@@ -2,26 +2,85 @@
 // Each function reads the relevant sub-object from transportData and appends
 // a table to the "sidedatatable" container (or no-ops when the data is absent).
 
+// Reusable element pools to reduce garbage collection
+const elementPool = {
+  table: null,
+  tr: null,
+  th: null,
+  td: null,
+  reset() {
+    this.table = null;
+    this.tr = null;
+    this.th = null;
+    this.td = null;
+  }
+};
+
 function createTable(data, headers, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  // Use DocumentFragment for batched DOM insertion
+  const fragment = document.createDocumentFragment();
+
   const table = document.createElement('table');
   const headerRow = document.createElement('tr');
-  headers.forEach((text) => {
+  for (let i = 0; i < headers.length; i++) {
     const th = document.createElement('th');
-    th.textContent = text;
+    th.textContent = headers[i];
     headerRow.appendChild(th);
-  });
+  }
   table.appendChild(headerRow);
-  data.forEach((item) => {
-    const row = document.createElement('tr');
-    Object.values(item).forEach((value) => {
-      const td = document.createElement('td');
-      td.textContent = value;
-      row.appendChild(td);
-    });
-    table.appendChild(row);
-  });
 
-  document.getElementById(containerId).appendChild(table);
+  // Build all rows first, then append once
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    const row = document.createElement('tr');
+    const values = Object.values(item);
+    for (let j = 0; j < values.length; j++) {
+      const td = document.createElement('td');
+      td.textContent = values[j];
+      row.appendChild(td);
+    }
+    table.appendChild(row);
+  }
+
+  fragment.appendChild(table);
+  container.appendChild(fragment);
+}
+
+// Optimized batch table creation for multiple tables
+function createTablesBatch(tablesData, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const fragment = document.createDocumentFragment();
+
+  for (const tableData of tablesData) {
+    const table = document.createElement('table');
+    const headerRow = document.createElement('tr');
+    for (let i = 0; i < tableData.headers.length; i++) {
+      const th = document.createElement('th');
+      th.textContent = tableData.headers[i];
+      headerRow.appendChild(th);
+    }
+    table.appendChild(headerRow);
+
+    for (let i = 0; i < tableData.rows.length; i++) {
+      const item = tableData.rows[i];
+      const row = document.createElement('tr');
+      const values = Object.values(item);
+      for (let j = 0; j < values.length; j++) {
+        const td = document.createElement('td');
+        td.textContent = values[j];
+        row.appendChild(td);
+      }
+      table.appendChild(row);
+    }
+    fragment.appendChild(table);
+  }
+
+  container.appendChild(fragment);
 }
 
 function renderDnsTable(transportData) {

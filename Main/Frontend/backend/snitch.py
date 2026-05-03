@@ -45,6 +45,7 @@ import time
 import zlib
 from datetime import datetime
 from decimal import Decimal
+from functools import lru_cache
 import chardet
 import geoip2.database
 import magic
@@ -162,10 +163,12 @@ def configLoader(filename="conf.yaml"):
         return yaml.safe_load(f)
 
 
+@lru_cache(maxsize=2048)
 def getPortDescription(port, protocol="tcp"):
     """
     Return the IANA description for a port/protocol pair.
     Uses the portDescriptionMap dict loaded once at startup for O(1) lookup.
+    Also cached with LRU for additional layer of caching.
     """
     return portDescriptionMap.get((port, protocol), "No description available")
 
@@ -398,9 +401,11 @@ def byHost(outputDirPath, finalSummary):
         )
 
 
+@lru_cache(maxsize=4096)
 def getNetclass(ip):
     """
     Determine the network class (A, B, C, or Unknown) of an IPv4 address.
+    Cached to avoid repeated parsing of the same IP addresses.
     """
     ipAddressObj = ipaddress.ip_address(ip)
     # Get the first octet
@@ -533,9 +538,11 @@ def getDatatypes(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
     return dataTypeResult
 
 
+@lru_cache(maxsize=1024)
 def getServ(port, protocol="tcp"):
     """
     Return the service name for a given port and protocol using the system's services database.
+    Cached with LRU to avoid repeated system calls for the same port/protocol.
     """
 
     try:
@@ -2568,12 +2575,12 @@ def llmBrief(jsonBatch):
 def startThreading():
     """
     Process all TCP, UDP, and ICMP packets from the pre-loaded `packets` list using a
-    ThreadPoolExecutor.
+    ThreadPoolExecutor with chunked processing for reduced overhead.
 
     Rather than re-reading the pcap file in every thread (which was the old behaviour),
-    this submits one lightweight task per packet index.  ThreadPoolExecutor handles
-    work-stealing, so threads stay busy even if individual packets take different amounts
-    of time (e.g. when active-recon network calls vary in latency).
+    this submits chunked tasks to reduce thread scheduling overhead. ThreadPoolExecutor
+    handles work-stealing, so threads stay busy even if individual packets take different
+    amounts of time (e.g. when active-recon network calls vary in latency).
     """
     if __name__ == "__main__":
         print(
@@ -2587,16 +2594,28 @@ def startThreading():
             if p.haslayer("TCP") or p.haslayer("UDP") or p.haslayer("ICMP")
         ]
 
+        # Chunk packets to reduce thread scheduling overhead
+        chunkSize = max(1, len(packetIndices) // (numWorkerThreads * 4))
+        packetChunks = [
+            packetIndices[i:i + chunkSize]
+            for i in range(0, len(packetIndices), chunkSize)
+        ]
+
+        def processChunk(chunk):
+            """Process a chunk of packet indices."""
+            results = []
+            for idx in chunk:
+                if stopEvent.is_set():
+                    break
+                result = processPacketAtIndex(idx, args.source_port, args.dest_port, args.timeout)
+                if result:
+                    results.append(result)
+            return results
+
         with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
             taskFutures = {
-                executor.submit(
-                    processPacketAtIndex,
-                    idx,
-                    args.source_port,
-                    args.dest_port,
-                    args.timeout,
-                ): idx
-                for idx in packetIndices
+                executor.submit(processChunk, chunk): chunk
+                for chunk in packetChunks
             }
             for future in as_completed(taskFutures):
                 if stopEvent.is_set():

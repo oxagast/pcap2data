@@ -1,3 +1,14 @@
+// Pre-compiled regex patterns for getDataType (avoid recompilation on every call)
+const REGEX_IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+const REGEX_HEX = /^0x[0-9a-fA-F]+$/;
+const REGEX_MAC = /^([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}$/;
+const REGEX_ASCII = /^[\x00-\x7F]*$/;
+
+// Memoization cache for getLeafKeys to avoid recomputing for same packet structures
+const leafKeysCache = new Map();
+// Cache for normalized/original key maps per host
+const keyMapCache = new Map();
+
 const operators = {
   '==': (a, b) => a == b,
   '!=': (a, b) => a != b,
@@ -27,18 +38,12 @@ const intersectBy = (a, b, keyFn) => {
 };
 
 function getDataType(data) {
-  const isIPv4 = (ip) =>
-    /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(
-      ip,
-    );
-  const isHex = (str) => /^0x[0-9a-fA-F]+$/.test(str);
-  const isMAC = (str) => /^([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}$/.test(str);
-  if (isIPv4(data)) return 'IP';
-  if (isHex(data)) return 'HEX';
-  if (isMAC(data)) return 'MAC';
+  if (REGEX_IPV4.test(data)) return 'IP';
+  if (REGEX_HEX.test(data)) return 'HEX';
+  if (REGEX_MAC.test(data)) return 'MAC';
   if (Number.isInteger(data)) return 'INT';
   if (typeof data === 'number') return 'FLOAT';
-  if (typeof data === 'string' && /^[\x00-\x7F]*$/.test(data)) return 'ASCII';
+  if (typeof data === 'string' && REGEX_ASCII.test(data)) return 'ASCII';
   return 'BIN';
 }
 
@@ -79,36 +84,53 @@ function filterChunk(data, filter) {
   const matchedPackets = [];
   const comparisonOps = ['>=', '<=', '>', '<', '==', '!='];
 
+  // Pre-parse filter once outside the loop
+  if (!filter || !filter.includes(':')) return matchedPackets;
+  const [filterKey, filterValRaw] = filter.split(':').map((s) => s.trim());
+  const filterModifier = comparisonOps.find((m) => filterValRaw.includes(m));
+  const filterValue = filterValRaw.replace(filterModifier, '').trim();
+  const filterValueLower = filterValue.toLowerCase();
+  const isStringFilter = ['ASCII', 'HEX', 'IP', 'MAC'].includes(getDataType(filterValue));
+
   for (const host in parsedHosts.Host) {
     const hostPackets = parsedHosts.Host[host];
     const firstPacket = hostPackets[0];
-    const leafKeyList = getLeafKeys(firstPacket);
-    const normalizedKeys = leafKeyList.map((k) => Object.values(k)[0]);
-    const originalKeys = leafKeyList.map((k) => Object.keys(k)[0]);
-    if (!filter || !filter.includes(':')) continue;
-    const [filterKey, filterValRaw] = filter.split(':').map((s) => s.trim());
-    if (!normalizedKeys.includes(filterKey)) continue;
-    const filterModifier = comparisonOps.find((m) => filterValRaw.includes(m));
-    const filterValue = filterValRaw.replace(filterModifier, '').trim();
+
+    // Use cached key maps per host to avoid recomputing
+    let keyMap = keyMapCache.get(host);
+    if (!keyMap) {
+      const leafKeyList = getLeafKeys(firstPacket);
+      keyMap = {
+        normalized: leafKeyList.map((k) => Object.values(k)[0]),
+        original: leafKeyList.map((k) => Object.keys(k)[0]),
+      };
+      keyMapCache.set(host, keyMap);
+    }
+
+    const targetIdx = keyMap.normalized.indexOf(filterKey);
+    if (targetIdx === -1) continue;
+    const originalKey = keyMap.original[targetIdx];
+
     for (const packetItem of hostPackets) {
-      const fieldValue = searchFullKey(
-        packetItem,
-        originalKeys[normalizedKeys.indexOf(filterKey)],
-      );
+      const fieldValue = searchFullKey(packetItem, originalKey);
       if (fieldValue === undefined) continue;
-      if (filterModifier && compare(fieldValue, filterValue, filterModifier)) {
-        matchedPackets.push({ Host: { [host]: [packetItem] } });
-        continue;
+
+      let matched = false;
+      if (filterModifier) {
+        matched = compare(fieldValue, filterValue, filterModifier);
       } else {
-        if (compare(fieldValue, filterValue, '==')) {
-          matchedPackets.push({ Host: { [host]: [packetItem] } });
+        matched = compare(fieldValue, filterValue, '==');
+      }
+
+      if (!matched && isStringFilter) {
+        const type = getDataType(fieldValue);
+        if (['ASCII', 'HEX', 'IP', 'MAC'].includes(type)) {
+          matched = String(fieldValue).toLowerCase() === filterValueLower;
         }
       }
-      const type = getDataType(fieldValue);
-      if (['ASCII', 'HEX', 'IP', 'MAC'].includes(type)) {
-        if (String(fieldValue).toLowerCase() === filterValue.toLowerCase()) {
-          matchedPackets.push({ Host: { [host]: [packetItem] } });
-        }
+
+      if (matched) {
+        matchedPackets.push({ Host: { [host]: [packetItem] } });
       }
     }
   }

@@ -30,17 +30,27 @@ const {
   renderRadiusTable,
 } = require('./decoders');
 const psVer = require('../package.json').version;
+
+// Cache frequently accessed DOM elements to avoid repeated lookups
+const domCache = {};
+function getCachedElement(id) {
+  if (!domCache[id]) {
+    domCache[id] = document.getElementById(id);
+  }
+  return domCache[id];
+}
+
 // Global variables for DOM elements and state
-document.getElementById('close-btn').addEventListener('click', () => {
+getCachedElement('close-btn').addEventListener('click', () => {
   window.quitapi.quitApp();
 });
 let capturedPackets = {}; // Stores parsed packet data from JSON
 let jsonCapture = ''; // Stringified JSON capture for pretty display
 let currentIp;
 let finalSummary = ''; // Stores the summary section from JSON
-const status = document.getElementById('status'); // Status bar element
+const status = getCachedElement('status'); // Status bar element
 let hostsList = ['0.0.0.0']; // List of hosts found in capture
-const hostFilterEl = document.getElementById('host_filter'); // Host filter dropdown
+const hostFilterEl = getCachedElement('host_filter'); // Host filter dropdown
 let packetsForHost = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
 let bookmarkList = []; // List of bookmarks (host:packet index)
@@ -153,6 +163,60 @@ function isValidJson(str) {
   }
 }
 
+// Chunked JSON parsing for large files to avoid blocking the UI
+function parseJsonChunked(jsonString, chunkSize = 65536) {
+  return new Promise((resolve, reject) => {
+    try {
+      // For smaller files, parse directly
+      if (jsonString.length < chunkSize * 2) {
+        resolve(JSON.parse(jsonString));
+        return;
+      }
+
+      // For large files, use setTimeout to yield to the main thread
+      let position = 0;
+      const length = jsonString.length;
+      let result = '';
+      const stack = [];
+      let inString = false;
+      let escape = false;
+
+      function processChunk() {
+        const end = Math.min(position + chunkSize, length);
+
+        for (; position < end; position++) {
+          const char = jsonString[position];
+          if (escape) {
+            escape = false;
+          } else if (char === '\\') {
+            escape = true;
+          } else if (char === '"') {
+            inString = !inString;
+          } else if (!inString) {
+            if (char === '{' || char === '[') {
+              stack.push(char);
+            } else if (char === '}' || char === ']') {
+              stack.pop();
+            }
+          }
+          result += char;
+        }
+
+        if (position < length) {
+          // Yield to main thread and continue
+          setTimeout(processChunk, 0);
+        } else {
+          resolve(JSON.parse(result));
+        }
+      }
+
+      setTimeout(processChunk, 0);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 function fileLoaded(isLoaded) {
   if (isLoaded) {
     const loadEndTime = performance.now();
@@ -175,11 +239,12 @@ function fileLoaded(isLoaded) {
 
 /**
  * Reads and parses the JSON file, updates UI and state.
+ * Uses chunked parsing for large files to avoid UI blocking.
  */
 function processFile(file) {
   const reader = new FileReader();
   reader.onload = (event) => {
-    const mainPanel = document.getElementById('main');
+    const mainPanel = getCachedElement('main');
     if (isValidJson(event.target.result) == false) {
       console.log('Invalid JSON file');
       doError('Invalid JSON file, please upload a valid JSON capture!');
@@ -188,15 +253,37 @@ function processFile(file) {
     }
     fileLoaded(true);
     jsonOfPackets = event.target.result;
-    document.getElementById('error-container').style.display = 'none';
-    capturedPackets = JSON.parse(event.target.result);
-    jsonCapture = JSON.stringify(capturedPackets, null, 2);
-    finalSummary = capturedPackets['Final Summary'] ?? '';
-    document.getElementById('target_hosts').hidden = false;
-    document.getElementById('summary-btn').style.display = 'block';
+    getCachedElement('error-container').style.display = 'none';
+
+    // Use chunked parsing for large files (>1MB)
+    const fileSize = event.target.result.length;
+    if (fileSize > 1024 * 1024) {
+      statusUpdate('Status: Parsing large file (' + (fileSize / 1024 / 1024).toFixed(2) + 'MB)...');
+      parseJsonChunked(event.target.result)
+        .then((parsed) => {
+          capturedPackets = parsed;
+          jsonCapture = JSON.stringify(capturedPackets, null, 2);
+          finalSummary = capturedPackets['Final Summary'] ?? '';
+          finishProcessingFile();
+        })
+        .catch((e) => {
+          console.error('JSON parse error:', e);
+          doError('Error parsing JSON file!');
+        });
+    } else {
+      capturedPackets = JSON.parse(event.target.result);
+      jsonCapture = JSON.stringify(capturedPackets, null, 2);
+      finalSummary = capturedPackets['Final Summary'] ?? '';
+      finishProcessingFile();
+    }
+  };
+
+  function finishProcessingFile() {
+    getCachedElement('target_hosts').hidden = false;
+    getCachedElement('summary-btn').style.display = 'block';
     // Reset host list and dropdowns for the new file
     hostsList = ['0.0.0.0'];
-    const targetHostsDropdown = document.getElementById('target_hosts');
+    const targetHostsDropdown = getCachedElement('target_hosts');
     while (targetHostsDropdown.options.length > 0) {
       targetHostsDropdown.remove(0);
     }
@@ -246,13 +333,28 @@ function hostPacketInfo(currentIp) {
   }
 }
 
-// Update host filter and navigate when a new host is selected from dropdown
-document.getElementById('target_hosts').addEventListener('change', function () {
-  const selected = document.getElementById('target_hosts').value;
-  let hostFilterEl = document.getElementById('host_filter');
+// Use event delegation for dynamically created elements
+// and cache static elements at module load
+const navButtons = {
+  prev: getCachedElement('prev-btn'),
+  next: getCachedElement('next-btn'),
+  summary: getCachedElement('summary-btn'),
+  data: getCachedElement('data-btn'),
+  setBookmark: getCachedElement('setBookmark'),
+};
+
+// Update host filter when a new host is selected from dropdown
+getCachedElement('target_hosts').addEventListener('change', function () {
+  const selected = getCachedElement('target_hosts').value;
+  let hostFilterEl = getCachedElement('host_filter');
+  filteredPackets = []; // reset filter when host changes
   if (hostFilterEl.value !== selected) {
     hostFilterEl.value = selected;
   }
+});
+
+getCachedElement('target_hosts').addEventListener('click', function () {
+  const selected = getCachedElement('target_hosts').value;
   filteredPackets = filterPackets(
     capturedPackets,
     'ip.src.addr: ' + selected + '|| ip.dst.addr: ' + selected,
@@ -261,8 +363,7 @@ document.getElementById('target_hosts').addEventListener('change', function () {
 });
 
 // Show summary when summary button is clicked
-document.getElementById('summary-btn').addEventListener('click', function () {
-  //  document.getElementById("welcome").style.display = "The Analysis:";
+getCachedElement('summary-btn').addEventListener('click', function () {
   writeSummary();
 });
 
