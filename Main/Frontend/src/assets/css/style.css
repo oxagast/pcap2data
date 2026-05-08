@@ -633,7 +633,6 @@ strong {
   font-family: monospace;
   text-align: center;
   white-space: nowrap;
-  word-break: normal;
   line-height: 1;
   overflow: hidden;
   box-sizing: border-box;
