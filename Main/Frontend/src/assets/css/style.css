@@ -609,7 +609,7 @@ strong {
   font-size: 12px;
   display: grid;
   grid-template-columns: repeat(32, 27px);
-  grid-template-rows: repeat(32, minmax(27px, auto));
+  grid-template-rows: repeat(32, 27px);
   gap: 1px;
   justify-content: center;
   width: max-content;
@@ -627,9 +627,15 @@ strong {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 5px;
+  width: 27px;
+  height: 27px;
+  padding: 0;
   font-family: monospace;
   text-align: center;
+  white-space: nowrap;
+  word-break: normal;
+  line-height: 1;
+  overflow: hidden;
   box-sizing: border-box;
   transition:
     background-color 0.3s,
