@@ -9,3 +9,4 @@ scapy==2.5.0
 scipy==1.17.1
 setuptools==68.1.2
 typing_extensions==4.15.0
+chardet==7.4.3

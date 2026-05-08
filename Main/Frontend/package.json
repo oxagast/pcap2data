@@ -10,7 +10,7 @@
     "start": "electron-forge start",
     "package": "npm run build-python && electron-forge package",
     "make": "npm run build-python && electron-forge make",
-    "build-python": "pyinstaller --onedir -y --add-data \"backend/common:common\" --distpath backend ./backend/snitch.py",
+    "build-python": "python3 -m PyInstaller --onedir -y --add-data \"backend/common:common\" --distpath backend ./backend/snitch.py",
     "publish": "electron-forge publish",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
