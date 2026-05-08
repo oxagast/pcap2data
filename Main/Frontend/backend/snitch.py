@@ -29,7 +29,7 @@
 # Dependencies:
 #   - scapy, numpy, requests, chardet, geoip2, magic, yaml, ollama, bs4, scipy, etc.
 #
-# Author: oxagast oxagast
+# Author: oxagast
 # Import standard and third-party libraries for argument parsing, file handling, networking, compression, and data processing
 import argparse
 import csv
@@ -107,8 +107,15 @@ cachedBannersLock = threading.Lock()
 
 # --- HTTP method set used by decodeHTTP() for request-line detection ---
 HTTP_METHODS: set = {
-    "GET", "POST", "HEAD", "PUT", "DELETE", "PATCH",
-    "OPTIONS", "TRACE", "CONNECT",
+    "GET",
+    "POST",
+    "HEAD",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    "OPTIONS",
+    "TRACE",
+    "CONNECT",
 }
 
 
@@ -880,7 +887,9 @@ def decodeHTTP(rawPayload):
             return None
         firstLine = lines[0].strip()
         isHttpResponse = firstLine.startswith("HTTP/")
-        isHttpRequest = firstLine.split(" ")[0] in HTTP_METHODS if " " in firstLine else False
+        isHttpRequest = (
+            firstLine.split(" ")[0] in HTTP_METHODS if " " in firstLine else False
+        )
         if not isHttpResponse and not isHttpRequest:
             return None
 
@@ -962,12 +971,50 @@ def decodeFTP(rawPayload):
     or None if the payload is not recognisable as FTP traffic.
     """
     FTP_COMMANDS = {
-        "USER", "PASS", "ACCT", "CWD", "CDUP", "SMNT", "QUIT", "REIN",
-        "PORT", "PASV", "TYPE", "STRU", "MODE", "RETR", "STOR", "STOU",
-        "APPE", "ALLO", "REST", "RNFR", "RNTO", "ABOR", "DELE", "RMD",
-        "MKD", "PWD", "LIST", "NLST", "SITE", "SYST", "STAT", "HELP",
-        "NOOP", "FEAT", "OPTS", "MLST", "MLSD", "SIZE", "MDTM", "EPRT",
-        "EPSV", "AUTH", "PBSZ", "PROT",
+        "USER",
+        "PASS",
+        "ACCT",
+        "CWD",
+        "CDUP",
+        "SMNT",
+        "QUIT",
+        "REIN",
+        "PORT",
+        "PASV",
+        "TYPE",
+        "STRU",
+        "MODE",
+        "RETR",
+        "STOR",
+        "STOU",
+        "APPE",
+        "ALLO",
+        "REST",
+        "RNFR",
+        "RNTO",
+        "ABOR",
+        "DELE",
+        "RMD",
+        "MKD",
+        "PWD",
+        "LIST",
+        "NLST",
+        "SITE",
+        "SYST",
+        "STAT",
+        "HELP",
+        "NOOP",
+        "FEAT",
+        "OPTS",
+        "MLST",
+        "MLSD",
+        "SIZE",
+        "MDTM",
+        "EPRT",
+        "EPSV",
+        "AUTH",
+        "PBSZ",
+        "PROT",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1012,8 +1059,20 @@ def decodeSMTP(rawPayload):
     or None if the payload is not recognisable as SMTP traffic.
     """
     SMTP_COMMANDS = {
-        "EHLO", "HELO", "MAIL", "RCPT", "DATA", "RSET", "VRFY", "EXPN",
-        "HELP", "NOOP", "QUIT", "AUTH", "STARTTLS", "BDAT",
+        "EHLO",
+        "HELO",
+        "MAIL",
+        "RCPT",
+        "DATA",
+        "RSET",
+        "VRFY",
+        "EXPN",
+        "HELP",
+        "NOOP",
+        "QUIT",
+        "AUTH",
+        "STARTTLS",
+        "BDAT",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1058,8 +1117,21 @@ def decodePOP3(rawPayload):
     or None if the payload is not recognisable as POP3 traffic.
     """
     POP3_COMMANDS = {
-        "USER", "PASS", "APOP", "QUIT", "STAT", "LIST", "RETR", "DELE",
-        "NOOP", "RSET", "TOP", "UIDL", "CAPA", "AUTH", "STLS",
+        "USER",
+        "PASS",
+        "APOP",
+        "QUIT",
+        "STAT",
+        "LIST",
+        "RETR",
+        "DELE",
+        "NOOP",
+        "RSET",
+        "TOP",
+        "UIDL",
+        "CAPA",
+        "AUTH",
+        "STLS",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1103,11 +1175,34 @@ def decodeIMAP(rawPayload):
     or None if the payload is not recognisable as IMAP traffic.
     """
     IMAP_COMMANDS = {
-        "CAPABILITY", "NOOP", "LOGOUT", "AUTHENTICATE", "LOGIN", "SELECT",
-        "EXAMINE", "CREATE", "DELETE", "RENAME", "SUBSCRIBE", "UNSUBSCRIBE",
-        "LIST", "LSUB", "STATUS", "APPEND", "CHECK", "CLOSE", "EXPUNGE",
-        "SEARCH", "FETCH", "STORE", "COPY", "UID", "IDLE", "NAMESPACE",
-        "STARTTLS", "ENABLE",
+        "CAPABILITY",
+        "NOOP",
+        "LOGOUT",
+        "AUTHENTICATE",
+        "LOGIN",
+        "SELECT",
+        "EXAMINE",
+        "CREATE",
+        "DELETE",
+        "RENAME",
+        "SUBSCRIBE",
+        "UNSUBSCRIBE",
+        "LIST",
+        "LSUB",
+        "STATUS",
+        "APPEND",
+        "CHECK",
+        "CLOSE",
+        "EXPUNGE",
+        "SEARCH",
+        "FETCH",
+        "STORE",
+        "COPY",
+        "UID",
+        "IDLE",
+        "NAMESPACE",
+        "STARTTLS",
+        "ENABLE",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1171,18 +1266,36 @@ def decodeTelnet(rawPayload):
     """
     IAC = 0xFF
     TELNET_COMMANDS = {
-        0xF0: "SE",   0xF1: "NOP",  0xF2: "Data Mark",  0xF3: "Break",
-        0xF4: "Interrupt Process",  0xF5: "Abort Output",
-        0xF6: "Are You There",      0xF7: "Erase Character",
-        0xF8: "Erase Line",         0xF9: "Go Ahead",
-        0xFA: "SB",   0xFB: "WILL", 0xFC: "WONT",
-        0xFD: "DO",   0xFE: "DONT", 0xFF: "IAC",
+        0xF0: "SE",
+        0xF1: "NOP",
+        0xF2: "Data Mark",
+        0xF3: "Break",
+        0xF4: "Interrupt Process",
+        0xF5: "Abort Output",
+        0xF6: "Are You There",
+        0xF7: "Erase Character",
+        0xF8: "Erase Line",
+        0xF9: "Go Ahead",
+        0xFA: "SB",
+        0xFB: "WILL",
+        0xFC: "WONT",
+        0xFD: "DO",
+        0xFE: "DONT",
+        0xFF: "IAC",
     }
     TELNET_OPTIONS = {
-        0: "Binary",        1: "Echo",           2: "Reconnection",
-        3: "Suppress GA",   5: "Status",         6: "Timing Mark",
-        24: "Terminal Type",31: "Window Size",   32: "Terminal Speed",
-        33: "Remote Flow",  34: "Linemode",      36: "Environment",
+        0: "Binary",
+        1: "Echo",
+        2: "Reconnection",
+        3: "Suppress GA",
+        5: "Status",
+        6: "Timing Mark",
+        24: "Terminal Type",
+        31: "Window Size",
+        32: "Terminal Speed",
+        33: "Remote Flow",
+        34: "Linemode",
+        36: "Environment",
         39: "New Environment",
     }
     try:
@@ -1222,12 +1335,47 @@ def decodeIRC(rawPayload):
     Returns a dict with the IRC command and parameters, or None if not recognisable.
     """
     IRC_COMMANDS = {
-        "NICK", "USER", "JOIN", "PART", "PRIVMSG", "NOTICE", "QUIT",
-        "PING", "PONG", "MODE", "TOPIC", "NAMES", "LIST", "INVITE",
-        "KICK", "WHOIS", "WHO", "WHOWAS", "MOTD", "LUSERS", "VERSION",
-        "STATS", "LINKS", "TIME", "CONNECT", "TRACE", "ADMIN", "INFO",
-        "SERVLIST", "SQUERY", "KILL", "PASS", "OPER", "REHASH", "DIE",
-        "RESTART", "AWAY", "USERHOST", "ISON", "CAP", "AUTHENTICATE",
+        "NICK",
+        "USER",
+        "JOIN",
+        "PART",
+        "PRIVMSG",
+        "NOTICE",
+        "QUIT",
+        "PING",
+        "PONG",
+        "MODE",
+        "TOPIC",
+        "NAMES",
+        "LIST",
+        "INVITE",
+        "KICK",
+        "WHOIS",
+        "WHO",
+        "WHOWAS",
+        "MOTD",
+        "LUSERS",
+        "VERSION",
+        "STATS",
+        "LINKS",
+        "TIME",
+        "CONNECT",
+        "TRACE",
+        "ADMIN",
+        "INFO",
+        "SERVLIST",
+        "SQUERY",
+        "KILL",
+        "PASS",
+        "OPER",
+        "REHASH",
+        "DIE",
+        "RESTART",
+        "AWAY",
+        "USERHOST",
+        "ISON",
+        "CAP",
+        "AUTHENTICATE",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1245,7 +1393,9 @@ def decodeIRC(rawPayload):
             command = parts[0].upper()
             params = parts[1] if len(parts) > 1 else ""
             if command in IRC_COMMANDS or (len(command) == 3 and command.isdigit()):
-                messages.append({"Prefix": prefix, "Command": command, "Parameters": params})
+                messages.append(
+                    {"Prefix": prefix, "Command": command, "Parameters": params}
+                )
         if not messages:
             return None
         first = messages[0]
@@ -1270,6 +1420,7 @@ def decodeMTP(rawPayload):
     Returns basic MTP/MMS info dict or None if not recognisable.
     """
     import struct
+
     MMS_COMMANDS = {
         0x00030001: "CONNECT_REQUEST",
         0x00030002: "CONNECT_RESPONSE",
@@ -1312,16 +1463,26 @@ def decodeLDAP(rawPayload):
     Returns a dict with message ID and operation, or None if the payload does not look like LDAP.
     """
     LDAP_OPERATIONS = {
-        0x60: "BindRequest",      0x61: "BindResponse",
-        0x62: "UnbindRequest",    0x63: "SearchRequest",
-        0x64: "SearchResEntry",   0x65: "SearchResDone",
-        0x66: "SearchResRef",     0x67: "ModifyRequest",
-        0x68: "ModifyResponse",   0x69: "AddRequest",
-        0x6A: "AddResponse",      0x6B: "DelRequest",
-        0x6C: "DelResponse",      0x6D: "ModDNRequest",
-        0x6E: "ModDNResponse",    0x6F: "CompareRequest",
-        0x70: "CompareResponse",  0x77: "ExtendedRequest",
-        0x78: "ExtendedResponse", 0x79: "IntermediateResponse",
+        0x60: "BindRequest",
+        0x61: "BindResponse",
+        0x62: "UnbindRequest",
+        0x63: "SearchRequest",
+        0x64: "SearchResEntry",
+        0x65: "SearchResDone",
+        0x66: "SearchResRef",
+        0x67: "ModifyRequest",
+        0x68: "ModifyResponse",
+        0x69: "AddRequest",
+        0x6A: "AddResponse",
+        0x6B: "DelRequest",
+        0x6C: "DelResponse",
+        0x6D: "ModDNRequest",
+        0x6E: "ModDNResponse",
+        0x6F: "CompareRequest",
+        0x70: "CompareResponse",
+        0x77: "ExtendedRequest",
+        0x78: "ExtendedResponse",
+        0x79: "IntermediateResponse",
     }
     try:
         if len(rawPayload) < 4:
@@ -1337,7 +1498,7 @@ def decodeLDAP(rawPayload):
         if idx >= len(rawPayload) or rawPayload[idx] != 0x02:
             return None
         idxLen = rawPayload[idx + 1]
-        msgId = int.from_bytes(rawPayload[idx + 2: idx + 2 + idxLen], "big")
+        msgId = int.from_bytes(rawPayload[idx + 2 : idx + 2 + idxLen], "big")
         idx += 2 + idxLen
         if idx >= len(rawPayload):
             return None
@@ -1360,15 +1521,32 @@ def decodeMySQL(rawPayload):
     Returns a dict with packet type and relevant fields, or None if not recognisable.
     """
     import struct
+
     MYSQL_COMMANDS = {
-        0x00: "Sleep",      0x01: "Quit",           0x02: "Init DB",
-        0x03: "Query",      0x04: "Field List",      0x05: "Create DB",
-        0x06: "Drop DB",    0x07: "Refresh",         0x08: "Shutdown",
-        0x09: "Statistics", 0x0A: "Process Info",    0x0B: "Connect",
-        0x0C: "Process Kill",0x0D: "Debug",          0x0E: "Ping",
-        0x0F: "Time",       0x10: "Delayed Insert",  0x11: "Change User",
-        0x16: "Stmt Prepare",0x17: "Stmt Execute",   0x19: "Stmt Close",
-        0x1A: "Stmt Reset", 0x1C: "Set Option",      0x1D: "Stmt Fetch",
+        0x00: "Sleep",
+        0x01: "Quit",
+        0x02: "Init DB",
+        0x03: "Query",
+        0x04: "Field List",
+        0x05: "Create DB",
+        0x06: "Drop DB",
+        0x07: "Refresh",
+        0x08: "Shutdown",
+        0x09: "Statistics",
+        0x0A: "Process Info",
+        0x0B: "Connect",
+        0x0C: "Process Kill",
+        0x0D: "Debug",
+        0x0E: "Ping",
+        0x0F: "Time",
+        0x10: "Delayed Insert",
+        0x11: "Change User",
+        0x16: "Stmt Prepare",
+        0x17: "Stmt Execute",
+        0x19: "Stmt Close",
+        0x1A: "Stmt Reset",
+        0x1C: "Set Option",
+        0x1D: "Stmt Fetch",
     }
     try:
         if len(rawPayload) < 5:
@@ -1381,7 +1559,11 @@ def decodeMySQL(rawPayload):
         firstByte = payload[0]
         if firstByte == 0x0A:
             versionEnd = payload.find(b"\x00", 1)
-            version = payload[1:versionEnd].decode(errors="ignore") if versionEnd > 1 else "Unknown"
+            version = (
+                payload[1:versionEnd].decode(errors="ignore")
+                if versionEnd > 1
+                else "Unknown"
+            )
             return {
                 "Type": "Server Greeting",
                 "mysql.type": "Server Greeting",
@@ -1400,7 +1582,9 @@ def decodeMySQL(rawPayload):
                 "mysql.seq": seqNum,
             }
         if firstByte == 0xFF:
-            errCode = struct.unpack_from("<H", payload, 1)[0] if len(payload) >= 3 else 0
+            errCode = (
+                struct.unpack_from("<H", payload, 1)[0] if len(payload) >= 3 else 0
+            )
             errMsg = payload[9:].decode(errors="ignore") if len(payload) > 9 else ""
             return {
                 "Type": "Error",
@@ -1414,7 +1598,9 @@ def decodeMySQL(rawPayload):
             }
         if seqNum == 0 and firstByte in MYSQL_COMMANDS:
             cmdName = MYSQL_COMMANDS[firstByte]
-            query = payload[1:].decode(errors="ignore")[:200] if len(payload) > 1 else ""
+            query = (
+                payload[1:].decode(errors="ignore")[:200] if len(payload) > 1 else ""
+            )
             return {
                 "Type": "Command",
                 "mysql.type": "Command",
@@ -1436,26 +1622,47 @@ def decodePostgreSQL(rawPayload):
     Returns a dict with message type and relevant fields, or None if not recognisable.
     """
     import struct
+
     PG_BACKEND_TYPES = {
-        b"R": "Authentication",  b"K": "BackendKeyData",
-        b"2": "BindComplete",    b"3": "CloseComplete",
-        b"C": "CommandComplete", b"d": "CopyData",
-        b"c": "CopyDone",        b"f": "CopyFail",
-        b"G": "CopyInResponse",  b"H": "CopyOutResponse",
-        b"D": "DataRow",         b"I": "EmptyQueryResponse",
-        b"E": "ErrorResponse",   b"V": "FunctionCallResponse",
-        b"n": "NoData",          b"N": "NoticeResponse",
-        b"A": "NotificationResponse", b"t": "ParameterDescription",
-        b"S": "ParameterStatus", b"1": "ParseComplete",
-        b"s": "PortalSuspended", b"Z": "ReadyForQuery",
+        b"R": "Authentication",
+        b"K": "BackendKeyData",
+        b"2": "BindComplete",
+        b"3": "CloseComplete",
+        b"C": "CommandComplete",
+        b"d": "CopyData",
+        b"c": "CopyDone",
+        b"f": "CopyFail",
+        b"G": "CopyInResponse",
+        b"H": "CopyOutResponse",
+        b"D": "DataRow",
+        b"I": "EmptyQueryResponse",
+        b"E": "ErrorResponse",
+        b"V": "FunctionCallResponse",
+        b"n": "NoData",
+        b"N": "NoticeResponse",
+        b"A": "NotificationResponse",
+        b"t": "ParameterDescription",
+        b"S": "ParameterStatus",
+        b"1": "ParseComplete",
+        b"s": "PortalSuspended",
+        b"Z": "ReadyForQuery",
         b"T": "RowDescription",
     }
     PG_FRONTEND_TYPES = {
-        b"B": "Bind",    b"C": "Close",   b"d": "CopyData",
-        b"c": "CopyDone",b"f": "CopyFail",b"D": "Describe",
-        b"E": "Execute", b"H": "Flush",   b"F": "FunctionCall",
-        b"P": "Parse",   b"p": "Password",b"Q": "Query",
-        b"S": "Sync",    b"X": "Terminate",
+        b"B": "Bind",
+        b"C": "Close",
+        b"d": "CopyData",
+        b"c": "CopyDone",
+        b"f": "CopyFail",
+        b"D": "Describe",
+        b"E": "Execute",
+        b"H": "Flush",
+        b"F": "FunctionCall",
+        b"P": "Parse",
+        b"p": "Password",
+        b"Q": "Query",
+        b"S": "Sync",
+        b"X": "Terminate",
     }
     try:
         if len(rawPayload) < 5:
@@ -1485,7 +1692,11 @@ def decodePostgreSQL(rawPayload):
         if msgType in PG_FRONTEND_TYPES:
             typeName = PG_FRONTEND_TYPES[msgType]
             msgLen = struct.unpack_from(">I", rawPayload, 1)[0]
-            body = rawPayload[5:5 + min(msgLen - 4, 200)].decode(errors="ignore") if msgLen > 4 else ""
+            body = (
+                rawPayload[5 : 5 + min(msgLen - 4, 200)].decode(errors="ignore")
+                if msgLen > 4
+                else ""
+            )
             return {
                 "Type": typeName,
                 "pg.type": typeName,
@@ -1508,19 +1719,20 @@ def decodeXMPP(rawPayload):
     Returns a dict with the stanza type and attributes, or None if not XMPP.
     """
     import re
+
     try:
         text = rawPayload.decode(errors="ignore").strip()
         if not text:
             return None
         isXmpp = (
-            text.startswith("<?xml") or
-            "<stream:stream" in text or
-            text.startswith("<message") or
-            text.startswith("<presence") or
-            text.startswith("<iq ") or
-            text.startswith("<iq>") or
-            "<message " in text or
-            "<presence" in text
+            text.startswith("<?xml")
+            or "<stream:stream" in text
+            or text.startswith("<message")
+            or text.startswith("<presence")
+            or text.startswith("<iq ")
+            or text.startswith("<iq>")
+            or "<message " in text
+            or "<presence" in text
         )
         if not isXmpp:
             return None
@@ -1558,39 +1770,63 @@ def decodeSMB(rawPayload):
     Returns a dict with SMB version, command, status, and flags, or None if not SMB.
     """
     import struct
+
     SMB1_COMMANDS = {
-        0x00: "CREATE_DIRECTORY",    0x01: "DELETE_DIRECTORY",
-        0x02: "OPEN",                0x03: "CREATE",
-        0x04: "CLOSE",               0x05: "FLUSH",
-        0x06: "DELETE",              0x07: "RENAME",
-        0x08: "QUERY_INFORMATION",   0x09: "SET_INFORMATION",
-        0x0A: "READ",                0x0B: "WRITE",
-        0x24: "LOCKING_ANDX",        0x25: "TRANSACTION",
-        0x2D: "OPEN_ANDX",           0x2E: "READ_ANDX",
-        0x2F: "WRITE_ANDX",          0x32: "TRANSACTION2",
-        0x70: "TREE_CONNECT",        0x71: "TREE_DISCONNECT",
-        0x72: "NEGOTIATE",           0x73: "SESSION_SETUP_ANDX",
-        0x74: "LOGOFF_ANDX",         0x75: "TREE_CONNECT_ANDX",
-        0xA0: "NT_TRANSACT",         0xA2: "NT_CREATE_ANDX",
-        0xA4: "NT_CANCEL",           0xFE: "INVALID",
+        0x00: "CREATE_DIRECTORY",
+        0x01: "DELETE_DIRECTORY",
+        0x02: "OPEN",
+        0x03: "CREATE",
+        0x04: "CLOSE",
+        0x05: "FLUSH",
+        0x06: "DELETE",
+        0x07: "RENAME",
+        0x08: "QUERY_INFORMATION",
+        0x09: "SET_INFORMATION",
+        0x0A: "READ",
+        0x0B: "WRITE",
+        0x24: "LOCKING_ANDX",
+        0x25: "TRANSACTION",
+        0x2D: "OPEN_ANDX",
+        0x2E: "READ_ANDX",
+        0x2F: "WRITE_ANDX",
+        0x32: "TRANSACTION2",
+        0x70: "TREE_CONNECT",
+        0x71: "TREE_DISCONNECT",
+        0x72: "NEGOTIATE",
+        0x73: "SESSION_SETUP_ANDX",
+        0x74: "LOGOFF_ANDX",
+        0x75: "TREE_CONNECT_ANDX",
+        0xA0: "NT_TRANSACT",
+        0xA2: "NT_CREATE_ANDX",
+        0xA4: "NT_CANCEL",
+        0xFE: "INVALID",
         0xFF: "NO_ANDX",
     }
     SMB2_COMMANDS = {
-        0x0000: "NEGOTIATE",         0x0001: "SESSION_SETUP",
-        0x0002: "LOGOFF",            0x0003: "TREE_CONNECT",
-        0x0004: "TREE_DISCONNECT",   0x0005: "CREATE",
-        0x0006: "CLOSE",             0x0007: "FLUSH",
-        0x0008: "READ",              0x0009: "WRITE",
-        0x000A: "LOCK",              0x000B: "IOCTL",
-        0x000C: "CANCEL",            0x000D: "ECHO",
-        0x000E: "QUERY_DIRECTORY",   0x000F: "CHANGE_NOTIFY",
-        0x0010: "QUERY_INFO",        0x0011: "SET_INFO",
+        0x0000: "NEGOTIATE",
+        0x0001: "SESSION_SETUP",
+        0x0002: "LOGOFF",
+        0x0003: "TREE_CONNECT",
+        0x0004: "TREE_DISCONNECT",
+        0x0005: "CREATE",
+        0x0006: "CLOSE",
+        0x0007: "FLUSH",
+        0x0008: "READ",
+        0x0009: "WRITE",
+        0x000A: "LOCK",
+        0x000B: "IOCTL",
+        0x000C: "CANCEL",
+        0x000D: "ECHO",
+        0x000E: "QUERY_DIRECTORY",
+        0x000F: "CHANGE_NOTIFY",
+        0x0010: "QUERY_INFO",
+        0x0011: "SET_INFO",
         0x0012: "OPLOCK_BREAK",
     }
     try:
         if len(rawPayload) < 8:
             return None
-        if rawPayload[:4] == b"\xFF\x53\x4D\x42":
+        if rawPayload[:4] == b"\xff\x53\x4d\x42":
             cmd = rawPayload[4]
             status = struct.unpack_from("<I", rawPayload, 5)[0]
             flags = rawPayload[9]
@@ -1606,7 +1842,7 @@ def decodeSMB(rawPayload):
                 "Is Response": isResponse,
                 "smb.is_response": isResponse,
             }
-        if rawPayload[:4] == b"\xFE\x53\x4D\x42":
+        if rawPayload[:4] == b"\xfe\x53\x4d\x42":
             cmd = struct.unpack_from("<H", rawPayload, 12)[0]
             flags = struct.unpack_from("<I", rawPayload, 16)[0]
             status = struct.unpack_from("<I", rawPayload, 8)[0]
@@ -1634,12 +1870,22 @@ def decodeMQTT(rawPayload):
     Returns a dict with MQTT fields, or None if the payload does not look like MQTT.
     """
     import struct
+
     MQTT_TYPES = {
-        1: "CONNECT",     2: "CONNACK",    3: "PUBLISH",
-        4: "PUBACK",      5: "PUBREC",     6: "PUBREL",
-        7: "PUBCOMP",     8: "SUBSCRIBE",  9: "SUBACK",
-        10: "UNSUBSCRIBE",11: "UNSUBACK",  12: "PINGREQ",
-        13: "PINGRESP",   14: "DISCONNECT",
+        1: "CONNECT",
+        2: "CONNACK",
+        3: "PUBLISH",
+        4: "PUBACK",
+        5: "PUBREC",
+        6: "PUBREL",
+        7: "PUBCOMP",
+        8: "SUBSCRIBE",
+        9: "SUBACK",
+        10: "UNSUBSCRIBE",
+        11: "UNSUBACK",
+        12: "PINGREQ",
+        13: "PINGRESP",
+        14: "DISCONNECT",
     }
     try:
         if len(rawPayload) < 2:
@@ -1676,7 +1922,7 @@ def decodeMQTT(rawPayload):
                     break
             if idx + 2 <= len(rawPayload):
                 topicLen = struct.unpack_from(">H", rawPayload, idx)[0]
-                topic = rawPayload[idx + 2: idx + 2 + topicLen].decode(errors="ignore")
+                topic = rawPayload[idx + 2 : idx + 2 + topicLen].decode(errors="ignore")
                 result["Topic"] = topic
                 result["mqtt.topic"] = topic
         return result
@@ -1691,8 +1937,17 @@ def decodeRTSP(rawPayload):
     Returns a dict with RTSP method/status and headers, or None if not recognisable as RTSP.
     """
     RTSP_METHODS = {
-        "OPTIONS", "DESCRIBE", "ANNOUNCE", "SETUP", "PLAY", "PAUSE",
-        "RECORD", "TEARDOWN", "GET_PARAMETER", "SET_PARAMETER", "REDIRECT",
+        "OPTIONS",
+        "DESCRIBE",
+        "ANNOUNCE",
+        "SETUP",
+        "PLAY",
+        "PAUSE",
+        "RECORD",
+        "TEARDOWN",
+        "GET_PARAMETER",
+        "SET_PARAMETER",
+        "REDIRECT",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1703,7 +1958,11 @@ def decodeRTSP(rawPayload):
             return None
         firstLine = lines[0].strip()
         isRtspResponse = firstLine.startswith("RTSP/")
-        isRtspRequest = firstLine.split(" ")[0].upper() in RTSP_METHODS if " " in firstLine else False
+        isRtspRequest = (
+            firstLine.split(" ")[0].upper() in RTSP_METHODS
+            if " " in firstLine
+            else False
+        )
         if not isRtspResponse and not isRtspRequest:
             return None
         headers = {}
@@ -1766,12 +2025,17 @@ def decodeTFTP(rawPayload):
     Returns a dict with opcode type and arguments, or None if not recognisable as TFTP.
     """
     import struct
+
     TFTP_OPCODES = {1: "RRQ", 2: "WRQ", 3: "DATA", 4: "ACK", 5: "ERROR"}
     TFTP_ERRORS = {
-        0: "Not defined",         1: "File not found",
-        2: "Access violation",    3: "Disk full",
-        4: "Illegal operation",   5: "Unknown TID",
-        6: "File already exists", 7: "No such user",
+        0: "Not defined",
+        1: "File not found",
+        2: "Access violation",
+        3: "Disk full",
+        4: "Illegal operation",
+        5: "Unknown TID",
+        6: "File already exists",
+        7: "No such user",
     }
     try:
         if len(rawPayload) < 4:
@@ -1783,10 +2047,18 @@ def decodeTFTP(rawPayload):
         if opcode in (1, 2):
             rest = rawPayload[2:]
             nullIdx = rest.find(b"\x00")
-            filename = rest[:nullIdx].decode(errors="ignore") if nullIdx >= 0 else rest.decode(errors="ignore")
+            filename = (
+                rest[:nullIdx].decode(errors="ignore")
+                if nullIdx >= 0
+                else rest.decode(errors="ignore")
+            )
             modeStart = nullIdx + 1 if nullIdx >= 0 else len(rest)
             modeEnd = rest.find(b"\x00", modeStart)
-            mode = rest[modeStart:modeEnd].decode(errors="ignore") if modeEnd > modeStart else "Unknown"
+            mode = (
+                rest[modeStart:modeEnd].decode(errors="ignore")
+                if modeEnd > modeStart
+                else "Unknown"
+            )
             return {
                 "Opcode": opName,
                 "tftp.opcode": opName,
@@ -1839,18 +2111,26 @@ def decodeBGP(rawPayload):
     Returns a dict with BGP message type and length, or None if not BGP.
     """
     import struct
+
     BGP_TYPES = {
-        1: "OPEN", 2: "UPDATE", 3: "NOTIFICATION", 4: "KEEPALIVE", 5: "ROUTE-REFRESH",
+        1: "OPEN",
+        2: "UPDATE",
+        3: "NOTIFICATION",
+        4: "KEEPALIVE",
+        5: "ROUTE-REFRESH",
     }
     BGP_ERRORS = {
-        1: "Message Header Error", 2: "OPEN Message Error",
-        3: "UPDATE Message Error", 4: "Hold Timer Expired",
-        5: "Finite State Machine Error", 6: "Cease",
+        1: "Message Header Error",
+        2: "OPEN Message Error",
+        3: "UPDATE Message Error",
+        4: "Hold Timer Expired",
+        5: "Finite State Machine Error",
+        6: "Cease",
     }
     try:
         if len(rawPayload) < 19:
             return None
-        if rawPayload[:16] != b"\xFF" * 16:
+        if rawPayload[:16] != b"\xff" * 16:
             return None
         msgLen = struct.unpack_from(">H", rawPayload, 16)[0]
         msgType = rawPayload[18]
@@ -1896,10 +2176,17 @@ def decodeHTTP2(rawPayload):
     Returns a dict with HTTP/2 frame info, or None if not HTTP/2.
     """
     import struct
+
     HTTP2_FRAME_TYPES = {
-        0x0: "DATA",        0x1: "HEADERS",      0x2: "PRIORITY",
-        0x3: "RST_STREAM",  0x4: "SETTINGS",     0x5: "PUSH_PROMISE",
-        0x6: "PING",        0x7: "GOAWAY",        0x8: "WINDOW_UPDATE",
+        0x0: "DATA",
+        0x1: "HEADERS",
+        0x2: "PRIORITY",
+        0x3: "RST_STREAM",
+        0x4: "SETTINGS",
+        0x5: "PUSH_PROMISE",
+        0x6: "PING",
+        0x7: "GOAWAY",
+        0x8: "WINDOW_UPDATE",
         0x9: "CONTINUATION",
     }
     HTTP2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
@@ -1917,7 +2204,9 @@ def decodeHTTP2(rawPayload):
                     "http2.frame_type": "N/A",
                 }
             return None
-        frameLen = struct.unpack_from(">I", b"\x00" + rawPayload[offset:offset + 3])[0]
+        frameLen = struct.unpack_from(">I", b"\x00" + rawPayload[offset : offset + 3])[
+            0
+        ]
         frameType = rawPayload[offset + 3]
         frameFlags = rawPayload[offset + 4]
         streamId = struct.unpack_from(">I", rawPayload, offset + 5)[0] & 0x7FFFFFFF
@@ -1945,10 +2234,28 @@ def decodeNNTP(rawPayload):
     or None if the payload is not recognisable as NNTP traffic.
     """
     NNTP_COMMANDS = {
-        "ARTICLE", "BODY", "DATE", "GROUP", "HDR", "HEAD",
-        "HELP", "IHAVE", "LAST", "LIST", "LISTGROUP", "MODE",
-        "NEWGROUPS", "NEWNEWS", "NEXT", "OVER", "POST", "QUIT",
-        "READER", "STAT", "AUTHINFO", "COMPRESS",
+        "ARTICLE",
+        "BODY",
+        "DATE",
+        "GROUP",
+        "HDR",
+        "HEAD",
+        "HELP",
+        "IHAVE",
+        "LAST",
+        "LIST",
+        "LISTGROUP",
+        "MODE",
+        "NEWGROUPS",
+        "NEWNEWS",
+        "NEXT",
+        "OVER",
+        "POST",
+        "QUIT",
+        "READER",
+        "STAT",
+        "AUTHINFO",
+        "COMPRESS",
     }
     try:
         text = rawPayload.decode(errors="ignore")
@@ -1990,27 +2297,45 @@ def decodeRADIUS(rawPayload):
     Returns a dict with RADIUS fields, or None if not recognisable as RADIUS.
     """
     import struct
+
     RADIUS_CODES = {
-        1: "Access-Request",      2: "Access-Accept",
-        3: "Access-Reject",       4: "Accounting-Request",
-        5: "Accounting-Response", 11: "Access-Challenge",
-        12: "Status-Server",      13: "Status-Client",
+        1: "Access-Request",
+        2: "Access-Accept",
+        3: "Access-Reject",
+        4: "Accounting-Request",
+        5: "Accounting-Response",
+        11: "Access-Challenge",
+        12: "Status-Server",
+        13: "Status-Client",
         255: "Reserved",
     }
     RADIUS_ATTRIBUTES = {
-        1: "User-Name",           2: "User-Password",
-        3: "CHAP-Password",       4: "NAS-IP-Address",
-        5: "NAS-Port",            6: "Service-Type",
-        7: "Framed-Protocol",     8: "Framed-IP-Address",
-        18: "Reply-Message",      24: "State",
-        25: "Class",              26: "Vendor-Specific",
-        27: "Session-Timeout",    28: "Idle-Timeout",
-        30: "Called-Station-Id",  31: "Calling-Station-Id",
-        32: "NAS-Identifier",     40: "Acct-Status-Type",
-        41: "Acct-Delay-Time",    42: "Acct-Input-Octets",
-        43: "Acct-Output-Octets", 44: "Acct-Session-Id",
-        61: "NAS-Port-Type",      77: "Connect-Info",
-        79: "EAP-Message",        80: "Message-Authenticator",
+        1: "User-Name",
+        2: "User-Password",
+        3: "CHAP-Password",
+        4: "NAS-IP-Address",
+        5: "NAS-Port",
+        6: "Service-Type",
+        7: "Framed-Protocol",
+        8: "Framed-IP-Address",
+        18: "Reply-Message",
+        24: "State",
+        25: "Class",
+        26: "Vendor-Specific",
+        27: "Session-Timeout",
+        28: "Idle-Timeout",
+        30: "Called-Station-Id",
+        31: "Calling-Station-Id",
+        32: "NAS-Identifier",
+        40: "Acct-Status-Type",
+        41: "Acct-Delay-Time",
+        42: "Acct-Input-Octets",
+        43: "Acct-Output-Octets",
+        44: "Acct-Session-Id",
+        61: "NAS-Port-Type",
+        77: "Connect-Info",
+        79: "EAP-Message",
+        80: "Message-Authenticator",
     }
     try:
         if len(rawPayload) < 20:
@@ -2028,16 +2353,24 @@ def decodeRADIUS(rawPayload):
             attrLen = rawPayload[idx + 1]
             if attrLen < 2:
                 break
-            attrValue = rawPayload[idx + 2: idx + attrLen]
+            attrValue = rawPayload[idx + 2 : idx + attrLen]
             attrName = RADIUS_ATTRIBUTES.get(attrType, f"Attr-{attrType}")
             if attrType == 1:
                 attrValueStr = attrValue.decode(errors="ignore")
             elif attrType in (4, 8):
-                attrValueStr = ".".join(str(b) for b in attrValue) if len(attrValue) == 4 else attrValue.hex()
+                attrValueStr = (
+                    ".".join(str(b) for b in attrValue)
+                    if len(attrValue) == 4
+                    else attrValue.hex()
+                )
             elif attrType in (2, 3):
                 attrValueStr = "***"
             else:
-                attrValueStr = attrValue.decode(errors="ignore") if all(32 <= b <= 126 for b in attrValue) else attrValue.hex()
+                attrValueStr = (
+                    attrValue.decode(errors="ignore")
+                    if all(32 <= b <= 126 for b in attrValue)
+                    else attrValue.hex()
+                )
             attributes.append({"Type": attrName, "Value": attrValueStr})
             idx += attrLen
         return {
@@ -2272,7 +2605,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     if nntpSection is not None:
                         transportSection["NNTP"] = nntpSection
                 # Decode RADIUS on TCP ports 1812/1813/1645/1646 (RFC 6614 defines RADIUS over TCP)
-                if dstPort in (1812, 1813, 1645, 1646) or srcPort in (1812, 1813, 1645, 1646):
+                if dstPort in (1812, 1813, 1645, 1646) or srcPort in (
+                    1812,
+                    1813,
+                    1645,
+                    1646,
+                ):
                     radiusSection = decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
@@ -2378,7 +2716,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     if ldapSection is not None:
                         transportSection["LDAP"] = ldapSection
                 # Decode RADIUS on UDP ports 1812/1813/1645/1646
-                if dstPort in (1812, 1813, 1645, 1646) or srcPort in (1812, 1813, 1645, 1646):
+                if dstPort in (1812, 1813, 1645, 1646) or srcPort in (
+                    1812,
+                    1813,
+                    1645,
+                    1646,
+                ):
                     radiusSection = decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
@@ -2597,7 +2940,7 @@ def startThreading():
         # Chunk packets to reduce thread scheduling overhead
         chunkSize = max(1, len(packetIndices) // (numWorkerThreads * 4))
         packetChunks = [
-            packetIndices[i:i + chunkSize]
+            packetIndices[i : i + chunkSize]
             for i in range(0, len(packetIndices), chunkSize)
         ]
 
@@ -2607,15 +2950,16 @@ def startThreading():
             for idx in chunk:
                 if stopEvent.is_set():
                     break
-                result = processPacketAtIndex(idx, args.source_port, args.dest_port, args.timeout)
+                result = processPacketAtIndex(
+                    idx, args.source_port, args.dest_port, args.timeout
+                )
                 if result:
                     results.append(result)
             return results
 
         with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
             taskFutures = {
-                executor.submit(processChunk, chunk): chunk
-                for chunk in packetChunks
+                executor.submit(processChunk, chunk): chunk for chunk in packetChunks
             }
             for future in as_completed(taskFutures):
                 if stopEvent.is_set():
