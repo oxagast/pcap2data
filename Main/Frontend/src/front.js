@@ -398,7 +398,7 @@ function addFilterHistory(query) {
 
 function runFilterQuery(filterQuery) {
   filteredPackets = filterPackets(capturedPackets, filterQuery);
-  writeLogEntry(`User query executed query="${filterQuery}"`);
+  writeLogEntry(`User executed query="${filterQuery}"`);
 
   if (filteredPackets == undefined || filteredPackets.length == 0) {
     hideAllData();
