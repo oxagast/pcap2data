@@ -780,6 +780,11 @@ strong {
   z-index: 20;
 }
 
+.filter-history-empty {
+  padding: 6px;
+  color: #b5b5b5;
+}
+
 .query-history-item {
   width: 100%;
   border: none;

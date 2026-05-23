@@ -471,8 +471,7 @@ function renderFilterHistory() {
 
   const emptyState = document.createElement('div');
   emptyState.textContent = 'No previous queries';
-  emptyState.style.padding = '6px';
-  emptyState.style.color = '#b5b5b5';
+  emptyState.className = 'filter-history-empty';
   emptyState.style.display = filterHistory.length ? 'none' : 'block';
   filterHistoryMenuEl.appendChild(emptyState);
 
@@ -1561,7 +1560,6 @@ filterInputEl.addEventListener('scroll', () => {
 });
 
 filterHistoryToggleEl.addEventListener('click', () => {
-  if (!isFileLoaded) return;
   setHistoryMenuOpen(filterHistoryMenuEl.hidden);
 });
 
