@@ -218,7 +218,8 @@ ipcMain.handle('append-activity-log', async (_event, entry) => {
   if (typeof entry !== 'string' || entry.trim() === '') {
     return { success: false, error: 'Invalid log entry' };
   }
-  appendActivityLogLine(entry.trim());
+  const normalizedEntry = entry.trim();
+  appendActivityLogLine(normalizedEntry);
   return { success: true, path: activityLogFilePath };
 });
 
