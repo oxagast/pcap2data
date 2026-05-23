@@ -156,6 +156,14 @@ function writeLogEntry(message) {
   }
 }
 
+function logErrorEntry(context, error) {
+  const errorDetails =
+    error && typeof error === 'object' && 'message' in error
+      ? error.message
+      : String(error);
+  writeLogEntry(`Error context=${context} details="${errorDetails}"`);
+}
+
 function initializeActivityLog() {
   const pathEl = document.getElementById('activity-log-path');
   const panelEl = document.getElementById('activity-log-panel');
@@ -264,10 +272,14 @@ document
           .catch((error) => {
             // Handle any errors (e.g., file not found)
             console.error('Error fetching file size:', error);
+            logErrorEntry('file-size-fetch', error);
           });
 
         runSnitch(filePath);
       }
+    }).catch((error) => {
+      doError('Error selecting PCAP file!');
+      logErrorEntry('pcap-select', error);
     });
   });
 
@@ -390,6 +402,7 @@ function processFile(file) {
         })
         .catch((e) => {
           console.error('JSON parse error:', e);
+          logErrorEntry('json-parse', e);
           doError('Error parsing JSON file!');
         });
     } else {
@@ -436,6 +449,7 @@ function processFile(file) {
   };
   reader.onerror = (error) => {
     status.textContent = 'Status: Error reading file: ' + error;
+    logErrorEntry('file-read', error);
     doError('Error reading file!');
   };
   reader.readAsText(file);
@@ -1293,6 +1307,7 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
       statusUpdate('Status: JSON saved successfully');
     } else {
       doError('Save failed');
+      writeLogEntry(`Error context=save-json details="${result.error || 'unknown'}"`);
       statusUpdate(
         'Status: Save failed – ' + (result.error || 'unknown error'),
       );
@@ -1333,7 +1348,13 @@ function runSnitch(file) {
   writeLogEntry(
     `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
   );
-  window.snitchapi.runBackendCommand(file, useLLM).then((output) => {});
+  window.snitchapi
+    .runBackendCommand(file, useLLM)
+    .then((output) => {})
+    .catch((error) => {
+      doError('Backend run error!');
+      logErrorEntry('backend-run', error);
+    });
 }
 
 function doError(message) {
