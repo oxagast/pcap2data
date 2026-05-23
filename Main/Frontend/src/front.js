@@ -400,7 +400,7 @@ function runFilterQuery(filterQuery) {
   filteredPackets = filterPackets(capturedPackets, filterQuery);
   writeLogEntry(`User executed query="${filterQuery}"`);
 
-  if (filteredPackets == undefined || filteredPackets.length == 0) {
+  if (filteredPackets === undefined || filteredPackets.length === 0) {
     hideAllData();
     statusUpdate('Status: No packets match the filter criteria');
     writeLogEntry('User query returned 0 packets');
