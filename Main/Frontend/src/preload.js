@@ -41,3 +41,8 @@ contextBridge.exposeInMainWorld('installapi', {
   checkFirstRun: () => ipcRenderer.invoke('check-first-run'),
   dismissFirstRun: () => ipcRenderer.invoke('dismiss-first-run'),
 });
+
+contextBridge.exposeInMainWorld('logapi', {
+  append: (entry) => ipcRenderer.invoke('append-activity-log', entry),
+  getPath: () => ipcRenderer.invoke('get-activity-log-path'),
+});

@@ -142,6 +142,9 @@ body {
 #next-btn {
   opacity: 0;
 }
+#log-btn {
+  opacity: 0;
+}
 
 #psbyline {
   width: 150px;
@@ -855,4 +858,74 @@ strong {
 
 #install-continue-btn:hover {
   background-color: var(--color-3);
+}
+
+#activity-log-panel {
+  display: none;
+  position: fixed;
+  right: 30px;
+  top: 120px;
+  width: 460px;
+  height: 520px;
+  z-index: 9000;
+  background-color: var(--color-4);
+  border: 2px solid var(--color-1);
+  border-radius: 8px;
+  padding: 10px;
+  box-sizing: border-box;
+  color: white;
+  font-family: "Courier New", Courier, monospace;
+}
+
+#activity-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 16px;
+  color: var(--color-1);
+  margin-bottom: 6px;
+}
+
+#close-log-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-1);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+#activity-log-path {
+  border: 1px solid var(--color-3);
+  background-color: #000;
+  color: var(--color-6);
+  padding: 6px;
+  font-size: 12px;
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+#activity-log-entries {
+  border: 1px solid var(--color-3);
+  background-color: #000;
+  height: 410px;
+  overflow-y: auto;
+  padding: 6px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.activity-log-entry {
+  border-bottom: 1px solid #2f3257;
+  padding: 5px 0;
+  color: white;
+}
+
+#activity-log-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border: 1px solid var(--color-3);
+  background-color: #000;
+  color: white;
 }

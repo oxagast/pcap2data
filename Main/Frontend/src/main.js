@@ -9,6 +9,7 @@ let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
 let versionFilePath;
+let activityLogFilePath;
 let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
 if (require('electron-squirrel-startup')) {
@@ -86,8 +87,21 @@ function createWindow() {
   });
 }
 
+function appendActivityLogLine(entry) {
+  if (!activityLogFilePath) return;
+  try {
+    fs.appendFileSync(activityLogFilePath, entry + os.EOL, 'utf8');
+  } catch (error) {
+    console.error('Unable to append activity log:', error);
+  }
+}
+
 app.whenReady().then(() => {
   versionFilePath = path.join(app.getPath('userData'), 'installed_version.txt');
+  activityLogFilePath = path.join(app.getPath('userData'), 'activity-log.txt');
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] Session started for PacketSnitch v${app.getVersion()}`,
+  );
   isFirstRunAfterInstall = checkNewInstall();
   checkOllama().then((isInstalled) => {
     cachedOllamaInstalled = isInstalled;
@@ -188,6 +202,18 @@ ipcMain.handle('save-json', async (_event, jsonData) => {
     title: 'Save JSON Capture',
     defaultPath: path.join(app.getPath('documents'), 'capture.json'),
     filters: [{ name: 'JSON Files', extensions: ['json'] }],
+  });
+
+  ipcMain.handle('append-activity-log', async (_event, entry) => {
+    if (typeof entry !== 'string' || entry.trim() === '') {
+      return { success: false, error: 'Invalid log entry' };
+    }
+    appendActivityLogLine(entry.trim());
+    return { success: true, path: activityLogFilePath };
+  });
+
+  ipcMain.handle('get-activity-log-path', async () => {
+    return activityLogFilePath;
   });
   if (canceled || !filePath) return { success: false, canceled: true };
 
