@@ -121,7 +121,7 @@ if (installContinueBtn) {
 function renderActivityLogEntries(searchText = '') {
   const entriesEl = document.getElementById('activity-log-entries');
   if (!entriesEl) return;
-  entriesEl.textContent = '';
+  entriesEl.replaceChildren();
   const normalizedSearch = searchText.trim().toLowerCase();
   activityLogEntries
     .filter((entry) =>
@@ -194,7 +194,7 @@ function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== 'object') return null;
   const packetTimes = [];
   if (!capturedPackets['Host']) return null;
-  for (const host in capturedPackets['Host']) {
+  for (const host of Object.keys(capturedPackets['Host'])) {
     const hostPackets = capturedPackets['Host'][host];
     if (!Array.isArray(hostPackets)) continue;
     hostPackets.forEach((packet) => {
@@ -1307,7 +1307,7 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
       statusUpdate('Status: JSON saved successfully');
     } else {
       doError('Save failed');
-      writeLogEntry(`Error context=save-json details="${result.error || 'unknown'}"`);
+      logErrorEntry('save-json', result.error || 'unknown');
       statusUpdate(
         'Status: Save failed – ' + (result.error || 'unknown error'),
       );
