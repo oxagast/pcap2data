@@ -388,8 +388,7 @@ function escapeHtml(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-    .replace(/ /g, '&nbsp;');
+    .replace(/'/g, '&#39;');
 }
 
 function decorateExpressionSegment(segmentText) {
@@ -426,6 +425,7 @@ function renderHighlightedQuery(query) {
   const source = query || '';
   if (!source) return '&nbsp;';
 
+  // Query grammar tokens: logical OR/AND operators and grouping parentheses.
   const tokenRegex = /(\|\||&&|\(|\))/g;
   let cursor = 0;
   let html = '';
@@ -452,6 +452,18 @@ function syncFilterHighlight() {
 
 function setHistoryMenuOpen(isOpen) {
   filterHistoryMenuEl.hidden = !isOpen;
+  if (isOpen) {
+    const firstItem = filterHistoryMenuEl.querySelector('.query-history-item');
+    if (firstItem) {
+      firstItem.focus();
+    } else {
+      filterHistoryMenuEl.focus();
+    }
+    return;
+  }
+  if (document.activeElement && filterHistoryContainerEl.contains(document.activeElement)) {
+    filterHistoryToggleEl.focus();
+  }
 }
 
 function renderFilterHistory() {
@@ -1567,6 +1579,12 @@ filterHistoryMenuEl.addEventListener('click', (event) => {
 
 document.addEventListener('click', (event) => {
   if (!filterHistoryContainerEl.contains(event.target)) {
+    setHistoryMenuOpen(false);
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !filterHistoryMenuEl.hidden) {
     setHistoryMenuOpen(false);
   }
 });
