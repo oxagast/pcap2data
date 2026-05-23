@@ -367,6 +367,7 @@ function fileLoaded(isLoaded) {
     document.getElementById('prev-btn').style.opacity = '1';
     document.getElementById('next-btn').style.opacity = '1';
     document.getElementById('log-btn').style.opacity = '1';
+    document.getElementById('stats-btn').style.opacity = '1';
     document.getElementById('json-lab').style.display = 'none';
     document.getElementById('pcap-lab').style.display = 'none';
     document.getElementById('llm-toggle').style.display = 'none';
@@ -379,6 +380,7 @@ function fileLoaded(isLoaded) {
     document.getElementById('json-lab').style.display = 'block';
     document.getElementById('pcap-lab').style.display = 'block';
     document.getElementById('log-btn').style.opacity = '0';
+    document.getElementById('stats-btn').style.opacity = '0';
   }
 }
 
@@ -673,9 +675,9 @@ function writeSummary() {
   if (jsonCapture == '') {
     statusUpdate('Status: No JSON file loaded, please upload a file first');
   } else {
-    const summaryContainer = document.getElementById('main');
     document.getElementById('packetInfoPane').style.display = 'none';
     document.getElementById('packetPayloadPane').style.display = 'none';
+    document.getElementById('stats_box').style.display = 'none';
     document.getElementById('summary_content').textContent =
       finalSummary || 'No LLM summary available.';
     document.getElementById('summary_box').style.display = 'block';
@@ -683,10 +685,292 @@ function writeSummary() {
   }
 }
 
+/**
+ * Iterates all packets in capturedPackets and returns aggregate statistics
+ * useful for understanding what is in the capture at a glance.
+ */
+function buildCaptureStats() {
+  const protocols = new Set();
+  const transportProtocols = new Set();
+  const hosts = new Set();
+  const ports = new Set();
+  const macVendors = new Set();
+  const mimeTypes = new Set();
+  const locations = new Map(); // "City, Country" -> count
+  const hostnames = new Set();
+  const dataTypes = new Set();
+  let encryptedCount = 0;
+  let unencryptedCount = 0;
+  let totalPackets = 0;
+
+  if (!capturedPackets || !capturedPackets['Host']) return null;
+
+  for (const host of Object.keys(capturedPackets['Host'])) {
+    hosts.add(host);
+    const packets = capturedPackets['Host'][host];
+    if (!Array.isArray(packets)) continue;
+
+    for (const pkt of packets) {
+      totalPackets++;
+      const pi = pkt?.['Packet Info'];
+      const ei = pkt?.['Extra Info'];
+      if (!pi || !ei) continue;
+
+      // Transport protocol (TCP/UDP/ICMP)
+      const tp = pi['Protocol'];
+      if (tp) transportProtocols.add(tp);
+
+      // Source/destination IPs
+      const srcIp = pi?.['IP']?.['Source IP'];
+      const dstIp = pi?.['IP']?.['Destination IP'];
+      if (srcIp) hosts.add(srcIp);
+      if (dstIp) hosts.add(dstIp);
+
+      // MAC vendors
+      const ef = pi?.['Ethernet Frame'];
+      if (ef) {
+        if (ef['MAC Source Vendor']) macVendors.add(ef['MAC Source Vendor']);
+        if (ef['MAC Destination Vendor']) macVendors.add(ef['MAC Destination Vendor']);
+      }
+
+      // Port-level protocol name and ports
+      const netData = ei?.['Traits']?.['Network Data'];
+      if (netData) {
+        const protoName = netData['Port Protcol'];
+        if (protoName && protoName !== 'Unknown') protocols.add(protoName);
+
+        // Source/dest ports
+        const tpData = tp ? pi[tp] : null;
+        if (tpData) {
+          const srcPort = tpData['Source port'];
+          const dstPort = tpData['Destination port'];
+          if (srcPort !== undefined) ports.add(srcPort);
+          if (dstPort !== undefined) ports.add(dstPort);
+        }
+
+        // Hostnames
+        const hn = netData?.['Hostnames']?.['Hostnames'];
+        if (Array.isArray(hn)) {
+          hn.forEach((h) => hostnames.add(h));
+        }
+
+        // Locations
+        for (const side of ['Source IP', 'Destination IP']) {
+          const loc = netData?.[side]?.['Location'];
+          if (loc && loc['City'] && loc['Country']) {
+            const key = `${loc['City']}, ${loc['Country']}`;
+            locations.set(key, (locations.get(key) || 0) + 1);
+          }
+        }
+      }
+
+      // MIME types
+      const mimeType = ei?.['MIME Type'];
+      if (mimeType) mimeTypes.add(mimeType);
+
+      // Data types
+      const dt = ei?.['Data Types'];
+      if (Array.isArray(dt)) dt.forEach((d) => dataTypes.add(d));
+
+      // Encryption
+      const encData = ei?.['Traits']?.['Server Info']?.['Encryption Data'];
+      if (!encData || encData === 'N/A') {
+        unencryptedCount++;
+      } else {
+        encryptedCount++;
+      }
+    }
+  }
+
+  return {
+    protocols: [...protocols].sort(),
+    transportProtocols: [...transportProtocols].sort(),
+    hosts: [...hosts].sort(),
+    ports: [...ports].sort((a, b) => a - b),
+    macVendors: [...macVendors].filter((v) => v !== 'N/A').sort(),
+    mimeTypes: [...mimeTypes].sort(),
+    locations: [...locations.entries()].sort((a, b) => b[1] - a[1]),
+    hostnames: [...hostnames].sort(),
+    dataTypes: [...dataTypes].sort(),
+    encryptedCount,
+    unencryptedCount,
+    totalPackets,
+  };
+}
+
+/**
+ * Renders a section of tags that, when clicked, populate the filter bar
+ * with a suggested query for that value.
+ */
+function makeStatsSection(title, items, queryBuilder) {
+  if (!items || items.length === 0) return null;
+  const section = document.createElement('div');
+  section.className = 'stats-section';
+
+  const heading = document.createElement('div');
+  heading.className = 'stats-section-title';
+  heading.textContent = title;
+  section.appendChild(heading);
+
+  const tagList = document.createElement('div');
+  tagList.className = 'stats-tag-list';
+
+  items.forEach((item) => {
+    const tag = document.createElement('span');
+    tag.className = 'stats-tag';
+    tag.textContent = item;
+    tag.title = 'Click to use in filter query';
+    if (queryBuilder) {
+      tag.addEventListener('click', () => {
+        const query = queryBuilder(item);
+        if (query) {
+          filterInputEl.value = query;
+          syncFilterHighlight();
+          filterInputEl.focus();
+          statusUpdate('Status: Filter query populated — press Enter to apply');
+          writeLogEntry(`Stats tag clicked query="${query}"`);
+        }
+      });
+    }
+    tagList.appendChild(tag);
+  });
+
+  section.appendChild(tagList);
+  return section;
+}
+
+/**
+ * Shows the capture stats panel with aggregated data from the loaded capture.
+ */
+function showStats() {
+  if (jsonCapture === '') {
+    statusUpdate('Status: No JSON file loaded, please upload a file first');
+    return;
+  }
+  statusUpdate('Status: Displaying capture statistics');
+  writeLogEntry('User opened capture stats view');
+
+  document.getElementById('packetInfoPane').style.display = 'none';
+  document.getElementById('packetPayloadPane').style.display = 'none';
+  document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('stats_box').style.display = 'block';
+
+  const content = document.getElementById('stats_content');
+  content.replaceChildren();
+
+  const stats = buildCaptureStats();
+  if (!stats) {
+    content.textContent = 'No packet data available.';
+    return;
+  }
+
+  // Overview row
+  const overview = document.createElement('div');
+  overview.className = 'stats-section';
+  const ovHead = document.createElement('div');
+  ovHead.className = 'stats-section-title';
+  ovHead.textContent = 'Capture Overview';
+  overview.appendChild(ovHead);
+  [
+    `Total Packets: ${stats.totalPackets}`,
+    `Unique Hosts Targeted: ${stats.hosts.length}`,
+    `Encrypted Packets: ${stats.encryptedCount}`,
+    `Unencrypted Packets: ${stats.unencryptedCount}`,
+    `Unique Protocols: ${stats.protocols.length}`,
+    `Unique Locations: ${stats.locations.length}`,
+  ].forEach((line) => {
+    const kv = document.createElement('div');
+    kv.className = 'stats-kv';
+    kv.textContent = line;
+    overview.appendChild(kv);
+  });
+  content.appendChild(overview);
+
+  // Application protocols
+  const protoSec = makeStatsSection(
+    'Application Protocols',
+    stats.protocols,
+    (v) => `tcp.proto: ${v.toLowerCase()}`,
+  );
+  if (protoSec) content.appendChild(protoSec);
+
+  // Transport protocols
+  const tpSec = makeStatsSection(
+    'Transport Protocols',
+    stats.transportProtocols,
+    (v) => `wire.proto: ${v.toLowerCase()}`,
+  );
+  if (tpSec) content.appendChild(tpSec);
+
+  // All hosts
+  const hostSec = makeStatsSection(
+    'All Hosts Addressed',
+    stats.hosts,
+    (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
+  );
+  if (hostSec) content.appendChild(hostSec);
+
+  // Hostnames / DNS
+  const hnSec = makeStatsSection(
+    'Hostnames (DNS)',
+    stats.hostnames,
+    (v) => `dns.qname: ${v}`,
+  );
+  if (hnSec) content.appendChild(hnSec);
+
+  // Physical locations
+  if (stats.locations.length > 0) {
+    const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
+    const locSec = makeStatsSection(
+      'Physical Locations',
+      locItems,
+      null,
+    );
+    if (locSec) content.appendChild(locSec);
+  }
+
+  // Ports
+  const portSec = makeStatsSection(
+    'Ports Seen',
+    stats.ports.map(String),
+    (v) => `tcp.src.port: ${v} || tcp.dst.port: ${v}`,
+  );
+  if (portSec) content.appendChild(portSec);
+
+  // MAC vendors
+  const macSec = makeStatsSection(
+    'MAC Vendors',
+    stats.macVendors,
+    (v) => `eth.src.vendor: ${v}`,
+  );
+  if (macSec) content.appendChild(macSec);
+
+  // MIME types
+  const mimeSec = makeStatsSection(
+    'MIME Types',
+    stats.mimeTypes,
+    (v) => `mime.type: ${v}`,
+  );
+  if (mimeSec) content.appendChild(mimeSec);
+
+  // Data types
+  const dtSec = makeStatsSection(
+    'Data Types',
+    stats.dataTypes,
+    null,
+  );
+  if (dtSec) content.appendChild(dtSec);
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
   initializeDataView();
+});
+
+// Show capture stats when stats button is clicked
+document.getElementById('stats-btn').addEventListener('click', function () {
+  showStats();
 });
 
 function initializeDataView() {
@@ -812,9 +1096,9 @@ function totalPacketCount() {
 function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById('loading-container').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('stats_box').style.display = 'none';
   document.getElementById('packetInfoPane').style.display = 'block';
   document.getElementById('packetPayloadPane').style.display = 'block';
-  document.getElementById('summary_box').style.display = 'none';
   document.getElementById('welcome').style.display = 'none';
   showAllData();
 

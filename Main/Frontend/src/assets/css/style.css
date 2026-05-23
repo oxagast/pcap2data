@@ -142,6 +142,9 @@ body {
 #next-btn {
   opacity: 0;
 }
+#stats-btn {
+  opacity: 0;
+}
 #log-btn {
   opacity: 0;
 }
@@ -418,6 +421,64 @@ strong {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+}
+
+#stats_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#stats_content {
+  color: var(--color-5);
+}
+
+.stats-section {
+  margin-bottom: 18px;
+}
+
+.stats-section-title {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--color-1);
+  background-color: var(--color-2);
+  padding: 4px 8px;
+  margin-bottom: 6px;
+}
+
+.stats-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.stats-tag {
+  background-color: var(--color-7);
+  border: 1px solid var(--color-3);
+  color: white;
+  padding: 3px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.stats-tag:hover {
+  background-color: var(--color-2);
+}
+
+.stats-kv {
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--color-6);
 }
 
 #copyright {
