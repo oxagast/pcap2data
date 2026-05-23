@@ -62,7 +62,11 @@ let currentPacketKey;
 let startTime;
 let activityLogPath = 'Unavailable';
 const activityLogEntries = [];
-const filterHistoryEl = getCachedElement('filter-history');
+const filterInputEl = getCachedElement('filterStr');
+const filterHighlightEl = getCachedElement('filterStr-highlight');
+const filterHistoryToggleEl = getCachedElement('filter-history-toggle');
+const filterHistoryMenuEl = getCachedElement('filter-history-menu');
+const filterHistoryContainerEl = getCachedElement('filter-history');
 const filterHistory = [];
 
 // Check for first run after new version install and show install screen if needed
@@ -350,14 +354,15 @@ function parseJsonChunked(jsonString, chunkSize = 65536) {
 }
 
 function fileLoaded(isLoaded) {
+  isFileLoaded = isLoaded;
   if (isLoaded) {
     const loadEndTime = performance.now();
     document.getElementById('load-time').textContent =
       'Load time: ' +
       ((loadEndTime - startTime) / 1000).toFixed(2) +
       ' seconds';
-    document.getElementById('filterStr').disabled = false;
-    filterHistoryEl.disabled = false;
+    filterInputEl.disabled = false;
+    filterHistoryToggleEl.disabled = false;
     document.getElementById('tab-btns').style.opacity = '1';
     document.getElementById('prev-btn').style.opacity = '1';
     document.getElementById('next-btn').style.opacity = '1';
@@ -369,20 +374,121 @@ function fileLoaded(isLoaded) {
       `Initial file load completed seconds=${((loadEndTime - startTime) / 1000).toFixed(2)}`,
     );
   } else {
+    filterInputEl.disabled = true;
+    filterHistoryToggleEl.disabled = true;
     document.getElementById('json-lab').style.display = 'block';
     document.getElementById('pcap-lab').style.display = 'block';
     document.getElementById('log-btn').style.opacity = '0';
   }
 }
 
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function decorateExpressionSegment(segmentText) {
+  if (!segmentText) return '';
+
+  const colonIndex = segmentText.indexOf(':');
+  if (colonIndex === -1) {
+    return `<span class="query-token-value">${escapeHtml(segmentText)}</span>`;
+  }
+
+  const keyText = segmentText.slice(0, colonIndex);
+  const valueText = segmentText.slice(colonIndex + 1);
+  const cmpMatch = valueText.match(/^(\s*)(>=|<=|==|!=|>|<)(\s*)(.*)$/);
+
+  let valueHtml = '';
+  if (cmpMatch) {
+    valueHtml =
+      escapeHtml(cmpMatch[1]) +
+      `<span class="query-token-operator">${escapeHtml(cmpMatch[2])}</span>` +
+      escapeHtml(cmpMatch[3]) +
+      `<span class="query-token-value">${escapeHtml(cmpMatch[4])}</span>`;
+  } else {
+    valueHtml = `<span class="query-token-value">${escapeHtml(valueText)}</span>`;
+  }
+
+  return (
+    `<span class="query-token-key">${escapeHtml(keyText)}</span>` +
+    '<span class="query-token-colon">:</span>' +
+    valueHtml
+  );
+}
+
+function renderHighlightedQuery(query) {
+  const source = query || '';
+  if (!source) return '&nbsp;';
+
+  // Query grammar tokens: logical OR/AND operators and grouping parentheses.
+  const tokenRegex = /(\|\||&&|\(|\))/g;
+  let cursor = 0;
+  let html = '';
+  let tokenMatch = tokenRegex.exec(source);
+
+  while (tokenMatch !== null) {
+    const segmentText = source.slice(cursor, tokenMatch.index);
+    html += decorateExpressionSegment(segmentText);
+
+    const tokenText = tokenMatch[0];
+    const tokenClass = tokenText === '(' || tokenText === ')' ? 'paren' : 'logic';
+    html += `<span class="query-token-${tokenClass}">${escapeHtml(tokenText)}</span>`;
+    cursor = tokenRegex.lastIndex;
+    tokenMatch = tokenRegex.exec(source);
+  }
+
+  html += decorateExpressionSegment(source.slice(cursor));
+  return html;
+}
+
+function syncFilterHighlight() {
+  filterHighlightEl.innerHTML = renderHighlightedQuery(filterInputEl.value);
+  syncFilterHighlightScroll();
+}
+
+function syncFilterHighlightScroll() {
+  filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
+}
+
+function setHistoryMenuOpen(isOpen) {
+  filterHistoryMenuEl.hidden = !isOpen;
+  if (isOpen) {
+    const firstItem = filterHistoryMenuEl.querySelector('.query-history-item');
+    if (firstItem) {
+      firstItem.focus();
+    } else {
+      filterHistoryMenuEl.focus();
+    }
+    return;
+  }
+  if (document.activeElement && filterHistoryContainerEl.contains(document.activeElement)) {
+    filterHistoryToggleEl.focus();
+  }
+}
+
 function renderFilterHistory() {
-  filterHistoryEl.replaceChildren();
-  const defaultOption = new Option('Previous queries', '');
-  filterHistoryEl.appendChild(defaultOption);
+  filterHistoryMenuEl.replaceChildren();
+
+  const emptyState = document.createElement('div');
+  emptyState.textContent = 'No previous queries';
+  emptyState.className = 'filter-history-empty';
+  emptyState.style.display = filterHistory.length ? 'none' : 'block';
+  filterHistoryMenuEl.appendChild(emptyState);
+
   filterHistory.forEach((query) => {
-    filterHistoryEl.appendChild(new Option(query, query));
+    const queryOption = document.createElement('button');
+    queryOption.type = 'button';
+    queryOption.className = 'query-history-item';
+    queryOption.dataset.query = query;
+    queryOption.innerHTML = renderHighlightedQuery(query);
+    filterHistoryMenuEl.appendChild(queryOption);
   });
-  filterHistoryEl.value = '';
+  setHistoryMenuOpen(false);
 }
 
 function addFilterHistory(query) {
@@ -1446,19 +1552,45 @@ document
   .getElementById('filterStr')
   .addEventListener('keydown', function (event) {
     if (event.key === 'Enter') {
-      const filterQuery = document.getElementById('filterStr').value;
+      const filterQuery = filterInputEl.value;
       addFilterHistory(filterQuery);
       runFilterQuery(filterQuery);
+      setHistoryMenuOpen(false);
     }
   });
 
-filterHistoryEl.addEventListener('change', function () {
-  const selectedQuery = filterHistoryEl.value;
-  if (!selectedQuery) return;
-  document.getElementById('filterStr').value = selectedQuery;
-  runFilterQuery(selectedQuery);
-  filterHistoryEl.value = '';
+filterInputEl.addEventListener('input', syncFilterHighlight);
+filterInputEl.addEventListener('scroll', syncFilterHighlightScroll);
+
+filterHistoryToggleEl.addEventListener('click', () => {
+  setHistoryMenuOpen(filterHistoryMenuEl.hidden);
 });
+
+filterHistoryMenuEl.addEventListener('click', (event) => {
+  const selectedItem = event.target.closest('.query-history-item');
+  if (!selectedItem) return;
+  const selectedQuery = selectedItem.dataset.query;
+  if (!selectedQuery) return;
+  filterInputEl.value = selectedQuery;
+  syncFilterHighlight();
+  renderFilterHistory();
+  runFilterQuery(selectedQuery);
+  setHistoryMenuOpen(false);
+});
+
+document.addEventListener('click', (event) => {
+  if (!filterHistoryMenuEl.hidden && !filterHistoryContainerEl.contains(event.target)) {
+    setHistoryMenuOpen(false);
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !filterHistoryMenuEl.hidden) {
+    setHistoryMenuOpen(false);
+  }
+});
+
+syncFilterHighlight();
 
 window.onerror = (message, source, lineno, colno, error) => {
   doError(message + ' at ' + source + ':' + lineno + ':' + colno);

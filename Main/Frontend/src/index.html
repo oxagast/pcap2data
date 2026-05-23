@@ -32,15 +32,21 @@
         <div id="filters-container">
           <input id="host_filter" type="text" placeholder="0.0.0.0" disabled />
           <label style="color: white">Filter</label>
-          <input
-            id="filterStr"
-            type="text"
-            disabled
-            placeholder="wire.len: >100 && tcp.proto: https || dns.qname: example.com"
-          />
-          <select id="filter-history" disabled>
-            <option value="">Previous queries</option>
-          </select>
+          <div id="filterStr-wrap">
+            <div id="filterStr-highlight" aria-hidden="true"></div>
+            <input
+              id="filterStr"
+              type="text"
+              disabled
+              placeholder="wire.len: >100 && tcp.proto: https || dns.qname: example.com"
+            />
+          </div>
+          <div id="filter-history">
+            <button id="filter-history-toggle" type="button" disabled>
+              Previous queries
+            </button>
+            <div id="filter-history-menu" tabindex="-1" hidden></div>
+          </div>
         </div>
       </div>
       <div class="menu_bar" id="dropdown" style="display: none">
