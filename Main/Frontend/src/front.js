@@ -222,13 +222,14 @@ function getPacketTimeframe() {
 function logCurrentPacketDisplay(action) {
   if (!packetsForHost || !packetsForHost[index]) return;
   const packetInfo = packetsForHost[index]['Packet Info'];
+  const selectedHost = getCachedElement('host_filter').value || 'Unknown host';
   const sourceIp = packetInfo?.['IP']?.['Source IP'] || 'Unknown source';
   const destinationIp =
     packetInfo?.['IP']?.['Destination IP'] || 'Unknown destination';
   const packetIndex = packetInfo?.['Index'] ?? index;
   const packetTimestamp = packetInfo?.['Packet Timestamp'] || 'Unknown time';
   writeLogEntry(
-    `Displayed packet action=${action} host=${hostFilterEl.value} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
+    `Displayed packet action=${action} host=${selectedHost} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
   );
 }
 
