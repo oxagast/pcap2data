@@ -79,6 +79,47 @@ function getLeafKeys(obj) {
   return result;
 }
 
+function normalizeFilterKey(key) {
+  return key.toLowerCase().replace(/[._\s-]+/g, '-');
+}
+
+function getAliasedFieldValue(packetItem, normalizedKey) {
+  switch (normalizedKey) {
+    case 'wire-proto': {
+      const packetInfo = packetItem?.['Packet Info'] || {};
+      const explicitProtocol = packetInfo['Protocol'];
+      if (typeof explicitProtocol === 'string') {
+        return explicitProtocol.toLowerCase();
+      }
+      if (packetInfo['TCP']) return 'tcp';
+      if (packetInfo['UDP']) return 'udp';
+      if (packetInfo['ICMP']) return 'icmp';
+      return undefined;
+    }
+    case 'eth-src-vendor':
+      return (
+        packetItem?.['Packet Info']?.['Ethernet Frame']?.['MAC Source Vendor'] ??
+        packetItem?.['Packet Info']?.['Ethernet Frame']?.['ether.src.mac.vendor']
+      );
+    case 'mime-type':
+      return (
+        packetItem?.['Extra Info']?.['MIME Type'] ??
+        packetItem?.['Extra Info']?.['payload.mime']
+      );
+    case 'dns-qname': {
+      const aliasHostnames =
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Hostnames']?.['Hostnames'];
+      const dnsQname = searchFullKey(packetItem, 'dns.qname');
+      const dnsQnames = searchFullKey(packetItem, 'dns.qnames');
+      return [aliasHostnames, dnsQname, dnsQnames]
+        .flat()
+        .filter((value) => typeof value === 'string');
+    }
+    default:
+      return undefined;
+  }
+}
+
 function filterChunk(data, filter) {
   const parsedHosts = typeof data === 'string' ? JSON.parse(data) : data;
   const matchedPackets = [];
@@ -87,6 +128,7 @@ function filterChunk(data, filter) {
   // Pre-parse filter once outside the loop
   if (!filter || !filter.includes(':')) return matchedPackets;
   const [filterKey, filterValRaw] = filter.split(':').map((s) => s.trim());
+  const normalizedFilterKey = normalizeFilterKey(filterKey);
   const filterModifier = comparisonOps.find((m) => filterValRaw.includes(m));
   const filterValue = filterValRaw.replace(filterModifier, '').trim();
   const filterValueLower = filterValue.toLowerCase();
@@ -107,19 +149,36 @@ function filterChunk(data, filter) {
       keyMapCache.set(host, keyMap);
     }
 
-    const targetIdx = keyMap.normalized.indexOf(filterKey);
-    if (targetIdx === -1) continue;
-    const originalKey = keyMap.original[targetIdx];
+    const targetIdx = keyMap.normalized.findIndex(
+      (candidateKey) => normalizeFilterKey(candidateKey) === normalizedFilterKey,
+    );
+    const originalKey = targetIdx === -1 ? null : keyMap.original[targetIdx];
 
     for (const packetItem of hostPackets) {
-      const fieldValue = searchFullKey(packetItem, originalKey);
+      let fieldValue = getAliasedFieldValue(packetItem, normalizedFilterKey);
+      if (fieldValue === undefined && originalKey) {
+        fieldValue = searchFullKey(packetItem, originalKey);
+      }
       if (fieldValue === undefined) continue;
 
       let matched = false;
-      if (filterModifier) {
-        matched = compare(fieldValue, filterValue, filterModifier);
+
+      if (
+        !filterModifier &&
+        ['dns-qname', 'eth-src-vendor', 'mime-type'].includes(normalizedFilterKey)
+      ) {
+        const textValues = Array.isArray(fieldValue) ? fieldValue : [fieldValue];
+        matched = textValues.some(
+          (value) =>
+            typeof value === 'string' &&
+            value.toLowerCase().includes(filterValueLower),
+        );
       } else {
-        matched = compare(fieldValue, filterValue, '==');
+        if (filterModifier) {
+          matched = compare(fieldValue, filterValue, filterModifier);
+        } else {
+          matched = compare(fieldValue, filterValue, '==');
+        }
       }
 
       if (!matched && isStringFilter) {
