@@ -1549,7 +1549,7 @@ filterInputEl.addEventListener('scroll', () => {
 });
 
 filterHistoryToggleEl.addEventListener('click', () => {
-  if (!isFileLoaded || filterHistory.length === 0) return;
+  if (!isFileLoaded) return;
   setHistoryMenuOpen(filterHistoryMenuEl.hidden);
 });
 
@@ -1560,6 +1560,7 @@ filterHistoryMenuEl.addEventListener('click', (event) => {
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
+  renderFilterHistory();
   runFilterQuery(selectedQuery);
   setHistoryMenuOpen(false);
 });
