@@ -429,9 +429,9 @@ function renderHighlightedQuery(query) {
   const tokenRegex = /(\|\||&&|\(|\))/g;
   let cursor = 0;
   let html = '';
-  let tokenMatch;
+  let tokenMatch = tokenRegex.exec(source);
 
-  while ((tokenMatch = tokenRegex.exec(source)) !== null) {
+  while (tokenMatch !== null) {
     const segmentText = source.slice(cursor, tokenMatch.index);
     html += decorateExpressionSegment(segmentText);
 
@@ -439,6 +439,7 @@ function renderHighlightedQuery(query) {
     const tokenClass = tokenText === '(' || tokenText === ')' ? 'paren' : 'logic';
     html += `<span class="query-token-${tokenClass}">${escapeHtml(tokenText)}</span>`;
     cursor = tokenRegex.lastIndex;
+    tokenMatch = tokenRegex.exec(source);
   }
 
   html += decorateExpressionSegment(source.slice(cursor));
@@ -447,6 +448,10 @@ function renderHighlightedQuery(query) {
 
 function syncFilterHighlight() {
   filterHighlightEl.innerHTML = renderHighlightedQuery(filterInputEl.value);
+  syncFilterHighlightScroll();
+}
+
+function syncFilterHighlightScroll() {
   filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
 }
 
@@ -1555,9 +1560,7 @@ document
   });
 
 filterInputEl.addEventListener('input', syncFilterHighlight);
-filterInputEl.addEventListener('scroll', () => {
-  filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
-});
+filterInputEl.addEventListener('scroll', syncFilterHighlightScroll);
 
 filterHistoryToggleEl.addEventListener('click', () => {
   setHistoryMenuOpen(filterHistoryMenuEl.hidden);
@@ -1576,7 +1579,7 @@ filterHistoryMenuEl.addEventListener('click', (event) => {
 });
 
 document.addEventListener('click', (event) => {
-  if (!filterHistoryContainerEl.contains(event.target)) {
+  if (!filterHistoryMenuEl.hidden && !filterHistoryContainerEl.contains(event.target)) {
     setHistoryMenuOpen(false);
   }
 });
