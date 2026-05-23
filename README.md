@@ -61,7 +61,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 ## The Interface
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/Documentation/screenshots/packetsnitch_32.png" alt="PacketSnitch main view" width="800">
+  <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/Documentation/screenshots/packetsnitch_ss24.png" alt="PacketSnitch main view" width="950">
 </p>
 
 ### Left Sidebar
