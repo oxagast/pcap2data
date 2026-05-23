@@ -59,6 +59,7 @@
         />
         <input type="button" id="prev-btn" value="Prev" class="custom-btns" />
         <input type="button" id="next-btn" value="Next" class="custom-btns" />
+        <input type="button" id="log-btn" value="Log" class="custom-btns" />
       </div>
       <div class="content_area">
         <div class="sidebar">
@@ -202,6 +203,20 @@
         <div id="status" class="footer">Status: Ready</div>
         <div id="copyright" class="footer">oxasploits, llc (&copy; 2026)</div>
       </div>
+    </div>
+
+    <div id="activity-log-panel">
+      <div id="activity-log-header">
+        <span>Activity Log</span>
+        <button id="close-log-btn" aria-label="Close log">×</button>
+      </div>
+      <div id="activity-log-path"></div>
+      <div id="activity-log-entries"></div>
+      <input
+        id="activity-log-search"
+        type="text"
+        placeholder="Search log entries..."
+      />
     </div>
 
     <!-- Installation complete screen – shown only on first run after a new version install -->

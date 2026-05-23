@@ -60,6 +60,8 @@ let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
 let startTime;
+let activityLogPath = 'Unavailable';
+const activityLogEntries = [];
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -116,6 +118,123 @@ if (installContinueBtn) {
   });
 }
 
+function renderActivityLogEntries(searchText = '') {
+  const entriesEl = document.getElementById('activity-log-entries');
+  if (!entriesEl) return;
+  entriesEl.replaceChildren();
+  const normalizedSearch = searchText.trim().toLowerCase();
+  activityLogEntries
+    .filter((entry) =>
+      normalizedSearch
+        ? entry.message.toLowerCase().includes(normalizedSearch)
+        : true,
+    )
+    .forEach((entry) => {
+      const row = document.createElement('div');
+      row.className = 'activity-log-entry';
+      row.textContent = entry.message;
+      entriesEl.appendChild(row);
+    });
+}
+
+function writeLogEntry(message) {
+  const stampedMessage = `[${new Date().toISOString()}] ${message}`;
+  activityLogEntries.unshift({ message: stampedMessage });
+  renderActivityLogEntries(
+    document.getElementById('activity-log-search')?.value || '',
+  );
+  if (window.logapi) {
+    window.logapi.append(stampedMessage).then((result) => {
+      if (result && result.path) {
+        activityLogPath = result.path;
+        const pathEl = document.getElementById('activity-log-path');
+        if (pathEl) {
+          pathEl.textContent = `Log file: ${activityLogPath}`;
+        }
+      }
+    });
+  }
+}
+
+function logErrorEntry(context, error) {
+  const errorDetails =
+    error && typeof error === 'object' && 'message' in error
+      ? error.message
+      : String(error);
+  writeLogEntry(`Error context=${context} details="${errorDetails}"`);
+}
+
+function initializeActivityLog() {
+  const pathEl = document.getElementById('activity-log-path');
+  const panelEl = document.getElementById('activity-log-panel');
+  const searchEl = document.getElementById('activity-log-search');
+  const logBtn = document.getElementById('log-btn');
+  const closeBtn = document.getElementById('close-log-btn');
+  if (window.logapi) {
+    window.logapi.getPath().then((path) => {
+      if (path) {
+        activityLogPath = path;
+        pathEl.textContent = `Log file: ${activityLogPath}`;
+      }
+    });
+  }
+  logBtn.addEventListener('click', () => {
+    panelEl.style.display = 'block';
+  });
+  closeBtn.addEventListener('click', () => {
+    panelEl.style.display = 'none';
+  });
+  searchEl.addEventListener('input', (event) => {
+    renderActivityLogEntries(event.target.value);
+  });
+  writeLogEntry('PacketSnitch UI session initialized');
+}
+
+function getPacketTimeframe() {
+  if (!capturedPackets || typeof capturedPackets !== 'object') return null;
+  const packetTimes = [];
+  if (!capturedPackets['Host']) return null;
+  for (const host of Object.keys(capturedPackets['Host'])) {
+    const hostPackets = capturedPackets['Host'][host];
+    if (!Array.isArray(hostPackets)) continue;
+    hostPackets.forEach((packet) => {
+      const packetTime = packet?.['Packet Info']?.['Packet Timestamp'];
+      if (packetTime) {
+        packetTimes.push(packetTime);
+      }
+    });
+  }
+  if (packetTimes.length === 0) return null;
+  const parsedTimes = packetTimes
+    .map((time) => ({
+      raw: time,
+      value: Date.parse(time),
+    }))
+    .filter((item) => !Number.isNaN(item.value))
+    .sort((a, b) => a.value - b.value);
+  if (parsedTimes.length < 1) return null;
+  return {
+    first: parsedTimes[0].raw,
+    last: parsedTimes[parsedTimes.length - 1].raw,
+  };
+}
+
+function logCurrentPacketDisplay(action) {
+  if (!packetsForHost || !packetsForHost[index]) return;
+  const packetInfo = packetsForHost[index]['Packet Info'];
+  const selectedHost = getCachedElement('host_filter').value || 'Unknown host';
+  const sourceIp = packetInfo?.['IP']?.['Source IP'] || 'Unknown source';
+  const destinationIp =
+    packetInfo?.['IP']?.['Destination IP'] || 'Unknown destination';
+  const packetIndex = packetInfo?.['Index'] ?? index;
+  const packetTimestamp = packetInfo?.['Packet Timestamp'] || 'Unknown time';
+  writeLogEntry(
+    `Displayed packet action=${action} host=${selectedHost} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
+  );
+}
+
+initializeActivityLog();
+
 popHexGrid('00'.repeat(256));
 // Set up file upload handler for JSON capture
 document
@@ -125,6 +244,9 @@ document
     if (file) {
       startTime = performance.now();
       statusUpdate('Processing file: ' + file.name);
+      writeLogEntry(
+        `User selected JSON file name=${file.name} size_bytes=${file.size}`,
+      );
       processFile(file);
       isFileLoaded = true;
       event.target.value = ''; // Reset so the same file can be loaded again
@@ -136,6 +258,7 @@ document
   .addEventListener('click', function (event) {
     window.getfileapi.selectFile().then((filePath) => {
       if (filePath) {
+        writeLogEntry(`User selected PCAP file path=${filePath}`);
         window.fsize
           .getFSize()
           .then((fileSize) => {
@@ -143,14 +266,21 @@ document
             const fileSizeKb = (fileSize / 1024).toFixed(2);
             document.getElementById('pcap-size').textContent =
               `PCAP size: ${fileSizeKb}kb`;
+            writeLogEntry(
+              `Capture size recorded bytes=${fileSize} kilobytes=${fileSizeKb}`,
+            );
           })
           .catch((error) => {
             // Handle any errors (e.g., file not found)
             console.error('Error fetching file size:', error);
+            logErrorEntry('file-size-fetch', error);
           });
 
         runSnitch(filePath);
       }
+    }).catch((error) => {
+      doError('Error selecting PCAP file!');
+      logErrorEntry('pcap-select', error);
     });
   });
 
@@ -228,12 +358,17 @@ function fileLoaded(isLoaded) {
     document.getElementById('tab-btns').style.opacity = '1';
     document.getElementById('prev-btn').style.opacity = '1';
     document.getElementById('next-btn').style.opacity = '1';
+    document.getElementById('log-btn').style.opacity = '1';
     document.getElementById('json-lab').style.display = 'none';
     document.getElementById('pcap-lab').style.display = 'none';
     document.getElementById('llm-toggle').style.display = 'none';
+    writeLogEntry(
+      `Initial file load completed seconds=${((loadEndTime - startTime) / 1000).toFixed(2)}`,
+    );
   } else {
     document.getElementById('json-lab').style.display = 'block';
     document.getElementById('pcap-lab').style.display = 'block';
+    document.getElementById('log-btn').style.opacity = '0';
   }
 }
 
@@ -268,6 +403,7 @@ function processFile(file) {
         })
         .catch((e) => {
           console.error('JSON parse error:', e);
+          logErrorEntry('json-parse', e);
           doError('Error parsing JSON file!');
         });
     } else {
@@ -301,11 +437,20 @@ function processFile(file) {
       targetHostsDropdown.appendChild(newhost);
       isFileLoaded = true;
     }
+    writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
+    const timeframe = getPacketTimeframe();
+    if (timeframe) {
+      writeLogEntry(
+        `Packet timeframe start="${timeframe.first}" end="${timeframe.last}"`,
+      );
+    }
+    writeLogEntry(`Total packet count=${totalPacketCount()}`);
     writeSummary();
     initializeDataView();
   };
   reader.onerror = (error) => {
     status.textContent = 'Status: Error reading file: ' + error;
+    logErrorEntry('file-read', error);
     doError('Error reading file!');
   };
   reader.readAsText(file);
@@ -348,6 +493,7 @@ getCachedElement('target_hosts').addEventListener('change', function () {
   const selected = getCachedElement('target_hosts').value;
   let hostFilterEl = getCachedElement('host_filter');
   filteredPackets = []; // reset filter when host changes
+  writeLogEntry(`Host target changed host=${selected}`);
   if (hostFilterEl.value !== selected) {
     hostFilterEl.value = selected;
   }
@@ -358,6 +504,9 @@ getCachedElement('target_hosts').addEventListener('click', function () {
   filteredPackets = filterPackets(
     capturedPackets,
     'ip.src.addr: ' + selected + '|| ip.dst.addr: ' + selected,
+  );
+  writeLogEntry(
+    `Host target clicked host=${selected} packets_returned=${filteredPackets.length}`,
   );
   handlePacketNavigation('filtered', null);
 });
@@ -429,6 +578,7 @@ document.getElementById('prev-btn').addEventListener('click', function () {
       ],
     );
     populateDataTypes(packetsForHost);
+    logCurrentPacketDisplay('prev');
   }
 });
 
@@ -447,6 +597,7 @@ document.getElementById('next-btn').addEventListener('click', function () {
     packetsForHost[index]['Packet Info']['Raw data']['Payload']['Hex Encoded'],
   );
   populateDataTypes(packetsForHost);
+  logCurrentPacketDisplay('next');
 });
 
 // Handle bookmark selection from dropdown
@@ -478,6 +629,7 @@ document.getElementById('setBookmark').addEventListener('click', function () {
       document
         .getElementById('selectBookmark')
         .appendChild(new Option(currentPacketKey, currentPacketKey));
+      writeLogEntry(`Bookmark added key=${currentPacketKey}`);
     }
   }
 });
@@ -529,6 +681,7 @@ function handlePacketNavigation(navAction, navBookmark) {
     document.getElementById('filter-returned').textContent =
       'Filtered Packets: ' + filteredPackets.length;
     packetSet = filteredPackets;
+    writeLogEntry(`Filtered packet navigation packets_returned=${packetSet.length}`);
   }
 
   if (navAction === 'bookmark') {
@@ -547,6 +700,9 @@ function handlePacketNavigation(navAction, navBookmark) {
           navBookmark['Host'] +
           ' packet ' +
           navBookmark['Packet'],
+      );
+      writeLogEntry(
+        `Navigating bookmark host=${navBookmark['Host']} packet=${navBookmark['Packet']}`,
       );
     }
   }
@@ -582,6 +738,7 @@ function handlePacketNavigation(navAction, navBookmark) {
     infoPanel(packetSet);
     popHexGrid(hexPayload);
     populateDataTypes(packetSet);
+    logCurrentPacketDisplay(navAction || 'first-load');
   }
 }
 function populateDataTypes(p) {
@@ -1151,6 +1308,7 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
       statusUpdate('Status: JSON saved successfully');
     } else {
       doError('Save failed');
+      logErrorEntry('save-json', result.error || 'unknown');
       statusUpdate(
         'Status: Save failed – ' + (result.error || 'unknown error'),
       );
@@ -1167,6 +1325,7 @@ window.jsonapi.onJsonData((jsonData) => {
   document.getElementById('loading-container').style.display = 'block';
   document.getElementById('error-container').style.display = 'none';
   statusUpdate('Loaded data from backend, processing...');
+  writeLogEntry('Backend JSON payload received for processing');
   processFile(
     new File([jsonData], 'capture.json', { type: 'application/json' }),
   );
@@ -1186,11 +1345,22 @@ function runSnitch(file) {
   document.getElementById('error-container').style.display = 'none';
   startTime = performance.now();
   const useLLM = document.getElementById('use-llm').checked;
-  window.snitchapi.runBackendCommand(file, useLLM).then((output) => {});
+  const fileLabel = typeof file === 'string' ? file : file?.name || 'unknown';
+  writeLogEntry(
+    `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
+  );
+  window.snitchapi
+    .runBackendCommand(file, useLLM)
+    .then((output) => {})
+    .catch((error) => {
+      doError('Backend run error!');
+      logErrorEntry('backend-run', error);
+    });
 }
 
 function doError(message) {
   console.error('Error from backend:', message);
+  writeLogEntry(`Error shown message="${message}"`);
   const loadingContainerEl = document.getElementById('loading-container');
   const errorContainerEl = document.getElementById('error-container');
   document.getElementById('summary_content').textContent = '';
@@ -1235,16 +1405,19 @@ document
     if (event.key === 'Enter') {
       const filterQuery = document.getElementById('filterStr').value;
       filteredPackets = filterPackets(capturedPackets, filterQuery);
+      writeLogEntry(`User query executed query="${filterQuery}"`);
 
       if (filteredPackets == undefined || filteredPackets.length == 0) {
         hideAllData();
         statusUpdate('Status: No packets match the filter criteria');
+        writeLogEntry('User query returned 0 packets');
       } else {
         statusUpdate(
           'Status: Displaying ' +
             filteredPackets.length +
             ' packets matching filter',
         );
+        writeLogEntry(`User query returned packets=${filteredPackets.length}`);
         handlePacketNavigation('filtered', null);
       }
     }
