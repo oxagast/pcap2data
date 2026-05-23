@@ -710,6 +710,14 @@ strong {
   padding: 5px;
 }
 
+#filter-history {
+  width: 170px;
+  background-color: black;
+  color: white;
+  border: 1px solid grey;
+  padding: 5px;
+}
+
 #payloadascii {
   width: 320px;
   height: 24px;

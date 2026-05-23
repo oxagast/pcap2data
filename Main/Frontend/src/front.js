@@ -62,6 +62,8 @@ let currentPacketKey;
 let startTime;
 let activityLogPath = 'Unavailable';
 const activityLogEntries = [];
+const filterHistoryEl = getCachedElement('filter-history');
+const filterHistory = [];
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -355,6 +357,7 @@ function fileLoaded(isLoaded) {
       ((loadEndTime - startTime) / 1000).toFixed(2) +
       ' seconds';
     document.getElementById('filterStr').disabled = false;
+    filterHistoryEl.disabled = false;
     document.getElementById('tab-btns').style.opacity = '1';
     document.getElementById('prev-btn').style.opacity = '1';
     document.getElementById('next-btn').style.opacity = '1';
@@ -369,6 +372,46 @@ function fileLoaded(isLoaded) {
     document.getElementById('json-lab').style.display = 'block';
     document.getElementById('pcap-lab').style.display = 'block';
     document.getElementById('log-btn').style.opacity = '0';
+  }
+}
+
+function renderFilterHistory() {
+  filterHistoryEl.replaceChildren();
+  const defaultOption = new Option('Previous queries', '');
+  filterHistoryEl.appendChild(defaultOption);
+  filterHistory.forEach((query) => {
+    filterHistoryEl.appendChild(new Option(query, query));
+  });
+  filterHistoryEl.value = '';
+}
+
+function addFilterHistory(query) {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return;
+  const existingIndex = filterHistory.indexOf(normalizedQuery);
+  if (existingIndex !== -1) {
+    filterHistory.splice(existingIndex, 1);
+  }
+  filterHistory.unshift(normalizedQuery);
+  renderFilterHistory();
+}
+
+function runFilterQuery(filterQuery) {
+  filteredPackets = filterPackets(capturedPackets, filterQuery);
+  writeLogEntry(`User executed query="${filterQuery}"`);
+
+  if (filteredPackets === undefined || filteredPackets.length === 0) {
+    hideAllData();
+    statusUpdate('Status: No packets match the filter criteria');
+    writeLogEntry('User query returned 0 packets');
+  } else {
+    statusUpdate(
+      'Status: Displaying ' +
+        filteredPackets.length +
+        ' packets matching filter',
+    );
+    writeLogEntry(`User query returned packets=${filteredPackets.length}`);
+    handlePacketNavigation('filtered', null);
   }
 }
 
@@ -1404,24 +1447,18 @@ document
   .addEventListener('keydown', function (event) {
     if (event.key === 'Enter') {
       const filterQuery = document.getElementById('filterStr').value;
-      filteredPackets = filterPackets(capturedPackets, filterQuery);
-      writeLogEntry(`User query executed query="${filterQuery}"`);
-
-      if (filteredPackets == undefined || filteredPackets.length == 0) {
-        hideAllData();
-        statusUpdate('Status: No packets match the filter criteria');
-        writeLogEntry('User query returned 0 packets');
-      } else {
-        statusUpdate(
-          'Status: Displaying ' +
-            filteredPackets.length +
-            ' packets matching filter',
-        );
-        writeLogEntry(`User query returned packets=${filteredPackets.length}`);
-        handlePacketNavigation('filtered', null);
-      }
+      addFilterHistory(filterQuery);
+      runFilterQuery(filterQuery);
     }
   });
+
+filterHistoryEl.addEventListener('change', function () {
+  const selectedQuery = filterHistoryEl.value;
+  if (!selectedQuery) return;
+  document.getElementById('filterStr').value = selectedQuery;
+  runFilterQuery(selectedQuery);
+  filterHistoryEl.value = '';
+});
 
 window.onerror = (message, source, lineno, colno, error) => {
   doError(message + ' at ' + source + ':' + lineno + ':' + colno);
