@@ -72,6 +72,8 @@ Delete all text from the filter bar and press **Enter** to show all packets agai
 
 Filter keys correspond directly to the dot-notation leaf-node names embedded in each packet's JSON. The filter engine normalizes keys to **lowercase** with **spaces replaced by hyphens**, so both the machine-readable dot-notation form (`wire.len`) and the normalized human-readable form (`wire-length`) are accepted interchangeably. This document uses the canonical dot-notation names throughout.
 
+Additional shorthand aliases are also supported: `wire.proto`, `eth.src.vendor`, and `mime.type`. Text queries for `eth.src.vendor`, `mime.type`, and `dns.qname` are matched case-insensitively using substring matching.
+
 Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets where that protocol was detected, so filtering on them automatically scopes results to the relevant protocol traffic.
 
 ---
