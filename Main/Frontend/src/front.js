@@ -187,7 +187,9 @@ function getPacketTimeframe() {
   const packetTimes = [];
   if (!capturedPackets['Host']) return null;
   for (const host in capturedPackets['Host']) {
-    capturedPackets['Host'][host].forEach((packet) => {
+    const hostPackets = capturedPackets['Host'][host];
+    if (!Array.isArray(hostPackets)) continue;
+    hostPackets.forEach((packet) => {
       const packetTime = packet?.['Packet Info']?.['Packet Timestamp'];
       if (packetTime) {
         packetTimes.push(packetTime);
@@ -218,7 +220,7 @@ function logCurrentPacketDisplay(action) {
   const packetIndex = packetInfo?.['Index'] ?? index;
   const packetTimestamp = packetInfo?.['Packet Timestamp'] || 'Unknown time';
   writeLogEntry(
-    `Displayed packet (${action}) host=${hostFilterEl.value} packet=${packetIndex} ${sourceIp}->${destinationIp} timeframe=${packetTimestamp}`,
+    `Displayed packet action=${action} host=${hostFilterEl.value} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
   );
 }
 
@@ -348,7 +350,7 @@ function fileLoaded(isLoaded) {
     document.getElementById('pcap-lab').style.display = 'none';
     document.getElementById('llm-toggle').style.display = 'none';
     writeLogEntry(
-      `Initial file load completed in ${((loadEndTime - startTime) / 1000).toFixed(2)} seconds`,
+      `Initial file load completed seconds=${((loadEndTime - startTime) / 1000).toFixed(2)}`,
     );
   } else {
     document.getElementById('json-lab').style.display = 'block';
