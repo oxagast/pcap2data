@@ -183,6 +183,7 @@ function initializeActivityLog() {
 }
 
 function getPacketTimeframe() {
+  if (!capturedPackets || typeof capturedPackets !== 'object') return null;
   const packetTimes = [];
   if (!capturedPackets['Host']) return null;
   for (const host in capturedPackets['Host']) {
@@ -1326,7 +1327,10 @@ function runSnitch(file) {
   document.getElementById('error-container').style.display = 'none';
   startTime = performance.now();
   const useLLM = document.getElementById('use-llm').checked;
-  writeLogEntry(`Backend analysis started file=${file} llm_enabled=${useLLM}`);
+  const fileLabel = typeof file === 'string' ? file : file?.name || 'unknown';
+  writeLogEntry(
+    `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
+  );
   window.snitchapi.runBackendCommand(file, useLLM).then((output) => {});
 }
 

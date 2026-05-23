@@ -203,18 +203,6 @@ ipcMain.handle('save-json', async (_event, jsonData) => {
     defaultPath: path.join(app.getPath('documents'), 'capture.json'),
     filters: [{ name: 'JSON Files', extensions: ['json'] }],
   });
-
-  ipcMain.handle('append-activity-log', async (_event, entry) => {
-    if (typeof entry !== 'string' || entry.trim() === '') {
-      return { success: false, error: 'Invalid log entry' };
-    }
-    appendActivityLogLine(entry.trim());
-    return { success: true, path: activityLogFilePath };
-  });
-
-  ipcMain.handle('get-activity-log-path', async () => {
-    return activityLogFilePath;
-  });
   if (canceled || !filePath) return { success: false, canceled: true };
 
   try {
@@ -224,6 +212,18 @@ ipcMain.handle('save-json', async (_event, jsonData) => {
     console.error('Save error:', err);
     return { success: false, error: err.message };
   }
+});
+
+ipcMain.handle('append-activity-log', async (_event, entry) => {
+  if (typeof entry !== 'string' || entry.trim() === '') {
+    return { success: false, error: 'Invalid log entry' };
+  }
+  appendActivityLogLine(entry.trim());
+  return { success: true, path: activityLogFilePath };
+});
+
+ipcMain.handle('get-activity-log-path', async () => {
+  return activityLogFilePath;
 });
 
 app.on('before-quit', () => {
