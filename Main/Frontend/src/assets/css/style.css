@@ -455,10 +455,13 @@ strong {
 
 #list_search_bar {
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 #list-search {
-  width: 100%;
+  flex: 1;
   box-sizing: border-box;
   padding: 6px 8px;
   background-color: #000;
@@ -466,6 +469,15 @@ strong {
   color: var(--color-5);
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
+}
+
+#list-group-streams-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-5);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 #list_content {
@@ -497,30 +509,36 @@ strong {
   text-overflow: ellipsis;
 }
 
-/* Column widths: #, Host, Src IP, Dst IP, Src Port, Dst Port, Transport, App Protocol */
+/* Column widths: #, bookmark, stream, host, src/dst, ports, transport, app protocol */
 .packet-list-table thead th:nth-child(1) {
   width: 5%;
 }
 .packet-list-table thead th:nth-child(2) {
-  width: 16%;
+  width: 5%;
 }
 .packet-list-table thead th:nth-child(3) {
-  width: 13%;
+  width: 7%;
 }
 .packet-list-table thead th:nth-child(4) {
-  width: 13%;
+  width: 14%;
 }
 .packet-list-table thead th:nth-child(5) {
-  width: 8%;
+  width: 12%;
 }
 .packet-list-table thead th:nth-child(6) {
-  width: 8%;
+  width: 12%;
 }
 .packet-list-table thead th:nth-child(7) {
-  width: 10%;
+  width: 8%;
 }
 .packet-list-table thead th:nth-child(8) {
-  width: 27%;
+  width: 8%;
+}
+.packet-list-table thead th:nth-child(9) {
+  width: 9%;
+}
+.packet-list-table thead th:nth-child(10) {
+  width: 20%;
 }
 
 .packet-list-table tbody tr {
@@ -528,8 +546,19 @@ strong {
   border-bottom: 1px solid var(--color-7);
 }
 
-.packet-list-table tbody tr:hover {
+.packet-list-table tbody tr:hover,
+.packet-list-table tbody tr.packet-list-hovered {
   background-color: var(--color-7);
+  color: var(--color-1);
+}
+
+.packet-list-table tbody tr.packet-list-hovered:not(.packet-list-selected) {
+  outline: 1px solid var(--color-3);
+  outline-offset: -1px;
+}
+
+.packet-list-table tbody tr.packet-list-stream-break {
+  border-top: 2px solid var(--color-3);
 }
 
 .packet-list-table tbody tr.packet-list-selected {
