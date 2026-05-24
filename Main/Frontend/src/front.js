@@ -1496,10 +1496,16 @@ function copySelectedTextFromContextMenu() {
     statusUpdate('Status: No text selected to copy');
     return;
   }
-  navigator.clipboard.writeText(selectedText).catch((error) => {
-    console.error('Copy failed:', error);
-    statusUpdate('Status: Copy failed – clipboard access denied');
-  });
+  navigator.clipboard
+    .writeText(selectedText)
+    .then(() => {
+      statusUpdate('Status: Copied selected text to clipboard');
+      writeLogEntry(`Copied selected text length=${selectedText.length}`);
+    })
+    .catch((error) => {
+      console.error('Copy failed:', error);
+      statusUpdate('Status: Copy failed – clipboard access denied');
+    });
 }
 
 function pasteTextFromContextMenu() {
