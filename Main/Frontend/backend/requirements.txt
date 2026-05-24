@@ -10,3 +10,5 @@ scipy==1.17.1
 setuptools==68.1.2
 typing_extensions==4.15.0
 chardet==7.4.3
+libmagic==1.0
+python-magic-bin==0.4.14
