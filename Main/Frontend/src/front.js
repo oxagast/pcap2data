@@ -64,9 +64,7 @@ let activityLogPath = "Unavailable";
 const activityLogEntries = [];
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
-const filterHistoryToggleEl = getCachedElement("filter-history-toggle");
-const filterHistoryMenuEl = getCachedElement("filter-history-menu");
-const filterHistoryContainerEl = getCachedElement("filter-history");
+const filterHistorySelectEl = getCachedElement("filter-history-select");
 const filterHistory = [];
 const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
 const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
@@ -374,7 +372,7 @@ function fileLoaded(isLoaded) {
       ((loadEndTime - startTime) / 1000).toFixed(2) +
       " seconds";
     filterInputEl.disabled = false;
-    filterHistoryToggleEl.disabled = false;
+    filterHistorySelectEl.disabled = false;
     document.getElementById("summary-btn").style.opacity = "1";
     document.getElementById("data-btn").style.opacity = "1";
     document.getElementById("data-tools-btn").style.opacity = "1";
@@ -392,7 +390,7 @@ function fileLoaded(isLoaded) {
     );
   } else {
     filterInputEl.disabled = true;
-    filterHistoryToggleEl.disabled = true;
+    filterHistorySelectEl.disabled = true;
     document.getElementById("json-lab").style.display = "block";
     document.getElementById("pcap-lab").style.display = "block";
     document.getElementById("log-btn").style.opacity = "0";
@@ -475,43 +473,26 @@ function syncFilterHighlightScroll() {
   filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
 }
 
-function setHistoryMenuOpen(isOpen) {
-  filterHistoryMenuEl.hidden = !isOpen;
-  if (isOpen) {
-    const firstItem = filterHistoryMenuEl.querySelector(".query-history-item");
-    if (firstItem) {
-      firstItem.focus();
-    } else {
-      filterHistoryMenuEl.focus();
-    }
-    return;
-  }
-  if (
-    document.activeElement &&
-    filterHistoryContainerEl.contains(document.activeElement)
-  ) {
-    filterHistoryToggleEl.focus();
-  }
-}
-
 function renderFilterHistory() {
-  filterHistoryMenuEl.replaceChildren();
+  filterHistorySelectEl.replaceChildren();
 
-  const emptyState = document.createElement("div");
-  emptyState.textContent = "No previous queries";
-  emptyState.className = "filter-history-empty";
-  emptyState.style.display = filterHistory.length ? "none" : "block";
-  filterHistoryMenuEl.appendChild(emptyState);
+  const placeholderOption = document.createElement("option");
+  placeholderOption.value = "";
+  placeholderOption.textContent = filterHistory.length
+    ? "Previous queries"
+    : "No previous queries";
+  placeholderOption.selected = true;
+  filterHistorySelectEl.appendChild(placeholderOption);
 
   filterHistory.forEach((query) => {
-    const queryOption = document.createElement("button");
-    queryOption.type = "button";
-    queryOption.className = "query-history-item";
-    queryOption.dataset.query = query;
-    queryOption.innerHTML = renderHighlightedQuery(query);
-    filterHistoryMenuEl.appendChild(queryOption);
+    const queryOption = document.createElement("option");
+    queryOption.value = query;
+    queryOption.textContent = query;
+    queryOption.title = query;
+    filterHistorySelectEl.appendChild(queryOption);
   });
-  setHistoryMenuOpen(false);
+  filterHistorySelectEl.value = "";
+  filterHistorySelectEl.disabled = !isFileLoaded;
 }
 
 function addFilterHistory(query) {
@@ -3148,7 +3129,7 @@ document
       const filterQuery = filterInputEl.value;
       addFilterHistory(filterQuery);
       runFilterQuery(filterQuery);
-      setHistoryMenuOpen(false);
+      filterHistorySelectEl.value = "";
     }
   });
 
@@ -3216,40 +3197,23 @@ window.addEventListener("resize", () => {
 filterInputEl.addEventListener("input", syncFilterHighlight);
 filterInputEl.addEventListener("scroll", syncFilterHighlightScroll);
 
-filterHistoryToggleEl.addEventListener("click", () => {
-  setHistoryMenuOpen(filterHistoryMenuEl.hidden);
-});
-
-filterHistoryMenuEl.addEventListener("click", (event) => {
-  const selectedItem = event.target.closest(".query-history-item");
-  if (!selectedItem) return;
-  const selectedQuery = selectedItem.dataset.query;
+filterHistorySelectEl.addEventListener("change", () => {
+  const selectedQuery = filterHistorySelectEl.value;
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
-  renderFilterHistory();
+  addFilterHistory(selectedQuery);
   runFilterQuery(selectedQuery);
-  setHistoryMenuOpen(false);
-});
-
-document.addEventListener("click", (event) => {
-  if (
-    !filterHistoryMenuEl.hidden &&
-    !filterHistoryContainerEl.contains(event.target)
-  ) {
-    setHistoryMenuOpen(false);
-  }
+  filterHistorySelectEl.value = "";
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !filterHistoryMenuEl.hidden) {
-    setHistoryMenuOpen(false);
-  }
   if (event.key === "Escape" && !convertContextMenuEl.hidden) {
     hideConvertContextMenu();
   }
 });
 
+renderFilterHistory();
 syncFilterHighlight();
 
 window.onerror = (message, source, lineno, colno, error) => {
