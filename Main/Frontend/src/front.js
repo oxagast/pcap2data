@@ -1109,13 +1109,14 @@ function showPacketList() {
         const srcPort = tpData?.['Source port'] ?? '';
         const dstPort = tpData?.['Destination port'] ?? '';
         const netData = ei?.['Traits']?.['Network Data'];
-        const appProto = netData?.['Port Protcol'] ?? '';
+        const appProto =
+          netData?.['Port Protocol'] ?? netData?.['Port Protcol'] ?? '';
         const packetKey = srcIp + ':' + pi['Index'];
         const isBookmarked = bookmarkList.includes(packetKey);
         const streamKey = getStreamKey(pi);
 
         if (lc) {
-          const rowText = [host, srcIp, dstIp, String(srcPort), String(dstPort), transport, appProto, streamKey].join(' ').toLowerCase();
+          const rowText = [host, srcIp, dstIp, String(srcPort), String(dstPort), transport, appProto].join(' ').toLowerCase();
           if (!rowText.includes(lc)) return;
         }
 
