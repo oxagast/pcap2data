@@ -1382,14 +1382,14 @@ function showConvertContextMenu(
     ? 'block'
     : 'none';
   convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
-  const hasClipboardActions = showCopySelection || showPaste || showSaveJson;
+  const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
   const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
-  if (!hasClipboardActions && !hasDataTypeActions) {
+  if (!hasGeneralActions && !hasDataTypeActions) {
     hideConvertContextMenu();
     return;
   }
   convertContextDividerEl.style.display =
-    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
+    hasGeneralActions && hasDataTypeActions ? 'block' : 'none';
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -1546,10 +1546,14 @@ function saveJsonFromContextMenu() {
     } else if (result.success) {
       statusUpdate('Status: JSON saved successfully');
     } else {
+      const errorMessage =
+        result && typeof result === 'object' && 'error' in result
+          ? result.error
+          : 'unknown';
       doError('Save failed');
-      logErrorEntry('save-json', result.error || 'unknown');
-      statusUpdate('Status: Save failed – ' + (result.error || 'unknown error'));
-      console.error('Save failed:', result.error);
+      logErrorEntry('save-json', errorMessage || 'unknown');
+      statusUpdate('Status: Save failed – ' + (errorMessage || 'unknown error'));
+      console.error('Save failed:', errorMessage);
     }
   });
 }
