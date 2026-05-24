@@ -1316,12 +1316,12 @@ function extractContextPort(value) {
   );
   if (ipPortMatch) {
     const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
-    return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
+    return ipPortValue > 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
   }
   const portMatch = normalized.match(/^\d{1,5}$/);
   if (!portMatch) return '';
   const portValue = Number.parseInt(normalized, 10);
-  return portValue >= 0 && portValue <= 65535 ? String(portValue) : '';
+  return portValue > 0 && portValue <= 65535 ? String(portValue) : '';
 }
 
 function extractContextMac(value) {
@@ -1351,7 +1351,7 @@ function extractContextProtocol(value) {
 }
 
 function sanitizeFilterTerm(value) {
-  return normalizeContextToken(value).replace(/[|&()]/g, '').trim();
+  return normalizeContextToken(value).replace(/[^a-zA-Z0-9:./_+-]/g, '').trim();
 }
 
 function buildContextFilterQueries(target, selectedText, conversionText) {
@@ -1797,7 +1797,7 @@ function appendFilterQueryFromContextMenu(type) {
     return;
   }
   const existingQuery = filterInputEl.value.trim();
-  const wrappedQuery = query.includes('||') ? `(${query})` : query;
+  const wrappedQuery = query.includes('||') || query.includes('&&') ? `(${query})` : query;
   if (!existingQuery) {
     filterInputEl.value = query;
   } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
