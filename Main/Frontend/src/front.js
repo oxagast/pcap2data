@@ -1569,7 +1569,20 @@ function pasteTextFromContextMenu() {
 
       if (pasteTarget.isContentEditable) {
         pasteTarget.focus();
-        document.execCommand('insertText', false, text);
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          range.deleteContents();
+          const textNode = document.createTextNode(text);
+          range.insertNode(textNode);
+          range.setStartAfter(textNode);
+          range.setEndAfter(textNode);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } else {
+          pasteTarget.textContent = (pasteTarget.textContent || '') + text;
+        }
+        pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
       }
     })
     .catch((error) => {
