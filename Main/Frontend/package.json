@@ -11,9 +11,7 @@
     "package": "npm run build-python && electron-forge package",
     "make": "npm run build-python && electron-forge make",
     "build-python": "python3 -m PyInstaller --onedir -y --add-data \"backend/common:common\" --distpath backend ./backend/snitch.py",
-    "publish": "electron-forge publish",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "publish": "electron-forge publish"
   },
   "engines": {
     "node": ">=12.11.0"
@@ -33,21 +31,17 @@
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
     "@electron-forge/maker-deb": "^7.11.1",
-    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.2",
     "@electron-forge/maker-squirrel": "^7.11.1",
     "@electron-forge/maker-zip": "^7.11.1",
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-webpack": "^7.11.1",
     "@electron/fuses": "^1.8.0",
-    "@eslint/js": "^10.0.1",
     "@vercel/webpack-asset-relocator-loader": "^1.7.3",
     "copy-webpack-plugin": "^13.0.1",
     "css-loader": "^6.11.0",
     "electron": "^40.6.1",
-    "eslint": "^8.57.1",
-    "eslint-plugin-electron": "^7.0.0",
-    "eslint-plugin-node": "^11.1.0",
     "globals": "^17.5.0",
     "node-loader": "^2.1.0",
     "style-loader": "^3.3.4",
