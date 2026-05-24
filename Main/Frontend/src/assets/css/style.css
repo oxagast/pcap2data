@@ -440,6 +440,95 @@ strong {
   color: var(--color-5);
 }
 
+#list_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+#list_search_bar {
+  margin-bottom: 6px;
+}
+
+#list-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+}
+
+#list_content {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.packet-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--color-5);
+}
+
+.packet-list-table thead th {
+  background-color: var(--color-2);
+  color: var(--color-1);
+  padding: 5px 8px;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 2px solid var(--color-3);
+  white-space: nowrap;
+}
+
+.packet-list-table tbody tr {
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-7);
+}
+
+.packet-list-table tbody tr:hover {
+  background-color: var(--color-7);
+}
+
+.packet-list-table tbody tr.packet-list-selected {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+.packet-list-table td {
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.packet-list-host-header {
+  background-color: var(--color-7);
+  color: var(--color-1);
+  font-weight: bold;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+#list-btn {
+  opacity: 0;
+}
+
 .stats-section {
   margin-bottom: 18px;
 }
