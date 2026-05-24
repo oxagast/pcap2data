@@ -1284,7 +1284,7 @@ function hideConvertContextMenu() {
   convertContextMenuEl.hidden = true;
 }
 
-function getCurrentSelectionText() {
+function getTrimmedSelectionText() {
   return window.getSelection()?.toString().trim() || '';
 }
 
@@ -1490,7 +1490,7 @@ async function copyRawPayloadFromContext() {
 }
 
 function copySelectedTextFromContextMenu() {
-  const selectedText = getCurrentSelectionText();
+  const selectedText = getTrimmedSelectionText();
   hideConvertContextMenu();
   if (!selectedText) {
     statusUpdate('Status: No text selected to copy');
@@ -2790,7 +2790,7 @@ document
 
 document.addEventListener('contextmenu', (event) => {
   const target = event.target;
-  const selectedText = getCurrentSelectionText();
+  const selectedText = getTrimmedSelectionText();
   const insideEligiblePanel = target?.closest(
     '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
   );
