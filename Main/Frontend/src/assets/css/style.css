@@ -479,6 +479,7 @@ strong {
 .packet-list-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 12px;
   color: var(--color-5);
 }
@@ -493,7 +494,19 @@ strong {
   z-index: 1;
   border-bottom: 2px solid var(--color-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* Column widths: #, Host, Src IP, Dst IP, Src Port, Dst Port, Transport, App Protocol */
+.packet-list-table thead th:nth-child(1) { width: 5%; }
+.packet-list-table thead th:nth-child(2) { width: 16%; }
+.packet-list-table thead th:nth-child(3) { width: 13%; }
+.packet-list-table thead th:nth-child(4) { width: 13%; }
+.packet-list-table thead th:nth-child(5) { width: 8%; }
+.packet-list-table thead th:nth-child(6) { width: 8%; }
+.packet-list-table thead th:nth-child(7) { width: 10%; }
+.packet-list-table thead th:nth-child(8) { width: 27%; }
 
 .packet-list-table tbody tr {
   cursor: pointer;
@@ -514,7 +527,6 @@ strong {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 180px;
 }
 
 #list-btn {
