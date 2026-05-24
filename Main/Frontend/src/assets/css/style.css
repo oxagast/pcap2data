@@ -662,7 +662,6 @@ strong {
 #moredata {
   placement: absolute;
   display: block;
-  /*  width: 220px; */
   margin-left: 15px;
   margin-top: 10px;
 }
@@ -690,8 +689,8 @@ strong {
   margin-left: 15px;
   margin-bottom: 20px;
   margin-top: 20px;
-  width: 60%;
-  max-width: 600px;
+  width: 67%;
+  max-width: 1000px;
   background-color: var(--color-7);
   height: 400px;
   display: flex;
@@ -788,8 +787,8 @@ strong {
 #protoInfo {
   margin-top: 10px;
   margin-left: 15px;
-  width: 60%;
-  max-width: 600px;
+  width: 67%;
+  max-width: 1000px;
   display: block;
   font-size: 0px;
   border: 1px solid var(--color-3);
