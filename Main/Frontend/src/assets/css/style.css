@@ -576,6 +576,11 @@ strong {
   color: var(--color-1);
 }
 
+.packet-list-table tbody tr.packet-list-selected:hover,
+.packet-list-table tbody tr.packet-list-selected.packet-list-hovered {
+  background-color: #201e3d;
+}
+
 .packet-list-table td {
   padding: 4px 8px;
   white-space: nowrap;
