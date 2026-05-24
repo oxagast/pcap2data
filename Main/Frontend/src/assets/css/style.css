@@ -494,7 +494,6 @@ strong {
   padding: 6px;
 }
 
-#data-tools-input,
 #data-tools-hex-output,
 #data-tools-binary-output,
 #data-tools-decimal-output,
@@ -502,6 +501,11 @@ strong {
 #data-tools-ascii-output,
 #data-tools-base64-output {
   min-height: 58px;
+  resize: vertical;
+}
+
+#data-tools-input {
+  min-height: 450px;
   resize: vertical;
 }
 
