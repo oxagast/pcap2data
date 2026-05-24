@@ -1,5 +1,5 @@
-import './assets/css/style.css';
-const { filterPackets } = require('./filter');
+import "./assets/css/style.css";
+const { filterPackets } = require("./filter");
 const {
   createTable,
   renderDnsTable,
@@ -28,8 +28,8 @@ const {
   renderHttp2Table,
   renderNntpTable,
   renderRadiusTable,
-} = require('./decoders');
-const psVer = require('../package.json').version;
+} = require("./decoders");
+const psVer = require("../package.json").version;
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
@@ -41,16 +41,16 @@ function getCachedElement(id) {
 }
 
 // Global variables for DOM elements and state
-getCachedElement('close-btn').addEventListener('click', () => {
+getCachedElement("close-btn").addEventListener("click", () => {
   window.quitapi.quitApp();
 });
 let capturedPackets = {}; // Stores parsed packet data from JSON
-let jsonCapture = ''; // Stringified JSON capture for pretty display
+let jsonCapture = ""; // Stringified JSON capture for pretty display
 let currentIp;
-let finalSummary = ''; // Stores the summary section from JSON
-const status = getCachedElement('status'); // Status bar element
-let hostsList = ['0.0.0.0']; // List of hosts found in capture
-const hostFilterEl = getCachedElement('host_filter'); // Host filter dropdown
+let finalSummary = ""; // Stores the summary section from JSON
+const status = getCachedElement("status"); // Status bar element
+let hostsList = ["0.0.0.0"]; // List of hosts found in capture
+const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
 let packetsForHost = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
 let bookmarkList = []; // List of bookmarks (host:packet index)
@@ -60,13 +60,13 @@ let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
 let startTime;
-let activityLogPath = 'Unavailable';
+let activityLogPath = "Unavailable";
 const activityLogEntries = [];
-const filterInputEl = getCachedElement('filterStr');
-const filterHighlightEl = getCachedElement('filterStr-highlight');
-const filterHistoryToggleEl = getCachedElement('filter-history-toggle');
-const filterHistoryMenuEl = getCachedElement('filter-history-menu');
-const filterHistoryContainerEl = getCachedElement('filter-history');
+const filterInputEl = getCachedElement("filterStr");
+const filterHighlightEl = getCachedElement("filterStr-highlight");
+const filterHistoryToggleEl = getCachedElement("filter-history-toggle");
+const filterHistoryMenuEl = getCachedElement("filter-history-menu");
+const filterHistoryContainerEl = getCachedElement("filter-history");
 const filterHistory = [];
 const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
 const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
@@ -88,53 +88,53 @@ if (window.installapi) {
 }
 
 function showInstallScreen(installInfo) {
-  const screen = document.getElementById('install-screen');
+  const screen = document.getElementById("install-screen");
   if (!screen) return;
 
-  document.getElementById('install-version').textContent =
-    'Version ' + installInfo.version;
+  document.getElementById("install-version").textContent =
+    "Version " + installInfo.version;
 
-  const fileList = document.getElementById('install-file-list');
-  fileList.innerHTML = '';
+  const fileList = document.getElementById("install-file-list");
+  fileList.innerHTML = "";
   installInfo.installedFiles.forEach((file) => {
-    const item = document.createElement('li');
-    item.className = file.exists ? 'install-file-ok' : 'install-file-missing';
-    item.textContent = (file.exists ? '\u2713 ' : '\u2717 ') + file.name;
+    const item = document.createElement("li");
+    item.className = file.exists ? "install-file-ok" : "install-file-missing";
+    item.textContent = (file.exists ? "\u2713 " : "\u2717 ") + file.name;
     if (!file.exists) {
-      item.title = 'Not found at: ' + file.path;
+      item.title = "Not found at: " + file.path;
     }
     fileList.appendChild(item);
   });
 
-  const ollamaStatus = document.getElementById('install-ollama-status');
+  const ollamaStatus = document.getElementById("install-ollama-status");
   if (!installInfo.ollamaInstalled) {
     ollamaStatus.textContent =
-      '\u26a0 Ollama is not installed. LLM packet summarisation will be unavailable. Install Ollama from https://ollama.com to enable this feature.';
-    ollamaStatus.className = 'install-warning';
+      "\u26a0 Ollama is not installed. LLM packet summarisation will be unavailable. Install Ollama from https://ollama.com to enable this feature.";
+    ollamaStatus.className = "install-warning";
   } else {
     ollamaStatus.textContent =
-      '\u2713 Ollama is installed. LLM summarisation is available.';
-    ollamaStatus.className = 'install-ok';
+      "\u2713 Ollama is installed. LLM summarisation is available.";
+    ollamaStatus.className = "install-ok";
   }
 
-  screen.style.display = 'flex';
+  screen.style.display = "flex";
 }
 
-const installContinueBtn = document.getElementById('install-continue-btn');
+const installContinueBtn = document.getElementById("install-continue-btn");
 if (installContinueBtn) {
-  installContinueBtn.addEventListener('click', () => {
+  installContinueBtn.addEventListener("click", () => {
     if (window.installapi) {
       window.installapi.dismissFirstRun().then(() => {
-        document.getElementById('install-screen').style.display = 'none';
+        document.getElementById("install-screen").style.display = "none";
       });
     } else {
-      document.getElementById('install-screen').style.display = 'none';
+      document.getElementById("install-screen").style.display = "none";
     }
   });
 }
 
-function renderActivityLogEntries(searchText = '') {
-  const entriesEl = document.getElementById('activity-log-entries');
+function renderActivityLogEntries(searchText = "") {
+  const entriesEl = document.getElementById("activity-log-entries");
   if (!entriesEl) return;
   entriesEl.replaceChildren();
   const normalizedSearch = searchText.trim().toLowerCase();
@@ -145,8 +145,8 @@ function renderActivityLogEntries(searchText = '') {
         : true,
     )
     .forEach((entry) => {
-      const row = document.createElement('div');
-      row.className = 'activity-log-entry';
+      const row = document.createElement("div");
+      row.className = "activity-log-entry";
       row.textContent = entry.message;
       entriesEl.appendChild(row);
     });
@@ -156,13 +156,13 @@ function writeLogEntry(message) {
   const stampedMessage = `[${new Date().toISOString()}] ${message}`;
   activityLogEntries.unshift({ message: stampedMessage });
   renderActivityLogEntries(
-    document.getElementById('activity-log-search')?.value || '',
+    document.getElementById("activity-log-search")?.value || "",
   );
   if (window.logapi) {
     window.logapi.append(stampedMessage).then((result) => {
       if (result && result.path) {
         activityLogPath = result.path;
-        const pathEl = document.getElementById('activity-log-path');
+        const pathEl = document.getElementById("activity-log-path");
         if (pathEl) {
           pathEl.textContent = `Log file: ${activityLogPath}`;
         }
@@ -173,18 +173,18 @@ function writeLogEntry(message) {
 
 function logErrorEntry(context, error) {
   const errorDetails =
-    error && typeof error === 'object' && 'message' in error
+    error && typeof error === "object" && "message" in error
       ? error.message
       : String(error);
   writeLogEntry(`Error context=${context} details="${errorDetails}"`);
 }
 
 function initializeActivityLog() {
-  const pathEl = document.getElementById('activity-log-path');
-  const panelEl = document.getElementById('activity-log-panel');
-  const searchEl = document.getElementById('activity-log-search');
-  const logBtn = document.getElementById('log-btn');
-  const closeBtn = document.getElementById('close-log-btn');
+  const pathEl = document.getElementById("activity-log-path");
+  const panelEl = document.getElementById("activity-log-panel");
+  const searchEl = document.getElementById("activity-log-search");
+  const logBtn = document.getElementById("log-btn");
+  const closeBtn = document.getElementById("close-log-btn");
   if (window.logapi) {
     window.logapi.getPath().then((path) => {
       if (path) {
@@ -193,27 +193,27 @@ function initializeActivityLog() {
       }
     });
   }
-  logBtn.addEventListener('click', () => {
-    panelEl.style.display = 'block';
+  logBtn.addEventListener("click", () => {
+    panelEl.style.display = "block";
   });
-  closeBtn.addEventListener('click', () => {
-    panelEl.style.display = 'none';
+  closeBtn.addEventListener("click", () => {
+    panelEl.style.display = "none";
   });
-  searchEl.addEventListener('input', (event) => {
+  searchEl.addEventListener("input", (event) => {
     renderActivityLogEntries(event.target.value);
   });
-  writeLogEntry('PacketSnitch UI session initialized');
+  writeLogEntry("PacketSnitch UI session initialized");
 }
 
 function getPacketTimeframe() {
-  if (!capturedPackets || typeof capturedPackets !== 'object') return null;
+  if (!capturedPackets || typeof capturedPackets !== "object") return null;
   const packetTimes = [];
-  if (!capturedPackets['Host']) return null;
-  for (const host of Object.keys(capturedPackets['Host'])) {
-    const hostPackets = capturedPackets['Host'][host];
+  if (!capturedPackets["Host"]) return null;
+  for (const host of Object.keys(capturedPackets["Host"])) {
+    const hostPackets = capturedPackets["Host"][host];
     if (!Array.isArray(hostPackets)) continue;
     hostPackets.forEach((packet) => {
-      const packetTime = packet?.['Packet Info']?.['Packet Timestamp'];
+      const packetTime = packet?.["Packet Info"]?.["Packet Timestamp"];
       if (packetTime) {
         packetTimes.push(packetTime);
       }
@@ -236,13 +236,13 @@ function getPacketTimeframe() {
 
 function logCurrentPacketDisplay(action) {
   if (!packetsForHost || !packetsForHost[index]) return;
-  const packetInfo = packetsForHost[index]['Packet Info'];
-  const selectedHost = getCachedElement('host_filter').value || 'Unknown host';
-  const sourceIp = packetInfo?.['IP']?.['Source IP'] || 'Unknown source';
+  const packetInfo = packetsForHost[index]["Packet Info"];
+  const selectedHost = getCachedElement("host_filter").value || "Unknown host";
+  const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown source";
   const destinationIp =
-    packetInfo?.['IP']?.['Destination IP'] || 'Unknown destination';
-  const packetIndex = packetInfo?.['Index'] ?? index;
-  const packetTimestamp = packetInfo?.['Packet Timestamp'] || 'Unknown time';
+    packetInfo?.["IP"]?.["Destination IP"] || "Unknown destination";
+  const packetIndex = packetInfo?.["Index"] ?? index;
+  const packetTimestamp = packetInfo?.["Packet Timestamp"] || "Unknown time";
   writeLogEntry(
     `Displayed packet action=${action} host=${selectedHost} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
   );
@@ -250,53 +250,56 @@ function logCurrentPacketDisplay(action) {
 
 initializeActivityLog();
 
-popHexGrid('00'.repeat(256));
+popHexGrid("00".repeat(256));
 // Set up file upload handler for JSON capture
 document
-  .getElementById('json-upload')
-  .addEventListener('change', function (event) {
+  .getElementById("json-upload")
+  .addEventListener("change", function (event) {
     const file = event.target.files[0];
     if (file) {
       startTime = performance.now();
-      statusUpdate('Processing file: ' + file.name);
+      statusUpdate("Processing file: " + file.name);
       writeLogEntry(
         `User selected JSON file name=${file.name} size_bytes=${file.size}`,
       );
       processFile(file);
       isFileLoaded = true;
-      event.target.value = ''; // Reset so the same file can be loaded again
+      event.target.value = ""; // Reset so the same file can be loaded again
     }
   });
 
 document
-  .getElementById('pcap-filename')
-  .addEventListener('click', function (event) {
-    window.getfileapi.selectFile().then((filePath) => {
-      if (filePath) {
-        writeLogEntry(`User selected PCAP file path=${filePath}`);
-        window.fsize
-          .getFSize()
-          .then((fileSize) => {
-            // Update the UI with the file size
-            const fileSizeKb = (fileSize / 1024).toFixed(2);
-            document.getElementById('pcap-size').textContent =
-              `PCAP size: ${fileSizeKb}kb`;
-            writeLogEntry(
-              `Capture size recorded bytes=${fileSize} kilobytes=${fileSizeKb}`,
-            );
-          })
-          .catch((error) => {
-            // Handle any errors (e.g., file not found)
-            console.error('Error fetching file size:', error);
-            logErrorEntry('file-size-fetch', error);
-          });
+  .getElementById("pcap-filename")
+  .addEventListener("click", function (event) {
+    window.getfileapi
+      .selectFile()
+      .then((filePath) => {
+        if (filePath) {
+          writeLogEntry(`User selected PCAP file path=${filePath}`);
+          window.fsize
+            .getFSize()
+            .then((fileSize) => {
+              // Update the UI with the file size
+              const fileSizeKb = (fileSize / 1024).toFixed(2);
+              document.getElementById("pcap-size").textContent =
+                `PCAP size: ${fileSizeKb}kb`;
+              writeLogEntry(
+                `Capture size recorded bytes=${fileSize} kilobytes=${fileSizeKb}`,
+              );
+            })
+            .catch((error) => {
+              // Handle any errors (e.g., file not found)
+              console.error("Error fetching file size:", error);
+              logErrorEntry("file-size-fetch", error);
+            });
 
-        runSnitch(filePath);
-      }
-    }).catch((error) => {
-      doError('Error selecting PCAP file!');
-      logErrorEntry('pcap-select', error);
-    });
+          runSnitch(filePath);
+        }
+      })
+      .catch((error) => {
+        doError("Error selecting PCAP file!");
+        logErrorEntry("pcap-select", error);
+      });
   });
 
 function isValidJson(str) {
@@ -321,7 +324,7 @@ function parseJsonChunked(jsonString, chunkSize = 65536) {
       // For large files, use setTimeout to yield to the main thread
       let position = 0;
       const length = jsonString.length;
-      let result = '';
+      let result = "";
       const stack = [];
       let inString = false;
       let escape = false;
@@ -333,14 +336,14 @@ function parseJsonChunked(jsonString, chunkSize = 65536) {
           const char = jsonString[position];
           if (escape) {
             escape = false;
-          } else if (char === '\\') {
+          } else if (char === "\\") {
             escape = true;
           } else if (char === '"') {
             inString = !inString;
           } else if (!inString) {
-            if (char === '{' || char === '[') {
+            if (char === "{" || char === "[") {
               stack.push(char);
-            } else if (char === '}' || char === ']') {
+            } else if (char === "}" || char === "]") {
               stack.pop();
             }
           }
@@ -366,48 +369,51 @@ function fileLoaded(isLoaded) {
   isFileLoaded = isLoaded;
   if (isLoaded) {
     const loadEndTime = performance.now();
-    document.getElementById('load-time').textContent =
-      'Load time: ' +
+    document.getElementById("load-time").textContent =
+      "Load time: " +
       ((loadEndTime - startTime) / 1000).toFixed(2) +
-      ' seconds';
+      " seconds";
     filterInputEl.disabled = false;
     filterHistoryToggleEl.disabled = false;
-    document.getElementById('tab-btns').style.opacity = '1';
-    document.getElementById('prev-btn').style.opacity = '1';
-    document.getElementById('next-btn').style.opacity = '1';
-    document.getElementById('log-btn').style.opacity = '1';
-    document.getElementById('stats-btn').style.opacity = '1';
-    document.getElementById('list-btn').style.opacity = '1';
-    document.getElementById('json-lab').style.display = 'none';
-    document.getElementById('pcap-lab').style.display = 'none';
-    document.getElementById('llm-toggle').style.display = 'none';
+    document.getElementById("summary-btn").style.opacity = "1";
+    document.getElementById("data-btn").style.opacity = "1";
+    document.getElementById("data-tools-btn").style.opacity = "1";
+    document.getElementById("tab-btns").style.opacity = "1";
+    document.getElementById("prev-btn").style.opacity = "1";
+    document.getElementById("next-btn").style.opacity = "1";
+    document.getElementById("log-btn").style.opacity = "1";
+    document.getElementById("stats-btn").style.opacity = "1";
+    document.getElementById("list-btn").style.opacity = "1";
+    document.getElementById("json-lab").style.display = "none";
+    document.getElementById("pcap-lab").style.display = "none";
+    document.getElementById("llm-toggle").style.display = "none";
     writeLogEntry(
       `Initial file load completed seconds=${((loadEndTime - startTime) / 1000).toFixed(2)}`,
     );
   } else {
     filterInputEl.disabled = true;
     filterHistoryToggleEl.disabled = true;
-    document.getElementById('json-lab').style.display = 'block';
-    document.getElementById('pcap-lab').style.display = 'block';
-    document.getElementById('log-btn').style.opacity = '0';
-    document.getElementById('stats-btn').style.opacity = '0';
-    document.getElementById('list-btn').style.opacity = '0';
+    document.getElementById("json-lab").style.display = "block";
+    document.getElementById("pcap-lab").style.display = "block";
+    document.getElementById("log-btn").style.opacity = "0";
+    document.getElementById("stats-btn").style.opacity = "0";
+    document.getElementById("list-btn").style.opacity = "0";
   }
 }
 
 function escapeHtml(text) {
   return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function decorateExpressionSegment(segmentText) {
-  if (!segmentText) return '';
+  if (!segmentText) return "";
 
-  const colonIndex = segmentText.indexOf(':');
+  const colonIndex = segmentText.indexOf(":");
   if (colonIndex === -1) {
     return `<span class="query-token-value">${escapeHtml(segmentText)}</span>`;
   }
@@ -416,7 +422,7 @@ function decorateExpressionSegment(segmentText) {
   const valueText = segmentText.slice(colonIndex + 1);
   const cmpMatch = valueText.match(/^(\s*)(>=|<=|==|!=|>|<)(\s*)(.*)$/);
 
-  let valueHtml = '';
+  let valueHtml = "";
   if (cmpMatch) {
     valueHtml =
       escapeHtml(cmpMatch[1]) +
@@ -435,13 +441,13 @@ function decorateExpressionSegment(segmentText) {
 }
 
 function renderHighlightedQuery(query) {
-  const source = query || '';
-  if (!source) return '&nbsp;';
+  const source = query || "";
+  if (!source) return "&nbsp;";
 
   // Query grammar tokens: logical OR/AND operators and grouping parentheses.
   const tokenRegex = /(\|\||&&|\(|\))/g;
   let cursor = 0;
-  let html = '';
+  let html = "";
   let tokenMatch = tokenRegex.exec(source);
 
   while (tokenMatch !== null) {
@@ -449,7 +455,8 @@ function renderHighlightedQuery(query) {
     html += decorateExpressionSegment(segmentText);
 
     const tokenText = tokenMatch[0];
-    const tokenClass = tokenText === '(' || tokenText === ')' ? 'paren' : 'logic';
+    const tokenClass =
+      tokenText === "(" || tokenText === ")" ? "paren" : "logic";
     html += `<span class="query-token-${tokenClass}">${escapeHtml(tokenText)}</span>`;
     cursor = tokenRegex.lastIndex;
     tokenMatch = tokenRegex.exec(source);
@@ -471,7 +478,7 @@ function syncFilterHighlightScroll() {
 function setHistoryMenuOpen(isOpen) {
   filterHistoryMenuEl.hidden = !isOpen;
   if (isOpen) {
-    const firstItem = filterHistoryMenuEl.querySelector('.query-history-item');
+    const firstItem = filterHistoryMenuEl.querySelector(".query-history-item");
     if (firstItem) {
       firstItem.focus();
     } else {
@@ -479,7 +486,10 @@ function setHistoryMenuOpen(isOpen) {
     }
     return;
   }
-  if (document.activeElement && filterHistoryContainerEl.contains(document.activeElement)) {
+  if (
+    document.activeElement &&
+    filterHistoryContainerEl.contains(document.activeElement)
+  ) {
     filterHistoryToggleEl.focus();
   }
 }
@@ -487,16 +497,16 @@ function setHistoryMenuOpen(isOpen) {
 function renderFilterHistory() {
   filterHistoryMenuEl.replaceChildren();
 
-  const emptyState = document.createElement('div');
-  emptyState.textContent = 'No previous queries';
-  emptyState.className = 'filter-history-empty';
-  emptyState.style.display = filterHistory.length ? 'none' : 'block';
+  const emptyState = document.createElement("div");
+  emptyState.textContent = "No previous queries";
+  emptyState.className = "filter-history-empty";
+  emptyState.style.display = filterHistory.length ? "none" : "block";
   filterHistoryMenuEl.appendChild(emptyState);
 
   filterHistory.forEach((query) => {
-    const queryOption = document.createElement('button');
-    queryOption.type = 'button';
-    queryOption.className = 'query-history-item';
+    const queryOption = document.createElement("button");
+    queryOption.type = "button";
+    queryOption.className = "query-history-item";
     queryOption.dataset.query = query;
     queryOption.innerHTML = renderHighlightedQuery(query);
     filterHistoryMenuEl.appendChild(queryOption);
@@ -521,16 +531,16 @@ function runFilterQuery(filterQuery) {
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
     hideAllData();
-    statusUpdate('Status: No packets match the filter criteria');
-    writeLogEntry('User query returned 0 packets');
+    statusUpdate("Status: No packets match the filter criteria");
+    writeLogEntry("User query returned 0 packets");
   } else {
     statusUpdate(
-      'Status: Displaying ' +
+      "Status: Displaying " +
         filteredPackets.length +
-        ' packets matching filter',
+        " packets matching filter",
     );
     writeLogEntry(`User query returned packets=${filteredPackets.length}`);
-    handlePacketNavigation('filtered', null);
+    handlePacketNavigation("filtered", null);
   }
 }
 
@@ -541,59 +551,63 @@ function runFilterQuery(filterQuery) {
 function processFile(file) {
   const reader = new FileReader();
   reader.onload = (event) => {
-    const mainPanel = getCachedElement('main');
+    const mainPanel = getCachedElement("main");
     if (isValidJson(event.target.result) == false) {
-      console.log('Invalid JSON file');
-      doError('Invalid JSON file, please upload a valid JSON capture!');
+      console.log("Invalid JSON file");
+      doError("Invalid JSON file, please upload a valid JSON capture!");
       fileLoaded(false);
       return;
     }
     fileLoaded(true);
     jsonOfPackets = event.target.result;
-    getCachedElement('error-container').style.display = 'none';
+    getCachedElement("error-container").style.display = "none";
 
     // Use chunked parsing for large files (>1MB)
     const fileSize = event.target.result.length;
     if (fileSize > 1024 * 1024) {
-      statusUpdate('Status: Parsing large file (' + (fileSize / 1024 / 1024).toFixed(2) + 'MB)...');
+      statusUpdate(
+        "Status: Parsing large file (" +
+          (fileSize / 1024 / 1024).toFixed(2) +
+          "MB)...",
+      );
       parseJsonChunked(event.target.result)
         .then((parsed) => {
           capturedPackets = parsed;
           jsonCapture = JSON.stringify(capturedPackets, null, 2);
-          finalSummary = capturedPackets['Final Summary'] ?? '';
+          finalSummary = capturedPackets["Final Summary"] ?? "";
           finishProcessingFile();
         })
         .catch((e) => {
-          console.error('JSON parse error:', e);
-          logErrorEntry('json-parse', e);
-          doError('Error parsing JSON file!');
+          console.error("JSON parse error:", e);
+          logErrorEntry("json-parse", e);
+          doError("Error parsing JSON file!");
         });
     } else {
       capturedPackets = JSON.parse(event.target.result);
       jsonCapture = JSON.stringify(capturedPackets, null, 2);
-      finalSummary = capturedPackets['Final Summary'] ?? '';
+      finalSummary = capturedPackets["Final Summary"] ?? "";
       finishProcessingFile();
     }
   };
 
   function finishProcessingFile() {
-    getCachedElement('target_hosts').hidden = false;
-    getCachedElement('summary-btn').style.display = 'block';
+    getCachedElement("target_hosts").hidden = false;
+    getCachedElement("summary-btn").style.display = "block";
     // Reset host list and dropdowns for the new file
-    hostsList = ['0.0.0.0'];
-    const targetHostsDropdown = getCachedElement('target_hosts');
+    hostsList = ["0.0.0.0"];
+    const targetHostsDropdown = getCachedElement("target_hosts");
     while (targetHostsDropdown.options.length > 0) {
       targetHostsDropdown.remove(0);
     }
     bookmarkList = [];
-    const selectBookmarkEl = document.getElementById('selectBookmark');
+    const selectBookmarkEl = document.getElementById("selectBookmark");
     while (selectBookmarkEl.options.length > 1) {
       selectBookmarkEl.remove(1);
     }
     // Populate host dropdown with hosts from JSON
-    for (const host in capturedPackets['Host']) {
+    for (const host in capturedPackets["Host"]) {
       hostsList.push(host);
-      const newhost = document.createElement('option');
+      const newhost = document.createElement("option");
       newhost.textContent = host;
       newhost.value = host;
       targetHostsDropdown.appendChild(newhost);
@@ -609,11 +623,11 @@ function processFile(file) {
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
     writeSummary();
     initializeDataView();
-  };
+  }
   reader.onerror = (error) => {
-    status.textContent = 'Status: Error reading file: ' + error;
-    logErrorEntry('file-read', error);
-    doError('Error reading file!');
+    status.textContent = "Status: Error reading file: " + error;
+    logErrorEntry("file-read", error);
+    doError("Error reading file!");
   };
   reader.readAsText(file);
 }
@@ -624,7 +638,7 @@ function processFile(file) {
 function statusUpdate(message) {
   status.textContent = message;
   setTimeout(() => {
-    status.textContent = 'PacketSnitch ' + psVer + ': Ready';
+    status.textContent = "PacketSnitch " + psVer + ": Ready";
   }, 6000);
 }
 
@@ -634,7 +648,7 @@ function statusUpdate(message) {
 function hostPacketInfo(currentIp) {
   const selected = currentIp;
   packetsForHost = [];
-  const hostPackets = capturedPackets['Host'][selected];
+  const hostPackets = capturedPackets["Host"][selected];
   for (const packet in hostPackets) {
     packetsForHost.push(hostPackets[packet]);
   }
@@ -643,17 +657,17 @@ function hostPacketInfo(currentIp) {
 // Use event delegation for dynamically created elements
 // and cache static elements at module load
 const navButtons = {
-  prev: getCachedElement('prev-btn'),
-  next: getCachedElement('next-btn'),
-  summary: getCachedElement('summary-btn'),
-  data: getCachedElement('data-btn'),
-  setBookmark: getCachedElement('setBookmark'),
+  prev: getCachedElement("prev-btn"),
+  next: getCachedElement("next-btn"),
+  summary: getCachedElement("summary-btn"),
+  data: getCachedElement("data-btn"),
+  setBookmark: getCachedElement("setBookmark"),
 };
 
 // Update host filter when a new host is selected from dropdown
-getCachedElement('target_hosts').addEventListener('change', function () {
-  const selected = getCachedElement('target_hosts').value;
-  let hostFilterEl = getCachedElement('host_filter');
+getCachedElement("target_hosts").addEventListener("change", function () {
+  const selected = getCachedElement("target_hosts").value;
+  let hostFilterEl = getCachedElement("host_filter");
   filteredPackets = []; // reset filter when host changes
   writeLogEntry(`Host target changed host=${selected}`);
   if (hostFilterEl.value !== selected) {
@@ -661,39 +675,39 @@ getCachedElement('target_hosts').addEventListener('change', function () {
   }
 });
 
-getCachedElement('target_hosts').addEventListener('click', function () {
-  const selected = getCachedElement('target_hosts').value;
+getCachedElement("target_hosts").addEventListener("click", function () {
+  const selected = getCachedElement("target_hosts").value;
   filteredPackets = filterPackets(
     capturedPackets,
-    'ip.src.addr: ' + selected + '|| ip.dst.addr: ' + selected,
+    "ip.src.addr: " + selected + "|| ip.dst.addr: " + selected,
   );
   writeLogEntry(
     `Host target clicked host=${selected} packets_returned=${filteredPackets.length}`,
   );
-  handlePacketNavigation('filtered', null);
+  handlePacketNavigation("filtered", null);
 });
 
 // Show summary when summary button is clicked
-getCachedElement('summary-btn').addEventListener('click', function () {
+getCachedElement("summary-btn").addEventListener("click", function () {
   writeSummary();
 });
 
 // Displays the summary section from the loaded JSON.
 
 function writeSummary() {
-  statusUpdate('Status: Displaying capture analysis summary');
+  statusUpdate("Status: Displaying capture analysis summary");
   //highlightTab("summary-navAction");
-  if (jsonCapture == '') {
-    statusUpdate('Status: No JSON file loaded, please upload a file first');
+  if (jsonCapture == "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
   } else {
-    document.getElementById('packetInfoPane').style.display = 'none';
-    document.getElementById('packetPayloadPane').style.display = 'none';
-    document.getElementById('stats_box').style.display = 'none';
-    document.getElementById('data_tools_box').style.display = 'none';
-    document.getElementById('list_box').style.display = 'none';
-    document.getElementById('summary_content').textContent =
-      finalSummary || 'No LLM summary available.';
-    document.getElementById('summary_box').style.display = 'block';
+    document.getElementById("packetInfoPane").style.display = "none";
+    document.getElementById("packetPayloadPane").style.display = "none";
+    document.getElementById("stats_box").style.display = "none";
+    document.getElementById("data_tools_box").style.display = "none";
+    document.getElementById("list_box").style.display = "none";
+    document.getElementById("summary_content").textContent =
+      finalSummary || "No LLM summary available.";
+    document.getElementById("summary_box").style.display = "block";
     fileLoaded(true);
   }
 }
@@ -702,10 +716,10 @@ function normalizeStatsTextValue(value, options = {}) {
   if (value === null || value === undefined) return null;
 
   const { stripNonPrintable = false } = options;
-  let normalized = typeof value === 'string' ? value : String(value);
+  let normalized = typeof value === "string" ? value : String(value);
 
   if (stripNonPrintable) {
-    normalized = normalized.replace(/[\x00-\x1F\x7F]/g, '');
+    normalized = normalized.replace(/[\x00-\x1F\x7F]/g, "");
   }
 
   normalized = normalized.trim();
@@ -714,7 +728,7 @@ function normalizeStatsTextValue(value, options = {}) {
 
 function normalizeStatsPortValue(value) {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const normalizedText = normalizeStatsTextValue(value);
   if (!normalizedText || !/^\d+$/.test(normalizedText)) return null;
   return Number(normalizedText);
@@ -738,56 +752,56 @@ function buildCaptureStats() {
   let unencryptedCount = 0;
   let totalPackets = 0;
 
-  if (!capturedPackets || !capturedPackets['Host']) return null;
+  if (!capturedPackets || !capturedPackets["Host"]) return null;
 
-  for (const host of Object.keys(capturedPackets['Host'])) {
+  for (const host of Object.keys(capturedPackets["Host"])) {
     const normalizedHostKey = normalizeStatsTextValue(host);
     if (normalizedHostKey) hosts.add(normalizedHostKey);
-    const packets = capturedPackets['Host'][host];
+    const packets = capturedPackets["Host"][host];
     if (!Array.isArray(packets)) continue;
 
     for (const pkt of packets) {
       totalPackets++;
-      const pi = pkt?.['Packet Info'];
-      const ei = pkt?.['Extra Info'];
+      const pi = pkt?.["Packet Info"];
+      const ei = pkt?.["Extra Info"];
       if (!pi || !ei) continue;
 
       // Transport protocol (TCP/UDP/ICMP)
-      const tp = normalizeStatsTextValue(pi['Protocol']);
+      const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
 
       // Source/destination IPs
-      const srcIp = normalizeStatsTextValue(pi?.['IP']?.['Source IP']);
-      const dstIp = normalizeStatsTextValue(pi?.['IP']?.['Destination IP']);
+      const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
+      const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["Destination IP"]);
       if (srcIp) hosts.add(srcIp);
       if (dstIp) hosts.add(dstIp);
 
       // MAC vendors
-      const ef = pi?.['Ethernet Frame'];
+      const ef = pi?.["Ethernet Frame"];
       if (ef) {
-        const srcVendor = normalizeStatsTextValue(ef['MAC Source Vendor']);
-        const dstVendor = normalizeStatsTextValue(ef['MAC Destination Vendor']);
+        const srcVendor = normalizeStatsTextValue(ef["MAC Source Vendor"]);
+        const dstVendor = normalizeStatsTextValue(ef["MAC Destination Vendor"]);
         if (srcVendor) macVendors.add(srcVendor);
         if (dstVendor) macVendors.add(dstVendor);
       }
 
       // Port-level protocol name and ports
-      const netData = ei?.['Traits']?.['Network Data'];
+      const netData = ei?.["Traits"]?.["Network Data"];
       if (netData) {
-        const protoName = normalizeStatsTextValue(netData['Port Protcol']);
-        if (protoName && protoName !== 'Unknown') protocols.add(protoName);
+        const protoName = normalizeStatsTextValue(netData["Port Protcol"]);
+        if (protoName && protoName !== "Unknown") protocols.add(protoName);
 
         // Source/dest ports
         const tpData = tp ? pi[tp] : null;
         if (tpData) {
-          const srcPort = normalizeStatsPortValue(tpData['Source port']);
-          const dstPort = normalizeStatsPortValue(tpData['Destination port']);
+          const srcPort = normalizeStatsPortValue(tpData["Source port"]);
+          const dstPort = normalizeStatsPortValue(tpData["Destination port"]);
           if (srcPort !== null) ports.add(srcPort);
           if (dstPort !== null) ports.add(dstPort);
         }
 
         // Hostnames
-        const hn = netData?.['Hostnames']?.['Hostnames'];
+        const hn = netData?.["Hostnames"]?.["Hostnames"];
         if (Array.isArray(hn)) {
           hn.forEach((h) => {
             const normalizedHostname = normalizeStatsTextValue(h);
@@ -796,10 +810,10 @@ function buildCaptureStats() {
         }
 
         // Locations
-        for (const side of ['Source IP', 'Destination IP']) {
-          const loc = netData?.[side]?.['Location'];
-          const city = normalizeStatsTextValue(loc?.['City']);
-          const country = normalizeStatsTextValue(loc?.['Country']);
+        for (const side of ["Source IP", "Destination IP"]) {
+          const loc = netData?.[side]?.["Location"];
+          const city = normalizeStatsTextValue(loc?.["City"]);
+          const country = normalizeStatsTextValue(loc?.["Country"]);
           if (city && country) {
             const key = `${city}, ${country}`;
             locations.set(key, (locations.get(key) || 0) + 1);
@@ -808,11 +822,11 @@ function buildCaptureStats() {
       }
 
       // MIME types
-      const mimeType = normalizeStatsTextValue(ei?.['MIME Type']);
+      const mimeType = normalizeStatsTextValue(ei?.["MIME Type"]);
       if (mimeType) mimeTypes.add(mimeType);
 
       // Data types
-      const dt = ei?.['Data Types'];
+      const dt = ei?.["Data Types"];
       if (Array.isArray(dt)) {
         dt.forEach((d) => {
           const normalizedDataType = normalizeStatsTextValue(d, {
@@ -823,8 +837,8 @@ function buildCaptureStats() {
       }
 
       // Encryption
-      const encData = ei?.['Traits']?.['Server Info']?.['Encryption Data'];
-      if (!encData || encData === 'N/A') {
+      const encData = ei?.["Traits"]?.["Server Info"]?.["Encryption Data"];
+      if (!encData || encData === "N/A") {
         unencryptedCount++;
       } else {
         encryptedCount++;
@@ -837,7 +851,7 @@ function buildCaptureStats() {
     transportProtocols: [...transportProtocols].sort(),
     hosts: [...hosts].sort(),
     ports: [...ports].sort((a, b) => a - b),
-    macVendors: [...macVendors].filter((v) => v !== 'N/A').sort(),
+    macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
     mimeTypes: [...mimeTypes].sort(),
     locations: [...locations.entries()].sort((a, b) => b[1] - a[1]),
     hostnames: [...hostnames].sort(),
@@ -858,37 +872,37 @@ function makeStatsSection(title, items, queryBuilder) {
     new Set(
       items.filter((item) => {
         if (item === null || item === undefined) return false;
-        if (typeof item !== 'string') return true;
+        if (typeof item !== "string") return true;
         return normalizeStatsTextValue(item) !== null;
       }),
     ),
   );
   if (normalizedItems.length === 0) return null;
 
-  const section = document.createElement('div');
-  section.className = 'stats-section';
+  const section = document.createElement("div");
+  section.className = "stats-section";
 
-  const heading = document.createElement('div');
-  heading.className = 'stats-section-title';
+  const heading = document.createElement("div");
+  heading.className = "stats-section-title";
   heading.textContent = title;
   section.appendChild(heading);
 
-  const tagList = document.createElement('div');
-  tagList.className = 'stats-tag-list';
+  const tagList = document.createElement("div");
+  tagList.className = "stats-tag-list";
 
   normalizedItems.forEach((item) => {
-    const tag = document.createElement('span');
-    tag.className = 'stats-tag';
+    const tag = document.createElement("span");
+    tag.className = "stats-tag";
     tag.textContent = item;
-    tag.title = 'Click to use in filter query';
+    tag.title = "Click to use in filter query";
     if (queryBuilder) {
-      tag.addEventListener('click', () => {
+      tag.addEventListener("click", () => {
         const query = queryBuilder(item);
         if (query) {
           filterInputEl.value = query;
           syncFilterHighlight();
           filterInputEl.focus();
-          statusUpdate('Status: Filter query populated — press Enter to apply');
+          statusUpdate("Status: Filter query populated — press Enter to apply");
           writeLogEntry(`Stats tag clicked query="${query}"`);
         }
       });
@@ -904,36 +918,36 @@ function makeStatsSection(title, items, queryBuilder) {
  * Shows the capture stats panel with aggregated data from the loaded capture.
  */
 function showStats() {
-  if (jsonCapture === '') {
-    statusUpdate('Status: No JSON file loaded, please upload a file first');
+  if (jsonCapture === "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
     return;
   }
-  statusUpdate('Status: Displaying capture statistics');
-  writeLogEntry('User opened capture stats view');
+  statusUpdate("Status: Displaying capture statistics");
+  writeLogEntry("User opened capture stats view");
 
-  document.getElementById('packetInfoPane').style.display = 'none';
-  document.getElementById('packetPayloadPane').style.display = 'none';
-  document.getElementById('summary_box').style.display = 'none';
-  document.getElementById('list_box').style.display = 'none';
-  document.getElementById('data_tools_box').style.display = 'none';
-  document.getElementById('stats_box').style.display = 'block';
-  document.getElementById('rightside').style.display = 'none';
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "block";
+  document.getElementById("rightside").style.display = "none";
 
-  const content = document.getElementById('stats_content');
+  const content = document.getElementById("stats_content");
   content.replaceChildren();
 
   const stats = buildCaptureStats();
   if (!stats) {
-    content.textContent = 'No packet data available.';
+    content.textContent = "No packet data available.";
     return;
   }
 
   // Overview row
-  const overview = document.createElement('div');
-  overview.className = 'stats-section';
-  const ovHead = document.createElement('div');
-  ovHead.className = 'stats-section-title';
-  ovHead.textContent = 'Capture Overview';
+  const overview = document.createElement("div");
+  overview.className = "stats-section";
+  const ovHead = document.createElement("div");
+  ovHead.className = "stats-section-title";
+  ovHead.textContent = "Capture Overview";
   overview.appendChild(ovHead);
   [
     `Total Packets: ${stats.totalPackets}`,
@@ -943,8 +957,8 @@ function showStats() {
     `Unique Protocols: ${stats.protocols.length}`,
     `Unique Locations: ${stats.locations.length}`,
   ].forEach((line) => {
-    const kv = document.createElement('div');
-    kv.className = 'stats-kv';
+    const kv = document.createElement("div");
+    kv.className = "stats-kv";
     kv.textContent = line;
     overview.appendChild(kv);
   });
@@ -952,7 +966,7 @@ function showStats() {
 
   // Application protocols
   const protoSec = makeStatsSection(
-    'Application Protocols',
+    "Application Protocols",
     stats.protocols,
     (v) => `tcp.proto: ${v.toLowerCase()}`,
   );
@@ -960,7 +974,7 @@ function showStats() {
 
   // Transport protocols
   const tpSec = makeStatsSection(
-    'Transport Protocols',
+    "Transport Protocols",
     stats.transportProtocols,
     (v) => `wire.proto: ${v.toLowerCase()}`,
   );
@@ -968,7 +982,7 @@ function showStats() {
 
   // All hosts
   const hostSec = makeStatsSection(
-    'All Hosts Addressed',
+    "All Hosts Addressed",
     stats.hosts,
     (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
   );
@@ -976,7 +990,7 @@ function showStats() {
 
   // Hostnames / DNS
   const hnSec = makeStatsSection(
-    'Hostnames (DNS)',
+    "Hostnames (DNS)",
     stats.hostnames,
     (v) => `dns.qname: ${v}`,
   );
@@ -984,18 +998,16 @@ function showStats() {
 
   // Physical locations
   if (stats.locations.length > 0) {
-    const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
-    const locSec = makeStatsSection(
-      'Physical Locations',
-      locItems,
-      null,
+    const locItems = stats.locations.map(
+      ([place, count]) => `${place} (${count})`,
     );
+    const locSec = makeStatsSection("Physical Locations", locItems, null);
     if (locSec) content.appendChild(locSec);
   }
 
   // Ports
   const portSec = makeStatsSection(
-    'Ports Seen',
+    "Ports Seen",
     stats.ports.map(String),
     (v) => `tcp.src.port: ${v} || tcp.dst.port: ${v}`,
   );
@@ -1003,7 +1015,7 @@ function showStats() {
 
   // MAC vendors
   const macSec = makeStatsSection(
-    'MAC Vendors',
+    "MAC Vendors",
     stats.macVendors,
     (v) => `eth.src.vendor: ${v}`,
   );
@@ -1011,37 +1023,33 @@ function showStats() {
 
   // MIME types
   const mimeSec = makeStatsSection(
-    'MIME Types',
+    "MIME Types",
     stats.mimeTypes,
     (v) => `mime.type: ${v}`,
   );
   if (mimeSec) content.appendChild(mimeSec);
 
   // Data types
-  const dtSec = makeStatsSection(
-    'Data Types',
-    stats.dataTypes,
-    null,
-  );
+  const dtSec = makeStatsSection("Data Types", stats.dataTypes, null);
   if (dtSec) content.appendChild(dtSec);
 }
 
 function parseDataToolsInput(format, rawInput) {
-  if (!rawInput || rawInput.trim() === '') {
-    throw new Error('Enter input data first.');
+  if (!rawInput || rawInput.trim() === "") {
+    throw new Error("Enter input data first.");
   }
 
-  if (format === 'hex') {
+  if (format === "hex") {
     const normalized = rawInput
-      .replace(/0x/gi, '')
-      .replace(/[\s,:;-]+/g, '')
+      .replace(/0x/gi, "")
+      .replace(/[\s,:;-]+/g, "")
       .trim();
-    if (!normalized) throw new Error('No hex bytes were found.');
+    if (!normalized) throw new Error("No hex bytes were found.");
     if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-      throw new Error('Hex input can only contain 0-9 and A-F.');
+      throw new Error("Hex input can only contain 0-9 and A-F.");
     }
     if (normalized.length % 2 !== 0) {
-      throw new Error('Hex input must contain an even number of characters.');
+      throw new Error("Hex input must contain an even number of characters.");
     }
     const bytes = new Uint8Array(normalized.length / 2);
     for (let i = 0; i < normalized.length; i += 2) {
@@ -1050,14 +1058,14 @@ function parseDataToolsInput(format, rawInput) {
     return bytes;
   }
 
-  if (format === 'binary') {
-    const normalized = rawInput.replace(/\s+/g, '');
-    if (!normalized) throw new Error('No binary bits were found.');
+  if (format === "binary") {
+    const normalized = rawInput.replace(/\s+/g, "");
+    if (!normalized) throw new Error("No binary bits were found.");
     if (!/^[01]+$/.test(normalized)) {
-      throw new Error('Binary input can only contain 0 and 1.');
+      throw new Error("Binary input can only contain 0 and 1.");
     }
     if (normalized.length % 8 !== 0) {
-      throw new Error('Binary input must be grouped into full 8-bit bytes.');
+      throw new Error("Binary input must be grouped into full 8-bit bytes.");
     }
     const bytes = new Uint8Array(normalized.length / 8);
     for (let i = 0; i < normalized.length; i += 8) {
@@ -1066,17 +1074,17 @@ function parseDataToolsInput(format, rawInput) {
     return bytes;
   }
 
-  if (format === 'base64') {
+  if (format === "base64") {
     const normalized = rawInput
       .trim()
-      .replace(/^data:[^;]+;base64,/i, '')
-      .replace(/\s+/g, '');
-    if (!normalized) throw new Error('No base64 content was found.');
-    let decoded = '';
+      .replace(/^data:[^;]+;base64,/i, "")
+      .replace(/\s+/g, "");
+    if (!normalized) throw new Error("No base64 content was found.");
+    let decoded = "";
     try {
       decoded = atob(normalized);
     } catch {
-      throw new Error('Invalid base64 input.');
+      throw new Error("Invalid base64 input.");
     }
     const bytes = new Uint8Array(decoded.length);
     for (let i = 0; i < decoded.length; i++) {
@@ -1085,14 +1093,14 @@ function parseDataToolsInput(format, rawInput) {
     return bytes;
   }
 
-  if (format === 'decimal') {
+  if (format === "decimal") {
     const tokens = rawInput.split(/[\s,]+/).filter(Boolean);
-    if (!tokens.length) throw new Error('No decimal byte values were found.');
+    if (!tokens.length) throw new Error("No decimal byte values were found.");
     const values = tokens.map((token) => {
       const parsed = Number(token);
       if (!/^\d+$/.test(token) || parsed > 255) {
         throw new Error(
-          'Each decimal value must be a non-negative integer between 0 and 255.',
+          "Each decimal value must be a non-negative integer between 0 and 255.",
         );
       }
       return parsed;
@@ -1105,7 +1113,7 @@ function parseDataToolsInput(format, rawInput) {
 }
 
 function bytesToBase64(bytes) {
-  let binary = '';
+  let binary = "";
   bytes.forEach((byte) => {
     binary += String.fromCharCode(byte);
   });
@@ -1115,9 +1123,9 @@ function bytesToBase64(bytes) {
 function bytesToPrintableAscii(bytes) {
   return [...bytes]
     .map((byte) =>
-      byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.',
+      byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : ".",
     )
-    .join('');
+    .join("");
 }
 
 function bytesToBigIntDecimal(bytes) {
@@ -1144,24 +1152,24 @@ function calculateShannonEntropy(bytes) {
 }
 
 function inferMimeType(bytes) {
-  if (!bytes || !bytes.length) return 'application/octet-stream';
+  if (!bytes || !bytes.length) return "application/octet-stream";
 
   const startsWith = (signature) =>
     signature.every((value, index) => bytes[index] === value);
-  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return 'image/png';
-  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
-  if (startsWith([0x47, 0x49, 0x46, 0x38])) return 'image/gif';
-  if (startsWith([0x25, 0x50, 0x44, 0x46])) return 'application/pdf';
-  if (startsWith([0x50, 0x4b, 0x03, 0x04])) return 'application/zip';
-  if (startsWith([0x1f, 0x8b])) return 'application/gzip';
-  if (startsWith([0x7f, 0x45, 0x4c, 0x46])) return 'application/x-elf';
+  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return "image/png";
+  if (startsWith([0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return "image/gif";
+  if (startsWith([0x25, 0x50, 0x44, 0x46])) return "application/pdf";
+  if (startsWith([0x50, 0x4b, 0x03, 0x04])) return "application/zip";
+  if (startsWith([0x1f, 0x8b])) return "application/gzip";
+  if (startsWith([0x7f, 0x45, 0x4c, 0x46])) return "application/x-elf";
 
   const utf8Text = new TextDecoder().decode(bytes);
   const trimmed = utf8Text.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       JSON.parse(trimmed);
-      return 'application/json';
+      return "application/json";
     } catch {
       // Keep evaluating as plain text/binary.
     }
@@ -1170,56 +1178,54 @@ function inferMimeType(bytes) {
   const printableChars = [...utf8Text].filter((ch) => {
     const code = ch.charCodeAt(0);
     return (
-      (code >= 32 && code <= 126) ||
-      ch === '\n' ||
-      ch === '\r' ||
-      ch === '\t'
+      (code >= 32 && code <= 126) || ch === "\n" || ch === "\r" || ch === "\t"
     );
   }).length;
   if (
     utf8Text.length > 0 &&
     printableChars / utf8Text.length > DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD
   ) {
-    return 'text/plain; charset=utf-8';
+    return "text/plain; charset=utf-8";
   }
 
-  return 'application/octet-stream';
+  return "application/octet-stream";
 }
 
 function getEntropyLabel(entropy) {
-  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return 'High';
-  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return 'Medium';
-  return 'Low';
+  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return "High";
+  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return "Medium";
+  return "Low";
 }
 
 function resetDataToolsOutputs() {
-  document.getElementById('data-tools-hex-output').value = '';
-  document.getElementById('data-tools-binary-output').value = '';
-  document.getElementById('data-tools-decimal-output').value = '';
-  document.getElementById('data-tools-decimal-integer-output').value = '';
-  document.getElementById('data-tools-ascii-output').value = '';
-  document.getElementById('data-tools-base64-output').value = '';
-  document.getElementById('data-tools-byte-length').textContent = 'Byte Length: 0';
-  document.getElementById('data-tools-mime-type').textContent =
-    'MIME Type: Unknown';
-  document.getElementById('data-tools-entropy').textContent =
-    'Shannon Entropy: 0.00 (Low)';
+  document.getElementById("data-tools-hex-output").value = "";
+  document.getElementById("data-tools-binary-output").value = "";
+  document.getElementById("data-tools-decimal-output").value = "";
+  document.getElementById("data-tools-decimal-integer-output").value = "";
+  document.getElementById("data-tools-ascii-output").value = "";
+  document.getElementById("data-tools-base64-output").value = "";
+  document.getElementById("data-tools-byte-length").textContent =
+    "Byte Length: 0";
+  document.getElementById("data-tools-mime-type").textContent =
+    "MIME Type: Unknown";
+  document.getElementById("data-tools-entropy").textContent =
+    "Shannon Entropy: 0.00 (Low)";
 }
 
 function runDataToolsConversion() {
-  const inputEl = document.getElementById('data-tools-input');
-  const formatEl = document.getElementById('data-tools-format');
-  const errorEl = document.getElementById('data-tools-error');
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const errorEl = document.getElementById("data-tools-error");
 
   try {
     const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
     const hexSpaced = [...bytes]
-      .map((byte) => byte.toString(16).padStart(2, '0').toUpperCase())
-      .join(' ');
+      .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+      .join(" ");
     const binarySpaced = [...bytes]
-      .map((byte) => byte.toString(2).padStart(8, '0'))
-      .join(' ');
-    const decimalBytes = [...bytes].join(' ');
+      .map((byte) => byte.toString(2).padStart(8, "0"))
+      .join(" ");
+    const decimalBytes = [...bytes].join(" ");
     const asciiPreview = bytesToPrintableAscii(bytes);
     const base64Value = bytesToBase64(bytes);
     const entropy = calculateShannonEntropy(bytes);
@@ -1229,69 +1235,71 @@ function runDataToolsConversion() {
         ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
         : bytesToBigIntDecimal(bytes);
 
-    document.getElementById('data-tools-hex-output').value = hexSpaced;
-    document.getElementById('data-tools-binary-output').value = binarySpaced;
-    document.getElementById('data-tools-decimal-output').value = decimalBytes;
-    document.getElementById('data-tools-decimal-integer-output').value =
+    document.getElementById("data-tools-hex-output").value = hexSpaced;
+    document.getElementById("data-tools-binary-output").value = binarySpaced;
+    document.getElementById("data-tools-decimal-output").value = decimalBytes;
+    document.getElementById("data-tools-decimal-integer-output").value =
       decimalInteger;
-    document.getElementById('data-tools-ascii-output').value = asciiPreview;
-    document.getElementById('data-tools-base64-output').value = base64Value;
-    document.getElementById('data-tools-byte-length').textContent =
+    document.getElementById("data-tools-ascii-output").value = asciiPreview;
+    document.getElementById("data-tools-base64-output").value = base64Value;
+    document.getElementById("data-tools-byte-length").textContent =
       `Byte Length: ${bytes.length}`;
-    document.getElementById('data-tools-mime-type').textContent =
+    document.getElementById("data-tools-mime-type").textContent =
       `MIME Type: ${inferMimeType(bytes)}`;
-    document.getElementById('data-tools-entropy').textContent =
+    document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
-    errorEl.textContent = '';
+    errorEl.textContent = "";
   } catch (error) {
     resetDataToolsOutputs();
     errorEl.textContent =
-      error && typeof error === 'object' && 'message' in error
+      error && typeof error === "object" && "message" in error
         ? error.message
         : String(error);
   }
 }
 
 function showDataTools() {
-  statusUpdate('Status: Displaying data conversion tools');
-  writeLogEntry('User opened data conversion tools view');
-  document.getElementById('packetInfoPane').style.display = 'none';
-  document.getElementById('packetPayloadPane').style.display = 'none';
-  document.getElementById('summary_box').style.display = 'none';
-  document.getElementById('stats_box').style.display = 'none';
-  document.getElementById('list_box').style.display = 'none';
-  document.getElementById('rightside').style.display = 'none';
-  document.getElementById('data_tools_box').style.display = 'block';
+  statusUpdate("Status: Displaying data conversion tools");
+  writeLogEntry("User opened data conversion tools view");
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "block";
 }
 
-let activeContextConversionText = '';
+let activeContextConversionText = "";
 let activeContextTarget = null;
 let activeContextPasteTarget = null;
 let activeContextFilterQueries = {};
-const convertContextMenuEl = getCachedElement('convert-context-menu');
+const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
-  copy: getCachedElement('ctx-copy'),
-  paste: getCachedElement('ctx-paste'),
-  saveJson: getCachedElement('ctx-save-json'),
-  hex: getCachedElement('convert-context-hex'),
-  binary: getCachedElement('convert-context-binary'),
-  base64: getCachedElement('convert-context-base64'),
-  decimal: getCachedElement('convert-context-decimal'),
-  ascii: getCachedElement('convert-context-ascii'),
-  copyHex: getCachedElement('convert-context-copy-hex'),
-  copyAscii: getCachedElement('convert-context-copy-ascii'),
-  copyRaw: getCachedElement('convert-context-copy-raw'),
-  filterIp: getCachedElement('ctx-filter-ip'),
-  filterPort: getCachedElement('ctx-filter-port'),
-  filterMac: getCachedElement('ctx-filter-mac'),
-  filterProtocol: getCachedElement('ctx-filter-protocol'),
-  filterMime: getCachedElement('ctx-filter-mime'),
+  copy: getCachedElement("ctx-copy"),
+  paste: getCachedElement("ctx-paste"),
+  saveJson: getCachedElement("ctx-save-json"),
+  hex: getCachedElement("convert-context-hex"),
+  binary: getCachedElement("convert-context-binary"),
+  base64: getCachedElement("convert-context-base64"),
+  decimal: getCachedElement("convert-context-decimal"),
+  ascii: getCachedElement("convert-context-ascii"),
+  copyHex: getCachedElement("convert-context-copy-hex"),
+  copyAscii: getCachedElement("convert-context-copy-ascii"),
+  copyRaw: getCachedElement("convert-context-copy-raw"),
+  filterIp: getCachedElement("ctx-filter-ip"),
+  filterPort: getCachedElement("ctx-filter-port"),
+  filterMac: getCachedElement("ctx-filter-mac"),
+  filterProtocol: getCachedElement("ctx-filter-protocol"),
+  filterMime: getCachedElement("ctx-filter-mime"),
 };
-const convertContextDividerEl = getCachedElement('convert-context-divider');
-const convertContextSaveDividerEl = getCachedElement('convert-context-save-divider');
+const convertContextDividerEl = getCachedElement("convert-context-divider");
+const convertContextSaveDividerEl = getCachedElement(
+  "convert-context-save-divider",
+);
 
 function hideConvertContextMenu() {
-  activeContextConversionText = '';
+  activeContextConversionText = "";
   activeContextTarget = null;
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
@@ -1299,14 +1307,14 @@ function hideConvertContextMenu() {
 }
 
 function normalizeContextToken(value) {
-  if (value === null || value === undefined) return '';
-  return String(value).replace(/\s+/g, ' ').trim();
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 function extractContextIp(value) {
   const normalized = normalizeContextToken(value);
   const match = normalized.match(CONTEXT_IPV4_REGEX);
-  return match ? match[0] : '';
+  return match ? match[0] : "";
 }
 
 function extractContextPort(value, allowStandaloneNumber = false) {
@@ -1316,43 +1324,47 @@ function extractContextPort(value, allowStandaloneNumber = false) {
   );
   if (ipPortMatch) {
     const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
-    return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
+    return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : "";
   }
-  if (!allowStandaloneNumber) return '';
+  if (!allowStandaloneNumber) return "";
   const portMatch = normalized.match(/^\d{1,5}$/);
-  if (!portMatch) return '';
+  if (!portMatch) return "";
   const portValue = Number.parseInt(normalized, 10);
-  return portValue >= 0 && portValue <= 65535 ? String(portValue) : '';
+  return portValue >= 0 && portValue <= 65535 ? String(portValue) : "";
 }
 
 function extractContextMac(value) {
   const normalized = normalizeContextToken(value);
   const match = normalized.match(CONTEXT_MAC_REGEX);
-  return match ? match[0].toLowerCase() : '';
+  return match ? match[0].toLowerCase() : "";
 }
 
 function extractContextMimeType(value) {
   const normalized = normalizeContextToken(value);
-  const labelStripped = normalized.replace(/^mime(?:\s+type)?\s*:\s*/i, '').trim();
-  if (!labelStripped) return '';
-  const mimeBase = labelStripped.split(';')[0].trim();
-  return CONTEXT_MIME_REGEX.test(mimeBase) ? mimeBase.toLowerCase() : '';
+  const labelStripped = normalized
+    .replace(/^mime(?:\s+type)?\s*:\s*/i, "")
+    .trim();
+  if (!labelStripped) return "";
+  const mimeBase = labelStripped.split(";")[0].trim();
+  return CONTEXT_MIME_REGEX.test(mimeBase) ? mimeBase.toLowerCase() : "";
 }
 
 function extractContextProtocol(value) {
   const normalized = normalizeContextToken(value);
   const labelStripped = normalized
-    .replace(/^protocol(?:\s+name)?\s*:\s*/i, '')
-    .replace(/^app(?:lication)?\s+protocol\s*:\s*/i, '')
-    .replace(/^transport\s+protocol\s*:\s*/i, '')
+    .replace(/^protocol(?:\s+name)?\s*:\s*/i, "")
+    .replace(/^app(?:lication)?\s+protocol\s*:\s*/i, "")
+    .replace(/^transport\s+protocol\s*:\s*/i, "")
     .trim();
-  if (!labelStripped) return '';
+  if (!labelStripped) return "";
   const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+_-]*$/i);
-  return protocolMatch ? labelStripped.toLowerCase() : '';
+  return protocolMatch ? labelStripped.toLowerCase() : "";
 }
 
 function sanitizeFilterTerm(value) {
-  return normalizeContextToken(value).replace(/[^a-zA-Z0-9:./+-]/g, '').trim();
+  return normalizeContextToken(value)
+    .replace(/[^a-zA-Z0-9:./+-]/g, "")
+    .trim();
 }
 
 function buildContextFilterQueries(target, selectedText, conversionText) {
@@ -1366,11 +1378,11 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
   addCandidate(selectedText);
   addCandidate(conversionText);
 
-  let rowName = '';
+  let rowName = "";
   let rowPortEligible = false;
-  const row = target?.closest?.('tr');
+  const row = target?.closest?.("tr");
   if (row) {
-    const cells = row.querySelectorAll('td');
+    const cells = row.querySelectorAll("td");
     rowName = normalizeContextToken(cells[0]?.textContent);
     const rowValue = normalizeContextToken(cells[1]?.textContent);
     addCandidate(rowValue);
@@ -1388,7 +1400,7 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
           addCandidate(ipv4PortMatch[1]);
           addCandidate(ipv4PortMatch[2]);
         } else {
-          const lastColonIndex = rowValue.lastIndexOf(':');
+          const lastColonIndex = rowValue.lastIndexOf(":");
           if (lastColonIndex > 0) {
             const maybePort = rowValue.slice(lastColonIndex + 1).trim();
             if (/^\d{1,5}$/.test(maybePort)) {
@@ -1446,16 +1458,16 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
 }
 
 function getTrimmedSelectionText() {
-  return window.getSelection()?.toString().trim() || '';
+  return window.getSelection()?.toString().trim() || "";
 }
 
 function looksLikeBase64(text) {
-  const normalized = text.replace(/\s+/g, '');
+  const normalized = text.replace(/\s+/g, "");
   return (
     normalized.length >= DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH &&
     normalized.length % 4 === 0 &&
     /^[A-Za-z0-9+/]*={0,2}$/.test(normalized) &&
-    normalized.replace(/=/g, '').length > 0
+    normalized.replace(/=/g, "").length > 0
   );
 }
 
@@ -1473,11 +1485,11 @@ function detectConvertibleFormats(text) {
     }
   };
 
-  if (canParse('hex')) formats.push('hex');
-  if (canParse('binary')) formats.push('binary');
-  if (canParse('decimal')) formats.push('decimal');
-  if (looksLikeBase64(value) && canParse('base64')) formats.push('base64');
-  if (formats.length > 0) formats.push('ascii');
+  if (canParse("hex")) formats.push("hex");
+  if (canParse("binary")) formats.push("binary");
+  if (canParse("decimal")) formats.push("decimal");
+  if (looksLikeBase64(value) && canParse("base64")) formats.push("base64");
+  if (formats.length > 0) formats.push("ascii");
 
   return formats;
 }
@@ -1487,25 +1499,25 @@ function getConversionTextFromTarget(target) {
   if (selectedText) return selectedText;
 
   const directValue =
-    target && 'value' in target && typeof target.value === 'string'
+    target && "value" in target && typeof target.value === "string"
       ? target.value.trim()
-      : '';
+      : "";
   if (directValue) return directValue;
 
-  if (target?.classList?.contains('griditem')) {
+  if (target?.classList?.contains("griditem")) {
     return target.textContent.trim();
   }
 
-  const textContent = target?.textContent ? target.textContent.trim() : '';
-  if (!textContent) return '';
+  const textContent = target?.textContent ? target.textContent.trim() : "";
+  if (!textContent) return "";
 
-  if (textContent.includes(':')) {
-    const prefix = textContent.split(':')[0]?.trim();
+  if (textContent.includes(":")) {
+    const prefix = textContent.split(":")[0]?.trim();
     const looksLikeLabel = /^[A-Za-z][\w\s-]*$/.test(prefix);
     // Keep full suffix so values containing additional colons (IPv6/timestamps)
     // are preserved, e.g. "Label: fe80::1" or "Time: 12:34:56".
     if (looksLikeLabel) {
-      const suffix = textContent.split(':').slice(1).join(':').trim();
+      const suffix = textContent.split(":").slice(1).join(":").trim();
       if (suffix) return suffix;
     }
   }
@@ -1520,23 +1532,23 @@ function getPasteTargetFromContextTarget(target) {
   );
   if (!editableTarget) return null;
 
-  if ('readOnly' in editableTarget && editableTarget.readOnly) return null;
-  if ('disabled' in editableTarget && editableTarget.disabled) return null;
+  if ("readOnly" in editableTarget && editableTarget.readOnly) return null;
+  if ("disabled" in editableTarget && editableTarget.disabled) return null;
 
-  if (editableTarget.tagName === 'INPUT') {
+  if (editableTarget.tagName === "INPUT") {
     const disallowedInputTypes = new Set([
-      'button',
-      'checkbox',
-      'color',
-      'file',
-      'hidden',
-      'image',
-      'radio',
-      'range',
-      'reset',
-      'submit',
+      "button",
+      "checkbox",
+      "color",
+      "file",
+      "hidden",
+      "image",
+      "radio",
+      "range",
+      "reset",
+      "submit",
     ]);
-    const inputType = (editableTarget.type || 'text').toLowerCase();
+    const inputType = (editableTarget.type || "text").toLowerCase();
     if (disallowedInputTypes.has(inputType)) return null;
   }
 
@@ -1563,27 +1575,43 @@ function showConvertContextMenu(
   activeContextPasteTarget = pasteTarget;
   activeContextFilterQueries = filterQueries;
 
-  convertContextButtons.copy.style.display = showCopySelection ? 'block' : 'none';
-  convertContextButtons.paste.style.display = showPaste ? 'block' : 'none';
-  convertContextButtons.saveJson.style.display = showSaveJson ? 'block' : 'none';
+  convertContextButtons.copy.style.display = showCopySelection
+    ? "block"
+    : "none";
+  convertContextButtons.paste.style.display = showPaste ? "block" : "none";
+  convertContextButtons.saveJson.style.display = showSaveJson
+    ? "block"
+    : "none";
 
-  ['hex', 'binary', 'base64', 'decimal', 'ascii'].forEach((format) => {
+  ["hex", "binary", "base64", "decimal", "ascii"].forEach((format) => {
     convertContextButtons[format].style.display = formats.includes(format)
-      ? 'block'
-      : 'none';
+      ? "block"
+      : "none";
   });
-  convertContextButtons.copyHex.style.display = isHexViewTarget ? 'block' : 'none';
+  convertContextButtons.copyHex.style.display = isHexViewTarget
+    ? "block"
+    : "none";
   convertContextButtons.copyAscii.style.display = isHexViewTarget
-    ? 'block'
-    : 'none';
-  convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
-  convertContextButtons.filterIp.style.display = filterQueries.ip ? 'block' : 'none';
-  convertContextButtons.filterPort.style.display = filterQueries.port ? 'block' : 'none';
-  convertContextButtons.filterMac.style.display = filterQueries.mac ? 'block' : 'none';
+    ? "block"
+    : "none";
+  convertContextButtons.copyRaw.style.display = isHexViewTarget
+    ? "block"
+    : "none";
+  convertContextButtons.filterIp.style.display = filterQueries.ip
+    ? "block"
+    : "none";
+  convertContextButtons.filterPort.style.display = filterQueries.port
+    ? "block"
+    : "none";
+  convertContextButtons.filterMac.style.display = filterQueries.mac
+    ? "block"
+    : "none";
   convertContextButtons.filterProtocol.style.display = filterQueries.protocol
-    ? 'block'
-    : 'none';
-  convertContextButtons.filterMime.style.display = filterQueries.mime ? 'block' : 'none';
+    ? "block"
+    : "none";
+  convertContextButtons.filterMime.style.display = filterQueries.mime
+    ? "block"
+    : "none";
   const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
   const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
@@ -1593,25 +1621,31 @@ function showConvertContextMenu(
     return;
   }
   convertContextDividerEl.style.display =
-    hasClipboardActions && (hasDataTypeActions || hasFilterActions) ? 'block' : 'none';
+    hasClipboardActions && (hasDataTypeActions || hasFilterActions)
+      ? "block"
+      : "none";
   convertContextSaveDividerEl.style.display =
-    showSaveJson && (hasClipboardActions || hasDataTypeActions || hasFilterActions)
-      ? 'block'
-      : 'none';
+    showSaveJson &&
+    (hasClipboardActions || hasDataTypeActions || hasFilterActions)
+      ? "block"
+      : "none";
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
   const menuHeight = convertContextMenuEl.offsetHeight;
   const boundedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
-  const boundedY = Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8));
+  const boundedY = Math.max(
+    8,
+    Math.min(y, window.innerHeight - menuHeight - 8),
+  );
   convertContextMenuEl.style.left = `${boundedX}px`;
   convertContextMenuEl.style.top = `${boundedY}px`;
 }
 
 function loadContextValueIntoDataTools(format) {
   if (!activeContextConversionText) return;
-  const inputEl = document.getElementById('data-tools-input');
-  const formatEl = document.getElementById('data-tools-format');
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
   showDataTools();
@@ -1622,10 +1656,10 @@ function loadContextValueIntoDataTools(format) {
 
 function getCurrentRawPayloadHex() {
   const payloadHex =
-    packetsForHost?.[index]?.['Packet Info']?.['Raw data']?.['Payload']?.[
-      'Hex Encoded'
+    packetsForHost?.[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+      "Hex Encoded"
     ];
-  return typeof payloadHex === 'string' ? payloadHex : '';
+  return typeof payloadHex === "string" ? payloadHex : "";
 }
 
 async function copyTextToClipboard(text, label) {
@@ -1637,14 +1671,14 @@ async function copyTextToClipboard(text, label) {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
-    const fallbackInput = document.createElement('textarea');
+    const fallbackInput = document.createElement("textarea");
     fallbackInput.value = text;
-    fallbackInput.style.position = 'fixed';
-    fallbackInput.style.left = '-9999px';
+    fallbackInput.style.position = "fixed";
+    fallbackInput.style.left = "-9999px";
     document.body.appendChild(fallbackInput);
     fallbackInput.focus();
     fallbackInput.select();
-    document.execCommand('copy');
+    document.execCommand("copy");
     document.body.removeChild(fallbackInput);
   }
 
@@ -1653,9 +1687,9 @@ async function copyTextToClipboard(text, label) {
 }
 
 function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
-  if (byteIndex < 0) return '';
+  if (byteIndex < 0) return "";
   const decodedAscii = hexToAscii(payloadHex);
-  let printableSequence = '';
+  let printableSequence = "";
   for (let i = byteIndex; i < decodedAscii.length; i++) {
     const charCode = decodedAscii.charCodeAt(i);
     if (!isPrintable(charCode)) break;
@@ -1663,37 +1697,37 @@ function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
   }
   if (printableSequence.length > 0) return printableSequence;
   const fallbackCode = decodedAscii.charCodeAt(byteIndex);
-  if (Number.isNaN(fallbackCode)) return '';
-  return isPrintable(fallbackCode) ? decodedAscii[byteIndex] : '.';
+  if (Number.isNaN(fallbackCode)) return "";
+  return isPrintable(fallbackCode) ? decodedAscii[byteIndex] : ".";
 }
 
 async function copyHexFromContext() {
   const payloadHex = getCurrentRawPayloadHex();
-  const hexValue = activeContextTarget?.classList?.contains('griditem')
+  const hexValue = activeContextTarget?.classList?.contains("griditem")
     ? activeContextTarget.textContent.trim()
     : payloadHex;
-  await copyTextToClipboard(hexValue, 'Hex');
+  await copyTextToClipboard(hexValue, "Hex");
   hideConvertContextMenu();
 }
 
 async function copyAsciiFromContext() {
   const payloadHex = getCurrentRawPayloadHex();
   const byteIndex = Number.parseInt(
-    activeContextTarget?.dataset?.byteIndex ?? '-1',
+    activeContextTarget?.dataset?.byteIndex ?? "-1",
     10,
   );
   const fullPayloadAscii = payloadHex
-    ? bytesToPrintableAscii(parseDataToolsInput('hex', payloadHex))
-    : '';
-  const asciiValue = activeContextTarget?.classList?.contains('griditem')
+    ? bytesToPrintableAscii(parseDataToolsInput("hex", payloadHex))
+    : "";
+  const asciiValue = activeContextTarget?.classList?.contains("griditem")
     ? getAsciiPreviewForHexOffset(payloadHex, byteIndex)
     : fullPayloadAscii;
-  await copyTextToClipboard(asciiValue, 'ASCII');
+  await copyTextToClipboard(asciiValue, "ASCII");
   hideConvertContextMenu();
 }
 
 async function copyRawPayloadFromContext() {
-  await copyTextToClipboard(getCurrentRawPayloadHex(), 'Raw payload');
+  await copyTextToClipboard(getCurrentRawPayloadHex(), "Raw payload");
   hideConvertContextMenu();
 }
 
@@ -1701,18 +1735,18 @@ function copySelectedTextFromContextMenu() {
   const selectedText = getTrimmedSelectionText();
   hideConvertContextMenu();
   if (!selectedText) {
-    statusUpdate('Status: No text selected to copy');
+    statusUpdate("Status: No text selected to copy");
     return;
   }
   navigator.clipboard
     .writeText(selectedText)
     .then(() => {
-      statusUpdate('Status: Copied selected text to clipboard');
+      statusUpdate("Status: Copied selected text to clipboard");
       writeLogEntry(`Copied selected text length=${selectedText.length}`);
     })
     .catch((error) => {
-      console.error('Copy failed:', error);
-      statusUpdate('Status: Copy failed – clipboard access denied');
+      console.error("Copy failed:", error);
+      statusUpdate("Status: Copy failed – clipboard access denied");
     });
 }
 
@@ -1720,16 +1754,19 @@ function pasteTextFromContextMenu() {
   const pasteTarget = activeContextPasteTarget;
   hideConvertContextMenu();
   if (!pasteTarget) {
-    statusUpdate('Status: Paste unavailable for this target');
+    statusUpdate("Status: Paste unavailable for this target");
     return;
   }
   navigator.clipboard
     .readText()
     .then((text) => {
-      if (pasteTarget.tagName === 'INPUT' || pasteTarget.tagName === 'TEXTAREA') {
+      if (
+        pasteTarget.tagName === "INPUT" ||
+        pasteTarget.tagName === "TEXTAREA"
+      ) {
         const hasSelectionRange =
-          typeof pasteTarget.selectionStart === 'number' &&
-          typeof pasteTarget.selectionEnd === 'number';
+          typeof pasteTarget.selectionStart === "number" &&
+          typeof pasteTarget.selectionEnd === "number";
         const start = hasSelectionRange
           ? pasteTarget.selectionStart
           : pasteTarget.value.length;
@@ -1740,9 +1777,10 @@ function pasteTextFromContextMenu() {
         pasteTarget.value =
           current.substring(0, start) + text + current.substring(end);
         if (hasSelectionRange) {
-          pasteTarget.selectionStart = pasteTarget.selectionEnd = start + text.length;
+          pasteTarget.selectionStart = pasteTarget.selectionEnd =
+            start + text.length;
         }
-        pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
+        pasteTarget.dispatchEvent(new Event("input", { bubbles: true }));
         return;
       }
 
@@ -1759,37 +1797,39 @@ function pasteTextFromContextMenu() {
           selection.removeAllRanges();
           selection.addRange(range);
         } else {
-          pasteTarget.textContent = (pasteTarget.textContent || '') + text;
+          pasteTarget.textContent = (pasteTarget.textContent || "") + text;
         }
-        pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
+        pasteTarget.dispatchEvent(new Event("input", { bubbles: true }));
       }
     })
     .catch((error) => {
-      console.error('Paste failed:', error);
-      statusUpdate('Status: Paste failed – clipboard access denied');
+      console.error("Paste failed:", error);
+      statusUpdate("Status: Paste failed – clipboard access denied");
     });
 }
 
 function saveJsonFromContextMenu() {
   hideConvertContextMenu();
   if (!jsonCapture) {
-    statusUpdate('Status: No data loaded to save');
+    statusUpdate("Status: No data loaded to save");
     return;
   }
   window.saveapi.saveJson(jsonCapture).then((result) => {
     if (result.canceled) {
-      statusUpdate('Status: Save cancelled');
+      statusUpdate("Status: Save cancelled");
     } else if (result.success) {
-      statusUpdate('Status: JSON saved successfully');
+      statusUpdate("Status: JSON saved successfully");
     } else {
       const errorMessage =
-        result && typeof result === 'object' && 'error' in result
+        result && typeof result === "object" && "error" in result
           ? result.error
-          : 'unknown';
-      doError('Save failed');
-      logErrorEntry('save-json', errorMessage || 'unknown');
-      statusUpdate('Status: Save failed – ' + (errorMessage || 'unknown error'));
-      console.error('Save failed:', errorMessage);
+          : "unknown";
+      doError("Save failed");
+      logErrorEntry("save-json", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Save failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Save failed:", errorMessage);
     }
   });
 }
@@ -1798,11 +1838,12 @@ function appendFilterQueryFromContextMenu(type) {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
   if (!query) {
-    statusUpdate('Status: No matching filter value found for this selection');
+    statusUpdate("Status: No matching filter value found for this selection");
     return;
   }
   const existingQuery = filterInputEl.value.trim();
-  const wrappedQuery = query.includes('||') || query.includes('&&') ? `(${query})` : query;
+  const wrappedQuery =
+    query.includes("||") || query.includes("&&") ? `(${query})` : query;
   if (!existingQuery) {
     filterInputEl.value = query;
   } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
@@ -1812,141 +1853,151 @@ function appendFilterQueryFromContextMenu(type) {
   }
   syncFilterHighlight();
   filterInputEl.focus();
-  statusUpdate('Status: Filter query populated — press Enter to apply');
+  statusUpdate("Status: Filter query populated — press Enter to apply");
   writeLogEntry(
     `Context menu filter populated type=${type} query="${filterInputEl.value}"`,
   );
 }
 
 // Show host data when data button is clicked
-document.getElementById('data-btn').addEventListener('click', function () {
+document.getElementById("data-btn").addEventListener("click", function () {
   //highlightTab("data-navAction");
   initializeDataView();
 });
 
 // Show capture stats when stats button is clicked
-document.getElementById('stats-btn').addEventListener('click', function () {
+document.getElementById("stats-btn").addEventListener("click", function () {
   showStats();
 });
 
 // Show data conversion tools when data tools button is clicked
-document.getElementById('data-tools-btn').addEventListener('click', function () {
-  showDataTools();
-});
+document
+  .getElementById("data-tools-btn")
+  .addEventListener("click", function () {
+    showDataTools();
+  });
 
 // Show packet list when list button is clicked
-document.getElementById('list-btn').addEventListener('click', function () {
+document.getElementById("list-btn").addEventListener("click", function () {
   showPacketList();
 });
 
 document
-  .getElementById('data-tools-convert-btn')
-  .addEventListener('click', runDataToolsConversion);
-document.getElementById('data-tools-clear-btn').addEventListener('click', () => {
-  document.getElementById('data-tools-input').value = '';
-  document.getElementById('data-tools-error').textContent = '';
-  resetDataToolsOutputs();
-});
-convertContextButtons.hex.addEventListener('click', () =>
-  loadContextValueIntoDataTools('hex'),
+  .getElementById("data-tools-convert-btn")
+  .addEventListener("click", runDataToolsConversion);
+document
+  .getElementById("data-tools-clear-btn")
+  .addEventListener("click", () => {
+    document.getElementById("data-tools-input").value = "";
+    document.getElementById("data-tools-error").textContent = "";
+    resetDataToolsOutputs();
+  });
+convertContextButtons.hex.addEventListener("click", () =>
+  loadContextValueIntoDataTools("hex"),
 );
-convertContextButtons.binary.addEventListener('click', () =>
-  loadContextValueIntoDataTools('binary'),
+convertContextButtons.binary.addEventListener("click", () =>
+  loadContextValueIntoDataTools("binary"),
 );
-convertContextButtons.base64.addEventListener('click', () =>
-  loadContextValueIntoDataTools('base64'),
+convertContextButtons.base64.addEventListener("click", () =>
+  loadContextValueIntoDataTools("base64"),
 );
-convertContextButtons.decimal.addEventListener('click', () =>
-  loadContextValueIntoDataTools('decimal'),
+convertContextButtons.decimal.addEventListener("click", () =>
+  loadContextValueIntoDataTools("decimal"),
 );
-convertContextButtons.ascii.addEventListener('click', () =>
-  loadContextValueIntoDataTools('ascii'),
+convertContextButtons.ascii.addEventListener("click", () =>
+  loadContextValueIntoDataTools("ascii"),
 );
-convertContextButtons.copyHex.addEventListener('click', () => {
+convertContextButtons.copyHex.addEventListener("click", () => {
   copyHexFromContext();
 });
-convertContextButtons.copyAscii.addEventListener('click', () => {
+convertContextButtons.copyAscii.addEventListener("click", () => {
   copyAsciiFromContext();
 });
-convertContextButtons.copyRaw.addEventListener('click', () => {
+convertContextButtons.copyRaw.addEventListener("click", () => {
   copyRawPayloadFromContext();
 });
-convertContextButtons.filterIp.addEventListener('click', () => {
-  appendFilterQueryFromContextMenu('ip');
+convertContextButtons.filterIp.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("ip");
 });
-convertContextButtons.filterPort.addEventListener('click', () => {
-  appendFilterQueryFromContextMenu('port');
+convertContextButtons.filterPort.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("port");
 });
-convertContextButtons.filterMac.addEventListener('click', () => {
-  appendFilterQueryFromContextMenu('mac');
+convertContextButtons.filterMac.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mac");
 });
-convertContextButtons.filterProtocol.addEventListener('click', () => {
-  appendFilterQueryFromContextMenu('protocol');
+convertContextButtons.filterProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("protocol");
 });
-convertContextButtons.filterMime.addEventListener('click', () => {
-  appendFilterQueryFromContextMenu('mime');
+convertContextButtons.filterMime.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mime");
 });
-convertContextButtons.copy.addEventListener('click', copySelectedTextFromContextMenu);
-convertContextButtons.paste.addEventListener('click', pasteTextFromContextMenu);
-convertContextButtons.saveJson.addEventListener('click', saveJsonFromContextMenu);
+convertContextButtons.copy.addEventListener(
+  "click",
+  copySelectedTextFromContextMenu,
+);
+convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
+convertContextButtons.saveJson.addEventListener(
+  "click",
+  saveJsonFromContextMenu,
+);
 
 /**
  * Builds and shows the packet list tab, displaying all packets grouped by host
  * in a scrollable, selectable table.
  */
 function showPacketList() {
-  if (jsonCapture === '') {
-    statusUpdate('Status: No JSON file loaded, please upload a file first');
+  if (jsonCapture === "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
     return;
   }
-  statusUpdate('Status: Displaying packet list');
-  writeLogEntry('User opened packet list view');
+  statusUpdate("Status: Displaying packet list");
+  writeLogEntry("User opened packet list view");
 
-  document.getElementById('packetInfoPane').style.display = 'none';
-  document.getElementById('packetPayloadPane').style.display = 'none';
-  document.getElementById('summary_box').style.display = 'none';
-  document.getElementById('stats_box').style.display = 'none';
-  document.getElementById('data_tools_box').style.display = 'none';
-  document.getElementById('rightside').style.display = 'none';
-  const listBox = document.getElementById('list_box');
-  listBox.style.display = 'flex';
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  const listBox = document.getElementById("list_box");
+  listBox.style.display = "flex";
 
-  const content = document.getElementById('list_content');
-  const searchEl = document.getElementById('list-search');
-  const groupByStreamEl = document.getElementById('list-group-streams');
+  const content = document.getElementById("list_content");
+  const searchEl = document.getElementById("list-search");
+  const groupByStreamEl = document.getElementById("list-group-streams");
   const columnDefinitions = [
-    { label: '#', key: 'idx' },
-    { label: '★', key: 'isBookmarked' },
-    { label: 'Stream', key: 'streamOrder' },
-    { label: 'Host', key: 'host' },
-    { label: 'Src IP', key: 'srcIp' },
-    { label: 'Dst IP', key: 'dstIp' },
-    { label: 'Src Port', key: 'srcPort' },
-    { label: 'Dst Port', key: 'dstPort' },
-    { label: 'Transport', key: 'transport' },
-    { label: 'App Protocol', key: 'appProto' },
+    { label: "#", key: "idx" },
+    { label: "★", key: "isBookmarked" },
+    { label: "Stream", key: "streamOrder" },
+    { label: "Host", key: "host" },
+    { label: "Src IP", key: "srcIp" },
+    { label: "Dst IP", key: "dstIp" },
+    { label: "Src Port", key: "srcPort" },
+    { label: "Dst Port", key: "dstPort" },
+    { label: "Transport", key: "transport" },
+    { label: "App Protocol", key: "appProto" },
   ];
-  const sortState = { key: 'idx', direction: 'asc' };
+  const sortState = { key: "idx", direction: "asc" };
 
   function buildTable(filterText) {
     content.replaceChildren();
-    if (!capturedPackets || !capturedPackets['Host']) {
-      content.textContent = 'No packet data available.';
+    if (!capturedPackets || !capturedPackets["Host"]) {
+      content.textContent = "No packet data available.";
       return;
     }
 
-    const hosts = Object.keys(capturedPackets['Host']).sort();
-    const lc = filterText ? filterText.toLowerCase() : '';
+    const hosts = Object.keys(capturedPackets["Host"]).sort();
+    const lc = filterText ? filterText.toLowerCase() : "";
 
     const rows = [];
 
     const getStreamKey = (packetInfo) => {
-      const transportName = packetInfo?.['Protocol'] || 'Unknown';
+      const transportName = packetInfo?.["Protocol"] || "Unknown";
       const transportData = packetInfo?.[transportName] || {};
-      const sourceIp = packetInfo?.['IP']?.['Source IP'] ?? '';
-      const destinationIp = packetInfo?.['IP']?.['Destination IP'] ?? '';
-      const sourcePort = transportData?.['Source port'] ?? '';
-      const destinationPort = transportData?.['Destination port'] ?? '';
+      const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
+      const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
+      const sourcePort = transportData?.["Source port"] ?? "";
+      const destinationPort = transportData?.["Destination port"] ?? "";
 
       const endpointA = `${sourceIp}:${sourcePort}`;
       const endpointB = `${destinationIp}:${destinationPort}`;
@@ -1955,30 +2006,40 @@ function showPacketList() {
     };
 
     for (const host of hosts) {
-      const packets = capturedPackets['Host'][host];
+      const packets = capturedPackets["Host"][host];
       if (!Array.isArray(packets)) continue;
 
       packets.forEach((pkt, pktIdx) => {
-        const pi = pkt?.['Packet Info'];
-        const ei = pkt?.['Extra Info'];
+        const pi = pkt?.["Packet Info"];
+        const ei = pkt?.["Extra Info"];
         if (!pi) return;
 
-        const idx = pi['Index'] ?? pktIdx + 1;
-        const srcIp = pi?.['IP']?.['Source IP'] ?? '';
-        const dstIp = pi?.['IP']?.['Destination IP'] ?? '';
-        const transport = pi['Protocol'] || 'TCP';
+        const idx = pi["Index"] ?? pktIdx + 1;
+        const srcIp = pi?.["IP"]?.["Source IP"] ?? "";
+        const dstIp = pi?.["IP"]?.["Destination IP"] ?? "";
+        const transport = pi["Protocol"] || "TCP";
         const tpData = pi[transport] || null;
-        const srcPort = tpData?.['Source port'] ?? '';
-        const dstPort = tpData?.['Destination port'] ?? '';
-        const netData = ei?.['Traits']?.['Network Data'];
+        const srcPort = tpData?.["Source port"] ?? "";
+        const dstPort = tpData?.["Destination port"] ?? "";
+        const netData = ei?.["Traits"]?.["Network Data"];
         const appProto =
-          netData?.['Port Protocol'] ?? netData?.['Port Protcol'] ?? '';
-        const packetKey = srcIp + ':' + pi['Index'];
+          netData?.["Port Protocol"] ?? netData?.["Port Protcol"] ?? "";
+        const packetKey = srcIp + ":" + pi["Index"];
         const isBookmarked = bookmarkList.includes(packetKey);
         const streamKey = getStreamKey(pi);
 
         if (lc) {
-          const rowText = [host, srcIp, dstIp, String(srcPort), String(dstPort), transport, appProto].join(' ').toLowerCase();
+          const rowText = [
+            host,
+            srcIp,
+            dstIp,
+            String(srcPort),
+            String(dstPort),
+            transport,
+            appProto,
+          ]
+            .join(" ")
+            .toLowerCase();
           if (!rowText.includes(lc)) return;
         }
 
@@ -2009,9 +2070,11 @@ function showPacketList() {
       row.streamLabel = `S${row.streamOrder}`;
     });
 
-    const activeGroupByStream = document.getElementById('list-group-streams')?.checked;
-    const sortDirection = sortState.direction === 'asc' ? 1 : -1;
-    const compareText = (left, right) => String(left ?? '').localeCompare(String(right ?? ''));
+    const activeGroupByStream =
+      document.getElementById("list-group-streams")?.checked;
+    const sortDirection = sortState.direction === "asc" ? 1 : -1;
+    const compareText = (left, right) =>
+      String(left ?? "").localeCompare(String(right ?? ""));
     const comparePortValue = (left, right) => {
       const leftNum = Number(left);
       const rightNum = Number(right);
@@ -2023,13 +2086,13 @@ function showPacketList() {
 
     const compareByColumn = (left, right, columnKey) => {
       switch (columnKey) {
-        case 'idx':
-        case 'streamOrder':
+        case "idx":
+        case "streamOrder":
           return Number(left[columnKey]) - Number(right[columnKey]);
-        case 'isBookmarked':
+        case "isBookmarked":
           return Number(left.isBookmarked) - Number(right.isBookmarked);
-        case 'srcPort':
-        case 'dstPort':
+        case "srcPort":
+        case "dstPort":
           return comparePortValue(left[columnKey], right[columnKey]);
         default:
           return compareText(left[columnKey], right[columnKey]);
@@ -2037,7 +2100,7 @@ function showPacketList() {
     };
 
     rows.sort((left, right) => {
-      if (activeGroupByStream && sortState.key !== 'streamOrder') {
+      if (activeGroupByStream && sortState.key !== "streamOrder") {
         const streamDiff = left.streamOrder - right.streamOrder;
         if (streamDiff !== 0) return streamDiff;
       }
@@ -2047,43 +2110,43 @@ function showPacketList() {
       return Number(left.idx) - Number(right.idx);
     });
 
-    const table = document.createElement('table');
-    table.className = 'packet-list-table';
+    const table = document.createElement("table");
+    table.className = "packet-list-table";
 
-    const thead = document.createElement('thead');
-    const headerRow = document.createElement('tr');
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
     columnDefinitions.forEach((column) => {
-      const th = document.createElement('th');
+      const th = document.createElement("th");
       const isActiveSort = sortState.key === column.key;
       const sortArrow = isActiveSort
-        ? sortState.direction === 'asc'
-          ? ' ▲'
-          : ' ▼'
-        : '';
+        ? sortState.direction === "asc"
+          ? " ▲"
+          : " ▼"
+        : "";
       th.textContent = column.label + sortArrow;
-      th.classList.add('packet-list-sortable-header');
+      th.classList.add("packet-list-sortable-header");
       th.tabIndex = 0;
       th.title = `Sort by ${column.label}`;
       th.setAttribute(
-        'aria-sort',
+        "aria-sort",
         isActiveSort
-          ? sortState.direction === 'asc'
-            ? 'ascending'
-            : 'descending'
-          : 'none',
+          ? sortState.direction === "asc"
+            ? "ascending"
+            : "descending"
+          : "none",
       );
       const sortByColumn = () => {
         if (sortState.key === column.key) {
-          sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+          sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
         } else {
           sortState.key = column.key;
-          sortState.direction = 'asc';
+          sortState.direction = "asc";
         }
-        buildTable(document.getElementById('list-search')?.value || '');
+        buildTable(document.getElementById("list-search")?.value || "");
       };
-      th.addEventListener('click', sortByColumn);
-      th.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
+      th.addEventListener("click", sortByColumn);
+      th.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           sortByColumn();
         }
@@ -2093,33 +2156,39 @@ function showPacketList() {
     thead.appendChild(headerRow);
     table.appendChild(thead);
 
-    const tbody = document.createElement('tbody');
+    const tbody = document.createElement("tbody");
 
     if (rows.length === 0) {
-      const tr = document.createElement('tr');
-      const td = document.createElement('td');
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
       td.colSpan = columnDefinitions.length;
-      td.textContent = filterText ? 'No packets match the filter.' : 'No packets available.';
-      td.style.textAlign = 'center';
-      td.style.padding = '12px';
+      td.textContent = filterText
+        ? "No packets match the filter."
+        : "No packets available.";
+      td.style.textAlign = "center";
+      td.style.padding = "12px";
       tr.appendChild(td);
       tbody.appendChild(tr);
     } else {
-      let previousStreamLabel = '';
+      let previousStreamLabel = "";
       rows.forEach((row) => {
-        const tr = document.createElement('tr');
+        const tr = document.createElement("tr");
         tr.dataset.host = row.host;
         tr.dataset.pktIdx = row.pktIdx;
         tr.dataset.stream = row.streamLabel;
 
-        if (activeGroupByStream && previousStreamLabel !== '' && previousStreamLabel !== row.streamLabel) {
-          tr.classList.add('packet-list-stream-break');
+        if (
+          activeGroupByStream &&
+          previousStreamLabel !== "" &&
+          previousStreamLabel !== row.streamLabel
+        ) {
+          tr.classList.add("packet-list-stream-break");
         }
         previousStreamLabel = row.streamLabel;
 
         [
           row.idx,
-          row.isBookmarked ? '★' : '',
+          row.isBookmarked ? "★" : "",
           row.streamLabel,
           row.host,
           row.srcIp,
@@ -2129,47 +2198,59 @@ function showPacketList() {
           row.transport,
           row.appProto,
         ].forEach((val) => {
-          const td = document.createElement('td');
-          td.textContent = val ?? '';
+          const td = document.createElement("td");
+          td.textContent = val ?? "";
           tr.appendChild(td);
         });
 
-        tr.addEventListener('mouseenter', () => {
-          tr.classList.add('packet-list-hovered');
+        tr.addEventListener("mouseenter", () => {
+          tr.classList.add("packet-list-hovered");
         });
-        tr.addEventListener('mouseleave', () => {
-          tr.classList.remove('packet-list-hovered');
+        tr.addEventListener("mouseleave", () => {
+          tr.classList.remove("packet-list-hovered");
         });
 
-        tr.addEventListener('click', () => {
+        tr.addEventListener("click", () => {
           // Remove previous selection
-          tbody.querySelectorAll('.packet-list-selected').forEach((r) => r.classList.remove('packet-list-selected'));
-          tr.classList.add('packet-list-selected');
+          tbody
+            .querySelectorAll(".packet-list-selected")
+            .forEach((r) => r.classList.remove("packet-list-selected"));
+          tr.classList.add("packet-list-selected");
 
           // Navigate to selected packet
           hostFilterEl.value = row.host;
-          document.getElementById('target_hosts').value = row.host;
-          packetsForHost = capturedPackets['Host'][row.host];
+          document.getElementById("target_hosts").value = row.host;
+          packetsForHost = capturedPackets["Host"][row.host];
           index = row.pktIdx;
           currentIp = row.srcIp;
-          currentPacketKey = row.srcIp + ':' + row.pi['Index'];
+          currentPacketKey = row.srcIp + ":" + row.pi["Index"];
           syncBookmarkDropdown(currentPacketKey);
 
           // Switch to Host Data view
-          document.getElementById('list_box').style.display = 'none';
-          document.getElementById('data_tools_box').style.display = 'none';
-          document.getElementById('packetInfoPane').style.display = 'block';
-          document.getElementById('packetPayloadPane').style.display = 'block';
-          document.getElementById('prev-btn').style.display = 'block';
-          document.getElementById('next-btn').style.display = 'block';
+          document.getElementById("list_box").style.display = "none";
+          document.getElementById("data_tools_box").style.display = "none";
+          document.getElementById("packetInfoPane").style.display = "block";
+          document.getElementById("packetPayloadPane").style.display = "block";
+          document.getElementById("prev-btn").style.display = "block";
+          document.getElementById("next-btn").style.display = "block";
           showAllData();
 
           infoPanel(packetsForHost);
-          const hexPayload = packetsForHost[index]?.['Packet Info']?.['Raw data']?.['Payload']?.['Hex Encoded'];
+          const hexPayload =
+            packetsForHost[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+              "Hex Encoded"
+            ];
           if (hexPayload) popHexGrid(hexPayload);
           populateDataTypes(packetsForHost);
-          statusUpdate('Status: Displaying packet ' + row.pi['Index'] + ' for host ' + row.host);
-          writeLogEntry(`Packet list row selected host=${row.host} index=${row.pi['Index']}`);
+          statusUpdate(
+            "Status: Displaying packet " +
+              row.pi["Index"] +
+              " for host " +
+              row.host,
+          );
+          writeLogEntry(
+            `Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
+          );
         });
 
         tbody.appendChild(tr);
@@ -2185,102 +2266,104 @@ function showPacketList() {
   // Re-register search listener (replace old one)
   const newSearch = searchEl.cloneNode(true);
   searchEl.parentNode.replaceChild(newSearch, searchEl);
-  newSearch.addEventListener('input', () => buildTable(newSearch.value));
+  newSearch.addEventListener("input", () => buildTable(newSearch.value));
   if (groupByStreamEl) {
     const newGroupByStream = groupByStreamEl.cloneNode(true);
     groupByStreamEl.parentNode.replaceChild(newGroupByStream, groupByStreamEl);
-    newGroupByStream.addEventListener('change', () => buildTable(newSearch.value));
+    newGroupByStream.addEventListener("change", () =>
+      buildTable(newSearch.value),
+    );
   }
 }
 
 function initializeDataView() {
   statusUpdate(
-    'Status: Displaying packet information for ' + hostFilterEl.value,
+    "Status: Displaying packet information for " + hostFilterEl.value,
   );
-  if (jsonCapture == '') {
-    statusUpdate('Status: No JSON file loaded, please upload a file first');
-    doError('No file loaded! Upload one of JSON or PCAP first!');
+  if (jsonCapture == "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("No file loaded! Upload one of JSON or PCAP first!");
   } else {
-    document.getElementById('prev-btn').style.display = 'block';
-    document.getElementById('next-btn').style.display = 'block';
-    document.getElementById('welcome').style.display = 'none';
+    document.getElementById("prev-btn").style.display = "block";
+    document.getElementById("next-btn").style.display = "block";
+    document.getElementById("welcome").style.display = "none";
     //hostPacketInfostPacketInfo(hostFilterEl.value);
-    if (document.getElementById('host_filter').value == '') {
-      document.getElementById('host_filter').value = hostsList[1];
+    if (document.getElementById("host_filter").value == "") {
+      document.getElementById("host_filter").value = hostsList[1];
     }
 
-    handlePacketNavigation('first-load');
+    handlePacketNavigation("first-load");
   }
 }
 
 // Navigation for previous packet
-document.getElementById('prev-btn').addEventListener('click', function () {
-  statusUpdate('Status: Displaying capture analysis summary');
+document.getElementById("prev-btn").addEventListener("click", function () {
+  statusUpdate("Status: Displaying capture analysis summary");
   //highlightTab("prev-navAction");
   if (index > 0) {
     index--;
 
-    currentIp = packetsForHost[index]['Packet Info']['IP']['Source IP'];
+    currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
-      currentIp + ':' + packetsForHost[index]['Packet Info']['Index'];
+      currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
     syncBookmarkDropdown(currentPacketKey);
     infoPanel(packetsForHost);
     popHexGrid(
-      packetsForHost[index]['Packet Info']['Raw data']['Payload'][
-        'Hex Encoded'
+      packetsForHost[index]["Packet Info"]["Raw data"]["Payload"][
+        "Hex Encoded"
       ],
     );
     populateDataTypes(packetsForHost);
-    logCurrentPacketDisplay('prev');
+    logCurrentPacketDisplay("prev");
   }
 });
 
 // Navigation for next packet
-document.getElementById('next-btn').addEventListener('click', function () {
-  statusUpdate('Status: Displaying capture analysis summary');
+document.getElementById("next-btn").addEventListener("click", function () {
+  statusUpdate("Status: Displaying capture analysis summary");
   if (index < packetsForHost.length - 1) {
     index++;
-    currentIp = packetsForHost[index]['Packet Info']['IP']['Source IP'];
+    currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
-      currentIp + ':' + packetsForHost[index]['Packet Info']['Index'];
+      currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
   }
   syncBookmarkDropdown(currentPacketKey);
   infoPanel(packetsForHost);
   popHexGrid(
-    packetsForHost[index]['Packet Info']['Raw data']['Payload']['Hex Encoded'],
+    packetsForHost[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"],
   );
   populateDataTypes(packetsForHost);
-  logCurrentPacketDisplay('next');
+  logCurrentPacketDisplay("next");
 });
 
 // Handle bookmark selection from dropdown
 document
-  .getElementById('selectBookmark')
-  .addEventListener('change', function () {
+  .getElementById("selectBookmark")
+  .addEventListener("change", function () {
     const bookmarkHost = document
-      .getElementById('selectBookmark')
-      .value.split(':')[0];
-    index = document.getElementById('selectBookmark').value.split(':')[1];
-    packetsForHost = capturedPackets['Host'][bookmarkHost];
-    activeBookmark['Host'] = bookmarkHost;
-    activeBookmark['Packet'] = index;
+      .getElementById("selectBookmark")
+      .value.split(":")[0];
+    index = document.getElementById("selectBookmark").value.split(":")[1];
+    packetsForHost = capturedPackets["Host"][bookmarkHost];
+    activeBookmark["Host"] = bookmarkHost;
+    activeBookmark["Packet"] = index;
     hostFilterEl.value = bookmarkHost;
     if (bookmarkHost == undefined || index == undefined) {
-      statusUpdate('Invalid bookmark selection, missing host or packet index');
-      doError('Invalid bookmark selection, missing host or packet index!');
+      statusUpdate("Invalid bookmark selection, missing host or packet index");
+      doError("Invalid bookmark selection, missing host or packet index!");
     } else {
-      document.getElementById('target_hosts').value = bookmarkHost;
+      document.getElementById("target_hosts").value = bookmarkHost;
     }
-    handlePacketNavigation('bookmark', activeBookmark);
+    handlePacketNavigation("bookmark", activeBookmark);
   });
 
 // Add current packet as a bookmark
-document.getElementById('setBookmark').addEventListener('click', function () {
+document.getElementById("setBookmark").addEventListener("click", function () {
   if (!bookmarkList.includes(currentPacketKey)) {
     if (currentPacketKey != undefined) {
       bookmarkList.push(currentPacketKey);
       document
-        .getElementById('selectBookmark')
+        .getElementById("selectBookmark")
         .appendChild(new Option(currentPacketKey, currentPacketKey));
       writeLogEntry(`Bookmark added key=${currentPacketKey}`);
     }
@@ -2289,19 +2372,19 @@ document.getElementById('setBookmark').addEventListener('click', function () {
 
 // Syncs the bookmark dropdown to reflect whether the given packet key is bookmarked
 function syncBookmarkDropdown(packetKey) {
-  document.getElementById('selectBookmark').value = bookmarkList.includes(
+  document.getElementById("selectBookmark").value = bookmarkList.includes(
     packetKey,
   )
     ? packetKey
-    : '';
+    : "";
 }
 
 // function that returns the total number of packets in the entire capture
 function totalPacketCount() {
   let totalCount = 0;
-  if (capturedPackets['Host'] != undefined) {
-    for (const host in capturedPackets['Host']) {
-      totalCount += capturedPackets['Host'][host].length;
+  if (capturedPackets["Host"] != undefined) {
+    for (const host in capturedPackets["Host"]) {
+      totalCount += capturedPackets["Host"][host].length;
     }
   } else {
     return 0;
@@ -2314,63 +2397,65 @@ function totalPacketCount() {
  * Updates UI and packet info accordingly.
  */
 function handlePacketNavigation(navAction, navBookmark) {
-  document.getElementById('loading-container').style.display = 'none';
-  document.getElementById('summary_box').style.display = 'none';
-  document.getElementById('stats_box').style.display = 'none';
-  document.getElementById('list_box').style.display = 'none';
-  document.getElementById('data_tools_box').style.display = 'none';
-  document.getElementById('packetInfoPane').style.display = 'block';
-  document.getElementById('packetPayloadPane').style.display = 'block';
-  document.getElementById('welcome').style.display = 'none';
+  document.getElementById("loading-container").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("packetInfoPane").style.display = "block";
+  document.getElementById("packetPayloadPane").style.display = "block";
+  document.getElementById("welcome").style.display = "none";
   showAllData();
 
-  document.getElementById('total-packets').innerHTML =
-    'Total Packets: ' + totalPacketCount();
+  document.getElementById("total-packets").innerHTML =
+    "Total Packets: " + totalPacketCount();
   index = 0;
   if (navAction === undefined) {
-    handlePacketNavigation('first-load');
+    handlePacketNavigation("first-load");
   }
-  let packetSet = capturedPackets['Host'][hostFilterEl.value];
-  if (navAction === 'filtered') {
+  let packetSet = capturedPackets["Host"][hostFilterEl.value];
+  if (navAction === "filtered") {
     packetSet = [];
-    document.getElementById('filter-returned').textContent =
-      'Filtered Packets: ' + filteredPackets.length;
+    document.getElementById("filter-returned").textContent =
+      "Filtered Packets: " + filteredPackets.length;
     packetSet = filteredPackets;
-    writeLogEntry(`Filtered packet navigation packets_returned=${packetSet.length}`);
+    writeLogEntry(
+      `Filtered packet navigation packets_returned=${packetSet.length}`,
+    );
   }
 
-  if (navAction === 'bookmark') {
+  if (navAction === "bookmark") {
     if (
-      navBookmark['Host'] == undefined ||
-      navBookmark['Packet'] == undefined
+      navBookmark["Host"] == undefined ||
+      navBookmark["Packet"] == undefined
     ) {
-      statusUpdate('Status: Invalid bookmark data, reverting to first packet');
-      doError('Invalid bookmark data, missing host or packet index!');
-      handlePacketNavigation('first-load');
+      statusUpdate("Status: Invalid bookmark data, reverting to first packet");
+      doError("Invalid bookmark data, missing host or packet index!");
+      handlePacketNavigation("first-load");
     } else {
-      index = navBookmark['Packet'] - 1;
+      index = navBookmark["Packet"] - 1;
 
       statusUpdate(
-        'Navigating to bookmark: ' +
-          navBookmark['Host'] +
-          ' packet ' +
-          navBookmark['Packet'],
+        "Navigating to bookmark: " +
+          navBookmark["Host"] +
+          " packet " +
+          navBookmark["Packet"],
       );
       writeLogEntry(
-        `Navigating bookmark host=${navBookmark['Host']} packet=${navBookmark['Packet']}`,
+        `Navigating bookmark host=${navBookmark["Host"]} packet=${navBookmark["Packet"]}`,
       );
     }
   }
   if (!packetSet || packetSet.length === 0) {
-    statusUpdate('Status: No packets');
+    statusUpdate("Status: No packets");
     return;
   }
   if (
     packetSet != undefined &&
     (packetSet.length == 0 || packetSet[0] == undefined)
   ) {
-    statusUpdate('Status: No packet information found for this host');
-    document.getElementById('main').innerHTML = 'Please select a json file!';
+    statusUpdate("Status: No packet information found for this host");
+    document.getElementById("main").innerHTML = "Please select a json file!";
   }
   // in the data main secton, this is where we would
   // add the packet info for each packet, for now we just
@@ -2379,104 +2464,104 @@ function handlePacketNavigation(navAction, navBookmark) {
   // for the current host, we want to be able to navigate
   // through it with next and prev buttons
   if (packetSet == undefined || packetSet[index] == undefined) {
-    statusUpdate('Status: No packet information found for this host');
-    doError('No packet information found for this host!');
+    statusUpdate("Status: No packet information found for this host");
+    doError("No packet information found for this host!");
     return;
   } else {
-    currentIp = packetSet[index]['Packet Info']['IP']['Source IP'];
+    currentIp = packetSet[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
-      currentIp + ':' + packetSet[index]['Packet Info']['Index'];
+      currentIp + ":" + packetSet[index]["Packet Info"]["Index"];
     syncBookmarkDropdown(currentPacketKey);
     console.log(packetSet[index]);
     const hexPayload =
-      packetSet[index]['Packet Info']['Raw data']['Payload']['Hex Encoded'];
+      packetSet[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"];
     infoPanel(packetSet);
     popHexGrid(hexPayload);
     populateDataTypes(packetSet);
-    logCurrentPacketDisplay(navAction || 'first-load');
+    logCurrentPacketDisplay(navAction || "first-load");
   }
 }
 function populateDataTypes(p) {
-  const typesListEl = document.getElementById('types-list');
-  typesListEl.textContent = '';
-  const mimeTypeEl = document.getElementById('mime-type');
-  const charsetEl = document.getElementById('charset');
-  const encodingEl = document.getElementById('encoding');
-  const languageEl = document.getElementById('language');
-  encodingEl.textContent = '';
-  languageEl.textContent = '';
-  let encodingText = '';
-  let languageText = '';
+  const typesListEl = document.getElementById("types-list");
+  typesListEl.textContent = "";
+  const mimeTypeEl = document.getElementById("mime-type");
+  const charsetEl = document.getElementById("charset");
+  const encodingEl = document.getElementById("encoding");
+  const languageEl = document.getElementById("language");
+  encodingEl.textContent = "";
+  languageEl.textContent = "";
+  let encodingText = "";
+  let languageText = "";
   // packetsForHost = capturedPackets["Host"][hostFilterEl.value];
   packetsForHost = p;
   let charsetText = JSON.parse(
     JSON.stringify(
-      packetsForHost[index]['Extra Info']['Traits']['Characters']['Charset'],
+      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Charset"],
     ),
   );
   if (
-    packetsForHost[index]['Extra Info']['Traits']['Characters']['Encoding'] ==
-    'Unavailable for high entropy data'
+    packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"] ==
+    "Unavailable for high entropy data"
   ) {
     encodingText = JSON.parse(
       JSON.stringify(
-        packetsForHost[index]['Extra Info']['Traits']['Characters']['Encoding'],
+        packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"],
       ),
     );
   } else {
     encodingText = JSON.stringify(
-      packetsForHost[index]['Extra Info']['Traits']['Characters']['Encoding'][
-        'encoding'
+      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
+        "encoding"
       ],
     );
     languageText = JSON.stringify(
-      packetsForHost[index]['Extra Info']['Traits']['Characters']['Encoding'][
-        'language'
+      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
+        "language"
       ],
     );
   }
 
   const mimeTypeText = JSON.parse(
-    JSON.stringify(packetsForHost[index]['Extra Info']['MIME Type']),
+    JSON.stringify(packetsForHost[index]["Extra Info"]["MIME Type"]),
   );
   let dataItems = JSON.parse(
-    JSON.stringify(packetsForHost[index]['Extra Info']['Data Types']),
+    JSON.stringify(packetsForHost[index]["Extra Info"]["Data Types"]),
   );
-  let sslDetails = '';
+  let sslDetails = "";
   if (
-    packetsForHost[index]['Extra Info']['Traits']['Server Info'][
-      'Encryption Data'
-    ] != 'N/A' &&
-    packetsForHost[index]['Extra Info']['Traits']['Server Info'][
-      'Encryption Data'
+    packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+      "Encryption Data"
+    ] != "N/A" &&
+    packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+      "Encryption Data"
     ] != undefined
   ) {
     sslDetails =
-      packetsForHost[index]['Extra Info']['Traits']['Server Info'][
-        'Encryption Data'
-      ]['SSL Version'];
+      packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+        "Encryption Data"
+      ]["SSL Version"];
     const protoName =
-      packetsForHost[index]['Extra Info']['Traits']['Network Data'][
-        'Port Protcol'
+      packetsForHost[index]["Extra Info"]["Traits"]["Network Data"][
+        "Port Protcol"
       ];
     dataItems = [];
-    dataItems.push(sslDetails + ' encrypted stream');
-    dataItems.push(protoName + ' protocol data');
+    dataItems.push(sslDetails + " encrypted stream");
+    dataItems.push(protoName + " protocol data");
   }
 
-  mimeTypeEl.textContent = 'MIME type: ' + mimeTypeText;
-  charsetText = charsetText == '' ? 'Unknown' : charsetText;
-  encodingText = encodingText == '' ? 'Unknown' : encodingText;
+  mimeTypeEl.textContent = "MIME type: " + mimeTypeText;
+  charsetText = charsetText == "" ? "Unknown" : charsetText;
+  encodingText = encodingText == "" ? "Unknown" : encodingText;
   if (encodingText !== undefined) {
     encodingEl.textContent =
-      'Payload Encoding: ' + encodingText.replace(/"/g, '');
+      "Payload Encoding: " + encodingText.replace(/"/g, "");
   }
   if (languageText !== undefined) {
     languageEl.textContent =
-      'Payload Language: ' + languageText.replace(/"/g, '');
+      "Payload Language: " + languageText.replace(/"/g, "");
   }
   dataItems.forEach((item) => {
-    const listItem = document.createElement('li');
+    const listItem = document.createElement("li");
     listItem.textContent = item;
     typesListEl.appendChild(listItem);
   });
@@ -2490,7 +2575,7 @@ function isPrintable(charCode) {
 
 // this changes hex to ASCII
 function hexToAscii(hex) {
-  let decodedAscii = '';
+  let decodedAscii = "";
   for (let i = 0; i < hex.length; i += 2) {
     decodedAscii += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
   }
@@ -2505,14 +2590,14 @@ function truncate(str, maxLength) {
 
 // returns a 0 padded hex string of a number with a given length
 function decToHex(num, pad) {
-  return num.toString(16).padStart(pad, '0');
+  return num.toString(16).padStart(pad, "0");
 }
 
 // clears the higlights (its called after the moouse leaves grid)
 function clearGridHighlights() {
   document
-    .querySelectorAll('.griditem')
-    .forEach((el) => el.classList.remove('highlight'));
+    .querySelectorAll(".griditem")
+    .forEach((el) => el.classList.remove("highlight"));
 }
 
 /**
@@ -2520,21 +2605,21 @@ function clearGridHighlights() {
  */
 function popHexGrid(hex) {
   // swap it back to ASCII for the fade box
-  const payloadAsciiBox = document.getElementById('payloadascii');
+  const payloadAsciiBox = document.getElementById("payloadascii");
   const decodedAscii = hexToAscii(hex);
-  document.getElementById('hexg').textContent = '';
-  const hexGridContainer = document.getElementById('hexg');
+  document.getElementById("hexg").textContent = "";
+  const hexGridContainer = document.getElementById("hexg");
   const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
   hexPairs.forEach((hexPair, byteIndex) => {
-    const item = document.createElement('div');
-    item.classList.add('griditem');
+    const item = document.createElement("div");
+    item.classList.add("griditem");
     item.textContent = hexPair;
     item.dataset.byteIndex = String(byteIndex);
     hexGridContainer.appendChild(item);
   });
   function getPrintableSequence(startIndex) {
-    let result = '';
+    let result = "";
     for (let i = startIndex; i < decodedAscii.length; i++) {
       if (!isPrintable(decodedAscii.charCodeAt(i))) break;
       result += String.fromCharCode(decodedAscii.charCodeAt(i));
@@ -2542,38 +2627,38 @@ function popHexGrid(hex) {
     return result;
   }
   // Attach event listeners to each grid item
-  document.querySelectorAll('.griditem').forEach((item, idx) => {
-    item.addEventListener('mouseenter', (e) => {
+  document.querySelectorAll(".griditem").forEach((item, idx) => {
+    item.addEventListener("mouseenter", (e) => {
       //box fade in
-      const hexOffsetDisplay = document.getElementById('asciiOffset');
-      const asciiTextBox = document.getElementById('asciiText');
-      payloadAsciiBox.style.top = e.clientY + 18 + 'px';
-      payloadAsciiBox.style.left = e.clientX + 18 + 'px';
-      payloadAsciiBox.classList.add('visible');
-      asciiTextBox.innerHTML = '';
+      const hexOffsetDisplay = document.getElementById("asciiOffset");
+      const asciiTextBox = document.getElementById("asciiText");
+      payloadAsciiBox.style.top = e.clientY + 18 + "px";
+      payloadAsciiBox.style.left = e.clientX + 18 + "px";
+      payloadAsciiBox.classList.add("visible");
+      asciiTextBox.innerHTML = "";
       const printable = getPrintableSequence(idx);
       window.currentPrintableSequence = printable;
       // adds only consecutive printable characters to the decodedAscii box
       asciiTextBox.textContent += truncate(printable, 32);
       for (let i = 0; i < truncate(printable, 32).length; i++) {
-        const highlightedCell = document.querySelectorAll('.griditem')[idx + i];
-        highlightedCell.classList.add('highlight');
+        const highlightedCell = document.querySelectorAll(".griditem")[idx + i];
+        highlightedCell.classList.add("highlight");
       }
       const hexLen = parseInt(truncate(printable, 32).length, 10)
         .toString(16)
-        .padStart(2, '0')
+        .padStart(2, "0")
         .toUpperCase();
-      const hexOffset = idx.toString(16).padStart(4, '0').toUpperCase();
+      const hexOffset = idx.toString(16).padStart(4, "0").toUpperCase();
       if (printable.length == 0) {
-        asciiTextBox.textContent = '0x' + item.textContent;
+        asciiTextBox.textContent = "0x" + item.textContent;
       }
-      hexOffsetDisplay.textContent = '0x' + hexOffset + ':' + hexLen;
+      hexOffsetDisplay.textContent = "0x" + hexOffset + ":" + hexLen;
     });
   });
   // this fades the box back out and calls the grid clear func
-  document.querySelectorAll('.griditem').forEach((item) => {
-    item.addEventListener('mouseleave', () => {
-      payloadAsciiBox.classList.remove('visible');
+  document.querySelectorAll(".griditem").forEach((item) => {
+    item.addEventListener("mouseleave", () => {
+      payloadAsciiBox.classList.remove("visible");
       clearGridHighlights();
     });
   });
@@ -2588,87 +2673,87 @@ function popHexGrid(hex) {
 // and the main info table, also updates the timestamp and
 // currentIp:port info at the top
 function infoPanel(pk) {
-  const infoPaneEl = document.getElementById('packetInfoPane');
-  document.getElementById('rightside').style.display = 'block';
-  document.getElementById('leftside').style.display = 'block';
+  const infoPaneEl = document.getElementById("packetInfoPane");
+  document.getElementById("rightside").style.display = "block";
+  document.getElementById("leftside").style.display = "block";
   const infoPaneOrigHtml = infoPaneEl.innerHTML;
-  infoPaneEl.style.display = 'block';
+  infoPaneEl.style.display = "block";
   const p = pk[index];
-  let packetInfoData = p['Packet Info'];
-  let extraInfoData = p['Extra Info'];
-  let packetTimestamp = packetInfoData['Packet Timestamp'];
-  let ipChecksum = packetInfoData['IP']['IP Checksum'];
+  let packetInfoData = p["Packet Info"];
+  let extraInfoData = p["Extra Info"];
+  let packetTimestamp = packetInfoData["Packet Timestamp"];
+  let ipChecksum = packetInfoData["IP"]["IP Checksum"];
 
   // Determine transport protocol (TCP or UDP); fall back to TCP for older captures
-  const protocol = packetInfoData['Protocol'] || 'TCP';
+  const protocol = packetInfoData["Protocol"] || "TCP";
   const transportData = packetInfoData[protocol] || {};
 
   const transportChecksum =
-    protocol === 'TCP'
-      ? transportData['TCP checksum']
-      : protocol === 'UDP'
-        ? transportData['UDP checksum']
-        : protocol === 'ICMP'
-          ? transportData['ICMP Checksum']
-          : 'N/A';
+    protocol === "TCP"
+      ? transportData["TCP checksum"]
+      : protocol === "UDP"
+        ? transportData["UDP checksum"]
+        : protocol === "ICMP"
+          ? transportData["ICMP Checksum"]
+          : "N/A";
   const transportLayerLen =
-    protocol === 'TCP'
-      ? transportData['TCP layer length']
-      : protocol === 'UDP'
-        ? transportData['UDP length']
-        : protocol === 'ICMP'
-          ? transportData['Wire length']
-          : 'N/A';
+    protocol === "TCP"
+      ? transportData["TCP layer length"]
+      : protocol === "UDP"
+        ? transportData["UDP length"]
+        : protocol === "ICMP"
+          ? transportData["Wire length"]
+          : "N/A";
   const tcpFlags =
-    protocol === 'TCP' && transportData['TCP Flag Data']
-      ? transportData['TCP Flag Data']['Flags']
-      : 'N/A';
+    protocol === "TCP" && transportData["TCP Flag Data"]
+      ? transportData["TCP Flag Data"]["Flags"]
+      : "N/A";
 
   const sourceIpPort =
-    packetInfoData['IP']['Source IP'] +
-    ':' +
-    (transportData['Source port'] ?? '?');
+    packetInfoData["IP"]["Source IP"] +
+    ":" +
+    (transportData["Source port"] ?? "?");
   const destIpPort =
-    packetInfoData['IP']['Destination IP'] +
-    ':' +
-    (transportData['Destination port'] ?? '?');
+    packetInfoData["IP"]["Destination IP"] +
+    ":" +
+    (transportData["Destination port"] ?? "?");
   const etherFrame =
-    typeof packetInfoData['Ethernet Frame'] === 'object' &&
-    packetInfoData['Ethernet Frame'] !== null
-      ? packetInfoData['Ethernet Frame']
+    typeof packetInfoData["Ethernet Frame"] === "object" &&
+    packetInfoData["Ethernet Frame"] !== null
+      ? packetInfoData["Ethernet Frame"]
       : {};
-  const srcMac = etherFrame['MAC Source'] ?? 'N/A';
-  const dstMac = etherFrame['MAC Destination'] ?? 'N/A';
-  const srcMacVendor = etherFrame['MAC Source Vendor'] ?? 'N/A';
-  const dstMacVendor = etherFrame['MAC Destination Vendor'] ?? 'N/A';
-  const ipLayerLen = packetInfoData['IP']['IP layer length'];
-  const wireLen = transportData['Wire length'];
-  const payloadLen = packetInfoData['Raw data']['Payload Length'];
-  let sslCert = '';
-  let sslVersion = '';
-  let sslAlgos = '';
+  const srcMac = etherFrame["MAC Source"] ?? "N/A";
+  const dstMac = etherFrame["MAC Destination"] ?? "N/A";
+  const srcMacVendor = etherFrame["MAC Source Vendor"] ?? "N/A";
+  const dstMacVendor = etherFrame["MAC Destination Vendor"] ?? "N/A";
+  const ipLayerLen = packetInfoData["IP"]["IP layer length"];
+  const wireLen = transportData["Wire length"];
+  const payloadLen = packetInfoData["Raw data"]["Payload Length"];
+  let sslCert = "";
+  let sslVersion = "";
+  let sslAlgos = "";
   if (
-    extraInfoData['Traits']['Server Info']['Encryption Data'] == 'N/A' ||
-    extraInfoData['Traits']['Server Info'].hasOwnProperty('Encryption Data') ==
+    extraInfoData["Traits"]["Server Info"]["Encryption Data"] == "N/A" ||
+    extraInfoData["Traits"]["Server Info"].hasOwnProperty("Encryption Data") ==
       false
   ) {
-    sslCert = 'Not encrypted';
-    sslVersion = 'Not encrypted';
-    sslAlgos = '';
+    sslCert = "Not encrypted";
+    sslVersion = "Not encrypted";
+    sslAlgos = "";
   } else {
     sslCert =
-      extraInfoData['Traits']['Server Info']['Encryption Data']['SSL Cert'] ??
-      'Not available';
+      extraInfoData["Traits"]["Server Info"]["Encryption Data"]["SSL Cert"] ??
+      "Not available";
     sslVersion =
-      extraInfoData['Traits']['Server Info']['Encryption Data'][
-        'SSL Version'
-      ] ?? 'Not available';
+      extraInfoData["Traits"]["Server Info"]["Encryption Data"][
+        "SSL Version"
+      ] ?? "Not available";
     sslAlgos =
-      extraInfoData['Traits']['Server Info']['Encryption Data'][
-        'Encrypted With'
-      ].join('<br>Extra algo info: ') ?? 'No algorithm information available';
+      extraInfoData["Traits"]["Server Info"]["Encryption Data"][
+        "Encrypted With"
+      ].join("<br>Extra algo info: ") ?? "No algorithm information available";
   }
-  const isDecompressed = extraInfoData['Decompressed']['Decompressed'];
+  const isDecompressed = extraInfoData["Decompressed"]["Decompressed"];
   function removeIps(ipList) {
     const ipRegex =
       /\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/;
@@ -2677,94 +2762,94 @@ function infoPanel(pk) {
 
   let dnsHostsHtml;
   if (
-    extraInfoData['Traits']['Network Data']['Hostnames']['Hostnames'] ==
+    extraInfoData["Traits"]["Network Data"]["Hostnames"]["Hostnames"] ==
     undefined
   ) {
-    dnsHostsHtml = 'localhost';
+    dnsHostsHtml = "localhost";
   } else {
     dnsHostsHtml =
-      'localhost<br>' +
-      extraInfoData['Traits']['Network Data']['Hostnames']['Hostnames'].join(
-        '<br>',
+      "localhost<br>" +
+      extraInfoData["Traits"]["Network Data"]["Hostnames"]["Hostnames"].join(
+        "<br>",
       );
   }
-  const filteredDnsHosts = removeIps(dnsHostsHtml.split('<br>')).join('<br>');
-  dnsHostsHtml = filteredDnsHosts == '' ? 'localhost' : filteredDnsHosts;
+  const filteredDnsHosts = removeIps(dnsHostsHtml.split("<br>")).join("<br>");
+  dnsHostsHtml = filteredDnsHosts == "" ? "localhost" : filteredDnsHosts;
 
-  const pageTitle = extraInfoData['Traits']['Server Info']['Page Title'];
-  const isEncrypted = extraInfoData['Traits']['Server Info']['Encrypted'];
-  const protoName = extraInfoData['Traits']['Network Data']['Port Protcol'];
+  const pageTitle = extraInfoData["Traits"]["Server Info"]["Page Title"];
+  const isEncrypted = extraInfoData["Traits"]["Server Info"]["Encrypted"];
+  const protoName = extraInfoData["Traits"]["Network Data"]["Port Protcol"];
   const protoDescription =
-    extraInfoData['Traits']['Network Data']['Port Description'];
+    extraInfoData["Traits"]["Network Data"]["Port Description"];
   const srcNetClass =
-    extraInfoData['Traits']['Network Data']['Source IP']['Class'];
+    extraInfoData["Traits"]["Network Data"]["Source IP"]["Class"];
   const dstNetClass =
-    extraInfoData['Traits']['Network Data']['Destination IP']['Class'];
-  document.getElementById('sidedatatable').textContent = '';
-  document.getElementById('protoInfoSrc').textContent = 'Source';
-  document.getElementById('protoInfoDest').textContent = 'Destination';
-  document.getElementById('comp').textContent = 'Unknown';
+    extraInfoData["Traits"]["Network Data"]["Destination IP"]["Class"];
+  document.getElementById("sidedatatable").textContent = "";
+  document.getElementById("protoInfoSrc").textContent = "Source";
+  document.getElementById("protoInfoDest").textContent = "Destination";
+  document.getElementById("comp").textContent = "Unknown";
   if (isDecompressed == false || isDecompressed == undefined) {
-    const types = extraInfoData['Data Types'];
+    const types = extraInfoData["Data Types"];
 
     types.forEach((type) => {
-      if (type.includes('Zlib') || type.includes('zlib')) {
-        document.getElementById('comp').textContent = 'Compressed with zlib';
+      if (type.includes("Zlib") || type.includes("zlib")) {
+        document.getElementById("comp").textContent = "Compressed with zlib";
 
-        console.log('Data type identified: ' + type);
+        console.log("Data type identified: " + type);
       }
-      if (type.includes('Gzip') || type.includes('gzip')) {
-        document.getElementById('comp').textContent = 'Compressed with gzip';
+      if (type.includes("Gzip") || type.includes("gzip")) {
+        document.getElementById("comp").textContent = "Compressed with gzip";
       }
-      if (type.includes('Zip')) {
-        document.getElementById('comp').textContent = 'Compressed with zip';
+      if (type.includes("Zip")) {
+        document.getElementById("comp").textContent = "Compressed with zip";
       }
     });
   }
   if (isDecompressed == true) {
-    document.getElementById('comp').textContent =
-      'Not regonized as compressed data';
+    document.getElementById("comp").textContent =
+      "Not regonized as compressed data";
   }
   //  wireLen
-  if (pageTitle == undefined || pageTitle == 'N/A') {
-    document.getElementById('website').textContent =
-      'Not available for this server';
+  if (pageTitle == undefined || pageTitle == "N/A") {
+    document.getElementById("website").textContent =
+      "Not available for this server";
   } else {
-    document.getElementById('website').textContent = pageTitle;
+    document.getElementById("website").textContent = pageTitle;
   }
   //document.getElementById("crypt").textContent = isEncrypted;
-  const dnsCollapsedList = dnsHostsHtml.replace(/(<br\s*\/?>\s*)+/gi, '<br>');
-  document.getElementById('dns').innerHTML = dnsCollapsedList;
-  if (sslAlgos == undefined || sslAlgos == '') {
+  const dnsCollapsedList = dnsHostsHtml.replace(/(<br\s*\/?>\s*)+/gi, "<br>");
+  document.getElementById("dns").innerHTML = dnsCollapsedList;
+  if (sslAlgos == undefined || sslAlgos == "") {
     //document.getElementById("crypt").innerHTML = sslCert
     //  ? "Encrypted with: " + sslVersion + "<br>" + sslAlgos
     //  : "Not Encrypted";
-    document.getElementById('crypt').innerHTML = 'Not encrypted';
+    document.getElementById("crypt").innerHTML = "Not encrypted";
   } else {
-    document.getElementById('crypt').innerHTML =
-      'Encrypted with: ' + sslVersion + '<br>' + sslAlgos;
+    document.getElementById("crypt").innerHTML =
+      "Encrypted with: " + sslVersion + "<br>" + sslAlgos;
   }
 
-  if (protoName == 'Unknown') {
-    document.getElementById('protocols').innerHTML = 'Unknown';
+  if (protoName == "Unknown") {
+    document.getElementById("protocols").innerHTML = "Unknown";
   } else {
-    document.getElementById('protocols').innerHTML =
-      'Protocol Name: ' +
+    document.getElementById("protocols").innerHTML =
+      "Protocol Name: " +
       protoName +
-      '<br>Protocol Description: ' +
+      "<br>Protocol Description: " +
       protoDescription;
   }
   const checksumData = [
-    { name: 'IP Checksum', value: ipChecksum },
-    { name: protocol + ' Checksum', value: transportChecksum },
-    { name: 'Flags', value: tcpFlags },
-    { name: 'IP Length', value: ipLayerLen },
-    { name: protocol + ' Length', value: transportLayerLen },
-    { name: 'Wire Length', value: wireLen },
-    { name: 'Payload Length', value: payloadLen },
+    { name: "IP Checksum", value: ipChecksum },
+    { name: protocol + " Checksum", value: transportChecksum },
+    { name: "Flags", value: tcpFlags },
+    { name: "IP Length", value: ipLayerLen },
+    { name: protocol + " Length", value: transportLayerLen },
+    { name: "Wire Length", value: wireLen },
+    { name: "Payload Length", value: payloadLen },
   ];
-  const checksumHeaders = ['Protocol data', 'Details'];
-  createTable(checksumData, checksumHeaders, 'sidedatatable');
+  const checksumHeaders = ["Protocol data", "Details"];
+  createTable(checksumData, checksumHeaders, "sidedatatable");
 
   // DNS info table (shown for UDP/DNS packets)
   renderDnsTable(transportData);
@@ -2844,132 +2929,132 @@ function infoPanel(pk) {
   // RADIUS info table (shown for RADIUS packets on port 1812/1813/1645/1646)
   renderRadiusTable(transportData);
 
-  const ipTableHeaders = ['Packet', 'Data'];
+  const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [
-    { name: 'IP:Port', value: sourceIpPort },
-    { name: 'MAC', value: srcMac },
-    { name: 'MAC Vendor', value: srcMacVendor },
-    { name: 'Network Class', value: srcNetClass },
+    { name: "IP:Port", value: sourceIpPort },
+    { name: "MAC", value: srcMac },
+    { name: "MAC Vendor", value: srcMacVendor },
+    { name: "Network Class", value: srcNetClass },
   ];
-  createTable(srcIpData, ipTableHeaders, 'protoInfoSrc');
+  createTable(srcIpData, ipTableHeaders, "protoInfoSrc");
   const dstIpData = [
-    { name: 'IP:Port', value: destIpPort },
-    { name: 'MAC', value: dstMac },
-    { name: 'MAC Vendor', value: dstMacVendor },
-    { name: 'Network Class', value: dstNetClass },
+    { name: "IP:Port", value: destIpPort },
+    { name: "MAC", value: dstMac },
+    { name: "MAC Vendor", value: dstMacVendor },
+    { name: "Network Class", value: dstNetClass },
   ];
-  createTable(dstIpData, ipTableHeaders, 'protoInfoDest');
-  const entropyValue = extraInfoData['Traits']['Shannon Entropy'];
-  document.getElementById('timestamp').textContent =
-    'Timestamp ' + packetTimestamp;
+  createTable(dstIpData, ipTableHeaders, "protoInfoDest");
+  const entropyValue = extraInfoData["Traits"]["Shannon Entropy"];
+  document.getElementById("timestamp").textContent =
+    "Timestamp " + packetTimestamp;
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
-  document.getElementById('sideloctable').textContent = '';
-  document.getElementById('entropybox').textContent =
-    '\u096F ' + entropyValue.toFixed(2);
-  const entropyBoxEl = document.getElementById('entropybox');
+  document.getElementById("sideloctable").textContent = "";
+  document.getElementById("entropybox").textContent =
+    "\u096F " + entropyValue.toFixed(2);
+  const entropyBoxEl = document.getElementById("entropybox");
   if (entropyValue >= 6.8) {
-    entropyBoxEl.className = 'high';
+    entropyBoxEl.className = "high";
   } else if (entropyValue >= 4.5) {
-    entropyBoxEl.className = 'med';
+    entropyBoxEl.className = "med";
   } else {
-    entropyBoxEl.className = 'low';
+    entropyBoxEl.className = "low";
   }
   const secondColumnCells = document.querySelectorAll(
-    'table tr td:nth-child(1), table tr th:nth-child(1)',
+    "table tr td:nth-child(1), table tr th:nth-child(1)",
   );
   secondColumnCells.forEach((cell) => {
-    cell.style.width = '23%';
+    cell.style.width = "23%";
   });
   if (
-    extraInfoData['Traits']['Network Data']['Source IP']['Location']['City'] ==
+    extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"]["City"] ==
     undefined
   ) {
-    const localnetData = [{ name: 'Location', value: 'Localnet' }];
-    const localnetHeaders = ['Source Host', 'Location'];
-    createTable(localnetData, localnetHeaders, 'sideloctable');
+    const localnetData = [{ name: "Location", value: "Localnet" }];
+    const localnetHeaders = ["Source Host", "Location"];
+    createTable(localnetData, localnetHeaders, "sideloctable");
   } else {
     const srcLocData = [
       {
-        name: 'Country',
+        name: "Country",
         value:
-          extraInfoData['Traits']['Network Data']['Source IP']['Location'][
-            'Country'
+          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
+            "Country"
           ],
       },
       {
-        name: 'City',
+        name: "City",
         value:
-          extraInfoData['Traits']['Network Data']['Source IP']['Location'][
-            'City'
+          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
+            "City"
           ],
       },
       {
-        name: 'Timezone',
+        name: "Timezone",
         value:
-          extraInfoData['Traits']['Network Data']['Source IP']['Location'][
-            'Time Zone'
+          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
+            "Time Zone"
           ],
       },
     ];
-    const srcLocHeaders = ['Source Host', 'Location'];
-    createTable(srcLocData, srcLocHeaders, 'sideloctable');
+    const srcLocHeaders = ["Source Host", "Location"];
+    createTable(srcLocData, srcLocHeaders, "sideloctable");
   }
   if (
-    extraInfoData['Traits']['Network Data']['Destination IP']['Location'][
-      'City'
+    extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
+      "City"
     ] == undefined
   ) {
-    const localnetData = [{ name: 'Location', value: 'Localnet' }];
-    const localnetHeaders = ['Destination Host', 'Location'];
-    createTable(localnetData, localnetHeaders, 'sideloctable');
+    const localnetData = [{ name: "Location", value: "Localnet" }];
+    const localnetHeaders = ["Destination Host", "Location"];
+    createTable(localnetData, localnetHeaders, "sideloctable");
   } else {
     const dstLocData = [
       {
-        name: 'Country',
+        name: "Country",
         value:
-          extraInfoData['Traits']['Network Data']['Destination IP']['Location'][
-            'Country'
+          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
+            "Country"
           ],
       },
       {
-        name: 'City',
+        name: "City",
         value:
-          extraInfoData['Traits']['Network Data']['Destination IP']['Location'][
-            'City'
+          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
+            "City"
           ],
       },
       {
-        name: 'Timezone',
+        name: "Timezone",
 
         value:
-          extraInfoData['Traits']['Network Data']['Destination IP']['Location'][
-            'Time Zone'
+          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
+            "Time Zone"
           ],
       },
     ];
-    const dstLocHeaders = ['Destination Host', 'Location'];
-    createTable(dstLocData, dstLocHeaders, 'sideloctable');
+    const dstLocHeaders = ["Destination Host", "Location"];
+    createTable(dstLocData, dstLocHeaders, "sideloctable");
   }
 }
 
 // Save the currently loaded JSON capture to a user-chosen file via a worker thread
-document.getElementById('save-json-btn').addEventListener('click', function () {
+document.getElementById("save-json-btn").addEventListener("click", function () {
   if (!jsonCapture) {
-    statusUpdate('Status: No data loaded to save');
+    statusUpdate("Status: No data loaded to save");
     return;
   }
   window.saveapi.saveJson(jsonCapture).then((result) => {
     if (result.canceled) {
-      statusUpdate('Status: Save cancelled');
+      statusUpdate("Status: Save cancelled");
     } else if (result.success) {
-      statusUpdate('Status: JSON saved successfully');
+      statusUpdate("Status: JSON saved successfully");
     } else {
-      doError('Save failed');
-      logErrorEntry('save-json', result.error || 'unknown');
+      doError("Save failed");
+      logErrorEntry("save-json", result.error || "unknown");
       statusUpdate(
-        'Status: Save failed – ' + (result.error || 'unknown error'),
+        "Status: Save failed – " + (result.error || "unknown error"),
       );
-      console.error('Save failed:', result.error);
+      console.error("Save failed:", result.error);
     }
   });
 });
@@ -2979,30 +3064,30 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
 
 // when the main.js returns our json data from snitch.py
 window.jsonapi.onJsonData((jsonData) => {
-  document.getElementById('loading-container').style.display = 'block';
-  document.getElementById('error-container').style.display = 'none';
-  statusUpdate('Loaded data from backend, processing...');
-  writeLogEntry('Backend JSON payload received for processing');
+  document.getElementById("loading-container").style.display = "block";
+  document.getElementById("error-container").style.display = "none";
+  statusUpdate("Loaded data from backend, processing...");
+  writeLogEntry("Backend JSON payload received for processing");
   processFile(
-    new File([jsonData], 'capture.json', { type: 'application/json' }),
+    new File([jsonData], "capture.json", { type: "application/json" }),
   );
-  document.getElementById('loading-container').style.display = 'none';
+  document.getElementById("loading-container").style.display = "none";
   const loadEndTime = performance.now();
-  document.getElementById('load-time').textContent =
-    'Load time: ' + ((loadEndTime - startTime) / 1000).toFixed(2) + ' seconds';
+  document.getElementById("load-time").textContent =
+    "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
 });
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file) {
-  document.getElementById('loading-container').style.display = 'block';
-  document.getElementById('summary_content').innerHTML =
+  document.getElementById("loading-container").style.display = "block";
+  document.getElementById("summary_content").innerHTML =
     '<span id="loaderdots" class="loading">Loading</span>';
-  document.getElementById('status').textContent =
-    'Status: Running snitch backend, this may take a few minutes...';
-  document.getElementById('error-container').style.display = 'none';
+  document.getElementById("status").textContent =
+    "Status: Running snitch backend, this may take a few minutes...";
+  document.getElementById("error-container").style.display = "none";
   startTime = performance.now();
-  const useLLM = document.getElementById('use-llm').checked;
-  const fileLabel = typeof file === 'string' ? file : file?.name || 'unknown';
+  const useLLM = document.getElementById("use-llm").checked;
+  const fileLabel = typeof file === "string" ? file : file?.name || "unknown";
   writeLogEntry(
     `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
   );
@@ -3010,56 +3095,56 @@ function runSnitch(file) {
     .runBackendCommand(file, useLLM)
     .then((output) => {})
     .catch((error) => {
-      doError('Backend run error!');
-      logErrorEntry('backend-run', error);
+      doError("Backend run error!");
+      logErrorEntry("backend-run", error);
     });
 }
 
 function doError(message) {
-  console.error('Error from backend:', message);
+  console.error("Error from backend:", message);
   writeLogEntry(`Error shown message="${message}"`);
-  const loadingContainerEl = document.getElementById('loading-container');
-  const errorContainerEl = document.getElementById('error-container');
-  document.getElementById('summary_content').textContent = '';
-  loadingContainerEl.style.display = 'none';
-  errorContainerEl.style.display = 'block';
+  const loadingContainerEl = document.getElementById("loading-container");
+  const errorContainerEl = document.getElementById("error-container");
+  document.getElementById("summary_content").textContent = "";
+  loadingContainerEl.style.display = "none";
+  errorContainerEl.style.display = "block";
   errorContainerEl.textContent = message;
-  errorContainerEl.addEventListener('click', () => {
-    errorContainerEl.style.display = 'none';
-    loadingContainerEl.style.display = 'none';
+  errorContainerEl.addEventListener("click", () => {
+    errorContainerEl.style.display = "none";
+    loadingContainerEl.style.display = "none";
   });
 }
 
 function hideAllData() {
   //  document.getElementById("packetInfoPane").textContent =
   //    "No matching packets found.";
-  doError('No packets match the filter criteria!');
-  statusUpdate('Status: No packets match the filter criteria');
-  document.getElementById('data-types').style.display = 'none';
-  document.getElementById('protoInfo').style.display = 'none';
-  document.getElementById('timestamp').style.display = 'none';
-  document.getElementById('rightside').style.display = 'none';
-  document.getElementById('active-recon').style.display = 'none';
-  document.getElementById('prev-btn').style.opacity = '0';
-  document.getElementById('next-btn').style.opacity = '0';
-  popHexGrid('00'.repeat(1));
+  doError("No packets match the filter criteria!");
+  statusUpdate("Status: No packets match the filter criteria");
+  document.getElementById("data-types").style.display = "none";
+  document.getElementById("protoInfo").style.display = "none";
+  document.getElementById("timestamp").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  document.getElementById("active-recon").style.display = "none";
+  document.getElementById("prev-btn").style.opacity = "0";
+  document.getElementById("next-btn").style.opacity = "0";
+  popHexGrid("00".repeat(1));
 }
 function showAllData() {
-  document.getElementById('prev-btn').style.opacity = '1';
-  document.getElementById('next-btn').style.opacity = '1';
-  document.getElementById('data-types').style.display = 'block';
-  document.getElementById('protoInfo').style.display = 'block';
-  document.getElementById('timestamp').style.display = 'block';
-  document.getElementById('rightside').style.display = 'block';
-  document.getElementById('active-recon').style.display = 'block';
-  document.getElementById('hexg').hidden = false;
-  document.getElementById('error-container').style.display = 'none';
+  document.getElementById("prev-btn").style.opacity = "1";
+  document.getElementById("next-btn").style.opacity = "1";
+  document.getElementById("data-types").style.display = "block";
+  document.getElementById("protoInfo").style.display = "block";
+  document.getElementById("timestamp").style.display = "block";
+  document.getElementById("rightside").style.display = "block";
+  document.getElementById("active-recon").style.display = "block";
+  document.getElementById("hexg").hidden = false;
+  document.getElementById("error-container").style.display = "none";
 }
 
 document
-  .getElementById('filterStr')
-  .addEventListener('keydown', function (event) {
-    if (event.key === 'Enter') {
+  .getElementById("filterStr")
+  .addEventListener("keydown", function (event) {
+    if (event.key === "Enter") {
       const filterQuery = filterInputEl.value;
       addFilterHistory(filterQuery);
       runFilterQuery(filterQuery);
@@ -3067,15 +3152,15 @@ document
     }
   });
 
-document.addEventListener('contextmenu', (event) => {
+document.addEventListener("contextmenu", (event) => {
   const target = event.target;
   const pasteTarget = getPasteTargetFromContextTarget(target);
   const selectedText = getTrimmedSelectionText();
   const insideEligiblePanel = target?.closest(
-    '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
+    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata",
   );
-  const isHexViewTarget = Boolean(target?.closest('#hexg'));
-  let conversionText = '';
+  const isHexViewTarget = Boolean(target?.closest("#hexg"));
+  let conversionText = "";
   let formats = [];
   if (insideEligiblePanel) {
     conversionText = getConversionTextFromTarget(target);
@@ -3105,35 +3190,38 @@ document.addEventListener('contextmenu', (event) => {
   );
 });
 
-document.addEventListener('click', () => {
+document.addEventListener("click", () => {
   hideConvertContextMenu();
 });
 document.addEventListener(
-  'mousedown',
+  "mousedown",
   (event) => {
     if (event.button !== 0) return;
-    if (!convertContextMenuEl.hidden && !convertContextMenuEl.contains(event.target)) {
+    if (
+      !convertContextMenuEl.hidden &&
+      !convertContextMenuEl.contains(event.target)
+    ) {
       hideConvertContextMenu();
     }
   },
   true,
 );
-document.addEventListener('scroll', () => {
+document.addEventListener("scroll", () => {
   hideConvertContextMenu();
 });
-window.addEventListener('resize', () => {
+window.addEventListener("resize", () => {
   hideConvertContextMenu();
 });
 
-filterInputEl.addEventListener('input', syncFilterHighlight);
-filterInputEl.addEventListener('scroll', syncFilterHighlightScroll);
+filterInputEl.addEventListener("input", syncFilterHighlight);
+filterInputEl.addEventListener("scroll", syncFilterHighlightScroll);
 
-filterHistoryToggleEl.addEventListener('click', () => {
+filterHistoryToggleEl.addEventListener("click", () => {
   setHistoryMenuOpen(filterHistoryMenuEl.hidden);
 });
 
-filterHistoryMenuEl.addEventListener('click', (event) => {
-  const selectedItem = event.target.closest('.query-history-item');
+filterHistoryMenuEl.addEventListener("click", (event) => {
+  const selectedItem = event.target.closest(".query-history-item");
   if (!selectedItem) return;
   const selectedQuery = selectedItem.dataset.query;
   if (!selectedQuery) return;
@@ -3144,17 +3232,20 @@ filterHistoryMenuEl.addEventListener('click', (event) => {
   setHistoryMenuOpen(false);
 });
 
-document.addEventListener('click', (event) => {
-  if (!filterHistoryMenuEl.hidden && !filterHistoryContainerEl.contains(event.target)) {
+document.addEventListener("click", (event) => {
+  if (
+    !filterHistoryMenuEl.hidden &&
+    !filterHistoryContainerEl.contains(event.target)
+  ) {
     setHistoryMenuOpen(false);
   }
 });
 
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !filterHistoryMenuEl.hidden) {
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !filterHistoryMenuEl.hidden) {
     setHistoryMenuOpen(false);
   }
-  if (event.key === 'Escape' && !convertContextMenuEl.hidden) {
+  if (event.key === "Escape" && !convertContextMenuEl.hidden) {
     hideConvertContextMenu();
   }
 });
@@ -3162,15 +3253,15 @@ document.addEventListener('keydown', (event) => {
 syncFilterHighlight();
 
 window.onerror = (message, source, lineno, colno, error) => {
-  doError(message + ' at ' + source + ':' + lineno + ':' + colno);
+  doError(message + " at " + source + ":" + lineno + ":" + colno);
 };
 
 window.onunhandledrejection = (event) => {
-  doError('Unhandled promise error! ' + event.reason);
+  doError("Unhandled promise error! " + event.reason);
 };
 
 window.api.onError((msg) => {
-  console.error('Error from backend:', msg);
+  console.error("Error from backend:", msg);
   // Show alert or UI message
   doError(msg);
 });
@@ -3179,9 +3270,9 @@ window.api.onError((msg) => {
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
   hideConvertContextMenu();
-  document.getElementById('packetInfoPane').style.display = 'none';
-  document.getElementById('packetPayloadPane').style.display = 'none';
-  document.getElementById('rightside').style.display = 'none';
-  document.getElementById('leftside').style.display = 'none';
-  document.getElementById('loading-container').style.display = 'none';
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  document.getElementById("leftside").style.display = "none";
+  document.getElementById("loading-container").style.display = "none";
 };
