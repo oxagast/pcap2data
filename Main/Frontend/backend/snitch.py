@@ -242,14 +242,11 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     except Exception:
         pageTitle = "N/A"
     # Try to fetch SSL certificate info (ignore errors; port may not support TLS)
-    sslContext = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    if hasattr(sslContext, "minimum_version") and hasattr(ssl, "TLSVersion"):
-        sslContext.minimum_version = ssl.TLSVersion.TLSv1_2
-    else:
-        if hasattr(ssl, "OP_NO_TLSv1"):
-            sslContext.options |= ssl.OP_NO_TLSv1
-        if hasattr(ssl, "OP_NO_TLSv1_1"):
-            sslContext.options |= ssl.OP_NO_TLSv1_1
+    sslContext = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    if hasattr(ssl, "OP_NO_TLSv1"):
+        sslContext.options |= ssl.OP_NO_TLSv1
+    if hasattr(ssl, "OP_NO_TLSv1_1"):
+        sslContext.options |= ssl.OP_NO_TLSv1_1
     sslContext.check_hostname = False
     sslContext.verify_mode = ssl.CERT_NONE
 
