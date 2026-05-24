@@ -73,6 +73,10 @@ const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
 const DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD = 4.5;
 const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
 const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
+const CONTEXT_IPV4_REGEX =
+  /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
+const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
+const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -1263,6 +1267,7 @@ function showDataTools() {
 let activeContextConversionText = '';
 let activeContextTarget = null;
 let activeContextPasteTarget = null;
+let activeContextFilterQueries = {};
 const convertContextMenuEl = getCachedElement('convert-context-menu');
 const convertContextButtons = {
   copy: getCachedElement('ctx-copy'),
@@ -1276,6 +1281,11 @@ const convertContextButtons = {
   copyHex: getCachedElement('convert-context-copy-hex'),
   copyAscii: getCachedElement('convert-context-copy-ascii'),
   copyRaw: getCachedElement('convert-context-copy-raw'),
+  filterIp: getCachedElement('ctx-filter-ip'),
+  filterPort: getCachedElement('ctx-filter-port'),
+  filterMac: getCachedElement('ctx-filter-mac'),
+  filterProtocol: getCachedElement('ctx-filter-protocol'),
+  filterMime: getCachedElement('ctx-filter-mime'),
 };
 const convertContextDividerEl = getCachedElement('convert-context-divider');
 const convertContextSaveDividerEl = getCachedElement('convert-context-save-divider');
@@ -1284,7 +1294,155 @@ function hideConvertContextMenu() {
   activeContextConversionText = '';
   activeContextTarget = null;
   activeContextPasteTarget = null;
+  activeContextFilterQueries = {};
   convertContextMenuEl.hidden = true;
+}
+
+function normalizeContextToken(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function extractContextIp(value) {
+  const normalized = normalizeContextToken(value);
+  const match = normalized.match(CONTEXT_IPV4_REGEX);
+  return match ? match[0] : '';
+}
+
+function extractContextPort(value, allowStandaloneNumber = false) {
+  const normalized = normalizeContextToken(value);
+  const ipPortMatch = normalized.match(
+    /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:(\d{1,5})\b/,
+  );
+  if (ipPortMatch) {
+    const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
+    return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
+  }
+  if (!allowStandaloneNumber) return '';
+  const portMatch = normalized.match(/^\d{1,5}$/);
+  if (!portMatch) return '';
+  const portValue = Number.parseInt(normalized, 10);
+  return portValue >= 0 && portValue <= 65535 ? String(portValue) : '';
+}
+
+function extractContextMac(value) {
+  const normalized = normalizeContextToken(value);
+  const match = normalized.match(CONTEXT_MAC_REGEX);
+  return match ? match[0].toLowerCase() : '';
+}
+
+function extractContextMimeType(value) {
+  const normalized = normalizeContextToken(value);
+  const labelStripped = normalized.replace(/^mime(?:\s+type)?\s*:\s*/i, '').trim();
+  if (!labelStripped) return '';
+  const mimeBase = labelStripped.split(';')[0].trim();
+  return CONTEXT_MIME_REGEX.test(mimeBase) ? mimeBase.toLowerCase() : '';
+}
+
+function extractContextProtocol(value) {
+  const normalized = normalizeContextToken(value);
+  const labelStripped = normalized
+    .replace(/^protocol(?:\s+name)?\s*:\s*/i, '')
+    .replace(/^app(?:lication)?\s+protocol\s*:\s*/i, '')
+    .replace(/^transport\s+protocol\s*:\s*/i, '')
+    .trim();
+  if (!labelStripped) return '';
+  const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+_-]*$/i);
+  return protocolMatch ? labelStripped.toLowerCase() : '';
+}
+
+function sanitizeFilterTerm(value) {
+  return normalizeContextToken(value).replace(/[^a-zA-Z0-9:./+-]/g, '').trim();
+}
+
+function buildContextFilterQueries(target, selectedText, conversionText) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    const normalized = normalizeContextToken(value);
+    if (!normalized) return;
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  };
+
+  addCandidate(selectedText);
+  addCandidate(conversionText);
+
+  let rowName = '';
+  let rowPortEligible = false;
+  const row = target?.closest?.('tr');
+  if (row) {
+    const cells = row.querySelectorAll('td');
+    rowName = normalizeContextToken(cells[0]?.textContent);
+    const rowValue = normalizeContextToken(cells[1]?.textContent);
+    addCandidate(rowValue);
+    rowPortEligible = /\bport\b/i.test(rowName);
+    if (/^ip\s*:?\s*port$/i.test(rowName) && rowValue) {
+      const bracketedIpv6Match = rowValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+      if (bracketedIpv6Match) {
+        addCandidate(bracketedIpv6Match[1]);
+        addCandidate(bracketedIpv6Match[2]);
+      } else {
+        const ipv4PortMatch = rowValue.match(
+          /^((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}):(\d{1,5})$/,
+        );
+        if (ipv4PortMatch) {
+          addCandidate(ipv4PortMatch[1]);
+          addCandidate(ipv4PortMatch[2]);
+        } else {
+          const lastColonIndex = rowValue.lastIndexOf(':');
+          if (lastColonIndex > 0) {
+            const maybePort = rowValue.slice(lastColonIndex + 1).trim();
+            if (/^\d{1,5}$/.test(maybePort)) {
+              addCandidate(maybePort);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const filterQueries = {};
+  const skipProtocol = /^network\s+class$/i.test(rowName);
+  for (const candidate of candidates) {
+    if (!filterQueries.ip) {
+      const ip = extractContextIp(candidate);
+      if (ip) {
+        const safeIp = sanitizeFilterTerm(ip);
+        filterQueries.ip = `ip.src.addr: ${safeIp} || ip.dst.addr: ${safeIp}`;
+      }
+    }
+    if (!filterQueries.port) {
+      const port = extractContextPort(candidate, rowPortEligible);
+      if (port) {
+        const safePort = sanitizeFilterTerm(port);
+        filterQueries.port =
+          `tcp.src.port: ${safePort} || tcp.dst.port: ${safePort}` +
+          ` || udp.src.port: ${safePort} || udp.dst.port: ${safePort}`;
+      }
+    }
+    if (!filterQueries.mac) {
+      const mac = extractContextMac(candidate);
+      if (mac) {
+        const safeMac = sanitizeFilterTerm(mac);
+        filterQueries.mac = `ether.src.mac.addr: ${safeMac} || ether.dst.mac.addr: ${safeMac}`;
+      }
+    }
+    if (!filterQueries.protocol && !skipProtocol) {
+      const protocol = extractContextProtocol(candidate);
+      if (protocol) {
+        const safeProtocol = sanitizeFilterTerm(protocol);
+        filterQueries.protocol = `wire.proto: ${safeProtocol} || tcp.proto: ${safeProtocol}`;
+      }
+    }
+    if (!filterQueries.mime) {
+      const mimeType = extractContextMimeType(candidate);
+      if (mimeType) {
+        const safeMimeType = sanitizeFilterTerm(mimeType);
+        filterQueries.mime = `mime.type: ${safeMimeType}`;
+      }
+    }
+  }
+
+  return filterQueries;
 }
 
 function getTrimmedSelectionText() {
@@ -1397,11 +1555,13 @@ function showConvertContextMenu(
     showCopySelection = false,
     showPaste = true,
     showSaveJson = true,
+    filterQueries = {},
   } = {},
 ) {
   activeContextConversionText = sourceText;
   activeContextTarget = target;
   activeContextPasteTarget = pasteTarget;
+  activeContextFilterQueries = filterQueries;
 
   convertContextButtons.copy.style.display = showCopySelection ? 'block' : 'none';
   convertContextButtons.paste.style.display = showPaste ? 'block' : 'none';
@@ -1417,17 +1577,27 @@ function showConvertContextMenu(
     ? 'block'
     : 'none';
   convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
+  convertContextButtons.filterIp.style.display = filterQueries.ip ? 'block' : 'none';
+  convertContextButtons.filterPort.style.display = filterQueries.port ? 'block' : 'none';
+  convertContextButtons.filterMac.style.display = filterQueries.mac ? 'block' : 'none';
+  convertContextButtons.filterProtocol.style.display = filterQueries.protocol
+    ? 'block'
+    : 'none';
+  convertContextButtons.filterMime.style.display = filterQueries.mime ? 'block' : 'none';
   const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
   const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
-  if (!hasGeneralActions && !hasDataTypeActions) {
+  const hasFilterActions = Object.values(filterQueries).some(Boolean);
+  if (!hasGeneralActions && !hasDataTypeActions && !hasFilterActions) {
     hideConvertContextMenu();
     return;
   }
   convertContextDividerEl.style.display =
-    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
+    hasClipboardActions && (hasDataTypeActions || hasFilterActions) ? 'block' : 'none';
   convertContextSaveDividerEl.style.display =
-    showSaveJson && (hasClipboardActions || hasDataTypeActions) ? 'block' : 'none';
+    showSaveJson && (hasClipboardActions || hasDataTypeActions || hasFilterActions)
+      ? 'block'
+      : 'none';
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -1624,6 +1794,30 @@ function saveJsonFromContextMenu() {
   });
 }
 
+function appendFilterQueryFromContextMenu(type) {
+  const query = activeContextFilterQueries[type];
+  hideConvertContextMenu();
+  if (!query) {
+    statusUpdate('Status: No matching filter value found for this selection');
+    return;
+  }
+  const existingQuery = filterInputEl.value.trim();
+  const wrappedQuery = query.includes('||') || query.includes('&&') ? `(${query})` : query;
+  if (!existingQuery) {
+    filterInputEl.value = query;
+  } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
+    filterInputEl.value = `${existingQuery} ${wrappedQuery}`;
+  } else {
+    filterInputEl.value = `${existingQuery} && ${wrappedQuery}`;
+  }
+  syncFilterHighlight();
+  filterInputEl.focus();
+  statusUpdate('Status: Filter query populated — press Enter to apply');
+  writeLogEntry(
+    `Context menu filter populated type=${type} query="${filterInputEl.value}"`,
+  );
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
@@ -1676,6 +1870,21 @@ convertContextButtons.copyAscii.addEventListener('click', () => {
 });
 convertContextButtons.copyRaw.addEventListener('click', () => {
   copyRawPayloadFromContext();
+});
+convertContextButtons.filterIp.addEventListener('click', () => {
+  appendFilterQueryFromContextMenu('ip');
+});
+convertContextButtons.filterPort.addEventListener('click', () => {
+  appendFilterQueryFromContextMenu('port');
+});
+convertContextButtons.filterMac.addEventListener('click', () => {
+  appendFilterQueryFromContextMenu('mac');
+});
+convertContextButtons.filterProtocol.addEventListener('click', () => {
+  appendFilterQueryFromContextMenu('protocol');
+});
+convertContextButtons.filterMime.addEventListener('click', () => {
+  appendFilterQueryFromContextMenu('mime');
 });
 convertContextButtons.copy.addEventListener('click', copySelectedTextFromContextMenu);
 convertContextButtons.paste.addEventListener('click', pasteTextFromContextMenu);
@@ -2874,6 +3083,9 @@ document.addEventListener('contextmenu', (event) => {
       formats = conversionText ? detectConvertibleFormats(conversionText) : [];
     }
   }
+  const filterQueries = insideEligiblePanel
+    ? buildContextFilterQueries(target, selectedText, conversionText)
+    : {};
 
   event.preventDefault();
   showConvertContextMenu(
@@ -2888,6 +3100,7 @@ document.addEventListener('contextmenu', (event) => {
       showCopySelection: Boolean(selectedText),
       showPaste: Boolean(pasteTarget),
       showSaveJson: true,
+      filterQueries,
     },
   );
 });
