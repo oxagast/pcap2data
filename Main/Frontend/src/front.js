@@ -2601,6 +2601,98 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
   });
 });
 
+// Right-click context menu
+(function () {
+  const ctxMenu = document.getElementById('context-menu');
+  const ctxCopy = document.getElementById('ctx-copy');
+  const ctxPaste = document.getElementById('ctx-paste');
+  const ctxSaveJson = document.getElementById('ctx-save-json');
+
+  function hideMenu() {
+    ctxMenu.style.display = 'none';
+  }
+
+  document.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    ctxMenu.style.display = 'block';
+    const menuRect = ctxMenu.getBoundingClientRect();
+    const x = Math.min(e.clientX, window.innerWidth - menuRect.width);
+    const y = Math.min(e.clientY, window.innerHeight - menuRect.height);
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top = y + 'px';
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!ctxMenu.contains(e.target)) {
+      hideMenu();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') hideMenu();
+  });
+
+  ctxCopy.addEventListener('click', () => {
+    hideMenu();
+    const selection = window.getSelection();
+    const selectedText = selection ? selection.toString() : '';
+    if (selectedText) {
+      navigator.clipboard.writeText(selectedText).catch((err) => {
+        console.error('Copy failed:', err);
+        statusUpdate('Status: Copy failed – clipboard access denied');
+      });
+    } else {
+      statusUpdate('Status: No text selected to copy');
+    }
+  });
+
+  ctxPaste.addEventListener('click', () => {
+    hideMenu();
+    navigator.clipboard.readText().then((text) => {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
+        !active.readOnly &&
+        !active.disabled
+      ) {
+        const start = active.selectionStart;
+        const end = active.selectionEnd;
+        const current = active.value;
+        active.value =
+          current.substring(0, start) + text + current.substring(end);
+        active.selectionStart = active.selectionEnd = start + text.length;
+        active.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }).catch((err) => {
+      console.error('Paste failed:', err);
+      statusUpdate('Status: Paste failed – clipboard access denied');
+    });
+  });
+
+  ctxSaveJson.addEventListener('click', () => {
+    hideMenu();
+    if (!jsonCapture) {
+      statusUpdate('Status: No data loaded to save');
+      return;
+    }
+    window.saveapi.saveJson(jsonCapture).then((result) => {
+      if (result.canceled) {
+        statusUpdate('Status: Save cancelled');
+      } else if (result.success) {
+        statusUpdate('Status: JSON saved successfully');
+      } else {
+        doError('Save failed');
+        logErrorEntry('save-json', result.error || 'unknown');
+        statusUpdate(
+          'Status: Save failed – ' + (result.error || 'unknown error'),
+        );
+        console.error('Save failed:', result.error);
+      }
+    });
+  });
+})();
+
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
