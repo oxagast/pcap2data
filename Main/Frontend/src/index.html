@@ -69,6 +69,7 @@
         <input type="button" id="prev-btn" value="Prev" class="custom-btns" />
         <input type="button" id="next-btn" value="Next" class="custom-btns" />
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
+        <input type="button" id="list-btn" value="List" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
       </div>
       <div class="content_area">
@@ -152,6 +153,16 @@
           </div>
           <div id="stats_box">
             <div id="stats_content"></div>
+          </div>
+          <div id="list_box">
+            <div id="list_search_bar">
+              <input
+                id="list-search"
+                type="text"
+                placeholder="Filter list by host, IP, port, or protocol..."
+              />
+            </div>
+            <div id="list_content"></div>
           </div>
           <div id="packetInfoPane">
             <div id="timestamp"></div>

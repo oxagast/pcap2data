@@ -368,6 +368,7 @@ function fileLoaded(isLoaded) {
     document.getElementById('next-btn').style.opacity = '1';
     document.getElementById('log-btn').style.opacity = '1';
     document.getElementById('stats-btn').style.opacity = '1';
+    document.getElementById('list-btn').style.opacity = '1';
     document.getElementById('json-lab').style.display = 'none';
     document.getElementById('pcap-lab').style.display = 'none';
     document.getElementById('llm-toggle').style.display = 'none';
@@ -381,6 +382,7 @@ function fileLoaded(isLoaded) {
     document.getElementById('pcap-lab').style.display = 'block';
     document.getElementById('log-btn').style.opacity = '0';
     document.getElementById('stats-btn').style.opacity = '0';
+    document.getElementById('list-btn').style.opacity = '0';
   }
 }
 
@@ -678,6 +680,7 @@ function writeSummary() {
     document.getElementById('packetInfoPane').style.display = 'none';
     document.getElementById('packetPayloadPane').style.display = 'none';
     document.getElementById('stats_box').style.display = 'none';
+    document.getElementById('list_box').style.display = 'none';
     document.getElementById('summary_content').textContent =
       finalSummary || 'No LLM summary available.';
     document.getElementById('summary_box').style.display = 'block';
@@ -901,6 +904,7 @@ function showStats() {
   document.getElementById('packetInfoPane').style.display = 'none';
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('list_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'block';
 
   const content = document.getElementById('stats_content');
@@ -1020,6 +1024,151 @@ document.getElementById('data-btn').addEventListener('click', function () {
 document.getElementById('stats-btn').addEventListener('click', function () {
   showStats();
 });
+
+// Show packet list when list button is clicked
+document.getElementById('list-btn').addEventListener('click', function () {
+  showPacketList();
+});
+
+/**
+ * Builds and shows the packet list tab, displaying all packets grouped by host
+ * in a scrollable, selectable table.
+ */
+function showPacketList() {
+  if (jsonCapture === '') {
+    statusUpdate('Status: No JSON file loaded, please upload a file first');
+    return;
+  }
+  statusUpdate('Status: Displaying packet list');
+  writeLogEntry('User opened packet list view');
+
+  document.getElementById('packetInfoPane').style.display = 'none';
+  document.getElementById('packetPayloadPane').style.display = 'none';
+  document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('stats_box').style.display = 'none';
+  const listBox = document.getElementById('list_box');
+  listBox.style.display = 'flex';
+
+  const content = document.getElementById('list_content');
+  const searchEl = document.getElementById('list-search');
+
+  function buildTable(filterText) {
+    content.replaceChildren();
+    if (!capturedPackets || !capturedPackets['Host']) {
+      content.textContent = 'No packet data available.';
+      return;
+    }
+
+    const hosts = Object.keys(capturedPackets['Host']).sort();
+    const lc = filterText ? filterText.toLowerCase() : '';
+
+    const table = document.createElement('table');
+    table.className = 'packet-list-table';
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['#', 'Host', 'Src IP', 'Dst IP', 'Src Port', 'Dst Port', 'Transport', 'App Protocol'].forEach((col) => {
+      const th = document.createElement('th');
+      th.textContent = col;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    let anyRows = false;
+
+    for (const host of hosts) {
+      const packets = capturedPackets['Host'][host];
+      if (!Array.isArray(packets)) continue;
+
+      packets.forEach((pkt, pktIdx) => {
+        const pi = pkt?.['Packet Info'];
+        const ei = pkt?.['Extra Info'];
+        if (!pi) return;
+
+        const idx = pi['Index'] ?? pktIdx + 1;
+        const srcIp = pi?.['IP']?.['Source IP'] ?? '';
+        const dstIp = pi?.['IP']?.['Destination IP'] ?? '';
+        const transport = pi['Protocol'] || 'TCP';
+        const tpData = pi[transport] || null;
+        const srcPort = tpData?.['Source port'] ?? '';
+        const dstPort = tpData?.['Destination port'] ?? '';
+        const netData = ei?.['Traits']?.['Network Data'];
+        const appProto = netData?.['Port Protcol'] ?? '';
+
+        if (lc) {
+          const rowText = [host, srcIp, dstIp, String(srcPort), String(dstPort), transport, appProto].join(' ').toLowerCase();
+          if (!rowText.includes(lc)) return;
+        }
+
+        anyRows = true;
+        const tr = document.createElement('tr');
+        tr.dataset.host = host;
+        tr.dataset.pktIdx = pktIdx;
+
+        [idx, host, srcIp, dstIp, srcPort, dstPort, transport, appProto].forEach((val) => {
+          const td = document.createElement('td');
+          td.textContent = val ?? '';
+          tr.appendChild(td);
+        });
+
+        tr.addEventListener('click', () => {
+          // Remove previous selection
+          tbody.querySelectorAll('.packet-list-selected').forEach((r) => r.classList.remove('packet-list-selected'));
+          tr.classList.add('packet-list-selected');
+
+          // Navigate to selected packet
+          hostFilterEl.value = host;
+          document.getElementById('target_hosts').value = host;
+          packetsForHost = capturedPackets['Host'][host];
+          index = pktIdx;
+          currentIp = srcIp;
+          currentPacketKey = srcIp + ':' + pi['Index'];
+          syncBookmarkDropdown(currentPacketKey);
+
+          // Switch to Host Data view
+          document.getElementById('list_box').style.display = 'none';
+          document.getElementById('packetInfoPane').style.display = 'block';
+          document.getElementById('packetPayloadPane').style.display = 'block';
+          document.getElementById('prev-btn').style.display = 'block';
+          document.getElementById('next-btn').style.display = 'block';
+          showAllData();
+
+          infoPanel(packetsForHost);
+          const hexPayload = packetsForHost[index]?.['Packet Info']?.['Raw data']?.['Payload']?.['Hex Encoded'];
+          if (hexPayload) popHexGrid(hexPayload);
+          populateDataTypes(packetsForHost);
+          statusUpdate('Status: Displaying packet ' + pi['Index'] + ' for host ' + host);
+          writeLogEntry(`Packet list row selected host=${host} index=${pi['Index']}`);
+        });
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    if (!anyRows) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 8;
+      td.textContent = filterText ? 'No packets match the filter.' : 'No packets available.';
+      td.style.textAlign = 'center';
+      td.style.padding = '12px';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    content.appendChild(table);
+  }
+
+  buildTable(searchEl.value);
+
+  // Re-register search listener (replace old one)
+  const newSearch = searchEl.cloneNode(true);
+  searchEl.parentNode.replaceChild(newSearch, searchEl);
+  newSearch.addEventListener('input', () => buildTable(newSearch.value));
+}
 
 function initializeDataView() {
   statusUpdate(
@@ -1145,6 +1294,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById('loading-container').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('list_box').style.display = 'none';
   document.getElementById('packetInfoPane').style.display = 'block';
   document.getElementById('packetPayloadPane').style.display = 'block';
   document.getElementById('welcome').style.display = 'none';

@@ -440,6 +440,99 @@ strong {
   color: var(--color-5);
 }
 
+#list_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+}
+
+#list_search_bar {
+  margin-bottom: 6px;
+}
+
+#list-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+}
+
+#list_content {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.packet-list-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+  color: var(--color-5);
+}
+
+.packet-list-table thead th {
+  background-color: var(--color-2);
+  color: var(--color-1);
+  padding: 5px 8px;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 2px solid var(--color-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Column widths: #, Host, Src IP, Dst IP, Src Port, Dst Port, Transport, App Protocol */
+.packet-list-table thead th:nth-child(1) { width: 5%; }
+.packet-list-table thead th:nth-child(2) { width: 16%; }
+.packet-list-table thead th:nth-child(3) { width: 13%; }
+.packet-list-table thead th:nth-child(4) { width: 13%; }
+.packet-list-table thead th:nth-child(5) { width: 8%; }
+.packet-list-table thead th:nth-child(6) { width: 8%; }
+.packet-list-table thead th:nth-child(7) { width: 10%; }
+.packet-list-table thead th:nth-child(8) { width: 27%; }
+
+.packet-list-table tbody tr {
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-7);
+}
+
+.packet-list-table tbody tr:hover {
+  background-color: var(--color-7);
+}
+
+.packet-list-table tbody tr.packet-list-selected {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+.packet-list-table td {
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#list-btn {
+  opacity: 0;
+}
+
 .stats-section {
   margin-bottom: 18px;
 }
