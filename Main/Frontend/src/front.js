@@ -685,6 +685,28 @@ function writeSummary() {
   }
 }
 
+function normalizeStatsTextValue(value, options = {}) {
+  if (value === null || value === undefined) return null;
+
+  const { stripNonPrintable = false } = options;
+  let normalized = typeof value === 'string' ? value : String(value);
+
+  if (stripNonPrintable) {
+    normalized = normalized.replace(/[\x00-\x1F\x7F]/g, '');
+  }
+
+  normalized = normalized.trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeStatsPortValue(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const normalizedText = normalizeStatsTextValue(value);
+  if (!normalizedText || !/^\d+$/.test(normalizedText)) return null;
+  return Number(normalizedText);
+}
+
 /**
  * Iterates all packets in capturedPackets and returns aggregate statistics
  * useful for understanding what is in the capture at a glance.
@@ -706,7 +728,8 @@ function buildCaptureStats() {
   if (!capturedPackets || !capturedPackets['Host']) return null;
 
   for (const host of Object.keys(capturedPackets['Host'])) {
-    hosts.add(host);
+    const normalizedHostKey = normalizeStatsTextValue(host);
+    if (normalizedHostKey) hosts.add(normalizedHostKey);
     const packets = capturedPackets['Host'][host];
     if (!Array.isArray(packets)) continue;
 
@@ -717,60 +740,74 @@ function buildCaptureStats() {
       if (!pi || !ei) continue;
 
       // Transport protocol (TCP/UDP/ICMP)
-      const tp = pi['Protocol'];
+      const tp = normalizeStatsTextValue(pi['Protocol']);
       if (tp) transportProtocols.add(tp);
 
       // Source/destination IPs
-      const srcIp = pi?.['IP']?.['Source IP'];
-      const dstIp = pi?.['IP']?.['Destination IP'];
+      const srcIp = normalizeStatsTextValue(pi?.['IP']?.['Source IP']);
+      const dstIp = normalizeStatsTextValue(pi?.['IP']?.['Destination IP']);
       if (srcIp) hosts.add(srcIp);
       if (dstIp) hosts.add(dstIp);
 
       // MAC vendors
       const ef = pi?.['Ethernet Frame'];
       if (ef) {
-        if (ef['MAC Source Vendor']) macVendors.add(ef['MAC Source Vendor']);
-        if (ef['MAC Destination Vendor']) macVendors.add(ef['MAC Destination Vendor']);
+        const srcVendor = normalizeStatsTextValue(ef['MAC Source Vendor']);
+        const dstVendor = normalizeStatsTextValue(ef['MAC Destination Vendor']);
+        if (srcVendor) macVendors.add(srcVendor);
+        if (dstVendor) macVendors.add(dstVendor);
       }
 
       // Port-level protocol name and ports
       const netData = ei?.['Traits']?.['Network Data'];
       if (netData) {
-        const protoName = netData['Port Protcol'];
+        const protoName = normalizeStatsTextValue(netData['Port Protcol']);
         if (protoName && protoName !== 'Unknown') protocols.add(protoName);
 
         // Source/dest ports
         const tpData = tp ? pi[tp] : null;
         if (tpData) {
-          const srcPort = tpData['Source port'];
-          const dstPort = tpData['Destination port'];
-          if (srcPort !== undefined) ports.add(srcPort);
-          if (dstPort !== undefined) ports.add(dstPort);
+          const srcPort = normalizeStatsPortValue(tpData['Source port']);
+          const dstPort = normalizeStatsPortValue(tpData['Destination port']);
+          if (srcPort !== null) ports.add(srcPort);
+          if (dstPort !== null) ports.add(dstPort);
         }
 
         // Hostnames
         const hn = netData?.['Hostnames']?.['Hostnames'];
         if (Array.isArray(hn)) {
-          hn.forEach((h) => hostnames.add(h));
+          hn.forEach((h) => {
+            const normalizedHostname = normalizeStatsTextValue(h);
+            if (normalizedHostname) hostnames.add(normalizedHostname);
+          });
         }
 
         // Locations
         for (const side of ['Source IP', 'Destination IP']) {
           const loc = netData?.[side]?.['Location'];
-          if (loc && loc['City'] && loc['Country']) {
-            const key = `${loc['City']}, ${loc['Country']}`;
+          const city = normalizeStatsTextValue(loc?.['City']);
+          const country = normalizeStatsTextValue(loc?.['Country']);
+          if (city && country) {
+            const key = `${city}, ${country}`;
             locations.set(key, (locations.get(key) || 0) + 1);
           }
         }
       }
 
       // MIME types
-      const mimeType = ei?.['MIME Type'];
+      const mimeType = normalizeStatsTextValue(ei?.['MIME Type']);
       if (mimeType) mimeTypes.add(mimeType);
 
       // Data types
       const dt = ei?.['Data Types'];
-      if (Array.isArray(dt)) dt.forEach((d) => dataTypes.add(d));
+      if (Array.isArray(dt)) {
+        dt.forEach((d) => {
+          const normalizedDataType = normalizeStatsTextValue(d, {
+            stripNonPrintable: true,
+          });
+          if (normalizedDataType) dataTypes.add(normalizedDataType);
+        });
+      }
 
       // Encryption
       const encData = ei?.['Traits']?.['Server Info']?.['Encryption Data'];
@@ -804,6 +841,17 @@ function buildCaptureStats() {
  */
 function makeStatsSection(title, items, queryBuilder) {
   if (!items || items.length === 0) return null;
+  const normalizedItems = Array.from(
+    new Set(
+      items.filter((item) => {
+        if (item === null || item === undefined) return false;
+        if (typeof item !== 'string') return true;
+        return normalizeStatsTextValue(item) !== null;
+      }),
+    ),
+  );
+  if (normalizedItems.length === 0) return null;
+
   const section = document.createElement('div');
   section.className = 'stats-section';
 
@@ -815,7 +863,7 @@ function makeStatsSection(title, items, queryBuilder) {
   const tagList = document.createElement('div');
   tagList.className = 'stats-tag-list';
 
-  items.forEach((item) => {
+  normalizedItems.forEach((item) => {
     const tag = document.createElement('span');
     tag.className = 'stats-tag';
     tag.textContent = item;
