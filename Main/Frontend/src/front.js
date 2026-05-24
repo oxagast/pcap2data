@@ -1071,7 +1071,8 @@ function parseDataToolsInput(format, rawInput) {
     let decoded = '';
     try {
       decoded = atob(normalized);
-    } catch (_) {
+    } catch (ignoredError) {
+      void ignoredError;
       throw new Error('Invalid base64 input.');
     }
     const bytes = new Uint8Array(decoded.length);
@@ -1158,7 +1159,8 @@ function inferMimeType(bytes) {
     try {
       JSON.parse(trimmed);
       return 'application/json';
-    } catch (_) {
+    } catch (ignoredError) {
+      void ignoredError;
       // Keep evaluating as plain text/binary.
     }
   }
@@ -1299,7 +1301,8 @@ function detectConvertibleFormats(text) {
     try {
       parseDataToolsInput(format, value);
       return true;
-    } catch (_) {
+    } catch (ignoredError) {
+      void ignoredError;
       return false;
     }
   };
@@ -1402,7 +1405,8 @@ async function copyTextToClipboard(text, label) {
 
   try {
     await navigator.clipboard.writeText(text);
-  } catch (_) {
+  } catch (ignoredError) {
+    void ignoredError;
     const fallbackInput = document.createElement('textarea');
     fallbackInput.value = text;
     fallbackInput.style.position = 'fixed';
