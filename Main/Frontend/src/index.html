@@ -69,6 +69,12 @@
         <input type="button" id="prev-btn" value="Prev" class="custom-btns" />
         <input type="button" id="next-btn" value="Next" class="custom-btns" />
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
+        <input
+          type="button"
+          id="data-tools-btn"
+          value="Data"
+          class="custom-btns"
+        />
         <input type="button" id="list-btn" value="List" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
       </div>
@@ -153,6 +159,57 @@
           </div>
           <div id="stats_box">
             <div id="stats_content"></div>
+          </div>
+          <div id="data_tools_box">
+            <div class="data-tools-grid">
+              <div class="data-tools-section">
+                <div class="data-tools-title">Input</div>
+                <label for="data-tools-format">Input format</label>
+                <select id="data-tools-format">
+                  <option value="base64">Base64</option>
+                  <option value="binary">Binary</option>
+                  <option value="hex" selected>Hex</option>
+                  <option value="ascii">ASCII / UTF-8</option>
+                  <option value="decimal">Decimal bytes</option>
+                </select>
+                <textarea
+                  id="data-tools-input"
+                  placeholder="Paste base64, binary, hex, ascii, or decimal byte values here..."
+                ></textarea>
+                <div class="data-tools-actions">
+                  <button id="data-tools-convert-btn">Convert</button>
+                  <button id="data-tools-clear-btn">Clear</button>
+                </div>
+                <div id="data-tools-error" role="alert"></div>
+              </div>
+              <div class="data-tools-section">
+                <div class="data-tools-title">Converted Output</div>
+                <div class="data-tools-output-label">Hex</div>
+                <textarea id="data-tools-hex-output" readonly></textarea>
+                <div class="data-tools-output-label">Binary</div>
+                <textarea id="data-tools-binary-output" readonly></textarea>
+                <div class="data-tools-output-label">Decimal bytes</div>
+                <textarea id="data-tools-decimal-output" readonly></textarea>
+                <div class="data-tools-output-label">Decimal integer</div>
+                <textarea id="data-tools-decimal-integer-output" readonly></textarea>
+                <div class="data-tools-output-label">ASCII</div>
+                <textarea id="data-tools-ascii-output" readonly></textarea>
+                <div class="data-tools-output-label">Base64</div>
+                <textarea id="data-tools-base64-output" readonly></textarea>
+              </div>
+              <div class="data-tools-section">
+                <div class="data-tools-title">Data Insights</div>
+                <div id="data-tools-byte-length" class="data-tools-kv">
+                  Byte Length: 0
+                </div>
+                <div id="data-tools-mime-type" class="data-tools-kv">
+                  MIME Type: Unknown
+                </div>
+                <div id="data-tools-entropy" class="data-tools-kv">
+                  Shannon Entropy: 0.00 (Low)
+                </div>
+              </div>
+            </div>
           </div>
           <div id="list_box">
             <div id="list_search_bar">

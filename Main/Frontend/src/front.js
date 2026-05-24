@@ -680,6 +680,7 @@ function writeSummary() {
     document.getElementById('packetInfoPane').style.display = 'none';
     document.getElementById('packetPayloadPane').style.display = 'none';
     document.getElementById('stats_box').style.display = 'none';
+    document.getElementById('data_tools_box').style.display = 'none';
     document.getElementById('list_box').style.display = 'none';
     document.getElementById('summary_content').textContent =
       finalSummary || 'No LLM summary available.';
@@ -905,6 +906,7 @@ function showStats() {
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('list_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'block';
   document.getElementById('rightside').style.display = 'none';
 
@@ -1015,6 +1017,242 @@ function showStats() {
   if (dtSec) content.appendChild(dtSec);
 }
 
+function parseDataToolsInput(format, rawInput) {
+  if (!rawInput || rawInput.trim() === '') {
+    throw new Error('Enter input data first.');
+  }
+
+  if (format === 'hex') {
+    const normalized = rawInput
+      .replace(/0x/gi, '')
+      .replace(/[\s,:;-]+/g, '')
+      .trim();
+    if (!normalized) throw new Error('No hex bytes were found.');
+    if (!/^[0-9a-fA-F]+$/.test(normalized)) {
+      throw new Error('Hex input can only contain 0-9 and A-F.');
+    }
+    if (normalized.length % 2 !== 0) {
+      throw new Error('Hex input must contain an even number of characters.');
+    }
+    const bytes = new Uint8Array(normalized.length / 2);
+    for (let i = 0; i < normalized.length; i += 2) {
+      bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+    }
+    return bytes;
+  }
+
+  if (format === 'binary') {
+    const normalized = rawInput.replace(/\s+/g, '');
+    if (!normalized) throw new Error('No binary bits were found.');
+    if (!/^[01]+$/.test(normalized)) {
+      throw new Error('Binary input can only contain 0 and 1.');
+    }
+    if (normalized.length % 8 !== 0) {
+      throw new Error('Binary input must be grouped into full 8-bit bytes.');
+    }
+    const bytes = new Uint8Array(normalized.length / 8);
+    for (let i = 0; i < normalized.length; i += 8) {
+      bytes[i / 8] = parseInt(normalized.slice(i, i + 8), 2);
+    }
+    return bytes;
+  }
+
+  if (format === 'base64') {
+    const normalized = rawInput
+      .trim()
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '');
+    if (!normalized) throw new Error('No base64 content was found.');
+    let decoded = '';
+    try {
+      decoded = atob(normalized);
+    } catch (_) {
+      throw new Error('Invalid base64 input.');
+    }
+    const bytes = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i++) {
+      bytes[i] = decoded.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  if (format === 'decimal') {
+    const tokens = rawInput.split(/[\s,]+/).filter(Boolean);
+    if (!tokens.length) throw new Error('No decimal byte values were found.');
+    const values = tokens.map((token) => {
+      if (!/^\d+$/.test(token)) {
+        throw new Error('Decimal input must contain only integers 0-255.');
+      }
+      const parsed = Number(token);
+      if (parsed < 0 || parsed > 255) {
+        throw new Error('Each decimal byte value must be between 0 and 255.');
+      }
+      return parsed;
+    });
+    return Uint8Array.from(values);
+  }
+
+  // ascii / utf-8 fallback
+  return new TextEncoder().encode(rawInput);
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function bytesToPrintableAscii(bytes) {
+  return [...bytes]
+    .map((byte) =>
+      byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.',
+    )
+    .join('');
+}
+
+function bytesToBigIntDecimal(bytes) {
+  let total = 0n;
+  bytes.forEach((byte) => {
+    total = (total << 8n) + BigInt(byte);
+  });
+  return total.toString(10);
+}
+
+function calculateShannonEntropy(bytes) {
+  if (!bytes.length) return 0;
+  const counts = new Array(256).fill(0);
+  bytes.forEach((byte) => {
+    counts[byte] += 1;
+  });
+  let entropy = 0;
+  counts.forEach((count) => {
+    if (!count) return;
+    const p = count / bytes.length;
+    entropy -= p * Math.log2(p);
+  });
+  return entropy;
+}
+
+function inferMimeType(bytes) {
+  if (!bytes || !bytes.length) return 'application/octet-stream';
+
+  const startsWith = (signature) =>
+    signature.every((value, index) => bytes[index] === value);
+  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return 'image/png';
+  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return 'image/gif';
+  if (startsWith([0x25, 0x50, 0x44, 0x46])) return 'application/pdf';
+  if (startsWith([0x50, 0x4b, 0x03, 0x04])) return 'application/zip';
+  if (startsWith([0x1f, 0x8b])) return 'application/gzip';
+  if (startsWith([0x7f, 0x45, 0x4c, 0x46])) return 'application/x-elf';
+
+  const utf8Text = new TextDecoder().decode(bytes);
+  const trimmed = utf8Text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      JSON.parse(trimmed);
+      return 'application/json';
+    } catch (_) {
+      // Keep evaluating as plain text/binary.
+    }
+  }
+
+  const printableChars = [...utf8Text].filter((ch) => {
+    const code = ch.charCodeAt(0);
+    return (
+      (code >= 32 && code <= 126) ||
+      ch === '\n' ||
+      ch === '\r' ||
+      ch === '\t'
+    );
+  }).length;
+  if (utf8Text.length > 0 && printableChars / utf8Text.length > 0.9) {
+    return 'text/plain; charset=utf-8';
+  }
+
+  return 'application/octet-stream';
+}
+
+function getEntropyLabel(entropy) {
+  if (entropy >= 6.8) return 'High';
+  if (entropy >= 4.5) return 'Medium';
+  return 'Low';
+}
+
+function resetDataToolsOutputs() {
+  document.getElementById('data-tools-hex-output').value = '';
+  document.getElementById('data-tools-binary-output').value = '';
+  document.getElementById('data-tools-decimal-output').value = '';
+  document.getElementById('data-tools-decimal-integer-output').value = '';
+  document.getElementById('data-tools-ascii-output').value = '';
+  document.getElementById('data-tools-base64-output').value = '';
+  document.getElementById('data-tools-byte-length').textContent = 'Byte Length: 0';
+  document.getElementById('data-tools-mime-type').textContent =
+    'MIME Type: Unknown';
+  document.getElementById('data-tools-entropy').textContent =
+    'Shannon Entropy: 0.00 (Low)';
+}
+
+function runDataToolsConversion() {
+  const inputEl = document.getElementById('data-tools-input');
+  const formatEl = document.getElementById('data-tools-format');
+  const errorEl = document.getElementById('data-tools-error');
+
+  try {
+    const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+    const hexSpaced = [...bytes]
+      .map((byte) => byte.toString(16).padStart(2, '0').toUpperCase())
+      .join(' ');
+    const binarySpaced = [...bytes]
+      .map((byte) => byte.toString(2).padStart(8, '0'))
+      .join(' ');
+    const decimalBytes = [...bytes].join(' ');
+    const asciiPreview = bytesToPrintableAscii(bytes);
+    const base64Value = bytesToBase64(bytes);
+    const entropy = calculateShannonEntropy(bytes);
+    const entropyLabel = getEntropyLabel(entropy);
+    const decimalInteger =
+      bytes.length > 4096
+        ? 'Input too large for decimal integer display'
+        : bytesToBigIntDecimal(bytes);
+
+    document.getElementById('data-tools-hex-output').value = hexSpaced;
+    document.getElementById('data-tools-binary-output').value = binarySpaced;
+    document.getElementById('data-tools-decimal-output').value = decimalBytes;
+    document.getElementById('data-tools-decimal-integer-output').value =
+      decimalInteger;
+    document.getElementById('data-tools-ascii-output').value = asciiPreview;
+    document.getElementById('data-tools-base64-output').value = base64Value;
+    document.getElementById('data-tools-byte-length').textContent =
+      `Byte Length: ${bytes.length}`;
+    document.getElementById('data-tools-mime-type').textContent =
+      `MIME Type: ${inferMimeType(bytes)}`;
+    document.getElementById('data-tools-entropy').textContent =
+      `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
+    errorEl.textContent = '';
+  } catch (error) {
+    resetDataToolsOutputs();
+    errorEl.textContent =
+      error && typeof error === 'object' && 'message' in error
+        ? error.message
+        : String(error);
+  }
+}
+
+function showDataTools() {
+  statusUpdate('Status: Displaying data conversion tools');
+  writeLogEntry('User opened data conversion tools view');
+  document.getElementById('packetInfoPane').style.display = 'none';
+  document.getElementById('packetPayloadPane').style.display = 'none';
+  document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('list_box').style.display = 'none';
+  document.getElementById('rightside').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'block';
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
@@ -1026,9 +1264,23 @@ document.getElementById('stats-btn').addEventListener('click', function () {
   showStats();
 });
 
+// Show data conversion tools when data tools button is clicked
+document.getElementById('data-tools-btn').addEventListener('click', function () {
+  showDataTools();
+});
+
 // Show packet list when list button is clicked
 document.getElementById('list-btn').addEventListener('click', function () {
   showPacketList();
+});
+
+document
+  .getElementById('data-tools-convert-btn')
+  .addEventListener('click', runDataToolsConversion);
+document.getElementById('data-tools-clear-btn').addEventListener('click', () => {
+  document.getElementById('data-tools-input').value = '';
+  document.getElementById('data-tools-error').textContent = '';
+  resetDataToolsOutputs();
 });
 
 /**
@@ -1047,6 +1299,7 @@ function showPacketList() {
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('rightside').style.display = 'none';
   const listBox = document.getElementById('list_box');
   listBox.style.display = 'flex';
@@ -1297,6 +1550,7 @@ function showPacketList() {
 
           // Switch to Host Data view
           document.getElementById('list_box').style.display = 'none';
+          document.getElementById('data_tools_box').style.display = 'none';
           document.getElementById('packetInfoPane').style.display = 'block';
           document.getElementById('packetPayloadPane').style.display = 'block';
           document.getElementById('prev-btn').style.display = 'block';
@@ -1457,6 +1711,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
   document.getElementById('list_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('packetInfoPane').style.display = 'block';
   document.getElementById('packetPayloadPane').style.display = 'block';
   document.getElementById('welcome').style.display = 'none';

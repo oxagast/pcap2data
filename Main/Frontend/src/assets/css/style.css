@@ -440,6 +440,112 @@ strong {
   color: var(--color-5);
 }
 
+#data_tools_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.data-tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.6fr;
+  gap: 10px;
+  color: var(--color-5);
+}
+
+.data-tools-section {
+  border: 1px solid var(--color-3);
+  background-color: var(--color-7);
+  padding: 10px;
+  min-height: 0;
+}
+
+.data-tools-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--color-1);
+  margin-bottom: 8px;
+}
+
+#data-tools-format,
+#data-tools-input,
+#data-tools-hex-output,
+#data-tools-binary-output,
+#data-tools-decimal-output,
+#data-tools-decimal-integer-output,
+#data-tools-ascii-output,
+#data-tools-base64-output {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  margin-top: 6px;
+  margin-bottom: 8px;
+  padding: 6px;
+}
+
+#data-tools-input,
+#data-tools-hex-output,
+#data-tools-binary-output,
+#data-tools-decimal-output,
+#data-tools-decimal-integer-output,
+#data-tools-ascii-output,
+#data-tools-base64-output {
+  min-height: 58px;
+  resize: vertical;
+}
+
+.data-tools-output-label {
+  color: var(--color-1);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.data-tools-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.data-tools-actions button {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.data-tools-actions button:hover {
+  background-color: var(--color-2-hover);
+}
+
+#data-tools-error {
+  min-height: 18px;
+  color: #ff8f8f;
+  margin-top: 8px;
+}
+
+.data-tools-kv {
+  margin-bottom: 10px;
+  padding: 8px;
+  background-color: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--color-3);
+}
+
+#data-tools-btn {
+  opacity: 1;
+}
+
 #list_box {
   display: none;
   border: 8px solid var(--color-3);
