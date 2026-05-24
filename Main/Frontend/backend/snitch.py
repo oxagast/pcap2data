@@ -223,7 +223,11 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     bannerInfo = {}
     # Get page title for HTTP/HTTPS ports
     try:
-        serviceNameNormalized = serviceName.lower() if isinstance(serviceName, str) else ""
+        serviceNameNormalized = (
+            serviceName.lower()
+            if isinstance(serviceName, str) and serviceName
+            else ""
+        )
         isLikelyTlsService = (
             port in TLS_SERVICE_PORTS
             or "https" in serviceNameNormalized
@@ -241,12 +245,7 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     try:
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcpSocket.settimeout(timeout)
-        tlsProto = (
-            ssl.PROTOCOL_TLSv1_2
-            if hasattr(ssl, "PROTOCOL_TLSv1_2")
-            else ssl.PROTOCOL_TLS_CLIENT
-        )
-        sslContext = ssl.SSLContext(tlsProto)
+        sslContext = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
         if hasattr(ssl, "OP_NO_TLSv1"):
             sslContext.options |= ssl.OP_NO_TLSv1
         if hasattr(ssl, "OP_NO_TLSv1_1"):
