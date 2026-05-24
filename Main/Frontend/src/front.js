@@ -1309,7 +1309,7 @@ function extractContextIp(value) {
   return match ? match[0] : '';
 }
 
-function extractContextPort(value) {
+function extractContextPort(value, allowStandaloneNumber = false) {
   const normalized = normalizeContextToken(value);
   const ipPortMatch = normalized.match(
     /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:(\d{1,5})\b/,
@@ -1318,6 +1318,7 @@ function extractContextPort(value) {
     const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
     return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
   }
+  if (!allowStandaloneNumber) return '';
   const portMatch = normalized.match(/^\d{1,5}$/);
   if (!portMatch) return '';
   const portValue = Number.parseInt(normalized, 10);
@@ -1365,12 +1366,15 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
   addCandidate(selectedText);
   addCandidate(conversionText);
 
+  let rowName = '';
+  let rowPortEligible = false;
   const row = target?.closest?.('tr');
   if (row) {
     const cells = row.querySelectorAll('td');
-    const rowName = normalizeContextToken(cells[0]?.textContent);
+    rowName = normalizeContextToken(cells[0]?.textContent);
     const rowValue = normalizeContextToken(cells[1]?.textContent);
     addCandidate(rowValue);
+    rowPortEligible = /\bport\b/i.test(rowName);
     if (/^ip\s*:?\s*port$/i.test(rowName) && rowValue) {
       const bracketedIpv6Match = rowValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
       if (bracketedIpv6Match) {
@@ -1397,6 +1401,7 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
   }
 
   const filterQueries = {};
+  const skipProtocol = /^network\s+class$/i.test(rowName);
   for (const candidate of candidates) {
     if (!filterQueries.ip) {
       const ip = extractContextIp(candidate);
@@ -1406,7 +1411,7 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
       }
     }
     if (!filterQueries.port) {
-      const port = extractContextPort(candidate);
+      const port = extractContextPort(candidate, rowPortEligible);
       if (port) {
         const safePort = sanitizeFilterTerm(port);
         filterQueries.port =
@@ -1421,7 +1426,7 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
         filterQueries.mac = `ether.src.mac.addr: ${safeMac} || ether.dst.mac.addr: ${safeMac}`;
       }
     }
-    if (!filterQueries.protocol) {
+    if (!filterQueries.protocol && !skipProtocol) {
       const protocol = extractContextProtocol(candidate);
       if (protocol) {
         const safeProtocol = sanitizeFilterTerm(protocol);
