@@ -1315,7 +1315,7 @@ function extractContextPort(value) {
     /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:(\d{1,5})\b/,
   );
   if (ipPortMatch) {
-    const ipPortValue = Number.parseInt(ipPortMatch[5], 10);
+    const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
     return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
   }
   const portMatch = normalized.match(/^\d{1,5}$/);
@@ -1787,11 +1787,21 @@ function appendFilterQueryFromContextMenu(type) {
     statusUpdate('Status: No matching filter value found for this selection');
     return;
   }
-  filterInputEl.value = query;
+  const existingQuery = filterInputEl.value.trim();
+  const wrappedQuery = query.includes('||') ? `(${query})` : query;
+  if (!existingQuery) {
+    filterInputEl.value = query;
+  } else if (/(\|\||&&)\s*$/.test(existingQuery)) {
+    filterInputEl.value = `${existingQuery} ${wrappedQuery}`;
+  } else {
+    filterInputEl.value = `${existingQuery} && ${wrappedQuery}`;
+  }
   syncFilterHighlight();
   filterInputEl.focus();
   statusUpdate('Status: Filter query populated — press Enter to apply');
-  writeLogEntry(`Context menu filter populated type=${type} query="${query}"`);
+  writeLogEntry(
+    `Context menu filter populated type=${type} query="${filterInputEl.value}"`,
+  );
 }
 
 // Show host data when data button is clicked
