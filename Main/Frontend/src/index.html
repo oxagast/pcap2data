@@ -42,10 +42,13 @@
             />
           </div>
           <div id="filter-history">
-            <button id="filter-history-toggle" type="button" disabled>
-              Previous queries
-            </button>
-            <div id="filter-history-menu" tabindex="-1" hidden></div>
+            <select
+              id="filter-history-select"
+              disabled
+              aria-label="Previously used filters"
+            >
+              <option value="" selected>Previous queries</option>
+            </select>
           </div>
         </div>
       </div>
