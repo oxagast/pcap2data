@@ -2734,6 +2734,16 @@ document.addEventListener('contextmenu', (event) => {
 document.addEventListener('click', () => {
   hideConvertContextMenu();
 });
+document.addEventListener(
+  'mousedown',
+  (event) => {
+    if (event.button !== 0) return;
+    if (!convertContextMenuEl.hidden && !convertContextMenuEl.contains(event.target)) {
+      hideConvertContextMenu();
+    }
+  },
+  true,
+);
 document.addEventListener('scroll', () => {
   hideConvertContextMenu();
 });
@@ -2794,6 +2804,7 @@ window.api.onError((msg) => {
 // On page load, hide packet info and payload panes
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
+  hideConvertContextMenu();
   document.getElementById('packetInfoPane').style.display = 'none';
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('rightside').style.display = 'none';

@@ -559,6 +559,10 @@ strong {
   gap: 3px;
 }
 
+#convert-context-menu[hidden] {
+  display: none !important;
+}
+
 #convert-context-menu button {
   text-align: left;
   background-color: transparent;
