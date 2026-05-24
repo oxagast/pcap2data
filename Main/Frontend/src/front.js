@@ -1358,7 +1358,7 @@ function getConversionTextFromTarget(target) {
 function getPasteTargetFromContextTarget(target) {
   if (!(target instanceof Element)) return null;
   const editableTarget = target.closest(
-    'input, textarea, [contenteditable], [contenteditable="true"]',
+    'input, textarea, [contenteditable="true"], [contenteditable=""]',
   );
   if (!editableTarget) return null;
 
@@ -1557,12 +1557,21 @@ function pasteTextFromContextMenu() {
     .readText()
     .then((text) => {
       if (pasteTarget.tagName === 'INPUT' || pasteTarget.tagName === 'TEXTAREA') {
-        const start = pasteTarget.selectionStart ?? pasteTarget.value.length;
-        const end = pasteTarget.selectionEnd ?? pasteTarget.value.length;
+        const hasSelectionRange =
+          typeof pasteTarget.selectionStart === 'number' &&
+          typeof pasteTarget.selectionEnd === 'number';
+        const start = hasSelectionRange
+          ? pasteTarget.selectionStart
+          : pasteTarget.value.length;
+        const end = hasSelectionRange
+          ? pasteTarget.selectionEnd
+          : pasteTarget.value.length;
         const current = pasteTarget.value;
         pasteTarget.value =
           current.substring(0, start) + text + current.substring(end);
-        pasteTarget.selectionStart = pasteTarget.selectionEnd = start + text.length;
+        if (hasSelectionRange) {
+          pasteTarget.selectionStart = pasteTarget.selectionEnd = start + text.length;
+        }
         pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
         return;
       }
