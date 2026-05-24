@@ -1261,6 +1261,7 @@ function showDataTools() {
 }
 
 let activeContextConversionText = '';
+let activeContextTarget = null;
 const convertContextMenuEl = getCachedElement('convert-context-menu');
 const convertContextButtons = {
   hex: getCachedElement('convert-context-hex'),
@@ -1268,10 +1269,14 @@ const convertContextButtons = {
   base64: getCachedElement('convert-context-base64'),
   decimal: getCachedElement('convert-context-decimal'),
   ascii: getCachedElement('convert-context-ascii'),
+  copyHex: getCachedElement('convert-context-copy-hex'),
+  copyAscii: getCachedElement('convert-context-copy-ascii'),
+  copyRaw: getCachedElement('convert-context-copy-raw'),
 };
 
 function hideConvertContextMenu() {
   activeContextConversionText = '';
+  activeContextTarget = null;
   convertContextMenuEl.hidden = true;
 }
 
@@ -1339,13 +1344,26 @@ function getConversionTextFromTarget(target) {
   return textContent;
 }
 
-function showConvertContextMenu(x, y, sourceText, formats) {
+function showConvertContextMenu(
+  x,
+  y,
+  sourceText,
+  formats,
+  { isHexViewTarget = false, target = null } = {},
+) {
   activeContextConversionText = sourceText;
-  Object.keys(convertContextButtons).forEach((format) => {
+  activeContextTarget = target;
+
+  ['hex', 'binary', 'base64', 'decimal', 'ascii'].forEach((format) => {
     convertContextButtons[format].style.display = formats.includes(format)
       ? 'block'
       : 'none';
   });
+  convertContextButtons.copyHex.style.display = isHexViewTarget ? 'block' : 'none';
+  convertContextButtons.copyAscii.style.display = isHexViewTarget
+    ? 'block'
+    : 'none';
+  convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -1366,6 +1384,83 @@ function loadContextValueIntoDataTools(format) {
   runDataToolsConversion();
   hideConvertContextMenu();
   writeLogEntry(`Context conversion loaded format=${format}`);
+}
+
+function getCurrentRawPayloadHex() {
+  const payloadHex =
+    packetsForHost?.[index]?.['Packet Info']?.['Raw data']?.['Payload']?.[
+      'Hex Encoded'
+    ];
+  return typeof payloadHex === 'string' ? payloadHex : '';
+}
+
+async function copyTextToClipboard(text, label) {
+  if (!text) {
+    statusUpdate(`Status: No ${label.toLowerCase()} available to copy`);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    const fallbackInput = document.createElement('textarea');
+    fallbackInput.value = text;
+    fallbackInput.style.position = 'fixed';
+    fallbackInput.style.left = '-9999px';
+    document.body.appendChild(fallbackInput);
+    fallbackInput.focus();
+    fallbackInput.select();
+    document.execCommand('copy');
+    document.body.removeChild(fallbackInput);
+  }
+
+  statusUpdate(`Status: Copied ${label} to clipboard`);
+  writeLogEntry(`Copied ${label} length=${text.length}`);
+}
+
+function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
+  if (byteIndex < 0) return '';
+  const decodedAscii = hexToAscii(payloadHex);
+  let printableSequence = '';
+  for (let i = byteIndex; i < decodedAscii.length; i++) {
+    const charCode = decodedAscii.charCodeAt(i);
+    if (!isPrintable(charCode)) break;
+    printableSequence += decodedAscii[i];
+  }
+  if (printableSequence.length > 0) return printableSequence;
+  const fallbackCode = decodedAscii.charCodeAt(byteIndex);
+  if (Number.isNaN(fallbackCode)) return '';
+  return isPrintable(fallbackCode) ? decodedAscii[byteIndex] : '.';
+}
+
+async function copyHexFromContext() {
+  const payloadHex = getCurrentRawPayloadHex();
+  const hexValue = activeContextTarget?.classList?.contains('griditem')
+    ? activeContextTarget.textContent.trim()
+    : payloadHex;
+  await copyTextToClipboard(hexValue, 'Hex');
+  hideConvertContextMenu();
+}
+
+async function copyAsciiFromContext() {
+  const payloadHex = getCurrentRawPayloadHex();
+  const byteIndex = Number.parseInt(
+    activeContextTarget?.dataset?.byteIndex ?? '-1',
+    10,
+  );
+  const fullPayloadAscii = payloadHex
+    ? bytesToPrintableAscii(parseDataToolsInput('hex', payloadHex))
+    : '';
+  const asciiValue = activeContextTarget?.classList?.contains('griditem')
+    ? getAsciiPreviewForHexOffset(payloadHex, byteIndex)
+    : fullPayloadAscii;
+  await copyTextToClipboard(asciiValue, 'ASCII');
+  hideConvertContextMenu();
+}
+
+async function copyRawPayloadFromContext() {
+  await copyTextToClipboard(getCurrentRawPayloadHex(), 'Raw payload');
+  hideConvertContextMenu();
 }
 
 // Show host data when data button is clicked
@@ -1412,6 +1507,15 @@ convertContextButtons.decimal.addEventListener('click', () =>
 convertContextButtons.ascii.addEventListener('click', () =>
   loadContextValueIntoDataTools('ascii'),
 );
+convertContextButtons.copyHex.addEventListener('click', () => {
+  copyHexFromContext();
+});
+convertContextButtons.copyAscii.addEventListener('click', () => {
+  copyAsciiFromContext();
+});
+convertContextButtons.copyRaw.addEventListener('click', () => {
+  copyRawPayloadFromContext();
+});
 
 /**
  * Builds and shows the packet list tab, displaying all packets grouped by host
@@ -2047,13 +2151,15 @@ function popHexGrid(hex) {
   const decodedAscii = hexToAscii(hex);
   document.getElementById('hexg').textContent = '';
   const hexGridContainer = document.getElementById('hexg');
+  const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
-  for (const x of hex.toUpperCase().match(/.{1,2}/g)) {
+  hexPairs.forEach((x, idx) => {
     const item = document.createElement('div');
     item.classList.add('griditem');
     item.textContent = x;
+    item.dataset.byteIndex = String(idx);
     hexGridContainer.appendChild(item);
-  }
+  });
   function getPrintableSequence(startIndex) {
     let result = '';
     for (let i = startIndex; i < decodedAscii.length; i++) {
@@ -2593,19 +2699,20 @@ document.addEventListener('contextmenu', (event) => {
   const insideEligiblePanel = target?.closest(
     '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
   );
+  const isHexViewTarget = Boolean(target?.closest('#hexg'));
   if (!insideEligiblePanel) {
     hideConvertContextMenu();
     return;
   }
 
   const conversionText = getConversionTextFromTarget(target);
-  if (!conversionText) {
+  if (!conversionText && !isHexViewTarget) {
     hideConvertContextMenu();
     return;
   }
 
-  const formats = detectConvertibleFormats(conversionText);
-  if (!formats.length) {
+  const formats = conversionText ? detectConvertibleFormats(conversionText) : [];
+  if (!formats.length && !isHexViewTarget) {
     hideConvertContextMenu();
     return;
   }
@@ -2616,6 +2723,7 @@ document.addEventListener('contextmenu', (event) => {
     event.clientY,
     conversionText,
     formats,
+    { isHexViewTarget, target },
   );
 });
 
