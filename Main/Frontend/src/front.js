@@ -1315,7 +1315,7 @@ function extractContextPort(value) {
     /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:(\d{1,5})\b/,
   );
   if (ipPortMatch) {
-    const ipPortValue = Number.parseInt(ipPortMatch[4], 10);
+    const ipPortValue = Number.parseInt(ipPortMatch[5], 10);
     return ipPortValue >= 0 && ipPortValue <= 65535 ? String(ipPortValue) : '';
   }
   const portMatch = normalized.match(/^\d{1,5}$/);
@@ -1334,7 +1334,8 @@ function extractContextMimeType(value) {
   const normalized = normalizeContextToken(value);
   const labelStripped = normalized.replace(/^mime(?:\s+type)?\s*:\s*/i, '').trim();
   if (!labelStripped) return '';
-  return CONTEXT_MIME_REGEX.test(labelStripped) ? labelStripped.toLowerCase() : '';
+  const mimeBase = labelStripped.split(';')[0].trim();
+  return CONTEXT_MIME_REGEX.test(mimeBase) ? mimeBase.toLowerCase() : '';
 }
 
 function extractContextProtocol(value) {
@@ -1345,7 +1346,7 @@ function extractContextProtocol(value) {
     .replace(/^transport\s+protocol\s*:\s*/i, '')
     .trim();
   if (!labelStripped) return '';
-  const protocolMatch = labelStripped.match(/^[a-z0-9][a-z0-9+._-]*$/i);
+  const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+._-]*$/i);
   return protocolMatch ? labelStripped.toLowerCase() : '';
 }
 
@@ -1367,10 +1368,27 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
     const rowValue = normalizeContextToken(cells[1]?.textContent);
     addCandidate(rowValue);
     if (/^ip\s*:?\s*port$/i.test(rowName) && rowValue) {
-      const ipPart = rowValue.split(':')[0]?.trim();
-      const portPart = rowValue.split(':')[1]?.trim();
-      addCandidate(ipPart);
-      addCandidate(portPart);
+      const bracketedIpv6Match = rowValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+      if (bracketedIpv6Match) {
+        addCandidate(bracketedIpv6Match[1]);
+        addCandidate(bracketedIpv6Match[2]);
+      } else {
+        const ipv4PortMatch = rowValue.match(
+          /^((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}):(\d{1,5})$/,
+        );
+        if (ipv4PortMatch) {
+          addCandidate(ipv4PortMatch[1]);
+          addCandidate(ipv4PortMatch[2]);
+        } else {
+          const lastColonIndex = rowValue.lastIndexOf(':');
+          if (lastColonIndex > 0) {
+            const maybePort = rowValue.slice(lastColonIndex + 1).trim();
+            if (/^\d{1,5}$/.test(maybePort)) {
+              addCandidate(maybePort);
+            }
+          }
+        }
+      }
     }
   }
 
