@@ -1085,12 +1085,11 @@ function parseDataToolsInput(format, rawInput) {
     const tokens = rawInput.split(/[\s,]+/).filter(Boolean);
     if (!tokens.length) throw new Error('No decimal byte values were found.');
     const values = tokens.map((token) => {
-      if (!/^\d+$/.test(token)) {
-        throw new Error('Decimal input must contain only integers 0-255.');
-      }
       const parsed = Number(token);
-      if (parsed < 0 || parsed > 255) {
-        throw new Error('Each decimal byte value must be between 0 and 255.');
+      if (!/^\d+$/.test(token) || parsed < 0 || parsed > 255) {
+        throw new Error(
+          'Each decimal value must be a non-negative integer between 0 and 255.',
+        );
       }
       return parsed;
     });
@@ -1281,7 +1280,8 @@ function looksLikeBase64(text) {
   return (
     normalized.length >= DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH &&
     normalized.length % 4 === 0 &&
-    /^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+    /^[A-Za-z0-9+/]*={0,2}$/.test(normalized) &&
+    normalized.replace(/=/g, '').length > 0
   );
 }
 
@@ -1326,6 +1326,8 @@ function getConversionTextFromTarget(target) {
   if (!textContent) return '';
 
   if (textContent.includes(':')) {
+    // Keep full suffix so values containing additional colons (IPv6/timestamps)
+    // are preserved, e.g. "Label: fe80::1" or "Time: 12:34:56".
     const suffix = textContent.split(':').slice(1).join(':').trim();
     if (suffix) return suffix;
   }
