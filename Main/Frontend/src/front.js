@@ -1079,7 +1079,7 @@ function showPacketList() {
     const rows = [];
 
     const getStreamKey = (packetInfo) => {
-      const transportName = packetInfo?.['Protocol'] || 'TCP';
+      const transportName = packetInfo?.['Protocol'] || 'Unknown';
       const transportData = packetInfo?.[transportName] || {};
       const sourceIp = packetInfo?.['IP']?.['Source IP'] ?? '';
       const destinationIp = packetInfo?.['IP']?.['Destination IP'] ?? '';
