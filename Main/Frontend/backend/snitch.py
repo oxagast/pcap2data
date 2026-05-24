@@ -118,6 +118,8 @@ HTTP_METHODS: set = {
     "CONNECT",
 }
 
+TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
+
 
 def llmQuery(packetInfoStr):
     """
@@ -221,9 +223,9 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     bannerInfo = {}
     # Get page title for HTTP/HTTPS ports
     try:
-        serviceNameNormalized = str(serviceName).lower() if serviceName else ""
+        serviceNameNormalized = serviceName.lower() if serviceName else ""
         isLikelyTlsService = (
-            port in {443, 465, 636, 853, 8443, 9443, 5061}
+            port in TLS_SERVICE_PORTS
             or "https" in serviceNameNormalized
             or "ssl" in serviceNameNormalized
             or "tls" in serviceNameNormalized
@@ -240,6 +242,13 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcpSocket.settimeout(timeout)
         sslContext = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        if hasattr(sslContext, "minimum_version") and hasattr(ssl, "TLSVersion"):
+            sslContext.minimum_version = ssl.TLSVersion.TLSv1_2
+        else:
+            if hasattr(ssl, "OP_NO_TLSv1"):
+                sslContext.options |= ssl.OP_NO_TLSv1
+            if hasattr(ssl, "OP_NO_TLSv1_1"):
+                sslContext.options |= ssl.OP_NO_TLSv1_1
         sslContext.check_hostname = False
         sslContext.verify_mode = ssl.CERT_NONE
         serverHostname = hostname if hostname and hostname != ip else None
