@@ -76,7 +76,7 @@ const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
-const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+(?:\s*;.*)?$/;
+const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -1346,8 +1346,12 @@ function extractContextProtocol(value) {
     .replace(/^transport\s+protocol\s*:\s*/i, '')
     .trim();
   if (!labelStripped) return '';
-  const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+._-]*$/i);
+  const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+_-]*$/i);
   return protocolMatch ? labelStripped.toLowerCase() : '';
+}
+
+function sanitizeFilterTerm(value) {
+  return normalizeContextToken(value).replace(/[|&()]/g, '').trim();
 }
 
 function buildContextFilterQueries(target, selectedText, conversionText) {
@@ -1397,33 +1401,38 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
     if (!filterQueries.ip) {
       const ip = extractContextIp(candidate);
       if (ip) {
-        filterQueries.ip = `ip.src.addr: ${ip} || ip.dst.addr: ${ip}`;
+        const safeIp = sanitizeFilterTerm(ip);
+        filterQueries.ip = `ip.src.addr: ${safeIp} || ip.dst.addr: ${safeIp}`;
       }
     }
     if (!filterQueries.port) {
       const port = extractContextPort(candidate);
       if (port) {
+        const safePort = sanitizeFilterTerm(port);
         filterQueries.port =
-          `tcp.src.port: ${port} || tcp.dst.port: ${port}` +
-          ` || udp.src.port: ${port} || udp.dst.port: ${port}`;
+          `tcp.src.port: ${safePort} || tcp.dst.port: ${safePort}` +
+          ` || udp.src.port: ${safePort} || udp.dst.port: ${safePort}`;
       }
     }
     if (!filterQueries.mac) {
       const mac = extractContextMac(candidate);
       if (mac) {
-        filterQueries.mac = `ether.src.mac.addr: ${mac} || ether.dst.mac.addr: ${mac}`;
+        const safeMac = sanitizeFilterTerm(mac);
+        filterQueries.mac = `ether.src.mac.addr: ${safeMac} || ether.dst.mac.addr: ${safeMac}`;
       }
     }
     if (!filterQueries.protocol) {
       const protocol = extractContextProtocol(candidate);
       if (protocol) {
-        filterQueries.protocol = `wire.proto: ${protocol} || tcp.proto: ${protocol}`;
+        const safeProtocol = sanitizeFilterTerm(protocol);
+        filterQueries.protocol = `wire.proto: ${safeProtocol} || tcp.proto: ${safeProtocol}`;
       }
     }
     if (!filterQueries.mime) {
       const mimeType = extractContextMimeType(candidate);
       if (mimeType) {
-        filterQueries.mime = `mime.type: ${mimeType}`;
+        const safeMimeType = sanitizeFilterTerm(mimeType);
+        filterQueries.mime = `mime.type: ${safeMimeType}`;
       }
     }
   }
@@ -1791,7 +1800,7 @@ function appendFilterQueryFromContextMenu(type) {
   const wrappedQuery = query.includes('||') ? `(${query})` : query;
   if (!existingQuery) {
     filterInputEl.value = query;
-  } else if (/(\|\||&&)\s*$/.test(existingQuery)) {
+  } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
     filterInputEl.value = `${existingQuery} ${wrappedQuery}`;
   } else {
     filterInputEl.value = `${existingQuery} && ${wrappedQuery}`;
