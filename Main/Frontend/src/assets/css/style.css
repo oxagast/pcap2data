@@ -517,14 +517,6 @@ strong {
   max-width: 180px;
 }
 
-.packet-list-host-header {
-  background-color: var(--color-7);
-  color: var(--color-1);
-  font-weight: bold;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-
 #list-btn {
   opacity: 0;
 }
