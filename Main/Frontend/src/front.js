@@ -2157,10 +2157,10 @@ function popHexGrid(hex) {
   const hexGridContainer = document.getElementById('hexg');
   const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
-  hexPairs.forEach((x, idx) => {
+  hexPairs.forEach((hexPair, idx) => {
     const item = document.createElement('div');
     item.classList.add('griditem');
-    item.textContent = x;
+    item.textContent = hexPair;
     item.dataset.byteIndex = String(idx);
     hexGridContainer.appendChild(item);
   });
