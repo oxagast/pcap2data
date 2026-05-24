@@ -1071,8 +1071,7 @@ function parseDataToolsInput(format, rawInput) {
     let decoded = '';
     try {
       decoded = atob(normalized);
-    } catch (ignoredError) {
-      void ignoredError;
+    } catch {
       throw new Error('Invalid base64 input.');
     }
     const bytes = new Uint8Array(decoded.length);
@@ -1159,8 +1158,7 @@ function inferMimeType(bytes) {
     try {
       JSON.parse(trimmed);
       return 'application/json';
-    } catch (ignoredError) {
-      void ignoredError;
+    } catch {
       // Keep evaluating as plain text/binary.
     }
   }
@@ -1301,8 +1299,7 @@ function detectConvertibleFormats(text) {
     try {
       parseDataToolsInput(format, value);
       return true;
-    } catch (ignoredError) {
-      void ignoredError;
+    } catch {
       return false;
     }
   };
@@ -1405,8 +1402,7 @@ async function copyTextToClipboard(text, label) {
 
   try {
     await navigator.clipboard.writeText(text);
-  } catch (ignoredError) {
-    void ignoredError;
+  } catch {
     const fallbackInput = document.createElement('textarea');
     fallbackInput.value = text;
     fallbackInput.style.position = 'fixed';
@@ -2157,11 +2153,11 @@ function popHexGrid(hex) {
   const hexGridContainer = document.getElementById('hexg');
   const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
-  hexPairs.forEach((hexPair, idx) => {
+  hexPairs.forEach((hexPair, byteIndex) => {
     const item = document.createElement('div');
     item.classList.add('griditem');
     item.textContent = hexPair;
-    item.dataset.byteIndex = String(idx);
+    item.dataset.byteIndex = String(byteIndex);
     hexGridContainer.appendChild(item);
   });
   function getPrintableSequence(startIndex) {
