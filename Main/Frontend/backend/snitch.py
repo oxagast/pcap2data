@@ -118,6 +118,8 @@ HTTP_METHODS: set = {
     "CONNECT",
 }
 
+TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
+
 
 def llmQuery(packetInfoStr):
     """
@@ -200,11 +202,12 @@ def reverseDnsLookup(ip):
         }
 
 
-def getServBanner(ip, port, timeout, hostname):
+def getServBanner(ip, port, timeout, hostname, serviceName=None):
     """
     Retrieve the service banner, SSL certificate, and page title for a given IP and port.
     Uses a dict cache keyed by (ip, port) to avoid redundant network probes.
     Handles both HTTP and HTTPS. Returns a dict with banner, page title, and encryption data.
+    The optional serviceName helps choose the correct URL scheme for non-standard ports.
     """
 
     ipPortKey = (ip, port)
@@ -220,28 +223,55 @@ def getServBanner(ip, port, timeout, hostname):
     bannerInfo = {}
     # Get page title for HTTP/HTTPS ports
     try:
-        if port == 443:
+        serviceNameNormalized = (
+            serviceName.lower()
+            if isinstance(serviceName, str) and serviceName
+            else ""
+        )
+        isLikelyTlsService = (
+            port in TLS_SERVICE_PORTS
+            or "https" in serviceNameNormalized
+            or "ssl" in serviceNameNormalized
+            or "tls" in serviceNameNormalized
+            or "wss" in serviceNameNormalized
+        )
+        if isLikelyTlsService:
             pageTitle = getPageTitle("https://" + hostname + ":" + str(port), timeout)
         else:
             pageTitle = getPageTitle("http://" + hostname + ":" + str(port), timeout)
     except Exception:
         pageTitle = "N/A"
     # Try to fetch SSL certificate info (ignore errors; port may not support TLS)
-    try:
-        tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcpSocket.settimeout(timeout)
-        sslContext = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        sslContext.check_hostname = False
-        sslContext.verify_mode = ssl.CERT_NONE
-        sslSocket = sslContext.wrap_socket(tcpSocket, server_hostname=ip)
-        sslSocket.connect((ip, port))
-        if sslSocket:
-            sslCert = sslSocket.getpeercert()
-            cipherInfo = sslSocket.cipher()
-            sslVersion = sslSocket.version()
-        tcpSocket.close()
-    except Exception:
-        pass
+    sslContext = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    if hasattr(ssl, "OP_NO_TLSv1"):
+        sslContext.options |= ssl.OP_NO_TLSv1
+    if hasattr(ssl, "OP_NO_TLSv1_1"):
+        sslContext.options |= ssl.OP_NO_TLSv1_1
+    sslContext.check_hostname = False
+    sslContext.verify_mode = ssl.CERT_NONE
+
+    serverHostnamesToTry = [None]
+    if isinstance(hostname, str) and hostname:
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            # Only use SNI when the provided host is a domain, not a literal IP.
+            serverHostnamesToTry.insert(0, hostname)
+
+    for serverHostname in serverHostnamesToTry:
+        try:
+            with socket.create_connection((ip, port), timeout=timeout) as tcpSocket:
+                with sslContext.wrap_socket(
+                    tcpSocket, server_hostname=serverHostname
+                ) as sslSocket:
+                    peerCert = sslSocket.getpeercert()
+                    if peerCert:
+                        sslCert = peerCert
+                    cipherInfo = sslSocket.cipher() or "N/A"
+                    sslVersion = sslSocket.version() or "N/A"
+                    break
+        except Exception:
+            continue
     # Try to fetch banner from server
     try:
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -590,6 +620,7 @@ def getTraits(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
             dnsHostnames.get("Hostnames")[0]
             if dnsHostnames.get("Resolved")
             else destIp,  # ignore subscript warning, it checks for resolution first
+            protoName,
         )
     else:
         banner = "Active recon not performed"
