@@ -1384,12 +1384,12 @@ function showConvertContextMenu(
   convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
   const hasClipboardActions = showCopySelection || showPaste || showSaveJson;
   const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
-  convertContextDividerEl.style.display =
-    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
   if (!hasClipboardActions && !hasDataTypeActions) {
     hideConvertContextMenu();
     return;
   }
+  convertContextDividerEl.style.display =
+    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
