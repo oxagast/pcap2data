@@ -83,7 +83,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next**   | Navigate backwards and forwards through the packet list (or filtered set). |
 | **Filter bar**    | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)). |
 
-When right-clicking convertible values (such as hex, binary, base64, or decimal byte-like text) in packet/data views, PacketSnitch shows a context menu to load that value directly into the **Data** tab. In the hex grid, the same menu also includes copy actions for hex, ASCII preview, and raw payload data.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to load convertible values (hex/binary/base64/decimal) into the **Data** tab, copy selected payload views, and auto-populate the filter bar with detected IP addresses, ports, MAC addresses, protocol names, and MIME types.
 
 ---
 
