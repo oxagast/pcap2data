@@ -1,6 +1,7 @@
 :root {
   --color-1: #7f80ff;
   --color-2: #2a284a;
+  --color-2-hover: #201e3d;
   --color-3: #8a87c0;
   --color-4: #161a2b;
   --color-5: #ccbdde;
@@ -574,6 +575,11 @@ strong {
 .packet-list-table tbody tr.packet-list-selected {
   background-color: var(--color-2);
   color: var(--color-1);
+}
+
+.packet-list-table tbody tr.packet-list-selected:hover,
+.packet-list-table tbody tr.packet-list-selected.packet-list-hovered {
+  background-color: var(--color-2-hover);
 }
 
 .packet-list-table td {
