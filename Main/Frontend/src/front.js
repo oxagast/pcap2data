@@ -68,6 +68,11 @@ const filterHistoryToggleEl = getCachedElement('filter-history-toggle');
 const filterHistoryMenuEl = getCachedElement('filter-history-menu');
 const filterHistoryContainerEl = getCachedElement('filter-history');
 const filterHistory = [];
+const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
+const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
+const DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD = 4.5;
+const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
+const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -680,6 +685,7 @@ function writeSummary() {
     document.getElementById('packetInfoPane').style.display = 'none';
     document.getElementById('packetPayloadPane').style.display = 'none';
     document.getElementById('stats_box').style.display = 'none';
+    document.getElementById('data_tools_box').style.display = 'none';
     document.getElementById('list_box').style.display = 'none';
     document.getElementById('summary_content').textContent =
       finalSummary || 'No LLM summary available.';
@@ -905,6 +911,7 @@ function showStats() {
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('list_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'block';
   document.getElementById('rightside').style.display = 'none';
 
@@ -1015,6 +1022,542 @@ function showStats() {
   if (dtSec) content.appendChild(dtSec);
 }
 
+function parseDataToolsInput(format, rawInput) {
+  if (!rawInput || rawInput.trim() === '') {
+    throw new Error('Enter input data first.');
+  }
+
+  if (format === 'hex') {
+    const normalized = rawInput
+      .replace(/0x/gi, '')
+      .replace(/[\s,:;-]+/g, '')
+      .trim();
+    if (!normalized) throw new Error('No hex bytes were found.');
+    if (!/^[0-9a-fA-F]+$/.test(normalized)) {
+      throw new Error('Hex input can only contain 0-9 and A-F.');
+    }
+    if (normalized.length % 2 !== 0) {
+      throw new Error('Hex input must contain an even number of characters.');
+    }
+    const bytes = new Uint8Array(normalized.length / 2);
+    for (let i = 0; i < normalized.length; i += 2) {
+      bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+    }
+    return bytes;
+  }
+
+  if (format === 'binary') {
+    const normalized = rawInput.replace(/\s+/g, '');
+    if (!normalized) throw new Error('No binary bits were found.');
+    if (!/^[01]+$/.test(normalized)) {
+      throw new Error('Binary input can only contain 0 and 1.');
+    }
+    if (normalized.length % 8 !== 0) {
+      throw new Error('Binary input must be grouped into full 8-bit bytes.');
+    }
+    const bytes = new Uint8Array(normalized.length / 8);
+    for (let i = 0; i < normalized.length; i += 8) {
+      bytes[i / 8] = parseInt(normalized.slice(i, i + 8), 2);
+    }
+    return bytes;
+  }
+
+  if (format === 'base64') {
+    const normalized = rawInput
+      .trim()
+      .replace(/^data:[^;]+;base64,/i, '')
+      .replace(/\s+/g, '');
+    if (!normalized) throw new Error('No base64 content was found.');
+    let decoded = '';
+    try {
+      decoded = atob(normalized);
+    } catch {
+      throw new Error('Invalid base64 input.');
+    }
+    const bytes = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i++) {
+      bytes[i] = decoded.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  if (format === 'decimal') {
+    const tokens = rawInput.split(/[\s,]+/).filter(Boolean);
+    if (!tokens.length) throw new Error('No decimal byte values were found.');
+    const values = tokens.map((token) => {
+      const parsed = Number(token);
+      if (!/^\d+$/.test(token) || parsed > 255) {
+        throw new Error(
+          'Each decimal value must be a non-negative integer between 0 and 255.',
+        );
+      }
+      return parsed;
+    });
+    return Uint8Array.from(values);
+  }
+
+  // ascii / utf-8 fallback
+  return new TextEncoder().encode(rawInput);
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function bytesToPrintableAscii(bytes) {
+  return [...bytes]
+    .map((byte) =>
+      byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.',
+    )
+    .join('');
+}
+
+function bytesToBigIntDecimal(bytes) {
+  let total = 0n;
+  bytes.forEach((byte) => {
+    total = (total << 8n) + BigInt(byte);
+  });
+  return total.toString(10);
+}
+
+function calculateShannonEntropy(bytes) {
+  if (!bytes.length) return 0;
+  const counts = new Array(256).fill(0);
+  bytes.forEach((byte) => {
+    counts[byte] += 1;
+  });
+  let entropy = 0;
+  counts.forEach((count) => {
+    if (!count) return;
+    const p = count / bytes.length;
+    entropy -= p * Math.log2(p);
+  });
+  return entropy;
+}
+
+function inferMimeType(bytes) {
+  if (!bytes || !bytes.length) return 'application/octet-stream';
+
+  const startsWith = (signature) =>
+    signature.every((value, index) => bytes[index] === value);
+  if (startsWith([0x89, 0x50, 0x4e, 0x47])) return 'image/png';
+  if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+  if (startsWith([0x47, 0x49, 0x46, 0x38])) return 'image/gif';
+  if (startsWith([0x25, 0x50, 0x44, 0x46])) return 'application/pdf';
+  if (startsWith([0x50, 0x4b, 0x03, 0x04])) return 'application/zip';
+  if (startsWith([0x1f, 0x8b])) return 'application/gzip';
+  if (startsWith([0x7f, 0x45, 0x4c, 0x46])) return 'application/x-elf';
+
+  const utf8Text = new TextDecoder().decode(bytes);
+  const trimmed = utf8Text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      JSON.parse(trimmed);
+      return 'application/json';
+    } catch {
+      // Keep evaluating as plain text/binary.
+    }
+  }
+
+  const printableChars = [...utf8Text].filter((ch) => {
+    const code = ch.charCodeAt(0);
+    return (
+      (code >= 32 && code <= 126) ||
+      ch === '\n' ||
+      ch === '\r' ||
+      ch === '\t'
+    );
+  }).length;
+  if (
+    utf8Text.length > 0 &&
+    printableChars / utf8Text.length > DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD
+  ) {
+    return 'text/plain; charset=utf-8';
+  }
+
+  return 'application/octet-stream';
+}
+
+function getEntropyLabel(entropy) {
+  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return 'High';
+  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return 'Medium';
+  return 'Low';
+}
+
+function resetDataToolsOutputs() {
+  document.getElementById('data-tools-hex-output').value = '';
+  document.getElementById('data-tools-binary-output').value = '';
+  document.getElementById('data-tools-decimal-output').value = '';
+  document.getElementById('data-tools-decimal-integer-output').value = '';
+  document.getElementById('data-tools-ascii-output').value = '';
+  document.getElementById('data-tools-base64-output').value = '';
+  document.getElementById('data-tools-byte-length').textContent = 'Byte Length: 0';
+  document.getElementById('data-tools-mime-type').textContent =
+    'MIME Type: Unknown';
+  document.getElementById('data-tools-entropy').textContent =
+    'Shannon Entropy: 0.00 (Low)';
+}
+
+function runDataToolsConversion() {
+  const inputEl = document.getElementById('data-tools-input');
+  const formatEl = document.getElementById('data-tools-format');
+  const errorEl = document.getElementById('data-tools-error');
+
+  try {
+    const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+    const hexSpaced = [...bytes]
+      .map((byte) => byte.toString(16).padStart(2, '0').toUpperCase())
+      .join(' ');
+    const binarySpaced = [...bytes]
+      .map((byte) => byte.toString(2).padStart(8, '0'))
+      .join(' ');
+    const decimalBytes = [...bytes].join(' ');
+    const asciiPreview = bytesToPrintableAscii(bytes);
+    const base64Value = bytesToBase64(bytes);
+    const entropy = calculateShannonEntropy(bytes);
+    const entropyLabel = getEntropyLabel(entropy);
+    const decimalInteger =
+      bytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
+        ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
+        : bytesToBigIntDecimal(bytes);
+
+    document.getElementById('data-tools-hex-output').value = hexSpaced;
+    document.getElementById('data-tools-binary-output').value = binarySpaced;
+    document.getElementById('data-tools-decimal-output').value = decimalBytes;
+    document.getElementById('data-tools-decimal-integer-output').value =
+      decimalInteger;
+    document.getElementById('data-tools-ascii-output').value = asciiPreview;
+    document.getElementById('data-tools-base64-output').value = base64Value;
+    document.getElementById('data-tools-byte-length').textContent =
+      `Byte Length: ${bytes.length}`;
+    document.getElementById('data-tools-mime-type').textContent =
+      `MIME Type: ${inferMimeType(bytes)}`;
+    document.getElementById('data-tools-entropy').textContent =
+      `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
+    errorEl.textContent = '';
+  } catch (error) {
+    resetDataToolsOutputs();
+    errorEl.textContent =
+      error && typeof error === 'object' && 'message' in error
+        ? error.message
+        : String(error);
+  }
+}
+
+function showDataTools() {
+  statusUpdate('Status: Displaying data conversion tools');
+  writeLogEntry('User opened data conversion tools view');
+  document.getElementById('packetInfoPane').style.display = 'none';
+  document.getElementById('packetPayloadPane').style.display = 'none';
+  document.getElementById('summary_box').style.display = 'none';
+  document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('list_box').style.display = 'none';
+  document.getElementById('rightside').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'block';
+}
+
+let activeContextConversionText = '';
+let activeContextTarget = null;
+const convertContextMenuEl = getCachedElement('convert-context-menu');
+const convertContextButtons = {
+  copy: getCachedElement('ctx-copy'),
+  paste: getCachedElement('ctx-paste'),
+  saveJson: getCachedElement('ctx-save-json'),
+  hex: getCachedElement('convert-context-hex'),
+  binary: getCachedElement('convert-context-binary'),
+  base64: getCachedElement('convert-context-base64'),
+  decimal: getCachedElement('convert-context-decimal'),
+  ascii: getCachedElement('convert-context-ascii'),
+  copyHex: getCachedElement('convert-context-copy-hex'),
+  copyAscii: getCachedElement('convert-context-copy-ascii'),
+  copyRaw: getCachedElement('convert-context-copy-raw'),
+};
+const convertContextDividerEl = getCachedElement('convert-context-divider');
+
+function hideConvertContextMenu() {
+  activeContextConversionText = '';
+  activeContextTarget = null;
+  convertContextMenuEl.hidden = true;
+}
+
+function getTrimmedSelectionText() {
+  return window.getSelection()?.toString().trim() || '';
+}
+
+function looksLikeBase64(text) {
+  const normalized = text.replace(/\s+/g, '');
+  return (
+    normalized.length >= DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH &&
+    normalized.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(normalized) &&
+    normalized.replace(/=/g, '').length > 0
+  );
+}
+
+function detectConvertibleFormats(text) {
+  const formats = [];
+  const value = text.trim();
+  if (!value) return formats;
+
+  const canParse = (format) => {
+    try {
+      parseDataToolsInput(format, value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (canParse('hex')) formats.push('hex');
+  if (canParse('binary')) formats.push('binary');
+  if (canParse('decimal')) formats.push('decimal');
+  if (looksLikeBase64(value) && canParse('base64')) formats.push('base64');
+  if (formats.length > 0) formats.push('ascii');
+
+  return formats;
+}
+
+function getConversionTextFromTarget(target) {
+  const selectedText = window.getSelection()?.toString().trim();
+  if (selectedText) return selectedText;
+
+  const directValue =
+    target && 'value' in target && typeof target.value === 'string'
+      ? target.value.trim()
+      : '';
+  if (directValue) return directValue;
+
+  if (target?.classList?.contains('griditem')) {
+    return target.textContent.trim();
+  }
+
+  const textContent = target?.textContent ? target.textContent.trim() : '';
+  if (!textContent) return '';
+
+  if (textContent.includes(':')) {
+    const prefix = textContent.split(':')[0]?.trim();
+    const looksLikeLabel = /^[A-Za-z][\w\s-]*$/.test(prefix);
+    // Keep full suffix so values containing additional colons (IPv6/timestamps)
+    // are preserved, e.g. "Label: fe80::1" or "Time: 12:34:56".
+    if (looksLikeLabel) {
+      const suffix = textContent.split(':').slice(1).join(':').trim();
+      if (suffix) return suffix;
+    }
+  }
+
+  return textContent;
+}
+
+function showConvertContextMenu(
+  x,
+  y,
+  sourceText,
+  formats,
+  {
+    isHexViewTarget = false,
+    target = null,
+    showCopySelection = false,
+    showPaste = true,
+    showSaveJson = true,
+  } = {},
+) {
+  activeContextConversionText = sourceText;
+  activeContextTarget = target;
+
+  convertContextButtons.copy.style.display = showCopySelection ? 'block' : 'none';
+  convertContextButtons.paste.style.display = showPaste ? 'block' : 'none';
+  convertContextButtons.saveJson.style.display = showSaveJson ? 'block' : 'none';
+
+  ['hex', 'binary', 'base64', 'decimal', 'ascii'].forEach((format) => {
+    convertContextButtons[format].style.display = formats.includes(format)
+      ? 'block'
+      : 'none';
+  });
+  convertContextButtons.copyHex.style.display = isHexViewTarget ? 'block' : 'none';
+  convertContextButtons.copyAscii.style.display = isHexViewTarget
+    ? 'block'
+    : 'none';
+  convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
+  const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
+  const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
+  if (!hasGeneralActions && !hasDataTypeActions) {
+    hideConvertContextMenu();
+    return;
+  }
+  convertContextDividerEl.style.display =
+    hasGeneralActions && hasDataTypeActions ? 'block' : 'none';
+
+  convertContextMenuEl.hidden = false;
+  const menuWidth = convertContextMenuEl.offsetWidth;
+  const menuHeight = convertContextMenuEl.offsetHeight;
+  const boundedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
+  const boundedY = Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8));
+  convertContextMenuEl.style.left = `${boundedX}px`;
+  convertContextMenuEl.style.top = `${boundedY}px`;
+}
+
+function loadContextValueIntoDataTools(format) {
+  if (!activeContextConversionText) return;
+  const inputEl = document.getElementById('data-tools-input');
+  const formatEl = document.getElementById('data-tools-format');
+  inputEl.value = activeContextConversionText;
+  formatEl.value = format;
+  showDataTools();
+  runDataToolsConversion();
+  hideConvertContextMenu();
+  writeLogEntry(`Context conversion loaded format=${format}`);
+}
+
+function getCurrentRawPayloadHex() {
+  const payloadHex =
+    packetsForHost?.[index]?.['Packet Info']?.['Raw data']?.['Payload']?.[
+      'Hex Encoded'
+    ];
+  return typeof payloadHex === 'string' ? payloadHex : '';
+}
+
+async function copyTextToClipboard(text, label) {
+  if (!text) {
+    statusUpdate(`Status: No ${label.toLowerCase()} available to copy`);
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const fallbackInput = document.createElement('textarea');
+    fallbackInput.value = text;
+    fallbackInput.style.position = 'fixed';
+    fallbackInput.style.left = '-9999px';
+    document.body.appendChild(fallbackInput);
+    fallbackInput.focus();
+    fallbackInput.select();
+    document.execCommand('copy');
+    document.body.removeChild(fallbackInput);
+  }
+
+  statusUpdate(`Status: Copied ${label} to clipboard`);
+  writeLogEntry(`Copied ${label} length=${text.length}`);
+}
+
+function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
+  if (byteIndex < 0) return '';
+  const decodedAscii = hexToAscii(payloadHex);
+  let printableSequence = '';
+  for (let i = byteIndex; i < decodedAscii.length; i++) {
+    const charCode = decodedAscii.charCodeAt(i);
+    if (!isPrintable(charCode)) break;
+    printableSequence += decodedAscii[i];
+  }
+  if (printableSequence.length > 0) return printableSequence;
+  const fallbackCode = decodedAscii.charCodeAt(byteIndex);
+  if (Number.isNaN(fallbackCode)) return '';
+  return isPrintable(fallbackCode) ? decodedAscii[byteIndex] : '.';
+}
+
+async function copyHexFromContext() {
+  const payloadHex = getCurrentRawPayloadHex();
+  const hexValue = activeContextTarget?.classList?.contains('griditem')
+    ? activeContextTarget.textContent.trim()
+    : payloadHex;
+  await copyTextToClipboard(hexValue, 'Hex');
+  hideConvertContextMenu();
+}
+
+async function copyAsciiFromContext() {
+  const payloadHex = getCurrentRawPayloadHex();
+  const byteIndex = Number.parseInt(
+    activeContextTarget?.dataset?.byteIndex ?? '-1',
+    10,
+  );
+  const fullPayloadAscii = payloadHex
+    ? bytesToPrintableAscii(parseDataToolsInput('hex', payloadHex))
+    : '';
+  const asciiValue = activeContextTarget?.classList?.contains('griditem')
+    ? getAsciiPreviewForHexOffset(payloadHex, byteIndex)
+    : fullPayloadAscii;
+  await copyTextToClipboard(asciiValue, 'ASCII');
+  hideConvertContextMenu();
+}
+
+async function copyRawPayloadFromContext() {
+  await copyTextToClipboard(getCurrentRawPayloadHex(), 'Raw payload');
+  hideConvertContextMenu();
+}
+
+function copySelectedTextFromContextMenu() {
+  const selectedText = getTrimmedSelectionText();
+  hideConvertContextMenu();
+  if (!selectedText) {
+    statusUpdate('Status: No text selected to copy');
+    return;
+  }
+  navigator.clipboard
+    .writeText(selectedText)
+    .then(() => {
+      statusUpdate('Status: Copied selected text to clipboard');
+      writeLogEntry(`Copied selected text length=${selectedText.length}`);
+    })
+    .catch((error) => {
+      console.error('Copy failed:', error);
+      statusUpdate('Status: Copy failed – clipboard access denied');
+    });
+}
+
+function pasteTextFromContextMenu() {
+  hideConvertContextMenu();
+  navigator.clipboard
+    .readText()
+    .then((text) => {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
+        !active.readOnly &&
+        !active.disabled
+      ) {
+        const start = active.selectionStart;
+        const end = active.selectionEnd;
+        const current = active.value;
+        active.value = current.substring(0, start) + text + current.substring(end);
+        active.selectionStart = active.selectionEnd = start + text.length;
+        active.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    })
+    .catch((error) => {
+      console.error('Paste failed:', error);
+      statusUpdate('Status: Paste failed – clipboard access denied');
+    });
+}
+
+function saveJsonFromContextMenu() {
+  hideConvertContextMenu();
+  if (!jsonCapture) {
+    statusUpdate('Status: No data loaded to save');
+    return;
+  }
+  window.saveapi.saveJson(jsonCapture).then((result) => {
+    if (result.canceled) {
+      statusUpdate('Status: Save cancelled');
+    } else if (result.success) {
+      statusUpdate('Status: JSON saved successfully');
+    } else {
+      const errorMessage =
+        result && typeof result === 'object' && 'error' in result
+          ? result.error
+          : 'unknown';
+      doError('Save failed');
+      logErrorEntry('save-json', errorMessage || 'unknown');
+      statusUpdate('Status: Save failed – ' + (errorMessage || 'unknown error'));
+      console.error('Save failed:', errorMessage);
+    }
+  });
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
@@ -1026,10 +1569,51 @@ document.getElementById('stats-btn').addEventListener('click', function () {
   showStats();
 });
 
+// Show data conversion tools when data tools button is clicked
+document.getElementById('data-tools-btn').addEventListener('click', function () {
+  showDataTools();
+});
+
 // Show packet list when list button is clicked
 document.getElementById('list-btn').addEventListener('click', function () {
   showPacketList();
 });
+
+document
+  .getElementById('data-tools-convert-btn')
+  .addEventListener('click', runDataToolsConversion);
+document.getElementById('data-tools-clear-btn').addEventListener('click', () => {
+  document.getElementById('data-tools-input').value = '';
+  document.getElementById('data-tools-error').textContent = '';
+  resetDataToolsOutputs();
+});
+convertContextButtons.hex.addEventListener('click', () =>
+  loadContextValueIntoDataTools('hex'),
+);
+convertContextButtons.binary.addEventListener('click', () =>
+  loadContextValueIntoDataTools('binary'),
+);
+convertContextButtons.base64.addEventListener('click', () =>
+  loadContextValueIntoDataTools('base64'),
+);
+convertContextButtons.decimal.addEventListener('click', () =>
+  loadContextValueIntoDataTools('decimal'),
+);
+convertContextButtons.ascii.addEventListener('click', () =>
+  loadContextValueIntoDataTools('ascii'),
+);
+convertContextButtons.copyHex.addEventListener('click', () => {
+  copyHexFromContext();
+});
+convertContextButtons.copyAscii.addEventListener('click', () => {
+  copyAsciiFromContext();
+});
+convertContextButtons.copyRaw.addEventListener('click', () => {
+  copyRawPayloadFromContext();
+});
+convertContextButtons.copy.addEventListener('click', copySelectedTextFromContextMenu);
+convertContextButtons.paste.addEventListener('click', pasteTextFromContextMenu);
+convertContextButtons.saveJson.addEventListener('click', saveJsonFromContextMenu);
 
 /**
  * Builds and shows the packet list tab, displaying all packets grouped by host
@@ -1047,6 +1631,7 @@ function showPacketList() {
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('rightside').style.display = 'none';
   const listBox = document.getElementById('list_box');
   listBox.style.display = 'flex';
@@ -1297,6 +1882,7 @@ function showPacketList() {
 
           // Switch to Host Data view
           document.getElementById('list_box').style.display = 'none';
+          document.getElementById('data_tools_box').style.display = 'none';
           document.getElementById('packetInfoPane').style.display = 'block';
           document.getElementById('packetPayloadPane').style.display = 'block';
           document.getElementById('prev-btn').style.display = 'block';
@@ -1457,6 +2043,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
   document.getElementById('list_box').style.display = 'none';
+  document.getElementById('data_tools_box').style.display = 'none';
   document.getElementById('packetInfoPane').style.display = 'block';
   document.getElementById('packetPayloadPane').style.display = 'block';
   document.getElementById('welcome').style.display = 'none';
@@ -1662,13 +2249,15 @@ function popHexGrid(hex) {
   const decodedAscii = hexToAscii(hex);
   document.getElementById('hexg').textContent = '';
   const hexGridContainer = document.getElementById('hexg');
+  const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
-  for (const x of hex.toUpperCase().match(/.{1,2}/g)) {
+  hexPairs.forEach((hexPair, byteIndex) => {
     const item = document.createElement('div');
     item.classList.add('griditem');
-    item.textContent = x;
+    item.textContent = hexPair;
+    item.dataset.byteIndex = String(byteIndex);
     hexGridContainer.appendChild(item);
-  }
+  });
   function getPrintableSequence(startIndex) {
     let result = '';
     for (let i = startIndex; i < decodedAscii.length; i++) {
@@ -2110,98 +2699,6 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
   });
 });
 
-// Right-click context menu
-(function () {
-  const ctxMenu = document.getElementById('context-menu');
-  const ctxCopy = document.getElementById('ctx-copy');
-  const ctxPaste = document.getElementById('ctx-paste');
-  const ctxSaveJson = document.getElementById('ctx-save-json');
-
-  function hideMenu() {
-    ctxMenu.style.display = 'none';
-  }
-
-  document.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    ctxMenu.style.display = 'block';
-    const menuRect = ctxMenu.getBoundingClientRect();
-    const x = Math.min(e.clientX, window.innerWidth - menuRect.width);
-    const y = Math.min(e.clientY, window.innerHeight - menuRect.height);
-    ctxMenu.style.left = x + 'px';
-    ctxMenu.style.top = y + 'px';
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!ctxMenu.contains(e.target)) {
-      hideMenu();
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hideMenu();
-  });
-
-  ctxCopy.addEventListener('click', () => {
-    hideMenu();
-    const selection = window.getSelection();
-    const selectedText = selection ? selection.toString() : '';
-    if (selectedText) {
-      navigator.clipboard.writeText(selectedText).catch((err) => {
-        console.error('Copy failed:', err);
-        statusUpdate('Status: Copy failed – clipboard access denied');
-      });
-    } else {
-      statusUpdate('Status: No text selected to copy');
-    }
-  });
-
-  ctxPaste.addEventListener('click', () => {
-    hideMenu();
-    navigator.clipboard.readText().then((text) => {
-      const active = document.activeElement;
-      if (
-        active &&
-        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
-        !active.readOnly &&
-        !active.disabled
-      ) {
-        const start = active.selectionStart;
-        const end = active.selectionEnd;
-        const current = active.value;
-        active.value =
-          current.substring(0, start) + text + current.substring(end);
-        active.selectionStart = active.selectionEnd = start + text.length;
-        active.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }).catch((err) => {
-      console.error('Paste failed:', err);
-      statusUpdate('Status: Paste failed – clipboard access denied');
-    });
-  });
-
-  ctxSaveJson.addEventListener('click', () => {
-    hideMenu();
-    if (!jsonCapture) {
-      statusUpdate('Status: No data loaded to save');
-      return;
-    }
-    window.saveapi.saveJson(jsonCapture).then((result) => {
-      if (result.canceled) {
-        statusUpdate('Status: Save cancelled');
-      } else if (result.success) {
-        statusUpdate('Status: JSON saved successfully');
-      } else {
-        doError('Save failed');
-        logErrorEntry('save-json', result.error || 'unknown');
-        statusUpdate(
-          'Status: Save failed – ' + (result.error || 'unknown error'),
-        );
-        console.error('Save failed:', result.error);
-      }
-    });
-  });
-})();
-
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
@@ -2295,6 +2792,58 @@ document
     }
   });
 
+document.addEventListener('contextmenu', (event) => {
+  const target = event.target;
+  const selectedText = getTrimmedSelectionText();
+  const insideEligiblePanel = target?.closest(
+    '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
+  );
+  const isHexViewTarget = Boolean(target?.closest('#hexg'));
+  let conversionText = '';
+  let formats = [];
+  if (insideEligiblePanel) {
+    conversionText = getConversionTextFromTarget(target);
+    if (conversionText || isHexViewTarget) {
+      formats = conversionText ? detectConvertibleFormats(conversionText) : [];
+    }
+  }
+
+  event.preventDefault();
+  showConvertContextMenu(
+    event.clientX,
+    event.clientY,
+    conversionText,
+    formats,
+    {
+      isHexViewTarget,
+      target,
+      showCopySelection: Boolean(selectedText),
+      showPaste: true,
+      showSaveJson: true,
+    },
+  );
+});
+
+document.addEventListener('click', () => {
+  hideConvertContextMenu();
+});
+document.addEventListener(
+  'mousedown',
+  (event) => {
+    if (event.button !== 0) return;
+    if (!convertContextMenuEl.hidden && !convertContextMenuEl.contains(event.target)) {
+      hideConvertContextMenu();
+    }
+  },
+  true,
+);
+document.addEventListener('scroll', () => {
+  hideConvertContextMenu();
+});
+window.addEventListener('resize', () => {
+  hideConvertContextMenu();
+});
+
 filterInputEl.addEventListener('input', syncFilterHighlight);
 filterInputEl.addEventListener('scroll', syncFilterHighlightScroll);
 
@@ -2324,6 +2873,9 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !filterHistoryMenuEl.hidden) {
     setHistoryMenuOpen(false);
   }
+  if (event.key === 'Escape' && !convertContextMenuEl.hidden) {
+    hideConvertContextMenu();
+  }
 });
 
 syncFilterHighlight();
@@ -2345,6 +2897,7 @@ window.api.onError((msg) => {
 // On page load, hide packet info and payload panes
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
+  hideConvertContextMenu();
   document.getElementById('packetInfoPane').style.display = 'none';
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('rightside').style.display = 'none';
