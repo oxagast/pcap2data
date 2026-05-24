@@ -509,6 +509,16 @@ strong {
   text-overflow: ellipsis;
 }
 
+.packet-list-table thead th.packet-list-sortable-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.packet-list-table thead th.packet-list-sortable-header:focus {
+  outline: 1px solid var(--color-5);
+  outline-offset: -1px;
+}
+
 /* Column widths: #, bookmark, stream, host, src/dst, ports, transport, app protocol */
 .packet-list-table thead th:nth-child(1) {
   width: 5%;
