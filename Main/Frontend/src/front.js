@@ -1262,6 +1262,7 @@ function showDataTools() {
 
 let activeContextConversionText = '';
 let activeContextTarget = null;
+let activeContextPasteTarget = null;
 const convertContextMenuEl = getCachedElement('convert-context-menu');
 const convertContextButtons = {
   copy: getCachedElement('ctx-copy'),
@@ -1277,10 +1278,12 @@ const convertContextButtons = {
   copyRaw: getCachedElement('convert-context-copy-raw'),
 };
 const convertContextDividerEl = getCachedElement('convert-context-divider');
+const convertContextSaveDividerEl = getCachedElement('convert-context-save-divider');
 
 function hideConvertContextMenu() {
   activeContextConversionText = '';
   activeContextTarget = null;
+  activeContextPasteTarget = null;
   convertContextMenuEl.hidden = true;
 }
 
@@ -1352,6 +1355,36 @@ function getConversionTextFromTarget(target) {
   return textContent;
 }
 
+function getPasteTargetFromContextTarget(target) {
+  if (!(target instanceof Element)) return null;
+  const editableTarget = target.closest(
+    'input, textarea, [contenteditable="true"], [contenteditable=""]',
+  );
+  if (!editableTarget) return null;
+
+  if ('readOnly' in editableTarget && editableTarget.readOnly) return null;
+  if ('disabled' in editableTarget && editableTarget.disabled) return null;
+
+  if (editableTarget.tagName === 'INPUT') {
+    const disallowedInputTypes = new Set([
+      'button',
+      'checkbox',
+      'color',
+      'file',
+      'hidden',
+      'image',
+      'radio',
+      'range',
+      'reset',
+      'submit',
+    ]);
+    const inputType = (editableTarget.type || 'text').toLowerCase();
+    if (disallowedInputTypes.has(inputType)) return null;
+  }
+
+  return editableTarget;
+}
+
 function showConvertContextMenu(
   x,
   y,
@@ -1360,6 +1393,7 @@ function showConvertContextMenu(
   {
     isHexViewTarget = false,
     target = null,
+    pasteTarget = null,
     showCopySelection = false,
     showPaste = true,
     showSaveJson = true,
@@ -1367,6 +1401,7 @@ function showConvertContextMenu(
 ) {
   activeContextConversionText = sourceText;
   activeContextTarget = target;
+  activeContextPasteTarget = pasteTarget;
 
   convertContextButtons.copy.style.display = showCopySelection ? 'block' : 'none';
   convertContextButtons.paste.style.display = showPaste ? 'block' : 'none';
@@ -1382,6 +1417,7 @@ function showConvertContextMenu(
     ? 'block'
     : 'none';
   convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
+  const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
   const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
   if (!hasGeneralActions && !hasDataTypeActions) {
@@ -1389,7 +1425,9 @@ function showConvertContextMenu(
     return;
   }
   convertContextDividerEl.style.display =
-    hasGeneralActions && hasDataTypeActions ? 'block' : 'none';
+    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
+  convertContextSaveDividerEl.style.display =
+    showSaveJson && (hasClipboardActions || hasDataTypeActions) ? 'block' : 'none';
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -1509,23 +1547,51 @@ function copySelectedTextFromContextMenu() {
 }
 
 function pasteTextFromContextMenu() {
+  const pasteTarget = activeContextPasteTarget;
   hideConvertContextMenu();
+  if (!pasteTarget) {
+    statusUpdate('Status: Paste unavailable for this target');
+    return;
+  }
   navigator.clipboard
     .readText()
     .then((text) => {
-      const active = document.activeElement;
-      if (
-        active &&
-        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
-        !active.readOnly &&
-        !active.disabled
-      ) {
-        const start = active.selectionStart;
-        const end = active.selectionEnd;
-        const current = active.value;
-        active.value = current.substring(0, start) + text + current.substring(end);
-        active.selectionStart = active.selectionEnd = start + text.length;
-        active.dispatchEvent(new Event('input', { bubbles: true }));
+      if (pasteTarget.tagName === 'INPUT' || pasteTarget.tagName === 'TEXTAREA') {
+        const hasSelectionRange =
+          typeof pasteTarget.selectionStart === 'number' &&
+          typeof pasteTarget.selectionEnd === 'number';
+        const start = hasSelectionRange
+          ? pasteTarget.selectionStart
+          : pasteTarget.value.length;
+        const end = hasSelectionRange
+          ? pasteTarget.selectionEnd
+          : pasteTarget.value.length;
+        const current = pasteTarget.value;
+        pasteTarget.value =
+          current.substring(0, start) + text + current.substring(end);
+        if (hasSelectionRange) {
+          pasteTarget.selectionStart = pasteTarget.selectionEnd = start + text.length;
+        }
+        pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+
+      if (pasteTarget.isContentEditable) {
+        pasteTarget.focus();
+        const selection = window.getSelection();
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          range.deleteContents();
+          const textNode = document.createTextNode(text);
+          range.insertNode(textNode);
+          range.setStartAfter(textNode);
+          range.setEndAfter(textNode);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } else {
+          pasteTarget.textContent = (pasteTarget.textContent || '') + text;
+        }
+        pasteTarget.dispatchEvent(new Event('input', { bubbles: true }));
       }
     })
     .catch((error) => {
@@ -2794,6 +2860,7 @@ document
 
 document.addEventListener('contextmenu', (event) => {
   const target = event.target;
+  const pasteTarget = getPasteTargetFromContextTarget(target);
   const selectedText = getTrimmedSelectionText();
   const insideEligiblePanel = target?.closest(
     '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
@@ -2817,8 +2884,9 @@ document.addEventListener('contextmenu', (event) => {
     {
       isHexViewTarget,
       target,
+      pasteTarget,
       showCopySelection: Boolean(selectedText),
-      showPaste: true,
+      showPaste: Boolean(pasteTarget),
       showSaveJson: true,
     },
   );
