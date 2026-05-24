@@ -200,11 +200,12 @@ def reverseDnsLookup(ip):
         }
 
 
-def getServBanner(ip, port, timeout, hostname):
+def getServBanner(ip, port, timeout, hostname, serviceName=None):
     """
     Retrieve the service banner, SSL certificate, and page title for a given IP and port.
     Uses a dict cache keyed by (ip, port) to avoid redundant network probes.
     Handles both HTTP and HTTPS. Returns a dict with banner, page title, and encryption data.
+    The optional serviceName helps choose the correct URL scheme for non-standard ports.
     """
 
     ipPortKey = (ip, port)
@@ -220,7 +221,15 @@ def getServBanner(ip, port, timeout, hostname):
     bannerInfo = {}
     # Get page title for HTTP/HTTPS ports
     try:
-        if port == 443:
+        serviceNameNormalized = str(serviceName).lower() if serviceName else ""
+        isLikelyTlsService = (
+            port in {443, 465, 636, 853, 8443, 9443, 5061}
+            or "https" in serviceNameNormalized
+            or "ssl" in serviceNameNormalized
+            or "tls" in serviceNameNormalized
+            or "wss" in serviceNameNormalized
+        )
+        if isLikelyTlsService:
             pageTitle = getPageTitle("https://" + hostname + ":" + str(port), timeout)
         else:
             pageTitle = getPageTitle("http://" + hostname + ":" + str(port), timeout)
@@ -233,7 +242,8 @@ def getServBanner(ip, port, timeout, hostname):
         sslContext = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         sslContext.check_hostname = False
         sslContext.verify_mode = ssl.CERT_NONE
-        sslSocket = sslContext.wrap_socket(tcpSocket, server_hostname=ip)
+        serverHostname = hostname if hostname and hostname != ip else None
+        sslSocket = sslContext.wrap_socket(tcpSocket, server_hostname=serverHostname)
         sslSocket.connect((ip, port))
         if sslSocket:
             sslCert = sslSocket.getpeercert()
@@ -590,6 +600,7 @@ def getTraits(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
             dnsHostnames.get("Hostnames")[0]
             if dnsHostnames.get("Resolved")
             else destIp,  # ignore subscript warning, it checks for resolution first
+            protoName,
         )
     else:
         banner = "Active recon not performed"
