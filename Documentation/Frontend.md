@@ -83,6 +83,8 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next**   | Navigate backwards and forwards through the packet list (or filtered set). |
 | **Filter bar**    | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)). |
 
+When right-clicking convertible values (such as hex, binary, base64, or decimal byte-like text) in packet/data views, PacketSnitch shows a context menu to load that value directly into the **Data (Tools)** tab.
+
 ---
 
 ### Summary Frame

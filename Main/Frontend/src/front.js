@@ -68,6 +68,11 @@ const filterHistoryToggleEl = getCachedElement('filter-history-toggle');
 const filterHistoryMenuEl = getCachedElement('filter-history-menu');
 const filterHistoryContainerEl = getCachedElement('filter-history');
 const filterHistory = [];
+const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
+const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
+const DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD = 4.5;
+const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
+const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -1168,7 +1173,10 @@ function inferMimeType(bytes) {
       ch === '\t'
     );
   }).length;
-  if (utf8Text.length > 0 && printableChars / utf8Text.length > 0.9) {
+  if (
+    utf8Text.length > 0 &&
+    printableChars / utf8Text.length > DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD
+  ) {
     return 'text/plain; charset=utf-8';
   }
 
@@ -1176,8 +1184,8 @@ function inferMimeType(bytes) {
 }
 
 function getEntropyLabel(entropy) {
-  if (entropy >= 6.8) return 'High';
-  if (entropy >= 4.5) return 'Medium';
+  if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return 'High';
+  if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return 'Medium';
   return 'Low';
 }
 
@@ -1214,7 +1222,7 @@ function runDataToolsConversion() {
     const entropy = calculateShannonEntropy(bytes);
     const entropyLabel = getEntropyLabel(entropy);
     const decimalInteger =
-      bytes.length > 4096
+      bytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
         ? 'Input too large for decimal integer display'
         : bytesToBigIntDecimal(bytes);
 
@@ -1253,6 +1261,107 @@ function showDataTools() {
   document.getElementById('data_tools_box').style.display = 'block';
 }
 
+let activeContextConversionText = '';
+const convertContextMenuEl = getCachedElement('convert-context-menu');
+const convertContextButtons = {
+  hex: getCachedElement('convert-context-hex'),
+  binary: getCachedElement('convert-context-binary'),
+  base64: getCachedElement('convert-context-base64'),
+  decimal: getCachedElement('convert-context-decimal'),
+  ascii: getCachedElement('convert-context-ascii'),
+};
+
+function hideConvertContextMenu() {
+  activeContextConversionText = '';
+  convertContextMenuEl.hidden = true;
+}
+
+function looksLikeBase64(text) {
+  const normalized = text.replace(/\s+/g, '');
+  return (
+    normalized.length >= DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH &&
+    normalized.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+  );
+}
+
+function detectConvertibleFormats(text) {
+  const formats = [];
+  const value = text.trim();
+  if (!value) return formats;
+
+  const canParse = (format) => {
+    try {
+      parseDataToolsInput(format, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  if (canParse('hex')) formats.push('hex');
+  if (canParse('binary')) formats.push('binary');
+  if (canParse('decimal')) formats.push('decimal');
+  if (looksLikeBase64(value) && canParse('base64')) formats.push('base64');
+  if (formats.length > 0) formats.push('ascii');
+
+  return formats;
+}
+
+function getConversionTextFromTarget(target) {
+  const selectedText = window.getSelection()?.toString().trim();
+  if (selectedText) return selectedText;
+
+  const directValue =
+    target && 'value' in target && typeof target.value === 'string'
+      ? target.value.trim()
+      : '';
+  if (directValue) return directValue;
+
+  if (target?.classList?.contains('griditem')) {
+    return target.textContent.trim();
+  }
+
+  const textContent = target?.textContent ? target.textContent.trim() : '';
+  if (!textContent) return '';
+
+  if (textContent.includes(':')) {
+    const suffix = textContent.split(':').slice(1).join(':').trim();
+    if (suffix) return suffix;
+  }
+
+  return textContent;
+}
+
+function showConvertContextMenu(x, y, sourceText, formats) {
+  activeContextConversionText = sourceText;
+  Object.keys(convertContextButtons).forEach((format) => {
+    convertContextButtons[format].style.display = formats.includes(format)
+      ? 'block'
+      : 'none';
+  });
+
+  convertContextMenuEl.hidden = false;
+  const menuWidth = convertContextMenuEl.offsetWidth;
+  const menuHeight = convertContextMenuEl.offsetHeight;
+  const boundedX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
+  const boundedY = Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8));
+  convertContextMenuEl.style.left = `${boundedX}px`;
+  convertContextMenuEl.style.top = `${boundedY}px`;
+}
+
+function loadContextValueIntoDataTools(format) {
+  if (!activeContextConversionText) return;
+  const inputEl = document.getElementById('data-tools-input');
+  const formatEl = document.getElementById('data-tools-format');
+  inputEl.value = activeContextConversionText;
+  formatEl.value = format;
+  showDataTools();
+  runDataToolsConversion();
+  hideConvertContextMenu();
+  writeLogEntry(`Context conversion loaded format=${format}`);
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
@@ -1282,6 +1391,21 @@ document.getElementById('data-tools-clear-btn').addEventListener('click', () => 
   document.getElementById('data-tools-error').textContent = '';
   resetDataToolsOutputs();
 });
+convertContextButtons.hex.addEventListener('click', () =>
+  loadContextValueIntoDataTools('hex'),
+);
+convertContextButtons.binary.addEventListener('click', () =>
+  loadContextValueIntoDataTools('binary'),
+);
+convertContextButtons.base64.addEventListener('click', () =>
+  loadContextValueIntoDataTools('base64'),
+);
+convertContextButtons.decimal.addEventListener('click', () =>
+  loadContextValueIntoDataTools('decimal'),
+);
+convertContextButtons.ascii.addEventListener('click', () =>
+  loadContextValueIntoDataTools('ascii'),
+);
 
 /**
  * Builds and shows the packet list tab, displaying all packets grouped by host
@@ -2458,6 +2582,47 @@ document
     }
   });
 
+document.addEventListener('contextmenu', (event) => {
+  const target = event.target;
+  const insideEligiblePanel = target?.closest(
+    '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
+  );
+  if (!insideEligiblePanel) {
+    hideConvertContextMenu();
+    return;
+  }
+
+  const conversionText = getConversionTextFromTarget(target);
+  if (!conversionText) {
+    hideConvertContextMenu();
+    return;
+  }
+
+  const formats = detectConvertibleFormats(conversionText);
+  if (!formats.length) {
+    hideConvertContextMenu();
+    return;
+  }
+
+  event.preventDefault();
+  showConvertContextMenu(
+    event.clientX,
+    event.clientY,
+    conversionText,
+    formats,
+  );
+});
+
+document.addEventListener('click', () => {
+  hideConvertContextMenu();
+});
+document.addEventListener('scroll', () => {
+  hideConvertContextMenu();
+});
+window.addEventListener('resize', () => {
+  hideConvertContextMenu();
+});
+
 filterInputEl.addEventListener('input', syncFilterHighlight);
 filterInputEl.addEventListener('scroll', syncFilterHighlightScroll);
 
@@ -2486,6 +2651,9 @@ document.addEventListener('click', (event) => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !filterHistoryMenuEl.hidden) {
     setHistoryMenuOpen(false);
+  }
+  if (event.key === 'Escape' && !convertContextMenuEl.hidden) {
+    hideConvertContextMenu();
   }
 });
 

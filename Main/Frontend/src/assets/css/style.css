@@ -546,6 +546,35 @@ strong {
   opacity: 1;
 }
 
+#convert-context-menu {
+  position: fixed;
+  z-index: 2500;
+  background-color: #0f1120;
+  border: 1px solid var(--color-3);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  padding: 4px;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#convert-context-menu button {
+  text-align: left;
+  background-color: transparent;
+  border: 1px solid transparent;
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+#convert-context-menu button:hover {
+  background-color: var(--color-2);
+  border-color: var(--color-3);
+}
+
 #list_box {
   display: none;
   border: 8px solid var(--color-3);
