@@ -306,7 +306,6 @@ strong {
   margin-left: var(--sidebar-width);
   display: flex;
   gap: 10px;
-  max-width: 400px;
 }
 
 .menu-btns {
@@ -407,7 +406,7 @@ strong {
 
 #tab-btns {
   opacity: 0.4;
-  width: 400px;
+  width: 600px;
 }
 
 #summary_box {
@@ -455,7 +454,7 @@ strong {
 }
 
 #list_search_bar {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 #list-search {
@@ -499,14 +498,30 @@ strong {
 }
 
 /* Column widths: #, Host, Src IP, Dst IP, Src Port, Dst Port, Transport, App Protocol */
-.packet-list-table thead th:nth-child(1) { width: 5%; }
-.packet-list-table thead th:nth-child(2) { width: 16%; }
-.packet-list-table thead th:nth-child(3) { width: 13%; }
-.packet-list-table thead th:nth-child(4) { width: 13%; }
-.packet-list-table thead th:nth-child(5) { width: 8%; }
-.packet-list-table thead th:nth-child(6) { width: 8%; }
-.packet-list-table thead th:nth-child(7) { width: 10%; }
-.packet-list-table thead th:nth-child(8) { width: 27%; }
+.packet-list-table thead th:nth-child(1) {
+  width: 5%;
+}
+.packet-list-table thead th:nth-child(2) {
+  width: 16%;
+}
+.packet-list-table thead th:nth-child(3) {
+  width: 13%;
+}
+.packet-list-table thead th:nth-child(4) {
+  width: 13%;
+}
+.packet-list-table thead th:nth-child(5) {
+  width: 8%;
+}
+.packet-list-table thead th:nth-child(6) {
+  width: 8%;
+}
+.packet-list-table thead th:nth-child(7) {
+  width: 10%;
+}
+.packet-list-table thead th:nth-child(8) {
+  width: 27%;
+}
 
 .packet-list-table tbody tr {
   cursor: pointer;
@@ -1140,7 +1155,7 @@ strong {
   right: 30px;
   top: 120px;
   width: 460px;
-  height: 520px;
+  height: 560px;
   z-index: 9000;
   background-color: var(--color-4);
   border: 2px solid var(--color-1);

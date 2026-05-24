@@ -83,7 +83,7 @@ function createWindow() {
   });
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow.webContents.setZoomFactor(0.75); // makes everything fit snuggly
+    mainWindow.webContents.setZoomFactor(0.8); // makes everything fit snuggly
   });
 }
 
