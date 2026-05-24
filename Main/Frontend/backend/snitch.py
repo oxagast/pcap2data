@@ -242,32 +242,36 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     except Exception:
         pageTitle = "N/A"
     # Try to fetch SSL certificate info (ignore errors; port may not support TLS)
-    try:
-        tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcpSocket.settimeout(timeout)
-        sslContext = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
-        if hasattr(ssl, "OP_NO_TLSv1"):
-            sslContext.options |= ssl.OP_NO_TLSv1
-        if hasattr(ssl, "OP_NO_TLSv1_1"):
-            sslContext.options |= ssl.OP_NO_TLSv1_1
-        sslContext.check_hostname = False
-        sslContext.verify_mode = ssl.CERT_NONE
-        serverHostname = None
-        if isinstance(hostname, str) and hostname:
-            try:
-                ipaddress.ip_address(hostname)
-            except ValueError:
-                # Only use SNI when the provided host is a domain, not a literal IP.
-                serverHostname = hostname
-        sslSocket = sslContext.wrap_socket(tcpSocket, server_hostname=serverHostname)
-        sslSocket.connect((ip, port))
-        if sslSocket:
-            sslCert = sslSocket.getpeercert()
-            cipherInfo = sslSocket.cipher()
-            sslVersion = sslSocket.version()
-        tcpSocket.close()
-    except Exception:
-        pass
+    sslContext = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    if hasattr(ssl, "OP_NO_TLSv1"):
+        sslContext.options |= ssl.OP_NO_TLSv1
+    if hasattr(ssl, "OP_NO_TLSv1_1"):
+        sslContext.options |= ssl.OP_NO_TLSv1_1
+    sslContext.check_hostname = False
+    sslContext.verify_mode = ssl.CERT_NONE
+
+    serverHostnamesToTry = [None]
+    if isinstance(hostname, str) and hostname:
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            # Only use SNI when the provided host is a domain, not a literal IP.
+            serverHostnamesToTry.insert(0, hostname)
+
+    for serverHostname in serverHostnamesToTry:
+        try:
+            with socket.create_connection((ip, port), timeout=timeout) as tcpSocket:
+                with sslContext.wrap_socket(
+                    tcpSocket, server_hostname=serverHostname
+                ) as sslSocket:
+                    peerCert = sslSocket.getpeercert()
+                    if peerCert:
+                        sslCert = peerCert
+                    cipherInfo = sslSocket.cipher() or "N/A"
+                    sslVersion = sslSocket.version() or "N/A"
+                    break
+        except Exception:
+            continue
     # Try to fetch banner from server
     try:
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
