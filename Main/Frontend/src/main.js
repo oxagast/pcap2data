@@ -72,8 +72,8 @@ function checkNewInstall() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    minWidth: 1220,
-    minHeight: 640,
+    minWidth: 1450,
+    minHeight: 750,
     frame: false,
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
@@ -83,7 +83,7 @@ function createWindow() {
   });
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow.webContents.setZoomFactor(0.6); // makes everything fit snuggly
+    mainWindow.webContents.setZoomFactor(0.75); // makes everything fit snuggly
   });
 }
 
