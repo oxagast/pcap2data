@@ -906,6 +906,7 @@ function showStats() {
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('list_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'block';
+  document.getElementById('rightside').style.display = 'none';
 
   const content = document.getElementById('stats_content');
   content.replaceChildren();
@@ -1046,6 +1047,7 @@ function showPacketList() {
   document.getElementById('packetPayloadPane').style.display = 'none';
   document.getElementById('summary_box').style.display = 'none';
   document.getElementById('stats_box').style.display = 'none';
+  document.getElementById('rightside').style.display = 'none';
   const listBox = document.getElementById('list_box');
   listBox.style.display = 'flex';
 
