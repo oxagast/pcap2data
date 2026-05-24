@@ -1086,7 +1086,7 @@ function parseDataToolsInput(format, rawInput) {
     if (!tokens.length) throw new Error('No decimal byte values were found.');
     const values = tokens.map((token) => {
       const parsed = Number(token);
-      if (!/^\d+$/.test(token) || parsed < 0 || parsed > 255) {
+      if (!/^\d+$/.test(token) || parsed > 255) {
         throw new Error(
           'Each decimal value must be a non-negative integer between 0 and 255.',
         );
@@ -1222,7 +1222,7 @@ function runDataToolsConversion() {
     const entropyLabel = getEntropyLabel(entropy);
     const decimalInteger =
       bytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
-        ? 'Input too large for decimal integer display'
+        ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
         : bytesToBigIntDecimal(bytes);
 
     document.getElementById('data-tools-hex-output').value = hexSpaced;
@@ -1326,10 +1326,14 @@ function getConversionTextFromTarget(target) {
   if (!textContent) return '';
 
   if (textContent.includes(':')) {
+    const prefix = textContent.split(':')[0]?.trim();
+    const looksLikeLabel = /^[A-Za-z][\w\s-]*$/.test(prefix);
     // Keep full suffix so values containing additional colons (IPv6/timestamps)
     // are preserved, e.g. "Label: fe80::1" or "Time: 12:34:56".
-    const suffix = textContent.split(':').slice(1).join(':').trim();
-    if (suffix) return suffix;
+    if (looksLikeLabel) {
+      const suffix = textContent.split(':').slice(1).join(':').trim();
+      if (suffix) return suffix;
+    }
   }
 
   return textContent;
