@@ -241,14 +241,16 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
     try:
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tcpSocket.settimeout(timeout)
-        sslContext = ssl.create_default_context()
-        if hasattr(sslContext, "minimum_version") and hasattr(ssl, "TLSVersion"):
-            sslContext.minimum_version = ssl.TLSVersion.TLSv1_2
-        else:
-            if hasattr(ssl, "OP_NO_TLSv1"):
-                sslContext.options |= ssl.OP_NO_TLSv1
-            if hasattr(ssl, "OP_NO_TLSv1_1"):
-                sslContext.options |= ssl.OP_NO_TLSv1_1
+        tlsProto = (
+            ssl.PROTOCOL_TLSv1_2
+            if hasattr(ssl, "PROTOCOL_TLSv1_2")
+            else ssl.PROTOCOL_TLS_CLIENT
+        )
+        sslContext = ssl.SSLContext(tlsProto)
+        if hasattr(ssl, "OP_NO_TLSv1"):
+            sslContext.options |= ssl.OP_NO_TLSv1
+        if hasattr(ssl, "OP_NO_TLSv1_1"):
+            sslContext.options |= ssl.OP_NO_TLSv1_1
         sslContext.check_hostname = False
         sslContext.verify_mode = ssl.CERT_NONE
         serverHostname = None
@@ -256,6 +258,7 @@ def getServBanner(ip, port, timeout, hostname, serviceName=None):
             try:
                 ipaddress.ip_address(hostname)
             except ValueError:
+                # Only use SNI when the provided host is a domain, not a literal IP.
                 serverHostname = hostname
         sslSocket = sslContext.wrap_socket(tcpSocket, server_hostname=serverHostname)
         sslSocket.connect((ip, port))
