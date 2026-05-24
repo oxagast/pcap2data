@@ -1264,6 +1264,9 @@ let activeContextConversionText = '';
 let activeContextTarget = null;
 const convertContextMenuEl = getCachedElement('convert-context-menu');
 const convertContextButtons = {
+  copy: getCachedElement('ctx-copy'),
+  paste: getCachedElement('ctx-paste'),
+  saveJson: getCachedElement('ctx-save-json'),
   hex: getCachedElement('convert-context-hex'),
   binary: getCachedElement('convert-context-binary'),
   base64: getCachedElement('convert-context-base64'),
@@ -1273,11 +1276,16 @@ const convertContextButtons = {
   copyAscii: getCachedElement('convert-context-copy-ascii'),
   copyRaw: getCachedElement('convert-context-copy-raw'),
 };
+const convertContextDividerEl = getCachedElement('convert-context-divider');
 
 function hideConvertContextMenu() {
   activeContextConversionText = '';
   activeContextTarget = null;
   convertContextMenuEl.hidden = true;
+}
+
+function getCurrentSelectionText() {
+  return window.getSelection()?.toString().trim() || '';
 }
 
 function looksLikeBase64(text) {
@@ -1349,10 +1357,20 @@ function showConvertContextMenu(
   y,
   sourceText,
   formats,
-  { isHexViewTarget = false, target = null } = {},
+  {
+    isHexViewTarget = false,
+    target = null,
+    showCopySelection = false,
+    showPaste = true,
+    showSaveJson = true,
+  } = {},
 ) {
   activeContextConversionText = sourceText;
   activeContextTarget = target;
+
+  convertContextButtons.copy.style.display = showCopySelection ? 'block' : 'none';
+  convertContextButtons.paste.style.display = showPaste ? 'block' : 'none';
+  convertContextButtons.saveJson.style.display = showSaveJson ? 'block' : 'none';
 
   ['hex', 'binary', 'base64', 'decimal', 'ascii'].forEach((format) => {
     convertContextButtons[format].style.display = formats.includes(format)
@@ -1364,6 +1382,14 @@ function showConvertContextMenu(
     ? 'block'
     : 'none';
   convertContextButtons.copyRaw.style.display = isHexViewTarget ? 'block' : 'none';
+  const hasClipboardActions = showCopySelection || showPaste || showSaveJson;
+  const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
+  convertContextDividerEl.style.display =
+    hasClipboardActions && hasDataTypeActions ? 'block' : 'none';
+  if (!hasClipboardActions && !hasDataTypeActions) {
+    hideConvertContextMenu();
+    return;
+  }
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -1463,6 +1489,65 @@ async function copyRawPayloadFromContext() {
   hideConvertContextMenu();
 }
 
+function copySelectedTextFromContextMenu() {
+  const selectedText = getCurrentSelectionText();
+  hideConvertContextMenu();
+  if (!selectedText) {
+    statusUpdate('Status: No text selected to copy');
+    return;
+  }
+  navigator.clipboard.writeText(selectedText).catch((error) => {
+    console.error('Copy failed:', error);
+    statusUpdate('Status: Copy failed – clipboard access denied');
+  });
+}
+
+function pasteTextFromContextMenu() {
+  hideConvertContextMenu();
+  navigator.clipboard
+    .readText()
+    .then((text) => {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
+        !active.readOnly &&
+        !active.disabled
+      ) {
+        const start = active.selectionStart;
+        const end = active.selectionEnd;
+        const current = active.value;
+        active.value = current.substring(0, start) + text + current.substring(end);
+        active.selectionStart = active.selectionEnd = start + text.length;
+        active.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    })
+    .catch((error) => {
+      console.error('Paste failed:', error);
+      statusUpdate('Status: Paste failed – clipboard access denied');
+    });
+}
+
+function saveJsonFromContextMenu() {
+  hideConvertContextMenu();
+  if (!jsonCapture) {
+    statusUpdate('Status: No data loaded to save');
+    return;
+  }
+  window.saveapi.saveJson(jsonCapture).then((result) => {
+    if (result.canceled) {
+      statusUpdate('Status: Save cancelled');
+    } else if (result.success) {
+      statusUpdate('Status: JSON saved successfully');
+    } else {
+      doError('Save failed');
+      logErrorEntry('save-json', result.error || 'unknown');
+      statusUpdate('Status: Save failed – ' + (result.error || 'unknown error'));
+      console.error('Save failed:', result.error);
+    }
+  });
+}
+
 // Show host data when data button is clicked
 document.getElementById('data-btn').addEventListener('click', function () {
   //highlightTab("data-navAction");
@@ -1516,6 +1601,9 @@ convertContextButtons.copyAscii.addEventListener('click', () => {
 convertContextButtons.copyRaw.addEventListener('click', () => {
   copyRawPayloadFromContext();
 });
+convertContextButtons.copy.addEventListener('click', copySelectedTextFromContextMenu);
+convertContextButtons.paste.addEventListener('click', pasteTextFromContextMenu);
+convertContextButtons.saveJson.addEventListener('click', saveJsonFromContextMenu);
 
 /**
  * Builds and shows the packet list tab, displaying all packets grouped by host
@@ -2601,98 +2689,6 @@ document.getElementById('save-json-btn').addEventListener('click', function () {
   });
 });
 
-// Right-click context menu
-(function () {
-  const ctxMenu = document.getElementById('context-menu');
-  const ctxCopy = document.getElementById('ctx-copy');
-  const ctxPaste = document.getElementById('ctx-paste');
-  const ctxSaveJson = document.getElementById('ctx-save-json');
-
-  function hideMenu() {
-    ctxMenu.style.display = 'none';
-  }
-
-  document.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    ctxMenu.style.display = 'block';
-    const menuRect = ctxMenu.getBoundingClientRect();
-    const x = Math.min(e.clientX, window.innerWidth - menuRect.width);
-    const y = Math.min(e.clientY, window.innerHeight - menuRect.height);
-    ctxMenu.style.left = x + 'px';
-    ctxMenu.style.top = y + 'px';
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!ctxMenu.contains(e.target)) {
-      hideMenu();
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hideMenu();
-  });
-
-  ctxCopy.addEventListener('click', () => {
-    hideMenu();
-    const selection = window.getSelection();
-    const selectedText = selection ? selection.toString() : '';
-    if (selectedText) {
-      navigator.clipboard.writeText(selectedText).catch((err) => {
-        console.error('Copy failed:', err);
-        statusUpdate('Status: Copy failed – clipboard access denied');
-      });
-    } else {
-      statusUpdate('Status: No text selected to copy');
-    }
-  });
-
-  ctxPaste.addEventListener('click', () => {
-    hideMenu();
-    navigator.clipboard.readText().then((text) => {
-      const active = document.activeElement;
-      if (
-        active &&
-        (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') &&
-        !active.readOnly &&
-        !active.disabled
-      ) {
-        const start = active.selectionStart;
-        const end = active.selectionEnd;
-        const current = active.value;
-        active.value =
-          current.substring(0, start) + text + current.substring(end);
-        active.selectionStart = active.selectionEnd = start + text.length;
-        active.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-    }).catch((err) => {
-      console.error('Paste failed:', err);
-      statusUpdate('Status: Paste failed – clipboard access denied');
-    });
-  });
-
-  ctxSaveJson.addEventListener('click', () => {
-    hideMenu();
-    if (!jsonCapture) {
-      statusUpdate('Status: No data loaded to save');
-      return;
-    }
-    window.saveapi.saveJson(jsonCapture).then((result) => {
-      if (result.canceled) {
-        statusUpdate('Status: Save cancelled');
-      } else if (result.success) {
-        statusUpdate('Status: JSON saved successfully');
-      } else {
-        doError('Save failed');
-        logErrorEntry('save-json', result.error || 'unknown');
-        statusUpdate(
-          'Status: Save failed – ' + (result.error || 'unknown error'),
-        );
-        console.error('Save failed:', result.error);
-      }
-    });
-  });
-})();
-
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
@@ -2788,25 +2784,18 @@ document
 
 document.addEventListener('contextmenu', (event) => {
   const target = event.target;
+  const selectedText = getCurrentSelectionText();
   const insideEligiblePanel = target?.closest(
     '#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata',
   );
   const isHexViewTarget = Boolean(target?.closest('#hexg'));
-  if (!insideEligiblePanel) {
-    hideConvertContextMenu();
-    return;
-  }
-
-  const conversionText = getConversionTextFromTarget(target);
-  if (!conversionText && !isHexViewTarget) {
-    hideConvertContextMenu();
-    return;
-  }
-
-  const formats = conversionText ? detectConvertibleFormats(conversionText) : [];
-  if (!formats.length && !isHexViewTarget) {
-    hideConvertContextMenu();
-    return;
+  let conversionText = '';
+  let formats = [];
+  if (insideEligiblePanel) {
+    conversionText = getConversionTextFromTarget(target);
+    if (conversionText || isHexViewTarget) {
+      formats = conversionText ? detectConvertibleFormats(conversionText) : [];
+    }
   }
 
   event.preventDefault();
@@ -2815,7 +2804,13 @@ document.addEventListener('contextmenu', (event) => {
     event.clientY,
     conversionText,
     formats,
-    { isHexViewTarget, target },
+    {
+      isHexViewTarget,
+      target,
+      showCopySelection: Boolean(selectedText),
+      showPaste: true,
+      showSaveJson: true,
+    },
   );
 });
 

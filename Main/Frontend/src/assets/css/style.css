@@ -548,15 +548,15 @@ strong {
 
 #convert-context-menu {
   position: fixed;
-  z-index: 2500;
-  background-color: #0f1120;
-  border: 1px solid var(--color-3);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
-  padding: 4px;
+  z-index: 99999;
+  background-color: var(--color-4);
+  border: 1px solid var(--color-1);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  padding: 4px 0;
   min-width: 190px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
 }
 
 #convert-context-menu[hidden] {
@@ -564,19 +564,21 @@ strong {
 }
 
 #convert-context-menu button {
+  display: block;
+  width: 100%;
   text-align: left;
-  background-color: transparent;
-  border: 1px solid transparent;
+  background: none;
+  border: none;
   color: var(--color-5);
   font-family: "Courier New", Courier, monospace;
-  font-size: 12px;
-  padding: 6px 8px;
+  font-size: 13px;
+  padding: 8px 16px;
   cursor: pointer;
 }
 
 #convert-context-menu button:hover {
-  background-color: var(--color-2);
-  border-color: var(--color-3);
+  background-color: var(--color-7);
+  color: white;
 }
 
 #list_box {
@@ -1399,38 +1401,6 @@ strong {
   padding: 8px;
   border: 1px solid var(--color-3);
   background-color: #000;
-  color: white;
-}
-
-/* Right-click context menu */
-#context-menu {
-  display: none;
-  position: fixed;
-  z-index: 99999;
-  background-color: var(--color-4);
-  border: 1px solid var(--color-1);
-  border-radius: 6px;
-  padding: 4px 0;
-  min-width: 150px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
-  font-family: "Courier New", Courier, monospace;
-}
-
-#context-menu button {
-  display: block;
-  width: 100%;
-  background: none;
-  border: none;
-  color: var(--color-5);
-  padding: 8px 16px;
-  text-align: left;
-  cursor: pointer;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 13px;
-}
-
-#context-menu button:hover {
-  background-color: var(--color-7);
   color: white;
 }
 
