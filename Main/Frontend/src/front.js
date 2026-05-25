@@ -1570,7 +1570,9 @@ function showConvertContextMenu(
   convertContextButtons.saveJson.style.display = showSaveJson
     ? "block"
     : "none";
-  const hasPacketToExport = Boolean(getCurrentPacketForExport());
+  const hasPacketToExport = Boolean(
+    getCurrentPacketForExport(packetsForHost, index),
+  );
   const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
@@ -1677,12 +1679,12 @@ function getCurrentRawPayloadHex() {
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
-function getCurrentPacketForExport() {
-  const activePacketIndex = Number.parseInt(index, 10);
+function getCurrentPacketForExport(packetSet, packetIndex) {
+  const activePacketIndex = Number.parseInt(packetIndex, 10);
   if (!Number.isInteger(activePacketIndex) || activePacketIndex < 0) {
     return null;
   }
-  return packetsForHost?.[activePacketIndex] || null;
+  return packetSet?.[activePacketIndex] || null;
 }
 
 async function copyTextToClipboard(text, label) {
@@ -1859,7 +1861,7 @@ function saveJsonFromContextMenu() {
 
 function exportCurrentPacketFromContextMenu() {
   hideConvertContextMenu();
-  const currentPacket = getCurrentPacketForExport();
+  const currentPacket = getCurrentPacketForExport(packetsForHost, index);
   if (!currentPacket) {
     statusUpdate("Status: No packet selected to export");
     return;

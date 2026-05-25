@@ -215,7 +215,7 @@ ipcMain.handle('save-json', async (_event, jsonData) => {
 });
 
 ipcMain.handle('save-packet', async (_event, packetData) => {
-  if (!packetData || typeof packetData !== 'object' || Array.isArray(packetData)) {
+  if (packetData === null || packetData === undefined) {
     return { success: false, error: 'No packet data to save' };
   }
   const packetJson = JSON.stringify(packetData, null, 2);
