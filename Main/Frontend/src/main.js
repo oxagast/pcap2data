@@ -6,6 +6,8 @@ const os = require('os');
 const util = require('util');
 const platform = os.platform();
 const testcaseTempDir = path.join(os.tmpdir(), 'testcases');
+const CONSOLE_INSPECT_DEPTH = 6;
+const CONSOLE_MAX_ARRAY_LENGTH = 50;
 let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
@@ -100,9 +102,9 @@ function formatConsoleArgs(args) {
         return arg;
       }
       return util.inspect(arg, {
-        depth: 6,
+        depth: CONSOLE_INSPECT_DEPTH,
         breakLength: Infinity,
-        maxArrayLength: 50,
+        maxArrayLength: CONSOLE_MAX_ARRAY_LENGTH,
       });
     })
     .join(' ');
@@ -151,7 +153,7 @@ function flushPendingActivityLogEntries() {
   pendingActivityLogEntries.forEach((entry) => {
     appendActivityLogToFile(entry);
   });
-  pendingActivityLogEntries.length = 0;
+  pendingActivityLogEntries.splice(0);
 }
 
 const originalConsoleLog = console.log.bind(console);

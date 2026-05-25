@@ -229,7 +229,7 @@ async function initializeActivityLog() {
         window.logapi.getEntries(),
       ]);
       if (Array.isArray(entries)) {
-        activityLogEntries.length = 0;
+        activityLogEntries.splice(0);
         entries.forEach((entry) => {
           activityLogEntries.push({ message: entry });
         });
