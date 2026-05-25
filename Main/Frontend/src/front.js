@@ -1722,16 +1722,16 @@ function loadContextValueIntoDataTools(format) {
 }
 
 function getActivePacketCursor() {
-  return typeof activePacketCursor === "number" ||
-    typeof activePacketCursor === "string"
+  return (typeof activePacketCursor === "number" ||
+    typeof activePacketCursor === "string")
     ? activePacketCursor
     : null;
 }
 
 function getCurrentRawPayloadHex() {
-  const activePacketCursor = getActivePacketCursor();
+  const packetCursor = getActivePacketCursor();
   const payloadHex =
-    packetsForHost?.[activePacketCursor]?.["Packet Info"]?.["Raw data"]?.[
+    packetsForHost?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
       "Payload"
     ]?.[
       "Hex Encoded"
