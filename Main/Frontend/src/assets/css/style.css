@@ -394,7 +394,11 @@ strong {
 }
 
 #tab-btns {
-  width: 600px;
+  width: 100%;
+}
+
+#prev-btn {
+  margin-left: auto;
 }
 
 #summary_box {
