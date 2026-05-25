@@ -161,14 +161,14 @@ function syncActivityLogPath(result) {
   }
 }
 
-function addActivityLogEntry(message, persist = true) {
+function addActivityLogEntry(message, writeToFile = true) {
   if (typeof message !== "string" || message.trim() === "") return;
   const normalizedMessage = message.trim();
   activityLogEntries.unshift({ message: normalizedMessage });
   renderActivityLogEntries(
     document.getElementById("activity-log-search")?.value || "",
   );
-  if (persist && window.logapi) {
+  if (writeToFile && window.logapi) {
     window.logapi.append(normalizedMessage).then(syncActivityLogPath);
   }
 }
@@ -223,24 +223,28 @@ async function initializeActivityLog() {
   const logBtn = document.getElementById("log-btn");
   const closeBtn = document.getElementById("close-log-btn");
   if (window.logapi) {
-    const [path, entries] = await Promise.all([
-      window.logapi.getPath(),
-      window.logapi.getEntries(),
-    ]);
-    if (Array.isArray(entries)) {
-      activityLogEntries.length = 0;
-      entries.forEach((entry) => {
-        activityLogEntries.push({ message: entry });
+    try {
+      const [path, entries] = await Promise.all([
+        window.logapi.getPath(),
+        window.logapi.getEntries(),
+      ]);
+      if (Array.isArray(entries)) {
+        activityLogEntries.length = 0;
+        entries.forEach((entry) => {
+          activityLogEntries.push({ message: entry });
+        });
+        renderActivityLogEntries();
+      }
+      if (path) {
+        activityLogPath = path;
+        pathEl.textContent = `Log file: ${activityLogPath}`;
+      }
+      window.logapi.onEntry((entry) => {
+        addActivityLogEntry(entry, false);
       });
-      renderActivityLogEntries();
+    } catch (error) {
+      logErrorEntry("activity-log-init", error);
     }
-    if (path) {
-      activityLogPath = path;
-      pathEl.textContent = `Log file: ${activityLogPath}`;
-    }
-    window.logapi.onEntry((entry) => {
-      addActivityLogEntry(entry, false);
-    });
   }
   logBtn.addEventListener("click", () => {
     if (panelEl.style.display === "block") {

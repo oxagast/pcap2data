@@ -49,8 +49,10 @@ contextBridge.exposeInMainWorld('logapi', {
   getPath: () => ipcRenderer.invoke('get-activity-log-path'),
   getEntries: () => ipcRenderer.invoke('get-activity-log-entries'),
   onEntry: (callback) => {
-    ipcRenderer.on('activity-log-entry', (_event, entry) => {
+    const listener = (_event, entry) => {
       callback(entry);
-    });
+    };
+    ipcRenderer.on('activity-log-entry', listener);
+    return () => ipcRenderer.removeListener('activity-log-entry', listener);
   },
 });

@@ -126,10 +126,15 @@ function broadcastActivityLogEntry(entry) {
   }
 }
 
+function normalizeActivityLogEntry(entry) {
+  if (typeof entry !== 'string' || entry.trim() === '') return null;
+  return entry.trim();
+}
+
 function appendActivityLogLine(entry, options = {}) {
   const { broadcast = true } = options;
-  if (typeof entry !== 'string' || entry.trim() === '') return;
-  const normalizedEntry = entry.trim();
+  const normalizedEntry = normalizeActivityLogEntry(entry);
+  if (!normalizedEntry) return;
   cacheActivityLogEntry(normalizedEntry);
   if (activityLogFilePath) {
     appendActivityLogToFile(normalizedEntry);
@@ -337,10 +342,11 @@ ipcMain.handle('save-payload', async (_event, payloadHex) => {
 });
 
 ipcMain.handle('append-activity-log', async (_event, entry) => {
-  if (typeof entry !== 'string' || entry.trim() === '') {
+  const normalizedEntry = normalizeActivityLogEntry(entry);
+  if (!normalizedEntry) {
     return { success: false, error: 'Invalid log entry' };
   }
-  const normalizedEntry = entry.trim();
+  // Renderer entries are already shown locally, so skip broadcasting them back.
   appendActivityLogLine(normalizedEntry, { broadcast: false });
   return { success: true, path: activityLogFilePath };
 });
