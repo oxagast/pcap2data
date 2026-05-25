@@ -1285,12 +1285,60 @@ const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
   "convert-context-save-divider",
 );
+const convertContextSubmenuEls = Array.from(
+  convertContextMenuEl.querySelectorAll(".ctx-submenu"),
+);
+
+function resetConvertContextSubmenuPositions() {
+  convertContextSubmenuEls.forEach((submenuEl) => {
+    submenuEl.classList.remove("ctx-submenu-flip-x", "ctx-submenu-flip-y");
+  });
+}
+
+function updateConvertContextSubmenuPositions() {
+  const viewportPadding = 8;
+  resetConvertContextSubmenuPositions();
+
+  convertContextSubmenuEls.forEach((submenuEl) => {
+    if (submenuEl.style.display === "none") return;
+    const submenuPanelEl = submenuEl.querySelector(".ctx-submenu-panel");
+    if (!submenuPanelEl) return;
+
+    const previousDisplay = submenuPanelEl.style.display;
+    const previousVisibility = submenuPanelEl.style.visibility;
+    const previousPointerEvents = submenuPanelEl.style.pointerEvents;
+    submenuPanelEl.style.display = "block";
+    submenuPanelEl.style.visibility = "hidden";
+    submenuPanelEl.style.pointerEvents = "none";
+
+    const submenuRect = submenuEl.getBoundingClientRect();
+    const panelRect = submenuPanelEl.getBoundingClientRect();
+    const wouldOverflowRight =
+      submenuRect.right + panelRect.width > window.innerWidth - viewportPadding;
+    const wouldOverflowBottom =
+      submenuRect.top + panelRect.height > window.innerHeight - viewportPadding;
+    const hasRoomAbove =
+      submenuRect.bottom - panelRect.height >= viewportPadding;
+
+    if (wouldOverflowRight) {
+      submenuEl.classList.add("ctx-submenu-flip-x");
+    }
+    if (wouldOverflowBottom && hasRoomAbove) {
+      submenuEl.classList.add("ctx-submenu-flip-y");
+    }
+
+    submenuPanelEl.style.display = previousDisplay;
+    submenuPanelEl.style.visibility = previousVisibility;
+    submenuPanelEl.style.pointerEvents = previousPointerEvents;
+  });
+}
 
 function hideConvertContextMenu() {
   activeContextConversionText = "";
   activeContextTarget = null;
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
+  resetConvertContextSubmenuPositions();
   convertContextMenuEl.hidden = true;
 }
 
@@ -1657,6 +1705,7 @@ function showConvertContextMenu(
   );
   convertContextMenuEl.style.left = `${boundedX}px`;
   convertContextMenuEl.style.top = `${boundedY}px`;
+  updateConvertContextSubmenuPositions();
 }
 
 function loadContextValueIntoDataTools(format) {

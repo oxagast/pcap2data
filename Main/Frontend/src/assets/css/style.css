@@ -601,6 +601,16 @@ strong {
   z-index: 100000;
 }
 
+#convert-context-menu .ctx-submenu.ctx-submenu-flip-x > .ctx-submenu-panel {
+  left: auto;
+  right: calc(100% - 2px);
+}
+
+#convert-context-menu .ctx-submenu.ctx-submenu-flip-y > .ctx-submenu-panel {
+  top: auto;
+  bottom: -4px;
+}
+
 #convert-context-menu .ctx-submenu:hover > .ctx-submenu-panel,
 #convert-context-menu .ctx-submenu:focus-within > .ctx-submenu-panel {
   display: block;
