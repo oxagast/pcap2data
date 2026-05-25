@@ -1344,6 +1344,11 @@ const convertContextButtons = {
   filterMac: getCachedElement("ctx-filter-mac"),
   filterProtocol: getCachedElement("ctx-filter-protocol"),
   filterMime: getCachedElement("ctx-filter-mime"),
+  filterOrIp: getCachedElement("ctx-filter-or-ip"),
+  filterOrPort: getCachedElement("ctx-filter-or-port"),
+  filterOrMac: getCachedElement("ctx-filter-or-mac"),
+  filterOrProtocol: getCachedElement("ctx-filter-or-protocol"),
+  filterOrMime: getCachedElement("ctx-filter-or-mime"),
   filterClearIp: getCachedElement("ctx-filter-clear-ip"),
   filterClearPort: getCachedElement("ctx-filter-clear-port"),
   filterClearMac: getCachedElement("ctx-filter-clear-mac"),
@@ -1353,6 +1358,8 @@ const convertContextButtons = {
 const convertContextSubmenus = {
   convert: getCachedElement("ctx-convert-submenu"),
   filter: getCachedElement("ctx-filter-submenu"),
+  filterAnd: getCachedElement("ctx-filter-and-submenu"),
+  filterOr: getCachedElement("ctx-filter-or-submenu"),
   filterClear: getCachedElement("ctx-filter-clear-submenu"),
   export: getCachedElement("ctx-export-submenu"),
 };
@@ -1733,6 +1740,21 @@ function showConvertContextMenu(
   convertContextButtons.filterMime.style.display = filterQueries.mime
     ? "block"
     : "none";
+  convertContextButtons.filterOrIp.style.display = filterQueries.ip
+    ? "block"
+    : "none";
+  convertContextButtons.filterOrPort.style.display = filterQueries.port
+    ? "block"
+    : "none";
+  convertContextButtons.filterOrMac.style.display = filterQueries.mac
+    ? "block"
+    : "none";
+  convertContextButtons.filterOrProtocol.style.display = filterQueries.protocol
+    ? "block"
+    : "none";
+  convertContextButtons.filterOrMime.style.display = filterQueries.mime
+    ? "block"
+    : "none";
   convertContextButtons.filterClearIp.style.display = filterQueries.ip
     ? "block"
     : "none";
@@ -1757,6 +1779,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextSubmenus.filter.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filterAnd.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filterOr.style.display = hasFilterActions
     ? "block"
     : "none";
   convertContextSubmenus.filterClear.style.display = hasFilterActions
@@ -2077,11 +2105,15 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
-function appendFilterQueryFromContextMenu(type) {
+function appendFilterQueryFromContextMenu(type, joinOperator = "&&") {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
   if (!query) {
     statusUpdate("Status: No matching filter value found for this selection");
+    return;
+  }
+  if (joinOperator !== "&&" && joinOperator !== "||") {
+    statusUpdate("Status: Could not add filter query — please try again");
     return;
   }
   const existingQuery = filterInputEl.value.trim();
@@ -2092,7 +2124,7 @@ function appendFilterQueryFromContextMenu(type) {
   } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
     filterInputEl.value = `${existingQuery} ${wrappedQuery}`;
   } else {
-    filterInputEl.value = `${existingQuery} && ${wrappedQuery}`;
+    filterInputEl.value = `${existingQuery} ${joinOperator} ${wrappedQuery}`;
   }
   syncFilterHighlight();
   filterInputEl.focus();
@@ -2187,19 +2219,34 @@ convertContextButtons.copyRaw.addEventListener("click", () => {
   copyRawPayloadFromContext();
 });
 convertContextButtons.filterIp.addEventListener("click", () => {
-  appendFilterQueryFromContextMenu("ip");
+  appendFilterQueryFromContextMenu("ip", "&&");
 });
 convertContextButtons.filterPort.addEventListener("click", () => {
-  appendFilterQueryFromContextMenu("port");
+  appendFilterQueryFromContextMenu("port", "&&");
 });
 convertContextButtons.filterMac.addEventListener("click", () => {
-  appendFilterQueryFromContextMenu("mac");
+  appendFilterQueryFromContextMenu("mac", "&&");
 });
 convertContextButtons.filterProtocol.addEventListener("click", () => {
-  appendFilterQueryFromContextMenu("protocol");
+  appendFilterQueryFromContextMenu("protocol", "&&");
 });
 convertContextButtons.filterMime.addEventListener("click", () => {
-  appendFilterQueryFromContextMenu("mime");
+  appendFilterQueryFromContextMenu("mime", "&&");
+});
+convertContextButtons.filterOrIp.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("ip", "||");
+});
+convertContextButtons.filterOrPort.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("port", "||");
+});
+convertContextButtons.filterOrMac.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mac", "||");
+});
+convertContextButtons.filterOrProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("protocol", "||");
+});
+convertContextButtons.filterOrMime.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mime", "||");
 });
 convertContextButtons.filterClearIp.addEventListener("click", () => {
   clearAndFilterQueryFromContextMenu("ip");

@@ -349,15 +349,38 @@
           Add to filter...
         </button>
         <div class="ctx-submenu-panel">
-          <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
-          <button id="ctx-filter-port" type="button">Add Port to Filter</button>
-          <button id="ctx-filter-mac" type="button">Add MAC to Filter</button>
-          <button id="ctx-filter-protocol" type="button">
-            Add Protocol to Filter
-          </button>
-          <button id="ctx-filter-mime" type="button">
-            Add MIME Type to Filter
-          </button>
+          <div id="ctx-filter-and-submenu" class="ctx-submenu">
+            <button id="ctx-filter-and-branch" class="ctx-branch" type="button">
+              Add with &&...
+            </button>
+            <div class="ctx-submenu-panel">
+              <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
+              <button id="ctx-filter-port" type="button">Add Port to Filter</button>
+              <button id="ctx-filter-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-protocol" type="button">
+                Add Protocol to Filter
+              </button>
+              <button id="ctx-filter-mime" type="button">
+                Add MIME Type to Filter
+              </button>
+            </div>
+          </div>
+          <div id="ctx-filter-or-submenu" class="ctx-submenu">
+            <button id="ctx-filter-or-branch" class="ctx-branch" type="button">
+              Add with ||...
+            </button>
+            <div class="ctx-submenu-panel">
+              <button id="ctx-filter-or-ip" type="button">Add IP to Filter</button>
+              <button id="ctx-filter-or-port" type="button">Add Port to Filter</button>
+              <button id="ctx-filter-or-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-or-protocol" type="button">
+                Add Protocol to Filter
+              </button>
+              <button id="ctx-filter-or-mime" type="button">
+                Add MIME Type to Filter
+              </button>
+            </div>
+          </div>
           <hr class="ctx-divider" />
           <div id="ctx-filter-clear-submenu" class="ctx-submenu">
             <button id="ctx-filter-clear-branch" class="ctx-branch" type="button">
