@@ -178,6 +178,11 @@ function writeLogEntry(message) {
   addActivityLogEntry(stampedMessage);
 }
 
+function writeConsoleLogEntry(message) {
+  const stampedMessage = `[${new Date().toISOString()}] [Console][UI] ${message}`;
+  addActivityLogEntry(stampedMessage);
+}
+
 function writeBackendErrorLogEntry(message) {
   const stampedMessage = `[${new Date().toISOString()}] [Console][Backend] ${message}`;
   addActivityLogEntry(stampedMessage);
@@ -217,7 +222,7 @@ console.log = (...args) => {
   originalConsoleLog(...args);
   const message = formatConsoleArgs(args);
   if (message) {
-    writeLogEntry(`[Console] ${message}`);
+    writeConsoleLogEntry(message);
   }
 };
 
