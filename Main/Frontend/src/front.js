@@ -1619,7 +1619,7 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasPacketToExport = Boolean(
-    getCurrentPacketForExport(packetsForHost, index),
+    getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
   );
   const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
   convertContextButtons.exportPacket.style.display = hasPacketToExport
@@ -1720,9 +1720,16 @@ function loadContextValueIntoDataTools(format) {
   writeLogEntry(`Context conversion loaded format=${format}`);
 }
 
+function getActivePacketCursor() {
+  return typeof index === "number" || typeof index === "string" ? index : null;
+}
+
 function getCurrentRawPayloadHex() {
+  const activePacketCursor = getActivePacketCursor();
   const payloadHex =
-    packetsForHost?.[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+    packetsForHost?.[activePacketCursor]?.["Packet Info"]?.["Raw data"]?.[
+      "Payload"
+    ]?.[
       "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
@@ -1913,7 +1920,10 @@ function saveJsonFromContextMenu() {
 
 function exportCurrentPacketFromContextMenu() {
   hideConvertContextMenu();
-  const currentPacket = getCurrentPacketForExport(packetsForHost, index);
+  const currentPacket = getCurrentPacketForExport(
+    packetsForHost,
+    getActivePacketCursor(),
+  );
   if (!currentPacket) {
     statusUpdate("Status: No packet selected to export");
     return;
