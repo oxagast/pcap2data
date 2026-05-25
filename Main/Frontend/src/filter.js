@@ -37,6 +37,27 @@ const intersectBy = (a, b, keyFn) => {
   return a.filter((item) => setB.has(keyFn(item)));
 };
 
+const subtractBy = (source, excluded, keyFn) => {
+  const excludedSet = new Set(excluded.map(keyFn));
+  return source.filter((item) => !excludedSet.has(keyFn(item)));
+};
+
+function getAllPackets(data) {
+  const parsedHosts = typeof data === 'string' ? JSON.parse(data) : data;
+  const allPackets = [];
+  if (!parsedHosts?.Host) return allPackets;
+
+  for (const host in parsedHosts.Host) {
+    const hostPackets = parsedHosts.Host[host];
+    if (!Array.isArray(hostPackets)) continue;
+    for (const packetItem of hostPackets) {
+      allPackets.push({ Host: { [host]: [packetItem] } });
+    }
+  }
+
+  return allPackets;
+}
+
 function getDataType(data) {
   if (REGEX_IPV4.test(data)) return 'IP';
   if (REGEX_HEX.test(data)) return 'HEX';
@@ -224,11 +245,17 @@ function tokenizeQuery(query) {
       i += 2;
       continue;
     }
+    if (query[i] === '!' && query[i + 1] !== '=') {
+      tokenList.push({ type: 'NOT' });
+      i++;
+      continue;
+    }
     let exprEnd = i;
     while (
       exprEnd < query.length &&
       !query.startsWith('||', exprEnd) &&
       !query.startsWith('&&', exprEnd) &&
+      !(query[exprEnd] === '!' && query[exprEnd + 1] !== '=') &&
       query[exprEnd] !== '(' &&
       query[exprEnd] !== ')'
     ) {
@@ -243,6 +270,7 @@ function tokenizeQuery(query) {
 
 function runQuery(data, query) {
   const tokenList = tokenizeQuery(query);
+  const allPackets = getAllPackets(data);
   let pos = 0;
 
   function peek() {
@@ -281,6 +309,14 @@ function runQuery(data, query) {
 
   function parseTerm() {
     const currentToken = peek();
+    if (currentToken && currentToken.type === 'NOT') {
+      consume('NOT');
+      if (!peek()) {
+        throw new Error('Expected expression or group after !');
+      }
+      const negatedResult = parseTerm();
+      return subtractBy(allPackets, negatedResult, getPacketKey);
+    }
     if (currentToken && currentToken.type === 'LPAREN') {
       consume('LPAREN');
       const result = parseOr();
