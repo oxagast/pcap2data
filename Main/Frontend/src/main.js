@@ -3,13 +3,18 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const os = require('os');
+const util = require('util');
 const platform = os.platform();
 const testcaseTempDir = path.join(os.tmpdir(), 'testcases');
+const CONSOLE_INSPECT_DEPTH = 6;
+const CONSOLE_MAX_ARRAY_LENGTH = 50;
 let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
 let versionFilePath;
 let activityLogFilePath;
+const activityLogEntries = [];
+const pendingActivityLogEntries = [];
 let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
 if (require('electron-squirrel-startup')) {
@@ -87,8 +92,25 @@ function createWindow() {
   });
 }
 
-function appendActivityLogLine(entry) {
-  if (!activityLogFilePath) return;
+function formatConsoleArgs(args) {
+  return args
+    .map((arg) => {
+      if (arg instanceof Error) {
+        return arg.stack || arg.message;
+      }
+      if (typeof arg === 'string') {
+        return arg;
+      }
+      return util.inspect(arg, {
+        depth: CONSOLE_INSPECT_DEPTH,
+        breakLength: Infinity,
+        maxArrayLength: CONSOLE_MAX_ARRAY_LENGTH,
+      });
+    })
+    .join(' ');
+}
+
+function appendActivityLogToFile(entry) {
   try {
     fs.appendFileSync(activityLogFilePath, entry + os.EOL, 'utf8');
   } catch (error) {
@@ -96,9 +118,58 @@ function appendActivityLogLine(entry) {
   }
 }
 
+function cacheActivityLogEntry(entry) {
+  activityLogEntries.unshift(entry);
+}
+
+function broadcastActivityLogEntry(entry) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('activity-log-entry', entry);
+  }
+}
+
+function normalizeActivityLogEntry(entry) {
+  if (typeof entry !== 'string' || entry.trim() === '') return null;
+  return entry.trim();
+}
+
+function appendActivityLogLine(entry, options = {}) {
+  const { broadcast = true } = options;
+  const normalizedEntry = normalizeActivityLogEntry(entry);
+  if (!normalizedEntry) return;
+  cacheActivityLogEntry(normalizedEntry);
+  if (activityLogFilePath) {
+    appendActivityLogToFile(normalizedEntry);
+  } else {
+    pendingActivityLogEntries.push(normalizedEntry);
+  }
+  if (broadcast) {
+    broadcastActivityLogEntry(normalizedEntry);
+  }
+}
+
+function flushPendingActivityLogEntries() {
+  if (!activityLogFilePath || pendingActivityLogEntries.length === 0) return;
+  pendingActivityLogEntries.forEach((entry) => {
+    appendActivityLogToFile(entry);
+  });
+  pendingActivityLogEntries.splice(0);
+}
+
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+  originalConsoleLog(...args);
+  const message = formatConsoleArgs(args);
+  if (!message) return;
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [Console][Main] ${message}`,
+  );
+};
+
 app.whenReady().then(() => {
   versionFilePath = path.join(app.getPath('userData'), 'installed_version.txt');
   activityLogFilePath = path.join(app.getPath('userData'), 'activity-log.txt');
+  flushPendingActivityLogEntries();
   appendActivityLogLine(
     `[${new Date().toISOString()}] Session started for PacketSnitch v${app.getVersion()}`,
   );
@@ -273,16 +344,21 @@ ipcMain.handle('save-payload', async (_event, payloadHex) => {
 });
 
 ipcMain.handle('append-activity-log', async (_event, entry) => {
-  if (typeof entry !== 'string' || entry.trim() === '') {
+  const normalizedEntry = normalizeActivityLogEntry(entry);
+  if (!normalizedEntry) {
     return { success: false, error: 'Invalid log entry' };
   }
-  const normalizedEntry = entry.trim();
-  appendActivityLogLine(normalizedEntry);
+  // Renderer entries are already shown locally, so skip broadcasting them back.
+  appendActivityLogLine(normalizedEntry, { broadcast: false });
   return { success: true, path: activityLogFilePath };
 });
 
 ipcMain.handle('get-activity-log-path', async () => {
   return activityLogFilePath;
+});
+
+ipcMain.handle('get-activity-log-entries', async () => {
+  return [...activityLogEntries];
 });
 
 app.on('before-quit', () => {
