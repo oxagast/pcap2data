@@ -166,6 +166,15 @@ console.log = (...args) => {
   );
 };
 
+global.logBackend = (...args) => {
+  const message = formatConsoleArgs(args);
+  if (!message) return;
+  originalConsoleLog(message);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [Console][Backend] ${message}`,
+  );
+};
+
 app.whenReady().then(() => {
   versionFilePath = path.join(app.getPath('userData'), 'installed_version.txt');
   activityLogFilePath = path.join(app.getPath('userData'), 'activity-log.txt');

@@ -7,7 +7,7 @@ const fs = require('fs');
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, 'testcases');
 ipcMain.handle('run-backend-command', async (event, filename, useLLM) => {
-  console.log(`Received pcap: ${filename}`);
+  global.logBackend(`Received pcap: ${filename}`);
   const isDev = !require('electron').app.isPackaged;
   const basePath = isDev
     ? path.join(__dirname, '../..')
@@ -30,7 +30,7 @@ ipcMain.handle('run-backend-command', async (event, filename, useLLM) => {
     fs.rmSync(testcaseOutputDir, { recursive: true, force: true });
   }
 
-  console.log('Command to run:', backendCommand);
+  global.logBackend('Command to run:', backendCommand);
 
   function sendError(message) {
     const mainWin = BrowserWindow.getAllWindows()[0]; // or track your main window
@@ -42,8 +42,8 @@ ipcMain.handle('run-backend-command', async (event, filename, useLLM) => {
   return new Promise((resolve) => {
     exec(backendCommand, (error, stdout, stderr) => {
       resolve(stdout);
-      console.log('Backend output:', stdout);
-      console.log('Backend error output:', stderr);
+      global.logBackend('Backend output:', stdout);
+      global.logBackend('Backend error output:', stderr);
       if (stdout.includes('Ollama')) {
         sendError('Backend LLM generation error!');
       }
@@ -65,6 +65,6 @@ ipcMain.handle('run-backend-command', async (event, filename, useLLM) => {
       }
     });
 
-    console.log('Backend started, waiting for completion...');
+    global.logBackend('Backend started, waiting for completion...');
   });
 });
