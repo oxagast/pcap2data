@@ -1260,6 +1260,8 @@ const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
   paste: getCachedElement("ctx-paste"),
   saveJson: getCachedElement("ctx-save-json"),
+  exportPacket: getCachedElement("ctx-export-packet"),
+  exportPayload: getCachedElement("ctx-export-payload"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -1273,6 +1275,11 @@ const convertContextButtons = {
   filterMac: getCachedElement("ctx-filter-mac"),
   filterProtocol: getCachedElement("ctx-filter-protocol"),
   filterMime: getCachedElement("ctx-filter-mime"),
+};
+const convertContextSubmenus = {
+  convert: getCachedElement("ctx-convert-submenu"),
+  filter: getCachedElement("ctx-filter-submenu"),
+  export: getCachedElement("ctx-export-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
@@ -1563,6 +1570,14 @@ function showConvertContextMenu(
   convertContextButtons.saveJson.style.display = showSaveJson
     ? "block"
     : "none";
+  const hasPacketToExport = Boolean(getCurrentPacketForExport());
+  const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
+  convertContextButtons.exportPacket.style.display = hasPacketToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
 
   ["hex", "binary", "base64", "decimal", "ascii"].forEach((format) => {
     convertContextButtons[format].style.display = formats.includes(format)
@@ -1594,20 +1609,39 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasClipboardActions = showCopySelection || showPaste;
-  const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
-  const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
+  const hasGeneralActions = showCopySelection || showPaste;
+  const hasDataTypeActions = formats.length > 0;
+  const hasHexCopyActions = isHexViewTarget;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
-  if (!hasGeneralActions && !hasDataTypeActions && !hasFilterActions) {
+  const hasExportActions =
+    showSaveJson || hasPacketToExport || hasPayloadToExport;
+  convertContextSubmenus.convert.style.display = hasDataTypeActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filter.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.export.style.display = hasExportActions
+    ? "block"
+    : "none";
+  if (
+    !hasGeneralActions &&
+    !hasDataTypeActions &&
+    !hasHexCopyActions &&
+    !hasFilterActions &&
+    !hasExportActions
+  ) {
     hideConvertContextMenu();
     return;
   }
   convertContextDividerEl.style.display =
-    hasClipboardActions && (hasDataTypeActions || hasFilterActions)
+    hasClipboardActions &&
+    (hasDataTypeActions || hasHexCopyActions || hasFilterActions || hasExportActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
-    showSaveJson &&
-    (hasClipboardActions || hasDataTypeActions || hasFilterActions)
+    hasExportActions &&
+    (hasClipboardActions || hasDataTypeActions || hasHexCopyActions || hasFilterActions)
       ? "block"
       : "none";
 
@@ -1641,6 +1675,10 @@ function getCurrentRawPayloadHex() {
       "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
+}
+
+function getCurrentPacketForExport() {
+  return packetsForHost?.[index] || null;
 }
 
 async function copyTextToClipboard(text, label) {
@@ -1815,6 +1853,62 @@ function saveJsonFromContextMenu() {
   });
 }
 
+function exportCurrentPacketFromContextMenu() {
+  hideConvertContextMenu();
+  const currentPacket = getCurrentPacketForExport();
+  if (!currentPacket) {
+    statusUpdate("Status: No packet selected to export");
+    return;
+  }
+  window.saveapi.savePacket(currentPacket).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Packet exported successfully");
+      writeLogEntry("Context menu packet export completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Packet export failed");
+      logErrorEntry("export-packet", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Packet export failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Packet export failed:", errorMessage);
+    }
+  });
+}
+
+function exportCurrentPayloadFromContextMenu() {
+  hideConvertContextMenu();
+  const payloadHex = getCurrentRawPayloadHex();
+  if (!payloadHex) {
+    statusUpdate("Status: No payload available to export");
+    return;
+  }
+  window.saveapi.savePayload(payloadHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Payload exported successfully");
+      writeLogEntry("Context menu payload export completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Payload export failed");
+      logErrorEntry("export-payload", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Payload export failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Payload export failed:", errorMessage);
+    }
+  });
+}
+
 function appendFilterQueryFromContextMenu(type) {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
@@ -1920,6 +2014,14 @@ convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
 convertContextButtons.saveJson.addEventListener(
   "click",
   saveJsonFromContextMenu,
+);
+convertContextButtons.exportPacket.addEventListener(
+  "click",
+  exportCurrentPacketFromContextMenu,
+);
+convertContextButtons.exportPayload.addEventListener(
+  "click",
+  exportCurrentPayloadFromContextMenu,
 );
 
 /**

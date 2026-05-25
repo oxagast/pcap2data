@@ -214,6 +214,61 @@ ipcMain.handle('save-json', async (_event, jsonData) => {
   }
 });
 
+ipcMain.handle('save-packet', async (_event, packetData) => {
+  if (!packetData || typeof packetData !== 'object' || Array.isArray(packetData)) {
+    return { success: false, error: 'No packet data to save' };
+  }
+  const packetJson = JSON.stringify(packetData, null, 2);
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Export Packet',
+    defaultPath: path.join(app.getPath('documents'), 'packet.json'),
+    filters: [{ name: 'JSON Files', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    await fs.promises.writeFile(filePath, packetJson, 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Packet export error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('save-payload', async (_event, payloadHex) => {
+  if (typeof payloadHex !== 'string') {
+    return { success: false, error: 'No payload data to save' };
+  }
+  const normalizedHex = payloadHex.replace(/\s+/g, '').trim();
+  if (
+    normalizedHex.length === 0 ||
+    normalizedHex.length % 2 !== 0 ||
+    !/^[\da-fA-F]+$/.test(normalizedHex)
+  ) {
+    return { success: false, error: 'Invalid payload data' };
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Export Packet Payload',
+    defaultPath: path.join(app.getPath('documents'), 'packet-payload.bin'),
+    filters: [
+      { name: 'Binary Files', extensions: ['bin'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    const payloadBuffer = Buffer.from(normalizedHex, 'hex');
+    await fs.promises.writeFile(filePath, payloadBuffer);
+    return { success: true };
+  } catch (err) {
+    console.error('Payload export error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('append-activity-log', async (_event, entry) => {
   if (typeof entry !== 'string' || entry.trim() === '') {
     return { success: false, error: 'Invalid log entry' };
