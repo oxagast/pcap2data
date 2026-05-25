@@ -397,6 +397,16 @@ strong {
   width: 600px;
 }
 
+#rotate-btns {
+  position: absolute;
+  margin-left: 950px;
+  margin-top: 58px;
+  width: 120px;
+  justify-content: right;
+  align-items: right;
+  z-index: 5;
+}
+
 #summary_box {
   display: block;
   border: 8px solid var(--color-3);
@@ -832,7 +842,6 @@ strong {
 }
 
 #moredata {
-  placement: absolute;
   display: block;
   margin-left: 15px;
   margin-top: 10px;
@@ -953,7 +962,7 @@ strong {
   border: 8px solid var(--color-3);
   margin-top: 0;
   flex: 0 0 40%;
-  z-index: 4;
+  /* z-index: 4; */
   position: relative;
 }
 #protoInfo {
