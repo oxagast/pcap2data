@@ -1613,7 +1613,7 @@ function showConvertContextMenu(
   const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste;
   const hasDataTypeActions = formats.length > 0;
-  const hasHexCopyActions = isHexViewTarget;
+  const isHexCopyContext = isHexViewTarget;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport;
@@ -1629,7 +1629,7 @@ function showConvertContextMenu(
   if (
     !hasGeneralActions &&
     !hasDataTypeActions &&
-    !hasHexCopyActions &&
+    !isHexCopyContext &&
     !hasFilterActions &&
     !hasExportActions
   ) {
@@ -1638,12 +1638,12 @@ function showConvertContextMenu(
   }
   convertContextDividerEl.style.display =
     hasClipboardActions &&
-    (hasDataTypeActions || hasHexCopyActions || hasFilterActions || hasExportActions)
+    (hasDataTypeActions || isHexCopyContext || hasFilterActions || hasExportActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
     hasExportActions &&
-    (hasClipboardActions || hasDataTypeActions || hasHexCopyActions || hasFilterActions)
+    (hasClipboardActions || hasDataTypeActions || isHexCopyContext || hasFilterActions)
       ? "block"
       : "none";
 
@@ -1681,7 +1681,7 @@ function getCurrentRawPayloadHex() {
 
 function getCurrentPacketForExport(packetSet, packetIndex) {
   const activePacketIndex = Number.parseInt(packetIndex, 10);
-  if (!Number.isInteger(activePacketIndex) || activePacketIndex < 0) {
+  if (Number.isNaN(activePacketIndex) || activePacketIndex < 0) {
     return null;
   }
   return packetSet?.[activePacketIndex] || null;
