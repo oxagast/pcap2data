@@ -69,8 +69,6 @@
           value="Host Data"
           class="custom-btns"
         />
-        <input type="button" id="prev-btn" value="Prev" class="custom-btns" />
-        <input type="button" id="next-btn" value="Next" class="custom-btns" />
         <input
           type="button"
           id="data-tools-btn"
@@ -81,6 +79,10 @@
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
         <input type="button" id="list-btn" value="List" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
+        <div id="rotate-btns" class="menu_bar">
+          <input type="button" id="prev-btn" value="Prev" class="custom-btns" />
+          <input type="button" id="next-btn" value="Next" class="custom-btns" />
+        </div>
       </div>
       <div class="content_area">
         <div class="sidebar">
@@ -195,7 +197,10 @@
                 <div class="data-tools-output-label">Decimal bytes</div>
                 <textarea id="data-tools-decimal-output" readonly></textarea>
                 <div class="data-tools-output-label">Decimal integer</div>
-                <textarea id="data-tools-decimal-integer-output" readonly></textarea>
+                <textarea
+                  id="data-tools-decimal-integer-output"
+                  readonly
+                ></textarea>
                 <div class="data-tools-output-label">ASCII</div>
                 <textarea id="data-tools-ascii-output" readonly></textarea>
                 <div class="data-tools-output-label">Base64</div>
@@ -320,8 +325,12 @@
         </button>
         <div class="ctx-submenu-panel">
           <button id="convert-context-hex" type="button">Load as Hex</button>
-          <button id="convert-context-binary" type="button">Load as Binary</button>
-          <button id="convert-context-base64" type="button">Load as Base64</button>
+          <button id="convert-context-binary" type="button">
+            Load as Binary
+          </button>
+          <button id="convert-context-base64" type="button">
+            Load as Base64
+          </button>
           <button id="convert-context-decimal" type="button">
             Load as Decimal bytes
           </button>
@@ -332,7 +341,9 @@
       </div>
       <button id="convert-context-copy-hex" type="button">Copy Hex</button>
       <button id="convert-context-copy-ascii" type="button">Copy ASCII</button>
-      <button id="convert-context-copy-raw" type="button">Copy Raw payload</button>
+      <button id="convert-context-copy-raw" type="button">
+        Copy Raw payload
+      </button>
       <div id="ctx-filter-submenu" class="ctx-submenu">
         <button id="ctx-filter-branch" class="ctx-branch" type="button">
           Add to filter...
@@ -344,7 +355,9 @@
           <button id="ctx-filter-protocol" type="button">
             Add Protocol to Filter
           </button>
-          <button id="ctx-filter-mime" type="button">Add MIME Type to Filter</button>
+          <button id="ctx-filter-mime" type="button">
+            Add MIME Type to Filter
+          </button>
         </div>
       </div>
       <hr id="convert-context-save-divider" class="ctx-divider" />
@@ -355,7 +368,9 @@
         <div class="ctx-submenu-panel">
           <button id="ctx-save-json" role="menuitem">Save JSON</button>
           <button id="ctx-export-packet" role="menuitem">Export Packet</button>
-          <button id="ctx-export-payload" role="menuitem">Export Payload</button>
+          <button id="ctx-export-payload" role="menuitem">
+            Export Payload
+          </button>
         </div>
       </div>
     </div>
