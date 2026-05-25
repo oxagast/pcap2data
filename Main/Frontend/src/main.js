@@ -240,7 +240,7 @@ ipcMain.handle('save-payload', async (_event, payloadHex) => {
   if (typeof payloadHex !== 'string') {
     return { success: false, error: 'No payload data to save' };
   }
-  const normalizedHex = payloadHex.replace(/\s+/g, '').trim();
+  const normalizedHex = payloadHex.replace(/\s+/g, '');
   if (
     normalizedHex.length === 0 ||
     normalizedHex.length % 2 !== 0 ||

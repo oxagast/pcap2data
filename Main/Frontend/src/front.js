@@ -1678,7 +1678,11 @@ function getCurrentRawPayloadHex() {
 }
 
 function getCurrentPacketForExport() {
-  return packetsForHost?.[index] || null;
+  const activePacketIndex = Number.parseInt(index, 10);
+  if (!Number.isInteger(activePacketIndex) || activePacketIndex < 0) {
+    return null;
+  }
+  return packetsForHost?.[activePacketIndex] || null;
 }
 
 async function copyTextToClipboard(text, label) {
