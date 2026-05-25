@@ -174,7 +174,7 @@ function addActivityLogEntry(message, writeToFile = true) {
 }
 
 function writeLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] ${message}`;
+  const stampedMessage = `[${new Date().toISOString()}] [GUI][UI] ${message}`;
   addActivityLogEntry(stampedMessage);
 }
 
@@ -212,7 +212,7 @@ console.log = (...args) => {
   originalConsoleLog(...args);
   const message = formatConsoleArgs(args);
   if (message) {
-    writeLogEntry(`[Console][UI] ${message}`);
+    writeLogEntry(`[Console] ${message}`);
   }
 };
 
