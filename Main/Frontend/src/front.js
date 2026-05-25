@@ -53,6 +53,7 @@ let hostsList = ["0.0.0.0"]; // List of hosts found in capture
 const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
 let packetsForHost = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
+let activePacketCursor = 0;
 let bookmarkList = []; // List of bookmarks (host:packet index)
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
@@ -1260,6 +1261,8 @@ const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
   paste: getCachedElement("ctx-paste"),
   saveJson: getCachedElement("ctx-save-json"),
+  exportPacket: getCachedElement("ctx-export-packet"),
+  exportPayload: getCachedElement("ctx-export-payload"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -1274,16 +1277,69 @@ const convertContextButtons = {
   filterProtocol: getCachedElement("ctx-filter-protocol"),
   filterMime: getCachedElement("ctx-filter-mime"),
 };
+const convertContextSubmenus = {
+  convert: getCachedElement("ctx-convert-submenu"),
+  filter: getCachedElement("ctx-filter-submenu"),
+  export: getCachedElement("ctx-export-submenu"),
+};
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
   "convert-context-save-divider",
 );
+const convertContextSubmenuEls = Array.from(
+  convertContextMenuEl.querySelectorAll(".ctx-submenu"),
+);
+
+function resetConvertContextSubmenuPositions() {
+  convertContextSubmenuEls.forEach((submenuEl) => {
+    submenuEl.classList.remove("ctx-submenu-flip-x", "ctx-submenu-flip-y");
+  });
+}
+
+function updateConvertContextSubmenuPositions() {
+  const viewportPadding = 8;
+  resetConvertContextSubmenuPositions();
+
+  convertContextSubmenuEls.forEach((submenuEl) => {
+    if (submenuEl.style.display === "none") return;
+    const submenuPanelEl = submenuEl.querySelector(".ctx-submenu-panel");
+    if (!submenuPanelEl) return;
+
+    const previousDisplay = submenuPanelEl.style.display;
+    const previousVisibility = submenuPanelEl.style.visibility;
+    const previousPointerEvents = submenuPanelEl.style.pointerEvents;
+    submenuPanelEl.style.display = "block";
+    submenuPanelEl.style.visibility = "hidden";
+    submenuPanelEl.style.pointerEvents = "none";
+
+    const submenuRect = submenuEl.getBoundingClientRect();
+    const panelRect = submenuPanelEl.getBoundingClientRect();
+    const wouldOverflowRight =
+      submenuRect.right + panelRect.width > window.innerWidth - viewportPadding;
+    const wouldOverflowBottom =
+      submenuRect.top + panelRect.height > window.innerHeight - viewportPadding;
+    const hasRoomAbove =
+      submenuRect.bottom - panelRect.height >= viewportPadding;
+
+    if (wouldOverflowRight) {
+      submenuEl.classList.add("ctx-submenu-flip-x");
+    }
+    if (wouldOverflowBottom && hasRoomAbove) {
+      submenuEl.classList.add("ctx-submenu-flip-y");
+    }
+
+    submenuPanelEl.style.display = previousDisplay;
+    submenuPanelEl.style.visibility = previousVisibility;
+    submenuPanelEl.style.pointerEvents = previousPointerEvents;
+  });
+}
 
 function hideConvertContextMenu() {
   activeContextConversionText = "";
   activeContextTarget = null;
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
+  resetConvertContextSubmenuPositions();
   convertContextMenuEl.hidden = true;
 }
 
@@ -1563,6 +1619,16 @@ function showConvertContextMenu(
   convertContextButtons.saveJson.style.display = showSaveJson
     ? "block"
     : "none";
+  const hasPacketToExport = Boolean(
+    getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
+  );
+  const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
+  convertContextButtons.exportPacket.style.display = hasPacketToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
 
   ["hex", "binary", "base64", "decimal", "ascii"].forEach((format) => {
     convertContextButtons[format].style.display = formats.includes(format)
@@ -1594,20 +1660,38 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasClipboardActions = showCopySelection || showPaste;
-  const hasGeneralActions = showCopySelection || showPaste || showSaveJson;
-  const hasDataTypeActions = formats.length > 0 || isHexViewTarget;
+  const hasGeneralActions = showCopySelection || showPaste;
+  const hasDataTypeActions = formats.length > 0;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
-  if (!hasGeneralActions && !hasDataTypeActions && !hasFilterActions) {
+  const hasExportActions =
+    showSaveJson || hasPacketToExport || hasPayloadToExport;
+  convertContextSubmenus.convert.style.display = hasDataTypeActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filter.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.export.style.display = hasExportActions
+    ? "block"
+    : "none";
+  if (
+    !hasGeneralActions &&
+    !hasDataTypeActions &&
+    !isHexViewTarget &&
+    !hasFilterActions &&
+    !hasExportActions
+  ) {
     hideConvertContextMenu();
     return;
   }
   convertContextDividerEl.style.display =
-    hasClipboardActions && (hasDataTypeActions || hasFilterActions)
+    hasClipboardActions &&
+    (hasDataTypeActions || isHexViewTarget || hasFilterActions || hasExportActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
-    showSaveJson &&
-    (hasClipboardActions || hasDataTypeActions || hasFilterActions)
+    hasExportActions &&
+    (hasClipboardActions || hasDataTypeActions || isHexViewTarget || hasFilterActions)
       ? "block"
       : "none";
 
@@ -1621,6 +1705,7 @@ function showConvertContextMenu(
   );
   convertContextMenuEl.style.left = `${boundedX}px`;
   convertContextMenuEl.style.top = `${boundedY}px`;
+  updateConvertContextSubmenuPositions();
 }
 
 function loadContextValueIntoDataTools(format) {
@@ -1635,12 +1720,35 @@ function loadContextValueIntoDataTools(format) {
   writeLogEntry(`Context conversion loaded format=${format}`);
 }
 
+function getActivePacketCursor() {
+  return Number.isInteger(activePacketCursor) && activePacketCursor >= 0
+    ? activePacketCursor
+    : null;
+}
+
+function setActivePacketCursor(nextIndex) {
+  const parsedIndex = Number.parseInt(nextIndex, 10);
+  activePacketCursor =
+    Number.isNaN(parsedIndex) || parsedIndex < 0 ? null : parsedIndex;
+  return activePacketCursor;
+}
+
 function getCurrentRawPayloadHex() {
+  const packetCursor = getActivePacketCursor();
   const payloadHex =
-    packetsForHost?.[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+    packetsForHost?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
+      "Payload"
+    ]?.[
       "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
+}
+
+function getCurrentPacketForExport(packetSet, packetIndex) {
+  if (!Number.isInteger(packetIndex) || packetIndex < 0) {
+    return null;
+  }
+  return packetSet?.[packetIndex] || null;
 }
 
 async function copyTextToClipboard(text, label) {
@@ -1815,6 +1923,65 @@ function saveJsonFromContextMenu() {
   });
 }
 
+function exportCurrentPacketFromContextMenu() {
+  hideConvertContextMenu();
+  const currentPacket = getCurrentPacketForExport(
+    packetsForHost,
+    getActivePacketCursor(),
+  );
+  if (!currentPacket) {
+    statusUpdate("Status: No packet selected to export");
+    return;
+  }
+  window.saveapi.savePacket(currentPacket).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Packet exported successfully");
+      writeLogEntry("Context menu packet export completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Packet export failed");
+      logErrorEntry("export-packet", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Packet export failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Packet export failed:", errorMessage);
+    }
+  });
+}
+
+function exportCurrentPayloadFromContextMenu() {
+  hideConvertContextMenu();
+  const payloadHex = getCurrentRawPayloadHex();
+  if (!payloadHex) {
+    statusUpdate("Status: No payload available to export");
+    return;
+  }
+  window.saveapi.savePayload(payloadHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Payload exported successfully");
+      writeLogEntry("Context menu payload export completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Payload export failed");
+      logErrorEntry("export-payload", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Payload export failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Payload export failed:", errorMessage);
+    }
+  });
+}
+
 function appendFilterQueryFromContextMenu(type) {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
@@ -1920,6 +2087,14 @@ convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
 convertContextButtons.saveJson.addEventListener(
   "click",
   saveJsonFromContextMenu,
+);
+convertContextButtons.exportPacket.addEventListener(
+  "click",
+  exportCurrentPacketFromContextMenu,
+);
+convertContextButtons.exportPayload.addEventListener(
+  "click",
+  exportCurrentPayloadFromContextMenu,
 );
 
 /**
@@ -2203,6 +2378,7 @@ function showPacketList() {
           document.getElementById("target_hosts").value = row.host;
           packetsForHost = capturedPackets["Host"][row.host];
           index = row.pktIdx;
+          setActivePacketCursor(index);
           currentIp = row.srcIp;
           currentPacketKey = row.srcIp + ":" + row.pi["Index"];
           syncBookmarkDropdown(currentPacketKey);
@@ -2283,6 +2459,7 @@ document.getElementById("prev-btn").addEventListener("click", function () {
   //highlightTab("prev-navAction");
   if (index > 0) {
     index--;
+    setActivePacketCursor(index);
 
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
@@ -2304,6 +2481,7 @@ document.getElementById("next-btn").addEventListener("click", function () {
   statusUpdate("Status: Displaying capture analysis summary");
   if (index < packetsForHost.length - 1) {
     index++;
+    setActivePacketCursor(index);
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
       currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
@@ -2325,6 +2503,7 @@ document
       .getElementById("selectBookmark")
       .value.split(":")[0];
     index = document.getElementById("selectBookmark").value.split(":")[1];
+    setActivePacketCursor(index);
     packetsForHost = capturedPackets["Host"][bookmarkHost];
     activeBookmark["Host"] = bookmarkHost;
     activeBookmark["Packet"] = index;
@@ -2391,6 +2570,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
   index = 0;
+  setActivePacketCursor(index);
   if (navAction === undefined) {
     handlePacketNavigation("first-load");
   }
@@ -2415,6 +2595,7 @@ function handlePacketNavigation(navAction, navBookmark) {
       handlePacketNavigation("first-load");
     } else {
       index = navBookmark["Packet"] - 1;
+      setActivePacketCursor(index);
 
       statusUpdate(
         "Navigating to bookmark: " +

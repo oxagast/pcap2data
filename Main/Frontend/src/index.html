@@ -313,21 +313,50 @@
       <button id="ctx-copy" role="menuitem">Copy</button>
       <button id="ctx-paste" role="menuitem">Paste</button>
       <hr id="convert-context-divider" class="ctx-divider" />
-      <button id="convert-context-hex" type="button">Load as Hex</button>
-      <button id="convert-context-binary" type="button">Load as Binary</button>
-      <button id="convert-context-base64" type="button">Load as Base64</button>
-      <button id="convert-context-decimal" type="button">Load as Decimal bytes</button>
-      <button id="convert-context-ascii" type="button">Load as ASCII / UTF-8</button>
+      <div id="ctx-convert-submenu" class="ctx-submenu">
+        <button id="ctx-convert-branch" class="ctx-branch" type="button">
+          Convert to...
+        </button>
+        <div class="ctx-submenu-panel">
+          <button id="convert-context-hex" type="button">Load as Hex</button>
+          <button id="convert-context-binary" type="button">Load as Binary</button>
+          <button id="convert-context-base64" type="button">Load as Base64</button>
+          <button id="convert-context-decimal" type="button">
+            Load as Decimal bytes
+          </button>
+          <button id="convert-context-ascii" type="button">
+            Load as ASCII / UTF-8
+          </button>
+        </div>
+      </div>
       <button id="convert-context-copy-hex" type="button">Copy Hex</button>
       <button id="convert-context-copy-ascii" type="button">Copy ASCII</button>
       <button id="convert-context-copy-raw" type="button">Copy Raw payload</button>
-      <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
-      <button id="ctx-filter-port" type="button">Add Port to Filter</button>
-      <button id="ctx-filter-mac" type="button">Add MAC to Filter</button>
-      <button id="ctx-filter-protocol" type="button">Add Protocol to Filter</button>
-      <button id="ctx-filter-mime" type="button">Add MIME Type to Filter</button>
+      <div id="ctx-filter-submenu" class="ctx-submenu">
+        <button id="ctx-filter-branch" class="ctx-branch" type="button">
+          Add to filter...
+        </button>
+        <div class="ctx-submenu-panel">
+          <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
+          <button id="ctx-filter-port" type="button">Add Port to Filter</button>
+          <button id="ctx-filter-mac" type="button">Add MAC to Filter</button>
+          <button id="ctx-filter-protocol" type="button">
+            Add Protocol to Filter
+          </button>
+          <button id="ctx-filter-mime" type="button">Add MIME Type to Filter</button>
+        </div>
+      </div>
       <hr id="convert-context-save-divider" class="ctx-divider" />
-      <button id="ctx-save-json" role="menuitem">Save JSON</button>
+      <div id="ctx-export-submenu" class="ctx-submenu">
+        <button id="ctx-export-branch" class="ctx-branch" type="button">
+          Export...
+        </button>
+        <div class="ctx-submenu-panel">
+          <button id="ctx-save-json" role="menuitem">Save JSON</button>
+          <button id="ctx-export-packet" role="menuitem">Export Packet</button>
+          <button id="ctx-export-payload" role="menuitem">Export Payload</button>
+        </div>
+      </div>
     </div>
 
     <!-- Installation complete screen – shown only on first run after a new version install -->

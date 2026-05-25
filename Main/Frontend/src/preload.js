@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld('fsize', {
 
 contextBridge.exposeInMainWorld('saveapi', {
   saveJson: (jsonData) => ipcRenderer.invoke('save-json', jsonData),
+  savePacket: (packetData) => ipcRenderer.invoke('save-packet', packetData),
+  savePayload: (payloadHex) => ipcRenderer.invoke('save-payload', payloadHex),
 });
 
 contextBridge.exposeInMainWorld('quitapi', {
