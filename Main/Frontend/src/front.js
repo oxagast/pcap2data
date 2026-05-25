@@ -1728,7 +1728,8 @@ function getActivePacketCursor() {
 
 function setActivePacketCursor(nextIndex) {
   const parsedIndex = Number.parseInt(nextIndex, 10);
-  activePacketCursor = Number.isNaN(parsedIndex) || parsedIndex < 0 ? 0 : parsedIndex;
+  activePacketCursor =
+    Number.isNaN(parsedIndex) || parsedIndex < 0 ? null : parsedIndex;
   return activePacketCursor;
 }
 
@@ -1744,9 +1745,6 @@ function getCurrentRawPayloadHex() {
 }
 
 function getCurrentPacketForExport(packetSet, packetIndex) {
-  if (packetIndex === null || packetIndex === undefined) {
-    return null;
-  }
   if (!Number.isInteger(packetIndex) || packetIndex < 0) {
     return null;
   }
