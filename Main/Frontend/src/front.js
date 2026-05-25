@@ -1662,7 +1662,6 @@ function showConvertContextMenu(
   const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste;
   const hasDataTypeActions = formats.length > 0;
-  const isHexCopyContext = isHexViewTarget;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport;
@@ -1678,7 +1677,7 @@ function showConvertContextMenu(
   if (
     !hasGeneralActions &&
     !hasDataTypeActions &&
-    !isHexCopyContext &&
+    !isHexViewTarget &&
     !hasFilterActions &&
     !hasExportActions
   ) {
@@ -1687,12 +1686,12 @@ function showConvertContextMenu(
   }
   convertContextDividerEl.style.display =
     hasClipboardActions &&
-    (hasDataTypeActions || isHexCopyContext || hasFilterActions || hasExportActions)
+    (hasDataTypeActions || isHexViewTarget || hasFilterActions || hasExportActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
     hasExportActions &&
-    (hasClipboardActions || hasDataTypeActions || isHexCopyContext || hasFilterActions)
+    (hasClipboardActions || hasDataTypeActions || isHexViewTarget || hasFilterActions)
       ? "block"
       : "none";
 
@@ -1722,10 +1721,15 @@ function loadContextValueIntoDataTools(format) {
 }
 
 function getActivePacketCursor() {
-  return (typeof activePacketCursor === "number" ||
-    typeof activePacketCursor === "string")
+  return Number.isInteger(activePacketCursor) && activePacketCursor >= 0
     ? activePacketCursor
     : null;
+}
+
+function setActivePacketCursor(nextIndex) {
+  const parsedIndex = Number.parseInt(nextIndex, 10);
+  activePacketCursor = Number.isNaN(parsedIndex) || parsedIndex < 0 ? 0 : parsedIndex;
+  return activePacketCursor;
 }
 
 function getCurrentRawPayloadHex() {
@@ -1743,11 +1747,10 @@ function getCurrentPacketForExport(packetSet, packetIndex) {
   if (packetIndex === null || packetIndex === undefined) {
     return null;
   }
-  const activePacketIndex = Number.parseInt(packetIndex, 10);
-  if (Number.isNaN(activePacketIndex) || activePacketIndex < 0) {
+  if (!Number.isInteger(packetIndex) || packetIndex < 0) {
     return null;
   }
-  return packetSet?.[activePacketIndex] || null;
+  return packetSet?.[packetIndex] || null;
 }
 
 async function copyTextToClipboard(text, label) {
@@ -2377,7 +2380,7 @@ function showPacketList() {
           document.getElementById("target_hosts").value = row.host;
           packetsForHost = capturedPackets["Host"][row.host];
           index = row.pktIdx;
-          activePacketCursor = index;
+          setActivePacketCursor(index);
           currentIp = row.srcIp;
           currentPacketKey = row.srcIp + ":" + row.pi["Index"];
           syncBookmarkDropdown(currentPacketKey);
@@ -2458,7 +2461,7 @@ document.getElementById("prev-btn").addEventListener("click", function () {
   //highlightTab("prev-navAction");
   if (index > 0) {
     index--;
-    activePacketCursor = index;
+    setActivePacketCursor(index);
 
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
@@ -2480,7 +2483,7 @@ document.getElementById("next-btn").addEventListener("click", function () {
   statusUpdate("Status: Displaying capture analysis summary");
   if (index < packetsForHost.length - 1) {
     index++;
-    activePacketCursor = index;
+    setActivePacketCursor(index);
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
       currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
@@ -2502,7 +2505,7 @@ document
       .getElementById("selectBookmark")
       .value.split(":")[0];
     index = document.getElementById("selectBookmark").value.split(":")[1];
-    activePacketCursor = index;
+    setActivePacketCursor(index);
     packetsForHost = capturedPackets["Host"][bookmarkHost];
     activeBookmark["Host"] = bookmarkHost;
     activeBookmark["Packet"] = index;
@@ -2569,7 +2572,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
   index = 0;
-  activePacketCursor = index;
+  setActivePacketCursor(index);
   if (navAction === undefined) {
     handlePacketNavigation("first-load");
   }
@@ -2594,7 +2597,7 @@ function handlePacketNavigation(navAction, navBookmark) {
       handlePacketNavigation("first-load");
     } else {
       index = navBookmark["Packet"] - 1;
-      activePacketCursor = index;
+      setActivePacketCursor(index);
 
       statusUpdate(
         "Navigating to bookmark: " +
