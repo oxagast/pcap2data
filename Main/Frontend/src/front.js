@@ -2146,8 +2146,9 @@ function appendFilterQueryFromContextMenu(
   }
   const queryToInsert = negate ? `!(${query})` : query;
   const existingQuery = filterInputEl.value.trim();
-  const wrappedQuery =
-    queryToInsert.includes("||") || queryToInsert.includes("&&")
+  const wrappedQuery = negate
+    ? queryToInsert
+    : queryToInsert.includes("||") || queryToInsert.includes("&&")
       ? `(${queryToInsert})`
       : queryToInsert;
   if (!existingQuery) {
