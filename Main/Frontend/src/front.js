@@ -178,6 +178,11 @@ function writeLogEntry(message) {
   addActivityLogEntry(stampedMessage);
 }
 
+function writeBackendErrorLogEntry(message) {
+  const stampedMessage = `[${new Date().toISOString()}] [Console][Backend] ${message}`;
+  addActivityLogEntry(stampedMessage);
+}
+
 function logErrorEntry(context, error) {
   const errorDetails =
     error && typeof error === "object" && "message" in error
@@ -3339,14 +3344,18 @@ function runSnitch(file) {
     .runBackendCommand(file, useLLM)
     .then((output) => {})
     .catch((error) => {
-      doError("Backend run error!");
+      doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
     });
 }
 
-function doError(message) {
+function doError(message, { backend = false } = {}) {
   console.error("Error from backend:", message);
-  writeLogEntry(`Error shown message="${message}"`);
+  if (backend) {
+    writeBackendErrorLogEntry(`Error shown message="${message}"`);
+  } else {
+    writeLogEntry(`Error shown message="${message}"`);
+  }
   const loadingContainerEl = document.getElementById("loading-container");
   const errorContainerEl = document.getElementById("error-container");
   document.getElementById("summary_content").textContent = "";
@@ -3490,7 +3499,7 @@ window.onunhandledrejection = (event) => {
 window.api.onError((msg) => {
   console.error("Error from backend:", msg);
   // Show alert or UI message
-  doError(msg);
+  doError(msg, { backend: true });
 });
 
 // On page load, hide packet info and payload panes
