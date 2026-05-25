@@ -53,6 +53,7 @@ let hostsList = ["0.0.0.0"]; // List of hosts found in capture
 const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
 let packetsForHost = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
+let activePacketCursor = 0;
 let bookmarkList = []; // List of bookmarks (host:packet index)
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
@@ -1721,7 +1722,10 @@ function loadContextValueIntoDataTools(format) {
 }
 
 function getActivePacketCursor() {
-  return typeof index === "number" || typeof index === "string" ? index : null;
+  return typeof activePacketCursor === "number" ||
+    typeof activePacketCursor === "string"
+    ? activePacketCursor
+    : null;
 }
 
 function getCurrentRawPayloadHex() {
@@ -2373,6 +2377,7 @@ function showPacketList() {
           document.getElementById("target_hosts").value = row.host;
           packetsForHost = capturedPackets["Host"][row.host];
           index = row.pktIdx;
+          activePacketCursor = index;
           currentIp = row.srcIp;
           currentPacketKey = row.srcIp + ":" + row.pi["Index"];
           syncBookmarkDropdown(currentPacketKey);
@@ -2453,6 +2458,7 @@ document.getElementById("prev-btn").addEventListener("click", function () {
   //highlightTab("prev-navAction");
   if (index > 0) {
     index--;
+    activePacketCursor = index;
 
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
@@ -2474,6 +2480,7 @@ document.getElementById("next-btn").addEventListener("click", function () {
   statusUpdate("Status: Displaying capture analysis summary");
   if (index < packetsForHost.length - 1) {
     index++;
+    activePacketCursor = index;
     currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
     currentPacketKey =
       currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
@@ -2495,6 +2502,7 @@ document
       .getElementById("selectBookmark")
       .value.split(":")[0];
     index = document.getElementById("selectBookmark").value.split(":")[1];
+    activePacketCursor = index;
     packetsForHost = capturedPackets["Host"][bookmarkHost];
     activeBookmark["Host"] = bookmarkHost;
     activeBookmark["Packet"] = index;
@@ -2561,6 +2569,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
   index = 0;
+  activePacketCursor = index;
   if (navAction === undefined) {
     handlePacketNavigation("first-load");
   }
@@ -2585,6 +2594,7 @@ function handlePacketNavigation(navAction, navBookmark) {
       handlePacketNavigation("first-load");
     } else {
       index = navBookmark["Packet"] - 1;
+      activePacketCursor = index;
 
       statusUpdate(
         "Navigating to bookmark: " +
