@@ -193,7 +193,11 @@ function initializeActivityLog() {
     });
   }
   logBtn.addEventListener("click", () => {
-    panelEl.style.display = "block";
+    if (panelEl.style.display === "block") {
+      panelEl.style.display = "none";
+    } else {
+      panelEl.style.display = "block";
+    }
   });
   closeBtn.addEventListener("click", () => {
     panelEl.style.display = "none";
@@ -1686,12 +1690,18 @@ function showConvertContextMenu(
   }
   convertContextDividerEl.style.display =
     hasClipboardActions &&
-    (hasDataTypeActions || isHexViewTarget || hasFilterActions || hasExportActions)
+    (hasDataTypeActions ||
+      isHexViewTarget ||
+      hasFilterActions ||
+      hasExportActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
     hasExportActions &&
-    (hasClipboardActions || hasDataTypeActions || isHexViewTarget || hasFilterActions)
+    (hasClipboardActions ||
+      hasDataTypeActions ||
+      isHexViewTarget ||
+      hasFilterActions)
       ? "block"
       : "none";
 
@@ -1738,9 +1748,7 @@ function getCurrentRawPayloadHex() {
   const payloadHex =
     packetsForHost?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
       "Payload"
-    ]?.[
-      "Hex Encoded"
-    ];
+    ]?.["Hex Encoded"];
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
@@ -2009,12 +2017,19 @@ function appendFilterQueryFromContextMenu(type) {
 
 // Show host data when data button is clicked
 document.getElementById("data-btn").addEventListener("click", function () {
-  //highlightTab("data-navAction");
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing host data.");
+    return;
+  }
   initializeDataView();
 });
 
 // Show capture stats when stats button is clicked
 document.getElementById("stats-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing packet statistics.");
+    return;
+  }
   showStats();
 });
 
@@ -2027,6 +2042,10 @@ document
 
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing the packet list.");
+    return;
+  }
   showPacketList();
 });
 
@@ -2456,7 +2475,11 @@ function initializeDataView() {
 // Navigation for previous packet
 document.getElementById("prev-btn").addEventListener("click", function () {
   statusUpdate("Status: Displaying capture analysis summary");
-  //highlightTab("prev-navAction");
+  if (!isFileLoaded) {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("No file loaded! Upload one of JSON or PCAP first!");
+    return;
+  }
   if (index > 0) {
     index--;
     setActivePacketCursor(index);
@@ -2479,6 +2502,11 @@ document.getElementById("prev-btn").addEventListener("click", function () {
 // Navigation for next packet
 document.getElementById("next-btn").addEventListener("click", function () {
   statusUpdate("Status: Displaying capture analysis summary");
+  if (!isFileLoaded) {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("No file loaded! Upload one of JSON or PCAP first!");
+    return;
+  }
   if (index < packetsForHost.length - 1) {
     index++;
     setActivePacketCursor(index);
