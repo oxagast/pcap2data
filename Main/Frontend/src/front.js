@@ -1680,6 +1680,9 @@ function getCurrentRawPayloadHex() {
 }
 
 function getCurrentPacketForExport(packetSet, packetIndex) {
+  if (packetIndex === null || packetIndex === undefined) {
+    return null;
+  }
   const activePacketIndex = Number.parseInt(packetIndex, 10);
   if (Number.isNaN(activePacketIndex) || activePacketIndex < 0) {
     return null;

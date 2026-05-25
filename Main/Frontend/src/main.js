@@ -246,7 +246,10 @@ ipcMain.handle('save-payload', async (_event, payloadHex) => {
     normalizedHex.length % 2 !== 0 ||
     !/^[\da-fA-F]+$/.test(normalizedHex)
   ) {
-    return { success: false, error: 'Invalid payload data' };
+    return {
+      success: false,
+      error: 'Payload must be a non-empty hex string with an even length',
+    };
   }
 
   const { canceled, filePath } = await dialog.showSaveDialog({
