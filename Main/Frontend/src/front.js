@@ -151,23 +151,31 @@ function renderActivityLogEntries(searchText = "") {
     });
 }
 
-function writeLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] ${message}`;
-  activityLogEntries.unshift({ message: stampedMessage });
+function syncActivityLogPath(result) {
+  if (result && result.path) {
+    activityLogPath = result.path;
+    const pathEl = document.getElementById("activity-log-path");
+    if (pathEl) {
+      pathEl.textContent = `Log file: ${activityLogPath}`;
+    }
+  }
+}
+
+function addActivityLogEntry(message, persist = true) {
+  if (typeof message !== "string" || message.trim() === "") return;
+  const normalizedMessage = message.trim();
+  activityLogEntries.unshift({ message: normalizedMessage });
   renderActivityLogEntries(
     document.getElementById("activity-log-search")?.value || "",
   );
-  if (window.logapi) {
-    window.logapi.append(stampedMessage).then((result) => {
-      if (result && result.path) {
-        activityLogPath = result.path;
-        const pathEl = document.getElementById("activity-log-path");
-        if (pathEl) {
-          pathEl.textContent = `Log file: ${activityLogPath}`;
-        }
-      }
-    });
+  if (persist && window.logapi) {
+    window.logapi.append(normalizedMessage).then(syncActivityLogPath);
   }
+}
+
+function writeLogEntry(message) {
+  const stampedMessage = `[${new Date().toISOString()}] ${message}`;
+  addActivityLogEntry(stampedMessage);
 }
 
 function logErrorEntry(context, error) {
@@ -178,18 +186,60 @@ function logErrorEntry(context, error) {
   writeLogEntry(`Error context=${context} details="${errorDetails}"`);
 }
 
-function initializeActivityLog() {
+function formatConsoleValue(value) {
+  if (value instanceof Error) {
+    return value.stack || value.message;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "undefined") {
+    return "undefined";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
+function formatConsoleArgs(args) {
+  return args.map((value) => formatConsoleValue(value)).join(" ");
+}
+
+const originalConsoleLog = console.log.bind(console);
+console.log = (...args) => {
+  originalConsoleLog(...args);
+  const message = formatConsoleArgs(args);
+  if (message) {
+    writeLogEntry(`[Console][UI] ${message}`);
+  }
+};
+
+async function initializeActivityLog() {
   const pathEl = document.getElementById("activity-log-path");
   const panelEl = document.getElementById("activity-log-panel");
   const searchEl = document.getElementById("activity-log-search");
   const logBtn = document.getElementById("log-btn");
   const closeBtn = document.getElementById("close-log-btn");
   if (window.logapi) {
-    window.logapi.getPath().then((path) => {
-      if (path) {
-        activityLogPath = path;
-        pathEl.textContent = `Log file: ${activityLogPath}`;
-      }
+    const [path, entries] = await Promise.all([
+      window.logapi.getPath(),
+      window.logapi.getEntries(),
+    ]);
+    if (Array.isArray(entries)) {
+      activityLogEntries.length = 0;
+      entries.forEach((entry) => {
+        activityLogEntries.push({ message: entry });
+      });
+      renderActivityLogEntries();
+    }
+    if (path) {
+      activityLogPath = path;
+      pathEl.textContent = `Log file: ${activityLogPath}`;
+    }
+    window.logapi.onEntry((entry) => {
+      addActivityLogEntry(entry, false);
     });
   }
   logBtn.addEventListener("click", () => {

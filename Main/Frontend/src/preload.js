@@ -47,4 +47,10 @@ contextBridge.exposeInMainWorld('installapi', {
 contextBridge.exposeInMainWorld('logapi', {
   append: (entry) => ipcRenderer.invoke('append-activity-log', entry),
   getPath: () => ipcRenderer.invoke('get-activity-log-path'),
+  getEntries: () => ipcRenderer.invoke('get-activity-log-entries'),
+  onEntry: (callback) => {
+    ipcRenderer.on('activity-log-entry', (_event, entry) => {
+      callback(entry);
+    });
+  },
 });
