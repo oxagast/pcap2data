@@ -1403,7 +1403,7 @@ strong {
 }
 
 #filterStr-wrap {
-  --filter-clear-button-width: 52px;
+  --filter-clear-button-width: 64px;
   --filter-clear-right-offset: 6px;
   --filter-clear-padding: calc(
     var(--filter-clear-button-width) + var(--filter-clear-right-offset) + 6px
