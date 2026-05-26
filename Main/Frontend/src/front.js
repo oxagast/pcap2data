@@ -5178,13 +5178,16 @@ function totalPacketCount() {
   return totalCount;
 }
 
+/**
+ * Returns the packet array index matching a `sourceIp:packetIndex` key.
+ */
 function findPacketIndexByKey(packetSet, packetKey) {
   if (!Array.isArray(packetSet) || !packetKey || typeof packetKey !== "string") {
-    return null;
+    return -1;
   }
 
   const separatorIndex = packetKey.lastIndexOf(":");
-  if (separatorIndex <= 0) return null;
+  if (separatorIndex < 0) return -1;
 
   const sourceIp = packetKey.slice(0, separatorIndex);
   const packetIndexValue = packetKey.slice(separatorIndex + 1);
