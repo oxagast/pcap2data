@@ -14,6 +14,7 @@ let selectedFilePath;
 let isBackendLoaded = false;
 let versionFilePath;
 let activityLogFilePath;
+let hasLoggedProgramShutdown = false;
 const activityLogEntries = [];
 const pendingActivityLogEntries = [];
 let isFirstRunAfterInstall = false;
@@ -91,6 +92,14 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.setZoomFactor(0.8); // makes everything fit snuggly
   });
+  mainWindow.once('close', () => {
+    appendActivityLogLine(
+      timestampLifecycleMessage(
+        `Session closed for PacketSnitch v${app.getVersion()}`,
+      ),
+      { broadcast: false },
+    );
+  });
 }
 
 function formatConsoleArgs(args) {
@@ -132,6 +141,10 @@ function broadcastActivityLogEntry(entry) {
 function normalizeActivityLogEntry(entry) {
   if (typeof entry !== 'string' || entry.trim() === '') return null;
   return entry.trim();
+}
+
+function timestampLifecycleMessage(message) {
+  return `[${new Date().toISOString()}] ${message}`;
 }
 
 function appendActivityLogLine(entry, options = {}) {
@@ -486,6 +499,15 @@ ipcMain.handle('get-activity-log-entries', async () => {
 });
 
 app.on('before-quit', () => {
+  if (!hasLoggedProgramShutdown) {
+    appendActivityLogLine(
+      timestampLifecycleMessage(
+        `Program shutdown requested for PacketSnitch v${app.getVersion()}`,
+      ),
+      { broadcast: false },
+    );
+    hasLoggedProgramShutdown = true;
+  }
   // make sure the backend snitch process dies!
   if (isBackendLoaded) {
     killBackendProcess();
