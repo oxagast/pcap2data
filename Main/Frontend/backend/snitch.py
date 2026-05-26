@@ -208,15 +208,23 @@ def _extractSetCookieCredentials(setCookieHeader):
 
 
 # Matches JSON key-value pairs where the key looks like a credential field.
-# Handles both double-quoted strings and bare numbers as values.
+# The keyword list mirrors CREDENTIAL_FIELD_RE but is spelled out explicitly here
+# so the pattern is self-contained and does not depend on regex string manipulation.
+_CRED_KEYWORDS = (
+    r"pass(?:w(?:or)?d?)?|pw|secret|auth|auth_token|credential|"
+    r"api[_\-.]?key|token|user(?:name)?|login|email"
+)
 _JSON_CRED_RE = re.compile(
-    r'"(' + CREDENTIAL_FIELD_RE.pattern.lstrip("^").rstrip("$") + r')"\s*:\s*"([^"]{1,512})"',
+    r'"(?:(?:.*[_\-.])?' + r'(?:' + _CRED_KEYWORDS + r')' + r'(?:[_\-.].*)?)"'
+    r'\s*:\s*"([^"]{1,512})"',
     re.IGNORECASE,
 )
 
 # Matches plain-text key:value or key=value lines where the key is credential-like.
+# Delimiters before the key include whitespace, common punctuation, and '&' (form data).
 _TEXT_CRED_RE = re.compile(
-    r'(?:^|[\s,{;&])(' + CREDENTIAL_FIELD_RE.pattern.lstrip("^").rstrip("$") + r')'
+    r'(?:^|[\s,{;&])'
+    r'(?:(?:.*[_\-.])?(?:' + _CRED_KEYWORDS + r')(?:[_\-.].*)?)'
     r'(?:\s*[=:]\s*)([^\s&"\'<>,;]{1,512})',
     re.IGNORECASE | re.MULTILINE,
 )
@@ -233,19 +241,27 @@ def _extractPostBodyCredentials(body, contentType):
     if not body or not body.strip():
         return {}
     creds = {}
-    ct = contentType.lower()
-    if "json" in ct:
+    lowerContentType = contentType.lower()
+    if "json" in lowerContentType:
         for match in _JSON_CRED_RE.finditer(body):
-            key = match.group(1)
-            val = match.group(2).strip()
+            val = match.group(1).strip()
             if val:
-                creds[key] = val
+                # Derive a human-readable key from the JSON property name
+                fullMatch = match.group(0)
+                keyEnd = fullMatch.index('"', 1)
+                creds[fullMatch[1:keyEnd]] = val
     else:
         for match in _TEXT_CRED_RE.finditer(body):
-            key = match.group(1)
-            val = match.group(2).strip()
+            val = match.group(1).strip()
             if val:
-                creds[key] = val
+                # Use the raw matched token before the separator as the key
+                raw = match.group(0).lstrip(" \t,{;&")
+                sep = next(
+                    (i for i, c in enumerate(raw) if c in "=:"), len(raw)
+                )
+                key = raw[:sep].strip()
+                if key:
+                    creds[key] = val
     return creds
 
 
@@ -1125,7 +1141,7 @@ def decodeHTTP(rawPayload):
             httpVersion = parts[0]
             statusCode = parts[1] if len(parts) > 1 else "Unknown"
             statusMessage = parts[2] if len(parts) > 2 else "Unknown"
-            return {
+            responseResult = {
                 "Type": "Response",
                 "http.type": "Response",
                 "HTTP Version": httpVersion,
@@ -1148,10 +1164,13 @@ def decodeHTTP(rawPayload):
                 "http.connection": headers.get("connection", "Unknown"),
                 "Location": headers.get("location", "Unknown"),
                 "http.location": headers.get("location", "Unknown"),
-                **({
-                    "Credentials": _extractSetCookieCredentials(headers["set-cookie"])
-                } if "set-cookie" in headers and headers["set-cookie"] else {}),
             }
+            setCookieVal = headers.get("set-cookie", "")
+            if setCookieVal:
+                responseCreds = _extractSetCookieCredentials(setCookieVal)
+                if responseCreds:
+                    responseResult["Credentials"] = responseCreds
+            return responseResult
     except Exception:
         return None
 
