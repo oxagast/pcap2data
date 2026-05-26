@@ -33,6 +33,13 @@ contextBridge.exposeInMainWorld('saveapi', {
   saveJson: (jsonData) => ipcRenderer.invoke('save-json', jsonData),
   savePacket: (packetData) => ipcRenderer.invoke('save-packet', packetData),
   savePayload: (payloadHex) => ipcRenderer.invoke('save-payload', payloadHex),
+  saveHttpBody: (bodyHex, contentType) =>
+    ipcRenderer.invoke('save-http-body', bodyHex, contentType),
+});
+
+contextBridge.exposeInMainWorld('previewapi', {
+  previewHttpBody: (bodyHex, contentType) =>
+    ipcRenderer.invoke('preview-http-body', bodyHex, contentType),
 });
 
 contextBridge.exposeInMainWorld('quitapi', {
