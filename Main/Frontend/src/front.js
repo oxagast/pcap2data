@@ -2388,6 +2388,33 @@ function buildSessionAutoKeystoreEntries() {
           });
         });
       });
+
+      const payloadHex = packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+      if (typeof payloadHex === "string" && payloadHex.trim()) {
+        try {
+          const payloadBytes = parseDataToolsInput("hex", payloadHex);
+          const decodedHttp = decodeHttpFromBytes(payloadBytes);
+          if (decodedHttp?.protocol === "HTTP") {
+            const cookieEntries = extractCookieJarEntriesFromHttpFields(
+              decodedHttp.fields,
+            );
+            cookieEntries.forEach((cookieEntry) => {
+              const cookieName = cookieEntry.split("=")[0]?.trim();
+              pushSessionEntry({
+                type: "cookie",
+                label: cookieName ? `HTTP Cookie ${cookieName}` : "HTTP Cookie",
+                source: "session-auto-cookie-jar",
+                content: cookieEntry,
+                summary: `Host ${host} packet #${packetIndex}`,
+                packetIndex,
+                protocol: "HTTP",
+              });
+            });
+          }
+        } catch {
+          // Ignore payload parse/decode failures for auto cookie extraction.
+        }
+      }
     });
   });
 
