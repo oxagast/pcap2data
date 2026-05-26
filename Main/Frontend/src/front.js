@@ -2281,7 +2281,7 @@ function decodeHttpBasicAuth(rawValue) {
   }
 }
 
-function hashSessionSecretFingerprint(content) {
+function hashContentForDeduplication(content) {
   let hash = 2166136261;
   for (let index = 0; index < content.length; index++) {
     hash ^= content.charCodeAt(index);
@@ -2336,7 +2336,7 @@ function buildSessionAutoKeystoreEntries() {
   }) => {
     const normalizedContent = normalizeSessionSecretValue(content);
     if (!normalizedContent) return;
-    const fingerprint = `${type}|${label}|${hashSessionSecretFingerprint(normalizedContent)}`;
+    const fingerprint = `${type}|${label}|${hashContentForDeduplication(normalizedContent)}`;
     if (dedupe.has(fingerprint)) return;
     dedupe.add(fingerprint);
     generatedEntries.push({
@@ -2382,9 +2382,11 @@ function buildSessionAutoKeystoreEntries() {
   });
 
   return generatedEntries.sort((a, b) => {
-    const aPacket = Number(a.packetIndex);
-    const bPacket = Number(b.packetIndex);
-    if (Number.isFinite(aPacket) && Number.isFinite(bPacket)) return aPacket - bPacket;
+    const aPacketNumber = Number(a.packetIndex);
+    const bPacketNumber = Number(b.packetIndex);
+    if (Number.isFinite(aPacketNumber) && Number.isFinite(bPacketNumber)) {
+      return aPacketNumber - bPacketNumber;
+    }
     return String(a.packetIndex).localeCompare(String(b.packetIndex));
   });
 }
@@ -2603,7 +2605,7 @@ function configureKeystoreUnlockDialog(mode) {
   }
   if (descriptionEl) {
     descriptionEl.textContent = isSetup
-      ? "Create the initial password for the persistent keychain. You will only be asked when selecting the keychain tab."
+      ? "Create the initial password for the persistent keychain (minimum 8 characters). You will only be asked when selecting the keychain tab."
       : "Enter the keychain password to unlock the persistent keychain.";
   }
   if (passwordEl) {
