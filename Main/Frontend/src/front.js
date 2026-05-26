@@ -74,8 +74,20 @@ const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
 const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
+const STRICT_IPV4_REGEX =
+  /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
 const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
+const CRYPT_SSL_SUBTAB = "ssl";
+const CRYPT_PGP_SUBTAB = "pgp";
+const CRYPT_OPENSSH_SUBTAB = "openssh";
+const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
+const CRYPT_KEYSTORE_DB_VERSION = 1;
+const CRYPT_KEYSTORE_STORE_NAME = "entries";
+const CRYPT_KEYSTORE_RECORD_KEY = "default";
+let cryptEncounteredEntries = [];
+let cryptActiveEntryIndex = -1;
+let cryptKeystoreEntries = [];
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -445,6 +457,8 @@ function fileLoaded(isLoaded) {
     document.getElementById("summary-btn").style.opacity = "1";
     document.getElementById("data-btn").style.opacity = "1";
     document.getElementById("data-tools-btn").style.opacity = "1";
+    document.getElementById("crypt-btn").style.opacity = "1";
+    document.getElementById("keystore-btn").style.opacity = "1";
     document.getElementById("tab-btns").style.opacity = "1";
     document.getElementById("prev-btn").style.opacity = "1";
     document.getElementById("next-btn").style.opacity = "1";
@@ -465,6 +479,8 @@ function fileLoaded(isLoaded) {
     document.getElementById("log-btn").style.opacity = "0";
     document.getElementById("stats-btn").style.opacity = "0";
     document.getElementById("list-btn").style.opacity = "0";
+    document.getElementById("crypt-btn").style.opacity = "0";
+    document.getElementById("keystore-btn").style.opacity = "0";
   }
 }
 
@@ -765,6 +781,8 @@ function writeSummary() {
     document.getElementById("packetPayloadPane").style.display = "none";
     document.getElementById("stats_box").style.display = "none";
     document.getElementById("data_tools_box").style.display = "none";
+    document.getElementById("crypt_box").style.display = "none";
+    document.getElementById("keystore_box").style.display = "none";
     document.getElementById("list_box").style.display = "none";
     document.getElementById("summary_content").textContent =
       finalSummary || "No LLM summary available.";
@@ -991,6 +1009,8 @@ function showStats() {
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("stats_box").style.display = "block";
   document.getElementById("rightside").style.display = "none";
 
@@ -1800,8 +1820,576 @@ function showDataTools() {
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "block";
+}
+
+function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
+  const normalized = (rawText || "").trim();
+  if (!normalized) {
+    return `No ${label.toLowerCase()} loaded.`;
+  }
+
+  const lines = normalized.split(/\r?\n/);
+  const beginMatch = normalized.match(/-----BEGIN ([^-]+)-----/);
+  const endMatch = normalized.match(/-----END ([^-]+)-----/);
+  const blockType = beginMatch ? beginMatch[1] : "Plain text";
+  const looksExpected =
+    !expectedRegex || (beginMatch && expectedRegex.test(blockType));
+
+  return [
+    `${label} loaded from ${sourceLabel}.`,
+    `Bytes: ${new TextEncoder().encode(normalized).length}`,
+    `Lines: ${lines.length}`,
+    `Detected block type: ${blockType}`,
+    beginMatch && endMatch
+      ? `PEM boundaries: ${beginMatch[1]} ... ${endMatch[1]}`
+      : "PEM boundaries not detected",
+    looksExpected
+      ? "Format check: looks valid for this input type"
+      : "Format check: unexpected block type for this input",
+  ].join("\n");
+}
+
+function getCryptEncounteredEntries() {
+  const entries = [];
+  if (!capturedPackets || !capturedPackets["Host"]) return entries;
+
+  for (const host of Object.keys(capturedPackets["Host"])) {
+    const packets = capturedPackets["Host"][host];
+    if (!Array.isArray(packets)) continue;
+
+    packets.forEach((packet) => {
+      const packetInfo = packet?.["Packet Info"];
+      const extraInfo = packet?.["Extra Info"];
+      const serverInfo = extraInfo?.["Traits"]?.["Server Info"];
+      const encryptionData = serverInfo?.["Encryption Data"];
+      if (!packetInfo || !serverInfo || !encryptionData || encryptionData === "N/A")
+        return;
+
+      const protocol = packetInfo["Protocol"] || "Unknown";
+      const transportData = packetInfo[protocol] || {};
+      const encryptedWithRaw = encryptionData["Encrypted With"];
+      const encryptedWith = Array.isArray(encryptedWithRaw)
+        ? encryptedWithRaw.filter(Boolean)
+        : encryptedWithRaw
+          ? [String(encryptedWithRaw)]
+          : [];
+      entries.push({
+        host,
+        packetIndex: packetInfo["Index"] ?? "?",
+        protocol,
+        srcIp: packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
+        dstIp: packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
+        srcPort: transportData?.["Source port"] ?? "N/A",
+        dstPort: transportData?.["Destination port"] ?? "N/A",
+        encrypted: serverInfo["Encrypted"] ?? "Unknown",
+        sslVersion: encryptionData["SSL Version"] ?? "Unknown",
+        sslCert: encryptionData["SSL Cert"] ?? "",
+        encryptedWith,
+      });
+    });
+  }
+
+  return entries.sort((a, b) => {
+    const aIdx = Number(a.packetIndex);
+    const bIdx = Number(b.packetIndex);
+    if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+    return String(a.packetIndex).localeCompare(String(b.packetIndex));
+  });
+}
+
+function renderCryptEncounteredDetails(entry) {
+  const detailsEl = document.getElementById("crypt-encountered-details");
+  if (!entry) {
+    detailsEl.textContent = "Select an encountered SSL/TLS item to inspect.";
+    return;
+  }
+  const algoText = entry.encryptedWith.length
+    ? entry.encryptedWith.join(", ")
+    : "Unavailable";
+  detailsEl.textContent = [
+    `Host: ${entry.host}`,
+    `Packet: ${entry.packetIndex}`,
+    `Protocol: ${entry.protocol}`,
+    `Path: ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`,
+    `Encrypted: ${entry.encrypted}`,
+    `SSL/TLS Version: ${entry.sslVersion}`,
+    `Algorithms: ${algoText}`,
+  ].join("\n");
+}
+
+function generateCryptEntryId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+    return `${Date.now()}-${hex}`;
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toBase64(bytes) {
+  return window.btoa(
+    Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""),
+  );
+}
+
+function fromBase64(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function deriveCryptKey(passphrase, saltBytes, usage) {
+  const keyMaterial = await window.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"],
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations: 600000,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    [usage],
+  );
+}
+
+async function encryptCryptContent(content, passphrase) {
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveCryptKey(passphrase, salt, "encrypt");
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(content),
+  );
+  return {
+    encryptedContent: toBase64(new Uint8Array(ciphertext)),
+    salt: toBase64(salt),
+    iv: toBase64(iv),
+  };
+}
+
+async function decryptCryptContent(entry, passphrase) {
+  const key = await deriveCryptKey(passphrase, fromBase64(entry.salt), "decrypt");
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64(entry.iv) },
+    key,
+    fromBase64(entry.encryptedContent),
+  );
+  return new TextDecoder().decode(new Uint8Array(decrypted));
+}
+
+function getCryptKeystorePassphrase() {
+  const passphrase = document.getElementById("crypt-keystore-passphrase")?.value || "";
+  if (!passphrase.trim()) {
+    statusUpdate("Status: Enter a keystore passphrase first");
+    return null;
+  }
+  return passphrase;
+}
+
+function getFirstLineOrFallback(elementId, fallback = "") {
+  const text = document.getElementById(elementId)?.textContent || "";
+  const firstLine = text.split("\n")[0]?.trim();
+  return firstLine || fallback;
+}
+
+function openCryptKeystoreDb() {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(
+      CRYPT_KEYSTORE_DB_NAME,
+      CRYPT_KEYSTORE_DB_VERSION,
+    );
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CRYPT_KEYSTORE_STORE_NAME)) {
+        db.createObjectStore(CRYPT_KEYSTORE_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+function runIdbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+function waitForIdbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+async function loadCryptKeystore() {
+  try {
+    const db = await openCryptKeystoreDb();
+    const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readonly");
+    const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
+    const storedRecord = await runIdbRequest(store.get(CRYPT_KEYSTORE_RECORD_KEY));
+    db.close();
+
+    const parsed = storedRecord?.entries;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        id: entry.id || generateCryptEntryId(),
+        type: String(entry.type || "secret"),
+        label: String(entry.label || "Untitled"),
+        source: String(entry.source || "manual"),
+        encryptedContent: String(entry.encryptedContent || ""),
+        salt: String(entry.salt || ""),
+        iv: String(entry.iv || ""),
+        summary: String(entry.summary || ""),
+        createdAt: String(entry.createdAt || new Date().toISOString()),
+      }))
+      .filter((entry) => entry.encryptedContent && entry.salt && entry.iv);
+  } catch (error) {
+    logErrorEntry("crypt-keystore-load", error);
+    return [];
+  }
+}
+
+async function saveCryptKeystore() {
+  try {
+    const db = await openCryptKeystoreDb();
+    const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
+    store.put(
+      { entries: cryptKeystoreEntries },
+      CRYPT_KEYSTORE_RECORD_KEY,
+    );
+    await waitForIdbTransaction(transaction);
+    db.close();
+  } catch (error) {
+    logErrorEntry("crypt-keystore-save", error);
+    doError("Could not save the persistent local keystore.");
+  }
+}
+
+function renderCryptKeystoreDetails(entry) {
+  const detailsEl = document.getElementById("crypt-keystore-details");
+  if (!entry) {
+    detailsEl.textContent = "No keystore entries saved.";
+    return;
+  }
+  detailsEl.textContent = [
+    `Type: ${entry.type}`,
+    `Label: ${entry.label}`,
+    `Source: ${entry.source}`,
+    `Saved: ${entry.createdAt}`,
+    entry.summary ? `Summary: ${entry.summary}` : "Summary: n/a",
+  ].join("\n");
+}
+
+function renderCryptKeystoreList() {
+  const listEl = document.getElementById("crypt-keystore-list");
+  listEl.replaceChildren();
+  if (!cryptKeystoreEntries.length) {
+    const option = document.createElement("option");
+    option.textContent = "No local keystore entries.";
+    option.disabled = true;
+    listEl.appendChild(option);
+    renderCryptKeystoreDetails(null);
+    return;
+  }
+
+  cryptKeystoreEntries.forEach((entry, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `[${entry.type}] ${entry.label}`;
+    listEl.appendChild(option);
+  });
+  listEl.selectedIndex = 0;
+  renderCryptKeystoreDetails(cryptKeystoreEntries[0]);
+}
+
+async function addCryptKeystoreEntry({ type, label, source, content, summary }) {
+  const normalizedContent = (content || "").trim();
+  if (!normalizedContent) {
+    statusUpdate("Status: No content available to save");
+    return;
+  }
+  const passphrase = getCryptKeystorePassphrase();
+  if (!passphrase) return;
+
+  if (!(window.crypto && window.crypto.subtle)) {
+    doError("WebCrypto API is unavailable; cannot encrypt keystore entries.");
+    return;
+  }
+
+  let encrypted;
+  try {
+    encrypted = await encryptCryptContent(normalizedContent, passphrase);
+  } catch (error) {
+    logErrorEntry("crypt-keystore-encrypt", error);
+    doError("Could not encrypt keystore content.");
+    return;
+  }
+
+  const entry = {
+    id: generateCryptEntryId(),
+    type,
+    label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
+    source,
+    encryptedContent: encrypted.encryptedContent,
+    salt: encrypted.salt,
+    iv: encrypted.iv,
+    summary: summary || "",
+    createdAt: new Date().toISOString(),
+  };
+  cryptKeystoreEntries.unshift(entry);
+  await saveCryptKeystore();
+  renderCryptKeystoreList();
+  statusUpdate(`Status: Saved ${type} in local crypt keystore`);
+  writeLogEntry(`Crypt keystore entry added type=${type} label="${entry.label}"`);
+}
+
+async function loadSelectedCryptKeystoreEntry() {
+  const listEl = document.getElementById("crypt-keystore-list");
+  const selectedIndex = Number(listEl.value);
+  if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+    statusUpdate("Status: Select a keystore entry first");
+    return;
+  }
+  const passphrase = getCryptKeystorePassphrase();
+  if (!passphrase) return;
+
+  const selectedEntry = cryptKeystoreEntries[selectedIndex];
+  let decryptedContent = "";
+  try {
+    decryptedContent = await decryptCryptContent(selectedEntry, passphrase);
+  } catch (error) {
+    logErrorEntry("crypt-keystore-decrypt", error);
+    doError("Could not decrypt keystore entry. Verify passphrase.");
+    return;
+  }
+  renderCryptKeystoreDetails(selectedEntry);
+  document.getElementById("crypt-keystore-label").value = selectedEntry.label;
+  if (selectedEntry.type === "certificate") {
+    applyCryptCertificateText(decryptedContent, "local keystore");
+  } else if (selectedEntry.type === "private-key") {
+    applyCryptPrivateKeyText(decryptedContent, "local keystore");
+  } else {
+    document.getElementById("crypt-credential-input").value = decryptedContent;
+  }
+  statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
+}
+
+async function deleteSelectedCryptKeystoreEntry() {
+  const listEl = document.getElementById("crypt-keystore-list");
+  const selectedIndex = Number(listEl.value);
+  if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+    statusUpdate("Status: Select a keystore entry first");
+    return;
+  }
+  const [removedEntry] = cryptKeystoreEntries.splice(selectedIndex, 1);
+  await saveCryptKeystore();
+  renderCryptKeystoreList();
+  statusUpdate(`Status: Deleted keystore entry "${removedEntry.label}"`);
+  writeLogEntry(
+    `Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
+  );
+}
+
+function refreshCryptEncounteredEntries() {
+  const listEl = document.getElementById("crypt-encountered-list");
+  cryptEncounteredEntries = getCryptEncounteredEntries();
+  listEl.replaceChildren();
+  cryptActiveEntryIndex = -1;
+
+  if (cryptEncounteredEntries.length === 0) {
+    const option = document.createElement("option");
+    option.textContent = "No SSL/TLS encryption encountered in loaded capture.";
+    option.disabled = true;
+    listEl.appendChild(option);
+    renderCryptEncounteredDetails(null);
+    return;
+  }
+
+  cryptEncounteredEntries.forEach((entry, entryIndex) => {
+    const option = document.createElement("option");
+    option.value = String(entryIndex);
+    const algoPreview = entry.encryptedWith.length
+      ? entry.encryptedWith[0]
+      : "Unknown cipher";
+    option.textContent = `#${entry.packetIndex} ${entry.sslVersion} ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort} (${algoPreview})`;
+    listEl.appendChild(option);
+  });
+
+  listEl.selectedIndex = 0;
+  cryptActiveEntryIndex = 0;
+  renderCryptEncounteredDetails(cryptEncounteredEntries[0]);
+}
+
+function setCryptSubtab(tabName) {
+  const sslActive = tabName === CRYPT_SSL_SUBTAB;
+  const pgpActive = tabName === CRYPT_PGP_SUBTAB;
+  const opensshActive = tabName === CRYPT_OPENSSH_SUBTAB;
+  document
+    .getElementById("crypt-subtab-ssl")
+    .classList.toggle("active", sslActive);
+  document
+    .getElementById("crypt-subtab-pgp")
+    .classList.toggle("active", pgpActive);
+  document
+    .getElementById("crypt-subtab-openssh")
+    .classList.toggle("active", opensshActive);
+  document.getElementById("crypt-ssl-panel").hidden = !sslActive;
+  document.getElementById("crypt-pgp-panel").hidden = !pgpActive;
+  document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
+}
+
+function applyCryptCertificateText(rawText, sourceLabel) {
+  const certInputEl = document.getElementById("crypt-cert-input");
+  const certPreviewEl = document.getElementById("crypt-cert-preview");
+  const normalized = (rawText || "").trim();
+  certInputEl.value = normalized;
+  certPreviewEl.textContent = formatCryptSummary(
+    normalized,
+    "Certificate",
+    sourceLabel,
+    /CERTIFICATE/i,
+  );
+  if (normalized) {
+    statusUpdate(`Status: Certificate loaded from ${sourceLabel}`);
+    writeLogEntry(`Crypt certificate loaded source="${sourceLabel}"`);
+  }
+}
+
+function applyCryptPrivateKeyText(rawText, sourceLabel) {
+  const keyInputEl = document.getElementById("crypt-key-input");
+  const keyPreviewEl = document.getElementById("crypt-key-preview");
+  const normalized = (rawText || "").trim();
+  keyInputEl.value = normalized;
+  keyPreviewEl.textContent = formatCryptSummary(
+    normalized,
+    "Private key",
+    sourceLabel,
+    /(PRIVATE KEY|OPENSSH)/i,
+  );
+  if (normalized) {
+    statusUpdate(`Status: Private key loaded from ${sourceLabel}`);
+    writeLogEntry(`Crypt private key loaded source="${sourceLabel}"`);
+  }
+}
+
+function readCryptTextFile(fileInputEl, onLoad) {
+  const file = fileInputEl.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => onLoad(String(reader.result || ""), `file ${file.name}`);
+  reader.onerror = (error) => {
+    logErrorEntry("crypt-file-read", error);
+    doError("Could not read selected crypt file.");
+  };
+  reader.readAsText(file);
+}
+
+function applyCryptFilterForActiveEntry() {
+  if (cryptActiveEntryIndex < 0 || !cryptEncounteredEntries[cryptActiveEntryIndex]) {
+    statusUpdate("Status: Select an encountered SSL/TLS entry first");
+    return;
+  }
+  const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
+  if (
+    !STRICT_IPV4_REGEX.test(String(activeEntry.srcIp || "")) ||
+    !STRICT_IPV4_REGEX.test(String(activeEntry.dstIp || ""))
+  ) {
+    statusUpdate("Status: Cannot build filter query for non-IPv4 packet endpoints");
+    return;
+  }
+  const query = `ip.src.addr: ${activeEntry.srcIp} && ip.dst.addr: ${activeEntry.dstIp}`;
+  filterInputEl.value = query;
+  syncFilterHighlight();
+  runFilterQuery(query);
+  writeLogEntry(`Crypt filter applied query="${query}"`);
+}
+
+function loadEncounteredCertificateIntoCrypt() {
+  if (cryptActiveEntryIndex < 0 || !cryptEncounteredEntries[cryptActiveEntryIndex]) {
+    statusUpdate("Status: Select an encountered SSL/TLS entry first");
+    return;
+  }
+  const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
+  if (!activeEntry.sslCert || activeEntry.sslCert === "Not available") {
+    statusUpdate("Status: No certificate text available for selected entry");
+    return;
+  }
+  applyCryptCertificateText(
+    String(activeEntry.sslCert),
+    `encountered packet #${activeEntry.packetIndex}`,
+  );
+}
+
+function showCryptWorkspace() {
+  if (jsonCapture === "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("Please upload a JSON file before accessing crypt tools.");
+    return;
+  }
+
+  statusUpdate("Status: Displaying crypt workspace");
+  writeLogEntry("User opened crypt workspace");
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  const cryptBoxEl = document.getElementById("crypt_box");
+  cryptBoxEl.style.display = "flex";
+  setCryptSubtab(CRYPT_SSL_SUBTAB);
+  refreshCryptEncounteredEntries();
+}
+
+function showKeystoreWorkspace() {
+  if (jsonCapture === "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("Please upload a JSON file before accessing the keystore.");
+    return;
+  }
+
+  statusUpdate("Status: Displaying local keystore");
+  writeLogEntry("User opened keystore workspace");
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  const keystoreBoxEl = document.getElementById("keystore_box");
+  keystoreBoxEl.style.display = "flex";
+  renderCryptKeystoreList();
 }
 
 let activeContextConversionText = "";
@@ -2730,6 +3318,22 @@ document
     showDataTools();
   });
 
+document.getElementById("crypt-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing crypt tools.");
+    return;
+  }
+  showCryptWorkspace();
+});
+
+document.getElementById("keystore-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing the keystore.");
+    return;
+  }
+  showKeystoreWorkspace();
+});
+
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {
   if (!isFileLoaded) {
@@ -2738,6 +3342,140 @@ document.getElementById("list-btn").addEventListener("click", function () {
   }
   showPacketList();
 });
+
+document
+  .getElementById("crypt-subtab-ssl")
+  .addEventListener("click", () => setCryptSubtab(CRYPT_SSL_SUBTAB));
+document
+  .getElementById("crypt-subtab-pgp")
+  .addEventListener("click", () => setCryptSubtab(CRYPT_PGP_SUBTAB));
+document
+  .getElementById("crypt-subtab-openssh")
+  .addEventListener("click", () => setCryptSubtab(CRYPT_OPENSSH_SUBTAB));
+document.getElementById("crypt-refresh-btn").addEventListener("click", () => {
+  refreshCryptEncounteredEntries();
+});
+document
+  .getElementById("crypt-encountered-list")
+  .addEventListener("change", function () {
+    const selectedIndex = Number(this.value);
+    if (!Number.isFinite(selectedIndex) || !cryptEncounteredEntries[selectedIndex]) {
+      return;
+    }
+    cryptActiveEntryIndex = selectedIndex;
+    renderCryptEncounteredDetails(cryptEncounteredEntries[selectedIndex]);
+  });
+document
+  .getElementById("crypt-apply-filter-btn")
+  .addEventListener("click", applyCryptFilterForActiveEntry);
+document
+  .getElementById("crypt-load-encountered-cert-btn")
+  .addEventListener("click", loadEncounteredCertificateIntoCrypt);
+
+document
+  .getElementById("crypt-load-cert-file-btn")
+  .addEventListener("click", () =>
+    document.getElementById("crypt-cert-file-input").click(),
+  );
+document
+  .getElementById("crypt-cert-file-input")
+  .addEventListener("change", function () {
+    readCryptTextFile(this, applyCryptCertificateText);
+    this.value = "";
+  });
+document
+  .getElementById("crypt-use-cert-input-btn")
+  .addEventListener("click", () =>
+    applyCryptCertificateText(
+      document.getElementById("crypt-cert-input").value,
+      "pasted text",
+    ),
+  );
+document.getElementById("crypt-clear-cert-btn").addEventListener("click", () => {
+  applyCryptCertificateText("", "cleared");
+});
+
+document
+  .getElementById("crypt-load-key-file-btn")
+  .addEventListener("click", () =>
+    document.getElementById("crypt-key-file-input").click(),
+  );
+document
+  .getElementById("crypt-key-file-input")
+  .addEventListener("change", function () {
+    readCryptTextFile(this, applyCryptPrivateKeyText);
+    this.value = "";
+  });
+document
+  .getElementById("crypt-use-key-input-btn")
+  .addEventListener("click", () =>
+    applyCryptPrivateKeyText(
+      document.getElementById("crypt-key-input").value,
+      "pasted text",
+    ),
+  );
+document.getElementById("crypt-clear-key-btn").addEventListener("click", () => {
+  applyCryptPrivateKeyText("", "cleared");
+});
+
+document
+  .getElementById("crypt-save-cert-keystore-btn")
+  .addEventListener("click", () => {
+    void addCryptKeystoreEntry({
+      type: "certificate",
+      label: document.getElementById("crypt-keystore-label").value,
+      source: "crypt-certificate-loader",
+      content: document.getElementById("crypt-cert-input").value,
+      summary: getFirstLineOrFallback(
+        "crypt-cert-preview",
+        "Certificate from loader",
+      ),
+    });
+  });
+document
+  .getElementById("crypt-save-key-keystore-btn")
+  .addEventListener("click", () => {
+    void addCryptKeystoreEntry({
+      type: "private-key",
+      label: document.getElementById("crypt-keystore-label").value,
+      source: "crypt-private-key-loader",
+      content: document.getElementById("crypt-key-input").value,
+      summary: getFirstLineOrFallback(
+        "crypt-key-preview",
+        "Private key from loader",
+      ),
+    });
+  });
+document
+  .getElementById("crypt-save-secret-keystore-btn")
+  .addEventListener("click", () => {
+    void addCryptKeystoreEntry({
+      type: "secret",
+      label: document.getElementById("crypt-keystore-label").value,
+      source: "crypt-secret-input",
+      content: document.getElementById("crypt-credential-input").value,
+      summary: "Manual secret/credential entry",
+    });
+  });
+document
+  .getElementById("crypt-keystore-list")
+  .addEventListener("change", function () {
+    const selectedIndex = Number(this.value);
+    if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+      return;
+    }
+    renderCryptKeystoreDetails(cryptKeystoreEntries[selectedIndex]);
+  });
+document
+  .getElementById("crypt-load-keystore-entry-btn")
+  .addEventListener("click", () => {
+    void loadSelectedCryptKeystoreEntry();
+  });
+document
+  .getElementById("crypt-delete-keystore-entry-btn")
+  .addEventListener("click", () => {
+    void deleteSelectedCryptKeystoreEntry();
+  });
 
 document
   .getElementById("data-tools-convert-btn")
@@ -2890,6 +3628,8 @@ function showPacketList() {
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   const listBox = document.getElementById("list_box");
   listBox.style.display = "flex";
@@ -3162,6 +3902,8 @@ function showPacketList() {
           // Switch to Host Data view
           document.getElementById("list_box").style.display = "none";
           document.getElementById("data_tools_box").style.display = "none";
+          document.getElementById("crypt_box").style.display = "none";
+          document.getElementById("keystore_box").style.display = "none";
           document.getElementById("packetInfoPane").style.display = "block";
           document.getElementById("packetPayloadPane").style.display = "block";
           document.getElementById("prev-btn").style.display = "block";
@@ -3347,6 +4089,8 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "block";
   document.getElementById("packetPayloadPane").style.display = "block";
   document.getElementById("welcome").style.display = "none";
@@ -4107,7 +4851,7 @@ document.addEventListener("contextmenu", (event) => {
   const pasteTarget = getPasteTargetFromContextTarget(target);
   const selectedText = getTrimmedSelectionText();
   const insideEligiblePanel = target?.closest(
-    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #sidedata",
+    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
   );
   const isHexViewTarget = Boolean(target?.closest("#hexg"));
   let conversionText = "";
@@ -4202,6 +4946,18 @@ window.api.onError((msg) => {
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
   hideConvertContextMenu();
+  loadCryptKeystore()
+    .then((entries) => {
+      cryptKeystoreEntries = entries;
+      renderCryptKeystoreList();
+    })
+    .catch((error) => {
+      cryptKeystoreEntries = [];
+      renderCryptKeystoreList();
+      logErrorEntry("crypt-keystore-load", error);
+      statusUpdate("Status: Could not load persistent keystore entries");
+    });
+  setCryptSubtab(CRYPT_SSL_SUBTAB);
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";
