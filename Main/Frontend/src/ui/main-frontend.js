@@ -855,10 +855,32 @@ async function maybePromptSaveSessionOnExit() {
   if (!isFileLoaded || !capturedPackets || !capturedPackets["Host"]) {
     return "discard";
   }
-  if (!window.quitapi?.promptSaveOnExit) {
+  const dialogEl = document.getElementById("save-session-dialog");
+  if (!dialogEl) {
     return window.confirm("Save session before exit?") ? "save" : "cancel";
   }
-  return window.quitapi.promptSaveOnExit();
+  dialogEl.hidden = false;
+  return new Promise((resolve) => {
+    function cleanup(result) {
+      dialogEl.hidden = true;
+      document
+        .getElementById("save-session-save-btn")
+        .removeEventListener("click", onSave);
+      document
+        .getElementById("save-session-discard-btn")
+        .removeEventListener("click", onDiscard);
+      document
+        .getElementById("save-session-cancel-btn")
+        .removeEventListener("click", onCancel);
+      resolve(result);
+    }
+    function onSave() { cleanup("save"); }
+    function onDiscard() { cleanup("discard"); }
+    function onCancel() { cleanup("cancel"); }
+    document.getElementById("save-session-save-btn").addEventListener("click", onSave);
+    document.getElementById("save-session-discard-btn").addEventListener("click", onDiscard);
+    document.getElementById("save-session-cancel-btn").addEventListener("click", onCancel);
+  });
 }
 
 async function requestApplicationClose() {
