@@ -1,5 +1,5 @@
 import "./assets/css/style.css";
-const { filterPackets } = require("./filter");
+const { filterPackets, validateFilterSyntax } = require("./filter");
 const {
   createTable,
   renderDnsTable,
@@ -576,6 +576,17 @@ function addFilterHistory(query) {
 }
 
 function runFilterQuery(filterQuery) {
+  try {
+    validateFilterSyntax(filterQuery);
+  } catch (error) {
+    logErrorEntry("filter-syntax", error);
+    writeLogEntry(`User query rejected query="${filterQuery}"`);
+    doError(`Invalid filter syntax: ${error.message}`);
+    statusUpdate("Status: Invalid filter syntax");
+    return;
+  }
+
+  addFilterHistory(filterQuery);
   filteredPackets = filterPackets(capturedPackets, filterQuery);
   writeLogEntry(`User executed query="${filterQuery}"`);
 
@@ -3600,7 +3611,6 @@ document
   .addEventListener("keydown", function (event) {
     if (event.key === "Enter") {
       const filterQuery = filterInputEl.value;
-      addFilterHistory(filterQuery);
       runFilterQuery(filterQuery);
       filterHistorySelectEl.value = "";
     }
@@ -3675,7 +3685,6 @@ filterHistorySelectEl.addEventListener("change", () => {
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
-  addFilterHistory(selectedQuery);
   runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
 });
