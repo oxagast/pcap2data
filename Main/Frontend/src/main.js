@@ -353,6 +353,30 @@ ipcMain.handle('save-payload', async (_event, payloadHex) => {
   }
 });
 
+ipcMain.handle('save-cookie-jar', async (_event, cookieJarText) => {
+  if (typeof cookieJarText !== 'string' || cookieJarText.trim() === '') {
+    return { success: false, error: 'No cookie jar data to save' };
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save Cookie Jar',
+    defaultPath: path.join(app.getPath('documents'), 'cookie_jar.txt'),
+    filters: [
+      { name: 'Text Files', extensions: ['txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    await fs.promises.writeFile(filePath, cookieJarText, 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Cookie jar save error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 // Map a Content-Type header value to a file extension for HTTP body exports.
 function extFromContentType(contentType) {
   const base = (contentType || '').split(';')[0].trim().toLowerCase();

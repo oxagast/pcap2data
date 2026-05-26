@@ -1788,6 +1788,7 @@ function autoDetectProtoFromBytes(bytes) {
 function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (!protoOutput) return;
+  activeDataToolsProtoResult = result || null;
   protoOutput.innerHTML = "";
   if (!result) {
     const span = document.createElement("span");
@@ -2387,6 +2388,41 @@ function buildSessionAutoKeystoreEntries() {
           });
         });
       });
+
+      const payloadHex = packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+      if (typeof payloadHex === "string" && payloadHex.trim()) {
+        try {
+          const payloadBytes = parseDataToolsInput("hex", payloadHex);
+          const decodedHttp = decodeHttpFromBytes(payloadBytes);
+          if (decodedHttp?.protocol === "HTTP") {
+            const cookieEntries = extractCookieJarEntriesFromHttpFields(
+              decodedHttp.fields,
+            );
+            cookieEntries.forEach((cookieEntry) => {
+              const separatorIndex = cookieEntry.indexOf("=");
+              const cookieName =
+                separatorIndex >= 0
+                  ? cookieEntry.slice(0, separatorIndex).trim()
+                  : "";
+              const cookieLabelSuffix =
+                cookieName || `packet-${packetIndex}-${hashContentForDeduplication(cookieEntry)}`;
+              pushSessionEntry({
+                type: "cookie",
+                label: `HTTP Cookie ${cookieLabelSuffix}`,
+                source: "session-auto-cookie-jar",
+                content: cookieEntry,
+                summary: `Host ${host} packet #${packetIndex}`,
+                packetIndex,
+                protocol: "HTTP",
+              });
+            });
+          }
+        } catch (error) {
+          // Keep auto-population resilient per packet; malformed payloads should not
+          // block loading. Log once per failure for troubleshooting.
+          logErrorEntry("crypt-keystore-cookie-auto", error);
+        }
+      }
     });
   });
 
@@ -2934,6 +2970,8 @@ let activeContextConversionText = "";
 let activeContextTarget = null;
 let activeContextPasteTarget = null;
 let activeContextFilterQueries = {};
+let activeContextCookieJarText = "";
+let activeDataToolsProtoResult = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -2981,6 +3019,8 @@ const convertContextButtons = {
   keystoreCertPersistent: getCachedElement("ctx-keystore-cert-persistent"),
   keystoreCookieSession: getCachedElement("ctx-keystore-cookie-session"),
   keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
+  copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
+  saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
   httpFileLoad: getCachedElement("ctx-http-file-load"),
   httpFilePreview: getCachedElement("ctx-http-file-preview"),
@@ -2999,6 +3039,7 @@ const convertContextSubmenus = {
   keystoreKey: getCachedElement("ctx-keystore-key-submenu"),
   keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
+  cookies: getCachedElement("ctx-cookies-submenu"),
   httpFile: getCachedElement("ctx-http-file-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
@@ -3092,6 +3133,7 @@ function hideConvertContextMenu() {
   activeContextTarget = null;
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
+  activeContextCookieJarText = "";
   resetConvertContextSubmenuPositions();
   convertContextMenuEl.hidden = true;
 }
@@ -3284,6 +3326,104 @@ function detectConvertibleFormats(text) {
   return formats;
 }
 
+function splitCookieHeaderEntries(headerValue) {
+  if (typeof headerValue !== "string" || !headerValue.trim()) return [];
+  const entries = [];
+  let currentEntry = "";
+  let inQuotes = false;
+  let isEscaped = false;
+
+  for (const character of headerValue) {
+    if (isEscaped) {
+      currentEntry += character;
+      isEscaped = false;
+      continue;
+    }
+    if (character === "\\" && inQuotes) {
+      currentEntry += character;
+      isEscaped = true;
+      continue;
+    }
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      currentEntry += character;
+      continue;
+    }
+    if (character === ";" && !inQuotes) {
+      const trimmedEntry = currentEntry.trim();
+      if (trimmedEntry) entries.push(trimmedEntry);
+      currentEntry = "";
+      continue;
+    }
+    currentEntry += character;
+  }
+
+  const trimmedEntry = currentEntry.trim();
+  if (trimmedEntry) entries.push(trimmedEntry);
+  return entries;
+}
+
+function extractCookieJarEntriesFromHttpFields(fields) {
+  if (!Array.isArray(fields)) return [];
+  const cookieEntries = [];
+  const addCookieEntry = (entry) => {
+    const normalizedEntry =
+      typeof entry === "string" ? entry.trim() : String(entry || "").trim();
+    if (!normalizedEntry || !normalizedEntry.includes("=")) return;
+    if (!cookieEntries.includes(normalizedEntry)) {
+      cookieEntries.push(normalizedEntry);
+    }
+  };
+
+  fields.forEach((field) => {
+    const fieldName = String(field?.name || "").trim().toLowerCase();
+    const fieldValue = typeof field?.value === "string" ? field.value.trim() : "";
+    if (!fieldValue) return;
+    if (fieldName === "cookie") {
+      splitCookieHeaderEntries(fieldValue).forEach((cookieEntry) => {
+        addCookieEntry(cookieEntry);
+      });
+      return;
+    }
+    if (fieldName === "set-cookie") {
+      addCookieEntry(fieldValue);
+    }
+  });
+
+  return cookieEntries;
+}
+
+function buildCookieJarTextFromHttpFields(fields) {
+  return extractCookieJarEntriesFromHttpFields(fields).join("\n");
+}
+
+function getCookieJarTextForCurrentPacket() {
+  const payloadHex = getCurrentRawPayloadHex();
+  if (!payloadHex) return "";
+  try {
+    const bytes = parseDataToolsInput("hex", payloadHex);
+    const decodedHttp = decodeHttpFromBytes(bytes);
+    return decodedHttp?.protocol === "HTTP"
+      ? buildCookieJarTextFromHttpFields(decodedHttp.fields)
+      : "";
+  } catch {
+    // Context-menu cookie actions are best-effort for the active packet.
+    // Fallback to no cookie jar when payload decode fails.
+    return "";
+  }
+}
+
+function getCookieJarTextForContextTarget(target) {
+  if (target?.closest?.("#data-tools-proto-output")) {
+    const dataToolsCookieJarText =
+      activeDataToolsProtoResult?.protocol === "HTTP"
+        ? buildCookieJarTextFromHttpFields(activeDataToolsProtoResult.fields)
+        : "";
+    if (dataToolsCookieJarText) return dataToolsCookieJarText;
+  }
+  return getCookieJarTextForCurrentPacket();
+}
+
 function getConversionTextFromTarget(target) {
   const selectedText = window.getSelection()?.toString().trim();
   if (selectedText) return selectedText;
@@ -3358,12 +3498,14 @@ function showConvertContextMenu(
     showPaste = true,
     showSaveJson = true,
     filterQueries = {},
+    cookieJarText = "",
   } = {},
 ) {
   activeContextConversionText = sourceText;
   activeContextTarget = target;
   activeContextPasteTarget = pasteTarget;
   activeContextFilterQueries = filterQueries;
+  activeContextCookieJarText = cookieJarText;
 
   convertContextButtons.copy.style.display = showCopySelection
     ? "block"
@@ -3476,6 +3618,7 @@ function showConvertContextMenu(
   const hasGeneralActions = showCopySelection || showPaste;
   const hasDataTypeActions = formats.length > 0 || hasPayloadToExport;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
+  const hasCookieActions = Boolean(cookieJarText);
   const hasKeystoreActions = showCopySelection || Boolean(sourceText);
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport;
@@ -3515,6 +3658,9 @@ function showConvertContextMenu(
   convertContextSubmenus.keystoreCookie.style.display = hasKeystoreActions
     ? "block"
     : "none";
+  convertContextSubmenus.cookies.style.display = hasCookieActions
+    ? "block"
+    : "none";
   convertContextSubmenus.export.style.display = hasExportActions
     ? "block"
     : "none";
@@ -3524,6 +3670,7 @@ function showConvertContextMenu(
     !hasDataTypeActions &&
     !isHexViewTarget &&
     !hasFilterActions &&
+    !hasCookieActions &&
     !hasKeystoreActions &&
     !hasExportActions &&
     !hasHttpBody
@@ -3536,6 +3683,7 @@ function showConvertContextMenu(
     (hasDataTypeActions ||
       isHexViewTarget ||
       hasFilterActions ||
+      hasCookieActions ||
       hasExportActions ||
       hasHttpBody)
       ? "block"
@@ -3546,6 +3694,7 @@ function showConvertContextMenu(
       hasDataTypeActions ||
       isHexViewTarget ||
       hasFilterActions ||
+      hasCookieActions ||
       hasKeystoreActions)
       ? "block"
       : "none";
@@ -3733,6 +3882,12 @@ function copySelectedTextFromContextMenu() {
     });
 }
 
+async function copyCookieJarFromContextMenu() {
+  const cookieJarText = activeContextCookieJarText;
+  hideConvertContextMenu();
+  await copyTextToClipboard(cookieJarText, "Cookie Jar");
+}
+
 function pasteTextFromContextMenu() {
   const pasteTarget = activeContextPasteTarget;
   hideConvertContextMenu();
@@ -3872,6 +4027,34 @@ function exportCurrentPayloadFromContextMenu() {
         "Status: Payload export failed – " + (errorMessage || "unknown error"),
       );
       console.error("Payload export failed:", errorMessage);
+    }
+  });
+}
+
+function saveCookieJarFromContextMenu() {
+  const cookieJarText = activeContextCookieJarText;
+  hideConvertContextMenu();
+  if (!cookieJarText) {
+    statusUpdate("Status: No cookie jar available to save");
+    return;
+  }
+  window.saveapi.saveCookieJar(cookieJarText).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Save cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Cookie jar saved successfully");
+      writeLogEntry("Context menu cookie jar save completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Cookie jar save failed");
+      logErrorEntry("save-cookie-jar", errorMessage || "unknown");
+      statusUpdate(
+        "Status: Cookie jar save failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("Cookie jar save failed:", errorMessage);
     }
   });
 }
@@ -4403,6 +4586,10 @@ convertContextButtons.copy.addEventListener(
   "click",
   copySelectedTextFromContextMenu,
 );
+convertContextButtons.copyCookieJar.addEventListener(
+  "click",
+  copyCookieJarFromContextMenu,
+);
 convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
 convertContextButtons.keystorePasswordSession.addEventListener("click", () => {
   addToKeystoreFromContextMenu("password", CRYPT_KEYSTORE_MODE_SESSION);
@@ -4439,6 +4626,10 @@ convertContextButtons.exportPacket.addEventListener(
 convertContextButtons.exportPayload.addEventListener(
   "click",
   exportCurrentPayloadFromContextMenu,
+);
+convertContextButtons.saveCookieJar.addEventListener(
+  "click",
+  saveCookieJarFromContextMenu,
 );
 convertContextButtons.httpFileSave.addEventListener(
   "click",
@@ -5707,6 +5898,9 @@ document.addEventListener("contextmenu", (event) => {
   const filterQueries = insideEligiblePanel
     ? buildContextFilterQueries(target, selectedText, conversionText)
     : {};
+  const cookieJarText = insideEligiblePanel
+    ? getCookieJarTextForContextTarget(target)
+    : "";
 
   event.preventDefault();
   showConvertContextMenu(
@@ -5722,6 +5916,7 @@ document.addEventListener("contextmenu", (event) => {
       showPaste: Boolean(pasteTarget),
       showSaveJson: true,
       filterQueries,
+      cookieJarText,
     },
   );
 });
