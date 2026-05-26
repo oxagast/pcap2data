@@ -85,9 +85,50 @@ const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
 const CRYPT_KEYSTORE_DB_VERSION = 1;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";
 const CRYPT_KEYSTORE_RECORD_KEY = "default";
+const CRYPT_KEYSTORE_SCHEMA_VERSION = 2;
+const CRYPT_KEYSTORE_MODE_SESSION = "session";
+const CRYPT_KEYSTORE_MODE_PERSISTENT = "persistent";
+const SESSION_KEYCHAIN_LABEL = "session keychain";
+const SESSION_SECRET_KEY_HINTS = [
+  "password",
+  "passwd",
+  "passphrase",
+  "secret",
+  "credential",
+  "token",
+  "authorization",
+  "auth",
+  "username",
+  "user",
+  "login",
+  "apikey",
+  "api_key",
+  "api-key",
+];
+const SESSION_SECRET_IGNORE_KEY_HINTS = [
+  "encrypted",
+  "length",
+  "checksum",
+  "version",
+  "port",
+  "ip",
+  "mac",
+  "ttl",
+  "window",
+  "sequence",
+  "ack",
+  "timestamp",
+  "frame",
+  "packet",
+];
 let cryptEncounteredEntries = [];
 let cryptActiveEntryIndex = -1;
-let cryptKeystoreEntries = [];
+let cryptPersistentKeystoreEntries = [];
+let cryptSessionKeystoreEntries = [];
+let cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
+let cryptKeystoreUnlockKeyMaterial = null;
+let cryptKeystoreUnlockDialogResolver = null;
+let cryptKeystoreUnlockDialogMode = "unlock";
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -691,6 +732,10 @@ function processFile(file) {
       isFileLoaded = true;
     }
     writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
+    cryptSessionKeystoreEntries = buildSessionAutoKeystoreEntries();
+    writeLogEntry(
+      `Session keychain auto-populated entries=${cryptSessionKeystoreEntries.length}`,
+    );
     const timeframe = getPacketTimeframe();
     if (timeframe) {
       writeLogEntry(
@@ -1950,14 +1995,21 @@ function fromBase64(base64) {
   return bytes;
 }
 
-async function deriveCryptKey(passphrase, saltBytes, usage) {
-  const keyMaterial = await window.crypto.subtle.importKey(
+async function importCryptKeyMaterial(passphrase) {
+  return window.crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(passphrase),
     { name: "PBKDF2" },
     false,
     ["deriveKey"],
   );
+}
+
+async function deriveCryptKey(passphraseOrKeyMaterial, saltBytes, usage) {
+  const keyMaterial =
+    typeof passphraseOrKeyMaterial === "string"
+      ? await importCryptKeyMaterial(passphraseOrKeyMaterial)
+      : passphraseOrKeyMaterial;
   return window.crypto.subtle.deriveKey(
     {
       name: "PBKDF2",
@@ -1996,15 +2048,6 @@ async function decryptCryptContent(entry, passphrase) {
     fromBase64(entry.encryptedContent),
   );
   return new TextDecoder().decode(new Uint8Array(decrypted));
-}
-
-function getCryptKeystorePassphrase() {
-  const passphrase = document.getElementById("crypt-keystore-passphrase")?.value || "";
-  if (!passphrase.trim()) {
-    statusUpdate("Status: Enter a keystore passphrase first");
-    return null;
-  }
-  return passphrase;
 }
 
 function getFirstLineOrFallback(elementId, fallback = "") {
@@ -2052,38 +2095,19 @@ async function loadCryptKeystore() {
     const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
     const storedRecord = await runIdbRequest(store.get(CRYPT_KEYSTORE_RECORD_KEY));
     db.close();
-
-    const parsed = storedRecord?.entries;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((entry) => entry && typeof entry === "object")
-      .map((entry) => ({
-        id: entry.id || generateCryptEntryId(),
-        type: String(entry.type || "secret"),
-        label: String(entry.label || "Untitled"),
-        source: String(entry.source || "manual"),
-        encryptedContent: String(entry.encryptedContent || ""),
-        salt: String(entry.salt || ""),
-        iv: String(entry.iv || ""),
-        summary: String(entry.summary || ""),
-        createdAt: String(entry.createdAt || new Date().toISOString()),
-      }))
-      .filter((entry) => entry.encryptedContent && entry.salt && entry.iv);
+    return storedRecord || null;
   } catch (error) {
     logErrorEntry("crypt-keystore-load", error);
-    return [];
+    return null;
   }
 }
 
-async function saveCryptKeystore() {
+async function saveCryptKeystoreRecord(storedRecord) {
   try {
     const db = await openCryptKeystoreDb();
     const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readwrite");
     const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
-    store.put(
-      { entries: cryptKeystoreEntries },
-      CRYPT_KEYSTORE_RECORD_KEY,
-    );
+    store.put(storedRecord, CRYPT_KEYSTORE_RECORD_KEY);
     await waitForIdbTransaction(transaction);
     db.close();
   } catch (error) {
@@ -2092,63 +2116,318 @@ async function saveCryptKeystore() {
   }
 }
 
+function sanitizePersistentEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const content =
+    typeof entry.content === "string"
+      ? entry.content
+      : entry.encryptedContent && entry.salt && entry.iv
+        ? null
+        : "";
+  return {
+    id: entry.id || generateCryptEntryId(),
+    type: String(entry.type || "secret"),
+    label: String(entry.label || "Untitled"),
+    source: String(entry.source || "manual"),
+    content,
+    encryptedContent: entry.encryptedContent ? String(entry.encryptedContent) : "",
+    salt: entry.salt ? String(entry.salt) : "",
+    iv: entry.iv ? String(entry.iv) : "",
+    summary: String(entry.summary || ""),
+    createdAt: String(entry.createdAt || new Date().toISOString()),
+  };
+}
+
+async function loadPersistentCryptKeystoreEntries(passphrase, existingRecord) {
+  const storedRecord =
+    existingRecord === undefined ? await loadCryptKeystore() : existingRecord;
+  if (!storedRecord) return [];
+
+  if (
+    storedRecord?.schemaVersion === CRYPT_KEYSTORE_SCHEMA_VERSION &&
+    storedRecord?.encryptedPayload &&
+    storedRecord?.salt &&
+    storedRecord?.iv
+  ) {
+    const decryptedJson = await decryptCryptContent(
+      {
+        encryptedContent: String(storedRecord.encryptedPayload),
+        salt: String(storedRecord.salt),
+        iv: String(storedRecord.iv),
+      },
+      passphrase,
+    );
+    const parsed = JSON.parse(decryptedJson);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(sanitizePersistentEntry).filter(Boolean);
+  }
+
+  // Legacy format compatibility.
+  const legacyEntries = Array.isArray(storedRecord?.entries)
+    ? storedRecord.entries.map(sanitizePersistentEntry).filter(Boolean)
+    : [];
+  await savePersistentCryptKeystoreEntries(legacyEntries, passphrase);
+  return legacyEntries;
+}
+
+async function savePersistentCryptKeystoreEntries(entries, passphrase) {
+  const encryptedPayload = await encryptCryptContent(
+    JSON.stringify(entries),
+    passphrase,
+  );
+  await saveCryptKeystoreRecord({
+    schemaVersion: CRYPT_KEYSTORE_SCHEMA_VERSION,
+    encryptedPayload: encryptedPayload.encryptedContent,
+    salt: encryptedPayload.salt,
+    iv: encryptedPayload.iv,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+function getActiveCryptKeystoreEntries() {
+  return cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION
+    ? cryptSessionKeystoreEntries
+    : cryptPersistentKeystoreEntries;
+}
+
+function getActiveKeystoreLabel() {
+  return cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION
+    ? SESSION_KEYCHAIN_LABEL
+    : "persistent keychain";
+}
+
+function updateCryptKeystoreWorkspaceState() {
+  const isPersistentMode =
+    cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT;
+  const saveCertBtn = document.getElementById("crypt-save-cert-keystore-btn");
+  const saveKeyBtn = document.getElementById("crypt-save-key-keystore-btn");
+  const saveSecretBtn = document.getElementById("crypt-save-secret-keystore-btn");
+  const sendToPersistentBtn = document.getElementById(
+    "crypt-send-to-persistent-btn",
+  );
+  const deleteBtn = document.getElementById("crypt-delete-keystore-entry-btn");
+  saveCertBtn.disabled = !isPersistentMode;
+  saveKeyBtn.disabled = !isPersistentMode;
+  saveSecretBtn.disabled = !isPersistentMode;
+  sendToPersistentBtn.disabled = isPersistentMode;
+  deleteBtn.disabled = !isPersistentMode;
+  const unlockStatusEl = document.getElementById("crypt-keystore-unlock-status");
+  unlockStatusEl.textContent = isPersistentMode
+    ? "Persistent keychain is unlocked for this app session."
+    : "Session keychain is auto-populated from decodable packet secrets and cert-tab imports.";
+}
+
 function renderCryptKeystoreDetails(entry) {
   const detailsEl = document.getElementById("crypt-keystore-details");
   if (!entry) {
-    detailsEl.textContent = "No keystore entries saved.";
+    detailsEl.textContent = `No entries available in ${getActiveKeystoreLabel()}.`;
     return;
   }
   detailsEl.textContent = [
+    `Keychain: ${getActiveKeystoreLabel()}`,
     `Type: ${entry.type}`,
     `Label: ${entry.label}`,
     `Source: ${entry.source}`,
+    entry.packetIndex !== undefined ? `Packet: ${entry.packetIndex}` : null,
     `Saved: ${entry.createdAt}`,
     entry.summary ? `Summary: ${entry.summary}` : "Summary: n/a",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function renderCryptKeystoreList() {
   const listEl = document.getElementById("crypt-keystore-list");
+  const activeEntries = getActiveCryptKeystoreEntries();
   listEl.replaceChildren();
-  if (!cryptKeystoreEntries.length) {
+  if (!activeEntries.length) {
     const option = document.createElement("option");
-    option.textContent = "No local keystore entries.";
+    option.textContent = `No entries in ${getActiveKeystoreLabel()}.`;
     option.disabled = true;
     listEl.appendChild(option);
     renderCryptKeystoreDetails(null);
+    updateCryptKeystoreWorkspaceState();
     return;
   }
 
-  cryptKeystoreEntries.forEach((entry, index) => {
+  activeEntries.forEach((entry, index) => {
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = `[${entry.type}] ${entry.label}`;
     listEl.appendChild(option);
   });
   listEl.selectedIndex = 0;
-  renderCryptKeystoreDetails(cryptKeystoreEntries[0]);
+  renderCryptKeystoreDetails(activeEntries[0]);
+  updateCryptKeystoreWorkspaceState();
+}
+
+function normalizeSessionSecretValue(value) {
+  if (value === null || value === undefined) return "";
+  const normalized =
+    typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+  return normalized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+}
+
+function decodeHttpBasicAuth(rawValue) {
+  if (!rawValue || !/^basic\s+/i.test(rawValue)) return "";
+  const encoded = rawValue.replace(/^basic\s+/i, "").trim();
+  if (!encoded) return "";
+  try {
+    const decoded = window.atob(encoded);
+    return decoded.includes(":") ? decoded.trim() : "";
+  } catch (error) {
+    logErrorEntry("crypt-keystore-basic-auth-decode", error);
+    return "";
+  }
+}
+
+function hashContentForDeduplication(content) {
+  let hash = 2166136261;
+  for (let index = 0; index < content.length; index++) {
+    hash ^= content.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function shouldIncludeSessionSecretKey(pathKey) {
+  if (!pathKey) return false;
+  const lower = pathKey.toLowerCase();
+  if (SESSION_SECRET_IGNORE_KEY_HINTS.some((hint) => lower.includes(hint))) {
+    return false;
+  }
+  return SESSION_SECRET_KEY_HINTS.some((hint) => lower.includes(hint));
+}
+
+function inferSessionEntryType(pathKey) {
+  const lower = String(pathKey || "").toLowerCase();
+  if (lower.includes("cert")) return "certificate";
+  if (lower.includes("private") && lower.includes("key")) return "private-key";
+  if (lower.includes("key")) return "private-key";
+  return "secret";
+}
+
+function collectSessionSecretCandidates(source, visit, parentPath = "") {
+  if (!source || typeof source !== "object") return;
+  for (const [key, value] of Object.entries(source)) {
+    const nextPath = parentPath ? `${parentPath}.${key}` : key;
+    if (value && typeof value === "object") {
+      collectSessionSecretCandidates(value, visit, nextPath);
+      continue;
+    }
+    visit(nextPath, value);
+  }
+}
+
+function buildSessionAutoKeystoreEntries() {
+  const generatedEntries = [];
+  const dedupe = new Set();
+  const hosts = capturedPackets?.Host;
+  if (!hosts || typeof hosts !== "object") return generatedEntries;
+
+  const pushSessionEntry = ({
+    type = "secret",
+    label,
+    source,
+    content,
+    summary,
+    packetIndex,
+    protocol,
+  }) => {
+    const normalizedContent = normalizeSessionSecretValue(content);
+    if (!normalizedContent) return;
+    const fingerprint = `${type}|${label}|${hashContentForDeduplication(normalizedContent)}`;
+    if (dedupe.has(fingerprint)) return;
+    dedupe.add(fingerprint);
+    generatedEntries.push({
+      id: generateCryptEntryId(),
+      type,
+      label: label || `${type}-${new Date().toISOString()}`,
+      source: source || "session-auto",
+      content: normalizedContent,
+      summary: summary || "",
+      packetIndex: packetIndex ?? "?",
+      protocol: protocol || "Unknown",
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  Object.entries(hosts).forEach(([host, packets]) => {
+    if (!Array.isArray(packets)) return;
+    packets.forEach((packet) => {
+      const packetInfo = packet?.["Packet Info"] || {};
+      const transportData = packetInfo?.["Transport Layer"] || {};
+      const extraInfo = packet?.["Extra Info"] || {};
+      const packetIndex = packetInfo?.["Index"] ?? "?";
+      const protocol = packetInfo?.["Protocol"] ?? "Unknown";
+      [transportData, extraInfo].forEach((candidateRoot) => {
+        collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
+          if (!shouldIncludeSessionSecretKey(pathKey)) return;
+          const rawText = normalizeSessionSecretValue(rawValue);
+          if (!rawText) return;
+          const decodedBasic = decodeHttpBasicAuth(rawText);
+          const contentToSave = decodedBasic || rawText;
+          pushSessionEntry({
+            type: inferSessionEntryType(pathKey),
+            label: `${protocol} ${pathKey}`,
+            source: "session-auto-decoded",
+            content: contentToSave,
+            summary: `Host ${host} packet #${packetIndex}`,
+            packetIndex,
+            protocol,
+          });
+        });
+      });
+    });
+  });
+
+  return generatedEntries.sort((a, b) => {
+    const aPacketNumber = Number(a.packetIndex);
+    const bPacketNumber = Number(b.packetIndex);
+    if (Number.isFinite(aPacketNumber) && Number.isFinite(bPacketNumber)) {
+      return aPacketNumber - bPacketNumber;
+    }
+    return String(a.packetIndex).localeCompare(String(b.packetIndex));
+  });
+}
+
+function addSessionKeystoreEntry({ type, label, source, content, summary, packetIndex }) {
+  const normalizedContent = normalizeSessionSecretValue(content);
+  if (!normalizedContent) return;
+  const exists = cryptSessionKeystoreEntries.some(
+    (entry) =>
+      entry.type === type &&
+      entry.label === label &&
+      normalizeSessionSecretValue(entry.content) === normalizedContent,
+  );
+  if (exists) return;
+  cryptSessionKeystoreEntries.unshift({
+    id: generateCryptEntryId(),
+    type,
+    label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
+    source: source || "session-auto",
+    content: normalizedContent,
+    summary: summary || "",
+    packetIndex: packetIndex ?? "?",
+    createdAt: new Date().toISOString(),
+  });
+  if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+    renderCryptKeystoreList();
+  }
 }
 
 async function addCryptKeystoreEntry({ type, label, source, content, summary }) {
+  if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
+    statusUpdate("Status: Switch to persistent keychain to save entries");
+    return;
+  }
+  if (!cryptKeystoreUnlockKeyMaterial) {
+    doError("Persistent keychain is locked. Reopen the keychain tab with password.");
+    return;
+  }
   const normalizedContent = (content || "").trim();
   if (!normalizedContent) {
     statusUpdate("Status: No content available to save");
-    return;
-  }
-  const passphrase = getCryptKeystorePassphrase();
-  if (!passphrase) return;
-
-  if (!(window.crypto && window.crypto.subtle)) {
-    doError("WebCrypto API is unavailable; cannot encrypt keystore entries.");
-    return;
-  }
-
-  let encrypted;
-  try {
-    encrypted = await encryptCryptContent(normalizedContent, passphrase);
-  } catch (error) {
-    logErrorEntry("crypt-keystore-encrypt", error);
-    doError("Could not encrypt keystore content.");
     return;
   }
 
@@ -2157,64 +2436,284 @@ async function addCryptKeystoreEntry({ type, label, source, content, summary }) 
     type,
     label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
     source,
-    encryptedContent: encrypted.encryptedContent,
-    salt: encrypted.salt,
-    iv: encrypted.iv,
+    content: normalizedContent,
     summary: summary || "",
     createdAt: new Date().toISOString(),
   };
-  cryptKeystoreEntries.unshift(entry);
-  await saveCryptKeystore();
+  cryptPersistentKeystoreEntries.unshift(entry);
+  try {
+    await savePersistentCryptKeystoreEntries(
+      cryptPersistentKeystoreEntries,
+      cryptKeystoreUnlockKeyMaterial,
+    );
+  } catch (error) {
+    logErrorEntry("crypt-keystore-save", error);
+    doError("Could not save the persistent keychain.");
+    return;
+  }
   renderCryptKeystoreList();
-  statusUpdate(`Status: Saved ${type} in local crypt keystore`);
+  statusUpdate(`Status: Saved ${type} in persistent keychain`);
   writeLogEntry(`Crypt keystore entry added type=${type} label="${entry.label}"`);
 }
 
 async function loadSelectedCryptKeystoreEntry() {
   const listEl = document.getElementById("crypt-keystore-list");
   const selectedIndex = Number(listEl.value);
-  if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+  const activeEntries = getActiveCryptKeystoreEntries();
+  if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
     statusUpdate("Status: Select a keystore entry first");
     return;
   }
-  const passphrase = getCryptKeystorePassphrase();
-  if (!passphrase) return;
 
-  const selectedEntry = cryptKeystoreEntries[selectedIndex];
-  let decryptedContent = "";
-  try {
-    decryptedContent = await decryptCryptContent(selectedEntry, passphrase);
-  } catch (error) {
-    logErrorEntry("crypt-keystore-decrypt", error);
-    doError("Could not decrypt keystore entry. Verify passphrase.");
+  const selectedEntry = activeEntries[selectedIndex];
+  let loadedContent = normalizeSessionSecretValue(selectedEntry.content);
+  if (!loadedContent && selectedEntry.encryptedContent && selectedEntry.salt && selectedEntry.iv) {
+    if (!cryptKeystoreUnlockKeyMaterial) {
+      doError("Persistent keychain is locked. Reopen keychain with password.");
+      return;
+    }
+    try {
+      loadedContent = await decryptCryptContent(
+        selectedEntry,
+        cryptKeystoreUnlockKeyMaterial,
+      );
+    } catch (error) {
+      logErrorEntry("crypt-keystore-decrypt", error);
+      doError("Could not decrypt keystore entry with current password.");
+      return;
+    }
+  }
+  if (!loadedContent) {
+    statusUpdate("Status: Selected entry has no decodable content");
     return;
   }
   renderCryptKeystoreDetails(selectedEntry);
   document.getElementById("crypt-keystore-label").value = selectedEntry.label;
   if (selectedEntry.type === "certificate") {
-    applyCryptCertificateText(decryptedContent, "local keystore");
+    applyCryptCertificateText(loadedContent, getActiveKeystoreLabel());
   } else if (selectedEntry.type === "private-key") {
-    applyCryptPrivateKeyText(decryptedContent, "local keystore");
+    applyCryptPrivateKeyText(loadedContent, getActiveKeystoreLabel());
   } else {
-    document.getElementById("crypt-credential-input").value = decryptedContent;
+    document.getElementById("crypt-credential-input").value = loadedContent;
   }
   statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
 }
 
 async function deleteSelectedCryptKeystoreEntry() {
+  if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
+    statusUpdate("Status: Session keychain entries are auto-managed");
+    return;
+  }
   const listEl = document.getElementById("crypt-keystore-list");
   const selectedIndex = Number(listEl.value);
-  if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+  if (
+    !Number.isFinite(selectedIndex) ||
+    !cryptPersistentKeystoreEntries[selectedIndex]
+  ) {
     statusUpdate("Status: Select a keystore entry first");
     return;
   }
-  const [removedEntry] = cryptKeystoreEntries.splice(selectedIndex, 1);
-  await saveCryptKeystore();
+  if (!cryptKeystoreUnlockKeyMaterial) {
+    doError("Persistent keychain is locked. Reopen keychain with password.");
+    return;
+  }
+  const [removedEntry] = cryptPersistentKeystoreEntries.splice(selectedIndex, 1);
+  try {
+    await savePersistentCryptKeystoreEntries(
+      cryptPersistentKeystoreEntries,
+      cryptKeystoreUnlockKeyMaterial,
+    );
+  } catch (error) {
+    logErrorEntry("crypt-keystore-save", error);
+    doError("Could not save the persistent keychain.");
+    return;
+  }
   renderCryptKeystoreList();
   statusUpdate(`Status: Deleted keystore entry "${removedEntry.label}"`);
   writeLogEntry(
     `Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
   );
+}
+
+async function sendSelectedSessionEntryToPersistent() {
+  if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_SESSION) {
+    statusUpdate("Status: Switch to session keychain to send temporary entries");
+    return;
+  }
+  if (!cryptKeystoreUnlockKeyMaterial) {
+    doError("Persistent keychain is locked. Reopen keychain with password.");
+    return;
+  }
+  const listEl = document.getElementById("crypt-keystore-list");
+  const selectedIndex = Number(listEl.value);
+  if (!Number.isFinite(selectedIndex) || !cryptSessionKeystoreEntries[selectedIndex]) {
+    statusUpdate("Status: Select a session keychain entry first");
+    return;
+  }
+
+  const selectedEntry = cryptSessionKeystoreEntries[selectedIndex];
+  const normalizedContent = normalizeSessionSecretValue(selectedEntry.content);
+  if (!normalizedContent) {
+    statusUpdate("Status: Selected session entry has no content to persist");
+    return;
+  }
+
+  const alreadyStored = cryptPersistentKeystoreEntries.some(
+    (entry) =>
+      entry.type === selectedEntry.type &&
+      entry.label === selectedEntry.label &&
+      normalizeSessionSecretValue(entry.content) === normalizedContent,
+  );
+  if (alreadyStored) {
+    statusUpdate("Status: Entry is already stored in persistent keychain");
+    return;
+  }
+
+  cryptPersistentKeystoreEntries.unshift({
+    id: generateCryptEntryId(),
+    type: selectedEntry.type,
+    label: selectedEntry.label,
+    source: `bookmarked from ${selectedEntry.source || "session-auto"}`,
+    content: normalizedContent,
+    summary: selectedEntry.summary || "Bookmarked from session keychain",
+    createdAt: new Date().toISOString(),
+  });
+  try {
+    await savePersistentCryptKeystoreEntries(
+      cryptPersistentKeystoreEntries,
+      cryptKeystoreUnlockKeyMaterial,
+    );
+  } catch (error) {
+    logErrorEntry("crypt-keystore-save", error);
+    doError("Could not save selected entry to persistent keychain.");
+    return;
+  }
+  statusUpdate(`Status: Sent "${selectedEntry.label}" to persistent keychain`);
+  writeLogEntry(`Session keychain entry persisted label="${selectedEntry.label}"`);
+}
+
+function configureKeystoreUnlockDialog(mode) {
+  cryptKeystoreUnlockDialogMode = mode === "setup" ? "setup" : "unlock";
+  const isSetup = cryptKeystoreUnlockDialogMode === "setup";
+  const titleEl = document.getElementById("crypt-keystore-unlock-title");
+  const descriptionEl = document.getElementById("crypt-keystore-unlock-description");
+  const passwordEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  const confirmBtn = document.getElementById("crypt-keystore-unlock-confirm-btn");
+  if (titleEl) {
+    titleEl.textContent = isSetup ? "Set Keychain Password" : "Unlock Keychain";
+  }
+  if (descriptionEl) {
+    descriptionEl.textContent = isSetup
+      ? "Create the initial password for the persistent keychain (minimum 8 characters). You will only be asked when selecting the keychain tab."
+      : "Enter the keychain password to unlock the persistent keychain.";
+  }
+  if (passwordEl) {
+    passwordEl.placeholder = isSetup
+      ? "Create keychain password"
+      : "Enter keychain password";
+  }
+  if (confirmEl) {
+    confirmEl.hidden = !isSetup;
+    confirmEl.placeholder = "Confirm keychain password";
+  }
+  if (confirmBtn) {
+    confirmBtn.textContent = isSetup ? "Set password" : "Unlock";
+  }
+}
+
+function requestKeystoreUnlockPassword(mode = "unlock") {
+  const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
+  const inputEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  if (!dialogEl || !inputEl || !confirmEl) return Promise.resolve(null);
+  configureKeystoreUnlockDialog(mode);
+  dialogEl.hidden = false;
+  inputEl.value = "";
+  confirmEl.value = "";
+  inputEl.focus();
+  return new Promise((resolve) => {
+    cryptKeystoreUnlockDialogResolver = resolve;
+  });
+}
+
+function resolveKeystoreUnlockPassword(value) {
+  const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
+  const inputEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  if (dialogEl) dialogEl.hidden = true;
+  if (inputEl) inputEl.value = "";
+  if (confirmEl) confirmEl.value = "";
+  if (!cryptKeystoreUnlockDialogResolver) return;
+  const resolve = cryptKeystoreUnlockDialogResolver;
+  cryptKeystoreUnlockDialogResolver = null;
+  resolve(value);
+}
+
+function submitKeystoreUnlockDialog() {
+  const inputEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  resolveKeystoreUnlockPassword({
+    password: inputEl?.value || "",
+    confirmPassword: confirmEl?.value || "",
+    mode: cryptKeystoreUnlockDialogMode,
+  });
+}
+
+async function unlockPersistentKeystoreAndLoad() {
+  if (!(window.crypto && window.crypto.subtle)) {
+    doError("WebCrypto API is unavailable; cannot unlock keychain.");
+    return false;
+  }
+  if (cryptKeystoreUnlockKeyMaterial) return true;
+
+  const storedRecord = await loadCryptKeystore();
+  const isInitialSetup = !storedRecord;
+  const dialogResult = await requestKeystoreUnlockPassword(
+    isInitialSetup ? "setup" : "unlock",
+  );
+  const normalizedPassword = (dialogResult?.password || "").trim();
+  if (!normalizedPassword) {
+    statusUpdate("Status: Keychain remains locked");
+    return false;
+  }
+  if (normalizedPassword.length < 8) {
+    doError("Keychain password must be at least 8 characters.");
+    return false;
+  }
+  if (
+    isInitialSetup &&
+    normalizedPassword !== String(dialogResult?.confirmPassword || "").trim()
+  ) {
+    doError("Keychain password confirmation does not match.");
+    return false;
+  }
+  try {
+    const keyMaterial = await importCryptKeyMaterial(normalizedPassword);
+    if (isInitialSetup) {
+      cryptPersistentKeystoreEntries = [];
+      await savePersistentCryptKeystoreEntries([], keyMaterial);
+      statusUpdate("Status: Keychain password set");
+      writeLogEntry("Persistent keychain password initialized");
+    } else {
+      cryptPersistentKeystoreEntries = await loadPersistentCryptKeystoreEntries(
+        keyMaterial,
+        storedRecord,
+      );
+      statusUpdate("Status: Keychain unlocked");
+      writeLogEntry("Persistent keychain unlocked");
+    }
+    cryptKeystoreUnlockKeyMaterial = keyMaterial;
+    return true;
+  } catch (error) {
+    logErrorEntry("crypt-keystore-unlock", error);
+    doError(
+      isInitialSetup
+        ? "Could not initialize persistent keychain."
+        : "Could not unlock persistent keychain. Verify password.",
+    );
+    return false;
+  }
 }
 
 function refreshCryptEncounteredEntries() {
@@ -2279,6 +2778,18 @@ function applyCryptCertificateText(rawText, sourceLabel) {
   if (normalized) {
     statusUpdate(`Status: Certificate loaded from ${sourceLabel}`);
     writeLogEntry(`Crypt certificate loaded source="${sourceLabel}"`);
+    if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
+      addSessionKeystoreEntry({
+        type: "certificate",
+        label: getFirstLineOrFallback(
+          "crypt-cert-preview",
+          `Certificate-${new Date().toISOString()}`,
+        ),
+        source: `cert-tab ${sourceLabel}`,
+        content: normalized,
+        summary: "Imported into cert tab",
+      });
+    }
   }
 }
 
@@ -2296,6 +2807,18 @@ function applyCryptPrivateKeyText(rawText, sourceLabel) {
   if (normalized) {
     statusUpdate(`Status: Private key loaded from ${sourceLabel}`);
     writeLogEntry(`Crypt private key loaded source="${sourceLabel}"`);
+    if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
+      addSessionKeystoreEntry({
+        type: "private-key",
+        label: getFirstLineOrFallback(
+          "crypt-key-preview",
+          `Private-key-${new Date().toISOString()}`,
+        ),
+        source: `cert-tab ${sourceLabel}`,
+        content: normalized,
+        summary: "Imported into cert tab",
+      });
+    }
   }
 }
 
@@ -2377,7 +2900,11 @@ function showKeystoreWorkspace() {
     return;
   }
 
-  statusUpdate("Status: Displaying local keystore");
+  if (!cryptKeystoreUnlockKeyMaterial) {
+    doError("Please unlock the keychain with password first.");
+    return;
+  }
+  statusUpdate("Status: Displaying keychain manager");
   writeLogEntry("User opened keystore workspace");
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
@@ -2389,6 +2916,8 @@ function showKeystoreWorkspace() {
   document.getElementById("rightside").style.display = "none";
   const keystoreBoxEl = document.getElementById("keystore_box");
   keystoreBoxEl.style.display = "flex";
+  const modeEl = document.getElementById("crypt-keystore-mode");
+  modeEl.value = cryptActiveKeystoreMode;
   renderCryptKeystoreList();
 }
 
@@ -3326,13 +3855,33 @@ document.getElementById("crypt-btn").addEventListener("click", function () {
   showCryptWorkspace();
 });
 
-document.getElementById("keystore-btn").addEventListener("click", function () {
+document.getElementById("keystore-btn").addEventListener("click", async function () {
   if (!isFileLoaded) {
     doError("Please upload a JSON file before accessing the keystore.");
     return;
   }
+  const unlocked = await unlockPersistentKeystoreAndLoad();
+  if (!unlocked) return;
   showKeystoreWorkspace();
 });
+document
+  .getElementById("crypt-keystore-unlock-confirm-btn")
+  .addEventListener("click", submitKeystoreUnlockDialog);
+document
+  .getElementById("crypt-keystore-unlock-cancel-btn")
+  .addEventListener("click", () => resolveKeystoreUnlockPassword(null));
+document
+  .getElementById("crypt-keystore-unlock-password")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    submitKeystoreUnlockDialog();
+  });
+document
+  .getElementById("crypt-keystore-unlock-password-confirm")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    submitKeystoreUnlockDialog();
+  });
 
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {
@@ -3458,18 +4007,34 @@ document
     });
   });
 document
+  .getElementById("crypt-keystore-mode")
+  .addEventListener("change", function () {
+    const selectedMode = String(this.value || CRYPT_KEYSTORE_MODE_SESSION);
+    cryptActiveKeystoreMode =
+      selectedMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+        ? CRYPT_KEYSTORE_MODE_PERSISTENT
+        : CRYPT_KEYSTORE_MODE_SESSION;
+    renderCryptKeystoreList();
+  });
+document
   .getElementById("crypt-keystore-list")
   .addEventListener("change", function () {
+    const activeEntries = getActiveCryptKeystoreEntries();
     const selectedIndex = Number(this.value);
-    if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
+    if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       return;
     }
-    renderCryptKeystoreDetails(cryptKeystoreEntries[selectedIndex]);
+    renderCryptKeystoreDetails(activeEntries[selectedIndex]);
   });
 document
   .getElementById("crypt-load-keystore-entry-btn")
   .addEventListener("click", () => {
     void loadSelectedCryptKeystoreEntry();
+  });
+document
+  .getElementById("crypt-send-to-persistent-btn")
+  .addEventListener("click", () => {
+    void sendSelectedSessionEntryToPersistent();
   });
 document
   .getElementById("crypt-delete-keystore-entry-btn")
@@ -4946,17 +5511,11 @@ window.api.onError((msg) => {
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
   hideConvertContextMenu();
-  loadCryptKeystore()
-    .then((entries) => {
-      cryptKeystoreEntries = entries;
-      renderCryptKeystoreList();
-    })
-    .catch((error) => {
-      cryptKeystoreEntries = [];
-      renderCryptKeystoreList();
-      logErrorEntry("crypt-keystore-load", error);
-      statusUpdate("Status: Could not load persistent keystore entries");
-    });
+  cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
+  cryptSessionKeystoreEntries = [];
+  cryptPersistentKeystoreEntries = [];
+  cryptKeystoreUnlockKeyMaterial = null;
+  renderCryptKeystoreList();
   setCryptSubtab(CRYPT_SSL_SUBTAB);
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";

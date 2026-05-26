@@ -343,15 +343,24 @@
             <div class="keystore-grid">
               <div class="crypt-section">
                 <div class="crypt-section-title">Create / Update Entry</div>
+                <div class="keystore-mode-row">
+                  <label for="crypt-keystore-mode">Keychain:</label>
+                  <select id="crypt-keystore-mode">
+                    <option value="session">Session auto keychain</option>
+                    <option value="persistent">Persistent keychain</option>
+                  </select>
+                </div>
+                <div
+                  id="crypt-keystore-unlock-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  Persistent keychain is unlocked for this app session.
+                </div>
                 <input
                   id="crypt-keystore-label"
                   type="text"
                   placeholder="Entry label (optional)"
-                />
-                <input
-                  id="crypt-keystore-passphrase"
-                  type="password"
-                  placeholder="Keystore passphrase (required for save/load)"
                 />
                 <textarea
                   id="crypt-credential-input"
@@ -369,11 +378,39 @@
                 <select id="crypt-keystore-list" size="10"></select>
                 <div class="crypt-actions-row">
                   <button id="crypt-load-keystore-entry-btn">Load selected</button>
+                  <button id="crypt-send-to-persistent-btn">
+                    Send to persistent
+                  </button>
                   <button id="crypt-delete-keystore-entry-btn">
                     Delete selected
                   </button>
                 </div>
                 <pre id="crypt-keystore-details">No keystore entries saved.</pre>
+              </div>
+            </div>
+          </div>
+          <div id="crypt-keystore-unlock-dialog" hidden>
+            <div class="crypt-keystore-unlock-content">
+              <div class="crypt-section-title" id="crypt-keystore-unlock-title">
+                Unlock Keychain
+              </div>
+              <div id="crypt-keystore-unlock-description">
+                Enter the keychain password to unlock the persistent keychain.
+              </div>
+              <input
+                id="crypt-keystore-unlock-password"
+                type="password"
+                placeholder="Enter keychain password"
+              />
+              <input
+                id="crypt-keystore-unlock-password-confirm"
+                type="password"
+                placeholder="Confirm keychain password"
+                hidden
+              />
+              <div class="crypt-actions-row">
+                <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
+                <button id="crypt-keystore-unlock-cancel-btn">Cancel</button>
               </div>
             </div>
           </div>
