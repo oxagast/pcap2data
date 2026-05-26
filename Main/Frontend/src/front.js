@@ -3026,6 +3026,7 @@ const convertContextButtons = {
   httpFilePreview: getCachedElement("ctx-http-file-preview"),
 };
 const convertContextSubmenus = {
+  copy: getCachedElement("ctx-copy-submenu"),
   convert: getCachedElement("ctx-convert-submenu"),
   filter: getCachedElement("ctx-filter-submenu"),
   filterAnd: getCachedElement("ctx-filter-and-submenu"),
@@ -3039,7 +3040,6 @@ const convertContextSubmenus = {
   keystoreKey: getCachedElement("ctx-keystore-key-submenu"),
   keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
-  cookies: getCachedElement("ctx-cookies-submenu"),
   httpFile: getCachedElement("ctx-http-file-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
@@ -3549,6 +3549,12 @@ function showConvertContextMenu(
   convertContextButtons.copyRaw.style.display = isHexViewTarget
     ? "block"
     : "none";
+  convertContextButtons.copyCookieJar.style.display = cookieJarText
+    ? "block"
+    : "none";
+  convertContextButtons.saveCookieJar.style.display = cookieJarText
+    ? "block"
+    : "none";
   convertContextButtons.loadPayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
@@ -3614,14 +3620,16 @@ function showConvertContextMenu(
   convertContextButtons.filterClearMime.style.display = filterQueries.mime
     ? "block"
     : "none";
-  const hasClipboardActions = showCopySelection || showPaste;
-  const hasGeneralActions = showCopySelection || showPaste;
+  const hasCookieActions = Boolean(cookieJarText);
+  const hasCopyActions = showCopySelection || isHexViewTarget || hasCookieActions;
+  const hasClipboardActions = hasCopyActions || showPaste;
+  const hasGeneralActions = hasClipboardActions;
   const hasDataTypeActions = formats.length > 0 || hasPayloadToExport;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
-  const hasCookieActions = Boolean(cookieJarText);
   const hasKeystoreActions = showCopySelection || Boolean(sourceText);
   const hasExportActions =
-    showSaveJson || hasPacketToExport || hasPayloadToExport;
+    showSaveJson || hasPacketToExport || hasPayloadToExport || hasCookieActions;
+  convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
   convertContextSubmenus.convert.style.display = hasDataTypeActions
     ? "block"
     : "none";
@@ -3658,9 +3666,6 @@ function showConvertContextMenu(
   convertContextSubmenus.keystoreCookie.style.display = hasKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.cookies.style.display = hasCookieActions
-    ? "block"
-    : "none";
   convertContextSubmenus.export.style.display = hasExportActions
     ? "block"
     : "none";
@@ -3683,7 +3688,6 @@ function showConvertContextMenu(
     (hasDataTypeActions ||
       isHexViewTarget ||
       hasFilterActions ||
-      hasCookieActions ||
       hasExportActions ||
       hasHttpBody)
       ? "block"
