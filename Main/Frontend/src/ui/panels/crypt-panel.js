@@ -56,7 +56,13 @@ function createCryptPanel({
   function getCryptEncounteredEntries() {
     const entries = [];
     const capturedPackets = getCapturedPackets();
-    if (!capturedPackets || !capturedPackets["Host"]) return entries;
+    if (
+      !capturedPackets ||
+      typeof capturedPackets !== "object" ||
+      !capturedPackets["Host"]
+    ) {
+      return entries;
+    }
 
     for (const host of Object.keys(capturedPackets["Host"])) {
       const packets = capturedPackets["Host"][host];

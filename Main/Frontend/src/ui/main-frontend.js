@@ -3127,19 +3127,16 @@ const cryptPanel = createCryptPanel({
   getFirstLineOrFallback,
 });
 
-const setCryptSubtab = (tabName) => cryptPanel.setCryptSubtab(tabName);
-const applyCryptCertificateText = (rawText, sourceLabel) =>
-  cryptPanel.applyCryptCertificateText(rawText, sourceLabel);
-const applyCryptPrivateKeyText = (rawText, sourceLabel) =>
-  cryptPanel.applyCryptPrivateKeyText(rawText, sourceLabel);
-const readCryptTextFile = (fileInputEl, onLoad) =>
-  cryptPanel.readCryptTextFile(fileInputEl, onLoad);
-const applyCryptFilterForActiveEntry = () => cryptPanel.applyCryptFilterForActiveEntry();
-const loadEncounteredCertificateIntoCrypt = () =>
-  cryptPanel.loadEncounteredCertificateIntoCrypt();
-const refreshCryptEncounteredEntries = () => cryptPanel.refreshCryptEncounteredEntries();
-const showCryptWorkspace = (tabName = CRYPT_SSL_SUBTAB) =>
-  cryptPanel.showCryptWorkspace(tabName);
+const {
+  setCryptSubtab,
+  applyCryptCertificateText,
+  applyCryptPrivateKeyText,
+  readCryptTextFile,
+  applyCryptFilterForActiveEntry,
+  loadEncounteredCertificateIntoCrypt,
+  refreshCryptEncounteredEntries,
+  showCryptWorkspace,
+} = cryptPanel;
 
 function showKeystoreWorkspace() {
   activeMainTab = MAIN_TAB_KEYSTORE;
