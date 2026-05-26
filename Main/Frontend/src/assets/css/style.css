@@ -394,7 +394,7 @@ strong {
 }
 
 #tab-btns {
-  width: 600px;
+  width: 760px;
 }
 
 #rotate-btns {
@@ -465,6 +465,7 @@ strong {
   color: var(--color-5);
 }
 
+.keystore-workspace-header,
 .crypt-workspace-header {
   color: var(--color-1);
   font-weight: bold;
@@ -599,6 +600,28 @@ strong {
   background-color: var(--color-7);
   color: var(--color-6);
   padding: 12px;
+}
+
+#keystore_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--color-5);
+}
+
+.keystore-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  height: 100%;
 }
 
 .data-tools-grid {

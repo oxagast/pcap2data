@@ -453,6 +453,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("data-btn").style.opacity = "1";
     document.getElementById("data-tools-btn").style.opacity = "1";
     document.getElementById("crypt-btn").style.opacity = "1";
+    document.getElementById("keystore-btn").style.opacity = "1";
     document.getElementById("tab-btns").style.opacity = "1";
     document.getElementById("prev-btn").style.opacity = "1";
     document.getElementById("next-btn").style.opacity = "1";
@@ -474,6 +475,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("stats-btn").style.opacity = "0";
     document.getElementById("list-btn").style.opacity = "0";
     document.getElementById("crypt-btn").style.opacity = "0";
+    document.getElementById("keystore-btn").style.opacity = "0";
   }
 }
 
@@ -775,6 +777,7 @@ function writeSummary() {
     document.getElementById("stats_box").style.display = "none";
     document.getElementById("data_tools_box").style.display = "none";
     document.getElementById("crypt_box").style.display = "none";
+    document.getElementById("keystore_box").style.display = "none";
     document.getElementById("list_box").style.display = "none";
     document.getElementById("summary_content").textContent =
       finalSummary || "No LLM summary available.";
@@ -1002,6 +1005,7 @@ function showStats() {
   document.getElementById("list_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("stats_box").style.display = "block";
   document.getElementById("rightside").style.display = "none";
 
@@ -1339,6 +1343,7 @@ function showDataTools() {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "block";
 }
@@ -1706,11 +1711,33 @@ function showCryptWorkspace() {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   const cryptBoxEl = document.getElementById("crypt_box");
   cryptBoxEl.style.display = "flex";
   setCryptSubtab(CRYPT_SSL_SUBTAB);
   refreshCryptEncounteredEntries();
+}
+
+function showKeystoreWorkspace() {
+  if (jsonCapture === "") {
+    statusUpdate("Status: No JSON file loaded, please upload a file first");
+    doError("Please upload a JSON file before accessing the keystore.");
+    return;
+  }
+
+  statusUpdate("Status: Displaying local keystore");
+  writeLogEntry("User opened keystore workspace");
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("rightside").style.display = "none";
+  const keystoreBoxEl = document.getElementById("keystore_box");
+  keystoreBoxEl.style.display = "flex";
   renderCryptKeystoreList();
 }
 
@@ -2648,6 +2675,14 @@ document.getElementById("crypt-btn").addEventListener("click", function () {
   showCryptWorkspace();
 });
 
+document.getElementById("keystore-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing the keystore.");
+    return;
+  }
+  showKeystoreWorkspace();
+});
+
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {
   if (!isFileLoaded) {
@@ -2922,6 +2957,7 @@ function showPacketList() {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   const listBox = document.getElementById("list_box");
   listBox.style.display = "flex";
@@ -3195,6 +3231,7 @@ function showPacketList() {
           document.getElementById("list_box").style.display = "none";
           document.getElementById("data_tools_box").style.display = "none";
           document.getElementById("crypt_box").style.display = "none";
+          document.getElementById("keystore_box").style.display = "none";
           document.getElementById("packetInfoPane").style.display = "block";
           document.getElementById("packetPayloadPane").style.display = "block";
           document.getElementById("prev-btn").style.display = "block";
@@ -3381,6 +3418,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("list_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "block";
   document.getElementById("packetPayloadPane").style.display = "block";
   document.getElementById("welcome").style.display = "none";
@@ -4141,7 +4179,7 @@ document.addEventListener("contextmenu", (event) => {
   const pasteTarget = getPasteTargetFromContextTarget(target);
   const selectedText = getTrimmedSelectionText();
   const insideEligiblePanel = target?.closest(
-    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #sidedata",
+    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
   );
   const isHexViewTarget = Boolean(target?.closest("#hexg"));
   let conversionText = "";

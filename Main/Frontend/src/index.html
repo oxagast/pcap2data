@@ -83,6 +83,13 @@
           title="Encryption workspace"
           class="custom-btns"
         />
+        <input
+          type="button"
+          id="keystore-btn"
+          value="Keystore"
+          title="Persistent local keystore"
+          class="custom-btns"
+        />
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
         <input type="button" id="list-btn" value="List" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
@@ -302,42 +309,6 @@
                   <pre id="crypt-key-preview">No private key loaded.</pre>
                 </div>
 
-                <div class="crypt-section">
-                  <div class="crypt-section-title">Persistent Local Keystore</div>
-                  <input
-                    id="crypt-keystore-label"
-                    type="text"
-                    placeholder="Entry label (optional)"
-                  />
-                  <input
-                    id="crypt-keystore-passphrase"
-                    type="password"
-                    placeholder="Keystore passphrase (required for save/load)"
-                  />
-                  <textarea
-                    id="crypt-credential-input"
-                    placeholder="Paste credentials/secrets/notes to store locally..."
-                  ></textarea>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-save-cert-keystore-btn">
-                      Save cert
-                    </button>
-                    <button id="crypt-save-key-keystore-btn">Save key</button>
-                    <button id="crypt-save-secret-keystore-btn">
-                      Save secret
-                    </button>
-                  </div>
-                  <select id="crypt-keystore-list" size="6"></select>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-load-keystore-entry-btn">
-                      Load selected
-                    </button>
-                    <button id="crypt-delete-keystore-entry-btn">
-                      Delete selected
-                    </button>
-                  </div>
-                  <pre id="crypt-keystore-details">No keystore entries saved.</pre>
-                </div>
               </div>
             </div>
 
@@ -350,6 +321,45 @@
             <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
               <div class="crypt-placeholder">
                 OpenSSH workspace reserved for future key/session tooling.
+              </div>
+            </div>
+          </div>
+          <div id="keystore_box">
+            <div class="keystore-workspace-header">Local Keystore</div>
+            <div class="keystore-grid">
+              <div class="crypt-section">
+                <div class="crypt-section-title">Create / Update Entry</div>
+                <input
+                  id="crypt-keystore-label"
+                  type="text"
+                  placeholder="Entry label (optional)"
+                />
+                <input
+                  id="crypt-keystore-passphrase"
+                  type="password"
+                  placeholder="Keystore passphrase (required for save/load)"
+                />
+                <textarea
+                  id="crypt-credential-input"
+                  placeholder="Paste credentials/secrets/notes to store locally..."
+                ></textarea>
+                <div class="crypt-actions-row">
+                  <button id="crypt-save-cert-keystore-btn">Save cert</button>
+                  <button id="crypt-save-key-keystore-btn">Save key</button>
+                  <button id="crypt-save-secret-keystore-btn">Save secret</button>
+                </div>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">Saved Entries</div>
+                <select id="crypt-keystore-list" size="10"></select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-load-keystore-entry-btn">Load selected</button>
+                  <button id="crypt-delete-keystore-entry-btn">
+                    Delete selected
+                  </button>
+                </div>
+                <pre id="crypt-keystore-details">No keystore entries saved.</pre>
               </div>
             </div>
           </div>
