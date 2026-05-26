@@ -76,6 +76,13 @@
           title="Data Conversion"
           class="custom-btns"
         />
+        <input
+          type="button"
+          id="crypt-btn"
+          value="Crypt"
+          title="Encryption workspace"
+          class="custom-btns"
+        />
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
         <input type="button" id="list-btn" value="List" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
@@ -217,6 +224,95 @@
                 <div id="data-tools-entropy" class="data-tools-kv">
                   Shannon Entropy: 0.00 (Low)
                 </div>
+              </div>
+            </div>
+          </div>
+          <div id="crypt_box">
+            <div class="crypt-workspace-header">Crypt Workspace</div>
+            <div class="crypt-subtab-row">
+              <button id="crypt-subtab-ssl" class="crypt-subtab-btn active">
+                SSL
+              </button>
+              <button id="crypt-subtab-pgp" class="crypt-subtab-btn">PGP</button>
+              <button id="crypt-subtab-openssh" class="crypt-subtab-btn">
+                OpenSSH
+              </button>
+            </div>
+
+            <div id="crypt-ssl-panel" class="crypt-subtab-panel">
+              <div class="crypt-grid">
+                <div class="crypt-section">
+                  <div class="crypt-section-title">Encountered SSL/TLS</div>
+                  <select id="crypt-encountered-list" size="10"></select>
+                  <div class="crypt-actions-row">
+                    <button id="crypt-refresh-btn">Refresh</button>
+                    <button id="crypt-apply-filter-btn">Filter packets</button>
+                    <button id="crypt-load-encountered-cert-btn">
+                      Load cert text
+                    </button>
+                  </div>
+                  <div id="crypt-encountered-details"></div>
+                </div>
+
+                <div class="crypt-section">
+                  <div class="crypt-section-title">Certificate Loader</div>
+                  <div class="crypt-actions-row">
+                    <button id="crypt-load-cert-file-btn">
+                      Load certificate file
+                    </button>
+                    <button id="crypt-use-cert-input-btn">
+                      Use pasted certificate
+                    </button>
+                    <button id="crypt-clear-cert-btn">Clear</button>
+                  </div>
+                  <input
+                    type="file"
+                    id="crypt-cert-file-input"
+                    accept=".pem,.crt,.cer,.der,.txt"
+                    hidden
+                  />
+                  <textarea
+                    id="crypt-cert-input"
+                    placeholder="Paste PEM certificate text here..."
+                  ></textarea>
+                  <pre id="crypt-cert-preview">No certificate loaded.</pre>
+                </div>
+
+                <div class="crypt-section">
+                  <div class="crypt-section-title">Private Key Loader</div>
+                  <div class="crypt-actions-row">
+                    <button id="crypt-load-key-file-btn">
+                      Load private key file
+                    </button>
+                    <button id="crypt-use-key-input-btn">
+                      Use pasted key
+                    </button>
+                    <button id="crypt-clear-key-btn">Clear</button>
+                  </div>
+                  <input
+                    type="file"
+                    id="crypt-key-file-input"
+                    accept=".key,.pem,.txt"
+                    hidden
+                  />
+                  <textarea
+                    id="crypt-key-input"
+                    placeholder="Paste PEM private key text here..."
+                  ></textarea>
+                  <pre id="crypt-key-preview">No private key loaded.</pre>
+                </div>
+              </div>
+            </div>
+
+            <div id="crypt-pgp-panel" class="crypt-subtab-panel" hidden>
+              <div class="crypt-placeholder">
+                PGP workspace reserved for future import/decrypt tooling.
+              </div>
+            </div>
+
+            <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
+              <div class="crypt-placeholder">
+                OpenSSH workspace reserved for future key/session tooling.
               </div>
             </div>
           </div>
