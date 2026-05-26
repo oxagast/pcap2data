@@ -520,8 +520,11 @@ strong {
 }
 
 #crypt-encountered-list,
+#crypt-keystore-list,
+#crypt-keystore-label,
 #crypt-cert-input,
-#crypt-key-input {
+#crypt-key-input,
+#crypt-credential-input {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
@@ -532,7 +535,8 @@ strong {
 }
 
 #crypt-cert-input,
-#crypt-key-input {
+#crypt-key-input,
+#crypt-credential-input {
   min-height: 120px;
   resize: vertical;
   padding: 6px;
@@ -540,6 +544,14 @@ strong {
 
 #crypt-encountered-list {
   min-height: 180px;
+}
+
+#crypt-keystore-list {
+  min-height: 120px;
+}
+
+#crypt-keystore-label {
+  padding: 6px;
 }
 
 .crypt-actions-row {
@@ -567,7 +579,8 @@ strong {
 }
 
 #crypt-cert-preview,
-#crypt-key-preview {
+#crypt-key-preview,
+#crypt-keystore-details {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;

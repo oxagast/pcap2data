@@ -301,6 +301,38 @@
                   ></textarea>
                   <pre id="crypt-key-preview">No private key loaded.</pre>
                 </div>
+
+                <div class="crypt-section">
+                  <div class="crypt-section-title">Persistent Local Keystore</div>
+                  <input
+                    id="crypt-keystore-label"
+                    type="text"
+                    placeholder="Entry label (optional)"
+                  />
+                  <textarea
+                    id="crypt-credential-input"
+                    placeholder="Paste credentials/secrets/notes to store locally..."
+                  ></textarea>
+                  <div class="crypt-actions-row">
+                    <button id="crypt-save-cert-keystore-btn">
+                      Save cert
+                    </button>
+                    <button id="crypt-save-key-keystore-btn">Save key</button>
+                    <button id="crypt-save-secret-keystore-btn">
+                      Save secret
+                    </button>
+                  </div>
+                  <select id="crypt-keystore-list" size="6"></select>
+                  <div class="crypt-actions-row">
+                    <button id="crypt-load-keystore-entry-btn">
+                      Load selected
+                    </button>
+                    <button id="crypt-delete-keystore-entry-btn">
+                      Delete selected
+                    </button>
+                  </div>
+                  <pre id="crypt-keystore-details">No keystore entries saved.</pre>
+                </div>
               </div>
             </div>
 
