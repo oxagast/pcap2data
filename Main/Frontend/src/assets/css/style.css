@@ -1440,6 +1440,7 @@ strong {
 #filterStr-clear {
   position: absolute;
   top: 1px;
+  margin-top: -2px;
   bottom: 1px;
   right: var(--filter-clear-right-offset);
   width: var(--filter-clear-button-width);
@@ -1454,6 +1455,8 @@ strong {
   font: inherit;
   line-height: 1;
   cursor: pointer;
+  height: 32px;
+  margin-right: 4px;
 }
 
 #filterStr-clear:not(:disabled):hover,
