@@ -62,6 +62,18 @@ Use parentheses to override precedence and group sub-expressions.
 (payload.mime:text/html || payload.mime:application/json) && ip.dst.addr:10.0.0.1
 ```
 
+The context menu also supports explicit parenthesis editing via **Add to filter... → Parentheses...**, including **Append (**, **Append )**, and **Wrap current query with (...)**.
+
+### Inversion with `!`
+
+Use `!` to invert either a single expression or a grouped expression.
+
+```
+!tcp.dst.port:443
+!(tcp.dst.port:80 || tcp.dst.port:443)
+ip.src.addr:10.0.0.1 && !(mime.type:text/html || mime.type:application/json)
+```
+
 ### Clearing the filter
 
 Delete all text from the filter bar and press **Enter** to show all packets again.

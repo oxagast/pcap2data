@@ -1,5 +1,5 @@
 import "./assets/css/style.css";
-const { filterPackets } = require("./filter");
+const { filterPackets, validateFilterSyntax } = require("./filter");
 const {
   createTable,
   renderDnsTable,
@@ -512,7 +512,7 @@ function renderHighlightedQuery(query) {
   if (!source) return "&nbsp;";
 
   // Query grammar tokens: logical OR/AND operators and grouping parentheses.
-  const tokenRegex = /(\|\||&&|\(|\))/g;
+  const tokenRegex = /(\|\||&&|\(|\)|!(?!=))/g;
   let cursor = 0;
   let html = "";
   let tokenMatch = tokenRegex.exec(source);
@@ -576,6 +576,17 @@ function addFilterHistory(query) {
 }
 
 function runFilterQuery(filterQuery) {
+  try {
+    validateFilterSyntax(filterQuery);
+  } catch (error) {
+    logErrorEntry("filter-syntax", error);
+    writeLogEntry(`User query rejected query="${filterQuery}"`);
+    doError(`Invalid filter syntax: ${error.message}`);
+    statusUpdate("Status: Invalid filter syntax");
+    return;
+  }
+
+  addFilterHistory(filterQuery);
   filteredPackets = filterPackets(capturedPackets, filterQuery);
   writeLogEntry(`User executed query="${filterQuery}"`);
 
@@ -1349,6 +1360,14 @@ const convertContextButtons = {
   filterOrMac: getCachedElement("ctx-filter-or-mac"),
   filterOrProtocol: getCachedElement("ctx-filter-or-protocol"),
   filterOrMime: getCachedElement("ctx-filter-or-mime"),
+  filterNotIp: getCachedElement("ctx-filter-not-ip"),
+  filterNotPort: getCachedElement("ctx-filter-not-port"),
+  filterNotMac: getCachedElement("ctx-filter-not-mac"),
+  filterNotProtocol: getCachedElement("ctx-filter-not-protocol"),
+  filterNotMime: getCachedElement("ctx-filter-not-mime"),
+  filterParenOpen: getCachedElement("ctx-filter-paren-open"),
+  filterParenClose: getCachedElement("ctx-filter-paren-close"),
+  filterParenWrap: getCachedElement("ctx-filter-paren-wrap"),
   filterClearIp: getCachedElement("ctx-filter-clear-ip"),
   filterClearPort: getCachedElement("ctx-filter-clear-port"),
   filterClearMac: getCachedElement("ctx-filter-clear-mac"),
@@ -1360,6 +1379,8 @@ const convertContextSubmenus = {
   filter: getCachedElement("ctx-filter-submenu"),
   filterAnd: getCachedElement("ctx-filter-and-submenu"),
   filterOr: getCachedElement("ctx-filter-or-submenu"),
+  filterNot: getCachedElement("ctx-filter-not-submenu"),
+  filterParentheses: getCachedElement("ctx-filter-parentheses-submenu"),
   filterClear: getCachedElement("ctx-filter-clear-submenu"),
   export: getCachedElement("ctx-export-submenu"),
 };
@@ -1755,6 +1776,24 @@ function showConvertContextMenu(
   convertContextButtons.filterOrMime.style.display = filterQueries.mime
     ? "block"
     : "none";
+  convertContextButtons.filterNotIp.style.display = filterQueries.ip
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotPort.style.display = filterQueries.port
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotMac.style.display = filterQueries.mac
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotProtocol.style.display = filterQueries.protocol
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotMime.style.display = filterQueries.mime
+    ? "block"
+    : "none";
+  convertContextButtons.filterParenOpen.style.display = "block";
+  convertContextButtons.filterParenClose.style.display = "block";
+  convertContextButtons.filterParenWrap.style.display = "block";
   convertContextButtons.filterClearIp.style.display = filterQueries.ip
     ? "block"
     : "none";
@@ -1785,6 +1824,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextSubmenus.filterOr.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filterNot.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filterParentheses.style.display = hasFilterActions
     ? "block"
     : "none";
   convertContextSubmenus.filterClear.style.display = hasFilterActions
@@ -2105,7 +2150,11 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
-function appendFilterQueryFromContextMenu(type, joinOperator = "&&") {
+function appendFilterQueryFromContextMenu(
+  type,
+  joinOperator = "&&",
+  negate = false,
+) {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
   if (!query) {
@@ -2116,11 +2165,15 @@ function appendFilterQueryFromContextMenu(type, joinOperator = "&&") {
     statusUpdate("Status: Could not add filter query — please try again");
     return;
   }
+  const queryToInsert = negate ? `!(${query})` : query;
   const existingQuery = filterInputEl.value.trim();
-  const wrappedQuery =
-    query.includes("||") || query.includes("&&") ? `(${query})` : query;
+  const wrappedQuery = negate
+    ? queryToInsert
+    : queryToInsert.includes("||") || queryToInsert.includes("&&")
+      ? `(${queryToInsert})`
+      : queryToInsert;
   if (!existingQuery) {
-    filterInputEl.value = query;
+    filterInputEl.value = queryToInsert;
   } else if (/(?:\|\||&&)\s*$/.test(existingQuery)) {
     filterInputEl.value = `${existingQuery} ${wrappedQuery}`;
   } else {
@@ -2130,7 +2183,7 @@ function appendFilterQueryFromContextMenu(type, joinOperator = "&&") {
   filterInputEl.focus();
   statusUpdate("Status: Filter query populated — press Enter to apply");
   writeLogEntry(
-    `Context menu filter populated type=${type} query="${filterInputEl.value}"`,
+    `Context menu filter populated type=${type} negated=${negate} query="${filterInputEl.value}"`,
   );
 }
 
@@ -2148,6 +2201,35 @@ function clearAndFilterQueryFromContextMenu(type) {
   writeLogEntry(
     `Context menu filter cleared and populated type=${type} query="${filterInputEl.value}"`,
   );
+}
+
+function appendParenthesisTokenFromContextMenu(token) {
+  hideConvertContextMenu();
+  if (token !== "(" && token !== ")") {
+    statusUpdate("Status: Could not append parenthesis — please try again");
+    return;
+  }
+  filterInputEl.value = `${filterInputEl.value}${token}`;
+  syncFilterHighlight();
+  filterInputEl.focus();
+  statusUpdate("Status: Filter query updated — press Enter to apply");
+  writeLogEntry(
+    `Context menu filter appended token="${token}" query="${filterInputEl.value}"`,
+  );
+}
+
+function wrapCurrentFilterWithParenthesesFromContextMenu() {
+  hideConvertContextMenu();
+  const existingQuery = filterInputEl.value.trim();
+  if (!existingQuery) {
+    statusUpdate("Status: No filter query available to wrap");
+    return;
+  }
+  filterInputEl.value = `(${existingQuery})`;
+  syncFilterHighlight();
+  filterInputEl.focus();
+  statusUpdate("Status: Filter query updated — press Enter to apply");
+  writeLogEntry(`Context menu filter wrapped query="${filterInputEl.value}"`);
 }
 
 // Show host data when data button is clicked
@@ -2247,6 +2329,30 @@ convertContextButtons.filterOrProtocol.addEventListener("click", () => {
 });
 convertContextButtons.filterOrMime.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("mime", "||");
+});
+convertContextButtons.filterNotIp.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("ip", "&&", true);
+});
+convertContextButtons.filterNotPort.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("port", "&&", true);
+});
+convertContextButtons.filterNotMac.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mac", "&&", true);
+});
+convertContextButtons.filterNotProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("protocol", "&&", true);
+});
+convertContextButtons.filterNotMime.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("mime", "&&", true);
+});
+convertContextButtons.filterParenOpen.addEventListener("click", () => {
+  appendParenthesisTokenFromContextMenu("(");
+});
+convertContextButtons.filterParenClose.addEventListener("click", () => {
+  appendParenthesisTokenFromContextMenu(")");
+});
+convertContextButtons.filterParenWrap.addEventListener("click", () => {
+  wrapCurrentFilterWithParenthesesFromContextMenu();
 });
 convertContextButtons.filterClearIp.addEventListener("click", () => {
   clearAndFilterQueryFromContextMenu("ip");
@@ -3505,7 +3611,6 @@ document
   .addEventListener("keydown", function (event) {
     if (event.key === "Enter") {
       const filterQuery = filterInputEl.value;
-      addFilterHistory(filterQuery);
       runFilterQuery(filterQuery);
       filterHistorySelectEl.value = "";
     }
@@ -3580,7 +3685,6 @@ filterHistorySelectEl.addEventListener("change", () => {
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
-  addFilterHistory(selectedQuery);
   runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
 });

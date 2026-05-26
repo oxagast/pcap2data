@@ -37,6 +37,27 @@ const intersectBy = (a, b, keyFn) => {
   return a.filter((item) => setB.has(keyFn(item)));
 };
 
+const subtractBy = (source, excluded, keyFn) => {
+  const excludedSet = new Set(excluded.map(keyFn));
+  return source.filter((item) => !excludedSet.has(keyFn(item)));
+};
+
+function getAllPackets(data) {
+  const parsedHosts = typeof data === 'string' ? JSON.parse(data) : data;
+  const allPackets = [];
+  if (!parsedHosts?.Host) return allPackets;
+
+  for (const host in parsedHosts.Host) {
+    const hostPackets = parsedHosts.Host[host];
+    if (!Array.isArray(hostPackets)) continue;
+    for (const packetItem of hostPackets) {
+      allPackets.push({ Host: { [host]: [packetItem] } });
+    }
+  }
+
+  return allPackets;
+}
+
 function getDataType(data) {
   if (REGEX_IPV4.test(data)) return 'IP';
   if (REGEX_HEX.test(data)) return 'HEX';
@@ -224,11 +245,17 @@ function tokenizeQuery(query) {
       i += 2;
       continue;
     }
+    if (query[i] === '!' && query[i + 1] !== '=') {
+      tokenList.push({ type: 'NOT' });
+      i++;
+      continue;
+    }
     let exprEnd = i;
     while (
       exprEnd < query.length &&
       !query.startsWith('||', exprEnd) &&
       !query.startsWith('&&', exprEnd) &&
+      !(query[exprEnd] === '!' && query[exprEnd + 1] !== '=') &&
       query[exprEnd] !== '(' &&
       query[exprEnd] !== ')'
     ) {
@@ -241,8 +268,118 @@ function tokenizeQuery(query) {
   return tokenList;
 }
 
+function validateFilterExpression(expression) {
+  if (typeof expression !== 'string') {
+    throw new Error('Filter expression must be text');
+  }
+
+  const separatorIndex = expression.indexOf(':');
+  if (separatorIndex === -1) {
+    throw new Error(`Missing ":" in expression "${expression.trim()}"`);
+  }
+
+  const filterKey = expression.slice(0, separatorIndex).trim();
+  const filterValue = expression.slice(separatorIndex + 1).trim();
+
+  if (!filterKey) {
+    throw new Error(`Missing filter field before ":" in "${expression.trim()}"`);
+  }
+  if (!filterValue) {
+    throw new Error(`Missing filter value after ":" in "${expression.trim()}"`);
+  }
+}
+
+function validateFilterSyntax(query) {
+  const normalizedQuery = typeof query === 'string' ? query.trim() : '';
+  if (!normalizedQuery) return true;
+
+  const tokenList = tokenizeQuery(normalizedQuery);
+  let pos = 0;
+
+  function peek() {
+    return tokenList[pos];
+  }
+
+  function consume(type) {
+    const currentToken = tokenList[pos];
+    if (type && (!currentToken || currentToken.type !== type)) {
+      throw new Error(
+        `Expected ${type} but got ${currentToken ? currentToken.type : 'EOF'}`,
+      );
+    }
+    pos++;
+    return currentToken;
+  }
+
+  function parseOr() {
+    parseAnd();
+    while (peek() && peek().type === 'OR') {
+      consume('OR');
+      parseAnd();
+    }
+  }
+
+  function parseAnd() {
+    parseTerm();
+    while (peek() && peek().type === 'AND') {
+      consume('AND');
+      parseTerm();
+    }
+  }
+
+  function parseTerm() {
+    const currentToken = peek();
+    if (!currentToken) {
+      throw new Error('Unexpected end of query');
+    }
+    if (currentToken.type === 'NOT') {
+      consume('NOT');
+      if (!peek()) {
+        throw new Error('Expected expression or group after !');
+      }
+      parseTerm();
+      return;
+    }
+    if (currentToken.type === 'LPAREN') {
+      consume('LPAREN');
+      if (peek()?.type === 'RPAREN') {
+        throw new Error('Empty parentheses are not allowed');
+      }
+      parseOr();
+      if (!peek() || peek().type !== 'RPAREN') {
+        throw new Error('Missing closing parenthesis');
+      }
+      consume('RPAREN');
+      return;
+    }
+    if (currentToken.type === 'EXPR') {
+      consume('EXPR');
+      validateFilterExpression(currentToken.value);
+      return;
+    }
+    if (currentToken.type === 'RPAREN') {
+      throw new Error('Unexpected closing parenthesis');
+    }
+    if (currentToken.type === 'AND' || currentToken.type === 'OR') {
+      throw new Error(`Unexpected operator ${currentToken.type}`);
+    }
+    throw new Error(`Unexpected token ${currentToken.type}`);
+  }
+
+  parseOr();
+  if (pos < tokenList.length) {
+    const remainingToken = tokenList[pos];
+    if (remainingToken.type === 'RPAREN') {
+      throw new Error('Unexpected closing parenthesis');
+    }
+    throw new Error(`Unexpected token ${remainingToken.type}`);
+  }
+  return true;
+}
+
 function runQuery(data, query) {
   const tokenList = tokenizeQuery(query);
+  const allPackets = getAllPackets(data);
   let pos = 0;
 
   function peek() {
@@ -281,6 +418,14 @@ function runQuery(data, query) {
 
   function parseTerm() {
     const currentToken = peek();
+    if (currentToken && currentToken.type === 'NOT') {
+      consume('NOT');
+      if (!peek()) {
+        throw new Error('Expected expression or group after !');
+      }
+      const negatedResult = parseTerm();
+      return subtractBy(allPackets, negatedResult, getPacketKey);
+    }
     if (currentToken && currentToken.type === 'LPAREN') {
       consume('LPAREN');
       const result = parseOr();
@@ -303,6 +448,7 @@ function filterPackets(data, query) {
     // dummy function so we can return all packets in the right format
     matchedPackets = runQuery(data, 'wire-length:>=0'); // dummy filter that matches all packets
   } else {
+    validateFilterSyntax(query);
     matchedPackets = runQuery(data, query);
   }
 
@@ -312,4 +458,4 @@ function filterPackets(data, query) {
   });
 }
 
-module.exports = { filterPackets, getDataType };
+module.exports = { filterPackets, getDataType, validateFilterSyntax };
