@@ -3287,6 +3287,43 @@ function detectConvertibleFormats(text) {
   return formats;
 }
 
+function splitCookieHeaderEntries(headerValue) {
+  if (typeof headerValue !== "string" || !headerValue.trim()) return [];
+  const entries = [];
+  let currentEntry = "";
+  let inQuotes = false;
+  let isEscaped = false;
+
+  for (const character of headerValue) {
+    if (isEscaped) {
+      currentEntry += character;
+      isEscaped = false;
+      continue;
+    }
+    if (character === "\\" && inQuotes) {
+      currentEntry += character;
+      isEscaped = true;
+      continue;
+    }
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      currentEntry += character;
+      continue;
+    }
+    if (character === ";" && !inQuotes) {
+      const trimmedEntry = currentEntry.trim();
+      if (trimmedEntry) entries.push(trimmedEntry);
+      currentEntry = "";
+      continue;
+    }
+    currentEntry += character;
+  }
+
+  const trimmedEntry = currentEntry.trim();
+  if (trimmedEntry) entries.push(trimmedEntry);
+  return entries;
+}
+
 function extractCookieJarEntriesFromHttpFields(fields) {
   if (!Array.isArray(fields)) return [];
   const cookieEntries = [];
@@ -3304,13 +3341,13 @@ function extractCookieJarEntriesFromHttpFields(fields) {
     const fieldValue = typeof field?.value === "string" ? field.value.trim() : "";
     if (!fieldValue) return;
     if (fieldName === "cookie") {
-      fieldValue.split(";").forEach((crumb) => {
+      splitCookieHeaderEntries(fieldValue).forEach((crumb) => {
         addCookieEntry(crumb);
       });
       return;
     }
     if (fieldName === "set-cookie") {
-      addCookieEntry(fieldValue.split(";")[0]);
+      addCookieEntry(fieldValue);
     }
   });
 
