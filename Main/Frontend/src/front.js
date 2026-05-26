@@ -74,6 +74,8 @@ const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
 const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
+const STRICT_IPV4_REGEX =
+  /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
 const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
 const CRYPT_SSL_SUBTAB = "ssl";
@@ -1443,6 +1445,93 @@ function renderCryptEncounteredDetails(entry) {
   ].join("\n");
 }
 
+function generateCryptEntryId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function toBase64(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return window.btoa(binary);
+}
+
+function fromBase64(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+async function deriveCryptKey(passphrase, saltBytes, usage) {
+  const keyMaterial = await window.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"],
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations: 150000,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    [usage],
+  );
+}
+
+async function encryptCryptContent(content, passphrase) {
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveCryptKey(passphrase, salt, "encrypt");
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(content),
+  );
+  return {
+    encryptedContent: toBase64(new Uint8Array(ciphertext)),
+    salt: toBase64(salt),
+    iv: toBase64(iv),
+  };
+}
+
+async function decryptCryptContent(entry, passphrase) {
+  const key = await deriveCryptKey(passphrase, fromBase64(entry.salt), "decrypt");
+  const decrypted = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64(entry.iv) },
+    key,
+    fromBase64(entry.encryptedContent),
+  );
+  return new TextDecoder().decode(new Uint8Array(decrypted));
+}
+
+function getCryptKeystorePassphrase() {
+  const passphrase = document.getElementById("crypt-keystore-passphrase")?.value || "";
+  if (!passphrase.trim()) {
+    statusUpdate("Status: Enter a keystore passphrase first");
+    return null;
+  }
+  return passphrase;
+}
+
+function getFirstLineOfElementText(elementId, fallback = "") {
+  const text = document.getElementById(elementId)?.textContent || "";
+  const firstLine = text.split("\n")[0]?.trim();
+  return firstLine || fallback;
+}
+
 function loadCryptKeystore() {
   try {
     const stored = window.localStorage.getItem(CRYPT_KEYSTORE_STORAGE_KEY);
@@ -1452,14 +1541,17 @@ function loadCryptKeystore() {
     return parsed
       .filter((entry) => entry && typeof entry === "object")
       .map((entry) => ({
-        id: entry.id || `${Date.now()}-${Math.random()}`,
+        id: entry.id || generateCryptEntryId(),
         type: String(entry.type || "secret"),
         label: String(entry.label || "Untitled"),
         source: String(entry.source || "manual"),
-        content: String(entry.content || ""),
+        encryptedContent: String(entry.encryptedContent || ""),
+        salt: String(entry.salt || ""),
+        iv: String(entry.iv || ""),
         summary: String(entry.summary || ""),
         createdAt: String(entry.createdAt || new Date().toISOString()),
-      }));
+      }))
+      .filter((entry) => entry.encryptedContent && entry.salt && entry.iv);
   } catch (error) {
     logErrorEntry("crypt-keystore-load", error);
     return [];
@@ -1515,18 +1607,37 @@ function renderCryptKeystoreList() {
   renderCryptKeystoreDetails(cryptKeystoreEntries[0]);
 }
 
-function addCryptKeystoreEntry({ type, label, source, content, summary }) {
+async function addCryptKeystoreEntry({ type, label, source, content, summary }) {
   const normalizedContent = (content || "").trim();
   if (!normalizedContent) {
     statusUpdate("Status: No content available to save");
     return;
   }
+  const passphrase = getCryptKeystorePassphrase();
+  if (!passphrase) return;
+
+  if (!(window.crypto && window.crypto.subtle)) {
+    doError("WebCrypto API is unavailable; cannot encrypt keystore entries.");
+    return;
+  }
+
+  let encrypted;
+  try {
+    encrypted = await encryptCryptContent(normalizedContent, passphrase);
+  } catch (error) {
+    logErrorEntry("crypt-keystore-encrypt", error);
+    doError("Could not encrypt keystore content.");
+    return;
+  }
+
   const entry = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    id: generateCryptEntryId(),
     type,
     label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
     source,
-    content: normalizedContent,
+    encryptedContent: encrypted.encryptedContent,
+    salt: encrypted.salt,
+    iv: encrypted.iv,
     summary: summary || "",
     createdAt: new Date().toISOString(),
   };
@@ -1537,22 +1648,33 @@ function addCryptKeystoreEntry({ type, label, source, content, summary }) {
   writeLogEntry(`Crypt keystore entry added type=${type} label="${entry.label}"`);
 }
 
-function loadSelectedCryptKeystoreEntry() {
+async function loadSelectedCryptKeystoreEntry() {
   const listEl = document.getElementById("crypt-keystore-list");
   const selectedIndex = Number(listEl.value);
   if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
     statusUpdate("Status: Select a keystore entry first");
     return;
   }
+  const passphrase = getCryptKeystorePassphrase();
+  if (!passphrase) return;
+
   const selectedEntry = cryptKeystoreEntries[selectedIndex];
+  let decryptedContent = "";
+  try {
+    decryptedContent = await decryptCryptContent(selectedEntry, passphrase);
+  } catch (error) {
+    logErrorEntry("crypt-keystore-decrypt", error);
+    doError("Could not decrypt keystore entry. Verify passphrase.");
+    return;
+  }
   renderCryptKeystoreDetails(selectedEntry);
   document.getElementById("crypt-keystore-label").value = selectedEntry.label;
   if (selectedEntry.type === "certificate") {
-    applyCryptCertificateText(selectedEntry.content, "local keystore");
+    applyCryptCertificateText(decryptedContent, "local keystore");
   } else if (selectedEntry.type === "private-key") {
-    applyCryptPrivateKeyText(selectedEntry.content, "local keystore");
+    applyCryptPrivateKeyText(decryptedContent, "local keystore");
   } else {
-    document.getElementById("crypt-credential-input").value = selectedEntry.content;
+    document.getElementById("crypt-credential-input").value = decryptedContent;
   }
   statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
 }
@@ -1673,6 +1795,13 @@ function applyCryptFilterForActiveEntry() {
     return;
   }
   const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
+  if (
+    !STRICT_IPV4_REGEX.test(String(activeEntry.srcIp || "")) ||
+    !STRICT_IPV4_REGEX.test(String(activeEntry.dstIp || ""))
+  ) {
+    statusUpdate("Status: Cannot build filter query for non-IPv4 packet endpoints");
+    return;
+  }
   const query = `ip.src.addr: ${activeEntry.srcIp} && ip.dst.addr: ${activeEntry.dstIp}`;
   filterInputEl.value = query;
   syncFilterHighlight();
@@ -2770,31 +2899,32 @@ document.getElementById("crypt-clear-key-btn").addEventListener("click", () => {
 document
   .getElementById("crypt-save-cert-keystore-btn")
   .addEventListener("click", () => {
-    addCryptKeystoreEntry({
+    void addCryptKeystoreEntry({
       type: "certificate",
       label: document.getElementById("crypt-keystore-label").value,
       source: "crypt-certificate-loader",
       content: document.getElementById("crypt-cert-input").value,
-      summary: document
-        .getElementById("crypt-cert-preview")
-        .textContent.split("\n")[0],
+      summary: getFirstLineOfElementText(
+        "crypt-cert-preview",
+        "Certificate from loader",
+      ),
     });
   });
 document
   .getElementById("crypt-save-key-keystore-btn")
   .addEventListener("click", () => {
-    addCryptKeystoreEntry({
+    void addCryptKeystoreEntry({
       type: "private-key",
       label: document.getElementById("crypt-keystore-label").value,
       source: "crypt-private-key-loader",
       content: document.getElementById("crypt-key-input").value,
-      summary: document.getElementById("crypt-key-preview").textContent.split("\n")[0],
+      summary: getFirstLineOfElementText("crypt-key-preview", "Private key from loader"),
     });
   });
 document
   .getElementById("crypt-save-secret-keystore-btn")
   .addEventListener("click", () => {
-    addCryptKeystoreEntry({
+    void addCryptKeystoreEntry({
       type: "secret",
       label: document.getElementById("crypt-keystore-label").value,
       source: "crypt-secret-input",
@@ -2813,7 +2943,9 @@ document
   });
 document
   .getElementById("crypt-load-keystore-entry-btn")
-  .addEventListener("click", loadSelectedCryptKeystoreEntry);
+  .addEventListener("click", () => {
+    void loadSelectedCryptKeystoreEntry();
+  });
 document
   .getElementById("crypt-delete-keystore-entry-btn")
   .addEventListener("click", deleteSelectedCryptKeystoreEntry);
