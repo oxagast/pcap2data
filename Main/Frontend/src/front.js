@@ -2399,7 +2399,11 @@ function buildSessionAutoKeystoreEntries() {
               decodedHttp.fields,
             );
             cookieEntries.forEach((cookieEntry) => {
-              const cookieName = cookieEntry.split("=")[0]?.trim();
+              const separatorIndex = cookieEntry.indexOf("=");
+              const cookieName =
+                separatorIndex >= 0
+                  ? cookieEntry.slice(0, separatorIndex).trim()
+                  : "";
               pushSessionEntry({
                 type: "cookie",
                 label: cookieName ? `HTTP Cookie ${cookieName}` : "HTTP Cookie",
