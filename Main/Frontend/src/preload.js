@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('previewapi', {
 
 contextBridge.exposeInMainWorld('quitapi', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
+  promptSaveOnExit: () => ipcRenderer.invoke('prompt-save-session-on-exit'),
 });
 
 contextBridge.exposeInMainWorld('installapi', {
