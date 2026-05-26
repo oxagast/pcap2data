@@ -5027,9 +5027,7 @@ function showPacketList() {
             runFilterQuery(streamFilter);
             // Keep packetsForHost in sync with the filtered stream so that
             // prev/next navigation and payload access stay within the stream
-            packetsForHost = filteredPackets.length > 0
-              ? filteredPackets
-              : capturedPackets["Host"][row.host];
+            packetsForHost = filteredPackets;
           } else {
             // Fallback: load all host packets when a stream filter cannot be built
             packetsForHost = capturedPackets["Host"][row.host];
