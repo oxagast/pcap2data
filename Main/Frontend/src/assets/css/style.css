@@ -1403,7 +1403,11 @@ strong {
 }
 
 #filterStr-wrap {
-  --filter-clear-padding: 64px;
+  --filter-clear-button-width: 52px;
+  --filter-clear-right-offset: 6px;
+  --filter-clear-padding: calc(
+    var(--filter-clear-button-width) + var(--filter-clear-right-offset) + 6px
+  );
   flex: 1;
   position: relative;
   min-width: 0;
@@ -1436,7 +1440,8 @@ strong {
 #filterStr-clear {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: var(--filter-clear-right-offset);
+  width: var(--filter-clear-button-width);
   transform: translateY(-50%);
   border: 1px solid grey;
   background-color: var(--color-7);
