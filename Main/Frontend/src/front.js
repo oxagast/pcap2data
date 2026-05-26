@@ -1368,7 +1368,7 @@ function resetHashOutputs() {
 
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
-  const binaryStr = new TextDecoder("latin1").decode(bytes);
+  const byteString = new TextDecoder("latin1").decode(bytes);
 
   document.getElementById("data-tools-md5-output").value =
     CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
@@ -1384,8 +1384,9 @@ function computeDataToolsHashes(bytes) {
   document.getElementById("data-tools-sha3-512-output").value = sha3_512(bytes);
   document.getElementById("data-tools-ripemd160-output").value =
     CryptoJS.RIPEMD160(wordArray).toString(CryptoJS.enc.Hex);
-  const wpHash = bytes.length > 0 ? whirlpool.encSync(binaryStr, "hex") : "";
-  document.getElementById("data-tools-whirlpool-output").value = wpHash;
+  const whirlpoolHash =
+    bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
+  document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
 }
 
 function runDataToolsConversion() {
