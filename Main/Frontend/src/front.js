@@ -2356,10 +2356,14 @@ function buildSessionAutoKeystoreEntries() {
     if (!Array.isArray(packets)) return;
     packets.forEach((packet) => {
       const packetInfo = packet?.["Packet Info"] || {};
-      const transportData = packetInfo?.["Transport Layer"] || {};
+      const protocol = packetInfo?.["Protocol"] ?? "Unknown";
+      // "Transport Layer" was the intended key but the backend uses the protocol name
+      // ("TCP", "UDP", "ICMP") directly — fall back to the actual protocol section so
+      // that decoded credential sub-dicts (HTTP, SMTP, POP3, IMAP, Telnet …) are scanned.
+      const transportData =
+        packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
       const extraInfo = packet?.["Extra Info"] || {};
       const packetIndex = packetInfo?.["Index"] ?? "?";
-      const protocol = packetInfo?.["Protocol"] ?? "Unknown";
       [transportData, extraInfo].forEach((candidateRoot) => {
         collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
           if (!shouldIncludeSessionSecretKey(pathKey)) return;

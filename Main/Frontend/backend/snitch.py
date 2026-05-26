@@ -32,9 +32,11 @@
 # Author: oxagast
 # Import standard and third-party libraries for argument parsing, file handling, networking, compression, and data processing
 import argparse
+import base64
 import csv
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -43,6 +45,7 @@ import textwrap
 import threading
 import time
 import zlib
+from urllib.parse import unquote_plus
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -119,6 +122,35 @@ HTTP_METHODS: set = {
 }
 
 TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
+
+# Matches common credential-related field names in HTTP query strings, POST bodies, etc.
+# Anchored to the whole token so "password" matches but "passwordhint" length doesn't leak.
+CREDENTIAL_FIELD_RE = re.compile(
+    r"^(?:.*[_\-.])?(?:pass(?:w(?:or)?d?)?|pw|secret|auth(?:_?token)?|"
+    r"credential|api[_\-.]?key|token|user(?:name)?|login|email)(?:[_\-.].*)?$",
+    re.IGNORECASE,
+)
+
+
+def _extractUrlCredentials(paramStr):
+    """
+    Parse a URL-encoded query string or POST body (e.g. ``user=alice&pass=s3cr3t``).
+    Returns a dict of {fieldName: value} for every field whose name matches
+    CREDENTIAL_FIELD_RE and whose value is non-empty.  Returns an empty dict when
+    nothing interesting is found.
+    """
+    creds = {}
+    if not paramStr:
+        return creds
+    for pair in paramStr.split("&"):
+        if "=" not in pair:
+            continue
+        rawKey, _, rawVal = pair.partition("=")
+        key = unquote_plus(rawKey.strip())
+        val = unquote_plus(rawVal.strip())
+        if val and CREDENTIAL_FIELD_RE.match(key):
+            creds[key] = val
+    return creds
 
 
 def llmQuery(packetInfoStr):
@@ -936,7 +968,7 @@ def decodeHTTP(rawPayload):
             method = parts[0]
             url = parts[1] if len(parts) > 1 else "Unknown"
             httpVersion = parts[2] if len(parts) > 2 else "Unknown"
-            return {
+            result = {
                 "Type": "Request",
                 "http.type": "Request",
                 "Method": method,
@@ -962,6 +994,27 @@ def decodeHTTP(rawPayload):
                 "Connection": headers.get("connection", "Unknown"),
                 "http.connection": headers.get("connection", "Unknown"),
             }
+            # --- Credential extraction ----------------------------------------
+            # Extract credential fields from query-string (GET, POST, any method)
+            creds = {}
+            if "?" in url:
+                queryStr = url.split("?", 1)[1].split("#")[0]
+                creds.update(_extractUrlCredentials(queryStr))
+            # Also check Authorization header (Basic auth decoded by the frontend,
+            # but include the raw value so the frontend decoder can handle it too)
+            authHeader = headers.get("authorization", "")
+            if authHeader:
+                creds["authorization"] = authHeader
+            # For POST with url-encoded body, parse the body portion after headers
+            contentType = headers.get("content-type", "")
+            if method in ("POST", "PUT", "PATCH") and "urlencoded" in contentType.lower():
+                bodyStart = normalised.find("\n\n")
+                if bodyStart != -1:
+                    body = normalised[bodyStart + 2 :]
+                    creds.update(_extractUrlCredentials(body))
+            if creds:
+                result["Credentials"] = creds
+            return result
         else:
             parts = firstLine.split(" ", 2)
             httpVersion = parts[0]
@@ -1115,9 +1168,7 @@ def decodeSMTP(rawPayload):
         word = parts[0].upper()
         if word in SMTP_COMMANDS:
             arg = parts[1].strip() if len(parts) > 1 else ""
-            if word == "AUTH" and "PLAIN" in arg.upper():
-                arg = arg.split(" ")[0] + " ***"
-            return {
+            result = {
                 "Type": "Command",
                 "smtp.type": "Command",
                 "Command": word,
@@ -1125,6 +1176,54 @@ def decodeSMTP(rawPayload):
                 "Argument": arg,
                 "smtp.argument": arg,
             }
+            # --- Credential extraction for AUTH commands ----------------------
+            # AUTH PLAIN <base64>  →  decode "\0username\0password"
+            # AUTH LOGIN           →  subsequent lines are base64 user then pass
+            if word == "AUTH":
+                argParts = arg.split()
+                mechanism = argParts[0].upper() if argParts else ""
+                creds = {}
+                if mechanism == "PLAIN" and len(argParts) > 1:
+                    try:
+                        decoded = base64.b64decode(argParts[1]).decode(errors="ignore")
+                        segments = decoded.split("\x00")
+                        segments = [s for s in segments if s]
+                        if len(segments) >= 2:
+                            creds["username"] = segments[0]
+                            creds["password"] = segments[1]
+                        elif len(segments) == 1:
+                            creds["username"] = segments[0]
+                    except Exception:
+                        pass
+                elif mechanism == "LOGIN":
+                    # Subsequent packets carry the base64-encoded username and
+                    # password separately; capture what we have in this packet.
+                    if len(argParts) > 1:
+                        try:
+                            creds["username"] = base64.b64decode(
+                                argParts[1]
+                            ).decode(errors="ignore")
+                        except Exception:
+                            pass
+                    # Scan remaining lines in the same payload for the password
+                    for extraLine in lines[1:]:
+                        extraLine = extraLine.strip()
+                        if extraLine:
+                            try:
+                                creds["password"] = base64.b64decode(
+                                    extraLine
+                                ).decode(errors="ignore")
+                            except Exception:
+                                pass
+                            break
+                # Mask the argument in the display field only when inline credential
+                # data was present (so "AUTH LOGIN" without inline data stays readable)
+                if len(argParts) > 1:
+                    result["Argument"] = mechanism + " ***"
+                    result["smtp.argument"] = mechanism + " ***"
+                if creds:
+                    result["Credentials"] = creds
+            return result
         if len(word) == 3 and word.isdigit():
             statusCode = word
             message = parts[1].strip() if len(parts) > 1 else ""
@@ -1174,9 +1273,7 @@ def decodePOP3(rawPayload):
         word = parts[0].upper()
         if word in POP3_COMMANDS:
             arg = parts[1].strip() if len(parts) > 1 else ""
-            if word == "PASS":
-                arg = "***"
-            return {
+            result = {
                 "Type": "Command",
                 "pop3.type": "Command",
                 "Command": word,
@@ -1184,6 +1281,14 @@ def decodePOP3(rawPayload):
                 "Argument": arg,
                 "pop3.argument": arg,
             }
+            # Capture credentials; mask the display field for PASS
+            if word == "USER" and arg:
+                result["Credentials"] = {"username": arg}
+            elif word == "PASS" and arg:
+                result["Credentials"] = {"password": arg}
+                result["Argument"] = "***"
+                result["pop3.argument"] = "***"
+            return result
         if word in ("+OK", "-ERR"):
             message = parts[1].strip() if len(parts) > 1 else ""
             return {
@@ -1260,10 +1365,7 @@ def decodeIMAP(rawPayload):
             word = parts[1].upper()
             arg = parts[2].strip() if len(parts) > 2 else ""
             if word in IMAP_COMMANDS:
-                if word == "LOGIN" and arg:
-                    argParts = arg.split(" ", 1)
-                    arg = argParts[0] + " ***" if len(argParts) > 1 else arg
-                return {
+                result = {
                     "Type": "Command",
                     "imap.type": "Command",
                     "Tag": tag,
@@ -1273,6 +1375,18 @@ def decodeIMAP(rawPayload):
                     "Argument": arg,
                     "imap.argument": arg,
                 }
+                # Extract LOGIN credentials and mask the password in the display field
+                if word == "LOGIN" and arg:
+                    argParts = arg.split(" ", 1)
+                    username = argParts[0].strip('"')
+                    if len(argParts) > 1:
+                        password = argParts[1].strip('"')
+                        result["Credentials"] = {"username": username, "password": password}
+                        result["Argument"] = username + " ***"
+                        result["imap.argument"] = username + " ***"
+                    else:
+                        result["Credentials"] = {"username": username}
+                return result
             if word in ("OK", "NO", "BAD", "PREAUTH", "BYE"):
                 return {
                     "Type": "Response",
@@ -1349,14 +1463,68 @@ def decodeTelnet(rawPayload):
             else:
                 i += 1
         printableText = "".join(chr(b) for b in rawPayload if 32 <= b <= 126).strip()
-        return {
+        result = {
             "Negotiations": negotiations,
             "telnet.negotiations": negotiations,
             "Printable Text": printableText[:200] if printableText else "",
             "telnet.text": printableText[:200] if printableText else "",
         }
+        # Scan negotiation packets' printable text for any embedded credentials
+        creds = _extractTelnetCredentialText(printableText)
+        if creds:
+            result["Credentials"] = creds
+        return result
     except Exception:
         return None
+
+
+# Compiled patterns for Telnet credential extraction (reused across all calls)
+_TELNET_USER_RE = re.compile(
+    r"(?:login|user(?:name)?)\s*:\s*(\S+)", re.IGNORECASE
+)
+_TELNET_PASS_RE = re.compile(
+    r"(?:pass(?:w(?:or)?d?)?|pw)\s*:\s*(\S+)", re.IGNORECASE
+)
+
+
+def _extractTelnetCredentialText(text):
+    """
+    Scan a printable Telnet text snippet for login/password prompt-response patterns
+    (e.g. ``login: alice`` or ``Password: s3cr3t``).
+    Returns a dict of found credential fields, or an empty dict.
+    """
+    if not text:
+        return {}
+    creds = {}
+    userMatch = _TELNET_USER_RE.search(text)
+    passMatch = _TELNET_PASS_RE.search(text)
+    if userMatch:
+        creds["username"] = userMatch.group(1)
+    if passMatch:
+        creds["password"] = passMatch.group(1)
+    return creds
+
+
+def extractTelnetCredentials(rawPayload):
+    """
+    Detect cleartext Telnet login credentials from raw TCP port-23 payloads that
+    do NOT necessarily contain IAC negotiation bytes.  This handles the data-transfer
+    phase of a Telnet session where usernames and passwords are transmitted as plain
+    ASCII lines (line-at-a-time mode) or labelled prompt/response pairs.
+
+    Returns a dict with any found credential fields, or an empty dict.
+    """
+    try:
+        printableText = "".join(
+            chr(b) for b in rawPayload if 32 <= b <= 126
+        ).strip()
+        if not printableText:
+            return {}
+        # Check for labelled prompt-response patterns (server echo or combined packet)
+        creds = _extractTelnetCredentialText(printableText)
+        return creds
+    except Exception:
+        return {}
 
 
 def decodeIRC(rawPayload):
@@ -2580,6 +2748,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     telnetSection = decodeTelnet(rawPayload)
                     if telnetSection is not None:
                         transportSection["Telnet"] = telnetSection
+                    # Also scan non-IAC data packets for cleartext credentials
+                    telnetCreds = extractTelnetCredentials(rawPayload)
+                    if telnetCreds:
+                        if "Telnet" not in transportSection:
+                            transportSection["Telnet"] = {}
+                        transportSection["Telnet"].setdefault("Credentials", {}).update(
+                            telnetCreds
+                        )
                 # Decode IRC on TCP ports 6667/6668/6669
                 if dstPort in (6667, 6668, 6669) or srcPort in (6667, 6668, 6669):
                     ircSection = decodeIRC(rawPayload)
