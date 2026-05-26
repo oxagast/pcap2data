@@ -2415,8 +2415,10 @@ function buildSessionAutoKeystoreEntries() {
               });
             });
           }
-        } catch {
-          // Ignore payload parse/decode failures for auto cookie extraction.
+        } catch (error) {
+          // Keep auto-population resilient per packet; malformed payloads should not
+          // block loading. Log once per failure for troubleshooting.
+          logErrorEntry("crypt-keystore-cookie-auto", error);
         }
       }
     });
@@ -3399,6 +3401,8 @@ function getCookieJarTextForCurrentPacket() {
       ? buildCookieJarTextFromHttpFields(decodedHttp.fields)
       : "";
   } catch {
+    // Context-menu cookie actions are best-effort for the active packet.
+    // Fallback to no cookie jar when payload decode fails.
     return "";
   }
 }
