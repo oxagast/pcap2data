@@ -543,6 +543,58 @@ strong {
   border: 1px solid var(--color-3);
 }
 
+.data-tools-proto-section {
+  margin-top: 10px;
+}
+
+#data-tools-proto-select {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  margin-top: 6px;
+  margin-bottom: 8px;
+  padding: 6px;
+}
+
+#data-tools-proto-output {
+  margin-top: 8px;
+  color: var(--color-5);
+}
+
+.data-tools-proto-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.data-tools-proto-table th,
+.data-tools-proto-table td {
+  border: 1px solid var(--color-3);
+  padding: 5px 8px;
+  text-align: left;
+  word-break: break-all;
+}
+
+.data-tools-proto-table th {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+.data-tools-proto-table tr:nth-child(even) td {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.data-tools-proto-none {
+  color: var(--color-3);
+  font-size: 12px;
+  font-style: italic;
+}
+
 #convert-context-menu {
   position: fixed;
   z-index: 99999;

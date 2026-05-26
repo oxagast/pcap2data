@@ -1271,6 +1271,7 @@ function resetDataToolsOutputs() {
     "MIME Type: Unknown";
   document.getElementById("data-tools-entropy").textContent =
     "Shannon Entropy: 0.00 (Low)";
+  clearProtoDecoderOutput();
 }
 
 function runDataToolsConversion() {
@@ -1310,6 +1311,7 @@ function runDataToolsConversion() {
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
+    runProtoDecoder(bytes);
   } catch (error) {
     resetDataToolsOutputs();
     errorEl.textContent =
@@ -1318,6 +1320,477 @@ function runDataToolsConversion() {
         : String(error);
   }
 }
+
+// ── Protocol decoders for the Conv tab ───────────────────────────────────────
+
+function decodeHttpFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return null;
+  const firstLine = lines[0].trim();
+  const requestMatch = firstLine.match(
+    /^([A-Z]+)\s+(\S+)\s+(HTTP\/[\d.]+)$/,
+  );
+  const responseMatch = firstLine.match(/^(HTTP\/[\d.]+)\s+(\d{3})\s*(.*)/);
+  if (!requestMatch && !responseMatch) return null;
+
+  const emptyLineIdx = lines.findIndex((l, i) => i > 0 && l.trim() === "");
+  const headerLines = lines.slice(
+    1,
+    emptyLineIdx > 0 ? emptyLineIdx : lines.length,
+  );
+  const headers = {};
+  headerLines.forEach((hl) => {
+    const idx = hl.indexOf(":");
+    if (idx > 0) {
+      headers[hl.slice(0, idx).trim()] = hl.slice(idx + 1).trim();
+    }
+  });
+
+  const fields = [];
+  if (requestMatch) {
+    fields.push(
+      { name: "Type", value: "Request" },
+      { name: "Method", value: requestMatch[1] },
+      { name: "URL", value: requestMatch[2] },
+      { name: "Version", value: requestMatch[3] },
+    );
+    [
+      "Host",
+      "User-Agent",
+      "Content-Type",
+      "Content-Length",
+      "Accept",
+      "Accept-Encoding",
+      "Connection",
+      "Authorization",
+      "Referer",
+      "Cookie",
+    ].forEach((h) => {
+      if (headers[h]) fields.push({ name: h, value: headers[h] });
+    });
+  } else {
+    fields.push(
+      { name: "Type", value: "Response" },
+      { name: "Version", value: responseMatch[1] },
+      { name: "Status Code", value: responseMatch[2] },
+      { name: "Status Message", value: responseMatch[3] || "—" },
+    );
+    [
+      "Server",
+      "Content-Type",
+      "Content-Length",
+      "Content-Encoding",
+      "Transfer-Encoding",
+      "Connection",
+      "Location",
+      "Set-Cookie",
+      "Cache-Control",
+      "Date",
+    ].forEach((h) => {
+      if (headers[h]) fields.push({ name: h, value: headers[h] });
+    });
+  }
+  if (emptyLineIdx > 0 && emptyLineIdx < lines.length - 1) {
+    const body = lines
+      .slice(emptyLineIdx + 1)
+      .join("\n")
+      .trim();
+    if (body) {
+      fields.push({
+        name: "Body (preview)",
+        value: body.length > 200 ? body.slice(0, 200) + "…" : body,
+      });
+    }
+  }
+  return { protocol: "HTTP", fields };
+}
+
+function decodeTelnetFromBytes(bytes) {
+  const IAC = 0xff;
+  const WILL = 0xfb,
+    WONT = 0xfc,
+    DO = 0xfd,
+    DONT = 0xfe;
+  const SB = 0xfa,
+    SE = 0xf0;
+  const optionNames = {
+    0: "Binary",
+    1: "Echo",
+    3: "Suppress Go Ahead",
+    5: "Status",
+    24: "Terminal Type",
+    31: "Window Size",
+    32: "Terminal Speed",
+    34: "Linemode",
+    39: "New Environment",
+  };
+  const negotiations = [];
+  let text = "";
+  let i = 0;
+  let hasIac = false;
+  while (i < bytes.length) {
+    if (bytes[i] === IAC) {
+      hasIac = true;
+      i++;
+      if (i >= bytes.length) break;
+      const cmd = bytes[i++];
+      if (cmd === WILL || cmd === WONT || cmd === DO || cmd === DONT) {
+        if (i < bytes.length) {
+          const opt = bytes[i++];
+          const cmdName =
+            cmd === WILL
+              ? "WILL"
+              : cmd === WONT
+                ? "WONT"
+                : cmd === DO
+                  ? "DO"
+                  : "DONT";
+          negotiations.push(`${cmdName} ${optionNames[opt] ?? `Option ${opt}`}`);
+        }
+      } else if (cmd === SB) {
+        while (i < bytes.length) {
+          if (bytes[i] === IAC && i + 1 < bytes.length && bytes[i + 1] === SE) {
+            i += 2;
+            break;
+          }
+          i++;
+        }
+      }
+    } else {
+      const b = bytes[i++];
+      if (b >= 32 && b < 127) text += String.fromCharCode(b);
+      else if (b === 10) text += "\n";
+      else if (b === 13) text += "\r";
+    }
+  }
+  if (!hasIac && !text.trim()) return null;
+  const fields = [];
+  if (negotiations.length) {
+    fields.push({ name: "Negotiations", value: negotiations.join(", ") });
+  }
+  if (text.trim()) {
+    const t = text.trim();
+    fields.push({
+      name: "Text",
+      value: t.length > 500 ? t.slice(0, 500) + "…" : t,
+    });
+  }
+  if (!fields.length) return null;
+  return { protocol: "Telnet", fields };
+}
+
+function decodeSshFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(
+    bytes.slice(0, 512),
+  );
+  const bannerMatch = text.match(/^SSH-([\S]+)\r?\n/);
+  if (!bannerMatch) return null;
+  const versionStr = bannerMatch[1];
+  const dashIdx = versionStr.indexOf("-");
+  const protocolVersion =
+    dashIdx >= 0 ? versionStr.slice(0, dashIdx) : versionStr;
+  const softwareVersion = dashIdx >= 0 ? versionStr.slice(dashIdx + 1) : "—";
+  const fields = [
+    { name: "Protocol Version", value: protocolVersion },
+    { name: "Software Version", value: softwareVersion },
+  ];
+  const bannerEnd = text.indexOf("\n");
+  if (bannerEnd > 0 && bytes.length > bannerEnd + 1) {
+    fields.push({
+      name: "Additional Data",
+      value: `${bytes.length - bannerEnd - 1} bytes (key exchange)`,
+    });
+  }
+  return { protocol: "SSH / OpenSSH", fields };
+}
+
+function decodePop3FromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return null;
+  const POP3_COMMANDS = new Set([
+    "USER",
+    "PASS",
+    "STAT",
+    "LIST",
+    "RETR",
+    "DELE",
+    "NOOP",
+    "RSET",
+    "QUIT",
+    "APOP",
+    "TOP",
+    "UIDL",
+  ]);
+  const fields = [];
+  let detected = false;
+  for (const line of lines) {
+    if (line.startsWith("+OK")) {
+      fields.push({ name: "Response", value: "+OK" });
+      const msg = line.slice(3).trim();
+      if (msg) fields.push({ name: "Message", value: msg });
+      detected = true;
+    } else if (line.startsWith("-ERR")) {
+      fields.push({ name: "Response", value: "-ERR" });
+      const msg = line.slice(4).trim();
+      if (msg) fields.push({ name: "Error", value: msg });
+      detected = true;
+    } else {
+      const parts = line.split(/\s+/);
+      const cmd = parts[0].toUpperCase();
+      if (POP3_COMMANDS.has(cmd)) {
+        fields.push({ name: "Command", value: cmd });
+        if (parts.length > 1) {
+          fields.push({ name: "Argument", value: parts.slice(1).join(" ") });
+        }
+        detected = true;
+      }
+    }
+    if (fields.length >= 10) break;
+  }
+  if (!detected) return null;
+  return { protocol: "POP3", fields };
+}
+
+function decodeImapFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return null;
+  const IMAP_STATUSES = new Set(["OK", "NO", "BAD", "PREAUTH", "BYE"]);
+  const IMAP_COMMANDS = new Set([
+    "CAPABILITY",
+    "NOOP",
+    "LOGOUT",
+    "AUTHENTICATE",
+    "LOGIN",
+    "SELECT",
+    "EXAMINE",
+    "CREATE",
+    "DELETE",
+    "RENAME",
+    "SUBSCRIBE",
+    "UNSUBSCRIBE",
+    "LIST",
+    "LSUB",
+    "STATUS",
+    "APPEND",
+    "CHECK",
+    "CLOSE",
+    "EXPUNGE",
+    "SEARCH",
+    "FETCH",
+    "STORE",
+    "COPY",
+    "UID",
+    "IDLE",
+  ]);
+  const fields = [];
+  let detected = false;
+  for (const line of lines) {
+    if (line.startsWith("* ")) {
+      const val = line.slice(2).trim();
+      fields.push({
+        name: "Untagged",
+        value: val.length > 100 ? val.slice(0, 100) + "…" : val,
+      });
+      detected = true;
+    } else if (line.startsWith("+ ")) {
+      fields.push({ name: "Continuation", value: line.slice(2).trim() });
+      detected = true;
+    } else {
+      const m = line.match(/^(\S+)\s+(\S+)\s*(.*)/);
+      if (m) {
+        const tag = m[1];
+        const word = m[2].toUpperCase();
+        const rest = m[3];
+        if (IMAP_STATUSES.has(word)) {
+          const val = `${word} ${rest}`.trim();
+          fields.push({
+            name: `[${tag}] Status`,
+            value: val.length > 100 ? val.slice(0, 100) + "…" : val,
+          });
+          detected = true;
+        } else if (IMAP_COMMANDS.has(word)) {
+          fields.push({ name: `[${tag}] Command`, value: word });
+          if (rest) {
+            fields.push({
+              name: "Arguments",
+              value: rest.length > 100 ? rest.slice(0, 100) + "…" : rest,
+            });
+          }
+          detected = true;
+        }
+      }
+    }
+    if (fields.length >= 12) break;
+  }
+  if (!detected) return null;
+  return { protocol: "IMAP", fields };
+}
+
+function decodeSmtpFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return null;
+  const SMTP_COMMANDS = new Set([
+    "HELO",
+    "EHLO",
+    "MAIL",
+    "RCPT",
+    "DATA",
+    "RSET",
+    "VRFY",
+    "EXPN",
+    "NOOP",
+    "QUIT",
+    "AUTH",
+    "STARTTLS",
+  ]);
+  const fields = [];
+  let detected = false;
+  for (const line of lines) {
+    const rm = line.match(/^(\d{3})([\s-])(.*)/);
+    if (rm) {
+      const label = `Response ${rm[1]}${rm[2] === "-" ? " (cont.)" : ""}`;
+      fields.push({ name: label, value: rm[3] });
+      detected = true;
+    } else {
+      const parts = line.split(/\s+/);
+      const cmd = parts[0].toUpperCase();
+      if (SMTP_COMMANDS.has(cmd)) {
+        fields.push({ name: "Command", value: cmd });
+        if (parts.length > 1) {
+          const arg = parts.slice(1).join(" ");
+          fields.push({
+            name: "Argument",
+            value: arg.length > 100 ? arg.slice(0, 100) + "…" : arg,
+          });
+        }
+        detected = true;
+      }
+    }
+    if (fields.length >= 12) break;
+  }
+  if (!detected) return null;
+  return { protocol: "SMTP", fields };
+}
+
+function autoDetectProtoFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(
+    bytes.slice(0, 256),
+  );
+  if (/^SSH-/.test(text)) return "ssh";
+  if (
+    /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s/.test(text) ||
+    /^HTTP\/[\d.]+ \d{3}/.test(text)
+  )
+    return "http";
+  if (
+    /^(HELO|EHLO|MAIL FROM|RCPT TO|DATA|QUIT)\b/i.test(text) ||
+    /^\d{3}[\s-]/.test(text)
+  )
+    return "smtp";
+  if (
+    /^\+OK/.test(text) ||
+    /^-ERR/.test(text) ||
+    /^(USER|PASS|STAT|LIST|RETR|DELE|QUIT)\b/i.test(text)
+  )
+    return "pop3";
+  if (
+    /^\* /.test(text) ||
+    /^\+ /.test(text) ||
+    /^\S+ (OK|NO|BAD|PREAUTH|BYE)\b/i.test(text) ||
+    /^\S+ (SELECT|LOGIN|FETCH|AUTHENTICATE)\b/i.test(text)
+  )
+    return "imap";
+  // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
+  const TELNET_COMMANDS = new Set([
+    0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
+    0xfc, 0xfd, 0xfe, 0xff,
+  ]);
+  for (let i = 0; i + 1 < bytes.length; i++) {
+    if (bytes[i] === 0xff && TELNET_COMMANDS.has(bytes[i + 1])) return "telnet";
+  }
+  return null;
+}
+
+function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
+  const protoOutput = document.getElementById("data-tools-proto-output");
+  if (!protoOutput) return;
+  protoOutput.innerHTML = "";
+  if (!result) {
+    const span = document.createElement("span");
+    span.className = "data-tools-proto-none";
+    span.textContent =
+      selectedProtocol === "auto"
+        ? "No known protocol detected"
+        : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
+    protoOutput.appendChild(span);
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "data-tools-proto-table";
+  const headerRow = document.createElement("tr");
+  const th1 = document.createElement("th");
+  th1.textContent = `${result.protocol} Field`;
+  const th2 = document.createElement("th");
+  th2.textContent = "Value";
+  headerRow.appendChild(th1);
+  headerRow.appendChild(th2);
+  table.appendChild(headerRow);
+  result.fields.forEach((field) => {
+    const tr = document.createElement("tr");
+    const tdName = document.createElement("td");
+    tdName.textContent = field.name;
+    const tdVal = document.createElement("td");
+    tdVal.textContent = field.value;
+    tr.appendChild(tdName);
+    tr.appendChild(tdVal);
+    table.appendChild(tr);
+  });
+  protoOutput.appendChild(table);
+}
+
+function runProtoDecoder(bytes) {
+  const selectEl = document.getElementById("data-tools-proto-select");
+  const selectedProtocol = selectEl ? selectEl.value : "auto";
+  let protocol = selectedProtocol;
+  if (protocol === "auto") {
+    protocol = autoDetectProtoFromBytes(bytes);
+  }
+  let result = null;
+  switch (protocol) {
+    case "http":
+      result = decodeHttpFromBytes(bytes);
+      break;
+    case "telnet":
+      result = decodeTelnetFromBytes(bytes);
+      break;
+    case "ssh":
+      result = decodeSshFromBytes(bytes);
+      break;
+    case "pop3":
+      result = decodePop3FromBytes(bytes);
+      break;
+    case "imap":
+      result = decodeImapFromBytes(bytes);
+      break;
+    case "smtp":
+      result = decodeSmtpFromBytes(bytes);
+      break;
+    default:
+      protocol = null;
+  }
+  renderProtoDecoderOutput(result, selectedProtocol, protocol);
+}
+
+function clearProtoDecoderOutput() {
+  const protoOutput = document.getElementById("data-tools-proto-output");
+  if (protoOutput) protoOutput.innerHTML = "";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function showDataTools() {
   statusUpdate("Status: Displaying data conversion tools");
@@ -2275,6 +2748,19 @@ document
     document.getElementById("data-tools-input").value = "";
     document.getElementById("data-tools-error").textContent = "";
     resetDataToolsOutputs();
+  });
+document
+  .getElementById("data-tools-proto-select")
+  .addEventListener("change", () => {
+    const inputEl = document.getElementById("data-tools-input");
+    const formatEl = document.getElementById("data-tools-format");
+    if (!inputEl.value.trim()) return;
+    try {
+      const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+      runProtoDecoder(bytes);
+    } catch {
+      // ignore parse errors; the error will have been shown on convert
+    }
   });
 convertContextButtons.hex.addEventListener("click", () =>
   loadContextValueIntoDataTools("hex"),
