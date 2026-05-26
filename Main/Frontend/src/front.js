@@ -3003,8 +3003,34 @@ function updateConvertContextSubmenuPositions() {
 
   convertContextSubmenuEls.forEach((submenuEl) => {
     if (submenuEl.style.display === "none") return;
-    const submenuPanelEl = submenuEl.querySelector(".ctx-submenu-panel");
+    // Use :scope > to get only the direct child panel, not a grandchild's.
+    const submenuPanelEl = submenuEl.querySelector(":scope > .ctx-submenu-panel");
     if (!submenuPanelEl) return;
+
+    // Temporarily reveal every ancestor .ctx-submenu-panel so that this
+    // element has a real viewport position when getBoundingClientRect() is
+    // called.  Without this, panels at depth > 1 are inside a hidden
+    // ancestor and always return zero-area rects, making the overflow
+    // calculations completely wrong for those levels.
+    const revealedAncestors = [];
+    let node = submenuEl.parentElement;
+    while (node && node !== convertContextMenuEl) {
+      if (
+        node.classList.contains("ctx-submenu-panel") &&
+        node.style.display !== "block"
+      ) {
+        revealedAncestors.push({
+          el: node,
+          previousDisplay: node.style.display,
+          previousVisibility: node.style.visibility,
+          previousPointerEvents: node.style.pointerEvents,
+        });
+        node.style.display = "block";
+        node.style.visibility = "hidden";
+        node.style.pointerEvents = "none";
+      }
+      node = node.parentElement;
+    }
 
     const previousDisplay = submenuPanelEl.style.display;
     const previousVisibility = submenuPanelEl.style.visibility;
@@ -3032,6 +3058,14 @@ function updateConvertContextSubmenuPositions() {
     submenuPanelEl.style.display = previousDisplay;
     submenuPanelEl.style.visibility = previousVisibility;
     submenuPanelEl.style.pointerEvents = previousPointerEvents;
+
+    // Restore ancestor panels in reverse order (innermost first).
+    for (let i = revealedAncestors.length - 1; i >= 0; i--) {
+      const ancestor = revealedAncestors[i];
+      ancestor.el.style.display = ancestor.previousDisplay;
+      ancestor.el.style.visibility = ancestor.previousVisibility;
+      ancestor.el.style.pointerEvents = ancestor.previousPointerEvents;
+    }
   });
 }
 
