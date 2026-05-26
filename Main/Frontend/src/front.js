@@ -2937,6 +2937,7 @@ const convertContextButtons = {
   base64: getCachedElement("convert-context-base64"),
   decimal: getCachedElement("convert-context-decimal"),
   ascii: getCachedElement("convert-context-ascii"),
+  loadPayload: getCachedElement("convert-context-load-payload"),
   copyHex: getCachedElement("convert-context-copy-hex"),
   copyAscii: getCachedElement("convert-context-copy-ascii"),
   copyRaw: getCachedElement("convert-context-copy-raw"),
@@ -3336,6 +3337,9 @@ function showConvertContextMenu(
   convertContextButtons.copyRaw.style.display = isHexViewTarget
     ? "block"
     : "none";
+  convertContextButtons.loadPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
   convertContextButtons.filterIp.style.display = filterQueries.ip
     ? "block"
     : "none";
@@ -3400,7 +3404,7 @@ function showConvertContextMenu(
     : "none";
   const hasClipboardActions = showCopySelection || showPaste;
   const hasGeneralActions = showCopySelection || showPaste;
-  const hasDataTypeActions = formats.length > 0;
+  const hasDataTypeActions = formats.length > 0 || hasPayloadToExport;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport;
@@ -3478,6 +3482,22 @@ function loadContextValueIntoDataTools(format) {
   runDataToolsConversion();
   hideConvertContextMenu();
   writeLogEntry(`Context conversion loaded format=${format}`);
+}
+
+function loadRawPayloadIntoDataToolsFromContextMenu() {
+  const payloadHex = getCurrentRawPayloadHex();
+  hideConvertContextMenu();
+  if (!payloadHex) {
+    statusUpdate("Status: No raw payload available to load");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  inputEl.value = payloadHex;
+  formatEl.value = "hex";
+  showDataTools();
+  runDataToolsConversion();
+  writeLogEntry("Context conversion loaded raw payload into Conv tab");
 }
 
 function getActivePacketCursor() {
@@ -4080,6 +4100,9 @@ convertContextButtons.decimal.addEventListener("click", () =>
 convertContextButtons.ascii.addEventListener("click", () =>
   loadContextValueIntoDataTools("ascii"),
 );
+convertContextButtons.loadPayload.addEventListener("click", () => {
+  loadRawPayloadIntoDataToolsFromContextMenu();
+});
 convertContextButtons.copyHex.addEventListener("click", () => {
   copyHexFromContext();
 });
