@@ -2191,10 +2191,14 @@ function updateCryptKeystoreWorkspaceState() {
   const saveCertBtn = document.getElementById("crypt-save-cert-keystore-btn");
   const saveKeyBtn = document.getElementById("crypt-save-key-keystore-btn");
   const saveSecretBtn = document.getElementById("crypt-save-secret-keystore-btn");
+  const sendToPersistentBtn = document.getElementById(
+    "crypt-send-to-persistent-btn",
+  );
   const deleteBtn = document.getElementById("crypt-delete-keystore-entry-btn");
   saveCertBtn.disabled = !isPersistentMode;
   saveKeyBtn.disabled = !isPersistentMode;
   saveSecretBtn.disabled = !isPersistentMode;
+  sendToPersistentBtn.disabled = isPersistentMode;
   deleteBtn.disabled = !isPersistentMode;
   const unlockStatusEl = document.getElementById("crypt-keystore-unlock-status");
   unlockStatusEl.textContent = isPersistentMode
@@ -2503,6 +2507,63 @@ async function deleteSelectedCryptKeystoreEntry() {
   writeLogEntry(
     `Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
   );
+}
+
+async function sendSelectedSessionEntryToPersistent() {
+  if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_SESSION) {
+    statusUpdate("Status: Switch to session keychain to send temporary entries");
+    return;
+  }
+  if (!cryptKeystoreUnlockPassword) {
+    doError("Persistent keychain is locked. Reopen keychain with password.");
+    return;
+  }
+  const listEl = document.getElementById("crypt-keystore-list");
+  const selectedIndex = Number(listEl.value);
+  if (!Number.isFinite(selectedIndex) || !cryptSessionKeystoreEntries[selectedIndex]) {
+    statusUpdate("Status: Select a session keychain entry first");
+    return;
+  }
+
+  const selectedEntry = cryptSessionKeystoreEntries[selectedIndex];
+  const normalizedContent = normalizeSessionSecretValue(selectedEntry.content);
+  if (!normalizedContent) {
+    statusUpdate("Status: Selected session entry has no content to persist");
+    return;
+  }
+
+  const alreadyStored = cryptPersistentKeystoreEntries.some(
+    (entry) =>
+      entry.type === selectedEntry.type &&
+      entry.label === selectedEntry.label &&
+      normalizeSessionSecretValue(entry.content) === normalizedContent,
+  );
+  if (alreadyStored) {
+    statusUpdate("Status: Entry is already stored in persistent keychain");
+    return;
+  }
+
+  cryptPersistentKeystoreEntries.unshift({
+    id: generateCryptEntryId(),
+    type: selectedEntry.type,
+    label: selectedEntry.label,
+    source: `bookmarked from ${selectedEntry.source || "session-auto"}`,
+    content: normalizedContent,
+    summary: selectedEntry.summary || "Bookmarked from session keychain",
+    createdAt: new Date().toISOString(),
+  });
+  try {
+    await savePersistentCryptKeystoreEntries(
+      cryptPersistentKeystoreEntries,
+      cryptKeystoreUnlockPassword,
+    );
+  } catch (error) {
+    logErrorEntry("crypt-keystore-save", error);
+    doError("Could not save selected entry to persistent keychain.");
+    return;
+  }
+  statusUpdate(`Status: Sent "${selectedEntry.label}" to persistent keychain`);
+  writeLogEntry(`Session keychain entry persisted label="${selectedEntry.label}"`);
 }
 
 async function unlockPersistentKeystoreAndLoad() {
@@ -3823,6 +3884,11 @@ document
   .getElementById("crypt-load-keystore-entry-btn")
   .addEventListener("click", () => {
     void loadSelectedCryptKeystoreEntry();
+  });
+document
+  .getElementById("crypt-send-to-persistent-btn")
+  .addEventListener("click", () => {
+    void sendSelectedSessionEntryToPersistent();
   });
 document
   .getElementById("crypt-delete-keystore-entry-btn")
