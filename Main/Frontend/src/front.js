@@ -81,7 +81,10 @@ const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
-const CRYPT_KEYSTORE_STORAGE_KEY = "packetsnitch.crypt.keystore.v1";
+const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
+const CRYPT_KEYSTORE_DB_VERSION = 1;
+const CRYPT_KEYSTORE_STORE_NAME = "entries";
+const CRYPT_KEYSTORE_RECORD_KEY = "default";
 let cryptEncounteredEntries = [];
 let cryptActiveEntryIndex = -1;
 let cryptKeystoreEntries = [];
@@ -1453,11 +1456,9 @@ function generateCryptEntryId() {
 }
 
 function toBase64(bytes) {
-  let binary = "";
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return window.btoa(binary);
+  return window.btoa(
+    Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""),
+  );
 }
 
 function fromBase64(base64) {
@@ -1481,7 +1482,7 @@ async function deriveCryptKey(passphrase, saltBytes, usage) {
     {
       name: "PBKDF2",
       salt: saltBytes,
-      iterations: 150000,
+      iterations: 600000,
       hash: "SHA-256",
     },
     keyMaterial,
@@ -1532,11 +1533,47 @@ function getFirstLineOfElementText(elementId, fallback = "") {
   return firstLine || fallback;
 }
 
-function loadCryptKeystore() {
+function openCryptKeystoreDb() {
+  return new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(
+      CRYPT_KEYSTORE_DB_NAME,
+      CRYPT_KEYSTORE_DB_VERSION,
+    );
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(CRYPT_KEYSTORE_STORE_NAME)) {
+        db.createObjectStore(CRYPT_KEYSTORE_STORE_NAME);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+function runIdbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+function waitForIdbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+async function loadCryptKeystore() {
   try {
-    const stored = window.localStorage.getItem(CRYPT_KEYSTORE_STORAGE_KEY);
-    if (!stored) return [];
-    const parsed = JSON.parse(stored);
+    const db = await openCryptKeystoreDb();
+    const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readonly");
+    const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
+    const storedRecord = await runIdbRequest(store.get(CRYPT_KEYSTORE_RECORD_KEY));
+    db.close();
+
+    const parsed = storedRecord?.entries;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((entry) => entry && typeof entry === "object")
@@ -1558,15 +1595,20 @@ function loadCryptKeystore() {
   }
 }
 
-function saveCryptKeystore() {
+async function saveCryptKeystore() {
   try {
-    window.localStorage.setItem(
-      CRYPT_KEYSTORE_STORAGE_KEY,
-      JSON.stringify(cryptKeystoreEntries),
+    const db = await openCryptKeystoreDb();
+    const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
+    store.put(
+      { entries: cryptKeystoreEntries },
+      CRYPT_KEYSTORE_RECORD_KEY,
     );
+    await waitForIdbTransaction(transaction);
+    db.close();
   } catch (error) {
     logErrorEntry("crypt-keystore-save", error);
-    doError("Could not save the local crypt keystore.");
+    doError("Could not save the persistent local keystore.");
   }
 }
 
@@ -1642,7 +1684,7 @@ async function addCryptKeystoreEntry({ type, label, source, content, summary }) 
     createdAt: new Date().toISOString(),
   };
   cryptKeystoreEntries.unshift(entry);
-  saveCryptKeystore();
+  await saveCryptKeystore();
   renderCryptKeystoreList();
   statusUpdate(`Status: Saved ${type} in local crypt keystore`);
   writeLogEntry(`Crypt keystore entry added type=${type} label="${entry.label}"`);
@@ -1679,7 +1721,7 @@ async function loadSelectedCryptKeystoreEntry() {
   statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
 }
 
-function deleteSelectedCryptKeystoreEntry() {
+async function deleteSelectedCryptKeystoreEntry() {
   const listEl = document.getElementById("crypt-keystore-list");
   const selectedIndex = Number(listEl.value);
   if (!Number.isFinite(selectedIndex) || !cryptKeystoreEntries[selectedIndex]) {
@@ -1687,7 +1729,7 @@ function deleteSelectedCryptKeystoreEntry() {
     return;
   }
   const [removedEntry] = cryptKeystoreEntries.splice(selectedIndex, 1);
-  saveCryptKeystore();
+  await saveCryptKeystore();
   renderCryptKeystoreList();
   statusUpdate(`Status: Deleted keystore entry "${removedEntry.label}"`);
   writeLogEntry(
@@ -2948,7 +2990,9 @@ document
   });
 document
   .getElementById("crypt-delete-keystore-entry-btn")
-  .addEventListener("click", deleteSelectedCryptKeystoreEntry);
+  .addEventListener("click", () => {
+    void deleteSelectedCryptKeystoreEntry();
+  });
 
 document
   .getElementById("data-tools-convert-btn")
@@ -4406,8 +4450,17 @@ window.api.onError((msg) => {
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
   hideConvertContextMenu();
-  cryptKeystoreEntries = loadCryptKeystore();
-  renderCryptKeystoreList();
+  loadCryptKeystore()
+    .then((entries) => {
+      cryptKeystoreEntries = entries;
+      renderCryptKeystoreList();
+    })
+    .catch((error) => {
+      cryptKeystoreEntries = [];
+      renderCryptKeystoreList();
+      logErrorEntry("crypt-keystore-load", error);
+      statusUpdate("Status: Could not load persistent keystore entries");
+    });
   setCryptSubtab(CRYPT_SSL_SUBTAB);
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
