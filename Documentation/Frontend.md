@@ -359,12 +359,12 @@ Build and append filter expressions to the filter bar based on attributes of the
 | Sub-menu         | Description                                                                         |
 | ---------------- | ----------------------------------------------------------------------------------- |
 | **Add with &&...** | Append the new clause joined with `&&` (AND) to the existing filter.              |
-| **Add with \|\|...** | Append the new clause joined with `\|\|` (OR) to the existing filter.            |
+| **Add with \|\|...** | Append the new clause joined with `||` (OR) to the existing filter.            |
 | **is not...**    | Append a negated (`!`) clause joined with `&&` to the existing filter.              |
 | **Parentheses...** | Insert parentheses into the filter expression.                                    |
 | **Clear and...** | Clear the existing filter, then set the new clause as the complete filter.          |
 
-Each directional sub-menu (**Add with &&...**, **Add with \|\|...**, **is not...**, **Clear and...**) has the same five attribute options:
+Each directional sub-menu (**Add with &&...**, **Add with ||...**, **is not...**, **Clear and...**) has the same five attribute options:
 
 | Option                  | Description                                                   |
 | ----------------------- | ------------------------------------------------------------- |
@@ -483,7 +483,7 @@ Filter keys use the same dot-notation names as the [searchable attributes](Filte
 | `tcp.flags:SYN`                                | Packets with the SYN flag set                         |
 | `snmp.community:public`                        | SNMP packets using the `public` community             |
 | `ip.src.addr:10.0.0.1 && tcp.dst.port:80`     | Source `10.0.0.1` to destination port 80              |
-| `(tcp.dst.port:80 \|\| tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
+| `(tcp.dst.port:80 || tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
 
 ## License
 
