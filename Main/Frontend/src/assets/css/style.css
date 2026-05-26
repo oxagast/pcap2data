@@ -524,6 +524,7 @@ strong {
 #crypt-keystore-list,
 #crypt-keystore-label,
 #crypt-keystore-mode,
+#crypt-keystore-unlock-password,
 #crypt-cert-input,
 #crypt-key-input,
 #crypt-credential-input {
@@ -570,6 +571,26 @@ strong {
 #crypt-keystore-unlock-status {
   font-size: 12px;
   color: var(--color-6);
+}
+
+#crypt-keystore-unlock-dialog {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.crypt-keystore-unlock-content {
+  width: min(420px, 92vw);
+  border: 1px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .crypt-actions-row {

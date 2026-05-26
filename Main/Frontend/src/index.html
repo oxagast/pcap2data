@@ -350,7 +350,11 @@
                     <option value="persistent">Persistent keychain</option>
                   </select>
                 </div>
-                <div id="crypt-keystore-unlock-status">
+                <div
+                  id="crypt-keystore-unlock-status"
+                  role="status"
+                  aria-live="polite"
+                >
                   Persistent keychain is unlocked for this app session.
                 </div>
                 <input
@@ -382,6 +386,20 @@
                   </button>
                 </div>
                 <pre id="crypt-keystore-details">No keystore entries saved.</pre>
+              </div>
+            </div>
+          </div>
+          <div id="crypt-keystore-unlock-dialog" hidden>
+            <div class="crypt-keystore-unlock-content">
+              <div class="crypt-section-title">Unlock Keychain</div>
+              <input
+                id="crypt-keystore-unlock-password"
+                type="password"
+                placeholder="Enter keychain password"
+              />
+              <div class="crypt-actions-row">
+                <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
+                <button id="crypt-keystore-unlock-cancel-btn">Cancel</button>
               </div>
             </div>
           </div>
