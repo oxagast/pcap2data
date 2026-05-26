@@ -510,7 +510,22 @@
     </div>
 
     <div id="convert-context-menu" role="menu" aria-label="Context menu" hidden>
-      <button id="ctx-copy" role="menuitem">Copy</button>
+      <div id="ctx-copy-submenu" class="ctx-submenu">
+        <button id="ctx-copy-branch" class="ctx-branch" type="button">
+          Copy...
+        </button>
+        <div class="ctx-submenu-panel">
+          <button id="ctx-copy" role="menuitem">Copy</button>
+          <button id="convert-context-copy-hex" type="button">Copy Hex</button>
+          <button id="convert-context-copy-ascii" type="button">Copy ASCII</button>
+          <button id="convert-context-copy-raw" type="button">
+            Copy Raw payload
+          </button>
+          <button id="ctx-copy-cookie-jar" role="menuitem">
+            Copy Cookie Jar
+          </button>
+        </div>
+      </div>
       <button id="ctx-paste" role="menuitem">Paste</button>
       <hr id="convert-context-divider" class="ctx-divider" />
       <div id="ctx-convert-submenu" class="ctx-submenu">
@@ -536,11 +551,6 @@
           </button>
         </div>
       </div>
-      <button id="convert-context-copy-hex" type="button">Copy Hex</button>
-      <button id="convert-context-copy-ascii" type="button">Copy ASCII</button>
-      <button id="convert-context-copy-raw" type="button">
-        Copy Raw payload
-      </button>
       <div id="ctx-filter-submenu" class="ctx-submenu">
         <button id="ctx-filter-branch" class="ctx-branch" type="button">
           Add to filter...
@@ -704,19 +714,6 @@
           </div>
         </div>
       </div>
-      <div id="ctx-cookies-submenu" class="ctx-submenu">
-        <button id="ctx-cookies-branch" class="ctx-branch" type="button">
-          Cookies...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-copy-cookie-jar" role="menuitem">
-            Copy Cookie Jar
-          </button>
-          <button id="ctx-save-cookie-jar" role="menuitem">
-            Save to cookie_jar.txt
-          </button>
-        </div>
-      </div>
       <hr id="convert-context-save-divider" class="ctx-divider" />
       <div id="ctx-export-submenu" class="ctx-submenu">
         <button id="ctx-export-branch" class="ctx-branch" type="button">
@@ -727,6 +724,9 @@
           <button id="ctx-export-packet" role="menuitem">Export Packet</button>
           <button id="ctx-export-payload" role="menuitem">
             Export Payload
+          </button>
+          <button id="ctx-save-cookie-jar" role="menuitem">
+            Save to cookie_jar.txt
           </button>
         </div>
       </div>
