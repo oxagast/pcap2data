@@ -4,7 +4,7 @@
 
 ## Overview
 
-The PacketSnitch frontend is an Electron-based desktop application that provides an interactive interface for loading, browsing, and filtering the JSON output produced by the backend (`snitch.py`). It visualizes packet metadata, payloads, protocol details, and GeoIP information, and supports LLM-powered analysis summaries.
+The PacketSnitch frontend is an Electron-based desktop application that provides an interactive interface for loading, browsing, and filtering the JSON output produced by the backend (`snitch.py`). It visualizes packet metadata, payloads, protocol details, and GeoIP information, and supports LLM-powered analysis summaries. The frontend also includes a data conversion workspace (Conv), an encryption/certificate workspace (Crypt), an aggregate statistics view (Stats), a sortable packet list (List), an encrypted local key and credential store (Keystore), and a persistent activity log (Log).
 
 ## Requirements
 
@@ -73,17 +73,20 @@ The left sidebar contains navigation controls and file metadata.
 
 The toolbar at the top of the content area contains navigation and view-switching controls.
 
-| Control           | Description                                                              |
-| ----------------- | ------------------------------------------------------------------------ |
-| **Summary**       | Switch to the Summary Frame to view the LLM-generated analysis report.   |
-| **Host Data**     | Switch back to the packet data view (Packet Info + Payload panes).       |
-| **Stats**         | Show capture-level aggregate statistics (protocols, hosts, ports, MIME, etc.). |
-| **Data**          | Open the data conversion tab for base64/binary/hex/ascii conversions plus inferred MIME type and entropy. |
-| **List**          | Show all packets in a searchable, sortable list view.                    |
-| **Prev / Next**   | Navigate backwards and forwards through the packet list (or filtered set). |
-| **Filter bar**    | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)). |
+| Control           | Description                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| **Analysis**      | Switch to the Summary Frame to view the LLM-generated analysis report.                                   |
+| **Host Data**     | Switch to the packet data view (Packet Info + Payload panes) for the currently selected host.            |
+| **Conv**          | Open the data conversion workspace for translating between hex, binary, base64, ASCII, and decimal, with MIME detection, entropy analysis, and protocol decoding. |
+| **Crypt**         | Open the encryption workspace for inspecting encountered SSL/TLS sessions, loading certificates and private keys, and accessing PGP/OpenSSH workspaces. |
+| **Keystore**      | Open the local credential store for managing session and persistent keychain entries (passwords, keys, certificates, cookies). |
+| **Stats**         | Show capture-level aggregate statistics (protocols, hosts, ports, MIME types, GeoIP locations, etc.) derived from the full loaded dataset. |
+| **List**          | Show all packets in a searchable, sortable, stream-groupable list view.                                  |
+| **Log**           | Toggle the Activity Log panel, which records all GUI and backend actions with timestamps.                |
+| **Prev / Next**   | Navigate backwards and forwards through the packet list (or filtered set).                               |
+| **Filter bar**    | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                 |
 
-When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to load convertible values (hex/binary/base64/decimal) into the **Data** tab, copy selected payload views, and auto-populate the filter bar with detected IP addresses, ports, MAC addresses, protocol names, and MIME types.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [Context Menu](#context-menu) for full details.
 
 ---
 
@@ -134,6 +137,288 @@ Displays consecutive runs of printable ASCII characters extracted from the paylo
 #### Hex Grid
 
 An interactive hex dump of the full raw payload. Clicking a cell in the hex grid highlights the corresponding bytes and displays any printable ASCII sequence starting at that offset in the ASCII view.
+
+---
+
+### Conv Tab (Data Conversion)
+
+The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar.
+
+#### Input
+
+| Control            | Description                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| **Input format**   | Choose the encoding of the text you are pasting: Base64, Binary, Hex, ASCII / UTF-8, or Decimal bytes. |
+| **Input textarea** | Paste raw encoded data here (hex strings, base64 blobs, binary sequences, etc.).                   |
+| **Convert**        | Parse the input according to the selected format and populate all output fields.                    |
+| **Clear**          | Erase the input and all output fields.                                                              |
+
+#### Converted Output
+
+After clicking **Convert**, the following representations are shown simultaneously:
+
+| Field                  | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| **Hex**                | Hexadecimal encoding of the input bytes.         |
+| **Binary**             | Binary bit-string encoding.                      |
+| **Decimal bytes**      | Space-separated decimal byte values.             |
+| **Decimal integer**    | The input interpreted as one big-endian integer. |
+| **ASCII**              | Printable ASCII / UTF-8 representation.          |
+| **Base64**             | Standard base64 encoding.                        |
+
+#### Data Insights
+
+| Field               | Description                                                                       |
+| ------------------- | --------------------------------------------------------------------------------- |
+| **Byte Length**     | Total number of bytes represented by the input.                                   |
+| **MIME Type**       | Magic-byte inferred MIME type of the data.                                        |
+| **Shannon Entropy** | Shannon entropy value and qualitative label (Low / Medium / High / Very High).    |
+
+#### Protocol Decoder
+
+Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP) to attempt to parse the input bytes as that protocol and display a human-readable decoded view below.
+
+> The context menu's **Convert to...** submenu and **Load Raw Payload into Conv tab** option can automatically populate the Conv tab input from packet data or the current selection.
+
+---
+
+### Crypt Tab (Encryption Workspace)
+
+The **Crypt** tab provides a multi-panel workspace for inspecting cryptographic material encountered in a capture or loaded from files. It has three sub-tabs: **SSL**, **PGP**, and **OpenSSH**.
+
+#### SSL Sub-tab
+
+| Panel                  | Description                                                                                                 |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **Encountered SSL/TLS** | A list of all distinct SSL/TLS sessions detected in the loaded capture. Select an entry to view its details (SSL version, cipher, certificate text). Buttons: **Refresh** (re-scan the loaded data), **Filter packets** (populate the filter bar to show only packets in the selected session), **Load cert text** (copy the session certificate into the Certificate Loader). |
+| **Certificate Loader** | Load a PEM certificate from a file (**Load certificate file**) or paste PEM text directly (**Use pasted certificate**). A parsed preview is shown below the input. **Clear** removes the loaded certificate. |
+| **Private Key Loader** | Load a PEM private key from a file (**Load private key file**) or paste PEM text directly (**Use pasted key**). A parsed preview is shown below. **Clear** removes the loaded key. |
+
+#### PGP Sub-tab
+
+Reserved workspace for future PGP key import and decryption tooling.
+
+#### OpenSSH Sub-tab
+
+Reserved workspace for future OpenSSH key and session tooling.
+
+---
+
+### Stats Tab
+
+The **Stats** tab shows aggregate statistics computed across the entire loaded capture (all hosts, all packets). Statistics are presented as labelled tag-cloud sections. Clicking any tag pre-fills the filter bar with a suggested filter expression for that value.
+
+| Section                  | Description                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| **Overview**             | Total packet count, unique hosts targeted, encrypted vs. unencrypted packet counts, unique protocol count, and unique GeoIP location count. |
+| **Application Protocols**| All distinct application-layer protocol names identified by port (e.g. HTTP, DNS, SMTP). |
+| **Transport Protocols**  | Transport layer protocols seen (TCP, UDP, ICMP).                                    |
+| **Hosts / IPs**          | All unique source and destination IP addresses and target host values.              |
+| **Hostnames**            | Resolved hostnames from DNS or reverse-lookup data.                                 |
+| **GeoIP Locations**      | City/country pairs from GeoIP, sorted by frequency.                                 |
+| **Ports**                | All source and destination port numbers observed.                                   |
+| **MAC Vendors**          | Ethernet MAC vendor strings identified from OUI lookup.                             |
+| **MIME Types**           | All distinct MIME types found in payload data.                                      |
+| **Data Types**           | All distinct magic-identified data type strings.                                    |
+
+---
+
+### List Tab
+
+The **List** tab shows all packets across all hosts as a searchable, sortable table.
+
+#### Search Bar
+
+| Control              | Description                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| **Filter list**      | Text input that filters rows in real time by host, IP address, port number, or protocol name.   |
+| **Group by stream**  | When checked, rows are grouped by bidirectional stream (same IP/port pair, same transport) before applying the sort column, making it easy to follow a single conversation. |
+
+#### Columns
+
+| Column          | Description                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| **#**           | Packet index from the capture.                                                           |
+| **★**           | Bookmark indicator — filled for bookmarked packets.                                      |
+| **Stream**      | Stream group number (S1, S2, …) assigned by bidirectional endpoint pair.                |
+| **Host**        | Target host label from the loaded JSON.                                                  |
+| **Src IP**      | Source IP address.                                                                       |
+| **Dst IP**      | Destination IP address.                                                                  |
+| **Src Port**    | Source port number.                                                                      |
+| **Dst Port**    | Destination port number.                                                                 |
+| **Transport**   | Transport protocol (TCP / UDP / ICMP).                                                   |
+| **App Protocol**| Application-layer protocol name inferred from port.                                      |
+
+Click any column header to sort by that column; click again to reverse direction. Click any row to navigate to that packet in the Host Data view.
+
+---
+
+### Keystore Tab (Local Keychain)
+
+The **Keystore** tab provides a local encrypted credential store. It has two keychains: a **Session** keychain (in-memory only, reset when the app closes) and a **Persistent** keychain (encrypted with AES-GCM, stored in IndexedDB, and unlocked with a passphrase each session).
+
+#### First-time setup
+
+On first use, clicking **Keystore** or adding an entry to the persistent keychain opens the **Set Keychain Password** dialog. Enter and confirm a password (minimum 8 characters). This password encrypts all persistent entries; it is never stored in plain text.
+
+On subsequent launches, the **Unlock Keychain** dialog prompts for the password before revealing persistent entries.
+
+#### Create / Update Entry
+
+| Control            | Description                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------------- |
+| **Keychain**       | Choose whether new entries are saved to the **Session auto keychain** or the **Persistent keychain**. |
+| **Entry label**    | Optional human-readable name for the entry.                                                    |
+| **Content area**   | Paste the credential, secret, certificate, or notes to store.                                  |
+| **Save cert**      | Store the pasted content as a certificate entry.                                               |
+| **Save key**       | Store the pasted content as a private key entry.                                               |
+| **Save secret**    | Store the pasted content as a generic secret/password entry.                                   |
+
+#### Saved Entries
+
+| Control                   | Description                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------- |
+| **Entries list**          | Scrollable list of all saved entries in the currently selected keychain.               |
+| **Load selected**         | Copy the selected entry's content into the Create/Update area for inspection or editing. |
+| **Send to persistent**    | Promote a session keychain entry to the persistent keychain.                           |
+| **Delete selected**       | Permanently remove the selected entry.                                                 |
+| **Details preview**       | Shows the type, label, source, creation timestamp, and a content summary of the selected entry. |
+
+#### Auto-population
+
+PacketSnitch automatically populates the **Session** keychain from packet data when a capture is loaded:
+
+- HTTP form credential fields (usernames, passwords) extracted by the backend.
+- Cookie/Set-Cookie header values extracted from HTTP payloads.
+
+These auto-entries appear with a source of `session-auto` and can be promoted to the persistent keychain via **Send to persistent**.
+
+---
+
+### Log Tab
+
+Clicking **Log** in the toolbar toggles the **Activity Log** panel, which slides in from the bottom of the window. The log records all significant GUI actions, backend events, and console output with ISO 8601 timestamps.
+
+#### Log Entry Formats
+
+| Prefix                   | Description                                                    |
+| ------------------------ | -------------------------------------------------------------- |
+| `[GUI][UI]`              | User interactions and UI state changes (tab switches, file loads, filter runs, etc.). |
+| `[Console][UI]`          | Console log output captured from the renderer process.         |
+| `[Console][Backend]`     | Error messages forwarded from the Python backend process.      |
+
+The log is written to a persistent log file on disk. The file path is shown at the top of the log panel.
+
+#### Log Search
+
+The **Search log entries** input filters the visible entries in real time (case-insensitive substring match). The log file on disk is not modified by the search.
+
+---
+
+### Context Menu
+
+Right-clicking anywhere in the packet views, payload panes, or Conv tab opens the **context menu**. The menu adapts its available items based on the current context (whether text is selected, whether the current packet has an HTTP body, etc.).
+
+---
+
+#### Copy...
+
+| Item                 | Description                                                                              |
+| -------------------- | ---------------------------------------------------------------------------------------- |
+| **Copy**             | Copy the currently highlighted text to the clipboard. Shown only when text is selected. |
+| **Copy Hex**         | Copy the raw payload bytes as a hex string.                                              |
+| **Copy ASCII**       | Copy the printable ASCII representation of the payload.                                  |
+| **Copy Raw payload** | Copy the raw payload bytes.                                                              |
+| **Copy Cookie Jar**  | Copy all session cookie jar entries as a formatted string.                               |
+
+#### Paste
+
+Paste clipboard text into the focused input element.
+
+---
+
+#### Convert to...
+
+Load the selected text or current packet data into the **Conv** tab with a specific input format pre-selected. The Conv tab is automatically opened and **Convert** is run.
+
+| Item                             | Description                                                    |
+| -------------------------------- | -------------------------------------------------------------- |
+| **Load as Hex**                  | Load the selection as a hex-encoded byte string.               |
+| **Load as Binary**               | Load the selection as a binary bit-string.                     |
+| **Load as Base64**               | Load the selection as a base64-encoded string.                 |
+| **Load as Decimal bytes**        | Load the selection as space-separated decimal byte values.     |
+| **Load as ASCII / UTF-8**        | Load the selection as a plain text string.                     |
+| **Load Raw Payload into Conv tab** | Load the current packet's full raw payload as hex into Conv and run conversion. |
+
+---
+
+#### Add to filter...
+
+Build and append filter expressions to the filter bar based on attributes of the current packet. Four sub-menus control how the new clause is combined with any existing expression.
+
+| Sub-menu         | Description                                                                         |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| **Add with &&...** | Append the new clause joined with `&&` (AND) to the existing filter.              |
+| **Add with \|\|...** | Append the new clause joined with `||` (OR) to the existing filter.            |
+| **is not...**    | Append a negated (`!`) clause joined with `&&` to the existing filter.              |
+| **Parentheses...** | Insert parentheses into the filter expression.                                    |
+| **Clear and...** | Clear the existing filter, then set the new clause as the complete filter.          |
+
+Each directional sub-menu (**Add with &&...**, **Add with ||...**, **is not...**, **Clear and...**) has the same five attribute options:
+
+| Option                  | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
+| **Add IP to Filter**    | Adds the source or destination IP of the current packet.      |
+| **Add Port to Filter**  | Adds the destination port of the current packet.              |
+| **Add MAC to Filter**   | Adds the source MAC address of the current packet.            |
+| **Add Protocol to Filter** | Adds the detected application protocol.                    |
+| **Add MIME Type to Filter** | Adds the detected MIME type.                              |
+
+The **Parentheses...** sub-menu provides:
+
+| Option                          | Description                                              |
+| ------------------------------- | -------------------------------------------------------- |
+| **Append (**                    | Append an opening parenthesis to the filter expression.  |
+| **Append )**                    | Append a closing parenthesis to the filter expression.   |
+| **Wrap current query with (...)** | Surround the entire existing filter with parentheses.  |
+
+---
+
+#### Add to Keystore...
+
+Save highlighted text or current context data directly to the keychain. Three levels of sub-menus select the entry type and the target keychain.
+
+| Type              | Session keychain      | Persistent keychain         |
+| ----------------- | --------------------- | --------------------------- |
+| **As Password**   | Session keychain      | Persistent keychain         |
+| **As Private Key**| Session keychain      | Persistent keychain         |
+| **As Certificate**| Session keychain      | Persistent keychain         |
+| **As Session Cookie** | Session keychain  | Persistent keychain         |
+
+Selecting a persistent target will prompt for the keychain password if it has not been unlocked yet.
+
+---
+
+#### Export...
+
+| Item                    | Description                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------- |
+| **Save JSON**           | Save the entire loaded/filtered dataset as a JSON file.                            |
+| **Export Packet**       | Save the raw data of the current packet to a file.                                 |
+| **Export Payload**      | Save only the payload bytes of the current packet to a file.                       |
+| **Save to cookie_jar.txt** | Append all session cookies to a `cookie_jar.txt` file on disk.                 |
+
+---
+
+#### HTTP File...
+
+Shown only when the current packet contains an HTTP response body.
+
+| Item                       | Description                                                                    |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| **Save body to file**      | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
+| **Load body into Conv tab**| Load the HTTP body bytes as hex into the Conv tab and run conversion.          |
+| **Preview in browser**     | Open the HTTP body in the system's default web browser for preview.            |
 
 ---
 
@@ -198,7 +483,7 @@ Filter keys use the same dot-notation names as the [searchable attributes](Filte
 | `tcp.flags:SYN`                                | Packets with the SYN flag set                         |
 | `snmp.community:public`                        | SNMP packets using the `public` community             |
 | `ip.src.addr:10.0.0.1 && tcp.dst.port:80`     | Source `10.0.0.1` to destination port 80              |
-| `(tcp.dst.port:80 \|\| tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
+| `(tcp.dst.port:80 || tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
 
 ## License
 
