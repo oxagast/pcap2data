@@ -61,7 +61,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 ## The Interface
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/Documentation/screenshots/packetsnitch_ss24.png" alt="PacketSnitch main view" width="950">
+  <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/Documentation/screenshots/ps-views.gif" alt="PacketSnitch main view" width="950">
 </p>
 
 ### Left Sidebar
@@ -136,10 +136,6 @@ tcp.dst.port:443 && payload.len:>500 && payload.entropy:>=7.0 && ip.src.class:!=
 - Press **Enter** to apply, clear and press **Enter** again to reset
 
 See the [Filter Reference](Documentation/Filters.md) for the complete list of keys and syntax.
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/main/Documentation/screenshots/comparison-operator-packetsnitch-ss21.png" alt="Filter example" width="600">
-</p>
 
 ---
 
