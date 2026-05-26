@@ -76,6 +76,7 @@ let activityLogPath = "Unavailable";
 const activityLogEntries = [];
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
+const filterClearButtonEl = getCachedElement("filterStr-clear");
 const filterHistorySelectEl = getCachedElement("filter-history-select");
 const filterHistory = [];
 const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
@@ -560,6 +561,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("crypt-btn").style.opacity = "0";
     document.getElementById("keystore-btn").style.opacity = "0";
   }
+  updateFilterClearButtonState();
 }
 
 function escapeHtml(text) {
@@ -630,10 +632,16 @@ function renderHighlightedQuery(query) {
 function syncFilterHighlight() {
   filterHighlightEl.innerHTML = renderHighlightedQuery(filterInputEl.value);
   syncFilterHighlightScroll();
+  updateFilterClearButtonState();
 }
 
 function syncFilterHighlightScroll() {
   filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
+}
+
+function updateFilterClearButtonState() {
+  filterClearButtonEl.disabled =
+    filterInputEl.disabled || filterInputEl.value.trim() === "";
 }
 
 function renderFilterHistory() {
@@ -700,6 +708,17 @@ function runFilterQuery(filterQuery, options = {}) {
     writeLogEntry(`User query returned packets=${filteredPackets.length}`);
     handlePacketNavigation("filtered", null);
   }
+}
+
+function clearFilterQuery() {
+  if (filterInputEl.disabled || filterInputEl.value.trim() === "") {
+    return;
+  }
+  filterInputEl.value = "";
+  syncFilterHighlight();
+  filterHistorySelectEl.value = "";
+  filterInputEl.focus();
+  runFilterQuery("");
 }
 
 function deepCloneSessionData(value, fallback) {
@@ -6356,6 +6375,8 @@ document
       filterHistorySelectEl.value = "";
     }
   });
+
+filterClearButtonEl.addEventListener("click", clearFilterQuery);
 
 document.addEventListener("contextmenu", (event) => {
   const target = event.target;

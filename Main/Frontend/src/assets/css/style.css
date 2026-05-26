@@ -1417,7 +1417,7 @@ strong {
   pointer-events: none;
   white-space: pre;
   overflow: hidden;
-  padding: 5px;
+  padding: 5px 52px 5px 5px;
   font: inherit;
 }
 
@@ -1427,9 +1427,33 @@ strong {
   color: transparent;
   caret-color: white;
   border: 1px solid grey;
-  padding: 5px;
+  padding: 5px 52px 5px 5px;
   box-sizing: border-box;
   font: inherit;
+}
+
+#filterStr-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  border: 1px solid grey;
+  background-color: var(--color-7);
+  color: white;
+  padding: 2px 8px;
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+#filterStr-clear:hover,
+#filterStr-clear:focus {
+  background-color: var(--color-2);
+}
+
+#filterStr-clear:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 #filterStr::placeholder {
