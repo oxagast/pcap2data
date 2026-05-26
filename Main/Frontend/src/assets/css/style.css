@@ -1439,16 +1439,20 @@ strong {
 
 #filterStr-clear {
   position: absolute;
-  top: 50%;
+  top: 1px;
+  bottom: 1px;
   right: var(--filter-clear-right-offset);
   width: var(--filter-clear-button-width);
-  transform: translateY(-50%);
   border: 1px solid grey;
   background-color: var(--color-7);
   color: white;
-  padding: 2px 8px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font: inherit;
-  line-height: 1.2;
+  line-height: 1;
   cursor: pointer;
 }
 
