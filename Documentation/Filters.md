@@ -62,6 +62,8 @@ Use parentheses to override precedence and group sub-expressions.
 (payload.mime:text/html || payload.mime:application/json) && ip.dst.addr:10.0.0.1
 ```
 
+The context menu also supports explicit parenthesis editing via **Add to filter... → Parentheses...**, including **Append (**, **Append )**, and **Wrap current query with (...)**.
+
 ### Inversion with `!`
 
 Use `!` to invert either a single expression or a grouped expression.

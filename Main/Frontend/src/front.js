@@ -1354,6 +1354,9 @@ const convertContextButtons = {
   filterNotMac: getCachedElement("ctx-filter-not-mac"),
   filterNotProtocol: getCachedElement("ctx-filter-not-protocol"),
   filterNotMime: getCachedElement("ctx-filter-not-mime"),
+  filterParenOpen: getCachedElement("ctx-filter-paren-open"),
+  filterParenClose: getCachedElement("ctx-filter-paren-close"),
+  filterParenWrap: getCachedElement("ctx-filter-paren-wrap"),
   filterClearIp: getCachedElement("ctx-filter-clear-ip"),
   filterClearPort: getCachedElement("ctx-filter-clear-port"),
   filterClearMac: getCachedElement("ctx-filter-clear-mac"),
@@ -1366,6 +1369,7 @@ const convertContextSubmenus = {
   filterAnd: getCachedElement("ctx-filter-and-submenu"),
   filterOr: getCachedElement("ctx-filter-or-submenu"),
   filterNot: getCachedElement("ctx-filter-not-submenu"),
+  filterParentheses: getCachedElement("ctx-filter-parentheses-submenu"),
   filterClear: getCachedElement("ctx-filter-clear-submenu"),
   export: getCachedElement("ctx-export-submenu"),
 };
@@ -1776,6 +1780,9 @@ function showConvertContextMenu(
   convertContextButtons.filterNotMime.style.display = filterQueries.mime
     ? "block"
     : "none";
+  convertContextButtons.filterParenOpen.style.display = "block";
+  convertContextButtons.filterParenClose.style.display = "block";
+  convertContextButtons.filterParenWrap.style.display = "block";
   convertContextButtons.filterClearIp.style.display = filterQueries.ip
     ? "block"
     : "none";
@@ -1809,6 +1816,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextSubmenus.filterNot.style.display = hasFilterActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.filterParentheses.style.display = hasFilterActions
     ? "block"
     : "none";
   convertContextSubmenus.filterClear.style.display = hasFilterActions
@@ -2182,6 +2192,35 @@ function clearAndFilterQueryFromContextMenu(type) {
   );
 }
 
+function appendParenthesisTokenFromContextMenu(token) {
+  hideConvertContextMenu();
+  if (token !== "(" && token !== ")") {
+    statusUpdate("Status: Could not append parenthesis — please try again");
+    return;
+  }
+  filterInputEl.value = `${filterInputEl.value}${token}`;
+  syncFilterHighlight();
+  filterInputEl.focus();
+  statusUpdate("Status: Filter query updated — press Enter to apply");
+  writeLogEntry(
+    `Context menu filter appended token="${token}" query="${filterInputEl.value}"`,
+  );
+}
+
+function wrapCurrentFilterWithParenthesesFromContextMenu() {
+  hideConvertContextMenu();
+  const existingQuery = filterInputEl.value.trim();
+  if (!existingQuery) {
+    statusUpdate("Status: No filter query available to wrap");
+    return;
+  }
+  filterInputEl.value = `(${existingQuery})`;
+  syncFilterHighlight();
+  filterInputEl.focus();
+  statusUpdate("Status: Filter query updated — press Enter to apply");
+  writeLogEntry(`Context menu filter wrapped query="${filterInputEl.value}"`);
+}
+
 // Show host data when data button is clicked
 document.getElementById("data-btn").addEventListener("click", function () {
   if (!isFileLoaded) {
@@ -2294,6 +2333,15 @@ convertContextButtons.filterNotProtocol.addEventListener("click", () => {
 });
 convertContextButtons.filterNotMime.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("mime", "&&", true);
+});
+convertContextButtons.filterParenOpen.addEventListener("click", () => {
+  appendParenthesisTokenFromContextMenu("(");
+});
+convertContextButtons.filterParenClose.addEventListener("click", () => {
+  appendParenthesisTokenFromContextMenu(")");
+});
+convertContextButtons.filterParenWrap.addEventListener("click", () => {
+  wrapCurrentFilterWithParenthesesFromContextMenu();
 });
 convertContextButtons.filterClearIp.addEventListener("click", () => {
   clearAndFilterQueryFromContextMenu("ip");
