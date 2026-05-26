@@ -1,5 +1,7 @@
 import "../assets/css/style.css";
 const { filterPackets, validateFilterSyntax } = require("../filter");
+const { initializeLogging } = require("../logging");
+const { initializeContextMenu } = require("./context-menu");
 const {
   createTable,
   renderDnsTable,
@@ -72,8 +74,6 @@ let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
 let startTime;
-let activityLogPath = "Unavailable";
-const activityLogEntries = [];
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -223,145 +223,16 @@ if (installContinueBtn) {
   });
 }
 
-function renderActivityLogEntries(searchText = "") {
-  const entriesEl = document.getElementById("activity-log-entries");
-  if (!entriesEl) return;
-  entriesEl.replaceChildren();
-  const normalizedSearch = searchText.trim().toLowerCase();
-  activityLogEntries
-    .filter((entry) =>
-      normalizedSearch
-        ? entry.message.toLowerCase().includes(normalizedSearch)
-        : true,
-    )
-    .forEach((entry) => {
-      const row = document.createElement("div");
-      row.className = "activity-log-entry";
-      row.textContent = entry.message;
-      entriesEl.appendChild(row);
-    });
-}
-
-function syncActivityLogPath(result) {
-  if (result && result.path) {
-    activityLogPath = result.path;
-    const pathEl = document.getElementById("activity-log-path");
-    if (pathEl) {
-      pathEl.textContent = `Log file: ${activityLogPath}`;
-    }
-  }
-}
-
-function addActivityLogEntry(message, writeToFile = true) {
-  if (typeof message !== "string" || message.trim() === "") return;
-  const normalizedMessage = message.trim();
-  activityLogEntries.unshift({ message: normalizedMessage });
-  renderActivityLogEntries(
-    document.getElementById("activity-log-search")?.value || "",
-  );
-  if (writeToFile && window.logapi) {
-    window.logapi.append(normalizedMessage).then(syncActivityLogPath);
-  }
-}
-
-function writeLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [GUI][UI] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function writeConsoleLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [Console][UI] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function writeBackendErrorLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [Console][Backend] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function logErrorEntry(context, error) {
-  const errorDetails =
-    error && typeof error === "object" && "message" in error
-      ? error.message
-      : String(error);
-  writeLogEntry(`Error context=${context} details="${errorDetails}"`);
-}
-
-function formatConsoleValue(value) {
-  if (value instanceof Error) {
-    return value.stack || value.message;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "undefined") {
-    return "undefined";
-  }
-  try {
-    return JSON.stringify(value);
-  } catch (_error) {
-    return String(value);
-  }
-}
-
-function formatConsoleArgs(args) {
-  return args.map((value) => formatConsoleValue(value)).join(" ");
-}
-
-const originalConsoleLog = console.log.bind(console);
-console.log = (...args) => {
-  originalConsoleLog(...args);
-  const message = formatConsoleArgs(args);
-  if (message) {
-    writeConsoleLogEntry(message);
-  }
-};
-
-async function initializeActivityLog() {
-  const pathEl = document.getElementById("activity-log-path");
-  const panelEl = document.getElementById("activity-log-panel");
-  const searchEl = document.getElementById("activity-log-search");
-  const logBtn = document.getElementById("log-btn");
-  const closeBtn = document.getElementById("close-log-btn");
-  if (window.logapi) {
-    try {
-      const [path, entries] = await Promise.all([
-        window.logapi.getPath(),
-        window.logapi.getEntries(),
-      ]);
-      if (Array.isArray(entries)) {
-        activityLogEntries.splice(0);
-        entries.forEach((entry) => {
-          activityLogEntries.push({ message: entry });
-        });
-        renderActivityLogEntries();
-      }
-      if (path) {
-        activityLogPath = path;
-        pathEl.textContent = `Log file: ${activityLogPath}`;
-      }
-      window.logapi.onEntry((entry) => {
-        addActivityLogEntry(entry, false);
-      });
-    } catch (error) {
-      logErrorEntry("activity-log-init", error);
-    }
-  }
-  logBtn.addEventListener("click", () => {
-    if (panelEl.style.display === "block") {
-      panelEl.style.display = "none";
-    } else {
-      panelEl.style.display = "block";
-    }
-  });
-  closeBtn.addEventListener("click", () => {
-    panelEl.style.display = "none";
-  });
-  searchEl.addEventListener("input", (event) => {
-    renderActivityLogEntries(event.target.value);
-  });
-  writeLogEntry("PacketSnitch UI session initialized");
-}
+const {
+  initializeActivityLog,
+  writeLogEntry,
+  writeBackendErrorLogEntry,
+  logErrorEntry,
+} = initializeLogging({
+  logapi: window.logapi,
+  documentRef: document,
+  consoleRef: console,
+});
 
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -406,7 +277,7 @@ function logCurrentPacketDisplay(action) {
   );
 }
 
-initializeActivityLog();
+void initializeActivityLog();
 
 popHexGrid("00".repeat(256));
 // Set up file upload handler for JSON capture
@@ -6403,69 +6274,18 @@ document
 
 filterClearButtonEl.addEventListener("click", clearFilterQuery);
 
-document.addEventListener("contextmenu", (event) => {
-  const target = event.target;
-  const pasteTarget = getPasteTargetFromContextTarget(target);
-  const selectedText = getTrimmedSelectionText();
-  const insideEligiblePanel = target?.closest(
-    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
-  );
-  const isHexViewTarget = Boolean(target?.closest("#hexg"));
-  let conversionText = "";
-  let formats = [];
-  if (insideEligiblePanel) {
-    conversionText = getConversionTextFromTarget(target);
-    if (conversionText || isHexViewTarget) {
-      formats = conversionText ? detectConvertibleFormats(conversionText) : [];
-    }
-  }
-  const filterQueries = insideEligiblePanel
-    ? buildContextFilterQueries(target, selectedText, conversionText)
-    : {};
-  const cookieJarText = insideEligiblePanel
-    ? getCookieJarTextForContextTarget(target)
-    : "";
-
-  event.preventDefault();
-  showConvertContextMenu(
-    event.clientX,
-    event.clientY,
-    conversionText,
-    formats,
-    {
-      isHexViewTarget,
-      target,
-      pasteTarget,
-      showCopySelection: Boolean(selectedText),
-      showPaste: Boolean(pasteTarget),
-      showSaveJson: true,
-      filterQueries,
-      cookieJarText,
-    },
-  );
-});
-
-document.addEventListener("click", () => {
-  hideConvertContextMenu();
-});
-document.addEventListener(
-  "mousedown",
-  (event) => {
-    if (event.button !== 0) return;
-    if (
-      !convertContextMenuEl.hidden &&
-      !convertContextMenuEl.contains(event.target)
-    ) {
-      hideConvertContextMenu();
-    }
-  },
-  true,
-);
-document.addEventListener("scroll", () => {
-  hideConvertContextMenu();
-});
-window.addEventListener("resize", () => {
-  hideConvertContextMenu();
+initializeContextMenu({
+  documentRef: document,
+  windowRef: window,
+  convertContextMenuEl,
+  getPasteTargetFromContextTarget,
+  getTrimmedSelectionText,
+  getConversionTextFromTarget,
+  detectConvertibleFormats,
+  buildContextFilterQueries,
+  getCookieJarTextForContextTarget,
+  showConvertContextMenu,
+  hideConvertContextMenu,
 });
 
 filterInputEl.addEventListener("input", syncFilterHighlight);
@@ -6478,12 +6298,6 @@ filterHistorySelectEl.addEventListener("change", () => {
   syncFilterHighlight();
   runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !convertContextMenuEl.hidden) {
-    hideConvertContextMenu();
-  }
 });
 
 renderFilterHistory();
