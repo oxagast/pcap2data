@@ -1366,7 +1366,7 @@ function resetHashOutputs() {
   }
 }
 
-function bytesToByteString(bytes) {
+function bytesToCharString(bytes) {
   const CHUNK_SIZE = 0x8000;
   let result = "";
   for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
@@ -1378,7 +1378,7 @@ function bytesToByteString(bytes) {
 
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
-  const byteString = bytesToByteString(bytes);
+  const byteString = bytesToCharString(bytes);
 
   document.getElementById("data-tools-md5-output").value =
     CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
