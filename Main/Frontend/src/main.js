@@ -423,13 +423,19 @@ ipcMain.handle('preview-http-body', async (_event, bodyHex, contentType) => {
   if (!buf) return { success: false, error: 'Invalid HTTP body data' };
 
   const ext = extFromContentType(contentType);
-  const tmpDir = path.join(os.tmpdir(), 'packetsnitch-preview');
   try {
-    await fs.promises.mkdir(tmpDir, { recursive: true });
+    // Use a unique temp directory per preview to avoid races and data leaks.
+    const tmpDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'ps-preview-'),
+    );
     const tmpFile = path.join(tmpDir, `http-preview.${ext}`);
     await fs.promises.writeFile(tmpFile, buf);
     const fileUrl = pathToFileURL(tmpFile).href;
     await shell.openExternal(fileUrl);
+    // Schedule cleanup after a delay to give the browser time to read the file.
+    setTimeout(() => {
+      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }, 30000);
     return { success: true };
   } catch (err) {
     console.error('HTTP body preview error:', err);

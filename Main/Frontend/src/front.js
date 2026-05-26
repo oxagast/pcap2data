@@ -3625,16 +3625,12 @@ function getCurrentHttpData() {
 function extractHttpBodyHex(payloadHex) {
   if (!payloadHex) return "";
   // Locate the HTTP header/body separator in hex space.
-  // \r\n\r\n encodes as "0d0a0d0a"; \n\n encodes as "0a0a".
+  // RFC 7230 mandates \r\n\r\n which encodes as "0d0a0d0a".
   const lower = payloadHex.toLowerCase();
-  let bodyStart = lower.indexOf("0d0a0d0a");
-  if (bodyStart !== -1) {
-    bodyStart += 8; // skip past the 4-byte CRLFCRLF separator
-  } else {
-    bodyStart = lower.indexOf("0a0a");
-    if (bodyStart !== -1) bodyStart += 4;
-  }
-  if (bodyStart === -1 || bodyStart >= payloadHex.length) return "";
+  const sepIdx = lower.indexOf("0d0a0d0a");
+  if (sepIdx === -1) return "";
+  const bodyStart = sepIdx + 8; // skip past the 4-byte CRLFCRLF separator
+  if (bodyStart >= payloadHex.length) return "";
   return payloadHex.slice(bodyStart);
 }
 
