@@ -104,6 +104,11 @@ const SESSION_SECRET_KEY_HINTS = [
   "apikey",
   "api_key",
   "api-key",
+  "cookie",
+  "session",
+  "sessionid",
+  "set_cookie",
+  "set-cookie",
 ];
 const SESSION_SECRET_IGNORE_KEY_HINTS = [
   "encrypted",

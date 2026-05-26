@@ -154,6 +154,101 @@ def _extractUrlCredentials(paramStr):
     return creds
 
 
+# Cookie names that are always treated as sensitive regardless of CREDENTIAL_FIELD_RE.
+# These are common session / auth cookie names used by popular frameworks and platforms.
+_SENSITIVE_COOKIE_RE = re.compile(
+    r"^(?:sess(?:ion)?(?:id)?|auth(?:_?token)?|access_token|refresh_token|"
+    r"remember(?:_me)?(?:_token)?|jwt|bearer|csrf(?:_token)?|xsrf(?:_token)?|"
+    r"sid|uid|user(?:id)?|login|pass(?:w(?:or)?d?)?|pw|secret|"
+    r"PHPSESSID|ASP\.NET_SessionId|__Secure-.*|__Host-.*)$",
+    re.IGNORECASE,
+)
+
+
+def _extractCookieCredentials(cookieHeader):
+    """
+    Parse a ``Cookie:`` request header (e.g. ``session=abc; token=xyz; q=1``).
+    Always stores the raw full cookie string under the key ``cookie_raw``.
+    Also stores each individual cookie whose name matches CREDENTIAL_FIELD_RE or
+    _SENSITIVE_COOKIE_RE under the key ``cookie.<name>``.
+    Returns a dict; an empty dict means nothing sensitive was found.
+    """
+    if not cookieHeader:
+        return {}
+    creds = {"cookie_raw": cookieHeader}
+    for crumb in cookieHeader.split(";"):
+        crumb = crumb.strip()
+        if "=" not in crumb:
+            continue
+        name, _, value = crumb.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if value and (CREDENTIAL_FIELD_RE.match(name) or _SENSITIVE_COOKIE_RE.match(name)):
+            creds[f"cookie.{name}"] = value
+    return creds
+
+
+def _extractSetCookieCredentials(setCookieHeader):
+    """
+    Parse a ``Set-Cookie:`` response header and return a dict with the raw value
+    and the parsed cookie name/value pair (before any attributes like HttpOnly).
+    """
+    if not setCookieHeader:
+        return {}
+    creds = {"set_cookie_raw": setCookieHeader}
+    # The first pair before any ";" is the actual cookie name=value
+    firstPair = setCookieHeader.split(";")[0].strip()
+    if "=" in firstPair:
+        name, _, value = firstPair.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if value:
+            creds[f"cookie.{name}"] = value
+    return creds
+
+
+# Matches JSON key-value pairs where the key looks like a credential field.
+# Handles both double-quoted strings and bare numbers as values.
+_JSON_CRED_RE = re.compile(
+    r'"(' + CREDENTIAL_FIELD_RE.pattern.lstrip("^").rstrip("$") + r')"\s*:\s*"([^"]{1,512})"',
+    re.IGNORECASE,
+)
+
+# Matches plain-text key:value or key=value lines where the key is credential-like.
+_TEXT_CRED_RE = re.compile(
+    r'(?:^|[\s,{;&])(' + CREDENTIAL_FIELD_RE.pattern.lstrip("^").rstrip("$") + r')'
+    r'(?:\s*[=:]\s*)([^\s&"\'<>,;]{1,512})',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extractPostBodyCredentials(body, contentType):
+    """
+    Scan a POST/PUT/PATCH body for credential fields regardless of content type.
+    - For ``application/json`` bodies: uses JSON key-value regex.
+    - For all other bodies (multipart, plain-text, XML, etc.): uses a more general
+      key=value / key:value regex.
+    Returns a dict of {fieldName: value}; empty dict when nothing is found.
+    """
+    if not body or not body.strip():
+        return {}
+    creds = {}
+    ct = contentType.lower()
+    if "json" in ct:
+        for match in _JSON_CRED_RE.finditer(body):
+            key = match.group(1)
+            val = match.group(2).strip()
+            if val:
+                creds[key] = val
+    else:
+        for match in _TEXT_CRED_RE.finditer(body):
+            key = match.group(1)
+            val = match.group(2).strip()
+            if val:
+                creds[key] = val
+    return creds
+
+
 def llmQuery(packetInfoStr):
     """
     Query a large language model (LLM) with packet information for summarization.
@@ -1006,13 +1101,22 @@ def decodeHTTP(rawPayload):
             authHeader = headers.get("authorization", "")
             if authHeader:
                 creds["authorization"] = authHeader
-            # For POST with url-encoded body, parse the body portion after headers
+            # Extract Cookie header — session tokens and auth cookies are sensitive
+            cookieHeader = headers.get("cookie", "")
+            if cookieHeader:
+                creds.update(_extractCookieCredentials(cookieHeader))
+            # For request bodies (POST/PUT/PATCH) scan for credential fields
             contentType = headers.get("content-type", "")
-            if method in ("POST", "PUT", "PATCH") and "urlencoded" in contentType.lower():
+            if method in ("POST", "PUT", "PATCH"):
                 bodyStart = normalised.find("\n\n")
                 if bodyStart != -1:
                     body = normalised[bodyStart + 2 :]
-                    creds.update(_extractUrlCredentials(body))
+                    if body.strip():
+                        if "urlencoded" in contentType.lower():
+                            creds.update(_extractUrlCredentials(body))
+                        else:
+                            # JSON, multipart, plain-text, XML — regex scan
+                            creds.update(_extractPostBodyCredentials(body, contentType))
             if creds:
                 result["Credentials"] = creds
             return result
@@ -1044,6 +1148,9 @@ def decodeHTTP(rawPayload):
                 "http.connection": headers.get("connection", "Unknown"),
                 "Location": headers.get("location", "Unknown"),
                 "http.location": headers.get("location", "Unknown"),
+                **({
+                    "Credentials": _extractSetCookieCredentials(headers["set-cookie"])
+                } if "set-cookie" in headers and headers["set-cookie"] else {}),
             }
     except Exception:
         return None
