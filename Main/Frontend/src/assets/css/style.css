@@ -1403,6 +1403,7 @@ strong {
 }
 
 #filterStr-wrap {
+  --filter-clear-padding: 52px;
   flex: 1;
   position: relative;
   min-width: 0;
@@ -1417,7 +1418,7 @@ strong {
   pointer-events: none;
   white-space: pre;
   overflow: hidden;
-  padding: 5px 52px 5px 5px;
+  padding: 5px var(--filter-clear-padding) 5px 5px;
   font: inherit;
 }
 
@@ -1427,7 +1428,7 @@ strong {
   color: transparent;
   caret-color: white;
   border: 1px solid grey;
-  padding: 5px 52px 5px 5px;
+  padding: 5px var(--filter-clear-padding) 5px 5px;
   box-sizing: border-box;
   font: inherit;
 }
