@@ -104,6 +104,11 @@ const SESSION_SECRET_KEY_HINTS = [
   "apikey",
   "api_key",
   "api-key",
+  "cookie",
+  "session",
+  "sessionid",
+  "set_cookie",
+  "set-cookie",
 ];
 const SESSION_SECRET_IGNORE_KEY_HINTS = [
   "encrypted",
@@ -2356,10 +2361,14 @@ function buildSessionAutoKeystoreEntries() {
     if (!Array.isArray(packets)) return;
     packets.forEach((packet) => {
       const packetInfo = packet?.["Packet Info"] || {};
-      const transportData = packetInfo?.["Transport Layer"] || {};
+      const protocol = packetInfo?.["Protocol"] ?? "Unknown";
+      // "Transport Layer" was the intended key but the backend uses the protocol name
+      // ("TCP", "UDP", "ICMP") directly — fall back to the actual protocol section so
+      // that decoded credential sub-dicts (HTTP, SMTP, POP3, IMAP, Telnet …) are scanned.
+      const transportData =
+        packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
       const extraInfo = packet?.["Extra Info"] || {};
       const packetIndex = packetInfo?.["Index"] ?? "?";
-      const protocol = packetInfo?.["Protocol"] ?? "Unknown";
       [transportData, extraInfo].forEach((candidateRoot) => {
         collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
           if (!shouldIncludeSessionSecretKey(pathKey)) return;
@@ -2416,8 +2425,8 @@ function addSessionKeystoreEntry({ type, label, source, content, summary, packet
   }
 }
 
-async function addCryptKeystoreEntry({ type, label, source, content, summary }) {
-  if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
+async function addCryptKeystoreEntry({ type, label, source, content, summary }, { force = false } = {}) {
+  if (!force && cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
     statusUpdate("Status: Switch to persistent keychain to save entries");
     return;
   }
@@ -2964,6 +2973,14 @@ const convertContextButtons = {
   filterClearMac: getCachedElement("ctx-filter-clear-mac"),
   filterClearProtocol: getCachedElement("ctx-filter-clear-protocol"),
   filterClearMime: getCachedElement("ctx-filter-clear-mime"),
+  keystorePasswordSession: getCachedElement("ctx-keystore-password-session"),
+  keystorePasswordPersistent: getCachedElement("ctx-keystore-password-persistent"),
+  keystoreKeySession: getCachedElement("ctx-keystore-key-session"),
+  keystoreKeyPersistent: getCachedElement("ctx-keystore-key-persistent"),
+  keystoreCertSession: getCachedElement("ctx-keystore-cert-session"),
+  keystoreCertPersistent: getCachedElement("ctx-keystore-cert-persistent"),
+  keystoreCookieSession: getCachedElement("ctx-keystore-cookie-session"),
+  keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
 };
 const convertContextSubmenus = {
   convert: getCachedElement("ctx-convert-submenu"),
@@ -2974,6 +2991,11 @@ const convertContextSubmenus = {
   filterParentheses: getCachedElement("ctx-filter-parentheses-submenu"),
   filterClear: getCachedElement("ctx-filter-clear-submenu"),
   export: getCachedElement("ctx-export-submenu"),
+  keystore: getCachedElement("ctx-keystore-submenu"),
+  keystorePassword: getCachedElement("ctx-keystore-password-submenu"),
+  keystoreKey: getCachedElement("ctx-keystore-key-submenu"),
+  keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
+  keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
@@ -2995,8 +3017,34 @@ function updateConvertContextSubmenuPositions() {
 
   convertContextSubmenuEls.forEach((submenuEl) => {
     if (submenuEl.style.display === "none") return;
-    const submenuPanelEl = submenuEl.querySelector(".ctx-submenu-panel");
+    // Use :scope > to get only the direct child panel, not a grandchild's.
+    const submenuPanelEl = submenuEl.querySelector(":scope > .ctx-submenu-panel");
     if (!submenuPanelEl) return;
+
+    // Temporarily reveal every ancestor .ctx-submenu-panel so that this
+    // element has a real viewport position when getBoundingClientRect() is
+    // called.  Without this, panels at depth > 1 are inside a hidden
+    // ancestor and always return zero-area rects, making the overflow
+    // calculations completely wrong for those levels.
+    const revealedAncestors = [];
+    let node = submenuEl.parentElement;
+    while (node && node !== convertContextMenuEl) {
+      if (
+        node.classList.contains("ctx-submenu-panel") &&
+        node.style.display !== "block"
+      ) {
+        revealedAncestors.push({
+          el: node,
+          previousDisplay: node.style.display,
+          previousVisibility: node.style.visibility,
+          previousPointerEvents: node.style.pointerEvents,
+        });
+        node.style.display = "block";
+        node.style.visibility = "hidden";
+        node.style.pointerEvents = "none";
+      }
+      node = node.parentElement;
+    }
 
     const previousDisplay = submenuPanelEl.style.display;
     const previousVisibility = submenuPanelEl.style.visibility;
@@ -3024,6 +3072,14 @@ function updateConvertContextSubmenuPositions() {
     submenuPanelEl.style.display = previousDisplay;
     submenuPanelEl.style.visibility = previousVisibility;
     submenuPanelEl.style.pointerEvents = previousPointerEvents;
+
+    // Restore ancestor panels in reverse order (innermost first).
+    for (let i = revealedAncestors.length - 1; i >= 0; i--) {
+      const ancestor = revealedAncestors[i];
+      ancestor.el.style.display = ancestor.previousDisplay;
+      ancestor.el.style.visibility = ancestor.previousVisibility;
+      ancestor.el.style.pointerEvents = ancestor.previousPointerEvents;
+    }
   });
 }
 
@@ -3406,6 +3462,7 @@ function showConvertContextMenu(
   const hasGeneralActions = showCopySelection || showPaste;
   const hasDataTypeActions = formats.length > 0 || hasPayloadToExport;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
+  const hasKeystoreActions = showCopySelection || Boolean(sourceText);
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport;
   convertContextSubmenus.convert.style.display = hasDataTypeActions
@@ -3429,6 +3486,21 @@ function showConvertContextMenu(
   convertContextSubmenus.filterClear.style.display = hasFilterActions
     ? "block"
     : "none";
+  convertContextSubmenus.keystore.style.display = hasKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystorePassword.style.display = hasKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystoreKey.style.display = hasKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystoreCert.style.display = hasKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystoreCookie.style.display = hasKeystoreActions
+    ? "block"
+    : "none";
   convertContextSubmenus.export.style.display = hasExportActions
     ? "block"
     : "none";
@@ -3437,6 +3509,7 @@ function showConvertContextMenu(
     !hasDataTypeActions &&
     !isHexViewTarget &&
     !hasFilterActions &&
+    !hasKeystoreActions &&
     !hasExportActions
   ) {
     hideConvertContextMenu();
@@ -3455,7 +3528,8 @@ function showConvertContextMenu(
     (hasClipboardActions ||
       hasDataTypeActions ||
       isHexViewTarget ||
-      hasFilterActions)
+      hasFilterActions ||
+      hasKeystoreActions)
       ? "block"
       : "none";
 
@@ -3842,6 +3916,31 @@ function wrapCurrentFilterWithParenthesesFromContextMenu() {
   writeLogEntry(`Context menu filter wrapped query="${filterInputEl.value}"`);
 }
 
+async function addToKeystoreFromContextMenu(type, keystoreMode) {
+  const text = (getTrimmedSelectionText() || activeContextConversionText).trim();
+  hideConvertContextMenu();
+  if (!text) {
+    statusUpdate("Status: No text to add to keystore");
+    return;
+  }
+  if (keystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+    addSessionKeystoreEntry({
+      type,
+      label: "",
+      source: "context-menu",
+      content: text,
+      summary: "",
+    });
+    statusUpdate(`Status: Saved ${type} in session keychain`);
+    writeLogEntry(`Context menu keystore entry added type=${type} mode=session`);
+  } else {
+    await addCryptKeystoreEntry(
+      { type, label: "", source: "context-menu", content: text, summary: "" },
+      { force: true },
+    );
+  }
+}
+
 // Show host data when data button is clicked
 document.getElementById("data-btn").addEventListener("click", function () {
   if (!isFileLoaded) {
@@ -4186,6 +4285,30 @@ convertContextButtons.copy.addEventListener(
   copySelectedTextFromContextMenu,
 );
 convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
+convertContextButtons.keystorePasswordSession.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("password", CRYPT_KEYSTORE_MODE_SESSION);
+});
+convertContextButtons.keystorePasswordPersistent.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("password", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
+convertContextButtons.keystoreKeySession.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("key", CRYPT_KEYSTORE_MODE_SESSION);
+});
+convertContextButtons.keystoreKeyPersistent.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("key", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
+convertContextButtons.keystoreCertSession.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("cert", CRYPT_KEYSTORE_MODE_SESSION);
+});
+convertContextButtons.keystoreCertPersistent.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("cert", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
+convertContextButtons.keystoreCookieSession.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("cookie", CRYPT_KEYSTORE_MODE_SESSION);
+});
+convertContextButtons.keystoreCookiePersistent.addEventListener("click", () => {
+  addToKeystoreFromContextMenu("cookie", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
 convertContextButtons.saveJson.addEventListener(
   "click",
   saveJsonFromContextMenu,
