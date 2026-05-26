@@ -43,10 +43,18 @@ function getCachedElement(id) {
   return domCache[id];
 }
 
+const SESSION_FILE_SCHEMA_VERSION = 1;
+const SESSION_CAPTURE_KEY = "Capture Data";
+const SESSION_STATE_KEY = "Session State";
+const MAIN_TAB_SUMMARY = "summary";
+const MAIN_TAB_DATA = "data";
+const MAIN_TAB_STATS = "stats";
+const MAIN_TAB_LIST = "list";
+const MAIN_TAB_DATA_TOOLS = "data-tools";
+const MAIN_TAB_CRYPT = "crypt";
+const MAIN_TAB_KEYSTORE = "keystore";
+
 // Global variables for DOM elements and state
-getCachedElement("close-btn").addEventListener("click", () => {
-  window.quitapi.quitApp();
-});
 let capturedPackets = {}; // Stores parsed packet data from JSON
 let jsonCapture = ""; // Stringified JSON capture for pretty display
 let currentIp;
@@ -87,6 +95,21 @@ const CONV_DECODES_SUBTAB = "decodes";
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
+const VALID_MAIN_TABS = [
+  MAIN_TAB_SUMMARY,
+  MAIN_TAB_DATA,
+  MAIN_TAB_STATS,
+  MAIN_TAB_LIST,
+  MAIN_TAB_DATA_TOOLS,
+  MAIN_TAB_CRYPT,
+  MAIN_TAB_KEYSTORE,
+];
+const VALID_CONV_SUBTABS = [
+  CONV_CONVERSIONS_SUBTAB,
+  CONV_HASHES_SUBTAB,
+  CONV_DECODES_SUBTAB,
+];
+const VALID_CRYPT_SUBTABS = [CRYPT_SSL_SUBTAB, CRYPT_PGP_SUBTAB, CRYPT_OPENSSH_SUBTAB];
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
 const CRYPT_KEYSTORE_DB_VERSION = 1;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";
@@ -140,6 +163,9 @@ let cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
 let cryptKeystoreUnlockKeyMaterial = null;
 let cryptKeystoreUnlockDialogResolver = null;
 let cryptKeystoreUnlockDialogMode = "unlock";
+let activeMainTab = MAIN_TAB_SUMMARY;
+let activeConvSubtab = CONV_CONVERSIONS_SUBTAB;
+let activeCryptSubtab = CRYPT_SSL_SUBTAB;
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -643,7 +669,8 @@ function addFilterHistory(query) {
   renderFilterHistory();
 }
 
-function runFilterQuery(filterQuery) {
+function runFilterQuery(filterQuery, options = {}) {
+  const { trackHistory = true } = options;
   try {
     validateFilterSyntax(filterQuery);
   } catch (error) {
@@ -654,7 +681,9 @@ function runFilterQuery(filterQuery) {
     return;
   }
 
-  addFilterHistory(filterQuery);
+  if (trackHistory) {
+    addFilterHistory(filterQuery);
+  }
   filteredPackets = filterPackets(capturedPackets, filterQuery);
   writeLogEntry(`User executed query="${filterQuery}"`);
 
@@ -673,11 +702,290 @@ function runFilterQuery(filterQuery) {
   }
 }
 
+function deepCloneSessionData(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeLoadedSessionPayload(parsedPayload) {
+  if (!parsedPayload || typeof parsedPayload !== "object") {
+    return null;
+  }
+
+  const hasWrappedCapture =
+    parsedPayload[SESSION_CAPTURE_KEY] &&
+    typeof parsedPayload[SESSION_CAPTURE_KEY] === "object";
+  const captureData = hasWrappedCapture
+    ? parsedPayload[SESSION_CAPTURE_KEY]
+    : parsedPayload;
+  const sessionState =
+    hasWrappedCapture && parsedPayload[SESSION_STATE_KEY]
+      ? parsedPayload[SESSION_STATE_KEY]
+      : null;
+
+  if (
+    !captureData ||
+    typeof captureData !== "object" ||
+    !captureData["Host"] ||
+    typeof captureData["Host"] !== "object"
+  ) {
+    return null;
+  }
+
+  return {
+    captureData,
+    sessionState:
+      sessionState && typeof sessionState === "object" ? sessionState : null,
+  };
+}
+
+function rebuildBookmarkDropdown() {
+  const selectBookmarkEl = document.getElementById("selectBookmark");
+  while (selectBookmarkEl.options.length > 1) {
+    selectBookmarkEl.remove(1);
+  }
+  bookmarkList.forEach((bookmarkKey) => {
+    selectBookmarkEl.appendChild(new Option(bookmarkKey, bookmarkKey));
+  });
+}
+
+function getSessionPacketViewMode() {
+  if (
+    Array.isArray(filteredPackets) &&
+    filteredPackets.length > 0 &&
+    packetsForHost === filteredPackets
+  ) {
+    return "filtered";
+  }
+  return "host";
+}
+
+function buildSessionStateSnapshot() {
+  const listSearchEl = document.getElementById("list-search");
+  const listGroupStreamsEl = document.getElementById("list-group-streams");
+  return {
+    schemaVersion: SESSION_FILE_SCHEMA_VERSION,
+    savedAt: new Date().toISOString(),
+    currentFilterQuery: filterInputEl.value || "",
+    filterHistory: [...filterHistory],
+    currentPacketKey: currentPacketKey || null,
+    activePacketCursor: getActivePacketCursor(),
+    packetViewMode: getSessionPacketViewMode(),
+    selectedHost:
+      document.getElementById("target_hosts")?.value || hostFilterEl.value || "",
+    bookmarkList: [...bookmarkList],
+    sessionKeychainEntries: deepCloneSessionData(cryptSessionKeystoreEntries, []),
+    keystoreMode: cryptActiveKeystoreMode,
+    tabs: {
+      main: activeMainTab,
+      conv: activeConvSubtab,
+      crypt: activeCryptSubtab,
+      listSearch: listSearchEl ? listSearchEl.value : "",
+      listGroupStreams: listGroupStreamsEl ? Boolean(listGroupStreamsEl.checked) : false,
+    },
+  };
+}
+
+function buildSessionFilePayload() {
+  return JSON.stringify(
+    {
+      [SESSION_CAPTURE_KEY]: capturedPackets,
+      [SESSION_STATE_KEY]: buildSessionStateSnapshot(),
+    },
+    null,
+    2,
+  );
+}
+
+async function persistSessionToDisk(sourceLabel = "manual-save") {
+  if (
+    !capturedPackets ||
+    !capturedPackets["Host"] ||
+    typeof capturedPackets["Host"] !== "object"
+  ) {
+    statusUpdate("Status: No data loaded to save");
+    return { success: false, error: "No loaded capture" };
+  }
+  const sessionJsonData = buildSessionFilePayload();
+  const result = await window.saveapi.saveJson(sessionJsonData);
+  if (result.canceled) {
+    statusUpdate("Status: Save cancelled");
+  } else if (result.success) {
+    statusUpdate("Status: Session saved successfully");
+    writeLogEntry(`Session saved source=${sourceLabel}`);
+  } else {
+    const errorMessage =
+      result && typeof result === "object" && "error" in result
+        ? result.error
+        : "unknown";
+    doError("Save failed");
+    logErrorEntry("save-session", errorMessage || "unknown");
+    statusUpdate("Status: Save failed – " + (errorMessage || "unknown error"));
+    console.error("Save failed:", errorMessage);
+  }
+  return result;
+}
+
+async function maybePromptSaveSessionOnExit() {
+  if (!isFileLoaded || !capturedPackets || !capturedPackets["Host"]) {
+    return "discard";
+  }
+  if (!window.quitapi?.promptSaveOnExit) {
+    return window.confirm("Save session before exit?") ? "save" : "cancel";
+  }
+  return window.quitapi.promptSaveOnExit();
+}
+
+async function requestApplicationClose() {
+  const exitAction = await maybePromptSaveSessionOnExit();
+  if (exitAction === "cancel") {
+    statusUpdate("Status: Exit cancelled");
+    return;
+  }
+  if (exitAction === "save") {
+    const saveResult = await persistSessionToDisk("exit-prompt");
+    if (!saveResult?.success) {
+      if (saveResult?.canceled) {
+        statusUpdate("Status: Exit cancelled");
+      } else {
+        statusUpdate("Status: Exit cancelled due to save failure");
+      }
+      return;
+    }
+  }
+  window.quitapi.quitApp();
+}
+
+function restoreSessionState(sessionState) {
+  if (!sessionState || typeof sessionState !== "object") return;
+
+  const loadedHistory = Array.isArray(sessionState.filterHistory)
+    ? sessionState.filterHistory
+        .filter((query) => typeof query === "string")
+        .map((query) => query.trim())
+        .filter(Boolean)
+    : [];
+  filterHistory.splice(0, filterHistory.length, ...loadedHistory);
+  renderFilterHistory();
+
+  const loadedBookmarks = Array.isArray(sessionState.bookmarkList)
+    ? sessionState.bookmarkList.filter(
+        (bookmark) => typeof bookmark === "string" && bookmark.trim() !== "",
+      )
+    : [];
+  bookmarkList = loadedBookmarks;
+  rebuildBookmarkDropdown();
+
+  const loadedSessionEntries = Array.isArray(sessionState.sessionKeychainEntries)
+    ? sessionState.sessionKeychainEntries.filter(
+        (entry) => entry && typeof entry === "object",
+      )
+    : [];
+  cryptSessionKeystoreEntries = deepCloneSessionData(loadedSessionEntries, []);
+
+  if (
+    sessionState.keystoreMode === CRYPT_KEYSTORE_MODE_SESSION ||
+    sessionState.keystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+  ) {
+    cryptActiveKeystoreMode = sessionState.keystoreMode;
+  }
+
+  const selectedHost = String(sessionState.selectedHost || "").trim();
+  if (selectedHost && capturedPackets?.["Host"]?.[selectedHost]) {
+    const targetHostsEl = document.getElementById("target_hosts");
+    if (targetHostsEl) {
+      targetHostsEl.value = selectedHost;
+    }
+    hostFilterEl.value = selectedHost;
+  }
+
+  const restoredFilterQuery =
+    typeof sessionState.currentFilterQuery === "string"
+      ? sessionState.currentFilterQuery
+      : "";
+  filterInputEl.value = restoredFilterQuery;
+  syncFilterHighlight();
+  if (restoredFilterQuery.trim()) {
+    runFilterQuery(restoredFilterQuery, { trackHistory: false });
+  } else {
+    filteredPackets = [];
+    document.getElementById("filter-returned").textContent = "Filtered Packets: 0";
+  }
+
+  currentPacketKey =
+    typeof sessionState.currentPacketKey === "string"
+      ? sessionState.currentPacketKey
+      : null;
+  setActivePacketCursor(sessionState.activePacketCursor);
+
+  const navAction =
+    sessionState.packetViewMode === "filtered" &&
+    Array.isArray(filteredPackets) &&
+    filteredPackets.length > 0
+      ? "filtered"
+      : "first-load";
+  handlePacketNavigation(navAction);
+
+  const tabState = sessionState.tabs && typeof sessionState.tabs === "object"
+    ? sessionState.tabs
+    : {};
+  const savedMainTab =
+    typeof tabState.main === "string" && VALID_MAIN_TABS.includes(tabState.main)
+      ? tabState.main
+      : MAIN_TAB_DATA;
+  const savedConvTab = VALID_CONV_SUBTABS.includes(tabState.conv)
+    ? tabState.conv
+    : CONV_CONVERSIONS_SUBTAB;
+  const savedCryptTab = VALID_CRYPT_SUBTABS.includes(tabState.crypt)
+    ? tabState.crypt
+    : CRYPT_SSL_SUBTAB;
+
+  if (savedMainTab === MAIN_TAB_SUMMARY) {
+    writeSummary();
+  } else if (savedMainTab === MAIN_TAB_STATS) {
+    showStats();
+  } else if (savedMainTab === MAIN_TAB_LIST) {
+    showPacketList();
+    const listSearchEl = document.getElementById("list-search");
+    const listGroupStreamsEl = document.getElementById("list-group-streams");
+    if (listSearchEl && typeof tabState.listSearch === "string") {
+      listSearchEl.value = tabState.listSearch;
+      listSearchEl.dispatchEvent(new Event("input"));
+    }
+    if (listGroupStreamsEl && typeof tabState.listGroupStreams === "boolean") {
+      listGroupStreamsEl.checked = tabState.listGroupStreams;
+      listGroupStreamsEl.dispatchEvent(new Event("change"));
+    }
+  } else if (savedMainTab === MAIN_TAB_DATA_TOOLS) {
+    showDataTools(savedConvTab);
+  } else if (savedMainTab === MAIN_TAB_CRYPT) {
+    showCryptWorkspace(savedCryptTab);
+  } else if (savedMainTab === MAIN_TAB_KEYSTORE && cryptKeystoreUnlockKeyMaterial) {
+    showKeystoreWorkspace();
+  } else {
+    initializeDataView();
+  }
+
+  if (savedMainTab !== MAIN_TAB_DATA_TOOLS) {
+    setConvSubtab(savedConvTab);
+  }
+  if (savedMainTab !== MAIN_TAB_CRYPT) {
+    setCryptSubtab(savedCryptTab);
+  }
+
+  writeLogEntry("Session state restored from JSON");
+  statusUpdate("Status: Session restored");
+}
+
 /**
  * Reads and parses the JSON file, updates UI and state.
  * Uses chunked parsing for large files to avoid UI blocking.
  */
 function processFile(file) {
+  let loadedSessionState = null;
   const reader = new FileReader();
   reader.onload = (event) => {
     const mainPanel = getCachedElement("main");
@@ -701,7 +1009,14 @@ function processFile(file) {
       );
       parseJsonChunked(event.target.result)
         .then((parsed) => {
-          capturedPackets = parsed;
+          const normalizedPayload = normalizeLoadedSessionPayload(parsed);
+          if (!normalizedPayload) {
+            doError("Invalid JSON file, please upload a valid capture/session file!");
+            fileLoaded(false);
+            return;
+          }
+          capturedPackets = normalizedPayload.captureData;
+          loadedSessionState = normalizedPayload.sessionState;
           jsonCapture = JSON.stringify(capturedPackets, null, 2);
           finalSummary = capturedPackets["Final Summary"] ?? "";
           finishProcessingFile();
@@ -712,7 +1027,16 @@ function processFile(file) {
           doError("Error parsing JSON file!");
         });
     } else {
-      capturedPackets = JSON.parse(event.target.result);
+      const normalizedPayload = normalizeLoadedSessionPayload(
+        JSON.parse(event.target.result),
+      );
+      if (!normalizedPayload) {
+        doError("Invalid JSON file, please upload a valid capture/session file!");
+        fileLoaded(false);
+        return;
+      }
+      capturedPackets = normalizedPayload.captureData;
+      loadedSessionState = normalizedPayload.sessionState;
       jsonCapture = JSON.stringify(capturedPackets, null, 2);
       finalSummary = capturedPackets["Final Summary"] ?? "";
       finishProcessingFile();
@@ -756,6 +1080,9 @@ function processFile(file) {
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
     writeSummary();
     initializeDataView();
+    if (loadedSessionState) {
+      restoreSessionState(loadedSessionState);
+    }
   }
   reader.onerror = (error) => {
     status.textContent = "Status: Error reading file: " + error;
@@ -828,6 +1155,7 @@ getCachedElement("summary-btn").addEventListener("click", function () {
 // Displays the summary section from the loaded JSON.
 
 function writeSummary() {
+  activeMainTab = MAIN_TAB_SUMMARY;
   statusUpdate("Status: Displaying capture analysis summary");
   //highlightTab("summary-navAction");
   if (jsonCapture == "") {
@@ -1056,6 +1384,7 @@ function makeStatsSection(title, items, queryBuilder) {
  * Shows the capture stats panel with aggregated data from the loaded capture.
  */
 function showStats() {
+  activeMainTab = MAIN_TAB_STATS;
   if (jsonCapture === "") {
     statusUpdate("Status: No JSON file loaded, please upload a file first");
     return;
@@ -1925,7 +2254,8 @@ function clearProtoDecoderOutput() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function showDataTools() {
+function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
+  activeMainTab = MAIN_TAB_DATA_TOOLS;
   statusUpdate("Status: Displaying data conversion tools");
   writeLogEntry("User opened data conversion tools view");
   document.getElementById("packetInfoPane").style.display = "none";
@@ -1937,7 +2267,7 @@ function showDataTools() {
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "flex";
-  setConvSubtab(CONV_CONVERSIONS_SUBTAB);
+  setConvSubtab(tabName);
 }
 
 function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
@@ -2855,6 +3185,7 @@ function refreshCryptEncounteredEntries() {
 }
 
 function setConvSubtab(tabName) {
+  activeConvSubtab = tabName;
   const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
   const hashesActive = tabName === CONV_HASHES_SUBTAB;
   const decodesActive = tabName === CONV_DECODES_SUBTAB;
@@ -2873,6 +3204,7 @@ function setConvSubtab(tabName) {
 }
 
 function setCryptSubtab(tabName) {
+  activeCryptSubtab = tabName;
   const sslActive = tabName === CRYPT_SSL_SUBTAB;
   const pgpActive = tabName === CRYPT_PGP_SUBTAB;
   const opensshActive = tabName === CRYPT_OPENSSH_SUBTAB;
@@ -2996,7 +3328,8 @@ function loadEncounteredCertificateIntoCrypt() {
   );
 }
 
-function showCryptWorkspace() {
+function showCryptWorkspace(tabName = CRYPT_SSL_SUBTAB) {
+  activeMainTab = MAIN_TAB_CRYPT;
   if (jsonCapture === "") {
     statusUpdate("Status: No JSON file loaded, please upload a file first");
     doError("Please upload a JSON file before accessing crypt tools.");
@@ -3015,11 +3348,12 @@ function showCryptWorkspace() {
   document.getElementById("rightside").style.display = "none";
   const cryptBoxEl = document.getElementById("crypt_box");
   cryptBoxEl.style.display = "flex";
-  setCryptSubtab(CRYPT_SSL_SUBTAB);
+  setCryptSubtab(tabName);
   refreshCryptEncounteredEntries();
 }
 
 function showKeystoreWorkspace() {
+  activeMainTab = MAIN_TAB_KEYSTORE;
   if (jsonCapture === "") {
     statusUpdate("Status: No JSON file loaded, please upload a file first");
     doError("Please upload a JSON file before accessing the keystore.");
@@ -4033,28 +4367,7 @@ function pasteTextFromContextMenu() {
 
 function saveJsonFromContextMenu() {
   hideConvertContextMenu();
-  if (!jsonCapture) {
-    statusUpdate("Status: No data loaded to save");
-    return;
-  }
-  window.saveapi.saveJson(jsonCapture).then((result) => {
-    if (result.canceled) {
-      statusUpdate("Status: Save cancelled");
-    } else if (result.success) {
-      statusUpdate("Status: JSON saved successfully");
-    } else {
-      const errorMessage =
-        result && typeof result === "object" && "error" in result
-          ? result.error
-          : "unknown";
-      doError("Save failed");
-      logErrorEntry("save-json", errorMessage || "unknown");
-      statusUpdate(
-        "Status: Save failed – " + (errorMessage || "unknown error"),
-      );
-      console.error("Save failed:", errorMessage);
-    }
-  });
+  void persistSessionToDisk("context-menu");
 }
 
 function exportCurrentPacketFromContextMenu() {
@@ -4327,6 +4640,10 @@ async function addToKeystoreFromContextMenu(type, keystoreMode) {
     );
   }
 }
+
+document.getElementById("close-btn").addEventListener("click", () => {
+  void requestApplicationClose();
+});
 
 // Show host data when data button is clicked
 document.getElementById("data-btn").addEventListener("click", function () {
@@ -4765,6 +5082,7 @@ function buildStreamFilterQuery(transport, srcIp, dstIp, srcPort, dstPort) {
  * in a scrollable, selectable table.
  */
 function showPacketList() {
+  activeMainTab = MAIN_TAB_LIST;
   if (jsonCapture === "") {
     statusUpdate("Status: No JSON file loaded, please upload a file first");
     return;
@@ -5115,6 +5433,7 @@ function showPacketList() {
 }
 
 function initializeDataView() {
+  activeMainTab = MAIN_TAB_DATA;
   statusUpdate(
     "Status: Displaying packet information for " + hostFilterEl.value,
   );
@@ -5278,6 +5597,7 @@ function findPacketIndexByKey(packetSet, packetKey) {
  * Updates UI and packet info accordingly.
  */
 function handlePacketNavigation(navAction, navBookmark) {
+  activeMainTab = MAIN_TAB_DATA;
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
   document.getElementById("loading-container").style.display = "none";
@@ -5936,26 +6256,9 @@ function infoPanel(pk) {
   }
 }
 
-// Save the currently loaded JSON capture to a user-chosen file via a worker thread
+// Save the currently loaded capture plus session state to disk
 document.getElementById("save-json-btn").addEventListener("click", function () {
-  if (!jsonCapture) {
-    statusUpdate("Status: No data loaded to save");
-    return;
-  }
-  window.saveapi.saveJson(jsonCapture).then((result) => {
-    if (result.canceled) {
-      statusUpdate("Status: Save cancelled");
-    } else if (result.success) {
-      statusUpdate("Status: JSON saved successfully");
-    } else {
-      doError("Save failed");
-      logErrorEntry("save-json", result.error || "unknown");
-      statusUpdate(
-        "Status: Save failed – " + (result.error || "unknown error"),
-      );
-      console.error("Save failed:", result.error);
-    }
-  });
+  void persistSessionToDisk("sidebar-button");
 });
 
 // the next two have hooks into IPC handlers for main.js

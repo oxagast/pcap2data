@@ -274,14 +274,28 @@ ipcMain.handle('quit-app', () => {
   app.quit();
 });
 
+ipcMain.handle('prompt-save-session-on-exit', async () => {
+  const response = await dialog.showMessageBox({
+    type: 'question',
+    buttons: ['Save Session', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Save Session',
+    message: 'Do you want to save your PacketSnitch session before exiting?',
+  });
+  if (response.response === 0) return 'save';
+  if (response.response === 1) return 'discard';
+  return 'cancel';
+});
+
 ipcMain.handle('save-json', async (_event, jsonData) => {
   if (typeof jsonData !== 'string' || jsonData.trim() === '') {
     return { success: false, error: 'No JSON data to save' };
   }
 
   const { canceled, filePath } = await dialog.showSaveDialog({
-    title: 'Save JSON Capture',
-    defaultPath: path.join(app.getPath('documents'), 'capture.json'),
+    title: 'Save PacketSnitch Session',
+    defaultPath: path.join(app.getPath('documents'), 'packetsnitch-session.json'),
     filters: [{ name: 'JSON Files', extensions: ['json'] }],
   });
   if (canceled || !filePath) return { success: false, canceled: true };
