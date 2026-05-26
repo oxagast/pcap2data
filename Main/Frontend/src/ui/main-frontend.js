@@ -32,6 +32,7 @@ const {
   renderRadiusTable,
 } = require("./decoders");
 const { createCryptPanel } = require("./panels/crypt-panel");
+const { createStatsPanel } = require("./panels/stats-panel");
 const psVer = require("../../package.json").version;
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
@@ -231,6 +232,25 @@ const {
   logapi: window.logapi,
   documentRef: document,
   consoleRef: console,
+});
+
+const { showStats } = createStatsPanel({
+  documentRef: document,
+  statusUpdate,
+  writeLogEntry,
+  setActiveMainTab: (tab) => {
+    activeMainTab = tab;
+  },
+  mainTabStats: MAIN_TAB_STATS,
+  getJsonCapture: () => jsonCapture,
+  getCapturedPackets: () => capturedPackets,
+  filterInputEl,
+  syncFilterHighlight,
+  runFilterQuery,
+  getFilteredPackets: () => filteredPackets,
+  setPacketsForHost: (packets) => {
+    packetsForHost = packets;
+  },
 });
 
 function getPacketTimeframe() {
@@ -1087,334 +1107,6 @@ function writeSummary() {
     document.getElementById("summary_box").style.display = "block";
     fileLoaded(true);
   }
-}
-
-function normalizeStatsTextValue(value, options = {}) {
-  if (value === null || value === undefined) return null;
-
-  const { stripNonPrintable = false } = options;
-  let normalized = typeof value === "string" ? value : String(value);
-
-  if (stripNonPrintable) {
-    normalized = normalized.replace(/[\x00-\x1F\x7F]/g, "");
-  }
-
-  normalized = normalized.trim();
-  return normalized ? normalized : null;
-}
-
-function normalizeStatsPortValue(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  const normalizedText = normalizeStatsTextValue(value);
-  if (!normalizedText || !/^\d+$/.test(normalizedText)) return null;
-  return Number(normalizedText);
-}
-
-/**
- * Iterates all packets in capturedPackets and returns aggregate statistics
- * useful for understanding what is in the capture at a glance.
- */
-function buildCaptureStats() {
-  const protocols = new Set();
-  const transportProtocols = new Set();
-  const hosts = new Set();
-  const ports = new Set();
-  const macVendors = new Set();
-  const mimeTypes = new Set();
-  const locations = new Map(); // "City, Country" -> count
-  const hostnames = new Set();
-  const dataTypes = new Set();
-  let encryptedCount = 0;
-  let unencryptedCount = 0;
-  let totalPackets = 0;
-
-  if (!capturedPackets || !capturedPackets["Host"]) return null;
-
-  for (const host of Object.keys(capturedPackets["Host"])) {
-    const normalizedHostKey = normalizeStatsTextValue(host);
-    if (normalizedHostKey) hosts.add(normalizedHostKey);
-    const packets = capturedPackets["Host"][host];
-    if (!Array.isArray(packets)) continue;
-
-    for (const pkt of packets) {
-      totalPackets++;
-      const pi = pkt?.["Packet Info"];
-      const ei = pkt?.["Extra Info"];
-      if (!pi || !ei) continue;
-
-      // Transport protocol (TCP/UDP/ICMP)
-      const tp = normalizeStatsTextValue(pi["Protocol"]);
-      if (tp) transportProtocols.add(tp);
-
-      // Source/destination IPs
-      const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
-      const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["Destination IP"]);
-      if (srcIp) hosts.add(srcIp);
-      if (dstIp) hosts.add(dstIp);
-
-      // MAC vendors
-      const ef = pi?.["Ethernet Frame"];
-      if (ef) {
-        const srcVendor = normalizeStatsTextValue(ef["MAC Source Vendor"]);
-        const dstVendor = normalizeStatsTextValue(ef["MAC Destination Vendor"]);
-        if (srcVendor) macVendors.add(srcVendor);
-        if (dstVendor) macVendors.add(dstVendor);
-      }
-
-      // Port-level protocol name and ports
-      const netData = ei?.["Traits"]?.["Network Data"];
-      if (netData) {
-        const protoName = normalizeStatsTextValue(netData["Port Protcol"]);
-        if (protoName && protoName !== "Unknown") protocols.add(protoName);
-
-        // Source/dest ports
-        const tpData = tp ? pi[tp] : null;
-        if (tpData) {
-          const srcPort = normalizeStatsPortValue(tpData["Source port"]);
-          const dstPort = normalizeStatsPortValue(tpData["Destination port"]);
-          if (srcPort !== null) ports.add(srcPort);
-          if (dstPort !== null) ports.add(dstPort);
-        }
-
-        // Hostnames
-        const hn = netData?.["Hostnames"]?.["Hostnames"];
-        if (Array.isArray(hn)) {
-          hn.forEach((h) => {
-            const normalizedHostname = normalizeStatsTextValue(h);
-            if (normalizedHostname) hostnames.add(normalizedHostname);
-          });
-        }
-
-        // Locations
-        for (const side of ["Source IP", "Destination IP"]) {
-          const loc = netData?.[side]?.["Location"];
-          const city = normalizeStatsTextValue(loc?.["City"]);
-          const country = normalizeStatsTextValue(loc?.["Country"]);
-          if (city && country) {
-            const key = `${city}, ${country}`;
-            locations.set(key, (locations.get(key) || 0) + 1);
-          }
-        }
-      }
-
-      // MIME types
-      const mimeType = normalizeStatsTextValue(ei?.["MIME Type"]);
-      if (mimeType) mimeTypes.add(mimeType);
-
-      // Data types
-      const dt = ei?.["Data Types"];
-      if (Array.isArray(dt)) {
-        dt.forEach((d) => {
-          const normalizedDataType = normalizeStatsTextValue(d, {
-            stripNonPrintable: true,
-          });
-          if (normalizedDataType) dataTypes.add(normalizedDataType);
-        });
-      }
-
-      // Encryption
-      const encData = ei?.["Traits"]?.["Server Info"]?.["Encryption Data"];
-      if (!encData || encData === "N/A") {
-        unencryptedCount++;
-      } else {
-        encryptedCount++;
-      }
-    }
-  }
-
-  return {
-    protocols: [...protocols].sort(),
-    transportProtocols: [...transportProtocols].sort(),
-    hosts: [...hosts].sort(),
-    ports: [...ports].sort((a, b) => a - b),
-    macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
-    mimeTypes: [...mimeTypes].sort(),
-    locations: [...locations.entries()].sort((a, b) => b[1] - a[1]),
-    hostnames: [...hostnames].sort(),
-    dataTypes: [...dataTypes].sort(),
-    encryptedCount,
-    unencryptedCount,
-    totalPackets,
-  };
-}
-
-/**
- * Renders a section of tags that, when clicked, populate the filter bar
- * with a suggested query for that value.
- */
-function makeStatsSection(title, items, queryBuilder) {
-  if (!items || items.length === 0) return null;
-  const normalizedItems = Array.from(
-    new Set(
-      items.filter((item) => {
-        if (item === null || item === undefined) return false;
-        if (typeof item !== "string") return true;
-        return normalizeStatsTextValue(item) !== null;
-      }),
-    ),
-  );
-  if (normalizedItems.length === 0) return null;
-
-  const section = document.createElement("div");
-  section.className = "stats-section";
-
-  const heading = document.createElement("div");
-  heading.className = "stats-section-title";
-  heading.textContent = title;
-  section.appendChild(heading);
-
-  const tagList = document.createElement("div");
-  tagList.className = "stats-tag-list";
-
-  normalizedItems.forEach((item) => {
-    const tag = document.createElement("span");
-    tag.className = "stats-tag";
-    tag.textContent = item;
-    tag.title = "Click to filter packets by this value";
-    if (queryBuilder) {
-      tag.addEventListener("click", () => {
-        const query = queryBuilder(item);
-        if (query) {
-          filterInputEl.value = query;
-          syncFilterHighlight();
-          writeLogEntry(`Stats tag clicked query="${query}"`);
-          runFilterQuery(query);
-          // Keep packetsForHost in sync so prev/next navigation works within the result
-          if (filteredPackets && filteredPackets.length > 0) {
-            packetsForHost = filteredPackets;
-          }
-        }
-      });
-    }
-    tagList.appendChild(tag);
-  });
-
-  section.appendChild(tagList);
-  return section;
-}
-
-/**
- * Shows the capture stats panel with aggregated data from the loaded capture.
- */
-function showStats() {
-  activeMainTab = MAIN_TAB_STATS;
-  if (jsonCapture === "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    return;
-  }
-  statusUpdate("Status: Displaying capture statistics");
-  writeLogEntry("User opened capture stats view");
-
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("list_box").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "none";
-  document.getElementById("crypt_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "block";
-  document.getElementById("rightside").style.display = "none";
-
-  const content = document.getElementById("stats_content");
-  content.replaceChildren();
-
-  const stats = buildCaptureStats();
-  if (!stats) {
-    content.textContent = "No packet data available.";
-    return;
-  }
-
-  // Overview row
-  const overview = document.createElement("div");
-  overview.className = "stats-section";
-  const ovHead = document.createElement("div");
-  ovHead.className = "stats-section-title";
-  ovHead.textContent = "Capture Overview";
-  overview.appendChild(ovHead);
-  [
-    `Total Packets: ${stats.totalPackets}`,
-    `Unique Hosts Targeted: ${stats.hosts.length}`,
-    `Encrypted Packets: ${stats.encryptedCount}`,
-    `Unencrypted Packets: ${stats.unencryptedCount}`,
-    `Unique Protocols: ${stats.protocols.length}`,
-    `Unique Locations: ${stats.locations.length}`,
-  ].forEach((line) => {
-    const kv = document.createElement("div");
-    kv.className = "stats-kv";
-    kv.textContent = line;
-    overview.appendChild(kv);
-  });
-  content.appendChild(overview);
-
-  // Application protocols
-  const protoSec = makeStatsSection(
-    "Application Protocols",
-    stats.protocols,
-    (v) => `tcp.proto: ${v.toLowerCase()}`,
-  );
-  if (protoSec) content.appendChild(protoSec);
-
-  // Transport protocols
-  const tpSec = makeStatsSection(
-    "Transport Protocols",
-    stats.transportProtocols,
-    (v) => `wire.proto: ${v.toLowerCase()}`,
-  );
-  if (tpSec) content.appendChild(tpSec);
-
-  // All hosts
-  const hostSec = makeStatsSection(
-    "All Hosts Addressed",
-    stats.hosts,
-    (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
-  );
-  if (hostSec) content.appendChild(hostSec);
-
-  // Hostnames / DNS
-  const hnSec = makeStatsSection(
-    "Hostnames (DNS)",
-    stats.hostnames,
-    (v) => `dns.qname: ${v}`,
-  );
-  if (hnSec) content.appendChild(hnSec);
-
-  // Physical locations
-  if (stats.locations.length > 0) {
-    const locItems = stats.locations.map(
-      ([place, count]) => `${place} (${count})`,
-    );
-    const locSec = makeStatsSection("Physical Locations", locItems, null);
-    if (locSec) content.appendChild(locSec);
-  }
-
-  // Ports
-  const portSec = makeStatsSection(
-    "Ports Seen",
-    stats.ports.map(String),
-    (v) => `tcp.src.port: ${v} || tcp.dst.port: ${v}`,
-  );
-  if (portSec) content.appendChild(portSec);
-
-  // MAC vendors
-  const macSec = makeStatsSection(
-    "MAC Vendors",
-    stats.macVendors,
-    (v) => `eth.src.vendor: ${v}`,
-  );
-  if (macSec) content.appendChild(macSec);
-
-  // MIME types
-  const mimeSec = makeStatsSection(
-    "MIME Types",
-    stats.mimeTypes,
-    (v) => `mime.type: ${v}`,
-  );
-  if (mimeSec) content.appendChild(mimeSec);
-
-  // Data types
-  const dtSec = makeStatsSection("Data Types", stats.dataTypes, null);
-  if (dtSec) content.appendChild(dtSec);
 }
 
 function parseDataToolsInput(format, rawInput) {
