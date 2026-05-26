@@ -5060,7 +5060,13 @@ function initializeDataView() {
       document.getElementById("host_filter").value = hostsList[1];
     }
 
-    handlePacketNavigation("first-load");
+    const hasActiveFilterQuery = filterInputEl.value.trim() !== "";
+    const shouldReuseFilteredPackets =
+      Array.isArray(filteredPackets) &&
+      (hasActiveFilterQuery || packetsForHost === filteredPackets);
+    handlePacketNavigation(
+      shouldReuseFilteredPackets ? "filtered" : "first-load",
+    );
   }
 }
 
@@ -5172,11 +5178,35 @@ function totalPacketCount() {
   return totalCount;
 }
 
+function findPacketIndexByKey(packetSet, packetKey) {
+  if (!Array.isArray(packetSet) || !packetKey || typeof packetKey !== "string") {
+    return null;
+  }
+
+  const separatorIndex = packetKey.lastIndexOf(":");
+  if (separatorIndex <= 0) return null;
+
+  const sourceIp = packetKey.slice(0, separatorIndex);
+  const packetIndexValue = packetKey.slice(separatorIndex + 1);
+  return packetSet.findIndex((packet) => {
+    const packetInfo = packet?.["Packet Info"];
+    if (!packetInfo) return false;
+    const candidateSourceIp = packetInfo?.["IP"]?.["Source IP"];
+    const candidatePacketIndex = packetInfo?.["Index"];
+    return (
+      String(candidateSourceIp) === sourceIp &&
+      String(candidatePacketIndex) === packetIndexValue
+    );
+  });
+}
+
 /**
  * Handles navigation between capturedPackets (next, prev, activeBookmark, first-load).
  * Updates UI and packet info accordingly.
  */
 function handlePacketNavigation(navAction, navBookmark) {
+  const previousPacketKey = currentPacketKey;
+  const previousCursor = getActivePacketCursor();
   document.getElementById("loading-container").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
@@ -5191,8 +5221,6 @@ function handlePacketNavigation(navAction, navBookmark) {
 
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
-  index = 0;
-  setActivePacketCursor(index);
   if (navAction === undefined) {
     handlePacketNavigation("first-load");
   }
@@ -5229,6 +5257,20 @@ function handlePacketNavigation(navAction, navBookmark) {
         `Navigating bookmark host=${navBookmark["Host"]} packet=${navBookmark["Packet"]}`,
       );
     }
+  } else {
+    const packetIndexFromKey = findPacketIndexByKey(packetSet, previousPacketKey);
+    if (packetIndexFromKey >= 0) {
+      index = packetIndexFromKey;
+    } else if (
+      Number.isInteger(previousCursor) &&
+      previousCursor >= 0 &&
+      previousCursor < packetSet?.length
+    ) {
+      index = previousCursor;
+    } else {
+      index = 0;
+    }
+    setActivePacketCursor(index);
   }
   if (!packetSet || packetSet.length === 0) {
     statusUpdate("Status: No packets");
