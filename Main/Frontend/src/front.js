@@ -1026,16 +1026,19 @@ function makeStatsSection(title, items, queryBuilder) {
     const tag = document.createElement("span");
     tag.className = "stats-tag";
     tag.textContent = item;
-    tag.title = "Click to use in filter query";
+    tag.title = "Click to filter packets by this value";
     if (queryBuilder) {
       tag.addEventListener("click", () => {
         const query = queryBuilder(item);
         if (query) {
           filterInputEl.value = query;
           syncFilterHighlight();
-          filterInputEl.focus();
-          statusUpdate("Status: Filter query populated — press Enter to apply");
           writeLogEntry(`Stats tag clicked query="${query}"`);
+          runFilterQuery(query);
+          // Keep packetsForHost in sync so prev/next navigation works within the result
+          if (filteredPackets && filteredPackets.length > 0) {
+            packetsForHost = filteredPackets;
+          }
         }
       });
     }
@@ -4705,6 +4708,27 @@ convertContextButtons.httpFilePreview.addEventListener(
 );
 
 /**
+ * Builds a bidirectional stream filter query for a packet's 4-tuple.
+ * Returns a filter string matching packets flowing in either direction
+ * between the same endpoints, or an IP-only filter for protocols without ports.
+ */
+function buildStreamFilterQuery(transport, srcIp, dstIp, srcPort, dstPort) {
+  if (!srcIp || !dstIp) return null;
+  const tp = (transport || "").toLowerCase();
+  const hasPorts =
+    (srcPort !== "" && srcPort !== undefined && srcPort !== null) &&
+    (dstPort !== "" && dstPort !== undefined && dstPort !== null);
+  if (hasPorts && (tp === "tcp" || tp === "udp")) {
+    return (
+      `(ip.src.addr: ${srcIp} && ip.dst.addr: ${dstIp} && ${tp}.src.port: ${srcPort} && ${tp}.dst.port: ${dstPort})` +
+      ` || ` +
+      `(ip.src.addr: ${dstIp} && ip.dst.addr: ${srcIp} && ${tp}.src.port: ${dstPort} && ${tp}.dst.port: ${srcPort})`
+    );
+  }
+  return `(ip.src.addr: ${srcIp} && ip.dst.addr: ${dstIp}) || (ip.src.addr: ${dstIp} && ip.dst.addr: ${srcIp})`;
+}
+
+/**
  * Builds and shows the packet list tab, displaying all packets grouped by host
  * in a scrollable, selectable table.
  */
@@ -4982,42 +5006,58 @@ function showPacketList() {
             .forEach((r) => r.classList.remove("packet-list-selected"));
           tr.classList.add("packet-list-selected");
 
-          // Navigate to selected packet
+          // Set packet context so handlePacketNavigation can locate it in the filtered set
           hostFilterEl.value = row.host;
           document.getElementById("target_hosts").value = row.host;
-          packetsForHost = capturedPackets["Host"][row.host];
-          index = row.pktIdx;
-          setActivePacketCursor(index);
           currentIp = row.srcIp;
           currentPacketKey = row.srcIp + ":" + row.pi["Index"];
           syncBookmarkDropdown(currentPacketKey);
+          writeLogEntry(
+            `Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
+          );
 
-          // Switch to Host Data view
-          document.getElementById("list_box").style.display = "none";
-          document.getElementById("data_tools_box").style.display = "none";
-          document.getElementById("crypt_box").style.display = "none";
-          document.getElementById("keystore_box").style.display = "none";
-          document.getElementById("packetInfoPane").style.display = "block";
-          document.getElementById("packetPayloadPane").style.display = "block";
-          document.getElementById("prev-btn").style.display = "block";
-          document.getElementById("next-btn").style.display = "block";
-          showAllData();
+          // Build a bidirectional stream filter and apply it so only packets
+          // from the same stream are loaded into the interface
+          const streamFilter = buildStreamFilterQuery(
+            row.transport, row.srcIp, row.dstIp, row.srcPort, row.dstPort,
+          );
+          if (streamFilter) {
+            filterInputEl.value = streamFilter;
+            syncFilterHighlight();
+            runFilterQuery(streamFilter);
+            // Keep packetsForHost in sync with the filtered stream so that
+            // prev/next navigation and payload access stay within the stream
+            packetsForHost = filteredPackets.length > 0
+              ? filteredPackets
+              : capturedPackets["Host"][row.host];
+          } else {
+            // Fallback: load all host packets when a stream filter cannot be built
+            packetsForHost = capturedPackets["Host"][row.host];
+            index = row.pktIdx;
+            setActivePacketCursor(index);
+            document.getElementById("list_box").style.display = "none";
+            document.getElementById("data_tools_box").style.display = "none";
+            document.getElementById("crypt_box").style.display = "none";
+            document.getElementById("keystore_box").style.display = "none";
+            document.getElementById("packetInfoPane").style.display = "block";
+            document.getElementById("packetPayloadPane").style.display = "block";
+            document.getElementById("prev-btn").style.display = "block";
+            document.getElementById("next-btn").style.display = "block";
+            showAllData();
+            infoPanel(packetsForHost);
+            const hexPayload =
+              packetsForHost[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+                "Hex Encoded"
+              ];
+            if (hexPayload) popHexGrid(hexPayload);
+            populateDataTypes(packetsForHost);
+          }
 
-          infoPanel(packetsForHost);
-          const hexPayload =
-            packetsForHost[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
-              "Hex Encoded"
-            ];
-          if (hexPayload) popHexGrid(hexPayload);
-          populateDataTypes(packetsForHost);
           statusUpdate(
             "Status: Displaying packet " +
               row.pi["Index"] +
               " for host " +
               row.host,
-          );
-          writeLogEntry(
-            `Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
           );
         });
 
