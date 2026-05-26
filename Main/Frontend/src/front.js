@@ -1366,9 +1366,19 @@ function resetHashOutputs() {
   }
 }
 
+function bytesToByteString(bytes) {
+  const CHUNK_SIZE = 0x8000;
+  let result = "";
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    result += String.fromCharCode(...chunk);
+  }
+  return result;
+}
+
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
-  const byteString = new TextDecoder("latin1").decode(bytes);
+  const byteString = bytesToByteString(bytes);
 
   document.getElementById("data-tools-md5-output").value =
     CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
