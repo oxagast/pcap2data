@@ -128,6 +128,7 @@ let cryptSessionKeystoreEntries = [];
 let cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
 let cryptKeystoreUnlockKeyMaterial = null;
 let cryptKeystoreUnlockDialogResolver = null;
+let cryptKeystoreUnlockDialogMode = "unlock";
 
 // Check for first run after new version install and show install screen if needed
 if (window.installapi) {
@@ -2137,8 +2138,9 @@ function sanitizePersistentEntry(entry) {
   };
 }
 
-async function loadPersistentCryptKeystoreEntries(passphrase) {
-  const storedRecord = await loadCryptKeystore();
+async function loadPersistentCryptKeystoreEntries(passphrase, existingRecord) {
+  const storedRecord =
+    existingRecord === undefined ? await loadCryptKeystore() : existingRecord;
   if (!storedRecord) return [];
 
   if (
@@ -2588,12 +2590,45 @@ async function sendSelectedSessionEntryToPersistent() {
   writeLogEntry(`Session keychain entry persisted label="${selectedEntry.label}"`);
 }
 
-function requestKeystoreUnlockPassword() {
+function configureKeystoreUnlockDialog(mode) {
+  cryptKeystoreUnlockDialogMode = mode === "setup" ? "setup" : "unlock";
+  const isSetup = cryptKeystoreUnlockDialogMode === "setup";
+  const titleEl = document.getElementById("crypt-keystore-unlock-title");
+  const descriptionEl = document.getElementById("crypt-keystore-unlock-description");
+  const passwordEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  const confirmBtn = document.getElementById("crypt-keystore-unlock-confirm-btn");
+  if (titleEl) {
+    titleEl.textContent = isSetup ? "Set Keychain Password" : "Unlock Keychain";
+  }
+  if (descriptionEl) {
+    descriptionEl.textContent = isSetup
+      ? "Create the initial password for the persistent keychain. You will only be asked when selecting the keychain tab."
+      : "Enter the keychain password to unlock the persistent keychain.";
+  }
+  if (passwordEl) {
+    passwordEl.placeholder = isSetup
+      ? "Create keychain password"
+      : "Enter keychain password";
+  }
+  if (confirmEl) {
+    confirmEl.hidden = !isSetup;
+    confirmEl.placeholder = "Confirm keychain password";
+  }
+  if (confirmBtn) {
+    confirmBtn.textContent = isSetup ? "Set password" : "Unlock";
+  }
+}
+
+function requestKeystoreUnlockPassword(mode = "unlock") {
   const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
   const inputEl = document.getElementById("crypt-keystore-unlock-password");
-  if (!dialogEl || !inputEl) return Promise.resolve(null);
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  if (!dialogEl || !inputEl || !confirmEl) return Promise.resolve(null);
+  configureKeystoreUnlockDialog(mode);
   dialogEl.hidden = false;
   inputEl.value = "";
+  confirmEl.value = "";
   inputEl.focus();
   return new Promise((resolve) => {
     cryptKeystoreUnlockDialogResolver = resolve;
@@ -2603,12 +2638,24 @@ function requestKeystoreUnlockPassword() {
 function resolveKeystoreUnlockPassword(value) {
   const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
   const inputEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
   if (dialogEl) dialogEl.hidden = true;
   if (inputEl) inputEl.value = "";
+  if (confirmEl) confirmEl.value = "";
   if (!cryptKeystoreUnlockDialogResolver) return;
   const resolve = cryptKeystoreUnlockDialogResolver;
   cryptKeystoreUnlockDialogResolver = null;
-  resolve(value || "");
+  resolve(value);
+}
+
+function submitKeystoreUnlockDialog() {
+  const inputEl = document.getElementById("crypt-keystore-unlock-password");
+  const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+  resolveKeystoreUnlockPassword({
+    password: inputEl?.value || "",
+    confirmPassword: confirmEl?.value || "",
+    mode: cryptKeystoreUnlockDialogMode,
+  });
 }
 
 async function unlockPersistentKeystoreAndLoad() {
@@ -2618,8 +2665,12 @@ async function unlockPersistentKeystoreAndLoad() {
   }
   if (cryptKeystoreUnlockKeyMaterial) return true;
 
-  const entered = await requestKeystoreUnlockPassword();
-  const normalizedPassword = (entered || "").trim();
+  const storedRecord = await loadCryptKeystore();
+  const isInitialSetup = !storedRecord;
+  const dialogResult = await requestKeystoreUnlockPassword(
+    isInitialSetup ? "setup" : "unlock",
+  );
+  const normalizedPassword = (dialogResult?.password || "").trim();
   if (!normalizedPassword) {
     statusUpdate("Status: Keychain remains locked");
     return false;
@@ -2628,18 +2679,37 @@ async function unlockPersistentKeystoreAndLoad() {
     doError("Keychain password must be at least 8 characters.");
     return false;
   }
+  if (
+    isInitialSetup &&
+    normalizedPassword !== String(dialogResult?.confirmPassword || "").trim()
+  ) {
+    doError("Keychain password confirmation does not match.");
+    return false;
+  }
   try {
     const keyMaterial = await importCryptKeyMaterial(normalizedPassword);
-    cryptPersistentKeystoreEntries = await loadPersistentCryptKeystoreEntries(
-      keyMaterial,
-    );
+    if (isInitialSetup) {
+      cryptPersistentKeystoreEntries = [];
+      await savePersistentCryptKeystoreEntries([], keyMaterial);
+      statusUpdate("Status: Keychain password set");
+      writeLogEntry("Persistent keychain password initialized");
+    } else {
+      cryptPersistentKeystoreEntries = await loadPersistentCryptKeystoreEntries(
+        keyMaterial,
+        storedRecord,
+      );
+      statusUpdate("Status: Keychain unlocked");
+      writeLogEntry("Persistent keychain unlocked");
+    }
     cryptKeystoreUnlockKeyMaterial = keyMaterial;
-    statusUpdate("Status: Keychain unlocked");
-    writeLogEntry("Persistent keychain unlocked");
     return true;
   } catch (error) {
     logErrorEntry("crypt-keystore-unlock", error);
-    doError("Could not unlock persistent keychain. Verify password.");
+    doError(
+      isInitialSetup
+        ? "Could not initialize persistent keychain."
+        : "Could not unlock persistent keychain. Verify password.",
+    );
     return false;
   }
 }
@@ -3794,18 +3864,21 @@ document.getElementById("keystore-btn").addEventListener("click", async function
 });
 document
   .getElementById("crypt-keystore-unlock-confirm-btn")
-  .addEventListener("click", () => {
-    const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    resolveKeystoreUnlockPassword(inputEl?.value || "");
-  });
+  .addEventListener("click", submitKeystoreUnlockDialog);
 document
   .getElementById("crypt-keystore-unlock-cancel-btn")
-  .addEventListener("click", () => resolveKeystoreUnlockPassword(""));
+  .addEventListener("click", () => resolveKeystoreUnlockPassword(null));
 document
   .getElementById("crypt-keystore-unlock-password")
   .addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
-    resolveKeystoreUnlockPassword(event.target?.value || "");
+    submitKeystoreUnlockDialog();
+  });
+document
+  .getElementById("crypt-keystore-unlock-password-confirm")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    submitKeystoreUnlockDialog();
   });
 
 // Show packet list when list button is clicked

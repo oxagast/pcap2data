@@ -391,11 +391,22 @@
           </div>
           <div id="crypt-keystore-unlock-dialog" hidden>
             <div class="crypt-keystore-unlock-content">
-              <div class="crypt-section-title">Unlock Keychain</div>
+              <div class="crypt-section-title" id="crypt-keystore-unlock-title">
+                Unlock Keychain
+              </div>
+              <div id="crypt-keystore-unlock-description">
+                Enter the keychain password to unlock the persistent keychain.
+              </div>
               <input
                 id="crypt-keystore-unlock-password"
                 type="password"
                 placeholder="Enter keychain password"
+              />
+              <input
+                id="crypt-keystore-unlock-password-confirm"
+                type="password"
+                placeholder="Confirm keychain password"
+                hidden
               />
               <div class="crypt-actions-row">
                 <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
