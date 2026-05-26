@@ -1446,8 +1446,8 @@ strong {
   cursor: pointer;
 }
 
-#filterStr-clear:hover,
-#filterStr-clear:focus {
+#filterStr-clear:not(:disabled):hover,
+#filterStr-clear:not(:disabled):focus {
   background-color: var(--color-2);
 }
 

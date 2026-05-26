@@ -640,8 +640,11 @@ function syncFilterHighlightScroll() {
 }
 
 function updateFilterClearButtonState() {
-  filterClearButtonEl.disabled =
-    filterInputEl.disabled || filterInputEl.value.trim() === "";
+  filterClearButtonEl.disabled = !canClearFilterQuery();
+}
+
+function canClearFilterQuery() {
+  return !filterInputEl.disabled && filterInputEl.value.trim() !== "";
 }
 
 function renderFilterHistory() {
@@ -711,7 +714,7 @@ function runFilterQuery(filterQuery, options = {}) {
 }
 
 function clearFilterQuery() {
-  if (filterInputEl.disabled || filterInputEl.value.trim() === "") {
+  if (!canClearFilterQuery()) {
     return;
   }
   filterInputEl.value = "";
