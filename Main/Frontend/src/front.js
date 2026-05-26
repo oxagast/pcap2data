@@ -2404,9 +2404,11 @@ function buildSessionAutoKeystoreEntries() {
                 separatorIndex >= 0
                   ? cookieEntry.slice(0, separatorIndex).trim()
                   : "";
+              const cookieLabelSuffix =
+                cookieName || `packet-${packetIndex}-${hashContentForDeduplication(cookieEntry)}`;
               pushSessionEntry({
                 type: "cookie",
-                label: cookieName ? `HTTP Cookie ${cookieName}` : "HTTP Cookie",
+                label: `HTTP Cookie ${cookieLabelSuffix}`,
                 source: "session-auto-cookie-jar",
                 content: cookieEntry,
                 summary: `Host ${host} packet #${packetIndex}`,
@@ -3374,8 +3376,8 @@ function extractCookieJarEntriesFromHttpFields(fields) {
     const fieldValue = typeof field?.value === "string" ? field.value.trim() : "";
     if (!fieldValue) return;
     if (fieldName === "cookie") {
-      splitCookieHeaderEntries(fieldValue).forEach((crumb) => {
-        addCookieEntry(crumb);
+      splitCookieHeaderEntries(fieldValue).forEach((cookieEntry) => {
+        addCookieEntry(cookieEntry);
       });
       return;
     }
