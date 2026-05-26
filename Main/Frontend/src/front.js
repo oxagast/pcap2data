@@ -30,6 +30,10 @@ const {
   renderRadiusTable,
 } = require("./decoders");
 const psVer = require("../package.json").version;
+const { sha256, sha384, sha512 } = require("@noble/hashes/sha2");
+const { sha3_256, sha3_512 } = require("@noble/hashes/sha3");
+const { md5, ripemd160, sha1 } = require("@noble/hashes/legacy");
+const whirlpool = require("whirlpool-js");
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
@@ -1341,7 +1345,65 @@ function resetDataToolsOutputs() {
     "MIME Type: Unknown";
   document.getElementById("data-tools-entropy").textContent =
     "Shannon Entropy: 0.00 (Low)";
+  resetHashOutputs();
   clearProtoDecoderOutput();
+}
+
+const HASH_IDS = [
+  "data-tools-md5-output",
+  "data-tools-sha1-output",
+  "data-tools-sha256-output",
+  "data-tools-sha384-output",
+  "data-tools-sha512-output",
+  "data-tools-sha3-256-output",
+  "data-tools-sha3-512-output",
+  "data-tools-ripemd160-output",
+  "data-tools-whirlpool-output",
+];
+
+function resetHashOutputs() {
+  for (const id of HASH_IDS) {
+    document.getElementById(id).value = "";
+  }
+}
+
+function bytesToHex(arr) {
+  return Buffer.from(arr).toString("hex");
+}
+
+function computeDataToolsHashes(bytes) {
+  const binaryStr = (() => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  })();
+
+  document.getElementById("data-tools-md5-output").value = bytesToHex(
+    md5(bytes),
+  );
+  document.getElementById("data-tools-sha1-output").value = bytesToHex(
+    sha1(bytes),
+  );
+  document.getElementById("data-tools-sha256-output").value = bytesToHex(
+    sha256(bytes),
+  );
+  document.getElementById("data-tools-sha384-output").value = bytesToHex(
+    sha384(bytes),
+  );
+  document.getElementById("data-tools-sha512-output").value = bytesToHex(
+    sha512(bytes),
+  );
+  document.getElementById("data-tools-sha3-256-output").value = bytesToHex(
+    sha3_256(bytes),
+  );
+  document.getElementById("data-tools-sha3-512-output").value = bytesToHex(
+    sha3_512(bytes),
+  );
+  document.getElementById("data-tools-ripemd160-output").value = bytesToHex(
+    ripemd160(bytes),
+  );
+  const wpHash = bytes.length > 0 ? whirlpool.encSync(binaryStr, "hex") : "";
+  document.getElementById("data-tools-whirlpool-output").value = wpHash || "";
 }
 
 function runDataToolsConversion() {
@@ -1381,6 +1443,7 @@ function runDataToolsConversion() {
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
+    computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
   } catch (error) {
     resetDataToolsOutputs();
