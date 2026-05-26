@@ -30,9 +30,8 @@ const {
   renderRadiusTable,
 } = require("./decoders");
 const psVer = require("../package.json").version;
-const { sha256, sha384, sha512 } = require("@noble/hashes/sha2");
-const { sha3_256, sha3_512 } = require("@noble/hashes/sha3");
-const { md5, ripemd160, sha1 } = require("@noble/hashes/legacy");
+const CryptoJS = require("crypto-js");
+const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
@@ -1367,41 +1366,28 @@ function resetHashOutputs() {
   }
 }
 
-function bytesToHex(arr) {
-  return Buffer.from(arr).toString("hex");
-}
-
 function computeDataToolsHashes(bytes) {
+  const wordArray = CryptoJS.lib.WordArray.create(bytes);
   const binaryStr = (() => {
     let s = "";
     for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
     return s;
   })();
 
-  document.getElementById("data-tools-md5-output").value = bytesToHex(
-    md5(bytes),
-  );
-  document.getElementById("data-tools-sha1-output").value = bytesToHex(
-    sha1(bytes),
-  );
-  document.getElementById("data-tools-sha256-output").value = bytesToHex(
-    sha256(bytes),
-  );
-  document.getElementById("data-tools-sha384-output").value = bytesToHex(
-    sha384(bytes),
-  );
-  document.getElementById("data-tools-sha512-output").value = bytesToHex(
-    sha512(bytes),
-  );
-  document.getElementById("data-tools-sha3-256-output").value = bytesToHex(
-    sha3_256(bytes),
-  );
-  document.getElementById("data-tools-sha3-512-output").value = bytesToHex(
-    sha3_512(bytes),
-  );
-  document.getElementById("data-tools-ripemd160-output").value = bytesToHex(
-    ripemd160(bytes),
-  );
+  document.getElementById("data-tools-md5-output").value =
+    CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha1-output").value =
+    CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha256-output").value =
+    CryptoJS.SHA256(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha384-output").value =
+    CryptoJS.SHA384(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha512-output").value =
+    CryptoJS.SHA512(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha3-256-output").value = sha3_256(bytes);
+  document.getElementById("data-tools-sha3-512-output").value = sha3_512(bytes);
+  document.getElementById("data-tools-ripemd160-output").value =
+    CryptoJS.RIPEMD160(wordArray).toString(CryptoJS.enc.Hex);
   const wpHash = bytes.length > 0 ? whirlpool.encSync(binaryStr, "hex") : "";
   document.getElementById("data-tools-whirlpool-output").value = wpHash || "";
 }

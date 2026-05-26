@@ -48,9 +48,10 @@
     "webpack-cli": "^7.0.2"
   },
   "dependencies": {
-    "@noble/hashes": "^2.2.0",
+    "crypto-js": "^4.2.0",
     "electron-squirrel-startup": "^1.0.1",
     "fs": "^0.0.1-security",
+    "js-sha3": "^0.9.3",
     "whirlpool-js": "^1.0.0"
   },
   "plugins": [
