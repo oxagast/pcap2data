@@ -92,9 +92,11 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     mainWindow.webContents.setZoomFactor(0.8); // makes everything fit snuggly
   });
-  mainWindow.on('closed', () => {
+  mainWindow.once('close', () => {
     appendActivityLogLine(
-      `[${new Date().toISOString()}] Session closed for PacketSnitch v${app.getVersion()}`,
+      timestampLifecycleMessage(
+        `Session closed for PacketSnitch v${app.getVersion()}`,
+      ),
       { broadcast: false },
     );
   });
@@ -139,6 +141,10 @@ function broadcastActivityLogEntry(entry) {
 function normalizeActivityLogEntry(entry) {
   if (typeof entry !== 'string' || entry.trim() === '') return null;
   return entry.trim();
+}
+
+function timestampLifecycleMessage(message) {
+  return `[${new Date().toISOString()}] ${message}`;
 }
 
 function appendActivityLogLine(entry, options = {}) {
@@ -495,7 +501,9 @@ ipcMain.handle('get-activity-log-entries', async () => {
 app.on('before-quit', () => {
   if (!hasLoggedProgramShutdown) {
     appendActivityLogLine(
-      `[${new Date().toISOString()}] Program shutdown requested for PacketSnitch v${app.getVersion()}`,
+      timestampLifecycleMessage(
+        `Program shutdown requested for PacketSnitch v${app.getVersion()}`,
+      ),
       { broadcast: false },
     );
     hasLoggedProgramShutdown = true;
