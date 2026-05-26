@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { exec } = require('child_process');
 const os = require('os');
 const util = require('util');
@@ -372,6 +373,96 @@ ipcMain.handle('save-cookie-jar', async (_event, cookieJarText) => {
     return { success: true };
   } catch (err) {
     console.error('Cookie jar save error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+// Map a Content-Type header value to a file extension for HTTP body exports.
+function extFromContentType(contentType) {
+  const base = (contentType || '').split(';')[0].trim().toLowerCase();
+  const map = {
+    'text/html': 'html',
+    'text/plain': 'txt',
+    'text/css': 'css',
+    'text/csv': 'csv',
+    'text/xml': 'xml',
+    'application/javascript': 'js',
+    'application/x-javascript': 'js',
+    'text/javascript': 'js',
+    'application/json': 'json',
+    'application/xml': 'xml',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/svg+xml': 'svg',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+    'image/x-icon': 'ico',
+    'image/ico': 'ico',
+    'application/pdf': 'pdf',
+    'application/zip': 'zip',
+    'application/x-zip-compressed': 'zip',
+    'application/gzip': 'gz',
+    'application/x-gzip': 'gz',
+    'application/octet-stream': 'bin',
+  };
+  return map[base] || 'bin';
+}
+
+// Validate and decode a hex string into a Buffer; returns null on failure.
+function hexToBuffer(hex) {
+  if (typeof hex !== 'string') return null;
+  const normalized = hex.replace(/\s+/g, '');
+  if (normalized.length === 0 || normalized.length % 2 !== 0) return null;
+  if (!/^[\da-fA-F]+$/.test(normalized)) return null;
+  return Buffer.from(normalized, 'hex');
+}
+
+ipcMain.handle('save-http-body', async (_event, bodyHex, contentType) => {
+  const buf = hexToBuffer(bodyHex);
+  if (!buf) return { success: false, error: 'Invalid HTTP body data' };
+
+  const ext = extFromContentType(contentType);
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save HTTP Body',
+    defaultPath: path.join(app.getPath('documents'), `http-body.${ext}`),
+    filters: [
+      { name: 'HTTP Body', extensions: [ext] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    await fs.promises.writeFile(filePath, buf);
+    return { success: true };
+  } catch (err) {
+    console.error('HTTP body save error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('preview-http-body', async (_event, bodyHex, contentType) => {
+  const buf = hexToBuffer(bodyHex);
+  if (!buf) return { success: false, error: 'Invalid HTTP body data' };
+
+  const ext = extFromContentType(contentType);
+  try {
+    // Use a unique temp directory per preview to avoid races and data leaks.
+    const tmpDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'ps-preview-'),
+    );
+    const tmpFile = path.join(tmpDir, `http-preview.${ext}`);
+    await fs.promises.writeFile(tmpFile, buf);
+    const fileUrl = pathToFileURL(tmpFile).href;
+    await shell.openExternal(fileUrl);
+    // Schedule cleanup after a delay to give the browser time to read the file.
+    setTimeout(() => {
+      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }, 30000);
+    return { success: true };
+  } catch (err) {
+    console.error('HTTP body preview error:', err);
     return { success: false, error: err.message };
   }
 });

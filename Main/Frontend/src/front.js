@@ -3021,6 +3021,9 @@ const convertContextButtons = {
   keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
   copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
+  httpFileSave: getCachedElement("ctx-http-file-save"),
+  httpFileLoad: getCachedElement("ctx-http-file-load"),
+  httpFilePreview: getCachedElement("ctx-http-file-preview"),
 };
 const convertContextSubmenus = {
   convert: getCachedElement("ctx-convert-submenu"),
@@ -3037,6 +3040,7 @@ const convertContextSubmenus = {
   keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
   cookies: getCachedElement("ctx-cookies-submenu"),
+  httpFile: getCachedElement("ctx-http-file-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
@@ -3514,10 +3518,20 @@ function showConvertContextMenu(
     getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
   );
   const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
+  const hasHttpBody = Boolean(getCurrentHttpBodyHex());
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
     : "none";
   convertContextButtons.exportPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
+  convertContextButtons.httpFileSave.style.display = hasHttpBody
+    ? "block"
+    : "none";
+  convertContextButtons.httpFileLoad.style.display = hasHttpBody
+    ? "block"
+    : "none";
+  convertContextButtons.httpFilePreview.style.display = hasHttpBody
     ? "block"
     : "none";
 
@@ -3650,6 +3664,7 @@ function showConvertContextMenu(
   convertContextSubmenus.export.style.display = hasExportActions
     ? "block"
     : "none";
+  convertContextSubmenus.httpFile.style.display = hasHttpBody ? "block" : "none";
   if (
     !hasGeneralActions &&
     !hasDataTypeActions &&
@@ -3657,7 +3672,8 @@ function showConvertContextMenu(
     !hasFilterActions &&
     !hasCookieActions &&
     !hasKeystoreActions &&
-    !hasExportActions
+    !hasExportActions &&
+    !hasHttpBody
   ) {
     hideConvertContextMenu();
     return;
@@ -3668,11 +3684,12 @@ function showConvertContextMenu(
       isHexViewTarget ||
       hasFilterActions ||
       hasCookieActions ||
-      hasExportActions)
+      hasExportActions ||
+      hasHttpBody)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
-    hasExportActions &&
+    (hasExportActions || hasHttpBody) &&
     (hasClipboardActions ||
       hasDataTypeActions ||
       isHexViewTarget ||
@@ -3743,6 +3760,31 @@ function getCurrentRawPayloadHex() {
       "Payload"
     ]?.["Hex Encoded"];
   return typeof payloadHex === "string" ? payloadHex : "";
+}
+
+function getCurrentHttpData() {
+  const cursor = getActivePacketCursor();
+  if (cursor === null) return null;
+  const packetInfo = packetsForHost?.[cursor]?.["Packet Info"];
+  if (!packetInfo) return null;
+  const protocol = packetInfo["Protocol"] || "TCP";
+  return packetInfo[protocol]?.["HTTP"] || null;
+}
+
+function extractHttpBodyHex(payloadHex) {
+  if (!payloadHex) return "";
+  // Locate the HTTP header/body separator in hex space.
+  // RFC 7230 mandates \r\n\r\n which encodes as "0d0a0d0a".
+  const lower = payloadHex.toLowerCase();
+  const sepIdx = lower.indexOf("0d0a0d0a");
+  if (sepIdx === -1) return "";
+  const bodyStart = sepIdx + 8; // skip past the 4-byte CRLFCRLF separator
+  if (bodyStart >= payloadHex.length) return "";
+  return payloadHex.slice(bodyStart);
+}
+
+function getCurrentHttpBodyHex() {
+  return extractHttpBodyHex(getCurrentRawPayloadHex());
 }
 
 function getCurrentPacketForExport(packetSet, packetIndex) {
@@ -4013,6 +4055,83 @@ function saveCookieJarFromContextMenu() {
         "Status: Cookie jar save failed – " + (errorMessage || "unknown error"),
       );
       console.error("Cookie jar save failed:", errorMessage);
+    }
+  });
+}
+
+function getHttpContentTypeForCurrentPacket() {
+  const httpData = getCurrentHttpData();
+  return (httpData && httpData["Content-Type"]) || "application/octet-stream";
+}
+
+function saveHttpBodyFromContextMenu() {
+  hideConvertContextMenu();
+  const bodyHex = getCurrentHttpBodyHex();
+  if (!bodyHex) {
+    statusUpdate("Status: No HTTP body available to save");
+    return;
+  }
+  const contentType = getHttpContentTypeForCurrentPacket();
+  window.saveapi.saveHttpBody(bodyHex, contentType).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Save cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: HTTP body saved successfully");
+      writeLogEntry("Context menu HTTP body save completed");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("HTTP body save failed");
+      logErrorEntry("http-body-save", errorMessage || "unknown");
+      statusUpdate(
+        "Status: HTTP body save failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("HTTP body save failed:", errorMessage);
+    }
+  });
+}
+
+function loadHttpBodyIntoConvTabFromContextMenu() {
+  const bodyHex = getCurrentHttpBodyHex();
+  hideConvertContextMenu();
+  if (!bodyHex) {
+    statusUpdate("Status: No HTTP body available to load");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  inputEl.value = bodyHex;
+  formatEl.value = "hex";
+  showDataTools();
+  runDataToolsConversion();
+  writeLogEntry("Context menu loaded HTTP body into Conv tab");
+}
+
+function previewHttpBodyInBrowserFromContextMenu() {
+  hideConvertContextMenu();
+  const bodyHex = getCurrentHttpBodyHex();
+  if (!bodyHex) {
+    statusUpdate("Status: No HTTP body available to preview");
+    return;
+  }
+  const contentType = getHttpContentTypeForCurrentPacket();
+  window.previewapi.previewHttpBody(bodyHex, contentType).then((result) => {
+    if (result.success) {
+      statusUpdate("Status: HTTP body opened in browser");
+      writeLogEntry("Context menu HTTP body browser preview launched");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("HTTP body preview failed");
+      logErrorEntry("http-body-preview", errorMessage || "unknown");
+      statusUpdate(
+        "Status: HTTP body preview failed – " + (errorMessage || "unknown error"),
+      );
+      console.error("HTTP body preview failed:", errorMessage);
     }
   });
 }
@@ -4511,6 +4630,18 @@ convertContextButtons.exportPayload.addEventListener(
 convertContextButtons.saveCookieJar.addEventListener(
   "click",
   saveCookieJarFromContextMenu,
+);
+convertContextButtons.httpFileSave.addEventListener(
+  "click",
+  saveHttpBodyFromContextMenu,
+);
+convertContextButtons.httpFileLoad.addEventListener(
+  "click",
+  loadHttpBodyIntoConvTabFromContextMenu,
+);
+convertContextButtons.httpFilePreview.addEventListener(
+  "click",
+  previewHttpBodyInBrowserFromContextMenu,
 );
 
 /**

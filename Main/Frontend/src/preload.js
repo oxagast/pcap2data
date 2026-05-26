@@ -35,6 +35,13 @@ contextBridge.exposeInMainWorld('saveapi', {
   savePayload: (payloadHex) => ipcRenderer.invoke('save-payload', payloadHex),
   saveCookieJar: (cookieJarText) =>
     ipcRenderer.invoke('save-cookie-jar', cookieJarText),
+  saveHttpBody: (bodyHex, contentType) =>
+    ipcRenderer.invoke('save-http-body', bodyHex, contentType),
+});
+
+contextBridge.exposeInMainWorld('previewapi', {
+  previewHttpBody: (bodyHex, contentType) =>
+    ipcRenderer.invoke('preview-http-body', bodyHex, contentType),
 });
 
 contextBridge.exposeInMainWorld('quitapi', {
