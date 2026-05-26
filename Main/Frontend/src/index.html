@@ -343,15 +343,20 @@
             <div class="keystore-grid">
               <div class="crypt-section">
                 <div class="crypt-section-title">Create / Update Entry</div>
+                <div class="keystore-mode-row">
+                  <label for="crypt-keystore-mode">Keychain:</label>
+                  <select id="crypt-keystore-mode">
+                    <option value="session">Session auto keychain</option>
+                    <option value="persistent">Persistent keychain</option>
+                  </select>
+                </div>
+                <div id="crypt-keystore-unlock-status">
+                  Persistent keychain is unlocked for this app session.
+                </div>
                 <input
                   id="crypt-keystore-label"
                   type="text"
                   placeholder="Entry label (optional)"
-                />
-                <input
-                  id="crypt-keystore-passphrase"
-                  type="password"
-                  placeholder="Keystore passphrase (required for save/load)"
                 />
                 <textarea
                   id="crypt-credential-input"

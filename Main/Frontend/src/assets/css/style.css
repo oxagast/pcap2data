@@ -523,7 +523,7 @@ strong {
 #crypt-encountered-list,
 #crypt-keystore-list,
 #crypt-keystore-label,
-#crypt-keystore-passphrase,
+#crypt-keystore-mode,
 #crypt-cert-input,
 #crypt-key-input,
 #crypt-credential-input {
@@ -556,6 +556,22 @@ strong {
   padding: 6px;
 }
 
+.keystore-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+#crypt-keystore-mode {
+  padding: 6px;
+}
+
+#crypt-keystore-unlock-status {
+  font-size: 12px;
+  color: var(--color-6);
+}
+
 .crypt-actions-row {
   display: flex;
   flex-wrap: wrap;
@@ -572,6 +588,11 @@ strong {
 
 .crypt-actions-row button:hover {
   background-color: var(--color-2-hover);
+}
+
+.crypt-actions-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 #crypt-encountered-details {
