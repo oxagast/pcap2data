@@ -81,6 +81,9 @@ const STRICT_IPV4_REGEX =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
 const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
+const CONV_CONVERSIONS_SUBTAB = "conversions";
+const CONV_HASHES_SUBTAB = "hashes";
+const CONV_DECODES_SUBTAB = "decodes";
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
@@ -1933,7 +1936,8 @@ function showDataTools() {
   document.getElementById("crypt_box").style.display = "none";
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "block";
+  document.getElementById("data_tools_box").style.display = "flex";
+  setConvSubtab(CONV_CONVERSIONS_SUBTAB);
 }
 
 function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
@@ -2848,6 +2852,24 @@ function refreshCryptEncounteredEntries() {
   listEl.selectedIndex = 0;
   cryptActiveEntryIndex = 0;
   renderCryptEncounteredDetails(cryptEncounteredEntries[0]);
+}
+
+function setConvSubtab(tabName) {
+  const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
+  const hashesActive = tabName === CONV_HASHES_SUBTAB;
+  const decodesActive = tabName === CONV_DECODES_SUBTAB;
+  document
+    .getElementById("conv-subtab-conversions")
+    .classList.toggle("active", conversionsActive);
+  document
+    .getElementById("conv-subtab-hashes")
+    .classList.toggle("active", hashesActive);
+  document
+    .getElementById("conv-subtab-decodes")
+    .classList.toggle("active", decodesActive);
+  document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
+  document.getElementById("conv-hashes-panel").hidden = !hashesActive;
+  document.getElementById("conv-decodes-panel").hidden = !decodesActive;
 }
 
 function setCryptSubtab(tabName) {
@@ -4375,6 +4397,16 @@ document.getElementById("list-btn").addEventListener("click", function () {
   }
   showPacketList();
 });
+
+document
+  .getElementById("conv-subtab-conversions")
+  .addEventListener("click", () => setConvSubtab(CONV_CONVERSIONS_SUBTAB));
+document
+  .getElementById("conv-subtab-hashes")
+  .addEventListener("click", () => setConvSubtab(CONV_HASHES_SUBTAB));
+document
+  .getElementById("conv-subtab-decodes")
+  .addEventListener("click", () => setConvSubtab(CONV_DECODES_SUBTAB));
 
 document
   .getElementById("crypt-subtab-ssl")
@@ -6132,6 +6164,7 @@ onload = function () {
   cryptKeystoreUnlockKeyMaterial = null;
   renderCryptKeystoreList();
   setCryptSubtab(CRYPT_SSL_SUBTAB);
+  setConvSubtab(CONV_CONVERSIONS_SUBTAB);
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";

@@ -447,7 +447,9 @@ strong {
   margin-top: 2px;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--color-5);
 }
 
 #crypt_box {
@@ -495,6 +497,7 @@ strong {
 .crypt-subtab-panel {
   min-height: 0;
   flex: 1;
+  overflow-y: auto;
 }
 
 .crypt-grid {
