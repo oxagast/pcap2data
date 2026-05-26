@@ -124,9 +124,10 @@ HTTP_METHODS: set = {
 TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
 
 # Matches common credential-related field names in HTTP query strings, POST bodies, etc.
-# Anchored to the whole token so "password" matches but "passwordhint" length doesn't leak.
+# Each keyword is an independent alternative; compound names like "auth_token" or
+# "api_key" are covered by the optional prefix/suffix anchors.
 CREDENTIAL_FIELD_RE = re.compile(
-    r"^(?:.*[_\-.])?(?:pass(?:w(?:or)?d?)?|pw|secret|auth(?:_?token)?|"
+    r"^(?:.*[_\-.])?(?:pass(?:w(?:or)?d?)?|pw|secret|auth|auth_token|"
     r"credential|api[_\-.]?key|token|user(?:name)?|login|email)(?:[_\-.].*)?$",
     re.IGNORECASE,
 )
@@ -1185,7 +1186,7 @@ def decodeSMTP(rawPayload):
                 creds = {}
                 if mechanism == "PLAIN" and len(argParts) > 1:
                     try:
-                        decoded = base64.b64decode(argParts[1]).decode(errors="ignore")
+                        decoded = base64.b64decode(argParts[1]).decode(errors="replace")
                         segments = decoded.split("\x00")
                         segments = [s for s in segments if s]
                         if len(segments) >= 2:
@@ -1202,7 +1203,7 @@ def decodeSMTP(rawPayload):
                         try:
                             creds["username"] = base64.b64decode(
                                 argParts[1]
-                            ).decode(errors="ignore")
+                            ).decode(errors="replace")
                         except Exception:
                             pass
                     # Scan remaining lines in the same payload for the password
@@ -1212,7 +1213,7 @@ def decodeSMTP(rawPayload):
                             try:
                                 creds["password"] = base64.b64decode(
                                     extraLine
-                                ).decode(errors="ignore")
+                                ).decode(errors="replace")
                             except Exception:
                                 pass
                             break
