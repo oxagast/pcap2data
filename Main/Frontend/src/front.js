@@ -1452,6 +1452,13 @@ function generateCryptEntryId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return window.crypto.randomUUID();
   }
+  if (window.crypto && typeof window.crypto.getRandomValues === "function") {
+    const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+    return `${Date.now()}-${hex}`;
+  }
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
@@ -1527,7 +1534,7 @@ function getCryptKeystorePassphrase() {
   return passphrase;
 }
 
-function getFirstLineOfElementText(elementId, fallback = "") {
+function getFirstLineOrFallback(elementId, fallback = "") {
   const text = document.getElementById(elementId)?.textContent || "";
   const firstLine = text.split("\n")[0]?.trim();
   return firstLine || fallback;
@@ -2946,7 +2953,7 @@ document
       label: document.getElementById("crypt-keystore-label").value,
       source: "crypt-certificate-loader",
       content: document.getElementById("crypt-cert-input").value,
-      summary: getFirstLineOfElementText(
+      summary: getFirstLineOrFallback(
         "crypt-cert-preview",
         "Certificate from loader",
       ),
@@ -2960,7 +2967,10 @@ document
       label: document.getElementById("crypt-keystore-label").value,
       source: "crypt-private-key-loader",
       content: document.getElementById("crypt-key-input").value,
-      summary: getFirstLineOfElementText("crypt-key-preview", "Private key from loader"),
+      summary: getFirstLineOrFallback(
+        "crypt-key-preview",
+        "Private key from loader",
+      ),
     });
   });
 document
