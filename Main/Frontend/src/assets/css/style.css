@@ -820,6 +820,32 @@ strong {
   font-style: italic;
 }
 
+.data-tools-hashes-section {
+  margin-top: 10px;
+}
+
+.data-tools-hashes-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.data-tools-hashes-grid .data-tools-output-label {
+  margin-top: 0;
+}
+
+.data-tools-hash-output {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
 #convert-context-menu {
   position: fixed;
   z-index: 99999;

@@ -30,6 +30,9 @@ const {
   renderRadiusTable,
 } = require("./decoders");
 const psVer = require("../package.json").version;
+const CryptoJS = require("crypto-js");
+const { sha3_256, sha3_512 } = require("js-sha3");
+const whirlpool = require("whirlpool-js");
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
@@ -1341,7 +1344,59 @@ function resetDataToolsOutputs() {
     "MIME Type: Unknown";
   document.getElementById("data-tools-entropy").textContent =
     "Shannon Entropy: 0.00 (Low)";
+  resetHashOutputs();
   clearProtoDecoderOutput();
+}
+
+const HASH_IDS = [
+  "data-tools-md5-output",
+  "data-tools-sha1-output",
+  "data-tools-sha256-output",
+  "data-tools-sha384-output",
+  "data-tools-sha512-output",
+  "data-tools-sha3-256-output",
+  "data-tools-sha3-512-output",
+  "data-tools-ripemd160-output",
+  "data-tools-whirlpool-output",
+];
+
+function resetHashOutputs() {
+  for (const id of HASH_IDS) {
+    document.getElementById(id).value = "";
+  }
+}
+
+function bytesToCharString(bytes) {
+  const CHUNK_SIZE = 0x8000;
+  let result = "";
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    result += String.fromCharCode(...chunk);
+  }
+  return result;
+}
+
+function computeDataToolsHashes(bytes) {
+  const wordArray = CryptoJS.lib.WordArray.create(bytes);
+  const byteString = bytesToCharString(bytes);
+
+  document.getElementById("data-tools-md5-output").value =
+    CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha1-output").value =
+    CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha256-output").value =
+    CryptoJS.SHA256(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha384-output").value =
+    CryptoJS.SHA384(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha512-output").value =
+    CryptoJS.SHA512(wordArray).toString(CryptoJS.enc.Hex);
+  document.getElementById("data-tools-sha3-256-output").value = sha3_256(bytes);
+  document.getElementById("data-tools-sha3-512-output").value = sha3_512(bytes);
+  document.getElementById("data-tools-ripemd160-output").value =
+    CryptoJS.RIPEMD160(wordArray).toString(CryptoJS.enc.Hex);
+  const whirlpoolHash =
+    bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
+  document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
 }
 
 function runDataToolsConversion() {
@@ -1381,6 +1436,7 @@ function runDataToolsConversion() {
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
+    computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
   } catch (error) {
     resetDataToolsOutputs();
