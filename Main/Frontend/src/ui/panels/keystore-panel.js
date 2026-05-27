@@ -1050,6 +1050,47 @@ function createKeystorePanel({
     }
   }
 
+  async function addManualUriToKeystoreFromContextMenu(keystoreMode) {
+    hideConvertContextMenu();
+    const manualInput = window.prompt(
+      "Enter URI/URL to add to the keystore:",
+      "",
+    );
+    if (manualInput === null) return;
+    const normalized = normalizeUriCandidate(manualInput);
+    if (!normalized) {
+      statusUpdate("Status: No URI/URL provided");
+      return;
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(normalized);
+    } catch {
+      statusUpdate("Status: Invalid URI/URL");
+      return;
+    }
+
+    const normalizedUri = parsedUrl.href;
+    const uriType = /^https?:$/i.test(parsedUrl.protocol) ? "url" : "uri";
+    const entry = {
+      type: uriType,
+      label: `${uriType.toUpperCase()} ${normalizedUri}`,
+      source: "context-menu-manual-uri",
+      content: normalizedUri,
+      summary: "Manual URI/URL entry from context menu",
+    };
+
+    if (keystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+      addSessionKeystoreEntry(entry);
+      statusUpdate(`Status: Saved ${uriType} in session keychain`);
+      writeLogEntry(`Manual context URI saved mode=session type=${uriType}`);
+      return;
+    }
+
+    await addCryptKeystoreEntry(entry, { force: true });
+  }
+
   async function openSelectedKeystoreLinkInBrowser() {
     const listEl = document.getElementById("crypt-keystore-list");
     const selectedIndex = Number(listEl.value);
@@ -1100,6 +1141,7 @@ function createKeystorePanel({
     renderCryptKeystoreList,
     renderCryptKeystoreDetails,
     addToKeystoreFromContextMenu,
+    addManualUriToKeystoreFromContextMenu,
     openSelectedKeystoreLinkInBrowser,
     unlockPersistentKeystoreAndLoad,
     submitKeystoreUnlockDialog,

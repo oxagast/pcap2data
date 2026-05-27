@@ -1938,6 +1938,8 @@ const convertContextButtons = {
   keystoreCertPersistent: getCachedElement("ctx-keystore-cert-persistent"),
   keystoreCookieSession: getCachedElement("ctx-keystore-cookie-session"),
   keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
+  keystoreUriSession: getCachedElement("ctx-keystore-uri-session"),
+  keystoreUriPersistent: getCachedElement("ctx-keystore-uri-persistent"),
   copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
@@ -1959,6 +1961,7 @@ const convertContextSubmenus = {
   keystoreKey: getCachedElement("ctx-keystore-key-submenu"),
   keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
+  keystoreUri: getCachedElement("ctx-keystore-uri-submenu"),
   httpFile: getCachedElement("ctx-http-file-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
@@ -2440,6 +2443,7 @@ function showConvertContextMenu(
     showSaveJson = true,
     filterQueries = {},
     cookieJarText = "",
+    showManualKeystoreUri = false,
   } = {},
 ) {
   activeContextConversionText = sourceText;
@@ -2577,7 +2581,8 @@ function showConvertContextMenu(
   const hasDataTypeActions =
     formats.length > 0 || hasPayloadToExport || hasCursorAsciiValue;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
-  const hasKeystoreActions = showCopySelection || Boolean(sourceText);
+  const hasContextTextKeystoreActions = showCopySelection || Boolean(sourceText);
+  const hasKeystoreActions = hasContextTextKeystoreActions || showManualKeystoreUri;
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport || hasCookieActions;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
@@ -2605,16 +2610,19 @@ function showConvertContextMenu(
   convertContextSubmenus.keystore.style.display = hasKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystorePassword.style.display = hasKeystoreActions
+  convertContextSubmenus.keystorePassword.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreKey.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreKey.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreCert.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreCert.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreCookie.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreCookie.style.display = hasContextTextKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystoreUri.style.display = showManualKeystoreUri
     ? "block"
     : "none";
   convertContextSubmenus.export.style.display = hasExportActions
@@ -3583,6 +3591,16 @@ convertContextButtons.keystoreCookieSession.addEventListener("click", () => {
 });
 convertContextButtons.keystoreCookiePersistent.addEventListener("click", () => {
   keystorePanel.addToKeystoreFromContextMenu("cookie", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
+convertContextButtons.keystoreUriSession.addEventListener("click", () => {
+  void keystorePanel.addManualUriToKeystoreFromContextMenu(
+    CRYPT_KEYSTORE_MODE_SESSION,
+  );
+});
+convertContextButtons.keystoreUriPersistent.addEventListener("click", () => {
+  void keystorePanel.addManualUriToKeystoreFromContextMenu(
+    CRYPT_KEYSTORE_MODE_PERSISTENT,
+  );
 });
 convertContextButtons.saveJson.addEventListener(
   "click",

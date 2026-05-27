@@ -49,6 +49,7 @@ function initializeContextMenu({
         showSaveJson: true,
         filterQueries,
         cookieJarText,
+        showManualKeystoreUri: Boolean(insideEligiblePanel),
       },
     );
   });
