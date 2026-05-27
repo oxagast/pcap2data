@@ -144,7 +144,7 @@ function normalizeActivityLogEntry(entry) {
 }
 
 function timestampLifecycleMessage(message) {
-  return `[${new Date().toISOString()}] ${message}`;
+  return `[${new Date().toISOString()}] [Core] ${message}`;
 }
 
 function appendActivityLogLine(entry, options = {}) {
@@ -196,7 +196,7 @@ app.whenReady().then(() => {
   activityLogFilePath = path.join(app.getPath('userData'), 'activity-log.txt');
   flushPendingActivityLogEntries();
   appendActivityLogLine(
-    `[${new Date().toISOString()}] Session started for PacketSnitch v${app.getVersion()}`,
+    `[${new Date().toISOString()}] [Core] Session started for PacketSnitch v${app.getVersion()}`,
   );
   isFirstRunAfterInstall = checkNewInstall();
   checkOllama().then((isInstalled) => {
