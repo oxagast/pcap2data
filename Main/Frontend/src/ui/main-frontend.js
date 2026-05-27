@@ -1,4 +1,7 @@
 import "../assets/css/style.css";
+const CryptoJS = require("crypto-js");
+const { sha3_256, sha3_512 } = require("js-sha3");
+const whirlpool = require("whirlpool-js");
 const { filterPackets, validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
