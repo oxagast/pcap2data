@@ -143,6 +143,7 @@ let activeDataToolsProtoResult = null;
 let keystorePanel;
 let notesList = [];
 let selectedNoteId = null;
+let noteIdCounter = 0;
 
 initializeInstallScreen({
   installapi: window.installapi,
@@ -596,9 +597,17 @@ function normalizeNoteColor(colorValue) {
   return NOTE_DEFAULT_COLOR;
 }
 
+function generateNoteId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  noteIdCounter += 1;
+  return `note-${Date.now()}-${noteIdCounter}`;
+}
+
 function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
   return {
-    id: `note-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    id: generateNoteId(),
     text: typeof text === "string" ? text : String(text || ""),
     color: normalizeNoteColor(color),
   };
@@ -1050,7 +1059,7 @@ function restoreSessionState(sessionState) {
           id:
             typeof note.id === "string" && note.id.trim()
               ? note.id
-              : `note-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+              : generateNoteId(),
           text: typeof note.text === "string" ? note.text : String(note.text || ""),
           color: normalizeNoteColor(note.color),
         }))
