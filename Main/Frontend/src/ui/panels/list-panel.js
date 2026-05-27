@@ -51,6 +51,8 @@ function createListPanel({
 
     document.getElementById("packetInfoPane").style.display = "none";
     document.getElementById("packetPayloadPane").style.display = "none";
+    document.getElementById("prev-btn").style.display = "none";
+    document.getElementById("next-btn").style.display = "none";
     document.getElementById("summary_box").style.display = "none";
     document.getElementById("stats_box").style.display = "none";
     document.getElementById("data_tools_box").style.display = "none";
@@ -344,8 +346,6 @@ function createListPanel({
               document.getElementById("keystore_box").style.display = "none";
               document.getElementById("packetInfoPane").style.display = "block";
               document.getElementById("packetPayloadPane").style.display = "block";
-              document.getElementById("prev-btn").style.display = "block";
-              document.getElementById("next-btn").style.display = "block";
               showAllData();
               infoPanel(hostPackets);
               const hexPayload =
