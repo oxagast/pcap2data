@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 function createCryptPanel({
   constants,
   getCapturedPackets,
@@ -13,6 +15,7 @@ function createCryptPanel({
   runFilterQuery,
   addSessionKeystoreEntry,
   getFirstLineOrFallback,
+  sendDecryptedToConv,
 }) {
   const {
     MAIN_TAB_CRYPT,
@@ -25,6 +28,7 @@ function createCryptPanel({
 
   let cryptEncounteredEntries = [];
   let cryptActiveEntryIndex = -1;
+  let cryptLastDecryptedPayload = null;
 
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
     const normalized = (rawText || "").trim();
@@ -140,6 +144,7 @@ function createCryptPanel({
       option.disabled = true;
       listEl.appendChild(option);
       renderCryptEncounteredDetails(null);
+      clearCryptDecryptionOutput();
       return;
     }
 
@@ -156,6 +161,134 @@ function createCryptPanel({
     listEl.selectedIndex = 0;
     cryptActiveEntryIndex = 0;
     renderCryptEncounteredDetails(cryptEncounteredEntries[0]);
+    clearCryptDecryptionOutput();
+  }
+
+  function setDecryptSendEnabled(isEnabled) {
+    const sendBtnEl = document.getElementById("crypt-send-decrypted-conv-btn");
+    if (sendBtnEl) {
+      sendBtnEl.disabled = !isEnabled;
+    }
+  }
+
+  function clearCryptDecryptionOutput() {
+    const decryptPreviewEl = document.getElementById("crypt-decrypt-preview");
+    if (decryptPreviewEl) {
+      decryptPreviewEl.textContent = "No decrypted TLS/SSL output yet.";
+    }
+    cryptLastDecryptedPayload = null;
+    setDecryptSendEnabled(false);
+  }
+
+  function findPayloadHexForEncounteredEntry(entry) {
+    const packets = getCapturedPackets()?.["Host"]?.[entry.host];
+    if (!Array.isArray(packets)) return "";
+    const matchedPacket = packets.find((packet) => {
+      const packetIndex = packet?.["Packet Info"]?.["Index"];
+      return String(packetIndex) === String(entry.packetIndex);
+    });
+    return String(
+      matchedPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "",
+    );
+  }
+
+  function extractDecryptCandidates(cipherBytes) {
+    const candidates = [cipherBytes];
+    if (cipherBytes.length > 5 && cipherBytes[0] >= 20 && cipherBytes[0] <= 23) {
+      const recordLength = (cipherBytes[3] << 8) | cipherBytes[4];
+      const recordEnd = 5 + recordLength;
+      if (recordLength > 0 && recordEnd <= cipherBytes.length) {
+        const recordPayload = cipherBytes.subarray(5, recordEnd);
+        candidates.push(recordPayload);
+        if (recordPayload.length > 6 && recordPayload[0] === 16) {
+          const handshakeBody = recordPayload.subarray(4);
+          candidates.push(handshakeBody);
+          if (handshakeBody.length > 2) {
+            const encryptedLen = (handshakeBody[0] << 8) | handshakeBody[1];
+            if (encryptedLen > 0 && encryptedLen + 2 <= handshakeBody.length) {
+              candidates.push(handshakeBody.subarray(2, 2 + encryptedLen));
+            }
+          }
+        }
+      }
+    }
+    return candidates;
+  }
+
+  function decryptTlsCipherBytes(cipherBytes, privateKeyPem) {
+    const candidates = extractDecryptCandidates(cipherBytes);
+    const decryptVariants = [
+      { name: "RSA-OAEP-SHA256", options: { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" } },
+      { name: "RSA-OAEP-SHA1", options: { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha1" } },
+      { name: "RSA-PKCS1-v1_5", options: { padding: crypto.constants.RSA_PKCS1_PADDING } },
+    ];
+    const failures = [];
+    for (const candidate of candidates) {
+      for (const variant of decryptVariants) {
+        try {
+          const decrypted = crypto.privateDecrypt(
+            {
+              key: privateKeyPem,
+              ...variant.options,
+            },
+            candidate,
+          );
+          return decrypted;
+        } catch (error) {
+          failures.push(`${variant.name}: ${error.message}`);
+        }
+      }
+    }
+    throw new Error(
+      `No TLS decrypt attempt succeeded with the loaded key (${failures.slice(0, 3).join(" | ")})`,
+    );
+  }
+
+  function certMatchesPrivateKey(certificatePem, privateKeyPem) {
+    const normalizedCert = String(certificatePem || "").trim();
+    if (!normalizedCert) return true;
+    try {
+      const certPublicKeyPem = crypto
+        .createPublicKey(new crypto.X509Certificate(normalizedCert).publicKey)
+        .export({ type: "spki", format: "pem" })
+        .toString();
+      const privateKeyPublicPem = crypto
+        .createPublicKey(privateKeyPem)
+        .export({ type: "spki", format: "pem" })
+        .toString();
+      return certPublicKeyPem === privateKeyPublicPem;
+    } catch (error) {
+      logErrorEntry("crypt-cert-key-check", error);
+      return true;
+    }
+  }
+
+  function renderDecryptedPayload(entry, decryptedBytes) {
+    const decryptPreviewEl = document.getElementById("crypt-decrypt-preview");
+    const decryptedHex = decryptedBytes.toString("hex");
+    const decryptedUtf8 = decryptedBytes.toString("utf8");
+    const looksPrintable = /^[\x09\x0A\x0D\x20-\x7E]*$/.test(decryptedUtf8);
+    const asciiSummary = looksPrintable
+      ? decryptedUtf8
+      : decryptedUtf8
+          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "�")
+          .slice(0, 1024);
+    decryptPreviewEl.textContent = [
+      `Decrypted payload for packet #${entry.packetIndex}`,
+      `Bytes: ${decryptedBytes.length}`,
+      "",
+      "ASCII / UTF-8 preview:",
+      asciiSummary || "(no printable output)",
+      "",
+      "Hex:",
+      decryptedHex || "(empty)",
+    ].join("\n");
+    cryptLastDecryptedPayload = {
+      sourceLabel: `packet #${entry.packetIndex}`,
+      hexValue: decryptedHex,
+      asciiValue: decryptedUtf8,
+    };
+    setDecryptSendEnabled(true);
   }
 
   function setCryptSubtab(tabName) {
@@ -285,6 +418,71 @@ function createCryptPanel({
     }
     cryptActiveEntryIndex = selectedIndex;
     renderCryptEncounteredDetails(cryptEncounteredEntries[selectedIndex]);
+    clearCryptDecryptionOutput();
+  }
+
+  function decryptActiveEntryWithLoadedKey() {
+    if (cryptActiveEntryIndex < 0 || !cryptEncounteredEntries[cryptActiveEntryIndex]) {
+      statusUpdate("Status: Select an encountered SSL/TLS entry first");
+      return;
+    }
+    const privateKeyPem = String(
+      document.getElementById("crypt-key-input")?.value || "",
+    ).trim();
+    if (!privateKeyPem) {
+      statusUpdate("Status: Load a private key from keychain or file first");
+      return;
+    }
+    const certificatePem = String(
+      document.getElementById("crypt-cert-input")?.value || "",
+    ).trim();
+    if (certificatePem && !certMatchesPrivateKey(certificatePem, privateKeyPem)) {
+      statusUpdate(
+        "Status: Loaded certificate does not match private key (continuing with key)",
+      );
+    }
+    const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
+    const payloadHex = findPayloadHexForEncounteredEntry(activeEntry).replace(
+      /[^0-9A-Fa-f]/g,
+      "",
+    );
+    if (!payloadHex) {
+      statusUpdate("Status: Selected packet has no payload to decrypt");
+      return;
+    }
+    if (payloadHex.length % 2 !== 0) {
+      doError("Selected payload is not valid hex data.");
+      return;
+    }
+    try {
+      const decryptedBytes = decryptTlsCipherBytes(
+        Buffer.from(payloadHex, "hex"),
+        privateKeyPem,
+      );
+      renderDecryptedPayload(activeEntry, decryptedBytes);
+      statusUpdate(`Status: Decrypted TLS/SSL payload for packet #${activeEntry.packetIndex}`);
+      writeLogEntry(`Crypt decrypted payload packet_index=${activeEntry.packetIndex}`);
+    } catch (error) {
+      clearCryptDecryptionOutput();
+      logErrorEntry("crypt-tls-decrypt", error);
+      doError(
+        "Could not decrypt selected TLS/SSL payload with the loaded private key.",
+      );
+    }
+  }
+
+  function sendDecryptedPayloadToConvTab() {
+    if (!cryptLastDecryptedPayload) {
+      statusUpdate("Status: Decrypt data first before sending to Conv");
+      return;
+    }
+    sendDecryptedToConv(cryptLastDecryptedPayload);
+    statusUpdate(
+      `Status: Sent decrypted payload from ${cryptLastDecryptedPayload.sourceLabel} to Conv`,
+    );
+    writeLogEntry(
+      `Crypt decrypted payload sent to Conv source="${cryptLastDecryptedPayload.sourceLabel}"`,
+    );
   }
 
   function showCryptWorkspace(tabName = CRYPT_SSL_SUBTAB) {
@@ -324,6 +522,9 @@ function createCryptPanel({
     applyCryptFilterForActiveEntry,
     loadEncounteredCertificateIntoCrypt,
     selectEncounteredEntry,
+    decryptActiveEntryWithLoadedKey,
+    sendDecryptedPayloadToConvTab,
+    clearCryptDecryptionOutput,
   };
 }
 
