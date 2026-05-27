@@ -45,13 +45,6 @@ const {
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
-  parseDataToolsInput,
-  bytesToPrintableAscii,
-  decodeHttpFromBytes,
-  resetDataToolsOutputs,
-  runProtoDecoder,
-  runDataToolsConversion,
-  showDataTools,
   setConvSubtab,
 } = require("./panels/data-tools-panel");
 
