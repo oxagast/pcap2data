@@ -2705,7 +2705,7 @@ function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
   }
   const hexOffset = byteIndex * 2;
   const hexPair = payloadHex.slice(hexOffset, hexOffset + 2);
-  if (hexPair.length !== 2) return null;
+  if (hexPair.length !== 2 || !/^[0-9A-Fa-f]{2}$/.test(hexPair)) return null;
   return { value: hexPair.toUpperCase(), format: "hex" };
 }
 
