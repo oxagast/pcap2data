@@ -253,7 +253,7 @@ function createCryptPanel({
     }
     const failurePreview = [...new Set(failures)]
       .slice(0, MAX_DECRYPT_FAILURE_MESSAGES)
-      .join(" | ");
+      .join("; ");
     throw new Error(
       `No TLS decrypt attempt succeeded with the loaded key (${failurePreview})`,
     );
@@ -313,7 +313,7 @@ function createCryptPanel({
     cryptLastDecryptedPayload = {
       sourceLabel: `packet #${entry.packetIndex}`,
       hexValue: decryptedHex,
-      asciiValue: decryptedUtf8,
+      utf8Value: decryptedUtf8,
     };
     setDecryptSendEnabled(true);
   }

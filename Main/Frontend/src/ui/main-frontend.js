@@ -2153,16 +2153,16 @@ const cryptPanel = createCryptPanel({
   runFilterQuery,
   addSessionKeystoreEntry: (...args) => keystorePanel.addSessionKeystoreEntry(...args),
   getFirstLineOrFallback,
-  sendDecryptedToConv: ({ hexValue, asciiValue, sourceLabel }) => {
+  sendDecryptedToConv: ({ hexValue, utf8Value, sourceLabel }) => {
     const inputEl = document.getElementById("data-tools-input");
     const formatEl = document.getElementById("data-tools-format");
     const normalizedHex = String(hexValue || "").trim();
-    const normalizedAscii = String(asciiValue || "");
+    const normalizedUtf8 = String(utf8Value || "");
     if (normalizedHex) {
       inputEl.value = normalizedHex;
       formatEl.value = "hex";
     } else {
-      inputEl.value = normalizedAscii;
+      inputEl.value = normalizedUtf8;
       formatEl.value = "ascii";
     }
     showDataTools(CONV_CONVERSIONS_SUBTAB);
