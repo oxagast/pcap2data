@@ -528,6 +528,7 @@ strong {
 #crypt-keystore-label,
 #crypt-keystore-mode,
 #crypt-keystore-unlock-password,
+#crypt-keystore-manual-uri-input,
 #crypt-cert-input,
 #crypt-key-input,
 #crypt-credential-input {
@@ -576,7 +577,8 @@ strong {
   color: var(--color-6);
 }
 
-#crypt-keystore-unlock-description {
+#crypt-keystore-unlock-description,
+#crypt-keystore-manual-uri-description {
   font-size: 12px;
   color: var(--color-6);
   overflow-wrap: break-word;
@@ -584,7 +586,8 @@ strong {
 }
 
 #save-session-dialog,
-#crypt-keystore-unlock-dialog {
+#crypt-keystore-unlock-dialog,
+#crypt-keystore-manual-uri-dialog {
   position: fixed;
   inset: 0;
   background-color: rgba(0, 0, 0, 0.65);
@@ -596,7 +599,8 @@ strong {
 }
 
 #save-session-dialog[hidden],
-#crypt-keystore-unlock-dialog[hidden] {
+#crypt-keystore-unlock-dialog[hidden],
+#crypt-keystore-manual-uri-dialog[hidden] {
   display: none !important;
 }
 

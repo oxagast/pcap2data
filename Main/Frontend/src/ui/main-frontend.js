@@ -3263,6 +3263,20 @@ document
     if (event.key !== "Enter") return;
     keystorePanel.submitKeystoreUnlockDialog();
   });
+document
+  .getElementById("crypt-keystore-manual-uri-confirm-btn")
+  .addEventListener("click", keystorePanel.submitManualUriFromContextMenuDialog);
+document
+  .getElementById("crypt-keystore-manual-uri-cancel-btn")
+  .addEventListener("click", () =>
+    keystorePanel.resolveManualUriFromContextMenuDialog(null),
+  );
+document
+  .getElementById("crypt-keystore-manual-uri-input")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    keystorePanel.submitManualUriFromContextMenuDialog();
+  });
 
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {

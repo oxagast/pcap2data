@@ -69,6 +69,8 @@ function createKeystorePanel({
   let cryptKeystoreUnlockKeyMaterial = null;
   let cryptKeystoreUnlockDialogResolver = null;
   let cryptKeystoreUnlockDialogMode = "unlock";
+  let cryptManualUriDialogResolver = null;
+  let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
 
   function generateCryptEntryId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -936,6 +938,54 @@ function createKeystorePanel({
     });
   }
 
+  function requestManualUriFromContextMenuDialog(keystoreMode) {
+    const dialogEl = document.getElementById("crypt-keystore-manual-uri-dialog");
+    const descriptionEl = document.getElementById(
+      "crypt-keystore-manual-uri-description",
+    );
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    if (!dialogEl || !descriptionEl || !inputEl) return Promise.resolve(null);
+    if (cryptManualUriDialogResolver) {
+      const resolve = cryptManualUriDialogResolver;
+      cryptManualUriDialogResolver = null;
+      resolve(null);
+    }
+    cryptManualUriDialogMode =
+      keystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+        ? CRYPT_KEYSTORE_MODE_PERSISTENT
+        : CRYPT_KEYSTORE_MODE_SESSION;
+    const modeLabel =
+      cryptManualUriDialogMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+        ? "persistent keychain"
+        : "session keychain";
+    descriptionEl.textContent = `Enter URI/URL to add to the ${modeLabel}.`;
+    dialogEl.hidden = false;
+    inputEl.value = "";
+    inputEl.focus();
+    return new Promise((resolve) => {
+      cryptManualUriDialogResolver = resolve;
+    });
+  }
+
+  function resolveManualUriFromContextMenuDialog(value) {
+    const dialogEl = document.getElementById("crypt-keystore-manual-uri-dialog");
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    if (dialogEl) dialogEl.hidden = true;
+    if (inputEl) inputEl.value = "";
+    if (!cryptManualUriDialogResolver) return;
+    const resolve = cryptManualUriDialogResolver;
+    cryptManualUriDialogResolver = null;
+    resolve({
+      value,
+      mode: cryptManualUriDialogMode,
+    });
+  }
+
+  function submitManualUriFromContextMenuDialog() {
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    resolveManualUriFromContextMenuDialog(inputEl?.value || "");
+  }
+
   async function unlockPersistentKeystoreAndLoad() {
     if (!(window.crypto && window.crypto.subtle)) {
       doError("WebCrypto API is unavailable; cannot unlock keychain.");
@@ -1052,12 +1102,11 @@ function createKeystorePanel({
 
   async function addManualUriToKeystoreFromContextMenu(keystoreMode) {
     hideConvertContextMenu();
-    const manualInput = window.prompt(
-      "Enter URI/URL to add to the keystore:",
-      "",
+    const dialogResult = await requestManualUriFromContextMenuDialog(
+      keystoreMode,
     );
-    if (manualInput === null) return;
-    const normalized = normalizeUriCandidate(manualInput);
+    if (!dialogResult) return;
+    const normalized = normalizeUriCandidate(dialogResult.value);
     if (!normalized) {
       statusUpdate("Status: No URI/URL provided");
       return;
@@ -1081,7 +1130,7 @@ function createKeystorePanel({
       summary: "Manual URI/URL entry from context menu",
     };
 
-    if (keystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+    if (dialogResult.mode === CRYPT_KEYSTORE_MODE_SESSION) {
       addSessionKeystoreEntry(entry);
       statusUpdate(`Status: Saved ${uriType} in session keychain`);
       writeLogEntry(`Manual context URI saved mode=session type=${uriType}`);
@@ -1146,6 +1195,8 @@ function createKeystorePanel({
     unlockPersistentKeystoreAndLoad,
     submitKeystoreUnlockDialog,
     resolveKeystoreUnlockPassword,
+    submitManualUriFromContextMenuDialog,
+    resolveManualUriFromContextMenuDialog,
     getActiveCryptKeystoreEntries,
     setActiveMode(mode) {
       cryptActiveKeystoreMode = mode;
@@ -1180,6 +1231,8 @@ function createKeystorePanel({
       cryptKeystoreUnlockKeyMaterial = null;
       cryptKeystoreUnlockDialogResolver = null;
       cryptKeystoreUnlockDialogMode = "unlock";
+      cryptManualUriDialogResolver = null;
+      cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
       renderCryptKeystoreList();
     },
   };
