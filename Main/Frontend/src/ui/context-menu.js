@@ -16,7 +16,7 @@ function initializeContextMenu({
     const pasteTarget = getPasteTargetFromContextTarget(target);
     const selectedText = getTrimmedSelectionText();
     const insideEligiblePanel = target?.closest(
-      "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
+      "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #notes_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
     );
     const isHexViewTarget = Boolean(target?.closest("#hexg"));
     let conversionText = "";

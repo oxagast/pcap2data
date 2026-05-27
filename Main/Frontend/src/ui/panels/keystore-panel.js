@@ -948,6 +948,7 @@ function createKeystorePanel({
     document.getElementById("stats_box").style.display = "none";
     document.getElementById("data_tools_box").style.display = "none";
     document.getElementById("list_box").style.display = "none";
+    document.getElementById("notes_box").style.display = "none";
     document.getElementById("crypt_box").style.display = "none";
     document.getElementById("rightside").style.display = "none";
     const keystoreBoxEl = document.getElementById("keystore_box");

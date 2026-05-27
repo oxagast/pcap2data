@@ -222,6 +222,7 @@ function createStatsPanel(options) {
     documentRef.getElementById("next-btn").style.display = "none";
     documentRef.getElementById("summary_box").style.display = "none";
     documentRef.getElementById("list_box").style.display = "none";
+    documentRef.getElementById("notes_box").style.display = "none";
     documentRef.getElementById("data_tools_box").style.display = "none";
     documentRef.getElementById("crypt_box").style.display = "none";
     documentRef.getElementById("keystore_box").style.display = "none";

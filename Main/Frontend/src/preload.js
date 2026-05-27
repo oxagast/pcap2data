@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('saveapi', {
     ipcRenderer.invoke('save-cookie-jar', cookieJarText),
   saveHttpBody: (bodyHex, contentType) =>
     ipcRenderer.invoke('save-http-body', bodyHex, contentType),
+  saveNotes: (notesText) => ipcRenderer.invoke('save-notes', notesText),
 });
 
 contextBridge.exposeInMainWorld('previewapi', {

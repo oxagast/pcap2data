@@ -406,6 +406,30 @@ ipcMain.handle('save-cookie-jar', async (_event, cookieJarText) => {
   }
 });
 
+ipcMain.handle('save-notes', async (_event, notesText) => {
+  if (typeof notesText !== 'string' || notesText.trim() === '') {
+    return { success: false, error: 'No notes data to save' };
+  }
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save Notes',
+    defaultPath: path.join(app.getPath('documents'), 'packetsnitch-notes.txt'),
+    filters: [
+      { name: 'Text Files', extensions: ['txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    await fs.promises.writeFile(filePath, notesText, 'utf8');
+    return { success: true };
+  } catch (err) {
+    console.error('Notes save error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 // Map a Content-Type header value to a file extension for HTTP body exports.
 function extFromContentType(contentType) {
   const base = (contentType || '').split(';')[0].trim().toLowerCase();
