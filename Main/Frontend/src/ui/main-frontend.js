@@ -33,10 +33,26 @@ const {
 } = require("./decoders");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const { createStatsPanel } = require("./panels/stats-panel");
+const { createListPanel } = require("./panels/list-panel");
 const psVer = require("../../package.json").version;
-const CryptoJS = require("crypto-js");
-const { sha3_256, sha3_512 } = require("js-sha3");
-const whirlpool = require("whirlpool-js");
+const {
+  initConvPanel,
+  CONV_CONVERSIONS_SUBTAB,
+  CONV_HASHES_SUBTAB,
+  CONV_DECODES_SUBTAB,
+  VALID_CONV_SUBTABS,
+  DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
+  getActiveConvSubtab,
+  getActiveDataToolsProtoResult,
+  parseDataToolsInput,
+  bytesToPrintableAscii,
+  decodeHttpFromBytes,
+  resetDataToolsOutputs,
+  runProtoDecoder,
+  runDataToolsConversion,
+  showDataTools,
+  setConvSubtab,
+} = require("./panels/data-tools-panel");
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
@@ -81,20 +97,12 @@ const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
 const filterHistorySelectEl = getCachedElement("filter-history-select");
 const filterHistory = [];
-const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
-const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
-const DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD = 4.5;
-const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
-const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const STRICT_IPV4_REGEX =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
 const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
-const CONV_CONVERSIONS_SUBTAB = "conversions";
-const CONV_HASHES_SUBTAB = "hashes";
-const CONV_DECODES_SUBTAB = "decodes";
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
@@ -106,11 +114,6 @@ const VALID_MAIN_TABS = [
   MAIN_TAB_DATA_TOOLS,
   MAIN_TAB_CRYPT,
   MAIN_TAB_KEYSTORE,
-];
-const VALID_CONV_SUBTABS = [
-  CONV_CONVERSIONS_SUBTAB,
-  CONV_HASHES_SUBTAB,
-  CONV_DECODES_SUBTAB,
 ];
 const VALID_CRYPT_SUBTABS = [CRYPT_SSL_SUBTAB, CRYPT_PGP_SUBTAB, CRYPT_OPENSSH_SUBTAB];
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
@@ -165,7 +168,6 @@ let cryptKeystoreUnlockKeyMaterial = null;
 let cryptKeystoreUnlockDialogResolver = null;
 let cryptKeystoreUnlockDialogMode = "unlock";
 let activeMainTab = MAIN_TAB_SUMMARY;
-let activeConvSubtab = CONV_CONVERSIONS_SUBTAB;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
 
 // Check for first run after new version install and show install screen if needed
@@ -693,7 +695,7 @@ function buildSessionStateSnapshot() {
     keystoreMode: cryptActiveKeystoreMode,
     tabs: {
       main: activeMainTab,
-      conv: activeConvSubtab,
+      conv: getActiveConvSubtab(),
       crypt: activeCryptSubtab,
       listSearch: listSearchEl ? listSearchEl.value : "",
       listGroupStreams: listGroupStreamsEl ? Boolean(listGroupStreamsEl.checked) : false,
@@ -1875,7 +1877,6 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   document.getElementById("data_tools_box").style.display = "flex";
   setConvSubtab(tabName);
 }
-
 function generateCryptEntryId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
     return window.crypto.randomUUID();
@@ -2665,25 +2666,6 @@ async function unlockPersistentKeystoreAndLoad() {
   }
 }
 
-function setConvSubtab(tabName) {
-  activeConvSubtab = tabName;
-  const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
-  const hashesActive = tabName === CONV_HASHES_SUBTAB;
-  const decodesActive = tabName === CONV_DECODES_SUBTAB;
-  document
-    .getElementById("conv-subtab-conversions")
-    .classList.toggle("active", conversionsActive);
-  document
-    .getElementById("conv-subtab-hashes")
-    .classList.toggle("active", hashesActive);
-  document
-    .getElementById("conv-subtab-decodes")
-    .classList.toggle("active", decodesActive);
-  document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
-  document.getElementById("conv-hashes-panel").hidden = !hashesActive;
-  document.getElementById("conv-decodes-panel").hidden = !decodesActive;
-}
-
 const cryptPanel = createCryptPanel({
   constants: {
     MAIN_TAB_CRYPT,
@@ -2723,6 +2705,45 @@ const {
   showCryptWorkspace,
 } = cryptPanel;
 
+const listPanel = createListPanel({
+  constants: {
+    MAIN_TAB_LIST,
+  },
+  getJsonCapture: () => jsonCapture,
+  getCapturedPackets: () => capturedPackets,
+  getBookmarkList: () => bookmarkList,
+  setActiveMainTab: (tabName) => {
+    activeMainTab = tabName;
+  },
+  statusUpdate,
+  writeLogEntry,
+  hostFilterEl,
+  filterInputEl,
+  syncFilterHighlight,
+  runFilterQuery,
+  getFilteredPackets: () => filteredPackets,
+  setPacketsForHost: (packets) => {
+    packetsForHost = packets;
+  },
+  setIndex: (nextIndex) => {
+    index = nextIndex;
+  },
+  setCurrentIp: (nextCurrentIp) => {
+    currentIp = nextCurrentIp;
+  },
+  setCurrentPacketKey: (packetKey) => {
+    currentPacketKey = packetKey;
+  },
+  syncBookmarkDropdown,
+  setActivePacketCursor,
+  showAllData,
+  infoPanel,
+  popHexGrid,
+  populateDataTypes,
+});
+
+const { showPacketList } = listPanel;
+
 function showKeystoreWorkspace() {
   activeMainTab = MAIN_TAB_KEYSTORE;
   if (jsonCapture === "") {
@@ -2757,7 +2778,6 @@ let activeContextTarget = null;
 let activeContextPasteTarget = null;
 let activeContextFilterQueries = {};
 let activeContextCookieJarText = "";
-let activeDataToolsProtoResult = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -3202,8 +3222,8 @@ function getCookieJarTextForCurrentPacket() {
 function getCookieJarTextForContextTarget(target) {
   if (target?.closest?.("#data-tools-proto-output")) {
     const dataToolsCookieJarText =
-      activeDataToolsProtoResult?.protocol === "HTTP"
-        ? buildCookieJarTextFromHttpFields(activeDataToolsProtoResult.fields)
+      getActiveDataToolsProtoResult()?.protocol === "HTTP"
+        ? buildCookieJarTextFromHttpFields(getActiveDataToolsProtoResult().fields)
         : "";
     if (dataToolsCookieJarText) return dataToolsCookieJarText;
   }
@@ -4012,6 +4032,14 @@ async function addToKeystoreFromContextMenu(type, keystoreMode) {
   }
 }
 
+initConvPanel({
+  writeLogEntry,
+  statusUpdate,
+  setActiveMainTab: (tab) => {
+    activeMainTab = tab;
+  },
+});
+
 document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
 });
@@ -4422,382 +4450,6 @@ convertContextButtons.httpFilePreview.addEventListener(
   "click",
   previewHttpBodyInBrowserFromContextMenu,
 );
-
-/**
- * Builds a bidirectional stream filter query for a packet's 4-tuple.
- * Returns a filter string matching packets flowing in either direction
- * between the same endpoints, or an IP-only filter for protocols without ports.
- */
-function buildStreamFilterQuery(transport, srcIp, dstIp, srcPort, dstPort) {
-  if (!srcIp || !dstIp) return null;
-  const tp = (transport || "").toLowerCase();
-  const hasPorts =
-    (srcPort !== "" && srcPort !== undefined && srcPort !== null) &&
-    (dstPort !== "" && dstPort !== undefined && dstPort !== null);
-  if (hasPorts && (tp === "tcp" || tp === "udp")) {
-    return (
-      `(ip.src.addr: ${srcIp} && ip.dst.addr: ${dstIp} && ${tp}.src.port: ${srcPort} && ${tp}.dst.port: ${dstPort})` +
-      ` || ` +
-      `(ip.src.addr: ${dstIp} && ip.dst.addr: ${srcIp} && ${tp}.src.port: ${dstPort} && ${tp}.dst.port: ${srcPort})`
-    );
-  }
-  return `(ip.src.addr: ${srcIp} && ip.dst.addr: ${dstIp}) || (ip.src.addr: ${dstIp} && ip.dst.addr: ${srcIp})`;
-}
-
-/**
- * Builds and shows the packet list tab, displaying all packets grouped by host
- * in a scrollable, selectable table.
- */
-function showPacketList() {
-  activeMainTab = MAIN_TAB_LIST;
-  if (jsonCapture === "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    return;
-  }
-  statusUpdate("Status: Displaying packet list");
-  writeLogEntry("User opened packet list view");
-
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "none";
-  document.getElementById("crypt_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("rightside").style.display = "none";
-  const listBox = document.getElementById("list_box");
-  listBox.style.display = "flex";
-
-  const content = document.getElementById("list_content");
-  const searchEl = document.getElementById("list-search");
-  const groupByStreamEl = document.getElementById("list-group-streams");
-  const columnDefinitions = [
-    { label: "#", key: "idx" },
-    { label: "★", key: "isBookmarked" },
-    { label: "Stream", key: "streamOrder" },
-    { label: "Host", key: "host" },
-    { label: "Src IP", key: "srcIp" },
-    { label: "Dst IP", key: "dstIp" },
-    { label: "Src Port", key: "srcPort" },
-    { label: "Dst Port", key: "dstPort" },
-    { label: "Transport", key: "transport" },
-    { label: "App Protocol", key: "appProto" },
-  ];
-  const sortState = { key: "idx", direction: "asc" };
-
-  function buildTable(filterText) {
-    content.replaceChildren();
-    if (!capturedPackets || !capturedPackets["Host"]) {
-      content.textContent = "No packet data available.";
-      return;
-    }
-
-    const hosts = Object.keys(capturedPackets["Host"]).sort();
-    const lc = filterText ? filterText.toLowerCase() : "";
-
-    const rows = [];
-
-    const getStreamKey = (packetInfo) => {
-      const transportName = packetInfo?.["Protocol"] || "Unknown";
-      const transportData = packetInfo?.[transportName] || {};
-      const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
-      const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
-      const sourcePort = transportData?.["Source port"] ?? "";
-      const destinationPort = transportData?.["Destination port"] ?? "";
-
-      const endpointA = `${sourceIp}:${sourcePort}`;
-      const endpointB = `${destinationIp}:${destinationPort}`;
-      const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
-      return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
-    };
-
-    for (const host of hosts) {
-      const packets = capturedPackets["Host"][host];
-      if (!Array.isArray(packets)) continue;
-
-      packets.forEach((pkt, pktIdx) => {
-        const pi = pkt?.["Packet Info"];
-        const ei = pkt?.["Extra Info"];
-        if (!pi) return;
-
-        const idx = pi["Index"] ?? pktIdx + 1;
-        const srcIp = pi?.["IP"]?.["Source IP"] ?? "";
-        const dstIp = pi?.["IP"]?.["Destination IP"] ?? "";
-        const transport = pi["Protocol"] || "TCP";
-        const tpData = pi[transport] || null;
-        const srcPort = tpData?.["Source port"] ?? "";
-        const dstPort = tpData?.["Destination port"] ?? "";
-        const netData = ei?.["Traits"]?.["Network Data"];
-        const appProto =
-          netData?.["Port Protocol"] ?? netData?.["Port Protcol"] ?? "";
-        const packetKey = srcIp + ":" + pi["Index"];
-        const isBookmarked = bookmarkList.includes(packetKey);
-        const streamKey = getStreamKey(pi);
-
-        if (lc) {
-          const rowText = [
-            host,
-            srcIp,
-            dstIp,
-            String(srcPort),
-            String(dstPort),
-            transport,
-            appProto,
-          ]
-            .join(" ")
-            .toLowerCase();
-          if (!rowText.includes(lc)) return;
-        }
-
-        rows.push({
-          idx,
-          host,
-          srcIp,
-          dstIp,
-          srcPort,
-          dstPort,
-          transport,
-          appProto,
-          pktIdx,
-          pi,
-          streamKey,
-          isBookmarked,
-        });
-      });
-    }
-
-    const streamOrderMap = new Map();
-    let nextStreamOrder = 1;
-    rows.forEach((row) => {
-      if (!streamOrderMap.has(row.streamKey)) {
-        streamOrderMap.set(row.streamKey, nextStreamOrder++);
-      }
-      row.streamOrder = streamOrderMap.get(row.streamKey);
-      row.streamLabel = `S${row.streamOrder}`;
-    });
-
-    const activeGroupByStream =
-      document.getElementById("list-group-streams")?.checked;
-    const sortDirection = sortState.direction === "asc" ? 1 : -1;
-    const compareText = (left, right) =>
-      String(left ?? "").localeCompare(String(right ?? ""));
-    const comparePortValue = (left, right) => {
-      const leftNum = Number(left);
-      const rightNum = Number(right);
-      const leftIsNumber = Number.isFinite(leftNum);
-      const rightIsNumber = Number.isFinite(rightNum);
-      if (leftIsNumber && rightIsNumber) return leftNum - rightNum;
-      return compareText(left, right);
-    };
-
-    const compareByColumn = (left, right, columnKey) => {
-      switch (columnKey) {
-        case "idx":
-        case "streamOrder":
-          return Number(left[columnKey]) - Number(right[columnKey]);
-        case "isBookmarked":
-          return Number(left.isBookmarked) - Number(right.isBookmarked);
-        case "srcPort":
-        case "dstPort":
-          return comparePortValue(left[columnKey], right[columnKey]);
-        default:
-          return compareText(left[columnKey], right[columnKey]);
-      }
-    };
-
-    rows.sort((left, right) => {
-      if (activeGroupByStream && sortState.key !== "streamOrder") {
-        const streamDiff = left.streamOrder - right.streamOrder;
-        if (streamDiff !== 0) return streamDiff;
-      }
-
-      const sortedDiff = compareByColumn(left, right, sortState.key);
-      if (sortedDiff !== 0) return sortedDiff * sortDirection;
-      return Number(left.idx) - Number(right.idx);
-    });
-
-    const table = document.createElement("table");
-    table.className = "packet-list-table";
-
-    const thead = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    columnDefinitions.forEach((column) => {
-      const th = document.createElement("th");
-      const isActiveSort = sortState.key === column.key;
-      const sortArrow = isActiveSort
-        ? sortState.direction === "asc"
-          ? " ▲"
-          : " ▼"
-        : "";
-      th.textContent = column.label + sortArrow;
-      th.classList.add("packet-list-sortable-header");
-      th.tabIndex = 0;
-      th.title = `Sort by ${column.label}`;
-      th.setAttribute(
-        "aria-sort",
-        isActiveSort
-          ? sortState.direction === "asc"
-            ? "ascending"
-            : "descending"
-          : "none",
-      );
-      const sortByColumn = () => {
-        if (sortState.key === column.key) {
-          sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
-        } else {
-          sortState.key = column.key;
-          sortState.direction = "asc";
-        }
-        buildTable(document.getElementById("list-search")?.value || "");
-      };
-      th.addEventListener("click", sortByColumn);
-      th.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          sortByColumn();
-        }
-      });
-      headerRow.appendChild(th);
-    });
-    thead.appendChild(headerRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-
-    if (rows.length === 0) {
-      const tr = document.createElement("tr");
-      const td = document.createElement("td");
-      td.colSpan = columnDefinitions.length;
-      td.textContent = filterText
-        ? "No packets match the filter."
-        : "No packets available.";
-      td.style.textAlign = "center";
-      td.style.padding = "12px";
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    } else {
-      let previousStreamLabel = "";
-      rows.forEach((row) => {
-        const tr = document.createElement("tr");
-        tr.dataset.host = row.host;
-        tr.dataset.pktIdx = row.pktIdx;
-        tr.dataset.stream = row.streamLabel;
-
-        if (
-          activeGroupByStream &&
-          previousStreamLabel !== "" &&
-          previousStreamLabel !== row.streamLabel
-        ) {
-          tr.classList.add("packet-list-stream-break");
-        }
-        previousStreamLabel = row.streamLabel;
-
-        [
-          row.idx,
-          row.isBookmarked ? "★" : "",
-          row.streamLabel,
-          row.host,
-          row.srcIp,
-          row.dstIp,
-          row.srcPort,
-          row.dstPort,
-          row.transport,
-          row.appProto,
-        ].forEach((val) => {
-          const td = document.createElement("td");
-          td.textContent = val ?? "";
-          tr.appendChild(td);
-        });
-
-        tr.addEventListener("mouseenter", () => {
-          tr.classList.add("packet-list-hovered");
-        });
-        tr.addEventListener("mouseleave", () => {
-          tr.classList.remove("packet-list-hovered");
-        });
-
-        tr.addEventListener("click", () => {
-          // Remove previous selection
-          tbody
-            .querySelectorAll(".packet-list-selected")
-            .forEach((r) => r.classList.remove("packet-list-selected"));
-          tr.classList.add("packet-list-selected");
-
-          // Set packet context so handlePacketNavigation can locate it in the filtered set
-          hostFilterEl.value = row.host;
-          document.getElementById("target_hosts").value = row.host;
-          currentIp = row.srcIp;
-          currentPacketKey = row.srcIp + ":" + row.pi["Index"];
-          syncBookmarkDropdown(currentPacketKey);
-          writeLogEntry(
-            `Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
-          );
-
-          // Build a bidirectional stream filter and apply it so only packets
-          // from the same stream are loaded into the interface
-          const streamFilter = buildStreamFilterQuery(
-            row.transport, row.srcIp, row.dstIp, row.srcPort, row.dstPort,
-          );
-          if (streamFilter) {
-            filterInputEl.value = streamFilter;
-            syncFilterHighlight();
-            runFilterQuery(streamFilter);
-            // Keep packetsForHost in sync with the filtered stream so that
-            // prev/next navigation and payload access stay within the stream
-            packetsForHost = filteredPackets;
-          } else {
-            // Fallback: load all host packets when a stream filter cannot be built
-            packetsForHost = capturedPackets["Host"][row.host];
-            index = row.pktIdx;
-            setActivePacketCursor(index);
-            document.getElementById("list_box").style.display = "none";
-            document.getElementById("data_tools_box").style.display = "none";
-            document.getElementById("crypt_box").style.display = "none";
-            document.getElementById("keystore_box").style.display = "none";
-            document.getElementById("packetInfoPane").style.display = "block";
-            document.getElementById("packetPayloadPane").style.display = "block";
-            document.getElementById("prev-btn").style.display = "block";
-            document.getElementById("next-btn").style.display = "block";
-            showAllData();
-            infoPanel(packetsForHost);
-            const hexPayload =
-              packetsForHost[index]?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
-                "Hex Encoded"
-              ];
-            if (hexPayload) popHexGrid(hexPayload);
-            populateDataTypes(packetsForHost);
-          }
-
-          statusUpdate(
-            "Status: Displaying packet " +
-              row.pi["Index"] +
-              " for host " +
-              row.host,
-          );
-        });
-
-        tbody.appendChild(tr);
-      });
-    }
-
-    table.appendChild(tbody);
-    content.appendChild(table);
-  }
-
-  buildTable(searchEl.value);
-
-  // Re-register search listener (replace old one)
-  const newSearch = searchEl.cloneNode(true);
-  searchEl.parentNode.replaceChild(newSearch, searchEl);
-  newSearch.addEventListener("input", () => buildTable(newSearch.value));
-  if (groupByStreamEl) {
-    const newGroupByStream = groupByStreamEl.cloneNode(true);
-    groupByStreamEl.parentNode.replaceChild(newGroupByStream, groupByStreamEl);
-    newGroupByStream.addEventListener("change", () =>
-      buildTable(newSearch.value),
-    );
-  }
-}
 
 function initializeDataView() {
   activeMainTab = MAIN_TAB_DATA;
