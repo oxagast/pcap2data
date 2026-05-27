@@ -1,5 +1,7 @@
 import "../assets/css/style.css";
 const { filterPackets, validateFilterSyntax } = require("../filter");
+const { initializeLogging } = require("../logging");
+const { initializeContextMenu } = require("./context-menu");
 const {
   createTable,
   renderDnsTable,
@@ -29,6 +31,7 @@ const {
   renderNntpTable,
   renderRadiusTable,
 } = require("./decoders");
+const { createCryptPanel } = require("./panels/crypt-panel");
 const psVer = require("../../package.json").version;
 const {
   initConvPanel,
@@ -87,8 +90,6 @@ let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
 let startTime;
-let activityLogPath = "Unavailable";
-const activityLogEntries = [];
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -158,8 +159,6 @@ const SESSION_SECRET_IGNORE_KEY_HINTS = [
   "frame",
   "packet",
 ];
-let cryptEncounteredEntries = [];
-let cryptActiveEntryIndex = -1;
 let cryptPersistentKeystoreEntries = [];
 let cryptSessionKeystoreEntries = [];
 let cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
@@ -224,145 +223,16 @@ if (installContinueBtn) {
   });
 }
 
-function renderActivityLogEntries(searchText = "") {
-  const entriesEl = document.getElementById("activity-log-entries");
-  if (!entriesEl) return;
-  entriesEl.replaceChildren();
-  const normalizedSearch = searchText.trim().toLowerCase();
-  activityLogEntries
-    .filter((entry) =>
-      normalizedSearch
-        ? entry.message.toLowerCase().includes(normalizedSearch)
-        : true,
-    )
-    .forEach((entry) => {
-      const row = document.createElement("div");
-      row.className = "activity-log-entry";
-      row.textContent = entry.message;
-      entriesEl.appendChild(row);
-    });
-}
-
-function syncActivityLogPath(result) {
-  if (result && result.path) {
-    activityLogPath = result.path;
-    const pathEl = document.getElementById("activity-log-path");
-    if (pathEl) {
-      pathEl.textContent = `Log file: ${activityLogPath}`;
-    }
-  }
-}
-
-function addActivityLogEntry(message, writeToFile = true) {
-  if (typeof message !== "string" || message.trim() === "") return;
-  const normalizedMessage = message.trim();
-  activityLogEntries.unshift({ message: normalizedMessage });
-  renderActivityLogEntries(
-    document.getElementById("activity-log-search")?.value || "",
-  );
-  if (writeToFile && window.logapi) {
-    window.logapi.append(normalizedMessage).then(syncActivityLogPath);
-  }
-}
-
-function writeLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [GUI][UI] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function writeConsoleLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [Console][UI] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function writeBackendErrorLogEntry(message) {
-  const stampedMessage = `[${new Date().toISOString()}] [Console][Backend] ${message}`;
-  addActivityLogEntry(stampedMessage);
-}
-
-function logErrorEntry(context, error) {
-  const errorDetails =
-    error && typeof error === "object" && "message" in error
-      ? error.message
-      : String(error);
-  writeLogEntry(`Error context=${context} details="${errorDetails}"`);
-}
-
-function formatConsoleValue(value) {
-  if (value instanceof Error) {
-    return value.stack || value.message;
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "undefined") {
-    return "undefined";
-  }
-  try {
-    return JSON.stringify(value);
-  } catch (_error) {
-    return String(value);
-  }
-}
-
-function formatConsoleArgs(args) {
-  return args.map((value) => formatConsoleValue(value)).join(" ");
-}
-
-const originalConsoleLog = console.log.bind(console);
-console.log = (...args) => {
-  originalConsoleLog(...args);
-  const message = formatConsoleArgs(args);
-  if (message) {
-    writeConsoleLogEntry(message);
-  }
-};
-
-async function initializeActivityLog() {
-  const pathEl = document.getElementById("activity-log-path");
-  const panelEl = document.getElementById("activity-log-panel");
-  const searchEl = document.getElementById("activity-log-search");
-  const logBtn = document.getElementById("log-btn");
-  const closeBtn = document.getElementById("close-log-btn");
-  if (window.logapi) {
-    try {
-      const [path, entries] = await Promise.all([
-        window.logapi.getPath(),
-        window.logapi.getEntries(),
-      ]);
-      if (Array.isArray(entries)) {
-        activityLogEntries.splice(0);
-        entries.forEach((entry) => {
-          activityLogEntries.push({ message: entry });
-        });
-        renderActivityLogEntries();
-      }
-      if (path) {
-        activityLogPath = path;
-        pathEl.textContent = `Log file: ${activityLogPath}`;
-      }
-      window.logapi.onEntry((entry) => {
-        addActivityLogEntry(entry, false);
-      });
-    } catch (error) {
-      logErrorEntry("activity-log-init", error);
-    }
-  }
-  logBtn.addEventListener("click", () => {
-    if (panelEl.style.display === "block") {
-      panelEl.style.display = "none";
-    } else {
-      panelEl.style.display = "block";
-    }
-  });
-  closeBtn.addEventListener("click", () => {
-    panelEl.style.display = "none";
-  });
-  searchEl.addEventListener("input", (event) => {
-    renderActivityLogEntries(event.target.value);
-  });
-  writeLogEntry("PacketSnitch UI session initialized");
-}
+const {
+  initializeActivityLog,
+  writeLogEntry,
+  writeBackendErrorLogEntry,
+  logErrorEntry,
+} = initializeLogging({
+  logapi: window.logapi,
+  documentRef: document,
+  consoleRef: console,
+});
 
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -407,7 +277,7 @@ function logCurrentPacketDisplay(action) {
   );
 }
 
-initializeActivityLog();
+void initializeActivityLog();
 
 popHexGrid("00".repeat(256));
 // Set up file upload handler for JSON capture
@@ -856,10 +726,32 @@ async function maybePromptSaveSessionOnExit() {
   if (!isFileLoaded || !capturedPackets || !capturedPackets["Host"]) {
     return "discard";
   }
-  if (!window.quitapi?.promptSaveOnExit) {
+  const dialogEl = document.getElementById("save-session-dialog");
+  if (!dialogEl) {
     return window.confirm("Save session before exit?") ? "save" : "cancel";
   }
-  return window.quitapi.promptSaveOnExit();
+  dialogEl.hidden = false;
+  return new Promise((resolve) => {
+    function cleanup(result) {
+      dialogEl.hidden = true;
+      document
+        .getElementById("save-session-save-btn")
+        .removeEventListener("click", onSave);
+      document
+        .getElementById("save-session-discard-btn")
+        .removeEventListener("click", onDiscard);
+      document
+        .getElementById("save-session-cancel-btn")
+        .removeEventListener("click", onCancel);
+      resolve(result);
+    }
+    function onSave() { cleanup("save"); }
+    function onDiscard() { cleanup("discard"); }
+    function onCancel() { cleanup("cancel"); }
+    document.getElementById("save-session-save-btn").addEventListener("click", onSave);
+    document.getElementById("save-session-discard-btn").addEventListener("click", onDiscard);
+    document.getElementById("save-session-cancel-btn").addEventListener("click", onCancel);
+  });
 }
 
 async function requestApplicationClose() {
@@ -1526,100 +1418,6 @@ function showStats() {
   if (dtSec) content.appendChild(dtSec);
 }
 
-function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
-  const normalized = (rawText || "").trim();
-  if (!normalized) {
-    return `No ${label.toLowerCase()} loaded.`;
-  }
-
-  const lines = normalized.split(/\r?\n/);
-  const beginMatch = normalized.match(/-----BEGIN ([^-]+)-----/);
-  const endMatch = normalized.match(/-----END ([^-]+)-----/);
-  const blockType = beginMatch ? beginMatch[1] : "Plain text";
-  const looksExpected =
-    !expectedRegex || (beginMatch && expectedRegex.test(blockType));
-
-  return [
-    `${label} loaded from ${sourceLabel}.`,
-    `Bytes: ${new TextEncoder().encode(normalized).length}`,
-    `Lines: ${lines.length}`,
-    `Detected block type: ${blockType}`,
-    beginMatch && endMatch
-      ? `PEM boundaries: ${beginMatch[1]} ... ${endMatch[1]}`
-      : "PEM boundaries not detected",
-    looksExpected
-      ? "Format check: looks valid for this input type"
-      : "Format check: unexpected block type for this input",
-  ].join("\n");
-}
-
-function getCryptEncounteredEntries() {
-  const entries = [];
-  if (!capturedPackets || !capturedPackets["Host"]) return entries;
-
-  for (const host of Object.keys(capturedPackets["Host"])) {
-    const packets = capturedPackets["Host"][host];
-    if (!Array.isArray(packets)) continue;
-
-    packets.forEach((packet) => {
-      const packetInfo = packet?.["Packet Info"];
-      const extraInfo = packet?.["Extra Info"];
-      const serverInfo = extraInfo?.["Traits"]?.["Server Info"];
-      const encryptionData = serverInfo?.["Encryption Data"];
-      if (!packetInfo || !serverInfo || !encryptionData || encryptionData === "N/A")
-        return;
-
-      const protocol = packetInfo["Protocol"] || "Unknown";
-      const transportData = packetInfo[protocol] || {};
-      const encryptedWithRaw = encryptionData["Encrypted With"];
-      const encryptedWith = Array.isArray(encryptedWithRaw)
-        ? encryptedWithRaw.filter(Boolean)
-        : encryptedWithRaw
-          ? [String(encryptedWithRaw)]
-          : [];
-      entries.push({
-        host,
-        packetIndex: packetInfo["Index"] ?? "?",
-        protocol,
-        srcIp: packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
-        dstIp: packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
-        srcPort: transportData?.["Source port"] ?? "N/A",
-        dstPort: transportData?.["Destination port"] ?? "N/A",
-        encrypted: serverInfo["Encrypted"] ?? "Unknown",
-        sslVersion: encryptionData["SSL Version"] ?? "Unknown",
-        sslCert: encryptionData["SSL Cert"] ?? "",
-        encryptedWith,
-      });
-    });
-  }
-
-  return entries.sort((a, b) => {
-    const aIdx = Number(a.packetIndex);
-    const bIdx = Number(b.packetIndex);
-    if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
-    return String(a.packetIndex).localeCompare(String(b.packetIndex));
-  });
-}
-
-function renderCryptEncounteredDetails(entry) {
-  const detailsEl = document.getElementById("crypt-encountered-details");
-  if (!entry) {
-    detailsEl.textContent = "Select an encountered SSL/TLS item to inspect.";
-    return;
-  }
-  const algoText = entry.encryptedWith.length
-    ? entry.encryptedWith.join(", ")
-    : "Unavailable";
-  detailsEl.textContent = [
-    `Host: ${entry.host}`,
-    `Packet: ${entry.packetIndex}`,
-    `Protocol: ${entry.protocol}`,
-    `Path: ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`,
-    `Encrypted: ${entry.encrypted}`,
-    `SSL/TLS Version: ${entry.sslVersion}`,
-    `Algorithms: ${algoText}`,
-  ].join("\n");
-}
 
 function generateCryptEntryId() {
   if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -2410,184 +2208,44 @@ async function unlockPersistentKeystoreAndLoad() {
   }
 }
 
-function refreshCryptEncounteredEntries() {
-  const listEl = document.getElementById("crypt-encountered-list");
-  cryptEncounteredEntries = getCryptEncounteredEntries();
-  listEl.replaceChildren();
-  cryptActiveEntryIndex = -1;
+const cryptPanel = createCryptPanel({
+  constants: {
+    MAIN_TAB_CRYPT,
+    CRYPT_SSL_SUBTAB,
+    CRYPT_PGP_SUBTAB,
+    CRYPT_OPENSSH_SUBTAB,
+    SESSION_KEYCHAIN_LABEL,
+    STRICT_IPV4_REGEX,
+  },
+  getCapturedPackets: () => capturedPackets,
+  getJsonCapture: () => jsonCapture,
+  setActiveMainTab: (tabName) => {
+    activeMainTab = tabName;
+  },
+  setActiveCryptSubtab: (tabName) => {
+    activeCryptSubtab = tabName;
+  },
+  statusUpdate,
+  writeLogEntry,
+  doError,
+  logErrorEntry,
+  filterInputEl,
+  syncFilterHighlight,
+  runFilterQuery,
+  addSessionKeystoreEntry,
+  getFirstLineOrFallback,
+});
 
-  if (cryptEncounteredEntries.length === 0) {
-    const option = document.createElement("option");
-    option.textContent = "No SSL/TLS encryption encountered in loaded capture.";
-    option.disabled = true;
-    listEl.appendChild(option);
-    renderCryptEncounteredDetails(null);
-    return;
-  }
-
-  cryptEncounteredEntries.forEach((entry, entryIndex) => {
-    const option = document.createElement("option");
-    option.value = String(entryIndex);
-    const algoPreview = entry.encryptedWith.length
-      ? entry.encryptedWith[0]
-      : "Unknown cipher";
-    option.textContent = `#${entry.packetIndex} ${entry.sslVersion} ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort} (${algoPreview})`;
-    listEl.appendChild(option);
-  });
-
-  listEl.selectedIndex = 0;
-  cryptActiveEntryIndex = 0;
-  renderCryptEncounteredDetails(cryptEncounteredEntries[0]);
-}
-
-function setCryptSubtab(tabName) {
-  activeCryptSubtab = tabName;
-  const sslActive = tabName === CRYPT_SSL_SUBTAB;
-  const pgpActive = tabName === CRYPT_PGP_SUBTAB;
-  const opensshActive = tabName === CRYPT_OPENSSH_SUBTAB;
-  document
-    .getElementById("crypt-subtab-ssl")
-    .classList.toggle("active", sslActive);
-  document
-    .getElementById("crypt-subtab-pgp")
-    .classList.toggle("active", pgpActive);
-  document
-    .getElementById("crypt-subtab-openssh")
-    .classList.toggle("active", opensshActive);
-  document.getElementById("crypt-ssl-panel").hidden = !sslActive;
-  document.getElementById("crypt-pgp-panel").hidden = !pgpActive;
-  document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
-}
-
-function applyCryptCertificateText(rawText, sourceLabel) {
-  const certInputEl = document.getElementById("crypt-cert-input");
-  const certPreviewEl = document.getElementById("crypt-cert-preview");
-  const normalized = (rawText || "").trim();
-  certInputEl.value = normalized;
-  certPreviewEl.textContent = formatCryptSummary(
-    normalized,
-    "Certificate",
-    sourceLabel,
-    /CERTIFICATE/i,
-  );
-  if (normalized) {
-    statusUpdate(`Status: Certificate loaded from ${sourceLabel}`);
-    writeLogEntry(`Crypt certificate loaded source="${sourceLabel}"`);
-    if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
-      addSessionKeystoreEntry({
-        type: "certificate",
-        label: getFirstLineOrFallback(
-          "crypt-cert-preview",
-          `Certificate-${new Date().toISOString()}`,
-        ),
-        source: `cert-tab ${sourceLabel}`,
-        content: normalized,
-        summary: "Imported into cert tab",
-      });
-    }
-  }
-}
-
-function applyCryptPrivateKeyText(rawText, sourceLabel) {
-  const keyInputEl = document.getElementById("crypt-key-input");
-  const keyPreviewEl = document.getElementById("crypt-key-preview");
-  const normalized = (rawText || "").trim();
-  keyInputEl.value = normalized;
-  keyPreviewEl.textContent = formatCryptSummary(
-    normalized,
-    "Private key",
-    sourceLabel,
-    /(PRIVATE KEY|OPENSSH)/i,
-  );
-  if (normalized) {
-    statusUpdate(`Status: Private key loaded from ${sourceLabel}`);
-    writeLogEntry(`Crypt private key loaded source="${sourceLabel}"`);
-    if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
-      addSessionKeystoreEntry({
-        type: "private-key",
-        label: getFirstLineOrFallback(
-          "crypt-key-preview",
-          `Private-key-${new Date().toISOString()}`,
-        ),
-        source: `cert-tab ${sourceLabel}`,
-        content: normalized,
-        summary: "Imported into cert tab",
-      });
-    }
-  }
-}
-
-function readCryptTextFile(fileInputEl, onLoad) {
-  const file = fileInputEl.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => onLoad(String(reader.result || ""), `file ${file.name}`);
-  reader.onerror = (error) => {
-    logErrorEntry("crypt-file-read", error);
-    doError("Could not read selected crypt file.");
-  };
-  reader.readAsText(file);
-}
-
-function applyCryptFilterForActiveEntry() {
-  if (cryptActiveEntryIndex < 0 || !cryptEncounteredEntries[cryptActiveEntryIndex]) {
-    statusUpdate("Status: Select an encountered SSL/TLS entry first");
-    return;
-  }
-  const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
-  if (
-    !STRICT_IPV4_REGEX.test(String(activeEntry.srcIp || "")) ||
-    !STRICT_IPV4_REGEX.test(String(activeEntry.dstIp || ""))
-  ) {
-    statusUpdate("Status: Cannot build filter query for non-IPv4 packet endpoints");
-    return;
-  }
-  const query = `ip.src.addr: ${activeEntry.srcIp} && ip.dst.addr: ${activeEntry.dstIp}`;
-  filterInputEl.value = query;
-  syncFilterHighlight();
-  runFilterQuery(query);
-  writeLogEntry(`Crypt filter applied query="${query}"`);
-}
-
-function loadEncounteredCertificateIntoCrypt() {
-  if (cryptActiveEntryIndex < 0 || !cryptEncounteredEntries[cryptActiveEntryIndex]) {
-    statusUpdate("Status: Select an encountered SSL/TLS entry first");
-    return;
-  }
-  const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
-  if (!activeEntry.sslCert || activeEntry.sslCert === "Not available") {
-    statusUpdate("Status: No certificate text available for selected entry");
-    return;
-  }
-  applyCryptCertificateText(
-    String(activeEntry.sslCert),
-    `encountered packet #${activeEntry.packetIndex}`,
-  );
-}
-
-function showCryptWorkspace(tabName = CRYPT_SSL_SUBTAB) {
-  activeMainTab = MAIN_TAB_CRYPT;
-  if (jsonCapture === "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    doError("Please upload a JSON file before accessing crypt tools.");
-    return;
-  }
-
-  statusUpdate("Status: Displaying crypt workspace");
-  writeLogEntry("User opened crypt workspace");
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "none";
-  document.getElementById("list_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("rightside").style.display = "none";
-  const cryptBoxEl = document.getElementById("crypt_box");
-  cryptBoxEl.style.display = "flex";
-  setCryptSubtab(tabName);
-  refreshCryptEncounteredEntries();
-}
+const {
+  setCryptSubtab,
+  applyCryptCertificateText,
+  applyCryptPrivateKeyText,
+  readCryptTextFile,
+  applyCryptFilterForActiveEntry,
+  loadEncounteredCertificateIntoCrypt,
+  refreshCryptEncounteredEntries,
+  showCryptWorkspace,
+} = cryptPanel;
 
 function showKeystoreWorkspace() {
   activeMainTab = MAIN_TAB_KEYSTORE;
@@ -3985,11 +3643,7 @@ document
   .getElementById("crypt-encountered-list")
   .addEventListener("change", function () {
     const selectedIndex = Number(this.value);
-    if (!Number.isFinite(selectedIndex) || !cryptEncounteredEntries[selectedIndex]) {
-      return;
-    }
-    cryptActiveEntryIndex = selectedIndex;
-    renderCryptEncounteredDetails(cryptEncounteredEntries[selectedIndex]);
+    cryptPanel.selectEncounteredEntry(selectedIndex);
   });
 document
   .getElementById("crypt-apply-filter-btn")
@@ -5603,69 +5257,18 @@ document
 
 filterClearButtonEl.addEventListener("click", clearFilterQuery);
 
-document.addEventListener("contextmenu", (event) => {
-  const target = event.target;
-  const pasteTarget = getPasteTargetFromContextTarget(target);
-  const selectedText = getTrimmedSelectionText();
-  const insideEligiblePanel = target?.closest(
-    "#packetInfoPane, #packetPayloadPane, #stats_box, #list_box, #data_tools_box, #crypt_box, #keystore_box, #sidedata",
-  );
-  const isHexViewTarget = Boolean(target?.closest("#hexg"));
-  let conversionText = "";
-  let formats = [];
-  if (insideEligiblePanel) {
-    conversionText = getConversionTextFromTarget(target);
-    if (conversionText || isHexViewTarget) {
-      formats = conversionText ? detectConvertibleFormats(conversionText) : [];
-    }
-  }
-  const filterQueries = insideEligiblePanel
-    ? buildContextFilterQueries(target, selectedText, conversionText)
-    : {};
-  const cookieJarText = insideEligiblePanel
-    ? getCookieJarTextForContextTarget(target)
-    : "";
-
-  event.preventDefault();
-  showConvertContextMenu(
-    event.clientX,
-    event.clientY,
-    conversionText,
-    formats,
-    {
-      isHexViewTarget,
-      target,
-      pasteTarget,
-      showCopySelection: Boolean(selectedText),
-      showPaste: Boolean(pasteTarget),
-      showSaveJson: true,
-      filterQueries,
-      cookieJarText,
-    },
-  );
-});
-
-document.addEventListener("click", () => {
-  hideConvertContextMenu();
-});
-document.addEventListener(
-  "mousedown",
-  (event) => {
-    if (event.button !== 0) return;
-    if (
-      !convertContextMenuEl.hidden &&
-      !convertContextMenuEl.contains(event.target)
-    ) {
-      hideConvertContextMenu();
-    }
-  },
-  true,
-);
-document.addEventListener("scroll", () => {
-  hideConvertContextMenu();
-});
-window.addEventListener("resize", () => {
-  hideConvertContextMenu();
+initializeContextMenu({
+  documentRef: document,
+  windowRef: window,
+  convertContextMenuEl,
+  getPasteTargetFromContextTarget,
+  getTrimmedSelectionText,
+  getConversionTextFromTarget,
+  detectConvertibleFormats,
+  buildContextFilterQueries,
+  getCookieJarTextForContextTarget,
+  showConvertContextMenu,
+  hideConvertContextMenu,
 });
 
 filterInputEl.addEventListener("input", syncFilterHighlight);
@@ -5678,12 +5281,6 @@ filterHistorySelectEl.addEventListener("change", () => {
   syncFilterHighlight();
   runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
-});
-
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !convertContextMenuEl.hidden) {
-    hideConvertContextMenu();
-  }
 });
 
 renderFilterHistory();
