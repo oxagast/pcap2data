@@ -101,6 +101,7 @@
         />
         <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
         <input type="button" id="list-btn" value="List" class="custom-btns" />
+        <input type="button" id="notes-btn" value="Notes" class="custom-btns" />
         <input type="button" id="log-btn" value="Log" class="custom-btns" />
         <div id="rotate-btns" class="menu_bar">
           <input
@@ -574,6 +575,15 @@ No keystore entries saved.</pre
             </div>
             <div id="list_content"></div>
           </div>
+          <div id="notes_box">
+            <div class="notes-header">Selected Note</div>
+            <div class="notes-editor-wrap">
+              <textarea
+                id="notes-editor"
+                placeholder="Select a note from the right panel..."
+              ></textarea>
+            </div>
+          </div>
           <div id="packetInfoPane">
             <div id="timestamp"></div>
 
@@ -623,13 +633,34 @@ No keystore entries saved.</pre
         </div>
         <div class="sidebar" id="sidedata">
           <div id="rightside">
-            <div class="sidebar-header">Datagram Frame</div>
-            <div id="sidedatatable" class="sidetable"></div>
-            <div class="sidebar-header">Location</div>
-            <div id="locationtable" class="sidetable"></div>
-            <div id="sideloctable" class="sidetable"></div>
-            <div class="sidebar-header">Payload Entopy</div>
-            <div id="entropybox"></div>
+            <div id="rightside-data">
+              <div class="sidebar-header">Datagram Frame</div>
+              <div id="sidedatatable" class="sidetable"></div>
+              <div class="sidebar-header">Location</div>
+              <div id="locationtable" class="sidetable"></div>
+              <div id="sideloctable" class="sidetable"></div>
+              <div class="sidebar-header">Payload Entropy</div>
+              <div id="entropybox"></div>
+            </div>
+            <div id="rightside-notes" hidden>
+              <div class="sidebar-header">Notes</div>
+              <select id="notes-select" size="10"></select>
+              <div class="notes-controls-row notes-sidebar-actions">
+                <label for="notes-new-color">Color</label>
+                <input type="color" id="notes-new-color" value="#4caf50" />
+              </div>
+              <textarea
+                id="notes-new-input"
+                placeholder="Write a new note..."
+              ></textarea>
+              <div class="notes-controls-row notes-sidebar-actions">
+                <button id="notes-add-btn">Add note</button>
+                <button id="notes-remove-btn">Remove selected</button>
+              </div>
+              <div class="notes-controls-row notes-sidebar-actions">
+                <button id="notes-save-btn">Save notes file</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -699,6 +730,22 @@ No keystore entries saved.</pre
           </button>
           <button id="convert-context-load-payload" type="button">
             Load Raw Payload into Conv tab
+          </button>
+        </div>
+      </div>
+      <div id="ctx-notes-submenu" class="ctx-submenu">
+        <button id="ctx-notes-branch" class="ctx-branch" type="button">
+          Send to Notes...
+        </button>
+        <div class="ctx-submenu-panel">
+          <button id="ctx-notes-send-data" type="button">
+            Send selected/context data
+          </button>
+          <button id="ctx-notes-send-conv-output" type="button">
+            Send Conv converted output
+          </button>
+          <button id="ctx-notes-send-conv-hashes" type="button">
+            Send Conv hashes
           </button>
         </div>
       </div>

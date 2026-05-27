@@ -80,9 +80,19 @@ const MAIN_TAB_SUMMARY = "summary";
 const MAIN_TAB_DATA = "data";
 const MAIN_TAB_STATS = "stats";
 const MAIN_TAB_LIST = "list";
+const MAIN_TAB_NOTES = "notes";
 const MAIN_TAB_DATA_TOOLS = "data-tools";
 const MAIN_TAB_CRYPT = "crypt";
 const MAIN_TAB_KEYSTORE = "keystore";
+const NOTE_DEFAULT_COLOR = "#4caf50";
+const NOTE_FALLBACK_COLORS = [
+  "#4caf50",
+  "#ff9800",
+  "#2196f3",
+  "#9c27b0",
+  "#e91e63",
+  "#ffc107",
+];
 
 // Global variables for DOM elements and state
 let capturedPackets = {}; // Stores parsed packet data from JSON
@@ -121,6 +131,7 @@ const VALID_MAIN_TABS = [
   MAIN_TAB_DATA,
   MAIN_TAB_STATS,
   MAIN_TAB_LIST,
+  MAIN_TAB_NOTES,
   MAIN_TAB_DATA_TOOLS,
   MAIN_TAB_CRYPT,
   MAIN_TAB_KEYSTORE,
@@ -130,6 +141,9 @@ let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
 let activeDataToolsProtoResult = null;
 let keystorePanel;
+let notesList = [];
+let selectedNoteId = null;
+let noteIdCounter = 0;
 
 initializeInstallScreen({
   installapi: window.installapi,
@@ -386,6 +400,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("log-btn").style.opacity = "1";
     document.getElementById("stats-btn").style.opacity = "1";
     document.getElementById("list-btn").style.opacity = "1";
+    document.getElementById("notes-btn").style.opacity = "1";
     document.getElementById("json-lab").style.display = "none";
     document.getElementById("pcap-lab").style.display = "none";
     document.getElementById("llm-toggle").style.display = "none";
@@ -400,6 +415,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("log-btn").style.opacity = "0";
     document.getElementById("stats-btn").style.opacity = "0";
     document.getElementById("list-btn").style.opacity = "0";
+    document.getElementById("notes-btn").style.opacity = "0";
     document.getElementById("crypt-btn").style.opacity = "0";
     document.getElementById("keystore-btn").style.opacity = "0";
   }
@@ -574,6 +590,263 @@ function deepCloneSessionData(value, fallback) {
   }
 }
 
+function normalizeNoteColor(colorValue) {
+  const normalized =
+    typeof colorValue === "string" ? colorValue.trim().toLowerCase() : "";
+  if (/^#[0-9a-f]{6}$/.test(normalized)) return normalized;
+  return NOTE_DEFAULT_COLOR;
+}
+
+function generateNoteId() {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  noteIdCounter += 1;
+  return `note-${Date.now()}-${noteIdCounter}`;
+}
+
+function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
+  return {
+    id: generateNoteId(),
+    text: typeof text === "string" ? text : String(text || ""),
+    color: normalizeNoteColor(color),
+  };
+}
+
+function getSelectedNoteEntry() {
+  return notesList.find((entry) => entry.id === selectedNoteId) || null;
+}
+
+function renderNotesList() {
+  const notesSelectEl = document.getElementById("notes-select");
+  const notesEditorEl = document.getElementById("notes-editor");
+  const newNoteColorEl = document.getElementById("notes-new-color");
+  if (!notesSelectEl || !notesEditorEl || !newNoteColorEl) return;
+
+  notesSelectEl.replaceChildren();
+  if (!notesList.length) {
+    selectedNoteId = null;
+    notesEditorEl.value = "";
+    notesEditorEl.disabled = true;
+    return;
+  }
+
+  if (!getSelectedNoteEntry()) {
+    selectedNoteId = notesList[0].id;
+  }
+
+  notesList.forEach((noteEntry, noteIndex) => {
+    const optionEl = document.createElement("option");
+    const previewText = String(noteEntry.text || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    optionEl.value = noteEntry.id;
+    optionEl.textContent = `${noteIndex + 1}. ${previewText || "(empty note)"}`;
+    optionEl.style.borderLeft = `8px solid ${normalizeNoteColor(noteEntry.color)}`;
+    notesSelectEl.appendChild(optionEl);
+  });
+
+  notesSelectEl.value = selectedNoteId;
+  const selectedNoteEntry = getSelectedNoteEntry();
+  notesEditorEl.disabled = !selectedNoteEntry;
+  notesEditorEl.value = selectedNoteEntry ? selectedNoteEntry.text : "";
+  newNoteColorEl.value = selectedNoteEntry
+    ? normalizeNoteColor(selectedNoteEntry.color)
+    : NOTE_DEFAULT_COLOR;
+}
+
+function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
+  const normalizedText =
+    typeof text === "string" ? text.trim() : String(text || "").trim();
+  if (!normalizedText) {
+    statusUpdate("Status: No note text to add");
+    return false;
+  }
+  const noteEntry = createNoteEntry(normalizedText, color);
+  notesList.unshift(noteEntry);
+  selectedNoteId = noteEntry.id;
+  renderNotesList();
+  statusUpdate("Status: Note added");
+  writeLogEntry(`Note added source=${sourceLabel} length=${normalizedText.length}`);
+  return true;
+}
+
+function removeSelectedNote() {
+  const selectedNoteEntry = getSelectedNoteEntry();
+  if (!selectedNoteEntry) {
+    statusUpdate("Status: No note selected to remove");
+    return;
+  }
+  const selectedIndex = notesList.findIndex((entry) => entry.id === selectedNoteEntry.id);
+  notesList = notesList.filter((entry) => entry.id !== selectedNoteEntry.id);
+  if (notesList.length === 0) {
+    selectedNoteId = null;
+  } else if (selectedIndex >= notesList.length) {
+    selectedNoteId = notesList[notesList.length - 1].id;
+  } else {
+    selectedNoteId = notesList[Math.max(0, selectedIndex)].id;
+  }
+  renderNotesList();
+  statusUpdate("Status: Note removed");
+  writeLogEntry(`Note removed id=${selectedNoteEntry.id}`);
+}
+
+function formatNotesForExport() {
+  if (!Array.isArray(notesList) || notesList.length === 0) return "";
+  return notesList
+    .map((noteEntry, noteIndex) => {
+      const noteText = String(noteEntry.text || "").trim();
+      return [
+        `Note ${noteIndex + 1}`,
+        `Color: ${normalizeNoteColor(noteEntry.color)}`,
+        noteText,
+      ].join("\n");
+    })
+    .join("\n\n---\n\n");
+}
+
+async function saveNotesToDisk() {
+  const notesExportText = formatNotesForExport();
+  if (!notesExportText) {
+    statusUpdate("Status: No notes available to save");
+    return;
+  }
+  const result = await window.saveapi.saveNotes(notesExportText);
+  if (result?.canceled) {
+    statusUpdate("Status: Save cancelled");
+  } else if (result?.success) {
+    statusUpdate("Status: Notes saved successfully");
+    writeLogEntry(`Notes saved entries=${notesList.length}`);
+  } else {
+    const errorMessage =
+      result && typeof result === "object" && "error" in result
+        ? result.error
+        : "unknown";
+    doError("Notes save failed");
+    logErrorEntry("save-notes", errorMessage || "unknown");
+    statusUpdate("Status: Notes save failed – " + (errorMessage || "unknown error"));
+  }
+}
+
+function buildConvConvertedOutputNoteText() {
+  const outputFields = [
+    ["Hex", "data-tools-hex-output"],
+    ["Binary", "data-tools-binary-output"],
+    ["Decimal bytes", "data-tools-decimal-output"],
+    ["Decimal integer", "data-tools-decimal-integer-output"],
+    ["ASCII", "data-tools-ascii-output"],
+    ["Base64", "data-tools-base64-output"],
+  ];
+  const lines = outputFields
+    .map(([label, id]) => {
+      const value = document.getElementById(id)?.value?.trim() || "";
+      return value ? `${label}: ${value}` : "";
+    })
+    .filter(Boolean);
+  return lines.length > 0 ? lines.join("\n") : "";
+}
+
+function buildConvHashesNoteText() {
+  const hashFields = [
+    ["Input", "data-tools-hash-input-reading"],
+    ["MD5", "data-tools-md5-output"],
+    ["SHA-1", "data-tools-sha1-output"],
+    ["SHA-256", "data-tools-sha256-output"],
+    ["SHA-384", "data-tools-sha384-output"],
+    ["SHA-512", "data-tools-sha512-output"],
+    ["SHA3-256", "data-tools-sha3-256-output"],
+    ["SHA3-512", "data-tools-sha3-512-output"],
+    ["RIPEMD-160", "data-tools-ripemd160-output"],
+    ["Whirlpool", "data-tools-whirlpool-output"],
+  ];
+  const lines = hashFields
+    .map(([label, id]) => {
+      const value = document.getElementById(id)?.value?.trim() || "";
+      return value ? `${label}: ${value}` : "";
+    })
+    .filter(Boolean);
+  return lines.length > 0 ? lines.join("\n") : "";
+}
+
+function sendTextToNotesFromContextMenu(text, sourceLabel) {
+  hideConvertContextMenu();
+  const didAdd = addNote(text, NOTE_DEFAULT_COLOR, sourceLabel);
+  if (!didAdd) return;
+  showNotesWorkspace();
+}
+
+function initializeNotesPanel() {
+  const addButtonEl = document.getElementById("notes-add-btn");
+  const removeButtonEl = document.getElementById("notes-remove-btn");
+  const saveButtonEl = document.getElementById("notes-save-btn");
+  const newNoteInputEl = document.getElementById("notes-new-input");
+  const newNoteColorEl = document.getElementById("notes-new-color");
+  const notesSelectEl = document.getElementById("notes-select");
+  const notesEditorEl = document.getElementById("notes-editor");
+  if (
+    !addButtonEl ||
+    !removeButtonEl ||
+    !saveButtonEl ||
+    !newNoteInputEl ||
+    !newNoteColorEl ||
+    !notesSelectEl ||
+    !notesEditorEl
+  ) {
+    return;
+  }
+  newNoteColorEl.value = NOTE_DEFAULT_COLOR;
+
+  addButtonEl.addEventListener("click", () => {
+    const didAdd = addNote(newNoteInputEl.value, newNoteColorEl.value, "notes-panel");
+    if (didAdd) {
+      newNoteInputEl.value = "";
+      newNoteInputEl.focus();
+    }
+  });
+  saveButtonEl.addEventListener("click", () => {
+    void saveNotesToDisk();
+  });
+  removeButtonEl.addEventListener("click", removeSelectedNote);
+  newNoteInputEl.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
+    event.preventDefault();
+    const didAdd = addNote(newNoteInputEl.value, newNoteColorEl.value, "notes-panel");
+    if (didAdd) {
+      newNoteInputEl.value = "";
+      newNoteInputEl.focus();
+    }
+  });
+  notesSelectEl.addEventListener("change", () => {
+    selectedNoteId = notesSelectEl.value || null;
+    renderNotesList();
+  });
+  notesEditorEl.addEventListener("input", () => {
+    const selectedNoteEntry = getSelectedNoteEntry();
+    if (!selectedNoteEntry) return;
+    selectedNoteEntry.text = notesEditorEl.value;
+    const selectedOptionEl =
+      notesSelectEl.options[notesSelectEl.selectedIndex] || null;
+    if (selectedOptionEl) {
+      const previewText = String(selectedNoteEntry.text || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      selectedOptionEl.textContent = `${notesSelectEl.selectedIndex + 1}. ${previewText || "(empty note)"}`;
+    }
+  });
+  newNoteColorEl.addEventListener("input", () => {
+    const selectedNoteEntry = getSelectedNoteEntry();
+    if (!selectedNoteEntry) return;
+    selectedNoteEntry.color = normalizeNoteColor(newNoteColorEl.value);
+    const selectedOptionEl =
+      notesSelectEl.options[notesSelectEl.selectedIndex] || null;
+    if (selectedOptionEl) {
+      selectedOptionEl.style.borderLeft = `8px solid ${selectedNoteEntry.color}`;
+    }
+  });
+
+  renderNotesList();
+}
+
 function normalizeLoadedSessionPayload(parsedPayload) {
   if (!parsedPayload || typeof parsedPayload !== "object") {
     return null;
@@ -646,6 +919,7 @@ function buildSessionStateSnapshot() {
       [],
     ),
     keystoreMode: keystorePanel.getKeystoreMode(),
+    notes: deepCloneSessionData(notesList, []),
     tabs: {
       main: activeMainTab,
       conv: getActiveConvSubtab(),
@@ -778,6 +1052,22 @@ function restoreSessionState(sessionState) {
     sessionState.keystoreMode,
   );
 
+  const loadedNotes = Array.isArray(sessionState.notes)
+    ? sessionState.notes
+        .filter((note) => note && typeof note === "object")
+        .map((note) => ({
+          id:
+            typeof note.id === "string" && note.id.trim()
+              ? note.id
+              : generateNoteId(),
+          text: typeof note.text === "string" ? note.text : String(note.text || ""),
+          color: normalizeNoteColor(note.color),
+        }))
+    : [];
+  notesList = loadedNotes;
+  selectedNoteId = notesList.length > 0 ? notesList[0].id : null;
+  renderNotesList();
+
   const selectedHost = String(sessionState.selectedHost || "").trim();
   if (selectedHost && capturedPackets?.["Host"]?.[selectedHost]) {
     const targetHostsEl = document.getElementById("target_hosts");
@@ -844,6 +1134,8 @@ function restoreSessionState(sessionState) {
       listGroupStreamsEl.checked = tabState.listGroupStreams;
       listGroupStreamsEl.dispatchEvent(new Event("change"));
     }
+  } else if (savedMainTab === MAIN_TAB_NOTES) {
+    showNotesWorkspace();
   } else if (savedMainTab === MAIN_TAB_DATA_TOOLS) {
     showDataTools(savedConvTab);
   } else if (savedMainTab === MAIN_TAB_CRYPT) {
@@ -938,6 +1230,9 @@ function processFile(file) {
       targetHostsDropdown.remove(0);
     }
     bookmarkList = [];
+    notesList = [];
+    selectedNoteId = null;
+    renderNotesList();
     const selectBookmarkEl = document.getElementById("selectBookmark");
     while (selectBookmarkEl.options.length > 1) {
       selectBookmarkEl.remove(1);
@@ -1794,11 +2089,35 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
+  document.getElementById("notes_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "flex";
   setConvSubtab(tabName);
+}
+
+function showNotesWorkspace() {
+  activeMainTab = MAIN_TAB_NOTES;
+  statusUpdate("Status: Displaying session notes");
+  writeLogEntry("User opened notes workspace");
+  document.getElementById("prev-btn").style.display = "none";
+  document.getElementById("next-btn").style.display = "none";
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
+  document.getElementById("notes_box").style.display = "flex";
+  document.getElementById("rightside").style.display = "block";
+  const rightsideDataEl = document.getElementById("rightside-data");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  if (rightsideDataEl) rightsideDataEl.hidden = true;
+  if (rightsideNotesEl) rightsideNotesEl.hidden = false;
+  renderNotesList();
 }
 
 function getFirstLineOrFallback(elementId, fallback = "") {
@@ -1940,6 +2259,9 @@ const convertContextButtons = {
   keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
   copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
+  notesSendData: getCachedElement("ctx-notes-send-data"),
+  notesSendConvOutput: getCachedElement("ctx-notes-send-conv-output"),
+  notesSendConvHashes: getCachedElement("ctx-notes-send-conv-hashes"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
   httpFileLoad: getCachedElement("ctx-http-file-load"),
   httpFilePreview: getCachedElement("ctx-http-file-preview"),
@@ -1953,6 +2275,7 @@ const convertContextSubmenus = {
   filterNot: getCachedElement("ctx-filter-not-submenu"),
   filterParentheses: getCachedElement("ctx-filter-parentheses-submenu"),
   filterClear: getCachedElement("ctx-filter-clear-submenu"),
+  notes: getCachedElement("ctx-notes-submenu"),
   export: getCachedElement("ctx-export-submenu"),
   keystore: getCachedElement("ctx-keystore-submenu"),
   keystorePassword: getCachedElement("ctx-keystore-password-submenu"),
@@ -2570,6 +2893,22 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasCookieActions = Boolean(cookieJarText);
+  const hasContextDataForNotes = Boolean(
+    (sourceText && sourceText.trim()) || getTrimmedSelectionText(),
+  );
+  const hasConvOutputForNotes = Boolean(buildConvConvertedOutputNoteText());
+  const hasConvHashesForNotes = Boolean(buildConvHashesNoteText());
+  convertContextButtons.notesSendData.style.display = hasContextDataForNotes
+    ? "block"
+    : "none";
+  convertContextButtons.notesSendConvOutput.style.display = hasConvOutputForNotes
+    ? "block"
+    : "none";
+  convertContextButtons.notesSendConvHashes.style.display = hasConvHashesForNotes
+    ? "block"
+    : "none";
+  const hasNotesActions =
+    hasContextDataForNotes || hasConvOutputForNotes || hasConvHashesForNotes;
   const hasCopyActions = showCopySelection || isHexViewTarget || hasCookieActions;
   const hasClipboardActions = hasCopyActions || showPaste;
   const hasGeneralActions = hasClipboardActions;
@@ -2601,6 +2940,7 @@ function showConvertContextMenu(
   convertContextSubmenus.filterClear.style.display = hasFilterActions
     ? "block"
     : "none";
+  convertContextSubmenus.notes.style.display = hasNotesActions ? "block" : "none";
   convertContextSubmenus.keystore.style.display = hasKeystoreActions
     ? "block"
     : "none";
@@ -2626,6 +2966,7 @@ function showConvertContextMenu(
     !isHexViewTarget &&
     !hasFilterActions &&
     !hasCookieActions &&
+    !hasNotesActions &&
     !hasKeystoreActions &&
     !hasExportActions &&
     !hasHttpBody
@@ -3199,6 +3540,7 @@ initConvPanel({
     activeMainTab = tab;
   },
 });
+initializeNotesPanel();
 document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
 });
@@ -3262,6 +3604,13 @@ document.getElementById("list-btn").addEventListener("click", function () {
     return;
   }
   showPacketList();
+});
+document.getElementById("notes-btn").addEventListener("click", function () {
+  if (!isFileLoaded) {
+    doError("Please upload a JSON file before accessing notes.");
+    return;
+  }
+  showNotesWorkspace();
 });
 
 document
@@ -3554,6 +3903,25 @@ convertContextButtons.copyCookieJar.addEventListener(
   copyCookieJarFromContextMenu,
 );
 convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
+convertContextButtons.notesSendData.addEventListener("click", () => {
+  const selectedText = getTrimmedSelectionText();
+  sendTextToNotesFromContextMenu(
+    selectedText || activeContextConversionText,
+    "context-data",
+  );
+});
+convertContextButtons.notesSendConvOutput.addEventListener("click", () => {
+  sendTextToNotesFromContextMenu(
+    buildConvConvertedOutputNoteText(),
+    "context-conv-output",
+  );
+});
+convertContextButtons.notesSendConvHashes.addEventListener("click", () => {
+  sendTextToNotesFromContextMenu(
+    buildConvHashesNoteText(),
+    "context-conv-hashes",
+  );
+});
 convertContextButtons.keystorePasswordSession.addEventListener("click", () => {
   keystorePanel.addToKeystoreFromContextMenu("password", CRYPT_KEYSTORE_MODE_SESSION);
 });
@@ -3703,6 +4071,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
+  document.getElementById("notes_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
   document.getElementById("keystore_box").style.display = "none";
@@ -3710,6 +4079,10 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("packetPayloadPane").style.display = "block";
   document.getElementById("welcome").style.display = "none";
   showAllData();
+  const rightsideDataEl = document.getElementById("rightside-data");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  if (rightsideDataEl) rightsideDataEl.hidden = false;
+  if (rightsideNotesEl) rightsideNotesEl.hidden = true;
 
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
@@ -4510,6 +4883,10 @@ onload = function () {
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";
+  const rightsideDataEl = document.getElementById("rightside-data");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  if (rightsideDataEl) rightsideDataEl.hidden = false;
+  if (rightsideNotesEl) rightsideNotesEl.hidden = true;
   document.getElementById("leftside").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
 };

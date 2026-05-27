@@ -58,6 +58,7 @@ function createListPanel({
     document.getElementById("data_tools_box").style.display = "none";
     document.getElementById("crypt_box").style.display = "none";
     document.getElementById("keystore_box").style.display = "none";
+    document.getElementById("notes_box").style.display = "none";
     document.getElementById("rightside").style.display = "none";
     const listBox = document.getElementById("list_box");
     listBox.style.display = "flex";
@@ -344,8 +345,13 @@ function createListPanel({
               document.getElementById("data_tools_box").style.display = "none";
               document.getElementById("crypt_box").style.display = "none";
               document.getElementById("keystore_box").style.display = "none";
+              document.getElementById("notes_box").style.display = "none";
               document.getElementById("packetInfoPane").style.display = "block";
               document.getElementById("packetPayloadPane").style.display = "block";
+              const rightsideDataEl = document.getElementById("rightside-data");
+              const rightsideNotesEl = document.getElementById("rightside-notes");
+              if (rightsideDataEl) rightsideDataEl.hidden = false;
+              if (rightsideNotesEl) rightsideNotesEl.hidden = true;
               showAllData();
               infoPanel(hostPackets);
               const hexPayload =
