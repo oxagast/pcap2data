@@ -2454,7 +2454,8 @@ function showConvertContextMenu(
   const hasPacketToExport = Boolean(
     getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
   );
-  const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
+  const currentPayloadHex = getCurrentRawPayloadHex();
+  const hasPayloadToExport = Boolean(currentPayloadHex);
   const hasHttpBody = Boolean(getCurrentHttpBodyHex());
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
@@ -2498,7 +2499,7 @@ function showConvertContextMenu(
   const cursorByteIndex = Number.parseInt(target?.dataset?.byteIndex ?? "-1", 10);
   const hasCursorAsciiValue = Boolean(
     target?.classList?.contains("griditem") &&
-      getCursorAsciiContextValue(getCurrentRawPayloadHex(), cursorByteIndex),
+      getCursorAsciiContextValue(currentPayloadHex, cursorByteIndex),
   );
   convertContextButtons.loadCursorAscii.style.display = hasCursorAsciiValue
     ? "block"
@@ -2690,10 +2691,14 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
 }
 
+const NON_PRINTABLE_ASCII_PLACEHOLDER = ".";
+
 function getCursorAsciiContextValue(payloadHex, byteIndex) {
   if (byteIndex < 0 || !payloadHex) return "";
   const asciiPreview = getAsciiPreviewForHexOffset(payloadHex, byteIndex);
-  if (asciiPreview && asciiPreview !== ".") return asciiPreview;
+  if (asciiPreview && asciiPreview !== NON_PRINTABLE_ASCII_PLACEHOLDER) {
+    return asciiPreview;
+  }
   const hexOffset = byteIndex * 2;
   const hexPair = payloadHex.slice(hexOffset, hexOffset + 2);
   return hexPair ? `0x${hexPair.toUpperCase()}` : "";
