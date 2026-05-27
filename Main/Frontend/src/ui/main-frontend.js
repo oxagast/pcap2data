@@ -34,6 +34,7 @@ const {
 const { createCryptPanel } = require("./panels/crypt-panel");
 const { createStatsPanel } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
+const { createSummaryPanel } = require("./panels/summary-panel");
 const psVer = require("../../package.json").version;
 const {
   initConvPanel,
@@ -254,6 +255,20 @@ const { showStats } = createStatsPanel({
     packetsForHost = packets;
   },
 });
+
+const summaryPanel = createSummaryPanel({
+  documentRef: document,
+  getJsonCapture: () => jsonCapture,
+  getFinalSummary: () => finalSummary,
+  setActiveMainTab: (tab) => {
+    activeMainTab = tab;
+  },
+  mainTabSummary: MAIN_TAB_SUMMARY,
+  statusUpdate,
+  fileLoaded,
+});
+
+const { showSummary, showSummaryLoading, clearSummaryContent } = summaryPanel;
 
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -880,7 +895,7 @@ function restoreSessionState(sessionState) {
     : CRYPT_SSL_SUBTAB;
 
   if (savedMainTab === MAIN_TAB_SUMMARY) {
-    writeSummary();
+    showSummary();
   } else if (savedMainTab === MAIN_TAB_STATS) {
     showStats();
   } else if (savedMainTab === MAIN_TAB_LIST) {
@@ -1014,7 +1029,7 @@ function processFile(file) {
       );
     }
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
-    writeSummary();
+    showSummary();
     initializeDataView();
     if (loadedSessionState) {
       restoreSessionState(loadedSessionState);
@@ -1082,34 +1097,6 @@ getCachedElement("target_hosts").addEventListener("click", function () {
   );
   handlePacketNavigation("filtered", null);
 });
-
-// Show summary when summary button is clicked
-getCachedElement("summary-btn").addEventListener("click", function () {
-  writeSummary();
-});
-
-// Displays the summary section from the loaded JSON.
-
-function writeSummary() {
-  activeMainTab = MAIN_TAB_SUMMARY;
-  statusUpdate("Status: Displaying capture analysis summary");
-  //highlightTab("summary-navAction");
-  if (jsonCapture == "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-  } else {
-    document.getElementById("packetInfoPane").style.display = "none";
-    document.getElementById("packetPayloadPane").style.display = "none";
-    document.getElementById("stats_box").style.display = "none";
-    document.getElementById("data_tools_box").style.display = "none";
-    document.getElementById("crypt_box").style.display = "none";
-    document.getElementById("keystore_box").style.display = "none";
-    document.getElementById("list_box").style.display = "none";
-    document.getElementById("summary_content").textContent =
-      finalSummary || "No LLM summary available.";
-    document.getElementById("summary_box").style.display = "block";
-    fileLoaded(true);
-  }
-}
 
 function parseDataToolsInput(format, rawInput) {
   if (!rawInput || rawInput.trim() === "") {
@@ -5301,8 +5288,7 @@ window.jsonapi.onJsonData((jsonData) => {
 // here we create the backend process and hook it to the handler
 function runSnitch(file) {
   document.getElementById("loading-container").style.display = "block";
-  document.getElementById("summary_content").innerHTML =
-    '<span id="loaderdots" class="loading">Loading</span>';
+  showSummaryLoading();
   document.getElementById("status").textContent =
     "Status: Running snitch backend, this may take a few minutes...";
   document.getElementById("error-container").style.display = "none";
@@ -5330,7 +5316,7 @@ function doError(message, { backend = false } = {}) {
   }
   const loadingContainerEl = document.getElementById("loading-container");
   const errorContainerEl = document.getElementById("error-container");
-  document.getElementById("summary_content").textContent = "";
+  clearSummaryContent();
   loadingContainerEl.style.display = "none";
   errorContainerEl.style.display = "block";
   errorContainerEl.textContent = message;
