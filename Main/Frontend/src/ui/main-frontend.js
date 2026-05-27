@@ -40,6 +40,7 @@ const {
 } = require("./panels/keystore-panel");
 const { createStatsPanel } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
+const { createDataPanel } = require("./panels/data-panel");
 const psVer = require("../../package.json").version;
 const {
   initConvPanel,
@@ -50,13 +51,6 @@ const {
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
-  parseDataToolsInput,
-  bytesToPrintableAscii,
-  decodeHttpFromBytes,
-  resetDataToolsOutputs,
-  runProtoDecoder,
-  runDataToolsConversion,
-  showDataTools,
   setConvSubtab,
 } = require("./panels/data-tools-panel");
 
@@ -211,6 +205,46 @@ const { showStats } = createStatsPanel({
   },
 });
 
+const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
+  createDataPanel({
+    constants: {
+      MAIN_TAB_DATA,
+    },
+    documentRef: document,
+    statusUpdate,
+    writeLogEntry,
+    doError,
+    getIsFileLoaded: () => isFileLoaded,
+    getJsonCapture: () => jsonCapture,
+    getHostFilterValue: () => hostFilterEl.value,
+    getHostsList: () => hostsList,
+    getFilterInputValue: () => filterInputEl.value,
+    getFilteredPackets: () => filteredPackets,
+    getPacketsForHost: () => packetsForHost,
+    setActiveMainTab: (tab) => {
+      activeMainTab = tab;
+    },
+    handlePacketNavigation: (navAction, navBookmark) =>
+      handlePacketNavigation(navAction, navBookmark),
+    getIndex: () => index,
+    setIndex: (nextIndex) => {
+      index = nextIndex;
+    },
+    setActivePacketCursor,
+    setCurrentIp: (nextIp) => {
+      currentIp = nextIp;
+    },
+    setCurrentPacketKey: (nextPacketKey) => {
+      currentPacketKey = nextPacketKey;
+    },
+    getCurrentPacketKey: () => currentPacketKey,
+    syncBookmarkDropdown,
+    infoPanel,
+    popHexGrid,
+    populateDataTypes,
+  });
+bindDataPanelEvents();
+
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
   const packetTimes = [];
@@ -238,20 +272,6 @@ function getPacketTimeframe() {
     first: parsedTimes[0].raw,
     last: parsedTimes[parsedTimes.length - 1].raw,
   };
-}
-
-function logCurrentPacketDisplay(action) {
-  if (!packetsForHost || !packetsForHost[index]) return;
-  const packetInfo = packetsForHost[index]["Packet Info"];
-  const selectedHost = getCachedElement("host_filter").value || "Unknown host";
-  const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown source";
-  const destinationIp =
-    packetInfo?.["IP"]?.["Destination IP"] || "Unknown destination";
-  const packetIndex = packetInfo?.["Index"] ?? index;
-  const packetTimestamp = packetInfo?.["Packet Timestamp"] || "Unknown time";
-  writeLogEntry(
-    `Displayed packet action=${action} host=${selectedHost} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
-  );
 }
 
 void initializeActivityLog();
@@ -3106,15 +3126,6 @@ document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
 });
 
-// Show host data when data button is clicked
-document.getElementById("data-btn").addEventListener("click", function () {
-  if (!isFileLoaded) {
-    doError("Please upload a JSON file before accessing host data.");
-    return;
-  }
-  initializeDataView();
-});
-
 // Show capture stats when stats button is clicked
 document.getElementById("stats-btn").addEventListener("click", function () {
   if (!isFileLoaded) {
@@ -3512,84 +3523,6 @@ convertContextButtons.httpFilePreview.addEventListener(
   "click",
   previewHttpBodyInBrowserFromContextMenu,
 );
-
-function initializeDataView() {
-  activeMainTab = MAIN_TAB_DATA;
-  statusUpdate(
-    "Status: Displaying packet information for " + hostFilterEl.value,
-  );
-  if (jsonCapture == "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    doError("No file loaded! Upload one of JSON or PCAP first!");
-  } else {
-    document.getElementById("prev-btn").style.display = "block";
-    document.getElementById("next-btn").style.display = "block";
-    document.getElementById("welcome").style.display = "none";
-    //hostPacketInfostPacketInfo(hostFilterEl.value);
-    if (document.getElementById("host_filter").value == "") {
-      document.getElementById("host_filter").value = hostsList[1];
-    }
-
-    const hasActiveFilterQuery = filterInputEl.value.trim() !== "";
-    const shouldReuseFilteredPackets =
-      Array.isArray(filteredPackets) &&
-      (hasActiveFilterQuery || packetsForHost === filteredPackets);
-    handlePacketNavigation(
-      shouldReuseFilteredPackets ? "filtered" : "first-load",
-    );
-  }
-}
-
-// Navigation for previous packet
-document.getElementById("prev-btn").addEventListener("click", function () {
-  statusUpdate("Status: Displaying capture analysis summary");
-  if (!isFileLoaded) {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    doError("No file loaded! Upload one of JSON or PCAP first!");
-    return;
-  }
-  if (index > 0) {
-    index--;
-    setActivePacketCursor(index);
-
-    currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
-    currentPacketKey =
-      currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
-    syncBookmarkDropdown(currentPacketKey);
-    infoPanel(packetsForHost);
-    popHexGrid(
-      packetsForHost[index]["Packet Info"]["Raw data"]["Payload"][
-        "Hex Encoded"
-      ],
-    );
-    populateDataTypes(packetsForHost);
-    logCurrentPacketDisplay("prev");
-  }
-});
-
-// Navigation for next packet
-document.getElementById("next-btn").addEventListener("click", function () {
-  statusUpdate("Status: Displaying capture analysis summary");
-  if (!isFileLoaded) {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-    doError("No file loaded! Upload one of JSON or PCAP first!");
-    return;
-  }
-  if (index < packetsForHost.length - 1) {
-    index++;
-    setActivePacketCursor(index);
-    currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
-    currentPacketKey =
-      currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
-  }
-  syncBookmarkDropdown(currentPacketKey);
-  infoPanel(packetsForHost);
-  popHexGrid(
-    packetsForHost[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"],
-  );
-  populateDataTypes(packetsForHost);
-  logCurrentPacketDisplay("next");
-});
 
 // Handle bookmark selection from dropdown
 document
