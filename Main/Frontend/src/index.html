@@ -192,7 +192,10 @@
           <div id="data_tools_box">
             <div class="crypt-workspace-header">Conv Workspace</div>
             <div class="crypt-subtab-row">
-              <button id="conv-subtab-conversions" class="crypt-subtab-btn active">
+              <button
+                id="conv-subtab-conversions"
+                class="crypt-subtab-btn active"
+              >
                 Conversions
               </button>
               <button id="conv-subtab-hashes" class="crypt-subtab-btn">
@@ -263,23 +266,77 @@
                 <div class="data-tools-title">Hashes</div>
                 <div class="data-tools-hashes-grid">
                   <div class="data-tools-output-label">MD5</div>
-                  <input type="text" id="data-tools-md5-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-md5-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA-1</div>
-                  <input type="text" id="data-tools-sha1-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha1-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA-256</div>
-                  <input type="text" id="data-tools-sha256-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha256-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA-384</div>
-                  <input type="text" id="data-tools-sha384-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha384-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA-512</div>
-                  <input type="text" id="data-tools-sha512-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha512-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA3-256</div>
-                  <input type="text" id="data-tools-sha3-256-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha3-256-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">SHA3-512</div>
-                  <input type="text" id="data-tools-sha3-512-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-sha3-512-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">RIPEMD-160</div>
-                  <input type="text" id="data-tools-ripemd160-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-ripemd160-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                   <div class="data-tools-output-label">Whirlpool</div>
-                  <input type="text" id="data-tools-whirlpool-output" class="data-tools-hash-output" readonly placeholder="—">
+                  <input
+                    type="text"
+                    id="data-tools-whirlpool-output"
+                    class="data-tools-hash-output"
+                    readonly
+                    placeholder="—"
+                  />
                 </div>
               </div>
             </div>
@@ -307,7 +364,9 @@
               <button id="crypt-subtab-ssl" class="crypt-subtab-btn active">
                 SSL
               </button>
-              <button id="crypt-subtab-pgp" class="crypt-subtab-btn">PGP</button>
+              <button id="crypt-subtab-pgp" class="crypt-subtab-btn">
+                PGP
+              </button>
               <button id="crypt-subtab-openssh" class="crypt-subtab-btn">
                 OpenSSH
               </button>
@@ -358,9 +417,7 @@
                     <button id="crypt-load-key-file-btn">
                       Load private key file
                     </button>
-                    <button id="crypt-use-key-input-btn">
-                      Use pasted key
-                    </button>
+                    <button id="crypt-use-key-input-btn">Use pasted key</button>
                     <button id="crypt-clear-key-btn">Clear</button>
                   </div>
                   <input
@@ -375,7 +432,6 @@
                   ></textarea>
                   <pre id="crypt-key-preview">No private key loaded.</pre>
                 </div>
-
               </div>
             </div>
 
@@ -422,7 +478,9 @@
                 <div class="crypt-actions-row">
                   <button id="crypt-save-cert-keystore-btn">Save cert</button>
                   <button id="crypt-save-key-keystore-btn">Save key</button>
-                  <button id="crypt-save-secret-keystore-btn">Save secret</button>
+                  <button id="crypt-save-secret-keystore-btn">
+                    Save secret
+                  </button>
                 </div>
               </div>
 
@@ -430,7 +488,9 @@
                 <div class="crypt-section-title">Saved Entries</div>
                 <select id="crypt-keystore-list" size="10"></select>
                 <div class="crypt-actions-row">
-                  <button id="crypt-load-keystore-entry-btn">Load selected</button>
+                  <button id="crypt-load-keystore-entry-btn">
+                    Load selected
+                  </button>
                   <button id="crypt-send-to-persistent-btn">
                     Send to persistent
                   </button>
@@ -438,7 +498,9 @@
                     Delete selected
                   </button>
                 </div>
-                <pre id="crypt-keystore-details">No keystore entries saved.</pre>
+                <pre id="crypt-keystore-details">
+No keystore entries saved.</pre
+                >
               </div>
             </div>
           </div>
@@ -446,7 +508,7 @@
             <div class="crypt-keystore-unlock-content">
               <div class="crypt-section-title">Save Session</div>
               <div id="save-session-dialog-description">
-                Do you want to save your PacketSnitch session before exiting?
+                Do you want to save your PacketSnitch session?
               </div>
               <div class="crypt-actions-row">
                 <button id="save-session-save-btn">Save Session</button>
@@ -461,7 +523,7 @@
                 Unlock Keychain
               </div>
               <div id="crypt-keystore-unlock-description">
-                Enter the keychain password to unlock the persistent keychain.
+                Enter password to unlock the persistent keychain.
               </div>
               <input
                 id="crypt-keystore-unlock-password"
@@ -583,7 +645,9 @@
         <div class="ctx-submenu-panel">
           <button id="ctx-copy" role="menuitem">Copy</button>
           <button id="convert-context-copy-hex" type="button">Copy Hex</button>
-          <button id="convert-context-copy-ascii" type="button">Copy ASCII</button>
+          <button id="convert-context-copy-ascii" type="button">
+            Copy ASCII
+          </button>
           <button id="convert-context-copy-raw" type="button">
             Copy Raw payload
           </button>
@@ -628,8 +692,12 @@
             </button>
             <div class="ctx-submenu-panel">
               <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
-              <button id="ctx-filter-port" type="button">Add Port to Filter</button>
-              <button id="ctx-filter-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-port" type="button">
+                Add Port to Filter
+              </button>
+              <button id="ctx-filter-mac" type="button">
+                Add MAC to Filter
+              </button>
               <button id="ctx-filter-protocol" type="button">
                 Add Protocol to Filter
               </button>
@@ -643,9 +711,15 @@
               Add with ||...
             </button>
             <div class="ctx-submenu-panel">
-              <button id="ctx-filter-or-ip" type="button">Add IP to Filter</button>
-              <button id="ctx-filter-or-port" type="button">Add Port to Filter</button>
-              <button id="ctx-filter-or-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-or-ip" type="button">
+                Add IP to Filter
+              </button>
+              <button id="ctx-filter-or-port" type="button">
+                Add Port to Filter
+              </button>
+              <button id="ctx-filter-or-mac" type="button">
+                Add MAC to Filter
+              </button>
               <button id="ctx-filter-or-protocol" type="button">
                 Add Protocol to Filter
               </button>
@@ -659,9 +733,15 @@
               is not...
             </button>
             <div class="ctx-submenu-panel">
-              <button id="ctx-filter-not-ip" type="button">Add IP to Filter</button>
-              <button id="ctx-filter-not-port" type="button">Add Port to Filter</button>
-              <button id="ctx-filter-not-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-not-ip" type="button">
+                Add IP to Filter
+              </button>
+              <button id="ctx-filter-not-port" type="button">
+                Add Port to Filter
+              </button>
+              <button id="ctx-filter-not-mac" type="button">
+                Add MAC to Filter
+              </button>
               <button id="ctx-filter-not-protocol" type="button">
                 Add Protocol to Filter
               </button>
@@ -680,7 +760,9 @@
             </button>
             <div class="ctx-submenu-panel">
               <button id="ctx-filter-paren-open" type="button">Append (</button>
-              <button id="ctx-filter-paren-close" type="button">Append )</button>
+              <button id="ctx-filter-paren-close" type="button">
+                Append )
+              </button>
               <button id="ctx-filter-paren-wrap" type="button">
                 Wrap current query with (...)
               </button>
@@ -688,13 +770,23 @@
           </div>
           <hr class="ctx-divider" />
           <div id="ctx-filter-clear-submenu" class="ctx-submenu">
-            <button id="ctx-filter-clear-branch" class="ctx-branch" type="button">
+            <button
+              id="ctx-filter-clear-branch"
+              class="ctx-branch"
+              type="button"
+            >
               Clear and...
             </button>
             <div class="ctx-submenu-panel">
-              <button id="ctx-filter-clear-ip" type="button">Add IP to Filter</button>
-              <button id="ctx-filter-clear-port" type="button">Add Port to Filter</button>
-              <button id="ctx-filter-clear-mac" type="button">Add MAC to Filter</button>
+              <button id="ctx-filter-clear-ip" type="button">
+                Add IP to Filter
+              </button>
+              <button id="ctx-filter-clear-port" type="button">
+                Add Port to Filter
+              </button>
+              <button id="ctx-filter-clear-mac" type="button">
+                Add MAC to Filter
+              </button>
               <button id="ctx-filter-clear-protocol" type="button">
                 Add Protocol to Filter
               </button>

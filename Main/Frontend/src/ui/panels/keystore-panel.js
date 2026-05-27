@@ -75,9 +75,9 @@ function createKeystorePanel({
     }
     if (window.crypto && typeof window.crypto.getRandomValues === "function") {
       const bytes = window.crypto.getRandomValues(new Uint8Array(16));
-      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-        "",
-      );
+      const hex = Array.from(bytes, (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
       return `${Date.now()}-${hex}`;
     }
     return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -144,7 +144,11 @@ function createKeystorePanel({
   }
 
   async function decryptCryptContent(entry, passphrase) {
-    const key = await deriveCryptKey(passphrase, fromBase64(entry.salt), "decrypt");
+    const key = await deriveCryptKey(
+      passphrase,
+      fromBase64(entry.salt),
+      "decrypt",
+    );
     const decrypted = await window.crypto.subtle.decrypt(
       { name: "AES-GCM", iv: fromBase64(entry.iv) },
       key,
@@ -190,7 +194,9 @@ function createKeystorePanel({
       const db = await openCryptKeystoreDb();
       const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readonly");
       const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
-      const storedRecord = await runIdbRequest(store.get(CRYPT_KEYSTORE_RECORD_KEY));
+      const storedRecord = await runIdbRequest(
+        store.get(CRYPT_KEYSTORE_RECORD_KEY),
+      );
       db.close();
       return storedRecord || null;
     } catch (error) {
@@ -202,7 +208,10 @@ function createKeystorePanel({
   async function saveCryptKeystoreRecord(storedRecord) {
     try {
       const db = await openCryptKeystoreDb();
-      const transaction = db.transaction(CRYPT_KEYSTORE_STORE_NAME, "readwrite");
+      const transaction = db.transaction(
+        CRYPT_KEYSTORE_STORE_NAME,
+        "readwrite",
+      );
       const store = transaction.objectStore(CRYPT_KEYSTORE_STORE_NAME);
       store.put(storedRecord, CRYPT_KEYSTORE_RECORD_KEY);
       await waitForIdbTransaction(transaction);
@@ -227,7 +236,9 @@ function createKeystorePanel({
       label: String(entry.label || "Untitled"),
       source: String(entry.source || "manual"),
       content,
-      encryptedContent: entry.encryptedContent ? String(entry.encryptedContent) : "",
+      encryptedContent: entry.encryptedContent
+        ? String(entry.encryptedContent)
+        : "",
       salt: entry.salt ? String(entry.salt) : "",
       iv: entry.iv ? String(entry.iv) : "",
       summary: String(entry.summary || ""),
@@ -235,7 +246,10 @@ function createKeystorePanel({
     };
   }
 
-  async function loadPersistentCryptKeystoreEntries(passphrase, existingRecord) {
+  async function loadPersistentCryptKeystoreEntries(
+    passphrase,
+    existingRecord,
+  ) {
     const storedRecord =
       existingRecord === undefined ? await loadCryptKeystore() : existingRecord;
     if (!storedRecord) return [];
@@ -297,17 +311,23 @@ function createKeystorePanel({
       cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT;
     const saveCertBtn = document.getElementById("crypt-save-cert-keystore-btn");
     const saveKeyBtn = document.getElementById("crypt-save-key-keystore-btn");
-    const saveSecretBtn = document.getElementById("crypt-save-secret-keystore-btn");
+    const saveSecretBtn = document.getElementById(
+      "crypt-save-secret-keystore-btn",
+    );
     const sendToPersistentBtn = document.getElementById(
       "crypt-send-to-persistent-btn",
     );
-    const deleteBtn = document.getElementById("crypt-delete-keystore-entry-btn");
+    const deleteBtn = document.getElementById(
+      "crypt-delete-keystore-entry-btn",
+    );
     saveCertBtn.disabled = !isPersistentMode;
     saveKeyBtn.disabled = !isPersistentMode;
     saveSecretBtn.disabled = !isPersistentMode;
     sendToPersistentBtn.disabled = isPersistentMode;
     deleteBtn.disabled = !isPersistentMode;
-    const unlockStatusEl = document.getElementById("crypt-keystore-unlock-status");
+    const unlockStatusEl = document.getElementById(
+      "crypt-keystore-unlock-status",
+    );
     unlockStatusEl.textContent = isPersistentMode
       ? "Persistent keychain is unlocked for this app session."
       : "Session keychain is auto-populated from decodable packet secrets and cert-tab imports.";
@@ -360,7 +380,11 @@ function createKeystorePanel({
   function normalizeSessionSecretValue(value) {
     if (value === null || value === undefined) return "";
     const normalized =
-      typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+      typeof value === "string"
+        ? value
+        : typeof value === "number"
+          ? String(value)
+          : "";
     return normalized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
   }
 
@@ -398,7 +422,8 @@ function createKeystorePanel({
   function inferSessionEntryType(pathKey) {
     const lower = String(pathKey || "").toLowerCase();
     if (lower.includes("cert")) return "certificate";
-    if (lower.includes("private") && lower.includes("key")) return "private-key";
+    if (lower.includes("private") && lower.includes("key"))
+      return "private-key";
     if (lower.includes("key")) return "private-key";
     return "secret";
   }
@@ -476,7 +501,8 @@ function createKeystorePanel({
           });
         });
 
-        const payloadHex = packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+        const payloadHex =
+          packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
         if (typeof payloadHex === "string" && payloadHex.trim()) {
           try {
             const payloadBytes = parseDataToolsInput("hex", payloadHex);
@@ -492,7 +518,8 @@ function createKeystorePanel({
                     ? cookieEntry.slice(0, separatorIndex).trim()
                     : "";
                 const cookieLabelSuffix =
-                  cookieName || `packet-${packetIndex}-${hashContentForDeduplication(cookieEntry)}`;
+                  cookieName ||
+                  `packet-${packetIndex}-${hashContentForDeduplication(cookieEntry)}`;
                 pushSessionEntry({
                   type: "cookie",
                   label: `HTTP Cookie ${cookieLabelSuffix}`,
@@ -521,7 +548,14 @@ function createKeystorePanel({
     });
   }
 
-  function addSessionKeystoreEntry({ type, label, source, content, summary, packetIndex }) {
+  function addSessionKeystoreEntry({
+    type,
+    label,
+    source,
+    content,
+    summary,
+    packetIndex,
+  }) {
     const normalizedContent = normalizeSessionSecretValue(content);
     if (!normalizedContent) return;
     const exists = cryptSessionKeystoreEntries.some(
@@ -534,7 +568,9 @@ function createKeystorePanel({
     cryptSessionKeystoreEntries.unshift({
       id: generateCryptEntryId(),
       type,
-      label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
+      label: label?.trim()
+        ? label.trim()
+        : `${type}-${new Date().toISOString()}`,
       source: source || "session-auto",
       content: normalizedContent,
       summary: summary || "",
@@ -555,7 +591,9 @@ function createKeystorePanel({
       return;
     }
     if (!cryptKeystoreUnlockKeyMaterial) {
-      doError("Persistent keychain is locked. Reopen the keychain tab with password.");
+      doError(
+        "Persistent keychain is locked. Reopen the keychain tab with password.",
+      );
       return;
     }
     const normalizedContent = (content || "").trim();
@@ -567,7 +605,9 @@ function createKeystorePanel({
     const entry = {
       id: generateCryptEntryId(),
       type,
-      label: label?.trim() ? label.trim() : `${type}-${new Date().toISOString()}`,
+      label: label?.trim()
+        ? label.trim()
+        : `${type}-${new Date().toISOString()}`,
       source,
       content: normalizedContent,
       summary: summary || "",
@@ -586,7 +626,9 @@ function createKeystorePanel({
     }
     renderCryptKeystoreList();
     statusUpdate(`Status: Saved ${type} in persistent keychain`);
-    writeLogEntry(`Crypt keystore entry added type=${type} label="${entry.label}"`);
+    writeLogEntry(
+      `Crypt keystore entry added type=${type} label="${entry.label}"`,
+    );
   }
 
   async function loadSelectedCryptKeystoreEntry() {
@@ -600,9 +642,16 @@ function createKeystorePanel({
 
     const selectedEntry = activeEntries[selectedIndex];
     let loadedContent = normalizeSessionSecretValue(selectedEntry.content);
-    if (!loadedContent && selectedEntry.encryptedContent && selectedEntry.salt && selectedEntry.iv) {
+    if (
+      !loadedContent &&
+      selectedEntry.encryptedContent &&
+      selectedEntry.salt &&
+      selectedEntry.iv
+    ) {
       if (!cryptKeystoreUnlockKeyMaterial) {
-        doError("Persistent keychain is locked. Reopen keychain with password.");
+        doError(
+          "Persistent keychain is locked. Reopen keychain with password.",
+        );
         return;
       }
       try {
@@ -650,7 +699,10 @@ function createKeystorePanel({
       doError("Persistent keychain is locked. Reopen keychain with password.");
       return;
     }
-    const [removedEntry] = cryptPersistentKeystoreEntries.splice(selectedIndex, 1);
+    const [removedEntry] = cryptPersistentKeystoreEntries.splice(
+      selectedIndex,
+      1,
+    );
     try {
       await savePersistentCryptKeystoreEntries(
         cryptPersistentKeystoreEntries,
@@ -670,7 +722,9 @@ function createKeystorePanel({
 
   async function sendSelectedSessionEntryToPersistent() {
     if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_SESSION) {
-      statusUpdate("Status: Switch to session keychain to send temporary entries");
+      statusUpdate(
+        "Status: Switch to session keychain to send temporary entries",
+      );
       return;
     }
     if (!cryptKeystoreUnlockKeyMaterial) {
@@ -679,13 +733,18 @@ function createKeystorePanel({
     }
     const listEl = document.getElementById("crypt-keystore-list");
     const selectedIndex = Number(listEl.value);
-    if (!Number.isFinite(selectedIndex) || !cryptSessionKeystoreEntries[selectedIndex]) {
+    if (
+      !Number.isFinite(selectedIndex) ||
+      !cryptSessionKeystoreEntries[selectedIndex]
+    ) {
       statusUpdate("Status: Select a session keychain entry first");
       return;
     }
 
     const selectedEntry = cryptSessionKeystoreEntries[selectedIndex];
-    const normalizedContent = normalizeSessionSecretValue(selectedEntry.content);
+    const normalizedContent = normalizeSessionSecretValue(
+      selectedEntry.content,
+    );
     if (!normalizedContent) {
       statusUpdate("Status: Selected session entry has no content to persist");
       return;
@@ -721,25 +780,39 @@ function createKeystorePanel({
       doError("Could not save selected entry to persistent keychain.");
       return;
     }
-    statusUpdate(`Status: Sent "${selectedEntry.label}" to persistent keychain`);
-    writeLogEntry(`Session keychain entry persisted label="${selectedEntry.label}"`);
+    statusUpdate(
+      `Status: Sent "${selectedEntry.label}" to persistent keychain`,
+    );
+    writeLogEntry(
+      `Session keychain entry persisted label="${selectedEntry.label}"`,
+    );
   }
 
   function configureKeystoreUnlockDialog(mode) {
     cryptKeystoreUnlockDialogMode = mode === "setup" ? "setup" : "unlock";
     const isSetup = cryptKeystoreUnlockDialogMode === "setup";
     const titleEl = document.getElementById("crypt-keystore-unlock-title");
-    const descriptionEl = document.getElementById("crypt-keystore-unlock-description");
-    const passwordEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
-    const confirmBtn = document.getElementById("crypt-keystore-unlock-confirm-btn");
+    const descriptionEl = document.getElementById(
+      "crypt-keystore-unlock-description",
+    );
+    const passwordEl = document.getElementById(
+      "crypt-keystore-unlock-password",
+    );
+    const confirmEl = document.getElementById(
+      "crypt-keystore-unlock-password-confirm",
+    );
+    const confirmBtn = document.getElementById(
+      "crypt-keystore-unlock-confirm-btn",
+    );
     if (titleEl) {
-      titleEl.textContent = isSetup ? "Set Keychain Password" : "Unlock Keychain";
+      titleEl.textContent = isSetup
+        ? "Set Keychain Password"
+        : "Unlock Keychain";
     }
     if (descriptionEl) {
       descriptionEl.textContent = isSetup
         ? "Create the initial password for the persistent keychain (minimum 8 characters). You will only be asked when selecting the keychain tab."
-        : "Enter the keychain password to unlock the persistent keychain.";
+        : "Enter password to unlock the persistent keychain.";
     }
     if (passwordEl) {
       passwordEl.placeholder = isSetup
@@ -758,7 +831,9 @@ function createKeystorePanel({
   function requestKeystoreUnlockPassword(mode = "unlock") {
     const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
     const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+    const confirmEl = document.getElementById(
+      "crypt-keystore-unlock-password-confirm",
+    );
     if (!dialogEl || !inputEl || !confirmEl) return Promise.resolve(null);
     configureKeystoreUnlockDialog(mode);
     dialogEl.hidden = false;
@@ -773,7 +848,9 @@ function createKeystorePanel({
   function resolveKeystoreUnlockPassword(value) {
     const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
     const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+    const confirmEl = document.getElementById(
+      "crypt-keystore-unlock-password-confirm",
+    );
     if (dialogEl) dialogEl.hidden = true;
     if (inputEl) inputEl.value = "";
     if (confirmEl) confirmEl.value = "";
@@ -785,7 +862,9 @@ function createKeystorePanel({
 
   function submitKeystoreUnlockDialog() {
     const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById("crypt-keystore-unlock-password-confirm");
+    const confirmEl = document.getElementById(
+      "crypt-keystore-unlock-password-confirm",
+    );
     resolveKeystoreUnlockPassword({
       password: inputEl?.value || "",
       confirmPassword: confirmEl?.value || "",
@@ -829,10 +908,8 @@ function createKeystorePanel({
         statusUpdate("Status: Keychain password set");
         writeLogEntry("Persistent keychain password initialized");
       } else {
-        cryptPersistentKeystoreEntries = await loadPersistentCryptKeystoreEntries(
-          keyMaterial,
-          storedRecord,
-        );
+        cryptPersistentKeystoreEntries =
+          await loadPersistentCryptKeystoreEntries(keyMaterial, storedRecord);
         statusUpdate("Status: Keychain unlocked");
         writeLogEntry("Persistent keychain unlocked");
       }
@@ -880,8 +957,7 @@ function createKeystorePanel({
 
   async function addToKeystoreFromContextMenu(type, keystoreMode) {
     const text = (
-      getTrimmedSelectionText() ||
-      getActiveContextConversionText()
+      getTrimmedSelectionText() || getActiveContextConversionText()
     ).trim();
     hideConvertContextMenu();
     if (!text) {
@@ -897,7 +973,9 @@ function createKeystorePanel({
         summary: "",
       });
       statusUpdate(`Status: Saved ${type} in session keychain`);
-      writeLogEntry(`Context menu keystore entry added type=${type} mode=session`);
+      writeLogEntry(
+        `Context menu keystore entry added type=${type} mode=session`,
+      );
     } else {
       await addCryptKeystoreEntry(
         { type, label: "", source: "context-menu", content: text, summary: "" },

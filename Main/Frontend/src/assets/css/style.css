@@ -579,6 +579,8 @@ strong {
 #crypt-keystore-unlock-description {
   font-size: 12px;
   color: var(--color-6);
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 #save-session-dialog,
@@ -590,6 +592,7 @@ strong {
   align-items: center;
   justify-content: center;
   z-index: 9999;
+  overflow-wrap: break-word;
 }
 
 #save-session-dialog[hidden],
@@ -600,6 +603,8 @@ strong {
 #save-session-dialog-description {
   font-size: 12px;
   color: var(--color-6);
+  overflow-wrap: break-word;
+  max-width: 400px;
 }
 
 .crypt-keystore-unlock-content {
