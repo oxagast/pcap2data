@@ -297,6 +297,8 @@ function createCryptPanel({
 
     statusUpdate("Status: Displaying crypt workspace");
     writeLogEntry("User opened crypt workspace");
+    document.getElementById("prev-btn").style.display = "none";
+    document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";
     document.getElementById("packetPayloadPane").style.display = "none";
     document.getElementById("summary_box").style.display = "none";

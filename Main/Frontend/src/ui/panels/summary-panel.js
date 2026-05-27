@@ -21,6 +21,8 @@ function createSummaryPanel({
 
     documentRef.getElementById("packetInfoPane").style.display = "none";
     documentRef.getElementById("packetPayloadPane").style.display = "none";
+    documentRef.getElementById("prev-btn").style.display = "none";
+    documentRef.getElementById("next-btn").style.display = "none";
     documentRef.getElementById("stats_box").style.display = "none";
     documentRef.getElementById("data_tools_box").style.display = "none";
     documentRef.getElementById("crypt_box").style.display = "none";

@@ -218,6 +218,8 @@ function createStatsPanel(options) {
 
     documentRef.getElementById("packetInfoPane").style.display = "none";
     documentRef.getElementById("packetPayloadPane").style.display = "none";
+    documentRef.getElementById("prev-btn").style.display = "none";
+    documentRef.getElementById("next-btn").style.display = "none";
     documentRef.getElementById("summary_box").style.display = "none";
     documentRef.getElementById("list_box").style.display = "none";
     documentRef.getElementById("data_tools_box").style.display = "none";

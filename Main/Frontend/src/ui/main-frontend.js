@@ -1787,6 +1787,8 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   activeMainTab = MAIN_TAB_DATA_TOOLS;
   statusUpdate("Status: Displaying data conversion tools");
   writeLogEntry("User opened data conversion tools view");
+  document.getElementById("prev-btn").style.display = "none";
+  document.getElementById("next-btn").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
@@ -3695,6 +3697,8 @@ function handlePacketNavigation(navAction, navBookmark) {
   activeMainTab = MAIN_TAB_DATA;
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
+  document.getElementById("prev-btn").style.display = "block";
+  document.getElementById("next-btn").style.display = "block";
   document.getElementById("loading-container").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";

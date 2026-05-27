@@ -940,6 +940,8 @@ function createKeystorePanel({
     }
     statusUpdate("Status: Displaying keychain manager");
     writeLogEntry("User opened keystore workspace");
+    document.getElementById("prev-btn").style.display = "none";
+    document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";
     document.getElementById("packetPayloadPane").style.display = "none";
     document.getElementById("summary_box").style.display = "none";
