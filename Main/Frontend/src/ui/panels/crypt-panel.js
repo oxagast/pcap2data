@@ -1,4 +1,9 @@
 const crypto = require("crypto");
+const TLS_CONTENT_TYPE_MIN = 20;
+const TLS_CONTENT_TYPE_MAX = 23;
+const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
+const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
+const MAX_ASCII_PREVIEW_LENGTH = 1024;
 
 function createCryptPanel({
   constants,
@@ -194,13 +199,20 @@ function createCryptPanel({
 
   function extractDecryptCandidates(cipherBytes) {
     const candidates = [cipherBytes];
-    if (cipherBytes.length > 5 && cipherBytes[0] >= 20 && cipherBytes[0] <= 23) {
+    if (
+      cipherBytes.length > 5 &&
+      cipherBytes[0] >= TLS_CONTENT_TYPE_MIN &&
+      cipherBytes[0] <= TLS_CONTENT_TYPE_MAX
+    ) {
       const recordLength = (cipherBytes[3] << 8) | cipherBytes[4];
       const recordEnd = 5 + recordLength;
       if (recordLength > 0 && recordEnd <= cipherBytes.length) {
         const recordPayload = cipherBytes.subarray(5, recordEnd);
         candidates.push(recordPayload);
-        if (recordPayload.length > 6 && recordPayload[0] === 16) {
+        if (
+          recordPayload.length > 6 &&
+          recordPayload[0] === TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE
+        ) {
           const handshakeBody = recordPayload.subarray(4);
           candidates.push(handshakeBody);
           if (handshakeBody.length > 2) {
@@ -267,12 +279,12 @@ function createCryptPanel({
     const decryptPreviewEl = document.getElementById("crypt-decrypt-preview");
     const decryptedHex = decryptedBytes.toString("hex");
     const decryptedUtf8 = decryptedBytes.toString("utf8");
-    const looksPrintable = /^[\x09\x0A\x0D\x20-\x7E]*$/.test(decryptedUtf8);
+    const looksPrintable = PRINTABLE_UTF8_PREVIEW_REGEX.test(decryptedUtf8);
     const asciiSummary = looksPrintable
       ? decryptedUtf8
       : decryptedUtf8
-          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "�")
-          .slice(0, 1024);
+          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".")
+          .slice(0, MAX_ASCII_PREVIEW_LENGTH);
     decryptPreviewEl.textContent = [
       `Decrypted payload for packet #${entry.packetIndex}`,
       `Bytes: ${decryptedBytes.length}`,
