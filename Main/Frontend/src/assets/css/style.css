@@ -1078,6 +1078,10 @@ strong {
   gap: 8px;
 }
 
+#rightside-notes[hidden] {
+  display: none;
+}
+
 #notes-select {
   width: 100%;
   min-height: 210px;
