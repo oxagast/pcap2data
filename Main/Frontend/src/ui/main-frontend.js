@@ -127,6 +127,7 @@ const VALID_MAIN_TABS = [
 const VALID_CRYPT_SUBTABS = [CRYPT_SSL_SUBTAB, CRYPT_PGP_SUBTAB, CRYPT_OPENSSH_SUBTAB];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
+let activeDataToolsProtoResult = null;
 let keystorePanel;
 
 initializeInstallScreen({
