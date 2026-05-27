@@ -2167,7 +2167,6 @@ const cryptPanel = createCryptPanel({
     }
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
-    writeLogEntry(`Crypt decrypted payload loaded into Conv source="${sourceLabel}"`);
   },
 });
 

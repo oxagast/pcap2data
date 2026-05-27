@@ -231,7 +231,6 @@ function createCryptPanel({
     const candidates = extractDecryptCandidates(cipherBytes);
     const decryptVariants = [
       { name: "RSA-OAEP-SHA256", options: { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha256" } },
-      { name: "RSA-OAEP-SHA1", options: { padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: "sha1" } },
       { name: "RSA-PKCS1-v1_5", options: { padding: crypto.constants.RSA_PKCS1_PADDING } },
     ];
     const failures = [];
@@ -251,8 +250,9 @@ function createCryptPanel({
         }
       }
     }
+    const failurePreview = [...new Set(failures)].slice(0, 8).join(" | ");
     throw new Error(
-      `No TLS decrypt attempt succeeded with the loaded key (${failures.slice(0, 3).join(" | ")})`,
+      `No TLS decrypt attempt succeeded with the loaded key (${failurePreview})`,
     );
   }
 
@@ -283,8 +283,8 @@ function createCryptPanel({
     const asciiSummary = looksPrintable
       ? decryptedUtf8
       : decryptedUtf8
-          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".")
-          .slice(0, MAX_ASCII_PREVIEW_LENGTH);
+          .slice(0, MAX_ASCII_PREVIEW_LENGTH)
+          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".");
     decryptPreviewEl.textContent = [
       `Decrypted payload for packet #${entry.packetIndex}`,
       `Bytes: ${decryptedBytes.length}`,
