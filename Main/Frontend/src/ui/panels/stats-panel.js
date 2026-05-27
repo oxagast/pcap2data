@@ -66,7 +66,9 @@ function buildCaptureStats(capturedPackets) {
 
       const netData = ei?.["Traits"]?.["Network Data"];
       if (netData) {
-        const protoName = normalizeStatsTextValue(netData["Port Protcol"]);
+        const protoName = normalizeStatsTextValue(
+          netData["Port Protocol"] ?? netData["Port Protcol"],
+        );
         if (protoName && protoName !== "Unknown") protocols.add(protoName);
 
         const tpData = tp ? pi[tp] : null;
