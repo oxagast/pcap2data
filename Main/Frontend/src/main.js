@@ -184,9 +184,11 @@ global.logBackend = (...args) => {
   const message = formatConsoleArgs(args);
   if (!message) return;
   originalConsoleLog(message);
-  appendActivityLogLine(
-    `[${new Date().toISOString()}] [Console][Backend] ${message}`,
-  );
+  const timestamp = new Date().toISOString();
+  message.split(/\r?\n/).forEach((line) => {
+    if (line.trim() === '') return;
+    appendActivityLogLine(`[${timestamp}] [Console][Backend] ${line}`);
+  });
 };
 
 app.whenReady().then(() => {
