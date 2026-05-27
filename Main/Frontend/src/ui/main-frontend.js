@@ -1,4 +1,7 @@
 import "../assets/css/style.css";
+const CryptoJS = require("crypto-js");
+const { sha3_256, sha3_512 } = require("js-sha3");
+const whirlpool = require("whirlpool-js");
 const { filterPackets, validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
@@ -51,6 +54,10 @@ const {
   CONV_DECODES_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
+  DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD,
+  DATA_TOOLS_ENTROPY_HIGH_THRESHOLD,
+  DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD,
+  DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
   setConvSubtab,
@@ -120,6 +127,7 @@ const VALID_MAIN_TABS = [
 const VALID_CRYPT_SUBTABS = [CRYPT_SSL_SUBTAB, CRYPT_PGP_SUBTAB, CRYPT_OPENSSH_SUBTAB];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
+let activeDataToolsProtoResult = null;
 let keystorePanel;
 
 initializeInstallScreen({
