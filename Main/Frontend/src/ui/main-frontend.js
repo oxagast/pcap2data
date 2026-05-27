@@ -40,6 +40,7 @@ const {
 } = require("./panels/keystore-panel");
 const { createStatsPanel } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
+const { createSummaryPanel } = require("./panels/summary-panel");
 const { initializeInstallScreen } = require("./panels/install-screen");
 const { createDataPanel } = require("./panels/data-panel");
 const psVer = require("../../package.json").version;
@@ -157,6 +158,19 @@ const { showStats } = createStatsPanel({
   },
 });
 
+const summaryPanel = createSummaryPanel({
+  documentRef: document,
+  getJsonCapture: () => jsonCapture,
+  getFinalSummary: () => finalSummary,
+  setActiveMainTab: (tab) => {
+    activeMainTab = tab;
+  },
+  mainTabSummary: MAIN_TAB_SUMMARY,
+  statusUpdate,
+  fileLoaded,
+});
+
+const { showSummary, showSummaryLoading, clearSummaryContent } = summaryPanel;
 const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
   createDataPanel({
     constants: {
@@ -807,7 +821,7 @@ function restoreSessionState(sessionState) {
     : CRYPT_SSL_SUBTAB;
 
   if (savedMainTab === MAIN_TAB_SUMMARY) {
-    writeSummary();
+    showSummary();
   } else if (savedMainTab === MAIN_TAB_STATS) {
     showStats();
   } else if (savedMainTab === MAIN_TAB_LIST) {
@@ -941,7 +955,7 @@ function processFile(file) {
       );
     }
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
-    writeSummary();
+    showSummary();
     initializeDataView();
     if (loadedSessionState) {
       restoreSessionState(loadedSessionState);
@@ -1010,34 +1024,83 @@ getCachedElement("target_hosts").addEventListener("click", function () {
   handlePacketNavigation("filtered", null);
 });
 
-// Show summary when summary button is clicked
-getCachedElement("summary-btn").addEventListener("click", function () {
-  writeSummary();
-});
-
-// Displays the summary section from the loaded JSON.
-
-function writeSummary() {
-  activeMainTab = MAIN_TAB_SUMMARY;
-  statusUpdate("Status: Displaying capture analysis summary");
-  //highlightTab("summary-navAction");
-  if (jsonCapture == "") {
-    statusUpdate("Status: No JSON file loaded, please upload a file first");
-  } else {
-    document.getElementById("packetInfoPane").style.display = "none";
-    document.getElementById("packetPayloadPane").style.display = "none";
-    document.getElementById("stats_box").style.display = "none";
-    document.getElementById("data_tools_box").style.display = "none";
-    document.getElementById("crypt_box").style.display = "none";
-    document.getElementById("keystore_box").style.display = "none";
-    document.getElementById("list_box").style.display = "none";
-    document.getElementById("summary_content").textContent =
-      finalSummary || "No LLM summary available.";
-    document.getElementById("summary_box").style.display = "block";
-    fileLoaded(true);
+function parseDataToolsInput(format, rawInput) {
+  if (!rawInput || rawInput.trim() === "") {
+    throw new Error("Enter input data first.");
   }
-}
 
+  if (format === "hex") {
+    const normalized = rawInput
+      .replace(/0x/gi, "")
+      .replace(/[\s,:;-]+/g, "")
+      .trim();
+    if (!normalized) throw new Error("No hex bytes were found.");
+    if (!/^[0-9a-fA-F]+$/.test(normalized)) {
+      throw new Error("Hex input can only contain 0-9 and A-F.");
+    }
+    if (normalized.length % 2 !== 0) {
+      throw new Error("Hex input must contain an even number of characters.");
+    }
+    const bytes = new Uint8Array(normalized.length / 2);
+    for (let i = 0; i < normalized.length; i += 2) {
+      bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+    }
+    return bytes;
+  }
+
+  if (format === "binary") {
+    const normalized = rawInput.replace(/\s+/g, "");
+    if (!normalized) throw new Error("No binary bits were found.");
+    if (!/^[01]+$/.test(normalized)) {
+      throw new Error("Binary input can only contain 0 and 1.");
+    }
+    if (normalized.length % 8 !== 0) {
+      throw new Error("Binary input must be grouped into full 8-bit bytes.");
+    }
+    const bytes = new Uint8Array(normalized.length / 8);
+    for (let i = 0; i < normalized.length; i += 8) {
+      bytes[i / 8] = parseInt(normalized.slice(i, i + 8), 2);
+    }
+    return bytes;
+  }
+
+  if (format === "base64") {
+    const normalized = rawInput
+      .trim()
+      .replace(/^data:[^;]+;base64,/i, "")
+      .replace(/\s+/g, "");
+    if (!normalized) throw new Error("No base64 content was found.");
+    let decoded = "";
+    try {
+      decoded = atob(normalized);
+    } catch {
+      throw new Error("Invalid base64 input.");
+    }
+    const bytes = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i++) {
+      bytes[i] = decoded.charCodeAt(i);
+    }
+    return bytes;
+  }
+
+  if (format === "decimal") {
+    const tokens = rawInput.split(/[\s,]+/).filter(Boolean);
+    if (!tokens.length) throw new Error("No decimal byte values were found.");
+    const values = tokens.map((token) => {
+      const parsed = Number(token);
+      if (!/^\d+$/.test(token) || parsed > 255) {
+        throw new Error(
+          "Each decimal value must be a non-negative integer between 0 and 255.",
+        );
+      }
+      return parsed;
+    });
+    return Uint8Array.from(values);
+  }
+
+  // ascii / utf-8 fallback
+  return new TextEncoder().encode(rawInput);
+}
 
 function bytesToBase64(bytes) {
   let binary = "";
@@ -4248,8 +4311,7 @@ window.jsonapi.onJsonData((jsonData) => {
 // here we create the backend process and hook it to the handler
 function runSnitch(file) {
   document.getElementById("loading-container").style.display = "block";
-  document.getElementById("summary_content").innerHTML =
-    '<span id="loaderdots" class="loading">Loading</span>';
+  showSummaryLoading();
   document.getElementById("status").textContent =
     "Status: Running snitch backend, this may take a few minutes...";
   document.getElementById("error-container").style.display = "none";
@@ -4277,7 +4339,7 @@ function doError(message, { backend = false } = {}) {
   }
   const loadingContainerEl = document.getElementById("loading-container");
   const errorContainerEl = document.getElementById("error-container");
-  document.getElementById("summary_content").textContent = "";
+  clearSummaryContent();
   loadingContainerEl.style.display = "none";
   errorContainerEl.style.display = "block";
   errorContainerEl.textContent = message;
