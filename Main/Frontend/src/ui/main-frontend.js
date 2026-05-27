@@ -2499,7 +2499,7 @@ function showConvertContextMenu(
   const cursorByteIndex = Number.parseInt(target?.dataset?.byteIndex ?? "-1", 10);
   const hasCursorAsciiValue = Boolean(
     target?.classList?.contains("griditem") &&
-      getCursorAsciiContextValue(currentPayloadHex, cursorByteIndex),
+      getCursorAsciiContextLoadData(currentPayloadHex, cursorByteIndex),
   );
   convertContextButtons.loadCursorAscii.style.display = hasCursorAsciiValue
     ? "block"
@@ -2691,17 +2691,22 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
 }
 
-const NON_PRINTABLE_ASCII_PLACEHOLDER = ".";
-
-function getCursorAsciiContextValue(payloadHex, byteIndex) {
-  if (byteIndex < 0 || !payloadHex) return "";
-  const asciiPreview = getAsciiPreviewForHexOffset(payloadHex, byteIndex);
-  if (asciiPreview && asciiPreview !== NON_PRINTABLE_ASCII_PLACEHOLDER) {
-    return asciiPreview;
+function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
+  if (byteIndex < 0 || !payloadHex) return null;
+  const decodedAscii = hexToAscii(payloadHex);
+  let printableSequence = "";
+  for (let i = byteIndex; i < decodedAscii.length; i++) {
+    const charCode = decodedAscii.charCodeAt(i);
+    if (!isPrintable(charCode)) break;
+    printableSequence += decodedAscii[i];
+  }
+  if (printableSequence) {
+    return { value: printableSequence, format: "ascii" };
   }
   const hexOffset = byteIndex * 2;
   const hexPair = payloadHex.slice(hexOffset, hexOffset + 2);
-  return hexPair ? `0x${hexPair.toUpperCase()}` : "";
+  if (hexPair.length !== 2) return null;
+  return { value: hexPair.toUpperCase(), format: "hex" };
 }
 
 function loadCursorAsciiIntoDataToolsFromContextMenu() {
@@ -2710,19 +2715,21 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
     activeContextTarget?.dataset?.byteIndex ?? "-1",
     10,
   );
-  const cursorAscii = getCursorAsciiContextValue(payloadHex, byteIndex);
+  const cursorAsciiLoadData = getCursorAsciiContextLoadData(payloadHex, byteIndex);
   hideConvertContextMenu();
-  if (!cursorAscii) {
+  if (!cursorAsciiLoadData) {
     statusUpdate("Status: No cursor ASCII value available to load");
     return;
   }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = cursorAscii;
-  formatEl.value = "ascii";
+  inputEl.value = cursorAsciiLoadData.value;
+  formatEl.value = cursorAsciiLoadData.format;
   showDataTools();
   runDataToolsConversion();
-  writeLogEntry("Context conversion loaded cursor ASCII into Conv tab");
+  writeLogEntry(
+    `Context conversion loaded cursor ASCII into Conv tab format=${cursorAsciiLoadData.format}`,
+  );
 }
 
 function getActivePacketCursor() {
