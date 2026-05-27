@@ -520,6 +520,22 @@ ipcMain.handle('preview-http-body', async (_event, bodyHex, contentType) => {
   }
 });
 
+ipcMain.handle('open-external-url', async (_event, rawUrl) => {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    return { success: false, error: 'Invalid URL' };
+  }
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { success: false, error: 'Only HTTP/HTTPS URLs are supported' };
+    }
+    await shell.openExternal(parsed.href);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err?.message || 'Invalid URL' };
+  }
+});
+
 ipcMain.handle('append-activity-log', async (_event, entry) => {
   const normalizedEntry = normalizeActivityLogEntry(entry);
   if (!normalizedEntry) {

@@ -2257,6 +2257,8 @@ const convertContextButtons = {
   keystoreCertPersistent: getCachedElement("ctx-keystore-cert-persistent"),
   keystoreCookieSession: getCachedElement("ctx-keystore-cookie-session"),
   keystoreCookiePersistent: getCachedElement("ctx-keystore-cookie-persistent"),
+  keystoreUriSession: getCachedElement("ctx-keystore-uri-session"),
+  keystoreUriPersistent: getCachedElement("ctx-keystore-uri-persistent"),
   copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
   notesSendData: getCachedElement("ctx-notes-send-data"),
@@ -2282,6 +2284,7 @@ const convertContextSubmenus = {
   keystoreKey: getCachedElement("ctx-keystore-key-submenu"),
   keystoreCert: getCachedElement("ctx-keystore-cert-submenu"),
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
+  keystoreUri: getCachedElement("ctx-keystore-uri-submenu"),
   httpFile: getCachedElement("ctx-http-file-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
@@ -2654,6 +2657,7 @@ keystorePanel = createKeystorePanel({
   getActiveContextConversionText: () => activeContextConversionText,
   getApplyCryptCertificateText: () => applyCryptCertificateText,
   getApplyCryptPrivateKeyText: () => applyCryptPrivateKeyText,
+  openExternalUrl: (url) => window.browserapi.openExternalUrl(url),
 });
 
 function buildCookieJarTextFromHttpFields(fields) {
@@ -2762,6 +2766,7 @@ function showConvertContextMenu(
     showSaveJson = true,
     filterQueries = {},
     cookieJarText = "",
+    showManualKeystoreUri = false,
   } = {},
 ) {
   activeContextConversionText = sourceText;
@@ -2915,7 +2920,8 @@ function showConvertContextMenu(
   const hasDataTypeActions =
     formats.length > 0 || hasPayloadToExport || hasCursorAsciiValue;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
-  const hasKeystoreActions = showCopySelection || Boolean(sourceText);
+  const hasContextTextKeystoreActions = showCopySelection || Boolean(sourceText);
+  const hasKeystoreActions = hasContextTextKeystoreActions || showManualKeystoreUri;
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport || hasCookieActions;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
@@ -2944,16 +2950,19 @@ function showConvertContextMenu(
   convertContextSubmenus.keystore.style.display = hasKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystorePassword.style.display = hasKeystoreActions
+  convertContextSubmenus.keystorePassword.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreKey.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreKey.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreCert.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreCert.style.display = hasContextTextKeystoreActions
     ? "block"
     : "none";
-  convertContextSubmenus.keystoreCookie.style.display = hasKeystoreActions
+  convertContextSubmenus.keystoreCookie.style.display = hasContextTextKeystoreActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.keystoreUri.style.display = showManualKeystoreUri
     ? "block"
     : "none";
   convertContextSubmenus.export.style.display = hasExportActions
@@ -3596,6 +3605,20 @@ document
     if (event.key !== "Enter") return;
     keystorePanel.submitKeystoreUnlockDialog();
   });
+document
+  .getElementById("crypt-keystore-manual-uri-confirm-btn")
+  .addEventListener("click", keystorePanel.submitManualUriFromContextMenuDialog);
+document
+  .getElementById("crypt-keystore-manual-uri-cancel-btn")
+  .addEventListener("click", () =>
+    keystorePanel.resolveManualUriFromContextMenuDialog(null),
+  );
+document
+  .getElementById("crypt-keystore-manual-uri-input")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    keystorePanel.submitManualUriFromContextMenuDialog();
+  });
 
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {
@@ -3767,6 +3790,11 @@ document
   .getElementById("crypt-delete-keystore-entry-btn")
   .addEventListener("click", () => {
     void keystorePanel.deleteSelectedCryptKeystoreEntry();
+  });
+document
+  .getElementById("crypt-open-link-btn")
+  .addEventListener("click", () => {
+    void keystorePanel.openSelectedKeystoreLinkInBrowser();
   });
 
 document
@@ -3945,6 +3973,16 @@ convertContextButtons.keystoreCookieSession.addEventListener("click", () => {
 });
 convertContextButtons.keystoreCookiePersistent.addEventListener("click", () => {
   keystorePanel.addToKeystoreFromContextMenu("cookie", CRYPT_KEYSTORE_MODE_PERSISTENT);
+});
+convertContextButtons.keystoreUriSession.addEventListener("click", () => {
+  void keystorePanel.addManualUriToKeystoreFromContextMenu(
+    CRYPT_KEYSTORE_MODE_SESSION,
+  );
+});
+convertContextButtons.keystoreUriPersistent.addEventListener("click", () => {
+  void keystorePanel.addManualUriToKeystoreFromContextMenu(
+    CRYPT_KEYSTORE_MODE_PERSISTENT,
+  );
 });
 convertContextButtons.saveJson.addEventListener(
   "click",

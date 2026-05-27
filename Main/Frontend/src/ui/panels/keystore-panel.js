@@ -61,6 +61,7 @@ function createKeystorePanel({
   getActiveContextConversionText,
   getApplyCryptCertificateText,
   getApplyCryptPrivateKeyText,
+  openExternalUrl,
 }) {
   let cryptPersistentKeystoreEntries = [];
   let cryptSessionKeystoreEntries = [];
@@ -68,6 +69,8 @@ function createKeystorePanel({
   let cryptKeystoreUnlockKeyMaterial = null;
   let cryptKeystoreUnlockDialogResolver = null;
   let cryptKeystoreUnlockDialogMode = "unlock";
+  let cryptManualUriDialogResolver = null;
+  let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
 
   function generateCryptEntryId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -306,7 +309,25 @@ function createKeystorePanel({
       : "persistent keychain";
   }
 
-  function updateCryptKeystoreWorkspaceState() {
+  function normalizeOpenableLink(value) {
+    const normalized = normalizeSessionSecretValue(value);
+    if (!normalized) return "";
+    try {
+      const parsed = new URL(normalized);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.href;
+      }
+    } catch {
+      return "";
+    }
+    return "";
+  }
+
+  function canEntryOpenInBrowser(entry) {
+    return !!normalizeOpenableLink(entry?.content);
+  }
+
+  function updateCryptKeystoreWorkspaceState(activeEntry = null) {
     const isPersistentMode =
       cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT;
     const saveCertBtn = document.getElementById("crypt-save-cert-keystore-btn");
@@ -320,11 +341,15 @@ function createKeystorePanel({
     const deleteBtn = document.getElementById(
       "crypt-delete-keystore-entry-btn",
     );
+    const openLinkBtn = document.getElementById("crypt-open-link-btn");
     saveCertBtn.disabled = !isPersistentMode;
     saveKeyBtn.disabled = !isPersistentMode;
     saveSecretBtn.disabled = !isPersistentMode;
     sendToPersistentBtn.disabled = isPersistentMode;
     deleteBtn.disabled = !isPersistentMode;
+    if (openLinkBtn) {
+      openLinkBtn.disabled = !canEntryOpenInBrowser(activeEntry);
+    }
     const unlockStatusEl = document.getElementById(
       "crypt-keystore-unlock-status",
     );
@@ -337,6 +362,7 @@ function createKeystorePanel({
     const detailsEl = document.getElementById("crypt-keystore-details");
     if (!entry) {
       detailsEl.textContent = `No entries available in ${getActiveKeystoreLabel()}.`;
+      updateCryptKeystoreWorkspaceState(null);
       return;
     }
     detailsEl.textContent = [
@@ -350,6 +376,7 @@ function createKeystorePanel({
     ]
       .filter(Boolean)
       .join("\n");
+    updateCryptKeystoreWorkspaceState(entry);
   }
 
   function renderCryptKeystoreList() {
@@ -362,7 +389,6 @@ function createKeystorePanel({
       option.disabled = true;
       listEl.appendChild(option);
       renderCryptKeystoreDetails(null);
-      updateCryptKeystoreWorkspaceState();
       return;
     }
 
@@ -374,7 +400,6 @@ function createKeystorePanel({
     });
     listEl.selectedIndex = 0;
     renderCryptKeystoreDetails(activeEntries[0]);
-    updateCryptKeystoreWorkspaceState();
   }
 
   function normalizeSessionSecretValue(value) {
@@ -408,6 +433,33 @@ function createKeystorePanel({
       hash = Math.imul(hash, 16777619);
     }
     return (hash >>> 0).toString(16);
+  }
+
+  function normalizeUriCandidate(uri) {
+    return String(uri || "")
+      .trim()
+      .replace(/[),.;!?]+$/g, "");
+  }
+
+  function extractUriCandidatesFromText(rawText) {
+    const sourceText = normalizeSessionSecretValue(rawText);
+    if (!sourceText) return [];
+    const candidatePattern = /\b[a-z][a-z0-9+.-]*:[^\s<>"']+/gi;
+    const discovered = new Set();
+    let match;
+    while ((match = candidatePattern.exec(sourceText)) !== null) {
+      const normalized = normalizeUriCandidate(match[0]);
+      if (!normalized) continue;
+      try {
+        const parsed = new URL(normalized);
+        if (parsed.protocol) {
+          discovered.add(parsed.href);
+        }
+      } catch {
+        continue;
+      }
+    }
+    return Array.from(discovered);
   }
 
   function shouldIncludeSessionSecretKey(pathKey) {
@@ -484,8 +536,22 @@ function createKeystorePanel({
         const packetIndex = packetInfo?.["Index"] ?? "?";
         [transportData, extraInfo].forEach((candidateRoot) => {
           collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
-            if (!shouldIncludeSessionSecretKey(pathKey)) return;
             const rawText = normalizeSessionSecretValue(rawValue);
+            if (rawText) {
+              extractUriCandidatesFromText(rawText).forEach((uriValue) => {
+                const uriType = /^https?:\/\//i.test(uriValue) ? "url" : "uri";
+                pushSessionEntry({
+                  type: uriType,
+                  label: `${uriType.toUpperCase()} ${uriValue}`,
+                  source: "session-auto-uri",
+                  content: uriValue,
+                  summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
+                  packetIndex,
+                  protocol,
+                });
+              });
+            }
+            if (!shouldIncludeSessionSecretKey(pathKey)) return;
             if (!rawText) return;
             const decodedBasic = decodeHttpBasicAuth(rawText);
             const contentToSave = decodedBasic || rawText;
@@ -872,6 +938,54 @@ function createKeystorePanel({
     });
   }
 
+  function requestManualUriFromContextMenuDialog(keystoreMode) {
+    const dialogEl = document.getElementById("crypt-keystore-manual-uri-dialog");
+    const descriptionEl = document.getElementById(
+      "crypt-keystore-manual-uri-description",
+    );
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    if (!dialogEl || !descriptionEl || !inputEl) return Promise.resolve(null);
+    if (cryptManualUriDialogResolver) {
+      const resolve = cryptManualUriDialogResolver;
+      cryptManualUriDialogResolver = null;
+      resolve(null);
+    }
+    cryptManualUriDialogMode =
+      keystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+        ? CRYPT_KEYSTORE_MODE_PERSISTENT
+        : CRYPT_KEYSTORE_MODE_SESSION;
+    const modeLabel =
+      cryptManualUriDialogMode === CRYPT_KEYSTORE_MODE_PERSISTENT
+        ? "persistent keychain"
+        : "session keychain";
+    descriptionEl.textContent = `Enter URI/URL to add to the ${modeLabel}.`;
+    dialogEl.hidden = false;
+    inputEl.value = "";
+    inputEl.focus();
+    return new Promise((resolve) => {
+      cryptManualUriDialogResolver = resolve;
+    });
+  }
+
+  function resolveManualUriFromContextMenuDialog(value) {
+    const dialogEl = document.getElementById("crypt-keystore-manual-uri-dialog");
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    if (dialogEl) dialogEl.hidden = true;
+    if (inputEl) inputEl.value = "";
+    if (!cryptManualUriDialogResolver) return;
+    const resolve = cryptManualUriDialogResolver;
+    cryptManualUriDialogResolver = null;
+    resolve({
+      value,
+      mode: cryptManualUriDialogMode,
+    });
+  }
+
+  function submitManualUriFromContextMenuDialog() {
+    const inputEl = document.getElementById("crypt-keystore-manual-uri-input");
+    resolveManualUriFromContextMenuDialog(inputEl?.value || "");
+  }
+
   async function unlockPersistentKeystoreAndLoad() {
     if (!(window.crypto && window.crypto.subtle)) {
       doError("WebCrypto API is unavailable; cannot unlock keychain.");
@@ -987,6 +1101,86 @@ function createKeystorePanel({
     }
   }
 
+  async function addManualUriToKeystoreFromContextMenu(keystoreMode) {
+    hideConvertContextMenu();
+    const dialogResult = await requestManualUriFromContextMenuDialog(
+      keystoreMode,
+    );
+    if (!dialogResult) return;
+    const normalized = normalizeUriCandidate(dialogResult.value);
+    if (!normalized) {
+      statusUpdate("Status: No URI/URL provided");
+      return;
+    }
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(normalized);
+    } catch {
+      statusUpdate("Status: Invalid URI/URL");
+      return;
+    }
+
+    const normalizedUri = parsedUrl.href;
+    const uriType = /^https?:$/i.test(parsedUrl.protocol) ? "url" : "uri";
+    const entry = {
+      type: uriType,
+      label: `${uriType.toUpperCase()} ${normalizedUri}`,
+      source: "context-menu-manual-uri",
+      content: normalizedUri,
+      summary: "Manual URI/URL entry from context menu",
+    };
+
+    if (dialogResult.mode === CRYPT_KEYSTORE_MODE_SESSION) {
+      addSessionKeystoreEntry(entry);
+      statusUpdate(`Status: Saved ${uriType} in session keychain`);
+      writeLogEntry(`Manual context URI saved mode=session type=${uriType}`);
+      return;
+    }
+
+    await addCryptKeystoreEntry(entry, { force: true });
+  }
+
+  async function openSelectedKeystoreLinkInBrowser() {
+    const listEl = document.getElementById("crypt-keystore-list");
+    const selectedIndex = Number(listEl.value);
+    const activeEntries = getActiveCryptKeystoreEntries();
+    if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
+      statusUpdate("Status: Select a keystore entry first");
+      return;
+    }
+
+    const selectedEntry = activeEntries[selectedIndex];
+    const openableLink = normalizeOpenableLink(selectedEntry.content);
+    if (!openableLink) {
+      statusUpdate("Status: Selected entry is not an openable web link");
+      return;
+    }
+    if (typeof openExternalUrl !== "function") {
+      doError("External browser opening is unavailable in this environment.");
+      return;
+    }
+
+    const result = await openExternalUrl(openableLink);
+    if (result?.success) {
+      statusUpdate("Status: Opened link in external browser");
+      writeLogEntry(
+        `Keystore link opened in browser label="${selectedEntry.label}"`,
+      );
+      return;
+    }
+
+    const errorMessage =
+      result && typeof result === "object" && "error" in result
+        ? result.error
+        : "unknown";
+    doError("Could not open the selected link in browser.");
+    logErrorEntry("crypt-keystore-open-link", errorMessage || "unknown");
+    statusUpdate(
+      "Status: Could not open selected link – " + (errorMessage || "unknown"),
+    );
+  }
+
   return {
     addSessionKeystoreEntry,
     addCryptKeystoreEntry,
@@ -997,9 +1191,13 @@ function createKeystorePanel({
     renderCryptKeystoreList,
     renderCryptKeystoreDetails,
     addToKeystoreFromContextMenu,
+    addManualUriToKeystoreFromContextMenu,
+    openSelectedKeystoreLinkInBrowser,
     unlockPersistentKeystoreAndLoad,
     submitKeystoreUnlockDialog,
     resolveKeystoreUnlockPassword,
+    submitManualUriFromContextMenuDialog,
+    resolveManualUriFromContextMenuDialog,
     getActiveCryptKeystoreEntries,
     setActiveMode(mode) {
       cryptActiveKeystoreMode = mode;
@@ -1034,6 +1232,8 @@ function createKeystorePanel({
       cryptKeystoreUnlockKeyMaterial = null;
       cryptKeystoreUnlockDialogResolver = null;
       cryptKeystoreUnlockDialogMode = "unlock";
+      cryptManualUriDialogResolver = null;
+      cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
       renderCryptKeystoreList();
     },
   };
