@@ -9,6 +9,8 @@ const DATA_TOOLS_ENTROPY_HIGH_THRESHOLD = 6.8;
 const DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD = 4.5;
 const DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES = 4096;
 const DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH = 12;
+const DATA_TOOLS_TEXT_ENCODER = new TextEncoder();
+const DATA_TOOLS_HEX_BYTE_RE = /^[0-9a-fA-F]{2}$/;
 
 const CONV_CONVERSIONS_SUBTAB = "conversions";
 const CONV_HASHES_SUBTAB = "hashes";
@@ -227,6 +229,7 @@ function getEntropyLabel(entropy) {
 // ── Hash outputs ──────────────────────────────────────────────────────────────
 
 function resetHashOutputs() {
+  document.getElementById("data-tools-hash-input-reading").value = "";
   for (const id of HASH_IDS) {
     document.getElementById(id).value = "";
   }
@@ -240,6 +243,24 @@ function bytesToCharString(bytes) {
     result += String.fromCharCode(...chunk);
   }
   return result;
+}
+
+function formatHashInputReading(bytes) {
+  return [...bytes]
+    .map((byte) => {
+      if (byte === 0x5c) return "\\\\";
+      if (byte === 0x0a) return "\\n";
+      if (byte === 0x0d) return "\\r";
+      if (byte === 0x09) return "\\t";
+      if (byte >= 0x20 && byte <= 0x7e) return String.fromCharCode(byte);
+      return `\\x${byte.toString(16).padStart(2, "0").toUpperCase()}`;
+    })
+    .join("");
+}
+
+function setHashInputReadingFromBytes(bytes) {
+  document.getElementById("data-tools-hash-input-reading").value =
+    formatHashInputReading(bytes);
 }
 
 function computeDataToolsHashes(bytes) {
@@ -263,6 +284,53 @@ function computeDataToolsHashes(bytes) {
   const whirlpoolHash =
     bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
   document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
+}
+
+function runDataToolsHashesFromInput() {
+  const hashInput = document.getElementById("data-tools-hash-input-reading").value;
+  const bytes = parseHashInputReadingBytes(hashInput);
+  computeDataToolsHashes(bytes);
+}
+
+function parseHashInputReadingBytes(input) {
+  const bytes = [];
+  let plainStart = 0;
+  const flushPlain = (end) => {
+    if (end <= plainStart) return;
+    bytes.push(...DATA_TOOLS_TEXT_ENCODER.encode(input.slice(plainStart, end)));
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] !== "\\") continue;
+    flushPlain(i);
+    const next = input[i + 1];
+    if (next === "n") {
+      bytes.push(0x0a);
+      i += 1;
+    } else if (next === "r") {
+      bytes.push(0x0d);
+      i += 1;
+    } else if (next === "t") {
+      bytes.push(0x09);
+      i += 1;
+    } else if (next === "\\") {
+      bytes.push(0x5c);
+      i += 1;
+    } else if (
+      next === "x" &&
+      i + 3 < input.length &&
+      DATA_TOOLS_HEX_BYTE_RE.test(input.slice(i + 2, i + 4))
+    ) {
+      bytes.push(parseInt(input.slice(i + 2, i + 4), 16));
+      i += 3;
+    } else {
+      bytes.push(0x5c);
+    }
+    plainStart = i + 1;
+  }
+
+  flushPlain(input.length);
+  return new Uint8Array(bytes);
 }
 
 // ── Conversions panel ─────────────────────────────────────────────────────────
@@ -321,6 +389,7 @@ function runDataToolsConversion() {
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
+    setHashInputReadingFromBytes(bytes);
     computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
   } catch (error) {
@@ -864,6 +933,7 @@ module.exports = {
   resetDataToolsOutputs,
   runProtoDecoder,
   runDataToolsConversion,
+  runDataToolsHashesFromInput,
   showDataTools,
   setConvSubtab,
 };
