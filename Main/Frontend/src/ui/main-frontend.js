@@ -52,6 +52,7 @@ const {
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
+  parseDataToolsInput,
   setConvSubtab,
 } = require("./panels/data-tools-panel");
 
