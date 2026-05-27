@@ -1899,6 +1899,7 @@ const convertContextButtons = {
   base64: getCachedElement("convert-context-base64"),
   decimal: getCachedElement("convert-context-decimal"),
   ascii: getCachedElement("convert-context-ascii"),
+  loadCursorAscii: getCachedElement("convert-context-load-cursor-ascii"),
   loadPayload: getCachedElement("convert-context-load-payload"),
   copyHex: getCachedElement("convert-context-copy-hex"),
   copyAscii: getCachedElement("convert-context-copy-ascii"),
@@ -2453,7 +2454,8 @@ function showConvertContextMenu(
   const hasPacketToExport = Boolean(
     getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
   );
-  const hasPayloadToExport = Boolean(getCurrentRawPayloadHex());
+  const currentPayloadHex = getCurrentRawPayloadHex();
+  const hasPayloadToExport = Boolean(currentPayloadHex);
   const hasHttpBody = Boolean(getCurrentHttpBodyHex());
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
@@ -2492,6 +2494,14 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.loadPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
+  const cursorByteIndex = Number.parseInt(target?.dataset?.byteIndex ?? "-1", 10);
+  const hasCursorAsciiValue = Boolean(
+    target?.classList?.contains("griditem") &&
+      getCursorAsciiContextLoadData(currentPayloadHex, cursorByteIndex),
+  );
+  convertContextButtons.loadCursorAscii.style.display = hasCursorAsciiValue
     ? "block"
     : "none";
   convertContextButtons.filterIp.style.display = filterQueries.ip
@@ -2560,7 +2570,8 @@ function showConvertContextMenu(
   const hasCopyActions = showCopySelection || isHexViewTarget || hasCookieActions;
   const hasClipboardActions = hasCopyActions || showPaste;
   const hasGeneralActions = hasClipboardActions;
-  const hasDataTypeActions = formats.length > 0 || hasPayloadToExport;
+  const hasDataTypeActions =
+    formats.length > 0 || hasPayloadToExport || hasCursorAsciiValue;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
   const hasKeystoreActions = showCopySelection || Boolean(sourceText);
   const hasExportActions =
@@ -2678,6 +2689,47 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   showDataTools();
   runDataToolsConversion();
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
+}
+
+function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
+  if (byteIndex < 0 || !payloadHex) return null;
+  const decodedAscii = hexToAscii(payloadHex);
+  let printableSequence = "";
+  for (let i = byteIndex; i < decodedAscii.length; i++) {
+    const charCode = decodedAscii.charCodeAt(i);
+    if (!isPrintable(charCode)) break;
+    printableSequence += decodedAscii[i];
+  }
+  if (printableSequence) {
+    return { value: printableSequence, format: "ascii" };
+  }
+  const hexOffset = byteIndex * 2;
+  const hexPair = payloadHex.slice(hexOffset, hexOffset + 2);
+  if (hexPair.length !== 2 || !/^[0-9A-Fa-f]{2}$/.test(hexPair)) return null;
+  return { value: hexPair.toUpperCase(), format: "hex" };
+}
+
+function loadCursorAsciiIntoDataToolsFromContextMenu() {
+  const payloadHex = getCurrentRawPayloadHex();
+  const byteIndex = Number.parseInt(
+    activeContextTarget?.dataset?.byteIndex ?? "-1",
+    10,
+  );
+  const cursorAsciiLoadData = getCursorAsciiContextLoadData(payloadHex, byteIndex);
+  hideConvertContextMenu();
+  if (!cursorAsciiLoadData) {
+    statusUpdate("Status: No cursor ASCII value available to load");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  inputEl.value = cursorAsciiLoadData.value;
+  formatEl.value = cursorAsciiLoadData.format;
+  showDataTools();
+  runDataToolsConversion();
+  writeLogEntry(
+    `Context conversion loaded cursor ASCII into Conv tab format=${cursorAsciiLoadData.format}`,
+  );
 }
 
 function getActivePacketCursor() {
@@ -3405,6 +3457,9 @@ convertContextButtons.ascii.addEventListener("click", () =>
 );
 convertContextButtons.loadPayload.addEventListener("click", () => {
   loadRawPayloadIntoDataToolsFromContextMenu();
+});
+convertContextButtons.loadCursorAscii.addEventListener("click", () => {
+  loadCursorAsciiIntoDataToolsFromContextMenu();
 });
 convertContextButtons.copyHex.addEventListener("click", () => {
   copyHexFromContext();
