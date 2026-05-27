@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld('previewapi', {
     ipcRenderer.invoke('preview-http-body', bodyHex, contentType),
 });
 
+contextBridge.exposeInMainWorld('browserapi', {
+  openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
+});
+
 contextBridge.exposeInMainWorld('quitapi', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
   promptSaveOnExit: () => ipcRenderer.invoke('prompt-save-session-on-exit'),

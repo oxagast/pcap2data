@@ -2331,6 +2331,7 @@ keystorePanel = createKeystorePanel({
   getActiveContextConversionText: () => activeContextConversionText,
   getApplyCryptCertificateText: () => applyCryptCertificateText,
   getApplyCryptPrivateKeyText: () => applyCryptPrivateKeyText,
+  openExternalUrl: (url) => window.browserapi.openExternalUrl(url),
 });
 
 function buildCookieJarTextFromHttpFields(fields) {
@@ -3418,6 +3419,11 @@ document
   .getElementById("crypt-delete-keystore-entry-btn")
   .addEventListener("click", () => {
     void keystorePanel.deleteSelectedCryptKeystoreEntry();
+  });
+document
+  .getElementById("crypt-open-link-btn")
+  .addEventListener("click", () => {
+    void keystorePanel.openSelectedKeystoreLinkInBrowser();
   });
 
 document
