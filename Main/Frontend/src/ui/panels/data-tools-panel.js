@@ -227,6 +227,7 @@ function getEntropyLabel(entropy) {
 // ── Hash outputs ──────────────────────────────────────────────────────────────
 
 function resetHashOutputs() {
+  document.getElementById("data-tools-hash-input-reading").value = "";
   for (const id of HASH_IDS) {
     document.getElementById(id).value = "";
   }
@@ -242,9 +243,24 @@ function bytesToCharString(bytes) {
   return result;
 }
 
+function formatHashInputReading(bytes) {
+  return [...bytes]
+    .map((byte) => {
+      if (byte === 0x5c) return "\\\\";
+      if (byte === 0x0a) return "\\n";
+      if (byte === 0x0d) return "\\r";
+      if (byte === 0x09) return "\\t";
+      if (byte >= 0x20 && byte <= 0x7e) return String.fromCharCode(byte);
+      return `\\x${byte.toString(16).padStart(2, "0").toUpperCase()}`;
+    })
+    .join("");
+}
+
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
   const byteString = bytesToCharString(bytes);
+  document.getElementById("data-tools-hash-input-reading").value =
+    formatHashInputReading(bytes);
 
   document.getElementById("data-tools-md5-output").value =
     CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);

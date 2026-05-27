@@ -850,6 +850,19 @@ strong {
   margin-top: 0;
 }
 
+.data-tools-hash-input-reading {
+  width: 100%;
+  min-height: 48px;
+  box-sizing: border-box;
+  resize: vertical;
+  background-color: #000;
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
 .data-tools-hash-output {
   width: 100%;
   box-sizing: border-box;
