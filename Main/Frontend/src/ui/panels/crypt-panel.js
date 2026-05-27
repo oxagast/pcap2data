@@ -1,9 +1,10 @@
-const crypto = require("crypto");
+const crypto = require("crypto-browserify");
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
 const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
 const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
 const MAX_ASCII_PREVIEW_LENGTH = 1024;
+const MAX_DECRYPT_FAILURE_MESSAGES = 8;
 
 function createCryptPanel({
   constants,
@@ -250,7 +251,9 @@ function createCryptPanel({
         }
       }
     }
-    const failurePreview = [...new Set(failures)].slice(0, 8).join(" | ");
+    const failurePreview = [...new Set(failures)]
+      .slice(0, MAX_DECRYPT_FAILURE_MESSAGES)
+      .join(" | ");
     throw new Error(
       `No TLS decrypt attempt succeeded with the loaded key (${failurePreview})`,
     );
@@ -258,7 +261,16 @@ function createCryptPanel({
 
   function certMatchesPrivateKey(certificatePem, privateKeyPem) {
     const normalizedCert = String(certificatePem || "").trim();
-    if (!normalizedCert) return true;
+    if (!normalizedCert) return { matched: true };
+    if (
+      typeof crypto.X509Certificate !== "function" ||
+      typeof crypto.createPublicKey !== "function"
+    ) {
+      return {
+        matched: null,
+        reason: "Certificate/key pair validation is unavailable in this runtime.",
+      };
+    }
     try {
       const certPublicKeyPem = crypto
         .createPublicKey(new crypto.X509Certificate(normalizedCert).publicKey)
@@ -268,10 +280,13 @@ function createCryptPanel({
         .createPublicKey(privateKeyPem)
         .export({ type: "spki", format: "pem" })
         .toString();
-      return certPublicKeyPem === privateKeyPublicPem;
+      return { matched: certPublicKeyPem === privateKeyPublicPem };
     } catch (error) {
       logErrorEntry("crypt-cert-key-check", error);
-      return true;
+      return {
+        matched: null,
+        reason: "Certificate/key pair validation failed and was skipped.",
+      };
     }
   }
 
@@ -281,7 +296,7 @@ function createCryptPanel({
     const decryptedUtf8 = decryptedBytes.toString("utf8");
     const looksPrintable = PRINTABLE_UTF8_PREVIEW_REGEX.test(decryptedUtf8);
     const asciiSummary = looksPrintable
-      ? decryptedUtf8
+      ? decryptedUtf8.slice(0, MAX_ASCII_PREVIEW_LENGTH)
       : decryptedUtf8
           .slice(0, MAX_ASCII_PREVIEW_LENGTH)
           .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".");
@@ -448,10 +463,14 @@ function createCryptPanel({
     const certificatePem = String(
       document.getElementById("crypt-cert-input")?.value || "",
     ).trim();
-    if (certificatePem && !certMatchesPrivateKey(certificatePem, privateKeyPem)) {
+    const certKeyCheck = certMatchesPrivateKey(certificatePem, privateKeyPem);
+    if (certificatePem && certKeyCheck.matched === false) {
       statusUpdate(
         "Status: Loaded certificate does not match private key (continuing with key)",
       );
+    }
+    if (certificatePem && certKeyCheck.matched === null && certKeyCheck.reason) {
+      writeLogEntry(`Crypt cert/key check skipped: ${certKeyCheck.reason}`);
     }
     const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
     const payloadHex = findPayloadHexForEncounteredEntry(activeEntry).replace(
