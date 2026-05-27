@@ -61,6 +61,7 @@ const {
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
   setConvSubtab,
+  runDataToolsHashesFromInput,
 } = require("./panels/data-tools-panel");
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
@@ -3368,6 +3369,9 @@ document
 document
   .getElementById("data-tools-convert-btn")
   .addEventListener("click", runDataToolsConversion);
+document
+  .getElementById("data-tools-hash-input-reading")
+  .addEventListener("input", runDataToolsHashesFromInput);
 document
   .getElementById("data-tools-clear-btn")
   .addEventListener("click", () => {
