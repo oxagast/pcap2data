@@ -108,6 +108,9 @@ geoIpCacheLock = threading.Lock()
 cachedBanners: dict = {}
 cachedBannersLock = threading.Lock()
 
+# --- TCP stream protocol cache: canonical stream key -> initial packet dst port ---
+tcpStreamInitialDstPortMap: dict = {}
+
 # --- HTTP method set used by decodeHTTP() for request-line detection ---
 HTTP_METHODS: set = {
     "GET",
@@ -675,6 +678,30 @@ def getGeoipInfo(ip, srcOrDst):
     with geoIpCacheLock:
         geoIpCache[geoIpCacheKey] = geoIpResult
     return geoIpResult
+
+
+def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
+    """
+    Return a direction-agnostic key for a TCP stream.
+    """
+    endpointA = (str(srcIp), int(srcPort))
+    endpointB = (str(dstIp), int(dstPort))
+    return tuple(sorted((endpointA, endpointB)))
+
+
+def buildTcpStreamInitialDstPortMap(packetList):
+    """
+    Build a map of TCP stream key -> destination port from the stream's first packet
+    in capture order.
+    """
+    streamMap = {}
+    for p in packetList:
+        if not (p.haslayer("IP") and p.haslayer("TCP")):
+            continue
+        streamKey = getTcpStreamKey(p["IP"].src, p["TCP"].sport, p["IP"].dst, p["TCP"].dport)
+        if streamKey not in streamMap:
+            streamMap[streamKey] = p["TCP"].dport
+    return streamMap
 
 
 def getDatatypes(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
@@ -2768,10 +2795,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPortFilter is None or dstPort == dstPortFilter
     ):
         if rawPayload is not None and len(rawPayload) > 0:
+            streamLabelPort = dstPort
+            if isTcp:
+                streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
+                streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
             writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
             dataTypeInfo = getDatatypes(
                 rawPayload,
-                dstPort,
+                streamLabelPort,
                 p["IP"].src,
                 p["IP"].dst,
                 timeout,
@@ -3438,6 +3469,7 @@ else:
 
 totalPackets = 0
 packets = scapy.rdpcap(args.pcap_file)  # type: ignore
+tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
 allPacketCount = len(packets)
 llmBatchSize = 0
 totalPackets = len(
