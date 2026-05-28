@@ -2153,6 +2153,21 @@ const cryptPanel = createCryptPanel({
   runFilterQuery,
   addSessionKeystoreEntry: (...args) => keystorePanel.addSessionKeystoreEntry(...args),
   getFirstLineOrFallback,
+  sendDecryptedToConv: ({ hexValue, utf8Value, sourceLabel }) => {
+    const inputEl = document.getElementById("data-tools-input");
+    const formatEl = document.getElementById("data-tools-format");
+    const normalizedHex = String(hexValue || "").trim();
+    const normalizedUtf8 = String(utf8Value || "");
+    if (normalizedHex) {
+      inputEl.value = normalizedHex;
+      formatEl.value = "hex";
+    } else {
+      inputEl.value = normalizedUtf8;
+      formatEl.value = "ascii";
+    }
+    showDataTools(CONV_CONVERSIONS_SUBTAB);
+    runDataToolsConversion();
+  },
 });
 
 const {
@@ -2164,6 +2179,9 @@ const {
   loadEncounteredCertificateIntoCrypt,
   refreshCryptEncounteredEntries,
   showCryptWorkspace,
+  decryptActiveEntryWithLoadedKey,
+  sendDecryptedPayloadToConvTab,
+  clearCryptDecryptionOutput,
 } = cryptPanel;
 
 const listPanel = createListPanel({
@@ -3716,6 +3734,15 @@ document
 document.getElementById("crypt-clear-key-btn").addEventListener("click", () => {
   applyCryptPrivateKeyText("", "cleared");
 });
+document
+  .getElementById("crypt-decrypt-entry-btn")
+  .addEventListener("click", decryptActiveEntryWithLoadedKey);
+document
+  .getElementById("crypt-send-decrypted-conv-btn")
+  .addEventListener("click", sendDecryptedPayloadToConvTab);
+document
+  .getElementById("crypt-clear-decrypted-btn")
+  .addEventListener("click", clearCryptDecryptionOutput);
 
 document
   .getElementById("crypt-save-cert-keystore-btn")

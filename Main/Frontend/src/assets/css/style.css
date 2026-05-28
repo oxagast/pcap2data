@@ -652,6 +652,7 @@ strong {
 
 #crypt-cert-preview,
 #crypt-key-preview,
+#crypt-decrypt-preview,
 #crypt-keystore-details {
   margin: 0;
   white-space: pre-wrap;
