@@ -45,6 +45,7 @@ const { createStatsPanel } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { initializeInstallScreen } = require("./panels/install-screen");
+const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
 const psVer = require("../../package.json").version;
 const {
@@ -186,10 +187,29 @@ let keystorePanel;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
+// Name of the session in the library (userData/sessions/). Null if unsaved.
+let currentSessionName = null;
+let sessionPickerPanel = null;
 
 initializeInstallScreen({
   installapi: window.installapi,
   documentRef: document,
+});
+
+sessionPickerPanel = initializeSessionPicker({
+  sessionsapi: window.sessionsapi,
+  documentRef: document,
+  onSessionSelected: (name, jsonData) => {
+    currentSessionName = name;
+    startTime = performance.now();
+    statusUpdate("Loading session: " + name);
+    processFile(
+      new File([jsonData], name + ".json", { type: "application/json" }),
+    );
+  },
+  onNewSession: () => {
+    // User dismissed the picker – stay on the blank/new session state
+  },
 });
 
 const {
@@ -319,6 +339,8 @@ document
       writeLogEntry(
         `User selected JSON file name=${file.name} size=${fileSizeKb}kb`,
       );
+      // Clear library session name – this is a manual file load, not from the library
+      currentSessionName = null;
       processFile(file);
       isFileLoaded = true;
       event.target.value = ""; // Reset so the same file can be loaded again
@@ -1065,13 +1087,51 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
     statusUpdate("Status: No data loaded to save");
     return { success: false, error: "No loaded capture" };
   }
+
+  // If no session library is available fall back to the file-dialog export
+  if (!window.sessionsapi) {
+    const sessionJsonData = buildSessionFilePayload();
+    const result = await window.saveapi.saveJson(sessionJsonData);
+    if (result.canceled) {
+      statusUpdate("Status: Save cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Session saved successfully");
+      writeLogEntry(`Session saved source=${sourceLabel}`);
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Save failed");
+      logErrorEntry("save-session", errorMessage || "unknown");
+      statusUpdate("Status: Save failed – " + (errorMessage || "unknown error"));
+      console.error("Save failed:", errorMessage);
+    }
+    return result;
+  }
+
+  // Prompt for a session name if one has not been set yet
+  if (!currentSessionName) {
+    const promptedName =
+      sessionPickerPanel
+        ? await sessionPickerPanel.promptSessionName("Save Session to Library", "")
+        : window.prompt("Enter a session name:", "");
+    if (!promptedName || !promptedName.trim()) {
+      statusUpdate("Status: Save cancelled");
+      return { success: false, canceled: true };
+    }
+    currentSessionName = promptedName.trim();
+  }
+
   const sessionJsonData = buildSessionFilePayload();
-  const result = await window.saveapi.saveJson(sessionJsonData);
-  if (result.canceled) {
-    statusUpdate("Status: Save cancelled");
-  } else if (result.success) {
-    statusUpdate("Status: Session saved successfully");
-    writeLogEntry(`Session saved source=${sourceLabel}`);
+  const result = await window.sessionsapi.save(currentSessionName, sessionJsonData);
+  if (result.success) {
+    // Keep the canonical name returned by the backend (post-sanitization)
+    if (result.name) currentSessionName = result.name;
+    statusUpdate('Status: Session saved to library as "' + currentSessionName + '"');
+    writeLogEntry(
+      `Session saved to library name="${currentSessionName}" source=${sourceLabel}`,
+    );
   } else {
     const errorMessage =
       result && typeof result === "object" && "error" in result
@@ -1081,6 +1141,47 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
     logErrorEntry("save-session", errorMessage || "unknown");
     statusUpdate("Status: Save failed – " + (errorMessage || "unknown error"));
     console.error("Save failed:", errorMessage);
+  }
+  return result;
+}
+
+async function exportSessionToFile() {
+  if (
+    !capturedPackets ||
+    !capturedPackets["Host"] ||
+    typeof capturedPackets["Host"] !== "object"
+  ) {
+    statusUpdate("Status: No data loaded to export");
+    return { success: false, error: "No loaded capture" };
+  }
+  const sessionJsonData = buildSessionFilePayload();
+  if (window.sessionsapi) {
+    const result = await window.sessionsapi.exportToFile(
+      currentSessionName || "",
+      sessionJsonData,
+    );
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Session exported successfully");
+      writeLogEntry(`Session exported to file name="${currentSessionName || "unnamed"}"`);
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Export failed");
+      logErrorEntry("export-session", errorMessage || "unknown");
+      statusUpdate("Status: Export failed – " + (errorMessage || "unknown error"));
+    }
+    return result;
+  }
+  // Fallback: use the legacy save dialog
+  const result = await window.saveapi.saveJson(sessionJsonData);
+  if (result.canceled) {
+    statusUpdate("Status: Export cancelled");
+  } else if (result.success) {
+    statusUpdate("Status: Session exported successfully");
   }
   return result;
 }
@@ -6416,6 +6517,19 @@ document.getElementById("save-json-btn").addEventListener("click", function () {
   void persistSessionToDisk("sidebar-button");
 });
 
+// Export session to a user-chosen file location
+document.getElementById("export-session-btn").addEventListener("click", function () {
+  void exportSessionToFile();
+});
+
+// Open the session library picker
+const sessionsLibraryBtn = document.getElementById("sessions-library-btn");
+if (sessionsLibraryBtn) {
+  sessionsLibraryBtn.addEventListener("click", () => {
+    if (sessionPickerPanel) sessionPickerPanel.show();
+  });
+}
+
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
@@ -6425,6 +6539,8 @@ window.jsonapi.onJsonData((jsonData) => {
   document.getElementById("error-container").style.display = "none";
   statusUpdate("Loaded data from backend, processing...");
   writeLogEntry("Backend JSON payload received for processing");
+  // Clear library session name – this is a new PCAP capture, not a library session
+  currentSessionName = null;
   processFile(
     new File([jsonData], "capture.json", { type: "application/json" }),
   );
