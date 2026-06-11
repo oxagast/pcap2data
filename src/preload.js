@@ -71,3 +71,12 @@ contextBridge.exposeInMainWorld('logapi', {
     return () => ipcRenderer.removeListener('activity-log-entry', listener);
   },
 });
+
+contextBridge.exposeInMainWorld('sessionsapi', {
+  list: () => ipcRenderer.invoke('sessions-list'),
+  load: (name) => ipcRenderer.invoke('session-load', name),
+  save: (name, jsonData) => ipcRenderer.invoke('session-save', name, jsonData),
+  rename: (oldName, newName) => ipcRenderer.invoke('session-rename', oldName, newName),
+  remove: (name) => ipcRenderer.invoke('session-delete', name),
+  exportToFile: (name, jsonData) => ipcRenderer.invoke('session-export', name, jsonData),
+});

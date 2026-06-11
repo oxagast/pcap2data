@@ -575,6 +575,181 @@ ipcMain.handle("get-activity-log-entries", async () => {
   return [...activityLogEntries];
 });
 
+// Session library helpers
+function getSessionsDir() {
+  return path.join(app.getPath("userData"), "sessions");
+}
+
+function sanitizeSessionName(name) {
+  // Replace characters that are unsafe in filenames, collapse spaces
+  return name
+    .trim()
+    .replace(/[/\\:*?"<>|]/g, "_")
+    .replace(/\s+/g, " ")
+    .slice(0, 128);
+}
+
+function sessionFilePath(name) {
+  return path.join(getSessionsDir(), sanitizeSessionName(name) + ".json");
+}
+
+async function ensureSessionsDir() {
+  const dir = getSessionsDir();
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  }
+  return dir;
+}
+
+ipcMain.handle("sessions-list", async () => {
+  try {
+    const dir = await ensureSessionsDir();
+    const files = await fs.promises.readdir(dir);
+    const sessions = [];
+    for (const file of files) {
+      if (!file.endsWith(".json")) continue;
+      const filePath = path.join(dir, file);
+      const name = file.slice(0, -5); // strip .json
+      try {
+        const content = await fs.promises.readFile(filePath, "utf8");
+        const parsed = JSON.parse(content);
+        const sessionState = parsed["Session State"] || {};
+        sessions.push({
+          name,
+          savedAt: sessionState.savedAt || null,
+          filePath,
+        });
+      } catch (_err) {
+        // Skip files that cannot be read or parsed – they may be corrupted
+      }
+    }
+    sessions.sort((a, b) => {
+      if (!a.savedAt && !b.savedAt) return a.name.localeCompare(b.name);
+      if (!a.savedAt) return 1;
+      if (!b.savedAt) return -1;
+      return b.savedAt.localeCompare(a.savedAt);
+    });
+    return { success: true, sessions };
+  } catch (err) {
+    console.error("sessions-list error:", err);
+    return { success: false, error: err.message, sessions: [] };
+  }
+});
+
+ipcMain.handle("session-load", async (_event, name) => {
+  if (typeof name !== "string" || !name.trim()) {
+    return { success: false, error: "Invalid session name" };
+  }
+  try {
+    const filePath = sessionFilePath(name);
+    const content = await fs.promises.readFile(filePath, "utf8");
+    return { success: true, data: content };
+  } catch (err) {
+    console.error("session-load error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("session-save", async (_event, name, jsonData) => {
+  if (typeof name !== "string" || !name.trim()) {
+    return { success: false, error: "Invalid session name" };
+  }
+  if (typeof jsonData !== "string" || jsonData.trim() === "") {
+    return { success: false, error: "No JSON data to save" };
+  }
+  try {
+    await ensureSessionsDir();
+    const filePath = sessionFilePath(name);
+    await fs.promises.writeFile(filePath, jsonData, "utf8");
+    return { success: true, name: sanitizeSessionName(name) };
+  } catch (err) {
+    console.error("session-save error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("session-rename", async (_event, oldName, newName) => {
+  if (
+    typeof oldName !== "string" ||
+    !oldName.trim() ||
+    typeof newName !== "string" ||
+    !newName.trim()
+  ) {
+    return { success: false, error: "Invalid session name" };
+  }
+  const sanitizedNew = sanitizeSessionName(newName);
+  if (!sanitizedNew) {
+    return { success: false, error: "New name is invalid after sanitization" };
+  }
+  try {
+    await ensureSessionsDir();
+    const oldPath = sessionFilePath(oldName);
+    const newPath = sessionFilePath(sanitizedNew);
+    // Check source exists
+    try {
+      await fs.promises.access(oldPath);
+    } catch (_e) {
+      return { success: false, error: "Session not found" };
+    }
+    // Check destination doesn't already exist (skip if same path)
+    if (oldPath !== newPath) {
+      try {
+        await fs.promises.access(newPath);
+        return { success: false, error: "A session with that name already exists" };
+      } catch (_e) {
+        // Destination does not exist – safe to rename
+      }
+    }
+    await fs.promises.rename(oldPath, newPath);
+    return { success: true, name: sanitizedNew };
+  } catch (err) {
+    console.error("session-rename error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("session-delete", async (_event, name) => {
+  if (typeof name !== "string" || !name.trim()) {
+    return { success: false, error: "Invalid session name" };
+  }
+  try {
+    const filePath = sessionFilePath(name);
+    await fs.promises.unlink(filePath);
+    return { success: true };
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return { success: false, error: "Session not found" };
+    }
+    console.error("session-delete error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle("session-export", async (_event, name, jsonData) => {
+  if (typeof jsonData !== "string" || jsonData.trim() === "") {
+    return { success: false, error: "No JSON data to export" };
+  }
+  const defaultName =
+    typeof name === "string" && name.trim()
+      ? sanitizeSessionName(name) + ".json"
+      : "packetsnitch-session.json";
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Export PacketSnitch Session",
+    defaultPath: path.join(app.getPath("documents"), defaultName),
+    filters: [{ name: "JSON Files", extensions: ["json"] }],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+  try {
+    await fs.promises.writeFile(filePath, jsonData, "utf8");
+    return { success: true };
+  } catch (err) {
+    console.error("session-export error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 app.on("before-quit", () => {
   if (!hasLoggedProgramShutdown) {
     appendActivityLogLine(

@@ -134,6 +134,14 @@
             >
           </form>
           <br />
+          <input
+            type="button"
+            id="sessions-library-btn"
+            value="Sessions Library"
+            class="menu-btns"
+            title="Open saved sessions library"
+          />
+          <br />
           <input type="button" id="pcap-filename" name="pcap-up" hidden />
           <label id="pcap-lab" for="pcap-filename" class="menu-btns"
             >Choose PCAP</label
@@ -166,6 +174,13 @@
               type="button"
               id="save-json-btn"
               value="Save Session"
+              class="menu-btns left"
+            />
+            <input
+              type="button"
+              id="export-session-btn"
+              value="Export Session"
+              title="Export session to a file"
               class="menu-btns left"
             />
             <div id="file-info">
@@ -1116,6 +1131,64 @@ No keystore entries saved.</pre
         <hr class="install-divider" />
         <div id="install-ollama-status"></div>
         <button id="install-continue-btn">Continue</button>
+      </div>
+    </div>
+
+    <!-- Session picker – shown on startup when saved sessions exist -->
+    <div id="session-picker">
+      <div id="session-picker-inner">
+        <div id="session-picker-header">
+          <div id="session-picker-title">PacketSnitch – Saved Sessions</div>
+          <button
+            id="session-picker-close-btn"
+            class="session-picker-close"
+            aria-label="Close session picker"
+            title="Start new session"
+          >&#10005;</button>
+        </div>
+        <div id="session-picker-toolbar">
+          <button id="session-picker-new-btn" class="session-picker-primary-btn">
+            New Session
+          </button>
+          <button id="session-picker-refresh-btn" class="session-picker-secondary-btn">
+            Refresh
+          </button>
+        </div>
+        <div id="session-picker-table-wrap">
+          <table id="session-picker-table">
+            <thead>
+              <tr>
+                <th class="session-picker-th-name">Session Name</th>
+                <th class="session-picker-th-date">Last Saved</th>
+                <th class="session-picker-th-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="session-picker-list"></tbody>
+          </table>
+        </div>
+        <div id="session-picker-status" class="session-picker-status"></div>
+      </div>
+    </div>
+
+    <!-- Session name dialog – used when saving a session to the library -->
+    <div id="session-name-dialog" hidden>
+      <div id="session-name-dialog-inner">
+        <div id="session-name-dialog-title">Save Session</div>
+        <div id="session-name-dialog-desc">
+          Enter a name for this session:
+        </div>
+        <input
+          id="session-name-input"
+          type="text"
+          placeholder="My Session"
+          maxlength="128"
+          autocomplete="off"
+        />
+        <div id="session-name-dialog-status" class="session-name-dialog-status"></div>
+        <div class="session-name-dialog-actions">
+          <button id="session-name-confirm-btn">Save</button>
+          <button id="session-name-cancel-btn">Cancel</button>
+        </div>
       </div>
     </div>
   </body>
