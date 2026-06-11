@@ -4,7 +4,7 @@
  */
 
 function formatSavedAt(iso) {
-  if (!iso) return "Unknown date";
+  if (!iso) return "No date information";
   try {
     return new Date(iso).toLocaleString();
   } catch (_e) {

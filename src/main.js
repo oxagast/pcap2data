@@ -622,8 +622,7 @@ ipcMain.handle("sessions-list", async () => {
           filePath,
         });
       } catch (_err) {
-        // Skip files that can't be parsed
-        sessions.push({ name, savedAt: null, filePath });
+        // Skip files that cannot be read or parsed – they may be corrupted
       }
     }
     sessions.sort((a, b) => {
@@ -688,11 +687,20 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
     await ensureSessionsDir();
     const oldPath = sessionFilePath(oldName);
     const newPath = sessionFilePath(sanitizedNew);
-    if (!fs.existsSync(oldPath)) {
+    // Check source exists
+    try {
+      await fs.promises.access(oldPath);
+    } catch (_e) {
       return { success: false, error: "Session not found" };
     }
-    if (fs.existsSync(newPath) && oldPath !== newPath) {
-      return { success: false, error: "A session with that name already exists" };
+    // Check destination doesn't already exist (skip if same path)
+    if (oldPath !== newPath) {
+      try {
+        await fs.promises.access(newPath);
+        return { success: false, error: "A session with that name already exists" };
+      } catch (_e) {
+        // Destination does not exist – safe to rename
+      }
     }
     await fs.promises.rename(oldPath, newPath);
     return { success: true, name: sanitizedNew };
@@ -708,12 +716,12 @@ ipcMain.handle("session-delete", async (_event, name) => {
   }
   try {
     const filePath = sessionFilePath(name);
-    if (!fs.existsSync(filePath)) {
-      return { success: false, error: "Session not found" };
-    }
     await fs.promises.unlink(filePath);
     return { success: true };
   } catch (err) {
+    if (err.code === "ENOENT") {
+      return { success: false, error: "Session not found" };
+    }
     console.error("session-delete error:", err);
     return { success: false, error: err.message };
   }
