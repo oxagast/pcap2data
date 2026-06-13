@@ -1315,6 +1315,7 @@ async function maybePromptSaveSessionOnExit() {
 }
 
 async function requestApplicationClose() {
+  if (packetsForHost && packetsForHost.length > 1) {
   const exitAction = await maybePromptSaveSessionOnExit();
   if (exitAction === "cancel") {
     statusUpdate("Status: Exit cancelled");
@@ -1331,6 +1332,7 @@ async function requestApplicationClose() {
       return;
     }
   }
+}
   window.quitapi.quitApp();
 }
 
