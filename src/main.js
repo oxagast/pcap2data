@@ -534,7 +534,7 @@ ipcMain.handle("preview-http-body", async (_event, bodyHex, contentType) => {
     await shell.openExternal(fileUrl);
     // Schedule cleanup after a delay to give the browser time to read the file.
     setTimeout(() => {
-      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
     }, 30000);
     return { success: true };
   } catch (err) {

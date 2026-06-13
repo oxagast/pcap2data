@@ -356,7 +356,7 @@ function createListPanel({
               infoPanel(hostPackets);
               const hexPayload =
                 hostPackets[row.pktIdx]?.["Packet Info"]?.["Raw data"]?.[
-                  "Payload"
+                "Payload"
                 ]?.["Hex Encoded"];
               if (hexPayload) popHexGrid(hexPayload);
               populateDataTypes(hostPackets);
@@ -364,9 +364,9 @@ function createListPanel({
 
             statusUpdate(
               "Status: Displaying packet " +
-                row.pi["Index"] +
-                " for host " +
-                row.host,
+              row.pi["Index"] +
+              " for host " +
+              row.host,
             );
           });
 
@@ -377,8 +377,9 @@ function createListPanel({
       table.appendChild(tbody);
       content.appendChild(table);
     }
-
-    buildTable(searchEl.value);
+    if (getCapturedPackets() && Object.keys(getCapturedPackets()["Host"]).length > 1) {
+      buildTable(searchEl.value);
+    }
 
     const newSearch = searchEl.cloneNode(true);
     searchEl.parentNode.replaceChild(newSearch, searchEl);

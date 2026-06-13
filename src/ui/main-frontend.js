@@ -297,7 +297,7 @@ sessionPickerPanel = initializeSessionPicker({
     // User dismissed the picker – stay on the blank/new session state
     // on new session, we should clear any existing data and reset the UI to the initial state
     await clearCurrentSession();
-     window.getfileapi
+    window.getfileapi
       .selectFile()
       .then((filePath) => {
         if (filePath) {
@@ -328,53 +328,53 @@ sessionPickerPanel = initializeSessionPicker({
 });
 
 async function clearCurrentSession() {
-currentSessionName = null;
-    packetsForHost = [];
-    capturedPackets = {};
-    activePacketCursor = 0;
-    index = 0;
-    currentIp = null;
-    currentPacketKey = null;
-    jsonCapture = "";
-    finalSummary = "";
-    finalSummary = ""; // Clear the default summary from the template
-      filterHistory.length = 0;
-      hostFilterEl.value = "";
-      filterHistorySelectEl.innerHTML = '<option value="" selected>Filter History</option>';
-      filterInputEl.value = "";
-      dataToolsInputHistory.length = 0;
-      dataToolsHistorySelectEl.innerHTML = '<option value="" disabled selected>Data Tools History</option>';
-      updateFilterClearButtonState();
-      clearFilterQuery();
-      syncFilterHighlight();
-      clearSummaryContent();
-      renderFilterHistory();
+  currentSessionName = null;
+  packetsForHost = [];
+  capturedPackets = {};
+  activePacketCursor = 0;
+  index = 0;
+  currentIp = null;
+  currentPacketKey = null;
+  jsonCapture = "";
+  finalSummary = "";
+  finalSummary = ""; // Clear the default summary from the template
+  filterHistory.length = 0;
+  hostFilterEl.value = "";
+  filterHistorySelectEl.innerHTML = '<option value="" selected>Filter History</option>';
+  filterInputEl.value = "";
+  dataToolsInputHistory.length = 0;
+  dataToolsHistorySelectEl.innerHTML = '<option value="" disabled selected>Data Tools History</option>';
+  updateFilterClearButtonState();
+  clearFilterQuery();
+  syncFilterHighlight();
+  clearSummaryContent();
+  renderFilterHistory();
 
-    // Load the baseline session template through the preload bridge.
-    try {
-      const templateResult = await window.templateapi.getNewSessionTemplate();
-      if (!templateResult || !templateResult.success || !templateResult.data) {
-        doError(
-          "Unable to load new session template" +
-            (templateResult && templateResult.error
-              ? ": " + templateResult.error
-              : "."),
-        );
-        return;
-      }
-      processFile(
-        new File([templateResult.data], "new_session.json", {
-          type: "application/json",
-        }),
-      );
-
-      
-    } catch (err) {
+  // Load the baseline session template through the preload bridge.
+  try {
+    const templateResult = await window.templateapi.getNewSessionTemplate();
+    if (!templateResult || !templateResult.success || !templateResult.data) {
       doError(
-        "Unable to load new session template: " +
-          (err && err.message ? err.message : String(err)),
+        "Unable to load new session template" +
+        (templateResult && templateResult.error
+          ? ": " + templateResult.error
+          : "."),
       );
+      return;
     }
+    processFile(
+      new File([templateResult.data], "new_session.json", {
+        type: "application/json",
+      }),
+    );
+
+
+  } catch (err) {
+    doError(
+      "Unable to load new session template: " +
+      (err && err.message ? err.message : String(err)),
+    );
+  }
 }
 
 
@@ -765,8 +765,8 @@ function runFilterQuery(filterQuery, options = {}) {
   } else {
     statusUpdate(
       "Status: Displaying " +
-        filteredPackets.length +
-        " packets matching filter",
+      filteredPackets.length +
+      " packets matching filter",
     );
     writeLogEntry(`User query returned packets=${filteredPackets.length}`);
     handlePacketNavigation("filtered", null);
@@ -1316,23 +1316,23 @@ async function maybePromptSaveSessionOnExit() {
 
 async function requestApplicationClose() {
   if (packetsForHost && packetsForHost.length > 1) {
-  const exitAction = await maybePromptSaveSessionOnExit();
-  if (exitAction === "cancel") {
-    statusUpdate("Status: Exit cancelled");
-    return;
-  }
-  if (exitAction === "save") {
-    const saveResult = await persistSessionToDisk("exit-prompt");
-    if (!saveResult?.success) {
-      if (saveResult?.canceled) {
-        statusUpdate("Status: Exit cancelled");
-      } else {
-        statusUpdate("Status: Exit cancelled due to save failure");
-      }
+    const exitAction = await maybePromptSaveSessionOnExit();
+    if (exitAction === "cancel") {
+      statusUpdate("Status: Exit cancelled");
       return;
     }
+    if (exitAction === "save") {
+      const saveResult = await persistSessionToDisk("exit-prompt");
+      if (!saveResult?.success) {
+        if (saveResult?.canceled) {
+          statusUpdate("Status: Exit cancelled");
+        } else {
+          statusUpdate("Status: Exit cancelled due to save failure");
+        }
+        return;
+      }
+    }
   }
-}
   window.quitapi.quitApp();
 }
 
@@ -1341,41 +1341,41 @@ function restoreSessionState(sessionState) {
 
   const loadedHistory = Array.isArray(sessionState.filterHistory)
     ? sessionState.filterHistory
-        .filter((query) => typeof query === "string")
-        .map((query) => query.trim())
-        .filter(Boolean)
+      .filter((query) => typeof query === "string")
+      .map((query) => query.trim())
+      .filter(Boolean)
     : [];
   filterHistory.splice(0, filterHistory.length, ...loadedHistory);
   renderFilterHistory();
 
   const loadedBookmarks = Array.isArray(sessionState.bookmarkList)
     ? sessionState.bookmarkList.filter(
-        (bookmark) => typeof bookmark === "string" && bookmark.trim() !== "",
-      )
+      (bookmark) => typeof bookmark === "string" && bookmark.trim() !== "",
+    )
     : [];
   bookmarkList = loadedBookmarks;
   rebuildBookmarkDropdown();
 
   const loadedDataToolsHistory = Array.isArray(sessionState.convInputHistory)
     ? sessionState.convInputHistory
-        .filter((entry) => entry && typeof entry === "object")
-        .flatMap((entry) => {
-          const normalizedInput =
-            typeof entry.input === "string"
-              ? entry.input
-              : String(entry.input ?? "");
-          if (!normalizedInput.trim()) return [];
-          return [
-            {
-              format:
-                typeof entry.format === "string" && entry.format.trim()
-                  ? entry.format.trim().toLowerCase()
-                  : "hex",
-              input: normalizedInput,
-            },
-          ];
-        })
-        .slice(0, DATA_TOOLS_INPUT_HISTORY_LIMIT)
+      .filter((entry) => entry && typeof entry === "object")
+      .flatMap((entry) => {
+        const normalizedInput =
+          typeof entry.input === "string"
+            ? entry.input
+            : String(entry.input ?? "");
+        if (!normalizedInput.trim()) return [];
+        return [
+          {
+            format:
+              typeof entry.format === "string" && entry.format.trim()
+                ? entry.format.trim().toLowerCase()
+                : "hex",
+            input: normalizedInput,
+          },
+        ];
+      })
+      .slice(0, DATA_TOOLS_INPUT_HISTORY_LIMIT)
     : [];
   dataToolsInputHistory.splice(
     0,
@@ -1388,8 +1388,8 @@ function restoreSessionState(sessionState) {
     sessionState.sessionKeychainEntries,
   )
     ? sessionState.sessionKeychainEntries.filter(
-        (entry) => entry && typeof entry === "object",
-      )
+      (entry) => entry && typeof entry === "object",
+    )
     : [];
   keystorePanel.restoreSessionState(
     deepCloneSessionData(loadedSessionEntries, []),
@@ -1398,16 +1398,16 @@ function restoreSessionState(sessionState) {
 
   const loadedNotes = Array.isArray(sessionState.notes)
     ? sessionState.notes
-        .filter((note) => note && typeof note === "object")
-        .map((note) => ({
-          id:
-            typeof note.id === "string" && note.id.trim()
-              ? note.id
-              : generateNoteId(),
-          text:
-            typeof note.text === "string" ? note.text : String(note.text || ""),
-          color: normalizeNoteColor(note.color),
-        }))
+      .filter((note) => note && typeof note === "object")
+      .map((note) => ({
+        id:
+          typeof note.id === "string" && note.id.trim()
+            ? note.id
+            : generateNoteId(),
+        text:
+          typeof note.text === "string" ? note.text : String(note.text || ""),
+        color: normalizeNoteColor(note.color),
+      }))
     : [];
   notesList = loadedNotes;
   selectedNoteId = notesList.length > 0 ? notesList[0].id : null;
@@ -1444,8 +1444,8 @@ function restoreSessionState(sessionState) {
 
   const navAction =
     sessionState.packetViewMode === "filtered" &&
-    Array.isArray(filteredPackets) &&
-    filteredPackets.length > 0
+      Array.isArray(filteredPackets) &&
+      filteredPackets.length > 0
       ? "filtered"
       : "first-load";
   handlePacketNavigation(navAction);
@@ -1489,7 +1489,7 @@ function restoreSessionState(sessionState) {
     showCryptWorkspace(savedCryptTab);
   } else if (savedMainTab === MAIN_TAB_KEYSTORE && keystorePanel.isUnlocked()) {
     keystorePanel.showKeystoreWorkspace();
-  } 
+  }
 
   if (savedMainTab !== MAIN_TAB_DATA_TOOLS) {
     setConvSubtab(savedConvTab);
@@ -1498,9 +1498,9 @@ function restoreSessionState(sessionState) {
     setCryptSubtab(savedCryptTab);
   }
   else {
-      runFilterQuery(filterInputEl.value || "", { trackHistory: false });
-      isFileLoaded = true;
-    }
+    runFilterQuery(filterInputEl.value || "", { trackHistory: false });
+    isFileLoaded = true;
+  }
   writeLogEntry("Session state restored from JSON");
   statusUpdate("Status: Session restored");
 }
@@ -1531,8 +1531,8 @@ function processFile(file) {
     if (fileSize > 1024 * 1024) {
       statusUpdate(
         "Status: Parsing large file (" +
-          (fileSize / 1024 / 1024).toFixed(2) +
-          "MB)...",
+        (fileSize / 1024 / 1024).toFixed(2) +
+        "MB)...",
       );
       parseJsonChunked(event.target.result)
         .then((parsed) => {
@@ -1616,19 +1616,21 @@ function processFile(file) {
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
     clearFilterQuery();
     syncFilterHighlight();
-      isFileLoaded = true;
+    isFileLoaded = true;
     if (loadedSessionState) {
       restoreSessionState(loadedSessionState);
     }
     else {
       statusUpdate("Status: File loaded successfully");
-        document.getElementById("summary_content").textContent =
-          "Select a tab to get started!";
-                showPacketList();
-      }
-      document.getElementById("loading-container").style.display = "none";
-    
-    
+      document.getElementById("summary_content").textContent =
+        "Select a tab to get started!";
+      handlePacketNavigation("first-load");
+      runFilterQuery("", { trackHistory: false });
+      showPacketList();
+    }
+    document.getElementById("loading-container").style.display = "none";
+
+
   }
   reader.onerror = (error) => {
     status.textContent = "Status: Error reading file: " + error;
@@ -4139,8 +4141,8 @@ function getCookieJarTextForContextTarget(target) {
     const dataToolsCookieJarText =
       getActiveDataToolsProtoResult()?.protocol === "HTTP"
         ? buildCookieJarTextFromHttpFields(
-            getActiveDataToolsProtoResult().fields,
-          )
+          getActiveDataToolsProtoResult().fields,
+        )
         : "";
     if (dataToolsCookieJarText) return dataToolsCookieJarText;
   }
@@ -4459,21 +4461,21 @@ function showConvertContextMenu(
   }
   convertContextDividerEl.style.display =
     hasClipboardActions &&
-    (hasDataTypeActions ||
-      isHexViewTarget ||
-      hasFilterActions ||
-      hasExportActions ||
-      hasHttpBody)
+      (hasDataTypeActions ||
+        isHexViewTarget ||
+        hasFilterActions ||
+        hasExportActions ||
+        hasHttpBody)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
     (hasExportActions || hasHttpBody) &&
-    (hasClipboardActions ||
-      hasDataTypeActions ||
-      isHexViewTarget ||
-      hasFilterActions ||
-      hasCookieActions ||
-      hasKeystoreActions)
+      (hasClipboardActions ||
+        hasDataTypeActions ||
+        isHexViewTarget ||
+        hasFilterActions ||
+        hasCookieActions ||
+        hasKeystoreActions)
       ? "block"
       : "none";
 
@@ -4806,7 +4808,7 @@ function getCurrentRawPayloadHex() {
   const packetCursor = getActivePacketCursor();
   const payloadHex =
     packetsForHost?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
-      "Payload"
+    "Payload"
     ]?.["Hex Encoded"];
   return typeof payloadHex === "string" ? payloadHex : "";
 }
@@ -5158,7 +5160,7 @@ function previewHttpBodyInBrowserFromContextMenu() {
       logErrorEntry("http-body-preview", errorMessage || "unknown");
       statusUpdate(
         "Status: HTTP body preview failed – " +
-          (errorMessage || "unknown error"),
+        (errorMessage || "unknown error"),
       );
       console.error("HTTP body preview failed:", errorMessage);
     }
@@ -5992,9 +5994,9 @@ function handlePacketNavigation(navAction, navBookmark) {
 
       statusUpdate(
         "Navigating to bookmark: " +
-          navBookmark["Host"] +
-          " packet " +
-          navBookmark["Packet"],
+        navBookmark["Host"] +
+        " packet " +
+        navBookmark["Packet"],
       );
       writeLogEntry(
         `Navigating bookmark host=${navBookmark["Host"]} packet=${navBookmark["Packet"]}`,
@@ -6083,12 +6085,12 @@ function populateDataTypes(p) {
   } else {
     encodingText = JSON.stringify(
       packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
-        "encoding"
+      "encoding"
       ],
     );
     languageText = JSON.stringify(
       packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
-        "language"
+      "language"
       ],
     );
   }
@@ -6102,19 +6104,19 @@ function populateDataTypes(p) {
   let sslDetails = "";
   if (
     packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
-      "Encryption Data"
+    "Encryption Data"
     ] != "N/A" &&
     packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
-      "Encryption Data"
+    "Encryption Data"
     ] != undefined
   ) {
     sslDetails =
       packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
-        "Encryption Data"
+      "Encryption Data"
       ]["SSL Version"];
     const protoName =
       packetsForHost[index]["Extra Info"]["Traits"]["Network Data"][
-        "Port Protcol"
+      "Port Protcol"
       ];
     dataItems = [];
     dataItems.push(sslDetails + " encrypted stream");
@@ -6291,7 +6293,7 @@ function infoPanel(pk) {
     (transportData["Destination port"] ?? "?");
   const etherFrame =
     typeof packetInfoData["Ethernet Frame"] === "object" &&
-    packetInfoData["Ethernet Frame"] !== null
+      packetInfoData["Ethernet Frame"] !== null
       ? packetInfoData["Ethernet Frame"]
       : {};
   const srcMac = etherFrame["MAC Source"] ?? "N/A";
@@ -6307,7 +6309,7 @@ function infoPanel(pk) {
   if (
     extraInfoData["Traits"]["Server Info"]["Encryption Data"] == "N/A" ||
     extraInfoData["Traits"]["Server Info"].hasOwnProperty("Encryption Data") ==
-      false
+    false
   ) {
     sslCert = "Not encrypted";
     sslVersion = "Not encrypted";
@@ -6318,7 +6320,7 @@ function infoPanel(pk) {
       "Not available";
     sslVersion =
       extraInfoData["Traits"]["Server Info"]["Encryption Data"][
-        "SSL Version"
+      "SSL Version"
       ] ?? "Not available";
     sslAlgos =
       extraInfoData["Traits"]["Server Info"]["Encryption Data"][
@@ -6550,21 +6552,21 @@ function infoPanel(pk) {
         name: "Country",
         value:
           extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-            "Country"
+          "Country"
           ],
       },
       {
         name: "City",
         value:
           extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-            "City"
+          "City"
           ],
       },
       {
         name: "Timezone",
         value:
           extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-            "Time Zone"
+          "Time Zone"
           ],
       },
     ];
@@ -6573,7 +6575,7 @@ function infoPanel(pk) {
   }
   if (
     extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-      "City"
+    "City"
     ] == undefined
   ) {
     const localnetData = [{ name: "Location", value: "Localnet" }];
@@ -6585,14 +6587,14 @@ function infoPanel(pk) {
         name: "Country",
         value:
           extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-            "Country"
+          "Country"
           ],
       },
       {
         name: "City",
         value:
           extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-            "City"
+          "City"
           ],
       },
       {
@@ -6600,7 +6602,7 @@ function infoPanel(pk) {
 
         value:
           extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-            "Time Zone"
+          "Time Zone"
           ],
       },
     ];
@@ -6667,7 +6669,7 @@ function runSnitch(file) {
   );
   window.snitchapi
     .runBackendCommand(file, useLLM)
-    .then((output) => {})
+    .then((output) => { })
     .catch((error) => {
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
