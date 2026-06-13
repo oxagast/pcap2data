@@ -1,0 +1,99 @@
+{
+  "Host": {
+    "0.0.0.0": [
+      {
+        "Packet Info": {
+          "Packet Processed": 0,
+          "Packet Timestamp": "",
+          "Ethernet Frame": "",
+          "IP": {
+            "Source IP": "0.0.0.0",
+            "Destination IP": "0.0.0.0",
+            "IP Checksum": "",
+            "IP layer length": 0
+          },
+          "TCP": {
+            "Source port": 0,
+            "Destination port": 0,
+            "TCP checksum": "",
+            "Urgent flag": false,
+            "TCP Flag Data": {
+              "Flags": ""
+            },
+            "Options": [
+              [
+                "",
+                null
+              ],
+              [
+                "",
+                null
+              ],
+              [
+                "",
+                [
+                  0,
+                  0
+                ]
+              ]
+            ],
+            "TCP layer length": 0,
+            "Wire length": 0
+          },
+          "Raw data": {
+            "Payload": {
+              "Hex Encoded": "",
+              "ASCII Encoded": ""
+            },
+            "Packet": "",
+            "Payload Length": 0
+          }
+        },
+        "Extra Info": {
+          "MIME Type": "",
+          "Decompressed": {
+            "Decompressed": false
+          },
+          "Data Types": [
+            ""
+          ],
+          "Traits": {
+            "Shannon Entropy": 0.0,
+            "Network Data": {
+              "Source IP": {
+                "Class": "",
+                "Location": {
+                  "Country": "",
+                  "City": "",
+                  "Postal Code": "",
+                  "Time Zone": ""
+                }
+              },
+              "Destination IP": {
+                "Class": "",
+                "Location": {
+                  "Location": ""
+                }
+              },
+              "Port Protcol": "",
+              "Port Description": null,
+              "Hostnames": {
+                "Resolved": false,
+                "Error": ""
+              }
+            },
+            "Length": 0,
+            "Server Info": "",
+            "Characters": {
+              "Charset": "",
+              "Encoding": "",
+              "Characters used": 0,
+              "Unique characters": ""
+            }
+          }
+        }
+      }
+    ]
+  },
+  "Final Summary": ""
+}

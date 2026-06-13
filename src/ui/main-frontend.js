@@ -196,21 +196,7 @@ initializeInstallScreen({
   documentRef: document,
 });
 
-sessionPickerPanel = initializeSessionPicker({
-  sessionsapi: window.sessionsapi,
-  documentRef: document,
-  onSessionSelected: (name, jsonData) => {
-    currentSessionName = name;
-    startTime = performance.now();
-    statusUpdate("Loading session: " + name);
-    processFile(
-      new File([jsonData], name + ".json", { type: "application/json" }),
-    );
-  },
-  onNewSession: () => {
-    // User dismissed the picker – stay on the blank/new session state
-  },
-});
+
 
 const {
   initializeActivityLog,
@@ -294,6 +280,104 @@ const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
     populateDataTypes,
   });
 bindDataPanelEvents();
+
+
+sessionPickerPanel = initializeSessionPicker({
+  sessionsapi: window.sessionsapi,
+  documentRef: document,
+  onSessionSelected: (name, jsonData) => {
+    currentSessionName = name;
+    startTime = performance.now();
+    statusUpdate("Loading session: " + name);
+    processFile(
+      new File([jsonData], name + ".json", { type: "application/json" }),
+    );
+  },
+  onNewSession: async () => {
+    // User dismissed the picker – stay on the blank/new session state
+    // on new session, we should clear any existing data and reset the UI to the initial state
+    await clearCurrentSession();
+     window.getfileapi
+      .selectFile()
+      .then((filePath) => {
+        if (filePath) {
+          window.fsize
+            .getFSize()
+            .then((fileSize) => {
+              // Update the UI with the file size
+              const fileSizeKb = (fileSize / 1024).toFixed(2);
+              document.getElementById("pcap-size").textContent =
+                `PCAP size: ${fileSizeKb}kb`;
+              writeLogEntry(`Capture size=${fileSizeKb}kb`);
+            })
+            .catch((error) => {
+              // Handle any errors (e.g., file not found)
+              console.error("Error fetching file size:", error);
+              logErrorEntry("file-size-fetch", error);
+            });
+
+          runSnitch(filePath);
+
+        }
+      })
+      .catch((error) => {
+        doError("Error selecting PCAP file!");
+        logErrorEntry("pcap-select", error);
+      });
+  },
+});
+
+async function clearCurrentSession() {
+currentSessionName = null;
+    packetsForHost = [];
+    capturedPackets = {};
+    activePacketCursor = 0;
+    index = 0;
+    currentIp = null;
+    currentPacketKey = null;
+    jsonCapture = "";
+    finalSummary = "";
+    finalSummary = ""; // Clear the default summary from the template
+      filterHistory.length = 0;
+      hostFilterEl.value = "";
+      filterHistorySelectEl.innerHTML = '<option value="" selected>Filter History</option>';
+      filterInputEl.value = "";
+      dataToolsInputHistory.length = 0;
+      dataToolsHistorySelectEl.innerHTML = '<option value="" disabled selected>Data Tools History</option>';
+      updateFilterClearButtonState();
+      clearFilterQuery();
+      syncFilterHighlight();
+      clearSummaryContent();
+      renderFilterHistory();
+
+    // Load the baseline session template through the preload bridge.
+    try {
+      const templateResult = await window.templateapi.getNewSessionTemplate();
+      if (!templateResult || !templateResult.success || !templateResult.data) {
+        doError(
+          "Unable to load new session template" +
+            (templateResult && templateResult.error
+              ? ": " + templateResult.error
+              : "."),
+        );
+        return;
+      }
+      processFile(
+        new File([templateResult.data], "new_session.json", {
+          type: "application/json",
+        }),
+      );
+
+      
+    } catch (err) {
+      doError(
+        "Unable to load new session template: " +
+          (err && err.message ? err.message : String(err)),
+      );
+    }
+}
+
+
 
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -1403,9 +1487,7 @@ function restoreSessionState(sessionState) {
     showCryptWorkspace(savedCryptTab);
   } else if (savedMainTab === MAIN_TAB_KEYSTORE && keystorePanel.isUnlocked()) {
     keystorePanel.showKeystoreWorkspace();
-  } else {
-    initializeDataView();
-  }
+  } 
 
   if (savedMainTab !== MAIN_TAB_DATA_TOOLS) {
     setConvSubtab(savedConvTab);
@@ -1413,7 +1495,10 @@ function restoreSessionState(sessionState) {
   if (savedMainTab !== MAIN_TAB_CRYPT) {
     setCryptSubtab(savedCryptTab);
   }
-
+  else {
+      runFilterQuery(filterInputEl.value || "", { trackHistory: false });
+      isFileLoaded = true;
+    }
   writeLogEntry("Session state restored from JSON");
   statusUpdate("Status: Session restored");
 }
@@ -1527,11 +1612,21 @@ function processFile(file) {
       );
     }
     writeLogEntry(`Total packet count=${totalPacketCount()}`);
-    showSummary();
-    initializeDataView();
+    clearFilterQuery();
+    syncFilterHighlight();
+      isFileLoaded = true;
     if (loadedSessionState) {
       restoreSessionState(loadedSessionState);
     }
+    else {
+      statusUpdate("Status: File loaded successfully");
+        document.getElementById("summary_content").textContent =
+          "Select a tab to get started!";
+                showPacketList();
+      }
+      document.getElementById("loading-container").style.display = "none";
+    
+    
   }
   reader.onerror = (error) => {
     status.textContent = "Status: Error reading file: " + error;
@@ -6547,6 +6642,12 @@ window.jsonapi.onJsonData((jsonData) => {
   const loadEndTime = performance.now();
   document.getElementById("load-time").textContent =
     "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+  filterInputEl.value = "";
+  updateFilterClearButtonState();
+  clearFilterQuery();
+  syncFilterHighlight();
+  runFilterQuery("");
+  statusUpdate("Status: Ready");
 });
 
 // here we create the backend process and hook it to the handler

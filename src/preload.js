@@ -80,3 +80,12 @@ contextBridge.exposeInMainWorld('sessionsapi', {
   remove: (name) => ipcRenderer.invoke('session-delete', name),
   exportToFile: (name, jsonData) => ipcRenderer.invoke('session-export', name, jsonData),
 });
+
+contextBridge.exposeInMainWorld('templateapi', {
+  onJsonTemplate: (callback) => {
+    ipcRenderer.on('json-template', (event, templateJsonData) => {
+      callback(templateJsonData);
+    });
+  },
+  getNewSessionTemplate: () => ipcRenderer.invoke('get-new-session-template'),
+});

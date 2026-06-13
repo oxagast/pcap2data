@@ -6,6 +6,7 @@ const PANEL_MODULES = [
   "data-tools-panel",
   "crypt-panel",
   "keystore-panel",
+  "session-picker",
 ];
 
 module.exports = {

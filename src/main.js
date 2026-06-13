@@ -303,6 +303,8 @@ ipcMain.handle("dismiss-first-run", async () => {
   }
 });
 
+
+
 ipcMain.handle("quit-app", () => {
   app.quit();
 });
@@ -727,6 +729,20 @@ ipcMain.handle("session-delete", async (_event, name) => {
   }
 });
 
+ipcMain.handle("get-new-session-template", async () => {
+  try {
+    const templatePath = path.join(
+      app.isPackaged ? process.resourcesPath : path.join(__dirname, "../../src/data/"),
+      "new_session.json",
+    );
+    const content = await fs.promises.readFile(templatePath, "utf8");
+    return { success: true, data: content };
+  } catch (err) {
+    console.error("get-new-session-template error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("session-export", async (_event, name, jsonData) => {
   if (typeof jsonData !== "string" || jsonData.trim() === "") {
     return { success: false, error: "No JSON data to export" };
@@ -765,3 +781,4 @@ app.on("before-quit", () => {
     killBackendProcess();
   }
 });
+
