@@ -296,6 +296,7 @@ sessionPickerPanel = initializeSessionPicker({
   onNewSession: async () => {
     // User dismissed the picker – stay on the blank/new session state
     // on new session, we should clear any existing data and reset the UI to the initial state
+    document.getElementById("loading-screen").style.display = "flex";
     await clearCurrentSession();
     window.getfileapi
       .selectFile()
@@ -328,6 +329,8 @@ sessionPickerPanel = initializeSessionPicker({
 });
 
 async function clearCurrentSession() {
+  statusUpdate("Clearing current session data for new session...");
+  writeLogEntry("User initiated new session: clearing existing session data");
   currentSessionName = null;
   packetsForHost = [];
   capturedPackets = {};
@@ -351,6 +354,8 @@ async function clearCurrentSession() {
   renderFilterHistory();
 
   // Load the baseline session template through the preload bridge.
+  // this basically zeroed/nulls everything out but keeps the overall structure
+  // of the JSON intact.
   try {
     const templateResult = await window.templateapi.getNewSessionTemplate();
     if (!templateResult || !templateResult.success || !templateResult.data) {
@@ -1623,9 +1628,7 @@ function processFile(file) {
     }
     else {
       statusUpdate("Status: File loaded successfully");
-      document.getElementById("summary_content").textContent =
-        "Select a tab to get started!";
-      //runFilterQuery("", { trackHistory: false });
+      writeLogEntry("New session initialized: created new session state");
       document.getElementById("total-packets").textContent = "Total Packets: " + totalPacketCount();
       showPacketList();
     }
