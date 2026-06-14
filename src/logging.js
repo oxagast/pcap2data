@@ -66,6 +66,8 @@ function initializeLogging({
 
     if (typeof buildSessionFilePayload !== "function") return;
     const sessionDataJson = buildSessionFilePayload();
+    // this ensures that we only autosave on real session data and not
+    // on an error case, or when only the dummy "structure packet" is loaded.
     if (sessionDataJson && sessionDataJson.length > 5000) {
       const sessionsApiRef = sessionsapi || windowRef?.sessionsapi;
       if (sessionDataJson && sessionsApiRef && typeof sessionsApiRef.save === "function") {

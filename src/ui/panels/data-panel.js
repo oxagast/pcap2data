@@ -74,22 +74,34 @@ function createDataPanel(options) {
       doError("No file loaded! Upload one of JSON or PCAP first!");
       return;
     }
-    let index = getIndex();
+    let index = Number.parseInt(getIndex(), 10);
+    if (!Number.isInteger(index) || index < 0) index = 0;
     const packetsForHost = getPacketsForHost();
+    if (!Array.isArray(packetsForHost) || packetsForHost.length === 0) {
+      statusUpdate("Status: No packet information found for this host");
+      doError("No packet information found for this host!");
+      return;
+    }
     if (index > 0) {
       index -= 1;
       setIndex(index);
       setActivePacketCursor(index);
 
-      const currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
+      const packetInfo = packetsForHost[index]?.["Packet Info"];
+      if (!packetInfo) {
+        statusUpdate("Status: Packet data is unavailable for this entry");
+        doError("Packet data is unavailable for this entry!");
+        return;
+      }
+      const currentIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown";
       const currentPacketKey =
-        currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
+        currentIp + ":" + (packetInfo?.["Index"] ?? index);
       setCurrentIp(currentIp);
       setCurrentPacketKey(currentPacketKey);
       syncBookmarkDropdown(currentPacketKey);
       infoPanel(packetsForHost);
       popHexGrid(
-        packetsForHost[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"],
+        packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "",
       );
       populateDataTypes(packetsForHost);
       logCurrentPacketDisplay("prev");
@@ -103,22 +115,40 @@ function createDataPanel(options) {
       doError("No file loaded! Upload one of JSON or PCAP first!");
       return;
     }
-    let index = getIndex();
+    let index = Number.parseInt(getIndex(), 10);
+    if (!Number.isInteger(index) || index < 0) index = 0;
     const packetsForHost = getPacketsForHost();
+    if (!Array.isArray(packetsForHost) || packetsForHost.length === 0) {
+      statusUpdate("Status: No packet information found for this host");
+      doError("No packet information found for this host!");
+      return;
+    }
     if (index < packetsForHost.length - 1) {
       index += 1;
       setIndex(index);
       setActivePacketCursor(index);
-      const currentIp = packetsForHost[index]["Packet Info"]["IP"]["Source IP"];
+      const packetInfo = packetsForHost[index]?.["Packet Info"];
+      if (!packetInfo) {
+        statusUpdate("Status: Packet data is unavailable for this entry");
+        doError("Packet data is unavailable for this entry!");
+        return;
+      }
+      const currentIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown";
       const currentPacketKey =
-        currentIp + ":" + packetsForHost[index]["Packet Info"]["Index"];
+        currentIp + ":" + (packetInfo?.["Index"] ?? index);
       setCurrentIp(currentIp);
       setCurrentPacketKey(currentPacketKey);
     }
     syncBookmarkDropdown(getCurrentPacketKey());
+    const activePacketInfo = packetsForHost[index]?.["Packet Info"];
+    if (!activePacketInfo) {
+      statusUpdate("Status: Packet data is unavailable for this entry");
+      doError("Packet data is unavailable for this entry!");
+      return;
+    }
     infoPanel(packetsForHost);
     popHexGrid(
-      packetsForHost[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"],
+      activePacketInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "",
     );
     populateDataTypes(packetsForHost);
     logCurrentPacketDisplay("next");

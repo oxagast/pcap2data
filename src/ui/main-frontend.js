@@ -138,7 +138,7 @@ let finalSummary = ""; // Stores the summary section from JSON
 const status = getCachedElement("status"); // Status bar element
 let hostsList = ["0.0.0.0"]; // List of hosts found in capture
 const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
-let packetsForHost = []; // Packets for the currently selected host
+let p = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
 let activePacketCursor = 0;
 let bookmarkList = []; // List of bookmarks (host:packet index)
@@ -236,7 +236,7 @@ const { showStats } = createStatsPanel({
   runFilterQuery,
   getFilteredPackets: () => filteredPackets,
   setPacketsForHost: (packets) => {
-    packetsForHost = packets;
+    p = packets;
   },
 });
 
@@ -268,7 +268,7 @@ const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
     getHostsList: () => hostsList,
     getFilterInputValue: () => filterInputEl.value,
     getFilteredPackets: () => filteredPackets,
-    getPacketsForHost: () => packetsForHost,
+    getPacketsForHost: () => p,
     setActiveMainTab: (tab) => {
       activeMainTab = tab;
     },
@@ -276,7 +276,8 @@ const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
       handlePacketNavigation(navAction, navBookmark),
     getIndex: () => index,
     setIndex: (nextIndex) => {
-      index = nextIndex;
+      const normalizedIndex = setActivePacketCursor(nextIndex);
+      index = Number.isInteger(normalizedIndex) ? normalizedIndex : 0;
     },
     setActivePacketCursor,
     setCurrentIp: (nextIp) => {
@@ -345,7 +346,7 @@ async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
   currentSessionName = null;
-  packetsForHost = [];
+  p = [];
   capturedPackets = {};
   activePacketCursor = 0;
   index = 0;
@@ -1127,7 +1128,7 @@ function getSessionPacketViewMode() {
   if (
     Array.isArray(filteredPackets) &&
     filteredPackets.length > 0 &&
-    packetsForHost === filteredPackets
+    p === filteredPackets
   ) {
     return "filtered";
   }
@@ -1333,7 +1334,7 @@ async function maybePromptSaveSessionOnExit() {
 }
 
 async function requestApplicationClose() {
-  if (packetsForHost && packetsForHost.length > 1) {
+  if (p && p.length > 1) {
     const exitAction = await maybePromptSaveSessionOnExit();
     if (exitAction === "cancel") {
       statusUpdate("Status: Exit cancelled");
@@ -1438,6 +1439,15 @@ function restoreSessionState(sessionState) {
       targetHostsEl.value = selectedHost;
     }
     hostFilterEl.value = selectedHost;
+  } else {
+    const fallbackHost = Object.keys(capturedPackets?.["Host"] || {})[0];
+    if (fallbackHost) {
+      const targetHostsEl = document.getElementById("target_hosts");
+      if (targetHostsEl) {
+        targetHostsEl.value = fallbackHost;
+      }
+      hostFilterEl.value = fallbackHost;
+    }
   }
 
   const restoredFilterQuery =
@@ -1673,10 +1683,10 @@ function statusUpdate(message) {
  */
 function hostPacketInfo(currentIp) {
   const selected = currentIp;
-  packetsForHost = [];
+  p = [];
   const hostPackets = capturedPackets["Host"][selected];
   for (const packet in hostPackets) {
-    packetsForHost.push(hostPackets[packet]);
+    p.push(hostPackets[packet]);
   }
 }
 
@@ -3647,7 +3657,7 @@ const listPanel = createListPanel({
   runFilterQuery,
   getFilteredPackets: () => filteredPackets,
   setPacketsForHost: (packets) => {
-    packetsForHost = packets;
+    p = packets;
   },
   setIndex: (nextIndex) => {
     index = nextIndex;
@@ -4259,7 +4269,7 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasPacketToExport = Boolean(
-    getCurrentPacketForExport(packetsForHost, getActivePacketCursor()),
+    getCurrentPacketForExport(p, getActivePacketCursor()),
   );
   const currentPayloadHex = getCurrentRawPayloadHex();
   const hasPayloadToExport = Boolean(currentPayloadHex);
@@ -4647,7 +4657,7 @@ function hideStreamLoadingOverlay() {
 function getCurrentStreamTuple() {
   const cursor = getActivePacketCursor();
   if (cursor === null) return null;
-  const packetInfo = packetsForHost?.[cursor]?.["Packet Info"];
+  const packetInfo = p?.[cursor]?.["Packet Info"];
   if (!packetInfo) return null;
   const srcIp = packetInfo["IP"]?.["Source IP"];
   const dstIp = packetInfo["IP"]?.["Destination IP"];
@@ -4825,7 +4835,7 @@ function setActivePacketCursor(nextIndex) {
 function getCurrentRawPayloadHex() {
   const packetCursor = getActivePacketCursor();
   const payloadHex =
-    packetsForHost?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
+    p?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
     "Payload"
     ]?.["Hex Encoded"];
   return typeof payloadHex === "string" ? payloadHex : "";
@@ -4834,7 +4844,7 @@ function getCurrentRawPayloadHex() {
 function getCurrentHttpData() {
   const cursor = getActivePacketCursor();
   if (cursor === null) return null;
-  const packetInfo = packetsForHost?.[cursor]?.["Packet Info"];
+  const packetInfo = p?.[cursor]?.["Packet Info"];
   if (!packetInfo) return null;
   const protocol = packetInfo["Protocol"] || "TCP";
   return packetInfo[protocol]?.["HTTP"] || null;
@@ -5023,7 +5033,7 @@ function saveJsonFromContextMenu() {
 function exportCurrentPacketFromContextMenu() {
   hideConvertContextMenu();
   const currentPacket = getCurrentPacketForExport(
-    packetsForHost,
+    p,
     getActivePacketCursor(),
   );
   if (!currentPacket) {
@@ -5876,9 +5886,18 @@ document
     const bookmarkHost = document
       .getElementById("selectBookmark")
       .value.split(":")[0];
-    index = document.getElementById("selectBookmark").value.split(":")[1];
+    const bookmarkPacketIndex = Number.parseInt(
+      document.getElementById("selectBookmark").value.split(":")[1],
+      10,
+    );
+    if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
+      statusUpdate("Invalid bookmark selection, missing host or packet index");
+      doError("Invalid bookmark selection, missing host or packet index!");
+      return;
+    }
+    index = bookmarkPacketIndex;
     setActivePacketCursor(index);
-    packetsForHost = capturedPackets["Host"][bookmarkHost];
+    p = capturedPackets["Host"][bookmarkHost];
     activeBookmark["Host"] = bookmarkHost;
     activeBookmark["Packet"] = index;
     hostFilterEl.value = bookmarkHost;
@@ -5955,6 +5974,23 @@ function findPacketIndexByKey(packetSet, packetKey) {
   });
 }
 
+function setPrevNextButtonVisibility(packetSet, index) {
+  document.getElementById("prev-btn").style.display = "block";
+  document.getElementById("next-btn").style.display = "block";
+  document.getElementById("prev-btn").style.opacity = "1";
+  document.getElementById("next-btn").style.opacity = "1";
+  if (!packetSet || packetSet.length === 0) {
+    document.getElementById("prev-btn").style.opacity = "0";
+    document.getElementById("next-btn").style.opacity = "0";
+    return;
+  }
+  document.getElementById("prev-btn").style.opacity =
+    index > 0 ? "1" : "0";
+  document.getElementById("next-btn").style.opacity =
+    index < packetSet.length - 1 ? "1" : "0";
+}
+
+
 /**
  * Handles navigation between capturedPackets (next, prev, activeBookmark, first-load).
  * Updates UI and packet info accordingly.
@@ -5963,8 +5999,6 @@ function handlePacketNavigation(navAction, navBookmark) {
   activeMainTab = MAIN_TAB_DATA;
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
-  document.getElementById("prev-btn").style.display = "block";
-  document.getElementById("next-btn").style.display = "block";
   document.getElementById("loading-container").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
@@ -5981,7 +6015,6 @@ function handlePacketNavigation(navAction, navBookmark) {
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
   if (rightsideNotesEl) rightsideNotesEl.hidden = true;
-
   document.getElementById("total-packets").innerHTML =
     "Total Packets: " + totalPacketCount();
   if (navAction === undefined) {
@@ -5997,7 +6030,7 @@ function handlePacketNavigation(navAction, navBookmark) {
       `Filtered packet navigation packets_returned=${packetSet.length}`,
     );
   }
-
+  p = Array.isArray(packetSet) ? packetSet : [];
   if (navAction === "bookmark") {
     if (
       navBookmark["Host"] == undefined ||
@@ -6060,13 +6093,20 @@ function handlePacketNavigation(navAction, navBookmark) {
     doError("No packet information found for this host!");
     return;
   } else {
-    currentIp = packetSet[index]["Packet Info"]["IP"]["Source IP"];
+    const activePacket = packetSet[index];
+    const packetInfo = activePacket?.["Packet Info"];
+    if (!packetInfo) {
+      statusUpdate("Status: Packet data is unavailable for this entry");
+      doError("Packet data is unavailable for this entry!");
+      return;
+    }
+    currentIp = packetInfo?.["IP"]?.["Source IP"] || hostFilterEl.value || "Unknown";
     currentPacketKey =
-      currentIp + ":" + packetSet[index]["Packet Info"]["Index"];
+      currentIp + ":" + (packetInfo?.["Index"] ?? index);
     syncBookmarkDropdown(currentPacketKey);
-    console.log(packetSet[index]);
+    console.log(activePacket);
     const hexPayload =
-      packetSet[index]["Packet Info"]["Raw data"]["Payload"]["Hex Encoded"];
+      packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "";
     infoPanel(packetSet);
     popHexGrid(hexPayload);
     populateDataTypes(packetSet);
@@ -6074,6 +6114,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   }
 }
 function populateDataTypes(p) {
+  setPrevNextButtonVisibility(p, index);
   const typesListEl = document.getElementById("types-list");
   typesListEl.textContent = "";
   const mimeTypeEl = document.getElementById("mime-type");
@@ -6085,55 +6126,54 @@ function populateDataTypes(p) {
   let encodingText = "";
   let languageText = "";
   // packetsForHost = capturedPackets["Host"][hostFilterEl.value];
-  packetsForHost = p;
   let charsetText = JSON.parse(
     JSON.stringify(
-      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Charset"],
+      p[index]["Extra Info"]["Traits"]["Characters"]["Charset"],
     ),
   );
   if (
-    packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"] ==
+    p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"] ==
     "Unavailable for high entropy data"
   ) {
     encodingText = JSON.parse(
       JSON.stringify(
-        packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"],
+        p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"],
       ),
     );
   } else {
     encodingText = JSON.stringify(
-      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
+      p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
       "encoding"
       ],
     );
     languageText = JSON.stringify(
-      packetsForHost[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
+      p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
       "language"
       ],
     );
   }
 
   const mimeTypeText = JSON.parse(
-    JSON.stringify(packetsForHost[index]["Extra Info"]["MIME Type"]),
+    JSON.stringify(p[index]["Extra Info"]["MIME Type"]),
   );
   let dataItems = JSON.parse(
-    JSON.stringify(packetsForHost[index]["Extra Info"]["Data Types"]),
+    JSON.stringify(p[index]["Extra Info"]["Data Types"]),
   );
   let sslDetails = "";
   if (
-    packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+    p[index]["Extra Info"]["Traits"]["Server Info"][
     "Encryption Data"
     ] != "N/A" &&
-    packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+    p[index]["Extra Info"]["Traits"]["Server Info"][
     "Encryption Data"
     ] != undefined
   ) {
     sslDetails =
-      packetsForHost[index]["Extra Info"]["Traits"]["Server Info"][
+      p[index]["Extra Info"]["Traits"]["Server Info"][
       "Encryption Data"
       ]["SSL Version"];
     const protoName =
-      packetsForHost[index]["Extra Info"]["Traits"]["Network Data"][
+      p[index]["Extra Info"]["Traits"]["Network Data"][
       "Port Protcol"
       ];
     dataItems = [];
@@ -6270,7 +6310,17 @@ function infoPanel(pk) {
   document.getElementById("leftside").style.display = "block";
   const infoPaneOrigHtml = infoPaneEl.innerHTML;
   infoPaneEl.style.display = "block";
+  if (!Array.isArray(pk) || pk.length === 0) {
+    statusUpdate("Status: No packet information found for this host");
+    doError("No packet information found for this host!");
+    return;
+  }
   const p = pk[index];
+  if (!p || !p["Packet Info"]) {
+    statusUpdate("Status: Packet data is unavailable for this entry");
+    doError("Packet data is unavailable for this entry!");
+    return;
+  }
   let packetInfoData = p["Packet Info"];
   let extraInfoData = p["Extra Info"];
   let packetTimestamp = packetInfoData["Packet Timestamp"];
