@@ -26,7 +26,6 @@ body {
   align-items: center;
   height: 100vh;
   font-family: "Courier New", Courier, monospace;
-  font-color: --var(--color-5);
   overflow: hidden;
 }
 
@@ -40,7 +39,6 @@ body {
   padding: 15px;
   box-sizing: border-box;
   background-color: black;
-  font-color: var(--color-5);
   scrollbar-color: var(--color-7) black;
   overflow: hidden;
 }
@@ -219,7 +217,6 @@ hr {
 }
 
 #main_content {
-  font-face: Cantarell, system-ui;
   color: var(--color-1);
   flex: 1;
   min-height: 0;
@@ -294,7 +291,6 @@ td {
   color: white;
   word-break: break-all;
   font-size: 11px;
-  font-face: monospace, monospace;
 }
 
 table {
@@ -1535,7 +1531,6 @@ strong {
 #ip2ip {
   color: white;
   font-size: 15px;
-  placment: absolute;
   text-align: center;
   display: block;
   width: 90%;
@@ -1904,7 +1899,6 @@ strong {
   width: 320px;
   height: 24px;
   position: fixed;
-  text-size: 12px;
   background-color: var(--color-4);
   color: var(--color-1);
   font-family: monospace;
