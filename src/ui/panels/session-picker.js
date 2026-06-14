@@ -3,6 +3,12 @@
  * provides rename / delete / export-to-file management actions.
  */
 
+// pull in the quietapi from the preload script
+const { app, sessionsapi } = window;
+
+// import whats needed for exportSessionToFile function
+const { saveapi, quitapi } = window;
+
 function formatSavedAt(iso) {
   if (!iso) return "No date information";
   try {
@@ -17,6 +23,7 @@ function initializeSessionPicker({
   documentRef,
   onSessionSelected,
   onNewSession,
+  buildSessionFilePayload,
 }) {
   if (!sessionsapi) return;
 
@@ -266,7 +273,12 @@ function initializeSessionPicker({
   if (closeBtn) {
     closeBtn.addEventListener("click", () => {
       hide();
-      if (onNewSession) onNewSession();
+      const sessionData = buildSessionFilePayload();
+      if (sessionData) {
+        sessionsapi.save("autosave", sessionData).finally(() => window.quitapi.quitApp());
+      } else {
+        window.quitapi.quitApp();
+      }
     });
   }
 

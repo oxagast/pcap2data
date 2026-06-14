@@ -207,6 +207,18 @@ const {
   logapi: window.logapi,
   documentRef: document,
   consoleRef: console,
+  buildSessionFilePayload,
+  canAutosaveSession: () => {
+    if (!isFileLoaded) return false;
+    if (!capturedPackets || typeof capturedPackets !== "object") return false;
+    const hosts = capturedPackets["Host"];
+    if (!hosts || typeof hosts !== "object") return false;
+    return Object.keys(hosts).some((host) => {
+      const hostPackets = hosts[host];
+      return Array.isArray(hostPackets) && hostPackets.length > 0;
+    });
+  },
+  sessionsapi: window.sessionsapi,
 });
 
 const { showStats } = createStatsPanel({
@@ -285,6 +297,7 @@ bindDataPanelEvents();
 sessionPickerPanel = initializeSessionPicker({
   sessionsapi: window.sessionsapi,
   documentRef: document,
+  buildSessionFilePayload,
   onSessionSelected: (name, jsonData) => {
     currentSessionName = name;
     startTime = performance.now();

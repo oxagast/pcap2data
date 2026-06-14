@@ -1,7 +1,12 @@
+
 function initializeLogging({
   logapi = null,
   documentRef = document,
   consoleRef = console,
+  buildSessionFilePayload = null,
+  canAutosaveSession = null,
+  sessionsapi = null,
+  windowRef = window,
 }) {
   let activityLogPath = "Unavailable";
   const activityLogEntries = [];
@@ -47,9 +52,26 @@ function initializeLogging({
     }
   }
 
-  function writeLogEntry(message) {
+  function writeLogEntry(message, { autosave = true } = {}) {
     const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
     addActivityLogEntry(stampedMessage);
+    if (!autosave) return;
+
+    if (
+      typeof canAutosaveSession === "function" &&
+      !canAutosaveSession()
+    ) {
+      return;
+    }
+
+    if (typeof buildSessionFilePayload !== "function") return;
+    const sessionDataJson = buildSessionFilePayload();
+    const sessionsApiRef = sessionsapi || windowRef?.sessionsapi;
+    if (sessionDataJson && sessionsApiRef && typeof sessionsApiRef.save === "function") {
+      sessionsApiRef.save("autosave", sessionDataJson).catch((error) => {
+        logErrorEntry("autosave-session", error);
+      });
+    }
   }
 
   function writeConsoleLogEntry(message) {
@@ -70,7 +92,7 @@ function initializeLogging({
       error && typeof error === "object" && "message" in error
         ? error.message
         : String(error);
-    writeLogEntry(`Error context=${context} details="${errorDetails}"`);
+    writeLogEntry(`Error context=${context} details="${errorDetails}"`, { autosave: false });
   }
 
   function formatConsoleValue(value) {
