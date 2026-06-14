@@ -274,7 +274,7 @@ function initializeSessionPicker({
     closeBtn.addEventListener("click", () => {
       hide();
       const sessionData = buildSessionFilePayload();
-      if (sessionData) {
+      if (sessionData && sessionData.length > 5000) {
         sessionsapi.save("autosave", sessionData).finally(() => window.quitapi.quitApp());
       } else {
         window.quitapi.quitApp();

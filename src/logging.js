@@ -66,11 +66,13 @@ function initializeLogging({
 
     if (typeof buildSessionFilePayload !== "function") return;
     const sessionDataJson = buildSessionFilePayload();
-    const sessionsApiRef = sessionsapi || windowRef?.sessionsapi;
-    if (sessionDataJson && sessionsApiRef && typeof sessionsApiRef.save === "function") {
-      sessionsApiRef.save("autosave", sessionDataJson).catch((error) => {
-        logErrorEntry("autosave-session", error);
-      });
+    if (sessionDataJson && sessionDataJson.length > 5000) {
+      const sessionsApiRef = sessionsapi || windowRef?.sessionsapi;
+      if (sessionDataJson && sessionsApiRef && typeof sessionsApiRef.save === "function") {
+        sessionsApiRef.save("autosave", sessionDataJson).catch((error) => {
+          logErrorEntry("Could not autosave session: ", error);
+        });
+      }
     }
   }
 
