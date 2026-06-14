@@ -1,1195 +1,936 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PacketSnitch</title>
 
-    <!-- Google Font -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PacketSnitch</title>
 
-    <link rel="stylesheet" href="assets/css/style.css" type="text/css" />
-  </head>
-  <body>
-    <div class="container_box">
-      <div class="top_bar">
-        <div class="tagline">
-          <img
-            class="tagline"
-            id="psbyline"
-            src="../assets/images/packet-snitch-tag.webp"
-          />
-        </div>
-        <button id="close-btn" aria-label="Quit application" title="Quit">
-          &#10005;
-        </button>
+  <!-- Google Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <link rel="stylesheet" href="assets/css/style.css" type="text/css" />
+</head>
+
+<body>
+  <div class="container_box">
+    <div class="top_bar">
+      <div class="tagline">
+        <img class="tagline" id="psbyline" src="../assets/images/packet-snitch-tag.webp" />
       </div>
-      <div class="entry_bar">
-        <div class="logo-cont">
-          <img src="../assets/images/logo.webp" />
+      <button id="close-btn" aria-label="Quit application" title="Quit">
+        &#10005;
+      </button>
+    </div>
+    <div class="entry_bar">
+      <div class="logo-cont">
+        <img src="../assets/images/logo.webp" />
+      </div>
+      <div id="filters-container">
+        <input id="host_filter" type="text" placeholder="0.0.0.0" disabled />
+        <label style="color: white">Filter</label>
+        <div id="filterStr-wrap">
+          <div id="filterStr-highlight" aria-hidden="true"></div>
+          <input id="filterStr" type="text" disabled
+            placeholder="wire.len: >100 && tcp.proto: https || dns.qname: example.com" />
+          <button id="filterStr-clear" type="button" disabled aria-label="Clear filter" title="Clear filter">
+            Clear
+          </button>
         </div>
-        <div id="filters-container">
-          <input id="host_filter" type="text" placeholder="0.0.0.0" disabled />
-          <label style="color: white">Filter</label>
-          <div id="filterStr-wrap">
-            <div id="filterStr-highlight" aria-hidden="true"></div>
-            <input
-              id="filterStr"
-              type="text"
-              disabled
-              placeholder="wire.len: >100 && tcp.proto: https || dns.qname: example.com"
-            />
-            <button
-              id="filterStr-clear"
-              type="button"
-              disabled
-              aria-label="Clear filter"
-              title="Clear filter"
-            >
-              Clear
-            </button>
-          </div>
-          <div id="filter-history">
-            <select
-              id="filter-history-select"
-              disabled
-              aria-label="Previously used filters"
-            >
-              <option value="" selected>Previous queries</option>
-            </select>
-          </div>
+        <div id="filter-history">
+          <select id="filter-history-select" disabled aria-label="Previously used filters">
+            <option value="" selected>Previous queries</option>
+          </select>
         </div>
       </div>
-      <div class="menu_bar" id="dropdown" style="display: none">
-        <!-- this is where the dropdowns are handled, they are hidden by
+    </div>
+    <div class="menu_bar" id="dropdown" style="display: none">
+      <!-- this is where the dropdowns are handled, they are hidden by
                default and only shown when called upon -->
+    </div>
+    <div class="menu_bar" id="tab-btns">
+      <input type="button" id="summary-btn" value="Analysis" class="custom-btns" />
+      <input type="button" id="data-btn" value="Host Data" class="custom-btns" />
+      <input type="button" id="data-tools-btn" value="Conv" title="Data Conversion" class="custom-btns" />
+      <input type="button" id="crypt-btn" value="Crypt" title="Encryption workspace" class="custom-btns" />
+      <input type="button" id="keystore-btn" value="Keystore" title="Persistent local keystore" class="custom-btns" />
+      <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
+      <input type="button" id="list-btn" value="List" class="custom-btns" />
+      <input type="button" id="notes-btn" value="Notes" class="custom-btns" />
+      <input type="button" id="log-btn" value="Log" class="custom-btns" />
+      <div id="rotate-btns" class="menu_bar">
+        <input type="button" id="prev-btn" value="Prev" class="custom-btns" style="display: none" />
+        <input type="button" id="next-btn" value="Next" class="custom-btns" style="display: none" />
       </div>
-      <div class="menu_bar" id="tab-btns">
-        <input
-          type="button"
-          id="summary-btn"
-          value="Analysis"
-          class="custom-btns"
-        />
-        <input
-          type="button"
-          id="data-btn"
-          value="Host Data"
-          class="custom-btns"
-        />
-        <input
-          type="button"
-          id="data-tools-btn"
-          value="Conv"
-          title="Data Conversion"
-          class="custom-btns"
-        />
-        <input
-          type="button"
-          id="crypt-btn"
-          value="Crypt"
-          title="Encryption workspace"
-          class="custom-btns"
-        />
-        <input
-          type="button"
-          id="keystore-btn"
-          value="Keystore"
-          title="Persistent local keystore"
-          class="custom-btns"
-        />
-        <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
-        <input type="button" id="list-btn" value="List" class="custom-btns" />
-        <input type="button" id="notes-btn" value="Notes" class="custom-btns" />
-        <input type="button" id="log-btn" value="Log" class="custom-btns" />
-        <div id="rotate-btns" class="menu_bar">
-          <input
-            type="button"
-            id="prev-btn"
-            value="Prev"
-            class="custom-btns"
-            style="display: none"
-          />
-          <input
-            type="button"
-            id="next-btn"
-            value="Next"
-            class="custom-btns"
-            style="display: none"
-          />
+    </div>
+    <div class="content_area">
+      <div class="sidebar">
+        <form method="post" enctype="multipart/form-data" id="jsonFile" name="jsonFile">
+          <input type="file" id="json-upload" name="json-up" hidden />
+          <label id="json-lab" for="json-upload" class="menu-btns">Load Session</label>
+        </form>
+        <br />
+        <input type="button" id="sessions-library-btn" value="Sessions Library" class="menu-btns"
+          title="Open saved sessions library" />
+        <br />
+        <input type="button" id="pcap-filename" name="pcap-up" hidden />
+        <label id="pcap-lab" for="pcap-filename" class="menu-btns">Choose PCAP</label>
+        <div id="llm-toggle">
+          <label class="menu-btns">
+            <input type="checkbox" id="use-llm" />
+            Enable LLM
+          </label>
         </div>
-      </div>
-      <div class="content_area">
-        <div class="sidebar">
-          <form
-            method="post"
-            enctype="multipart/form-data"
-            id="jsonFile"
-            name="jsonFile"
-          >
-            <input type="file" id="json-upload" name="json-up" hidden />
-            <label id="json-lab" for="json-upload" class="menu-btns"
-              >Load Session</label
-            >
-          </form>
-          <br />
-          <input
-            type="button"
-            id="sessions-library-btn"
-            value="Sessions Library"
-            class="menu-btns"
-            title="Open saved sessions library"
-          />
-          <br />
-          <input type="button" id="pcap-filename" name="pcap-up" hidden />
-          <label id="pcap-lab" for="pcap-filename" class="menu-btns"
-            >Choose PCAP</label
-          >
-          <div id="llm-toggle">
-            <label class="menu-btns">
-              <input type="checkbox" id="use-llm" />
-              Enable LLM
-            </label>
-          </div>
 
-          <div id="leftside">
-            <!--   </form>  -->
-            <!-- Dropdown menus -->
-            <label for="target_hosts" class="menu-btns left">Target Host</label>
-            <select id="target_hosts" hidden class="menu-btns left"></select>
-            <br />
-            <input
-              type="button"
-              id="setBookmark"
-              value="Bookmark"
-              class="menu-btns left"
-            />
-            <select id="selectBookmark" class="menu-btns left">
-              <option class="menu-btns left" value="" disabled selected>
-                Select a bookmark
-              </option>
-            </select>
-            <input
-              type="button"
-              id="save-json-btn"
-              value="Save Session"
-              class="menu-btns left"
-            />
-            <input
-              type="button"
-              id="export-session-btn"
-              value="Export Session"
-              title="Export session to a file"
-              class="menu-btns left"
-            />
-            <div id="file-info">
-              <div id="pcap-size">PCAP size: 0</div>
-              <div id="load-time">Load time:</div>
-              <div id="total-packets">Total Packets: 0</div>
-              <div id="filter-returned">Filtered Packets: 0</div>
-              <div id="timestamp"></div>
-            </div>
+        <div id="leftside">
+          <!--   </form>  -->
+          <!-- Dropdown menus -->
+          <label for="target_hosts" class="menu-btns left">Target Host</label>
+          <select id="target_hosts" hidden class="menu-btns left"></select>
+          <br />
+          <input type="button" id="setBookmark" value="Bookmark" class="menu-btns left" />
+          <select id="selectBookmark" class="menu-btns left">
+            <option class="menu-btns left" value="" disabled selected>
+              Select a bookmark
+            </option>
+          </select>
+          <input type="button" id="save-json-btn" value="Save Session" class="menu-btns left" />
+          <input type="button" id="export-session-btn" value="Export Session" title="Export session to a file"
+            class="menu-btns left" />
+          <div id="file-info">
+            <div id="pcap-size">PCAP size: 0</div>
+            <div id="load-time">Load time:</div>
+            <div id="total-packets">Total Packets: 0</div>
+            <div id="filter-returned">Filtered Packets: 0</div>
+            <div id="timestamp"></div>
           </div>
         </div>
-        <div id="main" class="main_panel">
+      </div>
+      <div id="main" class="main_panel">
+        <div id="loading-screen">
           <div id="loading-container">
             <h2 id="loading-text">Processing Packets...</h2>
             <br />
             <!-- The animated gif for our rat is a gif i've edited some for this project.   -->
             <!-- The original gif author is Martin Ollivere: https://ollivere.co/           -->
-            <img
-              width="25%"
-              height="25%"
-              id="loading"
-              src="../assets/images/loading.gif"
-            />
+            <img width="25%" height="25%" id="loading" src="../assets/images/loading.gif" />
           </div>
-          <div id="error-container">
-            <h2>Error!</h2>
-            <br />
-            <p id="error-message"></p>
+        </div>
+        <div id="error-container">
+          <h2>Error!</h2>
+          <br />
+          <p id="error-message"></p>
+        </div>
+        <div id="summary_box">
+          <div id="summary_content">
+            Load a file to get started!
+            <!--            <span id="loaderdots" class="loading">Loading</span>  -->
           </div>
-          <div id="summary_box">
-            <div id="summary_content">
-              Load a file to get started!
-              <!--            <span id="loaderdots" class="loading">Loading</span>  -->
-            </div>
+        </div>
+        <div id="stats_box">
+          <div id="stats_content"></div>
+        </div>
+        <div id="data_tools_box">
+          <div class="crypt-workspace-header">Conv Workspace</div>
+          <div class="crypt-subtab-row">
+            <button id="conv-subtab-conversions" class="crypt-subtab-btn active">
+              Conversions
+            </button>
+            <button id="conv-subtab-hashes" class="crypt-subtab-btn">
+              Hashes
+            </button>
+            <button id="conv-subtab-decodes" class="crypt-subtab-btn">
+              Decodes
+            </button>
           </div>
-          <div id="stats_box">
-            <div id="stats_content"></div>
-          </div>
-          <div id="data_tools_box">
-            <div class="crypt-workspace-header">Conv Workspace</div>
-            <div class="crypt-subtab-row">
-              <button
-                id="conv-subtab-conversions"
-                class="crypt-subtab-btn active"
-              >
-                Conversions
-              </button>
-              <button id="conv-subtab-hashes" class="crypt-subtab-btn">
-                Hashes
-              </button>
-              <button id="conv-subtab-decodes" class="crypt-subtab-btn">
-                Decodes
-              </button>
-            </div>
 
-            <div id="conv-conversions-panel" class="crypt-subtab-panel">
-              <div class="data-tools-grid">
-                <div class="data-tools-section">
-                  <div class="data-tools-title">Input</div>
-                  <label for="data-tools-format">Input format</label>
-                  <select id="data-tools-format">
-                    <option value="base64">Base64</option>
-                    <option value="binary">Binary</option>
-                    <option value="hex" selected>Hex</option>
-                    <option value="ascii">ASCII / UTF-8</option>
-                    <option value="decimal">Decimal bytes</option>
-                  </select>
-                  <div class="data-tools-highlight-wrap">
-                    <pre
-                      id="data-tools-input-highlight"
-                      class="data-tools-highlight-layer"
-                      aria-hidden="true"
-                    ></pre>
-                    <textarea
-                      id="data-tools-input"
-                      placeholder="Paste base64, binary, hex, ascii, or decimal byte values here..."
-                    ></textarea>
-                  </div>
-                  <div id="data-tools-history">
-                    <select
-                      id="data-tools-history-select"
-                      aria-label="Previous Conv inputs"
-                    >
-                      <option value="" selected>No previous inputs</option>
-                    </select>
-                  </div>
-                  <div class="data-tools-actions">
-                    <button id="data-tools-convert-btn">Convert</button>
-                    <button id="data-tools-clear-btn">Clear</button>
-                  </div>
-                  <div id="data-tools-error" role="alert"></div>
-                </div>
-                <div class="data-tools-section">
-                  <div class="data-tools-title">Converted Output</div>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-hex"
-                  >
-                    Hex
-                  </div>
-                  <div class="data-tools-highlight-wrap">
-                    <pre
-                      id="data-tools-hex-output-highlight"
-                      class="data-tools-highlight-layer"
-                      aria-hidden="true"
-                    ></pre>
-                    <textarea id="data-tools-hex-output" readonly></textarea>
-                  </div>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-binary"
-                  >
-                    Binary
-                  </div>
-                  <textarea id="data-tools-binary-output" readonly></textarea>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-decimal"
-                  >
-                    Decimal bytes
-                  </div>
-                  <textarea id="data-tools-decimal-output" readonly></textarea>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-decimal-integer"
-                  >
-                    Decimal integer
-                  </div>
-                  <textarea
-                    id="data-tools-decimal-integer-output"
-                    readonly
-                  ></textarea>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-ascii"
-                  >
-                    ASCII
-                  </div>
-                  <textarea id="data-tools-ascii-output" readonly></textarea>
-                  <div
-                    class="data-tools-output-label data-tools-output-label-base64"
-                  >
-                    Base64
-                  </div>
-                  <textarea id="data-tools-base64-output" readonly></textarea>
-                </div>
-                <div class="data-tools-section">
-                  <div class="data-tools-title">Data Insights</div>
-                  <div id="data-tools-byte-length" class="data-tools-kv">
-                    Byte Length: 0
-                  </div>
-                  <div id="data-tools-mime-type" class="data-tools-kv">
-                    MIME Type: Unknown
-                  </div>
-                  <div id="data-tools-language-guess" class="data-tools-kv">
-                    Text Language: Unknown
-                  </div>
-                  <div id="data-tools-data-type-guesses" class="data-tools-kv">
-                    Data Type Guesses: None
-                  </div>
-                  <div id="data-tools-entropy" class="data-tools-kv">
-                    Shannon Entropy: 0.00 (Low)
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div id="conv-hashes-panel" class="crypt-subtab-panel" hidden>
-              <div class="data-tools-section data-tools-hashes-section">
-                <div class="data-tools-title">Hashes</div>
-                <div class="data-tools-hashes-grid">
-                  <div class="data-tools-output-label">Hashed Input</div>
-                  <textarea
-                    id="data-tools-hash-input-reading"
-                    class="data-tools-hash-input-reading"
-                    placeholder="Type text here to hash..."
-                  ></textarea>
-                  <div class="data-tools-output-label">MD5</div>
-                  <input
-                    type="text"
-                    id="data-tools-md5-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA-1</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha1-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA-256</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha256-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA-384</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha384-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA-512</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha512-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA3-256</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha3-256-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">SHA3-512</div>
-                  <input
-                    type="text"
-                    id="data-tools-sha3-512-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">RIPEMD-160</div>
-                  <input
-                    type="text"
-                    id="data-tools-ripemd160-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                  <div class="data-tools-output-label">Whirlpool</div>
-                  <input
-                    type="text"
-                    id="data-tools-whirlpool-output"
-                    class="data-tools-hash-output"
-                    readonly
-                    placeholder="—"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div id="conv-decodes-panel" class="crypt-subtab-panel" hidden>
-              <div class="data-tools-section data-tools-proto-section">
-                <div class="data-tools-title">Protocol Decoder</div>
-                <label for="data-tools-proto-select">Protocol</label>
-                <select id="data-tools-proto-select">
-                  <option value="auto" selected>Auto-detect</option>
-                  <option value="http">HTTP</option>
-                  <option value="telnet">Telnet</option>
-                  <option value="ssh">SSH / OpenSSH</option>
-                  <option value="pop3">POP3</option>
-                  <option value="imap">IMAP</option>
-                  <option value="smtp">SMTP</option>
+          <div id="conv-conversions-panel" class="crypt-subtab-panel">
+            <div class="data-tools-grid">
+              <div class="data-tools-section">
+                <div class="data-tools-title">Input</div>
+                <label for="data-tools-format">Input format</label>
+                <select id="data-tools-format">
+                  <option value="base64">Base64</option>
+                  <option value="binary">Binary</option>
+                  <option value="hex" selected>Hex</option>
+                  <option value="ascii">ASCII / UTF-8</option>
+                  <option value="decimal">Decimal bytes</option>
                 </select>
-                <div id="data-tools-proto-output"></div>
-              </div>
-            </div>
-          </div>
-          <div id="crypt_box">
-            <div class="crypt-workspace-header">Crypt Workspace</div>
-            <div class="crypt-subtab-row">
-              <button id="crypt-subtab-ssl" class="crypt-subtab-btn active">
-                SSL
-              </button>
-              <button id="crypt-subtab-pgp" class="crypt-subtab-btn">
-                PGP
-              </button>
-              <button id="crypt-subtab-openssh" class="crypt-subtab-btn">
-                OpenSSH
-              </button>
-            </div>
-
-            <div id="crypt-ssl-panel" class="crypt-subtab-panel">
-              <div class="crypt-grid">
-                <div class="crypt-section">
-                  <div class="crypt-section-title">Encountered SSL/TLS</div>
-                  <select id="crypt-encountered-list" size="10"></select>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-refresh-btn">Refresh</button>
-                    <button id="crypt-apply-filter-btn">Filter packets</button>
-                    <button id="crypt-load-encountered-cert-btn">
-                      Load cert text
-                    </button>
-                  </div>
-                  <div id="crypt-encountered-details"></div>
+                <div class="data-tools-highlight-wrap">
+                  <pre id="data-tools-input-highlight" class="data-tools-highlight-layer" aria-hidden="true"></pre>
+                  <textarea id="data-tools-input"
+                    placeholder="Paste base64, binary, hex, ascii, or decimal byte values here..."></textarea>
                 </div>
-
-                <div class="crypt-section">
-                  <div class="crypt-section-title">Certificate Loader</div>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-load-cert-file-btn">
-                      Load certificate file
-                    </button>
-                    <button id="crypt-use-cert-input-btn">
-                      Use pasted certificate
-                    </button>
-                    <button id="crypt-clear-cert-btn">Clear</button>
-                  </div>
-                  <input
-                    type="file"
-                    id="crypt-cert-file-input"
-                    accept=".pem,.crt,.cer,.der,.txt"
-                    hidden
-                  />
-                  <textarea
-                    id="crypt-cert-input"
-                    placeholder="Paste PEM certificate text here..."
-                  ></textarea>
-                  <pre id="crypt-cert-preview">No certificate loaded.</pre>
-                </div>
-
-                <div class="crypt-section">
-                  <div class="crypt-section-title">Private Key Loader</div>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-load-key-file-btn">
-                      Load private key file
-                    </button>
-                    <button id="crypt-use-key-input-btn">Use pasted key</button>
-                    <button id="crypt-clear-key-btn">Clear</button>
-                  </div>
-                  <input
-                    type="file"
-                    id="crypt-key-file-input"
-                    accept=".key,.pem,.txt"
-                    hidden
-                  />
-                  <textarea
-                    id="crypt-key-input"
-                    placeholder="Paste PEM private key text here..."
-                  ></textarea>
-                  <pre id="crypt-key-preview">No private key loaded.</pre>
-                </div>
-
-                <div class="crypt-section">
-                  <div class="crypt-section-title">TLS/SSL Decrypt</div>
-                  <div class="crypt-actions-row">
-                    <button id="crypt-decrypt-entry-btn">
-                      Decrypt selected
-                    </button>
-                    <button id="crypt-send-decrypted-conv-btn" disabled>
-                      Send to Conv
-                    </button>
-                    <button id="crypt-clear-decrypted-btn">Clear</button>
-                  </div>
-                  <pre id="crypt-decrypt-preview">
-No decrypted TLS/SSL output yet.</pre
-                  >
-                </div>
-              </div>
-            </div>
-
-            <div id="crypt-pgp-panel" class="crypt-subtab-panel" hidden>
-              <div class="crypt-placeholder">
-                PGP workspace reserved for future import/decrypt tooling.
-              </div>
-            </div>
-
-            <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
-              <div class="crypt-placeholder">
-                OpenSSH workspace reserved for future key/session tooling.
-              </div>
-            </div>
-          </div>
-          <div id="keystore_box">
-            <div class="keystore-workspace-header">Local Keystore</div>
-            <div class="keystore-grid">
-              <div class="crypt-section">
-                <div class="crypt-section-title">Create / Update Entry</div>
-                <div class="keystore-mode-row">
-                  <label for="crypt-keystore-mode">Keychain:</label>
-                  <select id="crypt-keystore-mode">
-                    <option value="session">Session auto keychain</option>
-                    <option value="persistent">Persistent keychain</option>
+                <div id="data-tools-history">
+                  <select id="data-tools-history-select" aria-label="Previous Conv inputs">
+                    <option value="" selected>No previous inputs</option>
                   </select>
                 </div>
-                <div
-                  id="crypt-keystore-unlock-status"
-                  role="status"
-                  aria-live="polite"
-                >
-                  Persistent keychain is unlocked for this app session.
+                <div class="data-tools-actions">
+                  <button id="data-tools-convert-btn">Convert</button>
+                  <button id="data-tools-clear-btn">Clear</button>
                 </div>
+                <div id="data-tools-error" role="alert"></div>
+              </div>
+              <div class="data-tools-section">
+                <div class="data-tools-title">Converted Output</div>
+                <div class="data-tools-output-label data-tools-output-label-hex">
+                  Hex
+                </div>
+                <div class="data-tools-highlight-wrap">
+                  <pre id="data-tools-hex-output-highlight" class="data-tools-highlight-layer" aria-hidden="true"></pre>
+                  <textarea id="data-tools-hex-output" readonly></textarea>
+                </div>
+                <div class="data-tools-output-label data-tools-output-label-binary">
+                  Binary
+                </div>
+                <textarea id="data-tools-binary-output" readonly></textarea>
+                <div class="data-tools-output-label data-tools-output-label-decimal">
+                  Decimal bytes
+                </div>
+                <textarea id="data-tools-decimal-output" readonly></textarea>
+                <div class="data-tools-output-label data-tools-output-label-decimal-integer">
+                  Decimal integer
+                </div>
+                <textarea id="data-tools-decimal-integer-output" readonly></textarea>
+                <div class="data-tools-output-label data-tools-output-label-ascii">
+                  ASCII
+                </div>
+                <textarea id="data-tools-ascii-output" readonly></textarea>
+                <div class="data-tools-output-label data-tools-output-label-base64">
+                  Base64
+                </div>
+                <textarea id="data-tools-base64-output" readonly></textarea>
+              </div>
+              <div class="data-tools-section">
+                <div class="data-tools-title">Data Insights</div>
+                <div id="data-tools-byte-length" class="data-tools-kv">
+                  Byte Length: 0
+                </div>
+                <div id="data-tools-mime-type" class="data-tools-kv">
+                  MIME Type: Unknown
+                </div>
+                <div id="data-tools-language-guess" class="data-tools-kv">
+                  Text Language: Unknown
+                </div>
+                <div id="data-tools-data-type-guesses" class="data-tools-kv">
+                  Data Type Guesses: None
+                </div>
+                <div id="data-tools-entropy" class="data-tools-kv">
+                  Shannon Entropy: 0.00 (Low)
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="conv-hashes-panel" class="crypt-subtab-panel" hidden>
+            <div class="data-tools-section data-tools-hashes-section">
+              <div class="data-tools-title">Hashes</div>
+              <div class="data-tools-hashes-grid">
+                <div class="data-tools-output-label">Hashed Input</div>
+                <textarea id="data-tools-hash-input-reading" class="data-tools-hash-input-reading"
+                  placeholder="Type text here to hash..."></textarea>
+                <div class="data-tools-output-label">MD5</div>
+                <input type="text" id="data-tools-md5-output" class="data-tools-hash-output" readonly placeholder="—" />
+                <div class="data-tools-output-label">SHA-1</div>
+                <input type="text" id="data-tools-sha1-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-256</div>
+                <input type="text" id="data-tools-sha256-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-384</div>
+                <input type="text" id="data-tools-sha384-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-512</div>
+                <input type="text" id="data-tools-sha512-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA3-256</div>
+                <input type="text" id="data-tools-sha3-256-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA3-512</div>
+                <input type="text" id="data-tools-sha3-512-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">RIPEMD-160</div>
+                <input type="text" id="data-tools-ripemd160-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">Whirlpool</div>
+                <input type="text" id="data-tools-whirlpool-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+              </div>
+            </div>
+          </div>
+
+          <div id="conv-decodes-panel" class="crypt-subtab-panel" hidden>
+            <div class="data-tools-section data-tools-proto-section">
+              <div class="data-tools-title">Protocol Decoder</div>
+              <label for="data-tools-proto-select">Protocol</label>
+              <select id="data-tools-proto-select">
+                <option value="auto" selected>Auto-detect</option>
+                <option value="http">HTTP</option>
+                <option value="telnet">Telnet</option>
+                <option value="ssh">SSH / OpenSSH</option>
+                <option value="pop3">POP3</option>
+                <option value="imap">IMAP</option>
+                <option value="smtp">SMTP</option>
+              </select>
+              <div id="data-tools-proto-output"></div>
+            </div>
+          </div>
+        </div>
+        <div id="crypt_box">
+          <div class="crypt-workspace-header">Crypt Workspace</div>
+          <div class="crypt-subtab-row">
+            <button id="crypt-subtab-ssl" class="crypt-subtab-btn active">
+              SSL
+            </button>
+            <button id="crypt-subtab-pgp" class="crypt-subtab-btn">
+              PGP
+            </button>
+            <button id="crypt-subtab-openssh" class="crypt-subtab-btn">
+              OpenSSH
+            </button>
+          </div>
+
+          <div id="crypt-ssl-panel" class="crypt-subtab-panel">
+            <div class="crypt-grid">
+              <div class="crypt-section">
+                <div class="crypt-section-title">Encountered SSL/TLS</div>
+                <select id="crypt-encountered-list" size="10"></select>
                 <div class="crypt-actions-row">
-                  <button id="crypt-reset-keystore-password-btn">
-                    Reset keychain password (wipes persistent keychain)
+                  <button id="crypt-refresh-btn">Refresh</button>
+                  <button id="crypt-apply-filter-btn">Filter packets</button>
+                  <button id="crypt-load-encountered-cert-btn">
+                    Load cert text
                   </button>
                 </div>
-                <input
-                  id="crypt-keystore-label"
-                  type="text"
-                  placeholder="Entry label (optional)"
-                />
-                <textarea
-                  id="crypt-credential-input"
-                  placeholder="Paste credentials/secrets/notes to store locally..."
-                ></textarea>
-                <div class="crypt-actions-row">
-                  <button id="crypt-save-cert-keystore-btn">Save cert</button>
-                  <button id="crypt-save-key-keystore-btn">Save key</button>
-                  <button id="crypt-save-secret-keystore-btn">
-                    Save secret
-                  </button>
-                </div>
+                <div id="crypt-encountered-details"></div>
               </div>
 
               <div class="crypt-section">
-                <div class="crypt-section-title">Saved Entries</div>
-                <select id="crypt-keystore-list" size="10"></select>
+                <div class="crypt-section-title">Certificate Loader</div>
                 <div class="crypt-actions-row">
-                  <button id="crypt-load-keystore-entry-btn">
-                    Load selected
+                  <button id="crypt-load-cert-file-btn">
+                    Load certificate file
                   </button>
-                  <button id="crypt-open-link-btn">Open link</button>
-                  <button id="crypt-send-to-persistent-btn">
-                    Send to persistent
+                  <button id="crypt-use-cert-input-btn">
+                    Use pasted certificate
                   </button>
-                  <button id="crypt-delete-keystore-entry-btn">
-                    Delete selected
-                  </button>
+                  <button id="crypt-clear-cert-btn">Clear</button>
                 </div>
-                <pre id="crypt-keystore-details">
-No keystore entries saved.</pre
-                >
+                <input type="file" id="crypt-cert-file-input" accept=".pem,.crt,.cer,.der,.txt" hidden />
+                <textarea id="crypt-cert-input" placeholder="Paste PEM certificate text here..."></textarea>
+                <pre id="crypt-cert-preview">No certificate loaded.</pre>
               </div>
-            </div>
-          </div>
-          <div id="save-session-dialog" hidden>
-            <div class="crypt-keystore-unlock-content">
-              <div class="crypt-section-title">Save Session</div>
-              <div id="save-session-dialog-description">
-                Do you want to save your PacketSnitch session?
-              </div>
-              <div class="crypt-actions-row">
-                <button id="save-session-save-btn">Save Session</button>
-                <button id="save-session-discard-btn">Don't Save</button>
-                <button id="save-session-cancel-btn">Cancel</button>
-              </div>
-            </div>
-          </div>
-          <div id="crypt-keystore-unlock-dialog" hidden>
-            <div class="crypt-keystore-unlock-content">
-              <div class="crypt-section-title" id="crypt-keystore-unlock-title">
-                Unlock Keychain
-              </div>
-              <div id="crypt-keystore-unlock-description">
-                Enter password to unlock the persistent keychain.
-              </div>
-              <input
-                id="crypt-keystore-unlock-password"
-                type="password"
-                placeholder="Enter keychain password"
-              />
-              <input
-                id="crypt-keystore-unlock-password-confirm"
-                type="password"
-                placeholder="Confirm keychain password"
-                hidden
-              />
-              <div class="crypt-actions-row">
-                <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
-                <button id="crypt-keystore-unlock-reset-btn" hidden>
-                  Wipe keychain
-                </button>
-                <button id="crypt-keystore-unlock-cancel-btn">Cancel</button>
-              </div>
-            </div>
-          </div>
-          <div id="crypt-keystore-manual-uri-dialog" hidden>
-            <div class="crypt-keystore-unlock-content">
-              <div class="crypt-section-title">Add URI/URL to Keystore</div>
-              <div id="crypt-keystore-manual-uri-description">
-                Enter URI/URL to add to the session keychain.
-              </div>
-              <input
-                id="crypt-keystore-manual-uri-input"
-                type="text"
-                placeholder="https://example.com/path"
-              />
-              <div class="crypt-actions-row">
-                <button id="crypt-keystore-manual-uri-confirm-btn">Save</button>
-                <button id="crypt-keystore-manual-uri-cancel-btn">
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-          <div id="list_box">
-            <div id="list_search_bar">
-              <input
-                id="list-search"
-                type="text"
-                placeholder="Filter list by host, IP, port, or protocol..."
-              />
-              <label id="list-group-streams-wrap">
-                <input id="list-group-streams" type="checkbox" />
-                Group by stream
-              </label>
-            </div>
-            <div id="list_content"></div>
-          </div>
-          <div id="notes_box">
-            <div class="notes-header">Selected Note</div>
-            <div class="notes-editor-wrap">
-              <textarea
-                id="notes-editor"
-                placeholder="Select a note from the right panel..."
-              ></textarea>
-            </div>
-          </div>
-          <div id="packetInfoPane">
-            <div id="timestamp"></div>
 
-            <div id="welcome">Processing packets...</div>
-            <div id="ip2ip"></div>
-            <div id="moredata"></div>
-            <div id="protoInfo">
-              <div id="protoInfoHead" class="PHead">Network Information</div>
-              <div id="protoInfoProto" class="infop">
-                <div id="protoInfoSrc" class="infop"></div>
-                <div id="protoInfoDest" class="infop"></div>
-              </div>
-            </div>
-            <div id="data-types">
-              <div id="dataTypesHead" class="PHead">Data Type List</div>
-
-              <div id="dataTypesPane">
-                <div id="type-head" class="infop">
-                  <div id="mime-type"></div>
-                  <div id="charset"></div>
-                  <div id="encoding"></div>
-                  <div id="language"></div>
+              <div class="crypt-section">
+                <div class="crypt-section-title">Private Key Loader</div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-load-key-file-btn">
+                    Load private key file
+                  </button>
+                  <button id="crypt-use-key-input-btn">Use pasted key</button>
+                  <button id="crypt-clear-key-btn">Clear</button>
                 </div>
-                <ul id="types-list"></ul>
+                <input type="file" id="crypt-key-file-input" accept=".key,.pem,.txt" hidden />
+                <textarea id="crypt-key-input" placeholder="Paste PEM private key text here..."></textarea>
+                <pre id="crypt-key-preview">No private key loaded.</pre>
               </div>
-            </div>
-            <div id="active-recon">
-              <div id="protcols-head" class="PHead">Protcols Used</div>
-              <div id="protocols" class="active">Unavilable</div>
-              <div id="comp-head" class="PHead">Compression Information</div>
-              <div id="comp" class="active">Unavailable for datatype</div>
-              <div id="crypt-head" class="PHead">Encryption Details</div>
-              <div id="crypt" class="active">Unavailable for datatype</div>
-              <div id="website-head" class="PHead">Website Title</div>
-              <div id="website" class="active">Unavailable</div>
-              <div id="dns-head" class="PHead">DNS</div>
-              <div id="dns" class="active">Unavailable</div>
-            </div>
-          </div>
-          <div id="packetPayloadPane" class="main_panel">
-            <div id="payloadascii">
-              <div id="asciiText"></div>
-              <div id="asciiOffset"></div>
-            </div>
-            <div id="hexg" class="hexGrid"></div>
-          </div>
-        </div>
-        <div class="sidebar" id="sidedata">
-          <div id="rightside">
-            <div id="rightside-data">
-              <div class="sidebar-header">Datagram Frame</div>
-              <div id="sidedatatable" class="sidetable"></div>
-              <div class="sidebar-header">Location</div>
-              <div id="locationtable" class="sidetable"></div>
-              <div id="sideloctable" class="sidetable"></div>
-              <div class="sidebar-header">Payload Entropy</div>
-              <div id="entropybox"></div>
-            </div>
-            <div id="rightside-notes" hidden>
-              <div class="sidebar-header">Notes</div>
-              <select id="notes-select" size="10"></select>
-              <div class="notes-controls-row notes-sidebar-actions">
-                <label for="notes-new-color">Color</label>
-                <input type="color" id="notes-new-color" value="#4caf50" />
-              </div>
-              <textarea
-                id="notes-new-input"
-                placeholder="Write a new note..."
-              ></textarea>
-              <div class="notes-controls-row notes-sidebar-actions">
-                <button id="notes-add-btn">Add note</button>
-                <button id="notes-remove-btn">Remove selected</button>
-              </div>
-              <div class="notes-controls-row notes-sidebar-actions">
-                <button id="notes-save-btn">Save notes file</button>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">TLS/SSL Decrypt</div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-decrypt-entry-btn">
+                    Decrypt selected
+                  </button>
+                  <button id="crypt-send-decrypted-conv-btn" disabled>
+                    Send to Conv
+                  </button>
+                  <button id="crypt-clear-decrypted-btn">Clear</button>
+                </div>
+                <pre id="crypt-decrypt-preview">
+No decrypted TLS/SSL output yet.</pre>
               </div>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="footer">
-        <div id="status" class="footer">Status: Ready</div>
-        <div id="copyright" class="footer">oxasploits, llc (&copy; 2026)</div>
-      </div>
-    </div>
 
-    <div id="activity-log-panel">
-      <div id="activity-log-header">
-        <span>Activity Log</span>
-        <button id="close-log-btn" aria-label="Close log">×</button>
-      </div>
-      <div id="activity-log-path"></div>
-      <div id="activity-log-entries"></div>
-      <div id="activity-log-search-bar">
-        <input
-          id="activity-log-search"
-          type="text"
-          placeholder="Search log entries..."
-        />
-      </div>
-    </div>
+          <div id="crypt-pgp-panel" class="crypt-subtab-panel" hidden>
+            <div class="crypt-placeholder">
+              PGP workspace reserved for future import/decrypt tooling.
+            </div>
+          </div>
 
-    <div id="convert-context-menu" role="menu" aria-label="Context menu" hidden>
-      <div id="ctx-copy-submenu" class="ctx-submenu">
-        <button id="ctx-copy-branch" class="ctx-branch" type="button">
-          Copy...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-copy" role="menuitem">Copy</button>
-          <button id="convert-context-copy-hex" type="button">Copy Hex</button>
-          <button id="convert-context-copy-ascii" type="button">
-            Copy ASCII
-          </button>
-          <button id="convert-context-copy-raw" type="button">
-            Copy Raw payload
-          </button>
-          <button id="ctx-copy-cookie-jar" role="menuitem">
-            Copy Cookie Jar
-          </button>
-        </div>
-      </div>
-      <button id="ctx-paste" role="menuitem">Paste</button>
-      <hr id="convert-context-divider" class="ctx-divider" />
-      <div id="ctx-convert-submenu" class="ctx-submenu">
-        <button id="ctx-convert-branch" class="ctx-branch" type="button">
-          Convert to...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="convert-context-hex" type="button">Load as Hex</button>
-          <button id="convert-context-binary" type="button">
-            Load as Binary
-          </button>
-          <button id="convert-context-base64" type="button">
-            Load as Base64
-          </button>
-          <button id="convert-context-decimal" type="button">
-            Load as Decimal bytes
-          </button>
-          <button id="convert-context-ascii" type="button">
-            Load as ASCII / UTF-8
-          </button>
-          <button id="convert-context-derive-guess" type="button">
-            Derive Data Type Guess
-          </button>
-          <button id="convert-context-load-cursor-ascii" type="button">
-            Load Cursor ASCII into Conv tab
-          </button>
-          <button id="convert-context-load-payload" type="button">
-            Load Raw Payload into Conv tab
-          </button>
-        </div>
-      </div>
-      <div id="ctx-follow-stream-submenu" class="ctx-submenu">
-        <button id="ctx-follow-stream-branch" class="ctx-branch" type="button">
-          Follow stream...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-follow-stream-conv" type="button">
-            Load stream into Conv tab
-          </button>
-          <button id="ctx-follow-stream-crypt" type="button">
-            Load stream into Crypt tab
-          </button>
-        </div>
-      </div>
-      <div id="ctx-notes-submenu" class="ctx-submenu">
-        <button id="ctx-notes-branch" class="ctx-branch" type="button">
-          Send to Notes...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-notes-send-data" type="button">
-            Send selected/context data
-          </button>
-          <button id="ctx-notes-send-conv-output" type="button">
-            Send Conv converted output
-          </button>
-          <button id="ctx-notes-send-conv-hashes" type="button">
-            Send Conv hashes
-          </button>
-        </div>
-      </div>
-      <div id="ctx-filter-submenu" class="ctx-submenu">
-        <button id="ctx-filter-branch" class="ctx-branch" type="button">
-          Add to filter...
-        </button>
-        <div class="ctx-submenu-panel">
-          <div id="ctx-filter-and-submenu" class="ctx-submenu">
-            <button id="ctx-filter-and-branch" class="ctx-branch" type="button">
-              Add with &&...
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
-              <button id="ctx-filter-port" type="button">
-                Add Port to Filter
-              </button>
-              <button id="ctx-filter-mac" type="button">
-                Add MAC to Filter
-              </button>
-              <button id="ctx-filter-protocol" type="button">
-                Add Protocol to Filter
-              </button>
-              <button id="ctx-filter-mime" type="button">
-                Add MIME Type to Filter
-              </button>
-            </div>
-          </div>
-          <div id="ctx-filter-or-submenu" class="ctx-submenu">
-            <button id="ctx-filter-or-branch" class="ctx-branch" type="button">
-              Add with ||...
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-filter-or-ip" type="button">
-                Add IP to Filter
-              </button>
-              <button id="ctx-filter-or-port" type="button">
-                Add Port to Filter
-              </button>
-              <button id="ctx-filter-or-mac" type="button">
-                Add MAC to Filter
-              </button>
-              <button id="ctx-filter-or-protocol" type="button">
-                Add Protocol to Filter
-              </button>
-              <button id="ctx-filter-or-mime" type="button">
-                Add MIME Type to Filter
-              </button>
-            </div>
-          </div>
-          <div id="ctx-filter-not-submenu" class="ctx-submenu">
-            <button id="ctx-filter-not-branch" class="ctx-branch" type="button">
-              is not...
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-filter-not-ip" type="button">
-                Add IP to Filter
-              </button>
-              <button id="ctx-filter-not-port" type="button">
-                Add Port to Filter
-              </button>
-              <button id="ctx-filter-not-mac" type="button">
-                Add MAC to Filter
-              </button>
-              <button id="ctx-filter-not-protocol" type="button">
-                Add Protocol to Filter
-              </button>
-              <button id="ctx-filter-not-mime" type="button">
-                Add MIME Type to Filter
-              </button>
-            </div>
-          </div>
-          <div id="ctx-filter-parentheses-submenu" class="ctx-submenu">
-            <button
-              id="ctx-filter-parentheses-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              Parentheses...
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-filter-paren-open" type="button">Append (</button>
-              <button id="ctx-filter-paren-close" type="button">
-                Append )
-              </button>
-              <button id="ctx-filter-paren-wrap" type="button">
-                Wrap current query with (...)
-              </button>
-            </div>
-          </div>
-          <hr class="ctx-divider" />
-          <div id="ctx-filter-clear-submenu" class="ctx-submenu">
-            <button
-              id="ctx-filter-clear-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              Clear and...
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-filter-clear-ip" type="button">
-                Add IP to Filter
-              </button>
-              <button id="ctx-filter-clear-port" type="button">
-                Add Port to Filter
-              </button>
-              <button id="ctx-filter-clear-mac" type="button">
-                Add MAC to Filter
-              </button>
-              <button id="ctx-filter-clear-protocol" type="button">
-                Add Protocol to Filter
-              </button>
-              <button id="ctx-filter-clear-mime" type="button">
-                Add MIME Type to Filter
-              </button>
+          <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
+            <div class="crypt-placeholder">
+              OpenSSH workspace reserved for future key/session tooling.
             </div>
           </div>
         </div>
-      </div>
-      <div id="ctx-keystore-submenu" class="ctx-submenu">
-        <button id="ctx-keystore-branch" class="ctx-branch" type="button">
-          Add to Keystore...
-        </button>
-        <div class="ctx-submenu-panel">
-          <div id="ctx-keystore-password-submenu" class="ctx-submenu">
-            <button
-              id="ctx-keystore-password-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              As Password
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-keystore-password-session" type="button">
-                Session keychain
-              </button>
-              <button id="ctx-keystore-password-persistent" type="button">
-                Persistent keychain
-              </button>
+        <div id="keystore_box">
+          <div class="keystore-workspace-header">Local Keystore</div>
+          <div class="keystore-grid">
+            <div class="crypt-section">
+              <div class="crypt-section-title">Create / Update Entry</div>
+              <div class="keystore-mode-row">
+                <label for="crypt-keystore-mode">Keychain:</label>
+                <select id="crypt-keystore-mode">
+                  <option value="session">Session auto keychain</option>
+                  <option value="persistent">Persistent keychain</option>
+                </select>
+              </div>
+              <div id="crypt-keystore-unlock-status" role="status" aria-live="polite">
+                Persistent keychain is unlocked for this app session.
+              </div>
+              <div class="crypt-actions-row">
+                <button id="crypt-reset-keystore-password-btn">
+                  Reset keychain password (wipes persistent keychain)
+                </button>
+              </div>
+              <input id="crypt-keystore-label" type="text" placeholder="Entry label (optional)" />
+              <textarea id="crypt-credential-input"
+                placeholder="Paste credentials/secrets/notes to store locally..."></textarea>
+              <div class="crypt-actions-row">
+                <button id="crypt-save-cert-keystore-btn">Save cert</button>
+                <button id="crypt-save-key-keystore-btn">Save key</button>
+                <button id="crypt-save-secret-keystore-btn">
+                  Save secret
+                </button>
+              </div>
             </div>
-          </div>
-          <div id="ctx-keystore-key-submenu" class="ctx-submenu">
-            <button
-              id="ctx-keystore-key-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              As Private Key
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-keystore-key-session" type="button">
-                Session keychain
-              </button>
-              <button id="ctx-keystore-key-persistent" type="button">
-                Persistent keychain
-              </button>
-            </div>
-          </div>
-          <div id="ctx-keystore-cert-submenu" class="ctx-submenu">
-            <button
-              id="ctx-keystore-cert-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              As Certificate
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-keystore-cert-session" type="button">
-                Session keychain
-              </button>
-              <button id="ctx-keystore-cert-persistent" type="button">
-                Persistent keychain
-              </button>
-            </div>
-          </div>
-          <div id="ctx-keystore-cookie-submenu" class="ctx-submenu">
-            <button
-              id="ctx-keystore-cookie-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              As Session Cookie
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-keystore-cookie-session" type="button">
-                Session keychain
-              </button>
-              <button id="ctx-keystore-cookie-persistent" type="button">
-                Persistent keychain
-              </button>
-            </div>
-          </div>
-          <div id="ctx-keystore-uri-submenu" class="ctx-submenu">
-            <button
-              id="ctx-keystore-uri-branch"
-              class="ctx-branch"
-              type="button"
-            >
-              As URI / URL (Manual)
-            </button>
-            <div class="ctx-submenu-panel">
-              <button id="ctx-keystore-uri-session" type="button">
-                Session keychain
-              </button>
-              <button id="ctx-keystore-uri-persistent" type="button">
-                Persistent keychain
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <hr id="convert-context-save-divider" class="ctx-divider" />
-      <div id="ctx-export-submenu" class="ctx-submenu">
-        <button id="ctx-export-branch" class="ctx-branch" type="button">
-          Export...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-save-json" role="menuitem">Save Session</button>
-          <button id="ctx-export-packet" role="menuitem">Export Packet</button>
-          <button id="ctx-export-payload" role="menuitem">
-            Export Payload
-          </button>
-          <button id="ctx-save-cookie-jar" role="menuitem">
-            Save to cookie_jar.txt
-          </button>
-        </div>
-      </div>
-      <div id="ctx-http-file-submenu" class="ctx-submenu">
-        <button id="ctx-http-file-branch" class="ctx-branch" type="button">
-          HTTP File...
-        </button>
-        <div class="ctx-submenu-panel">
-          <button id="ctx-http-file-save" type="button">
-            Save body to file
-          </button>
-          <button id="ctx-http-file-load" type="button">
-            Load body into Conv tab
-          </button>
-          <button id="ctx-http-file-preview" type="button">
-            Preview in browser
-          </button>
-        </div>
-      </div>
-    </div>
 
-    <!-- Installation complete screen – shown only on first run after a new version install -->
-    <div id="install-screen">
-      <div id="install-screen-inner">
-        <div id="install-title">PacketSnitch Installation Complete</div>
-        <div id="install-version"></div>
-        <hr class="install-divider" />
-        <div id="install-files-heading">Installed Files</div>
-        <ul id="install-file-list"></ul>
-        <hr class="install-divider" />
-        <div id="install-ollama-status"></div>
-        <button id="install-continue-btn">Continue</button>
-      </div>
-    </div>
+            <div class="crypt-section">
+              <div class="crypt-section-title">Saved Entries</div>
+              <select id="crypt-keystore-list" size="10"></select>
+              <div class="crypt-actions-row">
+                <button id="crypt-load-keystore-entry-btn">
+                  Load selected
+                </button>
+                <button id="crypt-open-link-btn">Open link</button>
+                <button id="crypt-send-to-persistent-btn">
+                  Send to persistent
+                </button>
+                <button id="crypt-delete-keystore-entry-btn">
+                  Delete selected
+                </button>
+              </div>
+              <pre id="crypt-keystore-details">
+No keystore entries saved.</pre>
+            </div>
+          </div>
+        </div>
+        <div id="save-session-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Save Session</div>
+            <div id="save-session-dialog-description">
+              Do you want to save your PacketSnitch session?
+            </div>
+            <div class="crypt-actions-row">
+              <button id="save-session-save-btn">Save Session</button>
+              <button id="save-session-discard-btn">Don't Save</button>
+              <button id="save-session-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div id="crypt-keystore-unlock-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title" id="crypt-keystore-unlock-title">
+              Unlock Keychain
+            </div>
+            <div id="crypt-keystore-unlock-description">
+              Enter password to unlock the persistent keychain.
+            </div>
+            <input id="crypt-keystore-unlock-password" type="password" placeholder="Enter keychain password" />
+            <input id="crypt-keystore-unlock-password-confirm" type="password" placeholder="Confirm keychain password"
+              hidden />
+            <div class="crypt-actions-row">
+              <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
+              <button id="crypt-keystore-unlock-reset-btn" hidden>
+                Wipe keychain
+              </button>
+              <button id="crypt-keystore-unlock-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div id="crypt-keystore-manual-uri-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Add URI/URL to Keystore</div>
+            <div id="crypt-keystore-manual-uri-description">
+              Enter URI/URL to add to the session keychain.
+            </div>
+            <input id="crypt-keystore-manual-uri-input" type="text" placeholder="https://example.com/path" />
+            <div class="crypt-actions-row">
+              <button id="crypt-keystore-manual-uri-confirm-btn">Save</button>
+              <button id="crypt-keystore-manual-uri-cancel-btn">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+        <div id="list_box">
+          <div id="list_search_bar">
+            <input id="list-search" type="text" placeholder="Filter list by host, IP, port, or protocol..." />
+            <label id="list-group-streams-wrap">
+              <input id="list-group-streams" type="checkbox" />
+              Group by stream
+            </label>
+          </div>
+          <div id="list_content"></div>
+        </div>
+        <div id="notes_box">
+          <div class="notes-header">Selected Note</div>
+          <div class="notes-editor-wrap">
+            <textarea id="notes-editor" placeholder="Select a note from the right panel..."></textarea>
+          </div>
+        </div>
+        <div id="packetInfoPane">
+          <div id="timestamp"></div>
 
-    <!-- Session picker – shown on startup when saved sessions exist -->
-    <div id="session-picker">
-      <div id="session-picker-inner">
-        <div id="session-picker-header">
-          <div id="session-picker-title">PacketSnitch – Saved Sessions</div>
-          <button
-            id="session-picker-close-btn"
-            class="session-picker-close"
-            aria-label="Close session picker"
-            title="Start new session"
-          >&#10005;</button>
-        </div>
-        <div id="session-picker-toolbar">
-          <button id="session-picker-new-btn" class="session-picker-primary-btn">
-            New Session
-          </button>
-          <button id="session-picker-refresh-btn" class="session-picker-secondary-btn">
-            Refresh
-          </button>
-        </div>
-        <div id="session-picker-table-wrap">
-          <table id="session-picker-table">
-            <thead>
-              <tr>
-                <th class="session-picker-th-name">Session Name</th>
-                <th class="session-picker-th-date">Last Saved</th>
-                <th class="session-picker-th-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="session-picker-list"></tbody>
-          </table>
-        </div>
-        <div id="session-picker-status" class="session-picker-status"></div>
-      </div>
-    </div>
+          <div id="welcome">Processing packets...</div>
+          <div id="ip2ip"></div>
+          <div id="moredata"></div>
+          <div id="protoInfo">
+            <div id="protoInfoHead" class="PHead">Network Information</div>
+            <div id="protoInfoProto" class="infop">
+              <div id="protoInfoSrc" class="infop"></div>
+              <div id="protoInfoDest" class="infop"></div>
+            </div>
+          </div>
+          <div id="data-types">
+            <div id="dataTypesHead" class="PHead">Data Type List</div>
 
-    <!-- Session name dialog – used when saving a session to the library -->
-    <div id="session-name-dialog" hidden>
-      <div id="session-name-dialog-inner">
-        <div id="session-name-dialog-title">Save Session</div>
-        <div id="session-name-dialog-desc">
-          Enter a name for this session:
+            <div id="dataTypesPane">
+              <div id="type-head" class="infop">
+                <div id="mime-type"></div>
+                <div id="charset"></div>
+                <div id="encoding"></div>
+                <div id="language"></div>
+              </div>
+              <ul id="types-list"></ul>
+            </div>
+          </div>
+          <div id="active-recon">
+            <div id="protcols-head" class="PHead">Protcols Used</div>
+            <div id="protocols" class="active">Unavilable</div>
+            <div id="comp-head" class="PHead">Compression Information</div>
+            <div id="comp" class="active">Unavailable for datatype</div>
+            <div id="crypt-head" class="PHead">Encryption Details</div>
+            <div id="crypt" class="active">Unavailable for datatype</div>
+            <div id="website-head" class="PHead">Website Title</div>
+            <div id="website" class="active">Unavailable</div>
+            <div id="dns-head" class="PHead">DNS</div>
+            <div id="dns" class="active">Unavailable</div>
+          </div>
         </div>
-        <input
-          id="session-name-input"
-          type="text"
-          placeholder="My Session"
-          maxlength="128"
-          autocomplete="off"
-        />
-        <div id="session-name-dialog-status" class="session-name-dialog-status"></div>
-        <div class="session-name-dialog-actions">
-          <button id="session-name-confirm-btn">Save</button>
-          <button id="session-name-cancel-btn">Cancel</button>
+        <div id="packetPayloadPane" class="main_panel">
+          <div id="payloadascii">
+            <div id="asciiText"></div>
+            <div id="asciiOffset"></div>
+          </div>
+          <div id="hexg" class="hexGrid"></div>
+        </div>
+      </div>
+      <div class="sidebar" id="sidedata">
+        <div id="rightside">
+          <div id="rightside-data">
+            <div class="sidebar-header">Datagram Frame</div>
+            <div id="sidedatatable" class="sidetable"></div>
+            <div class="sidebar-header">Location</div>
+            <div id="locationtable" class="sidetable"></div>
+            <div id="sideloctable" class="sidetable"></div>
+            <div class="sidebar-header">Payload Entropy</div>
+            <div id="entropybox"></div>
+          </div>
+          <div id="rightside-notes" hidden>
+            <div class="sidebar-header">Notes</div>
+            <select id="notes-select" size="10"></select>
+            <div class="notes-controls-row notes-sidebar-actions">
+              <label for="notes-new-color">Color</label>
+              <input type="color" id="notes-new-color" value="#4caf50" />
+            </div>
+            <textarea id="notes-new-input" placeholder="Write a new note..."></textarea>
+            <div class="notes-controls-row notes-sidebar-actions">
+              <button id="notes-add-btn">Add note</button>
+              <button id="notes-remove-btn">Remove selected</button>
+            </div>
+            <div class="notes-controls-row notes-sidebar-actions">
+              <button id="notes-save-btn">Save notes file</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </body>
+    <div class="footer">
+      <div id="status" class="footer">Status: Ready</div>
+      <div id="copyright" class="footer">oxasploits, llc (&copy; 2026)</div>
+    </div>
+  </div>
+
+  <div id="activity-log-panel">
+    <div id="activity-log-header">
+      <span>Activity Log</span>
+      <button id="close-log-btn" aria-label="Close log">×</button>
+    </div>
+    <div id="activity-log-path"></div>
+    <div id="activity-log-entries"></div>
+    <div id="activity-log-search-bar">
+      <input id="activity-log-search" type="text" placeholder="Search log entries..." />
+    </div>
+  </div>
+
+  <div id="convert-context-menu" role="menu" aria-label="Context menu" hidden>
+    <div id="ctx-copy-submenu" class="ctx-submenu">
+      <button id="ctx-copy-branch" class="ctx-branch" type="button">
+        Copy...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-copy" role="menuitem">Copy</button>
+        <button id="convert-context-copy-hex" type="button">Copy Hex</button>
+        <button id="convert-context-copy-ascii" type="button">
+          Copy ASCII
+        </button>
+        <button id="convert-context-copy-raw" type="button">
+          Copy Raw payload
+        </button>
+        <button id="ctx-copy-cookie-jar" role="menuitem">
+          Copy Cookie Jar
+        </button>
+      </div>
+    </div>
+    <button id="ctx-paste" role="menuitem">Paste</button>
+    <hr id="convert-context-divider" class="ctx-divider" />
+    <div id="ctx-convert-submenu" class="ctx-submenu">
+      <button id="ctx-convert-branch" class="ctx-branch" type="button">
+        Convert to...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="convert-context-hex" type="button">Load as Hex</button>
+        <button id="convert-context-binary" type="button">
+          Load as Binary
+        </button>
+        <button id="convert-context-base64" type="button">
+          Load as Base64
+        </button>
+        <button id="convert-context-decimal" type="button">
+          Load as Decimal bytes
+        </button>
+        <button id="convert-context-ascii" type="button">
+          Load as ASCII / UTF-8
+        </button>
+        <button id="convert-context-derive-guess" type="button">
+          Derive Data Type Guess
+        </button>
+        <button id="convert-context-load-cursor-ascii" type="button">
+          Load Cursor ASCII into Conv tab
+        </button>
+        <button id="convert-context-load-payload" type="button">
+          Load Raw Payload into Conv tab
+        </button>
+      </div>
+    </div>
+    <div id="ctx-follow-stream-submenu" class="ctx-submenu">
+      <button id="ctx-follow-stream-branch" class="ctx-branch" type="button">
+        Follow stream...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-follow-stream-conv" type="button">
+          Load stream into Conv tab
+        </button>
+        <button id="ctx-follow-stream-crypt" type="button">
+          Load stream into Crypt tab
+        </button>
+      </div>
+    </div>
+    <div id="ctx-notes-submenu" class="ctx-submenu">
+      <button id="ctx-notes-branch" class="ctx-branch" type="button">
+        Send to Notes...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-notes-send-data" type="button">
+          Send selected/context data
+        </button>
+        <button id="ctx-notes-send-conv-output" type="button">
+          Send Conv converted output
+        </button>
+        <button id="ctx-notes-send-conv-hashes" type="button">
+          Send Conv hashes
+        </button>
+      </div>
+    </div>
+    <div id="ctx-filter-submenu" class="ctx-submenu">
+      <button id="ctx-filter-branch" class="ctx-branch" type="button">
+        Add to filter...
+      </button>
+      <div class="ctx-submenu-panel">
+        <div id="ctx-filter-and-submenu" class="ctx-submenu">
+          <button id="ctx-filter-and-branch" class="ctx-branch" type="button">
+            Add with &&...
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-filter-ip" type="button">Add IP to Filter</button>
+            <button id="ctx-filter-port" type="button">
+              Add Port to Filter
+            </button>
+            <button id="ctx-filter-mac" type="button">
+              Add MAC to Filter
+            </button>
+            <button id="ctx-filter-protocol" type="button">
+              Add Protocol to Filter
+            </button>
+            <button id="ctx-filter-mime" type="button">
+              Add MIME Type to Filter
+            </button>
+          </div>
+        </div>
+        <div id="ctx-filter-or-submenu" class="ctx-submenu">
+          <button id="ctx-filter-or-branch" class="ctx-branch" type="button">
+            Add with ||...
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-filter-or-ip" type="button">
+              Add IP to Filter
+            </button>
+            <button id="ctx-filter-or-port" type="button">
+              Add Port to Filter
+            </button>
+            <button id="ctx-filter-or-mac" type="button">
+              Add MAC to Filter
+            </button>
+            <button id="ctx-filter-or-protocol" type="button">
+              Add Protocol to Filter
+            </button>
+            <button id="ctx-filter-or-mime" type="button">
+              Add MIME Type to Filter
+            </button>
+          </div>
+        </div>
+        <div id="ctx-filter-not-submenu" class="ctx-submenu">
+          <button id="ctx-filter-not-branch" class="ctx-branch" type="button">
+            is not...
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-filter-not-ip" type="button">
+              Add IP to Filter
+            </button>
+            <button id="ctx-filter-not-port" type="button">
+              Add Port to Filter
+            </button>
+            <button id="ctx-filter-not-mac" type="button">
+              Add MAC to Filter
+            </button>
+            <button id="ctx-filter-not-protocol" type="button">
+              Add Protocol to Filter
+            </button>
+            <button id="ctx-filter-not-mime" type="button">
+              Add MIME Type to Filter
+            </button>
+          </div>
+        </div>
+        <div id="ctx-filter-parentheses-submenu" class="ctx-submenu">
+          <button id="ctx-filter-parentheses-branch" class="ctx-branch" type="button">
+            Parentheses...
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-filter-paren-open" type="button">Append (</button>
+            <button id="ctx-filter-paren-close" type="button">
+              Append )
+            </button>
+            <button id="ctx-filter-paren-wrap" type="button">
+              Wrap current query with (...)
+            </button>
+          </div>
+        </div>
+        <hr class="ctx-divider" />
+        <div id="ctx-filter-clear-submenu" class="ctx-submenu">
+          <button id="ctx-filter-clear-branch" class="ctx-branch" type="button">
+            Clear and...
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-filter-clear-ip" type="button">
+              Add IP to Filter
+            </button>
+            <button id="ctx-filter-clear-port" type="button">
+              Add Port to Filter
+            </button>
+            <button id="ctx-filter-clear-mac" type="button">
+              Add MAC to Filter
+            </button>
+            <button id="ctx-filter-clear-protocol" type="button">
+              Add Protocol to Filter
+            </button>
+            <button id="ctx-filter-clear-mime" type="button">
+              Add MIME Type to Filter
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="ctx-keystore-submenu" class="ctx-submenu">
+      <button id="ctx-keystore-branch" class="ctx-branch" type="button">
+        Add to Keystore...
+      </button>
+      <div class="ctx-submenu-panel">
+        <div id="ctx-keystore-password-submenu" class="ctx-submenu">
+          <button id="ctx-keystore-password-branch" class="ctx-branch" type="button">
+            As Password
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-keystore-password-session" type="button">
+              Session keychain
+            </button>
+            <button id="ctx-keystore-password-persistent" type="button">
+              Persistent keychain
+            </button>
+          </div>
+        </div>
+        <div id="ctx-keystore-key-submenu" class="ctx-submenu">
+          <button id="ctx-keystore-key-branch" class="ctx-branch" type="button">
+            As Private Key
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-keystore-key-session" type="button">
+              Session keychain
+            </button>
+            <button id="ctx-keystore-key-persistent" type="button">
+              Persistent keychain
+            </button>
+          </div>
+        </div>
+        <div id="ctx-keystore-cert-submenu" class="ctx-submenu">
+          <button id="ctx-keystore-cert-branch" class="ctx-branch" type="button">
+            As Certificate
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-keystore-cert-session" type="button">
+              Session keychain
+            </button>
+            <button id="ctx-keystore-cert-persistent" type="button">
+              Persistent keychain
+            </button>
+          </div>
+        </div>
+        <div id="ctx-keystore-cookie-submenu" class="ctx-submenu">
+          <button id="ctx-keystore-cookie-branch" class="ctx-branch" type="button">
+            As Session Cookie
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-keystore-cookie-session" type="button">
+              Session keychain
+            </button>
+            <button id="ctx-keystore-cookie-persistent" type="button">
+              Persistent keychain
+            </button>
+          </div>
+        </div>
+        <div id="ctx-keystore-uri-submenu" class="ctx-submenu">
+          <button id="ctx-keystore-uri-branch" class="ctx-branch" type="button">
+            As URI / URL (Manual)
+          </button>
+          <div class="ctx-submenu-panel">
+            <button id="ctx-keystore-uri-session" type="button">
+              Session keychain
+            </button>
+            <button id="ctx-keystore-uri-persistent" type="button">
+              Persistent keychain
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <hr id="convert-context-save-divider" class="ctx-divider" />
+    <div id="ctx-export-submenu" class="ctx-submenu">
+      <button id="ctx-export-branch" class="ctx-branch" type="button">
+        Export...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-save-json" role="menuitem">Save Session</button>
+        <button id="ctx-export-packet" role="menuitem">Export Packet</button>
+        <button id="ctx-export-payload" role="menuitem">
+          Export Payload
+        </button>
+        <button id="ctx-save-cookie-jar" role="menuitem">
+          Save to cookie_jar.txt
+        </button>
+      </div>
+    </div>
+    <div id="ctx-http-file-submenu" class="ctx-submenu">
+      <button id="ctx-http-file-branch" class="ctx-branch" type="button">
+        HTTP File...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-http-file-save" type="button">
+          Save body to file
+        </button>
+        <button id="ctx-http-file-load" type="button">
+          Load body into Conv tab
+        </button>
+        <button id="ctx-http-file-preview" type="button">
+          Preview in browser
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Installation complete screen – shown only on first run after a new version install -->
+  <div id="install-screen">
+    <div id="install-screen-inner">
+      <div id="install-title">PacketSnitch Installation Complete</div>
+      <div id="install-version"></div>
+      <hr class="install-divider" />
+      <div id="install-files-heading">Installed Files</div>
+      <ul id="install-file-list"></ul>
+      <hr class="install-divider" />
+      <div id="install-ollama-status"></div>
+      <button id="install-continue-btn">Continue</button>
+    </div>
+  </div>
+
+  <!-- Session picker – shown on startup when saved sessions exist -->
+  <div id="session-picker">
+    <div id="session-picker-inner">
+      <div id="session-picker-header">
+        <div id="session-picker-title">PacketSnitch – Saved Sessions</div>
+        <button id="session-picker-close-btn" class="session-picker-close" aria-label="Close session picker"
+          title="Start new session">&#10005;</button>
+      </div>
+      <div id="session-picker-toolbar">
+        <button id="session-picker-new-btn" class="session-picker-primary-btn">
+          New Session
+        </button>
+        <button id="session-picker-refresh-btn" class="session-picker-secondary-btn">
+          Refresh
+        </button>
+      </div>
+      <div id="session-picker-table-wrap">
+        <table id="session-picker-table">
+          <thead>
+            <tr>
+              <th class="session-picker-th-name">Session Name</th>
+              <th class="session-picker-th-date">Last Saved</th>
+              <th class="session-picker-th-actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="session-picker-list"></tbody>
+        </table>
+      </div>
+      <div id="session-picker-status" class="session-picker-status"></div>
+    </div>
+  </div>
+
+  <!-- Session name dialog – used when saving a session to the library -->
+  <div id="session-name-dialog" hidden>
+    <div id="session-name-dialog-inner">
+      <div id="session-name-dialog-title">Save Session</div>
+      <div id="session-name-dialog-desc">
+        Enter a name for this session:
+      </div>
+      <input id="session-name-input" type="text" placeholder="My Session" maxlength="128" autocomplete="off" />
+      <div id="session-name-dialog-status" class="session-name-dialog-status"></div>
+      <div class="session-name-dialog-actions">
+        <button id="session-name-confirm-btn">Save</button>
+        <button id="session-name-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+</body>
+
 </html>

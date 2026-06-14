@@ -59,12 +59,26 @@ body {
   display: none;
 }
 
+#loading-screen {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.82);
+  z-index: 9999;
+  justify-content: center;
+  align-items: center;
+}
+
+
 #loading-container {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background-color: rgba(22, 26, 43, 0.3);
+  background-color: rgba(22, 26, 43, 1);
   padding: 20px;
   border-radius: 10px;
   text-align: center;
@@ -82,12 +96,15 @@ body {
   0% {
     content: ".";
   }
+
   33% {
     content: "..";
   }
+
   66% {
     content: "...";
   }
+
   100% {
     content: ".";
   }
@@ -106,6 +123,7 @@ body {
   font-size: 22px;
   color: var(--color-1);
 }
+
 /* Top title bar */
 .top_bar {
   height: 40px;
@@ -148,6 +166,7 @@ body {
   width: 150px;
   height: 30px;
 }
+
 .titleline {
   font-size: 18pt;
   font-family: "RG", system-ui;
@@ -160,6 +179,7 @@ body {
   left: -84px;
   bottom: -13px;
 }
+
 /* Entry bar */
 .entry_bar {
   height: 60px;
@@ -1124,18 +1144,18 @@ strong {
   z-index: 100000;
 }
 
-#convert-context-menu .ctx-submenu.ctx-submenu-flip-x > .ctx-submenu-panel {
+#convert-context-menu .ctx-submenu.ctx-submenu-flip-x>.ctx-submenu-panel {
   left: auto;
   right: calc(100% - 2px);
 }
 
-#convert-context-menu .ctx-submenu.ctx-submenu-flip-y > .ctx-submenu-panel {
+#convert-context-menu .ctx-submenu.ctx-submenu-flip-y>.ctx-submenu-panel {
   top: auto;
   bottom: -4px;
 }
 
-#convert-context-menu .ctx-submenu:hover > .ctx-submenu-panel,
-#convert-context-menu .ctx-submenu:focus-within > .ctx-submenu-panel {
+#convert-context-menu .ctx-submenu:hover>.ctx-submenu-panel,
+#convert-context-menu .ctx-submenu:focus-within>.ctx-submenu-panel {
   display: block;
 }
 
@@ -1357,30 +1377,39 @@ strong {
 .packet-list-table thead th:nth-child(1) {
   width: 5%;
 }
+
 .packet-list-table thead th:nth-child(2) {
   width: 5%;
 }
+
 .packet-list-table thead th:nth-child(3) {
   width: 7%;
 }
+
 .packet-list-table thead th:nth-child(4) {
   width: 14%;
 }
+
 .packet-list-table thead th:nth-child(5) {
   width: 12%;
 }
+
 .packet-list-table thead th:nth-child(6) {
   width: 12%;
 }
+
 .packet-list-table thead th:nth-child(7) {
   width: 8%;
 }
+
 .packet-list-table thead th:nth-child(8) {
   width: 8%;
 }
+
 .packet-list-table thead th:nth-child(9) {
   width: 9%;
 }
+
 .packet-list-table thead th:nth-child(10) {
   width: 20%;
 }
@@ -1541,6 +1570,7 @@ strong {
   margin-top: 10px;
   margin-left: 15px;
 }
+
 #charset {
   font-size: 14px;
   justify-content: left;
@@ -1549,6 +1579,7 @@ strong {
   margin-top: 10px;
   margin-left: 15px;
 }
+
 #encoding {
   font-size: 14px;
   justify-content: left;
@@ -1557,6 +1588,7 @@ strong {
   margin-top: 10px;
   margin-left: 15px;
 }
+
 #language {
   font-size: 14px;
   justify-content: left;
@@ -1612,6 +1644,7 @@ strong {
   /* z-index: 4; */
   position: relative;
 }
+
 #protoInfo {
   margin-top: 10px;
   margin-left: 15px;
@@ -1621,6 +1654,7 @@ strong {
   font-size: 0px;
   border: 1px solid var(--color-3);
 }
+
 #protoInfoProto {
   font-size: 14px;
   width: 100%;
@@ -1682,7 +1716,8 @@ strong {
   box-sizing: border-box;
   transition:
     background-color 0.3s,
-    border-color 0.3s; /* Smooth transition */
+    border-color 0.3s;
+  /* Smooth transition */
 }
 
 /* this is for the consecutive ones that are highlighted */
@@ -1697,7 +1732,8 @@ strong {
 /* this is for the one right under the cursor */
 .griditem:hover,
 .griditem:focus {
-  background-color: var(--color-3); /* Highlight color */
+  background-color: var(--color-3);
+  /* Highlight color */
   border-color: white;
   cursor: pointer;
 }
@@ -1746,9 +1782,7 @@ strong {
 #filterStr-wrap {
   --filter-clear-button-width: 64px;
   --filter-clear-right-offset: 6px;
-  --filter-clear-padding: calc(
-    var(--filter-clear-button-width) + var(--filter-clear-right-offset) + 6px
-  );
+  --filter-clear-padding: calc(var(--filter-clear-button-width) + var(--filter-clear-right-offset) + 6px);
   flex: 1;
   position: relative;
   min-width: 0;
@@ -1894,6 +1928,7 @@ strong {
   position: absolute;
   text-align: right;
 }
+
 #payloadascii.visible {
   opacity: 1;
   pointer-events: auto;
@@ -1902,7 +1937,8 @@ strong {
 .logo-cont img {
   width: 100%;
   height: 100%;
-  object-fit: cover; /* or 'contain' */
+  object-fit: cover;
+  /* or 'contain' */
   margin-top: 9px;
 }
 

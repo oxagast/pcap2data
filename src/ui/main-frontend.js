@@ -1498,7 +1498,6 @@ function restoreSessionState(sessionState) {
     setCryptSubtab(savedCryptTab);
   }
   else {
-    runFilterQuery(filterInputEl.value || "", { trackHistory: false });
     isFileLoaded = true;
   }
   writeLogEntry("Session state restored from JSON");
@@ -1510,6 +1509,9 @@ function restoreSessionState(sessionState) {
  * Uses chunked parsing for large files to avoid UI blocking.
  */
 function processFile(file) {
+  document.getElementById("loading-screen").style.display = "flex";
+  document.getElementById("loading-container").style.display = "block";
+  document.getElementById("loading-text").textContent = "Loading packets...";
   let loadedSessionState = null;
   const reader = new FileReader();
   reader.onload = (event) => {
@@ -1525,8 +1527,7 @@ function processFile(file) {
     getCachedElement("error-container").style.display = "none";
 
     // Use chunked parsing for large files (>1MB)
-    document.getElementById("loading-container").style.display = "block";
-    document.getElementById("loading-text").textContent = "Loading packets...";
+
     const fileSize = event.target.result.length;
     if (fileSize > 1024 * 1024) {
       statusUpdate(
@@ -1624,10 +1625,10 @@ function processFile(file) {
       statusUpdate("Status: File loaded successfully");
       document.getElementById("summary_content").textContent =
         "Select a tab to get started!";
-      handlePacketNavigation("first-load");
-      runFilterQuery("", { trackHistory: false });
+      //runFilterQuery("", { trackHistory: false });
       showPacketList();
     }
+    document.getElementById("loading-screen").style.display = "none";
     document.getElementById("loading-container").style.display = "none";
 
 
@@ -6650,12 +6651,15 @@ window.jsonapi.onJsonData((jsonData) => {
   updateFilterClearButtonState();
   clearFilterQuery();
   syncFilterHighlight();
-  runFilterQuery("");
+  if (capturedPackets && capturedPackets["Host"] && capturedPackets["Host"][hostFilterEl.value] !== "0.0.0.0") {
+    runFilterQuery("");
+  }
   statusUpdate("Status: Ready");
 });
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file) {
+  document.getElementById("loading-screen").style.display = "block";
   document.getElementById("loading-container").style.display = "block";
   showSummaryLoading();
   document.getElementById("status").textContent =
@@ -6698,8 +6702,11 @@ function doError(message, { backend = false } = {}) {
 function hideAllData() {
   //  document.getElementById("packetInfoPane").textContent =
   //    "No matching packets found.";
-  doError("No packets match the filter criteria!");
-  statusUpdate("Status: No packets match the filter criteria");
+  // check if packets were returned
+  if (!filteredPackets || filteredPackets.length === 0) {
+    doError("No packets match the filter criteria!");
+    statusUpdate("Status: No packets match the filter criteria");
+  }
   document.getElementById("data-types").style.display = "none";
   document.getElementById("protoInfo").style.display = "none";
   document.getElementById("timestamp").style.display = "none";
