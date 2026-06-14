@@ -1626,6 +1626,7 @@ function processFile(file) {
       document.getElementById("summary_content").textContent =
         "Select a tab to get started!";
       //runFilterQuery("", { trackHistory: false });
+      document.getElementById("total-packets").textContent = "Total Packets: " + totalPacketCount();
       showPacketList();
     }
     document.getElementById("loading-screen").style.display = "none";
@@ -6647,6 +6648,14 @@ window.jsonapi.onJsonData((jsonData) => {
   const loadEndTime = performance.now();
   document.getElementById("load-time").textContent =
     "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+  document.getElementById("total-packets").textContent =
+    "Total Packets: " + totalPacketCount();
+  writeLogEntry(
+    `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
+      (loadEndTime - startTime) /
+      1000
+    ).toFixed(2)}`,
+  );
   filterInputEl.value = "";
   updateFilterClearButtonState();
   clearFilterQuery();
