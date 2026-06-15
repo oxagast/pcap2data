@@ -285,7 +285,9 @@ function createStatsPanel(options) {
       onQuery: applyStatsQuery,
     });
     if (hostSec) content.appendChild(hostSec);
+    // push the ips onto a array so we can check it later
 
+    /*
     const hnSec = makeStatsSection({
       documentRef,
       title: "Hostnames (DNS)",
@@ -293,7 +295,27 @@ function createStatsPanel(options) {
       queryBuilder: (v) => `dns.qname: ${v}`,
       onQuery: applyStatsQuery,
     });
-    if (hnSec) content.appendChild(hnSec);
+    */
+    // make sure the ips here are not listed in stats.hosts, if they are, skip them
+    const hostIpsSet = new Set(stats.hosts);
+    const filteredHostnames = stats.hostnames.filter((hn) => {
+      const hnAsIp = hn.replace(/^\[|\]$/g, ""); // Remove brackets from IPv6 addresses
+      return !hostIpsSet.has(hnAsIp);
+    });
+    // also filter out any hostnames that have a "," comma in them, as they are likely
+    // malformed and not useful for filtering
+    const fullyFilteredHostnames = filteredHostnames.filter((hn) => !hn.includes(","));
+    if (fullyFilteredHostnames.length > 0) {
+      const filteredHnSec = makeStatsSection({
+        documentRef,
+        title: "Hostnames (DNS)",
+        items: fullyFilteredHostnames,
+        queryBuilder: (v) => `dns.qname: ${v}`,
+        onQuery: applyStatsQuery,
+      });
+      if (filteredHnSec) content.appendChild(filteredHnSec);
+    }
+    //if (hnSec) content.appendChild(hnSec);
 
     if (stats.locations.length > 0) {
       const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
@@ -301,6 +323,12 @@ function createStatsPanel(options) {
         documentRef,
         title: "Physical Locations",
         items: locItems,
+        queryBuilder: (v) => {
+          // we should search by the city, which comes before a comma
+          const city = v.split(" (")[0].split(",")[0].trim();
+          return `loc.src.city: ${city} || loc.dst.city: ${city}`;
+        },
+        onQuery: applyStatsQuery,
       });
       if (locSec) content.appendChild(locSec);
     }
