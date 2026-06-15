@@ -136,6 +136,7 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `tcp.len`      | integer | TCP header length in bytes                                |
 | `tcp.proto`    | string  | IANA service name for the destination port (e.g. `https`) |
 | `tcp.desc`     | string  | ICANN port description for the destination port           |
+| `app.proto`    | string  | Catchall IANA port service                                |
 
 #### UDP Fields
 
@@ -145,6 +146,8 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `udp.dst.port` | integer | UDP destination port         |
 | `udp.chksum`   | string  | UDP checksum (hex)           |
 | `udp.len`      | integer | UDP datagram length in bytes |
+| `udp.proto`    | string  | UDP IANA port service name   |
+| `app.proto`    | string  | Catchall IANA port service   |
 
 #### ICMP Fields
 
