@@ -1232,6 +1232,7 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
     // For autosave, we want to overwrite the existing session without creating a new entry in the library or log
     currentSessionName = null; // Clear the session name after autosave so that the next save will prompt for a name again
     await persistSessionToDisk(sourceLabel = "manual-save");
+    return { success: true, name: "autosave" };
   }
   const sessionJsonData = buildSessionFilePayload();
   // if the user picks save, we should also ask them what the new name 
