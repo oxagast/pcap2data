@@ -465,6 +465,18 @@ function createKeystorePanel({
     return Array.from(discovered);
   }
 
+  function extractEmailCandidatesFromText(rawText) {
+    const sourceText = normalizeSessionSecretValue(rawText);
+    if (!sourceText) return [];
+    const emailPattern = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g;
+    const discovered = new Set();
+    let match;
+    while ((match = emailPattern.exec(sourceText)) !== null) {
+      discovered.add(match[0].toLowerCase());
+    }
+    return Array.from(discovered);
+  }
+
   function shouldIncludeSessionSecretKey(pathKey) {
     if (!pathKey) return false;
     const lower = pathKey.toLowerCase();
@@ -548,6 +560,17 @@ function createKeystorePanel({
                   label: `${uriType.toUpperCase()} ${uriValue}`,
                   source: "session-auto-uri",
                   content: uriValue,
+                  summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
+                  packetIndex,
+                  protocol,
+                });
+              });
+              extractEmailCandidatesFromText(rawText).forEach((emailValue) => {
+                pushSessionEntry({
+                  type: "email",
+                  label: `Email ${emailValue}`,
+                  source: "session-auto-email",
+                  content: emailValue,
                   summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
                   packetIndex,
                   protocol,

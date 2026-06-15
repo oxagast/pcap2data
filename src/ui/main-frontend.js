@@ -3712,16 +3712,22 @@ const convertContextButtons = {
   filterIp: getCachedElement("ctx-filter-ip"),
   filterPort: getCachedElement("ctx-filter-port"),
   filterMac: getCachedElement("ctx-filter-mac"),
+  filterWireProtocol: getCachedElement("ctx-filter-wire-protocol"),
+  filterAppProtocol: getCachedElement("ctx-filter-app-protocol"),
   filterProtocol: getCachedElement("ctx-filter-protocol"),
   filterMime: getCachedElement("ctx-filter-mime"),
   filterOrIp: getCachedElement("ctx-filter-or-ip"),
   filterOrPort: getCachedElement("ctx-filter-or-port"),
   filterOrMac: getCachedElement("ctx-filter-or-mac"),
+  filterOrWireProtocol: getCachedElement("ctx-filter-or-wire-protocol"),
+  filterOrAppProtocol: getCachedElement("ctx-filter-or-app-protocol"),
   filterOrProtocol: getCachedElement("ctx-filter-or-protocol"),
   filterOrMime: getCachedElement("ctx-filter-or-mime"),
   filterNotIp: getCachedElement("ctx-filter-not-ip"),
   filterNotPort: getCachedElement("ctx-filter-not-port"),
   filterNotMac: getCachedElement("ctx-filter-not-mac"),
+  filterNotWireProtocol: getCachedElement("ctx-filter-not-wire-protocol"),
+  filterNotAppProtocol: getCachedElement("ctx-filter-not-app-protocol"),
   filterNotProtocol: getCachedElement("ctx-filter-not-protocol"),
   filterNotMime: getCachedElement("ctx-filter-not-mime"),
   filterParenOpen: getCachedElement("ctx-filter-paren-open"),
@@ -3730,6 +3736,8 @@ const convertContextButtons = {
   filterClearIp: getCachedElement("ctx-filter-clear-ip"),
   filterClearPort: getCachedElement("ctx-filter-clear-port"),
   filterClearMac: getCachedElement("ctx-filter-clear-mac"),
+  filterClearWireProtocol: getCachedElement("ctx-filter-clear-wire-protocol"),
+  filterClearAppProtocol: getCachedElement("ctx-filter-clear-app-protocol"),
   filterClearProtocol: getCachedElement("ctx-filter-clear-protocol"),
   filterClearMime: getCachedElement("ctx-filter-clear-mime"),
   keystorePasswordSession: getCachedElement("ctx-keystore-password-session"),
@@ -3916,17 +3924,6 @@ function extractContextMimeType(value) {
   return CONTEXT_MIME_REGEX.test(mimeBase) ? mimeBase.toLowerCase() : "";
 }
 
-function extractContextProtocol(value) {
-  const normalized = normalizeContextToken(value);
-  const labelStripped = normalized
-    .replace(/^protocol(?:\s+name)?\s*:\s*/i, "")
-    .replace(/^app(?:lication)?\s+protocol\s*:\s*/i, "")
-    .replace(/^transport\s+protocol\s*:\s*/i, "")
-    .trim();
-  if (!labelStripped) return "";
-  const protocolMatch = labelStripped.match(/^[a-z][a-z0-9+_-]*$/i);
-  return protocolMatch ? labelStripped.toLowerCase() : "";
-}
 
 function sanitizeFilterTerm(value) {
   return normalizeContextToken(value)
@@ -3980,7 +3977,6 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
   }
 
   const filterQueries = {};
-  const skipProtocol = /^network\s+class$/i.test(rowName);
   for (const candidate of candidates) {
     if (!filterQueries.ip) {
       const ip = extractContextIp(candidate);
@@ -4005,19 +4001,34 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
         filterQueries.mac = `ether.src.mac.addr: ${safeMac} || ether.dst.mac.addr: ${safeMac}`;
       }
     }
-    if (!filterQueries.protocol && !skipProtocol) {
-      const protocol = extractContextProtocol(candidate);
-      if (protocol) {
-        const safeProtocol = sanitizeFilterTerm(protocol);
-        filterQueries.protocol = `wire.proto: ${safeProtocol} || app.proto: ${safeProtocol}`;
-      }
-    }
     if (!filterQueries.mime) {
       const mimeType = extractContextMimeType(candidate);
       if (mimeType) {
         const safeMimeType = sanitizeFilterTerm(mimeType);
         filterQueries.mime = `mime.type: ${safeMimeType}`;
       }
+    }
+  }
+
+  const currentPkt = p?.[index];
+  if (currentPkt) {
+    const wireProto = String(currentPkt?.["Packet Info"]?.["Protocol"] ?? "").toLowerCase().trim();
+    const appProto = String(currentPkt?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["Port Protcol"] ?? "").toLowerCase().trim();
+    const safeWire = wireProto ? sanitizeFilterTerm(wireProto) : "";
+    const safeApp = appProto && appProto !== "unknown" ? sanitizeFilterTerm(appProto) : "";
+
+    if (safeWire) {
+      filterQueries.wireProtocol = `wire.proto: ${safeWire}`;
+    }
+    if (safeApp) {
+      filterQueries.appProtocol = `app.proto: ${safeApp}`;
+    }
+    if (safeWire && safeApp) {
+      filterQueries.protocol = `wire.proto: ${safeWire} && app.proto: ${safeApp}`;
+    } else if (safeWire) {
+      filterQueries.protocol = `wire.proto: ${safeWire}`;
+    } else if (safeApp) {
+      filterQueries.protocol = `app.proto: ${safeApp}`;
     }
   }
 
@@ -4348,6 +4359,12 @@ function showConvertContextMenu(
   convertContextButtons.filterMac.style.display = filterQueries.mac
     ? "block"
     : "none";
+  convertContextButtons.filterWireProtocol.style.display = filterQueries.wireProtocol
+    ? "block"
+    : "none";
+  convertContextButtons.filterAppProtocol.style.display = filterQueries.appProtocol
+    ? "block"
+    : "none";
   convertContextButtons.filterProtocol.style.display = filterQueries.protocol
     ? "block"
     : "none";
@@ -4363,6 +4380,12 @@ function showConvertContextMenu(
   convertContextButtons.filterOrMac.style.display = filterQueries.mac
     ? "block"
     : "none";
+  convertContextButtons.filterOrWireProtocol.style.display = filterQueries.wireProtocol
+    ? "block"
+    : "none";
+  convertContextButtons.filterOrAppProtocol.style.display = filterQueries.appProtocol
+    ? "block"
+    : "none";
   convertContextButtons.filterOrProtocol.style.display = filterQueries.protocol
     ? "block"
     : "none";
@@ -4376,6 +4399,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.filterNotMac.style.display = filterQueries.mac
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotWireProtocol.style.display = filterQueries.wireProtocol
+    ? "block"
+    : "none";
+  convertContextButtons.filterNotAppProtocol.style.display = filterQueries.appProtocol
     ? "block"
     : "none";
   convertContextButtons.filterNotProtocol.style.display = filterQueries.protocol
@@ -4396,6 +4425,10 @@ function showConvertContextMenu(
   convertContextButtons.filterClearMac.style.display = filterQueries.mac
     ? "block"
     : "none";
+  convertContextButtons.filterClearWireProtocol.style.display =
+    filterQueries.wireProtocol ? "block" : "none";
+  convertContextButtons.filterClearAppProtocol.style.display =
+    filterQueries.appProtocol ? "block" : "none";
   convertContextButtons.filterClearProtocol.style.display =
     filterQueries.protocol ? "block" : "none";
   convertContextButtons.filterClearMime.style.display = filterQueries.mime
@@ -5702,6 +5735,12 @@ convertContextButtons.filterPort.addEventListener("click", () => {
 convertContextButtons.filterMac.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("mac", "&&");
 });
+convertContextButtons.filterWireProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("wireProtocol", "&&");
+});
+convertContextButtons.filterAppProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("appProtocol", "&&");
+});
 convertContextButtons.filterProtocol.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("protocol", "&&");
 });
@@ -5717,6 +5756,12 @@ convertContextButtons.filterOrPort.addEventListener("click", () => {
 convertContextButtons.filterOrMac.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("mac", "||");
 });
+convertContextButtons.filterOrWireProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("wireProtocol", "||");
+});
+convertContextButtons.filterOrAppProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("appProtocol", "||");
+});
 convertContextButtons.filterOrProtocol.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("protocol", "||");
 });
@@ -5731,6 +5776,12 @@ convertContextButtons.filterNotPort.addEventListener("click", () => {
 });
 convertContextButtons.filterNotMac.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("mac", "&&", true);
+});
+convertContextButtons.filterNotWireProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("wireProtocol", "&&", true);
+});
+convertContextButtons.filterNotAppProtocol.addEventListener("click", () => {
+  appendFilterQueryFromContextMenu("appProtocol", "&&", true);
 });
 convertContextButtons.filterNotProtocol.addEventListener("click", () => {
   appendFilterQueryFromContextMenu("protocol", "&&", true);
@@ -5755,6 +5806,12 @@ convertContextButtons.filterClearPort.addEventListener("click", () => {
 });
 convertContextButtons.filterClearMac.addEventListener("click", () => {
   clearAndFilterQueryFromContextMenu("mac");
+});
+convertContextButtons.filterClearWireProtocol.addEventListener("click", () => {
+  clearAndFilterQueryFromContextMenu("wireProtocol");
+});
+convertContextButtons.filterClearAppProtocol.addEventListener("click", () => {
+  clearAndFilterQueryFromContextMenu("appProtocol");
 });
 convertContextButtons.filterClearProtocol.addEventListener("click", () => {
   clearAndFilterQueryFromContextMenu("protocol");
