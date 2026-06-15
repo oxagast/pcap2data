@@ -263,7 +263,7 @@ function createStatsPanel(options) {
       documentRef,
       title: "Application Protocols",
       items: stats.protocols,
-      queryBuilder: (v) => `tcp.proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `app.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (protoSec) content.appendChild(protoSec);
@@ -285,17 +285,7 @@ function createStatsPanel(options) {
       onQuery: applyStatsQuery,
     });
     if (hostSec) content.appendChild(hostSec);
-    // push the ips onto a array so we can check it later
 
-    /*
-    const hnSec = makeStatsSection({
-      documentRef,
-      title: "Hostnames (DNS)",
-      items: stats.hostnames,
-      queryBuilder: (v) => `dns.qname: ${v}`,
-      onQuery: applyStatsQuery,
-    });
-    */
     // make sure the ips here are not listed in stats.hosts, if they are, skip them
     const hostIpsSet = new Set(stats.hosts);
     const filteredHostnames = stats.hostnames.filter((hn) => {

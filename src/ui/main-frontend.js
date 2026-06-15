@@ -4009,7 +4009,7 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
       const protocol = extractContextProtocol(candidate);
       if (protocol) {
         const safeProtocol = sanitizeFilterTerm(protocol);
-        filterQueries.protocol = `wire.proto: ${safeProtocol} || tcp.proto: ${safeProtocol}`;
+        filterQueries.protocol = `wire.proto: ${safeProtocol} || app.proto: ${safeProtocol}`;
       }
     }
     if (!filterQueries.mime) {
