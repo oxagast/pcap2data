@@ -1,340 +1,193 @@
-  FRAME  (8 fields)
-━
-  idx                    Packet index (0-based, displayed as 1-based)
-  ts                     Unix timestamp with microsecond precision (float)
-  time_str               Formatted time HH:MM:SS.mmm (UTC)
-  date_str               Formatted date YYYY-MM-DD (UTC)
-  orig_len               Original packet length before any capture truncation
-  incl_len               Captured (included) length stored in file
-  link_type              PCAP link-layer type (1=Ethernet, 113=SLL, 101=RawIP)
-  inter_arrival          Seconds since previous packet (0.0 for first packet)
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ETHERNET  (9 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  src_mac                Source MAC address (xx:xx:xx:xx:xx:xx)
-  dst_mac                Destination MAC address (xx:xx:xx:xx:xx:xx)
-  eth_type               EtherType numeric value (int)
-  eth_type_str           EtherType as hex string e.g. "0x0800"
-  vlan_id                802.1Q VLAN ID (0–4095), None if untagged
-  vlan_prio              802.1Q Priority Code Point (0–7), None if untagged
-  vlan_dei               802.1Q Drop Eligible Indicator (0 or 1), None if untagged
-  src_oui                Vendor name from source MAC OUI prefix e.g. "VMware"
-  dst_oui                Vendor name from destination MAC OUI prefix
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  IPv4  (15 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ip_version             IP version (4)
-  ip_ihl                 Internet Header Length in bytes (min 20)
-  ip_dscp                Differentiated Services Code Point (6 bits, 0–63)
-  ip_ecn                 Explicit Congestion Notification (2 bits, 0–3)
-  ip_total_len           Total IP datagram length including header
-  ip_id                  IP Identification field (fragmentation ID)
-  ip_flags               Raw flags field (3 bits)
-  ip_flag_df             Don't Fragment flag (True/False)
-  ip_flag_mf             More Fragments flag (True/False)
-  ip_frag_offset         Fragment offset in bytes (0 if not fragmented)
-  ttl                    Time To Live hop count
-  ip_proto               IP protocol number (6=TCP, 17=UDP, 1=ICMP, etc.)
-  ip_proto_str           Protocol name string e.g. "TCP", "UDP", "OSPF"
-  ip_checksum            Header checksum (hex)
-  src_ip                 Source IP address (dotted decimal)
-  dst_ip                 Destination IP address (dotted decimal)
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  IPv6  (5 fields)   [populated instead of IPv4 fields for IPv6 packets]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ipv6_tc                Traffic Class byte (DSCP + ECN combined)
-  ipv6_flow              Flow Label (20-bit value)
-  ipv6_plen              Payload length (bytes after fixed 40-byte header)
-  ipv6_next              Next Header type (same values as ip_proto)
-  ipv6_hoplimit          Hop Limit (equivalent to IPv4 TTL)
-
-  Note: src_ip, dst_ip, ip_version, ip_dscp, ip_ecn, ttl, ip_proto,
-        ip_proto_str are also set for IPv6 packets.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  TCP  (15 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  src_port               Source port number (0–65535)
-  dst_port               Destination port number (0–65535)
-  tcp_seq                Sequence number (32-bit)
-  tcp_ack_num            Acknowledgment number (32-bit)
-  tcp_hdr_len            TCP header length in bytes (20–60)
-  tcp_flags              Human-readable flag string e.g. "SYN", "ACK|PSH"
-  tcp_flags_raw          Raw flags byte (0x02 = SYN, 0x12 = ACK|SYN, etc.)
-  tcp_window             Receive window size (bytes, before scaling)
-  tcp_checksum           TCP checksum (hex)
-  tcp_urgent             Urgent pointer value
-  tcp_mss                Maximum Segment Size from options (if present)
-  tcp_wscale             Window Scale factor from options (if present)
-  tcp_sack_perm          SACK Permitted option present (True/None)
-  tcp_sack_blocks        SACK block ranges as string e.g. "1000-2000,3000-4000"
-  tcp_ts_val             TCP Timestamp value (if timestamp option present)
-  tcp_ts_ecr             TCP Timestamp echo reply (if timestamp option present)
-  tcp_options_summary    Human-readable summary of all TCP options
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  UDP  (4 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  src_port               Source port number
-  dst_port               Destination port number
-  udp_len                UDP datagram length including 8-byte header
-  udp_checksum           UDP checksum (hex)
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ICMP  (8 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  icmp_type              ICMP type number (0=Echo Reply, 8=Echo Request, etc.)
-  icmp_code              ICMP code number (sub-type)
-  icmp_checksum          ICMP checksum (hex)
-  icmp_id                Echo identifier (Echo Request/Reply only)
-  icmp_seq               Echo sequence number (Echo Request/Reply only)
-  icmp_type_str          Human-readable type e.g. "Echo Request", "Time Exceeded"
-  icmp_code_str          Human-readable code e.g. "Port Unreachable"
-
-  Supported ICMP types: Echo Reply (0), Dest Unreachable (3), Source Quench (4),
-  Redirect (5), Echo Request (8), Router Advert (9), Router Solicit (10),
-  Time Exceeded (11), Param Problem (12), Timestamp Req/Reply (13/14),
-  Address Mask Req/Reply (17/18)
-
-  Dest Unreachable codes: Net/Host/Proto/Port Unreachable, Frag Needed,
-  Src Route Failed, Net/Host/Comm Admin Prohibited
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ICMPv6  (3 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  icmpv6_type            ICMPv6 type number
-  icmpv6_code            ICMPv6 code number
-  icmpv6_type_str        Human-readable type e.g. "Neighbor Solicit", "Echo Reply"
-
-  Supported ICMPv6 types: Dest Unreach (1), Packet Too Big (2),
-  Time Exceeded (3), Echo Request/Reply (128/129), Router Solicit/Advert (133/134),
-  Neighbor Solicit/Advert (135/136), MLD Report (143)
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ARP  (10 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  arp_htype              Hardware type (1 = Ethernet)
-  arp_ptype              Protocol type (0x0800 = IPv4)
-  arp_hlen               Hardware address length (6 for MAC)
-  arp_plen               Protocol address length (4 for IPv4)
-  arp_op                 Operation code (1=Request, 2=Reply)
-  arp_op_str             Operation string "Request" or "Reply"
-  arp_sha                Sender hardware (MAC) address
-  arp_spa                Sender protocol (IP) address
-  arp_tha                Target hardware (MAC) address
-  arp_tpa                Target protocol (IP) address
-
-  Note: src_ip/dst_ip/src_mac/dst_mac also set from ARP sender/target fields
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  DNS  (14 fields)   [UDP/TCP port 53]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  dns_txid               Transaction ID (16-bit hex)
-  dns_qr                 Query/Response flag (0=Query, 1=Response)
-  dns_opcode             Opcode (0=Standard, 1=Inverse, 2=Status)
-  dns_aa                 Authoritative Answer bit (0/1)
-  dns_tc                 Truncation bit (0/1)
-  dns_rd                 Recursion Desired bit (0/1)
-  dns_ra                 Recursion Available bit (0/1)
-  dns_rcode              Response code number
-  dns_rcode_str          Response code string e.g. "NOERROR", "NXDOMAIN"
-  dns_qdcount            Number of questions in the query section
-  dns_ancount            Number of answer resource records
-  dns_nscount            Number of authority resource records
-  dns_arcount            Number of additional resource records
-  dns_queries            Semicolon-separated query strings e.g. "google.com[A]"
-  dns_answers            Semicolon-separated answer strings e.g. "google.com=142.250.80.46[TTL=300]"
-
-  Supported record types: A, NS, CNAME, SOA, PTR, MX, TXT, AAAA, SRV, ANY
-  Response codes: NOERROR, FORMERR, SERVFAIL, NXDOMAIN, NOTIMP, REFUSED
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  HTTP  (10 fields)   [TCP port 80, 8080, or payload signature]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  http_method            Request method e.g. "GET", "POST", "PUT", "DELETE"
-  http_uri               Request URI / path e.g. "/index.html"
-  http_version           HTTP version string e.g. "HTTP/1.1"
-  http_host              Host header value
-  http_user_agent        User-Agent header value
-  http_content_type      Content-Type header value
-  http_content_len       Content-Length header value (string)
-  http_status_code       Response status code e.g. "200", "404"
-  http_status_msg        Response status message e.g. "OK", "Not Found"
-  http_headers           Semicolon-separated key:value pairs of all headers (up to 12)
-
-  Detected methods: GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH, CONNECT, TRACE
-  Also detects TLS ClientHello on port 443 → app_proto = "HTTPS"
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  DHCP  (8 fields)   [UDP ports 67/68]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  dhcp_op                Op code (1=BOOTREQUEST, 2=BOOTREPLY)
-  dhcp_xid               Transaction ID (32-bit hex)
-  dhcp_ciaddr            Client IP address (if known)
-  dhcp_yiaddr            Your (client) IP address offered by server
-  dhcp_siaddr            Next server IP address
-  dhcp_msg_type          DHCP message type from option 53:
-                           DISCOVER, OFFER, REQUEST, DECLINE, ACK, NAK,
-                           RELEASE, INFORM
-  dhcp_hostname          Client hostname from option 12
-  dhcp_requested_ip      Requested IP from option 50
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  PAYLOAD  (6 fields)   [all protocols]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  payload_len            Payload byte count after transport header
-  payload_bytes          Raw payload bytes (not exported to CSV)
-  payload_ascii          Full payload rendered as ASCII, non-printable → '.'
-                           (up to 1024 chars in fields view, 4096 in ASCII tab)
-  payload_printable_ratio  Fraction of bytes in printable ASCII range (0x20–0x7e)
-                           e.g. 0.95 = 95% printable (likely plaintext)
-                           Note: \r \n count as non-printable (control chars)
-  payload_entropy        Shannon entropy of first 256 payload bytes (0.0–8.0)
-                           ~0.0 = constant/repetitive data
-                           ~4–5 = mixed/structured text
-                           ~7–8 = encrypted, compressed, or random data
-  payload_hex_preview    First 32 bytes as space-separated hex pairs
-
-  ASCII tab also extracts:
-    - All contiguous printable strings of 8+ characters from payload
-    - Up to 60 unique strings shown per packet, up to 120 bytes each
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  META  (4 fields)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  proto                  Transport-layer protocol string e.g. "TCP", "UDP", "ARP"
-                           Overridden to app protocol when app is DNS, HTTP, DHCP
-  app_proto              Application-layer protocol string e.g. "DNS", "HTTP",
-                           "HTTPS", "DHCP", or "" if not detected
-  info                   Human-readable one-line summary for the packet list view
-  raw                    Complete raw packet bytes (not exported to CSV)
-
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  EXPORT FIELDS (CSV / TSV)   — 80 columns
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  idx, date, time, proto, app_proto,
-  src_mac, src_oui, dst_mac, dst_oui, vlan_id, eth_type_str,
-  src_ip, dst_ip, ip_version, ip_ihl, ip_dscp, ip_ecn,
-  ip_total_len, ip_id, ip_flag_df, ip_flag_mf, ip_frag_offset,
-  ttl, ip_proto_str, ip_checksum,
-  ipv6_tc, ipv6_flow, ipv6_hoplimit,
-  src_port, dst_port,
-  tcp_seq, tcp_ack_num, tcp_hdr_len, tcp_flags, tcp_window,
-  tcp_checksum, tcp_urgent, tcp_mss, tcp_wscale, tcp_sack_perm,
-  tcp_ts_val, tcp_ts_ecr, tcp_options_summary,
-  udp_len, udp_checksum,
-  icmp_type, icmp_code, icmp_type_str, icmp_code_str, icmp_id, icmp_seq,
-  icmpv6_type, icmpv6_type_str,
-  arp_op_str, arp_sha, arp_spa, arp_tha, arp_tpa,
-  dns_txid, dns_qr, dns_rcode_str, dns_qdcount, dns_ancount,
-  dns_queries, dns_answers,
-  http_method, http_uri, http_version, http_host,
-  http_user_agent, http_content_type, http_content_len,
-  http_status_code, http_status_msg,
-  dhcp_msg_type, dhcp_hostname, dhcp_yiaddr, dhcp_requested_ip,
-  payload_len, payload_printable_ratio, payload_entropy,
-  payload_hex_preview, payload_ascii (truncated to 256 chars),
-  orig_len, incl_len, inter_arrival
-
-  Note: payload_bytes and raw are excluded from export (binary data)
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  OUI VENDOR DATABASE  (partial — top vendors)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  00:00:0c  Cisco            00:50:56  VMware             00:0c:29  VMware
-  00:1a:a0  Dell             b8:27:eb  Raspberry Pi       dc:a6:32  Raspberry Pi
-  00:1b:21  Intel            00:23:14  Intel              3c:97:0e  Apple
-  a4:c3:f0  Apple            00:17:f2  Apple              fc:fb:fb  Cisco
-  00:50:43  3Com             00:e0:4c  Realtek            52:54:00  QEMU/KVM
-  00:15:5d  Microsoft(Hyp-V) 00:03:ff  Microsoft
-  00:1c:42  Parallels        08:00:27  VirtualBox
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  WELL-KNOWN PORT NAMES  (service resolution)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-   20  FTP-data      21  FTP           22  SSH           23  Telnet
-   25  SMTP          53  DNS           67  DHCP-srv      68  DHCP-cli
-   69  TFTP          80  HTTP         110  POP3          119  NNTP
-  123  NTP          135  MSRPC        137  NetBIOS-NS    138  NetBIOS-DG
-  139  NetBIOS-SS   143  IMAP         161  SNMP          162  SNMP-trap
-  389  LDAP         443  HTTPS        445  SMB           465  SMTPS
-  500  IKE          514  Syslog       515  LPD           587  SMTP-sub
-  636  LDAPS        993  IMAPS        995  POP3S        1080  SOCKS
- 1194  OpenVPN     1433  MSSQL       1521  Oracle        1723  PPTP
- 3306  MySQL       3389  RDP         4444  Metasploit    5060  SIP
- 5061  SIPS        5432  PostgreSQL  5900  VNC           6379  Redis
- 6881  BitTorrent  8080  HTTP-alt    8443  HTTPS-alt     9200  Elasticsearch
-27017  MongoDB
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  SUPPORTED LINK TYPES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    1   Ethernet (IEEE 802.3)
-   12   Raw IPv4
-  101   Raw IPv4 (alternate)
-  113   Linux cooked capture (SLL)
-
-  Both little-endian and big-endian PCAP files are supported.
-  PCAP-NG format is not supported — save as legacy .pcap first.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  FIELD COUNT SUMMARY
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Layer            Fields
-  ─────────────────────────
-  Frame              8
-  Ethernet           9
-  IPv4              15
-  IPv6               5
-  TCP               17      (incl. options: MSS, WS, SACK, timestamps)
-  UDP                4
-  ICMP               7
-  ICMPv6             3
-  ARP               10
-  DNS               14
-  HTTP              10
-  DHCP               8
-  Payload            6
-  Meta               4
-  ─────────────────────────
-  TOTAL            120
+# PacketSnitch Proposed Prioritized Release Plan
+
+Date: 2026-06-15
+Complexity scale:
+- Low: Small feature, mostly UI/state or simple backend wiring
+- Medium: Cross-module work, moderate parser/data changes
+- High: Stateful analysis, new panels, or significant backend logic
+- Very High: Architecture-level changes (plugins/live capture)
+
+Assumptions for estimates:
+- Estimates are engineering implementation time only (single developer).
+- Add 20-35% for QA, bug-fixing, and release packaging.
+- 1 week ~= 5 dev days.
+
+## Release 0.9.0 (Quick Wins, 3-5 weeks)
+Goal: Increase daily analyst usability with low risk and short delivery cycle.
+
+1) Saved Filter Library (named filters + tags)
+- Priority: P0
+- Complexity: Low
+- Est. dev time: 2-3 days
+- Dependencies: None
+
+2) Rule-based Highlights (color rows/cards by filter match)
+- Priority: P0
+- Complexity: Low
+- Est. dev time: 2-4 days
+- Dependencies: Reuse filter evaluator
+
+3) Packet Pinboard (collect suspicious packets across hosts)
+- Priority: P1
+- Complexity: Low
+- Est. dev time: 1-2 days
+- Dependencies: None
+
+4) IOC Extraction Panel (IP/domain/URL/hash/email extraction + dedupe)
+- Priority: P0
+- Complexity: Medium
+- Est. dev time: 4-6 days
+- Dependencies: None
+
+5) One-click IOC Export (CSV + JSON)
+- Priority: P0
+- Complexity: Low
+- Est. dev time: 1-2 days
+- Dependencies: IOC Extraction Panel
+
+6) Report Templates (IR summary + triage report export)
+- Priority: P1
+- Complexity: Low
+- Est. dev time: 2-3 days
+- Dependencies: None
+
+Release 0.9.0 total estimate: 12-20 dev days
+
+## Release 0.10.0 (Analyst Depth, 4-7 weeks)
+Goal: Add stronger investigative pivots and behavioral insights.
+
+1) Diff Two Packets (field-by-field compare)
+- Priority: P0
+- Complexity: Medium
+- Est. dev time: 3-5 days
+- Dependencies: None
+
+2) Filter Builder UI (visual query builder with boolean groups)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 4-7 days
+- Dependencies: Stable filter grammar/parser
+
+3) DNS Threat Lens (entropy outliers, rare TLDs, NXDOMAIN spikes)
+- Priority: P0
+- Complexity: Medium
+- Est. dev time: 4-6 days
+- Dependencies: Stats aggregation hooks
+
+4) Protocol Anomaly Heuristics (packet/session suspicion score)
+- Priority: P0
+- Complexity: Medium
+- Est. dev time: 5-8 days
+- Dependencies: Shared rule engine preferred
+
+5) Batch Analysis (multi-file ingest + consolidated session summary)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 4-6 days
+- Dependencies: Job orchestration and session merge model
+
+6) Case Workspace (notes linked to packets/IOCs)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 4-7 days
+- Dependencies: IOC entity model; session persistence
+
+Release 0.10.0 total estimate: 24-39 dev days
+
+## Release 0.11.0 (Advanced Forensics, 6-10 weeks)
+Goal: Bring deeper network-forensics capability closer to mature analyzers.
+
+1) Expert Events Feed (anomaly/event stream with severity)
+- Priority: P0
+- Complexity: High
+- Est. dev time: 8-12 days
+- Dependencies: Protocol anomaly heuristics foundation
+
+2) TLS Fingerprinting (JA3/JA4-like summaries)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 3-5 days
+- Dependencies: TLS parser enrichment
+
+3) Stream Reassembly (TCP payload reassembly for readable streams)
+- Priority: P0
+- Complexity: High
+- Est. dev time: 10-16 days
+- Dependencies: Reliable stream keying and ordering
+
+4) HTTP Object Extraction (responses/files from reassembled streams)
+- Priority: P0
+- Complexity: High
+- Est. dev time: 8-14 days
+- Dependencies: Stream Reassembly
+
+5) Timeline View (zoomable event timeline)
+- Priority: P1
+- Complexity: High
+- Est. dev time: 6-10 days
+- Dependencies: Event model and cached aggregations
+
+6) Conversation Graph (host/service interactive graph)
+- Priority: P2
+- Complexity: High
+- Est. dev time: 6-10 days
+- Dependencies: Conversation aggregation model
+
+Release 0.11.0 total estimate: 41-67 dev days
+
+## Long-term (1.0+)
+Goal: Platform-level extensibility and live operations.
+
+1) Alert Rules + Notifications (saved detections over ingest)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 4-7 days
+- Dependencies: Rule engine + event bus
+
+2) Redaction Profiles (mask secrets in UI/export)
+- Priority: P1
+- Complexity: Medium
+- Est. dev time: 3-5 days
+- Dependencies: Export pipeline integration
+
+3) Local Plugin API (custom decoders)
+- Priority: P2
+- Complexity: Very High
+- Est. dev time: 20-35 days
+- Dependencies: Stable extension contract and sandboxing
+
+4) Mini Decoder Scripting (user script runtime)
+- Priority: P3
+- Complexity: Very High
+- Est. dev time: 18-30 days
+- Dependencies: Plugin API and security controls
+
+5) Live Capture Mode (interface select + rolling ingest)
+- Priority: P2
+- Complexity: Very High
+- Est. dev time: 20-40 days
+- Dependencies: Capture orchestration, buffering, UX for long-running jobs
+
+## Suggested Execution Order (Dependency-aware)
+1. Saved Filter Library
+2. Rule-based Highlights
+3. IOC Extraction Panel
+4. IOC Export
+5. Report Templates
+6. Diff Two Packets
+7. DNS Threat Lens
+8. Protocol Anomaly Heuristics
+9. Batch Analysis
+10. Expert Events Feed
+11. Stream Reassembly
+12. HTTP Object Extraction
+13. Timeline View
+14. Conversation Graph
+15. Live Capture / Plugin API track
+
+## Capacity Planning Example
+If capacity is 10 dev days per sprint:
+- 0.9.0: 2 sprints (plus 1 hardening sprint)
+- 0.10.0: 3-4 sprints
+- 0.11.0: 5-7 sprints
+
