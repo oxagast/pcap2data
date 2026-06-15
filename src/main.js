@@ -310,6 +310,7 @@ ipcMain.handle("quit-app", () => {
 });
 
 ipcMain.handle("prompt-save-session-on-exit", async () => {
+  const currentSessionName = path.basename(selectedFilePath || "", path.extname(selectedFilePath || ""));
   const response = await dialog.showMessageBox({
     type: "question",
     buttons: ["Save Session", "Don't Save", "Cancel"],
@@ -661,6 +662,10 @@ ipcMain.handle("session-save", async (_event, name, jsonData) => {
   if (typeof jsonData !== "string" || jsonData.trim() === "") {
     return { success: false, error: "No JSON data to save" };
   }
+  // if the name is "autosave" we should ask what the name should be since "autosave"
+  // is a throwaway session
+  // show the save dialog to get the new name from the user
+
   try {
     await ensureSessionsDir();
     const filePath = sessionFilePath(name);

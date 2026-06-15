@@ -1193,6 +1193,8 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
 
   // If no session library is available fall back to the file-dialog export
   if (!window.sessionsapi) {
+    // get the sessions name from the json payload
+
     const sessionJsonData = buildSessionFilePayload();
     const result = await window.saveapi.saveJson(sessionJsonData);
     if (result.canceled) {
@@ -1227,6 +1229,16 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
   }
 
   const sessionJsonData = buildSessionFilePayload();
+  if (currentSessionName && currentSessionName === "autosave") {
+    // For autosave, we want to overwrite the existing session without creating a new entry in the library or log
+    const autoresult = await window.sessionsapi.save(currentSessionName, sessionJsonData);
+    if (autoresult.success) {
+      statusUpdate("Status: Session autosaved");
+      currentSessionName = null; // Clear the session name after autosave so that the next save will prompt for a name again
+    }
+    // if the user picks save, we should also ask them what the new name 
+    return autoresult;
+  }
   const result = await window.sessionsapi.save(currentSessionName, sessionJsonData);
   if (result.success) {
     // Keep the canonical name returned by the backend (post-sanitization)
