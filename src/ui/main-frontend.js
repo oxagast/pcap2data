@@ -3785,7 +3785,7 @@ const convertContextSubmenus = {
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
-  "convert-context-save-divider",
+  "convert-context-bottom-divider",
 );
 const convertContextSubmenuEls = Array.from(
   convertContextMenuEl.querySelectorAll(".ctx-submenu"),

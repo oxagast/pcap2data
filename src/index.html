@@ -589,7 +589,7 @@ No keystore entries saved.</pre>
           Copy ASCII
         </button>
         <button id="convert-context-copy-raw" type="button">
-          Copy Raw payload
+          Copy Raw
         </button>
         <button id="ctx-copy-cookie-jar" role="menuitem">
           Copy Cookie Jar
@@ -603,27 +603,27 @@ No keystore entries saved.</pre>
         Convert to...
       </button>
       <div class="ctx-submenu-panel">
-        <button id="convert-context-hex" type="button">Load as Hex</button>
+        <button id="convert-context-hex" type="button">as Hex</button>
         <button id="convert-context-binary" type="button">
-          Load as Binary
+          as Binary
         </button>
         <button id="convert-context-base64" type="button">
-          Load as Base64
+          as Base64
         </button>
         <button id="convert-context-decimal" type="button">
-          Load as Decimal bytes
+          as Decimal bytes
         </button>
         <button id="convert-context-ascii" type="button">
-          Load as ASCII / UTF-8
+          as ASCII / UTF-8
         </button>
         <button id="convert-context-derive-guess" type="button">
-          Derive Data Type Guess
+          Derive Type
         </button>
         <button id="convert-context-load-cursor-ascii" type="button">
-          Load Cursor ASCII into Conv tab
+          Cursor ASCII to Conv tab
         </button>
         <button id="convert-context-load-payload" type="button">
-          Load Raw Payload into Conv tab
+          Raw Payload to Conv tab
         </button>
       </div>
     </div>
@@ -633,10 +633,10 @@ No keystore entries saved.</pre>
       </button>
       <div class="ctx-submenu-panel">
         <button id="ctx-follow-stream-conv" type="button">
-          Load stream into Conv tab
+          Stream to Conv tab
         </button>
         <button id="ctx-follow-stream-crypt" type="button">
-          Load stream into Crypt tab
+          Stream to Crypt tab
         </button>
       </div>
     </div>
@@ -646,13 +646,13 @@ No keystore entries saved.</pre>
       </button>
       <div class="ctx-submenu-panel">
         <button id="ctx-notes-send-data" type="button">
-          Send selected/context data
+          Selected/context data
         </button>
         <button id="ctx-notes-send-conv-output" type="button">
-          Send Conv converted output
+          Conv converted output
         </button>
         <button id="ctx-notes-send-conv-hashes" type="button">
-          Send Conv hashes
+          Conv hashes
         </button>
       </div>
     </div>
@@ -753,7 +753,7 @@ No keystore entries saved.</pre>
               Append )
             </button>
             <button id="ctx-filter-paren-wrap" type="button">
-              Wrap current query with (...)
+              Wrap with (...)
             </button>
           </div>
         </div>
@@ -799,10 +799,10 @@ No keystore entries saved.</pre>
           </button>
           <div class="ctx-submenu-panel">
             <button id="ctx-keystore-password-session" type="button">
-              Session keychain
+              Session
             </button>
             <button id="ctx-keystore-password-persistent" type="button">
-              Persistent keychain
+              Persistent
             </button>
           </div>
         </div>
@@ -812,10 +812,10 @@ No keystore entries saved.</pre>
           </button>
           <div class="ctx-submenu-panel">
             <button id="ctx-keystore-key-session" type="button">
-              Session keychain
+              Session
             </button>
             <button id="ctx-keystore-key-persistent" type="button">
-              Persistent keychain
+              Persistent
             </button>
           </div>
         </div>
@@ -825,10 +825,10 @@ No keystore entries saved.</pre>
           </button>
           <div class="ctx-submenu-panel">
             <button id="ctx-keystore-cert-session" type="button">
-              Session keychain
+              Session
             </button>
             <button id="ctx-keystore-cert-persistent" type="button">
-              Persistent keychain
+              Persistent
             </button>
           </div>
         </div>
@@ -838,41 +838,39 @@ No keystore entries saved.</pre>
           </button>
           <div class="ctx-submenu-panel">
             <button id="ctx-keystore-cookie-session" type="button">
-              Session keychain
+              Session
             </button>
             <button id="ctx-keystore-cookie-persistent" type="button">
-              Persistent keychain
+              Persistent
             </button>
           </div>
         </div>
         <div id="ctx-keystore-uri-submenu" class="ctx-submenu">
           <button id="ctx-keystore-uri-branch" class="ctx-branch" type="button">
-            As URI / URL (Manual)
+            As URI / URL
           </button>
           <div class="ctx-submenu-panel">
             <button id="ctx-keystore-uri-session" type="button">
-              Session keychain
+              Session
             </button>
             <button id="ctx-keystore-uri-persistent" type="button">
-              Persistent keychain
+              Persistent
             </button>
           </div>
         </div>
       </div>
     </div>
-    <hr id="convert-context-save-divider" class="ctx-divider" />
     <div id="ctx-export-submenu" class="ctx-submenu">
       <button id="ctx-export-branch" class="ctx-branch" type="button">
         Export...
       </button>
       <div class="ctx-submenu-panel">
-        <button id="ctx-save-json" role="menuitem">Save Session</button>
         <button id="ctx-export-packet" role="menuitem">Export Packet</button>
         <button id="ctx-export-payload" role="menuitem">
           Export Payload
         </button>
         <button id="ctx-save-cookie-jar" role="menuitem">
-          Save to cookie_jar.txt
+          Cookie Jar
         </button>
       </div>
     </div>
@@ -882,16 +880,18 @@ No keystore entries saved.</pre>
       </button>
       <div class="ctx-submenu-panel">
         <button id="ctx-http-file-save" type="button">
-          Save body to file
+          Body to file
         </button>
         <button id="ctx-http-file-load" type="button">
-          Load body into Conv tab
+          Body to Conv tab
         </button>
         <button id="ctx-http-file-preview" type="button">
-          Preview in browser
+          Browser preview
         </button>
       </div>
     </div>
+    <hr id="convert-context-bottom-divider" class="ctx-divider" />
+    <button id="ctx-save-json" role="menuitem">Save Session</button>
   </div>
 
   <!-- Installation complete screen – shown only on first run after a new version install -->
