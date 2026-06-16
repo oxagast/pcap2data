@@ -117,14 +117,13 @@ Save and export packet and session data.
 
 | Item                       | Description                                                    |
 | -------------------------- | -------------------------------------------------------------- |
-| **Save Session**           | Save the loaded capture plus UI session state as a JSON file.  |
 | **Export Packet**          | Save the raw data of the current packet to a file.             |
 | **Export Payload**         | Save only the payload bytes of the current packet to a file.   |
 | **Save to cookie_jar.txt** | Append all session cookies to a `cookie_jar.txt` file on disk. |
 
 ---
 
-## HTTP File...
+### HTTP File...
 
 Shown only when the current packet contains an HTTP response body.
 
@@ -133,3 +132,9 @@ Shown only when the current packet contains an HTTP response body.
 | **Save body to file**       | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
 | **Load body into Conv**     | Load the HTTP body bytes as hex into the Conv tab and run conversion.                           |
 | **Preview in browser**      | Open the HTTP body in the system's default web browser for preview.                             |
+
+---
+
+### Save Session
+
+Located at the very bottom of the context menu, **Save Session** saves the loaded capture plus UI session state (packet cursor, filters/history, tabs, bookmarks, and session keychain) as a JSON file.
