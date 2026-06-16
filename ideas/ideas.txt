@@ -1,193 +1,408 @@
-# PacketSnitch Proposed Prioritized Release Plan
+=== High Priority Features ===
 
-Date: 2026-06-15
-Complexity scale:
-- Low: Small feature, mostly UI/state or simple backend wiring
-- Medium: Cross-module work, moderate parser/data changes
-- High: Stateful analysis, new panels, or significant backend logic
-- Very High: Architecture-level changes (plugins/live capture)
+[ ] Session / Conversation Reconstruction
+    - Reassemble complete TCP/UDP conversations
+    - Display client/server request-response chains
+    - HTTP session view
+    - SMTP session view
+    - FTP transfer reconstruction
+    - SMB file activity tracking
 
-Assumptions for estimates:
-- Estimates are engineering implementation time only (single developer).
-- Add 20-35% for QA, bug-fixing, and release packaging.
-- 1 week ~= 5 dev days.
+[ ] IOC / Threat Detection Engine
+    - Detect known malicious IPs
+    - Detect known malicious domains
+    - Detect suspicious user agents
+    - Detect common malware behaviors
+    - Custom IOC rule support
+    - Import threat intelligence feeds
 
-## Release 0.9.0 (Quick Wins, 3-5 weeks)
-Goal: Increase daily analyst usability with low risk and short delivery cycle.
+[ ] PCAP Diff Mode
+    - Compare two captures
+    - New hosts detected
+    - Missing hosts
+    - New protocols
+    - New ports
+    - Traffic volume changes
+    - Timeline comparison
 
-1) Saved Filter Library (named filters + tags)
-- Priority: P0
-- Complexity: Low
-- Est. dev time: 2-3 days
-- Dependencies: None
+[ ] Artifact Extraction Framework
+    - Extract executables
+    - Extract PDFs
+    - Extract Office documents
+    - Extract ZIP archives
+    - Extract images
+    - Extract scripts
+    - Hash all extracted artifacts
+    - Export artifacts to disk
 
-2) Rule-based Highlights (color rows/cards by filter match)
-- Priority: P0
-- Complexity: Low
-- Est. dev time: 2-4 days
-- Dependencies: Reuse filter evaluator
+[ ] Network Graph Visualization
+    - Host-to-host relationship graph
+    - Protocol-based graph coloring
+    - Traffic volume weighting
+    - Interactive exploration
+    - Community clustering
+    - Attack path visualization
 
-3) Packet Pinboard (collect suspicious packets across hosts)
-- Priority: P1
-- Complexity: Low
-- Est. dev time: 1-2 days
-- Dependencies: None
+=== Release 0.9.0 (Quick Wins) ===
 
-4) IOC Extraction Panel (IP/domain/URL/hash/email extraction + dedupe)
-- Priority: P0
-- Complexity: Medium
-- Est. dev time: 4-6 days
-- Dependencies: None
+[ ] Saved Filter Library
+    - Named filters
+    - Filter categories/tags
+    - Quick filter selection
+    - Share/export filter sets
+    - Priority: P0
+    - Complexity: Low
+    - Est. Dev Time: 2-3 days
 
-5) One-click IOC Export (CSV + JSON)
-- Priority: P0
-- Complexity: Low
-- Est. dev time: 1-2 days
-- Dependencies: IOC Extraction Panel
+[ ] Rule-Based Highlights
+    - Color rows based on filter matches
+    - Highlight hosts
+    - Highlight packets
+    - Highlight conversations
+    - Severity coloring
+    - Priority: P0
+    - Complexity: Low
+    - Est. Dev Time: 2-4 days
 
-6) Report Templates (IR summary + triage report export)
-- Priority: P1
-- Complexity: Low
-- Est. dev time: 2-3 days
-- Dependencies: None
+[ ] Packet Pinboard
+    - Collect suspicious packets
+    - Investigation workspace
+    - Bookmark packet evidence
+    - Quick navigation
+    - Priority: P1
+    - Complexity: Low
+    - Est. Dev Time: 1-2 days
 
-Release 0.9.0 total estimate: 12-20 dev days
+[ ] IOC Extraction Panel
+    - Extract IP addresses
+    - Extract domains
+    - Extract URLs
+    - Extract hashes
+    - Extract email addresses
+    - IOC deduplication
+    - Priority: P0
+    - Complexity: Medium
+    - Est. Dev Time: 4-6 days
 
-## Release 0.10.0 (Analyst Depth, 4-7 weeks)
-Goal: Add stronger investigative pivots and behavioral insights.
+[ ] One-Click IOC Export
+    - CSV export
+    - JSON export
+    - Selective export
+    - Priority: P0
+    - Complexity: Low
+    - Est. Dev Time: 1-2 days
 
-1) Diff Two Packets (field-by-field compare)
-- Priority: P0
-- Complexity: Medium
-- Est. dev time: 3-5 days
-- Dependencies: None
+[ ] Report Templates
+    - Incident response summary
+    - Triage report
+    - Executive report
+    - Exportable templates
+    - Priority: P1
+    - Complexity: Low
+    - Est. Dev Time: 2-3 days
 
-2) Filter Builder UI (visual query builder with boolean groups)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 4-7 days
-- Dependencies: Stable filter grammar/parser
+=== Release 0.10.0 (Analyst Depth) ===
 
-3) DNS Threat Lens (entropy outliers, rare TLDs, NXDOMAIN spikes)
-- Priority: P0
-- Complexity: Medium
-- Est. dev time: 4-6 days
-- Dependencies: Stats aggregation hooks
+[ ] Diff Two Packets
+    - Field-by-field comparison
+    - Highlight changed values
+    - Side-by-side view
+    - Priority: P0
+    - Complexity: Medium
+    - Est. Dev Time: 3-5 days
 
-4) Protocol Anomaly Heuristics (packet/session suspicion score)
-- Priority: P0
-- Complexity: Medium
-- Est. dev time: 5-8 days
-- Dependencies: Shared rule engine preferred
+[ ] Filter Builder UI
+    - Visual query builder
+    - Boolean groups
+    - Nested conditions
+    - Live query preview
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 4-7 days
 
-5) Batch Analysis (multi-file ingest + consolidated session summary)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 4-6 days
-- Dependencies: Job orchestration and session merge model
+[ ] DNS Threat Lens
+    - Entropy outliers
+    - Rare TLD detection
+    - NXDOMAIN spikes
+    - Suspicious DNS activity
+    - Priority: P0
+    - Complexity: Medium
+    - Est. Dev Time: 4-6 days
 
-6) Case Workspace (notes linked to packets/IOCs)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 4-7 days
-- Dependencies: IOC entity model; session persistence
+[ ] Protocol Anomaly Heuristics
+    - Session suspicion scoring
+    - Packet suspicion scoring
+    - Protocol misuse detection
+    - Behavioral anomalies
+    - Priority: P0
+    - Complexity: Medium
+    - Est. Dev Time: 5-8 days
 
-Release 0.10.0 total estimate: 24-39 dev days
+[ ] Batch Analysis
+    - Multi-PCAP ingest
+    - Consolidated summaries
+    - Cross-capture analysis
+    - Batch reporting
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 4-6 days
 
-## Release 0.11.0 (Advanced Forensics, 6-10 weeks)
-Goal: Bring deeper network-forensics capability closer to mature analyzers.
+[ ] Case Workspace
+    - Notes linked to packets
+    - Notes linked to IOCs
+    - Investigation organization
+    - Session persistence
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 4-7 days
 
-1) Expert Events Feed (anomaly/event stream with severity)
-- Priority: P0
-- Complexity: High
-- Est. dev time: 8-12 days
-- Dependencies: Protocol anomaly heuristics foundation
+=== Release 0.11.0 (Advanced Forensics) ===
 
-2) TLS Fingerprinting (JA3/JA4-like summaries)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 3-5 days
-- Dependencies: TLS parser enrichment
+[ ] Expert Events Feed
+    - Anomaly event stream
+    - Severity ratings
+    - Event categorization
+    - Timeline integration
+    - Priority: P0
+    - Complexity: High
+    - Est. Dev Time: 8-12 days
 
-3) Stream Reassembly (TCP payload reassembly for readable streams)
-- Priority: P0
-- Complexity: High
-- Est. dev time: 10-16 days
-- Dependencies: Reliable stream keying and ordering
+[ ] TLS Fingerprinting
+    - JA3 fingerprints
+    - JA4 fingerprints
+    - Client identification
+    - TLS anomaly detection
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 3-5 days
 
-4) HTTP Object Extraction (responses/files from reassembled streams)
-- Priority: P0
-- Complexity: High
-- Est. dev time: 8-14 days
-- Dependencies: Stream Reassembly
+[ ] Stream Reassembly
+    - TCP payload reconstruction
+    - Ordered stream view
+    - Missing packet handling
+    - Protocol reconstruction foundation
+    - Priority: P0
+    - Complexity: High
+    - Est. Dev Time: 10-16 days
 
-5) Timeline View (zoomable event timeline)
-- Priority: P1
-- Complexity: High
-- Est. dev time: 6-10 days
-- Dependencies: Event model and cached aggregations
+[ ] HTTP Object Extraction
+    - Extract downloaded files
+    - Extract HTTP responses
+    - File carving
+    - Metadata extraction
+    - Priority: P0
+    - Complexity: High
+    - Est. Dev Time: 8-14 days
 
-6) Conversation Graph (host/service interactive graph)
-- Priority: P2
-- Complexity: High
-- Est. dev time: 6-10 days
-- Dependencies: Conversation aggregation model
+[ ] Timeline View
+    - Zoomable timeline
+    - Host activity timeline
+    - Event overlays
+    - Protocol filtering
+    - Priority: P1
+    - Complexity: High
+    - Est. Dev Time: 6-10 days
 
-Release 0.11.0 total estimate: 41-67 dev days
+[ ] Conversation Graph
+    - Interactive host graph
+    - Service relationships
+    - Communication mapping
+    - Traffic weighting
+    - Priority: P2
+    - Complexity: High
+    - Est. Dev Time: 6-10 days
 
-## Long-term (1.0+)
-Goal: Platform-level extensibility and live operations.
+=== Detection & Analysis ===
 
-1) Alert Rules + Notifications (saved detections over ingest)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 4-7 days
-- Dependencies: Rule engine + event bus
+[ ] Beacon Detection
+    - Periodic communication detection
+    - Low-and-slow beacon identification
+    - Jitter analysis
+    - C2 behavior scoring
 
-2) Redaction Profiles (mask secrets in UI/export)
-- Priority: P1
-- Complexity: Medium
-- Est. dev time: 3-5 days
-- Dependencies: Export pipeline integration
+[ ] Suspicious Entropy Dashboard
+    - Highest entropy hosts
+    - Highest entropy conversations
+    - Encrypted payload detection
+    - Potential covert channels
 
-3) Local Plugin API (custom decoders)
-- Priority: P2
-- Complexity: Very High
-- Est. dev time: 20-35 days
-- Dependencies: Stable extension contract and sandboxing
+[ ] Credential Exposure Report
+    - Basic auth detection
+    - FTP credential detection
+    - Telnet credential detection
+    - SMTP authentication detection
+    - Password reuse identification
 
-4) Mini Decoder Scripting (user script runtime)
-- Priority: P3
-- Complexity: Very High
-- Est. dev time: 18-30 days
-- Dependencies: Plugin API and security controls
+[ ] DNS Intelligence
+    - DGA detection
+    - Newly registered domains
+    - NXDOMAIN analysis
+    - Fast-flux detection
+    - DNS tunneling detection
 
-5) Live Capture Mode (interface select + rolling ingest)
-- Priority: P2
-- Complexity: Very High
-- Est. dev time: 20-40 days
-- Dependencies: Capture orchestration, buffering, UX for long-running jobs
+[ ] Secret Detection
+    - AWS keys
+    - Azure keys
+    - GCP credentials
+    - JWT tokens
+    - API keys
+    - OAuth tokens
+    - Private keys
+    - Discord tokens
+    - GitHub tokens
 
-## Suggested Execution Order (Dependency-aware)
-1. Saved Filter Library
-2. Rule-based Highlights
-3. IOC Extraction Panel
-4. IOC Export
-5. Report Templates
-6. Diff Two Packets
-7. DNS Threat Lens
-8. Protocol Anomaly Heuristics
-9. Batch Analysis
-10. Expert Events Feed
-11. Stream Reassembly
-12. HTTP Object Extraction
-13. Timeline View
-14. Conversation Graph
-15. Live Capture / Plugin API track
+[ ] YARA Integration
+    - Scan extracted artifacts
+    - Scan payloads
+    - Custom rule support
+    - Rule hit reporting
 
-## Capacity Planning Example
-If capacity is 10 dev days per sprint:
-- 0.9.0: 2 sprints (plus 1 hardening sprint)
-- 0.10.0: 3-4 sprints
-- 0.11.0: 5-7 sprints
+=== Visualization & Investigation ===
 
+[ ] Packet Relationship View
+    - Show linked packets
+    - Follow packet chains
+    - Track protocol transitions
+    - Visual flow mapping
+
+[ ] Packet Tagging System
+    - User-defined tags
+    - Color coding
+    - Investigation notes
+    - Tag-based filtering
+
+[ ] Saved Investigations
+    - Case management
+    - Investigator notes
+    - Bookmarks
+    - Evidence tracking
+    - Export reports
+
+=== Protocol Support ===
+
+[ ] QUIC Support
+    - Stream analysis
+    - Metadata extraction
+    - Session reconstruction
+
+[ ] WebSocket Support
+    - Message reconstruction
+    - Frame analysis
+    - Payload decoding
+
+[ ] gRPC Support
+    - Service identification
+    - Method extraction
+    - Message decoding
+
+[ ] WireGuard Support
+    - Handshake detection
+    - Peer identification
+    - Tunnel statistics
+
+=== AI Features ===
+
+[ ] Ask The Capture
+    - Natural language querying
+    - Host summaries
+    - Threat hunting assistance
+    - Investigation recommendations
+    - Automatic anomaly explanation
+
+[ ] AI Investigation Assistant
+    - Generate findings
+    - Create executive summaries
+    - Recommend next steps
+    - Highlight unusual behavior
+
+=== Long-Term (1.0+) ===
+
+[ ] Alert Rules + Notifications
+    - Saved detections
+    - Background monitoring
+    - Event notifications
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 4-7 days
+
+[ ] Redaction Profiles
+    - Mask secrets in UI
+    - Mask secrets in exports
+    - Custom redaction policies
+    - Priority: P1
+    - Complexity: Medium
+    - Est. Dev Time: 3-5 days
+
+[ ] Local Plugin API
+    - Custom protocol decoders
+    - Extension framework
+    - Sandboxed execution
+    - Priority: P2
+    - Complexity: Very High
+    - Est. Dev Time: 20-35 days
+
+[ ] Mini Decoder Scripting
+    - User-defined parsers
+    - Lightweight decoder runtime
+    - Custom protocol support
+    - Priority: P3
+    - Complexity: Very High
+    - Est. Dev Time: 18-30 days
+
+[ ] Live Capture Mode
+    - Interface selection
+    - Rolling capture ingestion
+    - Continuous analysis
+    - Long-running session support
+    - Priority: P2
+    - Complexity: Very High
+    - Est. Dev Time: 20-40 days
+
+=== Future / Advanced Ideas ===
+
+[ ] Attack Path Reconstruction
+    - Lateral movement tracking
+    - Initial access identification
+    - Compromise timeline generation
+
+[ ] Traffic Baseline Engine
+    - Learn normal behavior
+    - Detect anomalies
+    - Compare captures to baseline
+
+[ ] MITRE ATT&CK Mapping
+    - Technique identification
+    - ATT&CK coverage reporting
+    - Detection mapping
+
+[ ] Threat Score System
+    - Host risk scores
+    - Conversation risk scores
+    - Capture-wide threat score
+
+[ ] Automatic Report Generator
+    - Executive summary
+    - Technical findings
+    - IOC appendix
+    - Artifact appendix
+    - Export to HTML/PDF
+
+=== Suggested Execution Order ===
+
+[ ] Saved Filter Library
+[ ] Rule-Based Highlights
+[ ] IOC Extraction Panel
+[ ] One-Click IOC Export
+[ ] Report Templates
+[ ] Diff Two Packets
+[ ] DNS Threat Lens
+[ ] Protocol Anomaly Heuristics
+[ ] Batch Analysis
+[ ] Expert Events Feed
+[ ] Stream Reassembly
+[ ] HTTP Object Extraction
+[ ] Timeline View
+[ ] Conversation Graph
+[ ] Live Capture Mode
+[ ] Local Plugin API
+.
