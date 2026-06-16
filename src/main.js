@@ -237,12 +237,15 @@ app.whenReady().then(() => {
     ipcMain.handle("select-file", async () => {
       const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ["openFile"],
+        filters: [
+          {
+            name: "Capture and Session Files",
+            extensions: ["pcap", "pcapng", "json"],
+          },
+        ],
       });
       if (canceled) return null;
-      console.log("Accepted pcapng.. Checking for json existence...");
       isBackendLoaded = true;
-      console.log("File selected:", filePaths[0]);
-      selectedFilePath = filePaths[0];
       return filePaths[0];
     });
   });
