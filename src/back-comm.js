@@ -22,6 +22,19 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     snitchExePath = path.join(basePath, "/snitch/snitch");
   }
 
+  if (fs.existsSync(snitchExePath)) {
+    global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
+  } else {
+    global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
+    const mainWin = BrowserWindow.getAllWindows()[0];
+    if (mainWin) {
+      mainWin.webContents.send(
+        "backend-error",
+        "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
+      );
+    }
+    return;
+  }
   const backendCommand = `"${snitchExePath}" "${filename}" -v -a -o "${testcaseOutputDir}"${useLLM ? "" : " --nollm"}`;
 
   // Always start with a clean output directory so snitch never hits the
