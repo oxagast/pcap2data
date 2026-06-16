@@ -775,7 +775,11 @@ function runFilterQuery(filterQuery, options = {}) {
     addFilterHistory(filterQuery);
   }
   filteredPackets = filterPackets(capturedPackets, filterQuery);
-  writeLogEntry(`User executed query="${filterQuery}"`);
+  if (filterQuery === "") {
+    writeLogEntry("User cleared filter query");
+  } else {
+    writeLogEntry(`User executed query="${filterQuery}"`);
+  }
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
     hideAllData();
