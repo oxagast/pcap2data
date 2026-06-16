@@ -52,7 +52,7 @@ body {
   padding: 20px;
   border-radius: 10px;
   text-align: center;
-  z-index: 1000;
+  z-index: 10000;
   width: 400px;
   display: none;
 }
