@@ -1161,6 +1161,8 @@ function buildSessionStateSnapshot() {
     tabs: {
       main: activeMainTab,
       conv: getActiveConvSubtab(),
+      convCurrentInput: document.getElementById("data-tools-input")?.value || "",
+      convCurrentFormat: document.getElementById("data-tools-format")?.value || "",
       crypt: activeCryptSubtab,
       listSearch: listSearchEl ? listSearchEl.value : "",
       listGroupStreams: listGroupStreamsEl
@@ -1531,6 +1533,23 @@ function restoreSessionState(sessionState) {
   if (savedMainTab !== MAIN_TAB_DATA_TOOLS) {
     setConvSubtab(savedConvTab);
   }
+
+  const savedConvCurrentInput = typeof tabState.convCurrentInput === "string"
+    ? tabState.convCurrentInput
+    : "";
+  const savedConvCurrentFormat = typeof tabState.convCurrentFormat === "string"
+    ? tabState.convCurrentFormat
+    : "";
+  if (savedConvCurrentInput.trim()) {
+    const dataToolsInputEl = document.getElementById("data-tools-input");
+    const dataToolsFormatEl = document.getElementById("data-tools-format");
+    if (dataToolsInputEl && dataToolsFormatEl) {
+      dataToolsInputEl.value = savedConvCurrentInput;
+      dataToolsFormatEl.value = savedConvCurrentFormat;
+      runDataToolsConversion();
+    }
+  }
+
   if (savedMainTab !== MAIN_TAB_CRYPT) {
     setCryptSubtab(savedCryptTab);
   }
