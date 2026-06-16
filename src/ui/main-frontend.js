@@ -1471,8 +1471,6 @@ function restoreSessionState(sessionState) {
     runFilterQuery(restoredFilterQuery, { trackHistory: false });
   } else {
     filteredPackets = [];
-    document.getElementById("filter-returned").textContent =
-      "Filtered Packets: 0";
   }
 
   currentPacketKey =
@@ -6030,6 +6028,71 @@ function totalPacketCount() {
   return totalCount;
 }
 
+function updateCurrentPacketCounters(packetSet, options = {}) {
+  const { isFilteredView = false } = options;
+  const currentStreamPacketEl = document.getElementById("current-stream-packet");
+  const currentFilteredPacketEl = document.getElementById(
+    "current-filtered-packet",
+  );
+  if (!currentStreamPacketEl || !currentFilteredPacketEl) {
+    return;
+  }
+
+  const packetCursor = Number.isInteger(index) && index >= 0 ? index : null;
+  const packetKeyForPacket = (packet, fallbackIndex = 0) => {
+    const packetInfo = packet?.["Packet Info"];
+    if (!packetInfo) return null;
+    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown";
+    const packetIndex = packetInfo?.["Index"] ?? fallbackIndex;
+    return sourceIp + ":" + packetIndex;
+  };
+
+  const streamPackets = getFollowStreamPackets();
+  const streamPacketTotal = streamPackets.length;
+  let streamPacketPosition = 0;
+  if (streamPacketTotal > 0 && typeof currentPacketKey === "string") {
+    const streamPacketIndex = streamPackets.findIndex((packet, idx) => {
+      return packetKeyForPacket(packet, idx) === currentPacketKey;
+    });
+    streamPacketPosition = streamPacketIndex >= 0 ? streamPacketIndex + 1 : 0;
+  }
+
+  currentStreamPacketEl.textContent =
+    "Current Stream Packet: " +
+    streamPacketPosition +
+    " / " +
+    streamPacketTotal;
+
+  const hasActiveFilterQuery =
+    typeof filterInputEl?.value === "string" && filterInputEl.value.trim() !== "";
+  const filteredPacketTotal = Array.isArray(filteredPackets)
+    ? filteredPackets.length
+    : 0;
+  let filteredPacketPosition = 0;
+
+  if (hasActiveFilterQuery && filteredPacketTotal > 0) {
+    let filteredPacketIndex =
+      typeof currentPacketKey === "string" && currentPacketKey
+        ? findPacketIndexByKey(filteredPackets, currentPacketKey)
+        : -1;
+    if (
+      filteredPacketIndex < 0 &&
+      isFilteredView &&
+      packetCursor !== null &&
+      packetCursor < filteredPacketTotal
+    ) {
+      filteredPacketIndex = packetCursor;
+    }
+    filteredPacketPosition = filteredPacketIndex >= 0 ? filteredPacketIndex + 1 : 0;
+  }
+
+  currentFilteredPacketEl.textContent =
+    "Current Filtered Packet: " +
+    filteredPacketPosition +
+    " / " +
+    (hasActiveFilterQuery ? filteredPacketTotal : 0);
+}
+
 /**
  * Returns the packet array index matching a `sourceIp:packetIndex` key.
  */
@@ -6100,7 +6163,7 @@ function handlePacketNavigation(navAction, navBookmark) {
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
   if (rightsideNotesEl) rightsideNotesEl.hidden = true;
-  document.getElementById("total-packets").innerHTML =
+  document.getElementById("total-packets").textContent =
     "Total Packets: " + totalPacketCount();
   if (navAction === undefined) {
     handlePacketNavigation("first-load");
@@ -6108,8 +6171,6 @@ function handlePacketNavigation(navAction, navBookmark) {
   let packetSet = capturedPackets["Host"][hostFilterEl.value];
   if (navAction === "filtered") {
     packetSet = [];
-    document.getElementById("filter-returned").textContent =
-      "Filtered Packets: " + filteredPackets.length;
     packetSet = filteredPackets;
     writeLogEntry(
       `Filtered packet navigation packets_returned=${packetSet.length}`,
@@ -6158,6 +6219,9 @@ function handlePacketNavigation(navAction, navBookmark) {
   }
   if (!packetSet || packetSet.length === 0) {
     statusUpdate("Status: No packets");
+    updateCurrentPacketCounters([], {
+      isFilteredView: navAction === "filtered",
+    });
     return;
   }
   if (
@@ -6189,6 +6253,9 @@ function handlePacketNavigation(navAction, navBookmark) {
     currentPacketKey =
       currentIp + ":" + (packetInfo?.["Index"] ?? index);
     syncBookmarkDropdown(currentPacketKey);
+    updateCurrentPacketCounters(packetSet, {
+      isFilteredView: navAction === "filtered",
+    });
     console.log(activePacket);
     const hexPayload =
       packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "";
@@ -6406,6 +6473,9 @@ function infoPanel(pk) {
     doError("Packet data is unavailable for this entry!");
     return;
   }
+  updateCurrentPacketCounters(pk, {
+    isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
+  });
   let packetInfoData = p["Packet Info"];
   let extraInfoData = p["Extra Info"];
   let packetTimestamp = packetInfoData["Packet Timestamp"];
@@ -6704,11 +6774,6 @@ function infoPanel(pk) {
     return count;
   })();
 
-  const streamStatsEl = document.getElementById("stream-stats");
-  if (streamStatsEl) {
-    streamStatsEl.textContent = `Stream: ${streamPacketCount} packets`;
-  }
-
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
   document.getElementById("sideloctable").textContent = "";
   document.getElementById("entropybox").textContent =
@@ -6909,6 +6974,9 @@ function hideAllData() {
   document.getElementById("active-recon").style.display = "none";
   document.getElementById("prev-btn").style.opacity = "0";
   document.getElementById("next-btn").style.opacity = "0";
+  updateCurrentPacketCounters([], {
+    isFilteredView: true,
+  });
   popHexGrid("00".repeat(1));
 }
 function showAllData() {
