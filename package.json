@@ -8,10 +8,10 @@
   "private": false,
   "scripts": {
     "start": "electron-forge start -- --ozone-platform=x11",
-    "package": "npm run build-python && electron-forge package",
+    "package": "npm run build-backend && electron-forge package",
     "patch-rpm-build": "patch -Np0 < patches/spec.ejs.patch",
-    "make": "npm run build-python && cross-env QA_SKIP_RPATHS=1 electron-forge make",
-    "build-python": "pip3 install -r src/backend/requirements.txt --user --break-system-packages && python3 -m PyInstaller --hidden-import encodings --onedir -y --add-data \"src/backend/common:common\" --distpath src/backend ./src/backend/snitch.py",
+    "make": "npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make",
+    "build-backend": "pip3 install -r src/backend/requirements.txt --user --break-system-packages && python3 -m PyInstaller --hidden-import encodings --onedir -y --add-data \"src/backend/common:common\" --distpath src/backend ./src/backend/snitch.py",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish"
   },
   "publishConfig": {

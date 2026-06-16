@@ -1574,7 +1574,7 @@ function processFile(file) {
   document.getElementById("loading-text").textContent = "Loading packets...";
   let loadedSessionState = null;
   const reader = new FileReader();
-  reader.onload = (event) => {
+  reader.onload = async (event) => {
     const mainPanel = getCachedElement("main");
     if (isValidJson(event.target.result) == false) {
       console.log("Invalid JSON file");
@@ -1596,7 +1596,7 @@ function processFile(file) {
         "MB)...",
       );
       parseJsonChunked(event.target.result)
-        .then((parsed) => {
+        .then(async (parsed) => {
           const normalizedPayload = normalizeLoadedSessionPayload(parsed);
           if (!normalizedPayload) {
             doError(
@@ -1611,7 +1611,7 @@ function processFile(file) {
           loadedSessionState = normalizedPayload.sessionState;
           jsonCapture = JSON.stringify(capturedPackets, null, 2);
           finalSummary = capturedPackets["Final Summary"] ?? "";
-          finishProcessingFile();
+          await finishProcessingFile();
         })
         .catch((e) => {
           console.error("JSON parse error:", e);
@@ -1633,11 +1633,11 @@ function processFile(file) {
       loadedSessionState = normalizedPayload.sessionState;
       jsonCapture = JSON.stringify(capturedPackets, null, 2);
       finalSummary = capturedPackets["Final Summary"] ?? "";
-      finishProcessingFile();
+      await finishProcessingFile();
     }
   };
 
-  function finishProcessingFile() {
+  async function finishProcessingFile() {
     getCachedElement("target_hosts").hidden = false;
     getCachedElement("summary-btn").style.display = "block";
     // Reset host list and dropdowns for the new file
@@ -1664,10 +1664,7 @@ function processFile(file) {
       isFileLoaded = true;
     }
     writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
-    const keystoreEntryCount = keystorePanel.rebuildSessionEntries();
-    writeLogEntry(
-      `Session keychain auto-populated entries=${keystoreEntryCount}`,
-    );
+
     const timeframe = getPacketTimeframe();
     if (timeframe) {
       writeLogEntry(
@@ -1682,6 +1679,11 @@ function processFile(file) {
       restoreSessionState(loadedSessionState);
     }
     else {
+      statusUpdate("Status: Auto-populating keychain from packet data...");
+      const keystoreEntryCount = await keystorePanel.rebuildSessionEntries();
+      writeLogEntry(
+        `Session keychain auto-populated entries=${keystoreEntryCount}`,
+      );
       statusUpdate("Status: File loaded successfully");
       writeLogEntry("New session initialized: created new session state");
       document.getElementById("total-packets").textContent = "Total Packets: " + totalPacketCount();

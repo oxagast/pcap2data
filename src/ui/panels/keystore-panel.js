@@ -46,6 +46,8 @@ const SESSION_SECRET_IGNORE_KEY_HINTS = [
   "frame",
   "packet",
 ];
+const SESSION_AUTO_BUILD_CHUNK_SIZE = 50;
+const SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE = 120;
 
 function createKeystorePanel({
   statusUpdate,
@@ -74,6 +76,7 @@ function createKeystorePanel({
   let cryptKeystoreUnlockDialogMode = "unlock";
   let cryptManualUriDialogResolver = null;
   let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
+  let sessionRebuildGeneration = 0;
 
   function generateCryptEntryId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -507,11 +510,286 @@ function createKeystorePanel({
     }
   }
 
-  function buildSessionAutoKeystoreEntries() {
+  function yieldToBrowserThread() {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+  }
+
+  function keystoreTokenWorkerThread() {
+    const DEFAULT_CHUNK_SIZE = 120;
+
+    function normalizeValue(value) {
+      if (value === null || value === undefined) return "";
+      const normalized =
+        typeof value === "string"
+          ? value
+          : typeof value === "number"
+            ? String(value)
+            : "";
+      return normalized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+    }
+
+    function hashForDedupe(content) {
+      let hash = 2166136261;
+      for (let index = 0; index < content.length; index++) {
+        hash ^= content.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0).toString(16);
+    }
+
+    function collectLeafValues(source, visit, parentPath = "") {
+      if (!source || typeof source !== "object") return;
+      for (const [key, value] of Object.entries(source)) {
+        const nextPath = parentPath ? `${parentPath}.${key}` : key;
+        if (value && typeof value === "object") {
+          collectLeafValues(value, visit, nextPath);
+          continue;
+        }
+        visit(nextPath, value);
+      }
+    }
+
+    function detectTokenMatches(rawText, pathKey) {
+      const matches = [];
+      const text = normalizeValue(rawText);
+      if (!text) return matches;
+      const lowerPath = String(pathKey || "").toLowerCase();
+
+      const addMatch = (type, token) => {
+        const normalizedToken = normalizeValue(token);
+        if (!normalizedToken) return;
+        matches.push({ type, content: normalizedToken });
+      };
+
+      const regexExtract = (regex, type) => {
+        regex.lastIndex = 0;
+        let regexMatch;
+        while ((regexMatch = regex.exec(text)) !== null) {
+          addMatch(type, regexMatch[0]);
+        }
+      };
+
+      regexExtract(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "aws-access-key");
+      regexExtract(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "github-token");
+      regexExtract(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "github-token");
+      regexExtract(/\bmfa\.[A-Za-z0-9_-]{80,}\b/g, "discord-token");
+      regexExtract(
+        /\b[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b/g,
+        "discord-token",
+      );
+      regexExtract(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "jwt-token");
+      regexExtract(/\bya29\.[A-Za-z0-9._-]{20,}\b/g, "oauth-token");
+
+      if (/\bBearer\s+[A-Za-z0-9._~-]{20,}\b/i.test(text)) {
+        const bearerToken = text.replace(/^.*?\bBearer\s+/i, "").trim();
+        addMatch("oauth-token", bearerToken);
+      }
+
+      const hasLikelySecretKeyName =
+        lowerPath.includes("token") ||
+        lowerPath.includes("apikey") ||
+        lowerPath.includes("api_key") ||
+        lowerPath.includes("api-key") ||
+        lowerPath.includes("oauth") ||
+        lowerPath.includes("authorization") ||
+        lowerPath.includes("auth") ||
+        lowerPath.includes("discord") ||
+        lowerPath.includes("github") ||
+        lowerPath.includes("azure") ||
+        lowerPath.includes("aws") ||
+        lowerPath.includes("secret") ||
+        lowerPath.includes("accountkey");
+
+      if (hasLikelySecretKeyName) {
+        const normalizedCandidate = text.replace(/^bearer\s+/i, "").trim();
+        if (normalizedCandidate.length >= 20) {
+          let inferredType = "api-token";
+          if (lowerPath.includes("oauth")) inferredType = "oauth-token";
+          else if (lowerPath.includes("discord")) inferredType = "discord-token";
+          else if (lowerPath.includes("github")) inferredType = "github-token";
+          else if (lowerPath.includes("aws")) inferredType = "aws-secret-key";
+          else if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
+            inferredType = "azure-key";
+          }
+          addMatch(inferredType, normalizedCandidate);
+        }
+      }
+
+      const accountKeyMatch = text.match(/AccountKey=([^;\s]+)/i);
+      if (accountKeyMatch?.[1]) {
+        addMatch("azure-key", accountKeyMatch[1]);
+      }
+
+      if (/^[A-Za-z0-9+/]{43}=$/.test(text) || /^[A-Za-z0-9+/]{86}==$/.test(text)) {
+        if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
+          addMatch("azure-key", text);
+        }
+      }
+
+      if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
+        addMatch("aws-secret-key", text);
+      }
+
+      return matches;
+    }
+
+    self.onmessage = (event) => {
+      const payload = event?.data || {};
+      if (payload.type !== "scan") return;
+      const packets = Array.isArray(payload.packets) ? payload.packets : [];
+      const chunkSize =
+        Number.isInteger(payload.chunkSize) && payload.chunkSize > 0
+          ? payload.chunkSize
+          : DEFAULT_CHUNK_SIZE;
+      const dedupe = new Set();
+      const discoveredEntries = [];
+
+      const pushEntry = ({
+        type,
+        content,
+        host,
+        pathKey,
+        packetIndex,
+        protocol,
+      }) => {
+        const normalizedContent = normalizeValue(content);
+        if (!normalizedContent) return;
+        const fingerprint = `${type}|${hashForDedupe(normalizedContent)}`;
+        if (dedupe.has(fingerprint)) return;
+        dedupe.add(fingerprint);
+        discoveredEntries.push({
+          type,
+          label: `${type.toUpperCase()} ${normalizedContent.slice(0, 64)}`,
+          source: "session-auto-token",
+          content: normalizedContent,
+          summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
+          packetIndex,
+          protocol,
+          createdAt: new Date().toISOString(),
+        });
+      };
+
+      function scanPacket(packetRecord) {
+        const host = packetRecord?.host || "Unknown";
+        const packet = packetRecord?.packet || {};
+        const packetInfo = packet?.["Packet Info"] || {};
+        const protocol = packetInfo?.["Protocol"] || "Unknown";
+        const packetIndex = packetInfo?.["Index"] ?? "?";
+        const transportData =
+          packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
+        const extraInfo = packet?.["Extra Info"] || {};
+        const roots = [transportData, extraInfo];
+
+        roots.forEach((root) => {
+          collectLeafValues(root, (pathKey, rawValue) => {
+            const tokenMatches = detectTokenMatches(rawValue, pathKey);
+            tokenMatches.forEach(({ type, content }) => {
+              pushEntry({
+                type,
+                content,
+                host,
+                pathKey,
+                packetIndex,
+                protocol,
+              });
+            });
+          });
+        });
+      }
+
+      function processChunk(startIndex) {
+        const endIndex = Math.min(startIndex + chunkSize, packets.length);
+        for (let index = startIndex; index < endIndex; index++) {
+          scanPacket(packets[index]);
+        }
+        if (endIndex < packets.length) {
+          setTimeout(() => processChunk(endIndex), 0);
+          return;
+        }
+        self.postMessage({
+          type: "done",
+          entries: discoveredEntries,
+        });
+      }
+
+      processChunk(0);
+    };
+  }
+
+  function createSessionTokenWorker() {
+    if (
+      typeof Worker !== "function" ||
+      typeof Blob !== "function" ||
+      !window.URL ||
+      typeof window.URL.createObjectURL !== "function"
+    ) {
+      return null;
+    }
+    const source = `(${keystoreTokenWorkerThread.toString()})();`;
+    const workerBlob = new Blob([source], {
+      type: "application/javascript",
+    });
+    const workerUrl = window.URL.createObjectURL(workerBlob);
+    const worker = new Worker(workerUrl);
+    window.URL.revokeObjectURL(workerUrl);
+    return worker;
+  }
+
+  function scanSessionTokensInWorker(packetRecords) {
+    const worker = createSessionTokenWorker();
+    if (!worker || !Array.isArray(packetRecords) || packetRecords.length === 0) {
+      return Promise.resolve([]);
+    }
+
+    return new Promise((resolve) => {
+      let didResolve = false;
+      const resolveOnce = (entries) => {
+        if (didResolve) return;
+        didResolve = true;
+        worker.terminate();
+        resolve(Array.isArray(entries) ? entries : []);
+      };
+
+      worker.onerror = (error) => {
+        logErrorEntry("crypt-keystore-token-worker", error);
+        resolveOnce([]);
+      };
+
+      worker.onmessage = (event) => {
+        const payload = event?.data || {};
+        if (payload.type === "done") {
+          resolveOnce(payload.entries);
+        }
+      };
+
+      worker.postMessage({
+        type: "scan",
+        packets: packetRecords,
+        chunkSize: SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE,
+      });
+    });
+  }
+
+  async function buildSessionAutoKeystoreEntries() {
     const generatedEntries = [];
     const dedupe = new Set();
     const hosts = getCapturedPackets()?.Host;
     if (!hosts || typeof hosts !== "object") return generatedEntries;
+
+    const packetRecords = [];
+    Object.entries(hosts).forEach(([host, packets]) => {
+      if (!Array.isArray(packets)) return;
+      packets.forEach((packet) => {
+        packetRecords.push({
+          host,
+          packet,
+        });
+      });
+    });
+
+    const tokenScanPromise = scanSessionTokensInWorker(packetRecords);
 
     const pushSessionEntry = ({
       type = "secret",
@@ -540,9 +818,16 @@ function createKeystorePanel({
       });
     };
 
-    Object.entries(hosts).forEach(([host, packets]) => {
-      if (!Array.isArray(packets)) return;
-      packets.forEach((packet) => {
+    for (
+      let recordIndex = 0;
+      recordIndex < packetRecords.length;
+      recordIndex += SESSION_AUTO_BUILD_CHUNK_SIZE
+    ) {
+      const chunk = packetRecords.slice(
+        recordIndex,
+        recordIndex + SESSION_AUTO_BUILD_CHUNK_SIZE,
+      );
+      chunk.forEach(({ host, packet }) => {
         const packetInfo = packet?.["Packet Info"] || {};
         const protocol = packetInfo?.["Protocol"] ?? "Unknown";
         const transportData =
@@ -628,6 +913,13 @@ function createKeystorePanel({
           }
         }
       });
+
+      await yieldToBrowserThread();
+    }
+
+    const tokenEntries = await tokenScanPromise;
+    tokenEntries.forEach((tokenEntry) => {
+      pushSessionEntry(tokenEntry);
     });
 
     return generatedEntries.sort((a, b) => {
@@ -1311,6 +1603,7 @@ function createKeystorePanel({
       return !!cryptKeystoreUnlockKeyMaterial;
     },
     restoreSessionState(sessionKeychainEntries, keystoreMode) {
+      sessionRebuildGeneration += 1;
       cryptSessionKeystoreEntries = sessionKeychainEntries;
       if (
         keystoreMode === CRYPT_KEYSTORE_MODE_SESSION ||
@@ -1319,11 +1612,20 @@ function createKeystorePanel({
         cryptActiveKeystoreMode = keystoreMode;
       }
     },
-    rebuildSessionEntries() {
-      cryptSessionKeystoreEntries = buildSessionAutoKeystoreEntries();
+    async rebuildSessionEntries() {
+      const rebuildGeneration = ++sessionRebuildGeneration;
+      const generatedEntries = await buildSessionAutoKeystoreEntries();
+      if (rebuildGeneration !== sessionRebuildGeneration) {
+        return cryptSessionKeystoreEntries.length;
+      }
+      cryptSessionKeystoreEntries = generatedEntries;
+      if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+        renderCryptKeystoreList();
+      }
       return cryptSessionKeystoreEntries.length;
     },
     resetKeystoreState() {
+      sessionRebuildGeneration += 1;
       cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
       cryptSessionKeystoreEntries = [];
       cryptPersistentKeystoreEntries = [];
