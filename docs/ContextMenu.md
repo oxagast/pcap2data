@@ -123,15 +123,26 @@ Save and export packet and session data.
 
 ---
 
-### HTTP File...
+### HTTP Body...
 
 Shown only when the current packet contains an HTTP response body.
 
-| Item                        | Description                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Save body to file**       | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
-| **Load body into Conv**     | Load the HTTP body bytes as hex into the Conv tab and run conversion.                           |
-| **Preview in browser**      | Open the HTTP body in the system's default web browser for preview.                             |
+| Item                    | Description                                                           |
+| ----------------------- | --------------------------------------------------------------------- |
+| **Load body into Conv** | Load the HTTP body bytes as hex into the Conv tab and run conversion. |
+| **Preview in browser**  | Open the HTTP body in the system's default web browser for preview.   |
+
+---
+
+### File Carving...
+
+Shown when at least one carve target is available for the current packet or stream.
+
+| Item                    | Description                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| **HTTP body to file**   | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
+| **SMB file to disk**    | Detect files transferred in the current SMB stream, let you pick one, then save it as binary.  |
+| **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
 
 ---
 

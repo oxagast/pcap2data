@@ -79,6 +79,10 @@ function initializeLogging({
   }
 
   function writeConsoleLogEntry(message) {
+    if (message.includes("0.0.0.0")) {
+      // this is the dummy structure packet
+      return;
+    }
     if (message.length > 300) {
       message = message.substring(0, 300) + " [truncated]";
     }

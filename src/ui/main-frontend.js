@@ -1666,15 +1666,18 @@ function processFile(file) {
       targetHostsDropdown.appendChild(newhost);
       isFileLoaded = true;
     }
-    writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
-
+    if (hostsList.length > 1) {
+      writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
+    }
     const timeframe = getPacketTimeframe();
     if (timeframe) {
       writeLogEntry(
         `Packet timeframe start="${timeframe.first}" end="${timeframe.last}"`,
       );
     }
-    writeLogEntry(`Total packet count=${totalPacketCount()}`);
+    if (totalPacketCount() > 1) {
+      writeLogEntry(`Total packet count=${totalPacketCount()}`);
+    }
     clearFilterQuery();
     syncFilterHighlight();
     isFileLoaded = true;
@@ -3788,6 +3791,8 @@ const convertContextButtons = {
   httpFileSave: getCachedElement("ctx-http-file-save"),
   httpFileLoad: getCachedElement("ctx-http-file-load"),
   httpFilePreview: getCachedElement("ctx-http-file-preview"),
+  fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
+  fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
 };
@@ -3809,6 +3814,7 @@ const convertContextSubmenus = {
   keystoreCookie: getCachedElement("ctx-keystore-cookie-submenu"),
   keystoreUri: getCachedElement("ctx-keystore-uri-submenu"),
   httpFile: getCachedElement("ctx-http-file-submenu"),
+  fileCarve: getCachedElement("ctx-file-carve-submenu"),
   followStream: getCachedElement("ctx-follow-stream-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
@@ -4322,6 +4328,10 @@ function showConvertContextMenu(
   const currentPayloadHex = getCurrentRawPayloadHex();
   const hasPayloadToExport = Boolean(currentPayloadHex);
   const hasHttpBody = Boolean(getCurrentHttpBodyHex());
+  const canCarveSmbStream = canCarveCurrentStreamForProtocol("smb");
+  const canCarveNfsStream = canCarveCurrentStreamForProtocol("nfs");
+  const hasFileCarveActions =
+    hasHttpBody || canCarveSmbStream || canCarveNfsStream;
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
     : "none";
@@ -4335,6 +4345,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.httpFilePreview.style.display = hasHttpBody
+    ? "block"
+    : "none";
+  convertContextButtons.fileCarveSmb.style.display = canCarveSmbStream
+    ? "block"
+    : "none";
+  convertContextButtons.fileCarveNfs.style.display = canCarveNfsStream
     ? "block"
     : "none";
 
@@ -4538,6 +4554,9 @@ function showConvertContextMenu(
   convertContextSubmenus.httpFile.style.display = hasHttpBody
     ? "block"
     : "none";
+  convertContextSubmenus.fileCarve.style.display = hasFileCarveActions
+    ? "block"
+    : "none";
   const hasFollowStreamActions = Boolean(getCurrentStreamTuple());
   convertContextSubmenus.followStream.style.display = hasFollowStreamActions
     ? "block"
@@ -4552,6 +4571,7 @@ function showConvertContextMenu(
     !hasKeystoreActions &&
     !hasExportActions &&
     !hasHttpBody &&
+    !hasFileCarveActions &&
     !hasFollowStreamActions
   ) {
     hideConvertContextMenu();
@@ -4563,11 +4583,12 @@ function showConvertContextMenu(
         isHexViewTarget ||
         hasFilterActions ||
         hasExportActions ||
-        hasHttpBody)
+        hasHttpBody ||
+        hasFileCarveActions)
       ? "block"
       : "none";
   convertContextSaveDividerEl.style.display =
-    (hasExportActions || hasHttpBody) &&
+    (hasExportActions || hasHttpBody || hasFileCarveActions) &&
       (hasClipboardActions ||
         hasDataTypeActions ||
         isHexViewTarget ||
@@ -4806,6 +4827,546 @@ function buildStreamHex(streamPackets) {
     }
   }
   return combined || null;
+}
+
+function alignTo4(value) {
+  return (value + 3) & ~3;
+}
+
+function bytesToHexString(bytes) {
+  return Array.from(bytes || [])
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function getPacketPayloadHex(packet) {
+  const payloadHex =
+    packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+  return typeof payloadHex === "string" ? payloadHex : "";
+}
+
+function getPacketPayloadBytes(packet) {
+  const payloadHex = getPacketPayloadHex(packet);
+  if (!payloadHex) return null;
+  try {
+    return parseDataToolsInput("hex", payloadHex);
+  } catch {
+    return null;
+  }
+}
+
+function getPacketTransportData(packet) {
+  const packetInfo = packet?.["Packet Info"];
+  if (!packetInfo) return null;
+  const protocol = packetInfo["Protocol"] || "TCP";
+  return packetInfo[protocol] || null;
+}
+
+function readUint32Le(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 4 > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(offset, true);
+}
+
+function readUint16Le(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 2 > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint16(offset, true);
+}
+
+function readUint32Be(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 4 > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return view.getUint32(offset, false);
+}
+
+function readUint64LeNumber(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 8 > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (typeof view.getBigUint64 === "function") {
+    const value = view.getBigUint64(offset, true);
+    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+    if (value > maxSafe) return null;
+    return Number(value);
+  }
+  const low = view.getUint32(offset, true);
+  const high = view.getUint32(offset + 4, true);
+  if (high > 0x1fffff) return null;
+  return high * 0x100000000 + low;
+}
+
+function readUint64BeNumber(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 8 > bytes.length) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (typeof view.getBigUint64 === "function") {
+    const value = view.getBigUint64(offset, false);
+    const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+    if (value > maxSafe) return null;
+    return Number(value);
+  }
+  const high = view.getUint32(offset, false);
+  const low = view.getUint32(offset + 4, false);
+  if (high > 0x1fffff) return null;
+  return high * 0x100000000 + low;
+}
+
+function readUint64LeHex(bytes, offset) {
+  if (!bytes || offset < 0 || offset + 8 > bytes.length) return "";
+  return bytesToHexString(bytes.slice(offset, offset + 8).reverse());
+}
+
+function decodeUtf16Le(bytes) {
+  if (!bytes || bytes.length === 0) return "";
+  const maxLen = bytes.length - (bytes.length % 2);
+  const evenBytes = bytes.slice(0, maxLen);
+  try {
+    return new TextDecoder("utf-16le").decode(evenBytes).replace(/\u0000/g, "");
+  } catch {
+    return "";
+  }
+}
+
+function sanitizeCarveFilename(name) {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  const parts = raw.split(/[\\/]/).filter(Boolean);
+  const leaf = parts.length ? parts[parts.length - 1] : raw;
+  return leaf.replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim();
+}
+
+function addSegmentToEntry(entry, offset, bytes) {
+  if (!entry || !Number.isInteger(offset) || offset < 0) return;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+  entry.segments.push({ offset, bytes });
+}
+
+function assembleSegments(segments) {
+  if (!Array.isArray(segments) || segments.length === 0) return null;
+  const ordered = segments
+    .filter(
+      (segment) =>
+        segment &&
+        Number.isInteger(segment.offset) &&
+        segment.offset >= 0 &&
+        segment.bytes instanceof Uint8Array &&
+        segment.bytes.length > 0,
+    )
+    .sort((a, b) => a.offset - b.offset);
+  if (!ordered.length) return null;
+  const totalLength = ordered.reduce(
+    (maxLength, segment) =>
+      Math.max(maxLength, segment.offset + segment.bytes.length),
+    0,
+  );
+  if (!Number.isFinite(totalLength) || totalLength <= 0) return null;
+  const output = new Uint8Array(totalLength);
+  ordered.forEach((segment) => {
+    output.set(segment.bytes, segment.offset);
+  });
+  return output;
+}
+
+function extractSmbFileCandidates(streamPackets) {
+  const fileEntries = new Map();
+  const createRequestByMessageId = new Map();
+  const readRequestByMessageId = new Map();
+  const fileIdToName = new Map();
+
+  const getOrCreateFileEntry = (fileId) => {
+    if (!fileEntries.has(fileId)) {
+      fileEntries.set(fileId, {
+        fileId,
+        name: "",
+        segments: [],
+      });
+    }
+    return fileEntries.get(fileId);
+  };
+
+  streamPackets.forEach((packet) => {
+    const transportData = getPacketTransportData(packet);
+    if (!transportData?.["SMB"]) return;
+    const payload = getPacketPayloadBytes(packet);
+    if (!payload || payload.length < 64) return;
+    if (
+      payload[0] !== 0xfe ||
+      payload[1] !== 0x53 ||
+      payload[2] !== 0x4d ||
+      payload[3] !== 0x42
+    ) {
+      return;
+    }
+
+    const command = readUint16Le(payload, 12);
+    const flags = readUint32Le(payload, 16);
+    const messageId = readUint64LeHex(payload, 24);
+    if (command === null || flags === null || !messageId) return;
+    const isResponse = Boolean(flags & 0x00000001);
+
+    if (command === 0x0005) {
+      if (!isResponse) {
+        const nameOffset = readUint16Le(payload, 108);
+        const nameLength = readUint16Le(payload, 110);
+        if (
+          nameOffset !== null &&
+          nameLength !== null &&
+          nameLength > 0 &&
+          nameOffset + nameLength <= payload.length
+        ) {
+          const rawName = decodeUtf16Le(
+            payload.slice(nameOffset, nameOffset + nameLength),
+          );
+          const cleanedName = rawName.trim();
+          if (cleanedName) {
+            createRequestByMessageId.set(messageId, cleanedName);
+          }
+        }
+      } else {
+        if (payload.length < 144) return;
+        const fileId = bytesToHexString(payload.slice(128, 144));
+        if (!fileId) return;
+        const fileName = createRequestByMessageId.get(messageId) || "";
+        if (fileName) fileIdToName.set(fileId, fileName);
+        const entry = getOrCreateFileEntry(fileId);
+        if (fileName) entry.name = fileName;
+      }
+      return;
+    }
+
+    if (command === 0x0009 && !isResponse) {
+      const dataOffset = readUint16Le(payload, 66);
+      const dataLength = readUint32Le(payload, 68);
+      const fileOffset = readUint64LeNumber(payload, 72);
+      if (
+        dataOffset === null ||
+        dataLength === null ||
+        fileOffset === null ||
+        payload.length < 96
+      ) {
+        return;
+      }
+      const fileId = bytesToHexString(payload.slice(80, 96));
+      if (!fileId || dataLength === 0) return;
+      const dataEnd = dataOffset + dataLength;
+      if (dataOffset < 0 || dataEnd > payload.length) return;
+      const chunk = payload.slice(dataOffset, dataEnd);
+      const entry = getOrCreateFileEntry(fileId);
+      if (!entry.name && fileIdToName.has(fileId)) {
+        entry.name = fileIdToName.get(fileId);
+      }
+      addSegmentToEntry(entry, fileOffset, chunk);
+      return;
+    }
+
+    if (command === 0x0008) {
+      if (!isResponse) {
+        const fileOffset = readUint64LeNumber(payload, 72);
+        if (fileOffset === null || payload.length < 96) return;
+        const fileId = bytesToHexString(payload.slice(80, 96));
+        if (!fileId) return;
+        readRequestByMessageId.set(messageId, {
+          fileId,
+          fileOffset,
+        });
+        return;
+      }
+
+      const readRequest = readRequestByMessageId.get(messageId);
+      if (!readRequest) return;
+      const dataOffset = payload[66];
+      const dataLength = readUint32Le(payload, 68);
+      if (dataLength === null || dataLength === 0) return;
+      const dataEnd = dataOffset + dataLength;
+      if (dataOffset < 0 || dataEnd > payload.length) return;
+      const chunk = payload.slice(dataOffset, dataEnd);
+      const entry = getOrCreateFileEntry(readRequest.fileId);
+      if (!entry.name && fileIdToName.has(readRequest.fileId)) {
+        entry.name = fileIdToName.get(readRequest.fileId);
+      }
+      addSegmentToEntry(entry, readRequest.fileOffset, chunk);
+    }
+  });
+
+  const candidates = [];
+  for (const entry of fileEntries.values()) {
+    const bytes = assembleSegments(entry.segments);
+    if (!bytes || bytes.length === 0) continue;
+    const cleanName = sanitizeCarveFilename(entry.name);
+    const fallbackId = entry.fileId.slice(0, 12) || "unknown";
+    const label = cleanName
+      ? `${cleanName} (${bytes.length} bytes)`
+      : `SMB file ${fallbackId} (${bytes.length} bytes)`;
+    candidates.push({
+      label,
+      fileName: cleanName || `smb-file-${fallbackId}.bin`,
+      bytes,
+    });
+  }
+  return candidates;
+}
+
+function parseRpcBaseOffset(payload) {
+  if (!payload || payload.length < 8) return 0;
+  const recordMark = readUint32Be(payload, 0);
+  if (recordMark === null) return 0;
+  if ((recordMark & 0x80000000) !== 0) {
+    const fragmentLength = recordMark & 0x7fffffff;
+    if (fragmentLength > 0 && fragmentLength + 4 <= payload.length) {
+      return 4;
+    }
+  }
+  return 0;
+}
+
+function parseRpcCallArgsOffset(payload, baseOffset) {
+  let cursor = baseOffset + 24;
+  if (cursor + 8 > payload.length) return null;
+  const credentialLength = readUint32Be(payload, cursor + 4);
+  if (credentialLength === null) return null;
+  cursor = alignTo4(cursor + 8 + credentialLength);
+  if (cursor + 8 > payload.length) return null;
+  const verifierLength = readUint32Be(payload, cursor + 4);
+  if (verifierLength === null) return null;
+  cursor = alignTo4(cursor + 8 + verifierLength);
+  if (cursor > payload.length) return null;
+  return cursor;
+}
+
+function parseRpcReplyResultsOffset(payload, baseOffset) {
+  let cursor = baseOffset + 8;
+  if (cursor + 4 > payload.length) return null;
+  const replyStatus = readUint32Be(payload, cursor);
+  if (replyStatus !== 0) return null;
+  cursor += 4;
+  if (cursor + 8 > payload.length) return null;
+  const verifierLength = readUint32Be(payload, cursor + 4);
+  if (verifierLength === null) return null;
+  cursor = alignTo4(cursor + 8 + verifierLength);
+  if (cursor + 4 > payload.length) return null;
+  const acceptStatus = readUint32Be(payload, cursor);
+  if (acceptStatus !== 0) return null;
+  cursor += 4;
+  return cursor <= payload.length ? cursor : null;
+}
+
+function parseRpcOpaque(payload, offset) {
+  if (!payload || offset < 0 || offset + 4 > payload.length) return null;
+  const length = readUint32Be(payload, offset);
+  if (length === null) return null;
+  const dataStart = offset + 4;
+  const dataEnd = dataStart + length;
+  if (dataEnd > payload.length) return null;
+  const nextOffset = alignTo4(dataEnd);
+  if (nextOffset > payload.length) return null;
+  return {
+    data: payload.slice(dataStart, dataEnd),
+    nextOffset,
+  };
+}
+
+function extractNfsFileCandidates(streamPackets) {
+  const fileEntries = new Map();
+  const readRequestByXid = new Map();
+
+  const getOrCreateFileEntry = (handleHex) => {
+    if (!fileEntries.has(handleHex)) {
+      fileEntries.set(handleHex, {
+        handleHex,
+        segments: [],
+      });
+    }
+    return fileEntries.get(handleHex);
+  };
+
+  streamPackets.forEach((packet) => {
+    const transportData = getPacketTransportData(packet);
+    if (!transportData?.["NFS"]) return;
+    const payload = getPacketPayloadBytes(packet);
+    if (!payload || payload.length < 24) return;
+
+    const baseOffset = parseRpcBaseOffset(payload);
+    const xidValue = readUint32Be(payload, baseOffset);
+    const msgType = readUint32Be(payload, baseOffset + 4);
+    if (xidValue === null || msgType === null) return;
+    const xid = xidValue.toString(16).padStart(8, "0");
+
+    if (msgType === 0) {
+      const program = readUint32Be(payload, baseOffset + 12);
+      const procedure = readUint32Be(payload, baseOffset + 20);
+      if (program !== 100003 || procedure === null) return;
+      const argsOffset = parseRpcCallArgsOffset(payload, baseOffset);
+      if (argsOffset === null) return;
+      const fileHandleOpaque = parseRpcOpaque(payload, argsOffset);
+      if (!fileHandleOpaque) return;
+      const handleHex = bytesToHexString(fileHandleOpaque.data);
+      if (!handleHex) return;
+
+      if (procedure === 6) {
+        const readOffset = readUint64BeNumber(payload, fileHandleOpaque.nextOffset);
+        if (readOffset === null) return;
+        readRequestByXid.set(xid, {
+          handleHex,
+          readOffset,
+        });
+        return;
+      }
+
+      if (procedure === 7) {
+        const writeOffset = readUint64BeNumber(payload, fileHandleOpaque.nextOffset);
+        if (writeOffset === null) return;
+        const dataOpaque = parseRpcOpaque(payload, fileHandleOpaque.nextOffset + 16);
+        if (!dataOpaque || dataOpaque.data.length === 0) return;
+        const entry = getOrCreateFileEntry(handleHex);
+        addSegmentToEntry(entry, writeOffset, dataOpaque.data);
+      }
+      return;
+    }
+
+    if (msgType !== 1) return;
+    const readRequest = readRequestByXid.get(xid);
+    if (!readRequest) return;
+    const resultOffset = parseRpcReplyResultsOffset(payload, baseOffset);
+    if (resultOffset === null) return;
+    const nfsStatus = readUint32Be(payload, resultOffset);
+    if (nfsStatus !== 0) return;
+
+    let cursor = resultOffset + 4;
+    const hasAttributes = readUint32Be(payload, cursor);
+    if (hasAttributes === null) return;
+    cursor += 4;
+    if (hasAttributes !== 0) {
+      if (cursor + 84 > payload.length) return;
+      cursor += 84;
+    }
+    const dataLength = readUint32Be(payload, cursor + 8);
+    if (dataLength === null || dataLength === 0) return;
+    const dataStart = cursor + 12;
+    const dataEnd = dataStart + dataLength;
+    if (dataEnd > payload.length) return;
+    const chunk = payload.slice(dataStart, dataEnd);
+    const entry = getOrCreateFileEntry(readRequest.handleHex);
+    addSegmentToEntry(entry, readRequest.readOffset, chunk);
+  });
+
+  const candidates = [];
+  for (const entry of fileEntries.values()) {
+    const bytes = assembleSegments(entry.segments);
+    if (!bytes || bytes.length === 0) continue;
+    const handlePreview = entry.handleHex.slice(0, 12) || "unknown";
+    candidates.push({
+      label: `NFS handle ${handlePreview} (${bytes.length} bytes)`,
+      fileName: `nfs-file-${handlePreview}.bin`,
+      bytes,
+    });
+  }
+  return candidates;
+}
+
+function buildFileCarveCandidatesForProtocol(protocolName, streamPackets) {
+  const normalized = String(protocolName || "").toLowerCase().trim();
+  if (normalized === "smb") return extractSmbFileCandidates(streamPackets);
+  if (normalized === "nfs") return extractNfsFileCandidates(streamPackets);
+  return [];
+}
+
+function canCarveCurrentStreamForProtocol(protocolName) {
+  const normalized = String(protocolName || "").toLowerCase().trim();
+  if (!normalized) return false;
+  const streamPackets = getFollowStreamPackets();
+  if (!streamPackets.length) return false;
+  const candidates = buildFileCarveCandidatesForProtocol(
+    normalized,
+    streamPackets,
+  );
+  return candidates.length > 0;
+}
+
+function selectCarveCandidate(candidates, protocolLabel) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  const visibleOptions = candidates.slice(0, 20);
+  const optionsText = visibleOptions
+    .map((candidate, optionIndex) => `${optionIndex + 1}. ${candidate.label}`)
+    .join("\n");
+  const promptText =
+    `Select ${protocolLabel} file to carve:` +
+    `\n${optionsText}` +
+    (candidates.length > visibleOptions.length
+      ? `\n... ${candidates.length - visibleOptions.length} more omitted`
+      : "") +
+    "\nEnter number:";
+  const userChoice = window.prompt(promptText, "1");
+  if (userChoice === null) return null;
+  const parsedChoice = Number.parseInt(userChoice.trim(), 10);
+  if (
+    !Number.isInteger(parsedChoice) ||
+    parsedChoice < 1 ||
+    parsedChoice > visibleOptions.length
+  ) {
+    statusUpdate("Status: Invalid file selection for carving");
+    return null;
+  }
+  return visibleOptions[parsedChoice - 1];
+}
+
+function carveCurrentStreamToFileFromContextMenu(protocolName) {
+  hideConvertContextMenu();
+  const normalized = String(protocolName || "").toLowerCase().trim();
+  const protocolLabel = normalized.toUpperCase();
+  if (!normalized) {
+    statusUpdate("Status: Unsupported carve protocol");
+    return;
+  }
+
+  const streamPackets = getFollowStreamPackets();
+  if (!streamPackets.length) {
+    statusUpdate("Status: No stream packets found for current packet");
+    return;
+  }
+
+  const candidates = buildFileCarveCandidatesForProtocol(
+    normalized,
+    streamPackets,
+  );
+  if (!candidates.length) {
+    statusUpdate(`Status: No ${protocolLabel} file data found in this stream`);
+    return;
+  }
+
+  const selectedCandidate = selectCarveCandidate(candidates, protocolLabel);
+  if (!selectedCandidate) {
+    statusUpdate("Status: File carving cancelled");
+    return;
+  }
+
+  const payloadHex = bytesToHexString(selectedCandidate.bytes);
+  if (!payloadHex) {
+    statusUpdate("Status: Selected file has no bytes to export");
+    return;
+  }
+
+  window.saveapi.savePayload(payloadHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate(`Status: ${protocolLabel} file carved successfully`);
+      writeLogEntry(
+        `${protocolLabel} file carve exported label="${selectedCandidate.label}" bytes=${selectedCandidate.bytes.length}`,
+      );
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError(`${protocolLabel} file carve failed`);
+      logErrorEntry(`file-carve-${normalized}`, errorMessage || "unknown");
+      statusUpdate(
+        `Status: ${protocolLabel} file carve failed - ${errorMessage || "unknown error"}`,
+      );
+      console.error(`${protocolLabel} file carve failed:`, errorMessage);
+    }
+  });
 }
 
 function followStreamToConv() {
@@ -5963,6 +6524,12 @@ convertContextButtons.httpFileLoad.addEventListener(
 convertContextButtons.httpFilePreview.addEventListener(
   "click",
   previewHttpBodyInBrowserFromContextMenu,
+);
+convertContextButtons.fileCarveSmb.addEventListener("click", () =>
+  carveCurrentStreamToFileFromContextMenu("smb"),
+);
+convertContextButtons.fileCarveNfs.addEventListener("click", () =>
+  carveCurrentStreamToFileFromContextMenu("nfs"),
 );
 convertContextButtons.followStreamConv.addEventListener(
   "click",
