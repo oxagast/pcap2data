@@ -30,11 +30,26 @@ function buildCaptureStats(capturedPackets) {
   const locations = new Map();
   const hostnames = new Set();
   const dataTypes = new Set();
+  const streams = new Map();
   let encryptedCount = 0;
   let unencryptedCount = 0;
   let totalPackets = 0;
 
   if (!capturedPackets || !capturedPackets["Host"]) return null;
+
+  const getStreamKey = (packetInfo) => {
+    const transportName = packetInfo?.["Protocol"] || "Unknown";
+    const transportData = packetInfo?.[transportName] || {};
+    const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
+    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
+    const sourcePort = transportData?.["Source port"] ?? "";
+    const destinationPort = transportData?.["Destination port"] ?? "";
+
+    const endpointA = `${sourceIp}:${sourcePort}`;
+    const endpointB = `${destinationIp}:${destinationPort}`;
+    const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+    return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
+  };
 
   for (const host of Object.keys(capturedPackets["Host"])) {
     const normalizedHostKey = normalizeStatsTextValue(host);
@@ -47,6 +62,12 @@ function buildCaptureStats(capturedPackets) {
       const pi = pkt?.["Packet Info"];
       const ei = pkt?.["Extra Info"];
       if (!pi || !ei) continue;
+
+      const streamKey = getStreamKey(pi);
+      if (!streams.has(streamKey)) {
+        streams.set(streamKey, { count: 0 });
+      }
+      streams.get(streamKey).count++;
 
       const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
@@ -120,6 +141,16 @@ function buildCaptureStats(capturedPackets) {
     }
   }
 
+  const streamStats = Array.from(streams.values()).map((s) => s.count);
+  const maxStreamLength =
+    streamStats.length > 0 ? Math.max(...streamStats) : 0;
+  const minStreamLength =
+    streamStats.length > 0 ? Math.min(...streamStats) : 0;
+  const avgStreamLength =
+    streamStats.length > 0
+      ? (streamStats.reduce((a, b) => a + b, 0) / streamStats.length).toFixed(2)
+      : 0;
+
   return {
     protocols: [...protocols].sort(),
     transportProtocols: [...transportProtocols].sort(),
@@ -133,6 +164,10 @@ function buildCaptureStats(capturedPackets) {
     encryptedCount,
     unencryptedCount,
     totalPackets,
+    totalStreams: streams.size,
+    maxStreamLength,
+    minStreamLength,
+    avgStreamLength,
   };
 }
 
@@ -246,6 +281,10 @@ function createStatsPanel(options) {
     overview.appendChild(ovHead);
     [
       `Total Packets: ${stats.totalPackets}`,
+      `Total Streams: ${stats.totalStreams}`,
+      `Longest Stream: ${stats.maxStreamLength} packets`,
+      `Shortest Stream: ${stats.minStreamLength} packets`,
+      `Average Stream Length: ${stats.avgStreamLength} packets`,
       `Unique Hosts Targeted: ${stats.hosts.length}`,
       `Encrypted Packets: ${stats.encryptedCount}`,
       `Unencrypted Packets: ${stats.unencryptedCount}`,

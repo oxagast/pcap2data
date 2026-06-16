@@ -6674,6 +6674,41 @@ function infoPanel(pk) {
   const entropyValue = extraInfoData["Traits"]["Shannon Entropy"];
   document.getElementById("timestamp").textContent =
     "Timestamp " + packetTimestamp;
+
+  const getStreamKey = (pkt) => {
+    const transportName = pkt?.["Protocol"] || "Unknown";
+    const transportData = pkt?.[transportName] || {};
+    const sourceIp = pkt?.["IP"]?.["Source IP"] ?? "";
+    const destinationIp = pkt?.["IP"]?.["Destination IP"] ?? "";
+    const sourcePort = transportData?.["Source port"] ?? "";
+    const destinationPort = transportData?.["Destination port"] ?? "";
+
+    const endpointA = `${sourceIp}:${sourcePort}`;
+    const endpointB = `${destinationIp}:${destinationPort}`;
+    const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+    return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
+  };
+
+  const currentStreamKey = getStreamKey(packetInfoData);
+  const streamPacketCount = (() => {
+    if (!capturedPackets || !capturedPackets["Host"]) return 0;
+    let count = 0;
+    for (const host of Object.keys(capturedPackets["Host"])) {
+      const hostPackets = capturedPackets["Host"][host];
+      if (!Array.isArray(hostPackets)) continue;
+      for (const pkt of hostPackets) {
+        const pi = pkt?.["Packet Info"];
+        if (pi && getStreamKey(pi) === currentStreamKey) count++;
+      }
+    }
+    return count;
+  })();
+
+  const streamStatsEl = document.getElementById("stream-stats");
+  if (streamStatsEl) {
+    streamStatsEl.textContent = `Stream: ${streamPacketCount} packets`;
+  }
+
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
   document.getElementById("sideloctable").textContent = "";
   document.getElementById("entropybox").textContent =
