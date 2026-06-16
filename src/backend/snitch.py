@@ -2750,6 +2750,278 @@ def decodeRADIUS(rawPayload):
         return None
 
 
+def decodeWebSocket(rawPayload):
+    """
+    Decode WebSocket frames (RFC 6455) from raw payload bytes.
+    Detects the binary frame header: FIN bit, opcode, mask bit, and payload length.
+    Also detects WebSocket HTTP Upgrade handshake packets.
+    Returns a dict with frame info, or None if not recognisable as WebSocket.
+    """
+    WS_OPCODES = {
+        0x0: "Continuation",
+        0x1: "Text",
+        0x2: "Binary",
+        0x8: "Close",
+        0x9: "Ping",
+        0xA: "Pong",
+    }
+    try:
+        # Detect WebSocket HTTP Upgrade request
+        text = rawPayload.decode(errors="ignore")
+        if "Upgrade: websocket" in text or "upgrade: websocket" in text.lower():
+            normalised = text.replace("\r\n", "\n")
+            lines = normalised.split("\n\n")[0].split("\n")
+            headers = {}
+            for line in lines[1:]:
+                if ": " in line:
+                    k, _, v = line.partition(": ")
+                    headers[k.strip().lower()] = v.strip()
+            return {
+                "Type": "Upgrade",
+                "ws.type": "Upgrade",
+                "Upgrade": headers.get("upgrade", "websocket"),
+                "ws.upgrade": headers.get("upgrade", "websocket"),
+                "Host": headers.get("host", "Unknown"),
+                "ws.host": headers.get("host", "Unknown"),
+                "Sec-WebSocket-Key": headers.get("sec-websocket-key", "Unknown"),
+                "ws.key": headers.get("sec-websocket-key", "Unknown"),
+                "Sec-WebSocket-Version": headers.get("sec-websocket-version", "Unknown"),
+                "ws.version": headers.get("sec-websocket-version", "Unknown"),
+            }
+        # Detect WebSocket binary frame framing
+        if len(rawPayload) < 2:
+            return None
+        firstByte = rawPayload[0]
+        secondByte = rawPayload[1]
+        fin = bool(firstByte & 0x80)
+        rsv1 = bool(firstByte & 0x40)
+        rsv2 = bool(firstByte & 0x20)
+        rsv3 = bool(firstByte & 0x10)
+        opcode = firstByte & 0x0F
+        # RSV bits should be 0 unless extension negotiated; opcode must be known
+        if (rsv1 or rsv2 or rsv3) and opcode not in WS_OPCODES:
+            return None
+        if opcode not in WS_OPCODES:
+            return None
+        masked = bool(secondByte & 0x80)
+        payloadLen = secondByte & 0x7F
+        opcodeName = WS_OPCODES[opcode]
+        # Determine extended payload length
+        if payloadLen == 126:
+            if len(rawPayload) < 4:
+                return None
+            import struct
+            payloadLen = struct.unpack_from(">H", rawPayload, 2)[0]
+        elif payloadLen == 127:
+            if len(rawPayload) < 10:
+                return None
+            import struct
+            payloadLen = struct.unpack_from(">Q", rawPayload, 2)[0]
+        return {
+            "Type": "Frame",
+            "ws.type": "Frame",
+            "Opcode": opcodeName,
+            "ws.opcode": opcodeName,
+            "FIN": fin,
+            "ws.fin": fin,
+            "Masked": masked,
+            "ws.masked": masked,
+            "Payload Length": payloadLen,
+            "ws.payload_len": payloadLen,
+        }
+    except Exception:
+        return None
+
+
+def decodeNFS(rawPayload):
+    """
+    Decode NFS/RPC (Sun RPC) packets from raw payload bytes.
+    NFS runs over TCP/UDP port 2049; portmapper uses port 111.
+    Parses the ONC RPC (RFC 5531) header: XID, message type, and for CALL messages
+    the RPC version, program, procedure, and credentials.
+    Returns a dict with RPC/NFS fields, or None if not recognisable.
+    """
+    import struct
+
+    RPC_MSG_TYPES = {0: "Call", 1: "Reply"}
+    NFS_PROCEDURES = {
+        0: "NULL",
+        1: "GETATTR",
+        2: "SETATTR",
+        3: "LOOKUP",
+        4: "ACCESS",
+        5: "READLINK",
+        6: "READ",
+        7: "WRITE",
+        8: "CREATE",
+        9: "MKDIR",
+        10: "SYMLINK",
+        11: "MKNOD",
+        12: "REMOVE",
+        13: "RMDIR",
+        14: "RENAME",
+        15: "LINK",
+        16: "READDIR",
+        17: "READDIRPLUS",
+        18: "FSSTAT",
+        19: "FSINFO",
+        20: "PATHCONF",
+        21: "COMMIT",
+    }
+    PORTMAP_PROCEDURES = {
+        0: "NULL",
+        1: "SET",
+        2: "UNSET",
+        3: "GETPORT",
+        4: "DUMP",
+        5: "CALLIT",
+    }
+    RPC_PROGRAMS = {
+        100000: "Portmapper",
+        100003: "NFS",
+        100005: "Mount",
+        100021: "NLM",
+        100227: "NFS_ACL",
+    }
+    try:
+        if len(rawPayload) < 8:
+            return None
+        # TCP NFS framing: 4-byte record mark (fragment header) may prefix the RPC
+        offset = 0
+        if len(rawPayload) >= 4:
+            recordMark = struct.unpack_from(">I", rawPayload, 0)[0]
+            # High bit set = last fragment; lower 31 bits = fragment length
+            if recordMark & 0x80000000:
+                fragLen = recordMark & 0x7FFFFFFF
+                if fragLen > 0 and fragLen + 4 <= len(rawPayload):
+                    offset = 4
+        if len(rawPayload) < offset + 8:
+            return None
+        xid = struct.unpack_from(">I", rawPayload, offset)[0]
+        msgType = struct.unpack_from(">I", rawPayload, offset + 4)[0]
+        if msgType not in RPC_MSG_TYPES:
+            return None
+        msgTypeName = RPC_MSG_TYPES[msgType]
+        result = {
+            "XID": f"0x{xid:08X}",
+            "rpc.xid": f"0x{xid:08X}",
+            "Message Type": msgTypeName,
+            "rpc.msg_type": msgTypeName,
+        }
+        if msgType == 0:  # Call
+            if len(rawPayload) < offset + 24:
+                return None
+            rpcVersion = struct.unpack_from(">I", rawPayload, offset + 8)[0]
+            program = struct.unpack_from(">I", rawPayload, offset + 12)[0]
+            progVersion = struct.unpack_from(">I", rawPayload, offset + 16)[0]
+            procedure = struct.unpack_from(">I", rawPayload, offset + 20)[0]
+            progName = RPC_PROGRAMS.get(program, f"Prog-{program}")
+            if program == 100003:
+                procName = NFS_PROCEDURES.get(procedure, f"Proc-{procedure}")
+            elif program == 100000:
+                procName = PORTMAP_PROCEDURES.get(procedure, f"Proc-{procedure}")
+            else:
+                procName = f"Proc-{procedure}"
+            result.update({
+                "RPC Version": rpcVersion,
+                "rpc.version": rpcVersion,
+                "Program": progName,
+                "rpc.program": progName,
+                "Program Version": progVersion,
+                "rpc.prog_version": progVersion,
+                "Procedure": procName,
+                "rpc.procedure": procName,
+            })
+        elif msgType == 1:  # Reply
+            if len(rawPayload) < offset + 12:
+                return None
+            replyStatus = struct.unpack_from(">I", rawPayload, offset + 8)[0]
+            statusName = "Accepted" if replyStatus == 0 else "Denied"
+            result["Reply Status"] = statusName
+            result["rpc.reply_status"] = statusName
+        return result
+    except Exception:
+        return None
+
+
+def decodeKerberos(rawPayload):
+    """
+    Decode Kerberos 5 messages from raw payload bytes using ASN.1 BER/DER structure.
+    Kerberos runs over TCP/UDP port 88. Extracts the message type tag.
+    For AS-REQ messages also attempts to extract the client principal name.
+    Returns a dict with Kerberos message type info, or None if not recognisable.
+    """
+    KRB5_MSG_TYPES = {
+        0x6A: "AS-REQ",       # [APPLICATION 10]
+        0x6B: "AS-REP",       # [APPLICATION 11]
+        0x6C: "TGS-REQ",      # [APPLICATION 12]
+        0x6D: "TGS-REP",      # [APPLICATION 13]
+        0x6E: "AP-REQ",       # [APPLICATION 14]
+        0x6F: "AP-REP",       # [APPLICATION 15]
+        0x74: "KRB-ERROR",    # [APPLICATION 30]
+        0x79: "KRB-PRIV",     # [APPLICATION 25]
+        0x7A: "KRB-CRED",     # [APPLICATION 26]
+    }
+    try:
+        payload = rawPayload
+        # TCP Kerberos may be prefixed by a 4-byte big-endian length
+        if len(payload) < 2:
+            return None
+        import struct
+        if len(payload) >= 4:
+            tcpLen = struct.unpack_from(">I", payload, 0)[0]
+            if tcpLen + 4 == len(payload) and tcpLen > 0:
+                payload = payload[4:]
+        if len(payload) < 2:
+            return None
+        # ASN.1 application tag for Kerberos messages
+        tag = payload[0]
+        if tag not in KRB5_MSG_TYPES:
+            return None
+        msgTypeName = KRB5_MSG_TYPES[tag]
+        result = {
+            "Message Type": msgTypeName,
+            "krb5.msg_type": msgTypeName,
+        }
+        # For AS-REQ (0x6A), attempt to extract pvno (protocol version)
+        # ASN.1 structure: [APP tag] length SEQUENCE { pvno INTEGER, ... }
+        try:
+            idx = 1
+            # skip outer tag length
+            if payload[idx] & 0x80:
+                numBytes = payload[idx] & 0x7F
+                idx += 1 + numBytes
+            else:
+                idx += 1
+            # expect SEQUENCE (0x30)
+            if idx < len(payload) and payload[idx] == 0x30:
+                idx += 1
+                if payload[idx] & 0x80:
+                    numBytes = payload[idx] & 0x7F
+                    idx += 1 + numBytes
+                else:
+                    idx += 1
+                # expect [0] pvno context
+                if idx < len(payload) and payload[idx] == 0xA0:
+                    idx += 1
+                    if payload[idx] & 0x80:
+                        numBytes = payload[idx] & 0x7F
+                        idx += 1 + numBytes
+                    else:
+                        idx += 1
+                    # INTEGER
+                    if idx + 2 < len(payload) and payload[idx] == 0x02:
+                        pvnoLen = payload[idx + 1]
+                        pvno = int.from_bytes(payload[idx + 2: idx + 2 + pvnoLen], "big")
+                        result["Protocol Version"] = pvno
+                        result["krb5.pvno"] = pvno
+        except Exception:
+            pass
+        return result
+    except Exception:
+        return None
+
+
 def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     """
     Process a single scapy packet: extract TCP, UDP, or ICMP payload, write the raw
@@ -2761,7 +3033,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     both requests and responses.  FTP (20/21), SMTP (25/587/465), POP3/POP (110/995),
     IMAP/IMAP4 (143/993), Telnet (23), IRC (6667-6669), MTP (1755), LDAP (389/636),
     MySQL (3306), PostgreSQL (5432), XMPP (5222/5223), SMB (139/445), MQTT (1883/8883),
-    RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), and RADIUS (1812/1813/1645/1646)
+    RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), RADIUS (1812/1813/1645/1646),
+    WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), and Kerberos (88)
     are also decoded.  ICMP packets are fully supported as a separate transport type.
 
     packetIndex is the 0-based position of this packet in the full capture, used as
@@ -2877,12 +3150,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "wire.len": len(p["TCP"]),
                 }
                 # Decode SIP on TCP ports 5060/5061
-                if dstPort in (5060, 5061) or srcPort in (5060, 5061):
+                if streamLabelPort in (5060, 5061) or srcPort in (5060, 5061):
                     sipSection = decodeSIP(rawPayload)
                     if sipSection is not None:
                         transportSection["SIP"] = sipSection
                 # Decode SNMP on TCP port 161/162 (less common but valid)
-                if dstPort in (161, 162) or srcPort in (161, 162):
+                if streamLabelPort in (161, 162) or srcPort in (161, 162):
                     snmpSection = decodeSNMP(p)
                     if snmpSection is not None:
                         transportSection["SNMP"] = snmpSection
@@ -2895,27 +3168,27 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 if http2Section is not None:
                     transportSection["HTTP2"] = http2Section
                 # Decode FTP on TCP ports 20/21
-                if dstPort in (20, 21) or srcPort in (20, 21):
+                if streamLabelPort in (20, 21) or srcPort in (20, 21):
                     ftpSection = decodeFTP(rawPayload)
                     if ftpSection is not None:
                         transportSection["FTP"] = ftpSection
                 # Decode SMTP on TCP ports 25/587/465
-                if dstPort in (25, 587, 465) or srcPort in (25, 587, 465):
+                if streamLabelPort in (25, 587, 465) or srcPort in (25, 587, 465):
                     smtpSection = decodeSMTP(rawPayload)
                     if smtpSection is not None:
                         transportSection["SMTP"] = smtpSection
                 # Decode POP3/POP on TCP ports 110/995
-                if dstPort in (110, 995) or srcPort in (110, 995):
+                if streamLabelPort in (110, 995) or srcPort in (110, 995):
                     pop3Section = decodePOP3(rawPayload)
                     if pop3Section is not None:
                         transportSection["POP3"] = pop3Section
                 # Decode IMAP/IMAP4 on TCP ports 143/993
-                if dstPort in (143, 993) or srcPort in (143, 993):
+                if streamLabelPort in (143, 993) or srcPort in (143, 993):
                     imapSection = decodeIMAP(rawPayload)
                     if imapSection is not None:
                         transportSection["IMAP"] = imapSection
                 # Decode Telnet on TCP port 23
-                if dstPort == 23 or srcPort == 23:
+                if streamLabelPort == 23 or srcPort == 23:
                     telnetSection = decodeTelnet(rawPayload)
                     if telnetSection is not None:
                         transportSection["Telnet"] = telnetSection
@@ -2928,57 +3201,57 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                             telnetCreds
                         )
                 # Decode IRC on TCP ports 6667/6668/6669
-                if dstPort in (6667, 6668, 6669) or srcPort in (6667, 6668, 6669):
+                if streamLabelPort in (6667, 6668, 6669) or srcPort in (6667, 6668, 6669):
                     ircSection = decodeIRC(rawPayload)
                     if ircSection is not None:
                         transportSection["IRC"] = ircSection
                 # Decode MTP/MMS on TCP port 1755
-                if dstPort == 1755 or srcPort == 1755:
+                if streamLabelPort == 1755 or srcPort == 1755:
                     mtpSection = decodeMTP(rawPayload)
                     if mtpSection is not None:
                         transportSection["MTP"] = mtpSection
                 # Decode LDAP on TCP ports 389/636
-                if dstPort in (389, 636) or srcPort in (389, 636):
+                if streamLabelPort in (389, 636) or srcPort in (389, 636):
                     ldapSection = decodeLDAP(rawPayload)
                     if ldapSection is not None:
                         transportSection["LDAP"] = ldapSection
                 # Decode MySQL on TCP port 3306
-                if dstPort == 3306 or srcPort == 3306:
+                if streamLabelPort == 3306 or srcPort == 3306:
                     mysqlSection = decodeMySQL(rawPayload)
                     if mysqlSection is not None:
                         transportSection["MySQL"] = mysqlSection
                 # Decode PostgreSQL on TCP port 5432
-                if dstPort == 5432 or srcPort == 5432:
+                if streamLabelPort == 5432 or srcPort == 5432:
                     pgSection = decodePostgreSQL(rawPayload)
                     if pgSection is not None:
                         transportSection["PostgreSQL"] = pgSection
                 # Decode XMPP on TCP ports 5222/5223
-                if dstPort in (5222, 5223) or srcPort in (5222, 5223):
+                if streamLabelPort in (5222, 5223) or srcPort in (5222, 5223):
                     xmppSection = decodeXMPP(rawPayload)
                     if xmppSection is not None:
                         transportSection["XMPP"] = xmppSection
                 # Decode SMB on TCP ports 139/445
-                if dstPort in (139, 445) or srcPort in (139, 445):
+                if streamLabelPort in (139, 445) or srcPort in (139, 445):
                     smbSection = decodeSMB(rawPayload)
                     if smbSection is not None:
                         transportSection["SMB"] = smbSection
                 # Decode MQTT on TCP ports 1883/8883
-                if dstPort in (1883, 8883) or srcPort in (1883, 8883):
+                if streamLabelPort in (1883, 8883) or srcPort in (1883, 8883):
                     mqttSection = decodeMQTT(rawPayload)
                     if mqttSection is not None:
                         transportSection["MQTT"] = mqttSection
                 # Decode RTSP on TCP port 554
-                if dstPort == 554 or srcPort == 554:
+                if streamLabelPort == 554 or srcPort == 554:
                     rtspSection = decodeRTSP(rawPayload)
                     if rtspSection is not None:
                         transportSection["RTSP"] = rtspSection
                 # Decode BGP on TCP port 179
-                if dstPort == 179 or srcPort == 179:
+                if streamLabelPort == 179 or srcPort == 179:
                     bgpSection = decodeBGP(rawPayload)
                     if bgpSection is not None:
                         transportSection["BGP"] = bgpSection
                 # Decode NNTP on TCP port 119
-                if dstPort == 119 or srcPort == 119:
+                if streamLabelPort == 119 or srcPort == 119:
                     nntpSection = decodeNNTP(rawPayload)
                     if nntpSection is not None:
                         transportSection["NNTP"] = nntpSection
@@ -2992,6 +3265,21 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     radiusSection = decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
+                # Decode WebSocket on TCP ports 80/443/8080/8443/8765 (stream-following aware)
+                if streamLabelPort in (80, 443, 8080, 8443, 8765) or srcPort in (80, 443, 8080, 8443, 8765):
+                    wsSection = decodeWebSocket(rawPayload)
+                    if wsSection is not None:
+                        transportSection["WebSocket"] = wsSection
+                # Decode NFS/RPC on TCP ports 2049/111
+                if streamLabelPort in (2049, 111) or srcPort in (2049, 111):
+                    nfsSection = decodeNFS(rawPayload)
+                    if nfsSection is not None:
+                        transportSection["NFS"] = nfsSection
+                # Decode Kerberos on TCP port 88
+                if streamLabelPort == 88 or srcPort == 88:
+                    kerberosSection = decodeKerberos(rawPayload)
+                    if kerberosSection is not None:
+                        transportSection["Kerberos"] = kerberosSection
                 protocolKey = "TCP"
             elif isUdp:
                 # Build UDP section; decode DNS if present
@@ -3103,6 +3391,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     radiusSection = decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
+                # Decode NFS/RPC on UDP ports 2049/111
+                if dstPort in (2049, 111) or srcPort in (2049, 111):
+                    nfsSection = decodeNFS(rawPayload)
+                    if nfsSection is not None:
+                        transportSection["NFS"] = nfsSection
+                # Decode Kerberos on UDP port 88
+                if dstPort == 88 or srcPort == 88:
+                    kerberosSection = decodeKerberos(rawPayload)
+                    if kerberosSection is not None:
+                        transportSection["Kerberos"] = kerberosSection
                 protocolKey = "UDP"
             else:
                 # ICMP transport section

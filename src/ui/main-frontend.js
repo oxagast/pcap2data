@@ -33,6 +33,9 @@ const {
   renderHttp2Table,
   renderNntpTable,
   renderRadiusTable,
+  renderWebSocketTable,
+  renderNfsTable,
+  renderKerberosTable,
 } = require("./decoders");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
@@ -6733,6 +6736,15 @@ function infoPanel(pk) {
 
   // RADIUS info table (shown for RADIUS packets on port 1812/1813/1645/1646)
   renderRadiusTable(transportData);
+
+  // WebSocket info table (shown for WebSocket frames/upgrades on port 80/443/8080/8443/8765)
+  renderWebSocketTable(transportData);
+
+  // NFS/RPC info table (shown for NFS/RPC packets on port 2049/111)
+  renderNfsTable(transportData);
+
+  // Kerberos info table (shown for Kerberos packets on port 88)
+  renderKerberosTable(transportData);
 
   const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [

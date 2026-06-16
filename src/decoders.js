@@ -548,6 +548,60 @@ function renderRadiusTable(transportData) {
   createTable(radiusRows, ['RADIUS Field', 'Value'], 'sidedatatable');
 }
 
+function renderWebSocketTable(transportData) {
+  const wsData = transportData['WebSocket'];
+  if (!wsData) return;
+  const wsRows = [{ name: 'Type', value: wsData['Type'] || '—' }];
+  if (wsData['Type'] === 'Upgrade') {
+    wsRows.push(
+      { name: 'Host', value: wsData['Host'] || '—' },
+      { name: 'Sec-WebSocket-Key', value: wsData['Sec-WebSocket-Key'] || '—' },
+      { name: 'Sec-WebSocket-Version', value: wsData['Sec-WebSocket-Version'] || '—' },
+    );
+  } else {
+    wsRows.push(
+      { name: 'Opcode', value: wsData['Opcode'] || '—' },
+      { name: 'FIN', value: wsData['FIN'] ? 'Yes' : 'No' },
+      { name: 'Masked', value: wsData['Masked'] ? 'Yes' : 'No' },
+      { name: 'Payload Length', value: wsData['Payload Length'] ?? '—' },
+    );
+  }
+  createTable(wsRows, ['WebSocket Field', 'Value'], 'sidedatatable');
+}
+
+function renderNfsTable(transportData) {
+  const nfsData = transportData['NFS'];
+  if (!nfsData) return;
+  const nfsRows = [
+    { name: 'XID', value: nfsData['XID'] || '—' },
+    { name: 'Message Type', value: nfsData['Message Type'] || '—' },
+  ];
+  if (nfsData['Program']) {
+    nfsRows.push(
+      { name: 'Program', value: nfsData['Program'] },
+      { name: 'Program Version', value: nfsData['Program Version'] ?? '—' },
+      { name: 'Procedure', value: nfsData['Procedure'] || '—' },
+      { name: 'RPC Version', value: nfsData['RPC Version'] ?? '—' },
+    );
+  }
+  if (nfsData['Reply Status']) {
+    nfsRows.push({ name: 'Reply Status', value: nfsData['Reply Status'] });
+  }
+  createTable(nfsRows, ['NFS/RPC Field', 'Value'], 'sidedatatable');
+}
+
+function renderKerberosTable(transportData) {
+  const krbData = transportData['Kerberos'];
+  if (!krbData) return;
+  const krbRows = [
+    { name: 'Message Type', value: krbData['Message Type'] || '—' },
+  ];
+  if (krbData['Protocol Version'] !== undefined) {
+    krbRows.push({ name: 'Protocol Version', value: krbData['Protocol Version'] });
+  }
+  createTable(krbRows, ['Kerberos Field', 'Value'], 'sidedatatable');
+}
+
 module.exports = {
   createTable,
   renderDnsTable,
@@ -576,4 +630,7 @@ module.exports = {
   renderHttp2Table,
   renderNntpTable,
   renderRadiusTable,
+  renderWebSocketTable,
+  renderNfsTable,
+  renderKerberosTable,
 };
