@@ -36,11 +36,14 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     return;
   }
   let isPCAP = false;
+  let isSession = false;
   // try to make a prelimienary determination of what type of file this is based on magic
   const fileForMagic = fs.readFileSync(filename, "binary", { encoding: "utf8" });
-  if (fileForMagic.startsWith("{")) {
+  if (fileForMagic.startsWith("{") && fileForMagic.endsWith("}")) {
+    global.logBackend("[Bridge] File looks like a JSON file");
     if (fileForMagic.includes("hosts") && fileForMagic.includes("packets")) {
-      global.logBackend("[Bridge] File looks like a session file with hosts and packets!");
+      global.logBackend("[Bridge] File looks like a PacketSnitch session file with hosts and packets!");
+      isSession = true;
     }
   } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
     global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
@@ -65,7 +68,13 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     // the error back to us and we can show that to the user
   }
   if (!isPCAP) {
-    backendCommand = `echo "This appears to be a session file, passing off to frontend..."`; // dummy command that succeeds so it skips through
+    if (!isSession) {
+      global.logBackend("[Bridge] File does not appear to be a session file or a known pcap format?");
+      backendCommand = `echo "File does not appear to be a session file or a known pcap format, passing off to frontend..."`; // dummy command that succeeds so it skips through
+      sendError("[Bridge] File does not appear to be a session file or a known pcap format!");
+    } else {
+      backendCommand = `echo "This appears to be a session file, passing off to frontend..."`; // dummy command that succeeds so it skips through
+    }
   } else {
     backendCommand = `"${snitchExePath}" "${filename}" -v -a -o "${testcaseOutputDir}"${useLLM ? "" : " --nollm"}`;
   }
