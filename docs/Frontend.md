@@ -67,7 +67,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
 
-When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [Context Menu](#context-menu) for full details.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [ContextMenu.md](ContextMenu.md) for full details.
 
 ---
 
@@ -182,7 +182,7 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
-> The context menu's **Convert to...** submenu and **Load Raw Payload into Conv tab** option can automatically populate the Conv tab input from packet data or the current selection.
+> The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [ContextMenu.md](ContextMenu.md) for details.
 
 ---
 
@@ -302,7 +302,7 @@ These auto-entries appear with a source of `session-auto` and can be promoted to
 
 ##### Manual URI/URL Entry
 
-The context menu's **Add to Keystore... → Manual URI Session** and **Manual URI Persistent** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**.
+The context menu's **Add to Keystore... → Manual URI** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**. See [ContextMenu.md](ContextMenu.md) for more on keystore context menu options.
 
 ---
 
@@ -327,13 +327,7 @@ The main content area shows a full-width editable text area for the currently se
 
 ##### Notes Context Menu
 
-Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu:
-
-| Item                        | Description                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| **Send selected/context data**  | Creates a new note containing the currently selected text or packet context. |
-| **Send Conv converted output**  | Creates a new note containing the current Conv tab conversion output.        |
-| **Send Conv hashes**            | Creates a new note containing the current Conv tab hash outputs.             |
+Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu. See [ContextMenu.md](ContextMenu.md) for details on context menu items.
 
 Notes are saved as part of the session file when **Save Session** is used.
 
@@ -359,128 +353,6 @@ The **Search log entries** input filters the visible entries in real time (case-
 
 ---
 
-#### Context Menu
-
-Right-clicking anywhere in the packet views, payload panes, or Conv tab opens the **context menu**. The menu adapts its available items based on the current context (whether text is selected, whether the current packet has an HTTP body, etc.).
-
----
-
-##### Copy...
-
-| Item                 | Description                                                                             |
-| -------------------- | --------------------------------------------------------------------------------------- |
-| **Copy**             | Copy the currently highlighted text to the clipboard. Shown only when text is selected. |
-| **Copy Hex**         | Copy the raw payload bytes as a hex string.                                             |
-| **Copy ASCII**       | Copy the printable ASCII representation of the payload.                                 |
-| **Copy Raw payload** | Copy the raw payload bytes.                                                             |
-| **Copy Cookie Jar**  | Copy all session cookie jar entries as a formatted string.                              |
-
-##### Paste
-
-Paste clipboard text into the focused input element.
-
----
-
-##### Convert to...
-
-Load the selected text or current packet data into the **Conv** tab with a specific input format pre-selected. The Conv tab is automatically opened and **Convert** is run.
-
-| Item                               | Description                                                                                                         |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Load as Hex**                    | Load the selection as a hex-encoded byte string.                                                                    |
-| **Load as Binary**                 | Load the selection as a binary bit-string.                                                                          |
-| **Load as Base64**                 | Load the selection as a base64-encoded string.                                                                      |
-| **Load as Decimal bytes**          | Load the selection as space-separated decimal byte values.                                                          |
-| **Load as ASCII / UTF-8**          | Load the selection as a plain text string.                                                                          |
-| **Derive Data Type Guess**         | Run the data-type guesser on the selected text and show the ranked type guesses in the Conv tab's Data Insights.    |
-| **Load Cursor ASCII into Conv tab**| Load the ASCII string at the current hex-grid cursor position into the Conv tab input as ASCII / UTF-8.            |
-| **Load Raw Payload into Conv tab** | Load the current packet's full raw payload as hex into Conv and run conversion.                                     |
-
----
-
-##### Add to filter...
-
-Build and append filter expressions to the filter bar based on attributes of the current packet. Four sub-menus control how the new clause is combined with any existing expression.
-
-| Sub-menu             | Description                                                                |
-| -------------------- | -------------------------------------------------------------------------- | --- | ------------------------------ |
-| **Add with &&...**   | Append the new clause joined with `&&` (AND) to the existing filter.       |
-| **Add with \|\|...** | Append the new clause joined with `                                        |     | ` (OR) to the existing filter. |
-| **is not...**        | Append a negated (`!`) clause joined with `&&` to the existing filter.     |
-| **Parentheses...**   | Insert parentheses into the filter expression.                             |
-| **Clear and...**     | Clear the existing filter, then set the new clause as the complete filter. |
-
-Each directional sub-menu (**Add with &&...**, **Add with ||...**, **is not...**, **Clear and...**) has the same five attribute options:
-
-| Option                      | Description                                              |
-| --------------------------- | -------------------------------------------------------- |
-| **Add IP to Filter**        | Adds the source or destination IP of the current packet. |
-| **Add Port to Filter**      | Adds the destination port of the current packet.         |
-| **Add MAC to Filter**       | Adds the source MAC address of the current packet.       |
-| **Add Protocol to Filter**  | Adds the detected application protocol.                  |
-| **Add MIME Type to Filter** | Adds the detected MIME type.                             |
-
-The **Parentheses...** sub-menu provides:
-
-| Option                            | Description                                             |
-| --------------------------------- | ------------------------------------------------------- |
-| **Append (**                      | Append an opening parenthesis to the filter expression. |
-| **Append )**                      | Append a closing parenthesis to the filter expression.  |
-| **Wrap current query with (...)** | Surround the entire existing filter with parentheses.   |
-
----
-
-##### Add to Keystore...
-
-Save highlighted text or current context data directly to the keychain. Three levels of sub-menus select the entry type and the target keychain.
-
-| Type                  | Session keychain | Persistent keychain |
-| --------------------- | ---------------- | ------------------- |
-| **As Password**       | Session keychain | Persistent keychain |
-| **As Private Key**    | Session keychain | Persistent keychain |
-| **As Certificate**    | Session keychain | Persistent keychain |
-| **As Session Cookie** | Session keychain | Persistent keychain |
-
-Selecting a persistent target will prompt for the keychain password if it has not been unlocked yet.
-
----
-
-##### Send to Notes...
-
-Send the current selection or Conv output directly to a new note in the Notes workspace.
-
-| Item                            | Description                                                                      |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| **Send selected/context data**  | Creates a new note containing the currently selected text or packet context.     |
-| **Send Conv converted output**  | Creates a new note containing the current Conv tab conversion output.            |
-| **Send Conv hashes**            | Creates a new note containing the current Conv tab hash outputs.                 |
-
-This submenu is only visible when there is context data available (selected text or active Conv output).
-
----
-
-##### Export...
-
-| Item                       | Description                                                    |
-| -------------------------- | -------------------------------------------------------------- |
-| **Save Session**           | Save the loaded capture plus UI session state as a JSON file.  |
-| **Export Packet**          | Save the raw data of the current packet to a file.             |
-| **Export Payload**         | Save only the payload bytes of the current packet to a file.   |
-| **Save to cookie_jar.txt** | Append all session cookies to a `cookie_jar.txt` file on disk. |
-
----
-
-##### HTTP File...
-
-Shown only when the current packet contains an HTTP response body.
-
-| Item                        | Description                                                                                     |
-| --------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Save body to file**       | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
-| **Load body into Conv tab** | Load the HTTP body bytes as hex into the Conv tab and run conversion.                           |
-| **Preview in browser**      | Open the HTTP body in the system's default web browser for preview.                             |
-
----
 
 #### Right Sidebar (Datagram Frame)
 

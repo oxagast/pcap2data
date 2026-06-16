@@ -59,6 +59,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 
 - 🚀 [Startup Docs](docs/README.md)  — Quickstart Documentation
 - 📖 [Frontend Docs](docs/Frontend.md) — UI reference, conversions, encryption, notes
+- 🎯 [Context Menu Reference](docs/ContextMenu.md) — Right-click options for copying, converting, filtering, and exporting
 - ⚙️ [Backend Docs](docs/Backend.md) — `snitch.py` usage, arguments, output structure
 - 🔎 [Filter Reference](docs/Filters.md) — Complete filter keys, operators, examples
 
