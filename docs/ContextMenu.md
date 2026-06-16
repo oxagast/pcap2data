@@ -1,12 +1,16 @@
-# Context Menu Documentation
+<p align="center">
+<a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
+</p>
 
-## Overview
+## Context Menu Documentation
+
+### Overview
 
 Right-clicking in the packet views, payload panes, Conv tab, or other data panels opens the **context menu**. The menu dynamically adapts its available items based on the current context (whether text is selected, whether the current packet contains an HTTP body, etc.). Context menu items have been shortened for better fit and visual appeal.
 
 ---
 
-## Copy
+### Copy
 
 Quick-access copy commands for current selection and payload data.
 
@@ -20,13 +24,13 @@ Quick-access copy commands for current selection and payload data.
 
 ---
 
-## Paste
+### Paste
 
 Paste clipboard text into the focused input element.
 
 ---
 
-## Convert to...
+### Convert to...
 
 Load the selected text or current packet data into the **Conv** tab with a specific input format pre-selected. The Conv tab is automatically opened and **Convert** is run.
 
@@ -43,7 +47,7 @@ Load the selected text or current packet data into the **Conv** tab with a speci
 
 ---
 
-## Filter...
+### Filter...
 
 Build and append filter expressions to the filter bar based on attributes of the current packet. Multiple sub-menus control how the new clause is combined with any existing expression.
 
@@ -75,7 +79,7 @@ The **Parentheses** sub-menu provides:
 
 ---
 
-## Add to Keystore...
+### Add to Keystore...
 
 Save highlighted text or current context data directly to the keychain. Three levels of sub-menus select the entry type and the target keychain.
 
@@ -93,7 +97,7 @@ The **Manual URI** options open a dialog to manually enter any `http://` or `htt
 
 ---
 
-## Send to Notes...
+### Send to Notes...
 
 Send the current selection or Conv output directly to a new note in the Notes workspace.
 
@@ -107,12 +111,13 @@ This submenu is only visible when there is context data available (selected text
 
 ---
 
-## Export...
+### Export...
 
-Save and export packet data.
+Save and export packet and session data.
 
 | Item                       | Description                                                    |
 | -------------------------- | -------------------------------------------------------------- |
+| **Save Session**           | Save the loaded capture plus UI session state as a JSON file.  |
 | **Export Packet**          | Save the raw data of the current packet to a file.             |
 | **Export Payload**         | Save only the payload bytes of the current packet to a file.   |
 | **Save to cookie_jar.txt** | Append all session cookies to a `cookie_jar.txt` file on disk. |
@@ -128,9 +133,3 @@ Shown only when the current packet contains an HTTP response body.
 | **Save body to file**       | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
 | **Load body into Conv**     | Load the HTTP body bytes as hex into the Conv tab and run conversion.                           |
 | **Preview in browser**      | Open the HTTP body in the system's default web browser for preview.                             |
-
----
-
-## Save Session
-
-Located at the very bottom of the context menu, **Save Session** saves the loaded capture plus UI session state (packet cursor, filters/history, tabs, bookmarks, and session keychain) as a JSON file.
