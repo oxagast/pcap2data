@@ -777,8 +777,10 @@ function runFilterQuery(filterQuery, options = {}) {
   filteredPackets = filterPackets(capturedPackets, filterQuery);
   if (filterQuery === "") {
     writeLogEntry("User cleared filter query");
+    statusUpdate("Status: Filter cleared, displaying all packets");
   } else {
     writeLogEntry(`User executed query="${filterQuery}"`);
+    statusUpdate(`Status: Filtering packets...`);
   }
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
