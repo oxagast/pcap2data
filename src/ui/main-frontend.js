@@ -941,7 +941,7 @@ async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0
 }
 
 async function runFilterQuery(filterQuery, options = {}) {
-  const { trackHistory = true } = options;
+  const { trackHistory = true, updateUi = true } = options;
   try {
     validateFilterSyntax(filterQuery);
   } catch (error) {
@@ -974,12 +974,16 @@ async function runFilterQuery(filterQuery, options = {}) {
     filteredPackets = [];
   }
 
+  if (!updateUi) {
+    return;
+  }
+
   if (filterQuery === "") {
     writeLogEntry("User cleared filter query");
     statusUpdate("Status: Filter cleared, displaying all packets");
   } else {
     writeLogEntry(`User executed query="${filterQuery}"`);
-    statusUpdate(`Status: Filtering packets...`);
+    statusUpdate("Status: Filtering packets...");
   }
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
@@ -1885,7 +1889,14 @@ async function processCapturePath(capturePath, options = {}) {
       "Total Packets: " + totalPacketCount();
 
     if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
-      await runFilterQuery(filterInputEl.value, { trackHistory: false });
+      const shouldRefreshFilterUi = activeMainTab === MAIN_TAB_DATA;
+      await runFilterQuery(filterInputEl.value, {
+        trackHistory: false,
+        updateUi: shouldRefreshFilterUi,
+      });
+      if (activeMainTab === MAIN_TAB_LIST) {
+        showPacketList();
+      }
     } else {
       filteredPackets = undefined;
       if (activeMainTab === MAIN_TAB_LIST) {
