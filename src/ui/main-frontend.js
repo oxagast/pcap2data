@@ -1709,13 +1709,13 @@ function processFile(file) {
 }
 
 /**
- * Updates the status bar with a message, then resets after 6 seconds.
+ * Updates the status bar with a message, then resets after 8 seconds.
  */
 function statusUpdate(message) {
   status.textContent = message;
   setTimeout(() => {
     status.textContent = "PacketSnitch " + psVer + ": Ready";
-  }, 6000);
+  }, 10000);
 }
 
 /**
