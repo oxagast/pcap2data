@@ -366,7 +366,7 @@ function createStatsPanel(options) {
       documentRef,
       title: "Ports Seen",
       items: stats.ports.map(String),
-      queryBuilder: (v) => `tcp.src.port: ${v} || tcp.dst.port: ${v}`,
+      queryBuilder: (v) => `(tcp.src.port: ${v} || tcp.dst.port: ${v}) || (udp.src.port: ${v} || udp.dst.port: ${v})`,
       onQuery: applyStatsQuery,
     });
     if (portSec) content.appendChild(portSec);
