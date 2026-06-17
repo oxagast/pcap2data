@@ -1,3 +1,4 @@
+
 function normalizeStatsTextValue(value, options = {}) {
   if (value === null || value === undefined) return null;
 
@@ -249,7 +250,7 @@ function createStatsPanel(options) {
       return;
     }
     statusUpdate("Status: Displaying capture statistics");
-    writeLogEntry("User opened capture stats view");
+    writeLogEntry(`User opened capture stats view`);
 
     documentRef.getElementById("packetInfoPane").style.display = "none";
     documentRef.getElementById("packetPayloadPane").style.display = "none";
