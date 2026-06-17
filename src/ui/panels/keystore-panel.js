@@ -1441,7 +1441,7 @@ function createKeystorePanel({
       return;
     }
     statusUpdate("Status: Displaying keychain manager");
-    writeLogEntry("User opened keystore workspace");
+    writeLogEntry("User opened keystore workspace view");
     document.getElementById("prev-btn").style.display = "none";
     document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";

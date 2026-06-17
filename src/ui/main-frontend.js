@@ -653,7 +653,7 @@ function fileLoaded(isLoaded) {
     document.getElementById("pcap-lab").style.display = "none";
     document.getElementById("llm-toggle").style.display = "none";
     writeLogEntry(
-      `Initial file load completed seconds=${((loadEndTime - startTime) / 1000).toFixed(2)}`,
+      `User opened AI summary view`,
     );
   } else {
     filterInputEl.disabled = true;
@@ -3988,7 +3988,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
 function showNotesWorkspace() {
   activeMainTab = MAIN_TAB_NOTES;
   statusUpdate("Status: Displaying session notes");
-  writeLogEntry("User opened notes workspace");
+  writeLogEntry("User opened notes workspace view");
   document.getElementById("prev-btn").style.display = "none";
   document.getElementById("next-btn").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "none";

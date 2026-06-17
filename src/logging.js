@@ -1,3 +1,5 @@
+let lastViewMode = "";
+
 
 function initializeLogging({
   logapi = null,
@@ -49,8 +51,18 @@ function initializeLogging({
   }
 
   function writeLogEntry(message) {
-    const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
-    addActivityLogEntry(stampedMessage);
+    const matchViewMode = message.match(/User opened (.+) view/);
+    if (matchViewMode) {
+      const viewMode = matchViewMode[1];
+      if (viewMode !== lastViewMode) {
+        lastViewMode = viewMode;
+        const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] User opened ${viewMode} view`;
+        addActivityLogEntry(stampedMessage);
+      }
+    } else {
+      const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
+      addActivityLogEntry(stampedMessage);
+    }
   }
 
   function writeConsoleLogEntry(message) {

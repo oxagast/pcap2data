@@ -201,7 +201,7 @@ function createCryptPanel({
     });
     return String(
       matchedPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
-        "Hex Encoded"
+      "Hex Encoded"
       ] || "",
     );
   }
@@ -316,8 +316,8 @@ function createCryptPanel({
     const asciiSummary = looksPrintable
       ? decryptedUtf8.slice(0, MAX_ASCII_PREVIEW_LENGTH)
       : decryptedUtf8
-          .slice(0, MAX_ASCII_PREVIEW_LENGTH)
-          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".");
+        .slice(0, MAX_ASCII_PREVIEW_LENGTH)
+        .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".");
     decryptPreviewEl.textContent = [
       `Decrypted payload for packet #${entry.packetIndex}`,
       `Bytes: ${decryptedBytes.length}`,
@@ -570,7 +570,7 @@ function createCryptPanel({
     }
 
     statusUpdate("Status: Displaying crypt workspace");
-    writeLogEntry("User opened crypt workspace");
+    writeLogEntry("User opened crypt workspace view");
     document.getElementById("prev-btn").style.display = "none";
     document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";
