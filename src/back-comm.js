@@ -1,19 +1,85 @@
 const { BrowserWindow, ipcMain } = require("electron");
-const { exec } = require("child_process");
+const { spawn } = require("child_process");
 const os = require("os");
 const platform = os.platform();
 const path = require("path");
 const fs = require("fs");
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
+
+const HOST_CHUNK_SIZE = 250;
+
+function getMainWindow() {
+  return BrowserWindow.getAllWindows()[0];
+}
+
+function sendError(message) {
+  const mainWin = getMainWindow();
+  if (mainWin) {
+    mainWin.webContents.send("backend-error", message);
+  }
+}
+
+function sendJsonPathPayload(payload) {
+  const mainWin = getMainWindow();
+  if (!mainWin) return;
+  mainWin.webContents.send("json-path", payload);
+}
+
+function parseBridgeProgressLine(line) {
+  if (!line || !line.includes("[BridgeProgress]")) return null;
+  const pathMatch = line.match(/path=([^\s]+)/);
+  const processedMatch = line.match(/processed=(\d+)/);
+  const totalMatch = line.match(/total=(\d+)/);
+  const finalMatch = line.match(/final=(\d+)/);
+  if (!pathMatch) return null;
+
+  return {
+    path: pathMatch[1],
+    processedPackets: processedMatch ? Number(processedMatch[1]) : 0,
+    totalPackets: totalMatch ? Number(totalMatch[1]) : 0,
+    complete: finalMatch ? finalMatch[1] === "1" : false,
+    chunkSize: HOST_CHUNK_SIZE,
+  };
+}
+
+function scanChunkSnapshots(sentSnapshotPaths) {
+  if (!fs.existsSync(testcaseOutputDir)) return [];
+  const entries = fs
+    .readdirSync(testcaseOutputDir)
+    .filter((name) => /^hosts-\d+\.json$/.test(name))
+    .sort((left, right) => {
+      const leftCount = Number(left.match(/hosts-(\d+)\.json/)?.[1] || 0);
+      const rightCount = Number(right.match(/hosts-(\d+)\.json/)?.[1] || 0);
+      return leftCount - rightCount;
+    });
+
+  const unsent = [];
+  entries.forEach((entryName) => {
+    const fullPath = path.join(testcaseOutputDir, entryName);
+    if (sentSnapshotPaths.has(fullPath)) return;
+    sentSnapshotPaths.add(fullPath);
+    const processedPackets = Number(entryName.match(/hosts-(\d+)\.json/)?.[1] || 0);
+    unsent.push({
+      path: fullPath,
+      processedPackets,
+      totalPackets: 0,
+      complete: false,
+      chunkSize: HOST_CHUNK_SIZE,
+    });
+  });
+
+  return unsent;
+}
+
 ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
   global.logBackend(`[Bridge] Received pcap: ${filename}`);
   const isDev = !require("electron").app.isPackaged;
   const basePath = isDev
     ? path.join(__dirname, "../../src/backend/")
     : process.resourcesPath;
+  const backendScriptPath = path.join(basePath, "snitch.py");
   let snitchExePath;
-  let backendCommand;
   if (platform === "win32") {
     snitchExePath = path.join(basePath, "\\snitch\\snitch.exe");
   } else if (platform === "linux") {
@@ -22,17 +88,22 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     snitchExePath = path.join(basePath, "/snitch/snitch");
   }
 
-  if (fs.existsSync(snitchExePath)) {
+  const usePythonBackend = isDev && fs.existsSync(backendScriptPath);
+  const backendCommandPath = usePythonBackend
+    ? platform === "win32"
+      ? "python"
+      : "python3"
+    : snitchExePath;
+
+  if (usePythonBackend) {
+    global.logBackend(`[Bridge] Using Python backend script at: ${backendScriptPath}`);
+  } else if (fs.existsSync(snitchExePath)) {
     global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
   } else {
     global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
-    const mainWin = BrowserWindow.getAllWindows()[0];
-    if (mainWin) {
-      mainWin.webContents.send(
-        "backend-error",
-        "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
-      );
-    }
+    sendError(
+      "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
+    );
     return;
   }
   let isPCAP = false;
@@ -70,13 +141,24 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
   if (!isPCAP) {
     if (!isSession) {
       global.logBackend("[Bridge] File does not appear to be a session file or a known pcap format?");
-      backendCommand = `echo "File does not appear to be a session file or a known pcap format, passing off to frontend..."`; // dummy command that succeeds so it skips through
       sendError("[Bridge] File does not appear to be a session file or a known pcap format!");
     } else {
-      backendCommand = `echo "This appears to be a session file, passing off to frontend..."`; // dummy command that succeeds so it skips through
+      sendJsonPathPayload({
+        path: filename,
+        processedPackets: 0,
+        totalPackets: 0,
+        complete: true,
+        chunkSize: HOST_CHUNK_SIZE,
+      });
     }
-  } else {
-    backendCommand = `"${snitchExePath}" "${filename}" -v -a -o "${testcaseOutputDir}"${useLLM ? "" : " --nollm"}`;
+    return "";
+  }
+
+  const backendArgs = usePythonBackend
+    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir]
+    : [filename, "-v", "-a", "-o", testcaseOutputDir];
+  if (!useLLM) {
+    backendArgs.push("--nollm");
   }
   // Always start with a clean output directory so snitch never hits the
   // interactive overwrite prompt on second (and later) runs.
@@ -84,48 +166,123 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     fs.rmSync(testcaseOutputDir, { recursive: true, force: true });
   }
 
-  global.logBackend("[Bridge]", backendCommand);
-
-  function sendError(message) {
-    const mainWin = BrowserWindow.getAllWindows()[0]; // or track your main window
-    if (mainWin) {
-      mainWin.webContents.send("backend-error", message);
-    }
-  }
+  global.logBackend("[Bridge]", `${backendCommandPath} ${backendArgs.join(" ")}`);
 
   return new Promise((resolve) => {
-    let hostsJsonPath;
-    exec(
-      backendCommand,
-      { maxBuffer: 1024 * 1024 * 20 },
-      (error, stdout, stderr) => {
-        resolve(stdout);
-        global.logBackend("", stdout);
-        global.logBackend("", stderr);
-        if (stdout.includes("Ollama")) {
-          sendError("[Bridge] Backend LLM generation error!");
-        }
-        if (error) {
-          if (stderr.includes("supported capture file")) {
-            sendError("[Bridge] Unsupported file format!");
-          } else {
-            sendError("[Bridge] Backend execution error! " + error);
-          }
+    const sentSnapshotPaths = new Set();
+    let stdoutBuffer = "";
+    let stderrBuffer = "";
+    let parsedTotalPackets = 0;
+    let latestProcessedPackets = 0;
+    const backendProc = spawn(backendCommandPath, backendArgs, {
+      windowsHide: true,
+    });
+
+    const snapshotScanTimer = setInterval(() => {
+      const snapshotPayloads = scanChunkSnapshots(sentSnapshotPaths);
+      snapshotPayloads.forEach((payload) => {
+        latestProcessedPackets = Math.max(
+          latestProcessedPackets,
+          payload.processedPackets,
+        );
+        payload.totalPackets = parsedTotalPackets;
+        sendJsonPathPayload(payload);
+      });
+    }, 600);
+
+    const handleProgressText = (text) => {
+      if (!text) return;
+      const progressPayload = parseBridgeProgressLine(text);
+      if (progressPayload) {
+        parsedTotalPackets = Math.max(
+          parsedTotalPackets,
+          progressPayload.totalPackets || 0,
+        );
+        latestProcessedPackets = Math.max(
+          latestProcessedPackets,
+          progressPayload.processedPackets || 0,
+        );
+        sentSnapshotPaths.add(progressPayload.path);
+        sendJsonPathPayload(progressPayload);
+        return;
+      }
+
+      const totalMatch = text.match(/Preparing to process\s+(\d+)/);
+      if (totalMatch) {
+        parsedTotalPackets = Number(totalMatch[1]);
+      }
+    };
+
+    backendProc.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      stdoutBuffer += text;
+      global.logBackend("", text);
+      text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach(handleProgressText);
+    });
+
+    backendProc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderrBuffer += text;
+      global.logBackend("", text);
+      text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach(handleProgressText);
+    });
+
+    backendProc.on("error", (error) => {
+      clearInterval(snapshotScanTimer);
+      sendError("[Bridge] Backend execution error! " + error);
+      resolve(stdoutBuffer);
+    });
+
+    backendProc.on("close", (code) => {
+      clearInterval(snapshotScanTimer);
+
+      const trailingSnapshots = scanChunkSnapshots(sentSnapshotPaths);
+      trailingSnapshots.forEach((payload) => {
+        latestProcessedPackets = Math.max(
+          latestProcessedPackets,
+          payload.processedPackets,
+        );
+        payload.totalPackets = parsedTotalPackets;
+        sendJsonPathPayload(payload);
+      });
+
+      if (stdoutBuffer.includes("Ollama")) {
+        sendError("[Bridge] Backend LLM generation error!");
+      }
+
+      if (code !== 0) {
+        if (stderrBuffer.includes("supported capture file")) {
+          sendError("[Bridge] Unsupported file format!");
         } else {
-          if (isPCAP) {
-            hostsJsonPath = path.join(testcaseOutputDir, "hosts.json");
-          } else {
-            hostsJsonPath = filename;
-          }
-          const mainWin = BrowserWindow.getAllWindows()[0];
-          if (mainWin && fs.existsSync(hostsJsonPath)) {
-            mainWin.webContents.send("json-path", hostsJsonPath);
-          } else {
-            sendError("[Bridge] hosts.json not found after backend execution!");
-          }
+          sendError(`[Bridge] Backend execution error! Exit code ${code}`);
         }
-      },
-    );
+        resolve(stdoutBuffer);
+        return;
+      }
+
+      const finalHostsPath = path.join(testcaseOutputDir, "hosts.json");
+      if (fs.existsSync(finalHostsPath)) {
+        sendJsonPathPayload({
+          path: finalHostsPath,
+          processedPackets: Math.max(latestProcessedPackets, parsedTotalPackets),
+          totalPackets: parsedTotalPackets,
+          complete: true,
+          chunkSize: HOST_CHUNK_SIZE,
+        });
+      } else {
+        sendError("[Bridge] hosts.json not found after backend execution!");
+      }
+
+      resolve(stdoutBuffer);
+    });
 
     global.logBackend("[Bridge] Backend started");
   });

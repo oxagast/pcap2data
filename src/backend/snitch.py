@@ -99,6 +99,8 @@ allPacketInfoLock = threading.Lock()
 llmCallLock = threading.Semaphore(numLlmThreads)  # cap simultaneous LLM calls
 
 hostOutputFile = "hosts.json"
+hostChunkSize = 250
+progressLinePrefix = "[BridgeProgress]"
 currentDir = os.getcwd()
 scriptDir = os.path.dirname(os.path.realpath(__file__)) + "/"
 
@@ -593,6 +595,32 @@ def byHost(outputDirPath, finalSummary):
         f.write(
             json.dumps({"Host": packetsByHost, "Final Summary": finalSummary}, indent=2)
         )
+
+
+def writeHostsSnapshot(
+    outputDirPath,
+    packetEntries,
+    finalSummary="",
+    outputFilename=hostOutputFile,
+):
+    """
+    Build and write a complete hosts snapshot file from the supplied packet entries.
+    Each snapshot remains frontend-compatible and self-contained.
+    """
+    packetMapByHost = {}
+    for entry in packetEntries:
+        host = entry.get("Host")
+        if host not in packetMapByHost:
+            packetMapByHost[host] = []
+        packetMapByHost[host].append(entry.get("Packet"))
+
+    packetMapByHost = sortAndIndexPackets(packetMapByHost)
+    snapshotPath = outputDirPath + "/" + outputFilename
+    with open(snapshotPath, "w+", encoding="utf-8") as snapshotFile:
+        snapshotFile.write(
+            json.dumps({"Host": packetMapByHost, "Final Summary": finalSummary}, indent=2)
+        )
+    return snapshotPath
 
 
 @lru_cache(maxsize=4096)
@@ -3041,8 +3069,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     the filename index so files from concurrent threads do not collide.
     Returns the merged info dict, or None if the packet should be skipped.
     """
-    # for every 500 packets, print a progress update with the packet index
-    if packetIndex % 500 == 0:
+    # for every 250 packets, print a progress update with the packet index
+    if packetIndex % 250 == 0:
         print(f"[Worker] Processing packet #{packetIndex}")
     srcMacAddr = p.src if p.haslayer("Ethernet") else "N/A"
     dstMacAddr = p.dst if p.haslayer("Ethernet") else "N/A"
@@ -3629,6 +3657,8 @@ def startThreading():
                     results.append(result)
             return results
 
+        nextSnapshotPacketCount = hostChunkSize
+
         with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
             taskFutures = {
                 executor.submit(processChunk, chunk): chunk for chunk in packetChunks
@@ -3638,6 +3668,24 @@ def startThreading():
                     break
                 try:
                     future.result()
+
+                    with allPacketInfoLock:
+                        processedPacketCount = len(allPacketInfo)
+                        allPacketInfoSnapshot = list(allPacketInfo)
+
+                    while processedPacketCount >= nextSnapshotPacketCount:
+                        chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
+                        snapshotPath = writeHostsSnapshot(
+                            outputDir,
+                            allPacketInfoSnapshot,
+                            "",
+                            chunkSnapshotName,
+                        )
+                        print(
+                            f"{progressLinePrefix} path={snapshotPath} processed={nextSnapshotPacketCount} total={totalPackets} final=0",
+                            file=sys.stderr,
+                        )
+                        nextSnapshotPacketCount += hostChunkSize
                 except Exception as exc:
                     if verbose >= 0:
                         print(
@@ -3906,7 +3954,13 @@ finally:
 
     # Always write hosts.json so the frontend can load data regardless of
     # whether LLM summarisation was enabled or succeeded.
-    byHost(outputDir, finalSummary)
+    with allPacketInfoLock:
+        finalPacketInfoSnapshot = list(allPacketInfo)
+    writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, finalSummary, hostOutputFile)
+    print(
+        f"{progressLinePrefix} path={outputDir + '/' + hostOutputFile} processed={len(finalPacketInfoSnapshot)} total={totalPackets} final=1",
+        file=sys.stderr,
+    )
 
     # Close the GeoIP reader now that all packets have been processed
     if geoIpReader is not None:

@@ -196,6 +196,71 @@ let noteIdCounter = 0;
 // Name of the session in the library (userData/sessions/). Null if unsaved.
 let currentSessionName = null;
 let sessionPickerPanel = null;
+const BACKEND_PACKET_CHUNK_SIZE = 250;
+let backendCaptureUpdateQueue = Promise.resolve();
+const backendProgressState = {
+  firstChunkLoaded: false,
+  processing: false,
+  processedPackets: 0,
+  totalPackets: 0,
+};
+
+function resetBackendProgressState() {
+  backendProgressState.firstChunkLoaded = false;
+  backendProgressState.processing = false;
+  backendProgressState.processedPackets = 0;
+  backendProgressState.totalPackets = 0;
+  updateBackendProcessingWarning();
+}
+
+function updateBackendProcessingWarning() {
+  const warningEl = document.getElementById("backend-processing-warning");
+  if (!warningEl) return;
+
+  if (!backendProgressState.firstChunkLoaded || !backendProgressState.processing) {
+    warningEl.style.display = "none";
+    warningEl.textContent = "";
+    return;
+  }
+
+  const processedText = backendProgressState.processedPackets > 0
+    ? String(backendProgressState.processedPackets)
+    : "0";
+  const totalText = backendProgressState.totalPackets > 0
+    ? String(backendProgressState.totalPackets)
+    : "?";
+  warningEl.textContent =
+    "Warning: packets are still being processed (" +
+    processedText +
+    " / " +
+    totalText +
+    "). Data is partial until backend processing completes.";
+  warningEl.style.display = "block";
+}
+
+function normalizeBackendJsonPathPayload(rawPayload) {
+  if (typeof rawPayload === "string") {
+    return {
+      path: rawPayload,
+      processedPackets: 0,
+      totalPackets: 0,
+      complete: true,
+      chunkSize: BACKEND_PACKET_CHUNK_SIZE,
+    };
+  }
+
+  if (!rawPayload || typeof rawPayload !== "object") {
+    return null;
+  }
+
+  return {
+    path: typeof rawPayload.path === "string" ? rawPayload.path : "",
+    processedPackets: Number(rawPayload.processedPackets) || 0,
+    totalPackets: Number(rawPayload.totalPackets) || 0,
+    complete: Boolean(rawPayload.complete),
+    chunkSize: Number(rawPayload.chunkSize) || BACKEND_PACKET_CHUNK_SIZE,
+  };
+}
 
 initializeInstallScreen({
   installapi: window.installapi,
@@ -371,6 +436,7 @@ sessionPickerPanel = initializeSessionPicker({
 async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
+  resetBackendProgressState();
   currentSessionName = null;
   p = [];
   capturedPackets = {};
@@ -1706,10 +1772,13 @@ function restoreSessionState(sessionState) {
   statusUpdate("Status: Session restored");
 }
 
-async function processCapturePath(capturePath) {
-  document.getElementById("loading-screen").style.display = "flex";
-  document.getElementById("loading-container").style.display = "block";
-  document.getElementById("loading-text").textContent = "Indexing capture...";
+async function processCapturePath(capturePath, options = {}) {
+  const { suppressLoadingOverlay = false, incrementalUpdate = false } = options;
+  if (!suppressLoadingOverlay) {
+    document.getElementById("loading-screen").style.display = "flex";
+    document.getElementById("loading-container").style.display = "block";
+    document.getElementById("loading-text").textContent = "Indexing capture...";
+  }
 
   if (!window.captureapi) {
     doError("Capture API is unavailable in this build");
@@ -1720,6 +1789,74 @@ async function processCapturePath(capturePath) {
   if (!loadResult?.success) {
     doError(`Failed to load capture: ${loadResult?.error || "unknown error"}`);
     fileLoaded(false);
+    return;
+  }
+
+  if (incrementalUpdate && isFileLoaded) {
+    capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+    finalSummary = capturedPackets["Final Summary"] || "";
+    jsonCapture = "[lazy-capture-store]";
+
+    const targetHostsDropdown = getCachedElement("target_hosts");
+    const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
+    const hostMap =
+      capturedPackets && typeof capturedPackets["Host"] === "object"
+        ? capturedPackets["Host"]
+        : {};
+
+    hostsList = ["0.0.0.0"];
+    while (targetHostsDropdown.options.length > 0) {
+      targetHostsDropdown.remove(0);
+    }
+
+    packetStubByKey.clear();
+    hydratedPacketCache.clear();
+
+    Object.keys(hostMap).forEach((host) => {
+      hostsList.push(host);
+      const optionEl = document.createElement("option");
+      optionEl.textContent = host;
+      optionEl.value = host;
+      targetHostsDropdown.appendChild(optionEl);
+      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      hostPackets.forEach((packet, packetIndex) => {
+        const packetKey = getPacketKey(packet, host, packetIndex);
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+      });
+    });
+
+    const availableHosts = hostsList.slice(1);
+    const selectedHost =
+      previousHost && availableHosts.includes(previousHost)
+        ? previousHost
+        : availableHosts[0] || "";
+    if (selectedHost) {
+      targetHostsDropdown.value = selectedHost;
+      hostFilterEl.value = selectedHost;
+      p = Array.isArray(hostMap[selectedHost]) ? hostMap[selectedHost] : [];
+    }
+
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+
+    if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
+      await runFilterQuery(filterInputEl.value, { trackHistory: false });
+    } else {
+      filteredPackets = undefined;
+      if (activeMainTab === MAIN_TAB_LIST) {
+        showPacketList();
+      }
+      if (activeMainTab === MAIN_TAB_DATA && p.length > 0) {
+        await handlePacketNavigation(undefined, null);
+      }
+      if (activeMainTab === MAIN_TAB_SUMMARY) {
+        showSummary();
+      }
+    }
+
     return;
   }
 
@@ -7708,37 +7845,98 @@ if (sessionsLibraryBtn) {
 // data transactions
 
 // when the main.js returns the capture path from snitch.py
-window.jsonapi.onJsonPath((jsonPath) => {
-  document.getElementById("loading-container").style.display = "block";
-  document.getElementById("error-container").style.display = "none";
-  statusUpdate("Loaded data from backend, processing...");
-  writeLogEntry(`Backend capture path received path="${jsonPath}"`);
-  // Clear library session name – this is a new PCAP capture, not a library session
-  currentSessionName = null;
-  void processCapturePath(jsonPath).then(() => {
-    const loadEndTime = performance.now();
-    document.getElementById("load-time").textContent =
-      "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
-    document.getElementById("total-packets").textContent =
-      "Total Packets: " + totalPacketCount();
-    writeLogEntry(
-      `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
-        (loadEndTime - startTime) /
-        1000
-      ).toFixed(2)}`,
-    );
-    filterInputEl.value = "";
-    updateFilterClearButtonState();
-    clearFilterQuery();
-    syncFilterHighlight();
-    statusUpdate("Status: Ready");
-  });
+window.jsonapi.onJsonPath((rawPayload) => {
+  const payload = normalizeBackendJsonPathPayload(rawPayload);
+  if (!payload || !payload.path) return;
+
+  backendCaptureUpdateQueue = backendCaptureUpdateQueue
+    .then(async () => {
+      document.getElementById("error-container").style.display = "none";
+      // Clear library session name – this is a new PCAP capture, not a library session
+      currentSessionName = null;
+
+      backendProgressState.processedPackets = Math.max(
+        backendProgressState.processedPackets,
+        payload.processedPackets,
+      );
+      backendProgressState.totalPackets = Math.max(
+        backendProgressState.totalPackets,
+        payload.totalPackets,
+      );
+      backendProgressState.processing = !payload.complete;
+
+      const minimumChunkSize = payload.chunkSize || BACKEND_PACKET_CHUNK_SIZE;
+      const hasUsableChunk =
+        payload.complete || payload.processedPackets >= minimumChunkSize;
+
+      if (!backendProgressState.firstChunkLoaded) {
+        if (!hasUsableChunk) {
+          document.getElementById("loading-screen").style.display = "flex";
+          document.getElementById("loading-container").style.display = "block";
+          document.getElementById("loading-text").textContent = "Loading packets...";
+          statusUpdate("Status: Waiting for initial packet batch...");
+          updateBackendProcessingWarning();
+          return;
+        }
+
+        document.getElementById("loading-screen").style.display = "flex";
+        document.getElementById("loading-container").style.display = "block";
+        document.getElementById("loading-text").textContent = "Loading packets...";
+        statusUpdate("Status: Initial packet batch ready, loading...");
+        writeLogEntry(
+          `Backend snapshot received path="${payload.path}" processed=${payload.processedPackets} total=${payload.totalPackets} complete=${payload.complete}`,
+        );
+        await processCapturePath(payload.path, {
+          suppressLoadingOverlay: false,
+          incrementalUpdate: false,
+        });
+        backendProgressState.firstChunkLoaded = true;
+        filterInputEl.value = "";
+        updateFilterClearButtonState();
+        clearFilterQuery();
+        syncFilterHighlight();
+      } else {
+        statusUpdate("Status: Updating packet data as backend processes capture...");
+        await processCapturePath(payload.path, {
+          suppressLoadingOverlay: true,
+          incrementalUpdate: true,
+        });
+        writeLogEntry(
+          `Backend incremental update processed=${payload.processedPackets} total=${payload.totalPackets} complete=${payload.complete}`,
+        );
+      }
+
+      if (payload.complete) {
+        backendProgressState.processing = false;
+        const loadEndTime = performance.now();
+        document.getElementById("load-time").textContent =
+          "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+        document.getElementById("total-packets").textContent =
+          "Total Packets: " + totalPacketCount();
+        writeLogEntry(
+          `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
+            (loadEndTime - startTime) /
+            1000
+          ).toFixed(2)}`,
+        );
+        statusUpdate("Status: Ready");
+      }
+
+      updateBackendProcessingWarning();
+    })
+    .catch((error) => {
+      logErrorEntry("backend-progress", error);
+      doError("Failed to process backend update", { backend: true });
+    });
 });
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file) {
+  resetBackendProgressState();
+  backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
   document.getElementById("loading-container").style.display = "block";
+  document.getElementById("loading-text").textContent = "Loading packets...";
   showSummaryLoading();
   document.getElementById("status").textContent =
     "Status: Running snitch backend, this may take a few minutes...";

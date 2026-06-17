@@ -1626,6 +1626,18 @@ strong {
   font-size: 16px;
 }
 
+#backend-processing-warning {
+  display: none;
+  margin: 8px 0;
+  padding: 6px 8px;
+  border: 1px solid #d39b29;
+  border-radius: 4px;
+  background-color: rgba(211, 155, 41, 0.14);
+  color: #ffd57a;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
 #packetPayloadPane {
   width: 100%;
   box-sizing: border-box;
