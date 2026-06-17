@@ -4,6 +4,9 @@ const os = require("os");
 const platform = os.platform();
 const path = require("path");
 const fs = require("fs");
+const { promisify } = require("util");
+const zlib = require("zlib");
+const gunzipAsync = promisify(zlib.gunzip);
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
 
@@ -108,6 +111,8 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
   }
   let isPCAP = false;
   let isSession = false;
+  let isCompressedSession = false;
+  let sessionCompression = null;
   // try to make a prelimienary determination of what type of file this is based on magic
   const fileForMagic = fs.readFileSync(filename, "binary", { encoding: "utf8" });
   if (fileForMagic.startsWith("{") && fileForMagic.endsWith("}")) {
@@ -116,6 +121,16 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
       global.logBackend("[Bridge] File looks like a PacketSnitch session file with hosts and packets!");
       isSession = true;
     }
+  } else if (fileForMagic.startsWith("\xfd\x37\x7a\x58\x5a")) {
+    global.logBackend("[Bridge] File looks like an xz-compressed file, this is probably a .pss session file!");
+    isSession = true;
+    isCompressedSession = true;
+    sessionCompression = "xz";
+  } else if (fileForMagic.startsWith("\x1f\x8b")) {
+    global.logBackend("[Bridge] File looks like a gzip-compressed file, this is probably a .pss.gz session file!");
+    isSession = true;
+    isCompressedSession = true;
+    sessionCompression = "gzip";
   } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
     global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
     isPCAP = true;
@@ -143,8 +158,33 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
       global.logBackend("[Bridge] File does not appear to be a session file or a known pcap format?");
       sendError("[Bridge] File does not appear to be a session file or a known pcap format!");
     } else {
+      let sessionJsonPath = filename;
+      if (isCompressedSession) {
+        try {
+          const compressedBuffer = fs.readFileSync(filename);
+          let decompressedBuffer;
+          if (sessionCompression === "gzip") {
+            decompressedBuffer = await gunzipAsync(compressedBuffer);
+          } else {
+            let lzmaNative = null;
+            try { lzmaNative = require("lzma-native"); } catch { }
+            if (!lzmaNative) {
+              sendError("[Bridge] Cannot load xz-compressed session (.pss / .json.xz) without lzma-native support!");
+              return "";
+            }
+            decompressedBuffer = await lzmaNative.decompress(compressedBuffer);
+          }
+          const tempPath = path.join(systemTempDir, `pss-session-${Date.now()}.json`);
+          fs.writeFileSync(tempPath, decompressedBuffer);
+          sessionJsonPath = tempPath;
+          global.logBackend(`[Bridge] Decompressed session to temp file: ${tempPath}`);
+        } catch (err) {
+          sendError(`[Bridge] Failed to decompress session file: ${err.message}`);
+          return "";
+        }
+      }
       sendJsonPathPayload({
-        path: filename,
+        path: sessionJsonPath,
         processedPackets: 0,
         totalPackets: 0,
         complete: true,

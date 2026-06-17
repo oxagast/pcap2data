@@ -197,7 +197,9 @@ let noteIdCounter = 0;
 let currentSessionName = null;
 let sessionPickerPanel = null;
 const BACKEND_PACKET_CHUNK_SIZE = 250;
+const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
+let sessionAutosaveInFlight = false;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -278,18 +280,6 @@ const {
   logapi: window.logapi,
   documentRef: document,
   consoleRef: console,
-  buildSessionFilePayload,
-  canAutosaveSession: () => {
-    if (!isFileLoaded) return false;
-    if (!capturedPackets || typeof capturedPackets !== "object") return false;
-    const hosts = capturedPackets["Host"];
-    if (!hosts || typeof hosts !== "object") return false;
-    return Object.keys(hosts).some((host) => {
-      const hostPackets = hosts[host];
-      return Array.isArray(hostPackets) && hostPackets.length > 0;
-    });
-  },
-  sessionsapi: window.sessionsapi,
 });
 
 const { showStats } = createStatsPanel({
@@ -520,6 +510,7 @@ function getPacketTimeframe() {
 }
 
 void initializeActivityLog();
+startSessionAutosaveTimer();
 
 popHexGrid("00".repeat(256));
 // Set up file upload handler for JSON capture
@@ -1395,6 +1386,57 @@ function buildSessionFilePayload() {
     null,
     2,
   );
+}
+
+function canAutosaveCurrentSession() {
+  if (!isFileLoaded) return false;
+  if (!capturedPackets || typeof capturedPackets !== "object") return false;
+  const hosts = capturedPackets["Host"];
+  if (!hosts || typeof hosts !== "object") return false;
+  return Object.keys(hosts).some((host) => {
+    const hostPackets = hosts[host];
+    return Array.isArray(hostPackets) && hostPackets.length > 0;
+  });
+}
+
+async function autosaveSessionToDisk() {
+  const sessionsApiRef = window.sessionsapi;
+  if (!sessionsApiRef || typeof sessionsApiRef.save !== "function") return;
+  if (!canAutosaveCurrentSession()) return;
+  if (sessionAutosaveInFlight) return;
+
+  sessionAutosaveInFlight = true;
+  try {
+    const sessionJsonData = buildSessionFilePayload();
+    if (!sessionJsonData || sessionJsonData.length <= 5000) return;
+
+    const autosaveTargetName =
+      typeof currentSessionName === "string" && currentSessionName.trim()
+        ? currentSessionName.trim()
+        : "autosave";
+    const result = await sessionsApiRef.save(autosaveTargetName, sessionJsonData);
+
+    if (result?.success && autosaveTargetName !== "autosave" && result.name) {
+      currentSessionName = result.name;
+    }
+    if (result?.success) {
+      writeLogEntry(
+        `Session autosaved target="${autosaveTargetName}" source=timer-5m`,
+      );
+    } else if (result && !result.canceled) {
+      logErrorEntry("session-autosave", result.error || "unknown");
+    }
+  } catch (error) {
+    logErrorEntry("session-autosave", error);
+  } finally {
+    sessionAutosaveInFlight = false;
+  }
+}
+
+function startSessionAutosaveTimer() {
+  window.setInterval(() => {
+    void autosaveSessionToDisk();
+  }, SESSION_AUTOSAVE_INTERVAL_MS);
 }
 
 async function persistSessionToDisk(sourceLabel = "manual-save") {

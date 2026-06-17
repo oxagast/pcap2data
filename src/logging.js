@@ -3,10 +3,6 @@ function initializeLogging({
   logapi = null,
   documentRef = document,
   consoleRef = console,
-  buildSessionFilePayload = null,
-  canAutosaveSession = null,
-  sessionsapi = null,
-  windowRef = window,
 }) {
   let activityLogPath = "Unavailable";
   const activityLogEntries = [];
@@ -52,30 +48,9 @@ function initializeLogging({
     }
   }
 
-  function writeLogEntry(message, { autosave = true } = {}) {
+  function writeLogEntry(message) {
     const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
     addActivityLogEntry(stampedMessage);
-    if (!autosave) return;
-
-    if (
-      typeof canAutosaveSession === "function" &&
-      !canAutosaveSession()
-    ) {
-      return;
-    }
-
-    if (typeof buildSessionFilePayload !== "function") return;
-    const sessionDataJson = buildSessionFilePayload();
-    // this ensures that we only autosave on real session data and not
-    // on an error case, or when only the dummy "structure packet" is loaded.
-    if (sessionDataJson && sessionDataJson.length > 5000) {
-      const sessionsApiRef = sessionsapi || windowRef?.sessionsapi;
-      if (sessionDataJson && sessionsApiRef && typeof sessionsApiRef.save === "function") {
-        sessionsApiRef.save("autosave", sessionDataJson).catch((error) => {
-          logErrorEntry("Could not autosave session: ", error);
-        });
-      }
-    }
   }
 
   function writeConsoleLogEntry(message) {
@@ -100,7 +75,7 @@ function initializeLogging({
       error && typeof error === "object" && "message" in error
         ? error.message
         : String(error);
-    writeLogEntry(`Error context=${context} details="${errorDetails}"`, { autosave: false });
+    writeLogEntry(`Error context=${context} details="${errorDetails}"`);
   }
 
   function formatConsoleValue(value) {
