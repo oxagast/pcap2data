@@ -73,12 +73,13 @@ function initializeLogging({
     if (message.length > 300) {
       message = message.substring(0, 300) + " [truncated]";
     }
+
     const stampedMessage = `[${new Date().toISOString()}] [Console][Renderer] ${message}`;
     addActivityLogEntry(stampedMessage);
   }
 
   function writeBackendErrorLogEntry(message) {
-    const stampedMessage = `[${new Date().toISOString()}] [Console][Snitch] ${message}`;
+    const stampedMessage = `[${new Date().toISOString()}] [Console][Snitch]${message}`;
     addActivityLogEntry(stampedMessage);
   }
 

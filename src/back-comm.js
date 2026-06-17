@@ -30,7 +30,7 @@ function sendJsonPathPayload(payload) {
 }
 
 function parseBridgeProgressLine(line) {
-  if (!line || !line.includes("[BridgeProgress]")) return null;
+  if (!line || !line.includes("[Bridge]")) return null;
   const pathMatch = line.match(/path=([^\s]+)/);
   const processedMatch = line.match(/processed=(\d+)/);
   const totalMatch = line.match(/total=(\d+)/);

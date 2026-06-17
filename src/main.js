@@ -221,6 +221,10 @@ global.logBackend = (...args) => {
   const timestamp = new Date().toISOString();
   message.split(/\r?\n/).forEach((line) => {
     if (line.trim() === "") return;
+    // if the line begins with a space, remove it
+    if (line.startsWith(" ")) {
+      line = line.substring(1);
+    }
     appendActivityLogLine(`[${timestamp}] [Console][Snitch]${line}`);
   });
 };

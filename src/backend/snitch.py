@@ -100,7 +100,7 @@ llmCallLock = threading.Semaphore(numLlmThreads)  # cap simultaneous LLM calls
 
 hostOutputFile = "hosts.json"
 hostChunkSize = 250
-progressLinePrefix = "[BridgeProgress]"
+progressLinePrefix = "[Bridge]"
 currentDir = os.getcwd()
 scriptDir = os.path.dirname(os.path.realpath(__file__)) + "/"
 
