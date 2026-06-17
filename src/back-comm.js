@@ -119,8 +119,7 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
           }
           const mainWin = BrowserWindow.getAllWindows()[0];
           if (mainWin && fs.existsSync(hostsJsonPath)) {
-            const hostsJsonData = fs.readFileSync(hostsJsonPath, "utf8");
-            mainWin.webContents.send("json-data", hostsJsonData);
+            mainWin.webContents.send("json-path", hostsJsonPath);
           } else {
             sendError("[Bridge] hosts.json not found after backend execution!");
           }

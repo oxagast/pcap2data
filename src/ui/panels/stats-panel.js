@@ -231,11 +231,11 @@ function createStatsPanel(options) {
     setPacketsForHost,
   } = options;
 
-  function applyStatsQuery(query) {
+  async function applyStatsQuery(query) {
     filterInputEl.value = query;
     syncFilterHighlight();
     writeLogEntry(`Stats tag clicked query="${query}"`);
-    runFilterQuery(query);
+    await runFilterQuery(query);
     const filteredPackets = getFilteredPackets();
     if (Array.isArray(filteredPackets) && filteredPackets.length > 0) {
       setPacketsForHost(filteredPackets);

@@ -2,7 +2,7 @@ import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
-const { filterPackets, validateFilterSyntax } = require("../filter");
+const { validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
 const {
@@ -151,6 +151,9 @@ let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
 let startTime;
+const packetStubByKey = new Map();
+const hydratedPacketCache = new Map();
+const HYDRATED_PACKET_CACHE_LIMIT = 8;
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -276,7 +279,7 @@ const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
       activeMainTab = tab;
     },
     handlePacketNavigation: (navAction, navBookmark) =>
-      handlePacketNavigation(navAction, navBookmark),
+      void handlePacketNavigation(navAction, navBookmark),
     getIndex: () => index,
     setIndex: (nextIndex) => {
       const normalizedIndex = setActivePacketCursor(nextIndex);
@@ -302,10 +305,30 @@ sessionPickerPanel = initializeSessionPicker({
   sessionsapi: window.sessionsapi,
   documentRef: document,
   buildSessionFilePayload,
-  onSessionSelected: (name, jsonData) => {
+  onSessionSelected: async (name, jsonData) => {
     currentSessionName = name;
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
+    if (window.captureapi) {
+      const loadResult = await window.captureapi.loadJson(jsonData);
+      if (!loadResult?.success) {
+        doError(`Failed to load session: ${loadResult?.error || "unknown error"}`);
+        return;
+      }
+      const syntheticPayload = {
+        [SESSION_CAPTURE_KEY]: loadResult.captureData,
+      };
+      if (loadResult.sessionState) {
+        syntheticPayload[SESSION_STATE_KEY] = loadResult.sessionState;
+      }
+      processFile(
+        new File([JSON.stringify(syntheticPayload)], name + ".json", {
+          type: "application/json",
+        }),
+      );
+      return;
+    }
+
     processFile(
       new File([jsonData], name + ".json", { type: "application/json" }),
     );
@@ -762,7 +785,105 @@ function addDataToolsInputHistory(format, input) {
   renderDataToolsInputHistory();
 }
 
-function runFilterQuery(filterQuery, options = {}) {
+function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
+  if (packet && typeof packet.__packetKey === "string" && packet.__packetKey) {
+    return packet.__packetKey;
+  }
+  const packetInfo = packet?.["Packet Info"];
+  const sourceIp =
+    packetInfo?.["IP"]?.["Source IP"] || fallbackHost || "Unknown";
+  const packetIndex = packetInfo?.["Index"] ?? fallbackIndex;
+  return sourceIp + ":" + packetIndex;
+}
+
+function cachePacketStub(packetKey, packetStub) {
+  if (!packetKey || !packetStub) return;
+  if (!packetStubByKey.has(packetKey)) {
+    packetStubByKey.set(packetKey, packetStub);
+  }
+}
+
+function cacheHydratedPacket(packetKey, packet) {
+  if (!packetKey || !packet) return;
+  if (hydratedPacketCache.has(packetKey)) {
+    hydratedPacketCache.delete(packetKey);
+  }
+  hydratedPacketCache.set(packetKey, packet);
+  while (hydratedPacketCache.size > HYDRATED_PACKET_CACHE_LIMIT) {
+    const oldestKey = hydratedPacketCache.keys().next().value;
+    if (!oldestKey) break;
+    hydratedPacketCache.delete(oldestKey);
+  }
+}
+
+function updatePacketInCollections(packetKey, packet) {
+  if (!packetKey || !packet) return;
+  const hosts = capturedPackets?.Host || {};
+  for (const host of Object.keys(hosts)) {
+    const packetList = hosts[host];
+    if (!Array.isArray(packetList)) continue;
+    const packetIndex = packetList.findIndex(
+      (entry) => getPacketKey(entry, host) === packetKey,
+    );
+    if (packetIndex >= 0) {
+      packetList[packetIndex] = packet;
+      break;
+    }
+  }
+
+  if (Array.isArray(filteredPackets)) {
+    const filteredIndex = filteredPackets.findIndex(
+      (entry) => getPacketKey(entry) === packetKey,
+    );
+    if (filteredIndex >= 0) {
+      filteredPackets[filteredIndex] = packet;
+    }
+  }
+
+  if (Array.isArray(p)) {
+    const packetIndex = p.findIndex((entry) => getPacketKey(entry) === packetKey);
+    if (packetIndex >= 0) {
+      p[packetIndex] = packet;
+    }
+  }
+}
+
+async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0) {
+  if (!packet) return null;
+  const packetKey = getPacketKey(packet, fallbackHost, fallbackIndex);
+  if (!packetKey) return packet;
+
+  const payloadHex =
+    packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+  if (typeof payloadHex === "string" && payloadHex.length > 0) {
+    cacheHydratedPacket(packetKey, packet);
+    return packet;
+  }
+
+  if (hydratedPacketCache.has(packetKey)) {
+    return hydratedPacketCache.get(packetKey);
+  }
+
+  if (!window.captureapi) {
+    return packet;
+  }
+
+  const result = await window.captureapi.getPacket(packetKey);
+  if (!result?.success || !result.packet) {
+    return packet;
+  }
+
+  const hydrated = {
+    ...result.packet,
+    __packetKey: packetKey,
+    __packetStub: false,
+  };
+  cacheHydratedPacket(packetKey, hydrated);
+  updatePacketInCollections(packetKey, hydrated);
+  return hydrated;
+}
+
+async function runFilterQuery(filterQuery, options = {}) {
   const { trackHistory = true } = options;
   try {
     validateFilterSyntax(filterQuery);
@@ -777,7 +898,25 @@ function runFilterQuery(filterQuery, options = {}) {
   if (trackHistory) {
     addFilterHistory(filterQuery);
   }
-  filteredPackets = filterPackets(capturedPackets, filterQuery);
+
+  if (window.captureapi) {
+    const filterResult = await window.captureapi.filter(filterQuery);
+    if (!filterResult?.success) {
+      const errorText =
+        typeof filterResult?.error === "string"
+          ? filterResult.error
+          : "Filter failed";
+      doError(`Filter execution failed: ${errorText}`);
+      statusUpdate("Status: Filter execution failed");
+      return;
+    }
+    filteredPackets = filterResult.packetKeys
+      .map((packetKey) => packetStubByKey.get(packetKey))
+      .filter(Boolean);
+  } else {
+    filteredPackets = [];
+  }
+
   if (filterQuery === "") {
     writeLogEntry("User cleared filter query");
     statusUpdate("Status: Filter cleared, displaying all packets");
@@ -797,7 +936,7 @@ function runFilterQuery(filterQuery, options = {}) {
       " packets matching filter",
     );
     writeLogEntry(`User query returned packets=${filteredPackets.length}`);
-    handlePacketNavigation("filtered", null);
+    await handlePacketNavigation("filtered", null);
   }
 }
 
@@ -809,7 +948,7 @@ function clearFilterQuery() {
   syncFilterHighlight();
   filterHistorySelectEl.value = "";
   filterInputEl.focus();
-  runFilterQuery("");
+  void runFilterQuery("");
 }
 
 function deepCloneSessionData(value, fallback) {
@@ -1477,7 +1616,7 @@ function restoreSessionState(sessionState) {
   filterInputEl.value = restoredFilterQuery;
   syncFilterHighlight();
   if (restoredFilterQuery.trim()) {
-    runFilterQuery(restoredFilterQuery, { trackHistory: false });
+    void runFilterQuery(restoredFilterQuery, { trackHistory: false });
   } else {
     filteredPackets = [];
   }
@@ -1494,7 +1633,7 @@ function restoreSessionState(sessionState) {
       filteredPackets.length > 0
       ? "filtered"
       : "first-load";
-  handlePacketNavigation(navAction);
+  void handlePacketNavigation(navAction);
 
   const tabState =
     sessionState.tabs && typeof sessionState.tabs === "object"
@@ -1567,11 +1706,63 @@ function restoreSessionState(sessionState) {
   statusUpdate("Status: Session restored");
 }
 
+async function processCapturePath(capturePath) {
+  document.getElementById("loading-screen").style.display = "flex";
+  document.getElementById("loading-container").style.display = "block";
+  document.getElementById("loading-text").textContent = "Indexing capture...";
+
+  if (!window.captureapi) {
+    doError("Capture API is unavailable in this build");
+    return;
+  }
+
+  const loadResult = await window.captureapi.loadFile(capturePath);
+  if (!loadResult?.success) {
+    doError(`Failed to load capture: ${loadResult?.error || "unknown error"}`);
+    fileLoaded(false);
+    return;
+  }
+
+  capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+  finalSummary = capturedPackets["Final Summary"] || "";
+  jsonCapture = "[lazy-capture-store]";
+  fileLoaded(true);
+
+  let loadedSessionState =
+    loadResult.sessionState && typeof loadResult.sessionState === "object"
+      ? loadResult.sessionState
+      : null;
+
+  // Reuse the existing session flow by processing a tiny synthetic payload.
+  // processFile() rebuilds the host dropdown, bookmarks, notes, and panel state.
+  const syntheticPayload = {
+    [SESSION_CAPTURE_KEY]: capturedPackets,
+  };
+  if (loadedSessionState) {
+    syntheticPayload[SESSION_STATE_KEY] = loadedSessionState;
+  }
+  processFile(
+    new File([JSON.stringify(syntheticPayload)], "lazy-capture.json", {
+      type: "application/json",
+    }),
+  );
+}
+
 /**
  * Reads and parses the JSON file, updates UI and state.
  * Uses chunked parsing for large files to avoid UI blocking.
  */
 function processFile(file) {
+  if (
+    window.captureapi &&
+    file &&
+    typeof file.path === "string" &&
+    file.path.trim()
+  ) {
+    void processCapturePath(file.path);
+    return;
+  }
+
   document.getElementById("loading-screen").style.display = "flex";
   document.getElementById("loading-container").style.display = "block";
   document.getElementById("loading-text").textContent = "Loading packets...";
@@ -1658,12 +1849,24 @@ function processFile(file) {
       selectBookmarkEl.remove(1);
     }
     // Populate host dropdown with hosts from JSON
+    packetStubByKey.clear();
+    hydratedPacketCache.clear();
     for (const host in capturedPackets["Host"]) {
       hostsList.push(host);
       const newhost = document.createElement("option");
       newhost.textContent = host;
       newhost.value = host;
       targetHostsDropdown.appendChild(newhost);
+      const hostPackets = Array.isArray(capturedPackets["Host"][host])
+        ? capturedPackets["Host"][host]
+        : [];
+      hostPackets.forEach((packet, packetIndex) => {
+        const packetKey = getPacketKey(packet, host, packetIndex);
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+      });
       isFileLoaded = true;
     }
     if (hostsList.length > 1) {
@@ -1756,7 +1959,7 @@ getCachedElement("target_hosts").addEventListener("change", function () {
   const hostFilterQuery = buildHostTargetFilterQuery(selected);
   filterInputEl.value = hostFilterQuery;
   syncFilterHighlight();
-  runFilterQuery(hostFilterQuery, { trackHistory: false });
+  void runFilterQuery(hostFilterQuery, { trackHistory: false });
 });
 
 function parseDataToolsInput(format, rawInput) {
@@ -5105,6 +5308,16 @@ function extractSmbFileCandidates(streamPackets) {
   return candidates;
 }
 
+async function hydratePacketCollection(packetList) {
+  if (!Array.isArray(packetList) || packetList.length === 0) return [];
+  const hydratedPackets = [];
+  for (let packetIndex = 0; packetIndex < packetList.length; packetIndex += 1) {
+    const hydratedPacket = await ensurePacketHydrated(packetList[packetIndex]);
+    hydratedPackets.push(hydratedPacket || packetList[packetIndex]);
+  }
+  return hydratedPackets;
+}
+
 function parseRpcBaseOffset(payload) {
   if (!payload || payload.length < 8) return 0;
   const recordMark = readUint32Be(payload, 0);
@@ -5310,7 +5523,7 @@ function selectCarveCandidate(candidates, protocolLabel) {
   return visibleOptions[parsedChoice - 1];
 }
 
-function carveCurrentStreamToFileFromContextMenu(protocolName) {
+async function carveCurrentStreamToFileFromContextMenu(protocolName) {
   hideConvertContextMenu();
   const normalized = String(protocolName || "").toLowerCase().trim();
   const protocolLabel = normalized.toUpperCase();
@@ -5325,9 +5538,11 @@ function carveCurrentStreamToFileFromContextMenu(protocolName) {
     return;
   }
 
+  const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+
   const candidates = buildFileCarveCandidatesForProtocol(
     normalized,
-    streamPackets,
+    hydratedStreamPackets,
   );
   if (!candidates.length) {
     statusUpdate(`Status: No ${protocolLabel} file data found in this stream`);
@@ -5375,24 +5590,23 @@ function followStreamToConv() {
   if (isLarge) {
     showStreamLoadingOverlay();
     setTimeout(() => {
-      try {
-        _doFollowStreamToConv();
-      } finally {
+      void _doFollowStreamToConv().finally(() => {
         hideStreamLoadingOverlay();
-      }
+      });
     }, 0);
   } else {
-    _doFollowStreamToConv();
+    void _doFollowStreamToConv();
   }
 }
 
-function _doFollowStreamToConv() {
+async function _doFollowStreamToConv() {
   const streamPackets = getFollowStreamPackets();
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
   }
-  const combinedHex = buildStreamHex(streamPackets);
+  const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+  const combinedHex = buildStreamHex(hydratedStreamPackets);
   if (!combinedHex) {
     statusUpdate("Status: Stream packets have no payload data");
     return;
@@ -5414,24 +5628,23 @@ function followStreamToCrypt() {
   if (isLarge) {
     showStreamLoadingOverlay();
     setTimeout(() => {
-      try {
-        _doFollowStreamToCrypt();
-      } finally {
+      void _doFollowStreamToCrypt().finally(() => {
         hideStreamLoadingOverlay();
-      }
+      });
     }, 0);
   } else {
-    _doFollowStreamToCrypt();
+    void _doFollowStreamToCrypt();
   }
 }
 
-function _doFollowStreamToCrypt() {
+async function _doFollowStreamToCrypt() {
   const streamPackets = getFollowStreamPackets();
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
   }
-  const combinedHex = buildStreamHex(streamPackets);
+  const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+  const combinedHex = buildStreamHex(hydratedStreamPackets);
   if (!combinedHex) {
     statusUpdate("Status: Stream packets have no payload data");
     return;
@@ -6568,7 +6781,7 @@ document
     } else {
       document.getElementById("target_hosts").value = bookmarkHost;
     }
-    handlePacketNavigation("bookmark", activeBookmark);
+    void handlePacketNavigation("bookmark", activeBookmark);
   });
 
 // Add current packet as a bookmark
@@ -6683,6 +6896,11 @@ function findPacketIndexByKey(packetSet, packetKey) {
     return -1;
   }
 
+  const directIndex = packetSet.findIndex(
+    (packet) => packet?.__packetKey === packetKey,
+  );
+  if (directIndex >= 0) return directIndex;
+
   const separatorIndex = packetKey.lastIndexOf(":");
   if (separatorIndex < 0) return -1;
 
@@ -6721,7 +6939,7 @@ function setPrevNextButtonVisibility(packetSet, index) {
  * Handles navigation between capturedPackets (next, prev, activeBookmark, first-load).
  * Updates UI and packet info accordingly.
  */
-function handlePacketNavigation(navAction, navBookmark) {
+async function handlePacketNavigation(navAction, navBookmark) {
   activeMainTab = MAIN_TAB_DATA;
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
@@ -6744,7 +6962,8 @@ function handlePacketNavigation(navAction, navBookmark) {
   document.getElementById("total-packets").textContent =
     "Total Packets: " + totalPacketCount();
   if (navAction === undefined) {
-    handlePacketNavigation("first-load");
+    await handlePacketNavigation("first-load");
+    return;
   }
   let packetSet = capturedPackets["Host"][hostFilterEl.value];
   if (navAction === "filtered") {
@@ -6762,7 +6981,8 @@ function handlePacketNavigation(navAction, navBookmark) {
     ) {
       statusUpdate("Status: Invalid bookmark data, reverting to first packet");
       doError("Invalid bookmark data, missing host or packet index!");
-      handlePacketNavigation("first-load");
+      await handlePacketNavigation("first-load");
+      return;
     } else {
       index = navBookmark["Packet"] - 1;
       setActivePacketCursor(index);
@@ -6776,6 +6996,16 @@ function handlePacketNavigation(navAction, navBookmark) {
       writeLogEntry(
         `Navigating bookmark host=${navBookmark["Host"]} packet=${navBookmark["Packet"]}`,
       );
+    }
+  } else if (navAction === "next") {
+    if (Array.isArray(packetSet) && index < packetSet.length - 1) {
+      index += 1;
+      setActivePacketCursor(index);
+    }
+  } else if (navAction === "prev") {
+    if (Array.isArray(packetSet) && index > 0) {
+      index -= 1;
+      setActivePacketCursor(index);
     }
   } else {
     const packetIndexFromKey = findPacketIndexByKey(
@@ -6820,7 +7050,12 @@ function handlePacketNavigation(navAction, navBookmark) {
     doError("No packet information found for this host!");
     return;
   } else {
-    const activePacket = packetSet[index];
+    const activePacket = await ensurePacketHydrated(
+      packetSet[index],
+      hostFilterEl.value,
+      index,
+    );
+    packetSet[index] = activePacket;
     const packetInfo = activePacket?.["Packet Info"];
     if (!packetInfo) {
       statusUpdate("Status: Packet data is unavailable for this entry");
@@ -7472,36 +7707,32 @@ if (sessionsLibraryBtn) {
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
-// when the main.js returns our json data from snitch.py
-window.jsonapi.onJsonData((jsonData) => {
+// when the main.js returns the capture path from snitch.py
+window.jsonapi.onJsonPath((jsonPath) => {
   document.getElementById("loading-container").style.display = "block";
   document.getElementById("error-container").style.display = "none";
   statusUpdate("Loaded data from backend, processing...");
-  writeLogEntry("Backend JSON payload received for processing");
+  writeLogEntry(`Backend capture path received path="${jsonPath}"`);
   // Clear library session name – this is a new PCAP capture, not a library session
   currentSessionName = null;
-  processFile(
-    new File([jsonData], "capture.json", { type: "application/json" }),
-  );
-  const loadEndTime = performance.now();
-  document.getElementById("load-time").textContent =
-    "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
-  document.getElementById("total-packets").textContent =
-    "Total Packets: " + totalPacketCount();
-  writeLogEntry(
-    `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
-      (loadEndTime - startTime) /
-      1000
-    ).toFixed(2)}`,
-  );
-  filterInputEl.value = "";
-  updateFilterClearButtonState();
-  clearFilterQuery();
-  syncFilterHighlight();
-  if (capturedPackets && capturedPackets["Host"] && capturedPackets["Host"][hostFilterEl.value] !== "0.0.0.0") {
-    runFilterQuery("");
-  }
-  statusUpdate("Status: Ready");
+  void processCapturePath(jsonPath).then(() => {
+    const loadEndTime = performance.now();
+    document.getElementById("load-time").textContent =
+      "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+    writeLogEntry(
+      `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
+        (loadEndTime - startTime) /
+        1000
+      ).toFixed(2)}`,
+    );
+    filterInputEl.value = "";
+    updateFilterClearButtonState();
+    clearFilterQuery();
+    syncFilterHighlight();
+    statusUpdate("Status: Ready");
+  });
 });
 
 // here we create the backend process and hook it to the handler
@@ -7583,7 +7814,7 @@ document
   .addEventListener("keydown", function (event) {
     if (event.key === "Enter") {
       const filterQuery = filterInputEl.value;
-      runFilterQuery(filterQuery);
+      void runFilterQuery(filterQuery);
       filterHistorySelectEl.value = "";
     }
   });
@@ -7612,7 +7843,7 @@ filterHistorySelectEl.addEventListener("change", () => {
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
-  runFilterQuery(selectedQuery);
+  void runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
 });
 

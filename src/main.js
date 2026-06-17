@@ -6,6 +6,7 @@ const { pathToFileURL } = require("url");
 const { exec } = require("child_process");
 const os = require("os");
 const util = require("util");
+const { registerCaptureStoreHandlers } = require("./capture-store");
 const platform = os.platform();
 const testcaseTempDir = path.join(os.tmpdir(), "testcases");
 const CONSOLE_INSPECT_DEPTH = 6;
@@ -232,6 +233,7 @@ app.whenReady().then(() => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
     console.log("App ready, waiting for file selection...");
+    registerCaptureStoreHandlers(ipcMain);
     // start the process that listens for the file selection and runs the backend command
     require("./back-comm");
     ipcMain.handle("select-file", async () => {

@@ -1,11 +1,24 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('jsonapi', {
+  onJsonPath: (callback) => {
+    ipcRenderer.on('json-path', (_event, jsonPath) => {
+      callback(jsonPath);
+    });
+  },
   onJsonData: (callback) => {
     ipcRenderer.on('json-data', (event, hostsJsonData) => {
       callback(hostsJsonData);
     });
   },
+});
+
+contextBridge.exposeInMainWorld('captureapi', {
+  loadFile: (sourcePath) => ipcRenderer.invoke('capture-store-load-file', sourcePath),
+  loadJson: (jsonData) => ipcRenderer.invoke('capture-store-load-json', jsonData),
+  getPacket: (packetKey) => ipcRenderer.invoke('capture-store-get-packet', packetKey),
+  getPacketStub: (packetKey) => ipcRenderer.invoke('capture-store-get-packet-stub', packetKey),
+  filter: (query) => ipcRenderer.invoke('capture-store-filter', query),
 });
 
 contextBridge.exposeInMainWorld('snitchapi', {

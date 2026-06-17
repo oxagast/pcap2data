@@ -312,7 +312,7 @@ function createListPanel({
             tr.classList.remove("packet-list-hovered");
           });
 
-          tr.addEventListener("click", () => {
+          tr.addEventListener("click", async () => {
             tbody
               .querySelectorAll(".packet-list-selected")
               .forEach((r) => r.classList.remove("packet-list-selected"));
@@ -333,7 +333,7 @@ function createListPanel({
             if (streamFilter) {
               filterInputEl.value = streamFilter;
               syncFilterHighlight();
-              runFilterQuery(streamFilter);
+              await runFilterQuery(streamFilter);
               setPacketsForHost(getFilteredPackets());
             } else {
               const capturedPackets = getCapturedPackets();
