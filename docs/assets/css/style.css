@@ -38,4 +38,5 @@ tr:nth-child(even) {
 
 .markdown-body {
   width: 85%;
+  align-self: center;
 }
