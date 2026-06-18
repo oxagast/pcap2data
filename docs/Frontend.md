@@ -20,13 +20,6 @@ The PacketSnitch frontend is an Electron-based desktop application that provides
   - copy-webpack-plugin
   - ollama
 
-### Demo
-
-<p align="center">
-<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1000>
-</p>
-
-
 ### Loading Data
 
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/session-picker.png">

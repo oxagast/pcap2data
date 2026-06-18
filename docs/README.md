@@ -9,9 +9,7 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 ### Screenshot
 
 <p align="center">
-<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-views.gif">
-  <img alt="screenshots" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-views-smaller.gif" width="1200">
-</a>
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1200>
 </p>
 
 ### Documentation
