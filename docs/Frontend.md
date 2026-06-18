@@ -1,4 +1,3 @@
-<p align="center">
 <div id="text-mover">
 <p align="center">
 <a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
@@ -457,4 +456,3 @@ GPL v3
 
 Marshall Whittaker
 </div>
-</p>
