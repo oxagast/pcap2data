@@ -296,6 +296,8 @@ const { showStats } = createStatsPanel({
   syncFilterHighlight,
   runFilterQuery,
   getFilteredPackets: () => filteredPackets,
+  syncTargetHostFromPackets: (packets) =>
+    syncTargetHostFromFilteredPackets(packets, "Stats filter"),
   setPacketsForHost: (packets) => {
     p = packets;
   },
@@ -940,6 +942,153 @@ async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0
   return hydrated;
 }
 
+function isLocationFilterQuery(filterQuery) {
+  if (typeof filterQuery !== "string") return false;
+  return /\bloc\.(src|dst)\.(city|country|postal|tz|timezone)\s*:/i.test(
+    filterQuery,
+  );
+}
+
+function chooseTargetHostFromPacketMatches(matches) {
+  if (!Array.isArray(matches) || matches.length === 0) return "";
+
+  const targetHostsEl = getCachedElement("target_hosts");
+  const availableHosts = new Set(
+    Array.from(targetHostsEl.options || [])
+      .map((option) => String(option.value || "").trim())
+      .filter(Boolean),
+  );
+  const ipHitCounts = new Map();
+
+  matches.forEach((packet) => {
+    const sourceIp = packet?.["Packet Info"]?.["IP"]?.["Source IP"];
+    const destinationIp = packet?.["Packet Info"]?.["IP"]?.["Destination IP"];
+    [sourceIp, destinationIp].forEach((ipValue) => {
+      if (typeof ipValue !== "string") return;
+      const normalizedIp = ipValue.trim();
+      if (!normalizedIp) return;
+      if (!STRICT_IPV4_REGEX.test(normalizedIp)) return;
+      if (availableHosts.size > 0 && !availableHosts.has(normalizedIp)) return;
+      ipHitCounts.set(normalizedIp, (ipHitCounts.get(normalizedIp) || 0) + 1);
+    });
+  });
+
+  let selectedIp = "";
+  let highestHitCount = -1;
+  ipHitCounts.forEach((hitCount, ipValue) => {
+    if (hitCount > highestHitCount) {
+      highestHitCount = hitCount;
+      selectedIp = ipValue;
+    }
+  });
+  return selectedIp;
+}
+
+function syncTargetHostFromFilteredPackets(matches, sourceLabel = "filter") {
+  const selectedHost = chooseTargetHostFromPacketMatches(matches);
+  if (!syncTargetHostSelection(selectedHost)) {
+    return "";
+  }
+  writeLogEntry(`${sourceLabel} auto-selected target host=${selectedHost}`);
+  return selectedHost;
+}
+
+function syncTargetHostSelection(selectedHost) {
+  const normalizedHost =
+    typeof selectedHost === "string" ? selectedHost.trim() : "";
+  if (!normalizedHost) return false;
+
+  const targetHostsEl = getCachedElement("target_hosts");
+  const hostExists = Array.from(targetHostsEl.options || []).some(
+    (option) => option.value === normalizedHost,
+  );
+  if (!hostExists) return false;
+
+  if (targetHostsEl.value !== normalizedHost) {
+    targetHostsEl.value = normalizedHost;
+  }
+  if (hostFilterEl.value !== normalizedHost) {
+    hostFilterEl.value = normalizedHost;
+  }
+  return true;
+}
+
+function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
+  const packetInfo = packet?.["Packet Info"] || {};
+  const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+  const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
+  const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
+  const transport = packetInfo[protocol] || packetInfo[protocol.toLowerCase()] || {};
+  const sourcePort = transport?.["Source port"];
+  const destinationPort = transport?.["Destination port"];
+  const hasPorts =
+    sourcePort !== undefined &&
+    sourcePort !== null &&
+    destinationPort !== undefined &&
+    destinationPort !== null;
+
+  const endpointA = hasPorts ? `${sourceIp}:${sourcePort}` : sourceIp;
+  const endpointB = hasPorts ? `${destinationIp}:${destinationPort}` : destinationIp;
+  const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+  const streamKey = `${protocol}|${firstEndpoint}|${secondEndpoint}`;
+
+  const packetIndexRaw = Number(packetInfo?.["Index"]);
+  const packetIndex = Number.isFinite(packetIndexRaw)
+    ? packetIndexRaw
+    : fallbackOrder;
+
+  return {
+    streamKey,
+    packetIndex,
+    protocol,
+  };
+}
+
+function sortPacketsByOwnStreamOrder(packetList) {
+  if (!Array.isArray(packetList) || packetList.length < 2) {
+    return Array.isArray(packetList) ? packetList : [];
+  }
+
+  const streamOrderMap = new Map();
+  const decorated = packetList.map((packet, originalOrder) => {
+    const streamInfo = getPacketStreamSortInfo(packet, originalOrder + 1);
+    const existingStreamOrder = streamOrderMap.get(streamInfo.streamKey);
+    if (existingStreamOrder === undefined) {
+      streamOrderMap.set(streamInfo.streamKey, streamInfo.packetIndex);
+    } else if (streamInfo.packetIndex < existingStreamOrder) {
+      streamOrderMap.set(streamInfo.streamKey, streamInfo.packetIndex);
+    }
+
+    return {
+      packet,
+      originalOrder,
+      streamKey: streamInfo.streamKey,
+      packetIndex: streamInfo.packetIndex,
+    };
+  });
+
+  decorated.sort((left, right) => {
+    const leftStreamOrder = streamOrderMap.get(left.streamKey) ?? Number.MAX_SAFE_INTEGER;
+    const rightStreamOrder =
+      streamOrderMap.get(right.streamKey) ?? Number.MAX_SAFE_INTEGER;
+    if (leftStreamOrder !== rightStreamOrder) {
+      return leftStreamOrder - rightStreamOrder;
+    }
+
+    if (left.packetIndex !== right.packetIndex) {
+      return left.packetIndex - right.packetIndex;
+    }
+
+    if (left.streamKey !== right.streamKey) {
+      return left.streamKey.localeCompare(right.streamKey);
+    }
+
+    return left.originalOrder - right.originalOrder;
+  });
+
+  return decorated.map((entry) => entry.packet);
+}
+
 async function runFilterQuery(filterQuery, options = {}) {
   const { trackHistory = true, updateUi = true } = options;
   try {
@@ -970,8 +1119,13 @@ async function runFilterQuery(filterQuery, options = {}) {
     filteredPackets = filterResult.packetKeys
       .map((packetKey) => packetStubByKey.get(packetKey))
       .filter(Boolean);
+    filteredPackets = sortPacketsByOwnStreamOrder(filteredPackets);
   } else {
     filteredPackets = [];
+  }
+
+  if (isLocationFilterQuery(filterQuery) && filteredPackets.length > 0) {
+    syncTargetHostFromFilteredPackets(filteredPackets, "Location filter");
   }
 
   if (!updateUi) {
@@ -7155,10 +7309,18 @@ async function handlePacketNavigation(navAction, navBookmark) {
     await handlePacketNavigation("first-load");
     return;
   }
-  let packetSet = capturedPackets["Host"][hostFilterEl.value];
-  if (navAction === "filtered") {
-    packetSet = [];
-    packetSet = filteredPackets;
+  const hasActiveFilterQuery =
+    typeof filterInputEl?.value === "string" && filterInputEl.value.trim() !== "";
+  const shouldUseFilteredPacketSet =
+    navAction === "filtered" ||
+    (navAction !== "bookmark" &&
+      hasActiveFilterQuery &&
+      Array.isArray(filteredPackets));
+
+  let packetSet = shouldUseFilteredPacketSet
+    ? filteredPackets
+    : capturedPackets["Host"][hostFilterEl.value];
+  if (shouldUseFilteredPacketSet) {
     writeLogEntry(
       `Filtered packet navigation packets_returned=${packetSet.length}`,
     );

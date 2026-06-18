@@ -229,6 +229,7 @@ function createStatsPanel(options) {
     syncFilterHighlight,
     runFilterQuery,
     getFilteredPackets,
+    syncTargetHostFromPackets,
     setPacketsForHost,
   } = options;
 
@@ -239,6 +240,9 @@ function createStatsPanel(options) {
     await runFilterQuery(query);
     const filteredPackets = getFilteredPackets();
     if (Array.isArray(filteredPackets) && filteredPackets.length > 0) {
+      if (typeof syncTargetHostFromPackets === "function") {
+        syncTargetHostFromPackets(filteredPackets);
+      }
       setPacketsForHost(filteredPackets);
     }
   }
