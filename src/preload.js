@@ -24,6 +24,13 @@ contextBridge.exposeInMainWorld('captureapi', {
 contextBridge.exposeInMainWorld('snitchapi', {
   runBackendCommand: (filename, useLLM) =>
     ipcRenderer.invoke('run-backend-command', filename, useLLM),
+  runBackendCommandFromSession: (sessionPcap, useLLM) =>
+    ipcRenderer.invoke('run-backend-command-from-session', sessionPcap, useLLM),
+  onPcapSource: (callback) => {
+    ipcRenderer.on('backend-pcap-source', (_event, payload) => {
+      callback(payload);
+    });
+  },
 });
 
 contextBridge.exposeInMainWorld('getfileapi', {

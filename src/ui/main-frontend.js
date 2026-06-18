@@ -206,6 +206,71 @@ const backendProgressState = {
   processedPackets: 0,
   totalPackets: 0,
 };
+let sessionPcapSource = null;
+
+function estimateBase64DecodedByteLength(base64Data) {
+  const normalized = typeof base64Data === "string"
+    ? base64Data.replace(/\s+/g, "")
+    : "";
+  if (!normalized) return 0;
+  const paddingMatch = normalized.match(/=+$/);
+  const paddingLength = paddingMatch ? paddingMatch[0].length : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - paddingLength);
+}
+
+function normalizeSessionPcapSource(source) {
+  if (!source || typeof source !== "object") return null;
+  const normalizedBase64 =
+    typeof source.data === "string" ? source.data.replace(/\s+/g, "").trim() : "";
+  if (!normalizedBase64) return null;
+  const explicitByteLength = Number(source.byteLength);
+  const byteLength =
+    Number.isFinite(explicitByteLength) && explicitByteLength > 0
+      ? Math.floor(explicitByteLength)
+      : estimateBase64DecodedByteLength(normalizedBase64);
+  const fileName =
+    typeof source.fileName === "string" && source.fileName.trim()
+      ? source.fileName.trim()
+      : "capture.pcap";
+  return {
+    fileName,
+    encoding: "base64",
+    data: normalizedBase64,
+    byteLength,
+  };
+}
+
+function updatePcapSizeDisplayFromSource() {
+  const pcapSizeEl = document.getElementById("pcap-size");
+  if (!pcapSizeEl) return;
+  const sourceSize = sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
+    ? sessionPcapSource.byteLength
+    : 0;
+  const fileSizeKb = (sourceSize / 1024).toFixed(2);
+  pcapSizeEl.textContent = `PCAP size: ${fileSizeKb}kb`;
+}
+
+function updateReprocessButtonState() {
+  const reprocessBtn = document.getElementById("reprocess-session-pcap-btn");
+  if (!reprocessBtn) return;
+  const hasSessionPcapData = Boolean(sessionPcapSource && sessionPcapSource.data);
+  reprocessBtn.disabled = !hasSessionPcapData;
+  reprocessBtn.title = hasSessionPcapData
+    ? "Reprocess stored source PCAP through backend"
+    : "No stored source PCAP in the current session";
+}
+
+function setSessionPcapSource(source, options = {}) {
+  const { skipLog = false, logLabel = "session" } = options;
+  sessionPcapSource = normalizeSessionPcapSource(source);
+  updatePcapSizeDisplayFromSource();
+  updateReprocessButtonState();
+  if (!skipLog && sessionPcapSource) {
+    writeLogEntry(
+      `PCAP source cached label=${logLabel} name=${sessionPcapSource.fileName} bytes=${sessionPcapSource.byteLength}`,
+    );
+  }
+}
 
 function resetBackendProgressState() {
   backendProgressState.firstChunkLoaded = false;
@@ -366,6 +431,7 @@ sessionPickerPanel = initializeSessionPicker({
     currentSessionName = name;
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
+    setSessionPcapSource(null, { skipLog: true });
     if (window.captureapi) {
       const loadResult = await window.captureapi.loadJson(jsonData);
       if (!loadResult?.success) {
@@ -399,23 +465,8 @@ sessionPickerPanel = initializeSessionPicker({
       .selectFile()
       .then((filePath) => {
         if (filePath) {
-          window.fsize
-            .getFSize()
-            .then((fileSize) => {
-              // Update the UI with the file size
-              const fileSizeKb = (fileSize / 1024).toFixed(2);
-              document.getElementById("pcap-size").textContent =
-                `PCAP size: ${fileSizeKb}kb`;
-              writeLogEntry(`Capture size=${fileSizeKb}kb`);
-            })
-            .catch((error) => {
-              // Handle any errors (e.g., file not found)
-              console.error("Error fetching file size:", error);
-              logErrorEntry("file-size-fetch", error);
-            });
-
+          setSessionPcapSource(null, { skipLog: true });
           runSnitch(filePath);
-
         }
       })
       .catch((error) => {
@@ -439,6 +490,7 @@ async function clearCurrentSession() {
   jsonCapture = "";
   finalSummary = "";
   finalSummary = ""; // Clear the default summary from the template
+  setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
   hostFilterEl.value = "";
   filterHistorySelectEl.innerHTML = '<option value="" selected>Filter History</option>';
@@ -523,6 +575,7 @@ document
     if (file) {
       startTime = performance.now();
       statusUpdate("Processing file: " + file.name);
+      setSessionPcapSource(null, { skipLog: true });
       const fileSizeKb = (file.size / 1024).toFixed(2);
       writeLogEntry(
         `User selected JSON file name=${file.name} size=${fileSizeKb}kb`,
@@ -542,21 +595,7 @@ document
       .selectFile()
       .then((filePath) => {
         if (filePath) {
-          window.fsize
-            .getFSize()
-            .then((fileSize) => {
-              // Update the UI with the file size
-              const fileSizeKb = (fileSize / 1024).toFixed(2);
-              document.getElementById("pcap-size").textContent =
-                `PCAP size: ${fileSizeKb}kb`;
-              writeLogEntry(`Capture size=${fileSizeKb}kb`);
-            })
-            .catch((error) => {
-              // Handle any errors (e.g., file not found)
-              console.error("Error fetching file size:", error);
-              logErrorEntry("file-size-fetch", error);
-            });
-
+          setSessionPcapSource(null, { skipLog: true });
           runSnitch(filePath);
         }
       })
@@ -1521,6 +1560,14 @@ function buildSessionStateSnapshot() {
     ),
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
+    sourcePcap: sessionPcapSource
+      ? {
+        fileName: sessionPcapSource.fileName,
+        encoding: sessionPcapSource.encoding,
+        data: sessionPcapSource.data,
+        byteLength: sessionPcapSource.byteLength,
+      }
+      : null,
     tabs: {
       main: activeMainTab,
       conv: getActiveConvSubtab(),
@@ -1782,6 +1829,10 @@ async function requestApplicationClose() {
 
 function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
+
+  setSessionPcapSource(sessionState.sourcePcap, {
+    skipLog: true,
+  });
 
   const loadedHistory = Array.isArray(sessionState.filterHistory)
     ? sessionState.filterHistory
@@ -8048,6 +8099,25 @@ document.getElementById("export-session-btn").addEventListener("click", function
   void exportSessionToFile();
 });
 
+const reprocessSessionPcapBtn = document.getElementById("reprocess-session-pcap-btn");
+if (reprocessSessionPcapBtn) {
+  reprocessSessionPcapBtn.addEventListener("click", () => {
+    if (!sessionPcapSource || !sessionPcapSource.data) {
+      statusUpdate("Status: No stored session PCAP to reprocess");
+      return;
+    }
+    runSnitch(sessionPcapSource, { fromSessionSource: true });
+  });
+}
+
+if (window.snitchapi && typeof window.snitchapi.onPcapSource === "function") {
+  window.snitchapi.onPcapSource((pcapSource) => {
+    setSessionPcapSource(pcapSource, {
+      logLabel: "backend-source",
+    });
+  });
+}
+
 // Open the session library picker
 const sessionsLibraryBtn = document.getElementById("sessions-library-btn");
 if (sessionsLibraryBtn) {
@@ -8146,7 +8216,8 @@ window.jsonapi.onJsonPath((rawPayload) => {
 });
 
 // here we create the backend process and hook it to the handler
-function runSnitch(file) {
+function runSnitch(file, options = {}) {
+  const { fromSessionSource = false } = options;
   resetBackendProgressState();
   backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
@@ -8158,13 +8229,27 @@ function runSnitch(file) {
   document.getElementById("error-container").style.display = "none";
   startTime = performance.now();
   const useLLM = document.getElementById("use-llm").checked;
-  const fileLabel = typeof file === "string" ? file : file?.name || "unknown";
+  const fileLabel = fromSessionSource
+    ? file?.fileName || "session-stored-pcap"
+    : typeof file === "string"
+      ? file
+      : file?.name || "unknown";
   writeLogEntry(
     `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
   );
-  window.snitchapi
-    .runBackendCommand(file, useLLM)
-    .then((output) => { })
+  const backendPromise = fromSessionSource
+    ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
+      ? window.snitchapi.runBackendCommandFromSession(file, useLLM)
+      : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
+    : window.snitchapi.runBackendCommand(file, useLLM);
+  backendPromise
+    .then((result) => {
+      if (result && result.pcapSource) {
+        setSessionPcapSource(result.pcapSource, {
+          logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
+        });
+      }
+    })
     .catch((error) => {
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
@@ -8301,6 +8386,8 @@ onload = function () {
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
   if (rightsideNotesEl) rightsideNotesEl.hidden = true;
+  updatePcapSizeDisplayFromSource();
+  updateReprocessButtonState();
   document.getElementById("leftside").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
 };

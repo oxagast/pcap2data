@@ -263,6 +263,7 @@ app.whenReady().then(() => {
         ],
       });
       if (canceled) return null;
+      selectedFilePath = filePaths[0];
       isBackendLoaded = true;
       return filePaths[0];
     });

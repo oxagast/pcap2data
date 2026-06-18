@@ -29,6 +29,71 @@ function sendJsonPathPayload(payload) {
   mainWin.webContents.send("json-path", payload);
 }
 
+function sendBackendPcapSource(payload) {
+  const mainWin = getMainWindow();
+  if (!mainWin) return;
+  mainWin.webContents.send("backend-pcap-source", payload);
+}
+
+function sanitizeBase64PcapInput(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, "").trim();
+}
+
+function buildPcapSourcePayloadFromBuffer(buffer, fileName) {
+  if (!Buffer.isBuffer(buffer)) return null;
+  const normalizedName =
+    typeof fileName === "string" && fileName.trim() ? fileName.trim() : "capture.pcap";
+  return {
+    fileName: path.basename(normalizedName),
+    encoding: "base64",
+    data: buffer.toString("base64"),
+    byteLength: buffer.length,
+  };
+}
+
+function emitPcapSourceFromFile(filePath) {
+  const fileBuffer = fs.readFileSync(filePath);
+  const payload = buildPcapSourcePayloadFromBuffer(fileBuffer, path.basename(filePath));
+  if (payload) {
+    sendBackendPcapSource(payload);
+  }
+  return payload;
+}
+
+function writeSessionPcapTempFile(sessionPcap) {
+  const normalizedData = sanitizeBase64PcapInput(sessionPcap?.data);
+  if (!normalizedData) {
+    throw new Error("Session PCAP payload is missing base64 data");
+  }
+
+  let fileBuffer;
+  try {
+    fileBuffer = Buffer.from(normalizedData, "base64");
+  } catch (_err) {
+    throw new Error("Session PCAP payload is not valid base64");
+  }
+
+  if (!fileBuffer || fileBuffer.length === 0) {
+    throw new Error("Session PCAP payload decoded to an empty buffer");
+  }
+
+  const requestedName =
+    typeof sessionPcap?.fileName === "string" && sessionPcap.fileName.trim()
+      ? path.basename(sessionPcap.fileName.trim())
+      : "session-reprocess.pcap";
+  const hasKnownExtension = /\.(pcap|pcapng)$/i.test(requestedName);
+  const tempName =
+    `pss-reprocess-${Date.now()}-${Math.random().toString(16).slice(2)}` +
+    (hasKnownExtension ? `-${requestedName}` : `-${requestedName}.pcap`);
+  const tempPath = path.join(systemTempDir, tempName);
+  fs.writeFileSync(tempPath, fileBuffer);
+  return {
+    tempPath,
+    payload: buildPcapSourcePayloadFromBuffer(fileBuffer, requestedName),
+  };
+}
+
 function parseBridgeProgressLine(line) {
   if (!line || !line.includes("[Bridge]")) return null;
   const pathMatch = line.match(/path=([^\s]+)/);
@@ -75,7 +140,8 @@ function scanChunkSnapshots(sentSnapshotPaths) {
   return unsent;
 }
 
-ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
+async function runBackendCommandInternal(filename, useLLM, options = {}) {
+  const { pcapSourcePayload: providedPcapSourcePayload = null } = options;
   global.logBackend(`[Bridge] Received pcap: ${filename}`);
   const isDev = !require("electron").app.isPackaged;
   const basePath = isDev
@@ -107,7 +173,10 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     sendError(
       "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
     );
-    return;
+    return {
+      success: false,
+      error: "Snitch executable not found",
+    };
   }
   let isPCAP = false;
   let isSession = false;
@@ -170,7 +239,10 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
             try { lzmaNative = require("lzma-native"); } catch { }
             if (!lzmaNative) {
               sendError("[Bridge] Cannot load xz-compressed session (.pss / .json.xz) without lzma-native support!");
-              return "";
+              return {
+                success: false,
+                error: "Cannot load xz-compressed session without lzma-native support",
+              };
             }
             decompressedBuffer = await lzmaNative.decompress(compressedBuffer);
           }
@@ -180,7 +252,10 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
           global.logBackend(`[Bridge] Decompressed session to temp file: ${tempPath}`);
         } catch (err) {
           sendError(`[Bridge] Failed to decompress session file: ${err.message}`);
-          return "";
+          return {
+            success: false,
+            error: err.message,
+          };
         }
       }
       sendJsonPathPayload({
@@ -191,7 +266,20 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
         chunkSize: HOST_CHUNK_SIZE,
       });
     }
-    return "";
+    return {
+      success: true,
+      stdout: "",
+      pcapSource: null,
+    };
+  }
+
+  let pcapSourcePayload = providedPcapSourcePayload;
+  if (!pcapSourcePayload) {
+    try {
+      pcapSourcePayload = emitPcapSourceFromFile(filename);
+    } catch (error) {
+      global.logBackend(`[Bridge] Failed to prepare source PCAP payload: ${error.message}`);
+    }
   }
 
   const backendArgs = usePythonBackend
@@ -278,7 +366,12 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
     backendProc.on("error", (error) => {
       clearInterval(snapshotScanTimer);
       sendError("[Bridge] Backend execution error! " + error);
-      resolve(stdoutBuffer);
+      resolve({
+        success: false,
+        stdout: stdoutBuffer,
+        error: error?.message || "Backend execution error",
+        pcapSource: pcapSourcePayload,
+      });
     });
 
     backendProc.on("close", (code) => {
@@ -304,7 +397,12 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
         } else {
           sendError(`[Bridge] Backend execution error! Exit code ${code}`);
         }
-        resolve(stdoutBuffer);
+        resolve({
+          success: false,
+          stdout: stdoutBuffer,
+          error: `Backend exited with code ${code}`,
+          pcapSource: pcapSourcePayload,
+        });
         return;
       }
 
@@ -321,9 +419,46 @@ ipcMain.handle("run-backend-command", async (event, filename, useLLM) => {
         sendError("[Bridge] hosts.json not found after backend execution!");
       }
 
-      resolve(stdoutBuffer);
+      resolve({
+        success: true,
+        stdout: stdoutBuffer,
+        pcapSource: pcapSourcePayload,
+      });
     });
 
     global.logBackend("[Bridge] Backend started");
   });
+}
+
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM) => {
+  return runBackendCommandInternal(filename, useLLM);
+});
+
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM) => {
+  let tempPathForCleanup = "";
+  try {
+    const prepared = writeSessionPcapTempFile(sessionPcap);
+    tempPathForCleanup = prepared.tempPath;
+    if (prepared.payload) {
+      sendBackendPcapSource(prepared.payload);
+    }
+    const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
+      pcapSourcePayload: prepared.payload,
+    });
+    return result;
+  } catch (error) {
+    sendError("[Bridge] Unable to run backend from session PCAP data");
+    return {
+      success: false,
+      error: error?.message || "Unable to run backend from session PCAP",
+    };
+  } finally {
+    if (tempPathForCleanup) {
+      try {
+        fs.unlinkSync(tempPathForCleanup);
+      } catch (_err) {
+        // ignore cleanup errors for temp files
+      }
+    }
+  }
 });
