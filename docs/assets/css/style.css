@@ -37,6 +37,14 @@ tr:nth-child(even) {
 }
 
 .markdown-body {
-  width: 85%;
-  align-self: center;
+  margin-left: auto;
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#text-content {
+  text-align: left;
+  width: 80%;
 }
