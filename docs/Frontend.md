@@ -261,8 +261,6 @@ The **List** tab shows all packets across all hosts as a searchable, sortable ta
 
 ##### Search Bar
 
-<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/filter-bar.png">
-
 | Control             | Description                                                                                                                                                                 |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Filter list**     | Text input that filters rows in real time by host, IP address, port number, or protocol name.                                                                               |
@@ -420,6 +418,8 @@ Visualizes the Shannon entropy of the payload as a numeric value and graphical i
 ---
 
 ### Filtering
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/filter-bar.png">
 
 Packets can be filtered using an expression in the filter bar. The syntax is:
 
