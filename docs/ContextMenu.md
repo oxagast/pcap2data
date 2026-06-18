@@ -1,3 +1,4 @@
+<div style="max-width: 85%; margin: 0 auto; text-align: left;">
 <p align="center">
 <a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
 </p>
@@ -149,3 +150,4 @@ Shown when at least one carve target is available for the current packet or stre
 ### Save Session
 
 Located at the very bottom of the context menu, **Save Session** saves the loaded capture plus UI session state (packet cursor, filters/history, tabs, bookmarks, and session keychain) as a JSON file.
+</div>

@@ -1,3 +1,4 @@
+<div style="max-width: 85%; margin: 0 auto; text-align: left;">
 <p align="center">
 <a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
 </p>
@@ -82,3 +83,5 @@ Marshall Whittaker <marshall@oxasploits.com>
 - <a href="https://buymeacoffee.com/oxagast">Sponsor on Buy me a Coffee</a>
 
 _If you sponsor PacketSnitch, your name and a link of your choice will be added here!_
+
+</div>
