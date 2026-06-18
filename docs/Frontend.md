@@ -29,6 +29,8 @@ The PacketSnitch frontend is an Electron-based desktop application that provides
 
 ### Loading Data
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/session-picker.png">
+
 1. Click **Load JSON** to open either a backend `hosts.json` capture or a previously saved PacketSnitch session file.
 2. Click **Load PCAP** to run the backend directly on a `.pcap` file from within the app.
 3. Toggle **Use LLM** to enable or disable Ollama-powered analysis summaries before running.
@@ -40,6 +42,8 @@ The PacketSnitch UI is divided into several panels that together provide a full 
 ---
 
 #### Left Sidebar
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/left-bar.png">
 
 The left sidebar contains navigation controls and file metadata.
 
@@ -57,6 +61,8 @@ The left sidebar contains navigation controls and file metadata.
 ---
 
 #### Toolbar / Tab Bar
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/tab-bar.png">
 
 The toolbar at the top of the content area contains navigation and view-switching controls.
 
@@ -80,11 +86,15 @@ When right-clicking in packet/data views, PacketSnitch shows a context menu with
 
 #### Summary Frame
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/summary-tab.png">
+
 The Summary Frame displays the LLM-generated analysis report for the loaded capture. This frame is shown by clicking the **Summary** button in the toolbar and is only populated when the backend was run with LLM support enabled (via `conf.yaml`).
 
 ---
 
 #### Packet Info Pane
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/host-data-tab.png">
 
 The Packet Info Pane is the main left-centre panel. It displays structured metadata for the currently selected packet, broken into several sub-sections.
 
@@ -116,6 +126,8 @@ Populated only when the backend was run with the `-a` (active recon) flag. Conta
 
 #### Packet Payload Pane
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/payload-pane.png">
+
 The Packet Payload Pane sits below/beside the Packet Info Pane and displays the raw payload bytes for the current packet.
 
 ##### ASCII View
@@ -129,6 +141,8 @@ An interactive hex dump of the full raw payload. Clicking a cell in the hex grid
 ---
 
 #### Conv Tab (Data Conversion)
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/conv-tab.png">
 
 The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar. It has three sub-tabs: **Conversions**, **Hashes**, and **Decodes**.
 
@@ -195,6 +209,8 @@ The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Prot
 
 #### Crypt Tab (Encryption Workspace)
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/crypt-tab.png">
+
 The **Crypt** tab provides a multi-panel workspace for inspecting cryptographic material encountered in a capture or loaded from files. It has three sub-tabs: **SSL**, **PGP**, and **OpenSSH**.
 
 ##### SSL Sub-tab
@@ -218,6 +234,8 @@ Reserved workspace for future OpenSSH key and session tooling.
 
 #### Stats Tab
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/stats-tab.png">
+
 The **Stats** tab shows aggregate statistics computed across the entire loaded capture (all hosts, all packets). Statistics are presented as labelled tag-cloud sections. Clicking any tag pre-fills the filter bar with a suggested filter expression for that value.
 
 | Section                    | Description                                                                                                                                                 |
@@ -237,9 +255,13 @@ The **Stats** tab shows aggregate statistics computed across the entire loaded c
 
 #### List Tab
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/list-tab.png">
+
 The **List** tab shows all packets across all hosts as a searchable, sortable table.
 
 ##### Search Bar
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/filter-bar.png">
 
 | Control             | Description                                                                                                                                                                 |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -266,6 +288,8 @@ Click any column header to sort by that column; click again to reverse direction
 ---
 
 #### Keystore Tab (Local Keychain)
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/keystore-tab.png">
 
 The **Keystore** tab provides a local encrypted credential store. It has two keychains: a **Session** keychain (in-memory only, reset when the app closes) and a **Persistent** keychain (encrypted with AES-GCM, stored in IndexedDB, and unlocked with a passphrase each session).
 
@@ -315,6 +339,8 @@ The context menu's **Add to Keystore... → Manual URI** options open a dialog t
 
 #### Notes Tab
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/notes-tab.png">
+
 The **Notes** tab is a session notes workspace for creating and editing freeform text notes tied to the current session. Click **Notes** in the toolbar to open it.
 
 ##### Notes Sidebar (right panel)
@@ -342,6 +368,8 @@ Notes are saved as part of the session file when **Save Session** is used.
 
 #### Log Tab
 
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/log-tab.png">
+
 Clicking **Log** in the toolbar toggles the **Activity Log** panel, which slides in from the bottom of the window. The log records all significant GUI actions, backend events, and console output with ISO 8601 timestamps.
 
 ##### Log Entry Formats
@@ -362,6 +390,8 @@ The **Search log entries** input filters the visible entries in real time (case-
 
 
 #### Right Sidebar (Datagram Frame)
+
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/datagram-frame.png">
 
 The right sidebar provides three contextual data panels that update with each packet.
 
