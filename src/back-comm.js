@@ -386,7 +386,20 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         payload.totalPackets = parsedTotalPackets;
         sendJsonPathPayload(payload);
       });
-
+      if (stderrBuffer.includes("No such file or directory")) {
+        if (backendCommandPath.includes("reprocess")) {
+          sendError("Processing of the session's source PCAP has not yet completed, please wait a moment and try again.");
+        } else {
+          sendError("[Bridge] Backend execution error! File not found.");
+        }
+        resolve({
+          success: false,
+          stdout: stdoutBuffer,
+          error: "Backend execution error: PCAP not found! Wait for processing to complete before requesting a reprocess.",
+          pcapSource: pcapSourcePayload,
+        });
+        return;
+      }
       if (stdoutBuffer.includes("Ollama")) {
         sendError("[Bridge] Backend LLM generation error!");
       }
