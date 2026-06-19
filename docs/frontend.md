@@ -79,7 +79,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
 
-When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [ContextMenu.md](ContextMenu.md) for full details.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [context-menu.md](context-menu.md) for full details.
 
 ---
 
@@ -210,7 +210,7 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
-> The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [ContextMenu.md](ContextMenu.md) for details.
+> The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [context-menu.md](context-menu.md) for details.
 
 ---
 
@@ -346,7 +346,7 @@ These auto-entries appear with a source of `session-auto` and can be promoted to
 
 ##### Manual URI/URL Entry
 
-The context menu's **Add to Keystore... → Manual URI** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**. See [ContextMenu.md](ContextMenu.md) for more on keystore context menu options.
+The context menu's **Add to Keystore... → Manual URI** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**. See [context-menu.md](context-menu.md) for more on keystore context menu options.
 
 ---
 
@@ -375,7 +375,7 @@ The main content area shows a full-width editable text area for the currently se
 
 ##### Notes Context Menu
 
-Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu. See [ContextMenu.md](ContextMenu.md) for details on context menu items.
+Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu. See [context-menu.md](context-menu.md) for details on context menu items.
 
 Notes are saved as part of the session file when **Save Session** is used.
 
@@ -459,7 +459,7 @@ ip.src.addr:192.168.1.1 && tcp.dst.port:443
 (payload.mime:text/html || payload.mime:application/json) && payload.entropy>=4.0
 ```
 
-Filter keys use the same dot-notation names as the [searchable attributes](Filters.md) documented in the Backend docs. Keys are normalized to lowercase with spaces replaced by hyphens.
+Filter keys use the same dot-notation names as the [searchable attributes](filters.md) documented in the Backend docs. Keys are normalized to lowercase with spaces replaced by hyphens.
 
 #### Filter Examples
 
