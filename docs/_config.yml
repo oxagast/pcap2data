@@ -1,16 +1,18 @@
+title: "PacketSnitch DocsHub"
 name: "PacketSnitch"
+keywords: ["network analysis", "security", "packet sniffer", "traffic monitoring", "pcap analysis", "network security", "intrusion detection", "network forensics"]
 author: "Marshall W."
 email: "marshall@oxasploits.com"
-keywords: ['network analysis', 'security', 'packet sniffer', 'traffic monitoring', 'network security', 'threat detection', 'pcap analysis', 'network forensics']
-description: "PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively."
-
-remote_theme: "tajacks/lightspeed"
+description: >-
+  PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
+remote_theme: "hemangsk/DevJournal"
+#remote_theme: "tajacks/lightspeed"
 # -----------------------------------------------------------------------------
 # URL and Path Configurations (Crucial for GitHub Pages)
 # -----------------------------------------------------------------------------
 # If your site is at username.github.io, leave baseurl as "".
 # If your site is a project repository (username.github.io/repo-name), set it to "/repo-name".
-baseurl: "/PacketSnitch" 
+baseurl: "" 
 url: "https://packetsnitch.oxasploits.com" 
 
 # Social Links (Used by standard theme footers)
@@ -23,18 +25,6 @@ github_username: oxagast
 markdown: kramdown
 highlighter: rouge
 permalink: /:categories/:year/:month/:day/:title/
-
-
-
-# Category Paginating
-autopages:
-  enabled: true
-  categories:
-    title: 'Posts in category :cat'
-    permalink: '/category/:cat'
-    silent: false
-
-
 
 # -----------------------------------------------------------------------------
 # Plugins (Supported natively by GitHub Pages whitelists)
