@@ -1,7 +1,7 @@
 name: "PacketSnitch"
 author: "Marshall W."
 email: "marshall@oxasploits.com"
-keywords: ["network analysis", "security", "packet sniffer", "traffic monitoring", "network security", "threat detection", "pcap analysis", "network forensics"]
+keywords: ['network analysis', 'security', 'packet sniffer', 'traffic monitoring', 'network security', 'threat detection', 'pcap analysis', 'network forensics']
 description: "PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively."
 
 remote_theme: "tajacks/lightspeed"
@@ -26,7 +26,13 @@ permalink: /:categories/:year/:month/:day/:title/
 
 
 
-
+# Category Paginating
+autopages:
+  enabled: true
+  categories:
+    title: 'Posts in category :cat'
+    permalink: '/category/:cat'
+    silent: false
 
 
 
@@ -34,7 +40,9 @@ permalink: /:categories/:year/:month/:day/:title/
 # Plugins (Supported natively by GitHub Pages whitelists)
 # -----------------------------------------------------------------------------
 plugins:
+  - jekyll-feed
   - jekyll-seo-tag
+  - jekyll-sitemap
 
 # -----------------------------------------------------------------------------
 # File Exclusions (Prevents node/vendor files from building)
