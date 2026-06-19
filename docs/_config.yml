@@ -2,7 +2,7 @@ title: "PacketSnitch DocsHub"
 email: "marshall@oxasploits.com"
 description: >-
   PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
-theme: minima # Or use remote_theme: "jekyll/minima" for external GitHub themes
+theme: violet # Or use remote_theme: "jekyll/minima" for external GitHub themes
 
 # -----------------------------------------------------------------------------
 # URL and Path Configurations (Crucial for GitHub Pages)
