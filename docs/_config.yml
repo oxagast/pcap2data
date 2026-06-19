@@ -1,8 +1,8 @@
-name: "PacketSnitch"
-author: "Marshall W."
-email: "marshall@oxasploits.com"
+name: PacketSnitch
+author: Marshall W.
+email: marshall@oxasploits.com
 keywords: ['network analysis', 'security', 'packet sniffer', 'traffic monitoring', 'network security', 'threat detection', 'pcap analysis', 'network forensics']
-description: "PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.""
+description: PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
 
 remote_theme: "tajacks/lightspeed"
 # -----------------------------------------------------------------------------
