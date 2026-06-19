@@ -11,7 +11,7 @@ remote_theme: "tajacks/lightspeed"
 # -----------------------------------------------------------------------------
 # If your site is at username.github.io, leave baseurl as "".
 # If your site is a project repository (username.github.io/repo-name), set it to "/repo-name".
-baseurl: "" 
+baseurl: "/PacketSnitch" 
 url: "https://packetsnitch.oxasploits.com" 
 
 # Social Links (Used by standard theme footers)
