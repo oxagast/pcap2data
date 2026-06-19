@@ -1,0 +1,44 @@
+title: "PacketSnitch DocsHub"
+email: "marshall@oxasploits.com"
+description: >-
+  PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
+theme: minima # Or use remote_theme: "jekyll/minima" for external GitHub themes
+
+# -----------------------------------------------------------------------------
+# URL and Path Configurations (Crucial for GitHub Pages)
+# -----------------------------------------------------------------------------
+# If your site is at username.github.io, leave baseurl as "".
+# If your site is a project repository (username.github.io/repo-name), set it to "/repo-name".
+baseurl: "" 
+url: "https://packetsnitch.oxasploits.com" 
+
+# Social Links (Used by standard theme footers)
+twitter_username: oxagast
+github_username: oxagast
+
+# -----------------------------------------------------------------------------
+# Build and Parser Settings
+# -----------------------------------------------------------------------------
+markdown: kramdown
+highlighter: rouge
+permalink: /:categories/:year/:month/:day/:title/
+
+# -----------------------------------------------------------------------------
+# Plugins (Supported natively by GitHub Pages whitelists)
+# -----------------------------------------------------------------------------
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# -----------------------------------------------------------------------------
+# File Exclusions (Prevents node/vendor files from building)
+# -----------------------------------------------------------------------------
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules/
+  - vendor/bundle/
+  - vendor/cache/
+  - .jekyll-cache/
+  - .sass-cache/
