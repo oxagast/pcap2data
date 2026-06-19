@@ -255,10 +255,56 @@ function updateReprocessButtonState() {
   const reprocessBtn = document.getElementById("reprocess-session-pcap-btn");
   if (!reprocessBtn) return;
   const hasSessionPcapData = Boolean(sessionPcapSource && sessionPcapSource.data);
-  reprocessBtn.disabled = !hasSessionPcapData;
-  reprocessBtn.title = hasSessionPcapData
-    ? "Reprocess stored source PCAP through backend"
-    : "No stored source PCAP in the current session";
+  const canReprocessNow = hasSessionPcapData && !backendProgressState.processing;
+  reprocessBtn.disabled = !canReprocessNow;
+  reprocessBtn.title = !hasSessionPcapData
+    ? "No stored source PCAP in the current session"
+    : backendProgressState.processing
+      ? "Wait until backend preprocessing completes before reprocessing"
+      : "Reprocess stored source PCAP through backend";
+}
+
+function canPersistSessionNow() {
+  if (!isFileLoaded) return false;
+  if (backendProgressState.processing) return false;
+  if (!capturedPackets || typeof capturedPackets !== "object") return false;
+  const hosts = capturedPackets["Host"];
+  if (!hosts || typeof hosts !== "object") return false;
+  return Object.keys(hosts).some((host) => {
+    const hostPackets = hosts[host];
+    return Array.isArray(hostPackets) && hostPackets.length > 0;
+  });
+}
+
+function updateSessionSaveControls() {
+  // Keep save controls enabled so an early click can surface the warning.
+}
+
+function warnReprocessAttemptBeforeReady() {
+  const message =
+    "Status: Backend preprocessing is still running. Wait until processing completes before reprocessing the session PCAP.";
+  statusUpdate(message);
+  writeLogEntry(
+    "Warning: blocked reprocess session PCAP while backend preprocessing was still in progress",
+  );
+  return {
+    success: false,
+    error: "Backend preprocessing still in progress",
+  };
+}
+
+function warnSessionSaveAttemptBeforeReady(actionLabel) {
+  const message =
+    "Status: Backend preprocessing is still running. Wait until processing completes before " +
+    actionLabel + ".";
+  statusUpdate(message);
+  writeLogEntry(
+    `Warning: blocked ${actionLabel} while backend preprocessing was still in progress`,
+  );
+  return {
+    success: false,
+    error: "Backend preprocessing still in progress",
+  };
 }
 
 function setSessionPcapSource(source, options = {}) {
@@ -282,6 +328,8 @@ function resetBackendProgressState() {
 }
 
 function updateBackendProcessingWarning() {
+  updateSessionSaveControls();
+  updateReprocessButtonState();
   const warningEl = document.getElementById("backend-processing-warning");
   if (!warningEl) return;
 
@@ -1590,14 +1638,7 @@ async function buildSessionFilePayload() {
 }
 
 function canAutosaveCurrentSession() {
-  if (!isFileLoaded) return false;
-  if (!capturedPackets || typeof capturedPackets !== "object") return false;
-  const hosts = capturedPackets["Host"];
-  if (!hosts || typeof hosts !== "object") return false;
-  return Object.keys(hosts).some((host) => {
-    const hostPackets = hosts[host];
-    return Array.isArray(hostPackets) && hostPackets.length > 0;
-  });
+  return canPersistSessionNow();
 }
 
 async function autosaveSessionToDisk() {
@@ -1641,11 +1682,10 @@ function startSessionAutosaveTimer() {
 }
 
 async function persistSessionToDisk(sourceLabel = "manual-save") {
-  if (
-    !capturedPackets ||
-    !capturedPackets["Host"] ||
-    typeof capturedPackets["Host"] !== "object"
-  ) {
+  if (!canPersistSessionNow()) {
+    if (backendProgressState.processing) {
+      return warnSessionSaveAttemptBeforeReady("saving");
+    }
     statusUpdate("Status: No data loaded to save");
     return { success: false, error: "No loaded capture" };
   }
@@ -1717,11 +1757,10 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
 }
 
 async function exportSessionToFile() {
-  if (
-    !capturedPackets ||
-    !capturedPackets["Host"] ||
-    typeof capturedPackets["Host"] !== "object"
-  ) {
+  if (!canPersistSessionNow()) {
+    if (backendProgressState.processing) {
+      return warnSessionSaveAttemptBeforeReady("exporting");
+    }
     statusUpdate("Status: No data loaded to export");
     return { success: false, error: "No loaded capture" };
   }
@@ -8100,6 +8139,10 @@ if (reprocessSessionPcapBtn) {
   reprocessSessionPcapBtn.addEventListener("click", () => {
     if (!sessionPcapSource || !sessionPcapSource.data) {
       statusUpdate("Status: No stored session PCAP to reprocess");
+      return;
+    }
+    if (backendProgressState.processing) {
+      warnReprocessAttemptBeforeReady();
       return;
     }
     runSnitch(sessionPcapSource, { fromSessionSource: true });
