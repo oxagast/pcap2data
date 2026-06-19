@@ -25,12 +25,6 @@ highlighter: rouge
 permalink: /:categories/:year/:month/:day/:title/
 
 
-pagination:
-  enabled: true
-  # Value set low for demonstration purposes
-  per_page: 3
-  sort_field: 'date'
-  sort_reverse: true
 
 # Category Paginating
 autopages:
