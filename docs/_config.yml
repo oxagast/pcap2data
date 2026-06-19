@@ -24,11 +24,7 @@ markdown: kramdown
 highlighter: rouge
 permalink: /:categories/:year/:month/:day/:title/
 
-sass:
-  sass_dir: _sass
-  style: expanded # compact, expanded or compressed
 
-# Paginate
 pagination:
   enabled: true
   # Value set low for demonstration purposes
