@@ -387,11 +387,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         sendJsonPathPayload(payload);
       });
       if (stderrBuffer.includes("No such file or directory")) {
-        if (backendCommandPath.includes("reprocess")) {
-          sendError("Processing of the session's source PCAP has not yet completed, please wait a moment and try again.");
-        } else {
-          sendError("[Bridge] Backend execution error! File not found.");
-        }
+        sendError("[Bridge] Backend execution error! File not found.  Please be sure the last pcap is not still being processed.");
         resolve({
           success: false,
           stdout: stdoutBuffer,
