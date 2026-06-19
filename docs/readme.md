@@ -6,18 +6,18 @@
 
 PacketSnitch is a network packet analysis tool consisting of a Python backend for extracting payloads and rich metadata from `.pcap` files, and an Electron-based frontend for browsing, filtering, and visualizing the results.
 
-### Demo
-
-<p align="center">
-<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1200>
-</p>
-
 ### Documentation
 
 - [**Backend Documentation**](backend.md) — Python backend (`snitch.py`): usage, arguments, output structure, and the full list of searchable attributes produced in the JSON output.
 - [**Frontend Documentation**](frontend.md) — Electron frontend: UI output frames, query box, and data type conversions.
 - [**Context Menu Reference**](context-menu.md) — Right-click context menu: copy, convert, filter, keystore, notes, and export options.
 - [**Filter Reference**](filters.md) — Complete guide to the filter bar: all filter keys, search syntax, operators, boolean combinators, and examples.
+
+### Demo
+
+<p align="center">
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1200>
+</p>
 
 ### Quick Start
 
