@@ -1,7 +1,8 @@
+
 // Protocol decoder render functions for the info panel side tables.
 // Each function reads the relevant sub-object from transportData and appends
 // a table to the "sidedatatable" container (or no-ops when the data is absent).
-
+const threadName = "Decoders";
 // Reusable element pools to reduce garbage collection
 const elementPool = {
   table: null,

@@ -1,9 +1,11 @@
+
 const crypto = require("crypto-browserify");
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
 const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
 const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
 const MAX_ASCII_PREVIEW_LENGTH = 1024;
+const threadName = "Crypt";
 const MAX_DECRYPT_FAILURE_MESSAGES = 8;
 
 function createCryptPanel({
@@ -368,7 +370,7 @@ function createCryptPanel({
     );
     if (normalized) {
       statusUpdate(`Status: Certificate loaded from ${sourceLabel}`);
-      writeLogEntry(`Crypt certificate loaded source="${sourceLabel}"`);
+      writeLogEntry(`[${threadName}] Crypt certificate loaded source="${sourceLabel}"`);
       if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
         addSessionKeystoreEntry({
           type: "certificate",
@@ -397,7 +399,7 @@ function createCryptPanel({
     );
     if (normalized) {
       statusUpdate(`Status: Private key loaded from ${sourceLabel}`);
-      writeLogEntry(`Crypt private key loaded source="${sourceLabel}"`);
+      writeLogEntry(`[${threadName}] Crypt private key loaded source="${sourceLabel}"`);
       if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
         addSessionKeystoreEntry({
           type: "private-key",
@@ -448,7 +450,7 @@ function createCryptPanel({
     filterInputEl.value = query;
     syncFilterHighlight();
     runFilterQuery(query);
-    writeLogEntry(`Crypt filter applied query="${query}"`);
+    writeLogEntry(`[${threadName}] Crypt filter applied query="${query}"`);
   }
 
   function loadEncounteredCertificateIntoCrypt() {
@@ -536,11 +538,11 @@ function createCryptPanel({
         `Status: Decrypted TLS/SSL payload for packet #${activeEntry.packetIndex}`,
       );
       writeLogEntry(
-        `Crypt decrypted payload packet_index=${activeEntry.packetIndex}`,
+        `[${threadName}] Crypt decrypted payload packet_index=${activeEntry.packetIndex}`,
       );
     } catch (error) {
       clearCryptDecryptionOutput();
-      logErrorEntry("crypt-tls-decrypt", error);
+      logErrorEntry(`[${threadName}] crypt-tls-decrypt`, error);
       doError(
         "Could not decrypt selected TLS/SSL payload with the loaded private key.",
       );
@@ -557,7 +559,7 @@ function createCryptPanel({
       `Status: Sent decrypted payload from ${cryptLastDecryptedPayload.sourceLabel} to Conv`,
     );
     writeLogEntry(
-      `Crypt decrypted payload sent to Conv source="${cryptLastDecryptedPayload.sourceLabel}"`,
+      `[${threadName}] Crypt decrypted payload sent to Conv source="${cryptLastDecryptedPayload.sourceLabel}"`,
     );
   }
 
@@ -565,12 +567,13 @@ function createCryptPanel({
     setActiveMainTab(MAIN_TAB_CRYPT);
     if (getJsonCapture() === "") {
       statusUpdate("Status: No JSON file loaded, please upload a file first");
+      writeLogEntry(`[${threadName}] No JSON file loaded when attempting to access crypt workspace`);
       doError("Please upload a JSON file before accessing crypt tools.");
       return;
     }
 
     statusUpdate("Status: Displaying crypt workspace");
-    writeLogEntry("User opened crypt workspace view");
+    writeLogEntry(`[${threadName}] User opened crypt workspace view`);
     document.getElementById("prev-btn").style.display = "none";
     document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";

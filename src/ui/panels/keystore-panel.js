@@ -1,9 +1,11 @@
+
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
 const CRYPT_KEYSTORE_DB_VERSION = 1;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";
 const CRYPT_KEYSTORE_RECORD_KEY = "default";
 const CRYPT_KEYSTORE_SCHEMA_VERSION = 2;
 const CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH = 8;
+const threadName = "Keystore";
 const CRYPT_KEYSTORE_RESET_CONFIRMATION_MESSAGE =
   "Resetting the keychain password will wipe your current persistent keychain entries. Continue?";
 const CRYPT_KEYSTORE_MODE_SESSION = "session";
@@ -1011,7 +1013,7 @@ function createKeystorePanel({
     renderCryptKeystoreList();
     statusUpdate(`Status: Saved ${type} in persistent keychain`);
     writeLogEntry(
-      `Crypt keystore entry added type=${type} label="${entry.label}"`,
+      `[${threadName}] Crypt keystore entry added type=${type} label="${entry.label}"`,
     );
   }
 
@@ -1100,7 +1102,7 @@ function createKeystorePanel({
     renderCryptKeystoreList();
     statusUpdate(`Status: Deleted keystore entry "${removedEntry.label}"`);
     writeLogEntry(
-      `Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
+      `[${threadName}] Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
     );
   }
 
@@ -1168,7 +1170,7 @@ function createKeystorePanel({
       `Status: Sent "${selectedEntry.label}" to persistent keychain`,
     );
     writeLogEntry(
-      `Session keychain entry persisted label="${selectedEntry.label}"`,
+      `[${threadName}] Session keychain entry persisted label="${selectedEntry.label}"`,
     );
   }
 
@@ -1360,7 +1362,7 @@ function createKeystorePanel({
       cryptKeystoreUnlockKeyMaterial = keyMaterial;
       renderCryptKeystoreList();
       statusUpdate("Status: Keychain password reset and persistent keychain wiped");
-      writeLogEntry("Persistent keychain password reset; entries wiped");
+      writeLogEntry(`[${threadName}] Persistent keychain password reset; entries wiped`);
       return true;
     } catch (error) {
       logErrorEntry("crypt-keystore-reset-password", error);
@@ -1408,12 +1410,12 @@ function createKeystorePanel({
         cryptPersistentKeystoreEntries = [];
         await savePersistentCryptKeystoreEntries([], keyMaterial);
         statusUpdate("Status: Keychain password set");
-        writeLogEntry("Persistent keychain password initialized");
+        writeLogEntry(`[${threadName}] Persistent keychain password initialized`);
       } else {
         cryptPersistentKeystoreEntries =
           await loadPersistentCryptKeystoreEntries(keyMaterial, storedRecord);
         statusUpdate("Status: Keychain unlocked");
-        writeLogEntry("Persistent keychain unlocked");
+        writeLogEntry(`[${threadName}] Persistent keychain unlocked`);
       }
       cryptKeystoreUnlockKeyMaterial = keyMaterial;
       return true;
@@ -1441,7 +1443,7 @@ function createKeystorePanel({
       return;
     }
     statusUpdate("Status: Displaying keychain manager");
-    writeLogEntry("User opened keystore workspace view");
+    writeLogEntry(`[${threadName}] User opened keystore workspace view`);
     document.getElementById("prev-btn").style.display = "none";
     document.getElementById("next-btn").style.display = "none";
     document.getElementById("packetInfoPane").style.display = "none";
@@ -1479,7 +1481,7 @@ function createKeystorePanel({
       });
       statusUpdate(`Status: Saved ${type} in session keychain`);
       writeLogEntry(
-        `Context menu keystore entry added type=${type} mode=session`,
+        `[${threadName}] Context menu keystore entry added type=${type} mode=session`,
       );
     } else {
       await addCryptKeystoreEntry(
@@ -1522,7 +1524,7 @@ function createKeystorePanel({
     if (dialogResult.mode === CRYPT_KEYSTORE_MODE_SESSION) {
       addSessionKeystoreEntry(entry);
       statusUpdate(`Status: Saved ${uriType} in session keychain`);
-      writeLogEntry(`Manual context URI saved mode=session type=${uriType}`);
+      writeLogEntry(`[${threadName}] Manual context URI saved mode=session type=${uriType}`);
       return;
     }
 
@@ -1553,7 +1555,7 @@ function createKeystorePanel({
     if (result?.success) {
       statusUpdate("Status: Opened link in external browser");
       writeLogEntry(
-        `Keystore link opened in browser label="${selectedEntry.label}"`,
+        `[${threadName}] Keystore link opened in browser label="${selectedEntry.label}"`,
       );
       return;
     }
@@ -1563,7 +1565,7 @@ function createKeystorePanel({
         ? result.error
         : "unknown";
     doError("Could not open the selected link in browser.");
-    logErrorEntry("crypt-keystore-open-link", errorMessage || "unknown");
+    logErrorEntry(`[${threadName}] crypt-keystore-open-link`, errorMessage || "unknown");
     statusUpdate(
       "Status: Could not open selected link – " + (errorMessage || "unknown"),
     );

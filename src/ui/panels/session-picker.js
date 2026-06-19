@@ -3,6 +3,9 @@
  * provides rename / delete / export-to-file management actions.
  */
 
+// we need to declare the writeLogEntry function here
+
+const threadName = "SessionPicker";
 // pull in the quietapi from the preload script
 const { app, sessionsapi } = window;
 

@@ -1,3 +1,5 @@
+const threadName = "Stats";
+
 
 function normalizeStatsTextValue(value, options = {}) {
   if (value === null || value === undefined) return null;
@@ -236,7 +238,7 @@ function createStatsPanel(options) {
   async function applyStatsQuery(query) {
     filterInputEl.value = query;
     syncFilterHighlight();
-    writeLogEntry(`Stats tag clicked query="${query}"`);
+    writeLogEntry(`[${threadName}] Stats tag clicked query="${query}"`);
     await runFilterQuery(query);
     const filteredPackets = getFilteredPackets();
     if (Array.isArray(filteredPackets) && filteredPackets.length > 0) {
@@ -254,7 +256,7 @@ function createStatsPanel(options) {
       return;
     }
     statusUpdate("Status: Displaying capture statistics");
-    writeLogEntry(`User opened capture stats view`);
+    writeLogEntry(`[${threadName}] User opened capture stats view`);
 
     documentRef.getElementById("packetInfoPane").style.display = "none";
     documentRef.getElementById("packetPayloadPane").style.display = "none";

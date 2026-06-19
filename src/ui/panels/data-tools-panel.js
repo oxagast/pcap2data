@@ -1,6 +1,9 @@
+
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
+
+const threadName = "DataTools";
 
 // ── Conv tab constants ────────────────────────────────────────────────────────
 
@@ -41,9 +44,9 @@ let activeDataToolsProtoResult = null;
 
 // ── Injected dependencies (set via initConvPanel) ─────────────────────────────
 
-let _writeLogEntry = () => {};
-let _statusUpdate = () => {};
-let _setActiveMainTab = () => {};
+let _writeLogEntry = () => { };
+let _statusUpdate = () => { };
+let _setActiveMainTab = () => { };
 
 function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab }) {
   _writeLogEntry = writeLogEntry;
@@ -996,7 +999,7 @@ function clearProtoDecoderOutput() {
 function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   _setActiveMainTab("data-tools");
   _statusUpdate("Status: Displaying data conversion tools");
-  _writeLogEntry("User opened data conversion tools view");
+  _writeLogEntry(`[${threadName}] User opened data conversion tools view`);
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("summary_box").style.display = "none";

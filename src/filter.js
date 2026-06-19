@@ -1,8 +1,16 @@
+
+
 // Pre-compiled regex patterns for getDataType (avoid recompilation on every call)
+const threadName = "Filter";
 const REGEX_IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const REGEX_HEX = /^0x[0-9a-fA-F]+$/;
 const REGEX_MAC = /^([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}$/;
 const REGEX_ASCII = /^[\x00-\x7F]*$/;
+
+// Declare the writeLogEntry function
+function writeLogEntry(message) {
+  console.log(message);
+}
 
 // Memoization cache for getLeafKeys to avoid recomputing for same packet structures
 const leafKeysCache = new Map();
@@ -270,11 +278,13 @@ function tokenizeQuery(query) {
 
 function validateFilterExpression(expression) {
   if (typeof expression !== 'string') {
+    writeLogEntry(`[${threadName}] Invalid filter expression type: expected string but got ${typeof expression}`);
     throw new Error('Filter expression must be text');
   }
 
   const separatorIndex = expression.indexOf(':');
   if (separatorIndex === -1) {
+    writeLogEntry(`[${threadName}] Missing ":" in expression "${expression.trim()}"`);
     throw new Error(`Missing ":" in expression "${expression.trim()}"`);
   }
 
@@ -282,9 +292,11 @@ function validateFilterExpression(expression) {
   const filterValue = expression.slice(separatorIndex + 1).trim();
 
   if (!filterKey) {
+    writeLogEntry(`[${threadName}] Missing filter field before ":" in "${expression.trim()}"`);
     throw new Error(`Missing filter field before ":" in "${expression.trim()}"`);
   }
   if (!filterValue) {
+    writeLogEntry(`[${threadName}] Missing filter value after ":" in "${expression.trim()}"`);
     throw new Error(`Missing filter value after ":" in "${expression.trim()}"`);
   }
 }
@@ -303,6 +315,7 @@ function validateFilterSyntax(query) {
   function consume(type) {
     const currentToken = tokenList[pos];
     if (type && (!currentToken || currentToken.type !== type)) {
+      writeLogEntry(`[${threadName}] Expected ${type} but got ${currentToken ? currentToken.type : 'EOF'}`);
       throw new Error(
         `Expected ${type} but got ${currentToken ? currentToken.type : 'EOF'}`,
       );
@@ -330,11 +343,13 @@ function validateFilterSyntax(query) {
   function parseTerm() {
     const currentToken = peek();
     if (!currentToken) {
+      writeLogEntry(`[${threadName}] Unexpected end of query`);
       throw new Error('Unexpected end of query');
     }
     if (currentToken.type === 'NOT') {
       consume('NOT');
       if (!peek()) {
+        writeLogEntry(`[${threadName}] Expected expression or group after !`);
         throw new Error('Expected expression or group after !');
       }
       parseTerm();
@@ -343,10 +358,12 @@ function validateFilterSyntax(query) {
     if (currentToken.type === 'LPAREN') {
       consume('LPAREN');
       if (peek()?.type === 'RPAREN') {
+        writeLogEntry(`[${threadName}] Empty parentheses are not allowed`);
         throw new Error('Empty parentheses are not allowed');
       }
       parseOr();
       if (!peek() || peek().type !== 'RPAREN') {
+        writeLogEntry(`[${threadName}] Missing closing parenthesis`);
         throw new Error('Missing closing parenthesis');
       }
       consume('RPAREN');
@@ -358,11 +375,14 @@ function validateFilterSyntax(query) {
       return;
     }
     if (currentToken.type === 'RPAREN') {
+      writeLogEntry(`[${threadName}] Unexpected closing parenthesis`);
       throw new Error('Unexpected closing parenthesis');
     }
     if (currentToken.type === 'AND' || currentToken.type === 'OR') {
+      writeLogEntry(`[${threadName}] Unexpected operator ${currentToken.type}`);
       throw new Error(`Unexpected operator ${currentToken.type}`);
     }
+    writeLogEntry(`[${threadName}] Unexpected token ${currentToken.type}`);
     throw new Error(`Unexpected token ${currentToken.type}`);
   }
 
@@ -370,8 +390,10 @@ function validateFilterSyntax(query) {
   if (pos < tokenList.length) {
     const remainingToken = tokenList[pos];
     if (remainingToken.type === 'RPAREN') {
+      writeLogEntry(`[${threadName}] Unexpected closing parenthesis`);
       throw new Error('Unexpected closing parenthesis');
     }
+    writeLogEntry(`[${threadName}] Unexpected token ${remainingToken.type}`);
     throw new Error(`Unexpected token ${remainingToken.type}`);
   }
   return true;
@@ -388,6 +410,7 @@ function runQuery(data, query) {
   function consume(type) {
     const currentToken = tokenList[pos];
     if (type && (!currentToken || currentToken.type !== type)) {
+      writeLogEntry(`[${threadName}] Expected ${type} but got ${currentToken ? currentToken.type : 'EOF'}`);
       throw new Error(
         `Expected ${type} but got ${currentToken ? currentToken.type : 'EOF'}`,
       );
@@ -421,6 +444,7 @@ function runQuery(data, query) {
     if (currentToken && currentToken.type === 'NOT') {
       consume('NOT');
       if (!peek()) {
+        writeLogEntry(`[${threadName}] Expected expression or group after !`);
         throw new Error('Expected expression or group after !');
       }
       const negatedResult = parseTerm();

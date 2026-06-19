@@ -1,3 +1,6 @@
+
+const threadName = "List";
+
 function createListPanel({
   constants,
   getJsonCapture,
@@ -47,7 +50,7 @@ function createListPanel({
       return;
     }
     statusUpdate("Status: Displaying packet list");
-    writeLogEntry("User opened packet list view");
+    writeLogEntry(`[${threadName}] User opened packet list view`);
 
     document.getElementById("packetInfoPane").style.display = "none";
     document.getElementById("packetPayloadPane").style.display = "none";
@@ -324,7 +327,7 @@ function createListPanel({
             setCurrentPacketKey(row.srcIp + ":" + row.pi["Index"]);
             syncBookmarkDropdown(row.srcIp + ":" + row.pi["Index"]);
             writeLogEntry(
-              `Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
+              `[${threadName}] Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
             );
 
             const streamFilter = buildStreamFilterQuery(

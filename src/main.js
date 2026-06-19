@@ -68,7 +68,7 @@ ipcMain.handle("file-size", async () => {
 fs.rmSync(testcaseTempDir, { recursive: true, force: true });
 
 function killBackendProcess() {
-  console.log("Killing backend proc...");
+  console.log("Shutting down preprocessor...");
   if (platform === "win32") {
     exec("taskkill /IM snitch.exe /T /F", (fileError) => {
       if (fileError) console.error(fileError);
@@ -113,6 +113,9 @@ function createWindow() {
     minHeight: 600,
     width: 1400,
     height: 820,
+    // the icon only sets under linux, windows uses the forge config 
+    // specified icons for the exe and installer, and macOS uses 
+    // the .icns file specified in the forge config
     icon: path.join("/", "usr", "share", "pixmaps", "packetsnitch.png"),
     frame: false,
     webPreferences: {

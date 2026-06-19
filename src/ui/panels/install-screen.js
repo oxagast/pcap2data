@@ -1,3 +1,4 @@
+const threadName = "InstallScreen";
 function showInstallScreen(installInfo, documentRef) {
   const screen = documentRef.getElementById("install-screen");
   if (!screen) return;

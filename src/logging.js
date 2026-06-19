@@ -58,8 +58,14 @@ function initializeLogging({
         lastViewMode = viewMode;
         const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] User opened ${viewMode} view`;
         addActivityLogEntry(stampedMessage);
+        return;
       }
     } else {
+      if (message.startsWith("[")) {
+        const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer]${message}`;
+        addActivityLogEntry(stampedMessage);
+        return;
+      }
       const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
       addActivityLogEntry(stampedMessage);
     }
