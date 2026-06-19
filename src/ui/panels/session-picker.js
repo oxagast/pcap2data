@@ -274,8 +274,8 @@ function initializeSessionPicker({
   }
 
   if (closeBtn) {
-    closeBtn.addEventListener("click", () => {
-      const sessionData = buildSessionFilePayload();
+    closeBtn.addEventListener("click", async () => {
+      const sessionData = await buildSessionFilePayload();
       if (sessionData && sessionData.length > 5000) {
         sessionsapi.save("autosave", sessionData).finally(() => window.quitapi.quitApp());
       } else {

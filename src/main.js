@@ -261,7 +261,15 @@ app.whenReady().then(() => {
         filters: [
           {
             name: "Capture and Session Files",
-            extensions: ["pcap", "pcapng", "pss", "json", "json.xz"],
+            extensions: [
+              "pcap",
+              "pcapng",
+              "pss",
+              "pss.gz",
+              "json",
+              "json.xz",
+              "json.gz",
+            ],
           },
         ],
       });
@@ -791,6 +799,39 @@ async function ensureSessionJsonFile(name) {
   return jsonPath;
 }
 
+async function resolveSessionFilePath(name) {
+  const jsonPath = sessionFilePath(name);
+  if (await fileExists(jsonPath)) {
+    return { filePath: jsonPath, compression: null };
+  }
+
+  const compressedSource = await getExistingCompressedSessionPath(name);
+  if (!compressedSource) {
+    throw new Error("Session not found");
+  }
+
+  return compressedSource;
+}
+
+async function readSessionFileContent(filePath, compression) {
+  if (!compression) {
+    return fs.promises.readFile(filePath, "utf8");
+  }
+
+  if (compression === SESSION_COMPRESSION_XZ && !lzmaNative) {
+    throw new Error(
+      "Cannot load xz-compressed session (.pss / legacy .json.xz) without Node xz compression support",
+    );
+  }
+
+  const compressedBuffer = await fs.promises.readFile(filePath);
+  const decompressedBuffer =
+    compression === SESSION_COMPRESSION_XZ
+      ? await lzmaNative.decompress(compressedBuffer)
+      : await gunzipAsync(compressedBuffer);
+  return decompressedBuffer.toString("utf8");
+}
+
 async function ensureSessionsDir() {
   const dir = getSessionsDir();
   try {
@@ -891,8 +932,8 @@ ipcMain.handle("session-load", async (_event, name) => {
     return { success: false, error: "Invalid session name" };
   }
   try {
-    const filePath = await ensureSessionJsonFile(name);
-    const content = await fs.promises.readFile(filePath, "utf8");
+    const { filePath, compression } = await resolveSessionFilePath(name);
+    const content = await readSessionFileContent(filePath, compression);
     return { success: true, data: content };
   } catch (err) {
     console.error("session-load error:", err);

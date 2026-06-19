@@ -56,7 +56,7 @@ function initializeLogging({
       const viewMode = matchViewMode[1];
       if (viewMode !== lastViewMode) {
         lastViewMode = viewMode;
-        const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] User opened ${viewMode} view`;
+        const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer]${message}`;
         addActivityLogEntry(stampedMessage);
         return;
       }
@@ -66,7 +66,7 @@ function initializeLogging({
         addActivityLogEntry(stampedMessage);
         return;
       }
-      const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer] ${message}`;
+      const stampedMessage = `[${new Date().toISOString()}] [GUI][Renderer][MainFrontend] ${message}`;
       addActivityLogEntry(stampedMessage);
     }
   }

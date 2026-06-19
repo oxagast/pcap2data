@@ -298,6 +298,29 @@ function getPacketStubByKey(packetKey) {
     return packetList[ref.packetListIndex];
 }
 
+async function buildMaterializedCaptureData() {
+    const store = getActiveStoreOrThrow();
+    const hostObject = {};
+
+    for (const [host, packetList] of store.hostPackets.entries()) {
+        const materializedPackets = [];
+        for (const packetStub of packetList) {
+            const packetKey =
+                packetStub && typeof packetStub.__packetKey === "string"
+                    ? packetStub.__packetKey
+                    : "";
+            const packet = packetKey ? await readPacketByKey(packetKey) : null;
+            materializedPackets.push(packet || packetStub);
+        }
+        hostObject[host] = materializedPackets;
+    }
+
+    return {
+        Host: hostObject,
+        "Final Summary": store.captureData?.["Final Summary"] || "",
+    };
+}
+
 async function runFilterQueryAgainstStore(query) {
     const store = getActiveStoreOrThrow();
     const normalizedQuery = typeof query === "string" ? query.trim() : "";
@@ -405,6 +428,23 @@ function registerCaptureStoreHandlers(ipcMain) {
             return {
                 success: false,
                 error: error?.message || "Unable to read packet stub",
+            };
+        }
+    });
+
+    ipcMain.handle("capture-store-export-session-data", async () => {
+        try {
+            const store = getActiveStoreOrThrow();
+            const captureData = await buildMaterializedCaptureData();
+            return {
+                success: true,
+                captureData,
+                sessionState: store.sessionState,
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error?.message || "Unable to export session data",
             };
         }
     });

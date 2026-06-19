@@ -1,3 +1,4 @@
+const threadName = "MainFrontend";
 import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
@@ -567,41 +568,25 @@ void initializeActivityLog();
 startSessionAutosaveTimer();
 
 popHexGrid("00".repeat(256));
-// Set up file upload handler for JSON capture
+// Set up the unified capture/session loader.
 document
-  .getElementById("json-upload")
-  .addEventListener("change", function (event) {
-    const file = event.target.files[0];
-    if (file) {
-      startTime = performance.now();
-      statusUpdate("Processing file: " + file.name);
-      setSessionPcapSource(null, { skipLog: true });
-      const fileSizeKb = (file.size / 1024).toFixed(2);
-      writeLogEntry(
-        `User selected JSON file name=${file.name} size=${fileSizeKb}kb`,
-      );
-      // Clear library session name – this is a manual file load, not from the library
-      currentSessionName = null;
-      processFile(file);
-      isFileLoaded = true;
-      event.target.value = ""; // Reset so the same file can be loaded again
-    }
-  });
-
-document
-  .getElementById("pcap-filename")
-  .addEventListener("click", function (event) {
+  .getElementById("capture-file-btn")
+  .addEventListener("click", function () {
     window.getfileapi
       .selectFile()
       .then((filePath) => {
-        if (filePath) {
-          setSessionPcapSource(null, { skipLog: true });
-          runSnitch(filePath);
-        }
+        if (!filePath) return;
+        startTime = performance.now();
+        statusUpdate("Processing file: " + filePath);
+        setSessionPcapSource(null, { skipLog: true });
+        writeLogEntry(`User selected capture/session file path=${filePath}`);
+        // Clear library session name – this is a manual file load, not from the library
+        currentSessionName = null;
+        runSnitch(filePath);
       })
       .catch((error) => {
-        doError("Error selecting PCAP file!");
-        logErrorEntry("pcap-select", error);
+        doError("Error selecting capture/session file!");
+        logErrorEntry("capture-select", error);
       });
   });
 
@@ -690,17 +675,15 @@ function fileLoaded(isLoaded) {
     document.getElementById("stats-btn").style.opacity = "1";
     document.getElementById("list-btn").style.opacity = "1";
     document.getElementById("notes-btn").style.opacity = "1";
-    document.getElementById("json-lab").style.display = "none";
-    document.getElementById("pcap-lab").style.display = "none";
+    document.getElementById("capture-file-lab").style.display = "none";
     document.getElementById("llm-toggle").style.display = "none";
     writeLogEntry(
-      `User opened AI summary view`,
+      `[${threadName}] User opened AI Summary view`,
     );
   } else {
     filterInputEl.disabled = true;
     filterHistorySelectEl.disabled = true;
-    document.getElementById("json-lab").style.display = "block";
-    document.getElementById("pcap-lab").style.display = "block";
+    document.getElementById("capture-file-lab").style.display = "block";
     document.getElementById("log-btn").style.opacity = "0";
     document.getElementById("stats-btn").style.opacity = "0";
     document.getElementById("list-btn").style.opacity = "0";
@@ -1582,10 +1565,23 @@ function buildSessionStateSnapshot() {
   };
 }
 
-function buildSessionFilePayload() {
+async function buildSessionFilePayload() {
+  let captureDataForSave = capturedPackets;
+
+  if (window.captureapi?.exportSessionData) {
+    try {
+      const exportResult = await window.captureapi.exportSessionData();
+      if (exportResult?.success && exportResult.captureData) {
+        captureDataForSave = exportResult.captureData;
+      }
+    } catch (error) {
+      logErrorEntry("session-export-materialize", error);
+    }
+  }
+
   return JSON.stringify(
     {
-      [SESSION_CAPTURE_KEY]: capturedPackets,
+      [SESSION_CAPTURE_KEY]: captureDataForSave,
       [SESSION_STATE_KEY]: buildSessionStateSnapshot(),
     },
     null,
@@ -1612,7 +1608,7 @@ async function autosaveSessionToDisk() {
 
   sessionAutosaveInFlight = true;
   try {
-    const sessionJsonData = buildSessionFilePayload();
+    const sessionJsonData = await buildSessionFilePayload();
     if (!sessionJsonData || sessionJsonData.length <= 5000) return;
 
     const autosaveTargetName =
@@ -1658,7 +1654,7 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
   if (!window.sessionsapi) {
     // get the sessions name from the json payload
 
-    const sessionJsonData = buildSessionFilePayload();
+    const sessionJsonData = await buildSessionFilePayload();
     const result = await window.saveapi.saveJson(sessionJsonData);
     if (result.canceled) {
       statusUpdate("Status: Save cancelled");
@@ -1697,7 +1693,7 @@ async function persistSessionToDisk(sourceLabel = "manual-save") {
     await persistSessionToDisk(sourceLabel = "manual-save");
     return { success: true, name: "autosave" };
   }
-  const sessionJsonData = buildSessionFilePayload();
+  const sessionJsonData = await buildSessionFilePayload();
   // if the user picks save, we should also ask them what the new name 
   const result = await window.sessionsapi.save(currentSessionName, sessionJsonData);
   if (result.success) {
@@ -1729,7 +1725,7 @@ async function exportSessionToFile() {
     statusUpdate("Status: No data loaded to export");
     return { success: false, error: "No loaded capture" };
   }
-  const sessionJsonData = buildSessionFilePayload();
+  const sessionJsonData = await buildSessionFilePayload();
   if (window.sessionsapi) {
     const result = await window.sessionsapi.exportToFile(
       currentSessionName || "",
@@ -4174,7 +4170,7 @@ function clearProtoDecoderOutput() {
 function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   activeMainTab = MAIN_TAB_DATA_TOOLS;
   statusUpdate("Status: Displaying data conversion tools");
-  writeLogEntry("User opened data conversion tools view");
+  writeLogEntry(`[${threadName}] User opened data conversion tools view`);
   document.getElementById("prev-btn").style.display = "none";
   document.getElementById("next-btn").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "none";
@@ -4193,7 +4189,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
 function showNotesWorkspace() {
   activeMainTab = MAIN_TAB_NOTES;
   statusUpdate("Status: Displaying session notes");
-  writeLogEntry("User opened notes workspace view");
+  writeLogEntry(`[${threadName}] User opened notes workspace view`);
   document.getElementById("prev-btn").style.display = "none";
   document.getElementById("next-btn").style.display = "none";
   document.getElementById("packetInfoPane").style.display = "none";

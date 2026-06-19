@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('captureapi', {
   loadJson: (jsonData) => ipcRenderer.invoke('capture-store-load-json', jsonData),
   getPacket: (packetKey) => ipcRenderer.invoke('capture-store-get-packet', packetKey),
   getPacketStub: (packetKey) => ipcRenderer.invoke('capture-store-get-packet-stub', packetKey),
+  exportSessionData: () => ipcRenderer.invoke('capture-store-export-session-data'),
   filter: (query) => ipcRenderer.invoke('capture-store-filter', query),
 });
 

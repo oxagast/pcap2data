@@ -66,16 +66,12 @@
     </div>
     <div class="content_area">
       <div class="sidebar">
-        <form method="post" enctype="multipart/form-data" id="jsonFile" name="jsonFile">
-          <input type="file" id="json-upload" name="json-up" hidden />
-          <label id="json-lab" for="json-upload" class="menu-btns">Load Session</label>
-        </form>
+        <input type="button" id="capture-file-btn" name="capture-file-btn" hidden />
+        <label id="capture-file-lab" for="capture-file-btn" class="menu-btns">Load Capture or Session</label>
         <br />
         <input type="button" id="sessions-library-btn" value="Sessions Library" class="menu-btns"
           title="Open saved sessions library" />
         <br />
-        <input type="button" id="pcap-filename" name="pcap-up" hidden />
-        <label id="pcap-lab" for="pcap-filename" class="menu-btns">Choose PCAP</label>
         <div id="llm-toggle">
           <label class="menu-btns">
             <input type="checkbox" id="use-llm" />
