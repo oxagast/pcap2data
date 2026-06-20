@@ -482,6 +482,230 @@ function createKeystorePanel({
     return Array.from(discovered);
   }
 
+  function getHttpFieldValue(fields, fieldName) {
+    if (!Array.isArray(fields) || !fieldName) return "";
+    const match = fields.find(
+      (field) =>
+        field &&
+        typeof field === "object" &&
+        String(field.name || "").toLowerCase() === fieldName.toLowerCase(),
+    );
+    return normalizeSessionSecretValue(match?.value);
+  }
+
+  function inferHttpSchemeForPacket(packetInfo) {
+    const destinationPort = Number(
+      packetInfo?.["Transport Layer"]?.["Destination port"] ||
+      packetInfo?.["TCP"]?.["Destination port"] ||
+      packetInfo?.["tcp"]?.["Destination port"] ||
+      0,
+    );
+    return destinationPort === 443 || destinationPort === 8443
+      ? "https"
+      : "http";
+  }
+
+  function normalizeHttpAuthority(authorityRaw) {
+    const trimmed = normalizeSessionSecretValue(authorityRaw)
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+      .split("/")[0]
+      .trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith("[")) return trimmed;
+    const colonCount = (trimmed.match(/:/g) || []).length;
+    if (colonCount > 1) {
+      return `[${trimmed}]`;
+    }
+    return trimmed;
+  }
+
+  function extractHttpRequestLocationInput(httpCandidate) {
+    if (!httpCandidate || typeof httpCandidate !== "object") {
+      return null;
+    }
+
+    if (httpCandidate?.protocol === "HTTP" && Array.isArray(httpCandidate?.fields)) {
+      const requestType = getHttpFieldValue(httpCandidate.fields, "Type");
+      const requestTarget = getHttpFieldValue(httpCandidate.fields, "URL");
+      const hostHeader = getHttpFieldValue(httpCandidate.fields, "Host");
+      return {
+        requestType,
+        requestTarget,
+        hostHeader,
+      };
+    }
+
+    const requestType = normalizeSessionSecretValue(
+      httpCandidate.Type || httpCandidate["http.type"],
+    );
+    const requestTarget = normalizeSessionSecretValue(
+      httpCandidate.URL ||
+      httpCandidate["http.url"] ||
+      httpCandidate["Request URI"] ||
+      httpCandidate["request.uri"],
+    );
+    const hostHeader = normalizeSessionSecretValue(
+      httpCandidate.Host || httpCandidate["http.host"],
+    );
+    return {
+      requestType,
+      requestTarget,
+      hostHeader,
+    };
+  }
+
+  function buildHttpRequestLocationCandidates(httpCandidate, packetInfo, host) {
+    const locationInput = extractHttpRequestLocationInput(httpCandidate);
+    if (!locationInput) {
+      return [];
+    }
+
+    const requestType = locationInput.requestType;
+    const requestTarget = locationInput.requestTarget;
+    const hostHeader = locationInput.hostHeader;
+    if (requestType.toLowerCase() !== "request") {
+      return [];
+    }
+
+    if (!requestTarget || requestTarget === "*") {
+      return [];
+    }
+
+    const destinationIp = normalizeSessionSecretValue(
+      packetInfo?.["IP"]?.["Destination IP"],
+    );
+    const sourceIp = normalizeSessionSecretValue(packetInfo?.["IP"]?.["Source IP"]);
+    const fallbackHost = normalizeSessionSecretValue(host);
+    const authority =
+      normalizeHttpAuthority(hostHeader) ||
+      normalizeHttpAuthority(destinationIp) ||
+      normalizeHttpAuthority(sourceIp) ||
+      normalizeHttpAuthority(fallbackHost);
+    const scheme = inferHttpSchemeForPacket(packetInfo);
+
+    const discovered = new Set();
+    const candidates = [];
+    const pushCandidate = (value, preferredType = "url") => {
+      const normalizedValue = normalizeSessionSecretValue(value);
+      if (!normalizedValue || discovered.has(normalizedValue)) return;
+      discovered.add(normalizedValue);
+      const candidateType = /^https?:\/\//i.test(normalizedValue)
+        ? "url"
+        : preferredType;
+      candidates.push({
+        type: candidateType,
+        label: `${candidateType.toUpperCase()} ${normalizedValue}`,
+        content: normalizedValue,
+      });
+    };
+
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(requestTarget)) {
+      try {
+        pushCandidate(new URL(requestTarget).href, "url");
+      } catch {
+        pushCandidate(requestTarget, "uri");
+      }
+      return candidates;
+    }
+
+    pushCandidate(requestTarget, "uri");
+
+    if (authority) {
+      const base = `${scheme}://${authority}`;
+      try {
+        if (
+          requestTarget.startsWith("/") ||
+          requestTarget.startsWith("?") ||
+          requestTarget.startsWith("#")
+        ) {
+          pushCandidate(new URL(requestTarget, base).href, "url");
+        } else {
+          pushCandidate(new URL(`/${requestTarget}`, base).href, "url");
+        }
+      } catch {
+        const separator = requestTarget.startsWith("/") ? "" : "/";
+        pushCandidate(`${base}${separator}${requestTarget}`, "url");
+      }
+    }
+
+    return candidates;
+  }
+
+  function splitCookieHeaderCandidates(cookieHeader) {
+    const normalizedHeader = normalizeSessionSecretValue(cookieHeader);
+    if (!normalizedHeader) return [];
+    return normalizedHeader
+      .split(";")
+      .map((part) => normalizeSessionSecretValue(part))
+      .filter((part) => part.includes("="));
+  }
+
+  function extractCookieEntriesFromHttpMetadata(httpCandidate) {
+    const discovered = new Set();
+    const cookieEntries = [];
+    const addCookieEntry = (entry) => {
+      const normalizedEntry = normalizeSessionSecretValue(entry);
+      if (!normalizedEntry || !normalizedEntry.includes("=")) return;
+      if (discovered.has(normalizedEntry)) return;
+      discovered.add(normalizedEntry);
+      cookieEntries.push(normalizedEntry);
+    };
+
+    if (!httpCandidate || typeof httpCandidate !== "object") {
+      return cookieEntries;
+    }
+
+    if (httpCandidate?.protocol === "HTTP" && Array.isArray(httpCandidate?.fields)) {
+      extractCookieJarEntriesFromHttpFields(httpCandidate.fields).forEach(addCookieEntry);
+      return cookieEntries;
+    }
+
+    const directCookieHeader = normalizeSessionSecretValue(
+      httpCandidate.Cookie || httpCandidate["http.cookie"],
+    );
+    splitCookieHeaderCandidates(directCookieHeader).forEach(addCookieEntry);
+
+    const directSetCookieHeader = normalizeSessionSecretValue(
+      httpCandidate["Set-Cookie"] ||
+      httpCandidate["set-cookie"] ||
+      httpCandidate["http.set_cookie"],
+    );
+    if (directSetCookieHeader) {
+      const firstPair = directSetCookieHeader.split(";")[0] || "";
+      addCookieEntry(firstPair);
+    }
+
+    const credentials =
+      httpCandidate.Credentials && typeof httpCandidate.Credentials === "object"
+        ? httpCandidate.Credentials
+        : null;
+    if (!credentials) {
+      return cookieEntries;
+    }
+
+    Object.entries(credentials).forEach(([key, value]) => {
+      const normalizedKey = String(key || "").toLowerCase().trim();
+      const normalizedValue = normalizeSessionSecretValue(value);
+      if (!normalizedValue) return;
+      if (normalizedKey === "cookie_raw") {
+        splitCookieHeaderCandidates(normalizedValue).forEach(addCookieEntry);
+        return;
+      }
+      if (normalizedKey === "set_cookie_raw") {
+        const firstPair = normalizedValue.split(";")[0] || "";
+        addCookieEntry(firstPair);
+        return;
+      }
+      if (normalizedKey.startsWith("cookie.")) {
+        const cookieName = normalizedKey.slice("cookie.".length).trim();
+        if (!cookieName) return;
+        addCookieEntry(`${cookieName}=${normalizedValue}`);
+      }
+    });
+
+    return cookieEntries;
+  }
+
   function shouldIncludeSessionSecretKey(pathKey) {
     if (!pathKey) return false;
     const lower = pathKey.toLowerCase();
@@ -882,11 +1106,69 @@ function createKeystorePanel({
 
         const payloadHex =
           packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+        const structuredHttpSection = transportData?.HTTP;
+        const structuredHttpLocationEntries = buildHttpRequestLocationCandidates(
+          structuredHttpSection,
+          packetInfo,
+          host,
+        );
+        structuredHttpLocationEntries.forEach((locationEntry) => {
+          pushSessionEntry({
+            type: locationEntry.type,
+            label: locationEntry.label,
+            source: "session-auto-http-location",
+            content: locationEntry.content,
+            summary: `Host ${host} packet #${packetIndex} HTTP request target`,
+            packetIndex,
+            protocol: "HTTP",
+          });
+        });
+
+        const structuredCookieEntries = extractCookieEntriesFromHttpMetadata(
+          structuredHttpSection,
+        );
+        structuredCookieEntries.forEach((cookieEntry) => {
+          const separatorIndex = cookieEntry.indexOf("=");
+          const cookieName =
+            separatorIndex >= 0
+              ? cookieEntry.slice(0, separatorIndex).trim()
+              : "";
+          const cookieLabelSuffix =
+            cookieName ||
+            `packet-${packetIndex}-${hashContentForDeduplication(cookieEntry)}`;
+          pushSessionEntry({
+            type: "cookie",
+            label: `HTTP Cookie ${cookieLabelSuffix}`,
+            source: "session-auto-cookie-jar",
+            content: cookieEntry,
+            summary: `Host ${host} packet #${packetIndex}`,
+            packetIndex,
+            protocol: "HTTP",
+          });
+        });
+
         if (typeof payloadHex === "string" && payloadHex.trim()) {
           try {
             const payloadBytes = parseDataToolsInput("hex", payloadHex);
             const decodedHttp = decodeHttpFromBytes(payloadBytes);
             if (decodedHttp?.protocol === "HTTP") {
+              const httpLocationEntries = buildHttpRequestLocationCandidates(
+                decodedHttp,
+                packetInfo,
+                host,
+              );
+              httpLocationEntries.forEach((locationEntry) => {
+                pushSessionEntry({
+                  type: locationEntry.type,
+                  label: locationEntry.label,
+                  source: "session-auto-http-location",
+                  content: locationEntry.content,
+                  summary: `Host ${host} packet #${packetIndex} HTTP request target`,
+                  packetIndex,
+                  protocol: "HTTP",
+                });
+              });
+
               const cookieEntries = extractCookieJarEntriesFromHttpFields(
                 decodedHttp.fields,
               );

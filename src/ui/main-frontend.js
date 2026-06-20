@@ -201,6 +201,7 @@ const BACKEND_PACKET_CHUNK_SIZE = 250;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
 let sessionAutosaveInFlight = false;
+let keystoreAutoPopulateGeneration = 0;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -208,6 +209,36 @@ const backendProgressState = {
   totalPackets: 0,
 };
 let sessionPcapSource = null;
+
+function scheduleSessionKeychainAutoPopulate(reason = "startup") {
+  const generation = ++keystoreAutoPopulateGeneration;
+  const runAutoPopulate = async () => {
+    try {
+      statusUpdate("Status: Auto-populating keychain from packet data...");
+      const keystoreEntryCount = await keystorePanel.rebuildSessionEntries();
+      if (generation !== keystoreAutoPopulateGeneration) return;
+      writeLogEntry(
+        `Session keychain auto-populated entries=${keystoreEntryCount} reason=${reason}`,
+      );
+      statusUpdate("Status: Session keychain auto-populated");
+    } catch (error) {
+      if (generation !== keystoreAutoPopulateGeneration) return;
+      logErrorEntry("session-keystore-autopopulate", error);
+      statusUpdate("Status: Session keychain auto-populate failed");
+    }
+  };
+
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => {
+      void runAutoPopulate();
+    }, { timeout: 1000 });
+    return;
+  }
+
+  window.setTimeout(() => {
+    void runAutoPopulate();
+  }, 0);
+}
 
 function estimateBase64DecodedByteLength(base64Data) {
   const normalized = typeof base64Data === "string"
@@ -2318,11 +2349,7 @@ function processFile(file) {
       restoreSessionState(loadedSessionState);
     }
     else {
-      statusUpdate("Status: Auto-populating keychain from packet data...");
-      const keystoreEntryCount = await keystorePanel.rebuildSessionEntries();
-      writeLogEntry(
-        `Session keychain auto-populated entries=${keystoreEntryCount}`,
-      );
+      scheduleSessionKeychainAutoPopulate("file-load");
       statusUpdate("Status: File loaded successfully");
       writeLogEntry("New session initialized: created new session state");
       document.getElementById("total-packets").textContent = "Total Packets: " + totalPacketCount();
