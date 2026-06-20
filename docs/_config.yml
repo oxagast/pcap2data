@@ -6,7 +6,8 @@ email: "marshall@oxasploits.com"
 description: >-
   PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
 #remote_theme: "hemangsk/DevJournal"
-remote_theme: "abhinavs/moonwalk"
+#remote_theme: "abhinavs/moonwalk"
+remote_theme: "tajacks/lightspeed"
 # -----------------------------------------------------------------------------
 # URL and Path Configurations (Crucial for GitHub Pages)
 # -----------------------------------------------------------------------------
