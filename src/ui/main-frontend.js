@@ -133,6 +133,11 @@ const DATA_TOOLS_OUTPUT_FORMAT_DETAILS = {
     outputSelector: "#data-tools-base64-output",
   },
 };
+const DUMMY_ALL_HOST = "0.0.0.0";
+const DUMMY_ALL_HOST_ALIAS = "All Hosts";
+const DUMMY_BOOKMARKED_HOST = "__BOOKMARKED__";
+const DUMMY_BOOKMARKED_HOST_ALIAS = "Bookmarked";
+const BOOKMARK_FILTER_QUERY = "bookmark: true";
 
 // Global variables for DOM elements and state
 let capturedPackets = {}; // Stores parsed packet data from JSON
@@ -140,7 +145,7 @@ let jsonCapture = ""; // Stringified JSON capture for pretty display
 let currentIp;
 let finalSummary = ""; // Stores the summary section from JSON
 const status = getCachedElement("status"); // Status bar element
-let hostsList = ["0.0.0.0"]; // List of hosts found in capture
+let hostsList = [DUMMY_ALL_HOST]; // List of hosts found in capture
 const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
 let p = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
@@ -1114,6 +1119,156 @@ function syncTargetHostSelection(selectedHost) {
   return true;
 }
 
+function isAllHostsSelection(selectedHost) {
+  return String(selectedHost || "").trim() === DUMMY_ALL_HOST;
+}
+
+function isBookmarkedSelection(selectedHost) {
+  return String(selectedHost || "").trim() === DUMMY_BOOKMARKED_HOST;
+}
+
+function appendAllHostsOption(targetHostsDropdown) {
+  const optionEl = document.createElement("option");
+  optionEl.value = DUMMY_ALL_HOST;
+  optionEl.textContent = `${DUMMY_ALL_HOST_ALIAS} (${DUMMY_ALL_HOST})`;
+  targetHostsDropdown.appendChild(optionEl);
+}
+
+function appendBookmarkedOption(targetHostsDropdown) {
+  const optionEl = document.createElement("option");
+  optionEl.value = DUMMY_BOOKMARKED_HOST;
+  optionEl.textContent = DUMMY_BOOKMARKED_HOST_ALIAS;
+  targetHostsDropdown.appendChild(optionEl);
+}
+
+function getAllPacketKeysForFiltering() {
+  if (packetStubByKey.size > 0) {
+    return Array.from(packetStubByKey.keys());
+  }
+
+  const hostMap =
+    capturedPackets && typeof capturedPackets["Host"] === "object"
+      ? capturedPackets["Host"]
+      : {};
+  const packetKeys = [];
+  Object.keys(hostMap).forEach((host) => {
+    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+    hostPackets.forEach((packet, packetIndex) => {
+      packetKeys.push(getPacketKey(packet, host, packetIndex));
+    });
+  });
+  return packetKeys;
+}
+
+function getBookmarkedPacketsForHostNavigation() {
+  const seenPacketKeys = new Set();
+  const packets = [];
+  const allPackets = getAllPacketsForHostNavigation();
+  bookmarkList.forEach((packetKey) => {
+    if (seenPacketKeys.has(packetKey)) return;
+    seenPacketKeys.add(packetKey);
+
+    const packetStub = packetStubByKey.get(packetKey);
+    if (packetStub) {
+      packets.push(packetStub);
+      return;
+    }
+
+    const packetIndex = findPacketIndexByKey(allPackets, packetKey);
+    if (packetIndex >= 0) {
+      packets.push(allPackets[packetIndex]);
+    }
+  });
+  return sortPacketsByOwnStreamOrder(packets);
+}
+
+function parseFilterExpressionParts(expression) {
+  if (typeof expression !== "string") {
+    return null;
+  }
+  const separatorIndex = expression.indexOf(":");
+  if (separatorIndex === -1) {
+    return null;
+  }
+  const filterKey = expression.slice(0, separatorIndex).trim();
+  const filterValue = expression.slice(separatorIndex + 1).trim();
+  return {
+    filterKey,
+    filterValue,
+  };
+}
+
+function normalizeLocalFilterKey(filterKey) {
+  return String(filterKey || "")
+    .toLowerCase()
+    .replace(/[._\s-]+/g, "-");
+}
+
+function isBookmarkFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts?.filterKey) return false;
+  return normalizeLocalFilterKey(parts.filterKey) === "bookmark";
+}
+
+function parseBookmarkFilterBool(rawValue) {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  if (["true", "1", "yes", "y"].includes(normalized)) return true;
+  if (["false", "0", "no", "n"].includes(normalized)) return false;
+  return null;
+}
+
+function evaluateBookmarkFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts) return [];
+
+  const comparisonOps = [">=", "<=", ">", "<", "==", "!="];
+  const filterModifier = comparisonOps.find((modifier) =>
+    parts.filterValue.includes(modifier),
+  );
+  const rawFilterValue = filterModifier
+    ? parts.filterValue.replace(filterModifier, "").trim()
+    : parts.filterValue;
+  const expectedBookmarked = parseBookmarkFilterBool(rawFilterValue);
+  if (expectedBookmarked === null) {
+    return [];
+  }
+
+  const bookmarkSet = new Set(bookmarkList);
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  return allPacketKeys.filter((packetKey) => {
+    const isBookmarked = bookmarkSet.has(packetKey);
+    if (filterModifier === "!=") {
+      return isBookmarked !== expectedBookmarked;
+    }
+    return isBookmarked === expectedBookmarked;
+  });
+}
+
+function getAllPacketsForHostNavigation() {
+  const hostMap =
+    capturedPackets && typeof capturedPackets["Host"] === "object"
+      ? capturedPackets["Host"]
+      : {};
+  const allPackets = [];
+  Object.keys(hostMap).forEach((host) => {
+    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+    allPackets.push(...hostPackets);
+  });
+  return sortPacketsByOwnStreamOrder(allPackets);
+}
+
+function getPacketsForSelectedHost(selectedHost) {
+  if (isAllHostsSelection(selectedHost)) {
+    return getAllPacketsForHostNavigation();
+  }
+  if (isBookmarkedSelection(selectedHost)) {
+    return getBookmarkedPacketsForHostNavigation();
+  }
+  return Array.isArray(capturedPackets?.["Host"]?.[selectedHost])
+    ? capturedPackets["Host"][selectedHost]
+    : [];
+}
+
 function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
   const packetInfo = packet?.["Packet Info"] || {};
   const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
@@ -1190,8 +1345,181 @@ function sortPacketsByOwnStreamOrder(packetList) {
   return decorated.map((entry) => entry.packet);
 }
 
+function tokenizeLocalFilterQuery(query) {
+  const tokenList = [];
+  let cursor = 0;
+
+  while (cursor < query.length) {
+    if (/\s/.test(query[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    if (query[cursor] === "(") {
+      tokenList.push({ type: "LPAREN" });
+      cursor += 1;
+      continue;
+    }
+    if (query[cursor] === ")") {
+      tokenList.push({ type: "RPAREN" });
+      cursor += 1;
+      continue;
+    }
+    if (query.startsWith("||", cursor)) {
+      tokenList.push({ type: "OR" });
+      cursor += 2;
+      continue;
+    }
+    if (query.startsWith("&&", cursor)) {
+      tokenList.push({ type: "AND" });
+      cursor += 2;
+      continue;
+    }
+    if (query[cursor] === "!" && query[cursor + 1] !== "=") {
+      tokenList.push({ type: "NOT" });
+      cursor += 1;
+      continue;
+    }
+
+    let expressionEnd = cursor;
+    while (
+      expressionEnd < query.length &&
+      !query.startsWith("||", expressionEnd) &&
+      !query.startsWith("&&", expressionEnd) &&
+      !(query[expressionEnd] === "!" && query[expressionEnd + 1] !== "=") &&
+      query[expressionEnd] !== "(" &&
+      query[expressionEnd] !== ")"
+    ) {
+      expressionEnd += 1;
+    }
+
+    const expressionText = query.slice(cursor, expressionEnd).trim();
+    if (expressionText) {
+      tokenList.push({ type: "EXPR", value: expressionText });
+    }
+    cursor = expressionEnd;
+  }
+  return tokenList;
+}
+
+function unionPacketKeys(leftKeys, rightKeys) {
+  return Array.from(new Set([...leftKeys, ...rightKeys]));
+}
+
+function intersectPacketKeys(leftKeys, rightKeys) {
+  const rightSet = new Set(rightKeys);
+  return leftKeys.filter((packetKey) => rightSet.has(packetKey));
+}
+
+function subtractPacketKeys(allKeys, excludedKeys) {
+  const excludedSet = new Set(excludedKeys);
+  return allKeys.filter((packetKey) => !excludedSet.has(packetKey));
+}
+
+async function evaluateFilterExpressionToPacketKeys(expression) {
+  if (isBookmarkFilterExpression(expression)) {
+    return evaluateBookmarkFilterExpression(expression);
+  }
+  if (!window.captureapi) {
+    return [];
+  }
+  const filterResult = await window.captureapi.filter(expression);
+  if (!filterResult?.success) {
+    const errorText =
+      typeof filterResult?.error === "string"
+        ? filterResult.error
+        : "Filter failed";
+    throw new Error(errorText);
+  }
+  return Array.isArray(filterResult.packetKeys) ? filterResult.packetKeys : [];
+}
+
+async function evaluateFilterQueryToPacketKeys(query) {
+  const normalizedQuery = String(query || "").trim();
+  if (!normalizedQuery) {
+    return getAllPacketKeysForFiltering();
+  }
+
+  const tokenList = tokenizeLocalFilterQuery(normalizedQuery);
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  let tokenIndex = 0;
+
+  const peek = () => tokenList[tokenIndex];
+  const consume = (expectedType) => {
+    const currentToken = tokenList[tokenIndex];
+    if (expectedType && (!currentToken || currentToken.type !== expectedType)) {
+      throw new Error(
+        `Expected ${expectedType} but got ${currentToken ? currentToken.type : "EOF"}`,
+      );
+    }
+    tokenIndex += 1;
+    return currentToken;
+  };
+
+  const parseOr = async () => {
+    let result = await parseAnd();
+    while (peek() && peek().type === "OR") {
+      consume("OR");
+      const rightResult = await parseAnd();
+      result = unionPacketKeys(result, rightResult);
+    }
+    return result;
+  };
+
+  const parseAnd = async () => {
+    let result = await parseTerm();
+    while (peek() && peek().type === "AND") {
+      consume("AND");
+      const rightResult = await parseTerm();
+      result = intersectPacketKeys(result, rightResult);
+    }
+    return result;
+  };
+
+  const parseTerm = async () => {
+    const currentToken = peek();
+    if (!currentToken) {
+      return [];
+    }
+    if (currentToken.type === "NOT") {
+      consume("NOT");
+      const negatedResult = await parseTerm();
+      return subtractPacketKeys(allPacketKeys, negatedResult);
+    }
+    if (currentToken.type === "LPAREN") {
+      consume("LPAREN");
+      const groupedResult = await parseOr();
+      consume("RPAREN");
+      return groupedResult;
+    }
+    if (currentToken.type === "EXPR") {
+      consume("EXPR");
+      return evaluateFilterExpressionToPacketKeys(currentToken.value);
+    }
+    return [];
+  };
+
+  const resolvedPacketKeys = await parseOr();
+  return Array.isArray(resolvedPacketKeys) ? resolvedPacketKeys : [];
+}
+
 async function runFilterQuery(filterQuery, options = {}) {
   const { trackHistory = true, updateUi = true } = options;
+  const normalizedFilterQuery =
+    typeof filterQuery === "string" ? filterQuery.trim() : "";
+
+  if (normalizedFilterQuery === "") {
+    filteredPackets = getAllPacketsForHostNavigation();
+    if (!updateUi) {
+      return;
+    }
+
+    syncTargetHostSelection(DUMMY_ALL_HOST);
+    writeLogEntry("User cleared filter query");
+    statusUpdate("Status: Filter cleared, displaying all packets");
+    await handlePacketNavigation("first-load", null);
+    return;
+  }
+
   try {
     validateFilterSyntax(filterQuery);
   } catch (error) {
@@ -1206,23 +1534,20 @@ async function runFilterQuery(filterQuery, options = {}) {
     addFilterHistory(filterQuery);
   }
 
-  if (window.captureapi) {
-    const filterResult = await window.captureapi.filter(filterQuery);
-    if (!filterResult?.success) {
-      const errorText =
-        typeof filterResult?.error === "string"
-          ? filterResult.error
-          : "Filter failed";
-      doError(`Filter execution failed: ${errorText}`);
-      statusUpdate("Status: Filter execution failed");
-      return;
-    }
-    filteredPackets = filterResult.packetKeys
+  try {
+    const matchedPacketKeys = await evaluateFilterQueryToPacketKeys(filterQuery);
+    filteredPackets = matchedPacketKeys
       .map((packetKey) => packetStubByKey.get(packetKey))
       .filter(Boolean);
     filteredPackets = sortPacketsByOwnStreamOrder(filteredPackets);
-  } else {
-    filteredPackets = [];
+  } catch (error) {
+    const errorText =
+      typeof error?.message === "string" && error.message.trim()
+        ? error.message
+        : "Filter failed";
+    doError(`Filter execution failed: ${errorText}`);
+    statusUpdate("Status: Filter execution failed");
+    return;
   }
 
   if (isLocationFilterQuery(filterQuery) && filteredPackets.length > 0) {
@@ -1233,13 +1558,8 @@ async function runFilterQuery(filterQuery, options = {}) {
     return;
   }
 
-  if (filterQuery === "") {
-    writeLogEntry("User cleared filter query");
-    statusUpdate("Status: Filter cleared, displaying all packets");
-  } else {
-    writeLogEntry(`User executed query="${filterQuery}"`);
-    statusUpdate("Status: Filtering packets...");
-  }
+  writeLogEntry(`User executed query="${filterQuery}"`);
+  statusUpdate("Status: Filtering packets...");
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
     hideAllData();
@@ -1257,6 +1577,7 @@ async function runFilterQuery(filterQuery, options = {}) {
 }
 
 function clearFilterQuery() {
+  syncTargetHostSelection(DUMMY_ALL_HOST);
   if (!canClearFilterQuery()) {
     return;
   }
@@ -1975,14 +2296,21 @@ function restoreSessionState(sessionState) {
   renderNotesList();
 
   const selectedHost = String(sessionState.selectedHost || "").trim();
-  if (selectedHost && capturedPackets?.["Host"]?.[selectedHost]) {
+  if (
+    selectedHost &&
+    (
+      isAllHostsSelection(selectedHost) ||
+      isBookmarkedSelection(selectedHost) ||
+      capturedPackets?.["Host"]?.[selectedHost]
+    )
+  ) {
     const targetHostsEl = document.getElementById("target_hosts");
     if (targetHostsEl) {
       targetHostsEl.value = selectedHost;
     }
     hostFilterEl.value = selectedHost;
   } else {
-    const fallbackHost = Object.keys(capturedPackets?.["Host"] || {})[0];
+    const fallbackHost = DUMMY_ALL_HOST;
     if (fallbackHost) {
       const targetHostsEl = document.getElementById("target_hosts");
       if (targetHostsEl) {
@@ -2121,10 +2449,12 @@ async function processCapturePath(capturePath, options = {}) {
         ? capturedPackets["Host"]
         : {};
 
-    hostsList = ["0.0.0.0"];
+    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
     while (targetHostsDropdown.options.length > 0) {
       targetHostsDropdown.remove(0);
     }
+    appendAllHostsOption(targetHostsDropdown);
+    appendBookmarkedOption(targetHostsDropdown);
 
     packetStubByKey.clear();
     hydratedPacketCache.clear();
@@ -2145,15 +2475,15 @@ async function processCapturePath(capturePath, options = {}) {
       });
     });
 
-    const availableHosts = hostsList.slice(1);
+    const availableHosts = hostsList.slice();
     const selectedHost =
       previousHost && availableHosts.includes(previousHost)
         ? previousHost
-        : availableHosts[0] || "";
+        : DUMMY_ALL_HOST;
     if (selectedHost) {
       targetHostsDropdown.value = selectedHost;
       hostFilterEl.value = selectedHost;
-      p = Array.isArray(hostMap[selectedHost]) ? hostMap[selectedHost] : [];
+      p = getPacketsForSelectedHost(selectedHost);
     }
 
     document.getElementById("total-packets").textContent =
@@ -2296,11 +2626,13 @@ function processFile(file) {
     getCachedElement("target_hosts").hidden = false;
     getCachedElement("summary-btn").style.display = "block";
     // Reset host list and dropdowns for the new file
-    hostsList = ["0.0.0.0"];
+    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
     const targetHostsDropdown = getCachedElement("target_hosts");
     while (targetHostsDropdown.options.length > 0) {
       targetHostsDropdown.remove(0);
     }
+    appendAllHostsOption(targetHostsDropdown);
+    appendBookmarkedOption(targetHostsDropdown);
     bookmarkList = [];
     notesList = [];
     selectedNoteId = null;
@@ -2382,12 +2714,7 @@ function statusUpdate(message) {
  * Loads all capturedPackets for a given host IP into packetsForHost.
  */
 function hostPacketInfo(currentIp) {
-  const selected = currentIp;
-  p = [];
-  const hostPackets = capturedPackets["Host"][selected];
-  for (const packet in hostPackets) {
-    p.push(hostPackets[packet]);
-  }
+  p = getPacketsForSelectedHost(currentIp);
 }
 
 // Use event delegation for dynamically created elements
@@ -2401,6 +2728,8 @@ const navButtons = {
 };
 
 function buildHostTargetFilterQuery(selectedHost) {
+  if (isAllHostsSelection(selectedHost)) return "";
+  if (isBookmarkedSelection(selectedHost)) return BOOKMARK_FILTER_QUERY;
   const safeHost = sanitizeFilterTerm(selectedHost);
   if (!safeHost) return "";
   return `ip.src.addr: ${safeHost} || ip.dst.addr: ${safeHost}`;
@@ -2923,6 +3252,115 @@ function bytesToBigIntDecimal(bytes) {
     total = (total << 8n) + BigInt(byte);
   });
   return total.toString(10);
+}
+
+function getCompressionAlgorithmsByPriority(preferredAlgorithm = "") {
+  const normalizedPreferred = String(preferredAlgorithm || "").toLowerCase();
+  const allAlgorithms = ["gzip", "deflate", "brotli"];
+  if (!normalizedPreferred || !allAlgorithms.includes(normalizedPreferred)) {
+    return allAlgorithms;
+  }
+  return [normalizedPreferred, ...allAlgorithms.filter((a) => a !== normalizedPreferred)];
+}
+
+function inferCompressionFromBytes(bytes) {
+  if (!bytes || bytes.length < 2) return "";
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) return "gzip";
+  if (bytes[0] === 0x78) return "deflate";
+  return "";
+}
+
+async function decompressBytes(bytes, algorithm) {
+  if (!bytes || !bytes.length) {
+    throw new Error("No input bytes available for decompression");
+  }
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("DecompressionStream is unavailable");
+  }
+  const streamFormat =
+    algorithm === "brotli"
+      ? "br"
+      : algorithm === "gzip"
+        ? "gzip"
+        : algorithm === "deflate"
+          ? "deflate"
+          : "";
+  if (!streamFormat) {
+    throw new Error(`Unsupported compression algorithm: ${algorithm}`);
+  }
+
+  const compressedBlob = new Blob([bytes]);
+  const decompressedStream = compressedBlob
+    .stream()
+    .pipeThrough(new DecompressionStream(streamFormat));
+  const decompressedArrayBuffer = await new Response(decompressedStream).arrayBuffer();
+  return new Uint8Array(decompressedArrayBuffer);
+}
+
+async function tryDecompressBytes(bytes, preferredAlgorithm = "") {
+  if (!bytes || !bytes.length) return null;
+  const byMagic = inferCompressionFromBytes(bytes);
+  const algorithmOrder = getCompressionAlgorithmsByPriority(
+    preferredAlgorithm || byMagic,
+  );
+
+  for (const algorithm of algorithmOrder) {
+    try {
+      const decompressedBytes = await decompressBytes(bytes, algorithm);
+      if (!decompressedBytes || decompressedBytes.length === 0) continue;
+      if (decompressedBytes.length === bytes.length) continue;
+      return {
+        algorithm,
+        bytes: decompressedBytes,
+      };
+    } catch {
+      // Try next algorithm.
+    }
+  }
+
+  return null;
+}
+
+function getCurrentPacketCompressionHint() {
+  const httpData = getCurrentHttpData();
+  const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
+  if (encoding.includes("br") || encoding.includes("brotli")) return "brotli";
+  if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
+  if (encoding.includes("deflate") || encoding.includes("zlib")) return "deflate";
+
+  const extraInfoData = p?.[getActivePacketCursor()]?.["Extra Info"];
+  const dataTypes = Array.isArray(extraInfoData?.["Data Types"])
+    ? extraInfoData["Data Types"]
+    : [];
+  const dataTypeText = dataTypes.join(" ").toLowerCase();
+  if (dataTypeText.includes("brotli") || dataTypeText.includes(" br")) return "brotli";
+  if (dataTypeText.includes("gzip") || dataTypeText.includes(" gz")) return "gzip";
+  if (dataTypeText.includes("zlib") || dataTypeText.includes("deflate")) return "deflate";
+
+  const payloadHex = getCurrentRawPayloadHex();
+  if (!payloadHex) return "";
+  try {
+    return inferCompressionFromBytes(parseDataToolsInput("hex", payloadHex));
+  } catch {
+    return "";
+  }
+}
+
+function getActiveConvDecompressionCandidate() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl || !inputEl.value.trim()) return null;
+  try {
+    const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+    const inferredAlgorithm = inferCompressionFromBytes(bytes);
+    if (!inferredAlgorithm) return null;
+    return {
+      bytes,
+      algorithm: inferredAlgorithm,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function calculateShannonEntropy(bytes) {
@@ -4382,6 +4820,8 @@ let activeContextTarget = null;
 let activeContextPasteTarget = null;
 let activeContextFilterQueries = {};
 let activeContextCookieJarText = "";
+let activeContextConvDecompression = null;
+let activeContextStreamCompressionHint = "";
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -4397,6 +4837,7 @@ const convertContextButtons = {
   deriveGuess: getCachedElement("convert-context-derive-guess"),
   loadCursorAscii: getCachedElement("convert-context-load-cursor-ascii"),
   loadPayload: getCachedElement("convert-context-load-payload"),
+  decompressConv: getCachedElement("convert-context-decompress-conv"),
   copyHex: getCachedElement("convert-context-copy-hex"),
   copyAscii: getCachedElement("convert-context-copy-ascii"),
   copyRaw: getCachedElement("convert-context-copy-raw"),
@@ -4454,6 +4895,7 @@ const convertContextButtons = {
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
+  followStreamConvDecompress: getCachedElement("ctx-follow-stream-conv-decompress"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
 };
 const convertContextSubmenus = {
@@ -5037,6 +5479,10 @@ function showConvertContextMenu(
   convertContextButtons.loadPayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
+  activeContextConvDecompression = getActiveConvDecompressionCandidate();
+  convertContextButtons.decompressConv.style.display = activeContextConvDecompression
+    ? "block"
+    : "none";
   const hasDeriveGuessInput = Boolean(
     (sourceText || "").trim() || getTrimmedSelectionText(),
   );
@@ -5160,6 +5606,7 @@ function showConvertContextMenu(
   const hasDataTypeActions =
     formats.length > 0 ||
     hasPayloadToExport ||
+    Boolean(activeContextConvDecompression) ||
     hasCursorAsciiValue ||
     hasDeriveGuessInput;
   const hasFilterActions = Object.values(filterQueries).some(Boolean);
@@ -5218,6 +5665,13 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   const hasFollowStreamActions = Boolean(getCurrentStreamTuple());
+  activeContextStreamCompressionHint = hasFollowStreamActions
+    ? getCurrentPacketCompressionHint()
+    : "";
+  convertContextButtons.followStreamConvDecompress.style.display =
+    hasFollowStreamActions && activeContextStreamCompressionHint
+      ? "block"
+      : "none";
   convertContextSubmenus.followStream.style.display = hasFollowStreamActions
     ? "block"
     : "none";
@@ -5316,6 +5770,34 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
 }
 
+async function loadActiveConvInputDecompressedFromContextMenu() {
+  const decompressionCandidate = activeContextConvDecompression;
+  hideConvertContextMenu();
+  if (!decompressionCandidate?.bytes) {
+    statusUpdate("Status: No compressed Conv data detected");
+    return;
+  }
+
+  const decompressedCandidate = await tryDecompressBytes(
+    decompressionCandidate.bytes,
+    decompressionCandidate.algorithm,
+  );
+  if (!decompressedCandidate?.bytes) {
+    statusUpdate("Status: Failed to decompress Conv data");
+    return;
+  }
+
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  inputEl.value = bytesToHexString(decompressedCandidate.bytes);
+  formatEl.value = "hex";
+  showDataTools();
+  runDataToolsConversion();
+  writeLogEntry(
+    `Context conversion decompressed Conv input algorithm=${decompressedCandidate.algorithm}`,
+  );
+}
+
 function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
   if (byteIndex < 0 || !payloadHex) return null;
   const decodedAscii = hexToAscii(payloadHex);
@@ -5384,6 +5866,17 @@ function getTotalPacketCount() {
 // with ~500+ packets produce a noticeable pause without the overlay.
 const STREAM_LOADING_THRESHOLD = 10;
 const STREAM_CONTEXT_WARN_PACKET_THRESHOLD = 100;
+const STREAM_ASYNC_PACKET_YIELD_INTERVAL = 2000;
+const STREAM_ASYNC_HEX_YIELD_INTERVAL = 200;
+
+function yieldToRenderer() {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 /**
  * Shows the loading-container overlay with a stream-specific message.
@@ -5480,6 +5973,70 @@ function getFollowStreamPackets() {
   return matches;
 }
 
+async function getFollowStreamPacketsAsync() {
+  const tuple = getCurrentStreamTuple();
+  if (!tuple) return [];
+  const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
+  const hasPorts = srcPort !== null && dstPort !== null;
+  const matches = [];
+  const hosts = capturedPackets?.["Host"];
+  if (!hosts || typeof hosts !== "object") return [];
+
+  let scannedPacketCount = 0;
+  for (const host of Object.values(hosts)) {
+    if (!Array.isArray(host)) continue;
+    for (const pkt of host) {
+      const pi = pkt?.["Packet Info"];
+      if (!pi) {
+        scannedPacketCount += 1;
+        if (scannedPacketCount % STREAM_ASYNC_PACKET_YIELD_INTERVAL === 0) {
+          await yieldToRenderer();
+        }
+        continue;
+      }
+
+      const pProto = pi["Protocol"] || "TCP";
+      if (pProto === protocol) {
+        const pSrcIp = pi["IP"]?.["Source IP"];
+        const pDstIp = pi["IP"]?.["Destination IP"];
+        if (pSrcIp && pDstIp) {
+          const pTransport = pi[pProto] || {};
+          const pSrcPort = pTransport["Source port"] ?? null;
+          const pDstPort = pTransport["Destination port"] ?? null;
+          const forwardMatch =
+            pSrcIp === srcIp &&
+            pDstIp === dstIp &&
+            (!hasPorts || (pSrcPort === srcPort && pDstPort === dstPort));
+          const reverseMatch =
+            pSrcIp === dstIp &&
+            pDstIp === srcIp &&
+            (!hasPorts || (pSrcPort === dstPort && pDstPort === srcPort));
+          if (forwardMatch || reverseMatch) {
+            matches.push(pkt);
+          }
+        }
+      }
+
+      scannedPacketCount += 1;
+      if (scannedPacketCount % STREAM_ASYNC_PACKET_YIELD_INTERVAL === 0) {
+        await yieldToRenderer();
+      }
+    }
+  }
+
+  await yieldToRenderer();
+  matches.sort((a, b) => {
+    const tsA = a?.["Packet Info"]?.["Packet Timestamp"] ?? "";
+    const tsB = b?.["Packet Info"]?.["Packet Timestamp"] ?? "";
+    if (tsA < tsB) return -1;
+    if (tsA > tsB) return 1;
+    const idxA = Number(a?.["Packet Info"]?.["Index"] ?? 0);
+    const idxB = Number(b?.["Packet Info"]?.["Index"] ?? 0);
+    return idxA - idxB;
+  });
+  return matches;
+}
+
 /**
  * Returns a hex string with all payloads from the stream concatenated, and a
  * summary label for logging.  Returns null when no payload data is found.
@@ -5495,6 +6052,24 @@ function buildStreamHex(streamPackets) {
     }
   }
   return combined || null;
+}
+
+async function buildStreamHexAsync(streamPackets) {
+  if (!streamPackets.length) return null;
+  const parts = [];
+  let scanned = 0;
+  for (const pkt of streamPackets) {
+    const payloadHex =
+      pkt?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+    if (typeof payloadHex === "string" && payloadHex.length > 0) {
+      parts.push(payloadHex);
+    }
+    scanned += 1;
+    if (scanned % STREAM_ASYNC_HEX_YIELD_INTERVAL === 0) {
+      await yieldToRenderer();
+    }
+  }
+  return parts.length ? parts.join("") : null;
 }
 
 function alignTo4(value) {
@@ -6051,48 +6626,88 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
 
 function followStreamToConv() {
   hideConvertContextMenu();
-  const streamPackets = getFollowStreamPackets();
-  if (!streamPackets.length) {
-    statusUpdate("Status: No stream packets found for current packet");
-    return;
-  }
-  if (!confirmFollowStreamContextMenuLoad("Conv", streamPackets.length)) {
-    statusUpdate("Status: Follow stream to Conv cancelled");
-    return;
-  }
-  const isLarge = getTotalPacketCount() >= STREAM_LOADING_THRESHOLD;
-  if (isLarge) {
-    showStreamLoadingOverlay();
-    setTimeout(() => {
-      void _doFollowStreamToConv(streamPackets).finally(() => {
-        hideStreamLoadingOverlay();
-      });
-    }, 0);
-  } else {
-    void _doFollowStreamToConv(streamPackets);
+  void _runFollowStreamToConvAction();
+}
+
+function followStreamToConvDecompressed() {
+  hideConvertContextMenu();
+  void _runFollowStreamToConvAction({ decompress: true });
+}
+
+async function _runFollowStreamToConvAction(options = {}) {
+  const { decompress = false } = options;
+  showStreamLoadingOverlay();
+  await yieldToRenderer();
+  try {
+    const streamPackets = await getFollowStreamPacketsAsync();
+    if (!streamPackets.length) {
+      statusUpdate("Status: No stream packets found for current packet");
+      return;
+    }
+    if (!confirmFollowStreamContextMenuLoad("Conv", streamPackets.length)) {
+      statusUpdate("Status: Follow stream to Conv cancelled");
+      return;
+    }
+    await _doFollowStreamToConv(streamPackets, { decompress });
+  } finally {
+    hideStreamLoadingOverlay();
   }
 }
 
-async function _doFollowStreamToConv(streamPackets = getFollowStreamPackets()) {
+async function _doFollowStreamToConv(
+  streamPackets = getFollowStreamPackets(),
+  options = {},
+) {
+  const { decompress = false } = options;
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
   }
   const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
-  const combinedHex = buildStreamHex(hydratedStreamPackets);
+  const combinedHex = await buildStreamHexAsync(hydratedStreamPackets);
   if (!combinedHex) {
     statusUpdate("Status: Stream packets have no payload data");
     return;
   }
+
+  let outputHex = combinedHex;
+  let decompressionAlgorithm = "";
+  if (decompress) {
+    let compressedBytes;
+    try {
+      compressedBytes = parseDataToolsInput("hex", combinedHex);
+    } catch {
+      statusUpdate("Status: Stream payload is not valid hex data");
+      return;
+    }
+    const decompressionCandidate = await tryDecompressBytes(
+      compressedBytes,
+      activeContextStreamCompressionHint,
+    );
+    if (!decompressionCandidate) {
+      statusUpdate(
+        "Status: Stream does not appear to be gzip/deflate/brotli compressed",
+      );
+      return;
+    }
+    outputHex = bytesToHexString(decompressionCandidate.bytes);
+    decompressionAlgorithm = decompressionCandidate.algorithm;
+  }
+
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = combinedHex;
+  inputEl.value = outputHex;
   formatEl.value = "hex";
   showDataTools();
+  await yieldToRenderer();
   runDataToolsConversion();
-  writeLogEntry(
-    `Follow stream loaded ${streamPackets.length} packets into Conv tab`,
-  );
+  if (decompress) {
+    writeLogEntry(
+      `Follow stream loaded ${streamPackets.length} packets into Conv tab decompressed algorithm=${decompressionAlgorithm}`,
+    );
+    return;
+  }
+  writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into Conv tab`);
 }
 
 function followStreamToCrypt() {
@@ -6997,6 +7612,9 @@ convertContextButtons.deriveGuess.addEventListener("click", () => {
 convertContextButtons.loadPayload.addEventListener("click", () => {
   loadRawPayloadIntoDataToolsFromContextMenu();
 });
+convertContextButtons.decompressConv.addEventListener("click", () => {
+  loadActiveConvInputDecompressedFromContextMenu();
+});
 convertContextButtons.loadCursorAscii.addEventListener("click", () => {
   loadCursorAsciiIntoDataToolsFromContextMenu();
 });
@@ -7229,6 +7847,10 @@ convertContextButtons.followStreamConv.addEventListener(
   "click",
   followStreamToConv,
 );
+convertContextButtons.followStreamConvDecompress.addEventListener(
+  "click",
+  followStreamToConvDecompressed,
+);
 convertContextButtons.followStreamCrypt.addEventListener(
   "click",
   followStreamToCrypt,
@@ -7456,7 +8078,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
 
   let packetSet = shouldUseFilteredPacketSet
     ? filteredPackets
-    : capturedPackets["Host"][hostFilterEl.value];
+    : getPacketsForSelectedHost(hostFilterEl.value);
   if (shouldUseFilteredPacketSet) {
     writeLogEntry(
       `Filtered packet navigation packets_returned=${packetSet.length}`,
@@ -8423,7 +9045,12 @@ initializeContextMenu({
   hideConvertContextMenu,
 });
 
-filterInputEl.addEventListener("input", syncFilterHighlight);
+filterInputEl.addEventListener("input", () => {
+  syncFilterHighlight();
+  if (filterInputEl.value.trim() === "") {
+    syncTargetHostSelection(DUMMY_ALL_HOST);
+  }
+});
 filterInputEl.addEventListener("scroll", syncFilterHighlightScroll);
 
 filterHistorySelectEl.addEventListener("change", () => {

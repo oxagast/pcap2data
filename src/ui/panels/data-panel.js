@@ -59,7 +59,7 @@ function createDataPanel(options) {
     documentRef.getElementById("next-btn").style.display = "block";
     documentRef.getElementById("welcome").style.display = "none";
     if (documentRef.getElementById("host_filter").value == "") {
-      documentRef.getElementById("host_filter").value = getHostsList()[1];
+      documentRef.getElementById("host_filter").value = getHostsList()[0];
     }
 
     const hasActiveFilterQuery = getFilterInputValue().trim() !== "";
