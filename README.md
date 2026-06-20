@@ -57,11 +57,11 @@ Launch the app with `packetsnitch` or click the desktop icon.
 
 ## Documentation
 
-- 🚀 [Startup Docs](docs/README.md)  — Quickstart Documentation
-- 📖 [Frontend Docs](docs/Frontend.md) — UI reference, conversions, encryption, notes
-- 🎯 [Context Menu Reference](docs/ContextMenu.md) — Right-click options for copying, converting, filtering, and exporting
-- ⚙️ [Backend Docs](docs/Backend.md) — `snitch.py` usage, arguments, output structure
-- 🔎 [Filter Reference](docs/Filters.md) — Complete filter keys, operators, examples
+- 🚀 [Startup Docs](docs/readme.md)  — Quickstart Documentation
+- 📖 [Frontend Docs](docs/frontend.md) — UI reference, conversions, encryption, notes
+- 🎯 [Context Menu Reference](docs/context-menu.md) — Right-click options for copying, converting, filtering, and exporting
+- ⚙️ [Backend Docs](docs/backend.md) — `snitch.py` usage, arguments, output structure
+- 🔎 [Filter Reference](docs/filters.md) — Complete filter keys, operators, examples
 
 ---
 
