@@ -434,6 +434,306 @@ function createKeystorePanel({
     }
   }
 
+  function extractDestinationPort(transportData, packetInfo) {
+    const port = Number(
+      transportData?.["Destination port"] ||
+      transportData?.tcp?.["Destination port"] ||
+      transportData?.udp?.["Destination port"] ||
+      packetInfo?.["Transport Layer"]?.["Destination port"] ||
+      0,
+    );
+    return Number.isFinite(port) && port > 0 ? port : null;
+  }
+
+  function isRelevantProtocolPort(protocol, port) {
+    if (!port) return false;
+    const lowerProtocol = String(protocol || "").toLowerCase();
+
+    if (lowerProtocol.includes("ftp")) {
+      return port === 21;
+    }
+    if (lowerProtocol.includes("smtp")) {
+      return port === 25 || port === 465 || port === 587;
+    }
+    if (lowerProtocol.includes("imap")) {
+      return port === 143 || port === 993;
+    }
+    if (lowerProtocol.includes("rdp")) {
+      return port === 3389;
+    }
+
+    return false;
+  }
+
+  function isLikelyEmailAddress(value) {
+    return /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/.test(
+      normalizeSessionSecretValue(value),
+    );
+  }
+
+  function normalizeCredentialToken(token) {
+    const trimmed = normalizeSessionSecretValue(token);
+    if (!trimmed) return "";
+    return trimmed
+      .replace(/^<(.+)>$/, "$1")
+      .replace(/^"(.+)"$/, "$1")
+      .trim();
+  }
+
+  function splitCredentialArguments(argumentText) {
+    const source = normalizeSessionSecretValue(argumentText);
+    if (!source) return [];
+    const tokens = [];
+    const tokenPattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|(\S+)/g;
+    let match;
+    while ((match = tokenPattern.exec(source)) !== null) {
+      const rawToken =
+        match[1] !== undefined
+          ? match[1].replace(/\\"/g, '"')
+          : match[2] || "";
+      const normalized = normalizeCredentialToken(rawToken);
+      if (normalized) tokens.push(normalized);
+    }
+    return tokens;
+  }
+
+  function extractHttpBasicCredentialEntries(rawAuthValue) {
+    const decoded = decodeHttpBasicAuth(rawAuthValue);
+    if (!decoded) return [];
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex < 0) return [];
+    const username = normalizeCredentialToken(decoded.slice(0, separatorIndex));
+    const password = normalizeCredentialToken(decoded.slice(separatorIndex + 1));
+    const entries = [];
+    if (username) {
+      entries.push({
+        type: isLikelyEmailAddress(username) ? "email" : "secret",
+        label: "HTTP Basic Username",
+        source: "session-auto-http-basic-user",
+        content: username,
+        protocol: "HTTP",
+      });
+    }
+    if (password) {
+      entries.push({
+        type: "secret",
+        label: "HTTP Basic Password",
+        source: "session-auto-http-basic-password",
+        content: password,
+        protocol: "HTTP",
+      });
+    }
+    return entries;
+  }
+
+  function extractPlaintextProtocolCredentialEntries({
+    protocol,
+    pathKey,
+    rawText,
+    port,
+    packetInfo,
+  }) {
+    const text = normalizeSessionSecretValue(rawText);
+    if (!text) return [];
+
+    const lowerProtocol = String(protocol || "").toLowerCase();
+    const upperProtocol = String(protocol || "").toUpperCase() || "Unknown";
+    const lowerPath = String(pathKey || "").toLowerCase();
+    const entries = [];
+    const discovered = new Set();
+
+    const addEntry = ({ type = "secret", label, source, content, protocolName }) => {
+      const normalizedContent = normalizeCredentialToken(content);
+      const normalizedLabel = normalizeSessionSecretValue(label);
+      if (!normalizedContent || !normalizedLabel) return;
+      const fingerprint = `${normalizedLabel}|${normalizedContent}`;
+      if (discovered.has(fingerprint)) return;
+      discovered.add(fingerprint);
+      entries.push({
+        type,
+        label: normalizedLabel,
+        source: source || "session-auto-protocol-credential",
+        content: normalizedContent,
+        protocol: protocolName || upperProtocol,
+      });
+    };
+
+    const addUserPasswordEntries = (serviceLabel, username, password, protocolName) => {
+      const normalizedUser = normalizeCredentialToken(username);
+      const normalizedPassword = normalizeCredentialToken(password);
+      if (normalizedUser) {
+        addEntry({
+          type: isLikelyEmailAddress(normalizedUser) ? "email" : "secret",
+          label: `${serviceLabel} Username`,
+          source: `session-auto-${serviceLabel.toLowerCase()}-username`,
+          content: normalizedUser,
+          protocolName,
+        });
+      }
+      if (normalizedPassword) {
+        addEntry({
+          type: "secret",
+          label: `${serviceLabel} Password`,
+          source: `session-auto-${serviceLabel.toLowerCase()}-password`,
+          content: normalizedPassword,
+          protocolName,
+        });
+      }
+    };
+
+    if (
+      lowerProtocol.includes("http") ||
+      lowerPath.includes("authorization") ||
+      lowerPath.includes("basic")
+    ) {
+      extractHttpBasicCredentialEntries(text).forEach((entry) => {
+        addEntry({
+          type: entry.type,
+          label: entry.label,
+          source: entry.source,
+          content: entry.content,
+          protocolName: entry.protocol,
+        });
+      });
+    }
+
+    if (
+      lowerProtocol.includes("ftp") ||
+      (lowerPath.includes("ftp") && isRelevantProtocolPort("ftp", port))
+    ) {
+      const ftpUserMatch = text.match(/^\s*USER\s+(.+)$/im);
+      const ftpPassMatch = text.match(/^\s*PASS\s+(.+)$/im);
+      if (ftpUserMatch || ftpPassMatch) {
+        addUserPasswordEntries(
+          "FTP",
+          ftpUserMatch?.[1] || "",
+          ftpPassMatch?.[1] || "",
+          "FTP",
+        );
+      }
+      if (isRelevantProtocolPort("ftp", port)) {
+        if (
+          lowerPath.includes("user") ||
+          lowerPath.includes("username") ||
+          lowerPath.includes("login")
+        ) {
+          addUserPasswordEntries("FTP", text, "", "FTP");
+        }
+        if (lowerPath.includes("pass") || lowerPath.includes("password")) {
+          addUserPasswordEntries("FTP", "", text, "FTP");
+        }
+      }
+    }
+
+    if (
+      lowerProtocol.includes("rdp") ||
+      (lowerPath.includes("rdp") && isRelevantProtocolPort("rdp", port))
+    ) {
+      const rdpUserMatch = text.match(/\b(?:user(?:name)?|login)\s*[:=]\s*(\S+)/i);
+      const rdpPassMatch = text.match(/\b(?:pass(?:word)?|pwd)\s*[:=]\s*(\S+)/i);
+      if ((rdpUserMatch || rdpPassMatch) && isRelevantProtocolPort("rdp", port)) {
+        addUserPasswordEntries(
+          "RDP",
+          rdpUserMatch?.[1] || "",
+          rdpPassMatch?.[1] || "",
+          "RDP",
+        );
+      }
+      if (isRelevantProtocolPort("rdp", port)) {
+        if (
+          lowerPath.includes("user") ||
+          lowerPath.includes("username") ||
+          lowerPath.includes("login")
+        ) {
+          addUserPasswordEntries("RDP", text, "", "RDP");
+        }
+        if (lowerPath.includes("pass") || lowerPath.includes("password")) {
+          addUserPasswordEntries("RDP", "", text, "RDP");
+        }
+      }
+    }
+
+    if (
+      lowerProtocol.includes("imap") ||
+      (lowerPath.includes("imap") && isRelevantProtocolPort("imap", port))
+    ) {
+      const imapLoginMatch = text.match(/^\s*\S+\s+LOGIN\s+(.+)$/im);
+      if (imapLoginMatch?.[1] && isRelevantProtocolPort("imap", port)) {
+        const imapTokens = splitCredentialArguments(imapLoginMatch[1]);
+        if (imapTokens.length >= 2) {
+          addUserPasswordEntries(
+            "IMAP",
+            imapTokens[0],
+            imapTokens[1],
+            "IMAP",
+          );
+        }
+      }
+      if (isRelevantProtocolPort("imap", port)) {
+        if (lowerPath.includes("email") || lowerPath.includes("user")) {
+          addEntry({
+            type: isLikelyEmailAddress(text) ? "email" : "secret",
+            label: "IMAP Username",
+            source: "session-auto-imap-username",
+            content: text,
+            protocolName: "IMAP",
+          });
+        }
+        if (lowerPath.includes("pass") || lowerPath.includes("password")) {
+          addEntry({
+            type: "secret",
+            label: "IMAP Password",
+            source: "session-auto-imap-password",
+            content: text,
+            protocolName: "IMAP",
+          });
+        }
+      }
+    }
+
+    if (
+      lowerProtocol.includes("smtp") ||
+      (lowerPath.includes("smtp") && isRelevantProtocolPort("smtp", port))
+    ) {
+      const smtpAuthMatch = text.match(
+        /^\s*AUTH\s+(?:LOGIN|PLAIN)\s+(.+)$/im,
+      );
+      if (smtpAuthMatch?.[1] && isRelevantProtocolPort("smtp", port)) {
+        const smtpTokens = splitCredentialArguments(smtpAuthMatch[1]);
+        if (smtpTokens.length >= 2) {
+          addUserPasswordEntries(
+            "SMTP",
+            smtpTokens[0],
+            smtpTokens[1],
+            "SMTP",
+          );
+        }
+      }
+      if (isRelevantProtocolPort("smtp", port)) {
+        if (lowerPath.includes("email") || lowerPath.includes("user")) {
+          addEntry({
+            type: isLikelyEmailAddress(text) ? "email" : "secret",
+            label: "SMTP Username",
+            source: "session-auto-smtp-username",
+            content: text,
+            protocolName: "SMTP",
+          });
+        }
+        if (lowerPath.includes("pass") || lowerPath.includes("password")) {
+          addEntry({
+            type: "secret",
+            label: "SMTP Password",
+            source: "session-auto-smtp-password",
+            content: text,
+            protocolName: "SMTP",
+          });
+        }
+      }
+    }
+
+    return entries;
+  }
+
   function hashContentForDeduplication(content) {
     let hash = 2166136261;
     for (let index = 0; index < content.length; index++) {
@@ -1060,6 +1360,7 @@ function createKeystorePanel({
           packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
         const extraInfo = packet?.["Extra Info"] || {};
         const packetIndex = packetInfo?.["Index"] ?? "?";
+        const destinationPort = extractDestinationPort(transportData, packetInfo);
         [transportData, extraInfo].forEach((candidateRoot) => {
           collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
             const rawText = normalizeSessionSecretValue(rawValue);
@@ -1085,6 +1386,23 @@ function createKeystorePanel({
                   summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
                   packetIndex,
                   protocol,
+                });
+              });
+              extractPlaintextProtocolCredentialEntries({
+                protocol,
+                pathKey,
+                rawText,
+                port: destinationPort,
+                packetInfo,
+              }).forEach((credentialEntry) => {
+                pushSessionEntry({
+                  type: credentialEntry.type,
+                  label: credentialEntry.label,
+                  source: credentialEntry.source,
+                  content: credentialEntry.content,
+                  summary: `Host ${host} packet #${packetIndex} ${pathKey}`,
+                  packetIndex,
+                  protocol: credentialEntry.protocol || protocol,
                 });
               });
             }
@@ -1150,8 +1468,47 @@ function createKeystorePanel({
         if (typeof payloadHex === "string" && payloadHex.trim()) {
           try {
             const payloadBytes = parseDataToolsInput("hex", payloadHex);
+            const payloadText = new TextDecoder("utf-8", {
+              fatal: false,
+            }).decode(payloadBytes);
+            extractPlaintextProtocolCredentialEntries({
+              protocol,
+              pathKey: "payload.text",
+              rawText: payloadText,
+              port: destinationPort,
+              packetInfo,
+            }).forEach((credentialEntry) => {
+              pushSessionEntry({
+                type: credentialEntry.type,
+                label: credentialEntry.label,
+                source: credentialEntry.source,
+                content: credentialEntry.content,
+                summary: `Host ${host} packet #${packetIndex} payload plaintext`,
+                packetIndex,
+                protocol: credentialEntry.protocol || protocol,
+              });
+            });
+
             const decodedHttp = decodeHttpFromBytes(payloadBytes);
             if (decodedHttp?.protocol === "HTTP") {
+              const decodedHttpAuthHeader = getHttpFieldValue(
+                decodedHttp.fields,
+                "Authorization",
+              );
+              extractHttpBasicCredentialEntries(decodedHttpAuthHeader).forEach(
+                (basicEntry) => {
+                  pushSessionEntry({
+                    type: basicEntry.type,
+                    label: basicEntry.label,
+                    source: basicEntry.source,
+                    content: basicEntry.content,
+                    summary: `Host ${host} packet #${packetIndex} HTTP Authorization`,
+                    packetIndex,
+                    protocol: "HTTP",
+                  });
+                },
+              );
+
               const httpLocationEntries = buildHttpRequestLocationCandidates(
                 decodedHttp,
                 packetInfo,
