@@ -1,10 +1,5 @@
 <style>
-    .header {
-        display: none;
-    }
-    body {
-        background-color: #262b3b;
-    }
+
     </style>
 
 <p align="center">

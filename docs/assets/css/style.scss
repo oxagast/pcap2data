@@ -1,6 +1,9 @@
 @import "{{ site.theme }}";
 
-
 .header {
   display: none;
+}
+
+body {
+  background-color: #262b3b;
 }
