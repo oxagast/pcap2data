@@ -57,11 +57,11 @@ Launch the app with `packetsnitch` or click the desktop icon.
 
 ## Documentation
 
-- 🚀 [Startup Docs](docs/readme.md)  — Quickstart Documentation
-- 📖 [Frontend Docs](docs/frontend.md) — UI reference, conversions, encryption, notes
-- 🎯 [Context Menu Reference](docs/context-menu.md) — Right-click options for copying, converting, filtering, and exporting
-- ⚙️ [Backend Docs](docs/backend.md) — `snitch.py` usage, arguments, output structure
-- 🔎 [Filter Reference](docs/filters.md) — Complete filter keys, operators, examples
+- 🚀 [Startup Docs](https://packetsnitch.oxasploits.com/)  — Quickstart Documentation
+- 📖 [Frontend Docs](https://packetsnitch.oxasploits.com/frontend/) — UI reference, conversions, encryption, notes
+- 🎯 [Context Menu Reference](https://packetsnitch.oxasploits.com/context-menu/) — Right-click options for copying, converting, filtering, and exporting
+- ⚙️ [Backend Docs](https://packetsnitch.oxasploits.com/backend/) — `snitch.py` usage, arguments, output structure
+- 🔎 [Filter Reference](https://packetsnitch.oxasploits.com/filters/) — Complete filter keys, operators, examples
 
 ---
 
