@@ -1,4 +1,4 @@
-- name: Docs Home
+- name: Overview
   link: /
 - name: Frontend
   link: /frontend
@@ -8,3 +8,5 @@
   link: /filters
 - name: Context Menu
   link: /context-menu
+- name: Oxasploits
+  link: https://oxasploits.com/
