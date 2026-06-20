@@ -8,7 +8,7 @@
     </style>
 
 <p align="center">
-<a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
+<a href="https://oxasploits.github.io/PacketSnitch/"><img width="360" height="60" alt="PacketSnitch by oxasploits" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
 </p>
 
 ## Backend Documentation
