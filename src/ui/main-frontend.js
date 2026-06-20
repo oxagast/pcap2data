@@ -5383,6 +5383,7 @@ function getTotalPacketCount() {
 // getFollowStreamPackets() iterates every packet across all hosts, so captures
 // with ~500+ packets produce a noticeable pause without the overlay.
 const STREAM_LOADING_THRESHOLD = 10;
+const STREAM_CONTEXT_WARN_PACKET_THRESHOLD = 100;
 
 /**
  * Shows the loading-container overlay with a stream-specific message.
@@ -5399,6 +5400,13 @@ function showStreamLoadingOverlay() {
 function hideStreamLoadingOverlay() {
   const loadingContainerEl = document.getElementById("loading-container");
   if (loadingContainerEl) loadingContainerEl.style.display = "none";
+}
+
+function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
+  if (packetCount <= STREAM_CONTEXT_WARN_PACKET_THRESHOLD) return true;
+  return window.confirm(
+    `This stream contains ${packetCount} packets. Loading it into the ${tabLabel} tab can consume significant memory and may bog down the UI.\n\nContinue?`,
+  );
 }
 
 /**
@@ -6043,21 +6051,29 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
 
 function followStreamToConv() {
   hideConvertContextMenu();
+  const streamPackets = getFollowStreamPackets();
+  if (!streamPackets.length) {
+    statusUpdate("Status: No stream packets found for current packet");
+    return;
+  }
+  if (!confirmFollowStreamContextMenuLoad("Conv", streamPackets.length)) {
+    statusUpdate("Status: Follow stream to Conv cancelled");
+    return;
+  }
   const isLarge = getTotalPacketCount() >= STREAM_LOADING_THRESHOLD;
   if (isLarge) {
     showStreamLoadingOverlay();
     setTimeout(() => {
-      void _doFollowStreamToConv().finally(() => {
+      void _doFollowStreamToConv(streamPackets).finally(() => {
         hideStreamLoadingOverlay();
       });
     }, 0);
   } else {
-    void _doFollowStreamToConv();
+    void _doFollowStreamToConv(streamPackets);
   }
 }
 
-async function _doFollowStreamToConv() {
-  const streamPackets = getFollowStreamPackets();
+async function _doFollowStreamToConv(streamPackets = getFollowStreamPackets()) {
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
@@ -6081,21 +6097,29 @@ async function _doFollowStreamToConv() {
 
 function followStreamToCrypt() {
   hideConvertContextMenu();
+  const streamPackets = getFollowStreamPackets();
+  if (!streamPackets.length) {
+    statusUpdate("Status: No stream packets found for current packet");
+    return;
+  }
+  if (!confirmFollowStreamContextMenuLoad("Crypt", streamPackets.length)) {
+    statusUpdate("Status: Follow stream to Crypt cancelled");
+    return;
+  }
   const isLarge = getTotalPacketCount() >= STREAM_LOADING_THRESHOLD;
   if (isLarge) {
     showStreamLoadingOverlay();
     setTimeout(() => {
-      void _doFollowStreamToCrypt().finally(() => {
+      void _doFollowStreamToCrypt(streamPackets).finally(() => {
         hideStreamLoadingOverlay();
       });
     }, 0);
   } else {
-    void _doFollowStreamToCrypt();
+    void _doFollowStreamToCrypt(streamPackets);
   }
 }
 
-async function _doFollowStreamToCrypt() {
-  const streamPackets = getFollowStreamPackets();
+async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) {
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
