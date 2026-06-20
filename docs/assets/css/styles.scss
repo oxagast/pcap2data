@@ -1,0 +1,22 @@
+--- --- @charset "utf-8";
+
+@import "reset",
+"wrapper",
+"page",
+"footer",
+"header",
+"float",
+"posts",
+"categories",
+"post",
+"mobile"
+;
+
+
+.header {
+  display: none;
+}
+
+body {
+  background-color: #262b3b;
+}
