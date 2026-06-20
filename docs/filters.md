@@ -1,3 +1,12 @@
+<style>
+    .header {
+        display: none;
+    }
+    body {
+        background-color: #262b3b;
+    }
+    </style>
+
 <p align="center">
 <a href="https://oxasploits.github.io/PacketSnitch/" alt="PacketSnitch by oxasploits"><img src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
 </p>

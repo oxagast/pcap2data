@@ -3,7 +3,7 @@
         display: none;
     }
     body {
-        background-color: #333333;
+        background-color: #262b3b;
     }
     </style>
 
