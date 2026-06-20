@@ -1787,6 +1787,36 @@ function sendTextToNotesFromContextMenu(text, sourceLabel) {
   showNotesWorkspace();
 }
 
+function buildListVisibleDataNoteText(target = activeContextTarget) {
+  const row = target?.closest?.("tr[data-host][data-pkt-idx]");
+  if (!row) return "";
+
+  const headers = Array.from(
+    row.closest("table")?.querySelectorAll("thead th") || [],
+  ).map((headerEl) =>
+    String(headerEl?.textContent || "")
+      .replace(/[▲▼]/g, "")
+      .trim(),
+  );
+  const values = Array.from(row.querySelectorAll("td")).map((cellEl) =>
+    String(cellEl?.textContent || "").trim(),
+  );
+  if (!values.length) return "";
+
+  const lines = ["List Tab Visible Row Data:"];
+  values.forEach((value, index) => {
+    const header = headers[index] || `Column ${index + 1}`;
+    const normalizedHeader = header === "★" ? "Bookmarked" : header;
+    const normalizedValue = header === "★"
+      ? value === "★"
+        ? "Yes"
+        : "No"
+      : value || "(empty)";
+    lines.push(`${normalizedHeader}: ${normalizedValue}`);
+  });
+  return lines.join("\n");
+}
+
 function initializeNotesPanel() {
   const addButtonEl = document.getElementById("notes-add-btn");
   const removeButtonEl = document.getElementById("notes-remove-btn");
@@ -3322,13 +3352,14 @@ async function tryDecompressBytes(bytes, preferredAlgorithm = "") {
 }
 
 function getCurrentPacketCompressionHint() {
-  const httpData = getCurrentHttpData();
+  const contextPacket = getCurrentContextPacket();
+  const httpData = getCurrentHttpData(contextPacket);
   const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
   if (encoding.includes("br") || encoding.includes("brotli")) return "brotli";
   if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
   if (encoding.includes("deflate") || encoding.includes("zlib")) return "deflate";
 
-  const extraInfoData = p?.[getActivePacketCursor()]?.["Extra Info"];
+  const extraInfoData = contextPacket?.["Extra Info"];
   const dataTypes = Array.isArray(extraInfoData?.["Data Types"])
     ? extraInfoData["Data Types"]
     : [];
@@ -4822,6 +4853,7 @@ let activeContextFilterQueries = {};
 let activeContextCookieJarText = "";
 let activeContextConvDecompression = null;
 let activeContextStreamCompressionHint = "";
+let activeContextPacket = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -4887,6 +4919,7 @@ const convertContextButtons = {
   copyCookieJar: getCachedElement("ctx-copy-cookie-jar"),
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
   notesSendData: getCachedElement("ctx-notes-send-data"),
+  notesSendListPacket: getCachedElement("ctx-notes-send-list-packet"),
   notesSendConvOutput: getCachedElement("ctx-notes-send-conv-output"),
   notesSendConvHashes: getCachedElement("ctx-notes-send-conv-hashes"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
@@ -5013,8 +5046,31 @@ function hideConvertContextMenu() {
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
   activeContextCookieJarText = "";
+  activeContextPacket = null;
   resetConvertContextSubmenuPositions();
   convertContextMenuEl.hidden = true;
+}
+
+function getPacketFromListContextTarget(target) {
+  const row = target?.closest?.("tr[data-host][data-pkt-idx]");
+  if (!row) return null;
+  const host = String(row.dataset.host || "").trim();
+  const packetIndex = Number.parseInt(row.dataset.pktIdx ?? "-1", 10);
+  if (!host || !Number.isInteger(packetIndex) || packetIndex < 0) return null;
+  const hostPackets = capturedPackets?.["Host"]?.[host];
+  if (!Array.isArray(hostPackets)) return null;
+  return hostPackets[packetIndex] || null;
+}
+
+function getCurrentContextPacket(target = null) {
+  if (activeMainTab === MAIN_TAB_LIST) {
+    const listPacket = getPacketFromListContextTarget(target || activeContextTarget);
+    if (listPacket) return listPacket;
+  }
+  if (activeContextPacket) return activeContextPacket;
+  const packetCursor = getActivePacketCursor();
+  if (packetCursor === null) return null;
+  return p?.[packetCursor] || null;
 }
 
 function normalizeContextToken(value) {
@@ -5416,6 +5472,11 @@ function showConvertContextMenu(
   activeContextPasteTarget = pasteTarget;
   activeContextFilterQueries = filterQueries;
   activeContextCookieJarText = cookieJarText;
+  activeContextPacket = getCurrentContextPacket(target);
+
+  const isHostDataTabActive = activeMainTab === MAIN_TAB_DATA;
+  const allowFollowStreamActions =
+    activeMainTab === MAIN_TAB_DATA || activeMainTab === MAIN_TAB_LIST;
 
   convertContextButtons.copy.style.display = showCopySelection
     ? "block"
@@ -5424,14 +5485,18 @@ function showConvertContextMenu(
   convertContextButtons.saveJson.style.display = showSaveJson
     ? "block"
     : "none";
-  const hasPacketToExport = Boolean(
-    getCurrentPacketForExport(p, getActivePacketCursor()),
-  );
+  const hasPacketToExport = Boolean(getCurrentPacketForExport());
   const currentPayloadHex = getCurrentRawPayloadHex();
   const hasPayloadToExport = Boolean(currentPayloadHex);
   const hasHttpBody = Boolean(getCurrentHttpBodyHex());
-  const canCarveSmbStream = canCarveCurrentStreamForProtocol("smb");
-  const canCarveNfsStream = canCarveCurrentStreamForProtocol("nfs");
+  const canCarveSmbStream = canCarveCurrentStreamForProtocol(
+    "smb",
+    activeContextPacket,
+  );
+  const canCarveNfsStream = canCarveCurrentStreamForProtocol(
+    "nfs",
+    activeContextPacket,
+  );
   const hasFileCarveActions =
     hasHttpBody || canCarveSmbStream || canCarveNfsStream;
   convertContextButtons.exportPacket.style.display = hasPacketToExport
@@ -5500,105 +5565,150 @@ function showConvertContextMenu(
   convertContextButtons.loadCursorAscii.style.display = hasCursorAsciiValue
     ? "block"
     : "none";
-  convertContextButtons.filterIp.style.display = filterQueries.ip
+  convertContextButtons.filterIp.style.display = isHostDataTabActive && filterQueries.ip
     ? "block"
     : "none";
-  convertContextButtons.filterPort.style.display = filterQueries.port
+  convertContextButtons.filterPort.style.display =
+    isHostDataTabActive && filterQueries.port
+      ? "block"
+      : "none";
+  convertContextButtons.filterMac.style.display = isHostDataTabActive && filterQueries.mac
     ? "block"
     : "none";
-  convertContextButtons.filterMac.style.display = filterQueries.mac
+  convertContextButtons.filterWireProtocol.style.display =
+    isHostDataTabActive && filterQueries.wireProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterAppProtocol.style.display =
+    isHostDataTabActive && filterQueries.appProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterProtocol.style.display =
+    isHostDataTabActive && filterQueries.protocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterMime.style.display = isHostDataTabActive && filterQueries.mime
     ? "block"
     : "none";
-  convertContextButtons.filterWireProtocol.style.display = filterQueries.wireProtocol
+  convertContextButtons.filterOrIp.style.display = isHostDataTabActive && filterQueries.ip
     ? "block"
     : "none";
-  convertContextButtons.filterAppProtocol.style.display = filterQueries.appProtocol
+  convertContextButtons.filterOrPort.style.display =
+    isHostDataTabActive && filterQueries.port
+      ? "block"
+      : "none";
+  convertContextButtons.filterOrMac.style.display = isHostDataTabActive && filterQueries.mac
     ? "block"
     : "none";
-  convertContextButtons.filterProtocol.style.display = filterQueries.protocol
+  convertContextButtons.filterOrWireProtocol.style.display =
+    isHostDataTabActive && filterQueries.wireProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterOrAppProtocol.style.display =
+    isHostDataTabActive && filterQueries.appProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterOrProtocol.style.display =
+    isHostDataTabActive && filterQueries.protocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterOrMime.style.display = isHostDataTabActive && filterQueries.mime
     ? "block"
     : "none";
-  convertContextButtons.filterMime.style.display = filterQueries.mime
+  convertContextButtons.filterNotIp.style.display = isHostDataTabActive && filterQueries.ip
     ? "block"
     : "none";
-  convertContextButtons.filterOrIp.style.display = filterQueries.ip
+  convertContextButtons.filterNotPort.style.display =
+    isHostDataTabActive && filterQueries.port
+      ? "block"
+      : "none";
+  convertContextButtons.filterNotMac.style.display =
+    isHostDataTabActive && filterQueries.mac
+      ? "block"
+      : "none";
+  convertContextButtons.filterNotWireProtocol.style.display =
+    isHostDataTabActive && filterQueries.wireProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterNotAppProtocol.style.display =
+    isHostDataTabActive && filterQueries.appProtocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterNotProtocol.style.display =
+    isHostDataTabActive && filterQueries.protocol
+      ? "block"
+      : "none";
+  convertContextButtons.filterNotMime.style.display =
+    isHostDataTabActive && filterQueries.mime
+      ? "block"
+      : "none";
+  convertContextButtons.filterParenOpen.style.display = isHostDataTabActive
     ? "block"
     : "none";
-  convertContextButtons.filterOrPort.style.display = filterQueries.port
+  convertContextButtons.filterParenClose.style.display = isHostDataTabActive
     ? "block"
     : "none";
-  convertContextButtons.filterOrMac.style.display = filterQueries.mac
+  convertContextButtons.filterParenWrap.style.display = isHostDataTabActive
     ? "block"
     : "none";
-  convertContextButtons.filterOrWireProtocol.style.display = filterQueries.wireProtocol
+  convertContextButtons.filterClearIp.style.display = isHostDataTabActive && filterQueries.ip
     ? "block"
     : "none";
-  convertContextButtons.filterOrAppProtocol.style.display = filterQueries.appProtocol
-    ? "block"
-    : "none";
-  convertContextButtons.filterOrProtocol.style.display = filterQueries.protocol
-    ? "block"
-    : "none";
-  convertContextButtons.filterOrMime.style.display = filterQueries.mime
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotIp.style.display = filterQueries.ip
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotPort.style.display = filterQueries.port
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotMac.style.display = filterQueries.mac
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotWireProtocol.style.display = filterQueries.wireProtocol
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotAppProtocol.style.display = filterQueries.appProtocol
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotProtocol.style.display = filterQueries.protocol
-    ? "block"
-    : "none";
-  convertContextButtons.filterNotMime.style.display = filterQueries.mime
-    ? "block"
-    : "none";
-  convertContextButtons.filterParenOpen.style.display = "block";
-  convertContextButtons.filterParenClose.style.display = "block";
-  convertContextButtons.filterParenWrap.style.display = "block";
-  convertContextButtons.filterClearIp.style.display = filterQueries.ip
-    ? "block"
-    : "none";
-  convertContextButtons.filterClearPort.style.display = filterQueries.port
-    ? "block"
-    : "none";
-  convertContextButtons.filterClearMac.style.display = filterQueries.mac
-    ? "block"
-    : "none";
+  convertContextButtons.filterClearPort.style.display =
+    isHostDataTabActive && filterQueries.port
+      ? "block"
+      : "none";
+  convertContextButtons.filterClearMac.style.display =
+    isHostDataTabActive && filterQueries.mac
+      ? "block"
+      : "none";
   convertContextButtons.filterClearWireProtocol.style.display =
-    filterQueries.wireProtocol ? "block" : "none";
+    isHostDataTabActive && filterQueries.wireProtocol ? "block" : "none";
   convertContextButtons.filterClearAppProtocol.style.display =
-    filterQueries.appProtocol ? "block" : "none";
+    isHostDataTabActive && filterQueries.appProtocol ? "block" : "none";
   convertContextButtons.filterClearProtocol.style.display =
-    filterQueries.protocol ? "block" : "none";
-  convertContextButtons.filterClearMime.style.display = filterQueries.mime
-    ? "block"
-    : "none";
+    isHostDataTabActive && filterQueries.protocol ? "block" : "none";
+  convertContextButtons.filterClearMime.style.display =
+    isHostDataTabActive && filterQueries.mime
+      ? "block"
+      : "none";
+  const allowNotesDataFromContext =
+    activeMainTab === MAIN_TAB_DATA ||
+    activeMainTab === MAIN_TAB_STATS ||
+    activeMainTab === MAIN_TAB_LIST ||
+    activeMainTab === MAIN_TAB_DATA_TOOLS ||
+    activeMainTab === MAIN_TAB_CRYPT;
+  const allowConvNotesActions = activeMainTab === MAIN_TAB_DATA_TOOLS;
+  const allowKeystoreContextActions =
+    activeMainTab === MAIN_TAB_DATA ||
+    activeMainTab === MAIN_TAB_DATA_TOOLS ||
+    activeMainTab === MAIN_TAB_CRYPT ||
+    activeMainTab === MAIN_TAB_KEYSTORE;
   const hasCookieActions = Boolean(cookieJarText);
-  const hasContextDataForNotes = Boolean(
-    (sourceText && sourceText.trim()) || getTrimmedSelectionText(),
-  );
-  const hasConvOutputForNotes = Boolean(buildConvConvertedOutputNoteText());
-  const hasConvHashesForNotes = Boolean(buildConvHashesNoteText());
+  const hasContextDataForNotes =
+    allowNotesDataFromContext &&
+    Boolean((sourceText && sourceText.trim()) || getTrimmedSelectionText());
+  const hasListVisibleDataForNotes =
+    activeMainTab === MAIN_TAB_LIST &&
+    Boolean(buildListVisibleDataNoteText(target));
+  const hasConvOutputForNotes =
+    allowConvNotesActions && Boolean(buildConvConvertedOutputNoteText());
+  const hasConvHashesForNotes =
+    allowConvNotesActions && Boolean(buildConvHashesNoteText());
   convertContextButtons.notesSendData.style.display = hasContextDataForNotes
     ? "block"
     : "none";
+  convertContextButtons.notesSendListPacket.style.display =
+    hasListVisibleDataForNotes ? "block" : "none";
   convertContextButtons.notesSendConvOutput.style.display =
     hasConvOutputForNotes ? "block" : "none";
   convertContextButtons.notesSendConvHashes.style.display =
     hasConvHashesForNotes ? "block" : "none";
   const hasNotesActions =
-    hasContextDataForNotes || hasConvOutputForNotes || hasConvHashesForNotes;
+    hasContextDataForNotes ||
+    hasListVisibleDataForNotes ||
+    hasConvOutputForNotes ||
+    hasConvHashesForNotes;
   const hasCopyActions =
     showCopySelection || isHexViewTarget || hasCookieActions;
   const hasClipboardActions = hasCopyActions || showPaste;
@@ -5609,11 +5719,14 @@ function showConvertContextMenu(
     Boolean(activeContextConvDecompression) ||
     hasCursorAsciiValue ||
     hasDeriveGuessInput;
-  const hasFilterActions = Object.values(filterQueries).some(Boolean);
+  const hasFilterActions =
+    isHostDataTabActive && Object.values(filterQueries).some(Boolean);
   const hasContextTextKeystoreActions =
-    showCopySelection || Boolean(sourceText);
+    allowKeystoreContextActions && (showCopySelection || Boolean(sourceText));
+  const hasManualKeystoreUriAction =
+    allowKeystoreContextActions && showManualKeystoreUri;
   const hasKeystoreActions =
-    hasContextTextKeystoreActions || showManualKeystoreUri;
+    hasContextTextKeystoreActions || hasManualKeystoreUriAction;
   const hasExportActions =
     showSaveJson || hasPacketToExport || hasPayloadToExport || hasCookieActions;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
@@ -5652,7 +5765,7 @@ function showConvertContextMenu(
     hasContextTextKeystoreActions ? "block" : "none";
   convertContextSubmenus.keystoreCookie.style.display =
     hasContextTextKeystoreActions ? "block" : "none";
-  convertContextSubmenus.keystoreUri.style.display = showManualKeystoreUri
+  convertContextSubmenus.keystoreUri.style.display = hasManualKeystoreUriAction
     ? "block"
     : "none";
   convertContextSubmenus.export.style.display = hasExportActions
@@ -5664,7 +5777,8 @@ function showConvertContextMenu(
   convertContextSubmenus.fileCarve.style.display = hasFileCarveActions
     ? "block"
     : "none";
-  const hasFollowStreamActions = Boolean(getCurrentStreamTuple());
+  const hasFollowStreamActions =
+    allowFollowStreamActions && Boolean(getCurrentStreamTuple());
   activeContextStreamCompressionHint = hasFollowStreamActions
     ? getCurrentPacketCompressionHint()
     : "";
@@ -5902,14 +6016,8 @@ function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
   );
 }
 
-/**
- * Returns metadata about the current packet's stream (4-tuple: srcIp, srcPort,
- * dstIp, dstPort, protocol), or null if no current packet is loaded.
- */
-function getCurrentStreamTuple() {
-  const cursor = getActivePacketCursor();
-  if (cursor === null) return null;
-  const packetInfo = p?.[cursor]?.["Packet Info"];
+function getStreamTupleForPacket(packet) {
+  const packetInfo = packet?.["Packet Info"];
   if (!packetInfo) return null;
   const srcIp = packetInfo["IP"]?.["Source IP"];
   const dstIp = packetInfo["IP"]?.["Destination IP"];
@@ -5922,12 +6030,22 @@ function getCurrentStreamTuple() {
 }
 
 /**
+ * Returns metadata about the current packet's stream (4-tuple: srcIp, srcPort,
+ * dstIp, dstPort, protocol), or null if no current packet is loaded.
+ */
+function getCurrentStreamTuple() {
+  return getStreamTupleForPacket(getCurrentContextPacket());
+}
+
+/**
  * Collects all packets across all hosts in capturedPackets that belong to the
  * same bidirectional conversation as the current packet, sorted by timestamp.
  * Returns an array of packet objects, or [] when no stream can be determined.
  */
-function getFollowStreamPackets() {
-  const tuple = getCurrentStreamTuple();
+function getFollowStreamPackets(packet = null) {
+  const tuple = packet
+    ? getStreamTupleForPacket(packet)
+    : getCurrentStreamTuple();
   if (!tuple) return [];
   const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
   const hasPorts = srcPort !== null && dstPort !== null;
@@ -5973,8 +6091,10 @@ function getFollowStreamPackets() {
   return matches;
 }
 
-async function getFollowStreamPacketsAsync() {
-  const tuple = getCurrentStreamTuple();
+async function getFollowStreamPacketsAsync(packet = null) {
+  const tuple = packet
+    ? getStreamTupleForPacket(packet)
+    : getCurrentStreamTuple();
   if (!tuple) return [];
   const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
   const hasPorts = srcPort !== null && dstPort !== null;
@@ -6522,10 +6642,10 @@ function buildFileCarveCandidatesForProtocol(protocolName, streamPackets) {
   return [];
 }
 
-function canCarveCurrentStreamForProtocol(protocolName) {
+function canCarveCurrentStreamForProtocol(protocolName, packet = null) {
   const normalized = String(protocolName || "").toLowerCase().trim();
   if (!normalized) return false;
-  const streamPackets = getFollowStreamPackets();
+  const streamPackets = getFollowStreamPackets(packet);
   if (!streamPackets.length) return false;
   const candidates = buildFileCarveCandidatesForProtocol(
     normalized,
@@ -6564,6 +6684,7 @@ function selectCarveCandidate(candidates, protocolLabel) {
 }
 
 async function carveCurrentStreamToFileFromContextMenu(protocolName) {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
   const normalized = String(protocolName || "").toLowerCase().trim();
   const protocolLabel = normalized.toUpperCase();
@@ -6572,7 +6693,7 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
     return;
   }
 
-  const streamPackets = getFollowStreamPackets();
+  const streamPackets = getFollowStreamPackets(contextPacket);
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
@@ -6625,21 +6746,23 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
 }
 
 function followStreamToConv() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  void _runFollowStreamToConvAction();
+  void _runFollowStreamToConvAction({ contextPacket });
 }
 
 function followStreamToConvDecompressed() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  void _runFollowStreamToConvAction({ decompress: true });
+  void _runFollowStreamToConvAction({ contextPacket, decompress: true });
 }
 
 async function _runFollowStreamToConvAction(options = {}) {
-  const { decompress = false } = options;
+  const { contextPacket = null, decompress = false } = options;
   showStreamLoadingOverlay();
   await yieldToRenderer();
   try {
-    const streamPackets = await getFollowStreamPacketsAsync();
+    const streamPackets = await getFollowStreamPacketsAsync(contextPacket);
     if (!streamPackets.length) {
       statusUpdate("Status: No stream packets found for current packet");
       return;
@@ -6711,8 +6834,9 @@ async function _doFollowStreamToConv(
 }
 
 function followStreamToCrypt() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const streamPackets = getFollowStreamPackets();
+  const streamPackets = getFollowStreamPackets(contextPacket);
   if (!streamPackets.length) {
     statusUpdate("Status: No stream packets found for current packet");
     return;
@@ -6772,19 +6896,18 @@ function setActivePacketCursor(nextIndex) {
   return activePacketCursor;
 }
 
-function getCurrentRawPayloadHex() {
-  const packetCursor = getActivePacketCursor();
+function getCurrentRawPayloadHex(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
   const payloadHex =
-    p?.[packetCursor]?.["Packet Info"]?.["Raw data"]?.[
-    "Payload"
-    ]?.["Hex Encoded"];
+    contextPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+    "Hex Encoded"
+    ];
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
-function getCurrentHttpData() {
-  const cursor = getActivePacketCursor();
-  if (cursor === null) return null;
-  const packetInfo = p?.[cursor]?.["Packet Info"];
+function getCurrentHttpData(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  const packetInfo = contextPacket?.["Packet Info"];
   if (!packetInfo) return null;
   const protocol = packetInfo["Protocol"] || "TCP";
   return packetInfo[protocol]?.["HTTP"] || null;
@@ -6802,15 +6925,12 @@ function extractHttpBodyHex(payloadHex) {
   return payloadHex.slice(bodyStart);
 }
 
-function getCurrentHttpBodyHex() {
-  return extractHttpBodyHex(getCurrentRawPayloadHex());
+function getCurrentHttpBodyHex(packet = null) {
+  return extractHttpBodyHex(getCurrentRawPayloadHex(packet));
 }
 
-function getCurrentPacketForExport(packetSet, packetIndex) {
-  if (!Number.isInteger(packetIndex) || packetIndex < 0) {
-    return null;
-  }
-  return packetSet?.[packetIndex] || null;
+function getCurrentPacketForExport() {
+  return getCurrentContextPacket();
 }
 
 async function copyTextToClipboard(text, label) {
@@ -6971,11 +7091,9 @@ function saveJsonFromContextMenu() {
 }
 
 function exportCurrentPacketFromContextMenu() {
+  const contextPacket = getCurrentPacketForExport();
   hideConvertContextMenu();
-  const currentPacket = getCurrentPacketForExport(
-    p,
-    getActivePacketCursor(),
-  );
+  const currentPacket = contextPacket;
   if (!currentPacket) {
     statusUpdate("Status: No packet selected to export");
     return;
@@ -7002,8 +7120,9 @@ function exportCurrentPacketFromContextMenu() {
 }
 
 function exportCurrentPayloadFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const payloadHex = getCurrentRawPayloadHex();
+  const payloadHex = getCurrentRawPayloadHex(contextPacket);
   if (!payloadHex) {
     statusUpdate("Status: No payload available to export");
     return;
@@ -7057,19 +7176,20 @@ function saveCookieJarFromContextMenu() {
   });
 }
 
-function getHttpContentTypeForCurrentPacket() {
-  const httpData = getCurrentHttpData();
+function getHttpContentTypeForCurrentPacket(packet = null) {
+  const httpData = getCurrentHttpData(packet);
   return (httpData && httpData["Content-Type"]) || "application/octet-stream";
 }
 
 function saveHttpBodyFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const bodyHex = getCurrentHttpBodyHex();
+  const bodyHex = getCurrentHttpBodyHex(contextPacket);
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to save");
     return;
   }
-  const contentType = getHttpContentTypeForCurrentPacket();
+  const contentType = getHttpContentTypeForCurrentPacket(contextPacket);
   window.saveapi.saveHttpBody(bodyHex, contentType).then((result) => {
     if (result.canceled) {
       statusUpdate("Status: Save cancelled");
@@ -7092,7 +7212,8 @@ function saveHttpBodyFromContextMenu() {
 }
 
 function loadHttpBodyIntoConvTabFromContextMenu() {
-  const bodyHex = getCurrentHttpBodyHex();
+  const contextPacket = getCurrentContextPacket();
+  const bodyHex = getCurrentHttpBodyHex(contextPacket);
   hideConvertContextMenu();
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to load");
@@ -7108,13 +7229,14 @@ function loadHttpBodyIntoConvTabFromContextMenu() {
 }
 
 function previewHttpBodyInBrowserFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const bodyHex = getCurrentHttpBodyHex();
+  const bodyHex = getCurrentHttpBodyHex(contextPacket);
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to preview");
     return;
   }
-  const contentType = getHttpContentTypeForCurrentPacket();
+  const contentType = getHttpContentTypeForCurrentPacket(contextPacket);
   window.previewapi.previewHttpBody(bodyHex, contentType).then((result) => {
     if (result.success) {
       statusUpdate("Status: HTTP body opened in browser");
@@ -7734,6 +7856,12 @@ convertContextButtons.notesSendData.addEventListener("click", () => {
   sendTextToNotesFromContextMenu(
     selectedText || activeContextConversionText,
     "context-data",
+  );
+});
+convertContextButtons.notesSendListPacket.addEventListener("click", () => {
+  sendTextToNotesFromContextMenu(
+    buildListVisibleDataNoteText(),
+    "context-list-row-visible-data",
   );
 });
 convertContextButtons.notesSendConvOutput.addEventListener("click", () => {
