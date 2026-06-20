@@ -1,6 +1,53 @@
 <style>
     body {
         background-color: #343359;
+        line-height: 1.75;
+    }
+
+    /* Increase vertical breathing room for long-form docs content. */
+    p,
+    ul,
+    ol,
+    table,
+    blockquote,
+    pre {
+        margin-top: 1rem;
+        margin-bottom: 1.25rem;
+    }
+
+    h2,
+    h3,
+    h4 {
+        margin-bottom: 1rem;
+        line-height: 1.35;
+    }
+
+    h2 {
+        margin-top: 3.25rem;
+        padding-top: 2rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.22);
+    }
+
+    h3 {
+        margin-top: 2.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    h4 {
+        margin-top: 2rem;
+    }
+
+    h2:first-of-type,
+    h3:first-of-type {
+        border-top: none;
+        padding-top: 0;
+    }
+
+    hr {
+        margin: 2.5rem 0;
+        border: 0;
+        border-top: 1px solid rgba(255, 255, 255, 0.22);
     }
 
     /* Right align the github link */
