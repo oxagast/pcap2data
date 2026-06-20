@@ -442,7 +442,7 @@ Visualizes the Shannon entropy of the payload as a numeric value and graphical i
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/filter-bar.png">
 </p>
 
-Packets can be filtered using an expression in the filter bar. The syntax is:
+Packets can be <a href="/filters">filtered using an expression</a> in the filter bar. The syntax is:
 
 ```
 attribute:value

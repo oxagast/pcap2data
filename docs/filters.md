@@ -4,7 +4,7 @@
 
 ### Overview
 
-PacketSnitch's filter bar lets you search and narrow down the packets displayed in the frontend. Filters are evaluated over the full loaded dataset (all hosts), not just the currently selected host. Results update immediately after pressing **Enter** in the filter bar, and the **Filtered Packets** counter in the left sidebar updates to reflect the number of matching packets.
+PacketSnitch's filter bar lets you search and narrow down the packets displayed in the <a href="/frontend">frontend</a>. Filters are evaluated over the full loaded dataset (all hosts), not just the currently selected host. Results update immediately after pressing **Enter** in the filter bar, and the **Filtered Packets** counter in the left sidebar updates to reflect the number of matching packets.
 
 ---
 
@@ -724,7 +724,7 @@ sip.method:INVITE && sip.to:example.com
 - **String matching is case-insensitive.** `loc.dst.country:china` matches the same packets as `loc.dst.country:China`.
 - **Protocol-specific keys only exist when that protocol was detected.** Filtering on `http.method:GET` will return only HTTP packets where the method field was parsed.
 - **GeoIP keys are absent for private/local IPs.** Use `ip.src.class:Localnet` to identify local traffic instead of relying on `loc.src.*` fields.
-- **Active recon keys require the `-a` flag** when running the backend. Without it, `host.banner` will contain `Active recon not performed` for all packets.
+- **Active recon keys require the `-a` flag** when running the <a href="/backend">backend</a>. Without it, `host.banner` will contain `Active recon not performed` for all packets.
 - **An empty filter bar shows all packets.** Clear the filter and press Enter to reset the view.
 
 ---

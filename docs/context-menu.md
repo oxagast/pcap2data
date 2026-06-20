@@ -4,7 +4,7 @@
 
 ### Overview
 
-Right-clicking in the packet views, payload panes, Conv tab, or other data panels opens the **context menu**. The menu dynamically adapts its available items based on the current context (whether text is selected, whether the current packet contains an HTTP body, etc.). Context menu items have been shortened for better fit and visual appeal.
+Right-clicking in the packet views, payload panes, Conv tab, or other data panels in the <a href="/frontend">frontend</a> opens the **context menu**. The menu dynamically adapts its available items based on the current context (whether text is selected, whether the current packet contains an HTTP body, etc.). Context menu items have been shortened for better fit and visual appeal.
 
 ---
 

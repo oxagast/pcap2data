@@ -76,7 +76,7 @@ python3 snitch.py traffic.pcap -o output_dir -T 5 -a -v
 
 ### Searchable Attributes
 
-Each testcase JSON contains the following dot-notation keys as leaf nodes, which can be used to search, filter, or query testcase data in the frontend or via `hosts.json`. The filter syntax uses `key:value` notation with optional comparison operators (`==`, `!=`, `>`, `>=`, `<`, `<=`) and boolean combinators (`&&`, `||`) with parentheses for grouping.
+Each testcase JSON contains the following dot-notation keys as leaf nodes, which can be used to search, filter, or query testcase data in the frontend or via `hosts.json`. The <a href="/filters">filter syntax</a> uses `key:value` notation with optional comparison operators (`==`, `!=`, `>`, `>=`, `<`, `<=`) and boolean combinators (`&&`, `||`) with parentheses for grouping.
 
 #### Core Packet Fields
 
