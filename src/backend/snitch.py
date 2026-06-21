@@ -1033,6 +1033,77 @@ def decodeNTP(p):
         return None
 
 
+def decodeIGMP(p, rawPayload):
+    """
+    Decode IGMP fields from a packet. Uses the scapy IGMP layer when available,
+    otherwise falls back to parsing the first 8 bytes of the raw IP payload.
+    """
+    igmpTypeMap = {
+        0x11: "Membership Query",
+        0x12: "IGMPv1 Membership Report",
+        0x16: "IGMPv2 Membership Report",
+        0x17: "Leave Group",
+        0x22: "IGMPv3 Membership Report",
+    }
+
+    igmpTypeNum = 0
+    maxRespCode = 0
+    checksumVal = 0
+    groupAddr = "0.0.0.0"
+
+    igmpClass = getattr(scapy, "IGMP", None)
+    hasIgmpLayer = bool(igmpClass and p.haslayer(igmpClass)) or p.haslayer("IGMP")
+    if hasIgmpLayer:
+        igmpLayer = p[igmpClass] if igmpClass and p.haslayer(igmpClass) else p["IGMP"]
+        try:
+            igmpTypeNum = int(getattr(igmpLayer, "type", 0) or 0)
+        except Exception:
+            igmpTypeNum = 0
+        try:
+            maxRespCode = int(getattr(igmpLayer, "mrcode", 0) or 0)
+        except Exception:
+            maxRespCode = 0
+        try:
+            checksumVal = int(getattr(igmpLayer, "chksum", 0) or 0)
+        except Exception:
+            checksumVal = 0
+        groupAddr = str(getattr(igmpLayer, "gaddr", "0.0.0.0") or "0.0.0.0")
+    elif rawPayload and len(rawPayload) >= 8:
+        igmpTypeNum = int(rawPayload[0])
+        maxRespCode = int(rawPayload[1])
+        checksumVal = int.from_bytes(rawPayload[2:4], byteorder="big", signed=False)
+        try:
+            groupAddr = socket.inet_ntoa(rawPayload[4:8])
+        except Exception:
+            groupAddr = "0.0.0.0"
+
+    igmpType = igmpTypeMap.get(igmpTypeNum, f"Type {igmpTypeNum}")
+    igmpVersion = "Unknown"
+    if igmpTypeNum == 0x12:
+        igmpVersion = "v1"
+    elif igmpTypeNum in (0x16, 0x17, 0x11):
+        igmpVersion = "v2"
+    elif igmpTypeNum == 0x22:
+        igmpVersion = "v3"
+
+    return {
+        "Type": igmpType,
+        "igmp.type": igmpType,
+        "Type Number": igmpTypeNum,
+        "igmp.type_num": igmpTypeNum,
+        "Version": igmpVersion,
+        "igmp.version": igmpVersion,
+        "Max Response Time (ds)": maxRespCode,
+        "igmp.max_resp_time_ds": maxRespCode,
+        "Group Address": groupAddr,
+        "igmp.group_addr": groupAddr,
+        "IGMP Checksum": hex(checksumVal),
+        "igmp.chksum": hex(checksumVal),
+        "Wire length": len(rawPayload) if rawPayload is not None else 0,
+        "wire.len": len(rawPayload) if rawPayload is not None else 0,
+    }
+
+
 def decodeSIP(rawPayload):
     """
     Decode SIP message fields from raw payload bytes.
@@ -3241,9 +3312,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), RADIUS (1812/1813/1645/1646),
     WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), Kerberos (88), and
     WAN/link-control protocols (ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP,
-    PPP, LCP, LAP, NCP) and ARP/RARP address-resolution frames are also decoded
-    when layer data is available. ICMP packets are fully supported as a separate
-    transport type.
+    PPP, LCP, LAP, NCP), IGMP, and ARP/RARP address-resolution frames are also
+    decoded when layer data is available. ICMP packets are fully supported as a
+    separate transport type.
 
     packetIndex is the 0-based position of this packet in the full capture, used as
     the filename index so files from concurrent threads do not collide.
@@ -3432,6 +3503,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
     isTcp = p.haslayer("TCP")
     isUdp = p.haslayer("UDP")
+    ipProtocolNumber = int(getattr(p["IP"], "proto", -1))
+    isIgmp = p.haslayer("IGMP") or ipProtocolNumber == 2
     isIcmp = p.haslayer("ICMP")
 
     if isTcp:
@@ -3446,6 +3519,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPort = p["UDP"].dport
         transportProtocol = "udp"
         dstPortStr = str(dstPort)
+    elif isIgmp:
+        rawPayload = bytes(p["IP"].payload)
+        srcPort = 0
+        dstPort = 0
+        transportProtocol = "igmp"
+        dstPortStr = "igmp"
     elif isIcmp:
         # ICMP: use the full ICMP layer bytes as the payload
         rawPayload = bytes(p["ICMP"])
@@ -3837,6 +3916,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "wire.len": len(p["ICMP"]),
                 }
                 protocolKey = "ICMP"
+            elif isIgmp:
+                transportSection = decodeIGMP(p, rawPayload)
+                protocolKey = "IGMP"
             else:
                 ipProtoNum = int(getattr(p["IP"], "proto", 0))
                 transportSection = {
@@ -3896,13 +3978,20 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "payload.len": len(rawPayload),
                 },
             }
+            if protocolKey == "IGMP":
+                packetInfo["Decoded Protocols"] = ["IGMP"]
+                packetInfo["packet.decoded_protocols"] = ["IGMP"]
             if wanLinkSection is not None:
                 packetInfo["Link Control"] = wanLinkSection
+                existingDecoded = packetInfo.get("Decoded Protocols", [])
+                if not isinstance(existingDecoded, list):
+                    existingDecoded = []
+                linkDecoded = list(wanLinkSection.get("wan.detected", []))
                 packetInfo["Decoded Protocols"] = list(
-                    wanLinkSection.get("wan.detected", [])
+                    dict.fromkeys(existingDecoded + linkDecoded)
                 )
                 packetInfo["packet.decoded_protocols"] = list(
-                    wanLinkSection.get("wan.detected", [])
+                    packetInfo["Decoded Protocols"]
                 )
             # Use the non-local IP as the host key; fall back to src for LAN captures
             hostKey = (

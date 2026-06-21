@@ -30,6 +30,7 @@ function buildCaptureStats(capturedPackets) {
   const transportProtocols = new Set();
   const decodedProtocols = new Set();
   const arpOperations = new Set();
+  const igmpMessageTypes = new Set();
   const hosts = new Set();
   const ports = new Set();
   const macVendors = new Set();
@@ -119,6 +120,12 @@ function buildCaptureStats(capturedPackets) {
         if (arpOp) arpOperations.add(arpOp);
       }
 
+      if (tp === "IGMP") {
+        const igmpData = pi?.["IGMP"] || {};
+        const igmpType = normalizeStatsTextValue(igmpData["Type"]);
+        if (igmpType) igmpMessageTypes.add(igmpType);
+      }
+
       const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
       const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["Destination IP"]);
       if (srcIp) hosts.add(srcIp);
@@ -205,6 +212,7 @@ function buildCaptureStats(capturedPackets) {
     transportProtocols: [...transportProtocols].sort(),
     decodedProtocols: [...decodedProtocols].sort(),
     arpOperations: [...arpOperations].sort(),
+    igmpMessageTypes: [...igmpMessageTypes].sort(),
     hosts: [...hosts].sort(),
     ports: [...ports].sort((a, b) => a - b),
     macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
@@ -375,7 +383,7 @@ function createStatsPanel(options) {
       documentRef,
       title: "Link Protocols",
       items: stats.linkProtocols,
-      queryBuilder: (v) => `decoded-proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (tpSec) content.appendChild(tpSec);
@@ -384,7 +392,7 @@ function createStatsPanel(options) {
       documentRef,
       title: "Decoded Protocols",
       items: stats.decodedProtocols,
-      queryBuilder: (v) => `decoded-proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (decodedProtoSec) content.appendChild(decodedProtoSec);
@@ -397,6 +405,15 @@ function createStatsPanel(options) {
       onQuery: applyStatsQuery,
     });
     if (arpOpSec) content.appendChild(arpOpSec);
+
+    const igmpTypeSec = makeStatsSection({
+      documentRef,
+      title: "IGMP Message Types",
+      items: stats.igmpMessageTypes,
+      queryBuilder: (v) => `igmp.type: ${v.toLowerCase()}`,
+      onQuery: applyStatsQuery,
+    });
+    if (igmpTypeSec) content.appendChild(igmpTypeSec);
 
     const hostSec = makeStatsSection({
       documentRef,

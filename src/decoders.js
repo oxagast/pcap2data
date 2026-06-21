@@ -118,6 +118,21 @@ function renderIcmpTable(protocol, transportData) {
   createTable(icmpRows, ['ICMP Field', 'Value'], 'sidedatatable');
 }
 
+function renderIgmpTable(protocol, transportData) {
+  if (protocol !== 'IGMP') return;
+  const igmpRows = [
+    { name: 'Type', value: transportData['Type'] ?? '—' },
+    { name: 'Type Number', value: transportData['Type Number'] ?? '—' },
+    { name: 'Version', value: transportData['Version'] ?? '—' },
+    { name: 'Group Address', value: transportData['Group Address'] ?? '—' },
+    {
+      name: 'Max Response Time (ds)',
+      value: transportData['Max Response Time (ds)'] ?? '—',
+    },
+  ];
+  createTable(igmpRows, ['IGMP Field', 'Value'], 'sidedatatable');
+}
+
 function renderArpTable(protocol, transportData) {
   if (protocol !== 'ARP' && protocol !== 'RARP') return;
   const arpRows = [
@@ -622,6 +637,7 @@ module.exports = {
   createTable,
   renderDnsTable,
   renderIcmpTable,
+  renderIgmpTable,
   renderArpTable,
   renderSnmpTable,
   renderDhcpTable,

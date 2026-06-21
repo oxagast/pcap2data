@@ -10,6 +10,7 @@ const {
   createTable,
   renderDnsTable,
   renderIcmpTable,
+  renderIgmpTable,
   renderArpTable,
   renderSnmpTable,
   renderDhcpTable,
@@ -8545,17 +8546,21 @@ function infoPanel(pk) {
       ? transportData["TCP checksum"]
       : protocol === "UDP"
         ? transportData["UDP checksum"]
-        : protocol === "ICMP"
-          ? transportData["ICMP Checksum"]
-          : "N/A";
+        : protocol === "IGMP"
+          ? transportData["IGMP Checksum"]
+          : protocol === "ICMP"
+            ? transportData["ICMP Checksum"]
+            : "N/A";
   const transportLayerLen =
     protocol === "TCP"
       ? transportData["TCP layer length"]
       : protocol === "UDP"
         ? transportData["UDP length"]
-        : protocol === "ICMP"
+        : protocol === "IGMP"
           ? transportData["Wire length"]
-          : "N/A";
+          : protocol === "ICMP"
+            ? transportData["Wire length"]
+            : "N/A";
   const tcpFlags =
     protocol === "TCP" && transportData["TCP Flag Data"]
       ? transportData["TCP Flag Data"]["Flags"]
@@ -8704,6 +8709,11 @@ function infoPanel(pk) {
   }
   if (protocol === "ARP" || protocol === "RARP") {
     addProtocolUsed("Network", protocol, transportData?.["Operation"]);
+  } else if (protocol === "IGMP") {
+    if (packetInfoData["IP"]) {
+      addProtocolUsed("Network", "IP");
+    }
+    addProtocolUsed("Network", "IGMP", transportData?.["Type"]);
   } else {
     if (packetInfoData["IP"]) {
       addProtocolUsed("Network", "IP");
@@ -8754,6 +8764,9 @@ function infoPanel(pk) {
 
   // ICMP info table (shown for ICMP packets)
   renderIcmpTable(protocol, transportData);
+
+  // IGMP info table (shown for IGMP packets)
+  renderIgmpTable(protocol, transportData);
 
   // ARP/RARP info table (shown for ARP and RARP packets)
   renderArpTable(protocol, transportData);
