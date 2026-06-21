@@ -26,6 +26,7 @@ function normalizeStatsPortValue(value) {
 function buildCaptureStats(capturedPackets) {
   const protocols = new Set();
   const transportProtocols = new Set();
+  const decodedProtocols = new Set();
   const hosts = new Set();
   const ports = new Set();
   const macVendors = new Set();
@@ -74,6 +75,22 @@ function buildCaptureStats(capturedPackets) {
 
       const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
+
+      const packetDecodedProtocols = pi?.["Decoded Protocols"];
+      if (Array.isArray(packetDecodedProtocols)) {
+        packetDecodedProtocols.forEach((decodedProtocol) => {
+          const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
+          if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
+        });
+      }
+
+      const linkControlDecodedProtocols = pi?.["Link Control"]?.["Detected Protocols"];
+      if (Array.isArray(linkControlDecodedProtocols)) {
+        linkControlDecodedProtocols.forEach((decodedProtocol) => {
+          const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
+          if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
+        });
+      }
 
       const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
       const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["Destination IP"]);
@@ -157,6 +174,7 @@ function buildCaptureStats(capturedPackets) {
   return {
     protocols: [...protocols].sort(),
     transportProtocols: [...transportProtocols].sort(),
+    decodedProtocols: [...decodedProtocols].sort(),
     hosts: [...hosts].sort(),
     ports: [...ports].sort((a, b) => a - b),
     macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
@@ -322,6 +340,15 @@ function createStatsPanel(options) {
       onQuery: applyStatsQuery,
     });
     if (tpSec) content.appendChild(tpSec);
+
+    const decodedProtoSec = makeStatsSection({
+      documentRef,
+      title: "Decoded Protocols",
+      items: stats.decodedProtocols,
+      queryBuilder: (v) => `decoded-proto: ${v.toLowerCase()}`,
+      onQuery: applyStatsQuery,
+    });
+    if (decodedProtoSec) content.appendChild(decodedProtoSec);
 
     const hostSec = makeStatsSection({
       documentRef,

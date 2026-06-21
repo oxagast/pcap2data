@@ -144,6 +144,37 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
         .flat()
         .filter((value) => typeof value === 'string');
     }
+    case 'decoded-proto': {
+      const packetInfo = packetItem?.['Packet Info'] || {};
+      const decodedValues = new Set();
+      const wireProto = packetInfo['Protocol'];
+      if (typeof wireProto === 'string' && wireProto) decodedValues.add(wireProto);
+
+      const decodedList =
+        packetInfo['Decoded Protocols'] ||
+        packetInfo['packet.decoded_protocols'] ||
+        packetInfo?.['Link Control']?.['Detected Protocols'] ||
+        packetInfo?.['Link Control']?.['wan.detected'];
+      if (Array.isArray(decodedList)) {
+        decodedList.forEach((value) => {
+          if (typeof value === 'string' && value) decodedValues.add(value);
+        });
+      }
+
+      const transportSections = ['TCP', 'UDP', 'ICMP', 'LINK'];
+      transportSections.forEach((sectionName) => {
+        const section = packetInfo?.[sectionName];
+        if (!section || typeof section !== 'object') return;
+        Object.entries(section).forEach(([fieldName, fieldValue]) => {
+          if (fieldName.includes('.')) return;
+          if (typeof fieldValue === 'object' && fieldValue !== null) {
+            decodedValues.add(fieldName);
+          }
+        });
+      });
+
+      return [...decodedValues];
+    }
     default:
       return undefined;
   }
@@ -194,7 +225,7 @@ function filterChunk(data, filter) {
 
       if (
         !filterModifier &&
-        ['dns-qname', 'eth-src-vendor', 'mime-type'].includes(normalizedFilterKey)
+        ['dns-qname', 'eth-src-vendor', 'mime-type', 'decoded-proto'].includes(normalizedFilterKey)
       ) {
         const textValues = Array.isArray(fieldValue) ? fieldValue : [fieldValue];
         matched = textValues.some(

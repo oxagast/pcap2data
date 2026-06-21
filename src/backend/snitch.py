@@ -3050,6 +3050,95 @@ def decodeKerberos(rawPayload):
         return None
 
 
+def decodeWanLinkProtocols(p):
+    """
+    Detect and decode WAN/link-control protocols from available scapy layers.
+    Supports ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP, LCP, LAP, and NCP.
+    Returns a dict with both display-friendly keys and dot-notation keys, or None
+    when no requested protocol indicators are present.
+    """
+    try:
+        layerNames = [
+            getattr(layer, "__name__", str(layer)).lower() for layer in p.layers()
+        ]
+    except Exception:
+        layerNames = []
+
+    if not layerNames:
+        return None
+
+    def hasLayerName(*names):
+        return any(
+            layerName == name or layerName.startswith(name + "_")
+            for layerName in layerNames
+            for name in names
+        )
+
+    detectedProtocols = []
+
+    def mark(protoName, present):
+        if present and protoName not in detectedProtocols:
+            detectedProtocols.append(protoName)
+
+    mark("ATM", hasLayerName("atm", "atmad", "atmmeta"))
+    mark("Token Ring", hasLayerName("tokenring", "dot5"))
+    mark("Frame Relay", hasLayerName("framerelay", "frame_relay"))
+    mark("SDLC", hasLayerName("sdlc"))
+    mark("HDLC", hasLayerName("hdlc"))
+    mark("SLIP", hasLayerName("slip"))
+    mark("PPP", hasLayerName("ppp", "pppoe"))
+    mark("LCP", hasLayerName("lcp", "ppp_lcp"))
+    mark("LAP", hasLayerName("lap", "lapb", "lapd"))
+    mark("NCP", hasLayerName("ncp", "ipcp", "ipv6cp", "ppp_ncp"))
+
+    # PPP protocol field can reveal LCP/NCP even when sublayers are not decoded.
+    pppProtocolHex = "N/A"
+    pppProtocolName = "Unknown"
+    if p.haslayer("PPP"):
+        try:
+            pppProtoVal = int(p["PPP"].proto)
+            pppProtocolHex = f"0x{pppProtoVal:04x}"
+            pppProtocolMap = {
+                0x0021: "IPv4",
+                0x0057: "IPv6",
+                0x8021: "IPCP (NCP)",
+                0x8057: "IPv6CP (NCP)",
+                0x80FD: "CCP (NCP)",
+                0xC021: "LCP",
+                0xC023: "PAP (LCP Auth)",
+                0xC223: "CHAP (LCP Auth)",
+            }
+            pppProtocolName = pppProtocolMap.get(pppProtoVal, f"0x{pppProtoVal:04x}")
+            if pppProtoVal in (0xC021, 0xC023, 0xC223):
+                mark("LCP", True)
+            if pppProtoVal in (0x8021, 0x8057, 0x80FD):
+                mark("NCP", True)
+        except Exception:
+            pass
+
+    if not detectedProtocols:
+        return None
+
+    result = {
+        "Detected Protocols": detectedProtocols,
+        "wan.detected": detectedProtocols,
+        "Layer Names": layerNames,
+        "wan.layers": layerNames,
+        "Primary WAN Protocol": detectedProtocols[0],
+        "wan.primary": detectedProtocols[0],
+    }
+
+    if pppProtocolHex != "N/A":
+        result["PPP Protocol Field"] = f"{pppProtocolHex} ({pppProtocolName})"
+        result["ppp.proto_field"] = f"{pppProtocolHex} ({pppProtocolName})"
+
+    for proto in detectedProtocols:
+        protoKey = proto.lower().replace(" ", "_")
+        result[f"wan.proto.{protoKey}"] = proto
+
+    return result
+
+
 def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     """
     Process a single scapy packet: extract TCP, UDP, or ICMP payload, write the raw
@@ -3062,8 +3151,10 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     IMAP/IMAP4 (143/993), Telnet (23), IRC (6667-6669), MTP (1755), LDAP (389/636),
     MySQL (3306), PostgreSQL (5432), XMPP (5222/5223), SMB (139/445), MQTT (1883/8883),
     RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), RADIUS (1812/1813/1645/1646),
-    WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), and Kerberos (88)
-    are also decoded.  ICMP packets are fully supported as a separate transport type.
+    WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), Kerberos (88), and
+    WAN/link-control protocols (ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP,
+    PPP, LCP, LAP, NCP) are also decoded when layer data is available. ICMP
+    packets are fully supported as a separate transport type.
 
     packetIndex is the 0-based position of this packet in the full capture, used as
     the filename index so files from concurrent threads do not collide.
@@ -3072,12 +3163,79 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     # for every 250 packets, print a progress update with the packet index
     if packetIndex % 250 == 0:
         print(f"[Worker] Processing packet #{packetIndex}")
-    srcMacAddr = p.src if p.haslayer("Ethernet") else "N/A"
-    dstMacAddr = p.dst if p.haslayer("Ethernet") else "N/A"
+    srcMacAddr = p.src if hasattr(p, "src") else "N/A"
+    dstMacAddr = p.dst if hasattr(p, "dst") else "N/A"
     srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
     dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
+
+    wanLinkSection = decodeWanLinkProtocols(p)
+
+    # Support captures that contain requested link-control protocols without an IP layer.
     if not p.haslayer("IP"):
-        return None
+        if wanLinkSection is None:
+            return None
+
+        rawPayload = bytes(p.payload) if bytes(p.payload) else bytes(p)
+        if rawPayload is None or len(rawPayload) == 0:
+            return None
+
+        dstPortStr = "link"
+        writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
+        mimeType = magic.from_buffer(rawPayload, mime=True)
+        timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )
+        decodedProtocols = list(wanLinkSection.get("wan.detected", []))
+        packetInfo = {
+            "Packet Processed": int(packetIndex),
+            "Packet Timestamp": timestamp,
+            "packet.timestamp": timestamp,
+            "Protocol": "LINK",
+            "packet.proto": "LINK",
+            "Decoded Protocols": decodedProtocols,
+            "packet.decoded_protocols": decodedProtocols,
+            "Ethernet Frame": {
+                "MAC Source": srcMacAddr,
+                "ether.src.mac.addr": srcMacAddr,
+                "MAC Destination": dstMacAddr,
+                "ether.dst.mac.addr": dstMacAddr,
+                "MAC Source Vendor": srcMacVendor,
+                "ether.src.mac.vendor": srcMacVendor,
+                "MAC Destination Vendor": dstMacVendor,
+                "ether.dst.mac.vendor": dstMacVendor,
+            }
+            if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+            else "N/A",
+            "Link Control": wanLinkSection,
+            "Raw data": {
+                "Payload": {
+                    "Hex Encoded": rawPayload.hex(),
+                    "payload.hex": rawPayload.hex(),
+                    "ASCII Encoded": rawPayload.decode(errors="ignore"),
+                    "payload.ascii": rawPayload.decode(errors="ignore"),
+                },
+                "Packet": bytes(p).hex(),
+                "packet.hex": bytes(p).hex(),
+                "Payload Length": len(rawPayload),
+                "payload.len": len(rawPayload),
+            },
+        }
+        dataTypeInfo = {
+            "MIME Type": mimeType,
+            "payload.mime": mimeType,
+            "Decompressed": {"Decompressed": False},
+            "payload.decompressed": {"Decompressed": False},
+            "Data Types": ["Unknown data type"],
+            "Traits": {"Length": len(rawPayload)},
+        }
+        return joinInfo(
+            outputDir,
+            dstPortStr,
+            packetIndex,
+            json.dumps(dataTypeInfo).encode(),
+            json.dumps(packetInfo).encode(),
+            "0.0.0.0",
+        )
 
     isTcp = p.haslayer("TCP")
     isUdp = p.haslayer("UDP")
@@ -3529,6 +3687,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "payload.len": len(rawPayload),
                 },
             }
+            if wanLinkSection is not None:
+                packetInfo["Link Control"] = wanLinkSection
+                packetInfo["Decoded Protocols"] = list(
+                    wanLinkSection.get("wan.detected", [])
+                )
+                packetInfo["packet.decoded_protocols"] = list(
+                    wanLinkSection.get("wan.detected", [])
+                )
             # Use the non-local IP as the host key; fall back to src for LAN captures
             hostKey = (
                 p["IP"].dst if dstGeoInfo.get("Location") != "Localnet" else p["IP"].src
