@@ -14,7 +14,7 @@ Quick-access copy commands for current selection and payload data.
 
 | Item                 | Description                                                                             |
 | -------------------- | --------------------------------------------------------------------------------------- |
-| **Copy**             | Copy the currently highlighted text to the clipboard. Shown only when text is selected. |
+| **Copy**             | Copy the currently highlighted text to the clipboard. Shown only when selected context is greater than 1 byte. |
 | **Copy Hex**         | Copy the raw payload bytes as a hex string.                                             |
 | **Copy ASCII**       | Copy the printable ASCII representation of the payload.                                 |
 | **Copy Raw payload** | Copy the raw payload bytes.                                                             |
@@ -117,6 +117,7 @@ Save and export packet and session data.
 | -------------------------- | -------------------------------------------------------------- |
 | **Export Packet**          | Save the raw data of the current packet to a file.             |
 | **Export Payload**         | Save only the payload bytes of the current packet to a file.   |
+| **Conv Raw**              | Save the current Conv byte data as raw binary output.           |
 | **Save to cookie_jar.txt** | Append all session cookies to a `cookie_jar.txt` file on disk. |
 
 ---

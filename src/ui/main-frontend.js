@@ -1920,6 +1920,35 @@ function exportConvContextTextFromContextMenu(exportType) {
     });
 }
 
+function exportConvRawFromContextMenu() {
+  const payloadHex =
+    document.getElementById("data-tools-hex-output")?.value?.trim() || "";
+  hideConvertContextMenu();
+  if (!payloadHex) {
+    statusUpdate("Status: No Conv raw data available to export");
+    return;
+  }
+  window.saveapi.savePayload(payloadHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Conv raw data exported successfully");
+      writeLogEntry("Context menu conv export completed type=raw");
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Conv raw export failed");
+      logErrorEntry("export-conv-raw", errorMessage || "unknown");
+      statusUpdate(
+        `Status: Conv raw export failed – ${errorMessage || "unknown error"}`,
+      );
+      console.error("Conv raw export failed:", errorMessage);
+    }
+  });
+}
+
 function buildConvHashesNoteText() {
   const hashFields = [
     ["Input", "data-tools-hash-input-reading"],
@@ -3027,6 +3056,8 @@ const DATA_TOOLS_SELECTION_FIELD_IDS = [
   "data-tools-ascii-output",
   "data-tools-base64-output",
 ];
+const DATA_TOOLS_SELECTION_FIELD_SELECTOR =
+  DATA_TOOLS_SELECTION_FIELD_IDS.map((fieldId) => `#${fieldId}`).join(", ");
 const DATA_TOOLS_HEX_BREAK_BYTES = new Set([
   0x00, 0x09, 0x0a, 0x0d, 0x20, 0x2c, 0x3a, 0x3b, 0x7c,
 ]);
@@ -5025,6 +5056,7 @@ const convertContextButtons = {
   exportPacket: getCachedElement("ctx-export-packet"),
   exportPayload: getCachedElement("ctx-export-payload"),
   exportConvInput: getCachedElement("ctx-export-conv-input"),
+  exportConvRaw: getCachedElement("ctx-export-conv-raw"),
   exportConvHex: getCachedElement("ctx-export-conv-hex"),
   exportConvBinary: getCachedElement("ctx-export-conv-binary"),
   exportConvDecimal: getCachedElement("ctx-export-conv-decimal"),
@@ -5413,6 +5445,28 @@ function getTrimmedSelectionText() {
   return window.getSelection()?.toString().trim() || "";
 }
 
+function getUtf8ByteLength(value) {
+  const normalized = typeof value === "string" ? value : String(value || "");
+  return DATA_TOOLS_TEXT_ENCODER.encode(normalized).length;
+}
+
+function getContextSelectionByteLength(target = activeContextTarget) {
+  if (
+    activeMainTab === MAIN_TAB_DATA_TOOLS &&
+    target?.closest?.(DATA_TOOLS_SELECTION_FIELD_SELECTOR)
+  ) {
+    const byteRange = dataToolsSelectionState.selectedByteRange;
+    if (
+      byteRange &&
+      Number.isFinite(byteRange.start) &&
+      Number.isFinite(byteRange.end)
+    ) {
+      return Math.max(0, byteRange.end - byteRange.start);
+    }
+  }
+  return getUtf8ByteLength(getTrimmedSelectionText());
+}
+
 function looksLikeBase64(text) {
   const normalized = text.replace(/\s+/g, "");
   return (
@@ -5663,7 +5717,10 @@ function showConvertContextMenu(
   const allowFollowStreamActions =
     activeMainTab === MAIN_TAB_DATA || activeMainTab === MAIN_TAB_LIST;
 
-  convertContextButtons.copy.style.display = showCopySelection
+  const hasSelectionContext = getContextSelectionByteLength(target) > 1;
+  const hasContextSourceText = getUtf8ByteLength(sourceText || "") > 1;
+
+  convertContextButtons.copy.style.display = hasSelectionContext
     ? "block"
     : "none";
   convertContextButtons.paste.style.display = showPaste ? "block" : "none";
@@ -5676,6 +5733,8 @@ function showConvertContextMenu(
   const isConvTabActive = activeMainTab === MAIN_TAB_DATA_TOOLS;
   const hasConvInputToExport =
     isConvTabActive && Boolean(getConvContextExportText("input"));
+  const hasConvRawToExport =
+    isConvTabActive && Boolean(getConvContextExportText("hex"));
   const hasConvHexToExport =
     isConvTabActive && Boolean(getConvContextExportText("hex"));
   const hasConvBinaryToExport =
@@ -5694,6 +5753,7 @@ function showConvertContextMenu(
     isConvTabActive && Boolean(getConvContextExportText("decodes"));
   const hasConvExportActions =
     hasConvInputToExport ||
+    hasConvRawToExport ||
     hasConvHexToExport ||
     hasConvBinaryToExport ||
     hasConvDecimalToExport ||
@@ -5720,6 +5780,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportConvInput.style.display = hasConvInputToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvRaw.style.display = hasConvRawToExport
     ? "block"
     : "none";
   convertContextButtons.exportConvHex.style.display = hasConvHexToExport
@@ -5939,7 +6002,7 @@ function showConvertContextMenu(
   const hasCookieActions = Boolean(cookieJarText);
   const hasContextDataForNotes =
     allowNotesDataFromContext &&
-    Boolean((sourceText && sourceText.trim()) || getTrimmedSelectionText());
+    (hasContextSourceText || hasSelectionContext);
   const hasListVisibleDataForNotes =
     activeMainTab === MAIN_TAB_LIST &&
     Boolean(buildListVisibleDataNoteText(target));
@@ -5962,7 +6025,7 @@ function showConvertContextMenu(
     hasConvOutputForNotes ||
     hasConvHashesForNotes;
   const hasCopyActions =
-    showCopySelection || isHexViewTarget || hasCookieActions;
+    hasSelectionContext || isHexViewTarget || hasCookieActions;
   const hasClipboardActions = hasCopyActions || showPaste;
   const hasGeneralActions = hasClipboardActions;
   const hasDataTypeActions =
@@ -5974,7 +6037,7 @@ function showConvertContextMenu(
   const hasFilterActions =
     isHostDataTabActive && Object.values(filterQueries).some(Boolean);
   const hasContextTextKeystoreActions =
-    allowKeystoreContextActions && (showCopySelection || Boolean(sourceText));
+    allowKeystoreContextActions && (hasSelectionContext || hasContextSourceText);
   const hasManualKeystoreUriAction =
     allowKeystoreContextActions && showManualKeystoreUri;
   const hasKeystoreActions =
@@ -8428,6 +8491,10 @@ convertContextButtons.exportPayload.addEventListener(
 convertContextButtons.exportConvInput.addEventListener("click", () => {
   exportConvContextTextFromContextMenu("input");
 });
+convertContextButtons.exportConvRaw.addEventListener(
+  "click",
+  exportConvRawFromContextMenu,
+);
 convertContextButtons.exportConvHex.addEventListener("click", () => {
   exportConvContextTextFromContextMenu("hex");
 });
