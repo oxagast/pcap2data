@@ -228,6 +228,9 @@ global.logBackend = (...args) => {
     if (line.startsWith(" ")) {
       line = line.substring(1);
     }
+    if (line.includes("[Worker] Processing packet")) {
+      return;
+    }
     appendActivityLogLine(`[${timestamp}] [Console][Snitch]${line}`);
   });
 };

@@ -34,16 +34,8 @@ function createDataPanel(options) {
     const packetsForHost = getPacketsForHost();
     const index = getIndex();
     if (!packetsForHost || !packetsForHost[index]) return;
-    const packetInfo = packetsForHost[index]["Packet Info"];
-    const selectedHost = getHostFilterValue() || "Unknown host";
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown source";
-    const destinationIp =
-      packetInfo?.["IP"]?.["Destination IP"] || "Unknown destination";
-    const packetIndex = packetInfo?.["Index"] ?? index;
-    const packetTimestamp = packetInfo?.["Packet Timestamp"] || "Unknown time";
-    writeLogEntry(
-      `[${threadName}] Displayed packet action=${action} host=${selectedHost} packet=${packetIndex} source=${sourceIp} destination=${destinationIp} timeframe=${packetTimestamp}`,
-    );
+    // Packet navigation is frequent during incremental updates; avoid flooding activity log.
+    void action;
   }
 
   function initializeDataView() {

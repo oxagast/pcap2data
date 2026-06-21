@@ -1,4 +1,5 @@
 let lastViewMode = "";
+const CONSOLE_DUPLICATE_WINDOW_MS = 5000;
 
 
 function initializeLogging({
@@ -8,6 +9,8 @@ function initializeLogging({
 }) {
   let activityLogPath = "Unavailable";
   const activityLogEntries = [];
+  let lastConsoleMessage = "";
+  let lastConsoleMessageTs = 0;
 
   function renderActivityLogEntries(searchText = "") {
     const entriesEl = documentRef.getElementById("activity-log-entries");
@@ -79,6 +82,16 @@ function initializeLogging({
     if (message.length > 300) {
       message = message.substring(0, 300) + " [truncated]";
     }
+
+    const now = Date.now();
+    if (
+      message === lastConsoleMessage &&
+      now - lastConsoleMessageTs < CONSOLE_DUPLICATE_WINDOW_MS
+    ) {
+      return;
+    }
+    lastConsoleMessage = message;
+    lastConsoleMessageTs = now;
 
     const stampedMessage = `[${new Date().toISOString()}] [Console][Renderer] ${message}`;
     addActivityLogEntry(stampedMessage);

@@ -156,6 +156,7 @@ let isFileLoaded = false;
 let jsonOfPackets;
 let filteredPackets;
 let currentPacketKey;
+let lastFilteredNavigationLogMessage = "";
 let startTime;
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
@@ -1503,7 +1504,11 @@ async function evaluateFilterQueryToPacketKeys(query) {
 }
 
 async function runFilterQuery(filterQuery, options = {}) {
-  const { trackHistory = true, updateUi = true } = options;
+  const {
+    trackHistory = true,
+    updateUi = true,
+    logQueryOutcome = trackHistory,
+  } = options;
   const normalizedFilterQuery =
     typeof filterQuery === "string" ? filterQuery.trim() : "";
 
@@ -1558,20 +1563,26 @@ async function runFilterQuery(filterQuery, options = {}) {
     return;
   }
 
-  writeLogEntry(`User executed query="${filterQuery}"`);
+  if (logQueryOutcome) {
+    writeLogEntry(`User executed query="${filterQuery}"`);
+  }
   statusUpdate("Status: Filtering packets...");
 
   if (filteredPackets === undefined || filteredPackets.length === 0) {
     hideAllData();
     statusUpdate("Status: No packets match the filter criteria");
-    writeLogEntry("User query returned 0 packets");
+    if (logQueryOutcome) {
+      writeLogEntry("User query returned 0 packets");
+    }
   } else {
     statusUpdate(
       "Status: Displaying " +
       filteredPackets.length +
       " packets matching filter",
     );
-    writeLogEntry(`User query returned packets=${filteredPackets.length}`);
+    if (logQueryOutcome) {
+      writeLogEntry(`User query returned packets=${filteredPackets.length}`);
+    }
     await handlePacketNavigation("filtered", null);
   }
 }
@@ -8208,9 +8219,14 @@ async function handlePacketNavigation(navAction, navBookmark) {
     ? filteredPackets
     : getPacketsForSelectedHost(hostFilterEl.value);
   if (shouldUseFilteredPacketSet) {
-    writeLogEntry(
-      `Filtered packet navigation packets_returned=${packetSet.length}`,
-    );
+    const filteredNavigationLogMessage =
+      `Filtered packet navigation packets_returned=${packetSet.length}`;
+    if (filteredNavigationLogMessage !== lastFilteredNavigationLogMessage) {
+      writeLogEntry(filteredNavigationLogMessage);
+      lastFilteredNavigationLogMessage = filteredNavigationLogMessage;
+    }
+  } else {
+    lastFilteredNavigationLogMessage = "";
   }
   p = Array.isArray(packetSet) ? packetSet : [];
   if (navAction === "bookmark") {
@@ -8627,7 +8643,9 @@ function infoPanel(pk) {
 
   const pageTitle = extraInfoData["Traits"]["Server Info"]["Page Title"];
   const isEncrypted = extraInfoData["Traits"]["Server Info"]["Encrypted"];
-  const protoName = extraInfoData["Traits"]["Network Data"]["Port Protcol"];
+  const protoName =
+    extraInfoData["Traits"]["Network Data"]["Port Protocol"] ??
+    extraInfoData["Traits"]["Network Data"]["Port Protcol"];
   const protoDescription =
     extraInfoData["Traits"]["Network Data"]["Port Description"];
   const srcNetClass =
@@ -8679,14 +8697,64 @@ function infoPanel(pk) {
       "Encrypted with: " + sslVersion + "<br>" + sslAlgos;
   }
 
-  if (protoName == "Unknown") {
-    document.getElementById("protocols").innerHTML = "Unknown";
+  const protocolsUsed = [];
+  const seenProtocolKeys = new Set();
+  const normalizeProtocolLabel = (value) => {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+    const lowered = text.toLowerCase();
+    if (lowered === "unknown" || lowered === "n/a" || lowered === "null") {
+      return "";
+    }
+    return text;
+  };
+  const addProtocolUsed = (layer, protocolLabel, details = "") => {
+    const normalizedLabel = normalizeProtocolLabel(protocolLabel);
+    if (!normalizedLabel) return;
+    const normalizedLayer = String(layer ?? "").trim();
+    const dedupeKey = `${normalizedLayer.toLowerCase()}|${normalizedLabel.toLowerCase()}`;
+    if (seenProtocolKeys.has(dedupeKey)) return;
+    seenProtocolKeys.add(dedupeKey);
+    protocolsUsed.push({
+      layer: normalizedLayer,
+      protocol: normalizedLabel,
+      details: normalizeProtocolLabel(details),
+    });
+  };
+
+  if (packetInfoData["Ethernet Frame"]) {
+    addProtocolUsed("Link", "Ethernet");
+  }
+  if (packetInfoData["IP"]) {
+    addProtocolUsed("Network", "IP");
+  }
+  addProtocolUsed("Transport", protocol);
+  addProtocolUsed("Application", protoName, protoDescription);
+
+  const sslVersionLabel =
+    extraInfoData?.["Traits"]?.["Server Info"]?.["Encryption Data"]?.[
+    "SSL Version"
+    ];
+  addProtocolUsed("Encryption", sslVersionLabel);
+  if (isEncrypted === true) {
+    addProtocolUsed("Encryption", "TLS");
+  }
+
+  const protocolsEl = document.getElementById("protocols");
+  if (protocolsUsed.length === 0) {
+    protocolsEl.innerHTML = "Unknown";
   } else {
-    document.getElementById("protocols").innerHTML =
-      "Protocol Name: " +
-      protoName +
-      "<br>Protocol Description: " +
-      protoDescription;
+    protocolsEl.innerHTML = protocolsUsed
+      .map((entry) => {
+        const detailText = entry.details
+          ? ` (${escapeHtml(String(entry.details))})`
+          : "";
+        if (!entry.layer) {
+          return `${escapeHtml(String(entry.protocol))}${detailText}`;
+        }
+        return `${escapeHtml(String(entry.layer))}: ${escapeHtml(String(entry.protocol))}${detailText}`;
+      })
+      .join("<br>");
   }
   const checksumData = [
     { name: "IP Checksum", value: ipChecksum },
