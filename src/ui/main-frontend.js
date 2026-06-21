@@ -5702,7 +5702,7 @@ function showConvertContextMenu(
     hasConvBase64ToExport ||
     hasConvHashesToExport ||
     hasConvDecodesToExport;
-  const hasHttpBody = Boolean(getCurrentHttpBodyHex());
+  const hasHttpBody = Boolean(extractHttpBodyHex(getCurrentRawPayloadHex()));
   const canCarveSmbStream = canCarveCurrentStreamForProtocol(
     "smb",
     activeContextPacket,
@@ -7173,19 +7173,140 @@ function extractHttpBodyHex(payloadHex) {
   if (!payloadHex) return "";
   // Locate the HTTP header/body separator in hex space.
   // RFC 7230 mandates \r\n\r\n which encodes as "0d0a0d0a".
-  const lower = payloadHex.toLowerCase();
+  const normalized = payloadHex.replace(/\s+/g, "");
+  const lower = normalized.toLowerCase();
   const sepIdx = lower.indexOf("0d0a0d0a");
   if (sepIdx === -1) return "";
   const bodyStart = sepIdx + 8; // skip past the 4-byte CRLFCRLF separator
-  if (bodyStart >= payloadHex.length) return "";
-  return payloadHex.slice(bodyStart);
+  if (bodyStart >= normalized.length) return "";
+  return normalized.slice(bodyStart);
 }
 
-function getCurrentHttpBodyHex(packet = null) {
-  return extractHttpBodyHex(getCurrentRawPayloadHex(packet));
+function parseHttpContentLength(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  const rawLength = String(httpData?.["Content-Length"] || "").trim();
+  if (!/^\d+$/.test(rawLength)) return null;
+  const contentLength = Number.parseInt(rawLength, 10);
+  return Number.isFinite(contentLength) && contentLength >= 0
+    ? contentLength
+    : null;
 }
 
-function getCurrentHttpBodyCompressionHint(packet = null) {
+function isChunkedHttpTransfer(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  return String(httpData?.["Transfer-Encoding"] || "")
+    .toLowerCase()
+    .includes("chunked");
+}
+
+function hexToAsciiString(hex) {
+  const normalized = typeof hex === "string" ? hex.replace(/\s+/g, "") : "";
+  let result = "";
+  for (let idx = 0; idx + 1 < normalized.length; idx += 2) {
+    result += String.fromCharCode(Number.parseInt(normalized.slice(idx, idx + 2), 16));
+  }
+  return result;
+}
+
+function sliceCompleteChunkedHttpBodyHex(bodyHex) {
+  const normalized = typeof bodyHex === "string" ? bodyHex.replace(/\s+/g, "") : "";
+  let cursor = 0;
+  while (cursor < normalized.length) {
+    const lineEnd = normalized.indexOf("0d0a", cursor);
+    if (lineEnd === -1) return null;
+    const chunkSizeLine = hexToAsciiString(normalized.slice(cursor, lineEnd)).trim();
+    const chunkSizeToken = chunkSizeLine.split(";", 1)[0].trim();
+    if (!/^[0-9a-fA-F]+$/.test(chunkSizeToken)) return null;
+    const chunkSize = Number.parseInt(chunkSizeToken, 16);
+    if (!Number.isFinite(chunkSize) || chunkSize < 0) return null;
+    cursor = lineEnd + 4;
+    const chunkDataEnd = cursor + chunkSize * 2;
+    if (chunkDataEnd > normalized.length) return null;
+    cursor = chunkDataEnd;
+    if (normalized.slice(cursor, cursor + 4).toLowerCase() !== "0d0a") return null;
+    cursor += 4;
+    if (chunkSize === 0) {
+      let trailerCursor = cursor;
+      while (trailerCursor <= normalized.length) {
+        const trailerEnd = normalized.indexOf("0d0a", trailerCursor);
+        if (trailerEnd === -1) return null;
+        if (trailerEnd === trailerCursor) {
+          return normalized.slice(0, trailerEnd + 4);
+        }
+        trailerCursor = trailerEnd + 4;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+function getPacketIdentity(packet) {
+  return (
+    packet?.__packetKey ||
+    packet?.["Packet Info"]?.["Index"] ||
+    null
+  );
+}
+
+function isSameDirectionalStreamPacket(packet, referencePacket) {
+  const packetTuple = getStreamTupleForPacket(packet);
+  const referenceTuple = getStreamTupleForPacket(referencePacket);
+  if (!packetTuple || !referenceTuple) return false;
+  return (
+    packetTuple.protocol === referenceTuple.protocol &&
+    packetTuple.srcIp === referenceTuple.srcIp &&
+    packetTuple.dstIp === referenceTuple.dstIp &&
+    packetTuple.srcPort === referenceTuple.srcPort &&
+    packetTuple.dstPort === referenceTuple.dstPort
+  );
+}
+
+function collectHttpBodyHexFromStream(streamPackets, referencePacket) {
+  if (!Array.isArray(streamPackets) || !streamPackets.length || !referencePacket) {
+    return "";
+  }
+  const referenceIdentity = getPacketIdentity(referencePacket);
+  const referenceIndex = streamPackets.findIndex((packet) => {
+    return getPacketIdentity(packet) === referenceIdentity;
+  });
+  if (referenceIndex === -1) return "";
+
+  const firstPacket = streamPackets[referenceIndex];
+  const firstBodyHex = extractHttpBodyHex(getCurrentRawPayloadHex(firstPacket));
+  if (!firstBodyHex) return "";
+
+  let combinedBodyHex = firstBodyHex;
+  for (let packetIndex = referenceIndex + 1; packetIndex < streamPackets.length; packetIndex += 1) {
+    const packet = streamPackets[packetIndex];
+    if (!isSameDirectionalStreamPacket(packet, firstPacket)) continue;
+    const payloadHex = getCurrentRawPayloadHex(packet).replace(/\s+/g, "");
+    if (payloadHex) combinedBodyHex += payloadHex;
+  }
+
+  const contentLength = parseHttpContentLength(firstPacket);
+  if (contentLength !== null) {
+    return combinedBodyHex.slice(0, contentLength * 2);
+  }
+  if (isChunkedHttpTransfer(firstPacket)) {
+    return sliceCompleteChunkedHttpBodyHex(combinedBodyHex) || combinedBodyHex;
+  }
+  return combinedBodyHex;
+}
+
+async function getCurrentHttpBodyHex(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  if (!contextPacket) return "";
+  const localBodyHex = extractHttpBodyHex(getCurrentRawPayloadHex(contextPacket));
+  if (!localBodyHex) return "";
+
+  const streamPackets = await getFollowStreamPacketsAsync(contextPacket);
+  if (!streamPackets.length) return localBodyHex;
+  const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+  return collectHttpBodyHexFromStream(hydratedStreamPackets, contextPacket) || localBodyHex;
+}
+
+function getCurrentHttpBodyCompressionHint(packet = null, bodyHexOverride = "") {
   const contextPacket = packet || getCurrentContextPacket();
   const httpData = getCurrentHttpData(contextPacket);
   const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
@@ -7193,7 +7314,8 @@ function getCurrentHttpBodyCompressionHint(packet = null) {
   if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
   if (encoding.includes("deflate") || encoding.includes("zlib")) return "deflate";
 
-  const bodyHex = getCurrentHttpBodyHex(contextPacket);
+  const bodyHex =
+    bodyHexOverride || extractHttpBodyHex(getCurrentRawPayloadHex(contextPacket));
   if (!bodyHex) return "";
   try {
     return inferCompressionFromBytes(parseDataToolsInput("hex", bodyHex));
@@ -7203,13 +7325,13 @@ function getCurrentHttpBodyCompressionHint(packet = null) {
 }
 
 async function getCurrentHttpBodyDecompressionCandidate(packet = null) {
-  const bodyHex = getCurrentHttpBodyHex(packet);
+  const bodyHex = await getCurrentHttpBodyHex(packet);
   if (!bodyHex) return null;
   try {
     const bodyBytes = parseDataToolsInput("hex", bodyHex);
     return await tryDecompressBytes(
       bodyBytes,
-      getCurrentHttpBodyCompressionHint(packet),
+      getCurrentHttpBodyCompressionHint(packet, bodyHex),
     );
   } catch {
     return null;
@@ -7475,7 +7597,7 @@ function saveHttpBodyFromContextMenu() {
 async function saveHttpBodyFromContextMenuImpl(decompress = false) {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const bodyHex = getCurrentHttpBodyHex(contextPacket);
+  const bodyHex = await getCurrentHttpBodyHex(contextPacket);
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to save");
     return;
@@ -7526,7 +7648,7 @@ function loadHttpBodyIntoConvTabFromContextMenu() {
 
 async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   const contextPacket = getCurrentContextPacket();
-  const bodyHex = getCurrentHttpBodyHex(contextPacket);
+  const bodyHex = await getCurrentHttpBodyHex(contextPacket);
   hideConvertContextMenu();
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to load");
@@ -7565,7 +7687,7 @@ async function previewHttpBodyInBrowserFromContextMenuImpl(
 ) {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
-  const bodyHex = getCurrentHttpBodyHex(contextPacket);
+  const bodyHex = await getCurrentHttpBodyHex(contextPacket);
   if (!bodyHex) {
     statusUpdate("Status: No HTTP body available to preview");
     return;
