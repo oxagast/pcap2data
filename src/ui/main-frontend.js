@@ -100,6 +100,33 @@ const NOTE_FALLBACK_COLORS = [
   "#e91e63",
   "#ffc107",
 ];
+const DATA_TYPES_DEFAULT_HIDDEN_PROTOCOLS = new Set([
+  "ARP",
+  "RARP",
+  "IGMP",
+  "ICMP",
+  "DHCP",
+  "DNS",
+  "NTP",
+  "BOOTPC",
+  "BOOTPS",
+  "FRAME",
+  "ATM",
+  "PPP",
+]);
+const DATA_TYPES_DEFAULT_HIDDEN_PROTOCOL_PREFIXES = [
+  "BOOTP",
+  "DHCP",
+  "DNS",
+  "NTP",
+  "ICMP",
+  "IGMP",
+  "ARP",
+  "RARP",
+  "ATM",
+  "PPP",
+  "FRAME",
+];
 const DEFAULT_DATA_TOOLS_FORMAT = "hex";
 const DATA_TOOLS_CONVERTED_OUTPUT_IDS = [
   "data-tools-hex-output",
@@ -210,6 +237,7 @@ const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
 let sessionAutosaveInFlight = false;
 let keystoreAutoPopulateGeneration = 0;
+let dataTypesOverridePacketKey = null;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -8991,6 +9019,182 @@ async function handlePacketNavigation(navAction, navBookmark) {
     logCurrentPacketDisplay(navAction || "first-load");
   }
 }
+
+function getPacketDataTypeItems(packetEntry) {
+  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const traits = extraInfo["Traits"] || {};
+  const serverInfo = traits["Server Info"] || {};
+  const networkData = traits["Network Data"] || {};
+  let dataItems = Array.isArray(extraInfo["Data Types"])
+    ? [...extraInfo["Data Types"]]
+    : [];
+
+  if (
+    serverInfo["Encryption Data"] != "N/A" &&
+    serverInfo["Encryption Data"] != undefined
+  ) {
+    const sslDetails = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Unknown";
+    const protoName =
+      networkData["Port Protocol"] ?? networkData["Port Protcol"] ?? "Unknown";
+    dataItems = [];
+    dataItems.push(sslDetails + " encrypted stream");
+    dataItems.push(protoName + " protocol data");
+  }
+
+  return dataItems;
+}
+
+function normalizeProtocolToken(value) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function collectPacketProtocolTokens(packetEntry) {
+  const packetInfo = packetEntry?.["Packet Info"] || {};
+  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const traits = extraInfo["Traits"] || {};
+  const networkData = traits["Network Data"] || {};
+  const tokens = new Set();
+
+  const pushToken = (value) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => pushToken(item));
+      return;
+    }
+    const text = String(value).trim();
+    if (!text) return;
+    const normalizedWhole = normalizeProtocolToken(text);
+    if (normalizedWhole) tokens.add(normalizedWhole);
+    text.split(/[^A-Za-z0-9]+/).forEach((segment) => {
+      const normalized = normalizeProtocolToken(segment);
+      if (normalized) tokens.add(normalized);
+    });
+  };
+
+  pushToken(packetInfo["Protocol"]);
+  pushToken(packetInfo["Decoded Protocols"]);
+  pushToken(packetInfo["Link Control"]);
+  pushToken(networkData["Port Protocol"]);
+  pushToken(networkData["Port Protcol"]);
+  pushToken(networkData["Port Description"]);
+
+  return [...tokens];
+}
+
+function getMatchedHiddenDataTypeProtocol(packetEntry) {
+  const protocolTokens = collectPacketProtocolTokens(packetEntry);
+  for (const token of protocolTokens) {
+    if (DATA_TYPES_DEFAULT_HIDDEN_PROTOCOLS.has(token)) {
+      return token;
+    }
+    if (
+      DATA_TYPES_DEFAULT_HIDDEN_PROTOCOL_PREFIXES.some((prefix) =>
+        token.startsWith(prefix),
+      )
+    ) {
+      return token;
+    }
+  }
+  return "";
+}
+
+function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
+  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const traits = extraInfo["Traits"] || {};
+  const characters = traits["Characters"] || {};
+  const packetInfo = packetEntry?.["Packet Info"] || {};
+  const payloadLenRaw = packetInfo?.["Raw data"]?.["Payload Length"];
+  const payloadLength = Number(payloadLenRaw);
+
+  if (Number.isFinite(payloadLength) && payloadLength <= 0) {
+    return false;
+  }
+
+  const charset = String(characters["Charset"] ?? "").trim().toLowerCase();
+  if (charset && charset !== "unknown" && charset !== "n/a") {
+    return true;
+  }
+
+  const mimeType = String(extraInfo["MIME Type"] ?? "")
+    .trim()
+    .toLowerCase();
+  const usefulMimeHints = [
+    "text/",
+    "image/",
+    "audio/",
+    "video/",
+    "application/json",
+    "application/xml",
+    "application/pdf",
+    "application/zip",
+    "application/gzip",
+    "application/x-",
+  ];
+  if (usefulMimeHints.some((hint) => mimeType.startsWith(hint))) {
+    return true;
+  }
+
+  const nonUsefulDataTypePatterns = [
+    /^unknown\s*data\s*type$/i,
+    /encrypted\s+stream/i,
+    /protocol\s+data/i,
+    /^unknown$/i,
+    /^n\/a$/i,
+  ];
+  const hasUsefulDataType = dataItems.some((item) => {
+    const normalized = String(item ?? "").trim();
+    if (!normalized) return false;
+    return !nonUsefulDataTypePatterns.some((pattern) => pattern.test(normalized));
+  });
+
+  return hasUsefulDataType;
+}
+
+function getDataTypesVisibilityState(packetEntry) {
+  const dataItems = getPacketDataTypeItems(packetEntry);
+  const hiddenProtocolToken = getMatchedHiddenDataTypeProtocol(packetEntry);
+  const hiddenByProtocol = hiddenProtocolToken !== "";
+  const likelyFileLikeData = hasLikelyFileLikeDataTypes(packetEntry, dataItems);
+  const hiddenByHeuristic = !hiddenByProtocol && !likelyFileLikeData;
+  const isOverridden = currentPacketKey != null && dataTypesOverridePacketKey === currentPacketKey;
+
+  return {
+    showPane: isOverridden || (!hiddenByProtocol && !hiddenByHeuristic ? true : false),
+    reason: hiddenByProtocol
+      ? `Hidden by default for ${hiddenProtocolToken} control/management traffic. Show it anyway to inspect encapsulated or tunneled payload guesses.`
+      : hiddenByHeuristic
+        ? "Hidden by default because this packet has no strong file-like payload indicators. Show it anyway to inspect encapsulated or tunneled payload guesses."
+        : "",
+  };
+}
+
+function applyDataTypesVisibility(visibilityState) {
+  const dataTypesEl = document.getElementById("data-types");
+  const dataTypesPaneEl = document.getElementById("dataTypesPane");
+  const overrideWrapEl = document.getElementById("data-types-override-wrap");
+  const overrideTextEl = document.getElementById("data-types-override-text");
+  const overrideButtonEl = document.getElementById("data-types-override-btn");
+
+  if (
+    !dataTypesEl ||
+    !dataTypesPaneEl ||
+    !overrideWrapEl ||
+    !overrideTextEl ||
+    !overrideButtonEl
+  ) {
+    return;
+  }
+
+  dataTypesPaneEl.hidden = !visibilityState.showPane;
+  overrideWrapEl.hidden = visibilityState.showPane;
+  overrideButtonEl.hidden = visibilityState.showPane;
+  overrideTextEl.textContent = visibilityState.reason;
+  dataTypesEl.classList.toggle("data-types-collapsed", !visibilityState.showPane);
+}
+
 function populateDataTypes(p) {
   setPrevNextButtonVisibility(p, index);
   const typesListEl = document.getElementById("types-list");
@@ -9004,11 +9208,11 @@ function populateDataTypes(p) {
   let encodingText = "";
   let languageText = "";
   const packetEntry = p?.[index] || {};
+  const visibilityState = getDataTypesVisibilityState(packetEntry);
+  applyDataTypesVisibility(visibilityState);
   const extraInfo = packetEntry["Extra Info"] || {};
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
-  const serverInfo = traits["Server Info"] || {};
-  const networkData = traits["Network Data"] || {};
 
   let charsetText = String(characters["Charset"] ?? "Unknown");
   const encodingData = characters["Encoding"];
@@ -9023,21 +9227,7 @@ function populateDataTypes(p) {
   }
 
   const mimeTypeText = String(extraInfo["MIME Type"] ?? "Unknown");
-  let dataItems = Array.isArray(extraInfo["Data Types"])
-    ? [...extraInfo["Data Types"]]
-    : [];
-  let sslDetails = "";
-  if (
-    serverInfo["Encryption Data"] != "N/A" &&
-    serverInfo["Encryption Data"] != undefined
-  ) {
-    sslDetails = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Unknown";
-    const protoName =
-      networkData["Port Protocol"] ?? networkData["Port Protcol"] ?? "Unknown";
-    dataItems = [];
-    dataItems.push(sslDetails + " encrypted stream");
-    dataItems.push(protoName + " protocol data");
-  }
+  const dataItems = getPacketDataTypeItems(packetEntry);
 
   mimeTypeEl.textContent = "MIME type: " + mimeTypeText;
   charsetText = charsetText == "" ? "Unknown" : charsetText;
@@ -9056,6 +9246,19 @@ function populateDataTypes(p) {
     typesListEl.appendChild(listItem);
   });
 }
+
+const dataTypesOverrideButtonEl = document.getElementById("data-types-override-btn");
+if (dataTypesOverrideButtonEl) {
+  dataTypesOverrideButtonEl.addEventListener("click", () => {
+    if (currentPacketKey == null || !Array.isArray(p) || !p[index]) {
+      return;
+    }
+    dataTypesOverridePacketKey = currentPacketKey;
+    populateDataTypes(p);
+    statusUpdate("Status: Showing data types for current packet");
+  });
+}
+
 // this takes a char code and returns true if it's
 // a printable ASCII character, false otherwise
 function isPrintable(charCode) {

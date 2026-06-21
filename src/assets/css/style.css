@@ -1549,6 +1549,29 @@ strong {
   z-index: 1;
 }
 
+#data-types.data-types-collapsed {
+  height: auto;
+  min-height: 0;
+}
+
+#data-types-override-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  color: white;
+}
+
+#data-types-override-text {
+  color: var(--color-6);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+#data-types-override-btn {
+  align-self: flex-start;
+}
+
 .sidebar-header {
   font-size: 18px;
   background-color: var(--color-2);
