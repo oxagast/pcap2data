@@ -25,6 +25,8 @@ function normalizeStatsPortValue(value) {
 
 function buildCaptureStats(capturedPackets) {
   const protocols = new Set();
+  const networkProtocols = new Set();
+  const linkProtocols = new Set();
   const transportProtocols = new Set();
   const decodedProtocols = new Set();
   const hosts = new Set();
@@ -64,8 +66,8 @@ function buildCaptureStats(capturedPackets) {
     for (const pkt of packets) {
       totalPackets++;
       const pi = pkt?.["Packet Info"];
-      const ei = pkt?.["Extra Info"];
-      if (!pi || !ei) continue;
+      const ei = pkt?.["Extra Info"] || {};
+      if (!pi) continue;
 
       const streamKey = getStreamKey(pi);
       if (!streams.has(streamKey)) {
@@ -75,6 +77,24 @@ function buildCaptureStats(capturedPackets) {
 
       const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
+      const packetProto = normalizeStatsTextValue(pi?.["packet.proto"] || tp);
+      if (packetProto) networkProtocols.add(packetProto);
+
+      const linkData = pi?.["Link Control"];
+      if (linkData) {
+        const primaryLinkProtocol = normalizeStatsTextValue(
+          linkData?.["Primary WAN Protocol"],
+        );
+        if (primaryLinkProtocol) linkProtocols.add(primaryLinkProtocol);
+
+        const detectedLinkProtocols = linkData?.["Detected Protocols"];
+        if (Array.isArray(detectedLinkProtocols)) {
+          detectedLinkProtocols.forEach((linkProtocol) => {
+            const normalizedLinkProtocol = normalizeStatsTextValue(linkProtocol);
+            if (normalizedLinkProtocol) linkProtocols.add(normalizedLinkProtocol);
+          });
+        }
+      }
 
       const packetDecodedProtocols = pi?.["Decoded Protocols"];
       if (Array.isArray(packetDecodedProtocols)) {
@@ -173,6 +193,8 @@ function buildCaptureStats(capturedPackets) {
 
   return {
     protocols: [...protocols].sort(),
+    networkProtocols: [...networkProtocols].sort(),
+    linkProtocols: [...linkProtocols].sort(),
     transportProtocols: [...transportProtocols].sort(),
     decodedProtocols: [...decodedProtocols].sort(),
     hosts: [...hosts].sort(),
@@ -332,11 +354,20 @@ function createStatsPanel(options) {
     });
     if (protoSec) content.appendChild(protoSec);
 
+    const networkProtoSec = makeStatsSection({
+      documentRef,
+      title: "Network Protocols",
+      items: stats.networkProtocols,
+      queryBuilder: (v) => `wire.proto: ${v.toLowerCase()}`,
+      onQuery: applyStatsQuery,
+    });
+    if (networkProtoSec) content.appendChild(networkProtoSec);
+
     const tpSec = makeStatsSection({
       documentRef,
-      title: "Transport Protocols",
-      items: stats.transportProtocols,
-      queryBuilder: (v) => `wire.proto: ${v.toLowerCase()}`,
+      title: "Link Protocols",
+      items: stats.linkProtocols,
+      queryBuilder: (v) => `decoded-proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (tpSec) content.appendChild(tpSec);
