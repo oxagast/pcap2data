@@ -4149,10 +4149,37 @@ function detectDataTypeGuessFromToken(token, candidateScores) {
         noWhitespace.length % 4 === 0 ? 80 : 50,
       );
     }
+  }
+  if (normalizedToken.length >= 3 && /.*\S[\s\S]*\S\r?\n$/.test(normalizedToken)) {
+    addDataTypeGuessCandidate(candidateScores, "Protocol Token", 75);
   } else if (normalizedToken.length >= 8) {
     addDataTypeGuessCandidate(candidateScores, "Alphanumeric Identifier", 50);
   }
+  else if (normalizedToken.length === 4 && /\p{Emoji}/u.test(normalizedToken)) {
+    addDataTypeGuessCandidate(candidateScores, "Emoji", 60);
+  }
   else if (normalizedToken.length === 1) {
+    if (normalizedToken.length === 1 && /\x00/.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Null Byte", 95);
+      addDataTypeGuessCandidate(candidateScores, "Control Character", 90);
+      addDataTypeGuessCandidate(candidateScores, "Delimiter", 95);
+    }
+    if (normalizedToken.length === 1 && /\p{P}/u.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Punctuation Character", 70);
+      addDataTypeGuessCandidate(candidateScores, "Delimiter", 40);
+    }
+    if (normalizedToken.length === 1 && /\p{S}/u.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Symbol Character", 65);
+    }
+    if (normalizedToken.length === 1 && /\p{C}/u.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Control Character", 90);
+    }
+    if (normalizedToken.length === 1 && /\p{Z}/u.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Whitespace Character", 90);
+    }
+    if (normalizedToken.length === 1 && /\p{M}/u.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Combining Mark Character", 50);
+    }
     if (/[A-Za-z]/.test(normalizedToken)) {
       if (/[aeiouAEIOU]/.test(normalizedToken)) {
         addDataTypeGuessCandidate(candidateScores, "Vowel", 85);
@@ -4171,12 +4198,10 @@ function detectDataTypeGuessFromToken(token, candidateScores) {
     if (/[:;.,\-_=+\/\\|?<>]/.test(normalizedToken)) {
       addDataTypeGuessCandidate(candidateScores, "Delimiter", 40);
     }
-    if (/[\s!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(normalizedToken)) {
-      addDataTypeGuessCandidate(candidateScores, "Symbol Character", 65);
-    }
     addDataTypeGuessCandidate(candidateScores, "Byte", 90);
     return;
   }
+
 }
 
 function scanAsciiTextForDataTypeGuesses(inputText, candidateScores) {
