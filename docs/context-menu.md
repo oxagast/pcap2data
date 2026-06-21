@@ -128,7 +128,9 @@ Shown only when the current packet contains an HTTP response body.
 | Item                    | Description                                                           |
 | ----------------------- | --------------------------------------------------------------------- |
 | **Load body into Conv** | Load the HTTP body bytes as hex into the Conv tab and run conversion. |
+| **Load body into Conv (decompressed)** | Decompress the HTTP body first, then load it into the Conv tab.    |
 | **Preview in browser**  | Open the HTTP body in the system's default web browser for preview.   |
+| **Preview in browser (decompressed)** | Decompress the HTTP body first, then open it in the browser.       |
 
 ---
 
@@ -139,6 +141,7 @@ Shown when at least one carve target is available for the current packet or stre
 | Item                    | Description                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------ |
 | **HTTP body to file**   | Save the extracted HTTP response body to a file, using the Content-Type to infer the extension. |
+| **HTTP body to file (decompressed)** | Decompress the HTTP body first, then save the resulting bytes to a file.                     |
 | **SMB file to disk**    | Detect files transferred in the current SMB stream, let you pick one, then save it as binary.  |
 | **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
 

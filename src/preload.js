@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('saveapi', {
   saveJson: (jsonData) => ipcRenderer.invoke('save-json', jsonData),
   savePacket: (packetData) => ipcRenderer.invoke('save-packet', packetData),
   savePayload: (payloadHex) => ipcRenderer.invoke('save-payload', payloadHex),
+  saveText: (options) => ipcRenderer.invoke('save-text', options),
   saveCookieJar: (cookieJarText) =>
     ipcRenderer.invoke('save-cookie-jar', cookieJarText),
   saveHttpBody: (bodyHex, contentType) =>

@@ -1771,6 +1771,155 @@ function buildConvConvertedOutputNoteText() {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
+function getConvDecodedOutputText() {
+  const decodedOutputEl = document.getElementById("data-tools-proto-output");
+  if (!decodedOutputEl) return "";
+  return String(decodedOutputEl.innerText || "").trim();
+}
+
+function getConvContextExportText(exportType) {
+  switch (exportType) {
+    case "input":
+      return document.getElementById("data-tools-input")?.value?.trim() || "";
+    case "hex":
+      return document.getElementById("data-tools-hex-output")?.value?.trim() || "";
+    case "binary":
+      return document.getElementById("data-tools-binary-output")?.value?.trim() || "";
+    case "decimal":
+      return document.getElementById("data-tools-decimal-output")?.value?.trim() || "";
+    case "decimal-integer":
+      return (
+        document.getElementById("data-tools-decimal-integer-output")?.value?.trim() ||
+        ""
+      );
+    case "ascii":
+      return document.getElementById("data-tools-ascii-output")?.value?.trim() || "";
+    case "base64":
+      return document.getElementById("data-tools-base64-output")?.value?.trim() || "";
+    case "hashes":
+      return buildConvHashesNoteText();
+    case "decodes":
+      return getConvDecodedOutputText();
+    default:
+      return "";
+  }
+}
+
+function getConvContextExportMeta(exportType) {
+  switch (exportType) {
+    case "input":
+      return {
+        title: "Export Conv Input",
+        defaultName: "conv-input.txt",
+        statusLabel: "Conv input",
+        logKey: "input",
+      };
+    case "hex":
+      return {
+        title: "Export Conv Output (Hex)",
+        defaultName: "conv-output-hex.txt",
+        statusLabel: "Conv hex output",
+        logKey: "hex",
+      };
+    case "binary":
+      return {
+        title: "Export Conv Output (Binary)",
+        defaultName: "conv-output-binary.txt",
+        statusLabel: "Conv binary output",
+        logKey: "binary",
+      };
+    case "decimal":
+      return {
+        title: "Export Conv Output (Decimal Bytes)",
+        defaultName: "conv-output-decimal-bytes.txt",
+        statusLabel: "Conv decimal bytes output",
+        logKey: "decimal-bytes",
+      };
+    case "decimal-integer":
+      return {
+        title: "Export Conv Output (Decimal Integer)",
+        defaultName: "conv-output-decimal-integer.txt",
+        statusLabel: "Conv decimal integer output",
+        logKey: "decimal-integer",
+      };
+    case "ascii":
+      return {
+        title: "Export Conv Output (ASCII)",
+        defaultName: "conv-output-ascii.txt",
+        statusLabel: "Conv ASCII output",
+        logKey: "ascii",
+      };
+    case "base64":
+      return {
+        title: "Export Conv Output (Base64)",
+        defaultName: "conv-output-base64.txt",
+        statusLabel: "Conv base64 output",
+        logKey: "base64",
+      };
+    case "hashes":
+      return {
+        title: "Export Conv Hashes",
+        defaultName: "conv-hashes.txt",
+        statusLabel: "Conv hashes",
+        logKey: "hashes",
+      };
+    case "decodes":
+      return {
+        title: "Export Conv Decode Output",
+        defaultName: "conv-decode-output.txt",
+        statusLabel: "Conv decode output",
+        logKey: "decode-output",
+      };
+    default:
+      return {
+        title: "Export Conv Data",
+        defaultName: "conv-export.txt",
+        statusLabel: "Conv data",
+        logKey: "unknown",
+      };
+  }
+}
+
+function exportConvContextTextFromContextMenu(exportType) {
+  const exportText = getConvContextExportText(exportType);
+  const exportMeta = getConvContextExportMeta(exportType);
+  hideConvertContextMenu();
+  if (!exportText) {
+    statusUpdate(`Status: No ${exportMeta.statusLabel} available to export`);
+    return;
+  }
+  window.saveapi
+    .saveText({
+      text: exportText,
+      title: exportMeta.title,
+      defaultName: exportMeta.defaultName,
+    })
+    .then((result) => {
+      if (result.canceled) {
+        statusUpdate("Status: Export cancelled");
+      } else if (result.success) {
+        statusUpdate(`Status: ${exportMeta.statusLabel} exported successfully`);
+        writeLogEntry(
+          `Context menu conv export completed type=${exportMeta.logKey}`,
+        );
+      } else {
+        const errorMessage =
+          result && typeof result === "object" && "error" in result
+            ? result.error
+            : "unknown";
+        doError(`${exportMeta.statusLabel} export failed`);
+        logErrorEntry(
+          `export-conv-${exportMeta.logKey}`,
+          errorMessage || "unknown",
+        );
+        statusUpdate(
+          `Status: ${exportMeta.statusLabel} export failed – ${errorMessage || "unknown error"}`,
+        );
+        console.error(`${exportMeta.statusLabel} export failed:`, errorMessage);
+      }
+    });
+}
+
 function buildConvHashesNoteText() {
   const hashFields = [
     ["Input", "data-tools-hash-input-reading"],
@@ -4865,6 +5014,7 @@ let activeContextPasteTarget = null;
 let activeContextFilterQueries = {};
 let activeContextCookieJarText = "";
 let activeContextConvDecompression = null;
+let activeContextHttpBodyDecompressionHint = "";
 let activeContextStreamCompressionHint = "";
 let activeContextPacket = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
@@ -4874,6 +5024,15 @@ const convertContextButtons = {
   saveJson: getCachedElement("ctx-save-json"),
   exportPacket: getCachedElement("ctx-export-packet"),
   exportPayload: getCachedElement("ctx-export-payload"),
+  exportConvInput: getCachedElement("ctx-export-conv-input"),
+  exportConvHex: getCachedElement("ctx-export-conv-hex"),
+  exportConvBinary: getCachedElement("ctx-export-conv-binary"),
+  exportConvDecimal: getCachedElement("ctx-export-conv-decimal"),
+  exportConvDecimalInteger: getCachedElement("ctx-export-conv-decimal-integer"),
+  exportConvAscii: getCachedElement("ctx-export-conv-ascii"),
+  exportConvBase64: getCachedElement("ctx-export-conv-base64"),
+  exportConvHashes: getCachedElement("ctx-export-conv-hashes"),
+  exportConvDecodes: getCachedElement("ctx-export-conv-decodes"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -4936,8 +5095,17 @@ const convertContextButtons = {
   notesSendConvOutput: getCachedElement("ctx-notes-send-conv-output"),
   notesSendConvHashes: getCachedElement("ctx-notes-send-conv-hashes"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
+  httpFileSaveDecompressed: getCachedElement(
+    "ctx-http-file-save-decompressed",
+  ),
   httpFileLoad: getCachedElement("ctx-http-file-load"),
+  httpFileLoadDecompressed: getCachedElement(
+    "ctx-http-file-load-decompressed",
+  ),
   httpFilePreview: getCachedElement("ctx-http-file-preview"),
+  httpFilePreviewDecompressed: getCachedElement(
+    "ctx-http-file-preview-decompressed",
+  ),
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
@@ -5059,6 +5227,7 @@ function hideConvertContextMenu() {
   activeContextPasteTarget = null;
   activeContextFilterQueries = {};
   activeContextCookieJarText = "";
+  activeContextHttpBodyDecompressionHint = "";
   activeContextPacket = null;
   resetConvertContextSubmenuPositions();
   convertContextMenuEl.hidden = true;
@@ -5486,6 +5655,9 @@ function showConvertContextMenu(
   activeContextFilterQueries = filterQueries;
   activeContextCookieJarText = cookieJarText;
   activeContextPacket = getCurrentContextPacket(target);
+  activeContextHttpBodyDecompressionHint = getCurrentHttpBodyCompressionHint(
+    activeContextPacket,
+  );
 
   const isHostDataTabActive = activeMainTab === MAIN_TAB_DATA;
   const allowFollowStreamActions =
@@ -5501,6 +5673,35 @@ function showConvertContextMenu(
   const hasPacketToExport = Boolean(getCurrentPacketForExport());
   const currentPayloadHex = getCurrentRawPayloadHex();
   const hasPayloadToExport = Boolean(currentPayloadHex);
+  const isConvTabActive = activeMainTab === MAIN_TAB_DATA_TOOLS;
+  const hasConvInputToExport =
+    isConvTabActive && Boolean(getConvContextExportText("input"));
+  const hasConvHexToExport =
+    isConvTabActive && Boolean(getConvContextExportText("hex"));
+  const hasConvBinaryToExport =
+    isConvTabActive && Boolean(getConvContextExportText("binary"));
+  const hasConvDecimalToExport =
+    isConvTabActive && Boolean(getConvContextExportText("decimal"));
+  const hasConvDecimalIntegerToExport =
+    isConvTabActive && Boolean(getConvContextExportText("decimal-integer"));
+  const hasConvAsciiToExport =
+    isConvTabActive && Boolean(getConvContextExportText("ascii"));
+  const hasConvBase64ToExport =
+    isConvTabActive && Boolean(getConvContextExportText("base64"));
+  const hasConvHashesToExport =
+    isConvTabActive && Boolean(getConvContextExportText("hashes"));
+  const hasConvDecodesToExport =
+    isConvTabActive && Boolean(getConvContextExportText("decodes"));
+  const hasConvExportActions =
+    hasConvInputToExport ||
+    hasConvHexToExport ||
+    hasConvBinaryToExport ||
+    hasConvDecimalToExport ||
+    hasConvDecimalIntegerToExport ||
+    hasConvAsciiToExport ||
+    hasConvBase64ToExport ||
+    hasConvHashesToExport ||
+    hasConvDecodesToExport;
   const hasHttpBody = Boolean(getCurrentHttpBodyHex());
   const canCarveSmbStream = canCarveCurrentStreamForProtocol(
     "smb",
@@ -5518,15 +5719,53 @@ function showConvertContextMenu(
   convertContextButtons.exportPayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
+  convertContextButtons.exportConvInput.style.display = hasConvInputToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvHex.style.display = hasConvHexToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvBinary.style.display = hasConvBinaryToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvDecimal.style.display = hasConvDecimalToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvDecimalInteger.style.display =
+    hasConvDecimalIntegerToExport ? "block" : "none";
+  convertContextButtons.exportConvAscii.style.display = hasConvAsciiToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvBase64.style.display = hasConvBase64ToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvHashes.style.display = hasConvHashesToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportConvDecodes.style.display = hasConvDecodesToExport
+    ? "block"
+    : "none";
   convertContextButtons.httpFileSave.style.display = hasHttpBody
     ? "block"
     : "none";
+  convertContextButtons.httpFileSaveDecompressed.style.display =
+    hasHttpBody && activeContextHttpBodyDecompressionHint
+      ? "block"
+      : "none";
   convertContextButtons.httpFileLoad.style.display = hasHttpBody
     ? "block"
     : "none";
+  convertContextButtons.httpFileLoadDecompressed.style.display =
+    hasHttpBody && activeContextHttpBodyDecompressionHint
+      ? "block"
+      : "none";
   convertContextButtons.httpFilePreview.style.display = hasHttpBody
     ? "block"
     : "none";
+  convertContextButtons.httpFilePreviewDecompressed.style.display =
+    hasHttpBody && activeContextHttpBodyDecompressionHint
+      ? "block"
+      : "none";
   convertContextButtons.fileCarveSmb.style.display = canCarveSmbStream
     ? "block"
     : "none";
@@ -5741,7 +5980,11 @@ function showConvertContextMenu(
   const hasKeystoreActions =
     hasContextTextKeystoreActions || hasManualKeystoreUriAction;
   const hasExportActions =
-    showSaveJson || hasPacketToExport || hasPayloadToExport || hasCookieActions;
+    showSaveJson ||
+    hasPacketToExport ||
+    hasPayloadToExport ||
+    hasCookieActions ||
+    hasConvExportActions;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
   convertContextSubmenus.convert.style.display = hasDataTypeActions
     ? "block"
@@ -6942,6 +7185,37 @@ function getCurrentHttpBodyHex(packet = null) {
   return extractHttpBodyHex(getCurrentRawPayloadHex(packet));
 }
 
+function getCurrentHttpBodyCompressionHint(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  const httpData = getCurrentHttpData(contextPacket);
+  const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
+  if (encoding.includes("br") || encoding.includes("brotli")) return "brotli";
+  if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
+  if (encoding.includes("deflate") || encoding.includes("zlib")) return "deflate";
+
+  const bodyHex = getCurrentHttpBodyHex(contextPacket);
+  if (!bodyHex) return "";
+  try {
+    return inferCompressionFromBytes(parseDataToolsInput("hex", bodyHex));
+  } catch {
+    return "";
+  }
+}
+
+async function getCurrentHttpBodyDecompressionCandidate(packet = null) {
+  const bodyHex = getCurrentHttpBodyHex(packet);
+  if (!bodyHex) return null;
+  try {
+    const bodyBytes = parseDataToolsInput("hex", bodyHex);
+    return await tryDecompressBytes(
+      bodyBytes,
+      getCurrentHttpBodyCompressionHint(packet),
+    );
+  } catch {
+    return null;
+  }
+}
+
 function getCurrentPacketForExport() {
   return getCurrentContextPacket();
 }
@@ -7195,6 +7469,10 @@ function getHttpContentTypeForCurrentPacket(packet = null) {
 }
 
 function saveHttpBodyFromContextMenu() {
+  void saveHttpBodyFromContextMenuImpl(false);
+}
+
+async function saveHttpBodyFromContextMenuImpl(decompress = false) {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
   const bodyHex = getCurrentHttpBodyHex(contextPacket);
@@ -7202,13 +7480,31 @@ function saveHttpBodyFromContextMenu() {
     statusUpdate("Status: No HTTP body available to save");
     return;
   }
-  const contentType = getHttpContentTypeForCurrentPacket(contextPacket);
-  window.saveapi.saveHttpBody(bodyHex, contentType).then((result) => {
+  let outputHex = bodyHex;
+  let decompressLabel = "";
+  if (decompress) {
+    const decompressionCandidate = await getCurrentHttpBodyDecompressionCandidate(
+      contextPacket,
+    );
+    if (!decompressionCandidate) {
+      statusUpdate("Status: HTTP body does not appear to be compressed");
+      return;
+    }
+    outputHex = bytesToHexString(decompressionCandidate.bytes);
+    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+  }
+  window.saveapi.savePayload(outputHex).then((result) => {
     if (result.canceled) {
       statusUpdate("Status: Save cancelled");
     } else if (result.success) {
-      statusUpdate("Status: HTTP body saved successfully");
-      writeLogEntry("Context menu HTTP body save completed");
+      statusUpdate(
+        decompress
+          ? "Status: Decompressed HTTP body saved successfully"
+          : "Status: HTTP body saved successfully",
+      );
+      writeLogEntry(
+        `Context menu HTTP body save completed${decompressLabel}`,
+      );
     } else {
       const errorMessage =
         result && typeof result === "object" && "error" in result
@@ -7225,6 +7521,10 @@ function saveHttpBodyFromContextMenu() {
 }
 
 function loadHttpBodyIntoConvTabFromContextMenu() {
+  void loadHttpBodyIntoConvTabFromContextMenuImpl(false);
+}
+
+async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   const contextPacket = getCurrentContextPacket();
   const bodyHex = getCurrentHttpBodyHex(contextPacket);
   hideConvertContextMenu();
@@ -7232,16 +7532,37 @@ function loadHttpBodyIntoConvTabFromContextMenu() {
     statusUpdate("Status: No HTTP body available to load");
     return;
   }
+  let outputHex = bodyHex;
+  let decompressLabel = "";
+  if (decompress) {
+    const decompressionCandidate = await getCurrentHttpBodyDecompressionCandidate(
+      contextPacket,
+    );
+    if (!decompressionCandidate) {
+      statusUpdate("Status: HTTP body does not appear to be compressed");
+      return;
+    }
+    outputHex = bytesToHexString(decompressionCandidate.bytes);
+    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+  }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = bodyHex;
+  inputEl.value = outputHex;
   formatEl.value = "hex";
   showDataTools();
   runDataToolsConversion();
-  writeLogEntry("Context menu loaded HTTP body into Conv tab");
+  writeLogEntry(
+    `Context menu loaded HTTP body into Conv tab${decompressLabel}`,
+  );
 }
 
 function previewHttpBodyInBrowserFromContextMenu() {
+  void previewHttpBodyInBrowserFromContextMenuImpl(false);
+}
+
+async function previewHttpBodyInBrowserFromContextMenuImpl(
+  decompress = false,
+) {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
   const bodyHex = getCurrentHttpBodyHex(contextPacket);
@@ -7249,11 +7570,31 @@ function previewHttpBodyInBrowserFromContextMenu() {
     statusUpdate("Status: No HTTP body available to preview");
     return;
   }
-  const contentType = getHttpContentTypeForCurrentPacket(contextPacket);
-  window.previewapi.previewHttpBody(bodyHex, contentType).then((result) => {
+  let outputHex = bodyHex;
+  let contentType = getHttpContentTypeForCurrentPacket(contextPacket);
+  let decompressLabel = "";
+  if (decompress) {
+    const decompressionCandidate = await getCurrentHttpBodyDecompressionCandidate(
+      contextPacket,
+    );
+    if (!decompressionCandidate) {
+      statusUpdate("Status: HTTP body does not appear to be compressed");
+      return;
+    }
+    outputHex = bytesToHexString(decompressionCandidate.bytes);
+    contentType = inferMimeType(decompressionCandidate.bytes);
+    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+  }
+  window.previewapi.previewHttpBody(outputHex, contentType).then((result) => {
     if (result.success) {
-      statusUpdate("Status: HTTP body opened in browser");
-      writeLogEntry("Context menu HTTP body browser preview launched");
+      statusUpdate(
+        decompress
+          ? "Status: Decompressed HTTP body opened in browser"
+          : "Status: HTTP body opened in browser",
+      );
+      writeLogEntry(
+        `Context menu HTTP body browser preview launched${decompressLabel}`,
+      );
     } else {
       const errorMessage =
         result && typeof result === "object" && "error" in result
@@ -7962,6 +8303,33 @@ convertContextButtons.exportPayload.addEventListener(
   "click",
   exportCurrentPayloadFromContextMenu,
 );
+convertContextButtons.exportConvInput.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("input");
+});
+convertContextButtons.exportConvHex.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("hex");
+});
+convertContextButtons.exportConvBinary.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("binary");
+});
+convertContextButtons.exportConvDecimal.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("decimal");
+});
+convertContextButtons.exportConvDecimalInteger.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("decimal-integer");
+});
+convertContextButtons.exportConvAscii.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("ascii");
+});
+convertContextButtons.exportConvBase64.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("base64");
+});
+convertContextButtons.exportConvHashes.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("hashes");
+});
+convertContextButtons.exportConvDecodes.addEventListener("click", () => {
+  exportConvContextTextFromContextMenu("decodes");
+});
 convertContextButtons.saveCookieJar.addEventListener(
   "click",
   saveCookieJarFromContextMenu,
@@ -7970,13 +8338,25 @@ convertContextButtons.httpFileSave.addEventListener(
   "click",
   saveHttpBodyFromContextMenu,
 );
+convertContextButtons.httpFileSaveDecompressed.addEventListener("click", () => {
+  void saveHttpBodyFromContextMenuImpl(true);
+});
 convertContextButtons.httpFileLoad.addEventListener(
   "click",
   loadHttpBodyIntoConvTabFromContextMenu,
 );
+convertContextButtons.httpFileLoadDecompressed.addEventListener("click", () => {
+  void loadHttpBodyIntoConvTabFromContextMenuImpl(true);
+});
 convertContextButtons.httpFilePreview.addEventListener(
   "click",
   previewHttpBodyInBrowserFromContextMenu,
+);
+convertContextButtons.httpFilePreviewDecompressed.addEventListener(
+  "click",
+  () => {
+    void previewHttpBodyInBrowserFromContextMenuImpl(true);
+  },
 );
 convertContextButtons.fileCarveSmb.addEventListener("click", () =>
   carveCurrentStreamToFileFromContextMenu("smb"),

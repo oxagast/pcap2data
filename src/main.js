@@ -442,6 +442,41 @@ ipcMain.handle("save-payload", async (_event, payloadHex) => {
   }
 });
 
+ipcMain.handle("save-text", async (_event, options = {}) => {
+  const text = typeof options?.text === "string" ? options.text : "";
+  if (!text.trim()) {
+    return { success: false, error: "No text data to save" };
+  }
+
+  const dialogTitle =
+    typeof options?.title === "string" && options.title.trim()
+      ? options.title.trim()
+      : "Save Text";
+  const defaultNameRaw =
+    typeof options?.defaultName === "string" && options.defaultName.trim()
+      ? options.defaultName.trim()
+      : "packetsnitch-export.txt";
+  const defaultName = path.basename(defaultNameRaw);
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: dialogTitle,
+    defaultPath: path.join(app.getPath("documents"), defaultName),
+    filters: [
+      { name: "Text Files", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  try {
+    await fs.promises.writeFile(filePath, text, "utf8");
+    return { success: true };
+  } catch (err) {
+    console.error("Text save error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("save-cookie-jar", async (_event, cookieJarText) => {
   if (typeof cookieJarText !== "string" || cookieJarText.trim() === "") {
     return { success: false, error: "No cookie jar data to save" };
