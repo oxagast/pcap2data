@@ -4156,6 +4156,14 @@ function detectDataTypeGuessFromToken(token, candidateScores) {
   if (normalizedToken.length >= 8) {
     addDataTypeGuessCandidate(candidateScores, "Alphanumeric Identifier", 50);
   }
+  // recognize an ip address pattern with  optional port, but only if it doesn't contain letters to avoid false positives on hex strings
+  if (/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/.test(normalizedToken) && !/[A-Za-z]/.test(normalizedToken)) {
+    addDataTypeGuessCandidate(candidateScores, "Network Endpoint", 85);
+  }
+  // reconize a mac address pattern with option delimaters and make sure its wihtin a reasonable length range to avoid false positives on hex strings
+  if (/\b(?:[0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}\b/.test(normalizedToken) && normalizedToken.length <= 20) {
+    addDataTypeGuessCandidate(candidateScores, "MAC Address", 85);
+  }
   if (normalizedToken.length === 4 && /\p{Emoji}/u.test(normalizedToken)) {
     addDataTypeGuessCandidate(candidateScores, "Emoji", 60);
   }
