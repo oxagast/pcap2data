@@ -4149,6 +4149,33 @@ function detectDataTypeGuessFromToken(token, candidateScores) {
         noWhitespace.length % 4 === 0 ? 80 : 50,
       );
     }
+  } else if (normalizedToken.length >= 8) {
+    addDataTypeGuessCandidate(candidateScores, "Alphanumeric Identifier", 50);
+  }
+  else if (normalizedToken.length === 1) {
+    if (/[A-Za-z]/.test(normalizedToken)) {
+      if (/[aeiouAEIOU]/.test(normalizedToken)) {
+        addDataTypeGuessCandidate(candidateScores, "Vowel", 85);
+      } else {
+        addDataTypeGuessCandidate(candidateScores, "Consonant", 85);
+      }
+      if (/[A-Z]/.test(normalizedToken)) {
+        addDataTypeGuessCandidate(candidateScores, "Uppercase Letter", 85);
+      } else {
+        addDataTypeGuessCandidate(candidateScores, "Lowercase Letter", 85);
+      }
+    } else if (/\d/.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Digit", 75);
+    }
+    // add detection for common delimeter characters
+    if (/[:;.,\-_=+\/\\|?<>]/.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Delimiter", 40);
+    }
+    if (/[\s!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(normalizedToken)) {
+      addDataTypeGuessCandidate(candidateScores, "Symbol Character", 65);
+    }
+    addDataTypeGuessCandidate(candidateScores, "Byte", 90);
+    return;
   }
 }
 
@@ -4156,6 +4183,14 @@ function scanAsciiTextForDataTypeGuesses(inputText, candidateScores) {
   const sourceText = String(inputText || "");
   if (!sourceText.trim()) return;
   addStructuredTextTypeGuesses(sourceText, candidateScores);
+
+  const trimmedSourceText = sourceText.trim();
+  // Short standalone values never match the 8+ token scanner below, so
+  // classify them directly instead of returning no guesses.
+  if (trimmedSourceText.length <= 7 && !/\s/.test(trimmedSourceText)) {
+    detectDataTypeGuessFromToken(trimmedSourceText, candidateScores);
+    return;
+  }
 
   const stepSize = Math.max(
     1,
@@ -4184,6 +4219,12 @@ function deriveDataTypeGuesses(rawInput, decodedAsciiInput = "") {
   const normalizedDecoded = String(decodedAsciiInput || "");
   if (normalizedDecoded && normalizedDecoded !== normalizedRaw) {
     scanAsciiTextForDataTypeGuesses(normalizedDecoded, candidateScores);
+  }
+  if (candidateScores.size === 0) {
+    const fallbackToken = normalizedDecoded.trim() || normalizedRaw.trim();
+    if (fallbackToken.length === 1) {
+      detectDataTypeGuessFromToken(fallbackToken, candidateScores);
+    }
   }
   return [...candidateScores.entries()]
     .sort((a, b) => b[1] - a[1])
