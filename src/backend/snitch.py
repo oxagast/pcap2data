@@ -629,7 +629,15 @@ def getNetclass(ip):
     Determine the network class (A, B, C, or Unknown) of an IPv4 address.
     Cached to avoid repeated parsing of the same IP addresses.
     """
-    ipAddressObj = ipaddress.ip_address(ip)
+    try:
+        ipAddressObj = ipaddress.ip_address(ip)
+    except Exception:
+        return "Invalid IP"
+
+    # IPv6 addresses do not map to legacy IPv4 classes.
+    if isinstance(ipAddressObj, ipaddress.IPv6Address):
+        return "IPv6"
+
     # Get the first octet
     firstOctet = int(str(ipAddressObj).split(".")[0])
     # Determine the class
@@ -3139,6 +3147,86 @@ def decodeWanLinkProtocols(p):
     return result
 
 
+def decodeAddressResolutionPacket(p):
+    """
+    Decode ARP/RARP packet fields from a scapy packet.
+    Returns a tuple of (protocolName, sectionDict, srcIp, dstIp) where protocolName
+    is "ARP" or "RARP". Returns None when ARP layer data is unavailable.
+    """
+    arpClass = getattr(scapy, "ARP", None)
+    hasArpLayer = bool(arpClass and p.haslayer(arpClass)) or p.haslayer("ARP")
+    if not hasArpLayer:
+        return None
+
+    arpLayer = p[arpClass] if arpClass and p.haslayer(arpClass) else p["ARP"]
+
+    opMap = {
+        1: "Request",
+        2: "Reply",
+        3: "RARP Request",
+        4: "RARP Reply",
+        8: "InARP Request",
+        9: "InARP Reply",
+    }
+
+    try:
+        opCode = int(getattr(arpLayer, "op", 0))
+    except Exception:
+        opCode = 0
+    opLabel = opMap.get(opCode, f"Opcode {opCode}")
+
+    etherType = None
+    if p.haslayer("Ether"):
+        try:
+            etherType = int(p["Ether"].type)
+        except Exception:
+            etherType = None
+
+    isRarp = opCode in (3, 4) or etherType == 0x8035
+    protocolName = "RARP" if isRarp else "ARP"
+
+    srcIp = str(getattr(arpLayer, "psrc", "0.0.0.0") or "0.0.0.0")
+    dstIp = str(getattr(arpLayer, "pdst", "0.0.0.0") or "0.0.0.0")
+    srcMac = str(getattr(arpLayer, "hwsrc", "N/A") or "N/A")
+    dstMac = str(getattr(arpLayer, "hwdst", "N/A") or "N/A")
+
+    hwTypeVal = int(getattr(arpLayer, "hwtype", 0) or 0)
+    protoTypeVal = int(getattr(arpLayer, "ptype", 0) or 0)
+    hwSizeVal = int(getattr(arpLayer, "hwlen", 0) or 0)
+    protoSizeVal = int(getattr(arpLayer, "plen", 0) or 0)
+
+    section = {
+        "Operation": opLabel,
+        "arp.op": opLabel,
+        "rarp.op": opLabel,
+        "Opcode": opCode,
+        "arp.opcode": opCode,
+        "rarp.opcode": opCode,
+        "Sender MAC": srcMac,
+        "arp.src.mac": srcMac,
+        "rarp.src.mac": srcMac,
+        "Target MAC": dstMac,
+        "arp.dst.mac": dstMac,
+        "rarp.dst.mac": dstMac,
+        "Sender IP": srcIp,
+        "arp.src.ip": srcIp,
+        "rarp.src.ip": srcIp,
+        "Target IP": dstIp,
+        "arp.dst.ip": dstIp,
+        "rarp.dst.ip": dstIp,
+        "Hardware Type": hwTypeVal,
+        "arp.hw.type": hwTypeVal,
+        "Protocol Type": f"0x{protoTypeVal:04x}",
+        "arp.proto.type": f"0x{protoTypeVal:04x}",
+        "Hardware Size": hwSizeVal,
+        "arp.hw.size": hwSizeVal,
+        "Protocol Size": protoSizeVal,
+        "arp.proto.size": protoSizeVal,
+    }
+
+    return protocolName, section, srcIp, dstIp
+
+
 def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     """
     Process a single scapy packet: extract TCP, UDP, or ICMP payload, write the raw
@@ -3153,8 +3241,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), RADIUS (1812/1813/1645/1646),
     WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), Kerberos (88), and
     WAN/link-control protocols (ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP,
-    PPP, LCP, LAP, NCP) are also decoded when layer data is available. ICMP
-    packets are fully supported as a separate transport type.
+    PPP, LCP, LAP, NCP) and ARP/RARP address-resolution frames are also decoded
+    when layer data is available. ICMP packets are fully supported as a separate
+    transport type.
 
     packetIndex is the 0-based position of this packet in the full capture, used as
     the filename index so files from concurrent threads do not collide.
@@ -3170,28 +3259,131 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
     wanLinkSection = decodeWanLinkProtocols(p)
 
-    # Support captures that contain requested link-control protocols without an IP layer.
+    # Decode ARP/RARP packets that do not carry an IP layer.
     if not p.haslayer("IP"):
-        if wanLinkSection is None:
-            return None
+        arpDecoded = decodeAddressResolutionPacket(p)
+        if arpDecoded is not None:
+            protocolName, arpSection, srcIp, dstIp = arpDecoded
+            arpClass = getattr(scapy, "ARP", None)
+            if arpClass and p.haslayer(arpClass):
+                rawPayload = bytes(p[arpClass])
+            elif p.haslayer("ARP"):
+                rawPayload = bytes(p["ARP"])
+            else:
+                rawPayload = bytes(p)
+            if rawPayload is None or len(rawPayload) == 0:
+                return None
+
+            dstPortStr = protocolName.lower()
+            writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
+            try:
+                dataTypeInfo = getDatatypes(
+                    rawPayload,
+                    0,
+                    srcIp,
+                    dstIp,
+                    timeout,
+                    "udp",
+                )
+            except Exception:
+                # Keep ARP/RARP packets even when higher-level trait extraction fails.
+                mimeType = magic.from_buffer(rawPayload, mime=True)
+                dataTypeInfo = {
+                    "MIME Type": mimeType,
+                    "payload.mime": mimeType,
+                    "Decompressed": {"Decompressed": False},
+                    "payload.decompressed": {"Decompressed": False},
+                    "Data Types": ["Unknown data type"],
+                    "Traits": {"Length": len(rawPayload)},
+                }
+            timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+                "%Y-%m-%d %H:%M:%S.%f"
+            )
+            decodedProtocols = [protocolName]
+            packetInfo = {
+                "Packet Processed": int(packetIndex),
+                "Packet Timestamp": timestamp,
+                "packet.timestamp": timestamp,
+                "Protocol": protocolName,
+                "packet.proto": protocolName,
+                "Decoded Protocols": decodedProtocols,
+                "packet.decoded_protocols": decodedProtocols,
+                "Ethernet Frame": {
+                    "MAC Source": srcMacAddr,
+                    "ether.src.mac.addr": srcMacAddr,
+                    "MAC Destination": dstMacAddr,
+                    "ether.dst.mac.addr": dstMacAddr,
+                    "MAC Source Vendor": srcMacVendor,
+                    "ether.src.mac.vendor": srcMacVendor,
+                    "MAC Destination Vendor": dstMacVendor,
+                    "ether.dst.mac.vendor": dstMacVendor,
+                }
+                if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+                else "N/A",
+                "IP": {
+                    "Source IP": srcIp,
+                    "ip.src.addr": srcIp,
+                    "Destination IP": dstIp,
+                    "ip.dst.addr": dstIp,
+                    "IP Checksum": "N/A",
+                    "ip.chksum": "N/A",
+                    "IP layer length": len(rawPayload),
+                    "ip.len": len(rawPayload),
+                },
+                protocolName: arpSection,
+                "Raw data": {
+                    "Payload": {
+                        "Hex Encoded": rawPayload.hex(),
+                        "payload.hex": rawPayload.hex(),
+                        "ASCII Encoded": rawPayload.decode(errors="ignore"),
+                        "payload.ascii": rawPayload.decode(errors="ignore"),
+                    },
+                    "Packet": bytes(p).hex(),
+                    "packet.hex": bytes(p).hex(),
+                    "Payload Length": len(rawPayload),
+                    "payload.len": len(rawPayload),
+                },
+            }
+            if wanLinkSection is not None:
+                packetInfo["Link Control"] = wanLinkSection
+                packetInfo["Decoded Protocols"] = decodedProtocols + list(
+                    wanLinkSection.get("wan.detected", [])
+                )
+                packetInfo["packet.decoded_protocols"] = decodedProtocols + list(
+                    wanLinkSection.get("wan.detected", [])
+                )
+
+            return joinInfo(
+                outputDir,
+                dstPortStr,
+                packetIndex,
+                json.dumps(dataTypeInfo).encode(),
+                json.dumps(packetInfo).encode(),
+                dstIp if dstIp != "0.0.0.0" else srcIp,
+            )
 
         rawPayload = bytes(p.payload) if bytes(p.payload) else bytes(p)
         if rawPayload is None or len(rawPayload) == 0:
             return None
 
-        dstPortStr = "link"
+        protocolName = "LINK" if wanLinkSection is not None else "FRAME"
+        dstPortStr = "link" if protocolName == "LINK" else "frame"
         writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
         mimeType = magic.from_buffer(rawPayload, mime=True)
         timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
             "%Y-%m-%d %H:%M:%S.%f"
         )
-        decodedProtocols = list(wanLinkSection.get("wan.detected", []))
+        decodedProtocols = (
+            list(wanLinkSection.get("wan.detected", []))
+            if wanLinkSection is not None
+            else ["FRAME"]
+        )
         packetInfo = {
             "Packet Processed": int(packetIndex),
             "Packet Timestamp": timestamp,
             "packet.timestamp": timestamp,
-            "Protocol": "LINK",
-            "packet.proto": "LINK",
+            "Protocol": protocolName,
+            "packet.proto": protocolName,
             "Decoded Protocols": decodedProtocols,
             "packet.decoded_protocols": decodedProtocols,
             "Ethernet Frame": {
@@ -3206,7 +3398,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             }
             if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
             else "N/A",
-            "Link Control": wanLinkSection,
             "Raw data": {
                 "Payload": {
                     "Hex Encoded": rawPayload.hex(),
@@ -3220,6 +3411,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 "payload.len": len(rawPayload),
             },
         }
+        if wanLinkSection is not None:
+            packetInfo["Link Control"] = wanLinkSection
         dataTypeInfo = {
             "MIME Type": mimeType,
             "payload.mime": mimeType,
@@ -3240,8 +3433,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     isTcp = p.haslayer("TCP")
     isUdp = p.haslayer("UDP")
     isIcmp = p.haslayer("ICMP")
-    if not isTcp and not isUdp and not isIcmp:
-        return None
 
     if isTcp:
         rawPayload = p["TCP"].payload.original
@@ -3255,13 +3446,20 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPort = p["UDP"].dport
         transportProtocol = "udp"
         dstPortStr = str(dstPort)
-    else:
+    elif isIcmp:
         # ICMP: use the full ICMP layer bytes as the payload
         rawPayload = bytes(p["ICMP"])
         srcPort = 0
         dstPort = 0
         transportProtocol = "icmp"
         dstPortStr = "icmp"
+    else:
+        # Generic IP payload fallback for captures without TCP/UDP/ICMP transport.
+        rawPayload = bytes(p["IP"].payload) if bytes(p["IP"].payload) else bytes(p["IP"])
+        srcPort = 0
+        dstPort = 0
+        transportProtocol = "ip"
+        dstPortStr = "ip"
 
     if (srcPortFilter is None or srcPort == srcPortFilter) and (
         dstPortFilter is None or dstPort == dstPortFilter
@@ -3588,7 +3786,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
                 protocolKey = "UDP"
-            else:
+            elif isIcmp:
                 # ICMP transport section
                 icmpLayer = p["ICMP"]
                 icmpTypeMap = {
@@ -3639,6 +3837,17 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "wire.len": len(p["ICMP"]),
                 }
                 protocolKey = "ICMP"
+            else:
+                ipProtoNum = int(getattr(p["IP"], "proto", 0))
+                transportSection = {
+                    "Source port": int(srcPort),
+                    "Destination port": int(dstPort),
+                    "IP Protocol Number": ipProtoNum,
+                    "ip.proto.num": ipProtoNum,
+                    "Wire length": len(p["IP"]),
+                    "wire.len": len(p["IP"]),
+                }
+                protocolKey = "IP"
 
             packetInfo = {
                 "Packet Processed": int(packetIndex),
@@ -3787,7 +3996,7 @@ def llmBrief(jsonBatch):
 
 def startThreading():
     """
-    Process all TCP, UDP, and ICMP packets from the pre-loaded `packets` list using a
+    Process packets from the pre-loaded `packets` list using a
     ThreadPoolExecutor with chunked processing for reduced overhead.
 
     Rather than re-reading the pcap file in every thread (which was the old behaviour),
@@ -3795,69 +4004,73 @@ def startThreading():
     handles work-stealing, so threads stay busy even if individual packets take different
     amounts of time (e.g. when active-recon network calls vary in latency).
     """
-    if __name__ == "__main__":
-        # Build the list of packet indices that belong to TCP, UDP, or ICMP packets
-        packetIndices = [
-            i
-            for i, p in enumerate(packets)
-            if p.haslayer("TCP") or p.haslayer("UDP") or p.haslayer("ICMP")
-        ]
+    # Always process when called; this function can be invoked from embedded/frozen contexts.
+    # Process all packets; packetLoop decides which protocols are handled.
+    packetIndices = list(range(len(packets)))
 
-        # Chunk packets to reduce thread scheduling overhead
-        chunkSize = max(1, len(packetIndices) // (numWorkerThreads * 4))
-        packetChunks = [
-            packetIndices[i : i + chunkSize]
-            for i in range(0, len(packetIndices), chunkSize)
-        ]
+    # Chunk packets to reduce thread scheduling overhead
+    chunkSize = max(1, len(packetIndices) // (numWorkerThreads * 4))
+    packetChunks = [
+        packetIndices[i : i + chunkSize]
+        for i in range(0, len(packetIndices), chunkSize)
+    ]
 
-        def processChunk(chunk):
-            """Process a chunk of packet indices."""
-            results = []
-            for idx in chunk:
-                if stopEvent.is_set():
-                    break
+    def processChunk(chunk):
+        """Process a chunk of packet indices."""
+        results = []
+        for idx in chunk:
+            if stopEvent.is_set():
+                break
+            try:
                 result = processPacketAtIndex(
                     idx, args.source_port, args.dest_port, args.timeout
                 )
                 if result:
                     results.append(result)
-            return results
+            except Exception as exc:
+                if verbose >= 0:
+                    print(
+                        f"[Worker] Packet index {idx} failed: {exc}",
+                        file=sys.stderr,
+                    )
+                continue
+        return results
 
-        nextSnapshotPacketCount = hostChunkSize
+    nextSnapshotPacketCount = hostChunkSize
 
-        with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
-            taskFutures = {
-                executor.submit(processChunk, chunk): chunk for chunk in packetChunks
-            }
-            for future in as_completed(taskFutures):
-                if stopEvent.is_set():
-                    break
-                try:
-                    future.result()
+    with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
+        taskFutures = {
+            executor.submit(processChunk, chunk): chunk for chunk in packetChunks
+        }
+        for future in as_completed(taskFutures):
+            if stopEvent.is_set():
+                break
+            try:
+                future.result()
 
-                    with allPacketInfoLock:
-                        processedPacketCount = len(allPacketInfo)
-                        allPacketInfoSnapshot = list(allPacketInfo)
+                with allPacketInfoLock:
+                    processedPacketCount = len(allPacketInfo)
+                    allPacketInfoSnapshot = list(allPacketInfo)
 
-                    while processedPacketCount >= nextSnapshotPacketCount:
-                        chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
-                        snapshotPath = writeHostsSnapshot(
-                            outputDir,
-                            allPacketInfoSnapshot,
-                            "",
-                            chunkSnapshotName,
-                        )
-                        print(
-                            f"{progressLinePrefix} path={snapshotPath} processed={nextSnapshotPacketCount} total={totalPackets} final=0",
-                            file=sys.stderr,
-                        )
-                        nextSnapshotPacketCount += hostChunkSize
-                except Exception as exc:
-                    if verbose >= 0:
-                        print(
-                            f"[Worker {future}] Packet {taskFutures[future]} raised an exception: {exc}",
-                            file=sys.stderr,
-                        )
+                while processedPacketCount >= nextSnapshotPacketCount:
+                    chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
+                    snapshotPath = writeHostsSnapshot(
+                        outputDir,
+                        allPacketInfoSnapshot,
+                        "",
+                        chunkSnapshotName,
+                    )
+                    print(
+                        f"{progressLinePrefix} path={snapshotPath} processed={nextSnapshotPacketCount} total={totalPackets} final=0",
+                        file=sys.stderr,
+                    )
+                    nextSnapshotPacketCount += hostChunkSize
+            except Exception as exc:
+                if verbose >= 0:
+                    print(
+                        f"[Worker {future}] Packet {taskFutures[future]} raised an exception: {exc}",
+                        file=sys.stderr,
+                    )
 
 
 parser = argparse.ArgumentParser(
@@ -3997,11 +4210,9 @@ packets = scapy.rdpcap(args.pcap_file)  # type: ignore
 tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
 allPacketCount = len(packets)
 llmBatchSize = 0
-totalPackets = len(
-    [p for p in packets if p.haslayer("TCP") or p.haslayer("UDP") or p.haslayer("ICMP")]
-)
+totalPackets = len(packets)
 if totalPackets == 0:
-    print("[Main] No TCP, UDP, or ICMP packets found in the capture.", file=sys.stderr)
+    print("[Main] No packets found in the capture.", file=sys.stderr)
     sys.exit(1)
 numWorkerThreads = os.cpu_count() or 4
 outputDir = currentDir + "/" + "testcases"
@@ -4062,7 +4273,7 @@ if llmModelName and useLlm:
 print(
     "[Main] Preparing to process "
     + str(totalPackets)
-    + " TCP/UDP/ICMP packets with "
+    + " packets with "
     + str(numWorkerThreads)
     + " threads.",
     file=sys.stderr,

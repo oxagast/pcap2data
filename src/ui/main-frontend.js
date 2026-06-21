@@ -10,6 +10,7 @@ const {
   createTable,
   renderDnsTable,
   renderIcmpTable,
+  renderArpTable,
   renderSnmpTable,
   renderDhcpTable,
   renderNtpTable,
@@ -8345,57 +8346,37 @@ function populateDataTypes(p) {
   languageEl.textContent = "";
   let encodingText = "";
   let languageText = "";
-  // packetsForHost = capturedPackets["Host"][hostFilterEl.value];
-  let charsetText = JSON.parse(
-    JSON.stringify(
-      p[index]["Extra Info"]["Traits"]["Characters"]["Charset"],
-    ),
-  );
-  if (
-    p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"] ==
-    "Unavailable for high entropy data"
-  ) {
-    encodingText = JSON.parse(
-      JSON.stringify(
-        p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"],
-      ),
-    );
+  const packetEntry = p?.[index] || {};
+  const extraInfo = packetEntry["Extra Info"] || {};
+  const traits = extraInfo["Traits"] || {};
+  const characters = traits["Characters"] || {};
+  const serverInfo = traits["Server Info"] || {};
+  const networkData = traits["Network Data"] || {};
+
+  let charsetText = String(characters["Charset"] ?? "Unknown");
+  const encodingData = characters["Encoding"];
+  if (encodingData === "Unavailable for high entropy data") {
+    encodingText = "Unavailable for high entropy data";
+  } else if (encodingData && typeof encodingData === "object") {
+    encodingText = JSON.stringify(encodingData["encoding"] ?? "Unknown");
+    languageText = JSON.stringify(encodingData["language"] ?? "Unknown");
   } else {
-    encodingText = JSON.stringify(
-      p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
-      "encoding"
-      ],
-    );
-    languageText = JSON.stringify(
-      p[index]["Extra Info"]["Traits"]["Characters"]["Encoding"][
-      "language"
-      ],
-    );
+    encodingText = "Unknown";
+    languageText = "Unknown";
   }
 
-  const mimeTypeText = JSON.parse(
-    JSON.stringify(p[index]["Extra Info"]["MIME Type"]),
-  );
-  let dataItems = JSON.parse(
-    JSON.stringify(p[index]["Extra Info"]["Data Types"]),
-  );
+  const mimeTypeText = String(extraInfo["MIME Type"] ?? "Unknown");
+  let dataItems = Array.isArray(extraInfo["Data Types"])
+    ? [...extraInfo["Data Types"]]
+    : [];
   let sslDetails = "";
   if (
-    p[index]["Extra Info"]["Traits"]["Server Info"][
-    "Encryption Data"
-    ] != "N/A" &&
-    p[index]["Extra Info"]["Traits"]["Server Info"][
-    "Encryption Data"
-    ] != undefined
+    serverInfo["Encryption Data"] != "N/A" &&
+    serverInfo["Encryption Data"] != undefined
   ) {
-    sslDetails =
-      p[index]["Extra Info"]["Traits"]["Server Info"][
-      "Encryption Data"
-      ]["SSL Version"];
+    sslDetails = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Unknown";
     const protoName =
-      p[index]["Extra Info"]["Traits"]["Network Data"][
-      "Port Protcol"
-      ];
+      networkData["Port Protocol"] ?? networkData["Port Protcol"] ?? "Unknown";
     dataItems = [];
     dataItems.push(sslDetails + " encrypted stream");
     dataItems.push(protoName + " protocol data");
@@ -8414,7 +8395,7 @@ function populateDataTypes(p) {
   }
   dataItems.forEach((item) => {
     const listItem = document.createElement("li");
-    listItem.textContent = item;
+    listItem.textContent = String(item ?? "Unknown");
     typesListEl.appendChild(listItem);
   });
 }
@@ -8544,13 +8525,19 @@ function infoPanel(pk) {
   updateCurrentPacketCounters(pk, {
     isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
   });
-  let packetInfoData = p["Packet Info"];
-  let extraInfoData = p["Extra Info"];
-  let packetTimestamp = packetInfoData["Packet Timestamp"];
-  let ipChecksum = packetInfoData["IP"]["IP Checksum"];
+  let packetInfoData = p["Packet Info"] || {};
+  let extraInfoData = p["Extra Info"] || {};
+  const ipData = packetInfoData["IP"] || {};
+  const traitsData = extraInfoData["Traits"] || {};
+  const networkData = traitsData["Network Data"] || {};
+  const serverInfo = traitsData["Server Info"] || {};
+  const srcLocation = networkData?.["Source IP"]?.["Location"] || {};
+  const dstLocation = networkData?.["Destination IP"]?.["Location"] || {};
+  let packetTimestamp = packetInfoData["Packet Timestamp"] || "N/A";
+  let ipChecksum = ipData["IP Checksum"] ?? "N/A";
 
   // Determine transport protocol (TCP or UDP); fall back to TCP for older captures
-  const protocol = packetInfoData["Protocol"] || "TCP";
+  const protocol = packetInfoData["Protocol"] || "Unknown";
   const transportData = packetInfoData[protocol] || {};
 
   const transportChecksum =
@@ -8575,11 +8562,11 @@ function infoPanel(pk) {
       : "N/A";
 
   const sourceIpPort =
-    packetInfoData["IP"]["Source IP"] +
+    (ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown") +
     ":" +
     (transportData["Source port"] ?? "?");
   const destIpPort =
-    packetInfoData["IP"]["Destination IP"] +
+    (ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown") +
     ":" +
     (transportData["Destination port"] ?? "?");
   const etherFrame =
@@ -8591,34 +8578,28 @@ function infoPanel(pk) {
   const dstMac = etherFrame["MAC Destination"] ?? "N/A";
   const srcMacVendor = etherFrame["MAC Source Vendor"] ?? "N/A";
   const dstMacVendor = etherFrame["MAC Destination Vendor"] ?? "N/A";
-  const ipLayerLen = packetInfoData["IP"]["IP layer length"];
-  const wireLen = transportData["Wire length"];
-  const payloadLen = packetInfoData["Raw data"]["Payload Length"];
+  const ipLayerLen = ipData["IP layer length"] ?? "N/A";
+  const wireLen = transportData["Wire length"] ?? "N/A";
+  const payloadLen = packetInfoData?.["Raw data"]?.["Payload Length"] ?? "N/A";
   let sslCert = "";
   let sslVersion = "";
   let sslAlgos = "";
   if (
-    extraInfoData["Traits"]["Server Info"]["Encryption Data"] == "N/A" ||
-    extraInfoData["Traits"]["Server Info"].hasOwnProperty("Encryption Data") ==
-    false
+    serverInfo["Encryption Data"] == "N/A" ||
+    serverInfo.hasOwnProperty("Encryption Data") == false
   ) {
     sslCert = "Not encrypted";
     sslVersion = "Not encrypted";
     sslAlgos = "";
   } else {
-    sslCert =
-      extraInfoData["Traits"]["Server Info"]["Encryption Data"]["SSL Cert"] ??
-      "Not available";
-    sslVersion =
-      extraInfoData["Traits"]["Server Info"]["Encryption Data"][
-      "SSL Version"
-      ] ?? "Not available";
+    sslCert = serverInfo["Encryption Data"]?.["SSL Cert"] ?? "Not available";
+    sslVersion = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Not available";
     sslAlgos =
-      extraInfoData["Traits"]["Server Info"]["Encryption Data"][
-        "Encrypted With"
-      ].join("<br>Extra algo info: ") ?? "No algorithm information available";
+      serverInfo["Encryption Data"]?.["Encrypted With"]?.join(
+        "<br>Extra algo info: ",
+      ) ?? "No algorithm information available";
   }
-  const isDecompressed = extraInfoData["Decompressed"]["Decompressed"];
+  const isDecompressed = extraInfoData?.["Decompressed"]?.["Decompressed"];
   function removeIps(ipList) {
     const ipRegex =
       /\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/;
@@ -8627,37 +8608,33 @@ function infoPanel(pk) {
 
   let dnsHostsHtml;
   if (
-    extraInfoData["Traits"]["Network Data"]["Hostnames"]["Hostnames"] ==
-    undefined
+    networkData?.["Hostnames"]?.["Hostnames"] == undefined
   ) {
     dnsHostsHtml = "localhost";
   } else {
     dnsHostsHtml =
       "localhost<br>" +
-      extraInfoData["Traits"]["Network Data"]["Hostnames"]["Hostnames"].join(
+      networkData["Hostnames"]["Hostnames"].join(
         "<br>",
       );
   }
   const filteredDnsHosts = removeIps(dnsHostsHtml.split("<br>")).join("<br>");
   dnsHostsHtml = filteredDnsHosts == "" ? "localhost" : filteredDnsHosts;
 
-  const pageTitle = extraInfoData["Traits"]["Server Info"]["Page Title"];
-  const isEncrypted = extraInfoData["Traits"]["Server Info"]["Encrypted"];
-  const protoName =
-    extraInfoData["Traits"]["Network Data"]["Port Protocol"] ??
-    extraInfoData["Traits"]["Network Data"]["Port Protcol"];
-  const protoDescription =
-    extraInfoData["Traits"]["Network Data"]["Port Description"];
-  const srcNetClass =
-    extraInfoData["Traits"]["Network Data"]["Source IP"]["Class"];
-  const dstNetClass =
-    extraInfoData["Traits"]["Network Data"]["Destination IP"]["Class"];
+  const pageTitle = serverInfo["Page Title"];
+  const isEncrypted = serverInfo["Encrypted"];
+  const protoName = networkData["Port Protocol"] ?? networkData["Port Protcol"];
+  const protoDescription = networkData["Port Description"];
+  const srcNetClass = networkData?.["Source IP"]?.["Class"] ?? "N/A";
+  const dstNetClass = networkData?.["Destination IP"]?.["Class"] ?? "N/A";
   document.getElementById("sidedatatable").textContent = "";
   document.getElementById("protoInfoSrc").textContent = "Source";
   document.getElementById("protoInfoDest").textContent = "Destination";
   document.getElementById("comp").textContent = "Unknown";
   if (isDecompressed == false || isDecompressed == undefined) {
-    const types = extraInfoData["Data Types"];
+    const types = Array.isArray(extraInfoData["Data Types"])
+      ? extraInfoData["Data Types"]
+      : [];
 
     types.forEach((type) => {
       if (type.includes("Zlib") || type.includes("zlib")) {
@@ -8725,11 +8702,15 @@ function infoPanel(pk) {
   if (packetInfoData["Ethernet Frame"]) {
     addProtocolUsed("Link", "Ethernet");
   }
-  if (packetInfoData["IP"]) {
-    addProtocolUsed("Network", "IP");
+  if (protocol === "ARP" || protocol === "RARP") {
+    addProtocolUsed("Network", protocol, transportData?.["Operation"]);
+  } else {
+    if (packetInfoData["IP"]) {
+      addProtocolUsed("Network", "IP");
+    }
+    addProtocolUsed("Transport", protocol);
+    addProtocolUsed("Application", protoName, protoDescription);
   }
-  addProtocolUsed("Transport", protocol);
-  addProtocolUsed("Application", protoName, protoDescription);
 
   const sslVersionLabel =
     extraInfoData?.["Traits"]?.["Server Info"]?.["Encryption Data"]?.[
@@ -8773,6 +8754,9 @@ function infoPanel(pk) {
 
   // ICMP info table (shown for ICMP packets)
   renderIcmpTable(protocol, transportData);
+
+  // ARP/RARP info table (shown for ARP and RARP packets)
+  renderArpTable(protocol, transportData);
 
   // SNMP info table (shown for SNMP packets on port 161/162)
   renderSnmpTable(transportData);
@@ -8870,7 +8854,7 @@ function infoPanel(pk) {
     { name: "Network Class", value: dstNetClass },
   ];
   createTable(dstIpData, ipTableHeaders, "protoInfoDest");
-  const entropyValue = extraInfoData["Traits"]["Shannon Entropy"];
+  const entropyValue = Number(traitsData["Shannon Entropy"] ?? 0);
   document.getElementById("timestamp").textContent =
     "Timestamp " + packetTimestamp;
 
@@ -8922,8 +8906,7 @@ function infoPanel(pk) {
     cell.style.width = "23%";
   });
   if (
-    extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"]["City"] ==
-    undefined
+    srcLocation["City"] == undefined
   ) {
     const localnetData = [{ name: "Location", value: "Localnet" }];
     const localnetHeaders = ["Source Host", "Location"];
@@ -8933,32 +8916,22 @@ function infoPanel(pk) {
       {
         name: "Country",
         value:
-          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-          "Country"
-          ],
+          srcLocation["Country"] ?? "N/A",
       },
       {
         name: "City",
-        value:
-          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-          "City"
-          ],
+        value: srcLocation["City"] ?? "N/A",
       },
       {
         name: "Timezone",
-        value:
-          extraInfoData["Traits"]["Network Data"]["Source IP"]["Location"][
-          "Time Zone"
-          ],
+        value: srcLocation["Time Zone"] ?? "N/A",
       },
     ];
     const srcLocHeaders = ["Source Host", "Location"];
     createTable(srcLocData, srcLocHeaders, "sideloctable");
   }
   if (
-    extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-    "City"
-    ] == undefined
+    dstLocation["City"] == undefined
   ) {
     const localnetData = [{ name: "Location", value: "Localnet" }];
     const localnetHeaders = ["Destination Host", "Location"];
@@ -8968,24 +8941,16 @@ function infoPanel(pk) {
       {
         name: "Country",
         value:
-          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-          "Country"
-          ],
+          dstLocation["Country"] ?? "N/A",
       },
       {
         name: "City",
-        value:
-          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-          "City"
-          ],
+        value: dstLocation["City"] ?? "N/A",
       },
       {
         name: "Timezone",
 
-        value:
-          extraInfoData["Traits"]["Network Data"]["Destination IP"]["Location"][
-          "Time Zone"
-          ],
+        value: dstLocation["Time Zone"] ?? "N/A",
       },
     ];
     const dstLocHeaders = ["Destination Host", "Location"];

@@ -118,6 +118,21 @@ function renderIcmpTable(protocol, transportData) {
   createTable(icmpRows, ['ICMP Field', 'Value'], 'sidedatatable');
 }
 
+function renderArpTable(protocol, transportData) {
+  if (protocol !== 'ARP' && protocol !== 'RARP') return;
+  const arpRows = [
+    { name: 'Operation', value: transportData['Operation'] ?? '—' },
+    { name: 'Opcode', value: transportData['Opcode'] ?? '—' },
+    { name: 'Sender MAC', value: transportData['Sender MAC'] ?? '—' },
+    { name: 'Sender IP', value: transportData['Sender IP'] ?? '—' },
+    { name: 'Target MAC', value: transportData['Target MAC'] ?? '—' },
+    { name: 'Target IP', value: transportData['Target IP'] ?? '—' },
+    { name: 'Hardware Type', value: transportData['Hardware Type'] ?? '—' },
+    { name: 'Protocol Type', value: transportData['Protocol Type'] ?? '—' },
+  ];
+  createTable(arpRows, [`${protocol} Field`, 'Value'], 'sidedatatable');
+}
+
 function renderSnmpTable(transportData) {
   const snmpData = transportData['SNMP'];
   if (!snmpData) return;
@@ -607,6 +622,7 @@ module.exports = {
   createTable,
   renderDnsTable,
   renderIcmpTable,
+  renderArpTable,
   renderSnmpTable,
   renderDhcpTable,
   renderNtpTable,

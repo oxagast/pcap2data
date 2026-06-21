@@ -29,6 +29,7 @@ function buildCaptureStats(capturedPackets) {
   const linkProtocols = new Set();
   const transportProtocols = new Set();
   const decodedProtocols = new Set();
+  const arpOperations = new Set();
   const hosts = new Set();
   const ports = new Set();
   const macVendors = new Set();
@@ -110,6 +111,12 @@ function buildCaptureStats(capturedPackets) {
           const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
           if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
         });
+      }
+
+      if (tp === "ARP" || tp === "RARP") {
+        const arpData = pi?.[tp] || {};
+        const arpOp = normalizeStatsTextValue(arpData["Operation"]);
+        if (arpOp) arpOperations.add(arpOp);
       }
 
       const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
@@ -197,6 +204,7 @@ function buildCaptureStats(capturedPackets) {
     linkProtocols: [...linkProtocols].sort(),
     transportProtocols: [...transportProtocols].sort(),
     decodedProtocols: [...decodedProtocols].sort(),
+    arpOperations: [...arpOperations].sort(),
     hosts: [...hosts].sort(),
     ports: [...ports].sort((a, b) => a - b),
     macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
@@ -380,6 +388,15 @@ function createStatsPanel(options) {
       onQuery: applyStatsQuery,
     });
     if (decodedProtoSec) content.appendChild(decodedProtoSec);
+
+    const arpOpSec = makeStatsSection({
+      documentRef,
+      title: "ARP/RARP Operations",
+      items: stats.arpOperations,
+      queryBuilder: (v) => `arp.op: ${v.toLowerCase()}`,
+      onQuery: applyStatsQuery,
+    });
+    if (arpOpSec) content.appendChild(arpOpSec);
 
     const hostSec = makeStatsSection({
       documentRef,

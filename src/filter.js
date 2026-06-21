@@ -175,6 +175,18 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
 
       return [...decodedValues];
     }
+    case 'arp-op':
+      return searchFullKey(packetItem, 'arp.op') ?? searchFullKey(packetItem, 'rarp.op');
+    case 'rarp-op':
+      return searchFullKey(packetItem, 'rarp.op') ?? searchFullKey(packetItem, 'arp.op');
+    case 'arp-src-ip':
+      return searchFullKey(packetItem, 'arp.src.ip') ?? searchFullKey(packetItem, 'rarp.src.ip');
+    case 'arp-dst-ip':
+      return searchFullKey(packetItem, 'arp.dst.ip') ?? searchFullKey(packetItem, 'rarp.dst.ip');
+    case 'arp-src-mac':
+      return searchFullKey(packetItem, 'arp.src.mac') ?? searchFullKey(packetItem, 'rarp.src.mac');
+    case 'arp-dst-mac':
+      return searchFullKey(packetItem, 'arp.dst.mac') ?? searchFullKey(packetItem, 'rarp.dst.mac');
     default:
       return undefined;
   }
@@ -225,7 +237,7 @@ function filterChunk(data, filter) {
 
       if (
         !filterModifier &&
-        ['dns-qname', 'eth-src-vendor', 'mime-type', 'decoded-proto'].includes(normalizedFilterKey)
+        ['dns-qname', 'eth-src-vendor', 'mime-type', 'decoded-proto', 'arp-op', 'rarp-op'].includes(normalizedFilterKey)
       ) {
         const textValues = Array.isArray(fieldValue) ? fieldValue : [fieldValue];
         matched = textValues.some(
