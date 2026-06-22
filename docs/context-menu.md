@@ -145,6 +145,7 @@ Shown when at least one carve target is available for the current packet or stre
 | **HTTP body to file (decompressed)** | Decompress the HTTP body first, then save the resulting bytes to a file.                     |
 | **SMB file to disk**    | Detect files transferred in the current SMB stream, let you pick one, then save it as binary.  |
 | **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
+| **FTP file to disk**    | Detect file transfer bytes in FTP streams, then save the carved result as binary.              |
 
 ---
 

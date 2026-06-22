@@ -1250,7 +1250,21 @@ function isBookmarkFilterExpression(expression) {
 function isRetransmissionFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
-  return normalizeLocalFilterKey(parts.filterKey) === "tcp.retransmission";
+  const normalizedFilterKey = normalizeLocalFilterKey(parts.filterKey);
+  return (
+    normalizedFilterKey === "tcp-retransmission" ||
+    normalizedFilterKey === "tcp-stream-retransmission"
+  );
+}
+
+function isOutOfOrderFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts?.filterKey) return false;
+  const normalizedFilterKey = normalizeLocalFilterKey(parts.filterKey);
+  return (
+    normalizedFilterKey === "tcp-badorder" ||
+    normalizedFilterKey === "tcp-stream-badorder"
+  );
 }
 
 function parseBookmarkFilterBool(rawValue) {
@@ -1265,6 +1279,39 @@ function parseRetransmissionFilterBool(rawValue) {
   if (["true", "1", "yes", "y"].includes(normalized)) return true;
   if (["false", "0", "no", "n"].includes(normalized)) return false;
   return null;
+}
+
+function rebuildTcpStreamFilterIndexes() {
+  retransmissionList = [];
+  outOfOrderList = [];
+
+  const hostMap =
+    capturedPackets && typeof capturedPackets["Host"] === "object"
+      ? capturedPackets["Host"]
+      : {};
+  const streamPacketsByKey = new Map();
+
+  Object.keys(hostMap).forEach((host) => {
+    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+    hostPackets.forEach((packet) => {
+      const packetInfo = packet?.["Packet Info"];
+      const protocol = String(packetInfo?.["Protocol"] || "").toUpperCase();
+      if (protocol !== "TCP") return;
+
+      const streamKey = buildBidirectionalStreamKey(packetInfo);
+      if (!streamKey) return;
+
+      if (!streamPacketsByKey.has(streamKey)) {
+        streamPacketsByKey.set(streamKey, []);
+      }
+      streamPacketsByKey.get(streamKey).push(packet);
+    });
+  });
+
+  streamPacketsByKey.forEach((streamPackets) => {
+    const sortedStreamPackets = sortPacketsByOwnStreamOrder([...streamPackets]);
+    getTcpStreamArrivalStatusByPacketKey(sortedStreamPackets);
+  });
 }
 
 function evaluateBookmarkFilterExpression(expression) {
@@ -1309,6 +1356,7 @@ function evaluateRetransmissionFilterExpression(expression) {
     return [];
   }
 
+  rebuildTcpStreamFilterIndexes();
   const retransmissionSet = new Set(retransmissionList);
   const allPacketKeys = getAllPacketKeysForFiltering();
   return allPacketKeys.filter((packetKey) => {
@@ -1317,6 +1365,33 @@ function evaluateRetransmissionFilterExpression(expression) {
       return isRetransmission !== expectedRetransmission;
     }
     return isRetransmission === expectedRetransmission;
+  });
+}
+
+function evaluateOutOfOrderFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts) return [];
+  const comparisonOps = [">=", "<=", ">", "<", "==", "!="];
+  const filterModifier = comparisonOps.find((modifier) =>
+    parts.filterValue.includes(modifier),
+  );
+  const rawFilterValue = filterModifier
+    ? parts.filterValue.replace(filterModifier, "").trim()
+    : parts.filterValue;
+  const expectedOutOfOrder = parseRetransmissionFilterBool(rawFilterValue);
+  if (expectedOutOfOrder === null) {
+    return [];
+  }
+
+  rebuildTcpStreamFilterIndexes();
+  const outOfOrderSet = new Set(outOfOrderList);
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  return allPacketKeys.filter((packetKey) => {
+    const isOutOfOrder = outOfOrderSet.has(packetKey);
+    if (filterModifier === "!=") {
+      return isOutOfOrder !== expectedOutOfOrder;
+    }
+    return isOutOfOrder === expectedOutOfOrder;
   });
 }
 
@@ -1529,6 +1604,9 @@ async function evaluateFilterExpressionToPacketKeys(expression) {
   }
   if (isRetransmissionFilterExpression(expression)) {
     return evaluateRetransmissionFilterExpression(expression);
+  }
+  if (isOutOfOrderFilterExpression(expression)) {
+    return evaluateOutOfOrderFilterExpression(expression);
   }
   if (!window.captureapi) {
     return [];
@@ -5414,6 +5492,7 @@ const convertContextButtons = {
   ),
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
+  fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
   followStreamConvDecompress: getCachedElement("ctx-follow-stream-conv-decompress"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
@@ -6045,8 +6124,12 @@ function showConvertContextMenu(
     "nfs",
     activeContextPacket,
   );
+  const canCarveFtpStream = canCarveCurrentStreamForProtocol(
+    "ftp",
+    activeContextPacket,
+  );
   const hasFileCarveActions =
-    hasHttpBody || canCarveSmbStream || canCarveNfsStream;
+    hasHttpBody || canCarveSmbStream || canCarveNfsStream || canCarveFtpStream;
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
     : "none";
@@ -6107,6 +6190,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.fileCarveNfs.style.display = canCarveNfsStream
+    ? "block"
+    : "none";
+  convertContextButtons.fileCarveFtp.style.display = canCarveFtpStream
     ? "block"
     : "none";
 
@@ -6938,14 +7024,14 @@ function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
     let label = "In-order TCP segment";
     if (isRetransmission && isOutOfOrder) {
       label = "Retransmission (out-of-order arrival)";
-      retransmissionList.push(currentPacketKey);
-      outOfOrderList.push(currentPacketKey);
+      retransmissionList.push(packetKey);
+      outOfOrderList.push(packetKey);
     } else if (isRetransmission) {
       label = "Retransmission";
-      retransmissionList.push(currentPacketKey);
+      retransmissionList.push(packetKey);
     } else if (isOutOfOrder) {
       label = "Out-of-order arrival";
-      outOfOrderList.push(currentPacketKey);
+      outOfOrderList.push(packetKey);
     }
     statusByPacketKey.set(packetKey, {
       label,
@@ -7373,10 +7459,313 @@ function extractNfsFileCandidates(streamPackets) {
   return candidates;
 }
 
-function buildFileCarveCandidatesForProtocol(protocolName, streamPackets) {
+function parseFtpActiveModeDataPort(argument) {
+  const value = String(argument || "").trim();
+  if (!value) return null;
+
+  const commaMatch = value.match(
+    /^(\d{1,3})(?:,(\d{1,3})){5}$/,
+  );
+  if (commaMatch) {
+    const parts = value.split(",").map((part) => Number.parseInt(part, 10));
+    if (parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+      const port = parts[4] * 256 + parts[5];
+      if (port >= 1 && port <= 65535) return port;
+    }
+  }
+
+  // EPRT usually looks like: |1|192.168.1.10|59231|
+  const eprtMatch = value.match(/^\|[^|]*\|[^|]*\|(\d{1,5})\|$/);
+  if (eprtMatch) {
+    const port = Number.parseInt(eprtMatch[1], 10);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) return port;
+  }
+
+  return null;
+}
+
+function parseFtpPassiveModeDataPort(message) {
+  const text = String(message || "").trim();
+  if (!text) return null;
+
+  // 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2)
+  const passiveMatch = text.match(/\((\d{1,3}(?:,\d{1,3}){5})\)/);
+  if (passiveMatch) {
+    const parts = passiveMatch[1]
+      .split(",")
+      .map((part) => Number.parseInt(part, 10));
+    if (parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+      const port = parts[4] * 256 + parts[5];
+      if (port >= 1 && port <= 65535) return port;
+    }
+  }
+
+  // 229 Entering Extended Passive Mode (|||6446|)
+  const epsvMatch = text.match(/\(\|\|\|(\d{1,5})\|\)/);
+  if (epsvMatch) {
+    const port = Number.parseInt(epsvMatch[1], 10);
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) return port;
+  }
+
+  return null;
+}
+
+function getFtpControlRolesFromStreamTuple(streamTuple) {
+  if (!streamTuple) return { clientIp: "", serverIp: "" };
+  const srcPort = Number(streamTuple.srcPort);
+  const dstPort = Number(streamTuple.dstPort);
+  if (dstPort === 21 || dstPort === 20) {
+    return { clientIp: streamTuple.srcIp, serverIp: streamTuple.dstIp };
+  }
+  if (srcPort === 21 || srcPort === 20) {
+    return { clientIp: streamTuple.dstIp, serverIp: streamTuple.srcIp };
+  }
+  return { clientIp: "", serverIp: "" };
+}
+
+function buildFtpCandidateFromDataStream(
+  streamPackets,
+  {
+    transferCommand = "",
+    transferName = "",
+    clientIp = "",
+    serverIp = "",
+  } = {},
+) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) return null;
+
+  const wantsServerToClient = ["RETR", "LIST", "NLST"].includes(transferCommand);
+  const wantsClientToServer = ["STOR", "APPE"].includes(transferCommand);
+  let preferredDirection = "";
+  if (wantsServerToClient && clientIp && serverIp) {
+    preferredDirection = `${serverIp}->${clientIp}`;
+  } else if (wantsClientToServer && clientIp && serverIp) {
+    preferredDirection = `${clientIp}->${serverIp}`;
+  }
+
+  let forwardHex = "";
+  let reverseHex = "";
+  let forwardBytes = 0;
+  let reverseBytes = 0;
+
+  const baseTuple = getStreamTupleForPacket(streamPackets[0]);
+  if (!baseTuple) return null;
+  const forwardDirection = `${baseTuple.srcIp}->${baseTuple.dstIp}`;
+  const reverseDirection = `${baseTuple.dstIp}->${baseTuple.srcIp}`;
+
+  streamPackets.forEach((packet) => {
+    const payloadHex = getPacketPayloadHex(packet);
+    if (!payloadHex) return;
+    const tuple = getStreamTupleForPacket(packet);
+    if (!tuple) return;
+    const packetDirection = `${tuple.srcIp}->${tuple.dstIp}`;
+    if (packetDirection === forwardDirection) {
+      forwardHex += payloadHex;
+      forwardBytes += payloadHex.length / 2;
+      return;
+    }
+    if (packetDirection === reverseDirection) {
+      reverseHex += payloadHex;
+      reverseBytes += payloadHex.length / 2;
+    }
+  });
+
+  if (!forwardHex && !reverseHex) return null;
+
+  let selectedHex = "";
+  if (preferredDirection && preferredDirection === forwardDirection && forwardHex) {
+    selectedHex = forwardHex;
+  } else if (
+    preferredDirection &&
+    preferredDirection === reverseDirection &&
+    reverseHex
+  ) {
+    selectedHex = reverseHex;
+  } else {
+    selectedHex = forwardBytes >= reverseBytes ? forwardHex : reverseHex;
+  }
+  if (!selectedHex) return null;
+
+  let bytes;
+  try {
+    bytes = parseDataToolsInput("hex", selectedHex);
+  } catch {
+    return null;
+  }
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
+  const safeName = sanitizeCarveFilename(transferName);
+  const transferPrefix = transferCommand
+    ? `ftp-${transferCommand.toLowerCase()}`
+    : "ftp-transfer";
+  const fileName = safeName || `${transferPrefix}.bin`;
+  return {
+    label: `${fileName} (${bytes.length} bytes)`,
+    fileName,
+    bytes,
+  };
+}
+
+function extractFtpFileCandidates(streamPackets, contextPacket = null) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) return [];
+
+  let hasControlMetadata = false;
+  let transferCommand = "";
+  let transferName = "";
+  let transferTimestamp = null;
+  const candidateDataPorts = new Set();
+
+  streamPackets.forEach((packet) => {
+    const transportData = getPacketTransportData(packet);
+    const ftpData = transportData?.["FTP"];
+    if (!ftpData || typeof ftpData !== "object") return;
+    hasControlMetadata = true;
+
+    const ftpType = String(ftpData["Type"] || "").trim().toLowerCase();
+    if (ftpType === "command") {
+      const command = String(ftpData["Command"] || "")
+        .trim()
+        .toUpperCase();
+      const argument = String(ftpData["Argument"] || "").trim();
+
+      if (command === "PORT" || command === "EPRT") {
+        const activePort = parseFtpActiveModeDataPort(argument);
+        if (activePort) candidateDataPorts.add(activePort);
+      }
+
+      if (["RETR", "STOR", "APPE", "LIST", "NLST"].includes(command)) {
+        transferCommand = command;
+        transferName = command === "LIST" || command === "NLST" ? "" : argument;
+        const packetTs = parsePacketTimestampMs(packet);
+        transferTimestamp = Number.isFinite(packetTs) ? packetTs : transferTimestamp;
+      }
+      return;
+    }
+
+    if (ftpType === "response") {
+      const statusCode = String(ftpData["Status Code"] || "").trim();
+      if (statusCode === "227" || statusCode === "229") {
+        const passivePort = parseFtpPassiveModeDataPort(ftpData["Message"]);
+        if (passivePort) candidateDataPorts.add(passivePort);
+      }
+    }
+  });
+
+  if (!hasControlMetadata) {
+    const tuple = getStreamTupleForPacket(contextPacket || streamPackets[0]);
+    const srcPort = Number(tuple?.srcPort);
+    const dstPort = Number(tuple?.dstPort);
+    const streamLooksFtpData =
+      srcPort === 20 ||
+      dstPort === 20 ||
+      streamPackets.some((packet) => {
+        const protocolTokens = collectPacketProtocolTokens(packet);
+        return protocolTokens.includes("FTP") || protocolTokens.includes("FTPDATA");
+      });
+    if (!streamLooksFtpData) return [];
+    const directCandidate = buildFtpCandidateFromDataStream(streamPackets);
+    return directCandidate ? [directCandidate] : [];
+  }
+
+  if (!transferCommand) return [];
+
+  const controlTuple = getStreamTupleForPacket(contextPacket || streamPackets[0]);
+  const { clientIp, serverIp } = getFtpControlRolesFromStreamTuple(controlTuple);
+  if (!clientIp || !serverIp) return [];
+
+  const controlStreamKey = buildBidirectionalStreamKey(
+    (contextPacket || streamPackets[0])?.["Packet Info"] || {},
+  );
+  const allPackets = getAllPacketsForHostNavigation();
+  const streamMap = new Map();
+
+  allPackets.forEach((packet) => {
+    const packetInfo = packet?.["Packet Info"];
+    const tuple = getStreamTupleForPacket(packet);
+    if (!packetInfo || !tuple) return;
+    if (String(packetInfo["Protocol"] || "").toUpperCase() !== "TCP") return;
+
+    const hasSameEndpoints =
+      (tuple.srcIp === clientIp && tuple.dstIp === serverIp) ||
+      (tuple.srcIp === serverIp && tuple.dstIp === clientIp);
+    if (!hasSameEndpoints) return;
+
+    const streamKey = buildBidirectionalStreamKey(packetInfo);
+    if (!streamKey || streamKey === controlStreamKey) return;
+
+    if (!streamMap.has(streamKey)) {
+      streamMap.set(streamKey, []);
+    }
+    streamMap.get(streamKey).push(packet);
+  });
+
+  let bestStreamPackets = [];
+  let bestScore = -1;
+  streamMap.forEach((packets) => {
+    if (!Array.isArray(packets) || packets.length === 0) return;
+    packets.sort((left, right) => comparePacketsChronologically(left, right));
+
+    const firstTs = parsePacketTimestampMs(packets[0]);
+    if (
+      Number.isFinite(transferTimestamp) &&
+      Number.isFinite(firstTs) &&
+      firstTs < transferTimestamp - 2000
+    ) {
+      return;
+    }
+
+    let hasControlPort = false;
+    const observedPorts = new Set();
+    let totalPayloadBytes = 0;
+    packets.forEach((packet) => {
+      const tuple = getStreamTupleForPacket(packet);
+      const payloadHex = getPacketPayloadHex(packet);
+      if (tuple) {
+        const srcPort = Number(tuple.srcPort);
+        const dstPort = Number(tuple.dstPort);
+        if (Number.isInteger(srcPort)) observedPorts.add(srcPort);
+        if (Number.isInteger(dstPort)) observedPorts.add(dstPort);
+        if (srcPort === 21 || dstPort === 21) hasControlPort = true;
+      }
+      if (payloadHex) totalPayloadBytes += payloadHex.length / 2;
+    });
+
+    if (hasControlPort || totalPayloadBytes <= 0) return;
+    if (candidateDataPorts.size > 0) {
+      const matchedPort = Array.from(observedPorts).some((port) =>
+        candidateDataPorts.has(port),
+      );
+      if (!matchedPort) return;
+    }
+
+    const score = totalPayloadBytes;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStreamPackets = packets;
+    }
+  });
+
+  if (!bestStreamPackets.length) return [];
+  const carvedCandidate = buildFtpCandidateFromDataStream(bestStreamPackets, {
+    transferCommand,
+    transferName,
+    clientIp,
+    serverIp,
+  });
+  return carvedCandidate ? [carvedCandidate] : [];
+}
+
+function buildFileCarveCandidatesForProtocol(
+  protocolName,
+  streamPackets,
+  packet = null,
+) {
   const normalized = String(protocolName || "").toLowerCase().trim();
   if (normalized === "smb") return extractSmbFileCandidates(streamPackets);
   if (normalized === "nfs") return extractNfsFileCandidates(streamPackets);
+  if (normalized === "ftp") {
+    return extractFtpFileCandidates(streamPackets, packet);
+  }
   return [];
 }
 
@@ -7388,6 +7777,7 @@ function canCarveCurrentStreamForProtocol(protocolName, packet = null) {
   const candidates = buildFileCarveCandidatesForProtocol(
     normalized,
     streamPackets,
+    packet,
   );
   return candidates.length > 0;
 }
@@ -7442,6 +7832,7 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
   const candidates = buildFileCarveCandidatesForProtocol(
     normalized,
     hydratedStreamPackets,
+    contextPacket,
   );
   if (!candidates.length) {
     statusUpdate(`Status: No ${protocolLabel} file data found in this stream`);
@@ -8971,6 +9362,9 @@ convertContextButtons.fileCarveSmb.addEventListener("click", () =>
 );
 convertContextButtons.fileCarveNfs.addEventListener("click", () =>
   carveCurrentStreamToFileFromContextMenu("nfs"),
+);
+convertContextButtons.fileCarveFtp.addEventListener("click", () =>
+  carveCurrentStreamToFileFromContextMenu("ftp"),
 );
 convertContextButtons.followStreamConv.addEventListener(
   "click",

@@ -67,6 +67,196 @@ function normalizeStatsPortValue(value) {
   return Number(normalizedText);
 }
 
+function parseStatsPacketTimestampMs(packet) {
+  const packetTimestamp = packet?.["Packet Info"]?.["Packet Timestamp"];
+  if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
+    return null;
+  }
+  const parsedTimestamp = Date.parse(packetTimestamp);
+  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+}
+
+function parseStatsPacketProcessedNumber(packet) {
+  const processedRaw = Number(packet?.["Packet Info"]?.["Packet Processed"]);
+  return Number.isFinite(processedRaw) ? processedRaw : null;
+}
+
+function parseStatsPacketIndexNumber(packet) {
+  const packetIndexRaw = Number(packet?.["Packet Info"]?.["Index"]);
+  return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
+}
+
+function compareStatsPacketsChronologically(
+  leftPacket,
+  rightPacket,
+  leftFallbackOrder = 0,
+  rightFallbackOrder = 0,
+) {
+  const leftTimestamp = parseStatsPacketTimestampMs(leftPacket);
+  const rightTimestamp = parseStatsPacketTimestampMs(rightPacket);
+  if (leftTimestamp !== null && rightTimestamp !== null && leftTimestamp !== rightTimestamp) {
+    return leftTimestamp - rightTimestamp;
+  }
+  if (leftTimestamp !== null && rightTimestamp === null) return -1;
+  if (leftTimestamp === null && rightTimestamp !== null) return 1;
+
+  const leftProcessed = parseStatsPacketProcessedNumber(leftPacket);
+  const rightProcessed = parseStatsPacketProcessedNumber(rightPacket);
+  if (leftProcessed !== null && rightProcessed !== null && leftProcessed !== rightProcessed) {
+    return leftProcessed - rightProcessed;
+  }
+  if (leftProcessed !== null && rightProcessed === null) return -1;
+  if (leftProcessed === null && rightProcessed !== null) return 1;
+
+  const leftIndex = parseStatsPacketIndexNumber(leftPacket);
+  const rightIndex = parseStatsPacketIndexNumber(rightPacket);
+  if (leftIndex !== null && rightIndex !== null && leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+  if (leftIndex !== null && rightIndex === null) return -1;
+  if (leftIndex === null && rightIndex !== null) return 1;
+
+  return leftFallbackOrder - rightFallbackOrder;
+}
+
+function parseStatsTcpSequenceNumber(transportData) {
+  const sequenceCandidates = [
+    transportData?.["TCP Sequence Number"],
+    transportData?.["tcp.seq"],
+    transportData?.["Sequence Number"],
+    transportData?.["Sequence"],
+  ];
+  for (const candidate of sequenceCandidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getStatsTcpSegmentLength(packetInfo, transportData) {
+  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
+    ? payloadLenRaw
+    : 0;
+
+  const flagsText = String(transportData?.["TCP Flag Data"]?.["Flags"] || "").toUpperCase();
+  const controlByteLength =
+    (flagsText.includes("SYN") ? 1 : 0) + (flagsText.includes("FIN") ? 1 : 0);
+  return payloadLen + controlByteLength;
+}
+
+function mergeStatsSequenceRange(ranges, start, end) {
+  if (!Array.isArray(ranges) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return;
+  }
+
+  ranges.push({ start, end });
+  ranges.sort((left, right) => left.start - right.start);
+
+  const merged = [];
+  for (const currentRange of ranges) {
+    if (!merged.length) {
+      merged.push({ ...currentRange });
+      continue;
+    }
+    const lastRange = merged[merged.length - 1];
+    if (currentRange.start <= lastRange.end) {
+      lastRange.end = Math.max(lastRange.end, currentRange.end);
+      continue;
+    }
+    merged.push({ ...currentRange });
+  }
+
+  ranges.length = 0;
+  ranges.push(...merged);
+}
+
+function getStatsSequenceRangeOverlapLength(ranges, start, end) {
+  if (!Array.isArray(ranges) || end <= start) return 0;
+  let overlapLength = 0;
+  for (const range of ranges) {
+    if (range.end <= start) continue;
+    if (range.start >= end) break;
+    const overlapStart = Math.max(start, range.start);
+    const overlapEnd = Math.min(end, range.end);
+    if (overlapEnd > overlapStart) {
+      overlapLength += overlapEnd - overlapStart;
+    }
+  }
+  return overlapLength;
+}
+
+function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
+  let retransmissionCount = 0;
+  let outOfOrderCount = 0;
+
+  streamPacketsByKey.forEach((streamPackets) => {
+    if (!Array.isArray(streamPackets) || streamPackets.length === 0) return;
+
+    const sortedStreamPackets = streamPackets
+      .map((packet, originalOrder) => ({ packet, originalOrder }))
+      .sort((left, right) =>
+        compareStatsPacketsChronologically(
+          left.packet,
+          right.packet,
+          left.originalOrder,
+          right.originalOrder,
+        ),
+      )
+      .map((entry) => entry.packet);
+
+    const streamStateByDirection = new Map();
+    sortedStreamPackets.forEach((packet) => {
+      const packetInfo = packet?.["Packet Info"] || {};
+      const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+      if (protocol !== "TCP") return;
+
+      const transportData = packetInfo["TCP"] || {};
+      const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
+      const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
+      const sourcePort = transportData?.["Source port"] ?? "";
+      const destinationPort = transportData?.["Destination port"] ?? "";
+      const directionKey = `${sourceIp}:${sourcePort}>${destinationIp}:${destinationPort}`;
+      const sequenceNumber = parseStatsTcpSequenceNumber(transportData);
+      const segmentLength = getStatsTcpSegmentLength(packetInfo, transportData);
+
+      const state = streamStateByDirection.get(directionKey) || {
+        seenRanges: [],
+        maxStartObserved: null,
+      };
+
+      if (sequenceNumber === null || segmentLength <= 0) {
+        streamStateByDirection.set(directionKey, state);
+        return;
+      }
+
+      const sequenceEnd = sequenceNumber + segmentLength;
+      const overlapLength = getStatsSequenceRangeOverlapLength(
+        state.seenRanges,
+        sequenceNumber,
+        sequenceEnd,
+      );
+      const isRetransmission = overlapLength > 0;
+      const isOutOfOrder =
+        Number.isFinite(state.maxStartObserved) && sequenceNumber < state.maxStartObserved;
+
+      if (isRetransmission) retransmissionCount += 1;
+      if (isOutOfOrder) outOfOrderCount += 1;
+
+      mergeStatsSequenceRange(state.seenRanges, sequenceNumber, sequenceEnd);
+      state.maxStartObserved = Number.isFinite(state.maxStartObserved)
+        ? Math.max(state.maxStartObserved, sequenceNumber)
+        : sequenceNumber;
+      streamStateByDirection.set(directionKey, state);
+    });
+  });
+
+  return {
+    retransmissionCount,
+    outOfOrderCount,
+  };
+}
+
 function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const protocols = new Set();
   const networkProtocols = new Set();
@@ -83,6 +273,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const hostnames = new Set();
   const dataTypes = new Set();
   const streams = new Map();
+  const tcpStreams = new Map();
   let encryptedCount = 0;
   let unencryptedCount = 0;
   let totalPackets = 0;
@@ -119,6 +310,14 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
         streams.set(streamKey, { count: 0 });
       }
       streams.get(streamKey).count++;
+
+      const protocolUpper = String(pi?.["Protocol"] || "").toUpperCase();
+      if (protocolUpper === "TCP") {
+        if (!tcpStreams.has(streamKey)) {
+          tcpStreams.set(streamKey, []);
+        }
+        tcpStreams.get(streamKey).push(pkt);
+      }
 
       const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
@@ -237,6 +436,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     streamStats.length > 1
       ? (streamStats.reduce((a, b) => a + b, 0) / streamStats.length).toFixed(2)
       : 0;
+  const tcpStreamAnomalyCounts = computeTcpStreamAnomalyCounts(tcpStreams);
 
   return {
     protocols: [...protocols].sort(),
@@ -260,6 +460,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     maxStreamLength,
     minStreamLength,
     avgStreamLength,
+    retransmissionCount: tcpStreamAnomalyCounts.retransmissionCount,
+    outOfOrderCount: tcpStreamAnomalyCounts.outOfOrderCount,
     bookmarkCount,
   };
 }
@@ -390,6 +592,8 @@ function createStatsPanel(options) {
       `Unique Hosts Targeted: ${stats.hosts.length}`,
       `Encrypted Packets: ${stats.encryptedCount}`,
       `Unencrypted Packets: ${stats.unencryptedCount}`,
+      `TCP Retransmissions: ${stats.retransmissionCount}`,
+      `TCP Out-of-Order: ${stats.outOfOrderCount}`,
       `Unique Protocols: ${stats.protocols.length}`,
       `Unique Locations: ${stats.locations.length}`,
     ].forEach((line) => {
