@@ -1388,9 +1388,7 @@ def decodeFTP(rawPayload):
         word = parts[0].upper()
         if word in FTP_COMMANDS:
             arg = parts[1].strip() if len(parts) > 1 else ""
-            if word == "PASS":
-                arg = "***"
-            return {
+            result = {
                 "Type": "Command",
                 "ftp.type": "Command",
                 "Command": word,
@@ -1398,6 +1396,15 @@ def decodeFTP(rawPayload):
                 "Argument": arg,
                 "ftp.argument": arg,
             }
+            if word == "USER" and arg:
+                result["Credentials"] = {"username": arg}
+            elif word == "PASS" and arg:
+                result["Credentials"] = {"password": arg}
+                # Keep plaintext out of display argument fields while preserving
+                # extracted credential metadata for downstream processing.
+                result["Argument"] = "***"
+                result["ftp.argument"] = "***"
+            return result
         if len(word) == 3 and word.isdigit():
             statusCode = word
             message = parts[1].strip() if len(parts) > 1 else ""

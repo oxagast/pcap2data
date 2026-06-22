@@ -1,5 +1,4 @@
 const threadName = "Stats";
-
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -68,7 +67,7 @@ function normalizeStatsPortValue(value) {
   return Number(normalizedText);
 }
 
-function buildCaptureStats(capturedPackets) {
+function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const protocols = new Set();
   const networkProtocols = new Set();
   const linkProtocols = new Set();
@@ -87,7 +86,6 @@ function buildCaptureStats(capturedPackets) {
   let encryptedCount = 0;
   let unencryptedCount = 0;
   let totalPackets = 0;
-
   if (!capturedPackets || !capturedPackets["Host"]) return null;
 
   const getStreamKey = (packetInfo) => {
@@ -232,11 +230,11 @@ function buildCaptureStats(capturedPackets) {
 
   const streamStats = Array.from(streams.values()).map((s) => s.count);
   const maxStreamLength =
-    streamStats.length > 0 ? Math.max(...streamStats) : 0;
+    streamStats.length > 1 ? Math.max(...streamStats) : 0;
   const minStreamLength =
-    streamStats.length > 0 ? Math.min(...streamStats) : 0;
+    streamStats.length > 1 ? Math.min(...streamStats) : 0;
   const avgStreamLength =
-    streamStats.length > 0
+    streamStats.length > 1
       ? (streamStats.reduce((a, b) => a + b, 0) / streamStats.length).toFixed(2)
       : 0;
 
@@ -262,6 +260,7 @@ function buildCaptureStats(capturedPackets) {
     maxStreamLength,
     minStreamLength,
     avgStreamLength,
+    bookmarkCount,
   };
 }
 
@@ -324,6 +323,7 @@ function createStatsPanel(options) {
     getFilteredPackets,
     syncTargetHostFromPackets,
     setPacketsForHost,
+    getBookmarkCount,
   } = options;
 
   async function applyStatsQuery(query) {
@@ -365,7 +365,10 @@ function createStatsPanel(options) {
     const content = documentRef.getElementById("stats_content");
     content.replaceChildren();
 
-    const stats = buildCaptureStats(getCapturedPackets());
+    const stats = buildCaptureStats(
+      getCapturedPackets(),
+      typeof getBookmarkCount === "function" ? getBookmarkCount() : 0,
+    );
     if (!stats) {
       content.textContent = "No packet data available.";
       return;
@@ -379,6 +382,7 @@ function createStatsPanel(options) {
     overview.appendChild(ovHead);
     [
       `Total Packets: ${stats.totalPackets}`,
+      `Bookmarked Packets: ${stats.bookmarkCount}`,
       `Total Streams: ${stats.totalStreams}`,
       `Longest Stream: ${stats.maxStreamLength} packets`,
       `Shortest Stream: ${stats.minStreamLength} packets`,

@@ -879,6 +879,75 @@ function decodeSmtpFromBytes(bytes) {
   return { protocol: "SMTP", fields };
 }
 
+function decodeFtpFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) return null;
+
+  const FTP_COMMANDS = new Set([
+    "USER",
+    "PASS",
+    "ACCT",
+    "CWD",
+    "CDUP",
+    "PWD",
+    "TYPE",
+    "PASV",
+    "EPSV",
+    "PORT",
+    "EPRT",
+    "LIST",
+    "NLST",
+    "RETR",
+    "STOR",
+    "DELE",
+    "RNFR",
+    "RNTO",
+    "MKD",
+    "RMD",
+    "SYST",
+    "STAT",
+    "FEAT",
+    "AUTH",
+    "QUIT",
+    "NOOP",
+  ]);
+
+  const fields = [];
+  let detected = false;
+  for (const line of lines) {
+    const responseMatch = line.match(/^(\d{3})([\s-])(.*)/);
+    if (responseMatch) {
+      const code = responseMatch[1];
+      const suffix = responseMatch[2] === "-" ? " (cont.)" : "";
+      fields.push({
+        name: `Response ${code}${suffix}`,
+        value: responseMatch[3] || "—",
+      });
+      detected = true;
+    } else {
+      const parts = line.trim().split(/\s+/);
+      const command = (parts[0] || "").toUpperCase();
+      if (FTP_COMMANDS.has(command)) {
+        fields.push({ name: "Command", value: command });
+        if (parts.length > 1) {
+          const argument = parts.slice(1).join(" ");
+          fields.push({
+            name: "Argument",
+            value: argument.length > 160 ? argument.slice(0, 160) + "…" : argument,
+          });
+        }
+        detected = true;
+      }
+    }
+
+    if (fields.length >= 12) break;
+  }
+
+  if (!detected) return null;
+  return { protocol: "FTP", fields };
+}
+
 function autoDetectProtoFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
@@ -894,6 +963,13 @@ function autoDetectProtoFromBytes(bytes) {
     /^\d{3}[\s-]/.test(text)
   )
     return "smtp";
+  if (
+    /^(USER|PASS|ACCT|CWD|CDUP|PWD|TYPE|PASV|EPSV|PORT|EPRT|LIST|NLST|RETR|STOR|DELE|RNFR|RNTO|MKD|RMD|SYST|STAT|FEAT|AUTH|NOOP|QUIT)\b/i.test(
+      text,
+    ) ||
+    /^220[\s-].*ftp/i.test(text)
+  )
+    return "ftp";
   if (
     /^\+OK/.test(text) ||
     /^-ERR/.test(text) ||
@@ -982,6 +1058,9 @@ function runProtoDecoder(bytes) {
       break;
     case "smtp":
       result = decodeSmtpFromBytes(bytes);
+      break;
+    case "ftp":
+      result = decodeFtpFromBytes(bytes);
       break;
     default:
       protocol = null;

@@ -434,32 +434,56 @@ function createKeystorePanel({
     }
   }
 
-  function extractDestinationPort(transportData, packetInfo) {
-    const port = Number(
-      transportData?.["Destination port"] ||
-      transportData?.tcp?.["Destination port"] ||
-      transportData?.udp?.["Destination port"] ||
-      packetInfo?.["Transport Layer"]?.["Destination port"] ||
-      0,
-    );
-    return Number.isFinite(port) && port > 0 ? port : null;
+  function extractTransportPorts(transportData, packetInfo) {
+    const rawPorts = [
+      transportData?.["Source port"],
+      transportData?.["Destination port"],
+      transportData?.tcp?.["Source port"],
+      transportData?.tcp?.["Destination port"],
+      transportData?.udp?.["Source port"],
+      transportData?.udp?.["Destination port"],
+      packetInfo?.["Transport Layer"]?.["Source port"],
+      packetInfo?.["Transport Layer"]?.["Destination port"],
+      packetInfo?.["TCP"]?.["Source port"],
+      packetInfo?.["TCP"]?.["Destination port"],
+      packetInfo?.["tcp"]?.["Source port"],
+      packetInfo?.["tcp"]?.["Destination port"],
+      packetInfo?.["UDP"]?.["Source port"],
+      packetInfo?.["UDP"]?.["Destination port"],
+      packetInfo?.["udp"]?.["Source port"],
+      packetInfo?.["udp"]?.["Destination port"],
+    ];
+
+    const uniquePorts = new Set();
+    rawPorts.forEach((value) => {
+      const port = Number(value);
+      if (Number.isFinite(port) && port > 0) {
+        uniquePorts.add(port);
+      }
+    });
+
+    return Array.from(uniquePorts);
   }
 
   function isRelevantProtocolPort(protocol, port) {
-    if (!port) return false;
+    const candidatePorts = Array.isArray(port) ? port : [port];
+    if (!candidatePorts.length) return false;
     const lowerProtocol = String(protocol || "").toLowerCase();
 
+    const hasPort = (expectedPort) =>
+      candidatePorts.some((candidatePort) => Number(candidatePort) === expectedPort);
+
     if (lowerProtocol.includes("ftp")) {
-      return port === 21;
+      return hasPort(21);
     }
     if (lowerProtocol.includes("smtp")) {
-      return port === 25 || port === 465 || port === 587;
+      return hasPort(25) || hasPort(465) || hasPort(587);
     }
     if (lowerProtocol.includes("imap")) {
-      return port === 143 || port === 993;
+      return hasPort(143) || hasPort(993);
     }
     if (lowerProtocol.includes("rdp")) {
-      return port === 3389;
+      return hasPort(3389);
     }
 
     return false;
@@ -526,6 +550,52 @@ function createKeystorePanel({
     return entries;
   }
 
+  function extractStructuredFtpCredentialEntries(packetInfo) {
+    const ftpCandidates = [
+      packetInfo?.["Transport Layer"]?.FTP,
+      packetInfo?.["Transport Layer"]?.ftp,
+      packetInfo?.FTP,
+      packetInfo?.ftp,
+      packetInfo?.TCP?.FTP,
+      packetInfo?.TCP?.ftp,
+      packetInfo?.tcp?.FTP,
+      packetInfo?.tcp?.ftp,
+    ].filter((candidate) => candidate && typeof candidate === "object");
+
+    for (const ftpData of ftpCandidates) {
+      const ftpCredentials =
+        ftpData?.Credentials && typeof ftpData.Credentials === "object"
+          ? ftpData.Credentials
+          : null;
+      const credentialUser = normalizeCredentialToken(ftpCredentials?.username);
+      const credentialPassword = normalizeCredentialToken(
+        ftpCredentials?.password,
+      );
+      if (credentialUser || credentialPassword) {
+        return {
+          username: credentialUser || "",
+          password: credentialPassword || "",
+        };
+      }
+
+      const command = normalizeSessionSecretValue(
+        ftpData?.Command || ftpData?.command || ftpData?.["ftp.command"],
+      ).toUpperCase();
+      const argument = normalizeCredentialToken(
+        ftpData?.Argument || ftpData?.argument || ftpData?.["ftp.argument"],
+      );
+      if (!command || !argument) continue;
+      if (command === "USER") {
+        return { username: argument, password: "" };
+      }
+      if (command === "PASS") {
+        return { username: "", password: argument };
+      }
+    }
+
+    return null;
+  }
+
   function extractPlaintextProtocolCredentialEntries({
     protocol,
     pathKey,
@@ -541,6 +611,9 @@ function createKeystorePanel({
     const lowerPath = String(pathKey || "").toLowerCase();
     const entries = [];
     const discovered = new Set();
+    const structuredFtpCredentials = extractStructuredFtpCredentialEntries(
+      packetInfo,
+    );
 
     const addEntry = ({ type = "secret", label, source, content, protocolName }) => {
       const normalizedContent = normalizeCredentialToken(content);
@@ -598,9 +671,20 @@ function createKeystorePanel({
     }
 
     if (
+      !!structuredFtpCredentials ||
+      /^\s*(USER|PASS)\s+.+$/im.test(text) ||
       lowerProtocol.includes("ftp") ||
       (lowerPath.includes("ftp") && isRelevantProtocolPort("ftp", port))
     ) {
+      if (structuredFtpCredentials) {
+        addUserPasswordEntries(
+          "FTP",
+          structuredFtpCredentials.username,
+          structuredFtpCredentials.password,
+          "FTP",
+        );
+      }
+
       const ftpUserMatch = text.match(/^\s*USER\s+(.+)$/im);
       const ftpPassMatch = text.match(/^\s*PASS\s+(.+)$/im);
       if (ftpUserMatch || ftpPassMatch) {
@@ -1263,6 +1347,45 @@ function createKeystorePanel({
     return worker;
   }
 
+  async function hydratePacketForSessionScan(packet, hydrationCache) {
+    if (!packet || typeof packet !== "object") return packet;
+    if (!packet.__packetStub) return packet;
+
+    const packetKey =
+      typeof packet.__packetKey === "string" ? packet.__packetKey : "";
+    if (!packetKey) return packet;
+
+    if (hydrationCache && hydrationCache.has(packetKey)) {
+      return hydrationCache.get(packetKey);
+    }
+
+    if (!window.captureapi || typeof window.captureapi.getPacket !== "function") {
+      return packet;
+    }
+
+    try {
+      const hydrationResult = await window.captureapi.getPacket(packetKey);
+      const hydratedPacket = hydrationResult?.packet;
+      if (!hydratedPacket || typeof hydratedPacket !== "object") {
+        if (hydrationCache) hydrationCache.set(packetKey, packet);
+        return packet;
+      }
+
+      const mergedPacket = {
+        ...packet,
+        ...hydratedPacket,
+        __packetKey: packetKey,
+        __packetStub: false,
+      };
+      if (hydrationCache) hydrationCache.set(packetKey, mergedPacket);
+      return mergedPacket;
+    } catch (error) {
+      logErrorEntry("crypt-keystore-packet-hydration", error);
+      if (hydrationCache) hydrationCache.set(packetKey, packet);
+      return packet;
+    }
+  }
+
   function scanSessionTokensInWorker(packetRecords) {
     const worker = createSessionTokenWorker();
     if (!worker || !Array.isArray(packetRecords) || packetRecords.length === 0) {
@@ -1305,6 +1428,7 @@ function createKeystorePanel({
     if (!hosts || typeof hosts !== "object") return generatedEntries;
 
     const packetRecords = [];
+    const hydratedPacketCache = new Map();
     Object.entries(hosts).forEach(([host, packets]) => {
       if (!Array.isArray(packets)) return;
       packets.forEach((packet) => {
@@ -1353,14 +1477,18 @@ function createKeystorePanel({
         recordIndex,
         recordIndex + SESSION_AUTO_BUILD_CHUNK_SIZE,
       );
-      chunk.forEach(({ host, packet }) => {
-        const packetInfo = packet?.["Packet Info"] || {};
+      for (const { host, packet } of chunk) {
+        const hydratedPacket = await hydratePacketForSessionScan(
+          packet,
+          hydratedPacketCache,
+        );
+        const packetInfo = hydratedPacket?.["Packet Info"] || {};
         const protocol = packetInfo?.["Protocol"] ?? "Unknown";
         const transportData =
           packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
-        const extraInfo = packet?.["Extra Info"] || {};
+        const extraInfo = hydratedPacket?.["Extra Info"] || {};
         const packetIndex = packetInfo?.["Index"] ?? "?";
-        const destinationPort = extractDestinationPort(transportData, packetInfo);
+        const transportPorts = extractTransportPorts(transportData, packetInfo);
         [transportData, extraInfo].forEach((candidateRoot) => {
           collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
             const rawText = normalizeSessionSecretValue(rawValue);
@@ -1392,7 +1520,7 @@ function createKeystorePanel({
                 protocol,
                 pathKey,
                 rawText,
-                port: destinationPort,
+                port: transportPorts,
                 packetInfo,
               }).forEach((credentialEntry) => {
                 pushSessionEntry({
@@ -1475,7 +1603,7 @@ function createKeystorePanel({
               protocol,
               pathKey: "payload.text",
               rawText: payloadText,
-              port: destinationPort,
+              port: transportPorts,
               packetInfo,
             }).forEach((credentialEntry) => {
               pushSessionEntry({
@@ -1553,7 +1681,7 @@ function createKeystorePanel({
             logErrorEntry("crypt-keystore-cookie-auto", error);
           }
         }
-      });
+      }
 
       await yieldToBrowserThread();
     }
