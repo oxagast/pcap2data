@@ -1,5 +1,50 @@
 const threadName = "Stats";
 
+function isProtocolLikeFieldName(fieldName, fieldValue) {
+  if (fieldName.includes(".")) return false;
+  if (!fieldValue || typeof fieldValue !== "object") return false;
+  if (Array.isArray(fieldValue)) return false;
+  // Exclude transport metadata objects such as "TCP Flag Data".
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(fieldName)) return false;
+  return true;
+}
+
+function collectPacketDecodedProtocolNames(packetInfo) {
+  const decodedNames = new Set();
+
+  const packetDecoded =
+    packetInfo?.["Decoded Protocols"] || packetInfo?.["packet.decoded_protocols"];
+  if (Array.isArray(packetDecoded)) {
+    packetDecoded.forEach((decodedProtocol) => {
+      const name = normalizeStatsTextValue(decodedProtocol);
+      if (name) decodedNames.add(name);
+    });
+  }
+
+  const linkControlDecoded =
+    packetInfo?.["Link Control"]?.["Detected Protocols"] ||
+    packetInfo?.["Link Control"]?.["wan.detected"];
+  if (Array.isArray(linkControlDecoded)) {
+    linkControlDecoded.forEach((decodedProtocol) => {
+      const name = normalizeStatsTextValue(decodedProtocol);
+      if (name) decodedNames.add(name);
+    });
+  }
+
+  const sectionNames = ["TCP", "UDP", "ICMP", "IGMP", "LINK", "IP"];
+  sectionNames.forEach((sectionName) => {
+    const section = packetInfo?.[sectionName];
+    if (!section || typeof section !== "object") return;
+    Object.entries(section).forEach(([fieldName, fieldValue]) => {
+      if (isProtocolLikeFieldName(fieldName, fieldValue)) {
+        const name = normalizeStatsTextValue(fieldName);
+        if (name) decodedNames.add(name);
+      }
+    });
+  });
+
+  return [...decodedNames];
+}
 
 function normalizeStatsTextValue(value, options = {}) {
   if (value === null || value === undefined) return null;
@@ -98,21 +143,11 @@ function buildCaptureStats(capturedPackets) {
         }
       }
 
-      const packetDecodedProtocols = pi?.["Decoded Protocols"];
-      if (Array.isArray(packetDecodedProtocols)) {
-        packetDecodedProtocols.forEach((decodedProtocol) => {
-          const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
-          if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
-        });
-      }
-
-      const linkControlDecodedProtocols = pi?.["Link Control"]?.["Detected Protocols"];
-      if (Array.isArray(linkControlDecodedProtocols)) {
-        linkControlDecodedProtocols.forEach((decodedProtocol) => {
-          const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
-          if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
-        });
-      }
+      const inferredDecodedProtocols = collectPacketDecodedProtocolNames(pi);
+      inferredDecodedProtocols.forEach((decodedProtocol) => {
+        const normalizedDecodedProtocol = normalizeStatsTextValue(decodedProtocol);
+        if (normalizedDecodedProtocol) decodedProtocols.add(normalizedDecodedProtocol);
+      });
 
       if (tp === "ARP" || tp === "RARP") {
         const arpData = pi?.[tp] || {};

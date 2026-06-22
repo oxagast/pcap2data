@@ -1,6 +1,104 @@
 
 const threadName = "List";
 
+function isUnknownLikeProtocol(value) {
+  if (value === null || value === undefined) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return (
+    normalized === "" ||
+    normalized === "unknown" ||
+    normalized === "n/a" ||
+    normalized === "na" ||
+    normalized === "none" ||
+    normalized === "unavailable" ||
+    normalized === "null"
+  );
+}
+
+function isProtocolLikeFieldName(fieldName, fieldValue) {
+  if (fieldName.includes(".")) return false;
+  if (!fieldValue || typeof fieldValue !== "object") return false;
+  if (Array.isArray(fieldValue)) return false;
+  // Exclude transport metadata objects such as "TCP Flag Data".
+  if (!/^[A-Za-z][A-Za-z0-9]*$/.test(fieldName)) return false;
+  return true;
+}
+
+function collectDecodedProtocolNames(packetInfo) {
+  const decodedNames = new Set();
+  const packetDecodedValues = [
+    packetInfo?.["Decoded Protocols"],
+    packetInfo?.["packet.decoded_protocols"],
+  ];
+  packetDecodedValues.forEach((packetDecoded) => {
+    if (Array.isArray(packetDecoded)) {
+      packetDecoded.forEach((name) => {
+        if (typeof name === "string" && name.trim()) {
+          decodedNames.add(name.trim());
+        }
+      });
+      return;
+    }
+    if (typeof packetDecoded === "string" && packetDecoded.trim()) {
+      decodedNames.add(packetDecoded.trim());
+    }
+  });
+
+  const sectionNames = ["TCP", "UDP", "ICMP", "IGMP", "LINK", "IP"];
+  sectionNames.forEach((sectionName) => {
+    const section = packetInfo?.[sectionName];
+    if (!section || typeof section !== "object") return;
+    Object.entries(section).forEach(([fieldName, fieldValue]) => {
+      if (isProtocolLikeFieldName(fieldName, fieldValue)) {
+        decodedNames.add(fieldName);
+      }
+    });
+  });
+
+  return [...decodedNames];
+}
+
+function inferApplicationProtocol(packetInfo, extraInfo) {
+  const netData = extraInfo?.["Traits"]?.["Network Data"];
+  const fromTraitsRaw =
+    netData?.["Port Protocol"] ??
+    netData?.["Port Protcol"] ??
+    "";
+  const fromTraits =
+    typeof fromTraitsRaw === "string" ? fromTraitsRaw.trim() : "";
+
+  // List-tab-only fallback: only use decoded protocols when the app protocol
+  // would otherwise be shown as Unknown.
+  if (!isUnknownLikeProtocol(fromTraits)) {
+    return fromTraits;
+  }
+
+  const decodedNames = collectDecodedProtocolNames(packetInfo);
+  const preferred = [
+    "SSH",
+    "HTTP2",
+    "HTTP",
+    "WebSocket",
+    "DNS",
+    "TLS",
+    "Kerberos",
+    "NFS",
+    "RADIUS",
+  ];
+
+  const decodedByLower = new Map(
+    decodedNames.map((name) => [String(name).toLowerCase(), name]),
+  );
+
+  for (const name of preferred) {
+    const matched = decodedByLower.get(name.toLowerCase());
+    if (matched) return matched;
+  }
+
+  if (decodedNames.length > 0) return decodedNames[0];
+  return "Unknown";
+}
+
 function createListPanel({
   constants,
   getJsonCapture,
@@ -126,9 +224,7 @@ function createListPanel({
           const tpData = pi[transport] || null;
           const srcPort = tpData?.["Source port"] ?? "";
           const dstPort = tpData?.["Destination port"] ?? "";
-          const netData = ei?.["Traits"]?.["Network Data"];
-          const appProto =
-            netData?.["Port Protocol"] ?? netData?.["Port Protcol"] ?? "";
+          const appProto = inferApplicationProtocol(pi, ei);
           const packetKey = srcIp + ":" + pi["Index"];
           const isBookmarked = getBookmarkList().includes(packetKey);
           const streamKey = getStreamKey(pi);

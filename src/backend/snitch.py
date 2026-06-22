@@ -122,6 +122,9 @@ cachedBannersLock = threading.Lock()
 
 # --- TCP stream protocol cache: canonical stream key -> initial packet dst port ---
 tcpStreamInitialDstPortMap: dict = {}
+# Streams positively identified as HTTP/2 via client connection preface.
+http2DetectedStreams: set = set()
+http2DetectedStreamsLock = threading.Lock()
 
 # --- HTTP method set used by decodeHTTP() for request-line detection ---
 HTTP_METHODS: set = {
@@ -137,6 +140,7 @@ HTTP_METHODS: set = {
 }
 
 TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
+HTTP2_PREFACE_BYTES = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
 # Matches common credential-related field names in HTTP query strings, POST bodies, etc.
 # Each keyword is an independent alternative; compound names like "auth_token" or
@@ -2659,12 +2663,11 @@ def decodeHTTP2(rawPayload):
         0x8: "WINDOW_UPDATE",
         0x9: "CONTINUATION",
     }
-    HTTP2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
     try:
         if len(rawPayload) < 9:
             return None
-        hasPreface = rawPayload.startswith(HTTP2_PREFACE)
-        offset = len(HTTP2_PREFACE) if hasPreface else 0
+        hasPreface = rawPayload.startswith(HTTP2_PREFACE_BYTES)
+        offset = len(HTTP2_PREFACE_BYTES) if hasPreface else 0
         if offset + 9 > len(rawPayload):
             if hasPreface:
                 return {
@@ -2680,6 +2683,15 @@ def decodeHTTP2(rawPayload):
         frameType = rawPayload[offset + 3]
         frameFlags = rawPayload[offset + 4]
         streamId = struct.unpack_from(">I", rawPayload, offset + 5)[0] & 0x7FFFFFFF
+        # Tight sanity checks to avoid treating random encrypted bytes as HTTP/2.
+        if frameLen > 16384:
+            return None
+        # SETTINGS, PING and GOAWAY are connection-level frames and must use stream 0.
+        if frameType in (0x4, 0x6, 0x7) and streamId != 0:
+            return None
+        # DATA/HEADERS/PUSH_PROMISE/CONTINUATION are stream-level and cannot use 0.
+        if frameType in (0x0, 0x1, 0x5, 0x9) and streamId == 0:
+            return None
         typeName = HTTP2_FRAME_TYPES.get(frameType, f"0x{frameType:02X}")
         return {
             "Connection Preface": hasPreface,
@@ -2692,6 +2704,134 @@ def decodeHTTP2(rawPayload):
             "http2.frame_flags": f"0x{frameFlags:02X}",
             "Stream ID": streamId,
             "http2.stream_id": streamId,
+        }
+    except Exception:
+        return None
+
+
+def decodeSSH(rawPayload, srcPort=None, dstPort=None):
+    """
+    Decode SSH protocol metadata from raw TCP payload bytes.
+    Extracts cleartext identification banners (RFC 4253 section 4.2) and,
+    when present, basic packet framing metadata from binary SSH transport
+    packets without attempting decryption.
+    Returns a dict with SSH fields, or None if not recognisable as SSH traffic.
+    """
+    SSH_MESSAGE_TYPES = {
+        1: "DISCONNECT",
+        2: "IGNORE",
+        3: "UNIMPLEMENTED",
+        4: "DEBUG",
+        5: "SERVICE_REQUEST",
+        6: "SERVICE_ACCEPT",
+        20: "KEXINIT",
+        21: "NEWKEYS",
+        30: "KEXDH_INIT",
+        31: "KEXDH_REPLY",
+        50: "USERAUTH_REQUEST",
+        51: "USERAUTH_FAILURE",
+        52: "USERAUTH_SUCCESS",
+        53: "USERAUTH_BANNER",
+        80: "GLOBAL_REQUEST",
+        81: "REQUEST_SUCCESS",
+        82: "REQUEST_FAILURE",
+        90: "CHANNEL_OPEN",
+        91: "CHANNEL_OPEN_CONFIRMATION",
+        92: "CHANNEL_OPEN_FAILURE",
+        93: "CHANNEL_WINDOW_ADJUST",
+        94: "CHANNEL_DATA",
+        95: "CHANNEL_EXTENDED_DATA",
+        96: "CHANNEL_EOF",
+        97: "CHANNEL_CLOSE",
+        98: "CHANNEL_REQUEST",
+        99: "CHANNEL_SUCCESS",
+        100: "CHANNEL_FAILURE",
+    }
+
+    try:
+        if not rawPayload or len(rawPayload) == 0:
+            return None
+
+        payloadPrefix = rawPayload[:4]
+        isBanner = rawPayload.startswith(b"SSH-")
+
+        # SSH cleartext version exchange line, e.g.:
+        # SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.3\r\n
+        if isBanner:
+            firstLineRaw = rawPayload.split(b"\n", 1)[0].rstrip(b"\r")
+            banner = firstLineRaw.decode(errors="ignore").strip()
+            m = re.match(r"^SSH-(\d+\.\d+)-([^\s]+)(?:\s+(.*))?$", banner)
+
+            direction = "Unknown"
+            if srcPort in (22, 2222):
+                direction = "Server Identification"
+            elif dstPort in (22, 2222):
+                direction = "Client Identification"
+
+            if not m:
+                return {
+                    "Type": "Identification",
+                    "ssh.type": "Identification",
+                    "Banner": banner,
+                    "ssh.banner": banner,
+                    "Direction": direction,
+                    "ssh.direction": direction,
+                }
+
+            protoVersion = m.group(1)
+            softwareVersion = m.group(2)
+            comments = m.group(3).strip() if m.group(3) else ""
+            result = {
+                "Type": "Identification",
+                "ssh.type": "Identification",
+                "Banner": banner,
+                "ssh.banner": banner,
+                "Protocol Version": protoVersion,
+                "ssh.protocol_version": protoVersion,
+                "Software Version": softwareVersion,
+                "ssh.software_version": softwareVersion,
+                "Direction": direction,
+                "ssh.direction": direction,
+            }
+            if comments:
+                result["Comments"] = comments
+                result["ssh.comments"] = comments
+            return result
+
+        # SSH binary packet framing starts with a uint32 packet_length then
+        # one byte padding_length. This remains visible even when payload data
+        # itself is encrypted.
+        if len(rawPayload) < 6:
+            return None
+
+        packetLength = int.from_bytes(payloadPrefix, byteorder="big", signed=False)
+        if packetLength <= 0 or packetLength > 35000:
+            return None
+
+        paddingLength = int(rawPayload[4])
+        # Sanity checks from RFC 4253: padding >= 4, packet_length >= padding+1
+        if paddingLength < 4 or packetLength < (paddingLength + 1):
+            return None
+
+        # The first byte of packet payload is the SSH message number only when
+        # encryption is not yet active; otherwise it is encrypted/random.
+        msgTypeNum = int(rawPayload[5])
+        msgTypeName = SSH_MESSAGE_TYPES.get(msgTypeNum, f"Unknown({msgTypeNum})")
+        knownClearMessage = msgTypeNum in SSH_MESSAGE_TYPES
+
+        return {
+            "Type": "Binary Packet",
+            "ssh.type": "Binary Packet",
+            "Packet Length": packetLength,
+            "ssh.packet_length": packetLength,
+            "Padding Length": paddingLength,
+            "ssh.padding_length": paddingLength,
+            "Message Type": msgTypeName,
+            "ssh.msg_type": msgTypeName,
+            "Message Type Number": msgTypeNum,
+            "ssh.msg_type_num": msgTypeNum,
+            "Likely Encrypted": not knownClearMessage,
+            "ssh.likely_encrypted": not knownClearMessage,
         }
     except Exception:
         return None
@@ -3304,7 +3444,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     testcase file, gather analysis data (MIME, entropy, geoip, etc.) and merge
     everything into a single JSON output file.  For UDP packets on port 53 the DNS
     layer is decoded.  SNMP (161/162), DHCP (67/68), NTP/SNTP (123), and SIP (5060/5061)
-    packets are also decoded and included in the output.  HTTP (any port whose payload
+    packets are also decoded and included in the output.  SSH (22/2222, plus
+    banner-based detection) is decoded for protocol metadata such as
+    identification banner/version and transport packet framing. HTTP (any port whose payload
     looks like HTTP) and HTTP/2 (connection preface or binary frames) are decoded for
     both requests and responses.  FTP (20/21), SMTP (25/587/465), POP3/POP (110/995),
     IMAP/IMAP4 (143/993), Telnet (23), IRC (6667-6669), MTP (1755), LDAP (389/636),
@@ -3626,10 +3768,22 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 httpSection = decodeHTTP(rawPayload)
                 if httpSection is not None:
                     transportSection["HTTP"] = httpSection
-                # Decode HTTP/2 on any TCP port (preface or binary frame detection)
-                http2Section = decodeHTTP2(rawPayload)
-                if http2Section is not None:
-                    transportSection["HTTP2"] = http2Section
+                # Decode HTTP/2 only for streams that have presented the client
+                # connection preface. This avoids classifying unrelated encrypted
+                # payloads (including SSH) as HTTP/2 based on random bytes.
+                shouldDecodeHttp2 = False
+                if rawPayload.startswith(HTTP2_PREFACE_BYTES):
+                    shouldDecodeHttp2 = True
+                    with http2DetectedStreamsLock:
+                        http2DetectedStreams.add(streamKey)
+                else:
+                    with http2DetectedStreamsLock:
+                        shouldDecodeHttp2 = streamKey in http2DetectedStreams
+
+                if shouldDecodeHttp2:
+                    http2Section = decodeHTTP2(rawPayload)
+                    if http2Section is not None:
+                        transportSection["HTTP2"] = http2Section
                 # Decode FTP on TCP ports 20/21
                 if streamLabelPort in (20, 21) or srcPort in (20, 21):
                     ftpSection = decodeFTP(rawPayload)
@@ -3743,6 +3897,15 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     kerberosSection = decodeKerberos(rawPayload)
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
+                # Decode SSH metadata on TCP ports 22/2222, or when payload starts with SSH banner
+                if (
+                    streamLabelPort in (22, 2222)
+                    or srcPort in (22, 2222)
+                    or rawPayload.startswith(b"SSH-")
+                ):
+                    sshSection = decodeSSH(rawPayload, srcPort, dstPort)
+                    if sshSection is not None:
+                        transportSection["SSH"] = sshSection
                 protocolKey = "TCP"
             elif isUdp:
                 # Build UDP section; decode DNS if present

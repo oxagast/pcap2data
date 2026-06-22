@@ -39,6 +39,7 @@ const {
   renderWebSocketTable,
   renderNfsTable,
   renderKerberosTable,
+  renderSshTable,
 } = require("./decoders");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
@@ -9710,6 +9711,9 @@ function infoPanel(pk) {
 
   // Kerberos info table (shown for Kerberos packets on port 88)
   renderKerberosTable(transportData);
+
+  // SSH info table (shown for SSH packets on port 22/2222)
+  renderSshTable(transportData);
 
   const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [

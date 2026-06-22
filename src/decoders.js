@@ -633,6 +633,32 @@ function renderKerberosTable(transportData) {
   createTable(krbRows, ['Kerberos Field', 'Value'], 'sidedatatable');
 }
 
+function renderSshTable(transportData) {
+  const sshData = transportData['SSH'];
+  if (!sshData) return;
+  const sshRows = [
+    { name: 'Type', value: sshData['Type'] || '—' },
+    { name: 'Direction', value: sshData['Direction'] || '—' },
+    { name: 'Banner', value: sshData['Banner'] || '—' },
+    { name: 'Protocol Version', value: sshData['Protocol Version'] || '—' },
+    { name: 'Software Version', value: sshData['Software Version'] || '—' },
+    { name: 'Comments', value: sshData['Comments'] || '—' },
+    { name: 'Packet Length', value: sshData['Packet Length'] ?? '—' },
+    { name: 'Padding Length', value: sshData['Padding Length'] ?? '—' },
+    { name: 'Message Type', value: sshData['Message Type'] || '—' },
+    {
+      name: 'Likely Encrypted',
+      value:
+        sshData['Likely Encrypted'] === undefined
+          ? '—'
+          : sshData['Likely Encrypted']
+            ? 'Yes'
+            : 'No',
+    },
+  ];
+  createTable(sshRows, ['SSH Field', 'Value'], 'sidedatatable');
+}
+
 module.exports = {
   createTable,
   renderDnsTable,
@@ -666,4 +692,5 @@ module.exports = {
   renderWebSocketTable,
   renderNfsTable,
   renderKerberosTable,
+  renderSshTable,
 };
