@@ -948,6 +948,89 @@ function decodeFtpFromBytes(bytes) {
   return { protocol: "FTP", fields };
 }
 
+function decodeSipFromBytes(bytes) {
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return null;
+
+  const firstLine = lines[0].trim();
+  const sipMethods = new Set([
+    "INVITE",
+    "ACK",
+    "BYE",
+    "CANCEL",
+    "REGISTER",
+    "OPTIONS",
+    "SUBSCRIBE",
+    "NOTIFY",
+    "REFER",
+    "INFO",
+    "UPDATE",
+    "PRACK",
+  ]);
+
+  // Check if first line is a SIP request or response
+  const isRequest =
+    sipMethods.has(firstLine.split(/\s+/)[0]?.toUpperCase());
+  const isResponse = firstLine.startsWith("SIP/");
+
+  if (!isRequest && !isResponse) return null;
+
+  const fields = [];
+  const headers = {};
+
+  // Parse headers
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) break;
+    if (line.includes(": ")) {
+      const [key, value] = line.split(": ", 2);
+      headers[key.trim()] = value.trim();
+    }
+  }
+
+  if (isRequest) {
+    const parts = firstLine.split(/\s+/);
+    fields.push(
+      { name: "Type", value: "Request" },
+      { name: "Method", value: parts[0] || "—" },
+      { name: "Request URI", value: parts[1] || "—" },
+    );
+  } else {
+    const parts = firstLine.split(/\s+/);
+    fields.push(
+      { name: "Type", value: "Response" },
+      { name: "Status Code", value: parts[1] || "—" },
+      { name: "Status Message", value: parts[2] || "—" },
+    );
+  }
+
+  // Add common SIP headers
+  [
+    "From",
+    "To",
+    "Call-ID",
+    "CSeq",
+    "Via",
+    "Contact",
+    "Authorization",
+    "Proxy-Authorization",
+    "Route",
+    "Record-Route",
+  ].forEach((headerName) => {
+    if (headers[headerName]) {
+      const value = headers[headerName];
+      fields.push({
+        name: headerName,
+        value: value.length > 100 ? value.slice(0, 100) + "…" : value,
+      });
+    }
+  });
+
+  if (!fields.length) return null;
+  return { protocol: "SIP", fields };
+}
+
 function autoDetectProtoFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
@@ -983,6 +1066,13 @@ function autoDetectProtoFromBytes(bytes) {
     /^\S+ (SELECT|LOGIN|FETCH|AUTHENTICATE)\b/i.test(text)
   )
     return "imap";
+  if (
+    /^(INVITE|ACK|BYE|CANCEL|REGISTER|OPTIONS|SUBSCRIBE|NOTIFY|REFER|INFO|UPDATE|PRACK)\s+\S+\s+SIP\/[\d.]+/i.test(
+      text,
+    ) ||
+    /^SIP\/[\d.]+ \d{3}/i.test(text)
+  )
+    return "sip";
   // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
   const TELNET_COMMANDS = new Set([
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
@@ -1061,6 +1151,9 @@ function runProtoDecoder(bytes) {
       break;
     case "ftp":
       result = decodeFtpFromBytes(bytes);
+      break;
+    case "sip":
+      result = decodeSipFromBytes(bytes);
       break;
     default:
       protocol = null;

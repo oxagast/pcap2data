@@ -1111,7 +1111,7 @@ def decodeIGMP(p, rawPayload):
 def decodeSIP(rawPayload):
     """
     Decode SIP message fields from raw payload bytes.
-    Parses the first line and common headers (From, To, Call-ID).
+    Parses the first line and common headers (From, To, Call-ID, Authorization).
     Returns a dict with both display-friendly keys and dot-notation keys for message
     type, method/status, and headers, or None if the payload is not a SIP message or
     decoding fails.
@@ -1147,11 +1147,16 @@ def decodeSIP(rawPayload):
             if ": " in line:
                 key, _, val = line.partition(": ")
                 headers[key.strip()] = val.strip()
+        
+        # Extract Authorization and Proxy-Authorization headers for credentials
+        authorization = headers.get("Authorization", "")
+        proxyAuthorization = headers.get("Proxy-Authorization", "")
+        
         if isSipRequest:
             parts = firstLine.split(" ", 2)
             method = parts[0]
             requestUri = parts[1] if len(parts) > 1 else "Unknown"
-            return {
+            result = {
                 "Type": "Request",
                 "sip.type": "Request",
                 "Method": method,
@@ -1165,11 +1170,18 @@ def decodeSIP(rawPayload):
                 "Call-ID": headers.get("Call-ID", "Unknown"),
                 "sip.call_id": headers.get("Call-ID", "Unknown"),
             }
+            if authorization:
+                result["Authorization"] = authorization
+                result["sip.authorization"] = authorization
+            if proxyAuthorization:
+                result["Proxy-Authorization"] = proxyAuthorization
+                result["sip.proxy_authorization"] = proxyAuthorization
+            return result
         else:
             parts = firstLine.split(" ", 2)
             statusCode = parts[1] if len(parts) > 1 else "Unknown"
             statusMsg = parts[2] if len(parts) > 2 else "Unknown"
-            return {
+            result = {
                 "Type": "Response",
                 "sip.type": "Response",
                 "Status Code": statusCode,
@@ -1183,6 +1195,13 @@ def decodeSIP(rawPayload):
                 "Call-ID": headers.get("Call-ID", "Unknown"),
                 "sip.call_id": headers.get("Call-ID", "Unknown"),
             }
+            if authorization:
+                result["Authorization"] = authorization
+                result["sip.authorization"] = authorization
+            if proxyAuthorization:
+                result["Proxy-Authorization"] = proxyAuthorization
+                result["sip.proxy_authorization"] = proxyAuthorization
+            return result
     except Exception:
         return None
 

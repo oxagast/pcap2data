@@ -485,6 +485,9 @@ function createKeystorePanel({
     if (lowerProtocol.includes("rdp")) {
       return hasPort(3389);
     }
+    if (lowerProtocol.includes("sip")) {
+      return hasPort(5060) || hasPort(5061);
+    }
 
     return false;
   }
@@ -811,6 +814,97 @@ function createKeystorePanel({
             content: text,
             protocolName: "SMTP",
           });
+        }
+      }
+    }
+
+    if (
+      lowerProtocol.includes("sip") ||
+      (lowerPath.includes("sip") && isRelevantProtocolPort("sip", port))
+    ) {
+      // Extract SIP Authorization header credentials
+      const authMatch = text.match(
+        /^\s*(?:Authorization|Proxy-Authorization)\s*[:=]\s*(.+)$/im,
+      );
+      if (authMatch?.[1] && isRelevantProtocolPort("sip", port)) {
+        const authValue = authMatch[1].trim();
+        // Extract username from digest auth (username="username_value")
+        const usernameMatch = authValue.match(/username\s*=\s*"?([^",\s]+)"?/i);
+        if (usernameMatch?.[1]) {
+          addEntry({
+            type: isLikelyEmailAddress(usernameMatch[1]) ? "email" : "secret",
+            label: "SIP Username",
+            source: "session-auto-sip-username",
+            content: usernameMatch[1],
+            protocolName: "SIP",
+          });
+        }
+        // Extract password/response from digest auth (response="...")
+        const responseMatch = authValue.match(/response\s*=\s*"([^"]+)"/i);
+        if (responseMatch?.[1]) {
+          addEntry({
+            type: "secret",
+            label: "SIP Digest Response (hashed)",
+            source: "session-auto-sip-password",
+            content: responseMatch[1],
+            protocolName: "SIP",
+          });
+        }
+        // For basic auth in SIP (rare but possible)
+        if (authValue.toLowerCase().includes("basic")) {
+          const basicMatch = authValue.match(/basic\s+([A-Za-z0-9+/=]+)/i);
+          if (basicMatch?.[1]) {
+            try {
+              const decodedBasic = atob(basicMatch[1]);
+              const [basicUser, basicPass] = decodedBasic.split(":");
+              if (basicUser) {
+                addEntry({
+                  type: isLikelyEmailAddress(basicUser) ? "email" : "secret",
+                  label: "SIP Basic Auth Username",
+                  source: "session-auto-sip-basic-username",
+                  content: basicUser,
+                  protocolName: "SIP",
+                });
+              }
+              if (basicPass) {
+                addEntry({
+                  type: "secret",
+                  label: "SIP Basic Auth Password",
+                  source: "session-auto-sip-basic-password",
+                  content: basicPass,
+                  protocolName: "SIP",
+                });
+              }
+            } catch (e) {
+              // Ignore if base64 decode fails
+            }
+          }
+        }
+      }
+      // Check for Authorization/Proxy-Authorization header in pathKey
+      if (isRelevantProtocolPort("sip", port)) {
+        if (lowerPath.includes("authorization")) {
+          // Extract credentials from Authorization header value in path
+          const usernameMatch = text.match(/username\s*=\s*"?([^",\s]+)"?/i);
+          if (usernameMatch?.[1]) {
+            addEntry({
+              type: isLikelyEmailAddress(usernameMatch[1]) ? "email" : "secret",
+              label: "SIP Username",
+              source: "session-auto-sip-username",
+              content: usernameMatch[1],
+              protocolName: "SIP",
+            });
+          }
+          const responseMatch = text.match(/response\s*=\s*"([^"]+)"/i);
+          if (responseMatch?.[1]) {
+            addEntry({
+              type: "secret",
+              label: "SIP Digest Response (hashed)",
+              source: "session-auto-sip-password",
+              content: responseMatch[1],
+              protocolName: "SIP",
+            });
+          }
         }
       }
     }

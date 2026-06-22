@@ -198,6 +198,12 @@ function renderSipTable(transportData) {
     { name: 'To', value: sipData['To'] || '—' },
     { name: 'Call-ID', value: sipData['Call-ID'] || '—' },
   ];
+  if (sipData['Authorization']) {
+    sipRows.push({ name: 'Authorization', value: sipData['Authorization'] || '—' });
+  }
+  if (sipData['Proxy-Authorization']) {
+    sipRows.push({ name: 'Proxy-Authorization', value: sipData['Proxy-Authorization'] || '—' });
+  }
   createTable(sipRows, ['SIP Field', 'Value'], 'sidedatatable');
 }
 
