@@ -181,6 +181,8 @@ let p = []; // Packets for the currently selected host
 let index = 0; // Navigation index for packets
 let activePacketCursor = 0;
 let bookmarkList = []; // List of bookmarks (host:packet index)
+let retransmissionList = []; // List of packets marked as retransmissions
+let outOfOrderList = []; // List of packets marked as out-of-order
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
 let jsonOfPackets;
@@ -1242,7 +1244,20 @@ function isBookmarkFilterExpression(expression) {
   return normalizeLocalFilterKey(parts.filterKey) === "bookmark";
 }
 
+function isRetransmissionFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts?.filterKey) return false;
+  return normalizeLocalFilterKey(parts.filterKey) === "tcp.retransmission";
+}
+
 function parseBookmarkFilterBool(rawValue) {
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  if (["true", "1", "yes", "y"].includes(normalized)) return true;
+  if (["false", "0", "no", "n"].includes(normalized)) return false;
+  return null;
+}
+
+function parseRetransmissionFilterBool(rawValue) {
   const normalized = String(rawValue || "").trim().toLowerCase();
   if (["true", "1", "yes", "y"].includes(normalized)) return true;
   if (["false", "0", "no", "n"].includes(normalized)) return false;
@@ -1273,6 +1288,32 @@ function evaluateBookmarkFilterExpression(expression) {
       return isBookmarked !== expectedBookmarked;
     }
     return isBookmarked === expectedBookmarked;
+  });
+}
+
+function evaluateRetransmissionFilterExpression(expression) {
+  const parts = parseFilterExpressionParts(expression);
+  if (!parts) return [];
+  const comparisonOps = [">=", "<=", ">", "<", "==", "!="];
+  const filterModifier = comparisonOps.find((modifier) =>
+    parts.filterValue.includes(modifier),
+  );
+  const rawFilterValue = filterModifier
+    ? parts.filterValue.replace(filterModifier, "").trim()
+    : parts.filterValue;
+  const expectedRetransmission = parseRetransmissionFilterBool(rawFilterValue);
+  if (expectedRetransmission === null) {
+    return [];
+  }
+
+  const retransmissionSet = new Set(retransmissionList);
+  const allPacketKeys = getAllPacketKeysForFiltering();
+  return allPacketKeys.filter((packetKey) => {
+    const isRetransmission = retransmissionSet.has(packetKey);
+    if (filterModifier === "!=") {
+      return isRetransmission !== expectedRetransmission;
+    }
+    return isRetransmission === expectedRetransmission;
   });
 }
 
@@ -1482,6 +1523,9 @@ function subtractPacketKeys(allKeys, excludedKeys) {
 async function evaluateFilterExpressionToPacketKeys(expression) {
   if (isBookmarkFilterExpression(expression)) {
     return evaluateBookmarkFilterExpression(expression);
+  }
+  if (isRetransmissionFilterExpression(expression)) {
+    return evaluateRetransmissionFilterExpression(expression);
   }
   if (!window.captureapi) {
     return [];
@@ -6812,12 +6856,15 @@ function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
     let label = "In-order TCP segment";
     if (isRetransmission && isOutOfOrder) {
       label = "Retransmission (out-of-order arrival)";
+      retransmissionList.push(currentPacketKey);
+      outOfOrderList.push(currentPacketKey);
     } else if (isRetransmission) {
       label = "Retransmission";
+      retransmissionList.push(currentPacketKey);
     } else if (isOutOfOrder) {
       label = "Out-of-order arrival";
+      outOfOrderList.push(currentPacketKey);
     }
-
     statusByPacketKey.set(packetKey, {
       label,
       isRetransmission,
