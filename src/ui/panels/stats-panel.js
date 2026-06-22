@@ -395,7 +395,8 @@ function createStatsPanel(options) {
       overview.appendChild(kv);
     });
     content.appendChild(overview);
-
+    // make the application protocols uppercase to be congruent with the rest of the protos
+    stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
     const protoSec = makeStatsSection({
       documentRef,
       title: "Application Protocols",

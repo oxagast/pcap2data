@@ -67,12 +67,6 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
   const fromTraits =
     typeof fromTraitsRaw === "string" ? fromTraitsRaw.trim() : "";
 
-  // List-tab-only fallback: only use decoded protocols when the app protocol
-  // would otherwise be shown as Unknown.
-  if (!isUnknownLikeProtocol(fromTraits)) {
-    return fromTraits;
-  }
-
   const decodedNames = collectDecodedProtocolNames(packetInfo);
   const preferred = [
     "SSH",
@@ -90,12 +84,15 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
     decodedNames.map((name) => [String(name).toLowerCase(), name]),
   );
 
+  // List-tab precedence: decoded protocol evidence should override the
+  // traits app protocol mapping when both are available.
   for (const name of preferred) {
     const matched = decodedByLower.get(name.toLowerCase());
     if (matched) return matched;
   }
 
   if (decodedNames.length > 0) return decodedNames[0];
+  if (!isUnknownLikeProtocol(fromTraits)) return fromTraits;
   return "Unknown";
 }
 

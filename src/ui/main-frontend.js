@@ -1296,9 +1296,62 @@ function getPacketsForSelectedHost(selectedHost) {
   if (isBookmarkedSelection(selectedHost)) {
     return getBookmarkedPacketsForHostNavigation();
   }
-  return Array.isArray(capturedPackets?.["Host"]?.[selectedHost])
+  const hostPackets = Array.isArray(capturedPackets?.["Host"]?.[selectedHost])
     ? capturedPackets["Host"][selectedHost]
     : [];
+  return sortPacketsByOwnStreamOrder([...hostPackets]);
+}
+
+function parsePacketTimestampMs(packet) {
+  const packetTimestamp = packet?.["Packet Info"]?.["Packet Timestamp"];
+  if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
+    return null;
+  }
+  const parsedTimestamp = Date.parse(packetTimestamp);
+  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+}
+
+function parsePacketProcessedNumber(packet) {
+  const processedRaw = Number(packet?.["Packet Info"]?.["Packet Processed"]);
+  return Number.isFinite(processedRaw) ? processedRaw : null;
+}
+
+function parsePacketIndexNumber(packet) {
+  const packetIndexRaw = Number(packet?.["Packet Info"]?.["Index"]);
+  return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
+}
+
+function comparePacketsChronologically(
+  leftPacket,
+  rightPacket,
+  leftFallbackOrder = 0,
+  rightFallbackOrder = 0,
+) {
+  const leftTimestamp = parsePacketTimestampMs(leftPacket);
+  const rightTimestamp = parsePacketTimestampMs(rightPacket);
+  if (leftTimestamp !== null && rightTimestamp !== null && leftTimestamp !== rightTimestamp) {
+    return leftTimestamp - rightTimestamp;
+  }
+  if (leftTimestamp !== null && rightTimestamp === null) return -1;
+  if (leftTimestamp === null && rightTimestamp !== null) return 1;
+
+  const leftProcessed = parsePacketProcessedNumber(leftPacket);
+  const rightProcessed = parsePacketProcessedNumber(rightPacket);
+  if (leftProcessed !== null && rightProcessed !== null && leftProcessed !== rightProcessed) {
+    return leftProcessed - rightProcessed;
+  }
+  if (leftProcessed !== null && rightProcessed === null) return -1;
+  if (leftProcessed === null && rightProcessed !== null) return 1;
+
+  const leftIndex = parsePacketIndexNumber(leftPacket);
+  const rightIndex = parsePacketIndexNumber(rightPacket);
+  if (leftIndex !== null && rightIndex !== null && leftIndex !== rightIndex) {
+    return leftIndex - rightIndex;
+  }
+  if (leftIndex !== null && rightIndex === null) return -1;
+  if (leftIndex === null && rightIndex !== null) return 1;
+
+  return leftFallbackOrder - rightFallbackOrder;
 }
 
 function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
@@ -1337,41 +1390,20 @@ function sortPacketsByOwnStreamOrder(packetList) {
     return Array.isArray(packetList) ? packetList : [];
   }
 
-  const streamOrderMap = new Map();
   const decorated = packetList.map((packet, originalOrder) => {
-    const streamInfo = getPacketStreamSortInfo(packet, originalOrder + 1);
-    const existingStreamOrder = streamOrderMap.get(streamInfo.streamKey);
-    if (existingStreamOrder === undefined) {
-      streamOrderMap.set(streamInfo.streamKey, streamInfo.packetIndex);
-    } else if (streamInfo.packetIndex < existingStreamOrder) {
-      streamOrderMap.set(streamInfo.streamKey, streamInfo.packetIndex);
-    }
-
     return {
       packet,
       originalOrder,
-      streamKey: streamInfo.streamKey,
-      packetIndex: streamInfo.packetIndex,
     };
   });
 
   decorated.sort((left, right) => {
-    const leftStreamOrder = streamOrderMap.get(left.streamKey) ?? Number.MAX_SAFE_INTEGER;
-    const rightStreamOrder =
-      streamOrderMap.get(right.streamKey) ?? Number.MAX_SAFE_INTEGER;
-    if (leftStreamOrder !== rightStreamOrder) {
-      return leftStreamOrder - rightStreamOrder;
-    }
-
-    if (left.packetIndex !== right.packetIndex) {
-      return left.packetIndex - right.packetIndex;
-    }
-
-    if (left.streamKey !== right.streamKey) {
-      return left.streamKey.localeCompare(right.streamKey);
-    }
-
-    return left.originalOrder - right.originalOrder;
+    return comparePacketsChronologically(
+      left.packet,
+      right.packet,
+      left.originalOrder,
+      right.originalOrder,
+    );
   });
 
   return decorated.map((entry) => entry.packet);
@@ -6513,15 +6545,9 @@ function getFollowStreamPackets(packet = null) {
       }
     }
   }
-  // Sort by packet timestamp, falling back to Index for stable ordering.
+  // Sort by packet chronology using timestamp, then Packet Processed and Index.
   matches.sort((a, b) => {
-    const tsA = a?.["Packet Info"]?.["Packet Timestamp"] ?? "";
-    const tsB = b?.["Packet Info"]?.["Packet Timestamp"] ?? "";
-    if (tsA < tsB) return -1;
-    if (tsA > tsB) return 1;
-    const idxA = Number(a?.["Packet Info"]?.["Index"] ?? 0);
-    const idxB = Number(b?.["Packet Info"]?.["Index"] ?? 0);
-    return idxA - idxB;
+    return comparePacketsChronologically(a, b);
   });
   return matches;
 }
@@ -6581,13 +6607,7 @@ async function getFollowStreamPacketsAsync(packet = null) {
 
   await yieldToRenderer();
   matches.sort((a, b) => {
-    const tsA = a?.["Packet Info"]?.["Packet Timestamp"] ?? "";
-    const tsB = b?.["Packet Info"]?.["Packet Timestamp"] ?? "";
-    if (tsA < tsB) return -1;
-    if (tsA > tsB) return 1;
-    const idxA = Number(a?.["Packet Info"]?.["Index"] ?? 0);
-    const idxB = Number(b?.["Packet Info"]?.["Index"] ?? 0);
-    return idxA - idxB;
+    return comparePacketsChronologically(a, b);
   });
   return matches;
 }
@@ -6658,6 +6678,160 @@ function getPacketTransportData(packet) {
   if (!packetInfo) return null;
   const protocol = packetInfo["Protocol"] || "TCP";
   return packetInfo[protocol] || null;
+}
+
+function buildBidirectionalStreamKey(packetInfo) {
+  if (!packetInfo || typeof packetInfo !== "object") return "";
+  const transportName = String(packetInfo["Protocol"] || "Unknown");
+  const transportData = packetInfo[transportName] || {};
+  const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
+  const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
+  const sourcePort = transportData?.["Source port"] ?? "";
+  const destinationPort = transportData?.["Destination port"] ?? "";
+
+  const endpointA = `${sourceIp}:${sourcePort}`;
+  const endpointB = `${destinationIp}:${destinationPort}`;
+  const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+  return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
+}
+
+function parseTcpSequenceNumber(transportData) {
+  const sequenceCandidates = [
+    transportData?.["TCP Sequence Number"],
+    transportData?.["tcp.seq"],
+    transportData?.["Sequence Number"],
+    transportData?.["Sequence"],
+  ];
+  for (const candidate of sequenceCandidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function getTcpSegmentLength(packetInfo, transportData) {
+  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
+    ? payloadLenRaw
+    : 0;
+
+  const flagsText = String(transportData?.["TCP Flag Data"]?.["Flags"] || "").toUpperCase();
+  const controlByteLength =
+    (flagsText.includes("SYN") ? 1 : 0) + (flagsText.includes("FIN") ? 1 : 0);
+  return payloadLen + controlByteLength;
+}
+
+function mergeSequenceRange(ranges, start, end) {
+  if (!Array.isArray(ranges) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return;
+  }
+
+  ranges.push({ start, end });
+  ranges.sort((left, right) => left.start - right.start);
+
+  const merged = [];
+  for (const currentRange of ranges) {
+    if (!merged.length) {
+      merged.push({ ...currentRange });
+      continue;
+    }
+    const lastRange = merged[merged.length - 1];
+    if (currentRange.start <= lastRange.end) {
+      lastRange.end = Math.max(lastRange.end, currentRange.end);
+      continue;
+    }
+    merged.push({ ...currentRange });
+  }
+
+  ranges.length = 0;
+  ranges.push(...merged);
+}
+
+function getSequenceRangeOverlapLength(ranges, start, end) {
+  if (!Array.isArray(ranges) || end <= start) return 0;
+  let overlapLength = 0;
+  for (const range of ranges) {
+    if (range.end <= start) continue;
+    if (range.start >= end) break;
+    const overlapStart = Math.max(start, range.start);
+    const overlapEnd = Math.min(end, range.end);
+    if (overlapEnd > overlapStart) {
+      overlapLength += overlapEnd - overlapStart;
+    }
+  }
+  return overlapLength;
+}
+
+function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
+  const statusByPacketKey = new Map();
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
+    return statusByPacketKey;
+  }
+
+  const streamStateByDirection = new Map();
+  streamPackets.forEach((packet) => {
+    const packetInfo = packet?.["Packet Info"] || {};
+    const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+    const packetKey = getPacketKey(packet);
+    if (!packetKey || protocol !== "TCP") return;
+
+    const transportData = packetInfo["TCP"] || {};
+    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
+    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
+    const sourcePort = transportData?.["Source port"] ?? "";
+    const destinationPort = transportData?.["Destination port"] ?? "";
+    const directionKey = `${sourceIp}:${sourcePort}>${destinationIp}:${destinationPort}`;
+    const sequenceNumber = parseTcpSequenceNumber(transportData);
+    const segmentLength = getTcpSegmentLength(packetInfo, transportData);
+
+    const state = streamStateByDirection.get(directionKey) || {
+      seenRanges: [],
+      maxStartObserved: null,
+    };
+
+    if (sequenceNumber === null || segmentLength <= 0) {
+      statusByPacketKey.set(packetKey, {
+        label: "In-order TCP segment",
+        isRetransmission: false,
+        isOutOfOrder: false,
+      });
+      streamStateByDirection.set(directionKey, state);
+      return;
+    }
+
+    const sequenceEnd = sequenceNumber + segmentLength;
+    const overlapLength = getSequenceRangeOverlapLength(
+      state.seenRanges,
+      sequenceNumber,
+      sequenceEnd,
+    );
+    const isRetransmission = overlapLength > 0;
+    const isOutOfOrder =
+      Number.isFinite(state.maxStartObserved) && sequenceNumber < state.maxStartObserved;
+
+    let label = "In-order TCP segment";
+    if (isRetransmission && isOutOfOrder) {
+      label = "Retransmission (out-of-order arrival)";
+    } else if (isRetransmission) {
+      label = "Retransmission";
+    } else if (isOutOfOrder) {
+      label = "Out-of-order arrival";
+    }
+
+    statusByPacketKey.set(packetKey, {
+      label,
+      isRetransmission,
+      isOutOfOrder,
+    });
+
+    mergeSequenceRange(state.seenRanges, sequenceNumber, sequenceEnd);
+    state.maxStartObserved = Number.isFinite(state.maxStartObserved)
+      ? Math.max(state.maxStartObserved, sequenceNumber)
+      : sequenceNumber;
+    streamStateByDirection.set(directionKey, state);
+  });
+
+  return statusByPacketKey;
 }
 
 function readUint32Le(bytes, offset) {
@@ -9607,10 +9781,36 @@ function infoPanel(pk) {
       })
       .join("<br>");
   }
+
+  const currentStreamKey = buildBidirectionalStreamKey(packetInfoData);
+  const streamPackets = [];
+  if (capturedPackets && capturedPackets["Host"]) {
+    for (const host of Object.keys(capturedPackets["Host"])) {
+      const hostPackets = capturedPackets["Host"][host];
+      if (!Array.isArray(hostPackets)) continue;
+      for (const pkt of hostPackets) {
+        const pi = pkt?.["Packet Info"];
+        if (pi && buildBidirectionalStreamKey(pi) === currentStreamKey) {
+          streamPackets.push(pkt);
+        }
+      }
+    }
+  }
+  const sortedStreamPackets = sortPacketsByOwnStreamOrder(streamPackets);
+  const tcpArrivalStatusByPacketKey = getTcpStreamArrivalStatusByPacketKey(
+    sortedStreamPackets,
+  );
+  const currentTcpArrivalStatus = tcpArrivalStatusByPacketKey.get(getPacketKey(p));
+  const tcpStreamStatusText =
+    protocol === "TCP"
+      ? currentTcpArrivalStatus?.label || "In-order TCP segment"
+      : "N/A";
+
   const checksumData = [
     { name: "IP Checksum", value: ipChecksum },
     { name: protocol + " Checksum", value: transportChecksum },
     { name: "Flags", value: tcpFlags },
+    { name: "TCP Stream Status", value: tcpStreamStatusText },
     { name: "IP Length", value: ipLayerLen },
     { name: protocol + " Length", value: transportLayerLen },
     { name: "Wire Length", value: wireLen },
@@ -9731,37 +9931,12 @@ function infoPanel(pk) {
   ];
   createTable(dstIpData, ipTableHeaders, "protoInfoDest");
   const entropyValue = Number(traitsData["Shannon Entropy"] ?? 0);
-  document.getElementById("timestamp").textContent =
-    "Timestamp " + packetTimestamp;
-
-  const getStreamKey = (pkt) => {
-    const transportName = pkt?.["Protocol"] || "Unknown";
-    const transportData = pkt?.[transportName] || {};
-    const sourceIp = pkt?.["IP"]?.["Source IP"] ?? "";
-    const destinationIp = pkt?.["IP"]?.["Destination IP"] ?? "";
-    const sourcePort = transportData?.["Source port"] ?? "";
-    const destinationPort = transportData?.["Destination port"] ?? "";
-
-    const endpointA = `${sourceIp}:${sourcePort}`;
-    const endpointB = `${destinationIp}:${destinationPort}`;
-    const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
-    return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
-  };
-
-  const currentStreamKey = getStreamKey(packetInfoData);
-  const streamPacketCount = (() => {
-    if (!capturedPackets || !capturedPackets["Host"]) return 0;
-    let count = 0;
-    for (const host of Object.keys(capturedPackets["Host"])) {
-      const hostPackets = capturedPackets["Host"][host];
-      if (!Array.isArray(hostPackets)) continue;
-      for (const pkt of hostPackets) {
-        const pi = pkt?.["Packet Info"];
-        if (pi && getStreamKey(pi) === currentStreamKey) count++;
-      }
-    }
-    return count;
-  })();
+  const tcpTimestampSuffix =
+    protocol === "TCP" && tcpStreamStatusText !== "N/A"
+      ? ` ${tcpStreamStatusText}`
+      : "";
+  document.getElementById("timestamp").innerHTML =
+    "Timestamp " + packetTimestamp + "<br>" + tcpTimestampSuffix;
 
   //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
   document.getElementById("sideloctable").textContent = "";
