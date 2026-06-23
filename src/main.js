@@ -162,8 +162,11 @@ function createWindow() {
       if (helpURL.startsWith("https://packetsnitch.oxasploits.com/")) {
         helpPage = pageMatch ? pageMatch[1] : "unknown";
       }
+      else if (helpURL.startsWith("https://github.com/oxasploits/PacketSnitch")) {
+        helpPage = "Repo";
+      }
       else {
-        helpPage = "External Permissive Page";
+        helpPage = "Unknown";
       }
       if (pageMatch && pageMatch[1]) {
         helpPage = helpPage.replace(/\//g, ""); // remove slashes
