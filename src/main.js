@@ -53,6 +53,8 @@ if (require("electron-squirrel-startup")) {
   app.quit();
 }
 
+
+
 ipcMain.handle("file-size", async () => {
   try {
     // Get file stats asynchronously
@@ -135,6 +137,10 @@ function createWindow() {
       ),
       { broadcast: false },
     );
+  });
+  mainWindow.webContents.on('did-create-window', (helpWinChild) => {
+    helpWinChild.removeMenu();
+    helpWinChild.setSize(1000, 900);
   });
 }
 

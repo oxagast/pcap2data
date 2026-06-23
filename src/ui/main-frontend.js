@@ -194,6 +194,8 @@ let filteredPackets;
 let currentPacketKey;
 let lastFilteredNavigationLogMessage = "";
 let startTime;
+let helpOpen = false;
+let helpWin = null;
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
@@ -8711,6 +8713,23 @@ document.getElementById("stats-btn").addEventListener("click", function () {
   showStats();
 });
 
+document.getElementById("help-btn").addEventListener("click", function () {
+  // if the window is already open, make sure it doesn't get opened again, just focus it
+  if (helpWin != null && !helpWin.closed) {
+    // bring the help window back in front of the main window
+    helpWin.blur();
+    window.focus();
+    return;
+  }
+  // open the help page in a new window
+  writeLogEntry("Calling help page in browser");
+  helpWin = window.open("https://packetsnitch.oxasploits.com/", "_blank");
+  // if the window is closed, set helpWin to null
+  helpWin.addEventListener("beforeunload", () => {
+    helpWin = null;
+  });
+});
+
 // Show data conversion tools when data tools button is clicked
 document
   .getElementById("data-tools-btn")
@@ -10837,6 +10856,7 @@ onload = function () {
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";
+  document.getElementById("help-btn").style.opacity = "1";
   const rightsideDataEl = document.getElementById("rightside-data");
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
