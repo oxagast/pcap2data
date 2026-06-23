@@ -524,6 +524,24 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `radius.length` | integer | Total packet length in bytes                                                      |
 | `radius.attrs`  | array   | List of decoded RADIUS attributes (`{Type, Value}` objects)                       |
 
+#### Stream related Fields
+
+> These keys filter based on tcp stream charactaristics.
+
+| Filter Key                   | Type    | Description                                              |
+| ---------------------------- | ------- | -------------------------------------------------------- |
+| `tcp.stream.retransmission`  | boolean | If this is a retransmission packet                       |
+| `tcp.stream.badorder`        | boolean | If this packet came, but was not in stream order         |
+
+#### Misc
+
+> These are otherwise uncatagorized filter keys
+
+| Filter Key     | Type    | Description
+| -------------- | ------- | ---------------------------------------------- |
+| `bookmark`     | boolean | If the packet has been bookmarked in the UI    |
+
+
 ---
 
 ### Examples
