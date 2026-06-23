@@ -2,5 +2,12 @@ I collected these samples from various places around the internet! Most of them 
 
 If you find a capture you have rights to here and don't want it here, I will gladly remove it from the repo.
 
+Resources:
+https://wiki.wireshark.org/samplecaptures#specific-protocols-and-protocol-families
+https://trove.cyberskyline.com/da643ef1fbdf44c399de12d273d281b6
+https://www.netresec.com/?page=PcapFiles
+https://kargs.net/captures/
+https://web.archive.org/web/20240719051541/https://njrusmc.net/jobaid/jobaid.html
+
 Questions? Email:
 marshall@oxasploits.com
