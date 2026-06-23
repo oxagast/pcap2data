@@ -10762,7 +10762,7 @@ function hideAllData() {
   updateCurrentPacketCounters([], {
     isFilteredView: true,
   });
-  popHexGrid("00".repeat(1));
+  popHexGrid("");
 }
 function showAllData() {
   document.getElementById("prev-btn").style.opacity = "1";
@@ -10857,6 +10857,7 @@ onload = function () {
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";
   document.getElementById("help-btn").style.opacity = "1";
+  document.getElementById("log-btn").style.opacity = "1";
   const rightsideDataEl = document.getElementById("rightside-data");
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
