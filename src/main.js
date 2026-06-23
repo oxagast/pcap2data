@@ -139,8 +139,48 @@ function createWindow() {
     );
   });
   mainWindow.webContents.on('did-create-window', (helpWinChild) => {
+    helpWinChild.webContents.on('will-navigate', (event, url) => {
+      const hostname = new URL(url).hostname;
+
+      if ((hostname !== 'github.com' && hostname !== 'oxasploits.com' && hostname !== 'packetsnitch.oxasploits.com') && !url.startsWith('https://github.com/oxasploits/packetsnitch/')) {
+        console.log(`Blocked navigation to external domain: ${url}`);
+        event.preventDefault();
+      }
+    });
     helpWinChild.removeMenu();
     helpWinChild.setSize(1000, 900);
+    helpWinChild.webContents.on('did-finish-load', () => {
+      let helpPage = "";
+      let helpURL = helpWinChild.webContents.getURL();
+      // regex for matching the help page within the URL
+      const helpPageRegex = /.*\/(.+?)\/$/;
+      pageMatch = helpURL.match(helpPageRegex);
+      if (helpURL.startsWith("https://packetsnitch.oxasploits.com/")) {
+        helpPage = pageMatch ? pageMatch[1] : "unknown";
+      }
+      else {
+        helpPage = "External Permissive Page";
+      }
+      if (pageMatch && pageMatch[1]) {
+        helpPage = helpPage.replace(/\//g, ""); // remove slashes
+      }
+      if (helpPage === "packetsnitch.oxasploits.com") {
+        helpPage = "Home";
+      }
+      helpPage = helpPage.charAt(0).toUpperCase() + helpPage.slice(1);
+      console.log(`Help loaded PacketSnitch DocsHub ${helpPage}`);
+    });
+
+    helpWinChild.webContents.on('did-fail-load', (
+      event,
+      errorCode,
+      errorDescription,
+      validatedURL
+    ) => {
+      console.error(
+        `Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`
+      );
+    });
   });
 }
 
