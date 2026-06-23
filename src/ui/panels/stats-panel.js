@@ -582,6 +582,8 @@ function createStatsPanel(options) {
     ovHead.className = "stats-section-title";
     ovHead.textContent = "Capture Overview";
     overview.appendChild(ovHead);
+    const overviewGrid = documentRef.createElement("div");
+    overviewGrid.className = "stats-overview-grid";
     [
       `Total Packets: ${stats.totalPackets}`,
       `Bookmarked Packets: ${stats.bookmarkCount}`,
@@ -600,8 +602,9 @@ function createStatsPanel(options) {
       const kv = documentRef.createElement("div");
       kv.className = "stats-kv";
       kv.textContent = line;
-      overview.appendChild(kv);
+      overviewGrid.appendChild(kv);
     });
+    overview.appendChild(overviewGrid);
     content.appendChild(overview);
     // make the application protocols uppercase to be congruent with the rest of the protos
     stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
