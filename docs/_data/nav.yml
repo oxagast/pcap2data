@@ -1,5 +1,7 @@
 - name: Overview
   link: /
+- name: Features
+  link: /features
 - name: Frontend
   link: /frontend
 - name: Backend
