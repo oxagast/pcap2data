@@ -13,8 +13,8 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 ## Demo
 
-<p align="center">
-<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1200>
+<p align="center"><a href="https://www.youtube.com/watch?v=R9FpxAu1E48" rel="alternate external" target="_blank">
+<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/ps-working2.gif" width=1200></a>
 </p>
 
 ## Quick Start
