@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const appLock = app.requestSingleInstanceLock();
+const userAgent = `PacketSnitch v${app.getVersion()} (${process.platform}; ${process.arch})`;
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -142,13 +143,16 @@ function createWindow() {
     helpWinChild.webContents.on('will-navigate', (event, url) => {
       const hostname = new URL(url).hostname;
 
-      if ((hostname !== 'github.com' && hostname !== 'oxasploits.com' && hostname !== 'packetsnitch.oxasploits.com') && !url.startsWith('https://github.com/oxasploits/packetsnitch/')) {
-        console.log(`Blocked navigation to external domain: ${url}`);
-        event.preventDefault();
+      if ((hostname !== 'github.com' && hostname !== 'packetsnitch.oxasploits.com')) {
+        if (!url.startsWith('https://github.com/oxasploits/packetsnitch/') && !url.startsWith('https://packetsnitch.oxasploits.com/')) {
+          console.log(`Blocked navigation to external domain: ${url}`);
+          event.preventDefault();
+        }
       }
     });
     helpWinChild.removeMenu();
     helpWinChild.setSize(1000, 900);
+    helpWinChild.webContents.setUserAgent(userAgent);
     helpWinChild.webContents.on('did-finish-load', () => {
       let helpPage = "";
       let helpURL = helpWinChild.webContents.getURL();
