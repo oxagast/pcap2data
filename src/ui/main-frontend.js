@@ -5796,17 +5796,17 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
     const safeApp = appProto && appProto !== "unknown" ? sanitizeFilterTerm(appProto) : "";
 
     if (safeWire) {
-      filterQueries.wireProtocol = `wire.proto: ${safeWire}`;
+      filterQueries.wireProtocol = `transport.proto: ${safeWire}`;
     }
     if (safeApp) {
-      filterQueries.appProtocol = `app.proto: ${safeApp}`;
+      filterQueries.appProtocol = `application.proto: ${safeApp}`;
     }
     if (safeWire && safeApp) {
-      filterQueries.protocol = `wire.proto: ${safeWire} && app.proto: ${safeApp}`;
+      filterQueries.protocol = `transport.proto: ${safeWire} && application.proto: ${safeApp}`;
     } else if (safeWire) {
-      filterQueries.protocol = `wire.proto: ${safeWire}`;
+      filterQueries.protocol = `transport.proto: ${safeWire}`;
     } else if (safeApp) {
-      filterQueries.protocol = `app.proto: ${safeApp}`;
+      filterQueries.protocol = `application.proto: ${safeApp}`;
     }
   }
 
