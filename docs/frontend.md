@@ -465,6 +465,7 @@ Filter keys use the same dot-notation names as the [searchable attributes](filte
 | ----------------------------------------- | --------------------------------------------------------- | ------------------------------------------ | ------------------------------------- |
 | `ip.src.addr:10.0.0.1`                    | Packets from source IP `10.0.0.1`                         |
 | `tcp.dst.port:443`                        | TCP packets to port 443                                   |
+| `ip.dst.addr:10.0.2.*` && transport.proto:tcp | TCP Packets destined for the subnet 10.0.2.0/24       |
 | `payload.entropy>=7.0`                    | Payloads with entropy ≥ 7.0 (likely encrypted/compressed) |
 | `payload.mime:text/html`                  | Payloads identified as HTML                               |
 | `loc.src.country:China`                   | Packets originating from China (GeoIP)                    |

@@ -26,7 +26,7 @@ payload.mime:text/html
 
 #### Comparison operators
 
-Prefix the value with a comparison operator to perform numeric or lexicographic comparisons.
+Prefix the value with a comparison operator to perform numeric or lexicographic comparisons, globbing supported.
 
 ```
 key:==value    (explicit equality — same as key:value)
@@ -35,6 +35,7 @@ key:>value     (greater than)
 key:>=value    (greater than or equal)
 key:<value     (less than)
 key:<=value    (less than or equal)
+key:value*       (globbing, or matching part of the string)
 ```
 
 ```
@@ -42,6 +43,7 @@ payload.entropy:>=7.0
 ip.len:>100
 tcp.dst.port:!=80
 payload.len:<64
+mime.type: text/*
 ```
 
 #### Boolean combinators
@@ -552,6 +554,9 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 # Packets from a specific source IP
 ip.src.addr:192.168.1.10
 
+# Packets coming from your home or vpn network
+ip.src.addr:10.0.1.* || ip.src.addr:10.0.2.*
+
 # Packets going to a specific destination IP
 ip.dst.addr:10.0.0.1
 
@@ -580,8 +585,8 @@ payload.entropy:>=7.0
 # Small payloads
 payload.len:<64
 
-# HTML responses
-payload.mime:text/html
+# All text based responses
+payload.mime:text/*
 
 # JSON payloads
 payload.mime:application/json
@@ -629,6 +634,9 @@ dns.qr:false
 
 # DNS queries for a specific domain
 dns.qname:example.com
+
+# DNS queries to a subdomain of google.com
+dns.qname:*.google.com
 
 # All DNS responses
 dns.qr:true
