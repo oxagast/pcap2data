@@ -6,7 +6,31 @@ const REGEX_IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d
 const REGEX_HEX = /^0x[0-9a-fA-F]+$/;
 const REGEX_MAC = /^([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}$/;
 const REGEX_ASCII = /^[\x00-\x7F]*$/;
+const wildcardCache = new Map();
 
+function wildcardMatch(value, pattern) {
+  let regex = wildcardCache.get(pattern);
+
+  if (!regex) {
+    const escaped = pattern.replace(
+      /[.+?^${}()|[\]\\]/g,
+      '\\$&',
+    );
+
+    regex = new RegExp(
+      '^' +
+      escaped
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.') +
+      '$',
+      'i',
+    );
+
+    wildcardCache.set(pattern, regex);
+  }
+
+  return regex.test(String(value));
+}
 // Declare the writeLogEntry function
 function writeLogEntry(message) {
   console.log(message);
@@ -108,6 +132,22 @@ function getLeafKeys(obj) {
   return result;
 }
 
+
+function wildcardMatch(value, pattern) {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+
+  const regex = new RegExp(
+    '^' +
+    escaped
+      .replace(/\*/g, '.*')
+      .replace(/\?/g, '.') +
+    '$',
+    'i',
+  );
+
+  return regex.test(String(value));
+}
+
 function normalizeFilterKey(key) {
   return key.toLowerCase().replace(/[._\s-]+/g, '-');
 }
@@ -204,6 +244,9 @@ function filterChunk(data, filter) {
   const filterModifier = comparisonOps.find((m) => filterValRaw.includes(m));
   const filterValue = filterValRaw.replace(filterModifier, '').trim();
   const filterValueLower = filterValue.toLowerCase();
+  const hasWildcard =
+    filterValue.includes('*') ||
+    filterValue.includes('?');
   const isStringFilter = ['ASCII', 'HEX', 'IP', 'MAC'].includes(getDataType(filterValue));
 
   for (const host in parsedHosts.Host) {
@@ -235,7 +278,7 @@ function filterChunk(data, filter) {
 
       let matched = false;
 
-      if (
+      /* if (
         !filterModifier &&
         ['dns-qname', 'eth-src-vendor', 'mime-type', 'decoded-proto', 'arp-op', 'rarp-op'].includes(normalizedFilterKey)
       ) {
@@ -246,10 +289,37 @@ function filterChunk(data, filter) {
             value.toLowerCase().includes(filterValueLower),
         );
       } else {
+ */
+      if (
+        !filterModifier &&
+        ['dns-qname', 'eth-src-vendor', 'mime-type', 'decoded-proto', 'arp-op', 'rarp-op']
+          .includes(normalizedFilterKey)
+      ) {
+        const textValues = Array.isArray(fieldValue)
+          ? fieldValue
+          : [fieldValue];
+
+        matched = textValues.some((value) => {
+          if (typeof value !== 'string') return false;
+
+          return hasWildcard
+            ? wildcardMatch(value, filterValue)
+            : value.toLowerCase().includes(filterValueLower);
+        });
+      } else {
+
         if (filterModifier) {
           matched = compare(fieldValue, filterValue, filterModifier);
         } else {
-          matched = compare(fieldValue, filterValue, '==');
+          //matched = compare(fieldValue, filterValue, '==');
+          if (
+            hasWildcard &&
+            typeof fieldValue === 'string'
+          ) {
+            matched = wildcardMatch(fieldValue, filterValue);
+          } else {
+            matched = compare(fieldValue, filterValue, '==');
+          }
         }
       }
 
