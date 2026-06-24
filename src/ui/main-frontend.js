@@ -3734,9 +3734,14 @@ async function tryDecompressBytes(bytes, preferredAlgorithm = "") {
   return null;
 }
 
-function getCurrentPacketCompressionHint() {
+
+async function getCurrentPacketCompressionHint() {
   const contextPacket = getCurrentContextPacket();
   const httpData = getCurrentHttpData(contextPacket);
+  // packet payload hex is for brotli and it has to be the next packet in the stream
+  // get the packet num in the current stream
+
+  //const packetPayloadHex = contextPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]["Hex Encoded"];
   const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
   if (encoding.includes("br") || encoding.includes("brotli")) return "brotli";
   if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
@@ -3747,9 +3752,13 @@ function getCurrentPacketCompressionHint() {
     ? extraInfoData["Data Types"]
     : [];
   const dataTypeText = dataTypes.join(" ").toLowerCase();
-  if (dataTypeText.includes("brotli") || dataTypeText.includes(" br")) return "brotli";
+  // for brotli we need to grab the payload from the packet after the HTTP header that reads br
+  const packetPayload = getPacketPayloadBytes(getCurrentContextPacket(contextPacket, 1));
+  const tryBrotli = await tryDecompressBytes(packetPayload, "brotli");
+  if (tryBrotli) return "brotli";
   if (dataTypeText.includes("gzip") || dataTypeText.includes(" gz")) return "gzip";
   if (dataTypeText.includes("zlib") || dataTypeText.includes("deflate")) return "deflate";
+
 
   const payloadHex = getCurrentRawPayloadHex();
   if (!payloadHex) return "";
@@ -5633,13 +5642,13 @@ function getPacketFromListContextTarget(target) {
   return hostPackets[packetIndex] || null;
 }
 
-function getCurrentContextPacket(target = null) {
+function getCurrentContextPacket(target = null, offset = 0) {
   if (activeMainTab === MAIN_TAB_LIST) {
     const listPacket = getPacketFromListContextTarget(target || activeContextTarget);
     if (listPacket) return listPacket;
   }
   if (activeContextPacket) return activeContextPacket;
-  const packetCursor = getActivePacketCursor();
+  const packetCursor = getActivePacketCursor() + offset;
   if (packetCursor === null) return null;
   return p?.[packetCursor] || null;
 }
@@ -6065,7 +6074,7 @@ function showConvertContextMenu(
   activeContextPasteTarget = pasteTarget;
   activeContextFilterQueries = filterQueries;
   activeContextCookieJarText = cookieJarText;
-  activeContextPacket = getCurrentContextPacket(target);
+  activeContextPacket = getCurrentContextPacket(target, 0);
   activeContextHttpBodyDecompressionHint = getCurrentHttpBodyCompressionHint(
     activeContextPacket,
   );
