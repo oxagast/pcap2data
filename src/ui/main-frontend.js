@@ -557,6 +557,10 @@ sessionPickerPanel = initializeSessionPicker({
     currentSessionName = name;
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
+    resetBackendProgressState();
+    window.snitchapi.shutdownBackend().catch((error) => {
+      logErrorEntry("shutdown-backend", error);
+    });
     setSessionPcapSource(null, { skipLog: true });
     if (window.captureapi) {
       const loadResult = await window.captureapi.loadJson(jsonData);
@@ -5631,11 +5635,11 @@ function hideConvertContextMenu() {
   convertContextMenuEl.hidden = true;
 }
 
-function getPacketFromListContextTarget(target) {
+function getPacketFromListContextTarget(target, offset = 0) {
   const row = target?.closest?.("tr[data-host][data-pkt-idx]");
   if (!row) return null;
   const host = String(row.dataset.host || "").trim();
-  const packetIndex = Number.parseInt(row.dataset.pktIdx ?? "-1", 10);
+  const packetIndex = Number.parseInt(row.dataset.pktIdx ?? "-1", 10) + offset;
   if (!host || !Number.isInteger(packetIndex) || packetIndex < 0) return null;
   const hostPackets = capturedPackets?.["Host"]?.[host];
   if (!Array.isArray(hostPackets)) return null;
@@ -5644,7 +5648,7 @@ function getPacketFromListContextTarget(target) {
 
 function getCurrentContextPacket(target = null, offset = 0) {
   if (activeMainTab === MAIN_TAB_LIST) {
-    const listPacket = getPacketFromListContextTarget(target || activeContextTarget);
+    const listPacket = getPacketFromListContextTarget(target || activeContextTarget, offset);
     if (listPacket) return listPacket;
   }
   if (activeContextPacket) return activeContextPacket;

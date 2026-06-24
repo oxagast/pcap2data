@@ -70,6 +70,12 @@ ipcMain.handle("file-size", async () => {
 // make sure we have a fresh temp dir
 fs.rmSync(testcaseTempDir, { recursive: true, force: true });
 
+// make a trigger so we can call killBackendProcess from the renderer process
+ipcMain.handle("kill-snitch-process", () => {
+  console.log("Received request to kill snitch process from renderer");
+  killBackendProcess();
+});
+
 function killBackendProcess() {
   console.log("Shutting down preprocessor...");
   if (platform === "win32") {

@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('snitchapi', {
       callback(payload);
     });
   },
+  shutdownBackend: () => ipcRenderer.invoke('kill-snitch-process'),
 });
 
 contextBridge.exposeInMainWorld('getfileapi', {
@@ -111,3 +112,4 @@ contextBridge.exposeInMainWorld('templateapi', {
   },
   getNewSessionTemplate: () => ipcRenderer.invoke('get-new-session-template'),
 });
+
