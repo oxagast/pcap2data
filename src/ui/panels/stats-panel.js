@@ -612,16 +612,16 @@ function createStatsPanel(options) {
       documentRef,
       title: "Application Protocols",
       items: stats.protocols,
-      queryBuilder: (v) => `app.proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `application.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (protoSec) content.appendChild(protoSec);
 
     const networkProtoSec = makeStatsSection({
       documentRef,
-      title: "Network Protocols",
+      title: "Network/Transport/Link Protocols",
       items: stats.networkProtocols,
-      queryBuilder: (v) => `wire.proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `network.proto: ${v.toLowerCase()} || link.proto: ${v.toLowerCase()} || decoded.proto: ${v.toLowerCase()} || transport.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (networkProtoSec) content.appendChild(networkProtoSec);
@@ -630,7 +630,7 @@ function createStatsPanel(options) {
       documentRef,
       title: "Link Protocols",
       items: stats.linkProtocols,
-      queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
+      queryBuilder: (v) => `link.proto: ${v.toLowerCase()}`,
       onQuery: applyStatsQuery,
     });
     if (tpSec) content.appendChild(tpSec);

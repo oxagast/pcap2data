@@ -3598,10 +3598,10 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "MAC Destination Vendor": dstMacVendor,
                     "ether.dst.mac.vendor": dstMacVendor,
                     "link.dst.mac.vendor": dstMacVendor,
-                    "network.proto": "Ethernet",
                 }
                 if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
                 else "N/A",
+                    "link.proto": "IP",
                 "IP": {
                     "Source IP": srcIp,
                     "ip.src.addr": srcIp,
@@ -3616,7 +3616,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "network.len": len(rawPayload),
                     "ip.len": len(rawPayload),
                     "network.ip.len": len(rawPayload),
-                    "network.proto": "IP",
                 },
                 protocolName: arpSection,
                 "Raw data": {
@@ -3672,7 +3671,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             "packet.timestamp": timestamp,
             "Protocol": protocolName,
             "packet.proto": protocolName,
-            "network.proto": protocolName,
+            "link.proto": protocolName,
             "Decoded Protocols": decodedProtocols,
             "packet.decoded_protocols": decodedProtocols,
             "Ethernet Frame": {
@@ -3688,7 +3687,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 "MAC Destination Vendor": dstMacVendor,
                 "ether.dst.mac.vendor": dstMacVendor,
                 "link.dst.mac.vendor": dstMacVendor,
-                "network.proto": "Ethernet",
             }
             if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
             else "N/A",
@@ -4216,6 +4214,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 "packet.timestamp": timestamp,
                 "Protocol": protocolKey,
                 "packet.proto": protocolKey,
+                    "link.proto": "Ethernet",
                 # Include Ethernet MAC data when at least one IP is local (private),
                 # so that mixed private+internet traffic still exposes the local device's MAC.
                 "Ethernet Frame": {
@@ -4231,7 +4230,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "MAC Destination Vendor": dstMacVendor,
                     "ether.dst.mac.vendor": dstMacVendor,
                     "link.dst.mac.vendor": dstMacVendor,
-                    "link.proto": "Ethernet",
                 }
                 if (
                     srcGeoInfo.get("Location") == "Localnet"
@@ -4251,7 +4249,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "IP layer length": int(p["IP"].len),
                     "ip.len": int(p["IP"].len),
                     "network.ip.len": int(p["IP"].len),
-                    "network.proto": "IP",
+                    "link.proto": "IP",
                 },
                 protocolKey: transportSection,
                 "Raw data": {

@@ -319,11 +319,13 @@ function normalizeSessionPcapSource(source) {
 
 function updatePcapSizeDisplayFromSource() {
   const pcapSizeEl = document.getElementById("pcap-size");
-  if (!pcapSizeEl) return;
+  const pcapFileNameEl = document.getElementById("file-name");
+  if (!pcapSizeEl || !pcapFileNameEl) return;
   const sourceSize = sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
     ? sessionPcapSource.byteLength
     : 0;
   const fileSizeKb = (sourceSize / 1024).toFixed(2);
+  pcapFileNameEl.textContent = `PCAP file: ${sessionPcapSource?.fileName || "unknown"}`;
   pcapSizeEl.textContent = `PCAP size: ${fileSizeKb}kb`;
 }
 
