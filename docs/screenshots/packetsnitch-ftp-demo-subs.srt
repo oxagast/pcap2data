@@ -1,0 +1,88 @@
+1
+00:00:00,000 --> 00:00:02,066
+He we are just going to load the autosave file as an example, it was saved when making the FTP demo video...
+
+2
+00:00:02,066 --> 00:00:03,816
+Here it will just take a few seconds to load... The renderer loads every 250 packets via the preprocessor in chunks...
+
+3
+00:00:03,816 --> 00:00:07,250
+So the user can start interacting with packets before the preprocessor finishes.
+
+4
+00:00:07,249 --> 00:00:09,400
+Here we would initially load into list view, but its going to jump to Stats view becuase that is where the autosave was left off.
+
+5
+00:00:09,733 --> 00:00:11,733
+Here I'm going to load all FTP management packets by clicking it under the Stats tab, where protocols in the capture will appear.
+
+6
+00:00:11,783 --> 00:00:16,783
+We can review the packet data here on the Host Data tab, but from here I'm going to jump back to the List tab...
+
+7
+00:00:16,783 --> 00:00:21,633
+This is the List tab, showing all packets in order as they appear in the capture by default, but the columns are, of course, sortable, by clicking the heading.
+
+8
+00:00:21,750 --> 00:00:25,066
+From here you can also export any of this under the mouse "in context" to the Notes tab.
+
+9
+00:00:25,066 --> 00:00:30,700
+But instead I'm going to load up another packet from the FTP management stream, so I can show you what it looks like...
+
+10
+00:00:31,050 --> 00:00:36,050
+in the Conv tab.  We're loading this entire stream, so multiple packets will be loaded into the conversion workspace, back to back.
+
+11
+00:00:36,383 --> 00:00:41,733
+But you can also load a packet, payload, or the payload from a decoded protocol, such as HTTP into the Conv tab, using the Context Menu, as well.
+
+12
+00:00:44,150 --> 00:00:49,150
+This what a stream looks like in the Conv tab, or conversions workspace.  As you can see you can also has the payload, or decode the currently loaded protocol.
+
+13
+00:00:49,566 --> 00:00:54,566
+From here, it looks like it may have captured some credentials, if we got lucky, so lets hop onto the Keystore tab, and check out if it aquired anything...
+
+14
+00:00:55,533 --> 00:01:00,533
+Oh wow, looks like it captured two usernames and their associated passwords from the FTP management stream! Lets take a peek..
+
+15
+00:01:01,550 --> 00:01:12,483
+Looks like it grabbed a password for the user "user1", and a password for "anonymous" when they logged in, thats cool.
+
+16
+00:01:14,200 --> 00:01:19,933
+Lets highlight that password to put it into context, so we can easily put it in the Notes tab, then we can refer to it later on.
+
+17
+00:01:25,533 --> 00:01:38,783
+Here's the notes tab, pretty basic, you can colorcode your notes too.
+
+18
+00:01:38,783 --> 00:01:41,350
+Lets get back over to the List tab, so we can view the FTP-DATA stream, which is where our file is.
+
+19
+00:01:41,366 --> 00:01:49,816
+We can use PacketSnitch's file carving features to rip whatever file the user transferred out of the FTP-DATA stream, so here goes....
+
+20
+00:01:54,800 --> 00:02:03,116
+If you need to, just check the log to see where it saved the data...
+
+21
+00:02:03,900 --> 00:02:08,266
+Finally, lets save our session as something memorable so we can load it again!
+
+22
+00:02:08,333 --> 00:02:10,199
+Hope you had fun following along in this PacketSnitch demo!!!
+

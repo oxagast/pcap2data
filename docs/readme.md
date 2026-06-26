@@ -13,7 +13,7 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 ## Demo
 
-<p align="center"><a href="https://www.youtube.com/watch?v=mZjXisPb5Sk" rel="alternate external" target="_blank">
+<p align="center"><a href="https://www.youtube.com/watch?v=fSeLVu0ElZk" rel="alternate external" target="_blank">
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/720p-packetsnitch-oxasploits.png" width=1280></a>
 </p>
 
