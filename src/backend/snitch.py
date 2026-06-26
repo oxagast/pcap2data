@@ -87,7 +87,7 @@ numLlmThreads = 5
 llmResponseLength = 100
 llmModelName = "minimax-m2.5:cloud"
 useLlm = False
-
+isSSH = False
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.
 llmSummaries = []
@@ -107,6 +107,7 @@ scriptDir = os.path.dirname(os.path.realpath(__file__)) + "/"
 # --- Lookup tables loaded once at startup (see init_lookup_tables()) ---
 # Keyed (port_int, "tcp"/"udp") -> description string
 portDescriptionMap: dict = {}
+portServiceNameMap: dict = {}
 # Keyed by uppercase MAC macPrefix (e.g. "00:1A:2B") -> vendor name
 macVendorMap: dict = {}
 
@@ -344,6 +345,13 @@ def getPortDescription(port, protocol="tcp"):
     """
     return portDescriptionMap.get((port, protocol), "No description available")
 
+def getPortNameFromCSV(port, protocol="tcp"):
+    """
+    Return the port name from the CSV lookup table for a given port/protocol pair.
+    Falls back to IANA Unknown if not found in the CSV.
+    """
+
+    return portServiceNameMap.get((port, protocol), "Unknown")
 
 def reverseDnsLookup(ip):
     """
@@ -756,7 +764,7 @@ def buildTcpStreamInitialDstPortMap(packetList):
     return streamMap
 
 
-def getDatatypes(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
+def getDatatypes(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
     """
     Analyze data to determine MIME type, decompress if possible, and extract traits.
     Returns a dictionary with MIME type, decompression info, data types, and traits.
@@ -786,7 +794,7 @@ def getDatatypes(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
         uniqueDescs.remove("data")
     if uniqueDescs == []:
         uniqueDescs = ["Unknown data type"]
-    traitData = getTraits(data, dstPort, sourceIp, destIp, timeout, protocol)
+    traitData = getTraits(data, srcPort,dstPort, sourceIp, destIp, timeout, protocol)
     dataTypeResult = {
         "MIME Type": mimeType,
         "payload.mime": mimeType,
@@ -805,14 +813,12 @@ def getServ(port, protocol="tcp"):
     Cached with LRU to avoid repeated system calls for the same port/protocol.
     """
 
-    try:
-        serviceName = socket.getservbyport(port, protocol)
-        return serviceName
-    except Exception:
-        return "Unknown"
-
-
-def getTraits(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
+    serviceName = socket.getservbyport(port, protocol)
+    if not serviceName:
+        serviceName = "Unknown"
+    return serviceName
+    
+def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
     """
     Analyze data for entropy, charsetType, encoding, and network/server traits.
     Returns a dictionary with entropy, network data, length, server info, and character info.
@@ -820,10 +826,32 @@ def getTraits(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
     UDP service names and descriptions are resolved correctly.
     """
 
+    protoName = ""
     byteCounts = np.bincount(list(data))
     shannonEntropy = entropy(byteCounts, base=2)
     dataLength = len(data)
-    protoName = getServ(dstPort, protocol)
+    srcProtoName = getPortNameFromCSV(srcPort, protocol)
+    dstProtoName = getPortNameFromCSV(dstPort, protocol)
+
+    if srcProtoName and dstProtoName:
+        if srcPort >= 1024 and dstPort < 1024:
+            protoName = dstProtoName
+        elif dstPort >= 1024 and srcPort < 1024:
+            protoName = srcProtoName
+        else:
+            protoName = srcProtoName if len(srcProtoName) < len(dstProtoName) else dstProtoName
+    elif srcProtoName is not "Unknown":
+        protoName = srcProtoName
+    elif dstProtoName is not "Unknown":
+        protoName = dstProtoName
+    else:
+        protoName = getServ(srcPort, protocol) or getServ(dstPort, protocol)
+        if not protoName:
+            protoName = "Unknown"
+
+    # normalize the protocol responses and remove anything after a space or slash (e.g., "http / ssl" -> "http")
+    protoName = protoName.split(" ")[0].split("/")[0].lower()
+
     charsetType = "ascii" if all(32 <= b <= 126 for b in data) else "binary"
     uniqueCharCount = len(set(data))
     uniqueCharsSet = set(data)
@@ -853,6 +881,7 @@ def getTraits(data, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
     srcNetClass = getNetclass(sourceIp)
     dstNetClass = getNetclass(destIp)
     portDesc = getPortDescription(dstPort, protocol)
+
     return {
         "Shannon Entropy": shannonEntropy,
         "payload.entropy": shannonEntropy,
@@ -2805,7 +2834,7 @@ def decodeSSH(rawPayload, srcPort=None, dstPort=None):
                 direction = "Server Identification"
             elif dstPort in (22, 2222):
                 direction = "Client Identification"
-
+            isSSH = True
             if not m:
                 return {
                     "Type": "Identification",
@@ -2819,6 +2848,7 @@ def decodeSSH(rawPayload, srcPort=None, dstPort=None):
             protoVersion = m.group(1)
             softwareVersion = m.group(2)
             comments = m.group(3).strip() if m.group(3) else ""
+            isSSH = True
             result = {
                 "Type": "Identification",
                 "ssh.type": "Identification",
@@ -2856,7 +2886,7 @@ def decodeSSH(rawPayload, srcPort=None, dstPort=None):
         msgTypeNum = int(rawPayload[5])
         msgTypeName = SSH_MESSAGE_TYPES.get(msgTypeNum, f"Unknown({msgTypeNum})")
         knownClearMessage = msgTypeNum in SSH_MESSAGE_TYPES
-
+        isSSH = True
         return {
             "Type": "Binary Packet",
             "ssh.type": "Binary Packet",
@@ -3533,7 +3563,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     dstMacAddr = p.dst if hasattr(p, "dst") else "N/A"
     srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
     dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
-
+    isSSH = False
     wanLinkSection = decodeWanLinkProtocols(p)
 
     # Decode ARP/RARP packets that do not carry an IP layer.
@@ -3556,6 +3586,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             try:
                 dataTypeInfo = getDatatypes(
                     rawPayload,
+                    0,
                     0,
                     srcIp,
                     dstIp,
@@ -3772,7 +3803,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
             writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
             dataTypeInfo = getDatatypes(
-                rawPayload,
+                rawPayload, srcPort,
                 streamLabelPort,
                 p["IP"].src,
                 p["IP"].dst,
@@ -3998,7 +4029,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 # Decode SSH metadata on TCP ports 22/2222, or when payload starts with SSH banner
                 if (
                     streamLabelPort in (22, 2222)
-                    or srcPort in (22, 2222)
+                    or srcPort in (22, 2222) or dstPort in (22, 2222)
                     or rawPayload.startswith(b"SSH-")
                 ):
                     sshSection = decodeSSH(rawPayload, srcPort, dstPort)
@@ -4560,8 +4591,10 @@ if os.path.exists(icannCsvPath):
                 portNum = int(csvRow.get("Port Number", ""))
                 protoStr = csvRow.get("Transport Protocol", "").strip().lower()
                 portDescription = csvRow.get("Description", "No description available")
+                serviceName = csvRow.get("Service Name", "Unknown")
                 if portNum and protoStr:
                     portDescriptionMap[(portNum, protoStr)] = portDescription
+                    portServiceNameMap[(portNum, protoStr)] = serviceName
             except (ValueError, TypeError):
                 pass
 else:
