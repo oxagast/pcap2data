@@ -372,6 +372,16 @@ def reverseDnsLookup(ip):
             "Error": "Address resolution error: " + str(e),
         }
 
+def streamStabilzeProtocol(streamKey, initialDstPort):
+    """
+    Stabilize the protocol for a TCP stream based on its initial destination port.
+    Updates the global tcpStreamInitialDstPortMap with the canonical stream key.
+    """
+    # we need to follow the four tuple of the stream, and store the initial destination port for that stream
+    if streamKey not in tcpStreamInitialDstPortMap:
+        tcpStreamInitialDstPortMap[streamKey] = initialDstPort
+    return tcpStreamInitialDstPortMap[streamKey]
+
 
 def getServBanner(ip, port, timeout, hostname, serviceName=None):
     """
@@ -3765,7 +3775,10 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         srcPort = p["TCP"].sport
         dstPort = p["TCP"].dport
         transportProtocol = "tcp"
-        dstPortStr = str(dstPort)
+        streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
+        dstPortStr = str(streamStabilzeProtocol(streamKey, dstPort))
+        dstPort = streamStabilzeProtocol(streamKey, dstPort)
+
     elif isUdp:
         rawPayload = p["UDP"].payload.original
         srcPort = p["UDP"].sport

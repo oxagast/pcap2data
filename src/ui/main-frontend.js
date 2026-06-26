@@ -190,6 +190,7 @@ let outOfOrderList = []; // List of packets marked as out-of-order
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
 let jsonOfPackets;
+let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
 let lastFilteredNavigationLogMessage = "";
@@ -10251,7 +10252,7 @@ function infoPanel(pk) {
 
   const pageTitle = serverInfo["Page Title"];
   const isEncrypted = serverInfo["Encrypted"];
-  const protoName = networkData["Port Protocol"] ?? networkData["Port Protcol"];
+  const protoName = networkData["app.proto"] ?? "Unknown";
   const protoDescription = networkData["Port Description"];
   const srcNetClass = networkData?.["Source IP"]?.["Class"] ?? "N/A";
   const dstNetClass = networkData?.["Destination IP"]?.["Class"] ?? "N/A";
@@ -10373,6 +10374,8 @@ function infoPanel(pk) {
 
   const currentStreamKey = buildBidirectionalStreamKey(packetInfoData);
   const streamPackets = [];
+
+  // ensure that all the packets in the stream all report the same application protocol, for consistency
   if (capturedPackets && capturedPackets["Host"]) {
     for (const host of Object.keys(capturedPackets["Host"])) {
       const hostPackets = capturedPackets["Host"][host];
@@ -10381,10 +10384,24 @@ function infoPanel(pk) {
         const pi = pkt?.["Packet Info"];
         if (pi && buildBidirectionalStreamKey(pi) === currentStreamKey) {
           streamPackets.push(pkt);
+          // check and see if they all have the same application protocol,
+          // if not, we will use the first packet's application protocol
+          //  for the stream, for consistency
+          const pktProtoName =
+            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["tcp.proto"] ||
+            "Unknown";
+          if (streamPackets.length === 1) {
+            // first packet in the stream, set the stream protocol
+            streamProtocol = pktProtoName;
+          } else if (pktProtoName !== streamProtocol) {
+            // different protocol found, log a warning and continue using the first packet's protocol
+            console.warn(`Inconsistent application protocol in stream: expected ${streamProtocol}, but found ${pktProtoName}`);
+          }
         }
       }
     }
   }
+
   const sortedStreamPackets = sortPacketsByOwnStreamOrder(streamPackets);
   const tcpArrivalStatusByPacketKey = getTcpStreamArrivalStatusByPacketKey(
     sortedStreamPackets,
