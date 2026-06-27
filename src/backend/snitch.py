@@ -561,9 +561,11 @@ def joinInfo(outputDirPath, portDir, index, dataTypeJson, packetInfoJson, host):
         "Packet Info": json.loads(packetInfoJson),
         "Extra Info": json.loads(dataTypeJson),
     }
-    path = outputDirPath + "/" + portDir + "/pcap.info_packet." + str(index) + ".json"
-    with open(path, "wb+") as out:
-        out.write(json.dumps(mergedJson).encode())
+    # the following is commented out because on large captures it can exceed the filesystem's
+    # maximum inode limit for temporary files.  It's not strictly necessary anyway.
+    ###path = outputDirPath + "/" + portDir + "/pcap.info_packet." + str(index) + ".json"
+    ###with open(path, "wb+") as out:
+    ###    out.write(json.dumps(mergedJson).encode())
     if verbose >= 2:
         print(json.dumps(mergedJson, indent=2))
     # Protect the shared list from concurrent thread writes
@@ -3593,7 +3595,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 return None
 
             dstPortStr = protocolName.lower()
-            writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
+            #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
             try:
                 dataTypeInfo = getDatatypes(
                     rawPayload,
@@ -3698,7 +3700,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
         protocolName = "LINK" if wanLinkSection is not None else "FRAME"
         dstPortStr = "link" if protocolName == "LINK" else "frame"
-        writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
+        #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
         mimeType = magic.from_buffer(rawPayload, mime=True)
         timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
             "%Y-%m-%d %H:%M:%S.%f"
@@ -3827,7 +3829,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             if isTcp:
                 streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
                 streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
-            writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
+            #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
             dataTypeInfo = getDatatypes(
                 rawPayload, srcPort,
                 streamLabelPort,

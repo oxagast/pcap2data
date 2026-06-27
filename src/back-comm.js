@@ -9,8 +9,20 @@ const zlib = require("zlib");
 const gunzipAsync = promisify(zlib.gunzip);
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
+let entries = [];
 
 const HOST_CHUNK_SIZE = 250;
+
+function removePacketsChunkFromFS(jsonPath) {
+  if (!jsonPath || typeof jsonPath !== "string") return;
+  try {
+    if (fs.existsSync(jsonPath)) {
+      fs.unlinkSync(jsonPath);
+    }
+  } catch (err) {
+    console.error(`Failed to remove file at ${jsonPath}:`, err);
+  }
+}
 
 function getMainWindow() {
   return BrowserWindow.getAllWindows()[0];
@@ -136,6 +148,8 @@ function scanChunkSnapshots(sentSnapshotPaths) {
       chunkSize: HOST_CHUNK_SIZE,
     });
   });
+
+
 
   return unsent;
 }
@@ -308,6 +322,17 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
 
     const snapshotScanTimer = setInterval(() => {
       const snapshotPayloads = scanChunkSnapshots(sentSnapshotPaths);
+      // thisis to avoid exceeding our disk inode limit on large captures
+      // we remove the oldest snapshot file after sending the latest one to the renderer
+      // first we check if it has been used (sent) already
+      // we should then give it some time to make sure the frontend has caught up before
+      // removing it.
+      if (entries[0] && sentSnapshotPaths.has(path.join(testcaseOutputDir, entries[0]))) {
+        // give some time for the frontend to catch up before removing
+        setTimeout(() => {
+          removePacketsChunkFromFS(path.join(testcaseOutputDir, entries[0]));
+        }, 10000);
+      }
       snapshotPayloads.forEach((payload) => {
         latestProcessedPackets = Math.max(
           latestProcessedPackets,
@@ -378,6 +403,17 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
       clearInterval(snapshotScanTimer);
 
       const trailingSnapshots = scanChunkSnapshots(sentSnapshotPaths);
+      // thisis to avoid exceeding our disk inode limit on large captures
+      // we remove the oldest snapshot file after sending the latest one to the renderer
+      // first we check if it has been used (sent) already
+      // we should then give it some time to make sure the frontend has caught up before
+      // removing it.
+      if (entries[0] && sentSnapshotPaths.has(path.join(testcaseOutputDir, entries[0]))) {
+        // give some time for the frontend to catch up before removing
+        setTimeout(() => {
+          removePacketsChunkFromFS(path.join(testcaseOutputDir, entries[0]));
+        }, 10000);
+      }
       trailingSnapshots.forEach((payload) => {
         latestProcessedPackets = Math.max(
           latestProcessedPackets,
@@ -399,7 +435,18 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
       if (stdoutBuffer.includes("Ollama")) {
         sendError("[Bridge] Backend LLM generation error!");
       }
-
+      if (stderrBuffer.includes("Disk quota exceeded")) {
+        sendError("[Bridge] Backend execution error! Disk quota exceeded.  Apparently PacketSnitch does not scale as well as we thought.  Killingg bckend process to avoid further issues.");
+        resolve({
+          success: false,
+          stdout: stdoutBuffer,
+          error: "Backend execution error: Disk quota exceeded!  Killing backend process to avoid further issues.",
+          pcapSource: pcapSourcePayload,
+        });
+        // call the backend shutdown function
+        killBackendProcess();
+        return;
+      }
       if (code !== 0) {
         if (stderrBuffer.includes("supported capture file")) {
           sendError("[Bridge] Unsupported file format!");
