@@ -922,9 +922,75 @@ function createKeystorePanel({
   }
 
   function normalizeUriCandidate(uri) {
-    return String(uri || "")
-      .trim()
-      .replace(/[),.;!?]+$/g, "");
+    if (uri === null || uri === undefined) return "";
+    // try to filter out CSS and HTML crap
+    if (typeof uri === "string") {
+      uri = uri.trim();
+      if (
+        uri.startsWith("url(") ||
+        uri.startsWith("URL(") ||
+        uri.startsWith("href=") ||
+        uri.startsWith("src=")
+      ) {
+        const match = uri.match(/["']?([^"')]+)["']?/);
+        if (match?.[1]) {
+          uri = match[1].trim();
+        }
+      }
+    }
+    // strip out anything with trailinling punctuation thats not uri related
+    if (uri.startsWith("data:") || uri.startsWith("blob:") || uri.startsWith("file:")) {
+      return uri;
+    }
+    if (uri.startsWith("http://") || uri.startsWith("https://")) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    else if (uri.startsWith("ftp://")) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    else if (uri.startsWith("mailto:")) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    if (uri.startsWith("sip:")) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    if (uri.startsWith("tel:")) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    else if (/^[a-z][a-z0-9+.-]*:\/\//.test(uri)) {
+      try {
+        const parsed = new URL(uri);
+        return parsed.href;
+      } catch {
+        return "";
+      }
+    }
+    return "";
   }
 
   function extractUriCandidatesFromText(rawText) {
@@ -2359,6 +2425,7 @@ function createKeystorePanel({
     );
     if (!dialogResult) return;
     const normalized = normalizeUriCandidate(dialogResult.value);
+    // make sure its actually a URI in format, otherwise we don't want to add it to the keystore
     if (!normalized) {
       statusUpdate("Status: No URI/URL provided");
       return;
