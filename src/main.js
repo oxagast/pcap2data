@@ -128,7 +128,7 @@ function createWindow() {
     // specified icons for the exe and installer, and macOS uses 
     // the .icns file specified in the forge config
     icon: path.join("/", "usr", "share", "pixmaps", "packetsnitch.png"),
-    frame: true,
+    frame: false,
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
