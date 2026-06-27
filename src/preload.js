@@ -113,3 +113,11 @@ contextBridge.exposeInMainWorld('templateapi', {
   getNewSessionTemplate: () => ipcRenderer.invoke('get-new-session-template'),
 });
 
+contextBridge.exposeInMainWorld('goodiesapi', {
+  getGoodies: () => ipcRenderer.invoke('get-goodies'),
+  onGoodies: (callback) => {
+    ipcRenderer.on('goodies-data', (_event, goodiesData) => {
+      callback(goodiesData);
+    });
+  },
+});

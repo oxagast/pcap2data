@@ -1,0 +1,544 @@
+# =============================================================================
+# PacketSnitch Goodies Signature List
+# Format:
+#   Signature
+#   # Description
+#
+# Designed for plaintext packet inspection, HTTP payloads, SMTP, FTP, Telnet,
+# DNS TXT records, extracted files, and decoded payloads.
+# =============================================================================
+
+
+# =============================================================================
+# PEM / X.509 / PKI
+# =============================================================================
+
+-----BEGIN PRIVATE KEY-----
+# PKCS#8 private key
+
+-----BEGIN ENCRYPTED PRIVATE KEY-----
+# Encrypted PKCS#8 private key
+
+-----BEGIN RSA PRIVATE KEY-----
+# RSA private key
+
+-----BEGIN EC PRIVATE KEY-----
+# Elliptic Curve private key
+
+-----BEGIN DSA PRIVATE KEY-----
+# DSA private key
+
+-----BEGIN OPENSSH PRIVATE KEY-----
+# OpenSSH private key
+
+-----BEGIN PUBLIC KEY-----
+# Generic public key
+
+-----BEGIN RSA PUBLIC KEY-----
+# RSA public key
+
+-----BEGIN CERTIFICATE-----
+# X.509 certificate
+
+-----BEGIN CERTIFICATE REQUEST-----
+# Certificate signing request (CSR)
+
+-----BEGIN X509 CRL-----
+# Certificate Revocation List
+
+-----BEGIN PKCS7-----
+# PKCS#7 certificate bundle
+
+-----BEGIN CMS-----
+# CMS/PKCS#7 message
+
+-----BEGIN PGP PRIVATE KEY BLOCK-----
+# OpenPGP private key
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+# OpenPGP public key
+
+-----BEGIN PGP SIGNATURE-----
+# OpenPGP signature
+
+-----BEGIN SSH2 PUBLIC KEY-----
+# SSH2 public key
+
+
+# =============================================================================
+# SSH
+# =============================================================================
+
+ssh-rsa
+# RSA SSH public key
+
+ssh-ed25519
+# Ed25519 SSH public key
+
+ecdsa-sha2-
+# ECDSA SSH key
+
+sk-ecdsa-sha2-
+# FIDO/U2F ECDSA key
+
+sk-ssh-ed25519@
+# FIDO/U2F Ed25519 key
+
+SSH-
+# SSH protocol banner
+
+
+# =============================================================================
+# JWT / Authentication
+# =============================================================================
+
+eyJ
+# JSON Web Token (JWT)
+
+Bearer
+# HTTP Bearer authentication
+
+Authorization:
+# HTTP Authorization header
+
+Basic
+# HTTP Basic Authentication
+
+Digest
+# HTTP Digest Authentication
+
+Negotiate
+# Kerberos/SPNEGO Authentication
+
+NTLM
+# Windows NTLM Authentication
+
+
+# =============================================================================
+# GitHub
+# =============================================================================
+
+ghp_
+# GitHub Personal Access Token
+
+github_pat_
+# GitHub Fine-grained PAT
+
+gho_
+# GitHub OAuth Token
+
+ghu_
+# GitHub User Token
+
+ghs_
+# GitHub Server Token
+
+
+# =============================================================================
+# GitLab
+# =============================================================================
+
+glpat-
+# GitLab Personal Access Token
+
+
+# =============================================================================
+# AWS
+# =============================================================================
+
+AKIA
+# AWS Access Key
+
+ASIA
+# Temporary AWS Access Key
+
+A3T
+# Legacy AWS Access Key
+
+AWS_SECRET_ACCESS_KEY
+# AWS Secret
+
+AWS_ACCESS_KEY_ID
+# AWS Access Key ID
+
+AWS_SESSION_TOKEN
+# Temporary AWS Session Token
+
+
+# =============================================================================
+# Google
+# =============================================================================
+
+AIza
+# Google API Key
+
+AIzaSy
+# Common Google API Key prefix
+
+ya29.
+# Google OAuth Access Token
+
+
+# =============================================================================
+# Slack
+# =============================================================================
+
+xoxb-
+# Slack Bot Token
+
+xoxp-
+# Slack User Token
+
+xoxa-
+# Slack Workspace Token
+
+xoxr-
+# Slack Refresh Token
+
+xapp-
+# Slack App Token
+
+xoxe-
+# Slack Enterprise Token
+
+
+# =============================================================================
+# Stripe
+# =============================================================================
+
+sk_live_
+# Stripe Live Secret Key
+
+pk_live_
+# Stripe Live Publishable Key
+
+rk_live_
+# Stripe Restricted Key
+
+sk_test_
+# Stripe Test Secret Key
+
+pk_test_
+# Stripe Test Publishable Key
+
+
+# =============================================================================
+# Square
+# =============================================================================
+
+sq0atp-
+# Square Access Token
+
+sq0csp-
+# Square Secret
+
+
+# =============================================================================
+# SendGrid
+# =============================================================================
+
+SG.
+# SendGrid API Key
+
+
+# =============================================================================
+# Facebook
+# =============================================================================
+
+EAACEdEose0cBA
+# Facebook Graph API Token
+
+EAAB
+# Facebook Access Token
+
+EAAG
+# Facebook Access Token
+
+EAAX
+# Facebook Access Token
+
+
+# =============================================================================
+# AI Providers
+# =============================================================================
+
+sk-ant-
+# Anthropic API Key
+
+sk-proj-
+# OpenAI Project API Key
+
+sk-
+# Generic API key prefix (many vendors)
+
+hf_
+# HuggingFace API Token
+
+
+# =============================================================================
+# Generic Tokens
+# =============================================================================
+
+npm_
+# npm access token
+
+pat_
+# Generic Personal Access Token
+
+v1.
+# Generic API token prefix
+
+
+# =============================================================================
+# Passwords / Secrets
+# =============================================================================
+
+password=
+# Password parameter
+
+passwd=
+# Password parameter
+
+pwd=
+# Password parameter
+
+pass=
+# Password parameter
+
+secret=
+# Secret parameter
+
+api_key=
+# API key parameter
+
+apikey=
+# API key parameter
+
+token=
+# Token parameter
+
+access_token=
+# OAuth access token
+
+refresh_token=
+# OAuth refresh token
+
+client_secret=
+# OAuth client secret
+
+private_key=
+# Private key parameter
+
+auth_token=
+# Authentication token
+
+sessionid=
+# Session identifier
+
+csrftoken=
+# CSRF token
+
+jwt=
+# JWT token
+
+oauth_token=
+# OAuth token
+
+oauth=
+# OAuth parameter
+
+
+# =============================================================================
+# Cookies
+# =============================================================================
+
+Cookie:
+# HTTP Cookie header
+
+Set-Cookie:
+# HTTP Set-Cookie header
+
+
+# =============================================================================
+# URLs / Database Connections
+# =============================================================================
+
+mysql://
+# MySQL connection string
+
+postgres://
+# PostgreSQL connection string
+
+postgresql://
+# PostgreSQL URI
+
+mongodb://
+# MongoDB connection string
+
+mongodb+srv://
+# MongoDB Atlas URI
+
+redis://
+# Redis URI
+
+amqp://
+# RabbitMQ URI
+
+ldap://
+# LDAP URI
+
+ldaps://
+# Secure LDAP URI
+
+ftp://
+# FTP URL
+
+sftp://
+# SFTP URL
+
+smb://
+# SMB URI
+
+
+# =============================================================================
+# HTTP
+# =============================================================================
+
+HTTP/
+# HTTP response
+
+GET
+# HTTP GET request
+
+POST
+# HTTP POST request
+
+PUT
+# HTTP PUT request
+
+DELETE
+# HTTP DELETE request
+
+CONNECT
+# HTTP CONNECT request
+
+OPTIONS
+# HTTP OPTIONS request
+
+Host:
+# HTTP Host header
+
+User-Agent:
+# HTTP User-Agent
+
+Referer:
+# HTTP Referer
+
+Origin:
+# HTTP Origin
+
+Content-Type:
+# HTTP Content-Type
+
+X-Forwarded-For:
+# Proxy client IP
+
+Forwarded:
+# RFC7239 forwarding header
+
+
+# =============================================================================
+# Databases / Environment Variables
+# =============================================================================
+
+DB_PASSWORD
+# Database password variable
+
+DATABASE_URL
+# Database connection URL
+
+DATABASE_URI
+# Database URI
+
+MYSQL_PASSWORD
+# MySQL password
+
+POSTGRES_PASSWORD
+# PostgreSQL password
+
+REDIS_PASSWORD
+# Redis password
+
+
+# =============================================================================
+# Application Secrets
+# =============================================================================
+
+SECRET_KEY
+# Secret key
+
+SECRET=
+# Generic secret
+
+PRIVATE_KEY
+# Private key variable
+
+CLIENT_SECRET
+# OAuth client secret
+
+JWT_SECRET
+# JWT signing key
+
+SIGNING_KEY
+# Signing key
+
+ENCRYPTION_KEY
+# Encryption key
+
+MASTER_KEY
+# Master encryption key
+
+
+# =============================================================================
+# VPN / Wi-Fi
+# =============================================================================
+
+WPA
+# Wi-Fi authentication
+
+WPA2
+# Wi-Fi authentication
+
+WPA3
+# Wi-Fi authentication
+
+PSK
+# Pre-shared key
+
+pre-shared-key
+# Wi-Fi PSK
+
+client.crt
+# VPN client certificate
+
+client.key
+# VPN client private key
+
+ca.crt
+# Certificate Authority certificate
+
+tls-auth
+# OpenVPN TLS auth key
+
+
+# =============================================================================
+# Executables / Archives
+# =============================================================================
+
+MZ
+# Windows PE executable
+
+ELF
+# Linux ELF executable
+
+PK

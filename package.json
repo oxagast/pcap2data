@@ -94,7 +94,7 @@
               "html": "./src/index.html",
               "js": "./src/renderer.js",
               "name": "main_window",
-              "devContentSecurityPolicy": "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com 'unsafe-inline' data:;"
+              "devContentSecurityPolicy": "default-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com 'unsafe-inline' data:;  worker-src 'self' blob:;"
             }
           ]
         }

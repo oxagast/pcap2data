@@ -102,6 +102,8 @@ function checkOllama() {
   });
 }
 
+
+
 function checkNewInstall() {
   if (!versionFilePath) return false;
   try {
@@ -126,7 +128,7 @@ function createWindow() {
     // specified icons for the exe and installer, and macOS uses 
     // the .icns file specified in the forge config
     icon: path.join("/", "usr", "share", "pixmaps", "packetsnitch.png"),
-    frame: false,
+    frame: true,
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       contextIsolation: true,
@@ -398,7 +400,20 @@ ipcMain.handle("dismiss-first-run", async () => {
   }
 });
 
-
+ipcMain.handle("get-goodies", async () => {
+  // now we look for src/data/goodies.txt in the resources path, and if it exists, we read it and return it
+  const goodiesPath = path.join(
+    app.isPackaged ? process.resourcesPath : __dirname,
+    "src",
+    "data",
+    "goodies.txt"
+  );
+  if (fs.existsSync(goodiesPath)) {
+    const goodiesData = fs.readFileSync(goodiesPath, "utf8");
+    return goodiesData.split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+  }
+  return [];
+});
 
 ipcMain.handle("quit-app", () => {
   app.quit();

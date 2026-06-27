@@ -1,4 +1,3 @@
-
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
 const CRYPT_KEYSTORE_DB_VERSION = 1;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";
@@ -6,6 +5,7 @@ const CRYPT_KEYSTORE_RECORD_KEY = "default";
 const CRYPT_KEYSTORE_SCHEMA_VERSION = 2;
 const CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH = 8;
 const threadName = "Keystore";
+
 const CRYPT_KEYSTORE_RESET_CONFIRMATION_MESSAGE =
   "Resetting the keychain password will wipe your current persistent keychain entries. Continue?";
 const CRYPT_KEYSTORE_MODE_SESSION = "session";
@@ -107,6 +107,20 @@ function createKeystorePanel({
       bytes[index] = binary.charCodeAt(index);
     }
     return bytes;
+  }
+
+  async function isItAGoodie(string) {
+    // this function loads a file full of goodies (one per line) and returns it as an array of strings, filtering out empty lines and comments
+    // then it checks to see if string is one of the goodies, if so, it returns the input string, else it returns an empty string
+
+    // this probably sould be done in parallel becuase the list is long
+    if (!string || typeof string !== "string") return "";
+    if (goodiesArray.length === 0) return "";
+    if (goodiesArray.includes(string)) {
+      return string;
+    }
+    return "";
+
   }
 
   async function importCryptKeyMaterial(passphrase) {
@@ -1321,7 +1335,7 @@ function createKeystorePanel({
       }
     }
 
-    function detectTokenMatches(rawText, pathKey) {
+    async function detectTokenMatches(rawText, pathKey) {
       const matches = [];
       const text = normalizeValue(rawText);
       if (!text) return matches;
@@ -1400,6 +1414,9 @@ function createKeystorePanel({
 
       if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
         addMatch("aws-secret-key", text);
+      }
+      if (await isItAGoodie(text)) {
+        addMatch("goodie", text);
       }
 
       return matches;
