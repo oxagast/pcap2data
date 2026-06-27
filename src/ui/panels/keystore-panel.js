@@ -113,15 +113,39 @@ function createKeystorePanel({
   async function isItAGoodie(string) {
     // this function loads a file full of goodies (one per line) and returns it as an array of strings, filtering out empty lines and comments
     // then it checks to see if string is one of the goodies, if so, it returns the input string, else it returns an empty string
+    const chunkSize = 25;
     if (!goodiesStash) {
       goodiesStash = await window.goodiesapi.getGoodies();
     }
     // this probably sould be done in parallel becuase the list is long
-    if (goodiesStash.includes(string)) {
-      return true;
+    function listInChunks(array, chunkSize) {
+      const chunks = [];
+      for (let i = 0; i < array.length; i += chunkSize) {
+        chunks.push(array.slice(i, i + chunkSize));
+      }
+      return chunks;
     }
-    return false;
-
+    const goodiesChunks = listInChunks(goodiesStash, chunkSize);
+    const promises = goodiesChunks.map((chunk) => {
+      return new Promise((resolve) => {
+        const worker = new Worker(new URL("./goodies-worker.js", import.meta.url));
+        worker.onmessage = (event) => {
+          const { goodie } = event.data;
+          if (goodie) {
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+          worker.terminate();
+        };
+        worker.postMessage({ input: string, goodies: chunk });
+        if (chunk.length === 0) {
+          resolve(false);
+          worker.terminate();
+        }
+      });
+    });
+    return Promise.all(promises).then((results) => results.some((result) => result));
   }
 
   async function importCryptKeyMaterial(passphrase) {
