@@ -84,9 +84,6 @@ sk-ecdsa-sha2-
 sk-ssh-ed25519@
 # FIDO/U2F Ed25519 key
 
-SSH-
-# SSH protocol banner
-
 
 # =============================================================================
 # JWT / Authentication
@@ -95,24 +92,8 @@ SSH-
 eyJ
 # JSON Web Token (JWT)
 
-Bearer
-# HTTP Bearer authentication
-
 Authorization:
 # HTTP Authorization header
-
-Basic
-# HTTP Basic Authentication
-
-Digest
-# HTTP Digest Authentication
-
-Negotiate
-# Kerberos/SPNEGO Authentication
-
-NTLM
-# Windows NTLM Authentication
-
 
 # =============================================================================
 # GitHub
@@ -338,27 +319,6 @@ sessionid=
 csrftoken=
 # CSRF token
 
-jwt=
-# JWT token
-
-oauth_token=
-# OAuth token
-
-oauth=
-# OAuth parameter
-
-
-# =============================================================================
-# Cookies
-# =============================================================================
-
-Cookie:
-# HTTP Cookie header
-
-Set-Cookie:
-# HTTP Set-Cookie header
-
-
 # =============================================================================
 # URLs / Database Connections
 # =============================================================================
@@ -398,53 +358,6 @@ sftp://
 
 smb://
 # SMB URI
-
-
-# =============================================================================
-# HTTP
-# =============================================================================
-
-HTTP/
-# HTTP response
-
-GET
-# HTTP GET request
-
-POST
-# HTTP POST request
-
-PUT
-# HTTP PUT request
-
-DELETE
-# HTTP DELETE request
-
-CONNECT
-# HTTP CONNECT request
-
-OPTIONS
-# HTTP OPTIONS request
-
-Host:
-# HTTP Host header
-
-User-Agent:
-# HTTP User-Agent
-
-Referer:
-# HTTP Referer
-
-Origin:
-# HTTP Origin
-
-Content-Type:
-# HTTP Content-Type
-
-X-Forwarded-For:
-# Proxy client IP
-
-Forwarded:
-# RFC7239 forwarding header
 
 
 # =============================================================================
@@ -499,46 +412,3 @@ MASTER_KEY
 # Master encryption key
 
 
-# =============================================================================
-# VPN / Wi-Fi
-# =============================================================================
-
-WPA
-# Wi-Fi authentication
-
-WPA2
-# Wi-Fi authentication
-
-WPA3
-# Wi-Fi authentication
-
-PSK
-# Pre-shared key
-
-pre-shared-key
-# Wi-Fi PSK
-
-client.crt
-# VPN client certificate
-
-client.key
-# VPN client private key
-
-ca.crt
-# Certificate Authority certificate
-
-tls-auth
-# OpenVPN TLS auth key
-
-
-# =============================================================================
-# Executables / Archives
-# =============================================================================
-
-MZ
-# Windows PE executable
-
-ELF
-# Linux ELF executable
-
-PK

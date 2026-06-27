@@ -5,7 +5,6 @@ const CRYPT_KEYSTORE_RECORD_KEY = "default";
 const CRYPT_KEYSTORE_SCHEMA_VERSION = 2;
 const CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH = 8;
 const threadName = "Keystore";
-
 const CRYPT_KEYSTORE_RESET_CONFIRMATION_MESSAGE =
   "Resetting the keychain password will wipe your current persistent keychain entries. Continue?";
 const CRYPT_KEYSTORE_MODE_SESSION = "session";
@@ -50,6 +49,8 @@ const SESSION_SECRET_IGNORE_KEY_HINTS = [
 ];
 const SESSION_AUTO_BUILD_CHUNK_SIZE = 50;
 const SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE = 120;
+
+let goodiesStash = null;
 
 function createKeystorePanel({
   statusUpdate,
@@ -112,14 +113,14 @@ function createKeystorePanel({
   async function isItAGoodie(string) {
     // this function loads a file full of goodies (one per line) and returns it as an array of strings, filtering out empty lines and comments
     // then it checks to see if string is one of the goodies, if so, it returns the input string, else it returns an empty string
-
-    // this probably sould be done in parallel becuase the list is long
-    if (!string || typeof string !== "string") return "";
-    if (goodiesArray.length === 0) return "";
-    if (goodiesArray.includes(string)) {
-      return string;
+    if (!goodiesStash) {
+      goodiesStash = await window.goodiesapi.getGoodies();
     }
-    return "";
+    // this probably sould be done in parallel becuase the list is long
+    if (goodiesStash.includes(string)) {
+      return true;
+    }
+    return false;
 
   }
 
@@ -1273,6 +1274,21 @@ function createKeystorePanel({
     return SESSION_SECRET_KEY_HINTS.some((hint) => lower.includes(hint));
   }
 
+
+  function shouldIncludeSessionSecretValue(value) {
+    if (!value) return false;
+    const normalized = normalizeSessionSecretValue(value);
+    if (!normalized) return false;
+    if (normalized.length < 3) return false;
+    if (normalized.length > 400) return false;
+    if (SESSION_SECRET_IGNORE_KEY_HINTS.some((hint) => normalized.includes(hint))) {
+      return false;
+    }
+    if (isItAGoodie(normalized)) {
+      return true;
+    }
+  }
+
   function inferSessionEntryType(pathKey) {
     const lower = String(pathKey || "").toLowerCase();
     if (lower.includes("cert")) return "certificate";
@@ -1415,10 +1431,9 @@ function createKeystorePanel({
       if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
         addMatch("aws-secret-key", text);
       }
-      if (await isItAGoodie(text)) {
+      if (shouldIncludeSessionSecretValue(text)) {
         addMatch("goodie", text);
       }
-
       return matches;
     }
 
@@ -1712,6 +1727,7 @@ function createKeystorePanel({
               });
             }
             if (!shouldIncludeSessionSecretKey(pathKey)) return;
+            if (!shouldIncludeSessionSecretValue(rawText)) return;
             if (!rawText) return;
             const decodedBasic = decodeHttpBasicAuth(rawText);
             const contentToSave = decodedBasic || rawText;

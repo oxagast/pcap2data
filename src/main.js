@@ -34,6 +34,7 @@ const pendingActivityLogEntries = [];
 let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
 let sessionCompressionFallbackAccepted = null;
+let goodiesDataCache = null;
 if (!appLock) {
   console.error(
     "Another instance of PacketSnitch is already running. Exiting this instance.",
@@ -402,17 +403,26 @@ ipcMain.handle("dismiss-first-run", async () => {
 
 ipcMain.handle("get-goodies", async () => {
   // now we look for src/data/goodies.txt in the resources path, and if it exists, we read it and return it
+  if (goodiesDataCache) {
+    return goodiesDataCache;
+  }
   const goodiesPath = path.join(
-    app.isPackaged ? process.resourcesPath : __dirname,
-    "src",
+    app.isPackaged ? process.resourcesPath :
+      "src",
     "data",
     "goodies.txt"
   );
   if (fs.existsSync(goodiesPath)) {
     const goodiesData = fs.readFileSync(goodiesPath, "utf8");
-    return goodiesData.split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+    const goodies = goodiesData.split("\n").map((line) => line.trim()).filter((line) => line.length > 0 && !line.startsWith("#"));
+    goodiesDataCache = goodies;
+    console.log(`Loaded ${goodies.length} goodies from ${goodiesPath}`);
+
+    return goodies;
+  } else {
+    console.warn(`Goodies file not found at ${goodiesPath}`);
+    return [];
   }
-  return [];
 });
 
 ipcMain.handle("quit-app", () => {

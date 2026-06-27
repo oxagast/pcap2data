@@ -82,6 +82,9 @@ function getCachedElement(id) {
   }
   return domCache[id];
 }
+const goodiesArray = window.goodiesapi.getGoodies().then((goodies) => {
+  console.log(`Loaded ${goodies.length} goodies from preload API`);
+});
 
 const SESSION_FILE_SCHEMA_VERSION = 1;
 const SESSION_CAPTURE_KEY = "Capture Data";

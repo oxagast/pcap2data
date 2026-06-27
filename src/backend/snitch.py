@@ -852,9 +852,9 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
             protoName = srcProtoName
         else:
             protoName = srcProtoName if len(srcProtoName) < len(dstProtoName) else dstProtoName
-    elif srcProtoName is not "Unknown":
+    elif srcProtoName != "Unknown":
         protoName = srcProtoName
-    elif dstProtoName is not "Unknown":
+    elif dstProtoName != "Unknown":
         protoName = dstProtoName
     else:
         protoName = getServ(srcPort, protocol) or getServ(dstPort, protocol)
