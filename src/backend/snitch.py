@@ -774,7 +774,7 @@ def buildTcpStreamInitialDstPortMap(packetList):
     return streamMap
 
 
-def getDatatypes(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
+def getDatatypes(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp", initialDstPort=None, activeRecon=False):
     """
     Analyze data to determine MIME type, decompress if possible, and extract traits.
     Returns a dictionary with MIME type, decompression info, data types, and traits.
@@ -804,7 +804,7 @@ def getDatatypes(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tc
         uniqueDescs.remove("data")
     if uniqueDescs == []:
         uniqueDescs = ["Unknown data type"]
-    traitData = getTraits(data, srcPort,dstPort, sourceIp, destIp, timeout, protocol)
+    traitData = getTraits(data, srcPort,dstPort, sourceIp, destIp, timeout, protocol, initialDstPort=initialDstPort, activeRecon=activeRecon)
     dataTypeResult = {
         "MIME Type": mimeType,
         "payload.mime": mimeType,
@@ -828,7 +828,7 @@ def getServ(port, protocol="tcp"):
         serviceName = "Unknown"
     return serviceName
     
-def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp"):
+def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp", initialDstPort=None, activeRecon=False):
     """
     Analyze data for entropy, charsetType, encoding, and network/server traits.
     Returns a dictionary with entropy, network data, length, server info, and character info.
@@ -841,7 +841,7 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp")
     shannonEntropy = entropy(byteCounts, base=2)
     dataLength = len(data)
     srcProtoName = getPortNameFromCSV(srcPort, protocol)
-    dstProtoName = getPortNameFromCSV(dstPort, protocol)
+    dstProtoName = getPortNameFromCSV(initialDstPort if initialDstPort is not None else dstPort, protocol)
 
     if srcProtoName and dstProtoName:
         if srcPort >= 1024 and dstPort < 1024:
@@ -3569,6 +3569,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     # for every 250 packets, print a progress update with the packet index
     if packetIndex % 250 == 0:
         print(f"[Worker] Processing packet #{packetIndex}")
+    initialDstPort = None
     srcMacAddr = p.src if hasattr(p, "src") else "N/A"
     dstMacAddr = p.dst if hasattr(p, "dst") else "N/A"
     srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
@@ -3775,10 +3776,22 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         srcPort = p["TCP"].sport
         dstPort = p["TCP"].dport
         transportProtocol = "tcp"
+        initialDstPort = dstPort
         streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
-        dstPortStr = str(streamStabilzeProtocol(streamKey, dstPort))
-        dstPort = streamStabilzeProtocol(streamKey, dstPort)
-
+        # check if we are the first packet in stream, and if so, store the initial destination port for this stream
+        if p["TCP"].flags.S and not p["TCP"].flags.A:
+            tcpStreamInitialDstPortMap[streamKey] = initialDstPort
+        elif p["TCP"].flags.S and p["TCP"].flags.A:
+            # SYN-ACK packet, check if we have already stored the initial destination port for this stream
+            if streamKey not in tcpStreamInitialDstPortMap:
+                tcpStreamInitialDstPortMap[streamKey] = initialDstPort
+        elif streamKey in tcpStreamInitialDstPortMap:
+            initialDstPort = tcpStreamInitialDstPortMap[streamKey]
+        else:
+            initialDstPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
+        dstPortStr = str(initialDstPort if initialDstPort is not None else dstPort)
+        #dstPort = streamStabilzeProtocol(streamKey, dstPort)
+        #srcPort = streamStabilzeProtocol(streamKey, srcPort)
     elif isUdp:
         rawPayload = p["UDP"].payload.original
         srcPort = p["UDP"].sport
@@ -3822,6 +3835,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 p["IP"].dst,
                 timeout,
                 transportProtocol,
+                initialDstPort,
+                activeRecon=activeRecon
             )
             timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
                 "%Y-%m-%d %H:%M:%S.%f"
