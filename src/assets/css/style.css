@@ -2543,3 +2543,50 @@ strong {
   display: flex;
   flex-direction: column;
 }
+
+#data-tools-packet-json-pre {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.json-number {
+  color: #d46b0a;
+}
+
+.json-string {
+  color: #69b4ff;
+}
+
+.json-boolean {
+  color: #4900ae;
+}
+
+.json-null {
+  color: #e3ff7d;
+}
+
+.json-key {
+  color: #d699a7;
+}
+
+.json-brace {
+  color: #11c33b;
+}
+
+.json-bracket {
+  color: #2311c3;
+}
+
+.json-colon {
+  color: #ff6ae6;
+}
+
+.json-curly {
+  color: #00ff3c;
+}
+
+.json-witespace {
+  color: var(--color-5);
+  width: 1ch;
+}

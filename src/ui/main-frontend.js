@@ -8417,9 +8417,72 @@ function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
   // turn it into json object
   const packetJson = contextPacket || {};
-  const jsonString = JSON.stringify(packetJson, null, 4);
+  const jsonString = JSON.stringify(packetJson, null, 2);
   const outputEl = document.getElementById("data-tools-packet-json-pre");
-  outputEl.textContent = jsonString;
+  //outputEl.textContent = jsonString;
+  // now colorcode the json
+  const jsonContainer = document.getElementById("data-tools-packet-json-output");
+  jsonContainer.innerHTML = "";
+  const jsonLines = jsonString.split("\n");
+  jsonLines.forEach((line) => {
+    const lineEl = document.createElement("pre");
+    lineEl.style.margin = "0";
+    lineEl.className = "json-line";
+    lineEl.innerHTML = syntaxHighlightJsonLine(line);
+    // make sure blank lines dont appear
+    jsonContainer.appendChild(lineEl);
+  });
+  // make sure that only a single newline is made, so strip any trailing newlines
+  while (jsonContainer.lastChild && jsonContainer.lastChild.textContent === "") {
+    jsonContainer.removeChild(jsonContainer.lastChild);
+  }
+  function syntaxHighlightJsonLine(line) {
+    const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b)/g;
+    if (line.trim() === "") {
+      return "<span class=\"json-newline\">&nbsp;</span>";
+    }
+    return line.replace(regex, (match) => {
+      let cls = "json-number";
+      if (/^"/.test(match)) {
+        if (/:$/.test(match)) {
+          cls = "json-key";
+        } else {
+          cls = "json-string";
+        }
+      } else if (/true|false/.test(match)) {
+        cls = "json-boolean";
+      } else if (/null/.test(match)) {
+        cls = "json-null";
+      } else if (/[\{\}\[\]]/.test(match)) {
+        cls = "json-brace";
+      }
+      if (/[\[\]]/.test(match)) {
+        cls = "json-bracket";
+      }
+      if (/\s*:\s*/.test(match)) {
+        cls = "json-colon";
+      }
+      // curley braces
+      if (/\{\}/.test(match)) {
+        cls = "json-curly";
+      }
+      // this has to be whitespace with stuff after it
+      if (/^\s+.*$/.test(match)) {
+        cls = "json-whitespace";
+      }
+      // we need to count how many spaces are in the whitespace and add a class for that
+      if (/^\s+.*$/.test(match)) {
+        const spaceCount = match.match(/^\s+/)[0].length;
+        cls = `json-whitespace json-whitespace-${spaceCount}`;
+      }
+
+      if (cls === "json-whitespace") {
+        return match.replace(/ /g, "&nbsp;").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;");
+
+      }
+      return `<span class="${cls}">${match}</span>`;
+    });
+  }
 }
 
 
