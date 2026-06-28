@@ -148,9 +148,6 @@ function scanChunkSnapshots(sentSnapshotPaths) {
       chunkSize: HOST_CHUNK_SIZE,
     });
   });
-
-
-
   return unsent;
 }
 

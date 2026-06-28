@@ -52,6 +52,11 @@ import magic
 import numpy as np
 import ollama
 import requests
+try:
+    from urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+except (ImportError, AttributeError):
+    requests.packages.urllib3.disable_warnings()
 import yaml
 import ipaddress
 from bs4 import BeautifulSoup
@@ -62,7 +67,7 @@ from urllib.parse import unquote_plus
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
-
+from cryptography.utils import CryptographyDeprecationWarning
 try:
     import ollama
 except ImportError:
