@@ -8415,21 +8415,23 @@ function saveJsonFromContextMenu() {
 
 function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
+  writeLogEntry(`Logged raw packet JSON at index=${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
+
   // turn it into json object
   const packetJson = contextPacket || {};
   const jsonString = JSON.stringify(packetJson, null, 2);
   const outputEl = document.getElementById("data-tools-packet-json-pre");
-  //outputEl.textContent = jsonString;
-  // now colorcode the json
   const jsonContainer = document.getElementById("data-tools-packet-json-output");
   jsonContainer.innerHTML = "";
   const jsonLines = jsonString.split("\n");
+  const currentPacketEl = document.getElementById("data-tools-packet-json-current-packet");
+  currentPacketEl.textContent = `Current packet at index: ${contextPacket?.["Packet Info"]?.["Index"] || "unknown"}`;
   jsonLines.forEach((line) => {
     const lineEl = document.createElement("pre");
+    // this prevents blank line after each <pre> element
     lineEl.style.margin = "0";
     lineEl.className = "json-line";
     lineEl.innerHTML = syntaxHighlightJsonLine(line);
-    // make sure blank lines dont appear
     jsonContainer.appendChild(lineEl);
   });
   // make sure that only a single newline is made, so strip any trailing newlines
@@ -8446,13 +8448,15 @@ function currentPacketToConvJson() {
       return "<span class=\"json-newline\">&nbsp;</span>";
     }
     return line.replace(regex, (match) => {
-      let cls = "json-number";
-      if (/^"/.test(match)) {
+      let cls = "json-quote";
+      if (/\".*\"$/.test(match)) {
         if (/:$/.test(match)) {
           cls = "json-key";
         } else {
           cls = "json-string";
         }
+      } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(match)) {
+        cls = "json-number";
       } else if (/true|false/.test(match)) {
         cls = "json-boolean";
       } else if (/null/.test(match)) {
@@ -8485,9 +8489,14 @@ function currentPacketToConvJson() {
 
       if (cls === "json-whitespace") {
         return match.replace(/ /g, "&nbsp;").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;");
-
       }
-      return `<span class="${cls}">${match}</span>`;
+      // make sure that if the match has a quote in the beginning and end the quote is a different color than the rest of the string
+      if ((cls === "json-string") || (cls === "json-key") && /^\".*\"$/.test(match)) {
+        const innerString = match.slice(1, -1);
+        return `<span class="json-quote">"</span><span class="${cls}">${innerString}</span><span class="json-quote">"</span>`;
+      } else {
+        return `<span class="${cls}">${match}</span>`;
+      }
     });
   }
 }

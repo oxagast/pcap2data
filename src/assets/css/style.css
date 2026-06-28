@@ -2550,6 +2550,12 @@ strong {
   overflow: auto;
 }
 
+#data-tools-packet-json-current-packet {
+  font-size: 13px;
+  color: var(--color-5);
+  margin-bottom: 6px;
+}
+
 .json-number {
   color: #d46b0a;
 }
@@ -2587,7 +2593,7 @@ strong {
 }
 
 .json-quote {
-  color: #7dffe5;
+  color: #dcff7d;
 }
 
 .json-witespace {
