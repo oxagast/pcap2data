@@ -594,6 +594,26 @@ ipcMain.handle("save-cookie-jar", async (_event, cookieJarText) => {
   }
 });
 
+ipcMain.handle("get-valid-keys", async () => {
+  // set valid keys array to the line by line contense of the src/data/valid-keys.txt file
+  // ignoring blank lines and comments
+  const validKeysPath = path.join(
+    app.isPackaged ? process.resourcesPath : "src",
+    "data",
+    "valid-keys.txt",
+  );
+  if (!fs.existsSync(validKeysPath)) {
+    console.warn(`Valid keys file not found at ${validKeysPath}`);
+    return [];
+  }
+  const validKeysData = fs.readFileSync(validKeysPath, "utf8");
+  const validKeys = validKeysData
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  return validKeys;
+});
+
 ipcMain.handle("save-notes", async (_event, notesText) => {
   if (typeof notesText !== "string" || notesText.trim() === "") {
     return { success: false, error: "No notes data to save" };

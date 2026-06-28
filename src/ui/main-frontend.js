@@ -86,6 +86,12 @@ const goodiesArray = window.goodiesapi.getGoodies().then((goodies) => {
   console.log(`Loaded ${goodies.length} goodies from preload API`);
 });
 
+const validKeysCache = [];
+window.validkeysapi.getValidKeys().then((keys) => {
+  validKeysCache.push(...keys);
+});
+
+
 const SESSION_FILE_SCHEMA_VERSION = 1;
 const SESSION_CAPTURE_KEY = "Capture Data";
 const SESSION_STATE_KEY = "Session State";
@@ -10907,6 +10913,29 @@ function hideAllData() {
   //    "No matching packets found.";
   // check if packets were returned
   if (!filteredPackets || filteredPackets.length === 0) {
+    if (!validKeysCache || validKeysCache.length === 0) {
+      validKeysCache = window.validkeysapi.getValidKeys().then((keys) => {
+        validKeysCache = keys;
+      });
+    }
+    // now check if the key in the current filter string is valid
+    // by checking if it exists in the validKeysCache
+    const currentFilterStr = filterInputEl.value.trim();
+    let isValidKey = true;
+    let filterKey = "";
+    if (currentFilterStr) {
+      filterKey = currentFilterStr.split(":")[0].trim();
+      if (filterKey && !validKeysCache.includes(filterKey)) {
+        isValidKey = false;
+      } else {
+        isValidKey = true;
+      }
+    }
+    if (currentFilterStr && !isValidKey) {
+      doError(`Invalid filter key: "${filterKey}" in search query "${currentFilterStr}"`);
+      statusUpdate(`Status: Invalid filter key: "${filterKey}" in search query "${currentFilterStr}"`);
+      return;
+    }
     doError("No packets match the filter criteria!");
     statusUpdate("Status: No packets match the filter criteria");
   }

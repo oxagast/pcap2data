@@ -121,3 +121,12 @@ contextBridge.exposeInMainWorld('goodiesapi', {
     });
   },
 });
+
+contextBridge.exposeInMainWorld('validkeysapi', {
+  getValidKeys: () => ipcRenderer.invoke('get-valid-keys'),
+  onValidKeys: (callback) => {
+    ipcRenderer.on('valid-keys-data', (_event, validKeysData) => {
+      callback(validKeysData);
+    });
+  },
+});
