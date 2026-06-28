@@ -55,7 +55,27 @@ packetsnitch                      # Linux
 packetsnitch.exe (or click)       # Windows
 ```
 
-Load a pcap or pcapng file, and start analyzing!
+## Samples
+
+**Load a capture and start analyzing!**
+
+In the samples folder there are some sample captures for you to play with.  PacketSnitch is compatible with both
+pcap *and* pcapng style captures.
+
+Note: *Some of the samples folder captures are for internal testing purposes, and their protocols have varying coverage as far as
+compatibility goes inside PacketSnitch.  Some may even crash PacketSnitch or any number of other things!  You have been warned!*
+
+Some captures you can test the code with:
+
+[HTTP with compression](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_compressions.pcap)
+[HTTP with images to carve](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_with_jpegs.pcap)
+[FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/ftp.pcap)
+[IMAP mail transaction with creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/imap.pcap)
+[Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/bgp.pcapng)
+[Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
+[An exploit working against HUSTOJ](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap)
+
+Have fun!
 
 ## License
 
