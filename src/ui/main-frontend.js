@@ -1,6 +1,5 @@
 const threadName = "MainFrontend";
 import { bookmarkList } from '../state';
-
 import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
@@ -62,6 +61,7 @@ const {
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
   DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD,
@@ -8413,6 +8413,16 @@ function saveJsonFromContextMenu() {
   void persistSessionToDisk("context-menu");
 }
 
+function currentPacketToConvJson() {
+  const contextPacket = getCurrentContextPacket();
+  // turn it into json object
+  const packetJson = contextPacket || {};
+  const jsonString = JSON.stringify(packetJson, null, 4);
+  const outputEl = document.getElementById("data-tools-packet-json-pre");
+  outputEl.textContent = jsonString;
+}
+
+
 function exportCurrentPacketFromContextMenu() {
   const contextPacket = getCurrentPacketForExport();
   hideConvertContextMenu();
@@ -8859,6 +8869,10 @@ document
 document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => setConvSubtab(CONV_DECODES_SUBTAB));
+document.getElementById("conv-subtab-packet-json").addEventListener("click", () => {
+  currentPacketToConvJson();
+  setConvSubtab(CONV_PACKET_JSON_SUBTAB);
+});
 
 document
   .getElementById("crypt-subtab-ssl")

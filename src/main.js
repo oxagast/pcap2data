@@ -329,11 +329,9 @@ app.whenReady().then(() => {
             extensions: [
               "pcap",
               "pcapng",
+              "cap",
               "pss",
               "pss.gz",
-              "json",
-              "json.xz",
-              "json.gz",
             ],
           },
         ],
@@ -466,6 +464,17 @@ ipcMain.handle("save-json", async (_event, jsonData) => {
     console.error("Save error:", err);
     return { success: false, error: err.message };
   }
+});
+
+
+ipcMain.handle("current-packet-json", async (_event, packetData) => {
+  // we need to use main-frontend.js's getCurrentPacketForExport() function
+
+  const packetJson = JSON.stringify(packetData, null, 2);
+  if (packetJson === null || packetJson === undefined) {
+    return { success: false, error: "No packet data available" };
+  }
+  return { success: true, data: packetJson };
 });
 
 ipcMain.handle("save-packet", async (_event, packetData) => {

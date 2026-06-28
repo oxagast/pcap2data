@@ -150,6 +150,9 @@
             <button id="conv-subtab-decodes" class="crypt-subtab-btn">
               Decodes
             </button>
+            <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
+              Packet JSON
+            </button>
           </div>
 
           <div id="conv-conversions-panel" class="crypt-subtab-panel">
@@ -284,6 +287,15 @@
                 <option value="sip">SIP</option>
               </select>
               <div id="data-tools-proto-output"></div>
+            </div>
+          </div>
+          <div id="conv-packet-json-panel" class="crypt-subtab-panel" hidden>
+            <div class="data-tools-section data-tools-packet-json-section">
+              <div class="data-tools-title">Packet JSON Viewer</div>
+              <label for="data-tools-packet-json-current-packet">Current Packet:</label>
+              <div id="data-tools-packet-json-output">
+                <pre id="data-tools-packet-json-pre">No packet selected.</pre>
+              </div>
             </div>
           </div>
         </div>

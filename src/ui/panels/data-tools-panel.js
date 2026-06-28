@@ -5,6 +5,7 @@ const whirlpool = require("whirlpool-js");
 
 const threadName = "DataTools";
 
+
 // ── Conv tab constants ────────────────────────────────────────────────────────
 
 const DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD = 0.9;
@@ -18,11 +19,13 @@ const DATA_TOOLS_HEX_BYTE_RE = /^[0-9a-fA-F]{2}$/;
 const CONV_CONVERSIONS_SUBTAB = "conversions";
 const CONV_HASHES_SUBTAB = "hashes";
 const CONV_DECODES_SUBTAB = "decodes";
+const CONV_PACKET_JSON_SUBTAB = "packet-json";
 
 const VALID_CONV_SUBTABS = [
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_PACKET_JSON_SUBTAB,
 ];
 
 const HASH_IDS = [
@@ -406,6 +409,7 @@ function computeDataToolsHashes(bytes) {
     bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
   document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
 }
+// we need to use 
 
 function runDataToolsHashesFromInput() {
   const hashInput = document.getElementById("data-tools-hash-input-reading").value;
@@ -1165,6 +1169,15 @@ function clearProtoDecoderOutput() {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (protoOutput) protoOutput.innerHTML = "";
 }
+//    Packet JSON decoder setup
+document.getElementById("conv-subtab-packet-json").addEventListener("click", () => {
+  setConvSubtab(CONV_PACKET_JSON_SUBTAB);
+});
+
+
+
+
+
 
 // ── Conv tab navigation ───────────────────────────────────────────────────────
 
@@ -1189,6 +1202,7 @@ function setConvSubtab(tabName) {
   const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
   const hashesActive = tabName === CONV_HASHES_SUBTAB;
   const decodesActive = tabName === CONV_DECODES_SUBTAB;
+  const packetJsonActive = tabName === CONV_PACKET_JSON_SUBTAB;
   document
     .getElementById("conv-subtab-conversions")
     .classList.toggle("active", conversionsActive);
@@ -1198,9 +1212,13 @@ function setConvSubtab(tabName) {
   document
     .getElementById("conv-subtab-decodes")
     .classList.toggle("active", decodesActive);
+  document
+    .getElementById("conv-subtab-packet-json")
+    .classList.toggle("active", packetJsonActive);
   document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
   document.getElementById("conv-hashes-panel").hidden = !hashesActive;
   document.getElementById("conv-decodes-panel").hidden = !decodesActive;
+  document.getElementById("conv-packet-json-panel").hidden = !packetJsonActive;
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -1212,6 +1230,7 @@ module.exports = {
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
   DATA_TOOLS_TEXT_MIME_PRINTABLE_THRESHOLD,
