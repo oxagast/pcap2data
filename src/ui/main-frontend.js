@@ -10925,7 +10925,7 @@ function hideAllData() {
     let filterKey = "";
     if (currentFilterStr) {
       filterKey = currentFilterStr.split(":")[0].trim();
-      if (filterKey && !validKeysCache.includes(filterKey)) {
+      if (filterKey !== "" && !validKeysCache.includes(filterKey)) {
         isValidKey = false;
       } else {
         isValidKey = true;
@@ -10933,11 +10933,11 @@ function hideAllData() {
     }
     if (currentFilterStr && !isValidKey) {
       doError(`Invalid filter key: "${filterKey}" in search query "${currentFilterStr}"`);
-      statusUpdate(`Status: Invalid filter key: "${filterKey}" in search query "${currentFilterStr}"`);
-      return;
+      statusUpdate(`Status: Invalid filter key: "${filterKey}" in search query."`);
+    } else {
+      doError("No packets match the filter criteria!");
+      statusUpdate("Status: No packets match the filter criteria");
     }
-    doError("No packets match the filter criteria!");
-    statusUpdate("Status: No packets match the filter criteria");
   }
   document.getElementById("data-types").style.display = "none";
   document.getElementById("protoInfo").style.display = "none";
