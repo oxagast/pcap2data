@@ -210,6 +210,15 @@ The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Prot
 
 > The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [context-menu.md](context-menu.md) for details.
 
+##### Packet JSON Sub-tab
+
+The **Packet JSON** sub-tab is just the full JSON structure that PacketSntich uses in memory to tell you about the packets.  Every piece of information about a singular packet that
+the application is aware of, lives here.  This pane is also Context Menu "context-aware", meaning you can right click on an item in the JSON, and easily send it to other places
+within the PacketSnitch.  
+
+Note: *If this data looks similar to the hosts.json data, it should, as that is where this data comes from, almost verbetum.*
+
+
 ---
 
 #### Crypt Tab (Encryption Workspace)
