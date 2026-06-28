@@ -8437,7 +8437,11 @@ function currentPacketToConvJson() {
     jsonContainer.removeChild(jsonContainer.lastChild);
   }
   function syntaxHighlightJsonLine(line) {
-    const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b)/g;
+    // the regex should account for quote as well as colon, and also for true/false/null,
+    // and also for numbers, and also for braces/brackets. Also quotes on each side of the key,
+    // and the value.
+    //const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b|[\{\}\[\]]|:|\s+)/g;
+    const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b|[\{\}\[\]]|:|\s+)/g;
     if (line.trim() === "") {
       return "<span class=\"json-newline\">&nbsp;</span>";
     }
@@ -8455,6 +8459,9 @@ function currentPacketToConvJson() {
         cls = "json-null";
       } else if (/[\{\}\[\]]/.test(match)) {
         cls = "json-brace";
+      }
+      if (/\"/.test(match)) {
+        cls = "json-quote";
       }
       if (/[\[\]]/.test(match)) {
         cls = "json-bracket";

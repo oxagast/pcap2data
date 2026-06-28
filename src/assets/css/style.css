@@ -2559,7 +2559,7 @@ strong {
 }
 
 .json-boolean {
-  color: #4900ae;
+  color: #ae0000;
 }
 
 .json-null {
@@ -2567,7 +2567,7 @@ strong {
 }
 
 .json-key {
-  color: #d699a7;
+  color: #ffccd8;
 }
 
 .json-brace {
@@ -2575,15 +2575,19 @@ strong {
 }
 
 .json-bracket {
-  color: #2311c3;
+  color: #7611c3;
 }
 
 .json-colon {
-  color: #ff6ae6;
+  color: #ffbaf3;
 }
 
 .json-curly {
   color: #00ff3c;
+}
+
+.json-quote {
+  color: #7dffe5;
 }
 
 .json-witespace {
