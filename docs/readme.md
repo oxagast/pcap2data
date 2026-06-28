@@ -67,13 +67,12 @@ compatibility goes inside PacketSnitch.  Some may even crash PacketSnitch or any
 
 Some captures you can test the code with:
 
-[HTTP with compression](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_compressions.pcap)
-[HTTP with images to carve](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_with_jpegs.pcap)
-[FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/ftp.pcap)
-[IMAP mail transaction with creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/imap.pcap)
-[Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/bgp.pcapng)
-[Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
-[An exploit working against HUSTOJ](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap)
+* [HTTP with compression](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_compressions.pcap)
+* [HTTP with images to carve](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_with_jpegs.pcap)
+* [FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/ftp.pcap)
+* [Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/bgp.pcapng)
+* [Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
+* [An exploit working against HUSTOJ](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap)
 
 If you want to test anything else, a great resource is the [Wireshark Sample Captures Page](https://wiki.wireshark.org/SampleCaptures), I would get started there.
 
