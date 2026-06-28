@@ -117,7 +117,7 @@ function createKeystorePanel({
     if (!goodiesStash) {
       goodiesStash = await window.goodiesapi.getGoodies();
     }
-    // this probably sould be done in parallel becuase the list is long
+    // this probably should be done in parallel because the list is long
     function listInChunks(array, chunkSize) {
       const chunks = [];
       for (let i = 0; i < array.length; i += chunkSize) {
@@ -1507,10 +1507,13 @@ function createKeystorePanel({
           packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
         const extraInfo = packet?.["Extra Info"] || {};
         const roots = [transportData, extraInfo];
-
+        // check type before going over roots
+        if (!Array.isArray(roots) || roots.length === 0) return;
         roots.forEach((root) => {
           collectLeafValues(root, (pathKey, rawValue) => {
             const tokenMatches = detectTokenMatches(rawValue, pathKey);
+            // check type before going over tokenMatches
+            if (!Array.isArray(tokenMatches) || tokenMatches.length === 0) return;
             tokenMatches.forEach(({ type, content }) => {
               pushEntry({
                 type,
