@@ -10913,11 +10913,7 @@ function hideAllData() {
   //    "No matching packets found.";
   // check if packets were returned
   if (!filteredPackets || filteredPackets.length === 0) {
-    if (!validKeysCache || validKeysCache.length === 0) {
-      validKeysCache = window.validkeysapi.getValidKeys().then((keys) => {
-        validKeysCache = keys;
-      });
-    }
+
     // now check if the key in the current filter string is valid
     // by checking if it exists in the validKeysCache
     const currentFilterStr = filterInputEl.value.trim();
