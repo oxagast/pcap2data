@@ -75,6 +75,8 @@ Some captures you can test the code with:
 [Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
 [An exploit working against HUSTOJ](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap)
 
+If you want to test anything else, a great resource is the [Wireshark Sample Captures Page](https://wiki.wireshark.org/SampleCaptures), I would get started there.
+
 Have fun!
 
 ## License
