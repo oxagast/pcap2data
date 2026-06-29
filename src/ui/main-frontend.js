@@ -3054,6 +3054,7 @@ function processFile(file) {
     getCachedElement("summary-btn").style.display = "block";
     // Reset host list and dropdowns for the new file
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
+
     const targetHostsDropdown = getCachedElement("target_hosts");
     while (targetHostsDropdown.options.length > 0) {
       targetHostsDropdown.remove(0);
@@ -3063,6 +3064,7 @@ function processFile(file) {
     bookmarkList.splice(0, bookmarkList.length);
     notesList = [];
     selectedNoteId = null;
+    currentPacketToConvJson();
     renderNotesList();
     const selectBookmarkEl = document.getElementById("selectBookmark");
     while (selectBookmarkEl.options.length > 1) {
@@ -3990,6 +3992,8 @@ function decodeBytesForTextInspection(bytes) {
   }
   return DATA_TOOLS_UTF8_DECODER.decode(bytes);
 }
+
+
 
 function isLikelyReadableText(text, bytes = null) {
   const normalized = String(text || "");
@@ -8930,6 +8934,10 @@ document
     if (event.key !== "Enter") return;
     keystorePanel.submitManualUriFromContextMenuDialog();
   });
+
+
+
+
 
 // Show packet list when list button is clicked
 document.getElementById("list-btn").addEventListener("click", function () {

@@ -110,6 +110,8 @@ function createKeystorePanel({
     return bytes;
   }
 
+
+
   async function isItAGoodie(string) {
     // this function loads a file full of goodies (one per line) and returns it as an array of strings, filtering out empty lines and comments
     // then it checks to see if string is one of the goodies, if so, it returns the input string, else it returns an empty string
@@ -426,9 +428,9 @@ function createKeystorePanel({
     updateCryptKeystoreWorkspaceState(entry);
   }
 
-  function renderCryptKeystoreList() {
+  function renderCryptKeystoreList(listEntries = null) {
     const listEl = document.getElementById("crypt-keystore-list");
-    const activeEntries = getActiveCryptKeystoreEntries();
+    const activeEntries = listEntries || getActiveCryptKeystoreEntries();
     listEl.replaceChildren();
     if (!activeEntries.length) {
       const option = document.createElement("option");
@@ -1299,6 +1301,7 @@ function createKeystorePanel({
   }
 
 
+
   function shouldIncludeSessionSecretValue(value) {
     if (!value) return false;
     const normalized = normalizeSessionSecretValue(value);
@@ -1565,6 +1568,13 @@ function createKeystorePanel({
     window.URL.revokeObjectURL(workerUrl);
     return worker;
   }
+
+  document.getElementById("crypt-keystore-filter").addEventListener("input", (event) => {
+    const filterValue = event.target.value.trim();
+    let newEntries = grepSessionKeystoreEntriesByContent(filterValue);
+    // now call the renderer again to rewrite the list with the filtered entries
+    renderCryptKeystoreList(newEntries);
+  });
 
   async function hydratePacketForSessionScan(packet, hydrationCache) {
     if (!packet || typeof packet !== "object") return packet;
@@ -2161,6 +2171,20 @@ function createKeystorePanel({
     );
   }
 
+  function grepSessionKeystoreEntriesByContent(content) {
+    const normalizedContent = content.trim().toLowerCase();
+    // get the session keystore entries from from the keystore-panel.js aray
+    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
+    const keystoreEntries = cryptSessionKeystoreEntries;
+    if (typeof keystoreEntries !== "object" || !Array.isArray(keystoreEntries)) {
+      return [];
+    }
+    return keystoreEntries.filter((entry) => {
+      const entryContent = String(entry?.content || "").toLowerCase();
+      return entryContent.includes(normalizedContent);
+    });
+  }
+
   function configureKeystoreUnlockDialog(mode) {
     cryptKeystoreUnlockDialogMode = mode === "setup" ? "setup" : "unlock";
     const isSetup = cryptKeystoreUnlockDialogMode === "setup";
@@ -2628,6 +2652,9 @@ function createKeystorePanel({
     },
   };
 }
+
+
+
 
 module.exports = {
   id: "keystore",
