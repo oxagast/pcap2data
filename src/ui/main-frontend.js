@@ -4716,6 +4716,8 @@ function runDataToolsConversion() {
     errorEl.textContent = "";
     computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
+
+
   } catch (error) {
     resetDataToolsOutputs();
     errorEl.textContent =
@@ -8954,10 +8956,9 @@ document
 document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => setConvSubtab(CONV_DECODES_SUBTAB));
-document.getElementById("conv-subtab-packet-json").addEventListener("click", () => {
-  currentPacketToConvJson();
-  setConvSubtab(CONV_PACKET_JSON_SUBTAB);
-});
+document
+  .getElementById("conv-subtab-packet-json")
+  .addEventListener("click", () => setConvSubtab(CONV_PACKET_JSON_SUBTAB));
 
 document
   .getElementById("crypt-subtab-ssl")
@@ -9738,6 +9739,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
   activeMainTab = MAIN_TAB_DATA;
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
+  currentPacketToConvJson();
   document.getElementById("loading-container").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";
