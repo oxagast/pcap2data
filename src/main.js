@@ -11,9 +11,6 @@ const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const ollama = require('ollama').default;
 
-console.log(ollama);
-console.log(typeof ollama.generate);
-console.log(ollama);
 let lzmaNative = null;
 try {
   lzmaNative = require("lzma-native");
@@ -71,7 +68,7 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
     });
     return response;
   } catch (error) {
-    console.error('Error generating response from Ollama:', error);
+    console.log("Error generating response from Ollama:", error);
     return { error: error.message || 'Unknown error' };
   }
 });
@@ -82,7 +79,7 @@ ipcMain.handle("file-size", async () => {
     const fileStats = await fs.promises.stat(selectedFilePath); // Using promises version of stat
     return fileStats.size; // Send back the file size
   } catch (fileError) {
-    console.error("Error getting file stats:", fileError);
+    console.log("Error getting file stats:", fileError);
     return 0; // Return 0 if there's an error
   }
 });

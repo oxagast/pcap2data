@@ -8162,7 +8162,7 @@ function writeSummaryFromLLM() {
         statusUpdate("Status: LLM summary available for current stream!");
       }
     } catch (error) {
-      console.error("Error generating LLM summary:", error);
+      writeLogEntry(`LLM summary generation failed.`);
     }
   }, 5000);  // wait 5 seconds before calling the LLM to avoid too many calls when scrolling rapidly
 }
@@ -8385,7 +8385,7 @@ async function copyTextToClipboard(text, label) {
   }
 
   statusUpdate(`Status: Copied ${label} to clipboard`);
-  writeLogEntry(`Copied ${label} length=${text.length}`);
+  writeLogEntry(`Copied ${label} length = ${text.length}`);
 }
 
 function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
@@ -8444,7 +8444,7 @@ function copySelectedTextFromContextMenu() {
     .writeText(selectedText)
     .then(() => {
       statusUpdate("Status: Copied selected text to clipboard");
-      writeLogEntry(`Copied selected text length=${selectedText.length}`);
+      writeLogEntry(`Copied selected text length = ${selectedText.length}`);
     })
     .catch((error) => {
       console.error("Copy failed:", error);
@@ -8523,7 +8523,7 @@ function saveJsonFromContextMenu() {
 
 async function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
-  writeLogEntry(`Logged raw packet JSON at index=${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
+  writeLogEntry(`Logged raw packet JSON at index = ${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
 
   // turn it into json object
   const packetJson = contextPacket || {};
@@ -8593,7 +8593,7 @@ async function currentPacketToConvJson() {
       // we need to count how many spaces are in the whitespace and add a class for that
       if (/^\s+.*$/.test(match)) {
         const spaceCount = match.match(/^\s+/)[0].length;
-        cls = `json-whitespace json-whitespace-${spaceCount}`;
+        cls = `json - whitespace json - whitespace - ${spaceCount}`;
       }
 
       if (cls === "json-whitespace") {
@@ -8602,9 +8602,9 @@ async function currentPacketToConvJson() {
       // make sure that if the match has a quote in the beginning and end the quote is a different color than the rest of the string
       if ((cls === "json-string") || (cls === "json-key") && /^\".*\"$/.test(match)) {
         const innerString = match.slice(1, -1);
-        return `<span class="json-quote">"</span><span class="${cls}">${innerString}</span><span class="json-quote">"</span>`;
+        return `< span class= "json-quote" > "</span><span class="${cls}">${innerString}</span><span class="json - quote">"</span > `;
       } else {
-        return `<span class="${cls}">${match}</span>`;
+        return `< span class= "${cls}" > ${match}</span > `;
       }
     });
   }
@@ -8725,7 +8725,7 @@ async function saveHttpBodyFromContextMenuImpl(decompress = false) {
       return;
     }
     outputHex = bytesToHexString(decompressionCandidate.bytes);
-    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+    decompressLabel = ` decompressed algorithm = ${decompressionCandidate.algorithm}`;
   }
   window.saveapi.savePayload(outputHex).then((result) => {
     if (result.canceled) {
@@ -8777,7 +8777,7 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
       return;
     }
     outputHex = bytesToHexString(decompressionCandidate.bytes);
-    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+    decompressLabel = ` decompressed algorithm = ${decompressionCandidate.algorithm}`;
   }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -8817,7 +8817,7 @@ async function previewHttpBodyInBrowserFromContextMenuImpl(
     }
     outputHex = bytesToHexString(decompressionCandidate.bytes);
     contentType = inferMimeType(decompressionCandidate.bytes);
-    decompressLabel = ` decompressed algorithm=${decompressionCandidate.algorithm}`;
+    decompressLabel = ` decompressed algorithm = ${decompressionCandidate.algorithm}`;
   }
   window.previewapi.previewHttpBody(outputHex, contentType).then((result) => {
     if (result.success) {
@@ -8878,7 +8878,7 @@ function appendFilterQueryFromContextMenu(
   filterInputEl.focus();
   statusUpdate("Status: Filter query populated — press Enter to apply");
   writeLogEntry(
-    `Context menu filter populated type=${type} negated=${negate} query="${filterInputEl.value}"`,
+    `Context menu filter populated type = ${type} negated = ${negate} query = "${filterInputEl.value}"`,
   );
 }
 
@@ -8894,7 +8894,7 @@ function clearAndFilterQueryFromContextMenu(type) {
   filterInputEl.focus();
   statusUpdate("Status: Filter query populated — press Enter to apply");
   writeLogEntry(
-    `Context menu filter cleared and populated type=${type} query="${filterInputEl.value}"`,
+    `Context menu filter cleared and populated type = ${type} query = "${filterInputEl.value}"`,
   );
 }
 
@@ -8909,7 +8909,7 @@ function appendParenthesisTokenFromContextMenu(token) {
   filterInputEl.focus();
   statusUpdate("Status: Filter query updated — press Enter to apply");
   writeLogEntry(
-    `Context menu filter appended token="${token}" query="${filterInputEl.value}"`,
+    `Context menu filter appended token = "${token}" query = "${filterInputEl.value}"`,
   );
 }
 
@@ -8924,7 +8924,7 @@ function wrapCurrentFilterWithParenthesesFromContextMenu() {
   syncFilterHighlight();
   filterInputEl.focus();
   statusUpdate("Status: Filter query updated — press Enter to apply");
-  writeLogEntry(`Context menu filter wrapped query="${filterInputEl.value}"`);
+  writeLogEntry(`Context menu filter wrapped query = "${filterInputEl.value}"`);
 }
 
 initConvPanel({
@@ -9693,7 +9693,7 @@ document.getElementById("setBookmark").addEventListener("click", function () {
       document
         .getElementById("selectBookmark")
         .appendChild(new Option(currentPacketKey, currentPacketKey));
-      writeLogEntry(`Bookmark added key=${currentPacketKey}`);
+      writeLogEntry(`Bookmark added key = ${currentPacketKey}`);
     }
   }
 });
@@ -9786,7 +9786,7 @@ function updateCurrentPacketCounters(packetSet, options = {}) {
 }
 
 /**
- * Returns the packet array index matching a `sourceIp:packetIndex` key.
+ * Returns the packet array index matching a `sourceIp: packetIndex` key.
  */
 function findPacketIndexByKey(packetSet, packetKey) {
   if (
@@ -9881,7 +9881,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
     : getPacketsForSelectedHost(hostFilterEl.value);
   if (shouldUseFilteredPacketSet) {
     const filteredNavigationLogMessage =
-      `Filtered packet navigation packets_returned=${packetSet.length}`;
+      `Filtered packet navigation packets_returned = ${packetSet.length}`;
     if (filteredNavigationLogMessage !== lastFilteredNavigationLogMessage) {
       writeLogEntry(filteredNavigationLogMessage);
       lastFilteredNavigationLogMessage = filteredNavigationLogMessage;
@@ -9910,7 +9910,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
         navBookmark["Packet"],
       );
       writeLogEntry(
-        `Navigating bookmark host=${navBookmark["Host"]} packet=${navBookmark["Packet"]}`,
+        `Navigating bookmark host = ${navBookmark["Host"]} packet = ${navBookmark["Packet"]}`,
       );
     }
   } else if (navAction === "next") {
@@ -10139,7 +10139,7 @@ function getDataTypesVisibilityState(packetEntry) {
   return {
     showPane: isOverridden || (!hiddenByProtocol && !hiddenByHeuristic ? true : false),
     reason: hiddenByProtocol
-      ? `Hidden by default for ${hiddenProtocolToken} control/management traffic. Show it anyway to inspect encapsulated or tunneled payload guesses.`
+      ? `Hidden by default for ${hiddenProtocolToken} control / management traffic.Show it anyway to inspect encapsulated or tunneled payload guesses.`
       : hiddenByHeuristic
         ? "Hidden by default because this packet has no strong file-like payload indicators. Show it anyway to inspect encapsulated or tunneled payload guesses."
         : "",
@@ -10528,7 +10528,7 @@ function infoPanel(pk) {
     const normalizedLabel = normalizeProtocolLabel(protocolLabel);
     if (!normalizedLabel) return;
     const normalizedLayer = String(layer ?? "").trim();
-    const dedupeKey = `${normalizedLayer.toLowerCase()}|${normalizedLabel.toLowerCase()}`;
+    const dedupeKey = `${normalizedLayer.toLowerCase()}| ${normalizedLabel.toLowerCase()} `;
     if (seenProtocolKeys.has(dedupeKey)) return;
     seenProtocolKeys.add(dedupeKey);
     protocolsUsed.push({
@@ -10572,12 +10572,13 @@ function infoPanel(pk) {
     protocolsEl.innerHTML = protocolsUsed
       .map((entry) => {
         const detailText = entry.details
-          ? ` (${escapeHtml(String(entry.details))})`
+          ? ` (${escapeHtml(String(entry.details))
+          })`
           : "";
         if (!entry.layer) {
-          return `${escapeHtml(String(entry.protocol))}${detailText}`;
+          return `${escapeHtml(String(entry.protocol))}${detailText} `;
         }
-        return `${escapeHtml(String(entry.layer))}: ${escapeHtml(String(entry.protocol))}${detailText}`;
+        return `${escapeHtml(String(entry.layer))}: ${escapeHtml(String(entry.protocol))}${detailText} `;
       })
       .join("<br>");
   }
@@ -10605,7 +10606,7 @@ function infoPanel(pk) {
             streamProtocol = pktProtoName;
           } else if (pktProtoName !== streamProtocol) {
             // different protocol found, log a warning and continue using the first packet's protocol
-            console.warn(`Inconsistent application protocol in stream: expected ${streamProtocol}, but found ${pktProtoName}`);
+            console.warn(`Inconsistent application protocol in stream: expected ${streamProtocol}, but found ${pktProtoName} `);
           }
         }
       }
@@ -10749,7 +10750,7 @@ function infoPanel(pk) {
   const entropyValue = Number(traitsData["Shannon Entropy"] ?? 0);
   const tcpTimestampSuffix =
     protocol === "TCP" && tcpStreamStatusText !== "N/A"
-      ? ` ${tcpStreamStatusText}`
+      ? ` ${tcpStreamStatusText} `
       : "";
   document.getElementById("timestamp").innerHTML =
     "Timestamp " + packetTimestamp + "<br>" + tcpTimestampSuffix;
@@ -10909,7 +10910,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
         document.getElementById("loading-text").textContent = "Loading packets...";
         statusUpdate("Status: Initial packet batch ready, loading...");
         writeLogEntry(
-          `Backend snapshot received path="${payload.path}" processed=${payload.processedPackets} total=${payload.totalPackets} complete=${payload.complete}`,
+          `Backend snapshot received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
         );
         await processCapturePath(payload.path, {
           suppressLoadingOverlay: false,
@@ -10927,7 +10928,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
           incrementalUpdate: true,
         });
         writeLogEntry(
-          `Backend incremental update processed=${payload.processedPackets} total=${payload.totalPackets} complete=${payload.complete}`,
+          `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
         );
       }
 
@@ -10940,10 +10941,11 @@ window.jsonapi.onJsonPath((rawPayload) => {
           "Total Packets: " + totalPacketCount();
         scheduleSessionKeychainAutoPopulate("backend-complete");
         writeLogEntry(
-          `Completed processing backend data total_packets=${totalPacketCount()} load_time_sec=${(
+          `Completed processing backend data total_packets = ${totalPacketCount()} load_time_sec = ${(
             (loadEndTime - startTime) /
             1000
-          ).toFixed(2)}`,
+          ).toFixed(2)
+          } `,
         );
         statusUpdate("Status: Ready");
       }
@@ -10976,7 +10978,7 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file=${fileLabel} llm_enabled=${useLLM}`,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -11000,9 +11002,9 @@ function runSnitch(file, options = {}) {
 function doError(message, { backend = false } = {}) {
   console.error("Error from backend:", message);
   if (backend) {
-    writeBackendErrorLogEntry(`Error shown message="${message}"`);
+    writeBackendErrorLogEntry(`Error shown message = "${message}"`);
   } else {
-    writeLogEntry(`Error shown message="${message}"`);
+    writeLogEntry(`Error shown message = "${message}"`);
   }
   const loadingContainerEl = document.getElementById("loading-container");
   const errorContainerEl = document.getElementById("error-container");
