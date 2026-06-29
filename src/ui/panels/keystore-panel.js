@@ -390,6 +390,11 @@ function createKeystorePanel({
     const deleteBtn = document.getElementById(
       "crypt-delete-keystore-entry-btn",
     );
+    if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+      document.getElementById("keystore-filter-block").style.display = "block";
+    } else {
+      document.getElementById("keystore-filter-block").style.display = "none";
+    }
     const openLinkBtn = document.getElementById("crypt-open-link-btn");
     saveCertBtn.disabled = !isPersistentMode;
     saveKeyBtn.disabled = !isPersistentMode;
@@ -1571,8 +1576,24 @@ function createKeystorePanel({
 
   document.getElementById("crypt-keystore-filter").addEventListener("input", (event) => {
     const filterValue = event.target.value.trim();
-    let newEntries = grepSessionKeystoreEntriesByContent(filterValue);
-    // now call the renderer again to rewrite the list with the filtered entries
+    let typeEntriesGrep = grepSessionKeystoreEntriesByType(filterValue);
+    let contentEntriesGrep = grepSessionKeystoreEntriesByContent(filterValue);
+    let newEntries = [];
+    if (filterValue) {
+      newEntries = [...typeEntriesGrep, ...contentEntriesGrep];
+    } else {
+      newEntries = cryptSessionKeystoreEntries.slice();
+    }
+
+    // now to make sure we dont have dupes in newEntries, we can use a Set to track unique IDs
+    const uniqueIds = new Set();
+    newEntries = newEntries.filter((entry) => {
+      if (uniqueIds.has(entry.id)) {
+        return false;
+      }
+      uniqueIds.add(entry.id);
+      return true;
+    });
     renderCryptKeystoreList(newEntries);
   });
 
@@ -2176,12 +2197,22 @@ function createKeystorePanel({
     // get the session keystore entries from from the keystore-panel.js aray
     // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
     const keystoreEntries = cryptSessionKeystoreEntries;
-    if (typeof keystoreEntries !== "object" || !Array.isArray(keystoreEntries)) {
-      return [];
-    }
+    if (!normalizedContent) return keystoreEntries;
     return keystoreEntries.filter((entry) => {
-      const entryContent = String(entry?.content || "").toLowerCase();
-      return entryContent.includes(normalizedContent);
+      const entryContent = entry.content || "";
+      return entryContent.toLowerCase().includes(normalizedContent);
+    });
+  }
+
+  function grepSessionKeystoreEntriesByType(type) {
+    const normalizedType = type.trim().toLowerCase();
+    // get the session keystore entries from from the keystore-panel.js aray
+    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
+    const keystoreEntries = cryptSessionKeystoreEntries;
+    if (!normalizedType) return keystoreEntries;
+    return keystoreEntries.filter((entry) => {
+      const entryType = entry.type || "";
+      return entryType.toLowerCase().includes(normalizedType);
     });
   }
 
@@ -2470,6 +2501,7 @@ function createKeystorePanel({
     keystoreBoxEl.style.display = "flex";
     const modeEl = document.getElementById("crypt-keystore-mode");
     modeEl.value = cryptActiveKeystoreMode;
+
     renderCryptKeystoreList();
   }
 
