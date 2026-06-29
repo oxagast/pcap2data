@@ -1578,9 +1578,16 @@ function createKeystorePanel({
     const filterValue = event.target.value.trim();
     let typeEntriesGrep = grepSessionKeystoreEntriesByType(filterValue);
     let contentEntriesGrep = grepSessionKeystoreEntriesByContent(filterValue);
+    let labelEntriesGrep = grepSessionKeystoreEntriesByLabel(filterValue);
+    //let typeEntriesGrep = [];
+    //let contentEntriesGrep = [];
+    //if (filterValue) {
+    //  typeEntriesGrep = grepSessionKeystoreEntries(filterValue, "type");
+    //  contentEntriesGrep = grepSessionKeystoreEntries(filterValue, "content");
+    //}
     let newEntries = [];
     if (filterValue) {
-      newEntries = [...typeEntriesGrep, ...contentEntriesGrep];
+      newEntries = [...typeEntriesGrep, ...contentEntriesGrep, ...labelEntriesGrep];
     } else {
       newEntries = cryptSessionKeystoreEntries.slice();
     }
@@ -2213,6 +2220,18 @@ function createKeystorePanel({
     return keystoreEntries.filter((entry) => {
       const entryType = entry.type || "";
       return entryType.toLowerCase().includes(normalizedType);
+    });
+  }
+
+  function grepSessionKeystoreEntriesByLabel(label) {
+    const normalizedLabel = label.trim().toLowerCase();
+    // get the session keystore entries from from the keystore-panel.js aray
+    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
+    const keystoreEntries = cryptSessionKeystoreEntries;
+    if (!normalizedLabel) return keystoreEntries;
+    return keystoreEntries.filter((entry) => {
+      const entryLabel = entry.label || "";
+      return entryLabel.toLowerCase().includes(normalizedLabel);
     });
   }
 
