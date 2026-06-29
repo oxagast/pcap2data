@@ -418,6 +418,8 @@ strong {
   white-space: pre-wrap;
   overflow-y: auto;
   overflow-x: hidden;
+  font-size: 14px;
+  font-family: "Tahoma", "Courier New", Courier, monospace;
 }
 
 #tab-btns {

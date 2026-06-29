@@ -201,6 +201,7 @@ let jsonOfPackets;
 let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
+let summaryFromSavedSession = false;
 let lastFilteredNavigationLogMessage = "";
 let startTime;
 let helpOpen = false;
@@ -252,6 +253,7 @@ let noteIdCounter = 0;
 // Name of the session in the library (userData/sessions/). Null if unsaved.
 let currentSessionName = null;
 let sessionPickerPanel = null;
+const LLM_MAX_CONTENT_LENGTH = 180000;
 const BACKEND_PACKET_CHUNK_SIZE = 250;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
@@ -259,6 +261,8 @@ let sessionAutosaveInFlight = false;
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
+let languageModelResponse = "No summary available.";
+let alreadySummarizedPacketKeys = new Set();
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -2372,6 +2376,7 @@ function buildSessionStateSnapshot() {
       keystorePanel.getSessionKeychainEntries(),
       [],
     ),
+    currentSummary: summary,
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
     sourcePcap: sessionPcapSource
@@ -2708,6 +2713,11 @@ function restoreSessionState(sessionState) {
     deepCloneSessionData(loadedSessionEntries, []),
     sessionState.keystoreMode,
   );
+  if (sessionState.currentSummary && typeof sessionState.currentSummary === "string") {
+    summary = sessionState.currentSummary;
+    summaryFromSavedSession = true;
+  }
+  document.getElementById("summary_content").textContent = summary || "No summary available";
 
   const loadedNotes = Array.isArray(sessionState.notes)
     ? sessionState.notes
@@ -2870,7 +2880,6 @@ async function processCapturePath(capturePath, options = {}) {
 
   if (incrementalUpdate && isFileLoaded) {
     capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
-    finalSummary = capturedPackets["Final Summary"] || "";
     jsonCapture = "[lazy-capture-store]";
 
     const targetHostsDropdown = getCachedElement("target_hosts");
@@ -3046,7 +3055,6 @@ function processFile(file) {
       capturedPackets = normalizedPayload.captureData;
       loadedSessionState = normalizedPayload.sessionState;
       jsonCapture = JSON.stringify(capturedPackets, null, 2);
-      finalSummary = capturedPackets["Final Summary"] ?? "";
       await finishProcessingFile();
     }
   };
@@ -8103,15 +8111,24 @@ function getFollowStreamJson(streamPackets) {
 }
 
 function writeSummaryFromLLM() {
-  // we will wait 8 seconds and make sure we are sitting on a packet before calling the
+  // we will wait 5 seconds and make sure we are sitting on a packet before calling the
   // llm to generate a summary of the packets stream. This is to avoid calling the llm
   //  too often when the user is rapidly scrolling through packets.
+  // we should also check to make sure if this is a loaded session, and the stream has 
+  // already been summmarized, we should not call the llm again for the same stream.
+  if (summaryFromSavedSession) {
+    summaryFromSavedSession = false;
+    return;
+  }
+
   if (llmSummaryTimeout) {
+    // clear any existing timeout to avoid multiple calls
     clearTimeout(llmSummaryTimeout);
   }
   llmSummaryTimeout = setTimeout(async () => {
     const contextPacket = getCurrentContextPacket();
     if (!contextPacket) return;
+    if (alreadySummarizedPacketKeys.has(contextPacket?.__packetKey)) return;
     const streamPackets = getFollowStreamPackets(contextPacket);
     if (!streamPackets.length) return;
     const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
@@ -8122,12 +8139,24 @@ function writeSummaryFromLLM() {
     // make sure we don't recall if we are on the same packet stream as before
     if (lastLLMSummaryPacketKey === contextPacket?.__packetKey) return;
     lastLLMSummaryPacketKey = contextPacket?.__packetKey;
+    // we need to keep track of what has already been summarized
+    if (alreadySummarizedPacketKeys.size > 100) {
+      // we need to shift out the old ones to avoid memory bloat
+      const keysToRemove = Array.from(alreadySummarizedPacketKeys).slice(0, alreadySummarizedPacketKeys.size - 100);
+      keysToRemove.forEach((key) => alreadySummarizedPacketKeys.delete(key));
+    }
+    // add the current packet key to the set of already summarized packets
+    alreadySummarizedPacketKeys.add(contextPacket?.__packetKey);
     writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
-    const prompt = `You are a network packet analysis assistant. Please provide a concise three paragraph summary of the following network stream data, including any protocols, file transfers, or notable content. If the data is not recognizable, simply state that it is unrecognized. Here is the stream data:\n\n${jsonOfPacketStream}`;
+    let prompt = `Please provide a summary of the following network stream data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next.  Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
+      prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
+    }
     try {
       const llmResponse = await callLargeLanguageModel(prompt);
-      summary = llmResponse?.response || "No summary generated.";
-      if (summary.length > 800) {
+      const summPart = llmResponse?.response || "No summary generated.";
+      summary = summary + "\n\n" + summPart;
+      if (summPart.length > 800) {
         document.getElementById("summary_content").textContent = summary;
         writeLogEntry(`LLM summary generated for ${streamPackets.length} packets`);
         statusUpdate("Status: LLM summary available for current stream!");
@@ -8135,7 +8164,7 @@ function writeSummaryFromLLM() {
     } catch (error) {
       console.error("Error generating LLM summary:", error);
     }
-  }, 8000);
+  }, 5000);  // wait 5 seconds before calling the LLM to avoid too many calls when scrolling rapidly
 }
 
 function setActivePacketCursor(nextIndex) {
