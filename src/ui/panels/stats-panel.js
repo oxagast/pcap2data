@@ -1,4 +1,5 @@
 const threadName = "Stats";
+const { app, sessionsapi, keystorePanel } = window;
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -6,6 +7,40 @@ function isProtocolLikeFieldName(fieldName, fieldValue) {
   // Exclude transport metadata objects such as "TCP Flag Data".
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(fieldName)) return false;
   return true;
+}
+
+
+function getCredentialsFromKeystore() {
+
+  return window.keystoreCredsCount;
+}
+
+function getTopTalkers(capturedPackets, topN = 5) {
+  const talkerCounts = new Map();
+
+  for (const host of Object.keys(capturedPackets["Host"] || {})) {
+    const packets = capturedPackets["Host"][host];
+    if (!Array.isArray(packets)) continue;
+
+    for (const pkt of packets) {
+      const pi = pkt?.["Packet Info"];
+      if (!pi) continue;
+
+      const srcIp = pi?.["IP"]?.["Source IP"];
+      const dstIp = pi?.["IP"]?.["Destination IP"];
+      if (srcIp) {
+        talkerCounts.set(srcIp, (talkerCounts.get(srcIp) || 0) + 1);
+      }
+      if (dstIp) {
+        talkerCounts.set(dstIp, (talkerCounts.get(dstIp) || 0) + 1);
+      }
+    }
+  }
+
+  return Array.from(talkerCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN)
+    .map(([ip, count]) => ({ ip, count }));
 }
 
 function collectPacketDecodedProtocolNames(packetInfo) {
@@ -453,6 +488,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     locations: [...locations.entries()].sort((a, b) => b[1] - a[1]),
     hostnames: [...hostnames].sort(),
     dataTypes: [...dataTypes].sort(),
+    topTalkers: getTopTalkers(capturedPackets, 5),
     encryptedCount,
     unencryptedCount,
     totalPackets,
@@ -460,6 +496,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     maxStreamLength,
     minStreamLength,
     avgStreamLength,
+    creds: getCredentialsFromKeystore(),
+    totalTraffic: totalTrafficBytes(capturedPackets),
     retransmissionCount: tcpStreamAnomalyCounts.retransmissionCount,
     outOfOrderCount: tcpStreamAnomalyCounts.outOfOrderCount,
     bookmarkCount,
@@ -510,8 +548,31 @@ function makeStatsSection({ documentRef, title, items, queryBuilder, onQuery }) 
   return section;
 }
 
+function totalTrafficBytes(capturedPackets) {
+  let totalBytes = 0;
+  for (const host of Object.keys(capturedPackets["Host"] || {})) {
+    const packets = capturedPackets["Host"][host];
+    if (!Array.isArray(packets)) continue;
+
+    for (const pkt of packets) {
+      const pi = pkt?.["Packet Info"];
+      if (!pi) continue;
+
+      const rawData = pi?.["Raw data"];
+      const payloadLength = Number(rawData?.["Payload Length"]);
+      if (Number.isFinite(payloadLength) && payloadLength > 0) {
+        totalBytes += payloadLength;
+      }
+    }
+  }
+  return totalBytes;
+}
+
+
+
 function createStatsPanel(options) {
   const {
+    keystorePanel,
     documentRef,
     statusUpdate,
     writeLogEntry,
@@ -598,6 +659,8 @@ function createStatsPanel(options) {
       `TCP Out-of-Order: ${stats.outOfOrderCount}`,
       `Unique Protocols: ${stats.protocols.length}`,
       `Unique Locations: ${stats.locations.length}`,
+      `Total Traffic: ${stats.totalTraffic} bytes`,
+      `Credentials Found: ${stats.creds}`,
     ].forEach((line) => {
       const kv = documentRef.createElement("div");
       kv.className = "stats-kv";
@@ -606,6 +669,16 @@ function createStatsPanel(options) {
     });
     overview.appendChild(overviewGrid);
     content.appendChild(overview);
+
+    const topTalkersSec = makeStatsSection({
+      documentRef,
+      title: "Top Talkers",
+      items: stats.topTalkers.map((talker) => `${talker.ip} (${talker.count} packets)`),
+      queryBuilder: (v) => `ip.src.addr: ${v.substr(0, v.indexOf(" "))} || ip.dst.addr: ${v.substr(0, v.indexOf(" "))}`,
+      onQuery: applyStatsQuery,
+    });
+    if (topTalkersSec) content.appendChild(topTalkersSec);
+
     // make the application protocols uppercase to be congruent with the rest of the protos
     stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
     const protoSec = makeStatsSection({

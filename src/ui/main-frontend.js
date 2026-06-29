@@ -5997,6 +5997,7 @@ keystorePanel = createKeystorePanel({
   openExternalUrl: (url) => window.browserapi.openExternalUrl(url),
 });
 
+
 function buildCookieJarTextFromHttpFields(fields) {
   return extractCookieJarEntriesFromHttpFields(fields).join("\n");
 }
@@ -7940,6 +7941,12 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
 }
 
 function callLargeLanguageModel(content) {
+  if (!window.llmapi || typeof window.llmapi.generate !== "function") {
+    throw new Error("LLM API is not available");
+  }
+  else if (!content || typeof content !== "string") {
+    throw new Error("Content must be a non-empty string");
+  }
   const model = "minimax-m2.5:cloud";
   const temperature = 0.5;
   const maxTokens = 1024;
@@ -8945,7 +8952,11 @@ document.getElementById("stats-btn").addEventListener("click", function () {
     doError("Please upload a JSON file before accessing packet statistics.");
     return;
   }
-  showStats();
+  const activeEntries = keystorePanel.getActiveCryptKeystoreEntries();
+  if (activeEntries.length > 0) {
+    window.keystoreCredsCount = activeEntries.length;
+    showStats();
+  }
 });
 
 document.getElementById("help-btn").addEventListener("click", function () {

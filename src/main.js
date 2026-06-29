@@ -69,7 +69,7 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
     return response;
   } catch (error) {
     console.log("Error generating response from Ollama:", error);
-    return { error: error.message || 'Unknown error' };
+    return;
   }
 });
 
