@@ -186,7 +186,6 @@ const BOOKMARK_FILTER_QUERY = "bookmark: true";
 let capturedPackets = {}; // Stores parsed packet data from JSON
 let jsonCapture = ""; // Stringified JSON capture for pretty display
 let currentIp;
-let finalSummary = ""; // Stores the summary section from JSON
 const status = getCachedElement("status"); // Status bar element
 let hostsList = [DUMMY_ALL_HOST]; // List of hosts found in capture
 const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
@@ -206,6 +205,8 @@ let lastFilteredNavigationLogMessage = "";
 let startTime;
 let helpOpen = false;
 let helpWin = null;
+let llmSummaryTimeout = null;
+let summary = "";
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
@@ -257,6 +258,7 @@ let backendCaptureUpdateQueue = Promise.resolve();
 let sessionAutosaveInFlight = false;
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
+let lastLLMSummaryPacketKey = null;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -509,7 +511,6 @@ const { showStats } = createStatsPanel({
 const summaryPanel = createSummaryPanel({
   documentRef: document,
   getJsonCapture: () => jsonCapture,
-  getFinalSummary: () => finalSummary,
   setActiveMainTab: (tab) => {
     activeMainTab = tab;
   },
@@ -630,8 +631,7 @@ async function clearCurrentSession() {
   currentIp = null;
   currentPacketKey = null;
   jsonCapture = "";
-  finalSummary = "";
-  finalSummary = ""; // Clear the default summary from the template
+  languageModelResponse = "No summary available.";
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
   hostFilterEl.value = "";
@@ -674,7 +674,11 @@ async function clearCurrentSession() {
   }
 }
 
-
+document.getElementById("summary-btn").addEventListener("click", () => {
+  activeMainTab = MAIN_TAB_SUMMARY;
+  document.getElementById("summary_content").textContent = summary || "No summary available.";
+  showSummary();
+});
 
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -2942,7 +2946,6 @@ async function processCapturePath(capturePath, options = {}) {
   }
 
   capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
-  finalSummary = capturedPackets["Final Summary"] || "";
   jsonCapture = "[lazy-capture-store]";
   fileLoaded(true);
 
@@ -3022,7 +3025,6 @@ function processFile(file) {
           capturedPackets = normalizedPayload.captureData;
           loadedSessionState = normalizedPayload.sessionState;
           jsonCapture = JSON.stringify(capturedPackets, null, 2);
-          finalSummary = capturedPackets["Final Summary"] ?? "";
           await finishProcessingFile();
         })
         .catch((e) => {
@@ -6766,8 +6768,10 @@ function getStreamTupleForPacket(packet) {
  * dstIp, dstPort, protocol), or null if no current packet is loaded.
  */
 function getCurrentStreamTuple() {
-  return getStreamTupleForPacket(getCurrentContextPacket());
+  return getStreamTupleForPacket(getCurrentPacketForExport());
 }
+
+
 
 /**
  * Collects all packets across all hosts in capturedPackets that belong to the
@@ -7927,6 +7931,18 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
   });
 }
 
+function callLargeLanguageModel(content) {
+  const model = "minimax-m2.5:cloud";
+  const temperature = 0.5;
+  const maxTokens = 1024;
+  return window.llmapi.generate(content, {
+    model,
+    temperature,
+    maxTokens,
+  });
+}
+
+
 function followStreamToConv() {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
@@ -8070,6 +8086,57 @@ async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) 
   );
 }
 
+function getFollowStreamJson(streamPackets) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) return "";
+  const jsonArray = streamPackets.map((packet) => {
+    const packetInfo = packet?.["Packet Info"] || {};
+    const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+    const timestamp = parsePacketTimestampMs(packet);
+    const payloadHex = getPacketPayloadHex(packet);
+    return {
+      timestamp: Number.isFinite(timestamp) ? timestamp : null,
+      protocol: protocol || null,
+      payloadHex: payloadHex || null,
+    };
+  });
+  return JSON.stringify(jsonArray, null, 2);
+}
+
+function writeSummaryFromLLM() {
+  // we will wait 8 seconds and make sure we are sitting on a packet before calling the
+  // llm to generate a summary of the packets stream. This is to avoid calling the llm
+  //  too often when the user is rapidly scrolling through packets.
+  if (llmSummaryTimeout) {
+    clearTimeout(llmSummaryTimeout);
+  }
+  llmSummaryTimeout = setTimeout(async () => {
+    const contextPacket = getCurrentContextPacket();
+    if (!contextPacket) return;
+    const streamPackets = getFollowStreamPackets(contextPacket);
+    if (!streamPackets.length) return;
+    const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+    const jsonOfPacketStream = getFollowStreamJson(hydratedStreamPackets);
+    const combinedHex = buildStreamHex(hydratedStreamPackets);
+    if (!combinedHex) return;
+    const asciiContent = hexToAscii(combinedHex);
+    // make sure we don't recall if we are on the same packet stream as before
+    if (lastLLMSummaryPacketKey === contextPacket?.__packetKey) return;
+    lastLLMSummaryPacketKey = contextPacket?.__packetKey;
+    writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
+    const prompt = `You are a network packet analysis assistant. Please provide a concise three paragraph summary of the following network stream data, including any protocols, file transfers, or notable content. If the data is not recognizable, simply state that it is unrecognized. Here is the stream data:\n\n${jsonOfPacketStream}`;
+    try {
+      const llmResponse = await callLargeLanguageModel(prompt);
+      summary = llmResponse?.response || "No summary generated.";
+      if (summary.length > 800) {
+        document.getElementById("summary_content").textContent = summary;
+        writeLogEntry(`LLM summary generated for ${streamPackets.length} packets`);
+        statusUpdate("Status: LLM summary available for current stream!");
+      }
+    } catch (error) {
+      console.error("Error generating LLM summary:", error);
+    }
+  }, 8000);
+}
 
 function setActivePacketCursor(nextIndex) {
   const parsedIndex = Number.parseInt(nextIndex, 10);
@@ -8425,13 +8492,14 @@ function saveJsonFromContextMenu() {
   void persistSessionToDisk("context-menu");
 }
 
-function currentPacketToConvJson() {
+async function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
   writeLogEntry(`Logged raw packet JSON at index=${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
 
   // turn it into json object
   const packetJson = contextPacket || {};
   const jsonString = JSON.stringify(packetJson, null, 2);
+
   const outputEl = document.getElementById("data-tools-packet-json-pre");
   const jsonContainer = document.getElementById("data-tools-packet-json-output");
   jsonContainer.innerHTML = "";
@@ -9748,6 +9816,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
   const previousPacketKey = currentPacketKey;
   const previousCursor = getActivePacketCursor();
   currentPacketToConvJson();
+  await writeSummaryFromLLM();
   document.getElementById("loading-container").style.display = "none";
   document.getElementById("summary_box").style.display = "none";
   document.getElementById("stats_box").style.display = "none";

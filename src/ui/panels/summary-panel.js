@@ -31,8 +31,6 @@ function createSummaryPanel({
     documentRef.getElementById("list_box").style.display = "none";
     documentRef.getElementById("notes_box").style.display = "none";
     documentRef.getElementById("rightside").style.display = "none";
-    documentRef.getElementById("summary_content").textContent =
-      getFinalSummary() || "No LLM summary available.";
     documentRef.getElementById("summary_box").style.display = "block";
     fileLoaded(true);
   }

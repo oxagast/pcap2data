@@ -130,3 +130,8 @@ contextBridge.exposeInMainWorld('validkeysapi', {
     });
   },
 });
+
+
+contextBridge.exposeInMainWorld("llmapi", {
+  generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),
+});

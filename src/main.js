@@ -9,6 +9,11 @@ const os = require("os");
 const util = require("util");
 const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
+const ollama = require('ollama').default;
+
+console.log(ollama);
+console.log(typeof ollama.generate);
+console.log(ollama);
 let lzmaNative = null;
 try {
   lzmaNative = require("lzma-native");
@@ -56,6 +61,20 @@ if (require("electron-squirrel-startup")) {
 }
 
 
+
+
+ipcMain.handle('ollama:generate', async (_event, prompt) => {
+  try {
+    const response = await ollama.generate({
+      model: 'minimax-m2.5:cloud',
+      prompt,
+    });
+    return response;
+  } catch (error) {
+    console.error('Error generating response from Ollama:', error);
+    return { error: error.message || 'Unknown error' };
+  }
+});
 
 ipcMain.handle("file-size", async () => {
   try {

@@ -414,6 +414,10 @@ strong {
   width: 95%;
   margin: 10px;
   box-sizing: border-box;
+  word-break: break-word;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #tab-btns {
