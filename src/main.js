@@ -167,7 +167,7 @@ const DEFAULT_THEME_DEFINITIONS = Object.freeze([
     variables: {
       "--app-bg": "#000000",
       "--surface-0": "#000000",
-      "--surface-1": "#020203",
+      "--surface-1": "#000000",
       "--surface-2": "#000000",
       "--scrollbar-track": "#000000",
       "--border-strong": "#4f59cf",
@@ -175,11 +175,11 @@ const DEFAULT_THEME_DEFINITIONS = Object.freeze([
       "--color-2": "#003b86",
       "--color-2-hover": "#0a4f9f",
       "--color-3": "#4f59cf",
-      "--color-4": "#00183d",
+      "--color-4": "#000611",
       "--color-5": "#e1e6ff",
       "--color-6": "#b9c5ff",
-      "--color-7": "#00295f",
-      "--data-tools-frame-bg": "#001e4d",
+      "--color-7": "#001635",
+      "--data-tools-frame-bg": "#000d24",
       "--data-tools-hex-color": "#dbe3ff",
       "--data-tools-binary-color": "#dbe3ff",
       "--data-tools-decimal-color": "#dbe3ff",
@@ -366,6 +366,26 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom") {
   return { id, name, description, variables };
 }
 
+function shouldMigrateSub7Theme(rawTheme) {
+  if (!rawTheme || typeof rawTheme !== "object") return false;
+  const normalized = normalizeThemeDefinition(rawTheme, "sub7");
+  if (!normalized || normalized.id !== "sub7") return false;
+  const v = normalized.variables || {};
+  const isLegacyGreen = (
+    String(v["--color-1"] || "").toLowerCase() === "#8cff6b" &&
+    String(v["--color-2"] || "").toLowerCase() === "#0d1a0d" &&
+    String(v["--color-7"] || "").toLowerCase() === "#132613"
+  );
+
+  const isEarlyCobalt = (
+    String(v["--color-2"] || "").toLowerCase() === "#003b86" &&
+    String(v["--color-4"] || "").toLowerCase() === "#00183d" &&
+    String(v["--color-7"] || "").toLowerCase() === "#00295f"
+  );
+
+  return isLegacyGreen || isEarlyCobalt;
+}
+
 async function readThemeDefinitionsFromDir(dirPath) {
   const fileEntries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   const parsedThemes = [];
@@ -414,6 +434,22 @@ async function ensureThemeFilesExist() {
     const filePath = path.join(themesDir, `${defaultTheme.id}${THEME_FILE_EXTENSION}`);
     try {
       await fs.promises.access(filePath, fs.constants.F_OK);
+      if (defaultTheme.id === "sub7") {
+        try {
+          const existingText = await fs.promises.readFile(filePath, "utf8");
+          const existingTheme = JSON.parse(existingText);
+          if (shouldMigrateSub7Theme(existingTheme)) {
+            await fs.promises.writeFile(
+              filePath,
+              JSON.stringify(defaultTheme, null, 2) + os.EOL,
+              "utf8",
+            );
+            console.log("Migrated legacy Sub7 theme to latest cobalt-black Sub7.");
+          }
+        } catch (migrationError) {
+          console.warn("Unable to inspect existing Sub7 theme for migration:", migrationError);
+        }
+      }
     } catch {
       await fs.promises.writeFile(
         filePath,

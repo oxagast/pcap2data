@@ -1,7 +1,7 @@
 {
-    "id": "dark",
-    "name": "Dark",
-    "description": "Neutral grey dark workspace.",
+    "id": "forrest",
+    "name": "Forret Gump",
+    "description": "Neutral greyish green, Forrest Gump theme.",
     "variables": {
         "--app-bg": "#1e2024",
         "--surface-0": "#16181c",
