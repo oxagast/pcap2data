@@ -27,6 +27,42 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 
 ---
 
+### Settings Workspace
+
+- Dedicated **Settings** tab with two sub-tabs: **General** and **LLM**.
+- Settings are persisted to `userData/config/settings.json` via main-process IPC (`settings-get`, `settings-save`, `settings-update`).
+- **General** settings:
+  - **Theme** selector (`general.themeId`) using discovered theme JSON files.
+  - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
+  - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
+  - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`.
+- **LLM** settings:
+  - **Ollama model** (`llm.ollamaModel`).
+  - **Ollama API key** (`llm.ollamaApiKey`) stored locally in settings.
+  - **Active by default** (`llm.activeByDefault`) for the load dialog LLM toggle.
+  - **LLM trigger delay (seconds)** (`llm.triggerDelaySeconds`) for stream-summary idle scheduling.
+  - **Max tokens for stream summary** (`llm.maxSummaryTokens`) applied to Ollama `num_predict`.
+- **Save settings** writes normalized values to disk; **Restore defaults** resets to app defaults.
+
+---
+
+### Theme Engine
+
+- Theme system is file-driven and runtime-discoverable.
+- Built-in defaults are bundled in `themes/*.json` and mirrored into `userData/themes` on startup.
+- Renderer discovers themes using `themeapi.list()` and applies them using `themeapi.get(themeId)`.
+- Theme JSON schema supports:
+  - `id`, `name`, `description`
+  - `variables` object (CSS custom properties only, keys must start with `--`)
+  - optional `logoImage` (`png` or `jpg`, base64 payload)
+- Theme IDs are sanitized to lowercase `a-z`, `0-9`, `_`, `-`; invalid IDs fall back safely.
+- Invalid theme files are skipped without crashing, and duplicate IDs are de-duplicated.
+- Selected theme is persisted through `general.themeId` in settings and applied on startup.
+- Theme logo override uses a data URI generated from the JSON `logoImage`; fallback restores default app logo.
+- Theme directory path is exposed in Settings (`themes-directory` IPC) to guide custom theme placement.
+
+---
+
 ### Packet Navigation
 
 - **Prev / Next** buttons to step through packets one at a time.
@@ -328,7 +364,7 @@ Shown when a carve target is available:
 - Optional Ollama integration for AI-powered capture analysis.
 - **Use LLM** toggle in the load dialog enables/disables analysis before running the backend.
 - Generated report displayed in the **Summary** tab.
-- LLM can be configured via `conf.yaml`.
+- LLM defaults are configured in the **Settings → LLM** sub-tab and persisted in app settings.
 - Stream-context summary generation: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane.
 - Summary deduping/persistence: already-summarized stream keys are tracked to reduce repeat calls, and `currentSummary` is saved/restored with session files.
 

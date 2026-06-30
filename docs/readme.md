@@ -8,6 +8,7 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 - [**Backend Documentation**](backend.md) — Python backend (`snitch.py`): usage, arguments, output structure, and the full list of searchable attributes produced in the JSON output.
 - [**Frontend Documentation**](frontend.md) — Electron frontend: UI output frames, query box, and data type conversions.
+- [**Themes Documentation**](themes.md) — Theme engine reference: theme JSON schema, custom logos, color variables, and opacity controls.
 - [**Context Menu Reference**](context-menu.md) — Right-click context menu: copy, convert, filter, keystore, notes, and export options.
 - [**Filter Reference**](filters.md) — Complete guide to the filter bar: all filter keys, search syntax, operators, boolean combinators, and examples.
 

@@ -59,6 +59,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 
 - 🚀 [Startup Docs](https://packetsnitch.oxasploits.com/)  — Quickstart Documentation
 - 📖 [Frontend Docs](https://packetsnitch.oxasploits.com/frontend/) — UI reference, conversions, encryption, notes
+- 🎨 [Themes Docs](https://packetsnitch.oxasploits.com/themes/) — Theme engine guide: custom theme JSON, colors, logos, and opacity
 - 🎯 [Context Menu Reference](https://packetsnitch.oxasploits.com/context-menu/) — Right-click options for copying, converting, filtering, and exporting
 - ⚙️ [Backend Docs](https://packetsnitch.oxasploits.com/backend/) — `snitch.py` usage, arguments, output structure
 - 🔎 [Filter Reference](https://packetsnitch.oxasploits.com/filters/) — Complete filter keys, operators, examples

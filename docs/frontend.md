@@ -73,6 +73,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Stats**       | Show capture-level aggregate statistics (protocols, hosts, ports, MIME types, GeoIP locations, etc.) derived from the full loaded dataset.                        |
 | **List**        | Show all packets in a searchable, sortable, stream-groupable list view.                                                                                           |
 | **Notes**       | Open the session notes workspace for creating, editing, color-tagging, and exporting freeform notes tied to the current session.                                  |
+| **Settings**    | Open the settings workspace for General defaults (themes/UI behavior) and LLM defaults (model, API key, delay, token cap).                                        |
 | **Log**         | Toggle the Activity Log panel, which records all GUI and backend actions with timestamps.                                                                         |
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
@@ -212,7 +213,7 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 ##### Decodes Sub-tab
 
-The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, SIP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
 > The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [context-menu.md](context-menu.md) for details.
 
@@ -251,6 +252,53 @@ Reserved workspace for future PGP key import and decryption tooling.
 ##### OpenSSH Sub-tab
 
 Reserved workspace for future OpenSSH key and session tooling.
+
+---
+
+#### Settings Tab
+
+The **Settings** tab is a persistent configuration workspace with two sub-tabs: **General** and **LLM**.
+
+Settings are stored locally at `userData/config/settings.json` and loaded through preload IPC (`settingsapi`). Theme discovery and retrieval are exposed through `themeapi`.
+
+##### General Sub-tab
+
+| Setting                               | Key                               | Description                                                                                  |
+| ------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Theme**                             | `general.themeId`                 | Selects the active UI theme from discovered JSON theme files.                               |
+| **Conv JSON indent spaces**           | `general.convJsonIndentSpaces`    | Number of spaces used when rendering packet JSON in Conv.                                   |
+| **Status reset delay (seconds)**      | `general.statusResetSeconds`      | Delay before transient status text is reset.                                                |
+| **Default backend packet chunk size** | `general.backendPacketChunkSize`  | Fallback chunk size used when backend progress metadata is unavailable.                     |
+
+Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`.
+
+The Settings UI also shows the runtime themes directory path so custom theme JSON files can be dropped in place and loaded.
+
+##### LLM Sub-tab
+
+| Setting                           | Key                         | Description                                                                                         |
+| --------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Ollama model**                  | `llm.ollamaModel`           | Model used for summary generation.                                                                  |
+| **Ollama API key**                | `llm.ollamaApiKey`          | Optional bearer token for authenticated Ollama endpoints.                                           |
+| **Set LLM Active by default**     | `llm.activeByDefault`       | Controls whether the load-screen **Use LLM** toggle is checked by default.                         |
+| **LLM trigger delay (seconds)**   | `llm.triggerDelaySeconds`   | Idle delay before stream-context summaries run while navigating packets.                            |
+| **Max tokens for stream summary** | `llm.maxSummaryTokens`      | Maximum generated summary size (`num_predict`).                                                     |
+
+If the API key field is left blank when saving, the currently stored key is retained.
+
+##### Actions
+
+- **Save settings**: normalizes and persists General + LLM values.
+- **Restore defaults**: resets settings to app defaults.
+- Theme changes are applied immediately after save.
+
+##### Theme Engine Summary
+
+- Themes are JSON files in `userData/themes`.
+- Default bundled themes are mirrored there automatically on startup.
+- Theme definitions provide CSS variable overrides and optional custom logo data.
+
+See [themes.md](themes.md) for complete theme schema, variable reference, logo setup, and opacity tuning.
 
 ---
 
