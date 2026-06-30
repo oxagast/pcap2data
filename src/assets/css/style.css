@@ -1535,6 +1535,31 @@ strong {
   color: var(--color-2);
 }
 
+.notes-markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  table-layout: fixed;
+}
+
+.notes-markdown-preview th,
+.notes-markdown-preview td {
+  border: 1px solid var(--color-3);
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.notes-markdown-preview th {
+  background-color: color-mix(in srgb, var(--input-bg-color) 60%, #000 40%);
+  color: var(--header-text-color);
+  font-weight: 700;
+}
+
+.notes-markdown-preview tbody tr:nth-child(even) td {
+  background-color: color-mix(in srgb, var(--input-bg-color) 78%, #000 22%);
+}
+
 .notes-markdown-placeholder {
   opacity: 0.8;
   font-style: italic;

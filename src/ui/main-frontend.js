@@ -2,6 +2,7 @@ const threadName = "MainFrontend";
 import { bookmarkList } from '../state';
 import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");
+const { marked } = require("marked");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
 const { validateFilterSyntax } = require("../filter");
@@ -2388,100 +2389,205 @@ function renderInlineMarkdown(markdownText) {
   return html;
 }
 
+function splitMarkdownTableRow(line) {
+  const rowText = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = [];
+  let currentCell = "";
+  let isEscaped = false;
+
+  for (const char of rowText) {
+    if (isEscaped) {
+      currentCell += char;
+      isEscaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      isEscaped = true;
+      continue;
+    }
+
+    if (char === "|") {
+      cells.push(currentCell.trim());
+      currentCell = "";
+      continue;
+    }
+
+    currentCell += char;
+  }
+
+  cells.push(currentCell.trim());
+  return cells;
+}
+
+function parseMarkdownTableAlignment(cellText) {
+  const normalized = String(cellText || "").trim();
+  if (!/^:?-{3,}:?$/.test(normalized)) {
+    return null;
+  }
+
+  const alignLeft = normalized.startsWith(":");
+  const alignRight = normalized.endsWith(":");
+  if (alignLeft && alignRight) return "center";
+  if (alignRight) return "right";
+  if (alignLeft) return "left";
+  return null;
+}
+
+function renderMarkdownTable(headerRowText, separatorRowText, bodyRowTexts) {
+  const headers = splitMarkdownTableRow(headerRowText);
+  const separatorCells = splitMarkdownTableRow(separatorRowText);
+  const alignments = headers.map((_header, index) => parseMarkdownTableAlignment(separatorCells[index] || ""));
+
+  const headerHtml = headers
+    .map((headerText, index) => {
+      const alignment = alignments[index];
+      const alignAttr = alignment ? ` style="text-align: ${alignment};"` : "";
+      return `<th${alignAttr}>${renderInlineMarkdown(headerText)}</th>`;
+    })
+    .join("");
+
+  const bodyHtml = bodyRowTexts
+    .map((rowText) => {
+      const rowCells = splitMarkdownTableRow(rowText);
+      const rowHtml = headers
+        .map((_headerText, index) => {
+          const cellText = rowCells[index] || "";
+          const alignment = alignments[index];
+          const alignAttr = alignment ? ` style="text-align: ${alignment};"` : "";
+          return `<td${alignAttr}>${renderInlineMarkdown(cellText)}</td>`;
+        })
+        .join("");
+      return `<tr>${rowHtml}</tr>`;
+    })
+    .join("\n");
+
+  return `<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+function sanitizeMarkdownPreviewHtml(renderedHtml) {
+  const template = document.createElement("template");
+  template.innerHTML = String(renderedHtml || "");
+
+  const allowedTags = new Set([
+    "a",
+    "blockquote",
+    "br",
+    "code",
+    "em",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "ol",
+    "p",
+    "pre",
+    "strong",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+  ]);
+
+  const elementNodes = Array.from(template.content.querySelectorAll("*")).reverse();
+  elementNodes.forEach((node) => {
+    const tagName = node.tagName.toLowerCase();
+    if (!allowedTags.has(tagName)) {
+      node.replaceWith(...Array.from(node.childNodes));
+      return;
+    }
+
+    Array.from(node.attributes).forEach((attribute) => {
+      if (tagName === "a" && attribute.name === "href") {
+        const safeUrl = normalizeMarkdownLinkUrl(attribute.value);
+        if (!safeUrl) {
+          node.removeAttribute("href");
+        } else {
+          node.setAttribute("href", safeUrl);
+        }
+        return;
+      }
+
+      if (tagName === "th" || tagName === "td") {
+        if (attribute.name === "style" && /^text-align:\s*(left|center|right)$/i.test(attribute.value.trim())) {
+          return;
+        }
+      }
+
+      if (tagName === "a" && (attribute.name === "target" || attribute.name === "rel")) {
+        return;
+      }
+
+      node.removeAttribute(attribute.name);
+    });
+
+    if (tagName === "a") {
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+    }
+  });
+
+  return template.innerHTML;
+}
+
 function renderMarkdownToHtml(markdownText) {
   const source = String(markdownText || "").replace(/\r\n?/g, "\n");
   if (!source.trim()) {
     return '<p class="notes-markdown-placeholder">No note selected.</p>';
   }
 
-  const lines = source.split("\n");
-  const htmlParts = [];
-  let inCodeBlock = false;
-  let listKind = "";
-
-  const closeListIfOpen = () => {
-    if (!listKind) return;
-    htmlParts.push(listKind === "ol" ? "</ol>" : "</ul>");
-    listKind = "";
-  };
-
-  lines.forEach((line) => {
-    const codeFenceMatch = line.match(/^\s*```/);
-    if (codeFenceMatch) {
-      closeListIfOpen();
-      if (!inCodeBlock) {
-        inCodeBlock = true;
-        htmlParts.push("<pre><code>");
-      } else {
-        inCodeBlock = false;
-        htmlParts.push("</code></pre>");
-      }
-      return;
-    }
-
-    if (inCodeBlock) {
-      htmlParts.push(`${escapeHtml(line)}\n`);
-      return;
-    }
-
-    if (!line.trim()) {
-      closeListIfOpen();
-      return;
-    }
-
-    const headingMatch = line.match(/^(\s{0,3})(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      closeListIfOpen();
-      const level = Math.max(1, Math.min(6, headingMatch[2].length));
-      htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[3].trim())}</h${level}>`);
-      return;
-    }
-
-    const orderedItemMatch = line.match(/^\s*\d+\.\s+(.+)$/);
-    if (orderedItemMatch) {
-      if (listKind !== "ol") {
-        closeListIfOpen();
-        listKind = "ol";
-        htmlParts.push("<ol>");
-      }
-      htmlParts.push(`<li>${renderInlineMarkdown(orderedItemMatch[1].trim())}</li>`);
-      return;
-    }
-
-    const unorderedItemMatch = line.match(/^\s*[-*+]\s+(.+)$/);
-    if (unorderedItemMatch) {
-      if (listKind !== "ul") {
-        closeListIfOpen();
-        listKind = "ul";
-        htmlParts.push("<ul>");
-      }
-      htmlParts.push(`<li>${renderInlineMarkdown(unorderedItemMatch[1].trim())}</li>`);
-      return;
-    }
-
-    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
-    if (quoteMatch) {
-      closeListIfOpen();
-      htmlParts.push(`<blockquote>${renderInlineMarkdown(quoteMatch[1])}</blockquote>`);
-      return;
-    }
-
-    closeListIfOpen();
-    htmlParts.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  const renderedHtml = marked.parse(source, {
+    breaks: false,
+    gfm: true,
+    headerIds: false,
+    mangle: false,
   });
 
-  closeListIfOpen();
-  if (inCodeBlock) {
-    htmlParts.push("</code></pre>");
-  }
-
-  return htmlParts.join("\n");
+  return sanitizeMarkdownPreviewHtml(renderedHtml);
 }
 
 function renderSelectedNoteMarkdownPreview(noteText) {
   const notesPreviewEl = document.getElementById("notes-markdown-preview");
   if (!notesPreviewEl) return;
+  initializeNotesMarkdownPreviewLinkHandling();
   notesPreviewEl.innerHTML = renderMarkdownToHtml(noteText);
+}
+
+function normalizeExternalMarkdownLinkHref(href) {
+  const candidate = String(href || "").trim().replace(/&amp;/g, "&");
+  if (/^(https?:|mailto:)/i.test(candidate)) return candidate;
+  return "";
+}
+
+function initializeNotesMarkdownPreviewLinkHandling() {
+  const notesPreviewEl = document.getElementById("notes-markdown-preview");
+  if (!notesPreviewEl || notesPreviewEl.dataset.linkHandlingInitialized === "true") {
+    return;
+  }
+
+  notesPreviewEl.dataset.linkHandlingInitialized = "true";
+  notesPreviewEl.addEventListener("click", async (event) => {
+    const anchorEl = event.target?.closest?.("a[href]");
+    if (!anchorEl || !notesPreviewEl.contains(anchorEl)) return;
+
+    const openableUrl = normalizeExternalMarkdownLinkHref(anchorEl.getAttribute("href"));
+    if (!openableUrl) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (typeof window.browserapi?.openExternalUrl !== "function") {
+      return;
+    }
+
+    await window.browserapi.openExternalUrl(openableUrl);
+  });
 }
 
 function syncNotesEditorVisibilityUi() {
@@ -2652,10 +2758,91 @@ function buildConvConvertedOutputNoteText() {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
-function getConvDecodedOutputText() {
-  const decodedOutputEl = document.getElementById("data-tools-proto-output");
-  if (!decodedOutputEl) return "";
-  return String(decodedOutputEl.innerText || "").trim();
+function escapeMarkdownTableCell(text) {
+  return String(text || "").replace(/\|/g, "\\|").replace(/\n/g, "<br>");
+}
+
+function getConvDecodedResultFromDomTable() {
+  const tableEl = document.querySelector(
+    "#data-tools-proto-output table.data-tools-proto-table",
+  );
+  if (!tableEl) return null;
+
+  const headerCells = tableEl.querySelectorAll("tr:first-child th");
+  const protocolHeaderText = String(headerCells?.[0]?.textContent || "").trim();
+  const protocolFromHeader = protocolHeaderText
+    ? protocolHeaderText.replace(/\s+field$/i, "").trim()
+    : "";
+
+  const fields = Array.from(tableEl.querySelectorAll("tr"))
+    .slice(1)
+    .map((rowEl) => {
+      const cellEls = rowEl.querySelectorAll("td");
+      const name = String(cellEls?.[0]?.textContent || "").trim();
+      const value = String(cellEls?.[1]?.textContent || "").trim();
+      if (!name && !value) return null;
+      return {
+        name: name || "Field",
+        value: value || "(empty)",
+      };
+    })
+    .filter(Boolean);
+
+  if (!fields.length && !protocolFromHeader) return null;
+  return {
+    protocol: protocolFromHeader || null,
+    fields,
+  };
+}
+
+function getConvDecodedOutputText(outputFormat = "plain") {
+  const selectedDecoderEl = document.getElementById("data-tools-proto-select");
+  const selectedDecoderValue = String(selectedDecoderEl?.value || "auto").trim();
+  const selectedDecoderLabel =
+    selectedDecoderValue === "auto"
+      ? "Auto-detect"
+      : selectedDecoderValue.toUpperCase();
+
+  const decodedResult = getActiveDataToolsProtoResult() || getConvDecodedResultFromDomTable();
+  if (decodedResult && Array.isArray(decodedResult.fields) && decodedResult.fields.length > 0) {
+    if (outputFormat === "markdown") {
+      const lines = [
+        "## Protocol Decoder",
+        "",
+        `Protocol: ${decodedResult.protocol || selectedDecoderLabel}`,
+        "",
+        "| Field | Value |",
+        "| --- | --- |",
+      ];
+      decodedResult.fields.forEach((field) => {
+        const fieldName = String(field?.name || "").trim() || "Field";
+        const fieldValue = String(field?.value || "").trim() || "(empty)";
+        lines.push(
+          `| ${escapeMarkdownTableCell(fieldName)} | ${escapeMarkdownTableCell(fieldValue)} |`,
+        );
+      });
+      return lines.join("\n").trim();
+    }
+
+    const lines = [
+      "Protocol Decoder",
+      "Protocol",
+      `${decodedResult.protocol || selectedDecoderLabel}`,
+      "",
+      "FieldValue",
+    ];
+    decodedResult.fields.forEach((field) => {
+      const fieldName = String(field?.name || "").trim() || "Field";
+      const fieldValue = String(field?.value || "").trim() || "(empty)";
+      lines.push(`${fieldName}: ${fieldValue}`);
+    });
+    return lines.join("\n").trim();
+  }
+
+  if (outputFormat === "markdown") {
+    return `## Protocol Decoder\n\nProtocol: ${selectedDecoderLabel}`;
+  }
+  return `Protocol Decoder\nProtocol\n${selectedDecoderLabel}`;
 }
 
 function getConvContextExportText(exportType) {
@@ -6747,6 +6934,13 @@ function getCookieJarTextForContextTarget(target) {
 }
 
 function getConversionTextFromTarget(target) {
+  // For Conv Decodes, always use decoder context from the selected protocol,
+  // even if text selection spans protocol options or panel labels.
+  if (target?.closest?.("#conv-decodes-panel")) {
+    const decodeContextText = getConvDecodedOutputText();
+    if (decodeContextText) return decodeContextText;
+  }
+
   const selectedText = window.getSelection()?.toString().trim();
   if (selectedText) return selectedText;
 
@@ -8680,6 +8874,14 @@ function callLargeLanguageModel(content) {
   return window.llmapi.generate(content);
 }
 
+function buildMarkdownResponseInstruction() {
+  return [
+    "Return your response as valid Markdown (.md compatible).",
+    "Use clear headings and include Markdown tables when they improve readability.",
+    "Prefer concise bullets for key findings, and avoid HTML.",
+  ].join(" ");
+}
+
 function isTextSignificantForLlmExplain(text) {
   if (!text || typeof text !== "string") return false;
   const trimmed = text.trim();
@@ -8718,6 +8920,13 @@ function buildUtf8BytePreview(text, maxBytes = 24) {
   };
 }
 
+function getActiveContextTextForNotesAndLlm(destination = "llm") {
+  if (activeContextTarget?.closest?.("#conv-decodes-panel")) {
+    return getConvDecodedOutputText(destination === "notes" ? "markdown" : "plain");
+  }
+  return (getTrimmedSelectionText() || activeContextConversionText || "").trim();
+}
+
 function buildPacketContextSummary(packet) {
   if (!packet) return "No packet context available.";
   const info = packet["Packet Info"] || {};
@@ -8745,8 +8954,7 @@ async function explainContextWithLLM() {
     statusUpdate("Status: LLM is disabled in settings.");
     return;
   }
-  const selectedText = getTrimmedSelectionText();
-  const textToExplain = (selectedText || activeContextConversionText || "").trim();
+  const textToExplain = getActiveContextTextForNotesAndLlm("llm");
   hideConvertContextMenu();
 
   if (!isTextSignificantForLlmExplain(textToExplain)) {
@@ -8755,7 +8963,7 @@ async function explainContextWithLLM() {
   }
 
   const packetCtx = buildPacketContextSummary(activeContextPacket);
-  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. You may use concise Markdown formatting (lists, bold, inline code) when helpful.\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
+  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
 
   statusUpdate("Status: Asking LLM to explain selection...");
   writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
@@ -8789,7 +8997,7 @@ function requestLlmQuestionFromContextMenuDialog() {
     activeContextLlmQuestionDialogResolver = null;
     resolve(null);
   }
-  const selectedText = (getTrimmedSelectionText() || activeContextConversionText || "").trim();
+  const selectedText = getActiveContextTextForNotesAndLlm("llm");
   const selectedTextPreview = buildUtf8BytePreview(selectedText, 24);
   descriptionEl.textContent = selectedTextPreview.preview
     ? `Ask a question about: ${selectedTextPreview.preview}${selectedTextPreview.truncated ? "…" : ""}`
@@ -8832,7 +9040,7 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   const packetCtx = buildPacketContextSummary(contextPacket);
   const contextLines = [
     "You are a network analysis assistant. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
-    "This request is sent through a hook that supports Markdown in the user query and in your response. Use concise Markdown formatting when it improves clarity.",
+    `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
     "",
     `Packet context: ${packetCtx}`,
   ];
@@ -9108,7 +9316,7 @@ function writeSummaryFromLLM() {
     // add the current packet key to the set of already summarized packets
     alreadySummarizedPacketKeys.add(contextPacket?.__packetKey);
     writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
-    let prompt = `Please provide a summary of the following network stream data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next.  Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    let prompt = `Please provide a summary of the following network stream data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -10524,9 +10732,8 @@ convertContextButtons.copyCookieJar.addEventListener(
 );
 convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
 convertContextButtons.notesSendData.addEventListener("click", () => {
-  const selectedText = getTrimmedSelectionText();
   sendTextToNotesFromContextMenu(
-    selectedText || activeContextConversionText,
+    getActiveContextTextForNotesAndLlm("notes"),
     "context-data",
   );
 });

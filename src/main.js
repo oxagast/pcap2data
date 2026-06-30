@@ -1232,8 +1232,8 @@ ipcMain.handle("open-external-url", async (_event, rawUrl) => {
   }
   try {
     const parsed = new URL(rawUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return { success: false, error: "Only HTTP/HTTPS URLs are supported" };
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:" && parsed.protocol !== "mailto:") {
+      return { success: false, error: "Only HTTP/HTTPS/mailto URLs are supported" };
     }
     await shell.openExternal(parsed.href);
     return { success: true };
