@@ -8738,8 +8738,8 @@ async function currentPacketToConvJson() {
   writeLogEntry(`Logged raw packet JSON at index = ${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
 
   // turn it into json object
-  const packetJson = contextPacket || {};
-  const jsonString = JSON.stringify(packetJson, null, getConvJsonIndentSpaces());
+  const packet = contextPacket || {};
+  const jsonString = JSON.stringify(packet, null, getConvJsonIndentSpaces());
 
   const outputEl = document.getElementById("data-tools-packet-json-pre");
   const jsonContainer = document.getElementById("data-tools-packet-json-output");
@@ -8776,12 +8776,29 @@ async function currentPacketToConvJson() {
         return match.replace(/ /g, "&nbsp;").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;");
       }
 
+      const toNbsp = (text) => text.replace(/ /g, "&nbsp;").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;");
+
+      const keyTokenMatch = match.match(/^"([\s\S]*)"(\s*:)$/);
+      if (keyTokenMatch) {
+        return (
+          '<span class="json-quote">"</span>' +
+          `<span class="json-key">${escapeToken(keyTokenMatch[1])}</span>` +
+          '<span class="json-quote">"</span>' +
+          `<span class="json-colon">${toNbsp(escapeToken(keyTokenMatch[2]))}</span>`
+        );
+      }
+
+      const stringTokenMatch = match.match(/^"([\s\S]*)"$/);
+      if (stringTokenMatch) {
+        return (
+          '<span class="json-quote">"</span>' +
+          `<span class="json-string">${escapeToken(stringTokenMatch[1])}</span>` +
+          '<span class="json-quote">"</span>'
+        );
+      }
+
       let cls = "json-quote";
-      if (/^".*"\s*:$/.test(match)) {
-        cls = "json-key";
-      } else if (/^".*"$/.test(match)) {
-        cls = "json-string";
-      } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(match)) {
+      if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(match)) {
         cls = "json-number";
       } else if (/^(true|false)$/.test(match)) {
         cls = "json-boolean";
