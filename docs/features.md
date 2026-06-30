@@ -36,6 +36,7 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
   - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
   - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
   - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`.
+  - **Stream warning threshold (packets)** (`general.streamContextWarnPacketThreshold`) for follow-stream Conv/Crypt warnings, defaulting to `20` with a minimum accepted value of `5`.
 - **LLM** settings:
   - **Ollama model** (`llm.ollamaModel`).
   - **Ollama API key** (`llm.ollamaApiKey`) stored locally in settings.

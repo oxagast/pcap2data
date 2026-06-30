@@ -269,6 +269,7 @@ Settings are stored locally at `userData/config/settings.json` and loaded throug
 | **Conv JSON indent spaces**           | `general.convJsonIndentSpaces`    | Number of spaces used when rendering packet JSON in Conv.                                   |
 | **Status reset delay (seconds)**      | `general.statusResetSeconds`      | Delay before transient status text is reset.                                                |
 | **Default backend packet chunk size** | `general.backendPacketChunkSize`  | Fallback chunk size used when backend progress metadata is unavailable.                     |
+| **Stream warning threshold (packets)** | `general.streamContextWarnPacketThreshold` | Warns before loading large follow-stream results into Conv or Crypt; default `20`, minimum `5`. |
 
 Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`.
 

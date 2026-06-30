@@ -480,6 +480,9 @@ function syncSettingsFormFromState() {
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const streamWarnThresholdEl = document.getElementById(
+    "settings-general-stream-warn-packet-threshold",
+  );
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -498,6 +501,9 @@ function syncSettingsFormFromState() {
   if (backendChunkSizeEl) {
     backendChunkSizeEl.value = String(settings.general.backendPacketChunkSize);
   }
+  if (streamWarnThresholdEl) {
+    streamWarnThresholdEl.value = String(settings.general.streamContextWarnPacketThreshold);
+  }
   if (modelEl) modelEl.value = settings.llm.ollamaModel;
   if (apiKeyEl) {
     apiKeyEl.value = "";
@@ -515,6 +521,9 @@ function readSettingsFormState() {
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const streamWarnThresholdEl = document.getElementById(
+    "settings-general-stream-warn-packet-threshold",
+  );
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -536,6 +545,9 @@ function readSettingsFormState() {
       backendPacketChunkSize: backendChunkSizeEl
         ? backendChunkSizeEl.value
         : DEFAULT_SETTINGS.general.backendPacketChunkSize,
+      streamContextWarnPacketThreshold: streamWarnThresholdEl
+        ? streamWarnThresholdEl.value
+        : DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
     },
     llm: {
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
@@ -609,6 +621,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "backendPacketChunkSize",
     previousGeneral.backendPacketChunkSize,
     nextGeneral.backendPacketChunkSize,
+  );
+  pushChange(
+    "streamContextWarnPacketThreshold",
+    previousGeneral.streamContextWarnPacketThreshold,
+    nextGeneral.streamContextWarnPacketThreshold,
   );
   pushChange("ollamaModel", previousLlm.ollamaModel, nextLlm.ollamaModel);
   pushChange(
@@ -712,6 +729,14 @@ function getBackendPacketChunkSize() {
     1,
     Number(getCurrentSettings()?.general?.backendPacketChunkSize) ||
     DEFAULT_SETTINGS.general.backendPacketChunkSize,
+  );
+}
+
+function getStreamContextWarnPacketThreshold() {
+  return Math.max(
+    5,
+    Number(getCurrentSettings()?.general?.streamContextWarnPacketThreshold) ||
+    DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
   );
 }
 
@@ -7264,7 +7289,6 @@ function getTotalPacketCount() {
 // getFollowStreamPackets() iterates every packet across all hosts, so captures
 // with ~500+ packets produce a noticeable pause without the overlay.
 const STREAM_LOADING_THRESHOLD = 10;
-const STREAM_CONTEXT_WARN_PACKET_THRESHOLD = 100;
 const STREAM_ASYNC_PACKET_YIELD_INTERVAL = 2000;
 const STREAM_ASYNC_HEX_YIELD_INTERVAL = 200;
 
@@ -7295,7 +7319,7 @@ function hideStreamLoadingOverlay() {
 }
 
 function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
-  if (packetCount <= STREAM_CONTEXT_WARN_PACKET_THRESHOLD) return true;
+  if (packetCount <= getStreamContextWarnPacketThreshold()) return true;
   return window.confirm(
     `This stream contains ${packetCount} packets. Loading it into the ${tabLabel} tab can consume significant memory and may bog down the UI.\n\nContinue?`,
   );
@@ -9887,6 +9911,12 @@ document.getElementById("settings-general-status-reset-seconds").addEventListene
 document.getElementById("settings-general-backend-chunk-size").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated backendPacketChunkSize=${event?.target?.value}`);
 });
+
+document
+  .getElementById("settings-general-stream-warn-packet-threshold")
+  .addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated streamContextWarnPacketThreshold=${event?.target?.value}`);
+  });
 
 document.getElementById("settings-llm-model").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated ollamaModel=${JSON.stringify(event?.target?.value || "")}`);

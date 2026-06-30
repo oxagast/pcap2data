@@ -4,6 +4,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         convJsonIndentSpaces: 2,
         statusResetSeconds: 10,
         backendPacketChunkSize: 250,
+        streamContextWarnPacketThreshold: 20,
     },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
@@ -65,6 +66,11 @@ function normalizeSettings(rawSettings = {}) {
             backendPacketChunkSize: VALID_BACKEND_CHUNK_SIZES.has(normalizedBackendChunkSize)
                 ? normalizedBackendChunkSize
                 : generalDefaults.backendPacketChunkSize,
+            streamContextWarnPacketThreshold: toPositiveInteger(
+                general.streamContextWarnPacketThreshold,
+                generalDefaults.streamContextWarnPacketThreshold,
+                5,
+            ),
         },
         llm: {
             ollamaModel:
