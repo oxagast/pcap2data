@@ -268,6 +268,8 @@ let statusResetTimeoutId = null;
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
+const FALLBACK_THEME_ID = "snitchbitch";
+let availableThemes = [];
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
@@ -290,8 +292,106 @@ function setCurrentSettings(nextSettings) {
   return appSettings;
 }
 
+function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return normalized || fallback;
+}
+
+function getThemeSelectElement() {
+  return document.getElementById("settings-general-theme");
+}
+
+function renderThemeOptions() {
+  const themeSelectEl = getThemeSelectElement();
+  if (!themeSelectEl) return;
+  const currentValue = sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID);
+  const settingsThemeId = sanitizeThemeId(
+    getCurrentSettings()?.general?.themeId,
+    FALLBACK_THEME_ID,
+  );
+  const selectedThemeId = availableThemes.some((theme) => theme.id === settingsThemeId)
+    ? settingsThemeId
+    : currentValue;
+
+  themeSelectEl.innerHTML = "";
+  availableThemes.forEach((theme) => {
+    const option = document.createElement("option");
+    option.value = theme.id;
+    option.textContent = theme.name;
+    themeSelectEl.appendChild(option);
+  });
+
+  if (themeSelectEl.options.length > 0) {
+    themeSelectEl.value = selectedThemeId || FALLBACK_THEME_ID;
+  }
+}
+
+function applyThemeVariables(theme) {
+  if (!theme || !theme.variables || typeof theme.variables !== "object") return;
+  const rootStyle = document.documentElement.style;
+  Object.entries(theme.variables).forEach(([variableName, variableValue]) => {
+    if (!String(variableName).startsWith("--")) return;
+    rootStyle.setProperty(variableName, String(variableValue));
+  });
+}
+
+async function applyThemeById(themeId) {
+  const normalizedThemeId = sanitizeThemeId(themeId, FALLBACK_THEME_ID);
+  if (!window.themeapi || typeof window.themeapi.get !== "function") {
+    document.documentElement.dataset.themeId = normalizedThemeId;
+    return normalizedThemeId;
+  }
+  try {
+    const theme = await window.themeapi.get(normalizedThemeId);
+    if (!theme) return normalizedThemeId;
+    applyThemeVariables(theme);
+    document.documentElement.dataset.themeId = theme.id;
+    return theme.id;
+  } catch (error) {
+    console.warn("Unable to apply selected theme:", error);
+    return normalizedThemeId;
+  }
+}
+
+async function loadAvailableThemes() {
+  if (!window.themeapi || typeof window.themeapi.list !== "function") {
+    availableThemes = [{ id: FALLBACK_THEME_ID, name: "SnitchBitch" }];
+    renderThemeOptions();
+    return availableThemes;
+  }
+
+  try {
+    const themeList = await window.themeapi.list();
+    availableThemes = Array.isArray(themeList) && themeList.length > 0
+      ? themeList
+      : [{ id: FALLBACK_THEME_ID, name: "SnitchBitch" }];
+  } catch (error) {
+    console.warn("Unable to load available themes:", error);
+    availableThemes = [{ id: FALLBACK_THEME_ID, name: "SnitchBitch" }];
+  }
+  renderThemeOptions();
+  return availableThemes;
+}
+
+async function updateThemeDirectoryHint() {
+  const hintEl = document.getElementById("settings-theme-directory-hint");
+  if (!hintEl || !window.themeapi || typeof window.themeapi.getThemesDirectory !== "function") {
+    return;
+  }
+  try {
+    const themesDir = await window.themeapi.getThemesDirectory();
+    if (themesDir) {
+      hintEl.textContent = `Add custom theme JSON files in ${themesDir} and restart or reopen Settings.`;
+    }
+  } catch (error) {
+    console.warn("Unable to resolve themes directory:", error);
+  }
+}
+
 function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
+  const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
@@ -300,6 +400,10 @@ function syncSettingsFormFromState() {
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  if (themeSelectEl) {
+    renderThemeOptions();
+    themeSelectEl.value = sanitizeThemeId(settings.general.themeId, FALLBACK_THEME_ID);
+  }
   if (convJsonIndentEl) {
     convJsonIndentEl.value = String(settings.general.convJsonIndentSpaces);
   }
@@ -322,6 +426,7 @@ function syncSettingsFormFromState() {
 }
 
 function readSettingsFormState() {
+  const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
@@ -334,6 +439,9 @@ function readSettingsFormState() {
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
     general: {
+      themeId: themeSelectEl
+        ? sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID)
+        : DEFAULT_SETTINGS.general.themeId,
       convJsonIndentSpaces: convJsonIndentEl
         ? convJsonIndentEl.value
         : DEFAULT_SETTINGS.general.convJsonIndentSpaces,
@@ -371,6 +479,7 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
+  await applyThemeById(savedSettings.general.themeId);
   syncSettingsFormFromState();
   setSettingsStatus("Settings saved.");
   return savedSettings;
@@ -383,6 +492,7 @@ async function loadPersistedSettings() {
   }
   const loadedSettings = await window.settingsapi.get();
   setCurrentSettings(loadedSettings);
+  await applyThemeById(loadedSettings.general.themeId);
   const useLlmEl = document.getElementById("use-llm");
   if (useLlmEl) {
     useLlmEl.checked = Boolean(loadedSettings.llm.activeByDefault);
@@ -9283,6 +9393,11 @@ document.getElementById("settings-subtab-llm").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_LLM);
 });
 
+document.getElementById("settings-general-theme").addEventListener("change", (event) => {
+  const selectedThemeId = sanitizeThemeId(event?.target?.value, FALLBACK_THEME_ID);
+  void applyThemeById(selectedThemeId);
+});
+
 document
   .getElementById("conv-subtab-conversions")
   .addEventListener("click", () => setConvSubtab(CONV_CONVERSIONS_SUBTAB));
@@ -11363,10 +11478,13 @@ window.api.onError((msg) => {
   doError(msg, { backend: true });
 });
 
-void loadPersistedSettings().catch((error) => {
-  console.warn("Unable to load persisted settings:", error);
-  syncSettingsFormFromState();
-});
+void loadAvailableThemes()
+  .then(() => updateThemeDirectoryHint())
+  .then(() => loadPersistedSettings())
+  .catch((error) => {
+    console.warn("Unable to initialize themes/settings:", error);
+    syncSettingsFormFromState();
+  });
 
 // On page load, hide packet info and payload panes
 onload = function () {

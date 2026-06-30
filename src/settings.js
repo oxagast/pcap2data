@@ -1,5 +1,6 @@
 const DEFAULT_SETTINGS = Object.freeze({
     general: {
+        themeId: "snitchbitch",
         convJsonIndentSpaces: 2,
         statusResetSeconds: 10,
         backendPacketChunkSize: 250,
@@ -27,6 +28,14 @@ function toPositiveInteger(value, fallback, minimum = 1) {
     return parsed;
 }
 
+function normalizeThemeId(value, fallback) {
+    if (typeof value !== "string") {
+        return fallback;
+    }
+    const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+    return normalized || fallback;
+}
+
 function normalizeSettings(rawSettings = {}) {
     const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
     const general = source.general && typeof source.general === "object" ? source.general : {};
@@ -42,6 +51,7 @@ function normalizeSettings(rawSettings = {}) {
 
     return {
         general: {
+            themeId: normalizeThemeId(general.themeId, generalDefaults.themeId),
             convJsonIndentSpaces: toPositiveInteger(
                 general.convJsonIndentSpaces,
                 generalDefaults.convJsonIndentSpaces,

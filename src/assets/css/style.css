@@ -1,4 +1,10 @@
 :root {
+  --app-bg: #333333;
+  --surface-0: #000000;
+  --surface-1: #111111;
+  --surface-2: #000000;
+  --scrollbar-track: #000000;
+  --border-strong: #000000;
   --color-1: #7f80ff;
   --color-2: #2a284a;
   --color-2-hover: #201e3d;
@@ -14,19 +20,36 @@
   --data-tools-decimal-integer-color: #ccbdde;
   --data-tools-ascii-color: #ccbdde;
   --data-tools-base64-color: #ccbdde;
+  --header-text-color: var(--color-1);
+  --sidebar-text-color: var(--color-5);
+  --input-bg-color: var(--surface-0);
+  --input-text-color: var(--color-5);
+  --stats-tag-text-color: #ffffff;
+  --crypt-panel-bg: var(--color-7);
+  --crypt-panel-text: var(--color-6);
+  --tab-inactive-opacity: 0.4;
   --sidebar-width: 20%;
 }
 
 /* Page background */
 body {
   margin: 0;
-  background-color: #333333;
+  background-color: var(--app-bg);
   display: flex;
   justify-content: center;
   align-items: center;
   height: 100vh;
   font-family: "Courier New", Courier, monospace;
   overflow: hidden;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"],
+textarea,
+select {
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
 }
 
 /* Outer container */
@@ -38,8 +61,8 @@ body {
   flex-direction: column;
   padding: 15px;
   box-sizing: border-box;
-  background-color: black;
-  scrollbar-color: var(--color-7) black;
+  background-color: var(--surface-0);
+  scrollbar-color: var(--color-7) var(--scrollbar-track);
   overflow: hidden;
 }
 
@@ -129,7 +152,7 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
-  border: 1px solid black;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   position: relative;
   -webkit-app-region: drag;
@@ -182,7 +205,7 @@ body {
 .entry_bar {
   height: 60px;
   background-color: var(--color-2);
-  border: 1px solid black;
+  border: 1px solid var(--border-strong);
   padding: 5px;
   display: flex;
   align-items: center;
@@ -193,9 +216,9 @@ body {
 .entry_bar input[type="text"] {
   flex: 1;
   padding: 5px;
-  background-color: black;
+  background-color: var(--input-bg-color);
   border: 1px solid grey;
-  color: var(--color-6);
+  color: var(--input-text-color);
 }
 
 hr {
@@ -233,7 +256,7 @@ hr {
   background-color: var(--color-4);
   border: 1px solid var(--color-3);
   padding: 1px;
-  color: white;
+  color: var(--sidebar-text-color);
   margin-right: 1px;
   padding-top: 2px;
   margin-left: 6px;
@@ -245,22 +268,22 @@ hr {
 
 .sidebar select {
   margin-bottom: 5px;
-  background-color: black;
+  background-color: var(--surface-0);
   border: 1px solid var(--color-3);
-  color: var(--color-3);
+  color: var(--sidebar-text-color);
   padding: 5px;
   margin-top: 5px;
 }
 
 .sidebar option {
-  color: var(--color-1);
+  color: var(--sidebar-text-color);
   padding: 5px;
 }
 
 /* Main panel */
 .main_panel {
-  background-color: #111;
-  color: white;
+  background-color: var(--surface-1);
+  color: var(--color-5);
   padding: 5px;
   box-sizing: border-box;
   font-family: word-break, monospace;
@@ -288,7 +311,7 @@ td {
   border-collapse: collapse;
   border-spacing: 3px;
   padding: 6px;
-  color: white;
+  color: var(--color-5);
   word-break: break-all;
   font-size: 11px;
 }
@@ -298,16 +321,16 @@ table {
 }
 
 th {
-  color: var(--color-6);
+  color: var(--header-text-color);
 }
 
 td {
-  color: white;
+  color: var(--color-5);
   width: 30%;
 }
 
 strong {
-  color: white;
+  color: var(--color-5);
 }
 
 .menu_bar {
@@ -324,7 +347,7 @@ strong {
   width: 98%;
   background-color: var(--color-7);
   border: 2px solid black;
-  color: white;
+  color: var(--color-5);
   padding: 5px 0px;
   text-align: center;
   align-items: center;
@@ -349,7 +372,7 @@ strong {
   background-color: var(--color-7);
   border: 3px solid black;
   width: 140px;
-  color: white;
+  color: var(--color-5);
   padding: 5px 0px;
   text-align: center;
   align-items: center;
@@ -360,7 +383,7 @@ strong {
   cursor: pointer;
   font-weight: bold;
   border-radius: 5px;
-  opacity: 0.4;
+  opacity: var(--tab-inactive-opacity);
   transition:
     background-color 0.3s,
     border-color 0.3s;
@@ -378,8 +401,8 @@ strong {
   text-align: left;
   padding: 2px 8px;
   height: 18px;
-  background-color: black;
-  color: white;
+  background-color: var(--surface-0);
+  color: var(--color-5);
   border: 1px solid grey;
   font-size: small;
   flex: 1;
@@ -401,7 +424,7 @@ strong {
   min-width: 200px;
   border: 1px solid var(--color-3);
   height: 80%;
-  color: white;
+  color: var(--color-5);
   overflow-y: auto;
 }
 
@@ -514,7 +537,7 @@ strong {
 .keystore-workspace-header,
 .crypt-workspace-header,
 .settings-workspace-header {
-  color: var(--color-1);
+  color: var(--header-text-color);
   font-weight: bold;
   margin-bottom: 8px;
 }
@@ -587,7 +610,7 @@ strong {
 .settings-section-title {
   font-size: 14px;
   font-weight: bold;
-  color: var(--color-1);
+  color: var(--header-text-color);
 }
 
 .settings-section input[type="text"],
@@ -597,8 +620,8 @@ strong {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-5);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
   padding: 6px;
@@ -658,7 +681,8 @@ strong {
 
 .crypt-section {
   border: 1px solid var(--color-3);
-  background-color: var(--color-7);
+  background-color: var(--crypt-panel-bg);
+  color: var(--crypt-panel-text);
   padding: 10px;
   min-height: 0;
   display: flex;
@@ -669,7 +693,7 @@ strong {
 .crypt-section-title {
   font-size: 14px;
   font-weight: bold;
-  color: var(--color-1);
+  color: var(--header-text-color);
 }
 
 #crypt-encountered-list,
@@ -684,8 +708,8 @@ strong {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-5);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
 }
@@ -795,7 +819,7 @@ strong {
 
 #crypt-encountered-details {
   font-size: 12px;
-  color: var(--color-6);
+  color: var(--crypt-panel-text);
   white-space: pre-wrap;
 }
 
@@ -807,8 +831,8 @@ strong {
   white-space: pre-wrap;
   word-break: break-word;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-6);
+  background-color: var(--crypt-panel-bg);
+  color: var(--crypt-panel-text);
   min-height: 90px;
   padding: 6px;
   overflow-y: auto;
@@ -817,8 +841,8 @@ strong {
 
 .crypt-placeholder {
   border: 1px solid var(--color-3);
-  background-color: var(--color-7);
-  color: var(--color-6);
+  background-color: var(--crypt-panel-bg);
+  color: var(--crypt-panel-text);
   padding: 12px;
 }
 
@@ -1310,7 +1334,7 @@ strong {
 }
 
 .notes-header {
-  color: var(--color-1);
+  color: var(--header-text-color);
   font-weight: bold;
   margin-bottom: 8px;
 }
@@ -1327,8 +1351,8 @@ strong {
   min-height: 120px;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-5);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
   margin-bottom: 8px;
@@ -1377,7 +1401,7 @@ strong {
   flex: 1;
   min-height: 0;
   border: 1px solid var(--color-3);
-  background-color: #000;
+  background-color: var(--input-bg-color);
   padding: 6px;
 }
 
@@ -1387,8 +1411,8 @@ strong {
   min-height: 420px;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
-  background-color: #090909;
-  color: var(--color-5);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
   padding: 6px;
@@ -1410,8 +1434,8 @@ strong {
   min-height: 210px;
   box-sizing: border-box;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-5);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
 }
@@ -1439,9 +1463,9 @@ strong {
   flex: 1;
   box-sizing: border-box;
   padding: 6px 8px;
-  background-color: #000;
+  background-color: var(--input-bg-color);
   border: 1px solid var(--color-3);
-  color: var(--color-5);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
 }
@@ -1579,7 +1603,7 @@ strong {
 .stats-section-title {
   font-size: 16px;
   font-weight: bold;
-  color: var(--color-1);
+  color: var(--header-text-color);
   background-color: var(--color-2);
   padding: 4px 8px;
   margin-bottom: 6px;
@@ -1595,7 +1619,7 @@ strong {
 .stats-tag {
   background-color: var(--color-7);
   border: 1px solid var(--color-3);
-  color: white;
+  color: var(--stats-tag-text-color);
   padding: 3px 8px;
   font-size: 12px;
   border-radius: 3px;
@@ -1673,11 +1697,11 @@ strong {
 
 #timestamp {
   font-size: 14px;
-  color: white;
+  color: var(--color-5);
 }
 
 #ip2ip {
-  color: white;
+  color: var(--color-5);
   font-size: 15px;
   text-align: center;
   display: block;
@@ -1707,7 +1731,7 @@ strong {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  color: white;
+  color: var(--color-5);
 }
 
 #data-types-override-text {
@@ -1723,7 +1747,7 @@ strong {
 .sidebar-header {
   font-size: 18px;
   background-color: var(--color-2);
-  color: white;
+  color: var(--header-text-color);
   font-weight: bold;
   text-align: center;
 }
@@ -1765,7 +1789,7 @@ strong {
 }
 
 #types-list {
-  color: white;
+  color: var(--color-5);
   font-size: 14px;
   z-index: -1;
 }
@@ -1793,7 +1817,7 @@ strong {
   position: relative;
   margin-top: 100px;
   margin-left: 15px;
-  color: white;
+  color: var(--color-5);
   font-size: 16px;
 }
 
@@ -1841,7 +1865,7 @@ strong {
 }
 
 .PHead {
-  color: white;
+  color: var(--header-text-color);
   font-size: 18px;
   background-color: var(--color-2);
   text-align: center;
@@ -1925,7 +1949,7 @@ strong {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  background-color: black;
+  background-color: var(--surface-0);
   width: 100%;
   box-sizing: border-box;
   color: white;
@@ -1981,7 +2005,7 @@ strong {
 
 #filterStr {
   width: calc(100% - var(--filter-clear-padding));
-  background-color: black;
+  background-color: var(--surface-0);
   color: transparent;
   caret-color: white;
   border: 1px solid grey;
@@ -2044,8 +2068,8 @@ strong {
 
 #filter-history-select {
   width: 100%;
-  background-color: black;
-  color: white;
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
   border: 1px solid grey;
   padding: 5px;
   font: inherit;
@@ -2251,7 +2275,7 @@ strong {
   align-items: center;
   justify-content: space-between;
   font-size: 16px;
-  color: var(--color-1);
+  color: var(--header-text-color);
   margin-bottom: 6px;
 }
 
@@ -2295,8 +2319,8 @@ strong {
   box-sizing: border-box;
   padding: 8px;
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: white;
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
 }
 
 .ctx-divider {
@@ -2343,7 +2367,7 @@ strong {
 #session-picker-title {
   font-size: 20px;
   font-weight: bold;
-  color: var(--color-1);
+  color: var(--header-text-color);
 }
 
 .session-picker-close {
@@ -2406,7 +2430,7 @@ strong {
   flex: 1;
   border: 1px solid var(--color-7);
   border-radius: 6px;
-  scrollbar-color: var(--color-7) black;
+  scrollbar-color: var(--color-7) var(--scrollbar-track);
 }
 
 #session-picker-table {
@@ -2591,10 +2615,10 @@ strong {
   width: 100%;
   box-sizing: border-box;
   padding: 8px 10px;
-  background-color: #000;
+  background-color: var(--input-bg-color);
   border: 1px solid var(--color-3);
   border-radius: 5px;
-  color: white;
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
   outline: none;
@@ -2687,9 +2711,9 @@ strong {
   flex: 1;
   box-sizing: border-box;
   padding: 6px 8px;
-  background-color: #000;
+  background-color: var(--input-bg-color);
   border: 1px solid var(--color-3);
-  color: var(--color-5);
+  color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
   width: 100%;

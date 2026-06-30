@@ -137,6 +137,12 @@ contextBridge.exposeInMainWorld('settingsapi', {
   update: (partialSettings) => ipcRenderer.invoke('settings-update', partialSettings),
 });
 
+contextBridge.exposeInMainWorld('themeapi', {
+  list: () => ipcRenderer.invoke('themes-list'),
+  get: (themeId) => ipcRenderer.invoke('themes-get', themeId),
+  getThemesDirectory: () => ipcRenderer.invoke('themes-directory'),
+});
+
 
 contextBridge.exposeInMainWorld("llmapi", {
   generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),

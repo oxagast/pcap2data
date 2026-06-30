@@ -1,0 +1,28 @@
+{
+    "id": "dark",
+    "name": "Dark",
+    "description": "Neutral grey dark workspace.",
+    "variables": {
+        "--app-bg": "#1e2024",
+        "--surface-0": "#16181c",
+        "--surface-1": "#22252b",
+        "--surface-2": "#1d2026",
+        "--scrollbar-track": "#14161a",
+        "--border-strong": "#2b3038",
+        "--color-1": "#c7d0db",
+        "--color-2": "#2a2f37",
+        "--color-2-hover": "#333943",
+        "--color-3": "#535b67",
+        "--color-4": "#1a1e24",
+        "--color-5": "#e4e8ee",
+        "--color-6": "#aab2be",
+        "--color-7": "#303641",
+        "--data-tools-frame-bg": "#21262e",
+        "--data-tools-hex-color": "#e4e8ee",
+        "--data-tools-binary-color": "#e4e8ee",
+        "--data-tools-decimal-color": "#e4e8ee",
+        "--data-tools-decimal-integer-color": "#e4e8ee",
+        "--data-tools-ascii-color": "#e4e8ee",
+        "--data-tools-base64-color": "#e4e8ee"
+    }
+}

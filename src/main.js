@@ -44,6 +44,187 @@ let goodiesDataCache = null;
 let appSettings = null;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
+const THEMES_DIR_NAME = "themes";
+const THEME_FILE_EXTENSION = ".json";
+const BUNDLED_THEMES_DIR_NAME = "themes";
+const DEFAULT_THEME_DEFINITIONS = Object.freeze([
+  {
+    id: "snitchbitch",
+    name: "SnitchBitch",
+    description: "Original PacketSnitch look.",
+    variables: {
+      "--app-bg": "#333333",
+      "--surface-0": "#000000",
+      "--surface-1": "#111111",
+      "--surface-2": "#000000",
+      "--scrollbar-track": "#000000",
+      "--border-strong": "#000000",
+      "--color-1": "#7f80ff",
+      "--color-2": "#2a284a",
+      "--color-2-hover": "#201e3d",
+      "--color-3": "#8a87c0",
+      "--color-4": "#161a2b",
+      "--color-5": "#ccbdde",
+      "--color-6": "#b5b5b5",
+      "--color-7": "#413f6e",
+      "--data-tools-frame-bg": "#0d1f47",
+      "--data-tools-hex-color": "#ccbdde",
+      "--data-tools-binary-color": "#ccbdde",
+      "--data-tools-decimal-color": "#ccbdde",
+      "--data-tools-decimal-integer-color": "#ccbdde",
+      "--data-tools-ascii-color": "#ccbdde",
+      "--data-tools-base64-color": "#ccbdde",
+    },
+  },
+  {
+    id: "dark",
+    name: "Dark",
+    description: "Neutral grey dark workspace.",
+    variables: {
+      "--app-bg": "#1e2024",
+      "--surface-0": "#16181c",
+      "--surface-1": "#22252b",
+      "--surface-2": "#1d2026",
+      "--scrollbar-track": "#14161a",
+      "--border-strong": "#2b3038",
+      "--color-1": "#c7d0db",
+      "--color-2": "#2a2f37",
+      "--color-2-hover": "#333943",
+      "--color-3": "#535b67",
+      "--color-4": "#1a1e24",
+      "--color-5": "#e4e8ee",
+      "--color-6": "#aab2be",
+      "--color-7": "#303641",
+      "--data-tools-frame-bg": "#21262e",
+      "--data-tools-hex-color": "#e4e8ee",
+      "--data-tools-binary-color": "#e4e8ee",
+      "--data-tools-decimal-color": "#e4e8ee",
+      "--data-tools-decimal-integer-color": "#e4e8ee",
+      "--data-tools-ascii-color": "#e4e8ee",
+      "--data-tools-base64-color": "#e4e8ee",
+    },
+  },
+  {
+    id: "pastels",
+    name: "Pastels",
+    description: "Soft pastel tones with readable contrast.",
+    variables: {
+      "--app-bg": "#e7ecef",
+      "--surface-0": "#f8fbfd",
+      "--surface-1": "#eef5f8",
+      "--surface-2": "#f3f8fb",
+      "--scrollbar-track": "#dce6eb",
+      "--border-strong": "#b6c8d1",
+      "--color-1": "#3a6a8d",
+      "--color-2": "#d8e6ef",
+      "--color-2-hover": "#c8dce8",
+      "--color-3": "#8fb1c4",
+      "--color-4": "#e3edf3",
+      "--color-5": "#1e3342",
+      "--color-6": "#4e6a7e",
+      "--color-7": "#c9dce8",
+      "--data-tools-frame-bg": "#e8f2f7",
+      "--data-tools-hex-color": "#1e3342",
+      "--data-tools-binary-color": "#1e3342",
+      "--data-tools-decimal-color": "#1e3342",
+      "--data-tools-decimal-integer-color": "#1e3342",
+      "--data-tools-ascii-color": "#1e3342",
+      "--data-tools-base64-color": "#1e3342",
+    },
+  },
+  {
+    id: "matrix",
+    name: "Matrix",
+    description: "Classic matrix-green terminal vibe.",
+    variables: {
+      "--app-bg": "#020302",
+      "--surface-0": "#000000",
+      "--surface-1": "#040705",
+      "--surface-2": "#010201",
+      "--scrollbar-track": "#000000",
+      "--border-strong": "#0a190c",
+      "--color-1": "#00ff41",
+      "--color-2": "#041108",
+      "--color-2-hover": "#08200f",
+      "--color-3": "#00a32a",
+      "--color-4": "#030b05",
+      "--color-5": "#b9ffbf",
+      "--color-6": "#63d471",
+      "--color-7": "#06150a",
+      "--data-tools-frame-bg": "#05150a",
+      "--data-tools-hex-color": "#b9ffbf",
+      "--data-tools-binary-color": "#b9ffbf",
+      "--data-tools-decimal-color": "#b9ffbf",
+      "--data-tools-decimal-integer-color": "#b9ffbf",
+      "--data-tools-ascii-color": "#b9ffbf",
+      "--data-tools-base64-color": "#b9ffbf",
+    },
+  },
+  {
+    id: "sub7",
+    name: "Sub7",
+    description: "Retro Sub7-style cobalt UI inspired by classic server panel screenshots.",
+    variables: {
+      "--app-bg": "#000000",
+      "--surface-0": "#000000",
+      "--surface-1": "#020203",
+      "--surface-2": "#000000",
+      "--scrollbar-track": "#000000",
+      "--border-strong": "#4f59cf",
+      "--color-1": "#a3adff",
+      "--color-2": "#003b86",
+      "--color-2-hover": "#0a4f9f",
+      "--color-3": "#4f59cf",
+      "--color-4": "#00183d",
+      "--color-5": "#e1e6ff",
+      "--color-6": "#b9c5ff",
+      "--color-7": "#00295f",
+      "--data-tools-frame-bg": "#001e4d",
+      "--data-tools-hex-color": "#dbe3ff",
+      "--data-tools-binary-color": "#dbe3ff",
+      "--data-tools-decimal-color": "#dbe3ff",
+      "--data-tools-decimal-integer-color": "#dbe3ff",
+      "--data-tools-ascii-color": "#dbe3ff",
+      "--data-tools-base64-color": "#dbe3ff",
+    },
+  },
+  {
+    id: "light",
+    name: "Light",
+    description: "Grey high-contrast light layout tuned for readability.",
+    variables: {
+      "--app-bg": "#ced3d9",
+      "--surface-0": "#f4f5f7",
+      "--surface-1": "#e6e9ed",
+      "--surface-2": "#eff1f4",
+      "--scrollbar-track": "#bcc3cb",
+      "--border-strong": "#4b5563",
+      "--color-1": "#0d1117",
+      "--color-2": "#8e97a3",
+      "--color-2-hover": "#798492",
+      "--color-3": "#5f6873",
+      "--color-4": "#d5dbe2",
+      "--color-5": "#05070a",
+      "--color-6": "#111827",
+      "--color-7": "#6f7a87",
+      "--data-tools-frame-bg": "#d9dfe6",
+      "--data-tools-hex-color": "#05070a",
+      "--data-tools-binary-color": "#05070a",
+      "--data-tools-decimal-color": "#05070a",
+      "--data-tools-decimal-integer-color": "#05070a",
+      "--data-tools-ascii-color": "#05070a",
+      "--data-tools-base64-color": "#05070a",
+      "--header-text-color": "#000000",
+      "--sidebar-text-color": "#070a0e",
+      "--input-bg-color": "#ffffff",
+      "--input-text-color": "#9aa3af",
+      "--stats-tag-text-color": "#1f6fff",
+      "--crypt-panel-bg": "#edf2f7",
+      "--crypt-panel-text": "#0b1220",
+      "--tab-inactive-opacity": "0.78",
+    },
+  },
+]);
 if (!appLock) {
   console.error(
     "Another instance of PacketSnitch is already running. Exiting this instance.",
@@ -146,6 +327,127 @@ function checkOllama() {
 
 function getSettingsFilePath() {
   return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, SETTINGS_FILE_NAME);
+}
+
+function getThemesDir() {
+  return path.join(app.getPath("userData"), THEMES_DIR_NAME);
+}
+
+function getBundledThemesDir() {
+  return path.join(app.getAppPath(), BUNDLED_THEMES_DIR_NAME);
+}
+
+function sanitizeThemeId(value, fallback = "snitchbitch") {
+  const safeFallback = typeof fallback === "string" && fallback ? fallback : "snitchbitch";
+  if (typeof value !== "string") return safeFallback;
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return normalized || safeFallback;
+}
+
+function normalizeThemeDefinition(rawTheme, fallbackId = "custom") {
+  if (!rawTheme || typeof rawTheme !== "object") return null;
+  const id = sanitizeThemeId(rawTheme.id, fallbackId);
+  const name = typeof rawTheme.name === "string" && rawTheme.name.trim()
+    ? rawTheme.name.trim()
+    : id;
+  const description = typeof rawTheme.description === "string"
+    ? rawTheme.description.trim()
+    : "";
+  const variables = rawTheme.variables && typeof rawTheme.variables === "object"
+    ? Object.entries(rawTheme.variables).reduce((acc, [key, value]) => {
+      if (!String(key).startsWith("--")) return acc;
+      if (typeof value !== "string" || !value.trim()) return acc;
+      acc[String(key)] = value.trim();
+      return acc;
+    }, {})
+    : {};
+
+  if (Object.keys(variables).length === 0) return null;
+  return { id, name, description, variables };
+}
+
+async function readThemeDefinitionsFromDir(dirPath) {
+  const fileEntries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+  const parsedThemes = [];
+
+  for (const entry of fileEntries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(THEME_FILE_EXTENSION)) {
+      continue;
+    }
+    const filePath = path.join(dirPath, entry.name);
+    try {
+      const rawText = await fs.promises.readFile(filePath, "utf8");
+      const parsed = JSON.parse(rawText);
+      const fallbackId = sanitizeThemeId(path.basename(entry.name, THEME_FILE_EXTENSION), "custom");
+      const normalized = normalizeThemeDefinition(parsed, fallbackId);
+      if (!normalized) continue;
+      parsedThemes.push(normalized);
+    } catch (error) {
+      console.warn(`Skipping invalid theme file: ${filePath}`, error);
+    }
+  }
+
+  return parsedThemes;
+}
+
+async function getDefaultThemeDefinitions() {
+  const bundledThemesDir = getBundledThemesDir();
+  try {
+    const bundledThemes = await readThemeDefinitionsFromDir(bundledThemesDir);
+    if (bundledThemes.length > 0) {
+      return bundledThemes;
+    }
+  } catch {
+    // Fallback to in-code defaults when bundled theme files are unavailable.
+  }
+  return DEFAULT_THEME_DEFINITIONS.map((theme) => ({
+    ...theme,
+    variables: { ...theme.variables },
+  }));
+}
+
+async function ensureThemeFilesExist() {
+  const themesDir = getThemesDir();
+  await fs.promises.mkdir(themesDir, { recursive: true });
+  const defaultThemes = await getDefaultThemeDefinitions();
+  for (const defaultTheme of defaultThemes) {
+    const filePath = path.join(themesDir, `${defaultTheme.id}${THEME_FILE_EXTENSION}`);
+    try {
+      await fs.promises.access(filePath, fs.constants.F_OK);
+    } catch {
+      await fs.promises.writeFile(
+        filePath,
+        JSON.stringify(defaultTheme, null, 2) + os.EOL,
+        "utf8",
+      );
+    }
+  }
+  return themesDir;
+}
+
+async function listThemeDefinitions() {
+  await ensureThemeFilesExist();
+  const themesDir = getThemesDir();
+  const parsedThemes = await readThemeDefinitionsFromDir(themesDir);
+
+  const deduped = [];
+  const seenIds = new Set();
+  for (const theme of parsedThemes) {
+    if (seenIds.has(theme.id)) continue;
+    seenIds.add(theme.id);
+    deduped.push(theme);
+  }
+
+  deduped.sort((a, b) => a.name.localeCompare(b.name));
+  return deduped;
+}
+
+async function getThemeById(themeId) {
+  const requestedId = sanitizeThemeId(themeId, "snitchbitch");
+  const themes = await listThemeDefinitions();
+  const found = themes.find((theme) => theme.id === requestedId);
+  if (found) return found;
+  return themes.find((theme) => theme.id === "snitchbitch") || themes[0] || null;
 }
 
 async function ensureSettingsFileExists(settings) {
@@ -394,6 +696,9 @@ app.whenReady().then(() => {
     `[${new Date().toISOString()}] [GUI][Main] Session started for PacketSnitch v${app.getVersion()}`,
   );
   isFirstRunAfterInstall = checkNewInstall();
+  void ensureThemeFilesExist().catch((error) => {
+    console.warn("Unable to initialize theme directory:", error);
+  });
   checkOllama().then((isInstalled) => {
     cachedOllamaInstalled = isInstalled;
     void loadSettingsFromDisk();
@@ -883,6 +1188,18 @@ ipcMain.handle("settings-update", async (_event, partialSettings) => {
       ...partialLlmSettings,
     },
   });
+});
+
+ipcMain.handle("themes-list", async () => {
+  return listThemeDefinitions();
+});
+
+ipcMain.handle("themes-get", async (_event, themeId) => {
+  return getThemeById(themeId);
+});
+
+ipcMain.handle("themes-directory", async () => {
+  return ensureThemeFilesExist();
 });
 
 // Session library helpers

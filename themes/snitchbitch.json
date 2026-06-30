@@ -1,0 +1,28 @@
+{
+    "id": "snitchbitch",
+    "name": "SnitchBitch",
+    "description": "Original PacketSnitch look.",
+    "variables": {
+        "--app-bg": "#333333",
+        "--surface-0": "#000000",
+        "--surface-1": "#111111",
+        "--surface-2": "#000000",
+        "--scrollbar-track": "#000000",
+        "--border-strong": "#000000",
+        "--color-1": "#7f80ff",
+        "--color-2": "#2a284a",
+        "--color-2-hover": "#201e3d",
+        "--color-3": "#8a87c0",
+        "--color-4": "#161a2b",
+        "--color-5": "#ccbdde",
+        "--color-6": "#b5b5b5",
+        "--color-7": "#413f6e",
+        "--data-tools-frame-bg": "#0d1f47",
+        "--data-tools-hex-color": "#ccbdde",
+        "--data-tools-binary-color": "#ccbdde",
+        "--data-tools-decimal-color": "#ccbdde",
+        "--data-tools-decimal-integer-color": "#ccbdde",
+        "--data-tools-ascii-color": "#ccbdde",
+        "--data-tools-base64-color": "#ccbdde"
+    }
+}

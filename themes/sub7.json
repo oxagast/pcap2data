@@ -1,0 +1,28 @@
+{
+    "id": "sub7",
+    "name": "Sub7",
+    "description": "Retro Sub7-style cobalt UI inspired by classic server panel screenshots.",
+    "variables": {
+        "--app-bg": "#000000",
+        "--surface-0": "#000000",
+        "--surface-1": "#020203",
+        "--surface-2": "#000000",
+        "--scrollbar-track": "#000000",
+        "--border-strong": "#4f59cf",
+        "--color-1": "#a3adff",
+        "--color-2": "#003b86",
+        "--color-2-hover": "#0a4f9f",
+        "--color-3": "#4f59cf",
+        "--color-4": "#00183d",
+        "--color-5": "#e1e6ff",
+        "--color-6": "#b9c5ff",
+        "--color-7": "#00295f",
+        "--data-tools-frame-bg": "#001e4d",
+        "--data-tools-hex-color": "#dbe3ff",
+        "--data-tools-binary-color": "#dbe3ff",
+        "--data-tools-decimal-color": "#dbe3ff",
+        "--data-tools-decimal-integer-color": "#dbe3ff",
+        "--data-tools-ascii-color": "#dbe3ff",
+        "--data-tools-base64-color": "#dbe3ff"
+    }
+}
