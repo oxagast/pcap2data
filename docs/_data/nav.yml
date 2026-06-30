@@ -4,12 +4,8 @@
   link: /features
 - name: Frontend
   link: /frontend
-- name: Backend
-  link: /backend
 - name: Filters
   link: /filters
-- name: Themes
-  link: /themes
 - name: Context Menu
   link: /context-menu
 - name: on GitHub
