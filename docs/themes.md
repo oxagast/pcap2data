@@ -18,9 +18,9 @@ This guide covers:
 This is a screenshot of the "Matrix" theme.
 
 
-<p align="center">
+<p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
 <img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
-</p>
+</a></p>
 
 ---
 
