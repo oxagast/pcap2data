@@ -2266,7 +2266,7 @@ strong {
   border-radius: 8px;
   padding: 10px;
   box-sizing: border-box;
-  color: white;
+  color: var(--log-text, white);
   font-family: "Courier New", Courier, monospace;
 }
 
@@ -2289,8 +2289,8 @@ strong {
 
 #activity-log-path {
   border: 1px solid var(--color-3);
-  background-color: #000;
-  color: var(--color-6);
+  background-color: var(--log-bg, #000);
+  color: var(--log-text, var(--color-6));
   padding: 6px;
   font-size: 12px;
   margin-bottom: 6px;
@@ -2299,7 +2299,7 @@ strong {
 
 #activity-log-entries {
   border: 1px solid var(--color-3);
-  background-color: #000;
+  background-color: var(--log-bg, #000);
   height: 520px;
   overflow-y: auto;
   padding: 6px;
@@ -2311,7 +2311,7 @@ strong {
 .activity-log-entry {
   border-bottom: 1px solid #2f3257;
   padding: 5px 0;
-  color: white;
+  color: var(--log-text, white);
 }
 
 #activity-log-search {

@@ -304,6 +304,31 @@ function getThemeSelectElement() {
   return document.getElementById("settings-general-theme");
 }
 
+function getThemeByIdFromList(themeId) {
+  const normalizedId = sanitizeThemeId(themeId, FALLBACK_THEME_ID);
+  return availableThemes.find((theme) => sanitizeThemeId(theme.id, "") === normalizedId) || null;
+}
+
+function getThemeSourceSuffix(theme) {
+  if (!theme || !theme.hasUserBundledDiff) return "";
+  return theme.sourceKind === "user" ? " [User Modified]" : " [Bundled]";
+}
+
+function updateSelectedThemeSourceNote(themeId) {
+  const noteEl = document.getElementById("settings-theme-source-note");
+  if (!noteEl) return;
+  const theme = getThemeByIdFromList(themeId);
+  if (!theme || !theme.hasUserBundledDiff) {
+    noteEl.textContent = "";
+    noteEl.hidden = true;
+    return;
+  }
+
+  const sourceLabel = theme.sourceKind === "user" ? "User Modified" : "Bundled";
+  noteEl.textContent = `Selected source for this theme ID: ${sourceLabel}.`;
+  noteEl.hidden = false;
+}
+
 function renderThemeOptions() {
   const themeSelectEl = getThemeSelectElement();
   if (!themeSelectEl) return;
@@ -320,13 +345,14 @@ function renderThemeOptions() {
   availableThemes.forEach((theme) => {
     const option = document.createElement("option");
     option.value = theme.id;
-    option.textContent = theme.name;
+    option.textContent = `${theme.name}${getThemeSourceSuffix(theme)}`;
     themeSelectEl.appendChild(option);
   });
 
   if (themeSelectEl.options.length > 0) {
     themeSelectEl.value = selectedThemeId || FALLBACK_THEME_ID;
   }
+  updateSelectedThemeSourceNote(themeSelectEl.value);
 }
 
 function applyThemeVariables(theme) {
@@ -519,17 +545,111 @@ function setSettingsStatus(message) {
   }
 }
 
+function formatSettingsLogValue(value) {
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (value == null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch (_error) {
+    return String(value);
+  }
+}
+
+function buildSettingsChangeSummaries(previousSettings, nextSettings) {
+  const changes = [];
+  const previousGeneral = previousSettings?.general || {};
+  const nextGeneral = nextSettings?.general || {};
+  const previousLlm = previousSettings?.llm || {};
+  const nextLlm = nextSettings?.llm || {};
+
+  const pushChange = (label, beforeValue, afterValue, { redacted = false } = {}) => {
+    if (beforeValue === afterValue) {
+      return;
+    }
+    if (redacted) {
+      changes.push(`${label}=updated`);
+      return;
+    }
+    changes.push(
+      `${label}:${formatSettingsLogValue(beforeValue)}->${formatSettingsLogValue(afterValue)}`,
+    );
+  };
+
+  pushChange("themeId", previousGeneral.themeId, nextGeneral.themeId);
+  pushChange(
+    "convJsonIndentSpaces",
+    previousGeneral.convJsonIndentSpaces,
+    nextGeneral.convJsonIndentSpaces,
+  );
+  pushChange(
+    "statusResetSeconds",
+    previousGeneral.statusResetSeconds,
+    nextGeneral.statusResetSeconds,
+  );
+  pushChange(
+    "backendPacketChunkSize",
+    previousGeneral.backendPacketChunkSize,
+    nextGeneral.backendPacketChunkSize,
+  );
+  pushChange("ollamaModel", previousLlm.ollamaModel, nextLlm.ollamaModel);
+  pushChange(
+    "ollamaApiKey",
+    previousLlm.ollamaApiKey,
+    nextLlm.ollamaApiKey,
+    { redacted: true },
+  );
+  pushChange(
+    "activeByDefault",
+    previousLlm.activeByDefault,
+    nextLlm.activeByDefault,
+  );
+  pushChange(
+    "triggerDelaySeconds",
+    previousLlm.triggerDelaySeconds,
+    nextLlm.triggerDelaySeconds,
+  );
+  pushChange(
+    "maxSummaryTokens",
+    previousLlm.maxSummaryTokens,
+    nextLlm.maxSummaryTokens,
+  );
+
+  return changes;
+}
+
+function logSettingsMutation(actionLabel, previousSettings, nextSettings) {
+  const changes = buildSettingsChangeSummaries(previousSettings, nextSettings);
+  if (changes.length === 0) {
+    writeLogEntry(`${actionLabel} with no setting changes`);
+    return;
+  }
+  writeLogEntry(`${actionLabel} ${changes.join(", ")}`);
+}
+
 async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   if (!window.settingsapi || typeof window.settingsapi.save !== "function") {
     setSettingsStatus("Settings storage is unavailable.");
     return null;
   }
+  const previousSettings = getCurrentSettings();
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
   await applyThemeById(savedSettings.general.themeId);
   syncSettingsFormFromState();
-  setSettingsStatus("Settings saved.");
+  logSettingsMutation(
+    resetToDefaults ? "Settings restored defaults" : "Settings saved",
+    previousSettings,
+    savedSettings,
+  );
+  setSettingsStatus(resetToDefaults ? "Defaults restored." : "Settings saved.");
   return savedSettings;
 }
 
@@ -9443,7 +9563,51 @@ document.getElementById("settings-subtab-llm").addEventListener("click", () => {
 
 document.getElementById("settings-general-theme").addEventListener("change", (event) => {
   const selectedThemeId = sanitizeThemeId(event?.target?.value, FALLBACK_THEME_ID);
+  const previousThemeId = sanitizeThemeId(
+    getCurrentSettings()?.general?.themeId,
+    FALLBACK_THEME_ID,
+  );
+  if (selectedThemeId !== previousThemeId) {
+    writeLogEntry(
+      `Settings theme changed themeId=${JSON.stringify(previousThemeId)}->${JSON.stringify(selectedThemeId)}`,
+    );
+  } else {
+    writeLogEntry(`Settings theme selected themeId=${JSON.stringify(selectedThemeId)}`);
+  }
+  updateSelectedThemeSourceNote(selectedThemeId);
   void applyThemeById(selectedThemeId);
+});
+
+document.getElementById("settings-general-conv-json-indent").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated convJsonIndentSpaces=${event?.target?.value}`);
+});
+
+document.getElementById("settings-general-status-reset-seconds").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated statusResetSeconds=${event?.target?.value}`);
+});
+
+document.getElementById("settings-general-backend-chunk-size").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated backendPacketChunkSize=${event?.target?.value}`);
+});
+
+document.getElementById("settings-llm-model").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated ollamaModel=${JSON.stringify(event?.target?.value || "")}`);
+});
+
+document.getElementById("settings-llm-api-key").addEventListener("change", () => {
+  writeLogEntry("Settings updated ollamaApiKey=updated");
+});
+
+document.getElementById("settings-llm-active-by-default").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated activeByDefault=${Boolean(event?.target?.checked)}`);
+});
+
+document.getElementById("settings-llm-delay-seconds").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated triggerDelaySeconds=${event?.target?.value}`);
+});
+
+document.getElementById("settings-llm-max-tokens").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated maxSummaryTokens=${event?.target?.value}`);
 });
 
 document

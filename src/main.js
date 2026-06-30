@@ -161,34 +161,6 @@ const DEFAULT_THEME_DEFINITIONS = Object.freeze([
     },
   },
   {
-    id: "sub7",
-    name: "Sub7",
-    description: "Retro Sub7-style cobalt UI inspired by classic server panel screenshots.",
-    variables: {
-      "--app-bg": "#000000",
-      "--surface-0": "#000000",
-      "--surface-1": "#000000",
-      "--surface-2": "#000000",
-      "--scrollbar-track": "#000000",
-      "--border-strong": "#4f59cf",
-      "--color-1": "#a3adff",
-      "--color-2": "#003b86",
-      "--color-2-hover": "#0a4f9f",
-      "--color-3": "#4f59cf",
-      "--color-4": "#000611",
-      "--color-5": "#e1e6ff",
-      "--color-6": "#b9c5ff",
-      "--color-7": "#001635",
-      "--data-tools-frame-bg": "#000d24",
-      "--data-tools-hex-color": "#dbe3ff",
-      "--data-tools-binary-color": "#dbe3ff",
-      "--data-tools-decimal-color": "#dbe3ff",
-      "--data-tools-decimal-integer-color": "#dbe3ff",
-      "--data-tools-ascii-color": "#dbe3ff",
-      "--data-tools-base64-color": "#dbe3ff",
-    },
-  },
-  {
     id: "light",
     name: "Light",
     description: "Grey high-contrast light layout tuned for readability.",
@@ -344,7 +316,7 @@ function sanitizeThemeId(value, fallback = "snitchbitch") {
   return normalized || safeFallback;
 }
 
-function normalizeThemeDefinition(rawTheme, fallbackId = "custom") {
+function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}) {
   if (!rawTheme || typeof rawTheme !== "object") return null;
   const id = sanitizeThemeId(rawTheme.id, fallbackId);
   const name = typeof rawTheme.name === "string" && rawTheme.name.trim()
@@ -364,7 +336,18 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom") {
 
   if (Object.keys(variables).length === 0) return null;
   const logoImage = normalizeThemeLogoImage(rawTheme.logoImage);
-  return { id, name, description, variables, logoImage };
+  return {
+    id,
+    name,
+    description,
+    variables,
+    logoImage,
+    sourcePath: typeof metadata.sourcePath === "string" ? metadata.sourcePath : "",
+    sourceKind: typeof metadata.sourceKind === "string" ? metadata.sourceKind : "unknown",
+    sourceMtimeMs: Number.isFinite(metadata.sourceMtimeMs)
+      ? metadata.sourceMtimeMs
+      : 0,
+  };
 }
 
 function normalizeThemeLogoImage(rawLogoImage) {
@@ -398,24 +381,21 @@ function normalizeThemeLogoImage(rawLogoImage) {
   };
 }
 
-function shouldMigrateSub7Theme(rawTheme) {
-  if (!rawTheme || typeof rawTheme !== "object") return false;
-  const normalized = normalizeThemeDefinition(rawTheme, "sub7");
-  if (!normalized || normalized.id !== "sub7") return false;
-  const v = normalized.variables || {};
-  const isLegacyGreen = (
-    String(v["--color-1"] || "").toLowerCase() === "#8cff6b" &&
-    String(v["--color-2"] || "").toLowerCase() === "#0d1a0d" &&
-    String(v["--color-7"] || "").toLowerCase() === "#132613"
-  );
+function getComparableThemePayload(theme) {
+  const normalizedVariables = theme && theme.variables && typeof theme.variables === "object"
+    ? Object.fromEntries(Object.entries(theme.variables).sort(([a], [b]) => a.localeCompare(b)))
+    : {};
+  return {
+    name: typeof theme?.name === "string" ? theme.name : "",
+    description: typeof theme?.description === "string" ? theme.description : "",
+    variables: normalizedVariables,
+    logoImage: theme?.logoImage || null,
+  };
+}
 
-  const isEarlyCobalt = (
-    String(v["--color-2"] || "").toLowerCase() === "#003b86" &&
-    String(v["--color-4"] || "").toLowerCase() === "#00183d" &&
-    String(v["--color-7"] || "").toLowerCase() === "#00295f"
-  );
-
-  return isLegacyGreen || isEarlyCobalt;
+function areThemeDefinitionsEquivalent(leftTheme, rightTheme) {
+  return JSON.stringify(getComparableThemePayload(leftTheme))
+    === JSON.stringify(getComparableThemePayload(rightTheme));
 }
 
 async function readThemeDefinitionsFromDir(dirPath) {
@@ -429,9 +409,14 @@ async function readThemeDefinitionsFromDir(dirPath) {
     const filePath = path.join(dirPath, entry.name);
     try {
       const rawText = await fs.promises.readFile(filePath, "utf8");
+      const stats = await fs.promises.stat(filePath);
       const parsed = JSON.parse(rawText);
       const fallbackId = sanitizeThemeId(path.basename(entry.name, THEME_FILE_EXTENSION), "custom");
-      const normalized = normalizeThemeDefinition(parsed, fallbackId);
+      const normalized = normalizeThemeDefinition(parsed, fallbackId, {
+        sourcePath: filePath,
+        sourceKind: "unknown",
+        sourceMtimeMs: stats.mtimeMs,
+      });
       if (!normalized) continue;
       parsedThemes.push(normalized);
     } catch (error) {
@@ -466,22 +451,7 @@ async function ensureThemeFilesExist() {
     const filePath = path.join(themesDir, `${defaultTheme.id}${THEME_FILE_EXTENSION}`);
     try {
       await fs.promises.access(filePath, fs.constants.F_OK);
-      if (defaultTheme.id === "sub7") {
-        try {
-          const existingText = await fs.promises.readFile(filePath, "utf8");
-          const existingTheme = JSON.parse(existingText);
-          if (shouldMigrateSub7Theme(existingTheme)) {
-            await fs.promises.writeFile(
-              filePath,
-              JSON.stringify(defaultTheme, null, 2) + os.EOL,
-              "utf8",
-            );
-            console.log("Migrated legacy Sub7 theme to latest cobalt-black Sub7.");
-          }
-        } catch (migrationError) {
-          console.warn("Unable to inspect existing Sub7 theme for migration:", migrationError);
-        }
-      }
+      // Existing user theme files are never modified automatically.
     } catch {
       await fs.promises.writeFile(
         filePath,
@@ -496,15 +466,83 @@ async function ensureThemeFilesExist() {
 async function listThemeDefinitions() {
   await ensureThemeFilesExist();
   const themesDir = getThemesDir();
-  const parsedThemes = await readThemeDefinitionsFromDir(themesDir);
+  const bundledThemesDir = getBundledThemesDir();
 
-  const deduped = [];
-  const seenIds = new Set();
-  for (const theme of parsedThemes) {
-    if (seenIds.has(theme.id)) continue;
-    seenIds.add(theme.id);
-    deduped.push(theme);
+  const userThemes = await readThemeDefinitionsFromDir(themesDir);
+  userThemes.forEach((theme) => {
+    theme.sourceKind = "user";
+  });
+
+  let bundledThemes = [];
+  try {
+    bundledThemes = await readThemeDefinitionsFromDir(bundledThemesDir);
+    bundledThemes.forEach((theme) => {
+      theme.sourceKind = "bundled";
+    });
+  } catch (error) {
+    console.warn("Unable to read bundled theme definitions:", error);
   }
+
+  const allThemes = [...userThemes, ...bundledThemes];
+  const themesById = new Map();
+  const duplicateStateById = new Map();
+
+  allThemes.forEach((theme) => {
+    const existing = themesById.get(theme.id);
+    if (!existing) {
+      themesById.set(theme.id, theme);
+      return;
+    }
+
+    const hasDiff = !areThemeDefinitionsEquivalent(existing, theme);
+    const existingDuplicateState = duplicateStateById.get(theme.id) || {
+      hasUserBundledConflict: false,
+      hasUserBundledDiff: false,
+    };
+    const hasUserBundledPair =
+      (existing.sourceKind === "user" && theme.sourceKind === "bundled")
+      || (existing.sourceKind === "bundled" && theme.sourceKind === "user");
+    duplicateStateById.set(theme.id, {
+      hasUserBundledConflict: existingDuplicateState.hasUserBundledConflict || hasUserBundledPair,
+      hasUserBundledDiff: existingDuplicateState.hasUserBundledDiff || (hasUserBundledPair && hasDiff),
+    });
+
+    const existingMtime = Number.isFinite(existing.sourceMtimeMs)
+      ? existing.sourceMtimeMs
+      : 0;
+    const currentMtime = Number.isFinite(theme.sourceMtimeMs)
+      ? theme.sourceMtimeMs
+      : 0;
+
+    let nextTheme;
+    if (currentMtime > existingMtime) {
+      nextTheme = theme;
+    } else if (currentMtime < existingMtime) {
+      nextTheme = existing;
+    } else {
+      nextTheme = [existing, theme].find((entry) => entry.sourceKind === "user") || existing;
+    }
+
+    const mtimeReason = currentMtime === existingMtime
+      ? "modification times are equal (preferring user theme when present)"
+      : "it has the most recent modification time";
+    console.warn(
+      `Duplicate theme id "${theme.id}" detected between ${existing.sourceKind} (${existing.sourcePath}) and ${theme.sourceKind} (${theme.sourcePath}). Using ${nextTheme.sourceKind} theme because ${mtimeReason}.`,
+    );
+
+    themesById.set(theme.id, nextTheme);
+  });
+
+  const deduped = Array.from(themesById.values()).map((theme) => ({
+    id: theme.id,
+    name: theme.name,
+    description: theme.description,
+    variables: theme.variables,
+    logoImage: theme.logoImage,
+    sourceKind: theme.sourceKind,
+    hasUserBundledConflict: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledConflict),
+    hasUserBundledDiff: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledDiff),
+  }));
 
   deduped.sort((a, b) => a.name.localeCompare(b.name));
   return deduped;

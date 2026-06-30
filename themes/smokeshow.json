@@ -31,6 +31,8 @@
         "--stats-tag-text-color": "#1f6fff",
         "--crypt-panel-bg": "#edf2f7",
         "--crypt-panel-text": "#0b1220",
-        "--tab-inactive-opacity": "0.78"
+        "--tab-inactive-opacity": "0.78",
+        "--log-bg": "#ffffff",
+        "--log-text": "#000000"
     }
 }
