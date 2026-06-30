@@ -57,6 +57,11 @@ const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
 const psVer = require("../../package.json").version;
 const {
+  DEFAULT_SETTINGS,
+  cloneDefaultSettings,
+  normalizeSettings,
+} = require("../settings");
+const {
   initConvPanel,
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
@@ -100,6 +105,7 @@ const MAIN_TAB_DATA = "data";
 const MAIN_TAB_STATS = "stats";
 const MAIN_TAB_LIST = "list";
 const MAIN_TAB_NOTES = "notes";
+const MAIN_TAB_SETTINGS = "settings";
 const MAIN_TAB_DATA_TOOLS = "data-tools";
 const MAIN_TAB_CRYPT = "crypt";
 const MAIN_TAB_KEYSTORE = "keystore";
@@ -258,6 +264,7 @@ const BACKEND_PACKET_CHUNK_SIZE = 250;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
 let sessionAutosaveInFlight = false;
+let appSettings = cloneDefaultSettings();
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
@@ -270,6 +277,100 @@ const backendProgressState = {
   totalPackets: 0,
 };
 let sessionPcapSource = null;
+
+function getCurrentSettings() {
+  return appSettings;
+}
+
+function setCurrentSettings(nextSettings) {
+  appSettings = normalizeSettings(nextSettings);
+  return appSettings;
+}
+
+function syncSettingsFormFromState() {
+  const settings = getCurrentSettings();
+  const modelEl = document.getElementById("settings-llm-model");
+  const apiKeyEl = document.getElementById("settings-llm-api-key");
+  const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
+  const delayEl = document.getElementById("settings-llm-delay-seconds");
+  const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  if (modelEl) modelEl.value = settings.llm.ollamaModel;
+  if (apiKeyEl) {
+    apiKeyEl.value = "";
+    apiKeyEl.placeholder = settings.llm.ollamaApiKey
+      ? "Stored key present; leave blank to keep it"
+      : "Leave blank to keep the stored key";
+  }
+  if (activeByDefaultEl) activeByDefaultEl.checked = Boolean(settings.llm.activeByDefault);
+  if (delayEl) delayEl.value = String(settings.llm.triggerDelaySeconds);
+  if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
+}
+
+function readSettingsFormState() {
+  const modelEl = document.getElementById("settings-llm-model");
+  const apiKeyEl = document.getElementById("settings-llm-api-key");
+  const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
+  const delayEl = document.getElementById("settings-llm-delay-seconds");
+  const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
+  const currentSettings = getCurrentSettings();
+  return normalizeSettings({
+    llm: {
+      ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
+      ollamaApiKey: trimmedApiKey || currentSettings.llm.ollamaApiKey || "",
+      activeByDefault: activeByDefaultEl
+        ? activeByDefaultEl.checked
+        : DEFAULT_SETTINGS.llm.activeByDefault,
+      triggerDelaySeconds: delayEl ? delayEl.value : DEFAULT_SETTINGS.llm.triggerDelaySeconds,
+      maxSummaryTokens: maxTokensEl ? maxTokensEl.value : DEFAULT_SETTINGS.llm.maxSummaryTokens,
+    },
+  });
+}
+
+function setSettingsStatus(message) {
+  const statusEl = document.getElementById("settings-status");
+  if (statusEl) {
+    statusEl.textContent = message;
+  }
+}
+
+async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
+  if (!window.settingsapi || typeof window.settingsapi.save !== "function") {
+    setSettingsStatus("Settings storage is unavailable.");
+    return null;
+  }
+  const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
+  const savedSettings = await window.settingsapi.save(nextSettings);
+  setCurrentSettings(savedSettings);
+  syncSettingsFormFromState();
+  setSettingsStatus("Settings saved.");
+  return savedSettings;
+}
+
+async function loadPersistedSettings() {
+  if (!window.settingsapi || typeof window.settingsapi.get !== "function") {
+    syncSettingsFormFromState();
+    return getCurrentSettings();
+  }
+  const loadedSettings = await window.settingsapi.get();
+  setCurrentSettings(loadedSettings);
+  const useLlmEl = document.getElementById("use-llm");
+  if (useLlmEl) {
+    useLlmEl.checked = Boolean(loadedSettings.llm.activeByDefault);
+  }
+  syncSettingsFormFromState();
+  return getCurrentSettings();
+}
+
+function getLLMSummaryDelayMs() {
+  return (
+    Math.max(
+      0,
+      Number(getCurrentSettings()?.llm?.triggerDelaySeconds) ||
+      DEFAULT_SETTINGS.llm.triggerDelaySeconds,
+    ) * 1000
+  );
+}
 
 function scheduleSessionKeychainAutoPopulate(reason = "startup") {
   const generation = ++keystoreAutoPopulateGeneration;
@@ -2820,6 +2921,8 @@ function restoreSessionState(sessionState) {
     }
   } else if (savedMainTab === MAIN_TAB_NOTES) {
     showNotesWorkspace();
+  } else if (savedMainTab === MAIN_TAB_SETTINGS) {
+    showSettingsWorkspace();
   } else if (savedMainTab === MAIN_TAB_DATA_TOOLS) {
     showDataTools(savedConvTab);
   } else if (savedMainTab === MAIN_TAB_CRYPT) {
@@ -5304,6 +5407,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
   document.getElementById("notes_box").style.display = "none";
+  document.getElementById("settings_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("rightside").style.display = "none";
@@ -5323,6 +5427,7 @@ function showNotesWorkspace() {
   document.getElementById("stats_box").style.display = "none";
   document.getElementById("list_box").style.display = "none";
   document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("settings_box").style.display = "none";
   document.getElementById("crypt_box").style.display = "none";
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("notes_box").style.display = "flex";
@@ -5332,6 +5437,27 @@ function showNotesWorkspace() {
   if (rightsideDataEl) rightsideDataEl.hidden = true;
   if (rightsideNotesEl) rightsideNotesEl.hidden = false;
   renderNotesList();
+}
+
+function showSettingsWorkspace() {
+  activeMainTab = MAIN_TAB_SETTINGS;
+  statusUpdate("Status: Displaying settings");
+  writeLogEntry(`[${threadName}] User opened settings workspace view`);
+  document.getElementById("prev-btn").style.display = "none";
+  document.getElementById("next-btn").style.display = "none";
+  document.getElementById("packetInfoPane").style.display = "none";
+  document.getElementById("packetPayloadPane").style.display = "none";
+  document.getElementById("summary_box").style.display = "none";
+  document.getElementById("stats_box").style.display = "none";
+  document.getElementById("list_box").style.display = "none";
+  document.getElementById("notes_box").style.display = "none";
+  document.getElementById("data_tools_box").style.display = "none";
+  document.getElementById("settings_box").style.display = "none";
+  document.getElementById("crypt_box").style.display = "none";
+  document.getElementById("keystore_box").style.display = "none";
+  document.getElementById("settings_box").style.display = "flex";
+  document.getElementById("rightside").style.display = "none";
+  syncSettingsFormFromState();
 }
 
 function getFirstLineOrFallback(elementId, fallback = "") {
@@ -7947,14 +8073,7 @@ function callLargeLanguageModel(content) {
   else if (!content || typeof content !== "string") {
     throw new Error("Content must be a non-empty string");
   }
-  const model = "minimax-m2.5:cloud";
-  const temperature = 0.5;
-  const maxTokens = 1024;
-  return window.llmapi.generate(content, {
-    model,
-    temperature,
-    maxTokens,
-  });
+  return window.llmapi.generate(content);
 }
 
 
@@ -8171,7 +8290,7 @@ function writeSummaryFromLLM() {
     } catch (error) {
       writeLogEntry(`LLM summary generation failed.`);
     }
-  }, 5000);  // wait 5 seconds before calling the LLM to avoid too many calls when scrolling rapidly
+  }, getLLMSummaryDelayMs());  // wait before calling the LLM to avoid too many calls when scrolling rapidly
 }
 
 function setActivePacketCursor(nextIndex) {
@@ -9061,6 +9180,18 @@ document.getElementById("notes-btn").addEventListener("click", function () {
     return;
   }
   showNotesWorkspace();
+});
+
+document.getElementById("settings-btn").addEventListener("click", function () {
+  showSettingsWorkspace();
+});
+
+document.getElementById("settings-save-btn").addEventListener("click", () => {
+  void persistSettingsFromForm();
+});
+
+document.getElementById("settings-reset-btn").addEventListener("click", () => {
+  void persistSettingsFromForm({ resetToDefaults: true });
 });
 
 document
@@ -11076,6 +11207,7 @@ function showAllData() {
   document.getElementById("timestamp").style.display = "block";
   document.getElementById("rightside").style.display = "block";
   document.getElementById("active-recon").style.display = "block";
+  document.getElementById("settings_box").style.display = "none";
   document.getElementById("hexg").hidden = false;
   document.getElementById("error-container").style.display = "none";
 }
@@ -11141,6 +11273,11 @@ window.api.onError((msg) => {
   doError(msg, { backend: true });
 });
 
+void loadPersistedSettings().catch((error) => {
+  console.warn("Unable to load persisted settings:", error);
+  syncSettingsFormFromState();
+});
+
 // On page load, hide packet info and payload panes
 onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
@@ -11148,6 +11285,7 @@ onload = function () {
   keystorePanel.resetKeystoreState();
   setCryptSubtab(CRYPT_SSL_SUBTAB);
   setConvSubtab(CONV_CONVERSIONS_SUBTAB);
+  syncSettingsFormFromState();
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(
     "data-tools-input",
@@ -11162,6 +11300,7 @@ onload = function () {
   document.getElementById("rightside").style.display = "none";
   document.getElementById("help-btn").style.opacity = "1";
   document.getElementById("log-btn").style.opacity = "1";
+  document.getElementById("settings-btn").style.opacity = "1";
   const rightsideDataEl = document.getElementById("rightside-data");
   const rightsideNotesEl = document.getElementById("rightside-notes");
   if (rightsideDataEl) rightsideDataEl.hidden = false;

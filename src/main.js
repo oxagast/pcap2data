@@ -9,7 +9,11 @@ const os = require("os");
 const util = require("util");
 const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
-const ollama = require('ollama').default;
+const { Ollama } = require("ollama");
+const {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+} = require("./settings");
 
 let lzmaNative = null;
 try {
@@ -37,6 +41,9 @@ let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
 let sessionCompressionFallbackAccepted = null;
 let goodiesDataCache = null;
+let appSettings = null;
+const SETTINGS_DIR_NAME = "config";
+const SETTINGS_FILE_NAME = "settings.json";
 if (!appLock) {
   console.error(
     "Another instance of PacketSnitch is already running. Exiting this instance.",
@@ -62,9 +69,26 @@ if (require("electron-squirrel-startup")) {
 
 ipcMain.handle('ollama:generate', async (_event, prompt) => {
   try {
-    const response = await ollama.generate({
-      model: 'minimax-m2.5:cloud',
+    if (!appSettings) {
+      await loadSettingsFromDisk();
+    }
+    const settings = getAppSettings();
+    const ollamaClient = settings.llm.ollamaApiKey
+      ? new Ollama({
+        headers: {
+          Authorization: settings.llm.ollamaApiKey.startsWith("Bearer ")
+            ? settings.llm.ollamaApiKey
+            : `Bearer ${settings.llm.ollamaApiKey}`,
+        },
+      })
+      : new Ollama();
+    const response = await ollamaClient.generate({
+      model: settings.llm.ollamaModel,
       prompt,
+      options: {
+        temperature: 0.5,
+        num_predict: settings.llm.maxSummaryTokens,
+      },
     });
     return response;
   } catch (error) {
@@ -119,6 +143,52 @@ function checkOllama() {
   });
 }
 
+
+function getSettingsFilePath() {
+  return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, SETTINGS_FILE_NAME);
+}
+
+async function ensureSettingsFileExists(settings) {
+  const settingsFilePath = getSettingsFilePath();
+  await fs.promises.mkdir(path.dirname(settingsFilePath), { recursive: true });
+  await fs.promises.writeFile(
+    settingsFilePath,
+    JSON.stringify(settings, null, 2) + os.EOL,
+    "utf8",
+  );
+  return settingsFilePath;
+}
+
+async function loadSettingsFromDisk() {
+  const settingsFilePath = getSettingsFilePath();
+  try {
+    const rawText = await fs.promises.readFile(settingsFilePath, "utf8");
+    const parsedSettings = normalizeSettings(JSON.parse(rawText));
+    appSettings = parsedSettings;
+    return parsedSettings;
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      console.warn("Failed to load PacketSnitch settings, using defaults:", error);
+    }
+    appSettings = normalizeSettings(DEFAULT_SETTINGS);
+    await ensureSettingsFileExists(appSettings);
+    return appSettings;
+  }
+}
+
+async function saveSettingsToDisk(nextSettings) {
+  const normalizedSettings = normalizeSettings(nextSettings);
+  appSettings = normalizedSettings;
+  await ensureSettingsFileExists(normalizedSettings);
+  return normalizedSettings;
+}
+
+function getAppSettings() {
+  if (!appSettings) {
+    appSettings = normalizeSettings(DEFAULT_SETTINGS);
+  }
+  return appSettings;
+}
 
 
 function checkNewInstall() {
@@ -326,6 +396,7 @@ app.whenReady().then(() => {
   isFirstRunAfterInstall = checkNewInstall();
   checkOllama().then((isInstalled) => {
     cachedOllamaInstalled = isInstalled;
+    void loadSettingsFromDisk();
     if (!isInstalled) {
       console.log(
         "Ollama is not installed. LLM summarisation will be unavailable.",
@@ -779,6 +850,39 @@ ipcMain.handle("get-activity-log-path", async () => {
 
 ipcMain.handle("get-activity-log-entries", async () => {
   return [...activityLogEntries];
+});
+
+ipcMain.handle("settings-get", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return getAppSettings();
+});
+
+ipcMain.handle("settings-save", async (_event, settings) => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return saveSettingsToDisk(settings);
+});
+
+ipcMain.handle("settings-update", async (_event, partialSettings) => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const currentSettings = getAppSettings();
+  const partialLlmSettings =
+    partialSettings && typeof partialSettings === "object" && partialSettings.llm && typeof partialSettings.llm === "object"
+      ? partialSettings.llm
+      : {};
+  return saveSettingsToDisk({
+    ...currentSettings,
+    ...partialSettings,
+    llm: {
+      ...currentSettings.llm,
+      ...partialLlmSettings,
+    },
+  });
 });
 
 // Session library helpers

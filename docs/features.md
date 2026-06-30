@@ -122,6 +122,8 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 Aggregate statistics over the entire loaded capture, presented as clickable tag clouds:
 
 - **Capture Overview**: total packets, unique hosts, encrypted vs. unencrypted counts, unique protocol count, unique GeoIP location count.
+- **Capture Overview** now also includes `Total Traffic` (sum of payload bytes) and `Credentials Found` (current active keychain entry count).
+- **Top Talkers**: top IPs by packet participation (source + destination); clicking an entry applies an IP src/dst filter.
 - **Application Protocols**: all distinct application-layer protocols.
 - **Transport Protocols**: TCP, UDP, ICMP breakdown.
 - **All Hosts Addressed**: unique source and destination IP addresses.
@@ -206,6 +208,7 @@ Reserved workspace for OpenSSH key and session tooling.
 - **Send to persistent**: promote a session entry to the encrypted persistent keychain.
 - **Delete selected**: permanently remove a persistent entry.
 - Details preview pane: type, label, source, creation timestamp, content summary.
+- **Session keychain filter bar**: quick-search session entries by type, label, and content; hidden while viewing persistent keychain mode.
 - **Export keystore**: export session or persistent keychain entries to CSV, JSON, or XML via context menu submenu.
 
 #### Auto-population from Packet Data
@@ -326,6 +329,8 @@ Shown when a carve target is available:
 - **Use LLM** toggle in the load dialog enables/disables analysis before running the backend.
 - Generated report displayed in the **Summary** tab.
 - LLM can be configured via `conf.yaml`.
+- Stream-context summary generation: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane.
+- Summary deduping/persistence: already-summarized stream keys are tracked to reduce repeat calls, and `currentSummary` is saved/restored with session files.
 
 ---
 

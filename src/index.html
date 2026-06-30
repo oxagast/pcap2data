@@ -63,6 +63,7 @@
       <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
       <input type="button" id="list-btn" value="List" class="custom-btns" />
       <input type="button" id="notes-btn" value="Notes" class="custom-btns" />
+      <input type="button" id="settings-btn" value="Settings" class="custom-btns" />
       <input type="button" id="log-btn" value="Log" class="custom-btns" />
       <input type="button" id="help-btn" value="Help" class="custom-btns" />
       <div id="rotate-btns" class="menu_bar">
@@ -504,6 +505,48 @@ No keystore entries saved.</pre>
           <div class="notes-header">Selected Note</div>
           <div class="notes-editor-wrap">
             <textarea id="notes-editor" placeholder="Select a note from the right panel..."></textarea>
+          </div>
+        </div>
+        <div id="settings_box">
+          <div class="settings-workspace-header">Settings</div>
+          <div class="settings-subtab-row">
+            <button id="settings-subtab-llm" class="settings-subtab-btn active">
+              LLM
+            </button>
+          </div>
+
+          <div id="settings-llm-panel" class="settings-subtab-panel">
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">LLM Defaults</div>
+                <label for="settings-llm-model">Ollama model</label>
+                <input id="settings-llm-model" type="text" placeholder="minimax-m2.5:cloud" />
+
+                <label for="settings-llm-api-key">Ollama API key</label>
+                <input id="settings-llm-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Stored locally in the settings file. Leave blank to keep the current
+                  key.</div>
+
+                <label class="settings-checkbox-row" for="settings-llm-active-by-default">
+                  <input id="settings-llm-active-by-default" type="checkbox" />
+                  LLM active by default
+                </label>
+
+                <label for="settings-llm-delay-seconds">LLM trigger delay (seconds)</label>
+                <input id="settings-llm-delay-seconds" type="number" min="0" step="1" />
+
+                <label for="settings-llm-max-tokens">Max tokens for stream summary</label>
+                <input id="settings-llm-max-tokens" type="number" min="1" step="1" />
+
+                <div class="settings-actions-row">
+                  <button id="settings-save-btn" type="button">Save settings</button>
+                  <button id="settings-reset-btn" type="button">Restore defaults</button>
+                </div>
+
+                <div id="settings-status" role="status" aria-live="polite"></div>
+              </div>
+            </div>
           </div>
         </div>
         <div id="packetInfoPane">

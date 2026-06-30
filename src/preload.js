@@ -131,6 +131,12 @@ contextBridge.exposeInMainWorld('validkeysapi', {
   },
 });
 
+contextBridge.exposeInMainWorld('settingsapi', {
+  get: () => ipcRenderer.invoke('settings-get'),
+  save: (settings) => ipcRenderer.invoke('settings-save', settings),
+  update: (partialSettings) => ipcRenderer.invoke('settings-update', partialSettings),
+});
+
 
 contextBridge.exposeInMainWorld("llmapi", {
   generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),

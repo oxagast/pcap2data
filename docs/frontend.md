@@ -87,7 +87,13 @@ When right-clicking in packet/data views, PacketSnitch shows a context menu with
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/summary-tab.png">
 </p>
 
-The Summary Frame displays the LLM-generated analysis report for the loaded capture. This frame is shown by clicking the **Summary** button in the toolbar and is only populated when the backend was run with LLM support enabled (via `conf.yaml`).
+The Summary Frame displays the LLM-generated analysis report for the loaded capture. This frame is shown by clicking the **Summary** button in the toolbar.
+
+Recent behavior updates:
+
+- The summary content now uses a preformatted text view for better readability of longer model output.
+- Summary generation is stream-aware: when packet navigation settles, the frontend summarizes the active stream context and appends non-duplicate findings.
+- Existing summary text is persisted in saved sessions and restored on load.
 
 ---
 
@@ -258,7 +264,8 @@ The **Stats** tab shows aggregate statistics computed across the entire loaded c
 
 | Section                    | Description                                                                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Capture Overview**       | Total packet count, unique hosts targeted, encrypted vs. unencrypted packet counts, unique protocol count, and unique GeoIP location count.                 |
+| **Capture Overview**       | Total packet count, unique hosts targeted, encrypted vs. unencrypted packet counts, unique protocol count, unique GeoIP location count, total traffic bytes, and current credentials-found count. |
+| **Top Talkers**            | Top IP addresses by packet participation (source + destination). Clicking a talker applies an IP src/dst filter query.                                     |
 | **Application Protocols**  | All distinct application-layer protocol names identified by port (e.g. HTTP, DNS, SMTP).                                                                    |
 | **Transport Protocols**    | Transport layer protocols seen (TCP, UDP, ICMP).                                                                                                            |
 | **All Hosts Addressed**    | All unique source and destination IP addresses and target host values.                                                                                      |
@@ -336,6 +343,7 @@ On subsequent launches, the **Unlock Keychain** dialog prompts for the password 
 | Control                | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
 | **Entries list**       | Scrollable list of all saved entries in the currently selected keychain.                        |
+| **Filter keystore entries** | Session-keychain-only live filter that matches entry type, label, and content.             |
 | **Load selected**      | Copy the selected entry's content into the Create/Update area for inspection or editing.        |
 | **Open link**          | Open the selected entry's content as a URL in the system's default browser. Only enabled when the entry contains a valid `http://` or `https://` URL. |
 | **Send to persistent** | Promote a session keychain entry to the persistent keychain (enabled only in Session mode).     |

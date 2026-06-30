@@ -496,8 +496,24 @@ strong {
   color: var(--color-5);
 }
 
+#settings_box {
+  display: none;
+  border: 8px solid var(--color-3);
+  background-color: var(--color-4);
+  padding: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 2px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--color-5);
+}
+
 .keystore-workspace-header,
-.crypt-workspace-header {
+.crypt-workspace-header,
+.settings-workspace-header {
   color: var(--color-1);
   font-weight: bold;
   margin-bottom: 8px;
@@ -521,6 +537,108 @@ strong {
 .crypt-subtab-btn.active {
   background-color: var(--color-2);
   color: var(--color-1);
+}
+
+.settings-subtab-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.settings-subtab-btn {
+  background-color: var(--color-7);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-weight: bold;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.settings-subtab-btn.active {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+.settings-subtab-panel {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  height: 100%;
+}
+
+.settings-section {
+  border: 1px solid var(--color-3);
+  background-color: var(--color-7);
+  padding: 10px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 700px;
+}
+
+.settings-section-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--color-1);
+}
+
+.settings-section input[type="text"],
+.settings-section input[type="number"],
+.settings-section input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--color-3);
+  background-color: #000;
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 6px;
+}
+
+.settings-help-text {
+  font-size: 12px;
+  color: var(--color-6);
+}
+
+.settings-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.settings-actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-actions-row button {
+  background-color: var(--color-7);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-weight: bold;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.settings-actions-row button:hover {
+  background-color: var(--color-2);
+  color: var(--color-1);
+}
+
+#settings-status {
+  font-size: 12px;
+  color: var(--color-6);
+  min-height: 1.2em;
 }
 
 .crypt-subtab-panel {
