@@ -272,6 +272,7 @@ const SETTINGS_SUBTAB_LLM = "llm";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 const FALLBACK_THEME_ID = "snitchbitch";
 let availableThemes = [];
+let availableOllamaModels = [];
 let defaultThemeLogoSrc = null;
 let appliedThemeVariableNames = new Set();
 let keystoreAutoPopulateGeneration = 0;
@@ -315,6 +316,90 @@ function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
 
 function getThemeSelectElement() {
   return document.getElementById("settings-general-theme");
+}
+
+function getLlmModelSelectElement() {
+  return document.getElementById("settings-llm-model");
+}
+
+function getConfiguredOllamaModels() {
+  if (Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0) {
+    return [...availableOllamaModels];
+  }
+  return [DEFAULT_SETTINGS.llm.ollamaModel];
+}
+
+function normalizeOllamaModelEntry(rawValue) {
+  if (typeof rawValue !== "string") return "";
+  const normalized = rawValue.trim();
+  if (!normalized || normalized.startsWith("#")) return "";
+  return normalized;
+}
+
+async function loadAvailableOllamaModels() {
+  if (!window.modelsapi || typeof window.modelsapi.getOllamaModels !== "function") {
+    availableOllamaModels = [DEFAULT_SETTINGS.llm.ollamaModel];
+    renderLlmModelOptions(getCurrentSettings()?.llm?.ollamaModel || DEFAULT_SETTINGS.llm.ollamaModel);
+    return availableOllamaModels;
+  }
+
+  try {
+    const models = await window.modelsapi.getOllamaModels();
+    availableOllamaModels = Array.isArray(models)
+      ? models
+        .map((entry) => normalizeOllamaModelEntry(entry))
+        .filter(Boolean)
+      : [];
+  } catch (error) {
+    console.warn("Unable to load available Ollama models:", error);
+    availableOllamaModels = [];
+  }
+
+  if (availableOllamaModels.length === 0) {
+    availableOllamaModels = [DEFAULT_SETTINGS.llm.ollamaModel];
+  }
+
+  renderLlmModelOptions(getCurrentSettings()?.llm?.ollamaModel || DEFAULT_SETTINGS.llm.ollamaModel);
+  return [...availableOllamaModels];
+}
+
+function getOllamaModelDropdownOptions() {
+  const options = getConfiguredOllamaModels().map((modelName) => ({
+    value: modelName,
+    label: modelName,
+  }));
+  return options;
+}
+
+function renderLlmModelOptions(selectedModelValue = "") {
+  const modelSelectEl = getLlmModelSelectElement();
+  if (!modelSelectEl) return;
+
+  const normalizedSelectedValue =
+    typeof selectedModelValue === "string" && selectedModelValue.trim()
+      ? selectedModelValue.trim()
+      : DEFAULT_SETTINGS.llm.ollamaModel;
+  const optionDefinitions = getOllamaModelDropdownOptions();
+  const hasSelectedValue = optionDefinitions.some(
+    (option) => option.value === normalizedSelectedValue,
+  );
+
+  if (!hasSelectedValue) {
+    optionDefinitions.unshift({
+      value: normalizedSelectedValue,
+      label: `${normalizedSelectedValue} (Custom)`,
+    });
+  }
+
+  modelSelectEl.innerHTML = "";
+  optionDefinitions.forEach((optionDefinition) => {
+    const optionEl = document.createElement("option");
+    optionEl.value = optionDefinition.value;
+    optionEl.textContent = optionDefinition.label;
+    modelSelectEl.appendChild(optionEl);
+  });
+
+  modelSelectEl.value = normalizedSelectedValue;
 }
 
 function getThemeByIdFromList(themeId) {
@@ -502,6 +587,8 @@ function syncSettingsFormFromState() {
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
+  const retryCountEl = document.getElementById("settings-llm-retry-count");
   if (themeSelectEl) {
     renderThemeOptions();
     themeSelectEl.value = sanitizeThemeId(settings.general.themeId, FALLBACK_THEME_ID);
@@ -518,7 +605,9 @@ function syncSettingsFormFromState() {
   if (streamWarnThresholdEl) {
     streamWarnThresholdEl.value = String(settings.general.streamContextWarnPacketThreshold);
   }
-  if (modelEl) modelEl.value = settings.llm.ollamaModel;
+  if (modelEl) {
+    renderLlmModelOptions(settings.llm.ollamaModel);
+  }
   if (apiKeyEl) {
     apiKeyEl.value = "";
     apiKeyEl.placeholder = settings.llm.ollamaApiKey
@@ -528,6 +617,8 @@ function syncSettingsFormFromState() {
   if (activeByDefaultEl) activeByDefaultEl.checked = Boolean(settings.llm.activeByDefault);
   if (delayEl) delayEl.value = String(settings.llm.triggerDelaySeconds);
   if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
+  if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
+  if (retryCountEl) retryCountEl.value = String(settings.llm.retryCount);
 }
 
 function readSettingsFormState() {
@@ -543,6 +634,8 @@ function readSettingsFormState() {
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
+  const retryCountEl = document.getElementById("settings-llm-retry-count");
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
@@ -571,6 +664,10 @@ function readSettingsFormState() {
         : DEFAULT_SETTINGS.llm.activeByDefault,
       triggerDelaySeconds: delayEl ? delayEl.value : DEFAULT_SETTINGS.llm.triggerDelaySeconds,
       maxSummaryTokens: maxTokensEl ? maxTokensEl.value : DEFAULT_SETTINGS.llm.maxSummaryTokens,
+      ollamaRequestTimeoutSeconds: timeoutSecondsEl
+        ? timeoutSecondsEl.value
+        : DEFAULT_SETTINGS.llm.ollamaRequestTimeoutSeconds,
+      retryCount: retryCountEl ? retryCountEl.value : DEFAULT_SETTINGS.llm.retryCount,
     },
   });
 }
@@ -662,6 +759,16 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "maxSummaryTokens",
     previousLlm.maxSummaryTokens,
     nextLlm.maxSummaryTokens,
+  );
+  pushChange(
+    "ollamaRequestTimeoutSeconds",
+    previousLlm.ollamaRequestTimeoutSeconds,
+    nextLlm.ollamaRequestTimeoutSeconds,
+  );
+  pushChange(
+    "retryCount",
+    previousLlm.retryCount,
+    nextLlm.retryCount,
   );
 
   return changes;
@@ -6946,9 +7053,26 @@ function getCookieJarTextForContextTarget(target) {
 }
 
 function getConversionTextFromTarget(target) {
-  // For Conv Decodes, always use decoder context from the selected protocol,
-  // even if text selection spans protocol options or panel labels.
+  // For Conv Decodes, prefer specific context (selection/cell value) and
+  // fallback to the full decoder table only when no granular context exists.
   if (target?.closest?.("#conv-decodes-panel")) {
+    const selectedText = window.getSelection()?.toString().trim();
+    if (selectedText) return selectedText;
+
+    const decoderCell = target?.closest?.("#data-tools-proto-output td");
+    if (decoderCell) {
+      const rowEl = decoderCell.closest("tr");
+      const rowCells = rowEl ? Array.from(rowEl.querySelectorAll("td")) : [];
+      const clickedText = String(decoderCell.textContent || "").trim();
+      const clickedCellIndex = rowCells.indexOf(decoderCell);
+      if (clickedCellIndex === 1 && clickedText) return clickedText;
+      if (clickedCellIndex === 0) {
+        const pairedValue = String(rowCells?.[1]?.textContent || "").trim();
+        if (pairedValue) return pairedValue;
+      }
+      if (clickedText) return clickedText;
+    }
+
     const decodeContextText = getConvDecodedOutputText();
     if (decodeContextText) return decodeContextText;
   }
@@ -8886,6 +9010,34 @@ function callLargeLanguageModel(content) {
   return window.llmapi.generate(content);
 }
 
+function waitForLlmRetryDelay(attemptNumber) {
+  const delayMs = attemptNumber * 500;
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function getConfiguredLlmRetryAttempts() {
+  const retryCount = Number(getCurrentSettings()?.llm?.retryCount);
+  if (Number.isFinite(retryCount) && retryCount >= 0) {
+    return Math.floor(retryCount) + 1;
+  }
+  return DEFAULT_SETTINGS.llm.retryCount + 1;
+}
+
+async function callLargeLanguageModelWithRetry(content, maxAttempts = getConfiguredLlmRetryAttempts()) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await callLargeLanguageModel(content);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await waitForLlmRetryDelay(attempt);
+      }
+    }
+  }
+  throw lastError;
+}
+
 function buildMarkdownResponseInstruction() {
   return [
     "Return your response as valid Markdown (.md compatible).",
@@ -8934,6 +9086,22 @@ function buildUtf8BytePreview(text, maxBytes = 24) {
 
 function getActiveContextTextForNotesAndLlm(destination = "llm") {
   if (activeContextTarget?.closest?.("#conv-decodes-panel")) {
+    const selectedContextText = (getTrimmedSelectionText() || "").trim();
+    if (selectedContextText) return selectedContextText;
+
+    const contextText = (activeContextConversionText || "").trim();
+    if (contextText) {
+      const plainDecodeFallback = getConvDecodedOutputText("plain").trim();
+      if (
+        destination === "notes" &&
+        plainDecodeFallback &&
+        contextText === plainDecodeFallback
+      ) {
+        return getConvDecodedOutputText("markdown");
+      }
+      return contextText;
+    }
+
     return getConvDecodedOutputText(destination === "notes" ? "markdown" : "plain");
   }
   return (getTrimmedSelectionText() || activeContextConversionText || "").trim();
@@ -8966,6 +9134,7 @@ async function explainContextWithLLM() {
     statusUpdate("Status: LLM is disabled in settings.");
     return;
   }
+  const contextPacket = activeContextPacket || getCurrentContextPacket();
   const textToExplain = getActiveContextTextForNotesAndLlm("llm");
   hideConvertContextMenu();
 
@@ -8974,13 +9143,13 @@ async function explainContextWithLLM() {
     return;
   }
 
-  const packetCtx = buildPacketContextSummary(activeContextPacket);
-  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
+  const packetCtx = buildPacketContextSummary(contextPacket);
+  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking LLM to explain selection...");
   writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
   try {
-    const response = await callLargeLanguageModel(prompt);
+    const response = await callLargeLanguageModelWithRetry(prompt);
     const explanation = response?.response?.trim() || "";
     if (!explanation) {
       statusUpdate("Status: LLM returned no explanation.");
@@ -8994,8 +9163,9 @@ async function explainContextWithLLM() {
       writeLogEntry(`LLM explain complete (${explanation.length} chars)`);
     }
   } catch (error) {
-    statusUpdate("Status: LLM explanation failed.");
-    writeLogEntry(`LLM explain failed: ${error?.message || error}`);
+    const errorMessage = error?.message || String(error);
+    statusUpdate(`Status: LLM explanation failed: ${errorMessage}`);
+    writeLogEntry(`LLM explain failed: ${errorMessage}`);
   }
 }
 
@@ -9095,7 +9265,7 @@ async function askContextQuestionWithLLM() {
   statusUpdate("Status: Asking PacketSnitch a question...");
   writeLogEntry(`PacketSnitch question requested for ${question.length} chars of prompt`);
   try {
-    const response = await callLargeLanguageModel(prompt);
+    const response = await callLargeLanguageModelWithRetry(prompt);
     const answer = response?.response?.trim() || "";
     if (!answer) {
       statusUpdate("Status: PacketSnitch returned no answer.");
@@ -9118,8 +9288,9 @@ async function askContextQuestionWithLLM() {
       writeLogEntry(`PacketSnitch question complete (${answer.length} chars)`);
     }
   } catch (error) {
-    statusUpdate("Status: PacketSnitch question failed.");
-    writeLogEntry(`PacketSnitch question failed: ${error?.message || error}`);
+    const errorMessage = error?.message || String(error);
+    statusUpdate(`Status: PacketSnitch question failed: ${errorMessage}`);
+    writeLogEntry(`PacketSnitch question failed: ${errorMessage}`);
   }
 }
 
@@ -9342,7 +9513,7 @@ function writeSummaryFromLLM() {
         statusUpdate("Status: LLM summary available for current stream!");
       }
     } catch (error) {
-      writeLogEntry(`LLM summary generation failed.`);
+      writeLogEntry(`LLM summary generation failed: ${error?.message || error}`);
     }
   }, getLLMSummaryDelayMs());  // wait before calling the LLM to avoid too many calls when scrolling rapidly
 }
@@ -10318,6 +10489,14 @@ document.getElementById("settings-llm-delay-seconds").addEventListener("change",
 
 document.getElementById("settings-llm-max-tokens").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated maxSummaryTokens=${event?.target?.value}`);
+});
+
+document.getElementById("settings-llm-timeout-seconds").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated ollamaRequestTimeoutSeconds=${event?.target?.value}`);
+});
+
+document.getElementById("settings-llm-retry-count").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated retryCount=${event?.target?.value}`);
 });
 
 document
@@ -12411,6 +12590,7 @@ window.api.onError((msg) => {
 
 void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
+  .then(() => loadAvailableOllamaModels())
   .then(() => loadPersistedSettings())
   .catch((error) => {
     console.warn("Unable to initialize themes/settings:", error);

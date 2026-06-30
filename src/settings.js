@@ -12,6 +12,8 @@ const DEFAULT_SETTINGS = Object.freeze({
         activeByDefault: false,
         triggerDelaySeconds: 5,
         maxSummaryTokens: 1024,
+        ollamaRequestTimeoutSeconds: 300,
+        retryCount: 2,
     },
 });
 
@@ -94,6 +96,16 @@ function normalizeSettings(rawSettings = {}) {
                 llm.maxSummaryTokens,
                 defaults.maxSummaryTokens,
                 1,
+            ),
+            ollamaRequestTimeoutSeconds: toPositiveInteger(
+                llm.ollamaRequestTimeoutSeconds,
+                defaults.ollamaRequestTimeoutSeconds,
+                1,
+            ),
+            retryCount: toPositiveInteger(
+                llm.retryCount,
+                defaults.retryCount,
+                0,
             ),
         },
     };

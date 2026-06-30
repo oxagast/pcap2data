@@ -1,0 +1,10 @@
+# PacketSnitch Ollama model options for Settings -> LLM.
+# One model per line.
+# Use :cloud suffix only for cloud-backed models.
+# Lines starting with # are ignored.
+
+gpt-oss:20b
+qwen2.5-coder:14b
+qwen3-coder:30b
+llama3.1:8b
+minimax-m2.5:cloud

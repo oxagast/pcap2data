@@ -131,6 +131,10 @@ contextBridge.exposeInMainWorld('validkeysapi', {
   },
 });
 
+contextBridge.exposeInMainWorld('modelsapi', {
+  getOllamaModels: () => ipcRenderer.invoke('get-ollama-models'),
+});
+
 contextBridge.exposeInMainWorld('settingsapi', {
   get: () => ipcRenderer.invoke('settings-get'),
   save: (settings) => ipcRenderer.invoke('settings-save', settings),

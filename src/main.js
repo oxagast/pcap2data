@@ -10,6 +10,7 @@ const util = require("util");
 const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const { Ollama } = require("ollama");
+const { Agent, fetch: undiciFetch } = require("undici");
 const {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -29,6 +30,33 @@ const SESSION_COMPRESSION_GZIP = "gzip";
 const testcaseTempDir = path.join(os.tmpdir(), "testcases");
 const CONSOLE_INSPECT_DEPTH = 6;
 const CONSOLE_MAX_ARRAY_LENGTH = 50;
+const ollamaDispatcherCache = new Map();
+
+function getOllamaDispatcher(timeoutMs) {
+  const normalizedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : 5 * 60 * 1000;
+  const cacheKey = String(normalizedTimeoutMs);
+  if (!ollamaDispatcherCache.has(cacheKey)) {
+    ollamaDispatcherCache.set(
+      cacheKey,
+      new Agent({
+        headersTimeout: normalizedTimeoutMs,
+        bodyTimeout: normalizedTimeoutMs,
+      }),
+    );
+  }
+  return ollamaDispatcherCache.get(cacheKey);
+}
+
+function getOllamaFetch(timeoutMs) {
+  const dispatcher = getOllamaDispatcher(timeoutMs);
+  return (input, init = {}) =>
+    undiciFetch(input, {
+      ...init,
+      dispatcher,
+    });
+}
 let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
@@ -41,6 +69,7 @@ let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
 let sessionCompressionFallbackAccepted = null;
 let goodiesDataCache = null;
+let ollamaModelsCache = null;
 let appSettings = null;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
@@ -226,15 +255,19 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
       await loadSettingsFromDisk();
     }
     const settings = getAppSettings();
+    const ollamaFetch = getOllamaFetch(
+      Number(settings.llm.ollamaRequestTimeoutSeconds) * 1000,
+    );
     const ollamaClient = settings.llm.ollamaApiKey
       ? new Ollama({
+        fetch: ollamaFetch,
         headers: {
           Authorization: settings.llm.ollamaApiKey.startsWith("Bearer ")
             ? settings.llm.ollamaApiKey
             : `Bearer ${settings.llm.ollamaApiKey}`,
         },
       })
-      : new Ollama();
+      : new Ollama({ fetch: ollamaFetch });
     const response = await ollamaClient.generate({
       model: settings.llm.ollamaModel,
       prompt,
@@ -245,8 +278,8 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
     });
     return response;
   } catch (error) {
-    console.log("Error generating response from Ollama:", error);
-    return;
+    console.error("Error generating response from Ollama:", error);
+    throw error;
   }
 });
 
@@ -1118,6 +1151,30 @@ ipcMain.handle("get-valid-keys", async () => {
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"));
   return validKeys;
+});
+
+ipcMain.handle("get-ollama-models", async () => {
+  if (ollamaModelsCache) {
+    return ollamaModelsCache;
+  }
+
+  const modelsPath = path.join(
+    app.isPackaged ? process.resourcesPath : "src",
+    "data",
+    "models.txt",
+  );
+  if (!fs.existsSync(modelsPath)) {
+    console.warn(`Models file not found at ${modelsPath}`);
+    return [];
+  }
+
+  const modelsData = fs.readFileSync(modelsPath, "utf8");
+  const models = modelsData
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  ollamaModelsCache = models;
+  return models;
 });
 
 ipcMain.handle("save-notes", async (_event, notesText) => {

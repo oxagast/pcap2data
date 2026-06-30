@@ -581,7 +581,8 @@ No keystore entries saved.</pre>
               <div class="settings-section">
                 <div class="settings-section-title">LLM Defaults</div>
                 <label for="settings-llm-model">Ollama model</label>
-                <input id="settings-llm-model" type="text" placeholder="minimax-m2.5:cloud" />
+                <select id="settings-llm-model"></select>
+                <div class="settings-help-text">Includes local and cloud variants for common models.</div>
 
                 <label for="settings-llm-api-key">Ollama API key</label>
                 <input id="settings-llm-api-key" type="password" autocomplete="off" spellcheck="false"
@@ -599,6 +600,13 @@ No keystore entries saved.</pre>
 
                 <label for="settings-llm-max-tokens">Max tokens for stream summary</label>
                 <input id="settings-llm-max-tokens" type="number" min="1" step="1" />
+
+                <label for="settings-llm-timeout-seconds">LLM request timeout (seconds)</label>
+                <input id="settings-llm-timeout-seconds" type="number" min="1" step="1" />
+                <div class="settings-help-text">Applies to Ollama headers and body reads.</div>
+
+                <label for="settings-llm-retry-count">LLM retries</label>
+                <input id="settings-llm-retry-count" type="number" min="0" step="1" />
               </div>
             </div>
           </div>
