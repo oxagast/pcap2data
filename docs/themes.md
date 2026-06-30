@@ -15,12 +15,21 @@ This guide covers:
 
 ## Screenshot
 
+<p align="center">
 This is a screenshot of the "Matrix" theme.
 
-
-<p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
+<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
 <img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
-</a></p>
+</a>
+
+Also a cobalt/black "Sub7" inspired theme.
+
+<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
+<img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
+</a>
+</p>
+
+
 
 ---
 
