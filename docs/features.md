@@ -275,7 +275,7 @@ Automatically extracts and adds entries to the Session keychain when a capture i
 - Remove individual notes.
 - Export all notes to a plain-text file with `---` dividers.
 - Notes are saved as part of the session file.
-- **Send to Notes** context menu submenu: send selected text, Conv output, or Conv hashes to a new note.
+- **Send to Notes** context menu submenu: send selected/context text, List row visible data, Conv output, or Conv hashes to a new note.
 
 ---
 
@@ -308,17 +308,25 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 
 #### Convert to...
 
-- Load selection or packet data into the Conv tab with a pre-selected input format and auto-run Convert.
+- Load selection or packet/context data into the Conv tab with a pre-selected input format and auto-run Convert.
 - Options: Hex, Binary, Base64, Decimal bytes, ASCII/UTF-8.
-- **Data Type Guess**: run the data-type guesser on selected text and show ranked guesses in Conv Data Insights.
-- **Cursor ASCII to Conv**: load the ASCII string at the current hex-grid cursor position into Conv.
-- **Payload to Conv**: load the current packet's full raw payload as hex into Conv.
+- **Derive Type**: run the data-type guesser on selected/context text and show ranked guesses in Conv Data Insights.
+- **Cursor ASCII to Conv tab**: load the ASCII string at the current hex-grid cursor position into Conv.
+- **Raw Payload to Conv tab**: load the current packet's full raw payload as hex into Conv.
+- **Decompress to Conv tab**: when Conv input appears compressed (gzip/deflate/brotli), decompress and load decompressed bytes into Conv.
+
+#### Follow stream...
+
+- **Stream to Conv tab**: reassemble a bidirectional stream and load it into Conv as hex.
+- **Stream to Conv tab (decompressed)**: reassemble stream payload, attempt decompression, then load into Conv.
+- **Stream to Crypt tab**: reassemble stream payload and load ASCII output into the Crypt workspace.
+- Large streams can trigger a confirmation prompt before loading.
 
 #### Filter...
 
 - Build and append filter clauses from current packet attributes.
 - Sub-menus: **Add with &&**, **Add with ||**, **is not** (negated &&), **Clear and...**, **Parentheses**.
-- Attribute options per sub-menu: IP, Port, MAC, Protocol, MIME Type.
+- Attribute options per sub-menu: IP, Port, MAC, Link Proto, Transport Proto, Application Proto, Both Protos, MIME Type.
 - Parentheses options: **Append (**, **Append )**, **Wrap with (...)**.
 
 #### Add to Keystore...
@@ -328,23 +336,23 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 
 #### Send to Notes...
 
-- Send selected/context data, Conv output, or Conv hashes to a new session note.
+- Send selected/context data, List row visible data, Conv output, or Conv hashes to a new session note.
 
 #### Export...
 
-- **Export Packet**: save raw packet data to a file.
-- **Export Payload**: save only payload bytes to a file.
-- **Conv Raw**: save current Conv byte data as raw binary.
-- **Save to cookie_jar.txt**: append all session cookies to `cookie_jar.txt` on disk.
+- **Packet** / **Payload**: export packet or payload data.
+- **Conv input** / **Conv Raw** / **Conv output** (hex, binary, decimal, integer, ASCII, base64).
+- **Conv hashes** and **Conv decode output** exports.
+- **Cookie Jar**: save extracted cookies to disk.
 
 #### HTTP Body...
 
 Shown when the current packet contains an HTTP response body:
 
-- **Load body into Conv**: load body bytes as hex into Conv.
-- **Load body into Conv (decompressed)**: decompress body first, then load into Conv.
-- **Preview in browser**: open the HTTP body in the system browser.
-- **Preview in browser (decompressed)**: decompress first, then preview in browser.
+- **Body to Conv tab**: load body bytes as hex into Conv.
+- **Body to Conv tab (decompressed)**: decompress body first, then load into Conv.
+- **Browser preview**: open the HTTP body in the system browser.
+- **Browser preview (decompressed)**: decompress first, then preview in browser.
 - HTTP body reassembly uses same-direction stream packets, trimmed by Content-Length or chunked framing.
 
 #### File Carving...
@@ -357,6 +365,12 @@ Shown when a carve target is available:
 - **NFS file to disk**: detect and pick a file from the current NFS stream, then save as binary.
 - **FTP file to disk**: carve FTP data-channel bytes (direct streams or inferred from PORT/EPRT/PASV/EPSV + RETR/STOR/APPE/LIST/NLST control-channel hints), then save as binary.
 
+#### LLM Actions
+
+- **Ask PS a question...**: opens a context dialog, sends packet context plus optional selected text and user question to the LLM, then writes answer to Notes.
+- **Explain this data...**: sends selected/context data plus packet context to the LLM for a concise analyst-focused explanation and writes result to Notes.
+- LLM actions are only shown when LLM is enabled in Settings.
+
 ---
 
 ### LLM-Powered Analysis (Ollama)
@@ -365,6 +379,7 @@ Shown when a carve target is available:
 - **Use LLM** toggle in the load dialog enables/disables analysis before running the backend.
 - Generated report displayed in the **Summary** tab.
 - LLM defaults are configured in the **Settings → LLM** sub-tab and persisted in app settings.
+- LLM context-menu actions are gated by the same runtime LLM setting and are hidden when LLM is disabled.
 - Stream-context summary generation: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane.
 - Summary deduping/persistence: already-summarized stream keys are tracked to reduce repeat calls, and `currentSummary` is saved/restored with session files.
 

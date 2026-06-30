@@ -78,7 +78,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
 
-When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load convertible values into the Conv tab, manage keystore entries, build filter expressions, export data, and interact with HTTP file bodies. See [context-menu.md](context-menu.md) for full details.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load/derive/decompress conversion values into Conv, follow bidirectional streams into Conv or Crypt, manage keystore entries, build filter expressions (including link/transport/application protocol filters), export packet/Conv outputs, interact with HTTP file bodies, and run LLM context actions. See [context-menu.md](context-menu.md) for full details.
 
 ---
 
@@ -215,7 +215,7 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, SIP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
-> The context menu's **Convert to...** options can automatically populate the Conv tab input from packet data or the current selection. See [context-menu.md](context-menu.md) for details.
+> The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu.md](context-menu.md) for details.
 
 ##### Packet JSON Sub-tab
 
@@ -280,7 +280,7 @@ The Settings UI also shows the runtime themes directory path so custom theme JSO
 | --------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------- |
 | **Ollama model**                  | `llm.ollamaModel`           | Model used for summary generation.                                                                  |
 | **Ollama API key**                | `llm.ollamaApiKey`          | Optional bearer token for authenticated Ollama endpoints.                                           |
-| **Set LLM Active by default**     | `llm.activeByDefault`       | Controls whether the load-screen **Use LLM** toggle is checked by default.                         |
+| **Set LLM Active by default**     | `llm.activeByDefault`       | Controls whether LLM-powered frontend features are active by default (load-screen toggle, stream summaries, and LLM context-menu actions). |
 | **LLM trigger delay (seconds)**   | `llm.triggerDelaySeconds`   | Idle delay before stream-context summaries run while navigating packets.                            |
 | **Max tokens for stream summary** | `llm.maxSummaryTokens`      | Maximum generated summary size (`num_predict`).                                                     |
 
