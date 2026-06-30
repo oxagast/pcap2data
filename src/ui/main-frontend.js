@@ -275,13 +275,13 @@ let appliedThemeVariableNames = new Set();
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
-let languageModelResponse = "";
 let alreadySummarizedPacketKeys = new Set();
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
   processedPackets: 0,
   totalPackets: 0,
+  lastReportedPercent: -1,
 };
 let sessionPcapSource = null;
 
@@ -875,7 +875,32 @@ function resetBackendProgressState() {
   backendProgressState.processing = false;
   backendProgressState.processedPackets = 0;
   backendProgressState.totalPackets = 0;
+  backendProgressState.lastReportedPercent = -1;
   updateBackendProcessingWarning();
+}
+
+function getBackendProgressPercent(processedPackets, totalPackets) {
+  if (!Number.isFinite(processedPackets) || processedPackets < 0) return 0;
+  if (!Number.isFinite(totalPackets) || totalPackets <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((processedPackets / totalPackets) * 100)));
+}
+
+function updateBackendProgressStatus({ force = false } = {}) {
+  const processedPackets = Math.max(0, Number(backendProgressState.processedPackets) || 0);
+  const totalPackets = Math.max(0, Number(backendProgressState.totalPackets) || 0);
+  const percentComplete = getBackendProgressPercent(processedPackets, totalPackets);
+
+  if (!force && percentComplete === backendProgressState.lastReportedPercent) {
+    return;
+  }
+
+  backendProgressState.lastReportedPercent = percentComplete;
+
+  const packetCountsSuffix = totalPackets > 0
+    ? ` (${processedPackets} / ${totalPackets} packets)`
+    : ` (${processedPackets} packets processed)`;
+
+  statusUpdate(`Status: Processing packets... ${percentComplete}%${packetCountsSuffix}`);
 }
 
 function updateBackendProcessingWarning() {
@@ -1092,7 +1117,7 @@ async function clearCurrentSession() {
   currentIp = null;
   currentPacketKey = null;
   jsonCapture = "";
-  languageModelResponse = "No summary available.";
+  summary = "";
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
   hostFilterEl.value = "";
@@ -5936,6 +5961,8 @@ let activeContextConvDecompression = null;
 let activeContextHttpBodyDecompressionHint = "";
 let activeContextStreamCompressionHint = "";
 let activeContextPacket = null;
+let activeContextLlmQuestionDialogResolver = null;
+let activeContextLlmQuestionDialogContext = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -6033,9 +6060,11 @@ const convertContextButtons = {
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
+  llmQuestion: getCachedElement("ctx-llm-question"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
   followStreamConvDecompress: getCachedElement("ctx-follow-stream-conv-decompress"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
+  llmExplain: getCachedElement("ctx-llm-explain"),
 };
 const convertContextSubmenus = {
   copy: getCachedElement("ctx-copy-submenu"),
@@ -7023,6 +7052,17 @@ function showConvertContextMenu(
   convertContextSubmenus.followStream.style.display = hasFollowStreamActions
     ? "block"
     : "none";
+  const llmEnabled = Boolean(document.getElementById("use-llm")?.checked);
+  const llmExplainText = (getTrimmedSelectionText() || sourceText || "").trim();
+  const hasLlmQuestionAction = llmEnabled && Boolean(activeContextPacket);
+  const hasLlmExplainAction =
+    llmEnabled && Boolean(activeContextPacket) && isTextSignificantForLlmExplain(llmExplainText);
+  convertContextButtons.llmQuestion.style.display = hasLlmQuestionAction
+    ? "block"
+    : "none";
+  convertContextButtons.llmExplain.style.display = hasLlmExplainAction
+    ? "block"
+    : "none";
   if (
     !hasGeneralActions &&
     !hasDataTypeActions &&
@@ -7034,7 +7074,9 @@ function showConvertContextMenu(
     !hasExportActions &&
     !hasHttpBody &&
     !hasFileCarveActions &&
-    !hasFollowStreamActions
+    !hasFollowStreamActions &&
+    !hasLlmQuestionAction &&
+    !hasLlmExplainAction
   ) {
     hideConvertContextMenu();
     return;
@@ -8441,6 +8483,217 @@ function callLargeLanguageModel(content) {
   return window.llmapi.generate(content);
 }
 
+function isTextSignificantForLlmExplain(text) {
+  if (!text || typeof text !== "string") return false;
+  const trimmed = text.trim();
+  // Must be at least 8 characters
+  if (trimmed.length < 8) return false;
+  // Reject purely numeric strings (port numbers, counts, raw ints, IP fragments, etc.)
+  if (/^\d+(\.\d+)*$/.test(trimmed)) return false;
+  // Reject bare hex/octal literals
+  if (/^0x[0-9a-fA-F]+$/i.test(trimmed)) return false;
+  // Require at least 4 letter/symbol characters (beyond just digits and separators)
+  const alphaLike = trimmed.replace(/[\d\s.\-_:,;/\\]/g, "");
+  if (alphaLike.length < 4) return false;
+  return true;
+}
+
+function buildUtf8BytePreview(text, maxBytes = 24) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return { preview: "", truncated: false };
+  }
+
+  const encoder = new TextEncoder();
+  let usedBytes = 0;
+  let preview = "";
+
+  for (const char of normalized) {
+    const charBytes = encoder.encode(char).length;
+    if (usedBytes + charBytes > maxBytes) break;
+    preview += char;
+    usedBytes += charBytes;
+  }
+
+  return {
+    preview,
+    truncated: preview.length < normalized.length,
+  };
+}
+
+function buildPacketContextSummary(packet) {
+  if (!packet) return "No packet context available.";
+  const info = packet["Packet Info"] || {};
+  const parts = [];
+  const proto = info["Protocol"];
+  if (proto) parts.push(`Protocol: ${proto}`);
+  const src = info["Source IP"] || info["Source"];
+  const dst = info["Destination IP"] || info["Destination"];
+  if (src) parts.push(`Source: ${src}`);
+  if (dst) parts.push(`Destination: ${dst}`);
+  const srcPort = info["Source Port"];
+  const dstPort = info["Destination Port"];
+  if (srcPort !== undefined) parts.push(`Source Port: ${srcPort}`);
+  if (dstPort !== undefined) parts.push(`Destination Port: ${dstPort}`);
+  const ts = info["Timestamp"] || info["timestamp"];
+  if (ts) parts.push(`Timestamp: ${ts}`);
+  const decodedProtos = info["Decoded Protocols"];
+  if (decodedProtos) parts.push(`Decoded Protocols: ${decodedProtos}`);
+  return parts.length ? parts.join(", ") : "Packet context unavailable.";
+}
+
+async function explainContextWithLLM() {
+  const selectedText = getTrimmedSelectionText();
+  const textToExplain = (selectedText || activeContextConversionText || "").trim();
+  hideConvertContextMenu();
+
+  if (!isTextSignificantForLlmExplain(textToExplain)) {
+    statusUpdate("Status: Selected text is not significant enough for LLM explanation.");
+    return;
+  }
+
+  const packetCtx = buildPacketContextSummary(activeContextPacket);
+  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
+
+  statusUpdate("Status: Asking LLM to explain selection...");
+  writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
+  try {
+    const response = await callLargeLanguageModel(prompt);
+    const explanation = response?.response?.trim() || "";
+    if (!explanation) {
+      statusUpdate("Status: LLM returned no explanation.");
+      return;
+    }
+    const noteText = `LLM Explanation\nPacket: ${packetCtx}\nData: "${textToExplain}"\n\n${explanation}`;
+    const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-explain");
+    if (didAdd) {
+      showNotesWorkspace();
+      statusUpdate("Status: LLM explanation added to Notes.");
+      writeLogEntry(`LLM explain complete (${explanation.length} chars)`);
+    }
+  } catch (error) {
+    statusUpdate("Status: LLM explanation failed.");
+    writeLogEntry(`LLM explain failed: ${error?.message || error}`);
+  }
+}
+
+function requestLlmQuestionFromContextMenuDialog() {
+  const dialogEl = document.getElementById("ctx-llm-question-dialog");
+  const descriptionEl = document.getElementById("ctx-llm-question-description");
+  const inputEl = document.getElementById("ctx-llm-question-input");
+  if (!dialogEl || !descriptionEl || !inputEl) return Promise.resolve(null);
+  if (activeContextLlmQuestionDialogResolver) {
+    const resolve = activeContextLlmQuestionDialogResolver;
+    activeContextLlmQuestionDialogResolver = null;
+    resolve(null);
+  }
+  const selectedText = (getTrimmedSelectionText() || activeContextConversionText || "").trim();
+  const selectedTextPreview = buildUtf8BytePreview(selectedText, 24);
+  descriptionEl.textContent = selectedTextPreview.preview
+    ? `Ask a question about: ${selectedTextPreview.preview}${selectedTextPreview.truncated ? "…" : ""}`
+    : "Ask a question about the selected data and packet context.";
+  activeContextLlmQuestionDialogContext = {
+    packet: activeContextPacket,
+    selectedText,
+  };
+  hideConvertContextMenu();
+  dialogEl.hidden = false;
+  inputEl.value = "";
+  inputEl.focus();
+  return new Promise((resolve) => {
+    activeContextLlmQuestionDialogResolver = resolve;
+  });
+}
+
+function resolveLlmQuestionFromContextMenuDialog(value) {
+  const dialogEl = document.getElementById("ctx-llm-question-dialog");
+  const inputEl = document.getElementById("ctx-llm-question-input");
+  const dialogContext = activeContextLlmQuestionDialogContext;
+  if (dialogEl) dialogEl.hidden = true;
+  if (inputEl) inputEl.value = "";
+  if (!activeContextLlmQuestionDialogResolver) return;
+  const resolve = activeContextLlmQuestionDialogResolver;
+  activeContextLlmQuestionDialogResolver = null;
+  resolve({
+    question: value,
+    context: dialogContext,
+  });
+  activeContextLlmQuestionDialogContext = null;
+}
+
+function submitLlmQuestionFromContextMenuDialog() {
+  const inputEl = document.getElementById("ctx-llm-question-input");
+  resolveLlmQuestionFromContextMenuDialog(inputEl?.value || "");
+}
+
+function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
+  const packetCtx = buildPacketContextSummary(contextPacket);
+  const contextLines = [
+    "You are a network analysis assistant. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
+    "",
+    `Packet context: ${packetCtx}`,
+  ];
+  if (selectedText) {
+    contextLines.push(
+      "",
+      `Relevant data from the packet or selected context:`,
+      `"${selectedText}"`,
+    );
+  }
+  contextLines.push(
+    "",
+    `User question: ${question}`,
+    "",
+    "Answer concisely and focus on what is practically relevant to a network analyst. If the packet context does not support a confident answer, say so.",
+  );
+  return contextLines.join("\n");
+}
+
+async function askContextQuestionWithLLM() {
+  const dialogResult = await requestLlmQuestionFromContextMenuDialog();
+  const question = String(dialogResult?.question || "").trim();
+  if (!question) return;
+  const questionContext = dialogResult?.context || {};
+  const contextPacket = questionContext.packet || activeContextPacket;
+  const selectedText = String(questionContext.selectedText || "").trim();
+  if (!contextPacket) {
+    statusUpdate("Status: No packet context available for PacketSnitch question.");
+    return;
+  }
+
+  const packetCtx = buildPacketContextSummary(contextPacket);
+  const prompt = buildLlmQuestionPrompt(question, contextPacket, selectedText);
+
+  statusUpdate("Status: Asking PacketSnitch a question...");
+  writeLogEntry(`PacketSnitch question requested for ${question.length} chars of prompt`);
+  try {
+    const response = await callLargeLanguageModel(prompt);
+    const answer = response?.response?.trim() || "";
+    if (!answer) {
+      statusUpdate("Status: PacketSnitch returned no answer.");
+      return;
+    }
+    const noteText = [
+      "PacketSnitch Question",
+      `Packet: ${packetCtx}`,
+      `Question: ${question}`,
+      selectedText ? `Context: "${selectedText}"` : null,
+      "",
+      answer,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-question");
+    if (didAdd) {
+      showNotesWorkspace();
+      statusUpdate("Status: PacketSnitch question answer added to Notes.");
+      writeLogEntry(`PacketSnitch question complete (${answer.length} chars)`);
+    }
+  } catch (error) {
+    statusUpdate("Status: PacketSnitch question failed.");
+    writeLogEntry(`PacketSnitch question failed: ${error?.message || error}`);
+  }
+}
 
 function followStreamToConv() {
   const contextPacket = getCurrentContextPacket();
@@ -9521,6 +9774,18 @@ document
     if (event.key !== "Enter") return;
     keystorePanel.submitManualUriFromContextMenuDialog();
   });
+document
+  .getElementById("ctx-llm-question-confirm-btn")
+  .addEventListener("click", submitLlmQuestionFromContextMenuDialog);
+document
+  .getElementById("ctx-llm-question-cancel-btn")
+  .addEventListener("click", () => resolveLlmQuestionFromContextMenuDialog(null));
+document
+  .getElementById("ctx-llm-question-input")
+  .addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    submitLlmQuestionFromContextMenuDialog();
+  });
 
 
 
@@ -10214,6 +10479,12 @@ convertContextButtons.followStreamCrypt.addEventListener(
   "click",
   followStreamToCrypt,
 );
+convertContextButtons.llmQuestion.addEventListener("click", () => {
+  void askContextQuestionWithLLM();
+});
+convertContextButtons.llmExplain.addEventListener("click", () => {
+  void explainContextWithLLM();
+});
 
 // Handle bookmark selection from dropdown
 document
@@ -11452,6 +11723,10 @@ window.jsonapi.onJsonPath((rawPayload) => {
       );
       backendProgressState.processing = !payload.complete;
 
+      if (!payload.complete) {
+        updateBackendProgressStatus();
+      }
+
       const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
       const hasUsableChunk =
         payload.complete || payload.processedPackets >= minimumChunkSize;
@@ -11461,7 +11736,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
           document.getElementById("loading-screen").style.display = "flex";
           document.getElementById("loading-container").style.display = "block";
           document.getElementById("loading-text").textContent = "Loading packets...";
-          statusUpdate("Status: Waiting for initial packet batch...");
+          updateBackendProgressStatus({ force: true });
           updateBackendProcessingWarning();
           return;
         }
@@ -11469,7 +11744,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
         document.getElementById("loading-screen").style.display = "flex";
         document.getElementById("loading-container").style.display = "block";
         document.getElementById("loading-text").textContent = "Loading packets...";
-        statusUpdate("Status: Initial packet batch ready, loading...");
+        updateBackendProgressStatus({ force: true });
         writeLogEntry(
           `Backend snapshot received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
         );
@@ -11483,7 +11758,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
         clearFilterQuery();
         syncFilterHighlight();
       } else {
-        statusUpdate("Status: Updating packet data as backend processes capture...");
+        updateBackendProgressStatus({ force: true });
         await processCapturePath(payload.path, {
           suppressLoadingOverlay: true,
           incrementalUpdate: true,

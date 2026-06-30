@@ -760,7 +760,8 @@ strong {
 
 #save-session-dialog,
 #crypt-keystore-unlock-dialog,
-#crypt-keystore-manual-uri-dialog {
+#crypt-keystore-manual-uri-dialog,
+#ctx-llm-question-dialog {
   position: fixed;
   inset: 0;
   background-color: rgba(0, 0, 0, 0.65);
@@ -773,7 +774,8 @@ strong {
 
 #save-session-dialog[hidden],
 #crypt-keystore-unlock-dialog[hidden],
-#crypt-keystore-manual-uri-dialog[hidden] {
+#crypt-keystore-manual-uri-dialog[hidden],
+#ctx-llm-question-dialog[hidden] {
   display: none !important;
 }
 

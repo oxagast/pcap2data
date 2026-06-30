@@ -491,6 +491,19 @@ No keystore entries saved.</pre>
             </div>
           </div>
         </div>
+        <div id="ctx-llm-question-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Ask PacketSnitch</div>
+            <div id="ctx-llm-question-description">
+              Ask a question about the selected data and packet context.
+            </div>
+            <input id="ctx-llm-question-input" type="text" placeholder="What does this mean?" />
+            <div class="crypt-actions-row">
+              <button id="ctx-llm-question-confirm-btn">Ask</button>
+              <button id="ctx-llm-question-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div id="list_box">
           <div id="list_search_bar">
             <input id="list-search" type="text" placeholder="Filter list by host, IP, port, or protocol..." />
@@ -1074,6 +1087,8 @@ No keystore entries saved.</pre>
         </button>
       </div>
     </div>
+    <button id="ctx-llm-question" role="menuitem">Ask PacketSnitch a Question...</button>
+    <button id="ctx-llm-explain" role="menuitem">Explain this data...</button>
     <hr id="convert-context-bottom-divider" class="ctx-divider" />
     <button id="ctx-save-json" role="menuitem">Save Session</button>
   </div>
