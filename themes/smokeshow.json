@@ -2,6 +2,7 @@
     "id": "smokeshow",
     "name": "SmokeShow",
     "description": "A light Grey medium contrast layout tuned for readability.",
+    "quitButtonCharacter": "\u2022",
     "variables": {
         "--app-bg": "#ced3d9",
         "--surface-0": "#f4f5f7",
@@ -32,6 +33,8 @@
         "--crypt-panel-bg": "#edf2f7",
         "--crypt-panel-text": "#0b1220",
         "--tab-inactive-opacity": "0.78",
+        "--quit-btn-color": "#000000",
+        "--quit-btn-hover-color": "#000000",
         "--log-bg": "#ffffff",
         "--log-text": "#000000"
     }

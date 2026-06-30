@@ -336,12 +336,17 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
 
   if (Object.keys(variables).length === 0) return null;
   const logoImage = normalizeThemeLogoImage(rawTheme.logoImage);
+  const quitButtonCharacter =
+    typeof rawTheme.quitButtonCharacter === "string" && rawTheme.quitButtonCharacter.trim()
+      ? rawTheme.quitButtonCharacter.trim()
+      : null;
   return {
     id,
     name,
     description,
     variables,
     logoImage,
+    quitButtonCharacter,
     sourcePath: typeof metadata.sourcePath === "string" ? metadata.sourcePath : "",
     sourceKind: typeof metadata.sourceKind === "string" ? metadata.sourceKind : "unknown",
     sourceMtimeMs: Number.isFinite(metadata.sourceMtimeMs)
@@ -390,6 +395,8 @@ function getComparableThemePayload(theme) {
     description: typeof theme?.description === "string" ? theme.description : "",
     variables: normalizedVariables,
     logoImage: theme?.logoImage || null,
+    quitButtonCharacter:
+      typeof theme?.quitButtonCharacter === "string" ? theme.quitButtonCharacter : null,
   };
 }
 
@@ -536,6 +543,7 @@ async function listThemeDefinitions() {
     description: theme.description,
     variables: theme.variables,
     logoImage: theme.logoImage,
+    quitButtonCharacter: theme.quitButtonCharacter,
     sourceKind: theme.sourceKind,
     hasUserBundledConflict: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledConflict),
     hasUserBundledDiff: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledDiff),

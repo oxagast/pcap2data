@@ -163,7 +163,7 @@ select {
   right: 8px;
   background: transparent;
   border: none;
-  color: #4a90e2;
+  color: var(--quit-btn-color, #4a90e2);
   font-size: 18px;
   font-weight: bold;
   cursor: pointer;
@@ -174,7 +174,7 @@ select {
 }
 
 #close-btn:hover {
-  color: #82b4f0;
+  color: var(--quit-btn-hover-color, #82b4f0);
 }
 
 .rubik-glitch-regular {

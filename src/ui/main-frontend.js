@@ -386,6 +386,16 @@ function applyThemeVariables(theme) {
   });
 }
 
+function applyThemeQuitButtonCharacter(theme) {
+  const closeBtn = document.getElementById("close-btn");
+  if (!closeBtn) return;
+  const configuredCharacter =
+    theme && typeof theme.quitButtonCharacter === "string"
+      ? theme.quitButtonCharacter.trim()
+      : "";
+  closeBtn.textContent = configuredCharacter || "\u00D7";
+}
+
 function getAppLogoElement() {
   return document.getElementById("app-logo") || document.querySelector(".logo-cont img");
 }
@@ -425,6 +435,7 @@ async function applyThemeById(themeId) {
   if (!window.themeapi || typeof window.themeapi.get !== "function") {
     applyThemeVariables(null);
     applyThemeLogo(null);
+    applyThemeQuitButtonCharacter(null);
     document.documentElement.dataset.themeId = normalizedThemeId;
     return normalizedThemeId;
   }
@@ -433,6 +444,7 @@ async function applyThemeById(themeId) {
     if (!theme) return normalizedThemeId;
     applyThemeVariables(theme);
     applyThemeLogo(theme);
+    applyThemeQuitButtonCharacter(theme);
     document.documentElement.dataset.themeId = theme.id;
     return theme.id;
   } catch (error) {

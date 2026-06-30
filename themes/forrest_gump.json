@@ -23,6 +23,8 @@
         "--data-tools-decimal-color": "#e4e8ee",
         "--data-tools-decimal-integer-color": "#e4e8ee",
         "--data-tools-ascii-color": "#e4e8ee",
-        "--data-tools-base64-color": "#e4e8ee"
+        "--data-tools-base64-color": "#e4e8ee",
+        "--quit-btn-color": "#ffffff",
+        "--quit-btn-hover-color": "#ffffff"
     }
 }
