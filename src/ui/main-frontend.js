@@ -543,6 +543,7 @@ function setSettingsStatus(message) {
   if (statusEl) {
     statusEl.textContent = message;
   }
+  statusUpdate("Status: " + message);
 }
 
 function formatSettingsLogValue(value) {
@@ -9571,8 +9572,10 @@ document.getElementById("settings-general-theme").addEventListener("change", (ev
     writeLogEntry(
       `Settings theme changed themeId=${JSON.stringify(previousThemeId)}->${JSON.stringify(selectedThemeId)}`,
     );
+    statusUpdate(`Status: Theme changed to ${selectedThemeId}`);
   } else {
     writeLogEntry(`Settings theme selected themeId=${JSON.stringify(selectedThemeId)}`);
+    statusUpdate(`Status: Theme selected ${selectedThemeId} (no change)`);
   }
   updateSelectedThemeSourceNote(selectedThemeId);
   void applyThemeById(selectedThemeId);

@@ -526,9 +526,6 @@ async function listThemeDefinitions() {
     const mtimeReason = currentMtime === existingMtime
       ? "modification times are equal (preferring user theme when present)"
       : "it has the most recent modification time";
-    console.warn(
-      `Duplicate theme id "${theme.id}" detected between ${existing.sourceKind} (${existing.sourcePath}) and ${theme.sourceKind} (${theme.sourcePath}). Using ${nextTheme.sourceKind} theme because ${mtimeReason}.`,
-    );
 
     themesById.set(theme.id, nextTheme);
   });
