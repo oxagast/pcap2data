@@ -256,6 +256,7 @@ let keystorePanel;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
+let notesEditorVisible = false;
 // Name of the session in the library (userData/sessions/). Null if unsaved.
 let currentSessionName = null;
 let sessionPickerPanel = null;
@@ -2366,6 +2367,147 @@ function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
   };
 }
 
+function normalizeMarkdownLinkUrl(urlText) {
+  const candidate = String(urlText || "").trim().replace(/&amp;/g, "&");
+  if (/^(https?:\/\/|mailto:)/i.test(candidate)) return candidate;
+  return "";
+}
+
+function renderInlineMarkdown(markdownText) {
+  let html = escapeHtml(String(markdownText || ""));
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+    const safeUrl = normalizeMarkdownLinkUrl(url);
+    if (!safeUrl) return label;
+    return `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  });
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  html = html.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
+  return html;
+}
+
+function renderMarkdownToHtml(markdownText) {
+  const source = String(markdownText || "").replace(/\r\n?/g, "\n");
+  if (!source.trim()) {
+    return '<p class="notes-markdown-placeholder">No note selected.</p>';
+  }
+
+  const lines = source.split("\n");
+  const htmlParts = [];
+  let inCodeBlock = false;
+  let listKind = "";
+
+  const closeListIfOpen = () => {
+    if (!listKind) return;
+    htmlParts.push(listKind === "ol" ? "</ol>" : "</ul>");
+    listKind = "";
+  };
+
+  lines.forEach((line) => {
+    const codeFenceMatch = line.match(/^\s*```/);
+    if (codeFenceMatch) {
+      closeListIfOpen();
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        htmlParts.push("<pre><code>");
+      } else {
+        inCodeBlock = false;
+        htmlParts.push("</code></pre>");
+      }
+      return;
+    }
+
+    if (inCodeBlock) {
+      htmlParts.push(`${escapeHtml(line)}\n`);
+      return;
+    }
+
+    if (!line.trim()) {
+      closeListIfOpen();
+      return;
+    }
+
+    const headingMatch = line.match(/^(\s{0,3})(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      closeListIfOpen();
+      const level = Math.max(1, Math.min(6, headingMatch[2].length));
+      htmlParts.push(`<h${level}>${renderInlineMarkdown(headingMatch[3].trim())}</h${level}>`);
+      return;
+    }
+
+    const orderedItemMatch = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (orderedItemMatch) {
+      if (listKind !== "ol") {
+        closeListIfOpen();
+        listKind = "ol";
+        htmlParts.push("<ol>");
+      }
+      htmlParts.push(`<li>${renderInlineMarkdown(orderedItemMatch[1].trim())}</li>`);
+      return;
+    }
+
+    const unorderedItemMatch = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (unorderedItemMatch) {
+      if (listKind !== "ul") {
+        closeListIfOpen();
+        listKind = "ul";
+        htmlParts.push("<ul>");
+      }
+      htmlParts.push(`<li>${renderInlineMarkdown(unorderedItemMatch[1].trim())}</li>`);
+      return;
+    }
+
+    const quoteMatch = line.match(/^\s*>\s?(.*)$/);
+    if (quoteMatch) {
+      closeListIfOpen();
+      htmlParts.push(`<blockquote>${renderInlineMarkdown(quoteMatch[1])}</blockquote>`);
+      return;
+    }
+
+    closeListIfOpen();
+    htmlParts.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  });
+
+  closeListIfOpen();
+  if (inCodeBlock) {
+    htmlParts.push("</code></pre>");
+  }
+
+  return htmlParts.join("\n");
+}
+
+function renderSelectedNoteMarkdownPreview(noteText) {
+  const notesPreviewEl = document.getElementById("notes-markdown-preview");
+  if (!notesPreviewEl) return;
+  notesPreviewEl.innerHTML = renderMarkdownToHtml(noteText);
+}
+
+function syncNotesEditorVisibilityUi() {
+  const notesEditorWrapEl = document.querySelector(".notes-editor-wrap");
+  const notesEditorEl = document.getElementById("notes-editor");
+  const toggleButtonEl = document.getElementById("notes-edit-toggle-btn");
+  const hasSelectedNote = Boolean(getSelectedNoteEntry());
+  const showEditor = hasSelectedNote && notesEditorVisible;
+
+  if (notesEditorWrapEl) {
+    notesEditorWrapEl.classList.toggle("notes-editor-hidden", !showEditor);
+  }
+  if (notesEditorEl) {
+    notesEditorEl.disabled = !hasSelectedNote || !showEditor;
+  }
+  if (toggleButtonEl) {
+    toggleButtonEl.disabled = !hasSelectedNote;
+    toggleButtonEl.textContent = showEditor ? "Done Editing" : "Edit Note";
+  }
+}
+
+function setNotesEditorVisibility(visible) {
+  notesEditorVisible = Boolean(visible);
+  syncNotesEditorVisibilityUi();
+}
+
 function getSelectedNoteEntry() {
   return notesList.find((entry) => entry.id === selectedNoteId) || null;
 }
@@ -2379,8 +2521,10 @@ function renderNotesList() {
   notesSelectEl.replaceChildren();
   if (!notesList.length) {
     selectedNoteId = null;
+    notesEditorVisible = false;
     notesEditorEl.value = "";
-    notesEditorEl.disabled = true;
+    renderSelectedNoteMarkdownPreview("");
+    syncNotesEditorVisibilityUi();
     return;
   }
 
@@ -2401,11 +2545,12 @@ function renderNotesList() {
 
   notesSelectEl.value = selectedNoteId;
   const selectedNoteEntry = getSelectedNoteEntry();
-  notesEditorEl.disabled = !selectedNoteEntry;
   notesEditorEl.value = selectedNoteEntry ? selectedNoteEntry.text : "";
+  renderSelectedNoteMarkdownPreview(selectedNoteEntry ? selectedNoteEntry.text : "");
   newNoteColorEl.value = selectedNoteEntry
     ? normalizeNoteColor(selectedNoteEntry.color)
     : NOTE_DEFAULT_COLOR;
+  syncNotesEditorVisibilityUi();
 }
 
 function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
@@ -2418,6 +2563,7 @@ function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
   const noteEntry = createNoteEntry(normalizedText, color);
   notesList.unshift(noteEntry);
   selectedNoteId = noteEntry.id;
+  notesEditorVisible = true;
   renderNotesList();
   statusUpdate("Status: Note added");
   writeLogEntry(
@@ -2443,6 +2589,7 @@ function removeSelectedNote() {
   } else {
     selectedNoteId = notesList[Math.max(0, selectedIndex)].id;
   }
+  notesEditorVisible = false;
   renderNotesList();
   statusUpdate("Status: Note removed");
   writeLogEntry(`Note removed id=${selectedNoteEntry.id}`);
@@ -2750,6 +2897,7 @@ function initializeNotesPanel() {
   const newNoteColorEl = document.getElementById("notes-new-color");
   const notesSelectEl = document.getElementById("notes-select");
   const notesEditorEl = document.getElementById("notes-editor");
+  const editToggleButtonEl = document.getElementById("notes-edit-toggle-btn");
   if (
     !addButtonEl ||
     !removeButtonEl ||
@@ -2757,7 +2905,8 @@ function initializeNotesPanel() {
     !newNoteInputEl ||
     !newNoteColorEl ||
     !notesSelectEl ||
-    !notesEditorEl
+    !notesEditorEl ||
+    !editToggleButtonEl
   ) {
     return;
   }
@@ -2793,12 +2942,22 @@ function initializeNotesPanel() {
   });
   notesSelectEl.addEventListener("change", () => {
     selectedNoteId = notesSelectEl.value || null;
+    notesEditorVisible = false;
     renderNotesList();
+  });
+  editToggleButtonEl.addEventListener("click", () => {
+    const selectedNoteEntry = getSelectedNoteEntry();
+    if (!selectedNoteEntry) return;
+    setNotesEditorVisibility(!notesEditorVisible);
+    if (notesEditorVisible) {
+      notesEditorEl.focus();
+    }
   });
   notesEditorEl.addEventListener("input", () => {
     const selectedNoteEntry = getSelectedNoteEntry();
     if (!selectedNoteEntry) return;
     selectedNoteEntry.text = notesEditorEl.value;
+    renderSelectedNoteMarkdownPreview(selectedNoteEntry.text);
     const selectedOptionEl =
       notesSelectEl.options[notesSelectEl.selectedIndex] || null;
     if (selectedOptionEl) {
@@ -2820,6 +2979,7 @@ function initializeNotesPanel() {
   });
 
   renderNotesList();
+  setNotesEditorVisibility(false);
 }
 
 function normalizeLoadedSessionPayload(parsedPayload) {
@@ -3254,6 +3414,7 @@ function restoreSessionState(sessionState) {
     : [];
   notesList = loadedNotes;
   selectedNoteId = notesList.length > 0 ? notesList[0].id : null;
+  notesEditorVisible = false;
   renderNotesList();
 
   const selectedHost = String(sessionState.selectedHost || "").trim();
@@ -8594,7 +8755,7 @@ async function explainContextWithLLM() {
   }
 
   const packetCtx = buildPacketContextSummary(activeContextPacket);
-  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
+  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. You may use concise Markdown formatting (lists, bold, inline code) when helpful.\n\nPacket context: ${packetCtx}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.`;
 
   statusUpdate("Status: Asking LLM to explain selection...");
   writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
@@ -8671,6 +8832,7 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   const packetCtx = buildPacketContextSummary(contextPacket);
   const contextLines = [
     "You are a network analysis assistant. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
+    "This request is sent through a hook that supports Markdown in the user query and in your response. Use concise Markdown formatting when it improves clarity.",
     "",
     `Packet context: ${packetCtx}`,
   ];

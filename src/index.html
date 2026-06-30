@@ -515,9 +515,18 @@ No keystore entries saved.</pre>
           <div id="list_content"></div>
         </div>
         <div id="notes_box">
-          <div class="notes-header">Selected Note</div>
+          <div class="notes-header notes-header-row">
+            <span>Selected Note</span>
+            <button id="notes-edit-toggle-btn" type="button">Edit Note</button>
+          </div>
           <div class="notes-editor-wrap">
-            <textarea id="notes-editor" placeholder="Select a note from the right panel..."></textarea>
+            <div id="notes-editor-pane">
+              <textarea id="notes-editor" placeholder="Select a note from the right panel..."></textarea>
+            </div>
+            <div id="notes-preview-pane">
+              <div class="notes-preview-header">Markdown Preview</div>
+              <div id="notes-markdown-preview" class="notes-markdown-preview" aria-live="polite"></div>
+            </div>
           </div>
         </div>
         <div id="settings_box">
@@ -673,7 +682,7 @@ No keystore entries saved.</pre>
               <label for="notes-new-color">Color</label>
               <input type="color" id="notes-new-color" value="#4caf50" />
             </div>
-            <textarea id="notes-new-input" placeholder="Write a new note..."></textarea>
+            <textarea id="notes-new-input" placeholder="Write a new note (Markdown supported)..."></textarea>
             <div class="notes-controls-row notes-sidebar-actions">
               <button id="notes-add-btn">Add note</button>
               <button id="notes-remove-btn">Remove selected</button>
