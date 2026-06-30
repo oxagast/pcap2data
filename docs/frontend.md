@@ -298,7 +298,7 @@ If the API key field is left blank when saving, the currently stored key is reta
 - Default bundled themes are mirrored there automatically on startup.
 - Theme definitions provide CSS variable overrides and optional custom logo data.
 
-See [themes.md](themes.md) for complete theme schema, variable reference, logo setup, and opacity tuning.
+See [themes](themes.md) for complete theme schema, variable reference, logo setup, and opacity tuning.
 
 ---
 
