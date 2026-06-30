@@ -510,12 +510,39 @@ No keystore entries saved.</pre>
         <div id="settings_box">
           <div class="settings-workspace-header">Settings</div>
           <div class="settings-subtab-row">
-            <button id="settings-subtab-llm" class="settings-subtab-btn active">
+            <button id="settings-subtab-general" class="settings-subtab-btn active">
+              General
+            </button>
+            <button id="settings-subtab-llm" class="settings-subtab-btn">
               LLM
             </button>
           </div>
 
-          <div id="settings-llm-panel" class="settings-subtab-panel">
+          <div id="settings-general-panel" class="settings-subtab-panel">
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">General Defaults</div>
+
+                <label for="settings-general-conv-json-indent">Conv JSON indent spaces</label>
+                <input id="settings-general-conv-json-indent" type="number" min="0" step="1" />
+
+                <label for="settings-general-status-reset-seconds">Status reset delay (seconds)</label>
+                <input id="settings-general-status-reset-seconds" type="number" min="1" step="1" />
+
+                <label for="settings-general-backend-chunk-size">Default backend packet chunk size</label>
+                <select id="settings-general-backend-chunk-size">
+                  <option value="25">25</option>
+                  <option value="100">100</option>
+                  <option value="250" selected>250</option>
+                  <option value="500">500</option>
+                  <option value="2000">2000</option>
+                </select>
+                <div class="settings-help-text">Used when backend chunk metadata is unavailable.</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-llm-panel" class="settings-subtab-panel" hidden>
             <div class="settings-grid">
               <div class="settings-section">
                 <div class="settings-section-title">LLM Defaults</div>
@@ -538,16 +565,16 @@ No keystore entries saved.</pre>
 
                 <label for="settings-llm-max-tokens">Max tokens for stream summary</label>
                 <input id="settings-llm-max-tokens" type="number" min="1" step="1" />
-
-                <div class="settings-actions-row">
-                  <button id="settings-save-btn" type="button">Save settings</button>
-                  <button id="settings-reset-btn" type="button">Restore defaults</button>
-                </div>
-
-                <div id="settings-status" role="status" aria-live="polite"></div>
               </div>
             </div>
           </div>
+
+          <div class="settings-actions-row">
+            <button id="settings-save-btn" type="button">Save settings</button>
+            <button id="settings-reset-btn" type="button">Restore defaults</button>
+          </div>
+
+          <div id="settings-status" role="status" aria-live="polite"></div>
         </div>
         <div id="packetInfoPane">
           <div id="timestamp"></div>

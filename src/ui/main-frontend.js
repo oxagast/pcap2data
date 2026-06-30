@@ -260,11 +260,14 @@ let noteIdCounter = 0;
 let currentSessionName = null;
 let sessionPickerPanel = null;
 const LLM_MAX_CONTENT_LENGTH = 180000;
-const BACKEND_PACKET_CHUNK_SIZE = 250;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
 let sessionAutosaveInFlight = false;
 let appSettings = cloneDefaultSettings();
+let statusResetTimeoutId = null;
+const SETTINGS_SUBTAB_GENERAL = "general";
+const SETTINGS_SUBTAB_LLM = "llm";
+let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
@@ -289,11 +292,23 @@ function setCurrentSettings(nextSettings) {
 
 function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
+  const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
+  const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
+  const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
+  if (convJsonIndentEl) {
+    convJsonIndentEl.value = String(settings.general.convJsonIndentSpaces);
+  }
+  if (statusResetSecondsEl) {
+    statusResetSecondsEl.value = String(settings.general.statusResetSeconds);
+  }
+  if (backendChunkSizeEl) {
+    backendChunkSizeEl.value = String(settings.general.backendPacketChunkSize);
+  }
   if (modelEl) modelEl.value = settings.llm.ollamaModel;
   if (apiKeyEl) {
     apiKeyEl.value = "";
@@ -307,6 +322,9 @@ function syncSettingsFormFromState() {
 }
 
 function readSettingsFormState() {
+  const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
+  const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
+  const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -315,6 +333,17 @@ function readSettingsFormState() {
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
+    general: {
+      convJsonIndentSpaces: convJsonIndentEl
+        ? convJsonIndentEl.value
+        : DEFAULT_SETTINGS.general.convJsonIndentSpaces,
+      statusResetSeconds: statusResetSecondsEl
+        ? statusResetSecondsEl.value
+        : DEFAULT_SETTINGS.general.statusResetSeconds,
+      backendPacketChunkSize: backendChunkSizeEl
+        ? backendChunkSizeEl.value
+        : DEFAULT_SETTINGS.general.backendPacketChunkSize,
+    },
     llm: {
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
       ollamaApiKey: trimmedApiKey || currentSettings.llm.ollamaApiKey || "",
@@ -370,6 +399,54 @@ function getLLMSummaryDelayMs() {
       DEFAULT_SETTINGS.llm.triggerDelaySeconds,
     ) * 1000
   );
+}
+
+function getConvJsonIndentSpaces() {
+  return Math.max(
+    0,
+    Number(getCurrentSettings()?.general?.convJsonIndentSpaces) ||
+    DEFAULT_SETTINGS.general.convJsonIndentSpaces,
+  );
+}
+
+function getStatusResetDelayMs() {
+  return (
+    Math.max(
+      1,
+      Number(getCurrentSettings()?.general?.statusResetSeconds) ||
+      DEFAULT_SETTINGS.general.statusResetSeconds,
+    ) * 1000
+  );
+}
+
+function getBackendPacketChunkSize() {
+  return Math.max(
+    1,
+    Number(getCurrentSettings()?.general?.backendPacketChunkSize) ||
+    DEFAULT_SETTINGS.general.backendPacketChunkSize,
+  );
+}
+
+function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
+  const nextTab =
+    tabName === SETTINGS_SUBTAB_LLM ? SETTINGS_SUBTAB_LLM : SETTINGS_SUBTAB_GENERAL;
+  activeSettingsSubtab = nextTab;
+  const generalBtn = document.getElementById("settings-subtab-general");
+  const llmBtn = document.getElementById("settings-subtab-llm");
+  const generalPanel = document.getElementById("settings-general-panel");
+  const llmPanel = document.getElementById("settings-llm-panel");
+  if (generalBtn) {
+    generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
+  }
+  if (llmBtn) {
+    llmBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_LLM);
+  }
+  if (generalPanel) {
+    generalPanel.hidden = nextTab !== SETTINGS_SUBTAB_GENERAL;
+  }
+  if (llmPanel) {
+    llmPanel.hidden = nextTab !== SETTINGS_SUBTAB_LLM;
+  }
 }
 
 function scheduleSessionKeychainAutoPopulate(reason = "startup") {
@@ -556,7 +633,7 @@ function normalizeBackendJsonPathPayload(rawPayload) {
       processedPackets: 0,
       totalPackets: 0,
       complete: true,
-      chunkSize: BACKEND_PACKET_CHUNK_SIZE,
+      chunkSize: getBackendPacketChunkSize(),
     };
   }
 
@@ -569,7 +646,7 @@ function normalizeBackendJsonPathPayload(rawPayload) {
     processedPackets: Number(rawPayload.processedPackets) || 0,
     totalPackets: Number(rawPayload.totalPackets) || 0,
     complete: Boolean(rawPayload.complete),
-    chunkSize: Number(rawPayload.chunkSize) || BACKEND_PACKET_CHUNK_SIZE,
+    chunkSize: Number(rawPayload.chunkSize) || getBackendPacketChunkSize(),
   };
 }
 
@@ -3136,7 +3213,7 @@ function processFile(file) {
             "Initializing session...";
           capturedPackets = normalizedPayload.captureData;
           loadedSessionState = normalizedPayload.sessionState;
-          jsonCapture = JSON.stringify(capturedPackets, null, 2);
+          jsonCapture = JSON.stringify(capturedPackets, null, getConvJsonIndentSpaces());
           await finishProcessingFile();
         })
         .catch((e) => {
@@ -3157,7 +3234,7 @@ function processFile(file) {
       }
       capturedPackets = normalizedPayload.captureData;
       loadedSessionState = normalizedPayload.sessionState;
-      jsonCapture = JSON.stringify(capturedPackets, null, 2);
+      jsonCapture = JSON.stringify(capturedPackets, null, getConvJsonIndentSpaces());
       await finishProcessingFile();
     }
   };
@@ -3243,13 +3320,17 @@ function processFile(file) {
 }
 
 /**
- * Updates the status bar with a message, then resets after 8 seconds.
+ * Updates the status bar with a message, then resets after configured delay.
  */
 function statusUpdate(message) {
   status.textContent = message;
-  setTimeout(() => {
+  if (statusResetTimeoutId) {
+    clearTimeout(statusResetTimeoutId);
+  }
+  statusResetTimeoutId = setTimeout(() => {
     status.textContent = "PacketSnitch " + psVer + ": Ready";
-  }, 10000);
+    statusResetTimeoutId = null;
+  }, getStatusResetDelayMs());
 }
 
 /**
@@ -5457,6 +5538,7 @@ function showSettingsWorkspace() {
   document.getElementById("keystore_box").style.display = "none";
   document.getElementById("settings_box").style.display = "flex";
   document.getElementById("rightside").style.display = "none";
+  setSettingsSubtab(activeSettingsSubtab);
   syncSettingsFormFromState();
 }
 
@@ -8233,7 +8315,7 @@ function getFollowStreamJson(streamPackets) {
       payloadHex: payloadHex || null,
     };
   });
-  return JSON.stringify(jsonArray, null, 2);
+  return JSON.stringify(jsonArray, null, getConvJsonIndentSpaces());
 }
 
 function writeSummaryFromLLM() {
@@ -8653,7 +8735,7 @@ async function currentPacketToConvJson() {
 
   // turn it into json object
   const packetJson = contextPacket || {};
-  const jsonString = JSON.stringify(packetJson, null, 2);
+  const jsonString = JSON.stringify(packetJson, null, getConvJsonIndentSpaces());
 
   const outputEl = document.getElementById("data-tools-packet-json-pre");
   const jsonContainer = document.getElementById("data-tools-packet-json-output");
@@ -9192,6 +9274,14 @@ document.getElementById("settings-save-btn").addEventListener("click", () => {
 
 document.getElementById("settings-reset-btn").addEventListener("click", () => {
   void persistSettingsFromForm({ resetToDefaults: true });
+});
+
+document.getElementById("settings-subtab-general").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_GENERAL);
+});
+
+document.getElementById("settings-subtab-llm").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_LLM);
 });
 
 document
@@ -11033,7 +11123,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
       );
       backendProgressState.processing = !payload.complete;
 
-      const minimumChunkSize = payload.chunkSize || BACKEND_PACKET_CHUNK_SIZE;
+      const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
       const hasUsableChunk =
         payload.complete || payload.processedPackets >= minimumChunkSize;
 
@@ -11103,6 +11193,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
 // here we create the backend process and hook it to the handler
 function runSnitch(file, options = {}) {
   const { fromSessionSource = false } = options;
+  const backendChunkSize = getBackendPacketChunkSize();
   resetBackendProgressState();
   backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
@@ -11120,13 +11211,13 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} `,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
-      ? window.snitchapi.runBackendCommandFromSession(file, useLLM)
+      ? window.snitchapi.runBackendCommandFromSession(file, useLLM, backendChunkSize)
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
-    : window.snitchapi.runBackendCommand(file, useLLM);
+    : window.snitchapi.runBackendCommand(file, useLLM, backendChunkSize);
   backendPromise
     .then((result) => {
       if (result && result.pcapSource) {
@@ -11285,6 +11376,7 @@ onload = function () {
   keystorePanel.resetKeystoreState();
   setCryptSubtab(CRYPT_SSL_SUBTAB);
   setConvSubtab(CONV_CONVERSIONS_SUBTAB);
+  setSettingsSubtab(SETTINGS_SUBTAB_GENERAL);
   syncSettingsFormFromState();
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(

@@ -11,7 +11,15 @@ const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
 let entries = [];
 
-const HOST_CHUNK_SIZE = 250;
+const DEFAULT_HOST_CHUNK_SIZE = 250;
+const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
+
+function normalizeHostChunkSize(rawValue) {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return DEFAULT_HOST_CHUNK_SIZE;
+  const whole = Math.trunc(parsed);
+  return VALID_HOST_CHUNK_SIZES.has(whole) ? whole : DEFAULT_HOST_CHUNK_SIZE;
+}
 
 function removePacketsChunkFromFS(jsonPath) {
   if (!jsonPath || typeof jsonPath !== "string") return;
@@ -106,7 +114,7 @@ function writeSessionPcapTempFile(sessionPcap) {
   };
 }
 
-function parseBridgeProgressLine(line) {
+function parseBridgeProgressLine(line, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) {
   if (!line || !line.includes("[Bridge]")) return null;
   const pathMatch = line.match(/path=([^\s]+)/);
   const processedMatch = line.match(/processed=(\d+)/);
@@ -119,11 +127,11 @@ function parseBridgeProgressLine(line) {
     processedPackets: processedMatch ? Number(processedMatch[1]) : 0,
     totalPackets: totalMatch ? Number(totalMatch[1]) : 0,
     complete: finalMatch ? finalMatch[1] === "1" : false,
-    chunkSize: HOST_CHUNK_SIZE,
+    chunkSize: hostChunkSize,
   };
 }
 
-function scanChunkSnapshots(sentSnapshotPaths) {
+function scanChunkSnapshots(sentSnapshotPaths, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) {
   if (!fs.existsSync(testcaseOutputDir)) return [];
   const entries = fs
     .readdirSync(testcaseOutputDir)
@@ -145,14 +153,18 @@ function scanChunkSnapshots(sentSnapshotPaths) {
       processedPackets,
       totalPackets: 0,
       complete: false,
-      chunkSize: HOST_CHUNK_SIZE,
+      chunkSize: hostChunkSize,
     });
   });
   return unsent;
 }
 
 async function runBackendCommandInternal(filename, useLLM, options = {}) {
-  const { pcapSourcePayload: providedPcapSourcePayload = null } = options;
+  const {
+    pcapSourcePayload: providedPcapSourcePayload = null,
+    hostChunkSize: requestedHostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
+  } = options;
+  const hostChunkSize = normalizeHostChunkSize(requestedHostChunkSize);
   global.logBackend(`[Bridge] Received pcap: ${filename}`);
   const isDev = !require("electron").app.isPackaged;
   const basePath = isDev
@@ -274,7 +286,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         processedPackets: 0,
         totalPackets: 0,
         complete: true,
-        chunkSize: HOST_CHUNK_SIZE,
+        chunkSize: hostChunkSize,
       });
     }
     return {
@@ -294,8 +306,8 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   }
 
   const backendArgs = usePythonBackend
-    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir]
-    : [filename, "-v", "-a", "-o", testcaseOutputDir];
+    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)]
+    : [filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)];
   if (!useLLM) {
     backendArgs.push("--nollm");
   }
@@ -318,7 +330,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     });
 
     const snapshotScanTimer = setInterval(() => {
-      const snapshotPayloads = scanChunkSnapshots(sentSnapshotPaths);
+      const snapshotPayloads = scanChunkSnapshots(sentSnapshotPaths, hostChunkSize);
       // thisis to avoid exceeding our disk inode limit on large captures
       // we remove the oldest snapshot file after sending the latest one to the renderer
       // first we check if it has been used (sent) already
@@ -342,7 +354,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
 
     const handleProgressText = (text) => {
       if (!text) return;
-      const progressPayload = parseBridgeProgressLine(text);
+      const progressPayload = parseBridgeProgressLine(text, hostChunkSize);
       if (progressPayload) {
         parsedTotalPackets = Math.max(
           parsedTotalPackets,
@@ -399,7 +411,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     backendProc.on("close", (code) => {
       clearInterval(snapshotScanTimer);
 
-      const trailingSnapshots = scanChunkSnapshots(sentSnapshotPaths);
+      const trailingSnapshots = scanChunkSnapshots(sentSnapshotPaths, hostChunkSize);
       // thisis to avoid exceeding our disk inode limit on large captures
       // we remove the oldest snapshot file after sending the latest one to the renderer
       // first we check if it has been used (sent) already
@@ -466,7 +478,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
           processedPackets: Math.max(latestProcessedPackets, parsedTotalPackets),
           totalPackets: parsedTotalPackets,
           complete: true,
-          chunkSize: HOST_CHUNK_SIZE,
+          chunkSize: hostChunkSize,
         });
       } else {
         sendError("[Bridge] hosts.json not found after backend execution!");
@@ -483,11 +495,13 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   });
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM) => {
-  return runBackendCommandInternal(filename, useLLM);
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize) => {
+  return runBackendCommandInternal(filename, useLLM, {
+    hostChunkSize,
+  });
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM) => {
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize) => {
   let tempPathForCleanup = "";
   try {
     const prepared = writeSessionPcapTempFile(sessionPcap);
@@ -497,6 +511,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
     }
     const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
       pcapSourcePayload: prepared.payload,
+      hostChunkSize,
     });
     return result;
   } catch (error) {

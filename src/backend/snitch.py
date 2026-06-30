@@ -4575,6 +4575,12 @@ parser.add_argument(
     help="Path to configuration YAML file (default: conf.yaml).",
 )
 parser.add_argument(
+    "--host-chunk-size",
+    help="Packet count per incremental hosts snapshot (default: 250).",
+    type=int,
+    default=250,
+)
+parser.add_argument(
     "-v",
     "--verbose",
     help="Enable verbose output for debugging.",
@@ -4588,6 +4594,7 @@ parser.add_argument(
 )
 verbose = parser.parse_args().verbose
 args = parser.parse_args()  # parse once; verbose is needed by functions defined above
+hostChunkSize = max(1, int(args.host_chunk_size or 250))
 try:
     config = configLoader(args.conf if args.conf else "conf.yaml")
     # this next exception handles if ther is no config file
