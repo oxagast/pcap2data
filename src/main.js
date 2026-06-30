@@ -363,7 +363,39 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom") {
     : {};
 
   if (Object.keys(variables).length === 0) return null;
-  return { id, name, description, variables };
+  const logoImage = normalizeThemeLogoImage(rawTheme.logoImage);
+  return { id, name, description, variables, logoImage };
+}
+
+function normalizeThemeLogoImage(rawLogoImage) {
+  if (!rawLogoImage || typeof rawLogoImage !== "object") {
+    return null;
+  }
+
+  const rawFormat = typeof rawLogoImage.format === "string"
+    ? rawLogoImage.format.trim().toLowerCase()
+    : "";
+  const normalizedFormat = rawFormat === "jpeg" ? "jpg" : rawFormat;
+  if (normalizedFormat !== "png" && normalizedFormat !== "jpg") {
+    return null;
+  }
+
+  const rawBase64 =
+    typeof rawLogoImage.base64 === "string"
+      ? rawLogoImage.base64
+      : typeof rawLogoImage.data === "string"
+        ? rawLogoImage.data
+        : "";
+  const strippedDataUri = rawBase64.replace(/^data:image\/(png|jpeg|jpg);base64,/i, "");
+  const normalizedBase64 = strippedDataUri.replace(/\s+/g, "");
+  if (!normalizedBase64 || !/^[A-Za-z0-9+/=]+$/.test(normalizedBase64)) {
+    return null;
+  }
+
+  return {
+    format: normalizedFormat,
+    base64: normalizedBase64,
+  };
 }
 
 function shouldMigrateSub7Theme(rawTheme) {

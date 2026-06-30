@@ -270,6 +270,7 @@ const SETTINGS_SUBTAB_LLM = "llm";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 const FALLBACK_THEME_ID = "snitchbitch";
 let availableThemes = [];
+let defaultThemeLogoSrc = null;
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
@@ -336,9 +337,44 @@ function applyThemeVariables(theme) {
   });
 }
 
+function getAppLogoElement() {
+  return document.getElementById("app-logo") || document.querySelector(".logo-cont img");
+}
+
+function applyThemeLogo(theme) {
+  const logoEl = getAppLogoElement();
+  if (!logoEl) return;
+
+  if (!defaultThemeLogoSrc) {
+    defaultThemeLogoSrc = logoEl.getAttribute("src") || "../assets/images/logo.webp";
+  }
+
+  const logoImage = theme && typeof theme === "object" ? theme.logoImage : null;
+  if (!logoImage || typeof logoImage !== "object") {
+    logoEl.src = defaultThemeLogoSrc;
+    return;
+  }
+
+  const formatRaw = typeof logoImage.format === "string"
+    ? logoImage.format.trim().toLowerCase()
+    : "";
+  const format = formatRaw === "jpeg" ? "jpg" : formatRaw;
+  const normalizedBase64 = typeof logoImage.base64 === "string"
+    ? logoImage.base64.replace(/\s+/g, "")
+    : "";
+  if ((format !== "png" && format !== "jpg") || !normalizedBase64) {
+    logoEl.src = defaultThemeLogoSrc;
+    return;
+  }
+
+  const mime = format === "png" ? "image/png" : "image/jpeg";
+  logoEl.src = `data:${mime};base64,${normalizedBase64}`;
+}
+
 async function applyThemeById(themeId) {
   const normalizedThemeId = sanitizeThemeId(themeId, FALLBACK_THEME_ID);
   if (!window.themeapi || typeof window.themeapi.get !== "function") {
+    applyThemeLogo(null);
     document.documentElement.dataset.themeId = normalizedThemeId;
     return normalizedThemeId;
   }
@@ -346,6 +382,7 @@ async function applyThemeById(themeId) {
     const theme = await window.themeapi.get(normalizedThemeId);
     if (!theme) return normalizedThemeId;
     applyThemeVariables(theme);
+    applyThemeLogo(theme);
     document.documentElement.dataset.themeId = theme.id;
     return theme.id;
   } catch (error) {
