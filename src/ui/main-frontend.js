@@ -294,6 +294,17 @@ function setCurrentSettings(nextSettings) {
   return appSettings;
 }
 
+function isLlmEnabledInSettings() {
+  return Boolean(getCurrentSettings()?.llm?.activeByDefault);
+}
+
+function syncRuntimeLlmToggleFromSettings() {
+  const useLlmEl = document.getElementById("use-llm");
+  if (useLlmEl) {
+    useLlmEl.checked = isLlmEnabledInSettings();
+  }
+}
+
 function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
   if (typeof value !== "string") return fallback;
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
@@ -643,6 +654,7 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
+  syncRuntimeLlmToggleFromSettings();
   await applyThemeById(savedSettings.general.themeId);
   syncSettingsFormFromState();
   logSettingsMutation(
@@ -661,11 +673,8 @@ async function loadPersistedSettings() {
   }
   const loadedSettings = await window.settingsapi.get();
   setCurrentSettings(loadedSettings);
+  syncRuntimeLlmToggleFromSettings();
   await applyThemeById(loadedSettings.general.themeId);
-  const useLlmEl = document.getElementById("use-llm");
-  if (useLlmEl) {
-    useLlmEl.checked = Boolean(loadedSettings.llm.activeByDefault);
-  }
   syncSettingsFormFromState();
   return getCurrentSettings();
 }
@@ -7052,7 +7061,7 @@ function showConvertContextMenu(
   convertContextSubmenus.followStream.style.display = hasFollowStreamActions
     ? "block"
     : "none";
-  const llmEnabled = Boolean(document.getElementById("use-llm")?.checked);
+  const llmEnabled = isLlmEnabledInSettings();
   const llmExplainText = (getTrimmedSelectionText() || sourceText || "").trim();
   const hasLlmQuestionAction = llmEnabled && Boolean(activeContextPacket);
   const hasLlmExplainAction =
@@ -8474,6 +8483,9 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
 }
 
 function callLargeLanguageModel(content) {
+  if (!isLlmEnabledInSettings()) {
+    throw new Error("LLM is disabled in settings");
+  }
   if (!window.llmapi || typeof window.llmapi.generate !== "function") {
     throw new Error("LLM API is not available");
   }
@@ -8543,6 +8555,11 @@ function buildPacketContextSummary(packet) {
 }
 
 async function explainContextWithLLM() {
+  if (!isLlmEnabledInSettings()) {
+    hideConvertContextMenu();
+    statusUpdate("Status: LLM is disabled in settings.");
+    return;
+  }
   const selectedText = getTrimmedSelectionText();
   const textToExplain = (selectedText || activeContextConversionText || "").trim();
   hideConvertContextMenu();
@@ -8650,6 +8667,11 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
 }
 
 async function askContextQuestionWithLLM() {
+  if (!isLlmEnabledInSettings()) {
+    hideConvertContextMenu();
+    statusUpdate("Status: LLM is disabled in settings.");
+    return;
+  }
   const dialogResult = await requestLlmQuestionFromContextMenuDialog();
   const question = String(dialogResult?.question || "").trim();
   if (!question) return;
@@ -8862,6 +8884,14 @@ function writeSummaryFromLLM() {
   // already been summmarized, we should not call the llm again for the same stream.
   if (summaryFromSavedSession) {
     summaryFromSavedSession = false;
+    return;
+  }
+
+  if (!isLlmEnabledInSettings()) {
+    if (llmSummaryTimeout) {
+      clearTimeout(llmSummaryTimeout);
+      llmSummaryTimeout = null;
+    }
     return;
   }
 
@@ -11808,7 +11838,7 @@ function runSnitch(file, options = {}) {
     "Status: Running snitch backend, this may take a few minutes...";
   document.getElementById("error-container").style.display = "none";
   startTime = performance.now();
-  const useLLM = document.getElementById("use-llm").checked;
+  const useLLM = isLlmEnabledInSettings();
   const fileLabel = fromSessionSource
     ? file?.fileName || "session-stored-pcap"
     : typeof file === "string"
