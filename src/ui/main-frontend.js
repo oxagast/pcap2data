@@ -271,6 +271,7 @@ let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 const FALLBACK_THEME_ID = "snitchbitch";
 let availableThemes = [];
 let defaultThemeLogoSrc = null;
+let appliedThemeVariableNames = new Set();
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
@@ -329,11 +330,20 @@ function renderThemeOptions() {
 }
 
 function applyThemeVariables(theme) {
-  if (!theme || !theme.variables || typeof theme.variables !== "object") return;
   const rootStyle = document.documentElement.style;
+  if (appliedThemeVariableNames.size > 0) {
+    appliedThemeVariableNames.forEach((variableName) => {
+      rootStyle.removeProperty(variableName);
+    });
+    appliedThemeVariableNames = new Set();
+  }
+  if (!theme || !theme.variables || typeof theme.variables !== "object") return;
+
   Object.entries(theme.variables).forEach(([variableName, variableValue]) => {
     if (!String(variableName).startsWith("--")) return;
+    if (typeof variableValue !== "string" || !variableValue.trim()) return;
     rootStyle.setProperty(variableName, String(variableValue));
+    appliedThemeVariableNames.add(String(variableName));
   });
 }
 
@@ -374,6 +384,7 @@ function applyThemeLogo(theme) {
 async function applyThemeById(themeId) {
   const normalizedThemeId = sanitizeThemeId(themeId, FALLBACK_THEME_ID);
   if (!window.themeapi || typeof window.themeapi.get !== "function") {
+    applyThemeVariables(null);
     applyThemeLogo(null);
     document.documentElement.dataset.themeId = normalizedThemeId;
     return normalizedThemeId;

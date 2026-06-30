@@ -23,6 +23,7 @@
         "--data-tools-decimal-color": "#dbe3ff",
         "--data-tools-decimal-integer-color": "#dbe3ff",
         "--data-tools-ascii-color": "#dbe3ff",
-        "--data-tools-base64-color": "#dbe3ff"
+        "--data-tools-base64-color": "#dbe3ff",
+        "--tab-inactive-opacity": "0.78"
     }
 }

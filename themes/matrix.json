@@ -23,7 +23,8 @@
         "--data-tools-decimal-color": "#b9ffbf",
         "--data-tools-decimal-integer-color": "#b9ffbf",
         "--data-tools-ascii-color": "#b9ffbf",
-        "--data-tools-base64-color": "#b9ffbf"
+        "--data-tools-base64-color": "#b9ffbf",
+        "--tab-inactive-opacity": "0.60"
     },
     "logoImage": {
         "format": "jpg",

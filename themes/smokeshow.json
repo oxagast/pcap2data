@@ -1,7 +1,7 @@
 {
-    "id": "pastels",
-    "name": "Pastels",
-    "description": "Grey high-contrast light layout tuned for readability.",
+    "id": "smokeshow",
+    "name": "SmokeShow",
+    "description": "A light Grey medium contrast layout tuned for readability.",
     "variables": {
         "--app-bg": "#ced3d9",
         "--surface-0": "#f4f5f7",
