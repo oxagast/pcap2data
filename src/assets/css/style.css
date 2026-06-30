@@ -2741,7 +2741,7 @@ strong {
   color: #dcff7d;
 }
 
-.json-witespace {
+.json-whitespace {
   color: var(--color-5);
   width: 1ch;
 }

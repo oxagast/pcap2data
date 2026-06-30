@@ -271,7 +271,7 @@ let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
-let languageModelResponse = "No summary available.";
+let languageModelResponse = "";
 let alreadySummarizedPacketKeys = new Set();
 const backendProgressState = {
   firstChunkLoaded: false,
@@ -858,7 +858,11 @@ async function clearCurrentSession() {
 
 document.getElementById("summary-btn").addEventListener("click", () => {
   activeMainTab = MAIN_TAB_SUMMARY;
-  document.getElementById("summary_content").textContent = summary || "No summary available.";
+  if (summary.length > 300) {
+    document.getElementById("summary_content").textContent = summary || "";
+  } else {
+    document.getElementById("summary_content").textContent = summary;
+  }
   showSummary();
 });
 
@@ -8362,7 +8366,7 @@ function writeSummaryFromLLM() {
     }
     try {
       const llmResponse = await callLargeLanguageModel(prompt);
-      const summPart = llmResponse?.response || "No summary generated.";
+      const summPart = llmResponse?.response || "";
       summary = summary + "\n\n" + summPart;
       if (summPart.length > 800) {
         document.getElementById("summary_content").textContent = summary;
@@ -8756,64 +8760,42 @@ async function currentPacketToConvJson() {
     jsonContainer.removeChild(jsonContainer.lastChild);
   }
   function syntaxHighlightJsonLine(line) {
-    // the regex should account for quote as well as colon, and also for true/false/null,
-    // and also for numbers, and also for braces/brackets. Also quotes on each side of the key,
-    // and the value.
-    //const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b|[\{\}\[\]]|:|\s+)/g;
     const regex = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|\b-?\d+(\.\d+)?([eE][+-]?\d+)?\b|[\{\}\[\]]|:|\s+)/g;
     if (line.trim() === "") {
-      return "<span class=\"json-newline\">&nbsp;</span>";
+      return '<span class="json-newline">&nbsp;</span>';
     }
-    return line.replace(regex, (match) => {
-      let cls = "json-quote";
-      if (/\".*\"$/.test(match)) {
-        if (/:$/.test(match)) {
-          cls = "json-key";
-        } else {
-          cls = "json-string";
-        }
-      } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(match)) {
-        cls = "json-number";
-      } else if (/true|false/.test(match)) {
-        cls = "json-boolean";
-      } else if (/null/.test(match)) {
-        cls = "json-null";
-      } else if (/[\{\}\[\]]/.test(match)) {
-        cls = "json-brace";
-      }
-      if (/\"/.test(match)) {
-        cls = "json-quote";
-      }
-      if (/[\[\]]/.test(match)) {
-        cls = "json-bracket";
-      }
-      if (/\s*:\s*/.test(match)) {
-        cls = "json-colon";
-      }
-      // curley braces
-      if (/\{\}/.test(match)) {
-        cls = "json-curly";
-      }
-      // this has to be whitespace with stuff after it
-      if (/^\s+.*$/.test(match)) {
-        cls = "json-whitespace";
-      }
-      // we need to count how many spaces are in the whitespace and add a class for that
-      if (/^\s+.*$/.test(match)) {
-        const spaceCount = match.match(/^\s+/)[0].length;
-        cls = `json - whitespace json - whitespace - ${spaceCount}`;
-      }
 
-      if (cls === "json-whitespace") {
+    const escapeToken = (text) =>
+      text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+
+    return line.replace(regex, (match) => {
+      if (/^\s+$/.test(match)) {
         return match.replace(/ /g, "&nbsp;").replace(/\t/g, "&nbsp;&nbsp;&nbsp;&nbsp;");
       }
-      // make sure that if the match has a quote in the beginning and end the quote is a different color than the rest of the string
-      if ((cls === "json-string") || (cls === "json-key") && /^\".*\"$/.test(match)) {
-        const innerString = match.slice(1, -1);
-        return `< span class= "json-quote" > "</span><span class="${cls}">${innerString}</span><span class="json - quote">"</span > `;
-      } else {
-        return `< span class= "${cls}" > ${match}</span > `;
+
+      let cls = "json-quote";
+      if (/^".*"\s*:$/.test(match)) {
+        cls = "json-key";
+      } else if (/^".*"$/.test(match)) {
+        cls = "json-string";
+      } else if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(match)) {
+        cls = "json-number";
+      } else if (/^(true|false)$/.test(match)) {
+        cls = "json-boolean";
+      } else if (/^null$/.test(match)) {
+        cls = "json-null";
+      } else if (/^[\{\}]$/.test(match)) {
+        cls = "json-brace";
+      } else if (/^[\[\]]$/.test(match)) {
+        cls = "json-bracket";
+      } else if (/^:$/.test(match)) {
+        cls = "json-colon";
       }
+
+      return `<span class="${cls}">${escapeToken(match)}</span>`;
     });
   }
 }
