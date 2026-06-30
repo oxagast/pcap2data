@@ -2,6 +2,7 @@
     "id": "sub7",
     "name": "Sub7",
     "description": "Retro Sub7-style cobalt UI inspired by classic server panel screenshots.",
+    "quitButtonCharacter": "𝕊𝟟",
     "variables": {
         "--app-bg": "#000000",
         "--surface-0": "#000000",

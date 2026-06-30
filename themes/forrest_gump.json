@@ -2,6 +2,7 @@
     "id": "forrest",
     "name": "Forrest Gump",
     "description": "Neutral greyish green, Forrest Gump theme.",
+    "quitButtonCharacter": "⏻",
     "variables": {
         "--app-bg": "#1e2024",
         "--surface-0": "#16181c",

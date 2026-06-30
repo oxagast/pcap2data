@@ -2,7 +2,7 @@
     "id": "smokeshow",
     "name": "SmokeShow",
     "description": "A light Grey medium contrast layout tuned for readability.",
-    "quitButtonCharacter": "\u2022",
+    "quitButtonCharacter": "⦿",
     "variables": {
         "--app-bg": "#ced3d9",
         "--surface-0": "#f4f5f7",

@@ -1,8 +1,8 @@
 {
     "id": "matrix",
     "name": "Matrix",
-    "description": "Classic matrix-green terminal vibe.",
-    "quitButtonCharacter": "ヨ",
+    "description": "Classic matrix-green hacker vibe.",
+    "quitButtonCharacter": "ラ",
     "variables": {
         "--app-bg": "#020302",
         "--surface-0": "#000000",
