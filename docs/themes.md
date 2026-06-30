@@ -13,6 +13,17 @@ This guide covers:
 
 ---
 
+## Screenshot
+
+This is a screenshot of the "Matrix" theme.
+
+
+<p align="center">
+<img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
+</p>
+
+---
+
 ## Theme File Locations
 
 PacketSnitch uses two theme locations:
