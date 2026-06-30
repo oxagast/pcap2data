@@ -8,7 +8,6 @@
 # packets are also decoded and their protocol-specific fields included. ICMP packets are
 # fully supported with type, code, ID, and sequence fields. Optionally, it performs
 # active reconnaissance to gather additional network and server information.
-# Summaries and final reports can be generated using a large language model (LLM).
 #
 # Features:
 #   - Extracts TCP, UDP, and ICMP packet data and metadata from .pcap files.
@@ -19,7 +18,6 @@
 #   - Determines MIME types, entropy, geoip, network class, banners, and more.
 #   - Optionally performs active reconnaissance (reverse DNS, banners, SSL info, etc.).
 #   - Supports multi-threaded processing for large captures.
-#   - Summarizes results using LLM integration (Ollama).
 #   - Outputs consolidated JSON and summary files.
 #
 # Usage:
@@ -27,7 +25,7 @@
 #   See command-line argument parser below for available options.
 #
 # Dependencies:
-#   - scapy, numpy, requests, chardet, geoip2, magic, yaml, ollama, bs4, scipy, etc.
+#   - scapy, numpy, requests, chardet, geoip2, magic, yaml, bs4, scipy, etc.
 #
 # Author: oxagast
 # Import standard and third-party libraries for argument parsing, file handling, networking, compression, and data processing
@@ -50,7 +48,6 @@ import chardet
 import geoip2.database
 import magic
 import numpy as np
-import ollama
 import requests
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -60,7 +57,6 @@ except (ImportError, AttributeError):
 import yaml
 import ipaddress
 from bs4 import BeautifulSoup
-from ollama import ResponseError
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote_plus
@@ -68,10 +64,6 @@ from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
 from cryptography.utils import CryptographyDeprecationWarning
-try:
-    import ollama
-except ImportError:
-    useLlm = False
 
 
 warnings.simplefilter("module")
@@ -88,20 +80,11 @@ except ImportError:
 
 activeRecon = "False"
 numWorkerThreads = 2 * (os.cpu_count() or 1)
-numLlmThreads = 5
-llmResponseLength = 100
-llmModelName = "minimax-m2.5:cloud"
-useLlm = False
 isSSH = False
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.
-llmSummaries = []
-llmSummariesLock = threading.Lock()
 allPacketInfo = []
 allPacketInfoLock = threading.Lock()
-
-# Concurrency controls
-llmCallLock = threading.Semaphore(numLlmThreads)  # cap simultaneous LLM calls
 
 hostOutputFile = "hosts.json"
 hostChunkSize = 250
@@ -288,48 +271,6 @@ def _extractPostBodyCredentials(body, contentType):
                 if key:
                     creds[key] = val
     return creds
-
-
-def llmQuery(packetInfoStr):
-    """
-    Query a large language model (LLM) with packet information for summarization.
-    Handles retries and concurrency limits. Appends responses to the global llmSummaries list.
-    """
-    with llmCallLock:
-        try:
-            if ollama and useLlm and packetInfoStr:
-                # Attempt up to 2 times with exponential backoff; halve the payload on each retry
-                for retryCount in range(2):
-                    try:
-                        llmResponse = ollama.generate(
-                            model=llmModelName,
-                            prompt=f"Tell me what you can about the following network capture (encoded in json, from pcap), its payload, and any interesting or unusual traits... respond with a single paragraph around {llmResponseLength} words: {packetInfoStr}",
-                        )
-                        if llmResponse and "response" in llmResponse:
-                            # Protect list append from concurrent thread writes
-                            with llmSummariesLock:
-                                llmSummaries.append(llmResponse["response"])
-                        else:
-                            return {"Summary": ""}
-                    except ResponseError as responseErr:
-                        if verbose >= 2:
-                            print(
-                                f"LLM API response error (attempt {retryCount + 1}/3): {str(responseErr)}",
-                                file=sys.stderr,
-                            )
-                        time.sleep(2**retryCount)  # Exponential backoff
-                        packetInfoStr = packetInfoStr[
-                            : int(len(packetInfoStr) / (2**retryCount))
-                        ]
-                        if verbose >= 1:
-                            print(
-                                f"Retrying with truncated (halved) string (attempt {retryCount + 1}/3)...",
-                                file=sys.stderr,
-                            )
-            else:
-                return {"Summary": "LLM integration not enabled"}
-        except Exception as e:
-            return {"Summary": "LLM integration error: " + str(e)}
 
 
 def configLoader(filename="conf.yaml"):
@@ -4374,69 +4315,6 @@ def processPacketAtIndex(packetIndex, srcPortFilter, dstPortFilter, timeout):
     return packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout)
 
 
-llmSummariesBatch = []
-
-
-def infoDistiller(batchSize):
-    """
-    lines: iterable of input data
-    worker_fn: function that takes a list (batch) and processes it
-    batchSize: number of items per batch
-    maxWorkers: number of threads
-    """
-    print("[LLM] Starting LLM calls...")
-    maxWorkers = 4
-    jsonStack = allPacketInfo
-
-    def chunker(iterable, size):
-        for i in range(0, len(iterable), size):
-            yield iterable[i : i + size]
-
-    packetBatches = list(chunker(jsonStack, batchSize))
-    results = []
-
-    with ThreadPoolExecutor(max_workers=maxWorkers) as executor:
-        taskFutures = [executor.submit(llmBrief, batch) for batch in packetBatches]
-
-        for future in as_completed(taskFutures):
-            try:
-                results.append(future.result())
-            except Exception as e:
-                print(f"[LLM] Batch failed: {e}")
-
-    return results
-
-
-def popDictKey(obj, keyToRemove):
-    if isinstance(obj, dict):
-        # Create a new dict to avoid modifying while iterating
-        return {
-            k: popDictKey(v, keyToRemove) for k, v in obj.items() if k != keyToRemove
-        }
-    elif isinstance(obj, list):
-        return [popDictKey(item, keyToRemove) for item in obj]
-    else:
-        return obj
-
-
-def llmBrief(jsonBatch):
-    """
-    Strip raw payload bytes (to keep the prompt short) and send a batch of packet
-    metadata to the LLM for summarisation.  Appends the response to llmSummaries.
-    """
-    strippedJson = popDictKey(jsonBatch, "Raw data")
-    packetInfoStr = json.dumps(strippedJson)
-    llmResponse = ollama.generate(
-        model=llmModelName,
-        prompt="Provide a concise summary of the following packets, in paragraph form, limited to three paragraphs: "
-        + packetInfoStr,
-    )
-    if llmResponse and "response" in llmResponse:
-        with llmSummariesLock:
-            llmSummaries.append(llmResponse["response"])
-        return llmResponse["response"]
-
-
 def startThreading():
     """
     Process packets from the pre-loaded `packets` list using a
@@ -4526,8 +4404,7 @@ This software analyzes pcap network captures. It extracts TCP and UDP packet dat
 writes testcases, and gathers extra information such as MIME types, entropy, geoip,
 network class, banners, and more. DNS packets (UDP port 53) are decoded and included
 in the output. Optionally, it performs active reconnaissance to enrich the output
-with additional network and server information.  A full capture summary is generated
-using a large language model to provide insights into the data.
+with additional network and server information.
         Outputs:
           - Testcase files: outputDirPath/<dest_port>/pcap.data_packet.<index>.dat
           - Testcase info: outputDirPath/<dest_port>/pcap.info_packet.<index>.json
@@ -4587,11 +4464,6 @@ parser.add_argument(
     action="count",
     default=0,
 )
-parser.add_argument(
-    "--nollm",
-    help="Disable LLM summarisation regardless of configuration.",
-    action="store_true",
-)
 verbose = parser.parse_args().verbose
 args = parser.parse_args()  # parse once; verbose is needed by functions defined above
 hostChunkSize = max(1, int(args.host_chunk_size or 250))
@@ -4602,15 +4474,6 @@ try:
 except Exception:
     config = {
         "active_recon": True,
-        "ollama": {
-            "use_llm": True,
-            "llm_brief": True,
-            "model": "minimax-m2.5:cloud",
-            "response_length": 340,
-            "server_call_threads": 5,
-            "batch_size": 65,
-        },
-        "final_summary": True,
     }
 pcapFilePath = args.pcap_file
 geoDbPath = scriptDir + "common/GeoLite2-City.mmdb"
@@ -4661,7 +4524,6 @@ totalPackets = 0
 packets = scapy.rdpcap(args.pcap_file)  # type: ignore
 tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
 allPacketCount = len(packets)
-llmBatchSize = 0
 totalPackets = len(packets)
 if totalPackets == 0:
     print("[Main] No packets found in the capture.", file=sys.stderr)
@@ -4679,49 +4541,6 @@ if not args.active_recon:
         activeRecon = config["active_recon"]
     else:
         activeRecon = False
-if "ollama" in config and config["ollama"].get("model"):
-    if config["ollama"].get("use_llm", False) and verbose >= 1:
-        print(
-            "[LLM] LLM integration enabled. Using model: "
-            + config["ollama"]["model"]
-            + ".",
-            file=sys.stderr,
-        )
-        llmModelName = config["ollama"]["model"]
-        if config["ollama"]["llm_brief"]:
-            print(
-                "[LLM] LLM brief generation enabled. Only packet metadata will be sent through the LLM.",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                "[LLM] LLM brief generation disabled. LLM will be used for full data packets!  This will take significantly more time, but will provide more detailed llmSummaries for each packet.",
-                file=sys.stderr,
-            )
-    llmResponseLength = config["ollama"].get("response_length", 200)
-    llmBatchSize = config["ollama"].get("batch_size", 65)
-    useLlm = config["ollama"].get("use_llm", False)
-if args.nollm:
-    useLlm = False
-    config = {
-        "active_recon": True,
-        "ollama": {
-            "use_llm": False,
-            "llm_brief": False,
-        },
-        "final_summary": False,
-    }
-
-
-if llmModelName and useLlm:
-    if llmModelName.endswith(":cloud"):
-        if verbose >= 2:
-            print(
-                "[Maseter] Using cloud-based LLM model: "
-                + "minimax-m2.5:cloud"  # doesn't need to be that fast, but has to look decent
-                + ". Ensure you have network connectivity and API access.",
-                file=sys.stderr,
-            )
 print(
     "[Main] Preparing to process "
     + str(totalPackets)
@@ -4748,44 +4567,11 @@ try:
         )
         threadingResult = startThreading()
 finally:
-    finalSummary = ""
-    if config["ollama"]["llm_brief"] != True and useLlm:
-        infoDistiller(llmBatchSize)
-    else:
-        # Strip raw payload bytes before sending to the LLM to keep the prompt small,
-        # then restore the full allPacketInfo for the hosts.json output.
-        allPacketInfoBackup = allPacketInfo.copy()
-        strippedPacketInfo = popDictKey(allPacketInfo, "Raw data")
-        allPacketInfo = strippedPacketInfo
-        if allPacketInfo and useLlm:
-            print("[LLM] Generating LLM brief for batch of packets...")
-            infoDistiller(50)
-        allPacketInfo = allPacketInfoBackup
-
-    if config.get("final_summary", True) and config["ollama"].get("use_llm", True):
-        joinedSummaries = (
-            " ".join(llmSummaries) if llmSummaries else "No LLM summaries generated."
-        )
-        try:
-            finalLlmResponse = ollama.generate(
-                model=llmModelName,
-                prompt="Provide a concise summary of the following packets, in paragraph form, limited to three paragraphs: "
-                + joinedSummaries,
-            )
-            finalSummary = finalLlmResponse["response"]
-            with open(
-                outputDir + "/final_summary.txt", "w", encoding="utf-8"
-            ) as summaryFile:
-                summaryFile.write(finalSummary)
-            print("[LLM] Final summary saved to: " + outputDir + "/final_summary.txt")
-        except Exception as e:
-            print("[LLM] LLM Final summary generation error: " + str(e))
-
     # Always write hosts.json so the frontend can load data regardless of
-    # whether LLM summarisation was enabled or succeeded.
+    # backend summarisation status.
     with allPacketInfoLock:
         finalPacketInfoSnapshot = list(allPacketInfo)
-    writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, finalSummary, hostOutputFile)
+    writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
     print(
         f"{progressLinePrefix} path={outputDir + '/' + hostOutputFile} processed={len(finalPacketInfoSnapshot)} total={totalPackets} final=1",
         file=sys.stderr,

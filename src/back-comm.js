@@ -308,9 +308,6 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   const backendArgs = usePythonBackend
     ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)]
     : [filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)];
-  if (!useLLM) {
-    backendArgs.push("--nollm");
-  }
   // Always start with a clean output directory so snitch never hits the
   // interactive overwrite prompt on second (and later) runs.
   if (fs.existsSync(testcaseOutputDir)) {
