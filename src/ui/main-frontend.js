@@ -88,14 +88,22 @@ function getCachedElement(id) {
   }
   return domCache[id];
 }
-const goodiesArray = window.goodiesapi.getGoodies().then((goodies) => {
-  console.log(`Loaded ${goodies.length} goodies from preload API`);
-});
+const goodiesArray =
+  window.goodiesapi && typeof window.goodiesapi.getGoodies === "function"
+    ? window.goodiesapi.getGoodies().then((goodies) => {
+      console.log(`Loaded ${goodies.length} goodies from preload API`);
+      return goodies;
+    })
+    : Promise.resolve([]);
 
 const validKeysCache = [];
-window.validkeysapi.getValidKeys().then((keys) => {
-  validKeysCache.push(...keys);
-});
+if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
+  window.validkeysapi.getValidKeys().then((keys) => {
+    validKeysCache.push(...keys);
+  });
+} else {
+  console.warn("validkeysapi is unavailable. Key validation helpers will be disabled.");
+}
 
 
 const SESSION_FILE_SCHEMA_VERSION = 1;

@@ -693,6 +693,43 @@ function createWindow() {
     },
   });
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  const appendRendererDiagnostic = (message) => {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [Console][Renderer] ${message}`,
+    );
+  };
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      const diagnostic = JSON.stringify({
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+      console.error("Main window failed to load:", diagnostic);
+      appendRendererDiagnostic(`did-fail-load ${diagnostic}`);
+    },
+  );
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("Renderer process exited unexpectedly:", details);
+    appendRendererDiagnostic(`render-process-gone ${JSON.stringify(details)}`);
+  });
+  mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    const diagnostic = `${preloadPath} ${error?.message || String(error)}`;
+    console.error("Preload script error:", preloadPath, error);
+    appendRendererDiagnostic(`preload-error ${diagnostic}`);
+  });
+  mainWindow.webContents.on(
+    "console-message",
+    (_event, level, message, line, sourceId) => {
+      if (level >= 2) {
+        const diagnostic = JSON.stringify({ message, line, sourceId });
+        console.error("Renderer console error:", diagnostic);
+        appendRendererDiagnostic(`console-message ${diagnostic}`);
+      }
+    },
+  );
   mainWindow.webContents.on("did-finish-load", () => {
     mainWindow.webContents.setZoomFactor(0.7); // makes everything fit snuggly
   });
