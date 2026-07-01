@@ -26,8 +26,6 @@
  * ```
  */
 
-import './assets/css/style.css';
-
 globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "bootstrapping";
 
 // Some bundled dependencies still reference Node globals in renderer scope.
@@ -55,6 +53,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 async function bootstrapRenderer() {
     try {
+        await import('./assets/css/style.css');
         await import('./front.js');
         globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "ready";
     } catch (error) {

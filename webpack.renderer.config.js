@@ -22,6 +22,10 @@ module.exports = {
   },
   plugins: [
     ...plugins,
+    new webpack.DefinePlugin({
+      __dirname: JSON.stringify('/'),
+      __filename: JSON.stringify('/index.js'),
+    }),
     new webpack.ProvidePlugin({
       Buffer: ['buffer', 'Buffer'],
       process: 'process/browser',
