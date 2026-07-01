@@ -215,6 +215,8 @@ You can set a full-app backdrop wallpaper with `backdropImage`.
 
 This image is rendered in the dedicated backdrop layer behind the full UI stack.
 
+Hint: Animated .png images (APNG format) *are* supported by the theme engine, however, I just personally think they are too distracting to be practical in this use case.
+
 Supported formats:
 
 - `png`
