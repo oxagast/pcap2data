@@ -123,7 +123,7 @@
                 const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
                 container.innerHTML = `
-            <strong>Latest Release:</strong> ${release.tag_name}<br>
+            <i>Latest Release:</i> ${release.tag_name}<br>
             ${links}`;
 
             } catch (err) {
