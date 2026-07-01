@@ -28,6 +28,15 @@
 
 import './assets/css/style.css';
 
+// Some bundled dependencies still reference Node globals in renderer scope.
+// Provide safe browser fallbacks so startup does not crash on Windows builds.
+if (typeof globalThis.__dirname === "undefined") {
+    globalThis.__dirname = "/";
+}
+if (typeof globalThis.__filename === "undefined") {
+    globalThis.__filename = "/index.js";
+}
+
 window.addEventListener("error", (event) => {
     const message = event?.error?.stack || event?.message || "Unknown renderer error";
     console.error("Renderer startup error:", message);

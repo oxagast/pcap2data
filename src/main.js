@@ -722,9 +722,14 @@ function createWindow() {
   });
   mainWindow.webContents.on(
     "console-message",
-    (_event, level, message, line, sourceId) => {
+    (event) => {
+      const level = Number(event?.level ?? 0);
       if (level >= 2) {
-        const diagnostic = JSON.stringify({ message, line, sourceId });
+        const diagnostic = JSON.stringify({
+          message: event?.message || "",
+          line: Number(event?.line ?? 0),
+          sourceId: event?.sourceId || "",
+        });
         console.error("Renderer console error:", diagnostic);
         appendRendererDiagnostic(`console-message ${diagnostic}`);
       }
