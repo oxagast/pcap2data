@@ -93,37 +93,74 @@ Validation behavior:
 
 The base color system is driven by CSS custom properties in `src/assets/css/style.css`.
 
-Most themes start by overriding these core variables:
-
-- `--app-bg`
-- `--surface-0`
-- `--surface-1`
-- `--surface-2`
-- `--scrollbar-track`
-- `--border-strong`
-- `--color-1` through `--color-7`
-
-Conv/data tools color variables:
-
-- `--data-tools-frame-bg`
-- `--data-tools-hex-color`
-- `--data-tools-binary-color`
-- `--data-tools-decimal-color`
-- `--data-tools-decimal-integer-color`
-- `--data-tools-ascii-color`
-- `--data-tools-base64-color`
-
-Optional readability overrides:
-
-- `--header-text-color`
-- `--sidebar-text-color`
-- `--input-bg-color`
-- `--input-text-color`
-- `--stats-tag-text-color`
-- `--crypt-panel-bg`
-- `--crypt-panel-text`
-
 Tip: start from an existing file in `themes/`, then change values incrementally.
+
+## Full Variable Reference
+
+The variables below are currently consumed by PacketSnitch styles and can be set in `theme.variables`.
+
+### Core Surfaces and UI Colors
+
+- `--app-bg`: app/page background.
+- `--surface-0`: primary workspace surface.
+- `--surface-1`: secondary panel surface.
+- `--surface-2`: tertiary surface token (available for themes).
+- `--scrollbar-track`: scrollbar track color.
+- `--border-strong`: stronger border color used by major frames.
+- `--color-1`: primary accent/foreground token.
+- `--color-2`: secondary accent/background token.
+- `--color-2-hover`: hover state for secondary accents.
+- `--color-3`: common border/outline token used widely.
+- `--color-4`: muted panel/background token.
+- `--color-5`: primary readable foreground text token.
+- `--color-6`: secondary readable foreground text token.
+- `--color-7`: shared panel background token.
+
+### Header, Sidebar, Inputs, and App Chrome
+
+- `--top-bar-bg`: top title/tagline bar background (center logo/tagline strip).
+- `--header-text-color`: heading/title text color.
+- `--sidebar-text-color`: sidebar text color.
+- `--input-bg-color`: text/select input background.
+- `--input-text-color`: text/select input foreground.
+- `--quit-btn-color`: quit button color.
+- `--quit-btn-hover-color`: quit button hover color.
+- `--stats-tag-text-color`: stats tag text color.
+- `--crypt-panel-bg`: crypt workspace panel background.
+- `--crypt-panel-text`: crypt workspace text color.
+
+### Data Tools Workspace Variables
+
+- `--data-tools-frame-bg`: data tools frame background.
+- `--data-tools-frame-color`: data tools frame text color.
+- `--data-tools-frame-border`: data tools frame border color.
+- `--data-tools-hex-color`: hex conversion accent/border color.
+- `--data-tools-binary-color`: binary conversion accent/border color.
+- `--data-tools-decimal-color`: decimal conversion accent/border color.
+- `--data-tools-decimal-integer-color`: decimal-integer conversion accent/border color.
+- `--data-tools-ascii-color`: ASCII conversion accent/border color.
+- `--data-tools-base64-color`: Base64 conversion accent/border color.
+
+### Activity Log Variables
+
+- `--log-bg`: activity log background.
+- `--log-text`: activity log text.
+
+### Typography and Layout Variables
+
+- `--body-font-family`: global body font family.
+- `--tab-inactive-opacity`: inactive tab opacity (string value from `0` to `1`).
+- `--sidebar-width`: sidebar width token used in layout sizing.
+
+### Internal Utility Tokens (Usually Leave Alone)
+
+These are internal sizing helpers used by the filter input/clear button layout.
+
+- `--filter-clear-button-width`
+- `--filter-clear-padding`
+- `--filter-clear-right-offset`
+
+You can override them, but values that are too small/large may cause overlap or clipping in the filter controls.
 
 ---
 
