@@ -13,6 +13,7 @@ Required shape:
   "id": "mytheme",
   "name": "My Theme",
   "description": "Optional",
+  "quitButtonCharacter": "x",
   "logoImage": {
     "format": "png",
     "base64": "<base64-image-data>"
@@ -32,6 +33,7 @@ Tips:
 - Only CSS variables in `variables` are applied.
 - `logoImage` is optional; supported formats are `png` and `jpg`.
 - `backdropImage` is optional; supported formats are `png` and `jpg`.
-- `--panel-bg-opacity` can make main panel surfaces translucent (for example `"84%"`).
+- `quitButtonCharacter` is optional and can replace the quit button label.
+- `--panel-bg-opacity` can make main panel surfaces translucent (for example `"84%"`, range `0%`-`100%`).
 - You can copy an existing file and tweak values.
 - The app also syncs defaults into your user themes directory for runtime edits.

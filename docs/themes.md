@@ -1,6 +1,6 @@
 ## PacketSnitch Themes
 
-PacketSnitch uses a file-driven theming engine. A theme is a JSON file that overrides CSS variables and can optionally replace the app logo.
+PacketSnitch uses a file-driven theming engine. A theme is a JSON file that overrides CSS variables and can optionally replace the app logo, apply a backdrop wallpaper, and tune panel transparency.
 
 This guide covers:
 
@@ -8,7 +8,8 @@ This guide covers:
 - Theme JSON schema
 - How to set app colors
 - How to set a custom logo
-- How to control opacity
+- How to set a backdrop wallpaper
+- How to control opacity and panel translucency
 - How the app validates/falls back when a theme is invalid
 
 ---
@@ -87,6 +88,7 @@ A valid theme must have a non-empty `variables` object with CSS custom propertie
 - `name`: display label shown in Settings
 - `description`: optional text
 - `variables`: required, must include at least one valid CSS variable key/value
+- `quitButtonCharacter`: optional single-character override for the app quit button label
 - `logoImage`: optional
 - `backdropImage`: optional
 
@@ -240,24 +242,24 @@ If `backdropImage` is missing or invalid, PacketSnitch shows no wallpaper and us
 
 Theme opacity is controlled with CSS variable values where supported.
 
-Most important global opacity control:
+Most useful controls:
 
-- `--tab-inactive-opacity`
+- `--tab-inactive-opacity`: inactive tab button opacity (`0` to `1`)
+- `--panel-bg-opacity`: major panel/chrome background mix percentage (`0%` to `100%`) used to let backdrop wallpaper show through
 
 Example:
 
 ```json
 "variables": {
-  "--tab-inactive-opacity": "0.78"
+  "--tab-inactive-opacity": "0.60",
+  "--panel-bg-opacity": "84%"
 }
 ```
 
-Use values between `0` and `1`:
+Recommended starting points:
 
-- `0` = fully transparent
-- `1` = fully opaque
-
-Other opacity effects in the app are hardcoded in component styles and not all are theme-variable driven.
+- `--panel-bg-opacity: "80%"` to `"92%"` for subtle translucency
+- `--tab-inactive-opacity: "0.55"` to `"0.75"` for readable but dimmed inactive tabs
 
 ---
 
@@ -265,7 +267,7 @@ Other opacity effects in the app are hardcoded in component styles and not all a
 
 1. Copy an existing theme JSON in `userData/themes`.
 2. Rename file and update `id`/`name`.
-3. Modify `variables` (and optional `logoImage`).
+3. Modify `variables` (and optional `logoImage` / `backdropImage`).
 4. Open **Settings → General** and select your theme.
 5. Save settings.
 6. If needed, reopen Settings or restart the app to refresh newly added files.
@@ -291,3 +293,14 @@ Logo does not render:
 - Confirm `format` is `png`, `jpg`, or `jpeg`.
 - Confirm base64 payload is valid and non-empty.
 - Remove line breaks/whitespace from base64 if needed.
+
+Backdrop wallpaper does not render:
+
+- Confirm `backdropImage.format` is `png`, `jpg`, or `jpeg`.
+- Confirm `backdropImage.base64` is valid base64.
+- If using custom runtime themes, ensure you edited the active file in `userData/themes` and restart the app if needed.
+
+Wallpaper renders but is hard to notice:
+
+- Lower `--panel-bg-opacity` (for example from `100%` to `84%`).
+- Ensure your panel surfaces are not fully opaque overrides in the selected theme.
