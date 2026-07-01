@@ -22,6 +22,16 @@ module.exports = {
   },
   plugins: [
     ...plugins,
+    new webpack.BannerPlugin({
+      raw: true,
+      entryOnly: true,
+      banner: [
+        'if (typeof globalThis.__dirname === "undefined") { globalThis.__dirname = "/"; }',
+        'if (typeof globalThis.__filename === "undefined") { globalThis.__filename = "/index.js"; }',
+        'var __dirname = globalThis.__dirname;',
+        'var __filename = globalThis.__filename;',
+      ].join('\n'),
+    }),
     new webpack.DefinePlugin({
       __dirname: JSON.stringify('/'),
       __filename: JSON.stringify('/index.js'),
