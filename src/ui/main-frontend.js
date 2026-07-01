@@ -279,6 +279,7 @@ let keystoreAutoPopulateGeneration = 0;
 let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
+let ollamaVersionCheckPassed = false;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -299,6 +300,25 @@ function setCurrentSettings(nextSettings) {
 
 function isLlmEnabledInSettings() {
   return Boolean(getCurrentSettings()?.llm?.activeByDefault);
+}
+
+function isLlmRuntimeEnabled() {
+  return isLlmEnabledInSettings() && ollamaVersionCheckPassed;
+}
+
+async function refreshOllamaStartupAvailability() {
+  if (!window.installapi || typeof window.installapi.checkFirstRun !== "function") {
+    ollamaVersionCheckPassed = false;
+    return ollamaVersionCheckPassed;
+  }
+  try {
+    const installInfo = await window.installapi.checkFirstRun();
+    ollamaVersionCheckPassed = Boolean(installInfo?.ollamaInstalled);
+  } catch (error) {
+    console.warn("Unable to resolve Ollama startup availability:", error);
+    ollamaVersionCheckPassed = false;
+  }
+  return ollamaVersionCheckPassed;
 }
 
 function syncRuntimeLlmToggleFromSettings() {
@@ -1113,6 +1133,8 @@ initializeInstallScreen({
   installapi: window.installapi,
   documentRef: document,
 });
+
+void refreshOllamaStartupAvailability();
 
 
 
@@ -7577,7 +7599,7 @@ function showConvertContextMenu(
   convertContextSubmenus.followStream.style.display = hasFollowStreamActions
     ? "block"
     : "none";
-  const llmEnabled = isLlmEnabledInSettings();
+  const llmEnabled = isLlmRuntimeEnabled();
   const llmExplainText = (getTrimmedSelectionText() || sourceText || "").trim();
   const hasLlmQuestionAction = llmEnabled && Boolean(activeContextPacket);
   const hasLlmExplainAction =
@@ -9001,6 +9023,9 @@ function callLargeLanguageModel(content) {
   if (!isLlmEnabledInSettings()) {
     throw new Error("LLM is disabled in settings");
   }
+  if (!ollamaVersionCheckPassed) {
+    throw new Error("Ollama is unavailable (startup version check failed)");
+  }
   if (!window.llmapi || typeof window.llmapi.generate !== "function") {
     throw new Error("LLM API is not available");
   }
@@ -9129,9 +9154,11 @@ function buildPacketContextSummary(packet) {
 }
 
 async function explainContextWithLLM() {
-  if (!isLlmEnabledInSettings()) {
+  if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
-    statusUpdate("Status: LLM is disabled in settings.");
+    statusUpdate(
+      "Status: LLM is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
+    );
     return;
   }
   const contextPacket = activeContextPacket || getCurrentContextPacket();
@@ -9143,8 +9170,9 @@ async function explainContextWithLLM() {
     return;
   }
 
-  const packetCtx = buildPacketContextSummary(contextPacket);
-  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet or its decoded fields:\n\n"${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet above. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
+  //const packetCtx = buildPacketContextSummary(contextPacket);
+  const packetCtx = contextPacket ? JSON.stringify(contextPacket, null, 2) : "No packet context available.";
+  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking LLM to explain selection...");
   writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
@@ -9155,7 +9183,7 @@ async function explainContextWithLLM() {
       statusUpdate("Status: LLM returned no explanation.");
       return;
     }
-    const noteText = `LLM Explanation\nPacket: ${packetCtx}\nData: "${textToExplain}"\n\n${explanation}`;
+    const noteText = `# LLM Explanation\n## Data: "${textToExplain}"\n\n${explanation}`;
     const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-explain");
     if (didAdd) {
       showNotesWorkspace();
@@ -9243,9 +9271,11 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
 }
 
 async function askContextQuestionWithLLM() {
-  if (!isLlmEnabledInSettings()) {
+  if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
-    statusUpdate("Status: LLM is disabled in settings.");
+    statusUpdate(
+      "Status: LLM is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
+    );
     return;
   }
   const dialogResult = await requestLlmQuestionFromContextMenuDialog();
@@ -9464,7 +9494,7 @@ function writeSummaryFromLLM() {
     return;
   }
 
-  if (!isLlmEnabledInSettings()) {
+  if (!isLlmRuntimeEnabled()) {
     if (llmSummaryTimeout) {
       clearTimeout(llmSummaryTimeout);
       llmSummaryTimeout = null;

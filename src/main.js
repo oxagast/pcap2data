@@ -319,12 +319,15 @@ function killBackendProcess() {
 
 function checkOllama() {
   return new Promise((resolve) => {
-    exec("ollama --version", (execError) => {
-      if (execError) {
+    exec("ollama --version", (versionError) => {
+      if (versionError) {
         resolve(false); // not installed or not in PATH
-      } else {
-        resolve(true);
+        return;
       }
+      // Backend reachability check: this fails when the daemon/API is down.
+      exec("ollama list", (listError) => {
+        resolve(!listError);
+      });
     });
   });
 }
@@ -848,7 +851,7 @@ app.whenReady().then(() => {
     void loadSettingsFromDisk();
     if (!isInstalled) {
       console.log(
-        "Ollama is not installed. LLM summarisation will be unavailable.",
+        "Ollama is unavailable (not installed or backend not reachable). LLM summarisation will be unavailable.",
       );
     }
     createWindow();
