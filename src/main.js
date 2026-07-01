@@ -173,6 +173,8 @@ const DEFAULT_THEME_DEFINITIONS = Object.freeze([
       "--data-tools-decimal-integer-color": "#1e3342",
       "--data-tools-ascii-color": "#1e3342",
       "--data-tools-base64-color": "#1e3342",
+      "--notes-link-color": "#2f6b3f",
+      "--notes-markdown-bg": "#fffdf0",
     },
   },
   {

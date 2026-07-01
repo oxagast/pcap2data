@@ -16,7 +16,7 @@ This guide covers:
 ## Screenshot
 
 <p align="center">
-This is a screenshot of the "Matrix" theme.
+Screenshot of the "Matrix" theme.
 
 <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
 <img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
@@ -25,7 +25,13 @@ This is a screenshot of the "Matrix" theme.
 Also a cobalt/black "Sub7" inspired theme.
 
 <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
-<img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
+<img alt="The Sub7 Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
+</a>
+
+A lighter, airy pastels theme, "Nilla Horizon".
+
+<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">
+<img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">
 </a>
 </p>
 
@@ -126,6 +132,8 @@ The variables below are currently consumed by PacketSnitch styles and can be set
 - `--quit-btn-color`: quit button color.
 - `--quit-btn-hover-color`: quit button hover color.
 - `--stats-tag-text-color`: stats tag text color.
+- `--notes-link-color`: markdown preview link color in notes.
+- `--notes-markdown-bg`: markdown preview background color in notes.
 - `--crypt-panel-bg`: crypt workspace panel background.
 - `--crypt-panel-text`: crypt workspace text color.
 

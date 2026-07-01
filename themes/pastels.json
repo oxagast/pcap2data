@@ -2,7 +2,7 @@
     "id": "nilla-horizon",
     "name": "Nilla Horizon",
     "description": "Soft pastel pink, blue, and yellow panels with high-contrast dark gray text.",
-    "quitButtonCharacter": "⦿",
+    "quitButtonCharacter": "■",
     "variables": {
         "--app-bg": "#f6f5fb",
         "--surface-0": "#ffe6f1",
@@ -31,10 +31,12 @@
         "--input-bg-color": "#ffffff",
         "--input-text-color": "#2f3640",
         "--stats-tag-text-color": "#1a4f90",
+        "--notes-link-color": "#2f6b3f",
+        "--notes-markdown-bg": "#fffdf0",
         "--crypt-panel-bg": "#ffdce9",
         "--crypt-panel-text": "#2f3640",
         "--tab-inactive-opacity": "0.84",
-        "--quit-btn-color": "#2f3640",
+        "--quit-btn-color": "#FF6961",
         "--quit-btn-hover-color": "#232a33",
         "--log-bg": "#ffffff",
         "--log-text": "#232a33"

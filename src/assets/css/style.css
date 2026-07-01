@@ -26,6 +26,8 @@
   --input-bg-color: var(--surface-0);
   --input-text-color: var(--color-5);
   --stats-tag-text-color: #ffffff;
+  --notes-link-color: var(--color-2);
+  --notes-markdown-bg: color-mix(in srgb, var(--input-bg-color) 86%, #000 14%);
   --crypt-panel-bg: var(--color-7);
   --crypt-panel-text: var(--color-6);
   --tab-inactive-opacity: 0.4;
@@ -1478,7 +1480,7 @@ strong {
 
 .notes-markdown-preview {
   border: 1px solid var(--color-3);
-  background-color: color-mix(in srgb, var(--input-bg-color) 86%, #000 14%);
+  background-color: var(--notes-markdown-bg, color-mix(in srgb, var(--input-bg-color) 86%, #000 14%));
   color: var(--input-text-color);
   font-family: var(--body-font-family);
   font-size: 12px;
@@ -1533,7 +1535,7 @@ strong {
 }
 
 .notes-markdown-preview a {
-  color: var(--color-2);
+  color: var(--notes-link-color);
 }
 
 .notes-markdown-preview table {
