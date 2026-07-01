@@ -36,6 +36,15 @@ if (typeof globalThis.__dirname === "undefined") {
 if (typeof globalThis.__filename === "undefined") {
     globalThis.__filename = "/index.js";
 }
+try {
+    // Create actual global identifier bindings (not just global object properties)
+    // so strict module code that references __dirname/__filename does not throw.
+    (0, eval)(
+        "var __dirname = globalThis.__dirname; var __filename = globalThis.__filename;",
+    );
+} catch (error) {
+    console.warn("Unable to create global __dirname/__filename bindings:", error);
+}
 
 window.addEventListener("error", (event) => {
     const message = event?.error?.stack || event?.message || "Unknown renderer error";
