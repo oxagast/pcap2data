@@ -8,7 +8,7 @@ hidden_imports += collect_submodules('cryptography')
 
 
 a = Analysis(
-    ['src\\backend\\snitch.py'],
+    ['src/backend/snitch.py'],
     pathex=[],
     binaries=[],
     datas=[('src/backend/common', 'common')],
