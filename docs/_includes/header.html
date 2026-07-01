@@ -87,6 +87,8 @@
         <p>Loading latest release...</p>
     </div>
 
+    <div id="downloads">Loading latest release...</div>
+
     <script>
         async function loadLatestRelease() {
             const owner = "oxasploits";
@@ -99,54 +101,47 @@
                     `https://api.github.com/repos/${owner}/${repo}/releases/latest`
                 );
 
-                if (!response.ok)
-                    throw new Error("Unable to fetch latest release.");
+                if (!response.ok) {
+                    throw new Error(`GitHub API returned ${response.status}`);
+                }
 
                 const release = await response.json();
 
-                let html = `
-            <h2>Latest Release</h2>
-            <p><strong>${release.tag_name}</strong></p>
-            <ul>
-        `;
-
-                const wanted = {
-                    ".deb": "Debian (.deb)",
-                    ".rpm": "Fedora (.rpm)",
-                    ".exe": "Windows (.exe)"
-                };
-
-                const links = [];
+                // Build download links
+                let deb = "";
+                let rpm = "";
+                let exe = "";
 
                 for (const asset of release.assets) {
-                    const lower = asset.name.toLowerCase();
+                    const name = asset.name.toLowerCase();
 
-                    for (const ext in wanted) {
-                        if (lower.endsWith(ext)) {
-                            links.push(
-                                `<a href="${asset.browser_download_url}">${wanted[ext]}</a>`
-                            );
-                        }
+                    if (name.endsWith(".deb")) {
+                        deb = `<a href="${asset.browser_download_url}">Debian (.deb)</a>`;
+                    }
+                    else if (name.endsWith(".rpm")) {
+                        rpm = `<a href="${asset.browser_download_url}">Fedora (.rpm)</a>`;
+                    }
+                    else if (name.endsWith(".exe")) {
+                        exe = `<a href="${asset.browser_download_url}">Windows (.exe)</a>`;
                     }
                 }
 
+                // Only include links that actually exist
+                const links = [deb, rpm, exe].filter(Boolean).join(" | ");
+
                 container.innerHTML = `
-    <h2>Latest Release</h2>
-    <p><strong>${release.tag_name}</strong></p>
-    <p>${links.join(" | ")}</p>
-    <p><a href="${release.html_url}">Release Notes</a></p>
-`;
-                console.log(release.assets);
-                container.innerHTML = html;
+            <strong>Latest Release:</strong> ${release.tag_name}<br>
+            ${links}<br><br>
+            <a href="${release.html_url}">Release Notes</a>
+        `;
 
             } catch (err) {
-                container.innerHTML =
-                    "<p>Unable to load the latest release.</p>";
                 console.error(err);
+                container.innerHTML = "Unable to load latest release.";
             }
         }
 
-        loadLatestRelease();
+        document.addEventListener("DOMContentLoaded", loadLatestRelease);
     </script>
 
 
