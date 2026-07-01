@@ -514,6 +514,27 @@ function getAppLogoElement() {
   return document.getElementById("app-logo") || document.querySelector(".logo-cont img");
 }
 
+function getThemeBackdropElement() {
+  return document.getElementById("theme-backdrop");
+}
+
+function buildThemeEmbeddedImageDataUri(imageConfig) {
+  if (!imageConfig || typeof imageConfig !== "object") return null;
+  const formatRaw = typeof imageConfig.format === "string"
+    ? imageConfig.format.trim().toLowerCase()
+    : "";
+  const format = formatRaw === "jpeg" ? "jpg" : formatRaw;
+  const normalizedBase64 = typeof imageConfig.base64 === "string"
+    ? imageConfig.base64.replace(/^data:image\/(png|jpeg|jpg);base64,/i, "").replace(/\s+/g, "")
+    : "";
+  if ((format !== "png" && format !== "jpg") || !normalizedBase64) {
+    return null;
+  }
+
+  const mime = format === "png" ? "image/png" : "image/jpeg";
+  return `data:${mime};base64,${normalizedBase64}`;
+}
+
 function applyThemeLogo(theme) {
   const logoEl = getAppLogoElement();
   if (!logoEl) return;
@@ -523,25 +544,29 @@ function applyThemeLogo(theme) {
   }
 
   const logoImage = theme && typeof theme === "object" ? theme.logoImage : null;
-  if (!logoImage || typeof logoImage !== "object") {
+  const logoDataUri = buildThemeEmbeddedImageDataUri(logoImage);
+  if (!logoDataUri) {
     logoEl.src = defaultThemeLogoSrc;
     return;
   }
 
-  const formatRaw = typeof logoImage.format === "string"
-    ? logoImage.format.trim().toLowerCase()
-    : "";
-  const format = formatRaw === "jpeg" ? "jpg" : formatRaw;
-  const normalizedBase64 = typeof logoImage.base64 === "string"
-    ? logoImage.base64.replace(/\s+/g, "")
-    : "";
-  if ((format !== "png" && format !== "jpg") || !normalizedBase64) {
-    logoEl.src = defaultThemeLogoSrc;
+  logoEl.src = logoDataUri;
+}
+
+function applyThemeBackdropImage(theme) {
+  const backdropEl = getThemeBackdropElement();
+  if (!backdropEl) return;
+
+  const backdropImage = theme && typeof theme === "object" ? theme.backdropImage : null;
+  const backdropDataUri = buildThemeEmbeddedImageDataUri(backdropImage);
+  if (!backdropDataUri) {
+    backdropEl.style.removeProperty("background-image");
+    backdropEl.classList.remove("has-image");
     return;
   }
 
-  const mime = format === "png" ? "image/png" : "image/jpeg";
-  logoEl.src = `data:${mime};base64,${normalizedBase64}`;
+  backdropEl.style.setProperty("background-image", `url(${backdropDataUri})`);
+  backdropEl.classList.add("has-image");
 }
 
 async function applyThemeById(themeId) {
@@ -549,6 +574,7 @@ async function applyThemeById(themeId) {
   if (!window.themeapi || typeof window.themeapi.get !== "function") {
     applyThemeVariables(null);
     applyThemeLogo(null);
+    applyThemeBackdropImage(null);
     applyThemeQuitButtonCharacter(null);
     document.documentElement.dataset.themeId = normalizedThemeId;
     return normalizedThemeId;
@@ -558,6 +584,7 @@ async function applyThemeById(themeId) {
     if (!theme) return normalizedThemeId;
     applyThemeVariables(theme);
     applyThemeLogo(theme);
+    applyThemeBackdropImage(theme);
     applyThemeQuitButtonCharacter(theme);
     document.documentElement.dataset.themeId = theme.id;
     return theme.id;

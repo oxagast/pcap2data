@@ -30,6 +30,7 @@
   --notes-markdown-bg: color-mix(in srgb, var(--input-bg-color) 86%, #000 14%);
   --crypt-panel-bg: var(--color-7);
   --crypt-panel-text: var(--color-6);
+  --panel-bg-opacity: 100%;
   --tab-inactive-opacity: 0.4;
   --sidebar-width: 20%;
 }
@@ -44,6 +45,24 @@ body {
   height: 100vh;
   font-family: "Courier New", Courier, monospace;
   overflow: hidden;
+  position: relative;
+}
+
+#theme-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--app-bg);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+#theme-backdrop.has-image {
+  opacity: 0.45;
 }
 
 input[type="text"],
@@ -64,9 +83,16 @@ select {
   flex-direction: column;
   padding: 15px;
   box-sizing: border-box;
-  background-color: var(--surface-0);
+  background-color: color-mix(in srgb, var(--surface-0) var(--panel-bg-opacity), transparent);
   scrollbar-color: var(--color-7) var(--scrollbar-track);
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+
+.container_box> :not(#theme-backdrop) {
+  position: relative;
+  z-index: 1;
 }
 
 #error-container {
@@ -151,7 +177,7 @@ select {
 /* Top title bar */
 .top_bar {
   height: 40px;
-  background-color: var(--top-bar-bg);
+  background-color: color-mix(in srgb, var(--top-bar-bg) var(--panel-bg-opacity), transparent);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -207,7 +233,7 @@ select {
 /* Entry bar */
 .entry_bar {
   height: 60px;
-  background-color: var(--color-2);
+  background-color: color-mix(in srgb, var(--color-2) var(--panel-bg-opacity), transparent);
   border: 1px solid var(--border-strong);
   padding: 5px;
   display: flex;
@@ -256,7 +282,7 @@ hr {
   width: var(--sidebar-width);
   min-width: 160px;
   max-width: 300px;
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   border: 1px solid var(--color-3);
   padding: 1px;
   color: var(--sidebar-text-color);
@@ -285,7 +311,7 @@ hr {
 
 /* Main panel */
 .main_panel {
-  background-color: var(--surface-1);
+  background-color: color-mix(in srgb, var(--surface-1) var(--panel-bg-opacity), transparent);
   color: var(--color-5);
   padding: 5px;
   box-sizing: border-box;
@@ -465,7 +491,7 @@ strong {
 #summary_box {
   display: block;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -478,7 +504,7 @@ strong {
 #stats_box {
   display: none;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -495,7 +521,7 @@ strong {
 #data_tools_box {
   display: none;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -510,7 +536,7 @@ strong {
 #crypt_box {
   display: none;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -525,7 +551,7 @@ strong {
 #settings_box {
   display: none;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;
@@ -854,7 +880,7 @@ strong {
 #keystore_box {
   display: none;
   border: 8px solid var(--color-3);
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
   padding: 10px;
   width: 100%;
   box-sizing: border-box;

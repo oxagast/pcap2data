@@ -394,7 +394,8 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
     : {};
 
   if (Object.keys(variables).length === 0) return null;
-  const logoImage = normalizeThemeLogoImage(rawTheme.logoImage);
+  const logoImage = normalizeThemeEmbeddedImage(rawTheme.logoImage);
+  const backdropImage = normalizeThemeEmbeddedImage(rawTheme.backdropImage);
   const quitButtonCharacter =
     typeof rawTheme.quitButtonCharacter === "string" && rawTheme.quitButtonCharacter.trim()
       ? rawTheme.quitButtonCharacter.trim()
@@ -405,6 +406,7 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
     description,
     variables,
     logoImage,
+    backdropImage,
     quitButtonCharacter,
     sourcePath: typeof metadata.sourcePath === "string" ? metadata.sourcePath : "",
     sourceKind: typeof metadata.sourceKind === "string" ? metadata.sourceKind : "unknown",
@@ -414,13 +416,13 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
   };
 }
 
-function normalizeThemeLogoImage(rawLogoImage) {
-  if (!rawLogoImage || typeof rawLogoImage !== "object") {
+function normalizeThemeEmbeddedImage(rawImage) {
+  if (!rawImage || typeof rawImage !== "object") {
     return null;
   }
 
-  const rawFormat = typeof rawLogoImage.format === "string"
-    ? rawLogoImage.format.trim().toLowerCase()
+  const rawFormat = typeof rawImage.format === "string"
+    ? rawImage.format.trim().toLowerCase()
     : "";
   const normalizedFormat = rawFormat === "jpeg" ? "jpg" : rawFormat;
   if (normalizedFormat !== "png" && normalizedFormat !== "jpg") {
@@ -428,10 +430,10 @@ function normalizeThemeLogoImage(rawLogoImage) {
   }
 
   const rawBase64 =
-    typeof rawLogoImage.base64 === "string"
-      ? rawLogoImage.base64
-      : typeof rawLogoImage.data === "string"
-        ? rawLogoImage.data
+    typeof rawImage.base64 === "string"
+      ? rawImage.base64
+      : typeof rawImage.data === "string"
+        ? rawImage.data
         : "";
   const strippedDataUri = rawBase64.replace(/^data:image\/(png|jpeg|jpg);base64,/i, "");
   const normalizedBase64 = strippedDataUri.replace(/\s+/g, "");
@@ -454,6 +456,7 @@ function getComparableThemePayload(theme) {
     description: typeof theme?.description === "string" ? theme.description : "",
     variables: normalizedVariables,
     logoImage: theme?.logoImage || null,
+    backdropImage: theme?.backdropImage || null,
     quitButtonCharacter:
       typeof theme?.quitButtonCharacter === "string" ? theme.quitButtonCharacter : null,
   };
@@ -602,6 +605,7 @@ async function listThemeDefinitions() {
     description: theme.description,
     variables: theme.variables,
     logoImage: theme.logoImage,
+    backdropImage: theme.backdropImage,
     quitButtonCharacter: theme.quitButtonCharacter,
     sourceKind: theme.sourceKind,
     hasUserBundledConflict: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledConflict),

@@ -17,6 +17,10 @@ Required shape:
     "format": "png",
     "base64": "<base64-image-data>"
   },
+  "backdropImage": {
+    "format": "jpg",
+    "base64": "<base64-image-data>"
+  },
   "variables": {
     "--color-1": "#7f80ff"
   }
@@ -27,5 +31,7 @@ Tips:
 - `id` should be lowercase letters/numbers with `-` or `_`.
 - Only CSS variables in `variables` are applied.
 - `logoImage` is optional; supported formats are `png` and `jpg`.
+- `backdropImage` is optional; supported formats are `png` and `jpg`.
+- `--panel-bg-opacity` can make main panel surfaces translucent (for example `"84%"`).
 - You can copy an existing file and tweak values.
 - The app also syncs defaults into your user themes directory for runtime edits.

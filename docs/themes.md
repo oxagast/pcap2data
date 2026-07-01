@@ -73,6 +73,10 @@ A valid theme must have a non-empty `variables` object with CSS custom propertie
   "logoImage": {
     "format": "png",
     "base64": "iVBORw0KGgoAAAANSUhEUgAA..."
+  },
+  "backdropImage": {
+    "format": "jpg",
+    "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD..."
   }
 }
 ```
@@ -84,6 +88,7 @@ A valid theme must have a non-empty `variables` object with CSS custom propertie
 - `description`: optional text
 - `variables`: required, must include at least one valid CSS variable key/value
 - `logoImage`: optional
+- `backdropImage`: optional
 
 Validation behavior:
 
@@ -157,6 +162,7 @@ The variables below are currently consumed by PacketSnitch styles and can be set
 ### Typography and Layout Variables
 
 - `--body-font-family`: global body font family.
+- `--panel-bg-opacity`: panel background opacity mix percentage (`0%`-`100%`). Lower values let the backdrop wallpaper show through panel surfaces.
 - `--tab-inactive-opacity`: inactive tab opacity (string value from `0` to `1`).
 - `--sidebar-width`: sidebar width token used in layout sizing.
 
@@ -198,6 +204,35 @@ Example:
 ```
 
 If `logoImage` is missing or invalid, PacketSnitch falls back to the default app logo.
+
+---
+
+## Optional Backdrop Wallpaper
+
+You can set a full-app backdrop wallpaper with `backdropImage`.
+
+This image is rendered in the dedicated backdrop layer behind the full UI stack.
+
+Supported formats:
+
+- `png`
+- `jpg` (or `jpeg`, normalized to `jpg`)
+
+Supported payload fields:
+
+- `backdropImage.base64`
+- `backdropImage.data`
+
+Example:
+
+```json
+"backdropImage": {
+  "format": "jpg",
+  "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD..."
+}
+```
+
+If `backdropImage` is missing or invalid, PacketSnitch shows no wallpaper and uses standard theme backgrounds only.
 
 ---
 
