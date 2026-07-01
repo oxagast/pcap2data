@@ -1,7 +1,7 @@
 beautifulsoup4==4.14.3
 geoip2==2.9.0
 numpy==2.4.2
-ollama==0.6.1
+#ollama==0.6.1
 python_magic==0.4.27
 PyYAML==6.0.3
 Requests==2.32.5
@@ -12,3 +12,6 @@ typing_extensions==4.15.0
 chardet==7.4.3
 libmagic==1.0
 python-magic-bin==0.4.14 ; sys_platform == "win32"
+cryptography==49.0.0
+cffi==2.0.0
+pycparser==3.0
