@@ -1,4 +1,5 @@
 const threadName = "MainFrontend";
+window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
 import { bookmarkList } from '../state';
 import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");

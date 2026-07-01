@@ -722,13 +722,22 @@ function createWindow() {
   });
   mainWindow.webContents.on(
     "console-message",
-    (event) => {
-      const level = Number(event?.level ?? 0);
+    (eventOrPayload, levelArg, messageArg, lineArg, sourceIdArg) => {
+      const payload =
+        typeof levelArg === "number"
+          ? {
+            level: levelArg,
+            message: messageArg,
+            line: lineArg,
+            sourceId: sourceIdArg,
+          }
+          : eventOrPayload || {};
+      const level = Number(payload?.level ?? 0);
       if (level >= 2) {
         const diagnostic = JSON.stringify({
-          message: event?.message || "",
-          line: Number(event?.line ?? 0),
-          sourceId: event?.sourceId || "",
+          message: payload?.message || "",
+          line: Number(payload?.line ?? 0),
+          sourceId: payload?.sourceId || "",
         });
         console.error("Renderer console error:", diagnostic);
         appendRendererDiagnostic(`console-message ${diagnostic}`);

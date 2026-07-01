@@ -28,6 +28,8 @@
 
 import './assets/css/style.css';
 
+globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "bootstrapping";
+
 // Some bundled dependencies still reference Node globals in renderer scope.
 // Provide safe browser fallbacks so startup does not crash on Windows builds.
 if (typeof globalThis.__dirname === "undefined") {
@@ -54,8 +56,25 @@ window.addEventListener("unhandledrejection", (event) => {
 async function bootstrapRenderer() {
     try {
         await import('./front.js');
+        globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "ready";
     } catch (error) {
+        const apiAvailability = {
+            installapi: Boolean(window.installapi),
+            captureapi: Boolean(window.captureapi),
+            getfileapi: Boolean(window.getfileapi),
+            sessionsapi: Boolean(window.sessionsapi),
+            settingsapi: Boolean(window.settingsapi),
+            llmapi: Boolean(window.llmapi),
+        };
         console.error("Failed to bootstrap renderer frontend:", error);
+        console.error(
+            "Renderer bootstrap context:",
+            JSON.stringify({
+                bootstrapState: globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__,
+                apiAvailability,
+            }),
+        );
+        globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "failed";
     }
 }
 
