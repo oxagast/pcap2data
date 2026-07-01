@@ -71,6 +71,79 @@
         text-align: right;
     }
 </style>
+
+<div id="downloads">
+    <p>Loading latest release...</p>
+</div>
+
+<script>
+    async function loadLatestRelease() {
+        const owner = "oxasploits";
+        const repo = "PacketSnitch";
+
+        const container = document.getElementById("downloads");
+
+        try {
+            const response = await fetch(
+                `https://api.github.com/repos/${owner}/${repo}/releases/latest`
+            );
+
+            if (!response.ok)
+                throw new Error("Unable to fetch latest release.");
+
+            const release = await response.json();
+
+            let html = `
+            <h2>Latest Release</h2>
+            <p><strong>${release.tag_name}</strong></p>
+            <ul>
+        `;
+
+            const wanted = {
+                ".exe": "Windows (.exe)",
+                ".deb": "Debian (.deb)",
+                ".rpm": "RPM (.rpm)"
+            };
+
+            for (const asset of release.assets) {
+                const lower = asset.name.toLowerCase();
+
+                for (const ext in wanted) {
+                    if (lower.endsWith(ext)) {
+                        html += `
+                        <li>
+                            <a href="${asset.browser_download_url}">
+                                ${wanted[ext]}
+                            </a>
+                            (${(asset.size / 1024 / 1024).toFixed(1)} MB)
+                        </li>
+                    `;
+                    }
+                }
+            }
+
+            html += `
+            </ul>
+            <p>
+                <a href="${release.html_url}">
+                    View Release Notes
+                </a>
+            </p>
+        `;
+
+            container.innerHTML = html;
+
+        } catch (err) {
+            container.innerHTML =
+                "<p>Unable to load the latest release.</p>";
+            console.error(err);
+        }
+    }
+
+    loadLatestRelease();
+</script>
+
+
 <div class="header">
     <a href="https://oxasploits.github.io/PacketSnitch/"><img width="360" height="60" alt="PacketSnitch by oxasploits"
             src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
