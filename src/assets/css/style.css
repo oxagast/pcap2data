@@ -13,6 +13,7 @@
   --color-5: #ccbdde;
   --color-6: #b5b5b5;
   --color-7: #413f6e;
+  --top-bar-bg: var(--color-7);
   --data-tools-frame-bg: #0d1f47;
   --data-tools-hex-color: #ccbdde;
   --data-tools-binary-color: #ccbdde;
@@ -148,7 +149,7 @@ select {
 /* Top title bar */
 .top_bar {
   height: 40px;
-  background-color: var(--color-7);
+  background-color: var(--top-bar-bg);
   display: flex;
   justify-content: center;
   align-items: center;
