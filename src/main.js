@@ -9,12 +9,21 @@ const os = require("os");
 const util = require("util");
 const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
-const { Ollama } = require("ollama");
 const { Agent, fetch: undiciFetch } = require("undici");
 const {
   DEFAULT_SETTINGS,
   normalizeSettings,
 } = require("./settings");
+
+let Ollama = null;
+try {
+  ({ Ollama } = require("ollama"));
+} catch (error) {
+  console.warn(
+    "Ollama Node client module is unavailable. LLM features will be disabled.",
+    error,
+  );
+}
 
 let lzmaNative = null;
 try {
@@ -57,6 +66,11 @@ function getOllamaFetch(timeoutMs) {
       dispatcher,
     });
 }
+
+function isOllamaClientModuleAvailable() {
+  return typeof Ollama === "function";
+}
+
 let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
@@ -251,6 +265,9 @@ if (require("electron-squirrel-startup")) {
 
 ipcMain.handle('ollama:generate', async (_event, prompt) => {
   try {
+    if (!isOllamaClientModuleAvailable()) {
+      throw new Error("Ollama client module is unavailable");
+    }
     if (!appSettings) {
       await loadSettingsFromDisk();
     }
@@ -319,6 +336,10 @@ function killBackendProcess() {
 
 function checkOllama() {
   return new Promise((resolve) => {
+    if (!isOllamaClientModuleAvailable()) {
+      resolve(false);
+      return;
+    }
     exec("ollama --version", (versionError) => {
       if (versionError) {
         resolve(false); // not installed or not in PATH
