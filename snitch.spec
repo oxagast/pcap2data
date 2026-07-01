@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
+
+hidden_imports = ['encodings']
+hidden_imports += collect_submodules('cryptography')
+
 
 a = Analysis(
     ['src\\backend\\snitch.py'],
     pathex=[],
     binaries=[],
     datas=[('src/backend/common', 'common')],
-    hiddenimports=['encodings'],
+    hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

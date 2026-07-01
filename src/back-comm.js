@@ -180,7 +180,10 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     snitchExePath = path.join(basePath, "/snitch/snitch");
   }
 
-  const usePythonBackend = isDev && fs.existsSync(backendScriptPath);
+  // Prefer the bundled backend executable whenever it exists, even in dev,
+  // to avoid failures caused by missing local Python packages.
+  const hasBundledBackendExe = fs.existsSync(snitchExePath);
+  const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
   const backendCommandPath = usePythonBackend
     ? platform === "win32"
       ? "python"
@@ -189,7 +192,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
 
   if (usePythonBackend) {
     global.logBackend(`[Bridge] Using Python backend script at: ${backendScriptPath}`);
-  } else if (fs.existsSync(snitchExePath)) {
+  } else if (hasBundledBackendExe) {
     global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
   } else {
     global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
@@ -454,6 +457,18 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         return;
       }
       if (code !== 0) {
+        if (stderrBuffer.includes("No module named 'cryptography'")) {
+          sendError(
+            "[Bridge] Backend is missing Python module 'cryptography'. Rebuild backend artifacts (npm run build-backend) or install backend requirements before launching.",
+          );
+          resolve({
+            success: false,
+            stdout: stdoutBuffer,
+            error: "Backend dependency missing: cryptography",
+            pcapSource: pcapSourcePayload,
+          });
+          return;
+        }
         if (stderrBuffer.includes("supported capture file")) {
           sendError("[Bridge] Unsupported file format!");
         } else {
