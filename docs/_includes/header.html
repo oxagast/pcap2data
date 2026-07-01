@@ -72,10 +72,6 @@
     }
 </style>
 
-
-
-
-
 <div class="header">
     <a href="https://oxasploits.github.io/PacketSnitch/"><img width="360" height="60" alt="PacketSnitch by oxasploits"
             src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
@@ -83,9 +79,6 @@
     <h5><i>Documentation for the PacketSnitch project</i></h5>
     <br>
     {% include nav.html %}
-    <div id="downloads">
-        <p>Loading latest release...</p>
-    </div>
 
     <div id="downloads">Loading latest release...</div>
 
@@ -127,13 +120,11 @@
                 }
 
                 // Only include links that actually exist
-                const links = [deb, rpm, exe].filter(Boolean).join(" | ");
+                const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
                 container.innerHTML = `
             <strong>Latest Release:</strong> ${release.tag_name}<br>
-            ${links}<br><br>
-            <a href="${release.html_url}">Release Notes</a>
-        `;
+            ${links}`;
 
             } catch (err) {
                 console.error(err);
@@ -143,6 +134,4 @@
 
         document.addEventListener("DOMContentLoaded", loadLatestRelease);
     </script>
-
-
     <hr>
