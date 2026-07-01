@@ -97,36 +97,31 @@
         `;
 
             const wanted = {
-                ".exe": "Windows (.exe)",
                 ".deb": "Debian (.deb)",
-                ".rpm": "RPM (.rpm)"
+                ".rpm": "Fedora (.rpm)",
+                ".exe": "Windows (.exe)"
             };
+
+            const links = [];
 
             for (const asset of release.assets) {
                 const lower = asset.name.toLowerCase();
 
                 for (const ext in wanted) {
                     if (lower.endsWith(ext)) {
-                        html += `
-                        <li>
-                            <a href="${asset.browser_download_url}">
-                                ${wanted[ext]}
-                            </a>
-                            (${(asset.size / 1024 / 1024).toFixed(1)} MB)
-                        </li>
-                    `;
+                        links.push(
+                            `<a href="${asset.browser_download_url}">${wanted[ext]}</a>`
+                        );
                     }
                 }
             }
 
-            html += `
-            </ul>
-            <p>
-                <a href="${release.html_url}">
-                    View Release Notes
-                </a>
-            </p>
-        `;
+            container.innerHTML = `
+    <h2>Latest Release</h2>
+    <p><strong>${release.tag_name}</strong></p>
+    <p>${links.join(" | ")}</p>
+    <p><a href="${release.html_url}">Release Notes</a></p>
+`;
 
             container.innerHTML = html;
 
