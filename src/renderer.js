@@ -29,25 +29,25 @@
 import './assets/css/style.css';
 
 window.addEventListener("error", (event) => {
-	const message = event?.error?.stack || event?.message || "Unknown renderer error";
-	console.error("Renderer startup error:", message);
+    const message = event?.error?.stack || event?.message || "Unknown renderer error";
+    console.error("Renderer startup error:", message);
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-	const reason = event?.reason;
-	const message =
-		reason && typeof reason === "object" && "stack" in reason
-			? reason.stack
-			: String(reason);
-	console.error("Unhandled promise rejection in renderer:", message);
+    const reason = event?.reason;
+    const message =
+        reason && typeof reason === "object" && "stack" in reason
+            ? reason.stack
+            : String(reason);
+    console.error("Unhandled promise rejection in renderer:", message);
 });
 
 async function bootstrapRenderer() {
-	try {
-		await import('./front.js');
-	} catch (error) {
-		console.error("Failed to bootstrap renderer frontend:", error);
-	}
+    try {
+        await import('./front.js');
+    } catch (error) {
+        console.error("Failed to bootstrap renderer frontend:", error);
+    }
 }
 
 void bootstrapRenderer();
