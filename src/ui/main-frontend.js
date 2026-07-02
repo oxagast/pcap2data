@@ -15,6 +15,7 @@ const {
   renderIcmpTable,
   renderIgmpTable,
   renderArpTable,
+  renderLinkControlTable,
   renderSnmpTable,
   renderDhcpTable,
   renderNtpTable,
@@ -43,6 +44,7 @@ const {
   renderNfsTable,
   renderKerberosTable,
   renderSshTable,
+  renderSctpTable,
 } = require("./decoders");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
@@ -10358,10 +10360,8 @@ document.getElementById("stats-btn").addEventListener("click", function () {
     return;
   }
   const activeEntries = keystorePanel.getActiveCryptKeystoreEntries();
-  if (activeEntries.length > 0) {
-    window.keystoreCredsCount = activeEntries.length;
-    showStats();
-  }
+  window.keystoreCredsCount = activeEntries.length;
+  showStats();
 });
 
 document.getElementById("help-btn").addEventListener("click", function () {
@@ -12118,6 +12118,8 @@ function infoPanel(pk) {
           //  for the stream, for consistency
           const pktProtoName =
             pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["tcp.proto"] ||
+            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["sctp.proto"] ||
+            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["udp.proto"] ||
             "Unknown";
           if (streamPackets.length === 1) {
             // first packet in the stream, set the stream protocol
@@ -12165,6 +12167,9 @@ function infoPanel(pk) {
 
   // ARP/RARP info table (shown for ARP and RARP packets)
   renderArpTable(protocol, transportData);
+
+  // WAN/link control info table (shown when ATM/PPP/Frame Relay style link layers are present)
+  renderLinkControlTable(packetInfoData);
 
   // SNMP info table (shown for SNMP packets on port 161/162)
   renderSnmpTable(transportData);
@@ -12249,6 +12254,9 @@ function infoPanel(pk) {
 
   // SSH info table (shown for SSH packets on port 22/2222)
   renderSshTable(transportData);
+
+  // SCTP/SIGTRAN info table (shown for SCTP packets and SS7 adaptation layers)
+  renderSctpTable(transportData);
 
   const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [

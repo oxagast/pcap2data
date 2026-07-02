@@ -794,7 +794,10 @@ def getServ(port, protocol="tcp"):
     Cached with LRU to avoid repeated system calls for the same port/protocol.
     """
 
-    serviceName = socket.getservbyport(port, protocol)
+    try:
+        serviceName = socket.getservbyport(port, protocol)
+    except OSError:
+        serviceName = "Unknown"
     if not serviceName:
         serviceName = "Unknown"
     return serviceName
@@ -803,10 +806,12 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
     """
     Analyze data for entropy, charsetType, encoding, and network/server traits.
     Returns a dictionary with entropy, network data, length, server info, and character info.
-    The protocol parameter ("tcp" or "udp") is used for port-description lookups so that
-    UDP service names and descriptions are resolved correctly.
+    The protocol parameter ("tcp", "udp", or "sctp") is used for port-description lookups so that
+    transport-specific service names and descriptions are resolved correctly.
     """
 
+    protocol = str(protocol or "tcp").lower()
+    protocolPrefix = protocol if protocol in ("tcp", "udp", "sctp") else "udp"
     protoName = ""
     byteCounts = np.bincount(list(data))
     shannonEntropy = entropy(byteCounts, base=2)
@@ -816,6 +821,15 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
     else:
         srcProtoName = getPortNameFromCSV(srcPort, protocol)
         dstProtoName = getPortNameFromCSV(initialDstPort if initialDstPort is not None else dstPort, protocol)
+
+        if protocolPrefix == "sctp":
+            inferredSctpProto = _inferSctpApplicationProtocol(
+                data,
+                srcPort,
+                initialDstPort if initialDstPort is not None else dstPort,
+            )
+            if inferredSctpProto != "SCTP":
+                protoName = inferredSctpProto
 
         if srcProtoName and dstProtoName:
             if srcPort >= 1024 and dstPort < 1024:
@@ -831,7 +845,7 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
         else:
             protoName = getServ(srcPort, protocol) or getServ(dstPort, protocol)
             if not protoName:
-                protoName = "Unknown"
+                protoName = "SCTP" if protocolPrefix == "sctp" else "Unknown"
 
     # normalize the protocol responses and remove anything after a space or slash (e.g., "http / ssl" -> "http")
     protoName = protoName.split(" ")[0].split("/")[0].lower()
@@ -839,7 +853,7 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
     charsetType = "ascii" if all(32 <= b <= 126 for b in data) else "binary"
     uniqueCharCount = len(set(data))
     uniqueCharsSet = set(data)
-    if activeRecon:
+    if activeRecon and protocolPrefix in ("tcp", "udp"):
         dnsHostnames = reverseDnsLookup(destIp)
     else:
         dnsHostnames = {
@@ -887,11 +901,11 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
                 "network.dst.location": dstGeoInfo,
             },
             "Port Protcol": protoName,
-            "tcp.proto" if protocol == "tcp" else "udp.proto": protoName,
+            f"{protocolPrefix}.proto": protoName,
             "app.proto": protoName,
             "application.proto": protoName,
             "Port Description": portDesc,
-            "tcp.desc" if protocol == "tcp" else "udp.desc": portDesc,
+            f"{protocolPrefix}.desc": portDesc,
             "Hostnames": dnsHostnames,
             "dns.hostnames": dnsHostnames,
         },
@@ -3352,6 +3366,7 @@ def decodeWanLinkProtocols(p):
             detectedProtocols.append(protoName)
 
     mark("ATM", hasLayerName("atm", "atmad", "atmmeta"))
+    mark("ATM", hasLayerName("clip", "aal5", "pppoatm", "pppoa"))
     mark("Token Ring", hasLayerName("tokenring", "dot5"))
     mark("Frame Relay", hasLayerName("framerelay", "frame_relay"))
     mark("SDLC", hasLayerName("sdlc"))
@@ -3404,11 +3419,249 @@ def decodeWanLinkProtocols(p):
         result["PPP Protocol Field"] = f"{pppProtocolHex} ({pppProtocolName})"
         result["ppp.proto_field"] = f"{pppProtocolHex} ({pppProtocolName})"
 
+    if hasLayerName("clip"):
+        result["ATM Encapsulation"] = "Classical IP over ATM (CLIP)"
+        result["atm.encapsulation"] = "Classical IP over ATM (CLIP)"
+    elif hasLayerName("pppoatm", "pppoa"):
+        result["ATM Encapsulation"] = "PPP over ATM (PPPoA)"
+        result["atm.encapsulation"] = "PPP over ATM (PPPoA)"
+    elif hasLayerName("aal5"):
+        result["ATM Encapsulation"] = "ATM AAL5"
+        result["atm.encapsulation"] = "ATM AAL5"
+
     for proto in detectedProtocols:
         protoKey = proto.lower().replace(" ", "_")
         result[f"wan.proto.{protoKey}"] = proto
 
     return result
+
+
+SIGTRAN_PORT_PROTOCOLS = {
+    2904: "M2UA",
+    2905: "M3UA",
+    2906: "SUA",
+    3565: "M2PA",
+    9900: "IUA",
+}
+
+SCTP_PORT_PROTOCOLS = {
+    **SIGTRAN_PORT_PROTOCOLS,
+    2944: "H.248/MEGACO",
+    3868: "Diameter",
+    3869: "Diameter",
+}
+
+SCTP_CHUNK_TYPE_NAMES = {
+    0: "DATA",
+    1: "INIT",
+    2: "INIT ACK",
+    3: "SACK",
+    4: "HEARTBEAT",
+    5: "HEARTBEAT ACK",
+    6: "ABORT",
+    7: "SHUTDOWN",
+    8: "SHUTDOWN ACK",
+    9: "ERROR",
+    10: "COOKIE ECHO",
+    11: "COOKIE ACK",
+    12: "ECNE",
+    13: "CWR",
+    14: "SHUTDOWN COMPLETE",
+}
+
+M3UA_MESSAGE_CLASS_NAMES = {
+    0: "Transfer Messages",
+    1: "SS7 Signalling Network Management",
+    2: "ASP State Maintenance",
+    3: "ASP Traffic Maintenance",
+    4: "Routing Key Management",
+    5: "ASP Interface Management",
+    6: "Error Messages",
+    7: "Reserved",
+    8: "Network Appearance Management",
+}
+
+
+def _decodeSctpChunks(chunkBytes):
+    chunks = []
+    firstDataPayload = None
+    offset = 0
+
+    while offset + 4 <= len(chunkBytes):
+        chunkType = int(chunkBytes[offset])
+        chunkFlags = int(chunkBytes[offset + 1])
+        chunkLength = int.from_bytes(chunkBytes[offset + 2 : offset + 4], "big")
+        if chunkLength < 4 or offset + chunkLength > len(chunkBytes):
+            break
+
+        chunkPayload = chunkBytes[offset + 4 : offset + chunkLength]
+        chunkName = SCTP_CHUNK_TYPE_NAMES.get(chunkType, f"Type {chunkType}")
+        chunkInfo = {
+            "Chunk Type": chunkName,
+            "sctp.chunk.type": chunkType,
+            "Chunk Flags": chunkFlags,
+            "sctp.chunk.flags": chunkFlags,
+            "Chunk Length": chunkLength,
+            "sctp.chunk.length": chunkLength,
+            "Chunk Payload Length": len(chunkPayload),
+            "sctp.chunk.payload.len": len(chunkPayload),
+        }
+        if chunkPayload:
+            preview = chunkPayload[:32].hex()
+            chunkInfo["Chunk Payload Preview"] = preview
+            chunkInfo["sctp.chunk.payload.preview"] = preview
+        chunks.append(chunkInfo)
+        if chunkType == 0 and firstDataPayload is None:
+            firstDataPayload = chunkPayload
+
+        offset += (chunkLength + 3) & ~3
+
+    return chunks, firstDataPayload
+
+
+def decodeSctpPacket(p):
+    """
+    Decode SCTP transport headers and rudimentary SIGTRAN/M3UA metadata.
+    Returns a dict with SCTP header fields and, when present, a nested SIGTRAN section.
+    """
+
+    sctpLayer = None
+    try:
+        if p.haslayer("SCTP"):
+            sctpLayer = p["SCTP"]
+    except Exception:
+        sctpLayer = None
+
+    try:
+        if sctpLayer is not None:
+            sctpBytes = bytes(sctpLayer)
+        else:
+            sctpBytes = bytes(p["IP"].payload)
+    except Exception:
+        return None
+
+    if len(sctpBytes) < 12:
+        return None
+
+    try:
+        srcPort = int(getattr(sctpLayer, "sport", int.from_bytes(sctpBytes[0:2], "big")))
+    except Exception:
+        srcPort = int.from_bytes(sctpBytes[0:2], "big")
+    try:
+        dstPort = int(getattr(sctpLayer, "dport", int.from_bytes(sctpBytes[2:4], "big")))
+    except Exception:
+        dstPort = int.from_bytes(sctpBytes[2:4], "big")
+
+    verificationTag = int.from_bytes(sctpBytes[4:8], "big")
+    checksum = f"0x{sctpBytes[8:12].hex()}"
+    chunkBytes = sctpBytes[12:]
+    chunks, firstDataPayload = _decodeSctpChunks(chunkBytes)
+
+    sigtranProto = SIGTRAN_PORT_PROTOCOLS.get(srcPort) or SIGTRAN_PORT_PROTOCOLS.get(dstPort)
+    if sigtranProto is None and firstDataPayload and len(firstDataPayload) >= 8 and firstDataPayload[0] == 1:
+        sigtranProto = "M3UA"
+
+    sigtranSection = None
+    if sigtranProto is not None:
+        sigtranSection = {
+            "Protocol": sigtranProto,
+            "sigtran.proto": sigtranProto,
+            "Likely Signaling": "SS7 over SCTP" if sigtranProto in ("M2UA", "M3UA", "SUA", "M2PA", "IUA") else "SCTP adaptation",
+            "sigtran.signaling": "SS7 over SCTP" if sigtranProto in ("M2UA", "M3UA", "SUA", "M2PA", "IUA") else "SCTP adaptation",
+        }
+        if sigtranProto == "M3UA" and firstDataPayload and len(firstDataPayload) >= 8 and firstDataPayload[0] == 1:
+            messageClass = int(firstDataPayload[2])
+            messageType = int(firstDataPayload[3])
+            messageLength = int.from_bytes(firstDataPayload[4:8], "big")
+            sigtranSection.update(
+                {
+                    "Version": int(firstDataPayload[0]),
+                    "sigtran.version": int(firstDataPayload[0]),
+                    "Reserved": int(firstDataPayload[1]),
+                    "sigtran.reserved": int(firstDataPayload[1]),
+                    "Message Class": M3UA_MESSAGE_CLASS_NAMES.get(messageClass, f"Class {messageClass}"),
+                    "sigtran.message.class": messageClass,
+                    "Message Type": messageType,
+                    "sigtran.message.type": messageType,
+                    "Message Length": messageLength,
+                    "sigtran.length": messageLength,
+                }
+            )
+            if len(firstDataPayload) > 8:
+                preview = firstDataPayload[8 : min(len(firstDataPayload), 40)].hex()
+                sigtranSection["Protocol Data Preview"] = preview
+                sigtranSection["sigtran.payload.preview"] = preview
+                sigtranSection["Payload Length"] = len(firstDataPayload) - 8
+                sigtranSection["sigtran.payload.len"] = len(firstDataPayload) - 8
+        elif firstDataPayload:
+            preview = firstDataPayload[:32].hex()
+            sigtranSection["Payload Length"] = len(firstDataPayload)
+            sigtranSection["sigtran.payload.len"] = len(firstDataPayload)
+            sigtranSection["Payload Preview"] = preview
+            sigtranSection["sigtran.payload.preview"] = preview
+
+    section = {
+        "Source port": srcPort,
+        "sctp.src.port": srcPort,
+        "Destination port": dstPort,
+        "sctp.dst.port": dstPort,
+        "Verification Tag": verificationTag,
+        "sctp.vtag": verificationTag,
+        "Checksum": checksum,
+        "sctp.chksum": checksum,
+        "Chunk Count": len(chunks),
+        "sctp.chunk.count": len(chunks),
+        "Chunks": [chunk["Chunk Type"] for chunk in chunks],
+        "sctp.chunks": [chunk["Chunk Type"] for chunk in chunks],
+        "Wire length": len(sctpBytes),
+        "wire.len": len(sctpBytes),
+        "transport.len": len(sctpBytes),
+        "transport.proto": "SCTP",
+    }
+    if chunks:
+        section["Chunk Details"] = chunks
+        section["sctp.chunk.details"] = chunks
+    if sigtranSection is not None:
+        section["SIGTRAN"] = sigtranSection
+
+    return section
+
+
+def isSctpPacket(p):
+    try:
+        if p.haslayer("SCTP"):
+            return True
+    except Exception:
+        pass
+    try:
+        return int(getattr(p["IP"], "proto", -1)) == 132
+    except Exception:
+        return False
+
+
+def _inferSctpApplicationProtocol(data, srcPort, dstPort):
+    portProto = SCTP_PORT_PROTOCOLS.get(srcPort) or SCTP_PORT_PROTOCOLS.get(dstPort)
+    if portProto:
+        return portProto
+
+    if len(data) >= 28 and int(data[12]) == 0:
+        chunkLength = int.from_bytes(data[14:16], "big")
+        if 28 <= chunkLength <= len(data):
+            ppid = int.from_bytes(data[24:28], "big")
+            if ppid == 7:
+                return "H.248/MEGACO"
+            if ppid == 3:
+                return "M3UA"
+            if ppid == 4:
+                return "SUA"
+            if ppid == 5:
+                return "M2UA"
+            if ppid == 6:
+                return "M2PA"
+            if ppid == 8:
+                return "Diameter"
+
+    return "SCTP"
 
 
 def decodeAddressResolutionPacket(p):
@@ -3741,6 +3994,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
     isTcp = p.haslayer("TCP")
     isUdp = p.haslayer("UDP")
+    isSctp = isSctpPacket(p)
     ipProtocolNumber = int(getattr(p["IP"], "proto", -1))
     isIgmp = p.haslayer("IGMP") or ipProtocolNumber == 2
     isIcmp = p.haslayer("ICMP")
@@ -3771,6 +4025,13 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         srcPort = p["UDP"].sport
         dstPort = p["UDP"].dport
         transportProtocol = "udp"
+        dstPortStr = str(dstPort)
+    elif isSctp:
+        sctpLayer = p["SCTP"] if p.haslayer("SCTP") else None
+        rawPayload = bytes(p["IP"].payload)
+        srcPort = int(getattr(sctpLayer, "sport", int.from_bytes(rawPayload[0:2], "big")) or 0)
+        dstPort = int(getattr(sctpLayer, "dport", int.from_bytes(rawPayload[2:4], "big")) or 0)
+        transportProtocol = "sctp"
         dstPortStr = str(dstPort)
     elif isIgmp:
         rawPayload = bytes(p["IP"].payload)
@@ -4179,6 +4440,19 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
                 protocolKey = "UDP"
+            elif isSctp:
+                sctpSection = decodeSctpPacket(p)
+                if sctpSection is None:
+                    sctpSection = {
+                        "Source port": int(srcPort),
+                        "Destination port": int(dstPort),
+                        "Wire length": len(rawPayload),
+                        "wire.len": len(rawPayload),
+                        "transport.len": len(rawPayload),
+                        "transport.proto": "SCTP",
+                    }
+                transportSection = sctpSection
+                protocolKey = "SCTP"
             elif isIcmp:
                 # ICMP transport section
                 icmpLayer = p["ICMP"]

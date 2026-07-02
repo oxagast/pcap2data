@@ -148,6 +148,31 @@ function renderArpTable(protocol, transportData) {
   createTable(arpRows, [`${protocol} Field`, 'Value'], 'sidedatatable');
 }
 
+function renderLinkControlTable(packetInfoData) {
+  const linkData = packetInfoData['Link Control'];
+  if (!linkData) return;
+
+  const detectedProtocols = Array.isArray(linkData['Detected Protocols'])
+    ? linkData['Detected Protocols'].join(', ')
+    : linkData['Detected Protocols'] || '—';
+  const layerNames = Array.isArray(linkData['Layer Names'])
+    ? linkData['Layer Names'].join(', ')
+    : linkData['Layer Names'] || '—';
+
+  const linkRows = [
+    { name: 'Primary WAN Protocol', value: linkData['Primary WAN Protocol'] || '—' },
+    { name: 'Detected Protocols', value: detectedProtocols },
+    { name: 'Layer Names', value: layerNames },
+  ];
+  if (linkData['PPP Protocol Field']) {
+    linkRows.push({ name: 'PPP Protocol Field', value: linkData['PPP Protocol Field'] });
+  }
+  if (linkData['ATM Encapsulation']) {
+    linkRows.push({ name: 'ATM Encapsulation', value: linkData['ATM Encapsulation'] });
+  }
+  createTable(linkRows, ['WAN Field', 'Value'], 'sidedatatable');
+}
+
 function renderSnmpTable(transportData) {
   const snmpData = transportData['SNMP'];
   if (!snmpData) return;
@@ -665,12 +690,49 @@ function renderSshTable(transportData) {
   createTable(sshRows, ['SSH Field', 'Value'], 'sidedatatable');
 }
 
+function renderSctpTable(transportData) {
+  const sctpData = transportData;
+  if (!sctpData) return;
+
+  const sctpRows = [
+    { name: 'Source Port', value: sctpData['Source port'] ?? '—' },
+    { name: 'Destination Port', value: sctpData['Destination port'] ?? '—' },
+    { name: 'Verification Tag', value: sctpData['Verification Tag'] ?? '—' },
+    { name: 'Checksum', value: sctpData['Checksum'] ?? '—' },
+    { name: 'Chunk Count', value: sctpData['Chunk Count'] ?? '—' },
+    { name: 'Wire Length', value: sctpData['Wire length'] ?? '—' },
+  ];
+
+  const sigtranData = sctpData['SIGTRAN'];
+  if (sigtranData) {
+    sctpRows.push(
+      { name: 'SIGTRAN Protocol', value: sigtranData['Protocol'] || sigtranData['sigtran.proto'] || '—' },
+      { name: 'Likely Signaling', value: sigtranData['Likely Signaling'] || sigtranData['sigtran.signaling'] || '—' },
+    );
+    if (sigtranData['Message Class'] !== undefined) {
+      sctpRows.push({ name: 'Message Class', value: sigtranData['Message Class'] });
+    }
+    if (sigtranData['Message Type'] !== undefined) {
+      sctpRows.push({ name: 'Message Type', value: sigtranData['Message Type'] });
+    }
+    if (sigtranData['Message Length'] !== undefined) {
+      sctpRows.push({ name: 'Message Length', value: sigtranData['Message Length'] });
+    }
+    if (sigtranData['Payload Length'] !== undefined) {
+      sctpRows.push({ name: 'Payload Length', value: sigtranData['Payload Length'] });
+    }
+  }
+
+  createTable(sctpRows, ['SCTP Field', 'Value'], 'sidedatatable');
+}
+
 module.exports = {
   createTable,
   renderDnsTable,
   renderIcmpTable,
   renderIgmpTable,
   renderArpTable,
+  renderLinkControlTable,
   renderSnmpTable,
   renderDhcpTable,
   renderNtpTable,
@@ -699,4 +761,5 @@ module.exports = {
   renderNfsTable,
   renderKerberosTable,
   renderSshTable,
+  renderSctpTable,
 };

@@ -1,5 +1,5 @@
 const threadName = "Stats";
-const { app, sessionsapi, keystorePanel } = window;
+const { app, sessionsapi } = window;
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -65,7 +65,7 @@ function collectPacketDecodedProtocolNames(packetInfo) {
     });
   }
 
-  const sectionNames = ["TCP", "UDP", "ICMP", "IGMP", "LINK", "IP"];
+  const sectionNames = ["TCP", "UDP", "SCTP", "ICMP", "IGMP", "LINK", "IP"];
   sectionNames.forEach((sectionName) => {
     const section = packetInfo?.[sectionName];
     if (!section || typeof section !== "object") return;
@@ -609,228 +609,257 @@ function createStatsPanel(options) {
   }
 
   function showStats() {
-    setActiveMainTab(mainTabStats);
-    if (getJsonCapture() === "") {
-      statusUpdate("Status: No JSON file loaded, please upload a file first");
-      return;
-    }
-    statusUpdate("Status: Displaying capture statistics");
-    writeLogEntry(`[${threadName}] User opened capture stats view`);
+    try {
+      setActiveMainTab(mainTabStats);
+      if (getJsonCapture() === "") {
+        statusUpdate("Status: No JSON file loaded, please upload a file first");
+        return;
+      }
+      statusUpdate("Status: Displaying capture statistics");
+      writeLogEntry(`[${threadName}] User opened capture stats view`);
 
-    documentRef.getElementById("packetInfoPane").style.display = "none";
-    documentRef.getElementById("packetPayloadPane").style.display = "none";
-    documentRef.getElementById("prev-btn").style.display = "none";
-    documentRef.getElementById("next-btn").style.display = "none";
-    documentRef.getElementById("summary_box").style.display = "none";
-    documentRef.getElementById("list_box").style.display = "none";
-    documentRef.getElementById("notes_box").style.display = "none";
-    documentRef.getElementById("data_tools_box").style.display = "none";
-    documentRef.getElementById("crypt_box").style.display = "none";
-    documentRef.getElementById("keystore_box").style.display = "none";
-    documentRef.getElementById("stats_box").style.display = "block";
-    documentRef.getElementById("rightside").style.display = "none";
+      documentRef.getElementById("packetInfoPane").style.display = "none";
+      documentRef.getElementById("packetPayloadPane").style.display = "none";
+      documentRef.getElementById("prev-btn").style.display = "none";
+      documentRef.getElementById("next-btn").style.display = "none";
+      documentRef.getElementById("summary_box").style.display = "none";
+      documentRef.getElementById("list_box").style.display = "none";
+      documentRef.getElementById("notes_box").style.display = "none";
+      documentRef.getElementById("data_tools_box").style.display = "none";
+      documentRef.getElementById("crypt_box").style.display = "none";
+      documentRef.getElementById("keystore_box").style.display = "none";
+      documentRef.getElementById("stats_box").style.display = "block";
+      documentRef.getElementById("rightside").style.display = "none";
 
-    const content = documentRef.getElementById("stats_content");
-    content.replaceChildren();
+      const content = documentRef.getElementById("stats_content");
+      content.replaceChildren();
 
-    const stats = buildCaptureStats(
-      getCapturedPackets(),
-      typeof getBookmarkCount === "function" ? getBookmarkCount() : 0,
-    );
-    if (!stats) {
-      content.textContent = "No packet data available.";
-      return;
-    }
+      const stats = buildCaptureStats(
+        getCapturedPackets(),
+        typeof getBookmarkCount === "function" ? getBookmarkCount() : 0,
+      );
+      if (!stats) {
+        content.textContent = "No packet data available.";
+        return;
+      }
 
-    const overview = documentRef.createElement("div");
-    overview.className = "stats-section";
-    const ovHead = documentRef.createElement("div");
-    ovHead.className = "stats-section-title";
-    ovHead.textContent = "Capture Overview";
-    overview.appendChild(ovHead);
-    const overviewGrid = documentRef.createElement("div");
-    overviewGrid.className = "stats-overview-grid";
-    [
-      `Total Packets: ${stats.totalPackets}`,
-      `Bookmarked Packets: ${stats.bookmarkCount}`,
-      `Undecodable Packets: ${stats.undecodableCount}`,
-      `Total Streams: ${stats.totalStreams}`,
-      `Longest Stream: ${stats.maxStreamLength} packets`,
-      `Shortest Stream: ${stats.minStreamLength} packets`,
-      `Average Stream Length: ${stats.avgStreamLength} packets`,
-      `Unique Hosts Targeted: ${stats.hosts.length}`,
-      `Encrypted Packets: ${stats.encryptedCount}`,
-      `Unencrypted Packets: ${stats.unencryptedCount}`,
-      `TCP Retransmissions: ${stats.retransmissionCount}`,
-      `TCP Out-of-Order: ${stats.outOfOrderCount}`,
-      `Unique Protocols: ${stats.protocols.length}`,
-      `Unique Locations: ${stats.locations.length}`,
-      `Total Traffic: ${stats.totalTraffic} bytes`,
-      `Credentials Found: ${stats.creds}`,
-    ].forEach((line) => {
-      const kv = documentRef.createElement("div");
-      kv.className = "stats-kv";
-      kv.textContent = line;
-      overviewGrid.appendChild(kv);
-    });
-    overview.appendChild(overviewGrid);
-    content.appendChild(overview);
+      // Defensive normalization so unusual packet schemas do not break stats rendering.
+      const normalizeStringArray = (values) =>
+        (Array.isArray(values) ? values : [])
+          .map((value) => normalizeStatsTextValue(value))
+          .filter((value) => value !== null);
 
-    if (stats.undecodableCount > 0) {
-      const undecodableSec = makeStatsSection({
+      stats.protocols = normalizeStringArray(stats.protocols).map((proto) =>
+        proto.toUpperCase(),
+      );
+      stats.networkProtocols = normalizeStringArray(stats.networkProtocols);
+      stats.linkProtocols = normalizeStringArray(stats.linkProtocols);
+      stats.decodedProtocols = normalizeStringArray(stats.decodedProtocols);
+      stats.hosts = normalizeStringArray(stats.hosts);
+      stats.hostnames = normalizeStringArray(stats.hostnames);
+      stats.macVendors = normalizeStringArray(stats.macVendors);
+      stats.mimeTypes = normalizeStringArray(stats.mimeTypes);
+      stats.dataTypes = normalizeStringArray(stats.dataTypes);
+
+      const overview = documentRef.createElement("div");
+      overview.className = "stats-section";
+      const ovHead = documentRef.createElement("div");
+      ovHead.className = "stats-section-title";
+      ovHead.textContent = "Capture Overview";
+      overview.appendChild(ovHead);
+      const overviewGrid = documentRef.createElement("div");
+      overviewGrid.className = "stats-overview-grid";
+      [
+        `Total Packets: ${stats.totalPackets}`,
+        `Bookmarked Packets: ${stats.bookmarkCount}`,
+        `Undecodable Packets: ${stats.undecodableCount}`,
+        `Total Streams: ${stats.totalStreams}`,
+        `Longest Stream: ${stats.maxStreamLength} packets`,
+        `Shortest Stream: ${stats.minStreamLength} packets`,
+        `Average Stream Length: ${stats.avgStreamLength} packets`,
+        `Unique Hosts Targeted: ${stats.hosts.length}`,
+        `Encrypted Packets: ${stats.encryptedCount}`,
+        `Unencrypted Packets: ${stats.unencryptedCount}`,
+        `TCP Retransmissions: ${stats.retransmissionCount}`,
+        `TCP Out-of-Order: ${stats.outOfOrderCount}`,
+        `Unique Protocols: ${stats.protocols.length}`,
+        `Unique Locations: ${stats.locations.length}`,
+        `Total Traffic: ${stats.totalTraffic} bytes`,
+        `Credentials Found: ${stats.creds}`,
+      ].forEach((line) => {
+        const kv = documentRef.createElement("div");
+        kv.className = "stats-kv";
+        kv.textContent = line;
+        overviewGrid.appendChild(kv);
+      });
+      overview.appendChild(overviewGrid);
+      content.appendChild(overview);
+
+      if (stats.undecodableCount > 0) {
+        const undecodableSec = makeStatsSection({
+          documentRef,
+          title: "Undecodable Packets",
+          items: [`Undecodable (${stats.undecodableCount})`],
+          queryBuilder: () => `packet.proto: undecodable`,
+          onQuery: applyStatsQuery,
+        });
+        if (undecodableSec) content.appendChild(undecodableSec);
+      }
+
+      const topTalkersSec = makeStatsSection({
         documentRef,
-        title: "Undecodable Packets",
-        items: [`Undecodable (${stats.undecodableCount})`],
-        queryBuilder: () => `packet.proto: undecodable`,
+        title: "Top Talkers",
+        items: stats.topTalkers.map((talker) => `${talker.ip} (${talker.count} packets)`),
+        queryBuilder: (v) => `ip.src.addr: ${v.substr(0, v.indexOf(" "))} || ip.dst.addr: ${v.substr(0, v.indexOf(" "))}`,
         onQuery: applyStatsQuery,
       });
-      if (undecodableSec) content.appendChild(undecodableSec);
-    }
+      if (topTalkersSec) content.appendChild(topTalkersSec);
 
-    const topTalkersSec = makeStatsSection({
-      documentRef,
-      title: "Top Talkers",
-      items: stats.topTalkers.map((talker) => `${talker.ip} (${talker.count} packets)`),
-      queryBuilder: (v) => `ip.src.addr: ${v.substr(0, v.indexOf(" "))} || ip.dst.addr: ${v.substr(0, v.indexOf(" "))}`,
-      onQuery: applyStatsQuery,
-    });
-    if (topTalkersSec) content.appendChild(topTalkersSec);
-
-    // make the application protocols uppercase to be congruent with the rest of the protos
-    stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
-    const protoSec = makeStatsSection({
-      documentRef,
-      title: "Application Protocols",
-      items: stats.protocols,
-      queryBuilder: (v) => `application.proto: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (protoSec) content.appendChild(protoSec);
-
-    const networkProtoSec = makeStatsSection({
-      documentRef,
-      title: "Network/Transport/Link Protocols",
-      items: stats.networkProtocols,
-      queryBuilder: (v) => `network.proto: ${v.toLowerCase()} || link.proto: ${v.toLowerCase()} || decoded.proto: ${v.toLowerCase()} || transport.proto: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (networkProtoSec) content.appendChild(networkProtoSec);
-
-    const tpSec = makeStatsSection({
-      documentRef,
-      title: "Link Protocols",
-      items: stats.linkProtocols,
-      queryBuilder: (v) => `link.proto: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (tpSec) content.appendChild(tpSec);
-
-    const decodedProtoSec = makeStatsSection({
-      documentRef,
-      title: "Decoded Protocols",
-      items: stats.decodedProtocols,
-      queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (decodedProtoSec) content.appendChild(decodedProtoSec);
-
-    const arpOpSec = makeStatsSection({
-      documentRef,
-      title: "ARP/RARP Operations",
-      items: stats.arpOperations,
-      queryBuilder: (v) => `arp.op: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (arpOpSec) content.appendChild(arpOpSec);
-
-    const igmpTypeSec = makeStatsSection({
-      documentRef,
-      title: "IGMP Message Types",
-      items: stats.igmpMessageTypes,
-      queryBuilder: (v) => `igmp.type: ${v.toLowerCase()}`,
-      onQuery: applyStatsQuery,
-    });
-    if (igmpTypeSec) content.appendChild(igmpTypeSec);
-
-    const hostSec = makeStatsSection({
-      documentRef,
-      title: "All Hosts Addressed",
-      items: stats.hosts,
-      queryBuilder: (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
-      onQuery: applyStatsQuery,
-    });
-    if (hostSec) content.appendChild(hostSec);
-
-    // make sure the ips here are not listed in stats.hosts, if they are, skip them
-    const hostIpsSet = new Set(stats.hosts);
-    const filteredHostnames = stats.hostnames.filter((hn) => {
-      const hnAsIp = hn.replace(/^\[|\]$/g, ""); // Remove brackets from IPv6 addresses
-      return !hostIpsSet.has(hnAsIp);
-    });
-    // also filter out any hostnames that have a "," comma in them, as they are likely
-    // malformed and not useful for filtering
-    const fullyFilteredHostnames = filteredHostnames.filter((hn) => !hn.includes(","));
-    if (fullyFilteredHostnames.length > 0) {
-      const filteredHnSec = makeStatsSection({
+      // make the application protocols uppercase to be congruent with the rest of the protos
+      stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
+      const protoSec = makeStatsSection({
         documentRef,
-        title: "Hostnames (DNS)",
-        items: fullyFilteredHostnames,
-        queryBuilder: (v) => `dns.qname: ${v}`,
+        title: "Application Protocols",
+        items: stats.protocols,
+        queryBuilder: (v) => `application.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (filteredHnSec) content.appendChild(filteredHnSec);
-    }
-    //if (hnSec) content.appendChild(hnSec);
+      if (protoSec) content.appendChild(protoSec);
 
-    if (stats.locations.length > 0) {
-      const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
-      const locSec = makeStatsSection({
+      const networkProtoSec = makeStatsSection({
         documentRef,
-        title: "Physical Locations",
-        items: locItems,
-        queryBuilder: (v) => {
-          // we should search by the city, which comes before a comma
-          const city = v.split(" (")[0].split(",")[0].trim();
-          return `loc.src.city: ${city} || loc.dst.city: ${city}`;
-        },
+        title: "Network/Transport/Link Protocols",
+        items: stats.networkProtocols,
+        queryBuilder: (v) => `network.proto: ${v.toLowerCase()} || link.proto: ${v.toLowerCase()} || decoded.proto: ${v.toLowerCase()} || transport.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (locSec) content.appendChild(locSec);
+      if (networkProtoSec) content.appendChild(networkProtoSec);
+
+      const tpSec = makeStatsSection({
+        documentRef,
+        title: "Link Protocols",
+        items: stats.linkProtocols,
+        queryBuilder: (v) => `link.proto: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (tpSec) content.appendChild(tpSec);
+
+      const decodedProtoSec = makeStatsSection({
+        documentRef,
+        title: "Decoded Protocols",
+        items: stats.decodedProtocols,
+        queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (decodedProtoSec) content.appendChild(decodedProtoSec);
+
+      const arpOpSec = makeStatsSection({
+        documentRef,
+        title: "ARP/RARP Operations",
+        items: stats.arpOperations,
+        queryBuilder: (v) => `arp.op: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (arpOpSec) content.appendChild(arpOpSec);
+
+      const igmpTypeSec = makeStatsSection({
+        documentRef,
+        title: "IGMP Message Types",
+        items: stats.igmpMessageTypes,
+        queryBuilder: (v) => `igmp.type: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (igmpTypeSec) content.appendChild(igmpTypeSec);
+
+      const hostSec = makeStatsSection({
+        documentRef,
+        title: "All Hosts Addressed",
+        items: stats.hosts,
+        queryBuilder: (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
+        onQuery: applyStatsQuery,
+      });
+      if (hostSec) content.appendChild(hostSec);
+
+      // make sure the ips here are not listed in stats.hosts, if they are, skip them
+      const hostIpsSet = new Set(stats.hosts);
+      const filteredHostnames = stats.hostnames.filter((hn) => {
+        const hnAsIp = hn.replace(/^\[|\]$/g, ""); // Remove brackets from IPv6 addresses
+        return !hostIpsSet.has(hnAsIp);
+      });
+      // also filter out any hostnames that have a "," comma in them, as they are likely
+      // malformed and not useful for filtering
+      const fullyFilteredHostnames = filteredHostnames.filter((hn) => !hn.includes(","));
+      if (fullyFilteredHostnames.length > 0) {
+        const filteredHnSec = makeStatsSection({
+          documentRef,
+          title: "Hostnames (DNS)",
+          items: fullyFilteredHostnames,
+          queryBuilder: (v) => `dns.qname: ${v}`,
+          onQuery: applyStatsQuery,
+        });
+        if (filteredHnSec) content.appendChild(filteredHnSec);
+      }
+      //if (hnSec) content.appendChild(hnSec);
+
+      if (stats.locations.length > 0) {
+        const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
+        const locSec = makeStatsSection({
+          documentRef,
+          title: "Physical Locations",
+          items: locItems,
+          queryBuilder: (v) => {
+            // we should search by the city, which comes before a comma
+            const city = v.split(" (")[0].split(",")[0].trim();
+            return `loc.src.city: ${city} || loc.dst.city: ${city}`;
+          },
+          onQuery: applyStatsQuery,
+        });
+        if (locSec) content.appendChild(locSec);
+      }
+
+      const portSec = makeStatsSection({
+        documentRef,
+        title: "Ports Seen",
+        items: stats.ports.map(String),
+        queryBuilder: (v) => `(tcp.src.port: ${v} || tcp.dst.port: ${v}) || (udp.src.port: ${v} || udp.dst.port: ${v}) || (sctp.src.port: ${v} || sctp.dst.port: ${v})`,
+        onQuery: applyStatsQuery,
+      });
+      if (portSec) content.appendChild(portSec);
+
+      const macSec = makeStatsSection({
+        documentRef,
+        title: "MAC Vendors",
+        items: stats.macVendors,
+        queryBuilder: (v) => `eth.src.vendor: ${v}`,
+        onQuery: applyStatsQuery,
+      });
+      if (macSec) content.appendChild(macSec);
+
+      const mimeSec = makeStatsSection({
+        documentRef,
+        title: "MIME Types",
+        items: stats.mimeTypes,
+        queryBuilder: (v) => `mime.type: ${v}`,
+        onQuery: applyStatsQuery,
+      });
+      if (mimeSec) content.appendChild(mimeSec);
+
+      const dtSec = makeStatsSection({
+        documentRef,
+        title: "Data Types",
+        items: stats.dataTypes,
+      });
+      if (dtSec) content.appendChild(dtSec);
+    } catch (error) {
+      const message = error?.stack || error?.message || String(error);
+      writeLogEntry(`[${threadName}] Failed to render stats panel: ${message}`);
+      statusUpdate("Status: Failed to render capture stats. See activity log for details.");
+      const content = documentRef.getElementById("stats_content");
+      if (content) {
+        content.replaceChildren();
+        content.textContent = "Unable to render stats for this capture.";
+      }
     }
-
-    const portSec = makeStatsSection({
-      documentRef,
-      title: "Ports Seen",
-      items: stats.ports.map(String),
-      queryBuilder: (v) => `(tcp.src.port: ${v} || tcp.dst.port: ${v}) || (udp.src.port: ${v} || udp.dst.port: ${v})`,
-      onQuery: applyStatsQuery,
-    });
-    if (portSec) content.appendChild(portSec);
-
-    const macSec = makeStatsSection({
-      documentRef,
-      title: "MAC Vendors",
-      items: stats.macVendors,
-      queryBuilder: (v) => `eth.src.vendor: ${v}`,
-      onQuery: applyStatsQuery,
-    });
-    if (macSec) content.appendChild(macSec);
-
-    const mimeSec = makeStatsSection({
-      documentRef,
-      title: "MIME Types",
-      items: stats.mimeTypes,
-      queryBuilder: (v) => `mime.type: ${v}`,
-      onQuery: applyStatsQuery,
-    });
-    if (mimeSec) content.appendChild(mimeSec);
-
-    const dtSec = makeStatsSection({
-      documentRef,
-      title: "Data Types",
-      items: stats.dataTypes,
-    });
-    if (dtSec) content.appendChild(dtSec);
   }
 
   return {

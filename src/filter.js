@@ -201,7 +201,7 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
         });
       }
 
-      const transportSections = ['TCP', 'UDP', 'ICMP', 'IGMP', 'LINK'];
+      const transportSections = ['TCP', 'UDP', 'SCTP', 'ICMP', 'IGMP', 'LINK'];
       transportSections.forEach((sectionName) => {
         const section = packetInfo?.[sectionName];
         if (!section || typeof section !== 'object') return;
