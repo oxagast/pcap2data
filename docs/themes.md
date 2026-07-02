@@ -14,7 +14,7 @@ This guide covers:
 
 ---
 
-## Screenshot
+## Screenshots
 
 <p align="center">
 Screenshot of the "Matrix" theme.
@@ -44,8 +44,9 @@ A lighter, airy pastels theme, "Nilla Horizon".
 
 PacketSnitch uses two theme locations:
 
-- Repository defaults: `themes/*.json`
-- Runtime/user themes: `userData/themes/*.json`
+- Windows the userdir usually resolves to `C:\Users\Username\AppData\Roaming\packetsnitch\themes\*.json`.
+- Linux it ususally resolves to `/home/username/.config/packetsnitch/themes/*.json`.
+
 
 At startup, PacketSnitch ensures default themes exist in `userData/themes`. The Settings tab reads from this runtime directory.
 
@@ -267,7 +268,7 @@ Recommended starting points:
 
 ## Build and Test Workflow
 
-1. Copy an existing theme JSON in `userData/themes`.
+1. Copy an existing theme JSON in `packetsnitch/themes`.
 2. Rename file and update `id`/`name`.
 3. Modify `variables` (and optional `logoImage` / `backdropImage`).
 4. Open **Settings → General** and select your theme.
@@ -283,7 +284,8 @@ Theme does not appear in Settings:
 - Confirm file extension is `.json`.
 - Confirm JSON is valid.
 - Confirm `variables` exists and has at least one `--variable` string value.
-- Confirm the file is in `userData/themes` (not only repository `themes/` in production installs).
+- Confirm the file is in `~/.config/PacketSnitch/themes` or `C:\Users\Username\AppData\Roaming\packetsnitch\themes`.
+- Make sure the variables are in the correct *places in the json*, check all *commas* are where they should be, and make sure variables are *not duplicated*.
 
 Theme appears but styles do not change:
 
@@ -295,6 +297,7 @@ Logo does not render:
 - Confirm `format` is `png`, `jpg`, or `jpeg`.
 - Confirm base64 payload is valid and non-empty.
 - Remove line breaks/whitespace from base64 if needed.
+- A good way to get a valid base64 for an image is: `cat image.png | base64 -w0 | wl-copy`
 
 Backdrop wallpaper does not render:
 
@@ -304,5 +307,5 @@ Backdrop wallpaper does not render:
 
 Wallpaper renders but is hard to notice:
 
-- Lower `--panel-bg-opacity` (for example from `100%` to `84%`).
+- Lower `--panel-bg-opacity` (for example from `100%` to `70%`).
 - Ensure your panel surfaces are not fully opaque overrides in the selected theme.

@@ -259,7 +259,7 @@ Reserved workspace for future OpenSSH key and session tooling.
 
 The **Settings** tab is a persistent configuration workspace with two sub-tabs: **General** and **LLM**.
 
-Settings are stored locally at `userData/config/settings.json` and loaded through preload IPC (`settingsapi`). Theme discovery and retrieval are exposed through `themeapi`.
+Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Linux) or `C:\User\Username\AppData\Roaming\packetsnitch\config\settings.json` (Windows).
 
 ##### General Sub-tab
 
@@ -295,7 +295,7 @@ If the API key field is left blank when saving, the currently stored key is reta
 
 ##### Theme Engine Summary
 
-- Themes are JSON files in `userData/themes`.
+- Themes are JSON files in `packetsnitch/themes`.
 - Default bundled themes are mirrored there automatically on startup.
 - Theme definitions provide CSS variable overrides and optional custom logo data.
 
