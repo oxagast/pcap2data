@@ -475,11 +475,8 @@ strong {
   position: static;
   margin: 0;
   margin-left: 110px;
-  /* transform: translate(-50%, -50%);
-  width: auto;
-  justify-content: center;
-  align-items: center;
-  z-index: 10; */
+  width: 140px;
+  z-index: 10;
 }
 
 #summary_content {
