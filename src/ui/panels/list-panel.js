@@ -59,6 +59,36 @@ function collectDecodedProtocolNames(packetInfo) {
 }
 
 function inferApplicationProtocol(packetInfo, extraInfo) {
+  const packetProtocol = String(packetInfo?.["Protocol"] || "").trim().toLowerCase();
+  if (packetProtocol === "undecodable") {
+    return "Unknown protocol";
+  }
+
+  if (packetProtocol === "icmp") {
+    const icmpSection = packetInfo?.["ICMP"] || {};
+    const icmpTypeValue =
+      icmpSection?.["icmp.type"] ??
+      icmpSection?.["Type"] ??
+      icmpSection?.["transport.icmp.type"];
+    const icmpType = Number.parseInt(String(icmpTypeValue ?? ""), 10);
+    const icmpTypeLabel = String(icmpTypeValue ?? "").toLowerCase();
+
+    if (icmpType === 0 || icmpType === 8 || icmpTypeLabel.includes("echo")) {
+      return "Ping";
+    }
+
+    if (
+      icmpType === 3 ||
+      icmpType === 11 ||
+      icmpTypeLabel.includes("destination unreachable") ||
+      icmpTypeLabel.includes("time exceeded")
+    ) {
+      return "Traceroute";
+    }
+
+    return "ICMP";
+  }
+
   const netData = extraInfo?.["Traits"]?.["Network Data"];
   const fromTraitsRaw =
     netData?.["Port Protocol"] ??
@@ -93,7 +123,7 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
 
   if (decodedNames.length > 0) return decodedNames[0];
   if (!isUnknownLikeProtocol(fromTraits)) return fromTraits;
-  return "Unknown";
+  return "Unknown protocol";
 }
 
 function createListPanel({

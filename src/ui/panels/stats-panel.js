@@ -311,6 +311,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const tcpStreams = new Map();
   let encryptedCount = 0;
   let unencryptedCount = 0;
+  let undecodableCount = 0;
   let totalPackets = 0;
   if (!capturedPackets || !capturedPackets["Host"]) return null;
 
@@ -356,6 +357,9 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
 
       const tp = normalizeStatsTextValue(pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
+      if (tp && tp.toLowerCase() === "undecodable") {
+        undecodableCount++;
+      }
       const packetProto = normalizeStatsTextValue(pi?.["packet.proto"] || tp);
       if (packetProto) networkProtocols.add(packetProto);
 
@@ -491,6 +495,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     topTalkers: getTopTalkers(capturedPackets, 5),
     encryptedCount,
     unencryptedCount,
+    undecodableCount,
     totalPackets,
     totalStreams: streams.size,
     maxStreamLength,
@@ -648,6 +653,7 @@ function createStatsPanel(options) {
     [
       `Total Packets: ${stats.totalPackets}`,
       `Bookmarked Packets: ${stats.bookmarkCount}`,
+      `Undecodable Packets: ${stats.undecodableCount}`,
       `Total Streams: ${stats.totalStreams}`,
       `Longest Stream: ${stats.maxStreamLength} packets`,
       `Shortest Stream: ${stats.minStreamLength} packets`,
@@ -669,6 +675,17 @@ function createStatsPanel(options) {
     });
     overview.appendChild(overviewGrid);
     content.appendChild(overview);
+
+    if (stats.undecodableCount > 0) {
+      const undecodableSec = makeStatsSection({
+        documentRef,
+        title: "Undecodable Packets",
+        items: [`Undecodable (${stats.undecodableCount})`],
+        queryBuilder: () => `packet.proto: undecodable`,
+        onQuery: applyStatsQuery,
+      });
+      if (undecodableSec) content.appendChild(undecodableSec);
+    }
 
     const topTalkersSec = makeStatsSection({
       documentRef,

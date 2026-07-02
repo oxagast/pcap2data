@@ -299,6 +299,29 @@ def getPortNameFromCSV(port, protocol="tcp"):
 
     return portServiceNameMap.get((port, protocol), "Unknown")
 
+
+def getIcmpApplicationProtocol(data):
+    """
+    Infer a human-friendly ICMP application label from the ICMP header.
+    """
+
+    if not data:
+        return "ICMP"
+
+    icmpType = int(data[0]) if len(data) > 0 else -1
+    icmpCode = int(data[1]) if len(data) > 1 else -1
+
+    if icmpType in (0, 8):
+        return "Ping"
+
+    if icmpType in (3, 11):
+        return "Traceroute"
+
+    if icmpType == 12 and icmpCode == 0:
+        return "Traceroute"
+
+    return "ICMP"
+
 def reverseDnsLookup(ip):
     """
     Perform a reverse DNS lookup for the given IP address.
@@ -788,24 +811,27 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
     byteCounts = np.bincount(list(data))
     shannonEntropy = entropy(byteCounts, base=2)
     dataLength = len(data)
-    srcProtoName = getPortNameFromCSV(srcPort, protocol)
-    dstProtoName = getPortNameFromCSV(initialDstPort if initialDstPort is not None else dstPort, protocol)
-
-    if srcProtoName and dstProtoName:
-        if srcPort >= 1024 and dstPort < 1024:
-            protoName = dstProtoName
-        elif dstPort >= 1024 and srcPort < 1024:
-            protoName = srcProtoName
-        else:
-            protoName = srcProtoName if len(srcProtoName) < len(dstProtoName) else dstProtoName
-    elif srcProtoName != "Unknown":
-        protoName = srcProtoName
-    elif dstProtoName != "Unknown":
-        protoName = dstProtoName
+    if protocol == "icmp":
+        protoName = getIcmpApplicationProtocol(data)
     else:
-        protoName = getServ(srcPort, protocol) or getServ(dstPort, protocol)
-        if not protoName:
-            protoName = "Unknown"
+        srcProtoName = getPortNameFromCSV(srcPort, protocol)
+        dstProtoName = getPortNameFromCSV(initialDstPort if initialDstPort is not None else dstPort, protocol)
+
+        if srcProtoName and dstProtoName:
+            if srcPort >= 1024 and dstPort < 1024:
+                protoName = dstProtoName
+            elif dstPort >= 1024 and srcPort < 1024:
+                protoName = srcProtoName
+            else:
+                protoName = srcProtoName if len(srcProtoName) < len(dstProtoName) else dstProtoName
+        elif srcProtoName != "Unknown":
+            protoName = srcProtoName
+        elif dstProtoName != "Unknown":
+            protoName = dstProtoName
+        else:
+            protoName = getServ(srcPort, protocol) or getServ(dstPort, protocol)
+            if not protoName:
+                protoName = "Unknown"
 
     # normalize the protocol responses and remove anything after a space or slash (e.g., "http / ssl" -> "http")
     protoName = protoName.split(" ")[0].split("/")[0].lower()
@@ -3760,12 +3786,13 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         transportProtocol = "icmp"
         dstPortStr = "icmp"
     else:
-        # Generic IP payload fallback for captures without TCP/UDP/ICMP transport.
-        rawPayload = bytes(p["IP"].payload) if bytes(p["IP"].payload) else bytes(p["IP"])
+        # Catch-all fallback for packets we can see but do not have a decoder for yet.
+        ipPayload = bytes(p["IP"].payload)
+        rawPayload = ipPayload if len(ipPayload) > 0 else bytes(p["IP"])
         srcPort = 0
         dstPort = 0
         transportProtocol = "ip"
-        dstPortStr = "ip"
+        dstPortStr = "undecodable"
 
     if (srcPortFilter is None or srcPort == srcPortFilter) and (
         dstPortFilter is None or dstPort == dstPortFilter
@@ -3776,16 +3803,28 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
                 streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
             #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
-            dataTypeInfo = getDatatypes(
-                rawPayload, srcPort,
-                streamLabelPort,
-                p["IP"].src,
-                p["IP"].dst,
-                timeout,
-                transportProtocol,
-                initialDstPort,
-                activeRecon=activeRecon
-            )
+            if transportProtocol == "ip":
+                mimeType = magic.from_buffer(rawPayload, mime=True)
+                dataTypeInfo = {
+                    "MIME Type": mimeType,
+                    "payload.mime": mimeType,
+                    "Decompressed": {"Decompressed": False},
+                    "payload.decompressed": {"Decompressed": False},
+                    "Data Types": ["Unknown data type"],
+                    "Traits": {"Length": len(rawPayload)},
+                }
+            else:
+                dataTypeInfo = getDatatypes(
+                    rawPayload,
+                    srcPort,
+                    streamLabelPort,
+                    p["IP"].src,
+                    p["IP"].dst,
+                    timeout,
+                    transportProtocol,
+                    initialDstPort,
+                    activeRecon=activeRecon,
+                )
             timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
                 "%Y-%m-%d %H:%M:%S.%f"
             )
@@ -4213,8 +4252,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "wire.len": len(p["IP"]),
                     "network.len": len(p["IP"]),
                     "network.proto": "IP",
+                    "transport.proto": "Unknown protocol",
                 }
-                protocolKey = "IP"
+                protocolKey = "Undecodable"
 
             packetInfo = {
                 "Packet Processed": int(packetIndex),
