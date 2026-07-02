@@ -10360,7 +10360,11 @@ document.getElementById("stats-btn").addEventListener("click", function () {
     return;
   }
   const activeEntries = keystorePanel.getActiveCryptKeystoreEntries();
-  window.keystoreCredsCount = activeEntries.length;
+  // check the entries to only return the number of passwords (not usernames, not cookies, etc)
+  const passwordEntries = activeEntries.filter(entry => entry.label && entry.label.toLowerCase().includes("password"));
+  // now unique it
+  const uniquePasswords = new Set(passwordEntries.map(entry => entry.content));
+  window.keystoreCreds = uniquePasswords;
   showStats();
 });
 

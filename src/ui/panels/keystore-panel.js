@@ -727,10 +727,10 @@ function createKeystorePanel({
     ) {
       if (structuredFtpCredentials) {
         addUserPasswordEntries(
-          "FTP",
+          "TCP FTP.credentials.username",
           structuredFtpCredentials.username,
           structuredFtpCredentials.password,
-          "FTP",
+          "TCP FTP.credentials.password",
         );
       }
 
@@ -738,10 +738,10 @@ function createKeystorePanel({
       const ftpPassMatch = text.match(/^\s*PASS\s+(.+)$/im);
       if (ftpUserMatch || ftpPassMatch) {
         addUserPasswordEntries(
-          "FTP",
+          "TCP FTP.credentials.username",
           ftpUserMatch?.[1] || "",
           ftpPassMatch?.[1] || "",
-          "FTP",
+          "TCP FTP.credentials.password",
         );
       }
       if (isRelevantProtocolPort("ftp", port)) {
@@ -750,10 +750,10 @@ function createKeystorePanel({
           lowerPath.includes("username") ||
           lowerPath.includes("login")
         ) {
-          addUserPasswordEntries("FTP", text, "", "FTP");
+          addUserPasswordEntries("TCP FTP.credentials.username", text, "", "TCP FTP.credentials.password");
         }
         if (lowerPath.includes("pass") || lowerPath.includes("password")) {
-          addUserPasswordEntries("FTP", "", text, "FTP");
+          addUserPasswordEntries("TCP FTP.credentials.username", "", text, "TCP FTP.credentials.password");
         }
       }
     }
@@ -766,10 +766,10 @@ function createKeystorePanel({
       const rdpPassMatch = text.match(/\b(?:pass(?:word)?|pwd)\s*[:=]\s*(\S+)/i);
       if ((rdpUserMatch || rdpPassMatch) && isRelevantProtocolPort("rdp", port)) {
         addUserPasswordEntries(
-          "RDP",
+          "TCP RDP.credentials.username",
           rdpUserMatch?.[1] || "",
           rdpPassMatch?.[1] || "",
-          "RDP",
+          "TCP RDP.credentials.password",
         );
       }
       if (isRelevantProtocolPort("rdp", port)) {
@@ -778,10 +778,10 @@ function createKeystorePanel({
           lowerPath.includes("username") ||
           lowerPath.includes("login")
         ) {
-          addUserPasswordEntries("RDP", text, "", "RDP");
+          addUserPasswordEntries("TCP RDP.credentials.username", text, "", "TCP RDP.credentials.password");
         }
         if (lowerPath.includes("pass") || lowerPath.includes("password")) {
-          addUserPasswordEntries("RDP", "", text, "RDP");
+          addUserPasswordEntries("TCP RDP.credentials.username", "", text, "TCP RDP.credentials.password");
         }
       }
     }
@@ -835,10 +835,10 @@ function createKeystorePanel({
         const smtpTokens = splitCredentialArguments(smtpAuthMatch[1]);
         if (smtpTokens.length >= 2) {
           addUserPasswordEntries(
-            "SMTP",
+            "TCP SMTP.credentials.username",
             smtpTokens[0],
             smtpTokens[1],
-            "SMTP",
+            "TCP SMTP.credentials.password",
           );
         }
       }

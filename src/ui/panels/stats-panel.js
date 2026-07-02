@@ -43,6 +43,16 @@ function getTopTalkers(capturedPackets, topN = 5) {
     .map(([ip, count]) => ({ ip, count }));
 }
 
+function getUniqueCredentialList() {
+  const uniquePasswords = window.keystoreCreds || new Set();
+  return [...uniquePasswords].sort()
+};
+
+function getUniqueCredentialCount() {
+  const uniquePasswords = window.keystoreCreds || new Set();
+  return uniquePasswords.size;
+}
+
 function collectPacketDecodedProtocolNames(packetInfo) {
   const decodedNames = new Set();
 
@@ -309,6 +319,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const dataTypes = new Set();
   const streams = new Map();
   const tcpStreams = new Map();
+  const credsList = new Map();
   let encryptedCount = 0;
   let unencryptedCount = 0;
   let undecodableCount = 0;
@@ -502,6 +513,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     minStreamLength,
     avgStreamLength,
     creds: getCredentialsFromKeystore(),
+    uniqueCredentialCount: [...getUniqueCredentialList()].length,
+    uniqueCredentials: [...(window.keystoreCreds || new Set())].sort(),
     totalTraffic: totalTrafficBytes(capturedPackets),
     retransmissionCount: tcpStreamAnomalyCounts.retransmissionCount,
     outOfOrderCount: tcpStreamAnomalyCounts.outOfOrderCount,
@@ -685,7 +698,7 @@ function createStatsPanel(options) {
         `Unique Protocols: ${stats.protocols.length}`,
         `Unique Locations: ${stats.locations.length}`,
         `Total Traffic: ${stats.totalTraffic} bytes`,
-        `Credentials Found: ${stats.creds}`,
+        `Credentials Found: ${stats.uniqueCredentialCount}`,
       ].forEach((line) => {
         const kv = documentRef.createElement("div");
         kv.className = "stats-kv";
@@ -714,6 +727,13 @@ function createStatsPanel(options) {
         onQuery: applyStatsQuery,
       });
       if (topTalkersSec) content.appendChild(topTalkersSec);
+
+      const credsSec = makeStatsSection({
+        documentRef,
+        title: "Credentials Found",
+        items: stats.uniqueCredentialCount > 0 ? stats.uniqueCredentials : ["No credentials found"],
+      });
+      if (credsSec) content.appendChild(credsSec);
 
       // make the application protocols uppercase to be congruent with the rest of the protos
       stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
