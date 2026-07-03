@@ -4,7 +4,7 @@ out
 .npmrc
 src/backend/snitch
 backend/snitch.exe
-
+testcases
 .VSCodeCounter
 
 # Logs

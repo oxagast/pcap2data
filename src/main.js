@@ -86,6 +86,8 @@ let goodiesDataCache = null;
 let ollamaModelsCache = null;
 let appSettings = null;
 let backCommModule = null;
+let backendShutdownOnQuitInProgress = false;
+let backendShutdownOnQuitComplete = false;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
 const THEMES_DIR_NAME = "themes";
@@ -317,32 +319,17 @@ ipcMain.handle("file-size", async () => {
 // make sure we have a fresh temp dir
 fs.rmSync(testcaseTempDir, { recursive: true, force: true });
 
-// make a trigger so we can call killBackendProcess from the renderer process
-ipcMain.handle("kill-snitch-process", () => {
-  console.log("Received request to kill snitch process from renderer");
-  killBackendProcess();
-});
-
-function killBackendProcess() {
-  console.log("Shutting down preprocessor...");
-  const shutdownBackendService = backCommModule?.shutdownHttpBackendService
+async function shutdownBackendGracefullyForExit() {
+  const shutdownBackendService = backCommModule?.requestBackendShutdown
+    || backCommModule?.shutdownHttpBackendService
     || backCommModule?.shutdownTcpBackendService;
-  if (typeof shutdownBackendService === "function") {
-    try {
-      shutdownBackendService();
-    } catch (error) {
-      console.warn("Failed to shut down backend service cleanly:", error);
-    }
+  if (typeof shutdownBackendService !== "function") {
+    return;
   }
-  if (platform === "win32") {
-    exec("taskkill /IM snitch.exe /T /F", (fileError) => {
-      if (fileError) console.error(fileError);
-    });
-  }
-  if (platform === "linux") {
-    exec('pkill -f "testcases"', (fileError) => {
-      if (fileError) console.error(fileError);
-    });
+  try {
+    await shutdownBackendService();
+  } catch (error) {
+    console.warn("Failed to shut down backend service cleanly:", error);
   }
 }
 
@@ -1998,7 +1985,7 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   if (!hasLoggedProgramShutdown) {
     appendActivityLogLine(
       timestampLifecycleMessage(
@@ -2008,9 +1995,23 @@ app.on("before-quit", () => {
     );
     hasLoggedProgramShutdown = true;
   }
-  // make sure the backend snitch process dies!
-  if (isBackendLoaded) {
-    killBackendProcess();
+
+  // Ask the backend service to stop gracefully during app exit, and wait
+  // for the API request to finish before allowing Electron to terminate.
+  if (!backCommModule || backendShutdownOnQuitComplete) {
+    return;
   }
+
+  event.preventDefault();
+  if (backendShutdownOnQuitInProgress) {
+    return;
+  }
+
+  backendShutdownOnQuitInProgress = true;
+  void shutdownBackendGracefullyForExit().finally(() => {
+    backendShutdownOnQuitInProgress = false;
+    backendShutdownOnQuitComplete = true;
+    app.quit();
+  });
 });
 

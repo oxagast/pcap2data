@@ -1,5 +1,5 @@
 const { BrowserWindow, ipcMain } = require("electron");
-const { spawn, exec } = require("child_process");
+const { spawn } = require("child_process");
 const http = require("http");
 const os = require("os");
 const platform = os.platform();
@@ -24,6 +24,82 @@ let backendHttpReadyPromise = null;
 let currentBackendHttpHost = BACKEND_HTTP_HOST;
 let currentBackendHttpPort = BACKEND_HTTP_PORT;
 let backendHttpShutdownExpected = false;
+
+async function sendBackendControlCommand(action, timeoutMs = 5000) {
+  const isReady = await probeSnitchHttpBackendReady(
+    currentBackendHttpHost,
+    currentBackendHttpPort,
+    Math.min(timeoutMs, 1500),
+  );
+  if (!isReady) {
+    return {
+      success: true,
+      noop: true,
+      message: "Backend service is not running",
+    };
+  }
+
+  return new Promise((resolve) => {
+    const body = JSON.stringify({ action });
+    const req = http.request(
+      {
+        host: currentBackendHttpHost,
+        port: currentBackendHttpPort,
+        path: "/control",
+        method: "POST",
+        timeout: timeoutMs,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": Buffer.byteLength(body),
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk.toString();
+        });
+        res.on("end", () => {
+          let parsed = {};
+          try {
+            parsed = JSON.parse(responseBody || "{}");
+          } catch (_err) {
+            parsed = {};
+          }
+          resolve({
+            success: res.statusCode === 200 && parsed?.success !== false,
+            ...parsed,
+          });
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP backend control request timed out"));
+    });
+    req.on("error", (error) => {
+      resolve({
+        success: false,
+        error: error?.message || "HTTP backend control request failed",
+      });
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+async function requestBackendStopProcessing() {
+  return sendBackendControlCommand("stop-processing", 5000);
+}
+
+async function requestBackendShutdown() {
+  backendHttpShutdownExpected = true;
+  const result = await sendBackendControlCommand("shutdown", 5000);
+  if (!result?.success && !result?.noop) {
+    backendHttpShutdownExpected = false;
+  }
+  return result;
+}
 
 function probeSnitchHttpBackendReady(host = BACKEND_HTTP_HOST, port = BACKEND_HTTP_PORT, timeoutMs = 1200) {
   return new Promise((resolve) => {
@@ -145,33 +221,10 @@ function resolveBackendRuntime() {
 }
 
 function shutdownHttpBackendService() {
-  if (backendHttpServerProc) {
-    backendHttpShutdownExpected = true;
-    try {
-      backendHttpServerProc.kill("SIGTERM");
-    } catch (_err) {
-      // ignore shutdown errors
-    }
-  }
-  backendHttpServerProc = null;
+  const shutdownPromise = requestBackendShutdown();
+  // Reset local readiness tracking; the service close callback will reconcile state.
   backendHttpReadyPromise = null;
-}
-
-function killBackendProcess() {
-  shutdownHttpBackendService();
-  if (platform === "win32") {
-    exec("taskkill /IM snitch.exe /T /F", () => {
-      // best-effort kill path for compatibility with legacy backend mode
-    });
-  }
-  if (platform === "linux") {
-    exec('pkill -f "snitch.py"', () => {
-      // best-effort kill path for compatibility with legacy backend mode
-    });
-    exec('pkill -f "snitch/snitch"', () => {
-      // best-effort kill path for compatibility with legacy backend mode
-    });
-  }
+  return shutdownPromise;
 }
 
 async function ensureBackendHttpServerReady() {
@@ -841,11 +894,9 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         resolve({
           success: false,
           stdout: stdoutBuffer,
-          error: "Backend execution error: Disk quota exceeded!  Killing backend process to avoid further issues.",
+          error: "Backend execution error: Disk quota exceeded!",
           pcapSource: pcapSourcePayload,
         });
-        // call the backend shutdown function
-        killBackendProcess();
         return;
       }
       if (code !== 0) {
@@ -959,6 +1010,19 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
   }
 });
 
+ipcMain.handle("control-backend-service", async (_event, action) => {
+  if (action === "stop-processing") {
+    return requestBackendStopProcessing();
+  }
+  if (action === "shutdown") {
+    return requestBackendShutdown();
+  }
+  return {
+    success: false,
+    error: "Unsupported backend control action",
+  };
+});
+
 // Start the HTTP backend service as early as possible so the renderer can
 // submit processing requests immediately after startup.
 applyBackendTransportOptions({
@@ -975,6 +1039,8 @@ void ensureBackendHttpServerReady().then((ready) => {
 module.exports = {
   shutdownHttpBackendService,
   ensureBackendHttpServerReady,
+  requestBackendStopProcessing,
+  requestBackendShutdown,
   // Backward-compatible aliases for existing imports in main process code.
   shutdownTcpBackendService: shutdownHttpBackendService,
   ensureBackendTcpServerReady: ensureBackendHttpServerReady,

@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld('snitchapi', {
       callback(payload);
     });
   },
-  shutdownBackend: () => ipcRenderer.invoke('kill-snitch-process'),
+  shutdownBackend: () => ipcRenderer.invoke('control-backend-service', 'stop-processing'),
 });
 
 contextBridge.exposeInMainWorld('getfileapi', {

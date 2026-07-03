@@ -4958,6 +4958,7 @@ def runCaptureFromArgs(runArgs):
         file=sys.stderr,
     )
 
+    processingCancelled = False
     try:
         if os.path.isdir(outputDir):
             shutil.rmtree(outputDir, ignore_errors=True)
@@ -4971,6 +4972,7 @@ def runCaptureFromArgs(runArgs):
                 file=sys.stderr,
             )
             startThreading()
+        processingCancelled = stopEvent.is_set()
     finally:
         with allPacketInfoLock:
             finalPacketInfoSnapshot = list(allPacketInfo)
@@ -4990,6 +4992,7 @@ def runCaptureFromArgs(runArgs):
 
     return {
         "success": True,
+        "cancelled": processingCancelled,
         "outputDir": outputDir,
         "processedPackets": len(finalPacketInfoSnapshot),
         "totalPackets": totalPackets,
@@ -5044,6 +5047,65 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global progressEventCallback
+
+        if self.path == "/control":
+            try:
+                request = self.parseJsonBody()
+                if not isinstance(request, dict):
+                    self.sendJson(
+                        400,
+                        {
+                            "success": False,
+                            "error": "Invalid JSON request",
+                        },
+                    )
+                    return
+
+                action = str(request.get("action") or "").strip().lower()
+                if action == "stop-processing":
+                    stopEvent.set()
+                    self.sendJson(
+                        200,
+                        {
+                            "success": True,
+                            "action": action,
+                            "processing": processingLock.locked(),
+                        },
+                    )
+                    return
+
+                if action == "shutdown":
+                    stopEvent.set()
+                    self.sendJson(
+                        200,
+                        {
+                            "success": True,
+                            "action": action,
+                        },
+                    )
+
+                    # Shutdown must run on a different thread than the request handler.
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    return
+
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Unsupported control action",
+                    },
+                )
+                return
+            except Exception as controlError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(controlError),
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+                return
 
         if self.path != "/process":
             self.sendJson(
@@ -5113,6 +5175,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "success": bool(result.get("success")),
+                    "cancelled": bool(result.get("cancelled", False)),
                     "error": result.get("error"),
                     "stdout": "",
                     "progressEvents": progressEvents,

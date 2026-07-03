@@ -1388,9 +1388,16 @@ sessionPickerPanel = initializeSessionPicker({
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
     resetBackendProgressState();
-    window.snitchapi.shutdownBackend().catch((error) => {
+    writeLogEntry("Backend stop requested action=stop-processing reason=session-switch");
+    const backendStopResult = await window.snitchapi.shutdownBackend().catch((error) => {
       logErrorEntry("shutdown-backend", error);
+      return null;
     });
+    if (backendStopResult) {
+      writeLogEntry(
+        `Backend stop response success=${Boolean(backendStopResult.success)} noop=${Boolean(backendStopResult.noop)} processing=${Boolean(backendStopResult.processing)}`,
+      );
+    }
     setSessionPcapSource(null, { skipLog: true });
     if (window.captureapi) {
       const loadResult = await window.captureapi.loadJson(jsonData);
