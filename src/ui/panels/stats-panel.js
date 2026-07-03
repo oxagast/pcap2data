@@ -7,9 +7,9 @@ const DEFAULT_HEATMAP_TIGHTNESS = 145;
 const DEFAULT_HEATMAP_POINT_SIZE = 90;
 const DEFAULT_HEATMAP_BLUR = 72;
 const DEFAULT_HEATMAP_MAP_ZOOM = 100;
-const MIN_HEATMAP_MAP_ZOOM = 100;
-const MAX_HEATMAP_MAP_ZOOM = 360;
-const HEATMAP_MAP_ZOOM_STEP = 50;
+const MIN_HEATMAP_MAP_ZOOM = 120;
+const MAX_HEATMAP_MAP_ZOOM = 600;
+const HEATMAP_MAP_ZOOM_STEP = 150;
 const HEATMAP_SELECTION_MIN_PIXELS = 12;
 const HEATMAP_SELECTION_DRAW_MS = 170;
 const HEATMAP_SELECTION_BLINK_MS = 280;
@@ -34,6 +34,84 @@ const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 1.04;
 const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -0.006;
 const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y = 0;
 let lastStatsMapProjectionCalibration = null;
+let statsBasemapSvgSourceCache = null;
+const statsBasemapSvgThemeCache = new Map();
+
+function setInlineSvgStyleProperty(styleText, propertyName, propertyValue) {
+  const declarations = String(styleText || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !part.toLowerCase().startsWith(`${propertyName.toLowerCase()}:`));
+  declarations.unshift(`${propertyName}:${propertyValue}`);
+  return declarations.join(";");
+}
+
+async function fetchStatsBasemapSvgSource() {
+  if (typeof statsBasemapSvgSourceCache === "string" && statsBasemapSvgSourceCache.length > 0) {
+    return statsBasemapSvgSourceCache;
+  }
+  const response = await fetch(WIKIMEDIA_WORLD_MAP_ASSET_PATH);
+  if (!response.ok) {
+    throw new Error(`Unable to load heatmap basemap SVG: ${response.status}`);
+  }
+  const svgText = await response.text();
+  statsBasemapSvgSourceCache = svgText;
+  return svgText;
+}
+
+function buildThemedStatsBasemapSvg(svgSource, landFillColor) {
+  if (!svgSource || !landFillColor) return svgSource;
+
+  const groupStyleRegex = /(<g[^>]*id="layer1"[^>]*style=")([^"]*)(")/i;
+  if (groupStyleRegex.test(svgSource)) {
+    return svgSource.replace(groupStyleRegex, (fullMatch, prefix, styleValue, suffix) => {
+      const nextStyle = setInlineSvgStyleProperty(styleValue, "fill", landFillColor);
+      return `${prefix}${nextStyle}${suffix}`;
+    });
+  }
+
+  const groupTagRegex = /<g[^>]*id="layer1"[^>]*>/i;
+  if (groupTagRegex.test(svgSource)) {
+    return svgSource.replace(groupTagRegex, (groupTag) =>
+      groupTag.replace(/>$/, ` style="fill:${landFillColor}">`),
+    );
+  }
+
+  return svgSource;
+}
+
+async function getThemedStatsBasemapDataUri(landFillColor) {
+  const normalizedFillColor = String(landFillColor || "").trim() || "#cccccc";
+  if (statsBasemapSvgThemeCache.has(normalizedFillColor)) {
+    return statsBasemapSvgThemeCache.get(normalizedFillColor);
+  }
+
+  try {
+    const svgSource = await fetchStatsBasemapSvgSource();
+    const themedSvg = buildThemedStatsBasemapSvg(svgSource, normalizedFillColor);
+    const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedSvg)}`;
+    statsBasemapSvgThemeCache.set(normalizedFillColor, dataUri);
+    return dataUri;
+  } catch {
+    return null;
+  }
+}
+
+async function applyThemedStatsBasemapImage(basemapImageEl) {
+  if (!basemapImageEl || !window.getComputedStyle) return;
+  const rootStyles = window.getComputedStyle(document.documentElement);
+  const landFillColor =
+    rootStyles.getPropertyValue("--stats-heatmap-land-fill-color")
+    || rootStyles.getPropertyValue("--color-1")
+    || "#cccccc";
+  const themedDataUri = await getThemedStatsBasemapDataUri(landFillColor);
+  if (typeof themedDataUri === "string" && themedDataUri) {
+    basemapImageEl.src = themedDataUri;
+    return;
+  }
+  basemapImageEl.src = WIKIMEDIA_WORLD_MAP_ASSET_PATH;
+}
 
 function clampProjectionSetting(value, fallback, minimum, maximum) {
   const numericValue = Number(value);
@@ -803,6 +881,7 @@ function createStatsHeatmapSection({
   basemapEl.className = "stats-heatmap-basemap";
   basemapEl.src = WIKIMEDIA_WORLD_MAP_ASSET_PATH;
   basemapEl.alt = "World map basemap";
+  void applyThemedStatsBasemapImage(basemapEl);
   basemapFrameEl.appendChild(basemapEl);
   mapEl.appendChild(basemapFrameEl);
 

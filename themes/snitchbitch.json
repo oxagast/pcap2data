@@ -23,6 +23,17 @@
         "--data-tools-decimal-color": "#ccbdde",
         "--data-tools-decimal-integer-color": "#ccbdde",
         "--data-tools-ascii-color": "#ccbdde",
-        "--data-tools-base64-color": "#ccbdde"
+        "--data-tools-base64-color": "#ccbdde",
+        "--stats-heatmap-water-color-1": "#19052b",
+        "--stats-heatmap-water-color-2": "#5c63ff",
+        "--stats-heatmap-water-color-3-top": "#0a0811",
+        "--stats-heatmap-water-color-3-bottom": "#020103",
+        "--stats-heatmap-land-fill-color": "#7a37ff",
+        "--stats-heatmap-land-filter": "grayscale(0.80) contrast(1.34) brightness(0.63) hue-rotate(2850deg) saturate(2.35)",
+        "--stats-heatmap-land-opacity": "0.80",
+        "--stats-heatmap-selection-border-color": "#7b84ff",
+        "--stats-heatmap-selection-highlight-color": "rgba(123, 132, 255, 0.24)",
+        "--stats-heatmap-selection-active-border-color": "#9fa7ff",
+        "--stats-heatmap-selection-active-highlight-color": "rgba(105, 72, 255, 0.34)"
     }
 }

@@ -39,7 +39,18 @@
     "--quit-btn-hover-color": "#232a33",
     "--log-bg": "#ffffff",
     "--log-text": "#232a33",
-    "--panel-bg-opacity": "55%"
+    "--panel-bg-opacity": "55%",
+    "--stats-heatmap-water-color-1": "#F89880",
+    "--stats-heatmap-water-color-2": "#80E0F8",
+    "--stats-heatmap-water-color-3-top": "#440a02",
+    "--stats-heatmap-water-color-3-bottom": "#A4F880",
+    "--stats-heatmap-land-fill-color": "#F89880",
+    "--stats-heatmap-land-filter": "grayscale(0.80) contrast(1.34) brightness(0.83) hue-rotate(230deg) saturate(2.85)",
+    "--stats-heatmap-land-opacity": "0.80",
+    "--stats-heatmap-selection-border-color": "#7b84ff",
+    "--stats-heatmap-selection-highlight-color": "rgba(123, 132, 255, 0.24)",
+    "--stats-heatmap-selection-active-border-color": "#9fa7ff",
+    "--stats-heatmap-selection-active-highlight-color": "rgba(105, 72, 255, 0.34)"
   },
   "backdropImage": {
     "format": "png",

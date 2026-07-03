@@ -33,6 +33,17 @@
   --panel-bg-opacity: 100%;
   --tab-inactive-opacity: 0.4;
   --sidebar-width: 20%;
+  --stats-heatmap-water-color-1: color-mix(in srgb, var(--color-2) 55%, transparent);
+  --stats-heatmap-water-color-2: color-mix(in srgb, var(--color-1) 18%, transparent);
+  --stats-heatmap-water-color-3-top: color-mix(in srgb, var(--surface-1) 88%, #101216);
+  --stats-heatmap-water-color-3-bottom: color-mix(in srgb, var(--surface-0) 92%, #020304);
+  --stats-heatmap-land-fill-color: #cccccc;
+  --stats-heatmap-land-filter: grayscale(1) contrast(1.14) brightness(0.92);
+  --stats-heatmap-land-opacity: 0.96;
+  --stats-heatmap-selection-border-color: color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
+  --stats-heatmap-selection-highlight-color: color-mix(in srgb, var(--color-1) 22%, transparent);
+  --stats-heatmap-selection-active-border-color: color-mix(in srgb, #ff4a4a 82%, #ffffff 18%);
+  --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, #ff2e2e 34%, transparent);
 }
 
 /* Page background */
@@ -2007,9 +2018,9 @@ strong {
   overflow: hidden;
   border: 1px solid var(--color-3);
   background:
-    radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--color-2) 55%, transparent), transparent 42%),
-    radial-gradient(circle at 70% 72%, color-mix(in srgb, var(--color-1) 18%, transparent), transparent 38%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 88%, #101216), color-mix(in srgb, var(--surface-0) 92%, #020304));
+    radial-gradient(circle at 30% 20%, var(--stats-heatmap-water-color-1), transparent 42%),
+    radial-gradient(circle at 70% 72%, var(--stats-heatmap-water-color-2), transparent 38%),
+    linear-gradient(180deg, var(--stats-heatmap-water-color-3-top), var(--stats-heatmap-water-color-3-bottom));
   transition: height 0.2s ease;
 }
 
@@ -2047,8 +2058,8 @@ strong {
   height: 100%;
   display: block;
   object-fit: fill;
-  filter: grayscale(1) contrast(1.14) brightness(0.92);
-  opacity: 0.96;
+  filter: var(--stats-heatmap-land-filter);
+  opacity: var(--stats-heatmap-land-opacity);
 }
 
 .stats-heatmap-grid {
@@ -2094,9 +2105,14 @@ strong {
   position: absolute;
   z-index: 7;
   pointer-events: none;
-  border: 2px solid color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
-  background: color-mix(in srgb, var(--color-1) 22%, transparent);
+  border: 2px solid var(--stats-heatmap-selection-border-color);
+  background: var(--stats-heatmap-selection-highlight-color);
   box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 52%, transparent);
+}
+
+.stats-heatmap-selecting .stats-heatmap-selection {
+  border-color: var(--stats-heatmap-selection-active-border-color);
+  background: var(--stats-heatmap-selection-active-highlight-color);
 }
 
 .stats-heatmap-selection-capture {
