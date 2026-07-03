@@ -13,9 +13,9 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     debug: {
         ungroupedListVirtualizationEnabled: false,
-        mapProjectionZoomX: 1.08,
-        mapProjectionZoomY: 1.04,
-        mapProjectionOffsetX: -0.006,
+        mapProjectionZoomX: 0.55,
+        mapProjectionZoomY: 0.95,
+        mapProjectionOffsetX: -0.53,
         mapProjectionOffsetY: 0,
         mapProjectionCalibrationLocked: true,
     },

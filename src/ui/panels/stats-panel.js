@@ -30,9 +30,9 @@ const WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS = Object.freeze({
   top: 0.02,
   bottom: 0.98,
 });
-const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X = 1.08;
-const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 1.04;
-const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -0.006;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X = 0.55;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 0.95;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -0.53;
 const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y = 0;
 let lastStatsMapProjectionCalibration = null;
 let statsBasemapSvgSourceCache = null;
@@ -866,11 +866,11 @@ function createStatsHeatmapSection({
   controlsEl.appendChild(blurControlEl);
   controlsEl.appendChild(calibrationHeadingEl);
   controlsEl.appendChild(calibrationLockControlEl);
+  controlsEl.appendChild(resetControlsBtn);
   controlsEl.appendChild(zoomXControlEl);
   controlsEl.appendChild(zoomYControlEl);
   controlsEl.appendChild(offsetXControlEl);
   controlsEl.appendChild(offsetYControlEl);
-  controlsEl.appendChild(resetControlsBtn);
   shell.appendChild(controlsEl);
 
   const mapEl = documentRef.createElement("div");
