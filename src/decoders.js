@@ -694,6 +694,15 @@ function renderSctpTable(transportData) {
   const sctpData = transportData;
   if (!sctpData) return;
 
+  // Only render when SCTP-specific evidence exists; Source/Destination port
+  // keys are shared by TCP/UDP and would otherwise produce false SCTP tables.
+  const hasSctpData =
+    sctpData['Verification Tag'] !== undefined ||
+    sctpData['Chunk Count'] !== undefined ||
+    sctpData['SIGTRAN'] !== undefined ||
+    sctpData['sctp.proto'] !== undefined;
+  if (!hasSctpData) return;
+
   const sctpRows = [
     { name: 'Source Port', value: sctpData['Source port'] ?? '—' },
     { name: 'Destination Port', value: sctpData['Destination port'] ?? '—' },
