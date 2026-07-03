@@ -1961,6 +1961,14 @@ strong {
   accent-color: var(--color-1);
 }
 
+.stats-heatmap-control select {
+  width: 100%;
+  border: 1px solid var(--color-3);
+  color: var(--input-text-color);
+  background-color: var(--input-bg-color);
+  min-height: 26px;
+}
+
 .stats-heatmap-control-value {
   min-width: 42px;
   text-align: right;
@@ -2022,6 +2030,8 @@ strong {
 .stats-heatmap-layer,
 .stats-heatmap-points {
   position: absolute;
+  transition: transform 180ms ease-out;
+  will-change: transform;
 }
 
 .stats-heatmap-basemap-frame {
@@ -2078,6 +2088,76 @@ strong {
 .stats-heatmap-points {
   z-index: 4;
   pointer-events: none;
+}
+
+.stats-heatmap-selection {
+  position: absolute;
+  z-index: 7;
+  pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
+  background: color-mix(in srgb, var(--color-1) 22%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 52%, transparent);
+}
+
+.stats-heatmap-selection-capture {
+  animation: stats-heatmap-selection-capture 170ms ease-out;
+}
+
+.stats-heatmap-selection-blink {
+  animation: stats-heatmap-selection-blink 140ms ease-in-out 2;
+}
+
+@keyframes stats-heatmap-selection-capture {
+  0% {
+    transform: scale(0.97);
+    opacity: 0.72;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes stats-heatmap-selection-blink {
+
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 52%, transparent);
+  }
+
+  50% {
+    opacity: 0.12;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 95%, transparent);
+  }
+}
+
+.stats-heatmap-pixel-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.stats-heatmap-pixel-segment {
+  position: absolute;
+  background:
+    linear-gradient(45deg,
+      color-mix(in srgb, #000000 55%, transparent) 25%,
+      transparent 25%,
+      transparent 50%,
+      color-mix(in srgb, #000000 55%, transparent) 50%,
+      color-mix(in srgb, #000000 55%, transparent) 75%,
+      transparent 75%,
+      transparent);
+  background-size: 8px 8px;
+  backdrop-filter: blur(1.1px) contrast(0.76) saturate(0.55);
+}
+
+.stats-heatmap-selecting,
+.stats-heatmap-selection-animating {
+  cursor: crosshair;
 }
 
 .stats-heatmap-point {

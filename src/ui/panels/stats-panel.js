@@ -6,6 +6,18 @@ const DEFAULT_HEATMAP_INTENSITY = 100;
 const DEFAULT_HEATMAP_TIGHTNESS = 145;
 const DEFAULT_HEATMAP_POINT_SIZE = 90;
 const DEFAULT_HEATMAP_BLUR = 72;
+const DEFAULT_HEATMAP_MAP_ZOOM = 100;
+const MIN_HEATMAP_MAP_ZOOM = 100;
+const MAX_HEATMAP_MAP_ZOOM = 360;
+const HEATMAP_MAP_ZOOM_STEP = 50;
+const HEATMAP_SELECTION_MIN_PIXELS = 12;
+const HEATMAP_SELECTION_DRAW_MS = 170;
+const HEATMAP_SELECTION_BLINK_MS = 280;
+const HEATMAP_ZOOM_SETTLE_MS = 200;
+const HEATMAP_SCOPE_CAPTURE = "capture";
+const HEATMAP_SCOPE_FILTERED = "filtered";
+const HEATMAP_METRIC_PACKETS = "packets";
+const HEATMAP_METRIC_BYTES = "bytes";
 const WIKIMEDIA_WORLD_MAP_ASSET_PATH = "../assets/images/blankmap-world-gray.svg";
 const WIKIMEDIA_WORLD_MAP_WIDTH = 1404.7773;
 const WIKIMEDIA_WORLD_MAP_HEIGHT = 600.81262;
@@ -189,6 +201,14 @@ function getProjectionCalibration(settingsGetter) {
   return calibration;
 }
 
+function getProjectionCalibrationLockState(settingsGetter) {
+  const debugSettings = settingsGetter?.()?.debug || {};
+  if (typeof debugSettings.mapProjectionCalibrationLocked === "boolean") {
+    return debugSettings.mapProjectionCalibrationLocked;
+  }
+  return true;
+}
+
 function parseThemeRgbValue(colorValue) {
   const normalizedColor = typeof colorValue === "string" ? colorValue.trim() : "";
   if (!normalizedColor) return null;
@@ -256,6 +276,12 @@ function clampHeatmapPercent(value, fallback) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return fallback;
   return Math.min(200, Math.max(40, Math.round(numericValue)));
+}
+
+function clampHeatmapMapZoomPercent(value, fallback = DEFAULT_HEATMAP_MAP_ZOOM) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(MAX_HEATMAP_MAP_ZOOM, Math.max(MIN_HEATMAP_MAP_ZOOM, Math.round(numericValue)));
 }
 
 function buildHeatmapRenderConfig(width, height, controls = {}) {
@@ -334,6 +360,15 @@ function applyHeatmapLayerBounds(layerEl, bounds) {
   layerEl.style.height = `${bounds.height}px`;
 }
 
+function applyHeatmapLayerZoom(layerEl, viewState = {}) {
+  if (!layerEl) return;
+  const zoomPercent = clampHeatmapMapZoomPercent(viewState.zoomPercent, DEFAULT_HEATMAP_MAP_ZOOM);
+  const focusX = Math.min(1, Math.max(0, Number(viewState.focusX) || 0.5));
+  const focusY = Math.min(1, Math.max(0, Number(viewState.focusY) || 0.5));
+  layerEl.style.transformOrigin = `${(focusX * 100).toFixed(2)}% ${(focusY * 100).toFixed(2)}%`;
+  layerEl.style.transform = `scale(${(zoomPercent / 100).toFixed(3)})`;
+}
+
 function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb, renderConfig) {
   if (!pointsMountEl) return;
   pointsMountEl.replaceChildren();
@@ -368,10 +403,93 @@ function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb
     dotEl.style.height = `${size}px`;
     dotEl.style.backgroundColor = `rgba(${themeRgb.r}, ${themeRgb.g}, ${themeRgb.b}, 0.9)`;
     dotEl.style.boxShadow = `0 0 0 1px rgba(255,255,255,0.8), 0 0 ${Math.max(8, size * 1.8)}px rgba(${themeRgb.r}, ${themeRgb.g}, ${themeRgb.b}, 0.38)`;
-    dotEl.title = `${point.label} (${point.value})`;
+    dotEl.title = point.valueLabel
+      ? `${point.label} (${point.valueLabel})`
+      : `${point.label} (${point.value})`;
     fragment.appendChild(dotEl);
   });
   pointsMountEl.appendChild(fragment);
+}
+
+function getPacketPayloadLength(packetInfo) {
+  const payloadLength = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  if (!Number.isFinite(payloadLength) || payloadLength <= 0) return 0;
+  return payloadLength;
+}
+
+function getCapturePacketList(capturedPackets) {
+  const packetList = [];
+  if (!capturedPackets || !capturedPackets["Host"]) return packetList;
+  for (const hostKey of Object.keys(capturedPackets["Host"])) {
+    const hostPackets = capturedPackets["Host"][hostKey];
+    if (!Array.isArray(hostPackets)) continue;
+    hostPackets.forEach((packet) => packetList.push(packet));
+  }
+  return packetList;
+}
+
+function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_PACKETS) {
+  const heatmapPointsByCoordinate = new Map();
+  const internetHosts = new Set();
+  let heatmapPacketHits = 0;
+  let heatmapBytes = 0;
+
+  const packets = Array.isArray(packetList) ? packetList : [];
+  packets.forEach((packet) => {
+    const packetInfo = packet?.["Packet Info"];
+    const extraInfo = packet?.["Extra Info"] || {};
+    if (!packetInfo) return;
+
+    const payloadLength = getPacketPayloadLength(packetInfo);
+    const networkData = extraInfo?.["Traits"]?.["Network Data"];
+    if (!networkData) return;
+
+    ["Source IP", "Destination IP"].forEach((side) => {
+      const locationData = networkData?.[side]?.["Location"];
+      const city = normalizeStatsTextValue(locationData?.["City"]);
+      const country = normalizeStatsTextValue(locationData?.["Country"]);
+      const ipAddress =
+        side === "Source IP"
+          ? packetInfo?.["IP"]?.["Source IP"]
+          : packetInfo?.["IP"]?.["Destination IP"];
+      const mappedPoint = collectInternetLocationPoint(locationData, city || country, ipAddress);
+      if (!mappedPoint) return;
+
+      heatmapPacketHits += 1;
+      heatmapBytes += payloadLength;
+
+      const nextValue = valueMode === HEATMAP_METRIC_BYTES ? payloadLength : 1;
+      if (nextValue <= 0) {
+        if (mappedPoint.ipAddress) internetHosts.add(mappedPoint.ipAddress);
+        return;
+      }
+
+      const coordinateKey = `${mappedPoint.latitude.toFixed(4)},${mappedPoint.longitude.toFixed(4)}`;
+      const existingPoint = heatmapPointsByCoordinate.get(coordinateKey);
+      if (existingPoint) {
+        existingPoint.value += nextValue;
+      } else {
+        heatmapPointsByCoordinate.set(coordinateKey, {
+          pointKey: coordinateKey,
+          latitude: mappedPoint.latitude,
+          longitude: mappedPoint.longitude,
+          label: mappedPoint.label,
+          value: nextValue,
+        });
+      }
+
+      if (mappedPoint.ipAddress) {
+        internetHosts.add(mappedPoint.ipAddress);
+      }
+    });
+  });
+
+  return {
+    heatmapPoints: [...heatmapPointsByCoordinate.values()].sort((a, b) => b.value - a.value),
+    heatmapPacketHits,
+    heatmapBytes,
+    internetHostCount: internetHosts.size,
+  };
 }
 
 function highlightHeatmapPoint(pointsMountEl, pointKey) {
@@ -394,6 +512,7 @@ function renderStatsHeatmap(
   points,
   projectionCalibration,
   controls = {},
+  viewState = {},
 ) {
   if (!heatmapMountEl) return;
 
@@ -410,6 +529,10 @@ function renderStatsHeatmap(
   applyHeatmapLayerBounds(gridLayerEl, mapBounds);
   applyHeatmapLayerBounds(heatmapMountEl, mapBounds);
   applyHeatmapLayerBounds(pointsMountEl, mapBounds);
+  applyHeatmapLayerZoom(basemapFrameEl, viewState);
+  applyHeatmapLayerZoom(gridLayerEl, viewState);
+  applyHeatmapLayerZoom(heatmapMountEl, viewState);
+  applyHeatmapLayerZoom(pointsMountEl, viewState);
 
   const renderConfig = buildHeatmapRenderConfig(width, height, controls);
   const projectedData = points.map((point) => {
@@ -465,6 +588,8 @@ function renderStatsHeatmap(
 function createStatsHeatmapSection({
   documentRef,
   stats,
+  getCapturedPackets,
+  getFilteredPackets,
   getProjectionCalibrationSettings,
   getCurrentSettings,
 }) {
@@ -485,12 +610,48 @@ function createStatsHeatmapSection({
   const controlsToolbarEl = documentRef.createElement("div");
   controlsToolbarEl.className = "stats-heatmap-toolbar";
 
+  const mapZoomControlEl = documentRef.createElement("label");
+  mapZoomControlEl.className = "stats-heatmap-toolbar-control";
+  mapZoomControlEl.innerHTML = "<span>Map Zoom</span>";
+  const mapZoomInputEl = documentRef.createElement("input");
+  mapZoomInputEl.type = "range";
+  mapZoomInputEl.className = "stats-heatmap-mapzoom-input";
+  mapZoomInputEl.min = String(MIN_HEATMAP_MAP_ZOOM);
+  mapZoomInputEl.max = String(MAX_HEATMAP_MAP_ZOOM);
+  mapZoomInputEl.step = String(HEATMAP_MAP_ZOOM_STEP);
+  mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
+  const mapZoomValueEl = documentRef.createElement("strong");
+  mapZoomValueEl.className = "stats-heatmap-control-value";
+  mapZoomControlEl.appendChild(mapZoomInputEl);
+  mapZoomControlEl.appendChild(mapZoomValueEl);
+  controlsToolbarEl.appendChild(mapZoomControlEl);
+
   const toggleControlsBtn = documentRef.createElement("button");
   toggleControlsBtn.type = "button";
   toggleControlsBtn.className = "stats-heatmap-rollup";
   toggleControlsBtn.textContent = "Hide Sliders";
   controlsToolbarEl.appendChild(toggleControlsBtn);
   shell.appendChild(controlsToolbarEl);
+
+  const scopeControlEl = documentRef.createElement("label");
+  scopeControlEl.className = "stats-heatmap-control";
+  scopeControlEl.innerHTML = "<span>Aggregate By</span>";
+  const scopeInputEl = documentRef.createElement("select");
+  scopeInputEl.innerHTML = `
+    <option value="${HEATMAP_SCOPE_CAPTURE}">Entire Capture</option>
+    <option value="${HEATMAP_SCOPE_FILTERED}">Filtered Packets</option>
+  `;
+  scopeControlEl.appendChild(scopeInputEl);
+
+  const metricControlEl = documentRef.createElement("label");
+  metricControlEl.className = "stats-heatmap-control";
+  metricControlEl.innerHTML = "<span>Intensity By</span>";
+  const metricInputEl = documentRef.createElement("select");
+  metricInputEl.innerHTML = `
+    <option value="${HEATMAP_METRIC_PACKETS}">Packets</option>
+    <option value="${HEATMAP_METRIC_BYTES}">Bytes</option>
+  `;
+  metricControlEl.appendChild(metricInputEl);
 
   const intensityControlEl = documentRef.createElement("label");
   intensityControlEl.className = "stats-heatmap-control";
@@ -552,6 +713,15 @@ function createStatsHeatmapSection({
   calibrationHeadingEl.className = "stats-heatmap-controls-heading";
   calibrationHeadingEl.textContent = "Projection Calibration (Persistent)";
 
+  const calibrationLockControlEl = documentRef.createElement("label");
+  calibrationLockControlEl.className = "stats-heatmap-lock-row";
+  const calibrationLockInputEl = documentRef.createElement("input");
+  calibrationLockInputEl.type = "checkbox";
+  const calibrationLockTextEl = documentRef.createElement("span");
+  calibrationLockTextEl.textContent = "Lock point calibration (debug)";
+  calibrationLockControlEl.appendChild(calibrationLockInputEl);
+  calibrationLockControlEl.appendChild(calibrationLockTextEl);
+
   const zoomXControlEl = documentRef.createElement("label");
   zoomXControlEl.className = "stats-heatmap-control";
   zoomXControlEl.innerHTML = "<span>Zoom X</span>";
@@ -609,11 +779,14 @@ function createStatsHeatmapSection({
   resetControlsBtn.className = "stats-heatmap-reset";
   resetControlsBtn.textContent = "Reset";
 
+  controlsEl.appendChild(scopeControlEl);
+  controlsEl.appendChild(metricControlEl);
   controlsEl.appendChild(intensityControlEl);
   controlsEl.appendChild(pointSizeControlEl);
   controlsEl.appendChild(tightnessControlEl);
   controlsEl.appendChild(blurControlEl);
   controlsEl.appendChild(calibrationHeadingEl);
+  controlsEl.appendChild(calibrationLockControlEl);
   controlsEl.appendChild(zoomXControlEl);
   controlsEl.appendChild(zoomYControlEl);
   controlsEl.appendChild(offsetXControlEl);
@@ -669,49 +842,42 @@ function createStatsHeatmapSection({
   pointLayerEl.className = "stats-heatmap-points";
   mapEl.appendChild(pointLayerEl);
 
+  const selectionLayerEl = documentRef.createElement("div");
+  selectionLayerEl.className = "stats-heatmap-selection";
+  selectionLayerEl.hidden = true;
+  mapEl.appendChild(selectionLayerEl);
+
+  const pixelMaskEl = documentRef.createElement("div");
+  pixelMaskEl.className = "stats-heatmap-pixel-mask";
+  pixelMaskEl.hidden = true;
+  const pixelMaskSegments = {
+    top: documentRef.createElement("div"),
+    left: documentRef.createElement("div"),
+    right: documentRef.createElement("div"),
+    bottom: documentRef.createElement("div"),
+  };
+  Object.values(pixelMaskSegments).forEach((segmentEl) => {
+    segmentEl.className = "stats-heatmap-pixel-segment";
+    pixelMaskEl.appendChild(segmentEl);
+  });
+  mapEl.appendChild(pixelMaskEl);
+
   shell.appendChild(mapEl);
 
   const summaryEl = documentRef.createElement("div");
   summaryEl.className = "stats-heatmap-summary";
-  if (Array.isArray(stats.heatmapPoints) && stats.heatmapPoints.length > 0) {
-    summaryEl.textContent = `${stats.internetHostCount} geolocated internet hosts across ${stats.heatmapPacketHits} packet hits.`;
-  } else {
-    summaryEl.textContent = "No public GeoIP coordinates are available for this capture.";
-  }
   shell.appendChild(summaryEl);
 
-  if (Array.isArray(stats.heatmapPoints) && stats.heatmapPoints.length > 0) {
-    const topLocations = stats.heatmapPoints
-      .slice()
-      .sort((left, right) => right.value - left.value)
-      .slice(0, 8);
-
-    if (topLocations.length > 0) {
-      const locationsSectionEl = documentRef.createElement("div");
-      locationsSectionEl.className = "stats-section";
-
-      const locationsTitleEl = documentRef.createElement("div");
-      locationsTitleEl.className = "stats-section-title";
-      locationsTitleEl.textContent = "Most Active Mapped Locations";
-      locationsSectionEl.appendChild(locationsTitleEl);
-
-      const locationsListEl = documentRef.createElement("div");
-      locationsListEl.className = "stats-tag-list";
-      topLocations.forEach((point) => {
-        const locationTagEl = documentRef.createElement("span");
-        locationTagEl.className = "stats-tag";
-        locationTagEl.textContent = `${point.label} (${point.value})`;
-        locationTagEl.title = "Click to blink this location on the map";
-        locationTagEl.addEventListener("click", () => {
-          selectedPointKey = typeof point.pointKey === "string" ? point.pointKey : null;
-          render();
-        });
-        locationsListEl.appendChild(locationTagEl);
-      });
-      locationsSectionEl.appendChild(locationsListEl);
-      shell.appendChild(locationsSectionEl);
-    }
-  }
+  const locationsSectionEl = documentRef.createElement("div");
+  locationsSectionEl.className = "stats-section";
+  const locationsTitleEl = documentRef.createElement("div");
+  locationsTitleEl.className = "stats-section-title";
+  locationsTitleEl.textContent = "Most Active Mapped Locations";
+  const locationsListEl = documentRef.createElement("div");
+  locationsListEl.className = "stats-tag-list";
+  locationsSectionEl.appendChild(locationsTitleEl);
+  locationsSectionEl.appendChild(locationsListEl);
+  shell.appendChild(locationsSectionEl);
 
   section.appendChild(shell);
 
@@ -719,7 +885,21 @@ function createStatsHeatmapSection({
   let controlsCollapsed = true;
   let projectionCalibration =
     lastStatsMapProjectionCalibration || getProjectionCalibrationSettings();
+  let calibrationLocked = getProjectionCalibrationLockState(getCurrentSettings);
   let persistCalibrationTimeoutId = null;
+  let mapViewState = {
+    zoomPercent: DEFAULT_HEATMAP_MAP_ZOOM,
+    focusX: 0.5,
+    focusY: 0.5,
+  };
+  let dragSelectionState = null;
+  let selectionAnimating = false;
+  let activeHeatmapData = {
+    heatmapPoints: Array.isArray(stats?.heatmapPoints) ? stats.heatmapPoints : [],
+    heatmapPacketHits: Number(stats?.heatmapPacketHits) || 0,
+    heatmapBytes: 0,
+    internetHostCount: Number(stats?.internetHostCount) || 0,
+  };
 
   const toCalibrationLabel = (value) => Number(value).toFixed(2);
   const cloneSettings = (value) => {
@@ -764,6 +944,14 @@ function createStatsHeatmapSection({
     offsetYInputEl.value = String(calibration.offsetY);
   };
 
+  const updateCalibrationControlEnabledState = () => {
+    const disabled = calibrationLocked;
+    zoomXInputEl.disabled = disabled;
+    zoomYInputEl.disabled = disabled;
+    offsetXInputEl.disabled = disabled;
+    offsetYInputEl.disabled = disabled;
+  };
+
   const persistProjectionCalibration = async () => {
     if (!window.settingsapi || typeof window.settingsapi.save !== "function") return;
     let currentSettings =
@@ -783,6 +971,7 @@ function createStatsHeatmapSection({
     nextSettings.debug.mapProjectionZoomY = projectionCalibration.zoomY;
     nextSettings.debug.mapProjectionOffsetX = projectionCalibration.offsetX;
     nextSettings.debug.mapProjectionOffsetY = projectionCalibration.offsetY;
+    nextSettings.debug.mapProjectionCalibrationLocked = calibrationLocked;
 
     try {
       const savedSettings = await window.settingsapi.save(nextSettings);
@@ -814,8 +1003,14 @@ function createStatsHeatmapSection({
           2.2,
         ),
       };
+      calibrationLocked =
+        typeof savedDebug.mapProjectionCalibrationLocked === "boolean"
+          ? savedDebug.mapProjectionCalibrationLocked
+          : calibrationLocked;
       lastStatsMapProjectionCalibration = projectionCalibration;
       applyProjectionControlsFromCalibration(projectionCalibration);
+      calibrationLockInputEl.checked = calibrationLocked;
+      updateCalibrationControlEnabledState();
     } catch {
       // Ignore settings save failures in map interaction flow.
     }
@@ -858,9 +1053,227 @@ function createStatsHeatmapSection({
     ),
   });
 
+  const getMapZoomState = () => ({
+    zoomPercent: clampHeatmapMapZoomPercent(
+      mapZoomInputEl.value,
+      DEFAULT_HEATMAP_MAP_ZOOM,
+    ),
+    focusX: mapViewState.focusX,
+    focusY: mapViewState.focusY,
+  });
+
+  const getCurrentMapBounds = () => {
+    const width = Math.max(320, mapEl?.clientWidth || 0);
+    const height = Math.max(220, mapEl?.clientHeight || 0);
+    return getHeatmapMapBounds(width, height);
+  };
+
+  const resetSelectionBox = () => {
+    dragSelectionState = null;
+    pixelMaskEl.hidden = true;
+    selectionLayerEl.hidden = true;
+    selectionLayerEl.style.width = "0px";
+    selectionLayerEl.style.height = "0px";
+    selectionLayerEl.classList.remove(
+      "stats-heatmap-selection-capture",
+      "stats-heatmap-selection-blink",
+    );
+    mapEl.classList.remove("stats-heatmap-selecting", "stats-heatmap-selection-animating");
+  };
+
+  const updatePixelMask = (selectionRect) => {
+    const bounds = dragSelectionState?.bounds;
+    if (!bounds || !selectionRect) {
+      pixelMaskEl.hidden = true;
+      return;
+    }
+
+    const topHeight = Math.max(0, selectionRect.top - bounds.top);
+    const bottomY = selectionRect.top + selectionRect.height;
+    const bottomHeight = Math.max(0, (bounds.top + bounds.height) - bottomY);
+    const leftWidth = Math.max(0, selectionRect.left - bounds.left);
+    const rightX = selectionRect.left + selectionRect.width;
+    const rightWidth = Math.max(0, (bounds.left + bounds.width) - rightX);
+    const middleHeight = Math.max(0, selectionRect.height);
+
+    pixelMaskEl.hidden = false;
+
+    pixelMaskSegments.top.style.left = `${bounds.left}px`;
+    pixelMaskSegments.top.style.top = `${bounds.top}px`;
+    pixelMaskSegments.top.style.width = `${bounds.width}px`;
+    pixelMaskSegments.top.style.height = `${topHeight}px`;
+
+    pixelMaskSegments.bottom.style.left = `${bounds.left}px`;
+    pixelMaskSegments.bottom.style.top = `${bottomY}px`;
+    pixelMaskSegments.bottom.style.width = `${bounds.width}px`;
+    pixelMaskSegments.bottom.style.height = `${bottomHeight}px`;
+
+    pixelMaskSegments.left.style.left = `${bounds.left}px`;
+    pixelMaskSegments.left.style.top = `${selectionRect.top}px`;
+    pixelMaskSegments.left.style.width = `${leftWidth}px`;
+    pixelMaskSegments.left.style.height = `${middleHeight}px`;
+
+    pixelMaskSegments.right.style.left = `${rightX}px`;
+    pixelMaskSegments.right.style.top = `${selectionRect.top}px`;
+    pixelMaskSegments.right.style.width = `${rightWidth}px`;
+    pixelMaskSegments.right.style.height = `${middleHeight}px`;
+  };
+
+  const updateSelectionBox = (startX, startY, currentX, currentY) => {
+    const bounds = dragSelectionState?.bounds;
+    if (!bounds) return;
+    const left = Math.max(bounds.left, Math.min(startX, currentX));
+    const top = Math.max(bounds.top, Math.min(startY, currentY));
+    const right = Math.min(bounds.left + bounds.width, Math.max(startX, currentX));
+    const bottom = Math.min(bounds.top + bounds.height, Math.max(startY, currentY));
+    const width = Math.max(0, right - left);
+    const height = Math.max(0, bottom - top);
+    const selectionRect = {
+      left,
+      top,
+      width,
+      height,
+    };
+    dragSelectionState.selectionRect = selectionRect;
+
+    selectionLayerEl.hidden = false;
+    selectionLayerEl.style.left = `${left}px`;
+    selectionLayerEl.style.top = `${top}px`;
+    selectionLayerEl.style.width = `${width}px`;
+    selectionLayerEl.style.height = `${height}px`;
+    updatePixelMask(selectionRect);
+  };
+
+  const getMapEventPoint = (event) => {
+    const mapRect = mapEl.getBoundingClientRect();
+    const x = event.clientX - mapRect.left;
+    const y = event.clientY - mapRect.top;
+    return { x, y };
+  };
+
+  const applySelectionZoom = () => {
+    if (!dragSelectionState) return;
+    const bounds = dragSelectionState.bounds;
+    const selectionWidth = Math.abs(dragSelectionState.currentX - dragSelectionState.startX);
+    const selectionHeight = Math.abs(dragSelectionState.currentY - dragSelectionState.startY);
+    if (selectionWidth < HEATMAP_SELECTION_MIN_PIXELS || selectionHeight < HEATMAP_SELECTION_MIN_PIXELS) {
+      return;
+    }
+
+    const centerX = (dragSelectionState.startX + dragSelectionState.currentX) / 2;
+    const centerY = (dragSelectionState.startY + dragSelectionState.currentY) / 2;
+    mapViewState.focusX = Math.min(
+      1,
+      Math.max(0, (centerX - bounds.left) / Math.max(1, bounds.width)),
+    );
+    mapViewState.focusY = Math.min(
+      1,
+      Math.max(0, (centerY - bounds.top) / Math.max(1, bounds.height)),
+    );
+    mapZoomInputEl.value = String(
+      Math.min(
+        MAX_HEATMAP_MAP_ZOOM,
+        clampHeatmapMapZoomPercent(
+          mapZoomInputEl.value,
+          DEFAULT_HEATMAP_MAP_ZOOM,
+        ) + HEATMAP_MAP_ZOOM_STEP,
+      ),
+    );
+  };
+
+  const waitForSelectionAnimation = (durationMs) =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, durationMs);
+    });
+
+  const numberFormatter = new Intl.NumberFormat();
+  const getScopeLabel = () =>
+    scopeInputEl.value === HEATMAP_SCOPE_FILTERED
+      ? "filtered packet results"
+      : "entire capture";
+  const getMetricLabel = () =>
+    metricInputEl.value === HEATMAP_METRIC_BYTES ? "bytes" : "packets";
+
+  const updateHeatmapSummaryUi = () => {
+    const metric = metricInputEl.value;
+    const scopeLabel = getScopeLabel();
+    const filteredPacketsRaw = getFilteredPackets?.();
+    const filteredPackets = Array.isArray(filteredPacketsRaw) ? filteredPacketsRaw : [];
+    if (!Array.isArray(activeHeatmapData.heatmapPoints) || activeHeatmapData.heatmapPoints.length === 0) {
+      if (
+        scopeInputEl.value === HEATMAP_SCOPE_FILTERED
+        && filteredPackets.length === 0
+      ) {
+        summaryEl.textContent = "No packets are currently returned by the active filter.";
+      } else {
+        summaryEl.textContent = "No public GeoIP coordinates are available for this selection.";
+      }
+      return;
+    }
+
+    if (metric === HEATMAP_METRIC_BYTES) {
+      summaryEl.textContent = `${activeHeatmapData.internetHostCount} geolocated internet hosts across ${numberFormatter.format(activeHeatmapData.heatmapBytes)} bytes (${scopeLabel}).`;
+      return;
+    }
+
+    summaryEl.textContent = `${activeHeatmapData.internetHostCount} geolocated internet hosts across ${numberFormatter.format(activeHeatmapData.heatmapPacketHits)} packet hits (${scopeLabel}).`;
+  };
+
+  const updateTopLocationsUi = () => {
+    locationsListEl.replaceChildren();
+    const points = Array.isArray(activeHeatmapData.heatmapPoints)
+      ? activeHeatmapData.heatmapPoints
+      : [];
+    if (points.length === 0) {
+      locationsSectionEl.style.display = "none";
+      return;
+    }
+
+    locationsSectionEl.style.display = "block";
+    const metric = getMetricLabel();
+    points
+      .slice()
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 8)
+      .forEach((point) => {
+        const locationTagEl = documentRef.createElement("span");
+        locationTagEl.className = "stats-tag";
+        const metricValueLabel = `${numberFormatter.format(point.value)} ${metric}`;
+        locationTagEl.textContent = `${point.label} (${metricValueLabel})`;
+        locationTagEl.title = "Click to blink this location on the map";
+        locationTagEl.addEventListener("click", () => {
+          selectedPointKey = typeof point.pointKey === "string" ? point.pointKey : null;
+          render(false);
+        });
+        locationsListEl.appendChild(locationTagEl);
+      });
+  };
+
+  const buildActiveHeatmapData = () => {
+    const scope = scopeInputEl.value;
+    const metric = metricInputEl.value;
+    if (scope === HEATMAP_SCOPE_CAPTURE && metric === HEATMAP_METRIC_PACKETS) {
+      return {
+        heatmapPoints: Array.isArray(stats?.heatmapPoints)
+          ? stats.heatmapPoints.map((point) => ({ ...point }))
+          : [],
+        heatmapPacketHits: Number(stats?.heatmapPacketHits) || 0,
+        heatmapBytes: 0,
+        internetHostCount: Number(stats?.internetHostCount) || 0,
+      };
+    }
+
+    const packetList =
+      scope === HEATMAP_SCOPE_FILTERED
+        ? getFilteredPackets?.()
+        : getCapturePacketList(getCapturedPackets?.());
+    return buildHeatmapStatsFromPacketList(packetList, metric);
+  };
+
   const syncControlLabels = () => {
     const controlState = getControlState();
     const projectionState = getProjectionControlState();
+    const zoomState = getMapZoomState();
     intensityValueEl.textContent = `${controlState.intensityPercent}%`;
     pointSizeValueEl.textContent = `${controlState.pointSizePercent}%`;
     tightnessValueEl.textContent = `${controlState.tightnessPercent}%`;
@@ -869,10 +1282,31 @@ function createStatsHeatmapSection({
     zoomYValueEl.textContent = toCalibrationLabel(projectionState.zoomY);
     offsetXValueEl.textContent = toCalibrationLabel(projectionState.offsetX);
     offsetYValueEl.textContent = toCalibrationLabel(projectionState.offsetY);
+    mapZoomValueEl.textContent = `${zoomState.zoomPercent}%`;
   };
 
-  const render = () => {
+  const render = (refreshData = false) => {
+    if (refreshData) {
+      activeHeatmapData = buildActiveHeatmapData();
+      updateHeatmapSummaryUi();
+      updateTopLocationsUi();
+      const selectedExists = activeHeatmapData.heatmapPoints.some(
+        (point) => point.pointKey === selectedPointKey,
+      );
+      if (!selectedExists) {
+        selectedPointKey = null;
+      }
+    }
+
+    const metric = metricInputEl.value;
+    const metricSuffix = metric === HEATMAP_METRIC_BYTES ? "bytes" : "packets";
+    const pointsWithLabels = (activeHeatmapData.heatmapPoints || []).map((point) => ({
+      ...point,
+      valueLabel: `${numberFormatter.format(point.value)} ${metricSuffix}`,
+    }));
+
     projectionCalibration = getProjectionControlState();
+    mapViewState = getMapZoomState();
     syncControlLabels();
     renderStatsHeatmap(
       mapEl,
@@ -880,31 +1314,44 @@ function createStatsHeatmapSection({
       gridLayerEl,
       heatmapLayerEl,
       pointLayerEl,
-      stats.heatmapPoints,
+      pointsWithLabels,
       projectionCalibration,
       getControlState(),
+      mapViewState,
     );
     highlightHeatmapPoint(pointLayerEl, selectedPointKey);
   };
 
-  intensityInputEl.addEventListener("input", render);
-  pointSizeInputEl.addEventListener("input", render);
-  tightnessInputEl.addEventListener("input", render);
-  blurInputEl.addEventListener("input", render);
+  intensityInputEl.addEventListener("input", () => render(false));
+  pointSizeInputEl.addEventListener("input", () => render(false));
+  tightnessInputEl.addEventListener("input", () => render(false));
+  blurInputEl.addEventListener("input", () => render(false));
+  scopeInputEl.addEventListener("change", () => render(true));
+  metricInputEl.addEventListener("change", () => render(true));
+  mapZoomInputEl.addEventListener("input", () => render(false));
   zoomXInputEl.addEventListener("input", () => {
-    render();
+    if (calibrationLocked) return;
+    render(false);
     scheduleProjectionCalibrationSave();
   });
   zoomYInputEl.addEventListener("input", () => {
-    render();
+    if (calibrationLocked) return;
+    render(false);
     scheduleProjectionCalibrationSave();
   });
   offsetXInputEl.addEventListener("input", () => {
-    render();
+    if (calibrationLocked) return;
+    render(false);
     scheduleProjectionCalibrationSave();
   });
   offsetYInputEl.addEventListener("input", () => {
-    render();
+    if (calibrationLocked) return;
+    render(false);
+    scheduleProjectionCalibrationSave();
+  });
+  calibrationLockInputEl.addEventListener("change", () => {
+    calibrationLocked = Boolean(calibrationLockInputEl.checked);
+    updateCalibrationControlEnabledState();
     scheduleProjectionCalibrationSave();
   });
   resetControlsBtn.addEventListener("click", () => {
@@ -918,23 +1365,112 @@ function createStatsHeatmapSection({
       offsetX: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
       offsetY: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
     };
+    mapViewState = {
+      zoomPercent: DEFAULT_HEATMAP_MAP_ZOOM,
+      focusX: 0.5,
+      focusY: 0.5,
+    };
+    mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
     lastStatsMapProjectionCalibration = projectionCalibration;
     applyProjectionControlsFromCalibration(projectionCalibration);
     scheduleProjectionCalibrationSave();
-    render();
+    render(true);
   });
+
+  const onMapMouseDown = (event) => {
+    if (selectionAnimating) return;
+    if (event.button !== 0) return;
+    const bounds = getCurrentMapBounds();
+    const point = getMapEventPoint(event);
+    const withinBounds =
+      point.x >= bounds.left
+      && point.x <= bounds.left + bounds.width
+      && point.y >= bounds.top
+      && point.y <= bounds.top + bounds.height;
+    if (!withinBounds) return;
+
+    dragSelectionState = {
+      bounds,
+      startX: point.x,
+      startY: point.y,
+      currentX: point.x,
+      currentY: point.y,
+    };
+    updateSelectionBox(point.x, point.y, point.x, point.y);
+    mapEl.classList.add("stats-heatmap-selecting");
+    event.preventDefault();
+  };
+
+  const onMapMouseMove = (event) => {
+    if (!dragSelectionState) return;
+    const point = getMapEventPoint(event);
+    dragSelectionState.currentX = point.x;
+    dragSelectionState.currentY = point.y;
+    updateSelectionBox(
+      dragSelectionState.startX,
+      dragSelectionState.startY,
+      dragSelectionState.currentX,
+      dragSelectionState.currentY,
+    );
+  };
+
+  const onMapMouseUp = async () => {
+    if (!dragSelectionState) return;
+
+    const selectionWidth = Math.abs(dragSelectionState.currentX - dragSelectionState.startX);
+    const selectionHeight = Math.abs(dragSelectionState.currentY - dragSelectionState.startY);
+    if (
+      selectionWidth < HEATMAP_SELECTION_MIN_PIXELS
+      || selectionHeight < HEATMAP_SELECTION_MIN_PIXELS
+    ) {
+      resetSelectionBox();
+      return;
+    }
+
+    selectionAnimating = true;
+    mapEl.classList.add("stats-heatmap-selection-animating");
+    mapEl.classList.remove("stats-heatmap-selecting");
+    selectionLayerEl.classList.add("stats-heatmap-selection-capture");
+    await waitForSelectionAnimation(HEATMAP_SELECTION_DRAW_MS);
+    selectionLayerEl.classList.remove("stats-heatmap-selection-capture");
+    selectionLayerEl.classList.add("stats-heatmap-selection-blink");
+    await waitForSelectionAnimation(HEATMAP_SELECTION_BLINK_MS);
+    selectionLayerEl.classList.remove("stats-heatmap-selection-blink");
+
+    applySelectionZoom();
+    render(false);
+    await waitForSelectionAnimation(HEATMAP_ZOOM_SETTLE_MS);
+    selectionAnimating = false;
+    resetSelectionBox();
+  };
+
+  mapEl.addEventListener("mousedown", onMapMouseDown);
+  window.addEventListener("mousemove", onMapMouseMove);
+  window.addEventListener("mouseup", onMapMouseUp);
+
   toggleControlsBtn.addEventListener("click", () => {
     controlsCollapsed = !controlsCollapsed;
     syncControlsCollapsedUi();
-    render();
+    render(false);
   });
 
   syncControlsCollapsedUi();
+  calibrationLockInputEl.checked = calibrationLocked;
+  updateCalibrationControlEnabledState();
   syncControlLabels();
+  render(true);
 
   return {
     section,
     render,
+    dispose: () => {
+      if (persistCalibrationTimeoutId) {
+        window.clearTimeout(persistCalibrationTimeoutId);
+      }
+      mapEl.removeEventListener("mousedown", onMapMouseDown);
+      window.removeEventListener("mousemove", onMapMouseMove);
+      window.removeEventListener("mouseup", onMapMouseUp);
+    },
   };
 }
 
@@ -1677,6 +2213,8 @@ function createStatsPanel(options) {
       const heatmapSection = createStatsHeatmapSection({
         documentRef,
         stats,
+        getCapturedPackets,
+        getFilteredPackets,
         getProjectionCalibrationSettings: () => getProjectionCalibration(getCurrentSettings),
         getCurrentSettings,
       });
@@ -1689,7 +2227,12 @@ function createStatsPanel(options) {
           }
         };
         window.addEventListener("resize", rerenderHeatmap);
-        disposeHeatmapResize = () => window.removeEventListener("resize", rerenderHeatmap);
+        disposeHeatmapResize = () => {
+          window.removeEventListener("resize", rerenderHeatmap);
+          if (typeof heatmapSection.dispose === "function") {
+            heatmapSection.dispose();
+          }
+        };
       }
 
       if (stats.undecodableCount > 0) {

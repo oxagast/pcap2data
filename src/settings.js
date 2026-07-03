@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         mapProjectionZoomY: 1.04,
         mapProjectionOffsetX: -0.006,
         mapProjectionOffsetY: 0,
+        mapProjectionCalibrationLocked: true,
     },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
@@ -148,6 +149,10 @@ function normalizeSettings(rawSettings = {}) {
                 -2.2,
                 2.2,
             ),
+            mapProjectionCalibrationLocked:
+                typeof debug.mapProjectionCalibrationLocked === "boolean"
+                    ? debug.mapProjectionCalibrationLocked
+                    : debugDefaults.mapProjectionCalibrationLocked,
         },
         llm: {
             ollamaModel:
