@@ -639,6 +639,20 @@ No keystore entries saved.</pre>
                   When enabled, large ungrouped List-tab views use virtualized rendering. Leave disabled for maximum
                   stability.
                 </div>
+
+                <label for="settings-debug-map-projection-zoom-x">Map projection zoom X</label>
+                <input id="settings-debug-map-projection-zoom-x" type="number" min="0.1" max="3" step="0.001" />
+
+                <label for="settings-debug-map-projection-zoom-y">Map projection zoom Y</label>
+                <input id="settings-debug-map-projection-zoom-y" type="number" min="0.1" max="3" step="0.001" />
+
+                <label for="settings-debug-map-projection-offset-x">Map projection offset X</label>
+                <input id="settings-debug-map-projection-offset-x" type="number" min="-2.2" max="2.2" step="0.001" />
+
+                <label for="settings-debug-map-projection-offset-y">Map projection offset Y</label>
+                <input id="settings-debug-map-projection-offset-y" type="number" min="-2.2" max="2.2" step="0.001" />
+                <div class="settings-help-text">Heatmap map calibration controls. X shifts west/east, Y shifts
+                  north/south.</div>
               </div>
             </div>
           </div>

@@ -722,6 +722,10 @@ def getGeoipInfo(ip, srcOrDst):
                 "loc.src.country": geoIpResponse.country.name,
                 "City": geoIpResponse.city.name,
                 "loc.src.city": geoIpResponse.city.name,
+                "Latitude": geoIpResponse.location.latitude,  # type: ignore
+                "loc.src.lat": geoIpResponse.location.latitude,  # type: ignore
+                "Longitude": geoIpResponse.location.longitude,  # type: ignore
+                "loc.src.lon": geoIpResponse.location.longitude,  # type: ignore
                 "Postal Code": geoIpResponse.postal.code,  # type: ignore
                 "loc.src.postal": geoIpResponse.postal.code,  # type: ignore
                 "Time Zone": geoIpResponse.location.time_zone,  # type: ignore
@@ -734,6 +738,10 @@ def getGeoipInfo(ip, srcOrDst):
                 "loc.dst.country": geoIpResponse.country.name,
                 "City": geoIpResponse.city.name,
                 "loc.dst.city": geoIpResponse.city.name,
+                "Latitude": geoIpResponse.location.latitude,  # type: ignore
+                "loc.dst.lat": geoIpResponse.location.latitude,  # type: ignore
+                "Longitude": geoIpResponse.location.longitude,  # type: ignore
+                "loc.dst.lon": geoIpResponse.location.longitude,  # type: ignore
                 "Postal Code": geoIpResponse.postal.code,  # type: ignore
                 "loc.dst.postal": geoIpResponse.postal.code,  # type: ignore
                 "Time Zone": geoIpResponse.location.time_zone,  # type: ignore

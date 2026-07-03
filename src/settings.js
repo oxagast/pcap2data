@@ -13,6 +13,10 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     debug: {
         ungroupedListVirtualizationEnabled: false,
+        mapProjectionZoomX: 1.08,
+        mapProjectionZoomY: 1.04,
+        mapProjectionOffsetX: -0.006,
+        mapProjectionOffsetY: 0,
     },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
@@ -35,6 +39,20 @@ function toPositiveInteger(value, fallback, minimum = 1) {
     const parsed = Number.parseInt(String(value), 10);
     if (!Number.isFinite(parsed) || parsed < minimum) {
         return fallback;
+    }
+    return parsed;
+}
+
+function toFiniteNumber(value, fallback, minimum = null, maximum = null) {
+    const parsed = Number.parseFloat(String(value));
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    if (Number.isFinite(minimum) && parsed < minimum) {
+        return minimum;
+    }
+    if (Number.isFinite(maximum) && parsed > maximum) {
+        return maximum;
     }
     return parsed;
 }
@@ -106,6 +124,30 @@ function normalizeSettings(rawSettings = {}) {
                 typeof debug.ungroupedListVirtualizationEnabled === "boolean"
                     ? debug.ungroupedListVirtualizationEnabled
                     : debugDefaults.ungroupedListVirtualizationEnabled,
+            mapProjectionZoomX: toFiniteNumber(
+                debug.mapProjectionZoomX,
+                debugDefaults.mapProjectionZoomX,
+                0.1,
+                3,
+            ),
+            mapProjectionZoomY: toFiniteNumber(
+                debug.mapProjectionZoomY,
+                debugDefaults.mapProjectionZoomY,
+                0.1,
+                3,
+            ),
+            mapProjectionOffsetX: toFiniteNumber(
+                debug.mapProjectionOffsetX,
+                debugDefaults.mapProjectionOffsetX,
+                -2.2,
+                2.2,
+            ),
+            mapProjectionOffsetY: toFiniteNumber(
+                debug.mapProjectionOffsetY,
+                debugDefaults.mapProjectionOffsetY,
+                -2.2,
+                2.2,
+            ),
         },
         llm: {
             ollamaModel:

@@ -1,5 +1,34 @@
 const threadName = "Stats";
+const h337 = require("heatmap.js");
 const { app, sessionsapi } = window;
+
+const DEFAULT_HEATMAP_INTENSITY = 100;
+const DEFAULT_HEATMAP_TIGHTNESS = 145;
+const DEFAULT_HEATMAP_POINT_SIZE = 90;
+const DEFAULT_HEATMAP_BLUR = 72;
+const WIKIMEDIA_WORLD_MAP_ASSET_PATH = "../assets/images/blankmap-world-gray.svg";
+const WIKIMEDIA_WORLD_MAP_WIDTH = 1404.7773;
+const WIKIMEDIA_WORLD_MAP_HEIGHT = 600.81262;
+const WIKIMEDIA_WORLD_MAP_ASPECT_RATIO =
+  WIKIMEDIA_WORLD_MAP_WIDTH / WIKIMEDIA_WORLD_MAP_HEIGHT;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS = Object.freeze({
+  left: 0.007,
+  right: 0.993,
+  top: 0.02,
+  bottom: 0.98,
+});
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X = 1.08;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 1.04;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -0.006;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y = 0;
+let lastStatsMapProjectionCalibration = null;
+
+function clampProjectionSetting(value, fallback, minimum, maximum) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(maximum, Math.max(minimum, numericValue));
+}
+
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -51,6 +80,862 @@ function getUniqueCredentialList() {
 function getUniqueCredentialCount() {
   const uniquePasswords = window.keystoreCreds || new Set();
   return uniquePasswords.size;
+}
+
+function parseStatsGeoCoordinate(value, min, max) {
+  const parsedValue = Number(value);
+  if (!Number.isFinite(parsedValue)) return null;
+  if (parsedValue < min || parsedValue > max) return null;
+  return parsedValue;
+}
+
+function getGeoLocationLabel(locationData, fallbackLabel) {
+  const city = normalizeStatsTextValue(locationData?.["City"]);
+  const country = normalizeStatsTextValue(locationData?.["Country"]);
+  if (city && country) return `${city}, ${country}`;
+  return country || city || fallbackLabel || "Unknown";
+}
+
+function collectInternetLocationPoint(locationData, fallbackLabel, ipAddress) {
+  if (!locationData || typeof locationData !== "object") return null;
+
+  const statusLabel = normalizeStatsTextValue(locationData?.["Location"]);
+  if (statusLabel && /^(localnet|error:)/i.test(statusLabel)) {
+    return null;
+  }
+
+  const latitude = parseStatsGeoCoordinate(locationData?.["Latitude"], -90, 90);
+  const longitude = parseStatsGeoCoordinate(locationData?.["Longitude"], -180, 180);
+  if (latitude === null || longitude === null) return null;
+
+  return {
+    latitude,
+    longitude,
+    label: getGeoLocationLabel(locationData, fallbackLabel),
+    ipAddress: normalizeStatsTextValue(ipAddress),
+  };
+}
+
+function projectGeoPoint(
+  latitude,
+  longitude,
+  width,
+  height,
+  projectionBounds = WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+  projectionCalibration = null,
+) {
+  const calibration = projectionCalibration || {
+    zoomX: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X,
+    zoomY: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y,
+    offsetX: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
+    offsetY: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
+  };
+  const baseCenterX = (projectionBounds.left + projectionBounds.right) / 2;
+  const baseCenterY = (projectionBounds.top + projectionBounds.bottom) / 2;
+  const calibratedCenterX = baseCenterX + calibration.offsetX;
+  const calibratedCenterY = baseCenterY + calibration.offsetY;
+
+  const baseWidth = projectionBounds.right - projectionBounds.left;
+  const baseHeight = projectionBounds.bottom - projectionBounds.top;
+  const calibratedWidth = baseWidth / calibration.zoomX;
+  const calibratedHeight = baseHeight / calibration.zoomY;
+
+  const calibratedLeft = Math.max(0, calibratedCenterX - (calibratedWidth / 2));
+  const calibratedRight = Math.min(1, calibratedCenterX + (calibratedWidth / 2));
+  const calibratedTop = Math.max(0, calibratedCenterY - (calibratedHeight / 2));
+  const calibratedBottom = Math.min(1, calibratedCenterY + (calibratedHeight / 2));
+
+  const usableWidth = width * (calibratedRight - calibratedLeft);
+  const usableHeight = height * (calibratedBottom - calibratedTop);
+  const projectedX =
+    (width * calibratedLeft) + (((longitude + 180) / 360) * usableWidth);
+  const projectedY =
+    (height * calibratedTop) + (((90 - latitude) / 180) * usableHeight);
+  return {
+    x: Math.min(width - 1, Math.max(0, Math.round(projectedX))),
+    y: Math.min(height - 1, Math.max(0, Math.round(projectedY))),
+  };
+}
+
+function getProjectionCalibration(settingsGetter) {
+  const debugSettings = settingsGetter?.()?.debug || {};
+  const calibration = {
+    zoomX: clampProjectionSetting(
+      debugSettings.mapProjectionZoomX,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X,
+      0.1,
+      3,
+    ),
+    zoomY: clampProjectionSetting(
+      debugSettings.mapProjectionZoomY,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y,
+      0.1,
+      3,
+    ),
+    offsetX: clampProjectionSetting(
+      debugSettings.mapProjectionOffsetX,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
+      -2.2,
+      2.2,
+    ),
+    offsetY: clampProjectionSetting(
+      debugSettings.mapProjectionOffsetY,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
+      -2.2,
+      2.2,
+    ),
+  };
+  lastStatsMapProjectionCalibration = calibration;
+  return calibration;
+}
+
+function parseThemeRgbValue(colorValue) {
+  const normalizedColor = typeof colorValue === "string" ? colorValue.trim() : "";
+  if (!normalizedColor) return null;
+
+  const hexMatch = normalizedColor.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hexMatch) {
+    const compactHex = hexMatch[1];
+    const expandedHex = compactHex.length === 3
+      ? compactHex.split("").map((char) => char + char).join("")
+      : compactHex;
+    return {
+      r: Number.parseInt(expandedHex.slice(0, 2), 16),
+      g: Number.parseInt(expandedHex.slice(2, 4), 16),
+      b: Number.parseInt(expandedHex.slice(4, 6), 16),
+    };
+  }
+
+  const rgbMatch = normalizedColor.match(
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[0-9.]+)?\s*\)$/i,
+  );
+  if (!rgbMatch) return null;
+
+  return {
+    r: Math.min(255, Number(rgbMatch[1])),
+    g: Math.min(255, Number(rgbMatch[2])),
+    b: Math.min(255, Number(rgbMatch[3])),
+  };
+}
+
+function getStatsHeatmapThemeRgb() {
+  const rootStyles = window.getComputedStyle(document.documentElement);
+  return (
+    parseThemeRgbValue(rootStyles.getPropertyValue("--color-1")) ||
+    parseThemeRgbValue(rootStyles.getPropertyValue("--header-text-color")) ||
+    { r: 127, g: 128, b: 255 }
+  );
+}
+
+function buildStatsHeatmapGradient(themeRgb) {
+  if (!themeRgb) {
+    return {
+      0.15: "rgba(48, 48, 48, 0.28)",
+      0.45: "rgba(96, 96, 96, 0.5)",
+      0.72: "rgba(160, 160, 160, 0.76)",
+      1.0: "rgba(255, 255, 255, 0.95)",
+    };
+  }
+
+  const { r, g, b } = themeRgb;
+  return {
+    0.12: `rgba(${r}, ${g}, ${b}, 0.18)`,
+    0.35: `rgba(${r}, ${g}, ${b}, 0.36)`,
+    0.62: `rgba(${r}, ${g}, ${b}, 0.62)`,
+    0.82: `rgba(${r}, ${g}, ${b}, 0.82)`,
+    1.0: `rgba(255, 255, 255, 0.96)`,
+  };
+}
+
+function getHeatmapDisplayValue(rawValue, intensityScale = 1) {
+  const numericValue = Math.max(1, Number(rawValue) || 1);
+  return Math.max(1, Math.round(Math.sqrt(numericValue) * 10 * intensityScale));
+}
+
+function clampHeatmapPercent(value, fallback) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(200, Math.max(40, Math.round(numericValue)));
+}
+
+function buildHeatmapRenderConfig(width, height, controls = {}) {
+  const intensityPercent = clampHeatmapPercent(
+    controls.intensityPercent,
+    DEFAULT_HEATMAP_INTENSITY,
+  );
+  const tightnessPercent = clampHeatmapPercent(
+    controls.tightnessPercent,
+    DEFAULT_HEATMAP_TIGHTNESS,
+  );
+  const pointSizePercent = clampHeatmapPercent(
+    controls.pointSizePercent,
+    DEFAULT_HEATMAP_POINT_SIZE,
+  );
+  const blurPercent = clampHeatmapPercent(
+    controls.blurPercent,
+    DEFAULT_HEATMAP_BLUR,
+  );
+  const tightnessRatio = tightnessPercent / 100;
+  const pointSizeRatio = pointSizePercent / 100;
+  const blurRatio = blurPercent / 100;
+  const baseSize = Math.min(width, height);
+  const radiusScale = 1.45 - (tightnessRatio * 0.9);
+  const blurScale = 0.28 + (blurRatio * 0.52);
+
+  return {
+    intensityPercent,
+    intensityScale: intensityPercent / 100,
+    tightnessPercent,
+    pointSizePercent,
+    blurPercent,
+    radius: Math.max(7, Math.round(baseSize * 0.03 * radiusScale)),
+    blur: Math.max(0.18, Math.min(0.95, blurScale)),
+    pointCoreSize: Math.max(2, Math.round((7 - tightnessRatio * 2.2) * pointSizeRatio)),
+  };
+}
+
+function getHeatmapMapBounds(containerWidth, containerHeight) {
+  if (!Number.isFinite(containerWidth) || !Number.isFinite(containerHeight)) {
+    return {
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0,
+    };
+  }
+
+  const containerAspectRatio = containerWidth / containerHeight;
+  if (containerAspectRatio > WIKIMEDIA_WORLD_MAP_ASPECT_RATIO) {
+    const mapHeight = containerHeight;
+    const mapWidth = mapHeight * WIKIMEDIA_WORLD_MAP_ASPECT_RATIO;
+    return {
+      left: Math.round((containerWidth - mapWidth) / 2),
+      top: 0,
+      width: Math.round(mapWidth),
+      height: Math.round(mapHeight),
+    };
+  }
+
+  const mapWidth = containerWidth;
+  const mapHeight = mapWidth / WIKIMEDIA_WORLD_MAP_ASPECT_RATIO;
+  return {
+    left: 0,
+    top: Math.round((containerHeight - mapHeight) / 2),
+    width: Math.round(mapWidth),
+    height: Math.round(mapHeight),
+  };
+}
+
+function applyHeatmapLayerBounds(layerEl, bounds) {
+  if (!layerEl || !bounds) return;
+  layerEl.style.left = `${bounds.left}px`;
+  layerEl.style.top = `${bounds.top}px`;
+  layerEl.style.width = `${bounds.width}px`;
+  layerEl.style.height = `${bounds.height}px`;
+}
+
+function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb, renderConfig) {
+  if (!pointsMountEl) return;
+  pointsMountEl.replaceChildren();
+  if (!Array.isArray(points) || points.length === 0) return;
+
+  const fragment = document.createDocumentFragment();
+  points.forEach((point) => {
+    const projected = projectGeoPoint(
+      point.latitude,
+      point.longitude,
+      width,
+      height,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+      renderConfig.projectionCalibration,
+    );
+    const dotEl = document.createElement("div");
+    dotEl.className = "stats-heatmap-point";
+    const pointKey = typeof point.pointKey === "string" ? point.pointKey : "";
+    if (pointKey) {
+      dotEl.dataset.pointKey = pointKey;
+    }
+    const size = Math.max(
+      renderConfig.pointCoreSize,
+      Math.min(
+        14,
+        Math.round(renderConfig.pointCoreSize + Math.sqrt(Number(point.value) || 1) * 0.32),
+      ),
+    );
+    dotEl.style.left = `${projected.x}px`;
+    dotEl.style.top = `${projected.y}px`;
+    dotEl.style.width = `${size}px`;
+    dotEl.style.height = `${size}px`;
+    dotEl.style.backgroundColor = `rgba(${themeRgb.r}, ${themeRgb.g}, ${themeRgb.b}, 0.9)`;
+    dotEl.style.boxShadow = `0 0 0 1px rgba(255,255,255,0.8), 0 0 ${Math.max(8, size * 1.8)}px rgba(${themeRgb.r}, ${themeRgb.g}, ${themeRgb.b}, 0.38)`;
+    dotEl.title = `${point.label} (${point.value})`;
+    fragment.appendChild(dotEl);
+  });
+  pointsMountEl.appendChild(fragment);
+}
+
+function highlightHeatmapPoint(pointsMountEl, pointKey) {
+  if (!pointsMountEl) return;
+  const pointEls = pointsMountEl.querySelectorAll(".stats-heatmap-point");
+  pointEls.forEach((pointEl) => pointEl.classList.remove("stats-heatmap-point-blink"));
+  if (!pointKey) return;
+  const activePointEl = pointsMountEl.querySelector(`.stats-heatmap-point[data-point-key="${pointKey}"]`);
+  if (activePointEl) {
+    activePointEl.classList.add("stats-heatmap-point-blink");
+  }
+}
+
+function renderStatsHeatmap(
+  mapContainerEl,
+  basemapFrameEl,
+  gridLayerEl,
+  heatmapMountEl,
+  pointsMountEl,
+  points,
+  projectionCalibration,
+  controls = {},
+) {
+  if (!heatmapMountEl) return;
+
+  heatmapMountEl.replaceChildren();
+  if (pointsMountEl) {
+    pointsMountEl.replaceChildren();
+  }
+  if (!Array.isArray(points) || points.length === 0) return;
+
+  const width = Math.max(320, mapContainerEl?.clientWidth || 0);
+  const height = Math.max(220, mapContainerEl?.clientHeight || 0);
+  const mapBounds = getHeatmapMapBounds(width, height);
+  applyHeatmapLayerBounds(basemapFrameEl, mapBounds);
+  applyHeatmapLayerBounds(gridLayerEl, mapBounds);
+  applyHeatmapLayerBounds(heatmapMountEl, mapBounds);
+  applyHeatmapLayerBounds(pointsMountEl, mapBounds);
+
+  const renderConfig = buildHeatmapRenderConfig(width, height, controls);
+  const projectedData = points.map((point) => {
+    const projected = projectGeoPoint(
+      point.latitude,
+      point.longitude,
+      mapBounds.width,
+      mapBounds.height,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+      projectionCalibration,
+    );
+    return {
+      x: projected.x,
+      y: projected.y,
+      value: getHeatmapDisplayValue(point.value, renderConfig.intensityScale),
+    };
+  });
+
+  const themeRgb = getStatsHeatmapThemeRgb();
+  const maxValue = projectedData.reduce(
+    (currentMax, point) => Math.max(currentMax, point.value),
+    1,
+  );
+
+  const heatmapInstance = h337.create({
+    container: heatmapMountEl,
+    radius: renderConfig.radius,
+    blur: renderConfig.blur,
+    maxOpacity: 0.95,
+    minOpacity: 0.1,
+    gradient: buildStatsHeatmapGradient(themeRgb),
+    backgroundColor: "rgba(0, 0, 0, 0)",
+  });
+  heatmapInstance.setData({
+    min: 1,
+    max: maxValue,
+    data: projectedData,
+  });
+
+  renderStatsHeatmapPoints(
+    pointsMountEl,
+    points,
+    mapBounds.width,
+    mapBounds.height,
+    themeRgb,
+    {
+      ...renderConfig,
+      projectionCalibration,
+    },
+  );
+}
+
+function createStatsHeatmapSection({
+  documentRef,
+  stats,
+  getProjectionCalibrationSettings,
+  getCurrentSettings,
+}) {
+  const section = documentRef.createElement("div");
+  section.className = "stats-section";
+
+  const heading = documentRef.createElement("div");
+  heading.className = "stats-section-title";
+  heading.textContent = "Internet Heatmap";
+  section.appendChild(heading);
+
+  const shell = documentRef.createElement("div");
+  shell.className = "stats-heatmap-shell";
+
+  const controlsEl = documentRef.createElement("div");
+  controlsEl.className = "stats-heatmap-controls";
+
+  const controlsToolbarEl = documentRef.createElement("div");
+  controlsToolbarEl.className = "stats-heatmap-toolbar";
+
+  const toggleControlsBtn = documentRef.createElement("button");
+  toggleControlsBtn.type = "button";
+  toggleControlsBtn.className = "stats-heatmap-rollup";
+  toggleControlsBtn.textContent = "Hide Sliders";
+  controlsToolbarEl.appendChild(toggleControlsBtn);
+  shell.appendChild(controlsToolbarEl);
+
+  const intensityControlEl = documentRef.createElement("label");
+  intensityControlEl.className = "stats-heatmap-control";
+  intensityControlEl.innerHTML = "<span>Intensity</span>";
+  const intensityInputEl = documentRef.createElement("input");
+  intensityInputEl.type = "range";
+  intensityInputEl.min = "40";
+  intensityInputEl.max = "200";
+  intensityInputEl.step = "5";
+  intensityInputEl.value = String(DEFAULT_HEATMAP_INTENSITY);
+  const intensityValueEl = documentRef.createElement("strong");
+  intensityValueEl.className = "stats-heatmap-control-value";
+  intensityControlEl.appendChild(intensityInputEl);
+  intensityControlEl.appendChild(intensityValueEl);
+
+  const pointSizeControlEl = documentRef.createElement("label");
+  pointSizeControlEl.className = "stats-heatmap-control";
+  pointSizeControlEl.innerHTML = "<span>Point Size</span>";
+  const pointSizeInputEl = documentRef.createElement("input");
+  pointSizeInputEl.type = "range";
+  pointSizeInputEl.min = "40";
+  pointSizeInputEl.max = "200";
+  pointSizeInputEl.step = "5";
+  pointSizeInputEl.value = String(DEFAULT_HEATMAP_POINT_SIZE);
+  const pointSizeValueEl = documentRef.createElement("strong");
+  pointSizeValueEl.className = "stats-heatmap-control-value";
+  pointSizeControlEl.appendChild(pointSizeInputEl);
+  pointSizeControlEl.appendChild(pointSizeValueEl);
+
+  const tightnessControlEl = documentRef.createElement("label");
+  tightnessControlEl.className = "stats-heatmap-control";
+  tightnessControlEl.innerHTML = "<span>Tightness</span>";
+  const tightnessInputEl = documentRef.createElement("input");
+  tightnessInputEl.type = "range";
+  tightnessInputEl.min = "40";
+  tightnessInputEl.max = "200";
+  tightnessInputEl.step = "5";
+  tightnessInputEl.value = String(DEFAULT_HEATMAP_TIGHTNESS);
+  const tightnessValueEl = documentRef.createElement("strong");
+  tightnessValueEl.className = "stats-heatmap-control-value";
+  tightnessControlEl.appendChild(tightnessInputEl);
+  tightnessControlEl.appendChild(tightnessValueEl);
+
+  const blurControlEl = documentRef.createElement("label");
+  blurControlEl.className = "stats-heatmap-control";
+  blurControlEl.innerHTML = "<span>Blur</span>";
+  const blurInputEl = documentRef.createElement("input");
+  blurInputEl.type = "range";
+  blurInputEl.min = "40";
+  blurInputEl.max = "200";
+  blurInputEl.step = "5";
+  blurInputEl.value = String(DEFAULT_HEATMAP_BLUR);
+  const blurValueEl = documentRef.createElement("strong");
+  blurValueEl.className = "stats-heatmap-control-value";
+  blurControlEl.appendChild(blurInputEl);
+  blurControlEl.appendChild(blurValueEl);
+
+  const calibrationHeadingEl = documentRef.createElement("div");
+  calibrationHeadingEl.className = "stats-heatmap-controls-heading";
+  calibrationHeadingEl.textContent = "Projection Calibration (Persistent)";
+
+  const zoomXControlEl = documentRef.createElement("label");
+  zoomXControlEl.className = "stats-heatmap-control";
+  zoomXControlEl.innerHTML = "<span>Zoom X</span>";
+  const zoomXInputEl = documentRef.createElement("input");
+  zoomXInputEl.type = "range";
+  zoomXInputEl.min = "0.1";
+  zoomXInputEl.max = "3";
+  zoomXInputEl.step = "0.01";
+  const zoomXValueEl = documentRef.createElement("strong");
+  zoomXValueEl.className = "stats-heatmap-control-value";
+  zoomXControlEl.appendChild(zoomXInputEl);
+  zoomXControlEl.appendChild(zoomXValueEl);
+
+  const zoomYControlEl = documentRef.createElement("label");
+  zoomYControlEl.className = "stats-heatmap-control";
+  zoomYControlEl.innerHTML = "<span>Zoom Y</span>";
+  const zoomYInputEl = documentRef.createElement("input");
+  zoomYInputEl.type = "range";
+  zoomYInputEl.min = "0.1";
+  zoomYInputEl.max = "3";
+  zoomYInputEl.step = "0.01";
+  const zoomYValueEl = documentRef.createElement("strong");
+  zoomYValueEl.className = "stats-heatmap-control-value";
+  zoomYControlEl.appendChild(zoomYInputEl);
+  zoomYControlEl.appendChild(zoomYValueEl);
+
+  const offsetXControlEl = documentRef.createElement("label");
+  offsetXControlEl.className = "stats-heatmap-control";
+  offsetXControlEl.innerHTML = "<span>Offset X</span>";
+  const offsetXInputEl = documentRef.createElement("input");
+  offsetXInputEl.type = "range";
+  offsetXInputEl.min = "-2.2";
+  offsetXInputEl.max = "2.2";
+  offsetXInputEl.step = "0.01";
+  const offsetXValueEl = documentRef.createElement("strong");
+  offsetXValueEl.className = "stats-heatmap-control-value";
+  offsetXControlEl.appendChild(offsetXInputEl);
+  offsetXControlEl.appendChild(offsetXValueEl);
+
+  const offsetYControlEl = documentRef.createElement("label");
+  offsetYControlEl.className = "stats-heatmap-control";
+  offsetYControlEl.innerHTML = "<span>Offset Y</span>";
+  const offsetYInputEl = documentRef.createElement("input");
+  offsetYInputEl.type = "range";
+  offsetYInputEl.min = "-2.2";
+  offsetYInputEl.max = "2.2";
+  offsetYInputEl.step = "0.01";
+  const offsetYValueEl = documentRef.createElement("strong");
+  offsetYValueEl.className = "stats-heatmap-control-value";
+  offsetYControlEl.appendChild(offsetYInputEl);
+  offsetYControlEl.appendChild(offsetYValueEl);
+
+  const resetControlsBtn = documentRef.createElement("button");
+  resetControlsBtn.type = "button";
+  resetControlsBtn.className = "stats-heatmap-reset";
+  resetControlsBtn.textContent = "Reset";
+
+  controlsEl.appendChild(intensityControlEl);
+  controlsEl.appendChild(pointSizeControlEl);
+  controlsEl.appendChild(tightnessControlEl);
+  controlsEl.appendChild(blurControlEl);
+  controlsEl.appendChild(calibrationHeadingEl);
+  controlsEl.appendChild(zoomXControlEl);
+  controlsEl.appendChild(zoomYControlEl);
+  controlsEl.appendChild(offsetXControlEl);
+  controlsEl.appendChild(offsetYControlEl);
+  controlsEl.appendChild(resetControlsBtn);
+  shell.appendChild(controlsEl);
+
+  const mapEl = documentRef.createElement("div");
+  mapEl.className = "stats-heatmap-map";
+
+  const basemapFrameEl = documentRef.createElement("div");
+  basemapFrameEl.className = "stats-heatmap-basemap-frame";
+  const basemapEl = documentRef.createElement("img");
+  basemapEl.className = "stats-heatmap-basemap";
+  basemapEl.src = WIKIMEDIA_WORLD_MAP_ASSET_PATH;
+  basemapEl.alt = "World map basemap";
+  basemapFrameEl.appendChild(basemapEl);
+  mapEl.appendChild(basemapFrameEl);
+
+  const gridLayerEl = documentRef.createElement("div");
+  gridLayerEl.className = "stats-heatmap-grid";
+  mapEl.appendChild(gridLayerEl);
+
+  const latitudeLabels = [
+    { className: "north", text: "90N" },
+    { className: "equator", text: "EQ" },
+    { className: "south", text: "90S" },
+  ];
+  latitudeLabels.forEach((labelConfig) => {
+    const labelEl = documentRef.createElement("div");
+    labelEl.className = `stats-heatmap-axis stats-heatmap-axis-${labelConfig.className}`;
+    labelEl.textContent = labelConfig.text;
+    mapEl.appendChild(labelEl);
+  });
+
+  const longitudeLabels = [
+    { className: "west", text: "180W" },
+    { className: "center", text: "0" },
+    { className: "east", text: "180E" },
+  ];
+  longitudeLabels.forEach((labelConfig) => {
+    const labelEl = documentRef.createElement("div");
+    labelEl.className = `stats-heatmap-axis stats-heatmap-axis-${labelConfig.className}`;
+    labelEl.textContent = labelConfig.text;
+    mapEl.appendChild(labelEl);
+  });
+
+  const heatmapLayerEl = documentRef.createElement("div");
+  heatmapLayerEl.className = "stats-heatmap-layer";
+  mapEl.appendChild(heatmapLayerEl);
+
+  const pointLayerEl = documentRef.createElement("div");
+  pointLayerEl.className = "stats-heatmap-points";
+  mapEl.appendChild(pointLayerEl);
+
+  shell.appendChild(mapEl);
+
+  const summaryEl = documentRef.createElement("div");
+  summaryEl.className = "stats-heatmap-summary";
+  if (Array.isArray(stats.heatmapPoints) && stats.heatmapPoints.length > 0) {
+    summaryEl.textContent = `${stats.internetHostCount} geolocated internet hosts across ${stats.heatmapPacketHits} packet hits.`;
+  } else {
+    summaryEl.textContent = "No public GeoIP coordinates are available for this capture.";
+  }
+  shell.appendChild(summaryEl);
+
+  if (Array.isArray(stats.heatmapPoints) && stats.heatmapPoints.length > 0) {
+    const topLocations = stats.heatmapPoints
+      .slice()
+      .sort((left, right) => right.value - left.value)
+      .slice(0, 8);
+
+    if (topLocations.length > 0) {
+      const locationsSectionEl = documentRef.createElement("div");
+      locationsSectionEl.className = "stats-section";
+
+      const locationsTitleEl = documentRef.createElement("div");
+      locationsTitleEl.className = "stats-section-title";
+      locationsTitleEl.textContent = "Most Active Mapped Locations";
+      locationsSectionEl.appendChild(locationsTitleEl);
+
+      const locationsListEl = documentRef.createElement("div");
+      locationsListEl.className = "stats-tag-list";
+      topLocations.forEach((point) => {
+        const locationTagEl = documentRef.createElement("span");
+        locationTagEl.className = "stats-tag";
+        locationTagEl.textContent = `${point.label} (${point.value})`;
+        locationTagEl.title = "Click to blink this location on the map";
+        locationTagEl.addEventListener("click", () => {
+          selectedPointKey = typeof point.pointKey === "string" ? point.pointKey : null;
+          render();
+        });
+        locationsListEl.appendChild(locationTagEl);
+      });
+      locationsSectionEl.appendChild(locationsListEl);
+      shell.appendChild(locationsSectionEl);
+    }
+  }
+
+  section.appendChild(shell);
+
+  let selectedPointKey = null;
+  let controlsCollapsed = true;
+  let projectionCalibration =
+    lastStatsMapProjectionCalibration || getProjectionCalibrationSettings();
+  let persistCalibrationTimeoutId = null;
+
+  const toCalibrationLabel = (value) => Number(value).toFixed(2);
+  const cloneSettings = (value) => {
+    try {
+      return JSON.parse(JSON.stringify(value || {}));
+    } catch {
+      return {};
+    }
+  };
+
+  const getProjectionControlState = () => ({
+    zoomX: clampProjectionSetting(
+      zoomXInputEl.value,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X,
+      0.1,
+      3,
+    ),
+    zoomY: clampProjectionSetting(
+      zoomYInputEl.value,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y,
+      0.1,
+      3,
+    ),
+    offsetX: clampProjectionSetting(
+      offsetXInputEl.value,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
+      -2.2,
+      2.2,
+    ),
+    offsetY: clampProjectionSetting(
+      offsetYInputEl.value,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
+      -2.2,
+      2.2,
+    ),
+  });
+
+  const applyProjectionControlsFromCalibration = (calibration) => {
+    zoomXInputEl.value = String(calibration.zoomX);
+    zoomYInputEl.value = String(calibration.zoomY);
+    offsetXInputEl.value = String(calibration.offsetX);
+    offsetYInputEl.value = String(calibration.offsetY);
+  };
+
+  const persistProjectionCalibration = async () => {
+    if (!window.settingsapi || typeof window.settingsapi.save !== "function") return;
+    let currentSettings =
+      typeof getCurrentSettings === "function" ? getCurrentSettings() : null;
+    if (typeof window.settingsapi.get === "function") {
+      try {
+        currentSettings = await window.settingsapi.get();
+      } catch {
+        // Fall back to in-memory settings snapshot.
+      }
+    }
+    const nextSettings = cloneSettings(currentSettings);
+    if (!nextSettings.debug || typeof nextSettings.debug !== "object") {
+      nextSettings.debug = {};
+    }
+    nextSettings.debug.mapProjectionZoomX = projectionCalibration.zoomX;
+    nextSettings.debug.mapProjectionZoomY = projectionCalibration.zoomY;
+    nextSettings.debug.mapProjectionOffsetX = projectionCalibration.offsetX;
+    nextSettings.debug.mapProjectionOffsetY = projectionCalibration.offsetY;
+
+    try {
+      const savedSettings = await window.settingsapi.save(nextSettings);
+      const savedDebug = savedSettings?.debug;
+      if (!savedDebug || typeof savedDebug !== "object") return;
+      projectionCalibration = {
+        zoomX: clampProjectionSetting(
+          savedDebug.mapProjectionZoomX,
+          projectionCalibration.zoomX,
+          0.1,
+          3,
+        ),
+        zoomY: clampProjectionSetting(
+          savedDebug.mapProjectionZoomY,
+          projectionCalibration.zoomY,
+          0.1,
+          3,
+        ),
+        offsetX: clampProjectionSetting(
+          savedDebug.mapProjectionOffsetX,
+          projectionCalibration.offsetX,
+          -2.2,
+          2.2,
+        ),
+        offsetY: clampProjectionSetting(
+          savedDebug.mapProjectionOffsetY,
+          projectionCalibration.offsetY,
+          -2.2,
+          2.2,
+        ),
+      };
+      lastStatsMapProjectionCalibration = projectionCalibration;
+      applyProjectionControlsFromCalibration(projectionCalibration);
+    } catch {
+      // Ignore settings save failures in map interaction flow.
+    }
+  };
+
+  const scheduleProjectionCalibrationSave = () => {
+    if (persistCalibrationTimeoutId) {
+      window.clearTimeout(persistCalibrationTimeoutId);
+    }
+    persistCalibrationTimeoutId = window.setTimeout(() => {
+      persistCalibrationTimeoutId = null;
+      void persistProjectionCalibration();
+    }, 300);
+  };
+
+  applyProjectionControlsFromCalibration(projectionCalibration);
+
+  const syncControlsCollapsedUi = () => {
+    controlsEl.classList.toggle("stats-heatmap-controls-collapsed", controlsCollapsed);
+    mapEl.classList.toggle("stats-heatmap-map-expanded", controlsCollapsed);
+    toggleControlsBtn.textContent = controlsCollapsed ? "Show Sliders" : "Hide Sliders";
+  };
+
+  const getControlState = () => ({
+    intensityPercent: clampHeatmapPercent(
+      intensityInputEl.value,
+      DEFAULT_HEATMAP_INTENSITY,
+    ),
+    pointSizePercent: clampHeatmapPercent(
+      pointSizeInputEl.value,
+      DEFAULT_HEATMAP_POINT_SIZE,
+    ),
+    tightnessPercent: clampHeatmapPercent(
+      tightnessInputEl.value,
+      DEFAULT_HEATMAP_TIGHTNESS,
+    ),
+    blurPercent: clampHeatmapPercent(
+      blurInputEl.value,
+      DEFAULT_HEATMAP_BLUR,
+    ),
+  });
+
+  const syncControlLabels = () => {
+    const controlState = getControlState();
+    const projectionState = getProjectionControlState();
+    intensityValueEl.textContent = `${controlState.intensityPercent}%`;
+    pointSizeValueEl.textContent = `${controlState.pointSizePercent}%`;
+    tightnessValueEl.textContent = `${controlState.tightnessPercent}%`;
+    blurValueEl.textContent = `${controlState.blurPercent}%`;
+    zoomXValueEl.textContent = toCalibrationLabel(projectionState.zoomX);
+    zoomYValueEl.textContent = toCalibrationLabel(projectionState.zoomY);
+    offsetXValueEl.textContent = toCalibrationLabel(projectionState.offsetX);
+    offsetYValueEl.textContent = toCalibrationLabel(projectionState.offsetY);
+  };
+
+  const render = () => {
+    projectionCalibration = getProjectionControlState();
+    syncControlLabels();
+    renderStatsHeatmap(
+      mapEl,
+      basemapFrameEl,
+      gridLayerEl,
+      heatmapLayerEl,
+      pointLayerEl,
+      stats.heatmapPoints,
+      projectionCalibration,
+      getControlState(),
+    );
+    highlightHeatmapPoint(pointLayerEl, selectedPointKey);
+  };
+
+  intensityInputEl.addEventListener("input", render);
+  pointSizeInputEl.addEventListener("input", render);
+  tightnessInputEl.addEventListener("input", render);
+  blurInputEl.addEventListener("input", render);
+  zoomXInputEl.addEventListener("input", () => {
+    render();
+    scheduleProjectionCalibrationSave();
+  });
+  zoomYInputEl.addEventListener("input", () => {
+    render();
+    scheduleProjectionCalibrationSave();
+  });
+  offsetXInputEl.addEventListener("input", () => {
+    render();
+    scheduleProjectionCalibrationSave();
+  });
+  offsetYInputEl.addEventListener("input", () => {
+    render();
+    scheduleProjectionCalibrationSave();
+  });
+  resetControlsBtn.addEventListener("click", () => {
+    intensityInputEl.value = String(DEFAULT_HEATMAP_INTENSITY);
+    pointSizeInputEl.value = String(DEFAULT_HEATMAP_POINT_SIZE);
+    tightnessInputEl.value = String(DEFAULT_HEATMAP_TIGHTNESS);
+    blurInputEl.value = String(DEFAULT_HEATMAP_BLUR);
+    projectionCalibration = {
+      zoomX: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X,
+      zoomY: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y,
+      offsetX: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
+      offsetY: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
+    };
+    lastStatsMapProjectionCalibration = projectionCalibration;
+    applyProjectionControlsFromCalibration(projectionCalibration);
+    scheduleProjectionCalibrationSave();
+    render();
+  });
+  toggleControlsBtn.addEventListener("click", () => {
+    controlsCollapsed = !controlsCollapsed;
+    syncControlsCollapsedUi();
+    render();
+  });
+
+  syncControlsCollapsedUi();
+  syncControlLabels();
+
+  return {
+    section,
+    render,
+  };
 }
 
 function collectPacketDecodedProtocolNames(packetInfo) {
@@ -315,6 +1200,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const macVendors = new Set();
   const mimeTypes = new Set();
   const locations = new Map();
+  const heatmapPointsByCoordinate = new Map();
+  const internetHosts = new Set();
   const hostnames = new Set();
   const dataTypes = new Set();
   const streams = new Map();
@@ -452,6 +1339,30 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
             const key = `${city}, ${country}`;
             locations.set(key, (locations.get(key) || 0) + 1);
           }
+
+          const ipAddress =
+            side === "Source IP"
+              ? pi?.["IP"]?.["Source IP"]
+              : pi?.["IP"]?.["Destination IP"];
+          const mappedPoint = collectInternetLocationPoint(loc, city || country, ipAddress);
+          if (mappedPoint) {
+            const coordinateKey = `${mappedPoint.latitude.toFixed(4)},${mappedPoint.longitude.toFixed(4)}`;
+            const existingPoint = heatmapPointsByCoordinate.get(coordinateKey);
+            if (existingPoint) {
+              existingPoint.value += 1;
+            } else {
+              heatmapPointsByCoordinate.set(coordinateKey, {
+                pointKey: coordinateKey,
+                latitude: mappedPoint.latitude,
+                longitude: mappedPoint.longitude,
+                label: mappedPoint.label,
+                value: 1,
+              });
+            }
+            if (mappedPoint.ipAddress) {
+              internetHosts.add(mappedPoint.ipAddress);
+            }
+          }
         }
       }
 
@@ -501,6 +1412,12 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
     mimeTypes: [...mimeTypes].sort(),
     locations: [...locations.entries()].sort((a, b) => b[1] - a[1]),
+    heatmapPoints: [...heatmapPointsByCoordinate.values()].sort((a, b) => b.value - a.value),
+    heatmapPacketHits: [...heatmapPointsByCoordinate.values()].reduce(
+      (total, point) => total + point.value,
+      0,
+    ),
+    internetHostCount: internetHosts.size,
     hostnames: [...hostnames].sort(),
     dataTypes: [...dataTypes].sort(),
     topTalkers: getTopTalkers(capturedPackets, 5),
@@ -594,6 +1511,7 @@ function createStatsPanel(options) {
     documentRef,
     statusUpdate,
     writeLogEntry,
+    getCurrentSettings,
     setActiveMainTab,
     mainTabStats,
     getJsonCapture,
@@ -606,6 +1524,7 @@ function createStatsPanel(options) {
     setPacketsForHost,
     getBookmarkCount,
   } = options;
+  let disposeHeatmapResize = null;
 
   async function applyStatsQuery(query) {
     filterInputEl.value = query;
@@ -623,6 +1542,11 @@ function createStatsPanel(options) {
 
   function showStats() {
     try {
+      if (typeof disposeHeatmapResize === "function") {
+        disposeHeatmapResize();
+        disposeHeatmapResize = null;
+      }
+
       setActiveMainTab(mainTabStats);
       if (getJsonCapture() === "") {
         statusUpdate("Status: No JSON file loaded, please upload a file first");
@@ -647,14 +1571,56 @@ function createStatsPanel(options) {
       const content = documentRef.getElementById("stats_content");
       content.replaceChildren();
 
+      const subtabRow = documentRef.createElement("div");
+      subtabRow.className = "stats-subtab-row";
+
+      const statisticsTabBtn = documentRef.createElement("button");
+      statisticsTabBtn.type = "button";
+      statisticsTabBtn.className = "stats-subtab-btn active";
+      statisticsTabBtn.textContent = "Statistics";
+
+      const mapTabBtn = documentRef.createElement("button");
+      mapTabBtn.type = "button";
+      mapTabBtn.className = "stats-subtab-btn";
+      mapTabBtn.textContent = "Map";
+
+      subtabRow.appendChild(statisticsTabBtn);
+      subtabRow.appendChild(mapTabBtn);
+      content.appendChild(subtabRow);
+
+      const statisticsPanel = documentRef.createElement("div");
+      statisticsPanel.className = "stats-subtab-panel";
+
+      const mapPanel = documentRef.createElement("div");
+      mapPanel.className = "stats-subtab-panel";
+      mapPanel.style.display = "none";
+
+      content.appendChild(statisticsPanel);
+      content.appendChild(mapPanel);
+
       const stats = buildCaptureStats(
         getCapturedPackets(),
         typeof getBookmarkCount === "function" ? getBookmarkCount() : 0,
       );
       if (!stats) {
-        content.textContent = "No packet data available.";
+        statisticsPanel.textContent = "No packet data available.";
         return;
       }
+
+      let heatmapSectionRenderer = null;
+      const setActiveStatsSubtab = (tabId) => {
+        const showMap = tabId === "map";
+        statisticsTabBtn.classList.toggle("active", !showMap);
+        mapTabBtn.classList.toggle("active", showMap);
+        statisticsPanel.style.display = showMap ? "none" : "block";
+        mapPanel.style.display = showMap ? "block" : "none";
+        if (showMap && typeof heatmapSectionRenderer === "function") {
+          heatmapSectionRenderer();
+        }
+      };
+
+      statisticsTabBtn.addEventListener("click", () => setActiveStatsSubtab("statistics"));
+      mapTabBtn.addEventListener("click", () => setActiveStatsSubtab("map"));
 
       // Defensive normalization so unusual packet schemas do not break stats rendering.
       const normalizeStringArray = (values) =>
@@ -706,7 +1672,25 @@ function createStatsPanel(options) {
         overviewGrid.appendChild(kv);
       });
       overview.appendChild(overviewGrid);
-      content.appendChild(overview);
+      statisticsPanel.appendChild(overview);
+
+      const heatmapSection = createStatsHeatmapSection({
+        documentRef,
+        stats,
+        getProjectionCalibrationSettings: () => getProjectionCalibration(getCurrentSettings),
+        getCurrentSettings,
+      });
+      if (heatmapSection) {
+        mapPanel.appendChild(heatmapSection.section);
+        heatmapSectionRenderer = heatmapSection.render;
+        const rerenderHeatmap = () => {
+          if (mapPanel.style.display !== "none") {
+            heatmapSection.render();
+          }
+        };
+        window.addEventListener("resize", rerenderHeatmap);
+        disposeHeatmapResize = () => window.removeEventListener("resize", rerenderHeatmap);
+      }
 
       if (stats.undecodableCount > 0) {
         const undecodableSec = makeStatsSection({
@@ -716,7 +1700,7 @@ function createStatsPanel(options) {
           queryBuilder: () => `packet.proto: undecodable`,
           onQuery: applyStatsQuery,
         });
-        if (undecodableSec) content.appendChild(undecodableSec);
+        if (undecodableSec) statisticsPanel.appendChild(undecodableSec);
       }
 
       const topTalkersSec = makeStatsSection({
@@ -726,14 +1710,14 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `ip.src.addr: ${v.substr(0, v.indexOf(" "))} || ip.dst.addr: ${v.substr(0, v.indexOf(" "))}`,
         onQuery: applyStatsQuery,
       });
-      if (topTalkersSec) content.appendChild(topTalkersSec);
+      if (topTalkersSec) statisticsPanel.appendChild(topTalkersSec);
 
       const credsSec = makeStatsSection({
         documentRef,
         title: "Credentials Found",
         items: stats.uniqueCredentialCount > 0 ? stats.uniqueCredentials : ["No credentials found"],
       });
-      if (credsSec) content.appendChild(credsSec);
+      if (credsSec) statisticsPanel.appendChild(credsSec);
 
       // make the application protocols uppercase to be congruent with the rest of the protos
       stats.protocols = stats.protocols.map((proto) => proto.toUpperCase());
@@ -744,7 +1728,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `application.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (protoSec) content.appendChild(protoSec);
+      if (protoSec) statisticsPanel.appendChild(protoSec);
 
       const networkProtoSec = makeStatsSection({
         documentRef,
@@ -753,7 +1737,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `network.proto: ${v.toLowerCase()} || link.proto: ${v.toLowerCase()} || decoded.proto: ${v.toLowerCase()} || transport.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (networkProtoSec) content.appendChild(networkProtoSec);
+      if (networkProtoSec) statisticsPanel.appendChild(networkProtoSec);
 
       const tpSec = makeStatsSection({
         documentRef,
@@ -762,7 +1746,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `link.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (tpSec) content.appendChild(tpSec);
+      if (tpSec) statisticsPanel.appendChild(tpSec);
 
       const decodedProtoSec = makeStatsSection({
         documentRef,
@@ -771,7 +1755,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (decodedProtoSec) content.appendChild(decodedProtoSec);
+      if (decodedProtoSec) statisticsPanel.appendChild(decodedProtoSec);
 
       const arpOpSec = makeStatsSection({
         documentRef,
@@ -780,7 +1764,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `arp.op: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (arpOpSec) content.appendChild(arpOpSec);
+      if (arpOpSec) statisticsPanel.appendChild(arpOpSec);
 
       const igmpTypeSec = makeStatsSection({
         documentRef,
@@ -789,7 +1773,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `igmp.type: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
       });
-      if (igmpTypeSec) content.appendChild(igmpTypeSec);
+      if (igmpTypeSec) statisticsPanel.appendChild(igmpTypeSec);
 
       const hostSec = makeStatsSection({
         documentRef,
@@ -798,7 +1782,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
         onQuery: applyStatsQuery,
       });
-      if (hostSec) content.appendChild(hostSec);
+      if (hostSec) statisticsPanel.appendChild(hostSec);
 
       // make sure the ips here are not listed in stats.hosts, if they are, skip them
       const hostIpsSet = new Set(stats.hosts);
@@ -817,7 +1801,7 @@ function createStatsPanel(options) {
           queryBuilder: (v) => `dns.qname: ${v}`,
           onQuery: applyStatsQuery,
         });
-        if (filteredHnSec) content.appendChild(filteredHnSec);
+        if (filteredHnSec) statisticsPanel.appendChild(filteredHnSec);
       }
       //if (hnSec) content.appendChild(hnSec);
 
@@ -834,7 +1818,7 @@ function createStatsPanel(options) {
           },
           onQuery: applyStatsQuery,
         });
-        if (locSec) content.appendChild(locSec);
+        if (locSec) statisticsPanel.appendChild(locSec);
       }
 
       const portSec = makeStatsSection({
@@ -844,7 +1828,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `(tcp.src.port: ${v} || tcp.dst.port: ${v}) || (udp.src.port: ${v} || udp.dst.port: ${v}) || (sctp.src.port: ${v} || sctp.dst.port: ${v})`,
         onQuery: applyStatsQuery,
       });
-      if (portSec) content.appendChild(portSec);
+      if (portSec) statisticsPanel.appendChild(portSec);
 
       const macSec = makeStatsSection({
         documentRef,
@@ -853,7 +1837,7 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `eth.src.vendor: ${v}`,
         onQuery: applyStatsQuery,
       });
-      if (macSec) content.appendChild(macSec);
+      if (macSec) statisticsPanel.appendChild(macSec);
 
       const mimeSec = makeStatsSection({
         documentRef,
@@ -862,14 +1846,14 @@ function createStatsPanel(options) {
         queryBuilder: (v) => `mime.type: ${v}`,
         onQuery: applyStatsQuery,
       });
-      if (mimeSec) content.appendChild(mimeSec);
+      if (mimeSec) statisticsPanel.appendChild(mimeSec);
 
       const dtSec = makeStatsSection({
         documentRef,
         title: "Data Types",
         items: stats.dataTypes,
       });
-      if (dtSec) content.appendChild(dtSec);
+      if (dtSec) statisticsPanel.appendChild(dtSec);
     } catch (error) {
       const message = error?.stack || error?.message || String(error);
       writeLogEntry(`[${threadName}] Failed to render stats panel: ${message}`);

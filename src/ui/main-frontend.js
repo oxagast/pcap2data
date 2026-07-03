@@ -710,6 +710,10 @@ function syncSettingsFormFromState() {
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
+  const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
+  const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
+  const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
+  const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -747,6 +751,18 @@ function syncSettingsFormFromState() {
       settings.debug.ungroupedListVirtualizationEnabled,
     );
   }
+  if (mapProjectionZoomXEl) {
+    mapProjectionZoomXEl.value = String(settings.debug.mapProjectionZoomX);
+  }
+  if (mapProjectionZoomYEl) {
+    mapProjectionZoomYEl.value = String(settings.debug.mapProjectionZoomY);
+  }
+  if (mapProjectionOffsetXEl) {
+    mapProjectionOffsetXEl.value = String(settings.debug.mapProjectionOffsetX);
+  }
+  if (mapProjectionOffsetYEl) {
+    mapProjectionOffsetYEl.value = String(settings.debug.mapProjectionOffsetY);
+  }
   if (modelEl) {
     renderLlmModelOptions(settings.llm.ollamaModel);
   }
@@ -780,6 +796,10 @@ function readSettingsFormState() {
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
+  const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
+  const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
+  const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
+  const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -822,6 +842,18 @@ function readSettingsFormState() {
       ungroupedListVirtualizationEnabled: ungroupedListVirtualizationEnabledEl
         ? ungroupedListVirtualizationEnabledEl.checked
         : DEFAULT_SETTINGS.debug.ungroupedListVirtualizationEnabled,
+      mapProjectionZoomX: mapProjectionZoomXEl
+        ? mapProjectionZoomXEl.value
+        : DEFAULT_SETTINGS.debug.mapProjectionZoomX,
+      mapProjectionZoomY: mapProjectionZoomYEl
+        ? mapProjectionZoomYEl.value
+        : DEFAULT_SETTINGS.debug.mapProjectionZoomY,
+      mapProjectionOffsetX: mapProjectionOffsetXEl
+        ? mapProjectionOffsetXEl.value
+        : DEFAULT_SETTINGS.debug.mapProjectionOffsetX,
+      mapProjectionOffsetY: mapProjectionOffsetYEl
+        ? mapProjectionOffsetYEl.value
+        : DEFAULT_SETTINGS.debug.mapProjectionOffsetY,
     },
     llm: {
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
@@ -920,6 +952,26 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "ungroupedListVirtualizationEnabled",
     previousDebug.ungroupedListVirtualizationEnabled,
     nextDebug.ungroupedListVirtualizationEnabled,
+  );
+  pushChange(
+    "mapProjectionZoomX",
+    previousDebug.mapProjectionZoomX,
+    nextDebug.mapProjectionZoomX,
+  );
+  pushChange(
+    "mapProjectionZoomY",
+    previousDebug.mapProjectionZoomY,
+    nextDebug.mapProjectionZoomY,
+  );
+  pushChange(
+    "mapProjectionOffsetX",
+    previousDebug.mapProjectionOffsetX,
+    nextDebug.mapProjectionOffsetX,
+  );
+  pushChange(
+    "mapProjectionOffsetY",
+    previousDebug.mapProjectionOffsetY,
+    nextDebug.mapProjectionOffsetY,
   );
   pushChange("ollamaModel", previousLlm.ollamaModel, nextLlm.ollamaModel);
   pushChange(
@@ -1379,6 +1431,7 @@ const { showStats } = createStatsPanel({
   documentRef: document,
   statusUpdate,
   writeLogEntry,
+  getCurrentSettings,
   setActiveMainTab: (tab) => {
     activeMainTab = tab;
   },
@@ -10800,6 +10853,22 @@ document
       `Settings updated ungroupedListVirtualizationEnabled=${Boolean(event?.target?.checked)}`,
     );
   });
+
+document.getElementById("settings-debug-map-projection-zoom-x").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated mapProjectionZoomX=${event?.target?.value}`);
+});
+
+document.getElementById("settings-debug-map-projection-zoom-y").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated mapProjectionZoomY=${event?.target?.value}`);
+});
+
+document.getElementById("settings-debug-map-projection-offset-x").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated mapProjectionOffsetX=${event?.target?.value}`);
+});
+
+document.getElementById("settings-debug-map-projection-offset-y").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated mapProjectionOffsetY=${event?.target?.value}`);
+});
 
 document.getElementById("settings-llm-model").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated ollamaModel=${JSON.stringify(event?.target?.value || "")}`);
