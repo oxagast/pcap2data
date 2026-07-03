@@ -143,14 +143,23 @@ function createListPanel({
   setIndex,
   setCurrentIp,
   setCurrentPacketKey,
+  getCurrentPacketKey,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
   infoPanel,
   popHexGrid,
   populateDataTypes,
+  isCaptureStoreBackedCapture,
+  getEnableUngroupedListVirtualization,
 }) {
   const { MAIN_TAB_LIST } = constants;
+  const VIRTUAL_LIST_THRESHOLD = 250;
+  const VIRTUAL_LIST_OVERSCAN = 24;
+  const VIRTUAL_LIST_ROW_HEIGHT = 28;
+
+  let virtualListState = null;
+  let virtualListScrollFrame = 0;
 
   function buildStreamFilterQuery(transport, srcIp, dstIp, srcPort, dstPort) {
     if (!srcIp || !dstIp) return null;
@@ -166,6 +175,274 @@ function createListPanel({
       );
     }
     return `(ip.src.addr: ${srcIp} && ip.dst.addr: ${dstIp}) || (ip.src.addr: ${dstIp} && ip.dst.addr: ${srcIp})`;
+  }
+
+  function clearVirtualListState() {
+    if (virtualListState?.content && virtualListState.scrollHandler) {
+      virtualListState.content.removeEventListener("scroll", virtualListState.scrollHandler);
+    }
+    virtualListState = null;
+    if (virtualListScrollFrame) {
+      window.cancelAnimationFrame(virtualListScrollFrame);
+      virtualListScrollFrame = 0;
+    }
+  }
+
+  function createSpacerRow(columnCount, pixelHeight) {
+    const tr = document.createElement("tr");
+    tr.className = "packet-list-spacer";
+    const td = document.createElement("td");
+    td.colSpan = columnCount;
+    td.setAttribute("aria-hidden", "true");
+    td.style.height = `${Math.max(0, pixelHeight)}px`;
+    td.style.padding = "0";
+    td.style.border = "0";
+    td.style.lineHeight = "0";
+    td.style.fontSize = "0";
+    tr.appendChild(td);
+    return tr;
+  }
+
+  function appendPacketRow(selectionContainer, appendTarget, row, activeGroupByStream, previousStreamLabel) {
+    const tr = document.createElement("tr");
+    tr.dataset.host = row.host;
+    tr.dataset.pktIdx = row.pktIdx;
+    tr.dataset.stream = row.streamLabel;
+    tr.dataset.packetKey = row.packetKey;
+
+    if (row.packetKey === getCurrentPacketKey()) {
+      tr.classList.add("packet-list-selected");
+    }
+
+    if (
+      activeGroupByStream &&
+      previousStreamLabel !== "" &&
+      previousStreamLabel !== row.streamLabel
+    ) {
+      tr.classList.add("packet-list-stream-break");
+    }
+
+    [
+      row.idx,
+      row.isBookmarked ? "★" : "",
+      row.streamLabel,
+      row.host,
+      row.srcIp,
+      row.dstIp,
+      row.srcPort,
+      row.dstPort,
+      row.transport,
+      row.appProto,
+    ].forEach((val) => {
+      const td = document.createElement("td");
+      td.textContent = val ?? "";
+      tr.appendChild(td);
+    });
+
+    tr.addEventListener("mouseenter", () => {
+      tr.classList.add("packet-list-hovered");
+    });
+    tr.addEventListener("mouseleave", () => {
+      tr.classList.remove("packet-list-hovered");
+    });
+
+    tr.addEventListener("click", async () => {
+      selectionContainer
+        .querySelectorAll(".packet-list-selected")
+        .forEach((r) => r.classList.remove("packet-list-selected"));
+      tr.classList.add("packet-list-selected");
+
+      hostFilterEl.value = row.host;
+      document.getElementById("target_hosts").value = row.host;
+      setCurrentIp(row.srcIp);
+      setCurrentPacketKey(row.packetKey);
+      syncBookmarkDropdown(row.packetKey);
+      writeLogEntry(
+        `[${threadName}] Packet list row selected host=${row.host} index=${row.idx}`,
+      );
+
+      const streamFilter = buildStreamFilterQuery(
+        row.transport, row.srcIp, row.dstIp, row.srcPort, row.dstPort,
+      );
+      if (streamFilter) {
+        filterInputEl.value = streamFilter;
+        syncFilterHighlight();
+        await runFilterQuery(streamFilter);
+        setPacketsForHost(getFilteredPackets());
+      } else {
+        const capturedPackets = getCapturedPackets();
+        const hostPackets = capturedPackets["Host"][row.host];
+        setPacketsForHost(hostPackets);
+        setIndex(row.pktIdx);
+        setActivePacketCursor(row.pktIdx);
+        document.getElementById("list_box").style.display = "none";
+        document.getElementById("data_tools_box").style.display = "none";
+        document.getElementById("crypt_box").style.display = "none";
+        document.getElementById("keystore_box").style.display = "none";
+        document.getElementById("notes_box").style.display = "none";
+        document.getElementById("packetInfoPane").style.display = "block";
+        document.getElementById("packetPayloadPane").style.display = "block";
+        const rightsideDataEl = document.getElementById("rightside-data");
+        const rightsideNotesEl = document.getElementById("rightside-notes");
+        if (rightsideDataEl) rightsideDataEl.hidden = false;
+        if (rightsideNotesEl) rightsideNotesEl.hidden = true;
+        showAllData();
+        infoPanel(hostPackets);
+        const hexPayload =
+          hostPackets[row.pktIdx]?.["Packet Info"]?.["Raw data"]?.[
+          "Payload"
+          ]?.["Hex Encoded"];
+        if (hexPayload) popHexGrid(hexPayload);
+        populateDataTypes(hostPackets);
+      }
+
+      statusUpdate(
+        "Status: Displaying packet " +
+        row.idx +
+        " for host " +
+        row.host,
+      );
+    });
+
+    appendTarget.appendChild(tr);
+  }
+
+  function renderVirtualRows() {
+    if (!virtualListState) return;
+
+    const {
+      rows,
+      tbody,
+      content,
+      columnCount,
+      activeGroupByStream,
+      onRendered,
+      sourceBacked,
+    } = virtualListState;
+    const rowHeight = virtualListState.rowHeight || VIRTUAL_LIST_ROW_HEIGHT;
+    const viewportHeight = Math.max(0, content.clientHeight || 0);
+    const scrollTop = Math.max(0, content.scrollTop || 0);
+    const visibleCount = Math.max(
+      1,
+      Math.ceil(viewportHeight / rowHeight) + VIRTUAL_LIST_OVERSCAN * 2,
+    );
+    const totalCount = sourceBacked ? virtualListState.totalCount : rows.length;
+    const desiredStartIndex = Math.max(
+      0,
+      Math.floor(scrollTop / rowHeight) - VIRTUAL_LIST_OVERSCAN,
+    );
+    const desiredEndIndex = Math.min(totalCount, desiredStartIndex + visibleCount);
+
+    if (
+      sourceBacked &&
+      (
+        desiredStartIndex < virtualListState.windowStart ||
+        desiredEndIndex > virtualListState.windowEnd
+      )
+    ) {
+      void loadSourceBackedListWindow(desiredStartIndex).then(() => {
+        if (virtualListState) {
+          renderVirtualRows();
+        }
+      });
+      return;
+    }
+
+    const startIndex = sourceBacked
+      ? Math.max(desiredStartIndex, virtualListState.windowStart)
+      : desiredStartIndex;
+    const endIndex = sourceBacked
+      ? Math.min(desiredEndIndex, virtualListState.windowEnd)
+      : Math.min(rows.length, startIndex + visibleCount);
+    const fragment = document.createDocumentFragment();
+
+    const windowStart = sourceBacked ? virtualListState.windowStart : 0;
+    if (startIndex > windowStart) {
+      fragment.appendChild(
+        createSpacerRow(columnCount, (startIndex - windowStart) * rowHeight),
+      );
+    }
+
+    const visibleRows = sourceBacked ? rows : rows.slice(startIndex, endIndex);
+    const rowStartOffset = sourceBacked ? startIndex - windowStart : 0;
+    const rowEndOffset = sourceBacked ? endIndex - windowStart : visibleRows.length;
+    let previousStreamLabel =
+      sourceBacked && startIndex > windowStart
+        ? rows[startIndex - windowStart - 1]?.streamLabel || ""
+        : startIndex > 0
+          ? rows[startIndex - 1].streamLabel
+          : "";
+    for (let rowIndex = rowStartOffset; rowIndex < rowEndOffset; rowIndex += 1) {
+      const row = visibleRows[rowIndex];
+      appendPacketRow(tbody, fragment, row, activeGroupByStream, previousStreamLabel);
+      previousStreamLabel = row.streamLabel;
+    }
+
+    if (endIndex < totalCount) {
+      fragment.appendChild(
+        createSpacerRow(columnCount, (totalCount - endIndex) * rowHeight),
+      );
+    }
+
+    tbody.replaceChildren(fragment);
+
+    const firstRow = tbody.querySelector("tr:not(.packet-list-spacer)");
+    const measuredRowHeight = firstRow?.getBoundingClientRect().height || rowHeight;
+    if (
+      !virtualListState.rowHeightMeasured &&
+      measuredRowHeight > 0 &&
+      measuredRowHeight !== rowHeight
+    ) {
+      virtualListState.rowHeight = measuredRowHeight;
+      virtualListState.rowHeightMeasured = true;
+      renderVirtualRows();
+      return;
+    }
+    virtualListState.rowHeightMeasured = true;
+
+    if (typeof onRendered === "function") {
+      onRendered();
+    }
+  }
+
+  function scheduleVirtualRowsRender() {
+    if (!virtualListState) return;
+    if (virtualListScrollFrame) return;
+    virtualListScrollFrame = window.requestAnimationFrame(() => {
+      virtualListScrollFrame = 0;
+      renderVirtualRows();
+    });
+  }
+
+  async function loadSourceBackedListWindow(desiredStartIndex) {
+    if (!virtualListState || !window.captureapi?.getListWindow) return;
+    const totalCount = virtualListState.totalCount || 0;
+    const rowHeight = virtualListState.rowHeight || VIRTUAL_LIST_ROW_HEIGHT;
+    const viewportHeight = Math.max(0, virtualListState.content.clientHeight || 0);
+    const visibleCount = Math.max(
+      1,
+      Math.ceil(viewportHeight / rowHeight) + VIRTUAL_LIST_OVERSCAN * 2,
+    );
+    const windowSize = Math.max(visibleCount * 2, 200);
+    const windowStart = Math.max(
+      0,
+      Math.min(
+        Math.max(0, totalCount - windowSize),
+        desiredStartIndex - Math.floor(windowSize / 3),
+      ),
+    );
+
+    const response = await window.captureapi.getListWindow({
+      startIndex: windowStart,
+      count: windowSize,
+    });
+    if (!response?.success || !virtualListState) return;
+
+    virtualListState.rows = Array.isArray(response.rows) ? response.rows : [];
+    virtualListState.totalCount = Number(response.totalCount) || totalCount;
+    virtualListState.windowStart = Number(response.startIndex) || 0;
+    virtualListState.windowEnd =
+      virtualListState.windowStart + virtualListState.rows.length;
   }
 
   function showPacketList() {
@@ -209,6 +486,7 @@ function createListPanel({
     const sortState = { key: "idx", direction: "asc" };
 
     function buildTable(filterText) {
+      clearVirtualListState();
       content.replaceChildren();
       const capturedPackets = getCapturedPackets();
       if (!capturedPackets || !capturedPackets["Host"]) {
@@ -218,6 +496,101 @@ function createListPanel({
 
       const hosts = Object.keys(capturedPackets["Host"]).sort();
       const lc = filterText ? filterText.toLowerCase() : "";
+      const activeGroupByStream =
+        document.getElementById("list-group-streams")?.checked;
+      const ungroupedVirtualizationEnabled =
+        typeof getEnableUngroupedListVirtualization === "function"
+          ? Boolean(getEnableUngroupedListVirtualization())
+          : false;
+
+      const canUseSourceBackedList =
+        false;
+
+      if (canUseSourceBackedList) {
+        const table = document.createElement("table");
+        table.className = "packet-list-table";
+
+        const thead = document.createElement("thead");
+        const headerRow = document.createElement("tr");
+        columnDefinitions.forEach((column) => {
+          const th = document.createElement("th");
+          const isActiveSort = sortState.key === column.key;
+          const sortArrow = isActiveSort
+            ? sortState.direction === "asc"
+              ? " ▲"
+              : " ▼"
+            : "";
+          th.textContent = column.label + sortArrow;
+          th.classList.add("packet-list-sortable-header");
+          th.tabIndex = 0;
+          th.title = `Sort by ${column.label}`;
+          th.setAttribute(
+            "aria-sort",
+            isActiveSort
+              ? sortState.direction === "asc"
+                ? "ascending"
+                : "descending"
+              : "none",
+          );
+          const sortByColumn = () => {
+            if (sortState.key === column.key) {
+              sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+            } else {
+              sortState.key = column.key;
+              sortState.direction = "asc";
+            }
+            buildTable(document.getElementById("list-search")?.value || "");
+          };
+          th.addEventListener("click", sortByColumn);
+          th.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              sortByColumn();
+            }
+          });
+          headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        const loadingRow = document.createElement("tr");
+        const loadingCell = document.createElement("td");
+        loadingCell.colSpan = columnDefinitions.length;
+        loadingCell.textContent = "Loading packet list...";
+        loadingCell.style.textAlign = "center";
+        loadingCell.style.padding = "12px";
+        loadingRow.appendChild(loadingCell);
+        tbody.appendChild(loadingRow);
+        table.appendChild(tbody);
+        content.appendChild(table);
+
+        virtualListState = {
+          rows: [],
+          totalCount: 0,
+          windowStart: 0,
+          windowEnd: 0,
+          tbody,
+          content,
+          columnCount: columnDefinitions.length,
+          activeGroupByStream: false,
+          rowHeight: VIRTUAL_LIST_ROW_HEIGHT,
+          rowHeightMeasured: false,
+          sourceBacked: true,
+          onRendered: null,
+        };
+
+        const scrollHandler = () => scheduleVirtualRowsRender();
+        virtualListState.scrollHandler = scrollHandler;
+        content.addEventListener("scroll", scrollHandler, { passive: true });
+
+        void loadSourceBackedListWindow(0).then(() => {
+          if (virtualListState) {
+            renderVirtualRows();
+          }
+        });
+        return;
+      }
 
       const rows = [];
 
@@ -281,9 +654,9 @@ function createListPanel({
             transport,
             appProto,
             pktIdx,
-            pi,
             streamKey,
             isBookmarked,
+            packetKey: srcIp + ":" + pi["Index"],
           });
         });
       }
@@ -298,8 +671,6 @@ function createListPanel({
         row.streamLabel = `S${row.streamOrder}`;
       });
 
-      const activeGroupByStream =
-        document.getElementById("list-group-streams")?.checked;
       const sortDirection = sortState.direction === "asc" ? 1 : -1;
       const compareText = (left, right) =>
         String(left ?? "").localeCompare(String(right ?? ""));
@@ -337,6 +708,10 @@ function createListPanel({
         if (sortedDiff !== 0) return sortedDiff * sortDirection;
         return Number(left.idx) - Number(right.idx);
       });
+
+      const shouldVirtualizeRows =
+        rows.length > VIRTUAL_LIST_THRESHOLD &&
+        (activeGroupByStream || ungroupedVirtualizationEnabled);
 
       const table = document.createElement("table");
       table.className = "packet-list-table";
@@ -397,111 +772,44 @@ function createListPanel({
         td.style.padding = "12px";
         tr.appendChild(td);
         tbody.appendChild(tr);
+      } else if (shouldVirtualizeRows) {
+        table.dataset.virtualized = "true";
+        const renderState = {
+          rows,
+          tbody,
+          content,
+          columnCount: columnDefinitions.length,
+          activeGroupByStream,
+          rowHeight: VIRTUAL_LIST_ROW_HEIGHT,
+          rowHeightMeasured: false,
+          onRendered: null,
+        };
+        virtualListState = renderState;
+        renderState.onRendered = () => {
+          if (!virtualListState) return;
+          const selectedRow = tbody.querySelector(".packet-list-selected");
+          if (selectedRow) {
+            selectedRow.scrollIntoView({ block: "nearest" });
+          }
+        };
+        const scrollHandler = () => scheduleVirtualRowsRender();
+        renderState.scrollHandler = scrollHandler;
+        content.addEventListener("scroll", scrollHandler, { passive: true });
+        content.scrollTop = 0;
       } else {
         let previousStreamLabel = "";
         rows.forEach((row) => {
-          const tr = document.createElement("tr");
-          tr.dataset.host = row.host;
-          tr.dataset.pktIdx = row.pktIdx;
-          tr.dataset.stream = row.streamLabel;
-
-          if (
-            activeGroupByStream &&
-            previousStreamLabel !== "" &&
-            previousStreamLabel !== row.streamLabel
-          ) {
-            tr.classList.add("packet-list-stream-break");
-          }
+          appendPacketRow(tbody, tbody, row, activeGroupByStream, previousStreamLabel);
           previousStreamLabel = row.streamLabel;
-
-          [
-            row.idx,
-            row.isBookmarked ? "★" : "",
-            row.streamLabel,
-            row.host,
-            row.srcIp,
-            row.dstIp,
-            row.srcPort,
-            row.dstPort,
-            row.transport,
-            row.appProto,
-          ].forEach((val) => {
-            const td = document.createElement("td");
-            td.textContent = val ?? "";
-            tr.appendChild(td);
-          });
-
-          tr.addEventListener("mouseenter", () => {
-            tr.classList.add("packet-list-hovered");
-          });
-          tr.addEventListener("mouseleave", () => {
-            tr.classList.remove("packet-list-hovered");
-          });
-
-          tr.addEventListener("click", async () => {
-            tbody
-              .querySelectorAll(".packet-list-selected")
-              .forEach((r) => r.classList.remove("packet-list-selected"));
-            tr.classList.add("packet-list-selected");
-
-            hostFilterEl.value = row.host;
-            document.getElementById("target_hosts").value = row.host;
-            setCurrentIp(row.srcIp);
-            setCurrentPacketKey(row.srcIp + ":" + row.pi["Index"]);
-            syncBookmarkDropdown(row.srcIp + ":" + row.pi["Index"]);
-            writeLogEntry(
-              `[${threadName}] Packet list row selected host=${row.host} index=${row.pi["Index"]}`,
-            );
-
-            const streamFilter = buildStreamFilterQuery(
-              row.transport, row.srcIp, row.dstIp, row.srcPort, row.dstPort,
-            );
-            if (streamFilter) {
-              filterInputEl.value = streamFilter;
-              syncFilterHighlight();
-              await runFilterQuery(streamFilter);
-              setPacketsForHost(getFilteredPackets());
-            } else {
-              const capturedPackets = getCapturedPackets();
-              const hostPackets = capturedPackets["Host"][row.host];
-              setPacketsForHost(hostPackets);
-              setIndex(row.pktIdx);
-              setActivePacketCursor(row.pktIdx);
-              document.getElementById("list_box").style.display = "none";
-              document.getElementById("data_tools_box").style.display = "none";
-              document.getElementById("crypt_box").style.display = "none";
-              document.getElementById("keystore_box").style.display = "none";
-              document.getElementById("notes_box").style.display = "none";
-              document.getElementById("packetInfoPane").style.display = "block";
-              document.getElementById("packetPayloadPane").style.display = "block";
-              const rightsideDataEl = document.getElementById("rightside-data");
-              const rightsideNotesEl = document.getElementById("rightside-notes");
-              if (rightsideDataEl) rightsideDataEl.hidden = false;
-              if (rightsideNotesEl) rightsideNotesEl.hidden = true;
-              showAllData();
-              infoPanel(hostPackets);
-              const hexPayload =
-                hostPackets[row.pktIdx]?.["Packet Info"]?.["Raw data"]?.[
-                "Payload"
-                ]?.["Hex Encoded"];
-              if (hexPayload) popHexGrid(hexPayload);
-              populateDataTypes(hostPackets);
-            }
-
-            statusUpdate(
-              "Status: Displaying packet " +
-              row.pi["Index"] +
-              " for host " +
-              row.host,
-            );
-          });
-
-          tbody.appendChild(tr);
         });
       }
 
       table.appendChild(tbody);
       content.appendChild(table);
+
+      if (shouldVirtualizeRows) {
+        renderVirtualRows();
+      }
     }
     if (getCapturedPackets() && Object.keys(getCapturedPackets()["Host"]).length > 1) {
       buildTable(searchEl.value);

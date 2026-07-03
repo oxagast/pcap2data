@@ -6,6 +6,14 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendPacketChunkSize: 250,
         streamContextWarnPacketThreshold: 20,
     },
+    backend: {
+        tcpHost: "127.0.0.1",
+        tcpPort: 9020,
+        forceLegacySpawn: false,
+    },
+    debug: {
+        ungroupedListVirtualizationEnabled: false,
+    },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
         ollamaApiKey: "",
@@ -42,8 +50,12 @@ function normalizeThemeId(value, fallback) {
 function normalizeSettings(rawSettings = {}) {
     const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
     const general = source.general && typeof source.general === "object" ? source.general : {};
+    const backend = source.backend && typeof source.backend === "object" ? source.backend : {};
+    const debug = source.debug && typeof source.debug === "object" ? source.debug : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
+    const backendDefaults = DEFAULT_SETTINGS.backend;
+    const debugDefaults = DEFAULT_SETTINGS.debug;
     const defaults = DEFAULT_SETTINGS.llm;
 
     const normalizedBackendChunkSize = toPositiveInteger(
@@ -73,6 +85,27 @@ function normalizeSettings(rawSettings = {}) {
                 generalDefaults.streamContextWarnPacketThreshold,
                 5,
             ),
+        },
+        backend: {
+            tcpHost:
+                typeof backend.tcpHost === "string" && backend.tcpHost.trim()
+                    ? backend.tcpHost.trim()
+                    : backendDefaults.tcpHost,
+            tcpPort: toPositiveInteger(
+                backend.tcpPort,
+                backendDefaults.tcpPort,
+                1,
+            ),
+            forceLegacySpawn:
+                typeof backend.forceLegacySpawn === "boolean"
+                    ? backend.forceLegacySpawn
+                    : backendDefaults.forceLegacySpawn,
+        },
+        debug: {
+            ungroupedListVirtualizationEnabled:
+                typeof debug.ungroupedListVirtualizationEnabled === "boolean"
+                    ? debug.ungroupedListVirtualizationEnabled
+                    : debugDefaults.ungroupedListVirtualizationEnabled,
         },
         llm: {
             ollamaModel:

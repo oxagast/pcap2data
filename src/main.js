@@ -85,6 +85,7 @@ let sessionCompressionFallbackAccepted = null;
 let goodiesDataCache = null;
 let ollamaModelsCache = null;
 let appSettings = null;
+let backCommModule = null;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
 const THEMES_DIR_NAME = "themes";
@@ -324,6 +325,15 @@ ipcMain.handle("kill-snitch-process", () => {
 
 function killBackendProcess() {
   console.log("Shutting down preprocessor...");
+  const shutdownBackendService = backCommModule?.shutdownHttpBackendService
+    || backCommModule?.shutdownTcpBackendService;
+  if (typeof shutdownBackendService === "function") {
+    try {
+      shutdownBackendService();
+    } catch (error) {
+      console.warn("Failed to shut down backend service cleanly:", error);
+    }
+  }
   if (platform === "win32") {
     exec("taskkill /IM snitch.exe /T /F", (fileError) => {
       if (fileError) console.error(fileError);
@@ -939,7 +949,7 @@ app.whenReady().then(() => {
     console.log("App ready, waiting for file selection...");
     registerCaptureStoreHandlers(ipcMain);
     // start the process that listens for the file selection and runs the backend command
-    require("./back-comm");
+    backCommModule = require("./back-comm");
     ipcMain.handle("select-file", async () => {
       const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ["openFile"],

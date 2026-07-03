@@ -215,6 +215,7 @@ let retransmissionList = []; // List of packets marked as retransmissions
 let outOfOrderList = []; // List of packets marked as out-of-order
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
+let isCaptureStoreBackedCapture = false;
 let jsonOfPackets;
 let streamProtocol = null;
 let filteredPackets;
@@ -228,6 +229,7 @@ let llmSummaryTimeout = null;
 let summary = "";
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
+const streamPacketHydrationCache = new Map();
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
@@ -280,6 +282,8 @@ let appSettings = cloneDefaultSettings();
 let statusResetTimeoutId = null;
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
+const SETTINGS_SUBTAB_BACKEND = "backend";
+const SETTINGS_SUBTAB_DEBUG = "debug";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 const FALLBACK_THEME_ID = "snitchbitch";
 let availableThemes = [];
@@ -640,6 +644,14 @@ function syncSettingsFormFromState() {
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
   );
+  const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
+  const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
+  const backendForceLegacySpawnEl = document.getElementById(
+    "settings-backend-force-legacy-spawn",
+  );
+  const ungroupedListVirtualizationEnabledEl = document.getElementById(
+    "settings-debug-ungrouped-list-virtualization-enabled",
+  );
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -662,6 +674,20 @@ function syncSettingsFormFromState() {
   }
   if (streamWarnThresholdEl) {
     streamWarnThresholdEl.value = String(settings.general.streamContextWarnPacketThreshold);
+  }
+  if (backendTcpHostEl) {
+    backendTcpHostEl.value = String(settings.backend.tcpHost || DEFAULT_SETTINGS.backend.tcpHost);
+  }
+  if (backendTcpPortEl) {
+    backendTcpPortEl.value = String(settings.backend.tcpPort || DEFAULT_SETTINGS.backend.tcpPort);
+  }
+  if (backendForceLegacySpawnEl) {
+    backendForceLegacySpawnEl.checked = Boolean(settings.backend.forceLegacySpawn);
+  }
+  if (ungroupedListVirtualizationEnabledEl) {
+    ungroupedListVirtualizationEnabledEl.checked = Boolean(
+      settings.debug.ungroupedListVirtualizationEnabled,
+    );
   }
   if (modelEl) {
     renderLlmModelOptions(settings.llm.ollamaModel);
@@ -686,6 +712,14 @@ function readSettingsFormState() {
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
+  );
+  const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
+  const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
+  const backendForceLegacySpawnEl = document.getElementById(
+    "settings-backend-force-legacy-spawn",
+  );
+  const ungroupedListVirtualizationEnabledEl = document.getElementById(
+    "settings-debug-ungrouped-list-virtualization-enabled",
   );
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
@@ -713,6 +747,22 @@ function readSettingsFormState() {
       streamContextWarnPacketThreshold: streamWarnThresholdEl
         ? streamWarnThresholdEl.value
         : DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
+    },
+    backend: {
+      tcpHost: backendTcpHostEl
+        ? backendTcpHostEl.value
+        : DEFAULT_SETTINGS.backend.tcpHost,
+      tcpPort: backendTcpPortEl
+        ? backendTcpPortEl.value
+        : DEFAULT_SETTINGS.backend.tcpPort,
+      forceLegacySpawn: backendForceLegacySpawnEl
+        ? backendForceLegacySpawnEl.checked
+        : DEFAULT_SETTINGS.backend.forceLegacySpawn,
+    },
+    debug: {
+      ungroupedListVirtualizationEnabled: ungroupedListVirtualizationEnabledEl
+        ? ungroupedListVirtualizationEnabledEl.checked
+        : DEFAULT_SETTINGS.debug.ungroupedListVirtualizationEnabled,
     },
     llm: {
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
@@ -759,6 +809,10 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   const changes = [];
   const previousGeneral = previousSettings?.general || {};
   const nextGeneral = nextSettings?.general || {};
+  const previousBackend = previousSettings?.backend || {};
+  const nextBackend = nextSettings?.backend || {};
+  const previousDebug = previousSettings?.debug || {};
+  const nextDebug = nextSettings?.debug || {};
   const previousLlm = previousSettings?.llm || {};
   const nextLlm = nextSettings?.llm || {};
 
@@ -795,6 +849,18 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "streamContextWarnPacketThreshold",
     previousGeneral.streamContextWarnPacketThreshold,
     nextGeneral.streamContextWarnPacketThreshold,
+  );
+  pushChange("backendTcpHost", previousBackend.tcpHost, nextBackend.tcpHost);
+  pushChange("backendTcpPort", previousBackend.tcpPort, nextBackend.tcpPort);
+  pushChange(
+    "backendForceLegacySpawn",
+    previousBackend.forceLegacySpawn,
+    nextBackend.forceLegacySpawn,
+  );
+  pushChange(
+    "ungroupedListVirtualizationEnabled",
+    previousDebug.ungroupedListVirtualizationEnabled,
+    nextDebug.ungroupedListVirtualizationEnabled,
   );
   pushChange("ollamaModel", previousLlm.ollamaModel, nextLlm.ollamaModel);
   pushChange(
@@ -850,6 +916,7 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
+  await initializeBackendServiceFromSettings(savedSettings);
   syncRuntimeLlmToggleFromSettings();
   await applyThemeById(savedSettings.general.themeId);
   syncSettingsFormFromState();
@@ -869,6 +936,7 @@ async function loadPersistedSettings() {
   }
   const loadedSettings = await window.settingsapi.get();
   setCurrentSettings(loadedSettings);
+  await initializeBackendServiceFromSettings(loadedSettings);
   syncRuntimeLlmToggleFromSettings();
   await applyThemeById(loadedSettings.general.themeId);
   syncSettingsFormFromState();
@@ -919,25 +987,73 @@ function getStreamContextWarnPacketThreshold() {
   );
 }
 
+function getBackendTransportOptionsFromSettings(settings = getCurrentSettings()) {
+  return {
+    tcpHost: String(settings?.backend?.tcpHost || DEFAULT_SETTINGS.backend.tcpHost),
+    tcpPort: Number(settings?.backend?.tcpPort || DEFAULT_SETTINGS.backend.tcpPort),
+    forceLegacySpawn: Boolean(settings?.backend?.forceLegacySpawn),
+  };
+}
+
+async function initializeBackendServiceFromSettings(settings = getCurrentSettings()) {
+  if (!window.snitchapi || typeof window.snitchapi.initBackendService !== "function") {
+    return null;
+  }
+
+  const backendOptions = getBackendTransportOptionsFromSettings(settings);
+  try {
+    const result = await window.snitchapi.initBackendService(backendOptions);
+    writeLogEntry(
+      `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
+    );
+    return result;
+  } catch (error) {
+    logErrorEntry("backend-init", error);
+    return null;
+  }
+}
+
 function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const nextTab =
-    tabName === SETTINGS_SUBTAB_LLM ? SETTINGS_SUBTAB_LLM : SETTINGS_SUBTAB_GENERAL;
+    tabName === SETTINGS_SUBTAB_LLM
+      ? SETTINGS_SUBTAB_LLM
+      : tabName === SETTINGS_SUBTAB_BACKEND
+        ? SETTINGS_SUBTAB_BACKEND
+        : tabName === SETTINGS_SUBTAB_DEBUG
+          ? SETTINGS_SUBTAB_DEBUG
+          : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
+  const backendBtn = document.getElementById("settings-subtab-backend");
+  const debugBtn = document.getElementById("settings-subtab-debug");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
+  const backendPanel = document.getElementById("settings-backend-panel");
+  const debugPanel = document.getElementById("settings-debug-panel");
   if (generalBtn) {
     generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
   }
   if (llmBtn) {
     llmBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_LLM);
   }
+  if (backendBtn) {
+    backendBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_BACKEND);
+  }
+  if (debugBtn) {
+    debugBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_DEBUG);
+  }
   if (generalPanel) {
     generalPanel.hidden = nextTab !== SETTINGS_SUBTAB_GENERAL;
   }
   if (llmPanel) {
     llmPanel.hidden = nextTab !== SETTINGS_SUBTAB_LLM;
+  }
+  if (backendPanel) {
+    backendPanel.hidden = nextTab !== SETTINGS_SUBTAB_BACKEND;
+  }
+  if (debugPanel) {
+    debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
   }
 }
 
@@ -1745,6 +1861,43 @@ function cacheHydratedPacket(packetKey, packet) {
     if (!oldestKey) break;
     hydratedPacketCache.delete(oldestKey);
   }
+}
+
+function clearStreamPacketHydrationCache() {
+  streamPacketHydrationCache.clear();
+}
+
+async function warmStreamPacketHydrationCache(streamKey, streamPacketRefs) {
+  if (!streamKey || !Array.isArray(streamPacketRefs) || streamPacketRefs.length === 0) {
+    return [];
+  }
+
+  const cachedStreamPackets = streamPacketHydrationCache.get(streamKey);
+  if (Array.isArray(cachedStreamPackets)) {
+    return cachedStreamPackets;
+  }
+  if (cachedStreamPackets) {
+    return cachedStreamPackets;
+  }
+
+  const hydrationPromise = (async () => {
+    await yieldToRenderer();
+    const hydratedPackets = await Promise.all(
+      streamPacketRefs.map(({ packet, host, packetIndex }) =>
+        ensurePacketHydrated(packet, host, packetIndex),
+      ),
+    );
+    const resolvedPackets = hydratedPackets.filter(Boolean);
+    streamPacketHydrationCache.set(streamKey, resolvedPackets);
+    return resolvedPackets;
+  })().catch((error) => {
+    logErrorEntry("stream-packet-hydration", error);
+    streamPacketHydrationCache.delete(streamKey);
+    return [];
+  });
+
+  streamPacketHydrationCache.set(streamKey, hydrationPromise);
+  return hydrationPromise;
 }
 
 function updatePacketInCollections(packetKey, packet) {
@@ -3380,6 +3533,80 @@ function normalizeLoadedSessionPayload(parsedPayload) {
   };
 }
 
+async function finalizeLoadedCapture(sessionState) {
+  getCachedElement("target_hosts").hidden = false;
+  getCachedElement("summary-btn").style.display = "block";
+  hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
+
+  const targetHostsDropdown = getCachedElement("target_hosts");
+  while (targetHostsDropdown.options.length > 0) {
+    targetHostsDropdown.remove(0);
+  }
+  appendAllHostsOption(targetHostsDropdown);
+  appendBookmarkedOption(targetHostsDropdown);
+  bookmarkList.splice(0, bookmarkList.length);
+  notesList = [];
+  selectedNoteId = null;
+  currentPacketToConvJson();
+  renderNotesList();
+
+  const selectBookmarkEl = document.getElementById("selectBookmark");
+  while (selectBookmarkEl.options.length > 1) {
+    selectBookmarkEl.remove(1);
+  }
+
+  packetStubByKey.clear();
+  hydratedPacketCache.clear();
+  clearStreamPacketHydrationCache();
+  for (const host in capturedPackets["Host"]) {
+    hostsList.push(host);
+    const newhost = document.createElement("option");
+    newhost.textContent = host;
+    newhost.value = host;
+    targetHostsDropdown.appendChild(newhost);
+    const hostPackets = Array.isArray(capturedPackets["Host"][host])
+      ? capturedPackets["Host"][host]
+      : [];
+    hostPackets.forEach((packet, packetIndex) => {
+      const packetKey = getPacketKey(packet, host, packetIndex);
+      if (packet && typeof packet === "object") {
+        packet.__packetKey = packetKey;
+      }
+      cachePacketStub(packetKey, packet);
+    });
+    isFileLoaded = true;
+  }
+
+  if (hostsList.length > 1) {
+    writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
+  }
+  const timeframe = getPacketTimeframe();
+  if (timeframe) {
+    writeLogEntry(
+      `Packet timeframe start="${timeframe.first}" end="${timeframe.last}"`,
+    );
+  }
+  if (totalPacketCount() > 1) {
+    writeLogEntry(`Total packet count=${totalPacketCount()}`);
+  }
+
+  clearFilterQuery();
+  syncFilterHighlight();
+  isFileLoaded = true;
+  if (sessionState) {
+    restoreSessionState(sessionState);
+  } else {
+    scheduleSessionKeychainAutoPopulate("file-load");
+    statusUpdate("Status: File loaded successfully");
+    writeLogEntry("New session initialized: created new session state");
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+    showPacketList();
+  }
+  document.getElementById("loading-screen").style.display = "none";
+  document.getElementById("loading-container").style.display = "none";
+}
+
 function rebuildBookmarkDropdown() {
   const selectBookmarkEl = document.getElementById("selectBookmark");
   while (selectBookmarkEl.options.length > 1) {
@@ -3928,6 +4155,7 @@ async function processCapturePath(capturePath, options = {}) {
   }
 
   if (incrementalUpdate && isFileLoaded) {
+    isCaptureStoreBackedCapture = true;
     capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
     jsonCapture = "[lazy-capture-store]";
 
@@ -3947,6 +4175,7 @@ async function processCapturePath(capturePath, options = {}) {
 
     packetStubByKey.clear();
     hydratedPacketCache.clear();
+    clearStreamPacketHydrationCache();
 
     Object.keys(hostMap).forEach((host) => {
       hostsList.push(host);
@@ -4004,27 +4233,16 @@ async function processCapturePath(capturePath, options = {}) {
   }
 
   capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+  isCaptureStoreBackedCapture = true;
   jsonCapture = "[lazy-capture-store]";
   fileLoaded(true);
 
-  let loadedSessionState =
+  const loadedSessionState =
     loadResult.sessionState && typeof loadResult.sessionState === "object"
       ? loadResult.sessionState
       : null;
 
-  // Reuse the existing session flow by processing a tiny synthetic payload.
-  // processFile() rebuilds the host dropdown, bookmarks, notes, and panel state.
-  const syntheticPayload = {
-    [SESSION_CAPTURE_KEY]: capturedPackets,
-  };
-  if (loadedSessionState) {
-    syntheticPayload[SESSION_STATE_KEY] = loadedSessionState;
-  }
-  processFile(
-    new File([JSON.stringify(syntheticPayload)], "lazy-capture.json", {
-      type: "application/json",
-    }),
-  );
+  await finalizeLoadedCapture(loadedSessionState);
 }
 
 /**
@@ -4048,7 +4266,6 @@ function processFile(file) {
   let loadedSessionState = null;
   const reader = new FileReader();
   reader.onload = async (event) => {
-    const mainPanel = getCachedElement("main");
     if (isValidJson(event.target.result) == false) {
       console.log("Invalid JSON file");
       doError("Invalid JSON file, please upload a valid JSON capture!");
@@ -4056,6 +4273,7 @@ function processFile(file) {
       return;
     }
     fileLoaded(true);
+    isCaptureStoreBackedCapture = false;
     jsonOfPackets = event.target.result;
     getCachedElement("error-container").style.display = "none";
 
@@ -4083,7 +4301,7 @@ function processFile(file) {
           capturedPackets = normalizedPayload.captureData;
           loadedSessionState = normalizedPayload.sessionState;
           jsonCapture = JSON.stringify(capturedPackets, null, getConvJsonIndentSpaces());
-          await finishProcessingFile();
+          await finalizeLoadedCapture(loadedSessionState);
         })
         .catch((e) => {
           console.error("JSON parse error:", e);
@@ -4104,82 +4322,9 @@ function processFile(file) {
       capturedPackets = normalizedPayload.captureData;
       loadedSessionState = normalizedPayload.sessionState;
       jsonCapture = JSON.stringify(capturedPackets, null, getConvJsonIndentSpaces());
-      await finishProcessingFile();
+      await finalizeLoadedCapture(loadedSessionState);
     }
   };
-
-  async function finishProcessingFile() {
-    getCachedElement("target_hosts").hidden = false;
-    getCachedElement("summary-btn").style.display = "block";
-    // Reset host list and dropdowns for the new file
-    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
-
-    const targetHostsDropdown = getCachedElement("target_hosts");
-    while (targetHostsDropdown.options.length > 0) {
-      targetHostsDropdown.remove(0);
-    }
-    appendAllHostsOption(targetHostsDropdown);
-    appendBookmarkedOption(targetHostsDropdown);
-    bookmarkList.splice(0, bookmarkList.length);
-    notesList = [];
-    selectedNoteId = null;
-    currentPacketToConvJson();
-    renderNotesList();
-    const selectBookmarkEl = document.getElementById("selectBookmark");
-    while (selectBookmarkEl.options.length > 1) {
-      selectBookmarkEl.remove(1);
-    }
-    // Populate host dropdown with hosts from JSON
-    packetStubByKey.clear();
-    hydratedPacketCache.clear();
-    for (const host in capturedPackets["Host"]) {
-      hostsList.push(host);
-      const newhost = document.createElement("option");
-      newhost.textContent = host;
-      newhost.value = host;
-      targetHostsDropdown.appendChild(newhost);
-      const hostPackets = Array.isArray(capturedPackets["Host"][host])
-        ? capturedPackets["Host"][host]
-        : [];
-      hostPackets.forEach((packet, packetIndex) => {
-        const packetKey = getPacketKey(packet, host, packetIndex);
-        if (packet && typeof packet === "object") {
-          packet.__packetKey = packetKey;
-        }
-        cachePacketStub(packetKey, packet);
-      });
-      isFileLoaded = true;
-    }
-    if (hostsList.length > 1) {
-      writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
-    }
-    const timeframe = getPacketTimeframe();
-    if (timeframe) {
-      writeLogEntry(
-        `Packet timeframe start="${timeframe.first}" end="${timeframe.last}"`,
-      );
-    }
-    if (totalPacketCount() > 1) {
-      writeLogEntry(`Total packet count=${totalPacketCount()}`);
-    }
-    clearFilterQuery();
-    syncFilterHighlight();
-    isFileLoaded = true;
-    if (loadedSessionState) {
-      restoreSessionState(loadedSessionState);
-    }
-    else {
-      scheduleSessionKeychainAutoPopulate("file-load");
-      statusUpdate("Status: File loaded successfully");
-      writeLogEntry("New session initialized: created new session state");
-      document.getElementById("total-packets").textContent = "Total Packets: " + totalPacketCount();
-      showPacketList();
-    }
-    document.getElementById("loading-screen").style.display = "none";
-    document.getElementById("loading-container").style.display = "none";
-
-
-  }
   reader.onerror = (error) => {
     status.textContent = "Status: Error reading file: " + error;
     logErrorEntry("file-read", error);
@@ -6504,12 +6649,16 @@ const listPanel = createListPanel({
   setCurrentPacketKey: (packetKey) => {
     currentPacketKey = packetKey;
   },
+  getCurrentPacketKey: () => currentPacketKey,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
   infoPanel,
   popHexGrid,
   populateDataTypes,
+  isCaptureStoreBackedCapture: () => isCaptureStoreBackedCapture,
+  getEnableUngroupedListVirtualization: () =>
+    Boolean(getCurrentSettings()?.debug?.ungroupedListVirtualizationEnabled),
 });
 
 const { showPacketList } = listPanel;
@@ -10504,6 +10653,14 @@ document.getElementById("settings-subtab-llm").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_LLM);
 });
 
+document.getElementById("settings-subtab-backend").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_BACKEND);
+});
+
+document.getElementById("settings-subtab-debug").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_DEBUG);
+});
+
 document.getElementById("settings-general-theme").addEventListener("change", (event) => {
   const selectedThemeId = sanitizeThemeId(event?.target?.value, FALLBACK_THEME_ID);
   const previousThemeId = sanitizeThemeId(
@@ -10539,6 +10696,30 @@ document
   .getElementById("settings-general-stream-warn-packet-threshold")
   .addEventListener("change", (event) => {
     writeLogEntry(`Settings updated streamContextWarnPacketThreshold=${event?.target?.value}`);
+  });
+
+document.getElementById("settings-backend-tcp-host").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated backendTcpHost=${JSON.stringify(event?.target?.value || "")}`);
+});
+
+document.getElementById("settings-backend-tcp-port").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated backendTcpPort=${event?.target?.value}`);
+});
+
+document
+  .getElementById("settings-backend-force-legacy-spawn")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backendForceLegacySpawn=${Boolean(event?.target?.checked)}`,
+    );
+  });
+
+document
+  .getElementById("settings-debug-ungrouped-list-virtualization-enabled")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated ungroupedListVirtualizationEnabled=${Boolean(event?.target?.checked)}`,
+    );
   });
 
 document.getElementById("settings-llm-model").addEventListener("change", (event) => {
@@ -12106,6 +12287,7 @@ function infoPanel(pk) {
   }
 
   const currentStreamKey = buildBidirectionalStreamKey(packetInfoData);
+  const streamPacketRefs = [];
   const streamPackets = [];
 
   // ensure that all the packets in the stream all report the same application protocol, for consistency
@@ -12113,9 +12295,15 @@ function infoPanel(pk) {
     for (const host of Object.keys(capturedPackets["Host"])) {
       const hostPackets = capturedPackets["Host"][host];
       if (!Array.isArray(hostPackets)) continue;
-      for (const pkt of hostPackets) {
+      for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
+        const pkt = hostPackets[packetIndex];
         const pi = pkt?.["Packet Info"];
         if (pi && buildBidirectionalStreamKey(pi) === currentStreamKey) {
+          streamPacketRefs.push({
+            packet: pkt,
+            host,
+            packetIndex,
+          });
           streamPackets.push(pkt);
           // check and see if they all have the same application protocol,
           // if not, we will use the first packet's application protocol
@@ -12136,6 +12324,8 @@ function infoPanel(pk) {
       }
     }
   }
+
+  void warmStreamPacketHydrationCache(currentStreamKey, streamPacketRefs);
 
   const sortedStreamPackets = sortPacketsByOwnStreamOrder(streamPackets);
   const tcpArrivalStatusByPacketKey = getTcpStreamArrivalStatusByPacketKey(
@@ -12496,6 +12686,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
 function runSnitch(file, options = {}) {
   const { fromSessionSource = false } = options;
   const backendChunkSize = getBackendPacketChunkSize();
+  const backendTransportOptions = getBackendTransportOptionsFromSettings();
   resetBackendProgressState();
   backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
@@ -12513,13 +12704,18 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} `,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
-      ? window.snitchapi.runBackendCommandFromSession(file, useLLM, backendChunkSize)
+      ? window.snitchapi.runBackendCommandFromSession(
+        file,
+        useLLM,
+        backendChunkSize,
+        backendTransportOptions,
+      )
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
-    : window.snitchapi.runBackendCommand(file, useLLM, backendChunkSize);
+    : window.snitchapi.runBackendCommand(file, useLLM, backendChunkSize, backendTransportOptions);
   backendPromise
     .then((result) => {
       if (result && result.pcapSource) {

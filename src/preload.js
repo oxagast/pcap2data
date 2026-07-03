@@ -18,15 +18,18 @@ contextBridge.exposeInMainWorld('captureapi', {
   loadJson: (jsonData) => ipcRenderer.invoke('capture-store-load-json', jsonData),
   getPacket: (packetKey) => ipcRenderer.invoke('capture-store-get-packet', packetKey),
   getPacketStub: (packetKey) => ipcRenderer.invoke('capture-store-get-packet-stub', packetKey),
+  getListWindow: (request) => ipcRenderer.invoke('capture-store-get-list-window', request),
   exportSessionData: () => ipcRenderer.invoke('capture-store-export-session-data'),
   filter: (query) => ipcRenderer.invoke('capture-store-filter', query),
 });
 
 contextBridge.exposeInMainWorld('snitchapi', {
-  runBackendCommand: (filename, useLLM, chunkSize) =>
-    ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize),
-  runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize) =>
-    ipcRenderer.invoke('run-backend-command-from-session', sessionPcap, useLLM, chunkSize),
+  initBackendService: (backendOptions) =>
+    ipcRenderer.invoke('init-backend-service', backendOptions),
+  runBackendCommand: (filename, useLLM, chunkSize, backendOptions) =>
+    ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, backendOptions),
+  runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, backendOptions) =>
+    ipcRenderer.invoke('run-backend-command-from-session', sessionPcap, useLLM, chunkSize, backendOptions),
   onPcapSource: (callback) => {
     ipcRenderer.on('backend-pcap-source', (_event, payload) => {
       callback(payload);

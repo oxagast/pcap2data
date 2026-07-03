@@ -113,6 +113,57 @@ function buildPacketStub(packet, packetKey, host, hostPacketIndex) {
     };
 }
 
+function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
+    const packetInfo = isObject(packet?.["Packet Info"]) ? packet["Packet Info"] : {};
+    const extraInfo = isObject(packet?.["Extra Info"]) ? packet["Extra Info"] : {};
+    const transportName = String(packetInfo?.["Protocol"] || "Unknown").toUpperCase();
+    const transportData =
+        isObject(packetInfo[transportName]) ? packetInfo[transportName] :
+            isObject(packetInfo[transportName.toLowerCase()]) ? packetInfo[transportName.toLowerCase()] :
+                {};
+    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || host || "Unknown";
+    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
+    const sourcePort = transportData?.["Source port"] ?? "";
+    const destinationPort = transportData?.["Destination port"] ?? "";
+    const hasPorts = sourcePort !== "" && sourcePort !== undefined && sourcePort !== null &&
+        destinationPort !== "" && destinationPort !== undefined && destinationPort !== null;
+    const endpointA = hasPorts ? `${sourceIp}:${sourcePort}` : sourceIp;
+    const endpointB = hasPorts ? `${destinationIp}:${destinationPort}` : destinationIp;
+    const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+    const streamKey = `${transportName}|${firstEndpoint}|${secondEndpoint}`;
+    const appProtocol =
+        extraInfo?.["Traits"]?.["Network Data"]?.["Port Protocol"] ||
+        extraInfo?.["Traits"]?.["Network Data"]?.["Port Protcol"] ||
+        packetInfo?.["Decoded Protocols"]?.[0] ||
+        transportName ||
+        "Unknown";
+
+    return {
+        packetKey,
+        host,
+        pktIdx: hostPacketIndex,
+        idx: Number(packetInfo?.["Index"]) || hostPacketIndex,
+        srcIp: sourceIp,
+        dstIp: destinationIp,
+        srcPort: sourcePort,
+        dstPort: destinationPort,
+        transport: transportName,
+        appProto: String(appProtocol),
+        streamKey,
+    };
+}
+
+function compareListEntries(left, right) {
+    const leftIndex = Number(left?.idx);
+    const rightIndex = Number(right?.idx);
+    if (Number.isFinite(leftIndex) && Number.isFinite(rightIndex) && leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+    }
+    if (Number.isFinite(leftIndex) && !Number.isFinite(rightIndex)) return -1;
+    if (!Number.isFinite(leftIndex) && Number.isFinite(rightIndex)) return 1;
+    return String(left?.packetKey || "").localeCompare(String(right?.packetKey || ""));
+}
+
 function addPacketToCache(store, packetKey, packet) {
     if (!store.packetCache.has(packetKey) && store.packetCache.size >= PACKET_CACHE_LIMIT) {
         const oldestKey = store.packetCache.keys().next().value;
@@ -152,6 +203,7 @@ async function buildStoreFromSource(sourcePath) {
 
     const refsByKey = new Map();
     const hostPackets = new Map();
+    const listEntries = [];
     let finalSummary = "";
     let sessionState = null;
     let writeOffset = 0;
@@ -199,6 +251,8 @@ async function buildStoreFromSource(sourcePath) {
             ref.offset = result.offset;
             ref.length = result.length;
         }
+
+        listEntries.push(derivePacketListSummary(value, packetKey, host, hostPacketIndex));
     };
 
     const stream = fs.createReadStream(sourcePath, {
@@ -224,6 +278,7 @@ async function buildStoreFromSource(sourcePath) {
     });
 
     fs.fsyncSync(packetDataFd);
+    listEntries.sort(compareListEntries);
 
     const hostObject = {};
     hostPackets.forEach((packetList, host) => {
@@ -238,6 +293,7 @@ async function buildStoreFromSource(sourcePath) {
         refsByKey,
         hostPackets,
         packetCache: new Map(),
+        listEntries,
         captureData: {
             Host: hostObject,
             "Final Summary": finalSummary,
@@ -296,6 +352,22 @@ function getPacketStubByKey(packetKey) {
     const packetList = store.hostPackets.get(ref.host);
     if (!packetList || !packetList[ref.packetListIndex]) return null;
     return packetList[ref.packetListIndex];
+}
+
+function getListWindow(startIndex = 0, count = 100) {
+    const store = getActiveStoreOrThrow();
+    const safeStart = Number.isFinite(Number(startIndex)) && Number(startIndex) > 0
+        ? Math.floor(Number(startIndex))
+        : 0;
+    const safeCount = Number.isFinite(Number(count)) && Number(count) > 0
+        ? Math.floor(Number(count))
+        : 100;
+    const endIndex = Math.min(store.listEntries.length, safeStart + safeCount);
+    return {
+        totalCount: store.listEntries.length,
+        startIndex: safeStart,
+        rows: store.listEntries.slice(safeStart, endIndex),
+    };
 }
 
 async function buildMaterializedCaptureData() {
@@ -428,6 +500,26 @@ function registerCaptureStoreHandlers(ipcMain) {
             return {
                 success: false,
                 error: error?.message || "Unable to read packet stub",
+            };
+        }
+    });
+
+    ipcMain.handle("capture-store-get-list-window", async (_event, request) => {
+        try {
+            const startIndex = request && typeof request === "object" ? request.startIndex : 0;
+            const count = request && typeof request === "object" ? request.count : 100;
+            const windowData = getListWindow(startIndex, count);
+            return {
+                success: true,
+                ...windowData,
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error?.message || "Unable to read packet list window",
+                totalCount: 0,
+                startIndex: 0,
+                rows: [],
             };
         }
     });

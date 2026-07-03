@@ -40,10 +40,13 @@ import shutil
 import socket
 import ssl
 import sys
+import tempfile
 import textwrap
 import threading
 import time
+import traceback
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chardet
 import geoip2.database
 import magic
@@ -89,8 +92,11 @@ allPacketInfoLock = threading.Lock()
 hostOutputFile = "hosts.json"
 hostChunkSize = 250
 progressLinePrefix = "[Bridge]"
+progressEventCallback = None
 currentDir = os.getcwd()
 scriptDir = os.path.dirname(os.path.realpath(__file__)) + "/"
+runtimeInitialized = False
+processingLock = threading.Lock()
 
 # --- Lookup tables loaded once at startup (see init_lookup_tables()) ---
 # Keyed (port_int, "tcp"/"udp") -> description string
@@ -614,6 +620,32 @@ def writeHostsSnapshot(
             json.dumps({"Host": packetMapByHost, "Final Summary": finalSummary}, indent=2)
         )
     return snapshotPath
+
+def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal):
+    """
+    Emit backend progress in the legacy stderr format and, when configured,
+    forward a structured payload to the TCP bridge callback.
+    """
+
+    finalFlag = 1 if isFinal else 0
+    print(
+        f"{progressLinePrefix} path={pathValue} processed={processedPackets} total={totalPackets} final={finalFlag}",
+        file=sys.stderr,
+    )
+
+    if callable(progressEventCallback):
+        try:
+            progressEventCallback(
+                {
+                    "path": pathValue,
+                    "processedPackets": int(processedPackets),
+                    "totalPackets": int(totalPackets),
+                    "complete": bool(isFinal),
+                }
+            )
+        except Exception:
+            # Progress callback failures should not interrupt capture processing.
+            pass
 
 
 @lru_cache(maxsize=4096)
@@ -4695,9 +4727,11 @@ def startThreading():
                         "",
                         chunkSnapshotName,
                     )
-                    print(
-                        f"{progressLinePrefix} path={snapshotPath} processed={nextSnapshotPacketCount} total={totalPackets} final=0",
-                        file=sys.stderr,
+                    emitBridgeProgress(
+                        snapshotPath,
+                        nextSnapshotPacketCount,
+                        totalPackets,
+                        False,
                     )
                     nextSnapshotPacketCount += hostChunkSize
             except Exception as exc:
@@ -4708,11 +4742,12 @@ def startThreading():
                     )
 
 
-parser = argparse.ArgumentParser(
-    prog="snitch.py",
-    formatter_class=argparse.RawDescriptionHelpFormatter,
-    description=textwrap.dedent(
-        f"""                                
+def buildParser():
+    parser = argparse.ArgumentParser(
+        prog="snitch.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            f"""                                
 PacketSnitch.
 This software analyzes pcap network captures. It extracts TCP and UDP packet data,
 writes testcases, and gathers extra information such as MIME types, entropy, geoip,
@@ -4725,175 +4760,227 @@ with additional network and server information.
           - all_testcases_info.json: a consolidated file with info for the entire
             capture.
                                  """,
-    ),
-    epilog="Example usage: \n   python3 snitch.py traffic.pcap -o outputDirPath -s 80 -d 8080 -T 5 -a",
-)  # ignore fstring
-parser.add_argument("pcap_file", help="The .pcap file to parse.")
-parser.add_argument(
-    "-o",
-    "--output",
-    help="The output directory for the testcases.",
-    default="testcases",
-)
-parser.add_argument(
-    "-s",
-    "--source-port",
-    help="Only generate from this source port.",
-    type=int,
-)
-parser.add_argument(
-    "-d",
-    "--dest-port",
-    help="Only generate for this destination port.",
-    type=int,
-)
-parser.add_argument(
-    "-T",
-    "--timeout",
-    help="Timeout for network requests in seconds (default: 3).",
-    type=int,
-    default=3,
-)
-parser.add_argument(
-    "-a",
-    "--active-recon",
-    help="Perform active reconnaissance to gather extra info (geoip, banners, titles).",
-    action="store_true",
-)
-parser.add_argument(
-    "-c",
-    "--conf",
-    help="Path to configuration YAML file (default: conf.yaml).",
-)
-parser.add_argument(
-    "--host-chunk-size",
-    help="Packet count per incremental hosts snapshot (default: 250).",
-    type=int,
-    default=250,
-)
-parser.add_argument(
-    "-v",
-    "--verbose",
-    help="Enable verbose output for debugging.",
-    action="count",
-    default=0,
-)
-verbose = parser.parse_args().verbose
-args = parser.parse_args()  # parse once; verbose is needed by functions defined above
-hostChunkSize = max(1, int(args.host_chunk_size or 250))
-try:
-    config = configLoader(args.conf if args.conf else "conf.yaml")
-    # this next exception handles if ther is no config file
-    # these are default opts that should work decently
-except Exception:
-    config = {
-        "active_recon": True,
-    }
-pcapFilePath = args.pcap_file
-geoDbPath = scriptDir + "common/GeoLite2-City.mmdb"
-macVendorsPath = scriptDir + "common/mac-vendors-export.csv"
-icannCsvPath = scriptDir + "common/service-names-port-numbers.csv"
-
-# --- Open the GeoIP database once for the lifetime of the process.
-# The geoip2 Reader is documented as thread-safe for concurrent city() calls.
-if os.path.exists(geoDbPath):
-    geoIpReader = geoip2.database.Reader(geoDbPath)
-else:
-    print("[Main] Warning: GeoIP database not found at " + geoDbPath, file=sys.stderr)
-
-# --- Load ICANN port-description CSV into a dict for O(1) per-packet lookups.
-# Without this, every call to getPortDescription() would scan the full CSV.
-if os.path.exists(icannCsvPath):
-    with open(icannCsvPath, newline="", encoding="utf-8") as csvFile:
-        for csvRow in csv.DictReader(csvFile):
-            try:
-                portNum = int(csvRow.get("Port Number", ""))
-                protoStr = csvRow.get("Transport Protocol", "").strip().lower()
-                portDescription = csvRow.get("Description", "No description available")
-                serviceName = csvRow.get("Service Name", "Unknown")
-                if portNum and protoStr:
-                    portDescriptionMap[(portNum, protoStr)] = portDescription
-                    portServiceNameMap[(portNum, protoStr)] = serviceName
-            except (ValueError, TypeError):
-                pass
-else:
-    print(
-        "[Main] Warning: ICANN port CSV not found at " + icannCsvPath, file=sys.stderr
+        ),
+        epilog="Example usage: \n   python3 snitch.py traffic.pcap -o outputDirPath -s 80 -d 8080 -T 5 -a",
     )
-
-# --- Load MAC vendor CSV into a dict for O(1) per-packet lookups.
-# Without this, every call to macAddrToVendor() would scan the full CSV.
-if os.path.exists(macVendorsPath):
-    with open(macVendorsPath, newline="", encoding="utf-8") as csvFile:
-        for csvRow in csv.DictReader(csvFile):
-            if "Mac Prefix" in csvRow and "Vendor Name" in csvRow:
-                macVendorMap[csvRow["Mac Prefix"].upper()] = csvRow["Vendor Name"]
-else:
-    print(
-        "[Main] Warning: MAC vendor CSV not found at " + macVendorsPath,
-        file=sys.stderr,
+    parser.add_argument("pcap_file", nargs="?", help="The .pcap file to parse.")
+    parser.add_argument(
+        "-o",
+        "--output",
+        help="The output directory for the testcases.",
+        default="testcases",
     )
+    parser.add_argument(
+        "-s",
+        "--source-port",
+        help="Only generate from this source port.",
+        type=int,
+    )
+    parser.add_argument(
+        "-d",
+        "--dest-port",
+        help="Only generate for this destination port.",
+        type=int,
+    )
+    parser.add_argument(
+        "-T",
+        "--timeout",
+        help="Timeout for network requests in seconds (default: 3).",
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
+        "-a",
+        "--active-recon",
+        help="Perform active reconnaissance to gather extra info (geoip, banners, titles).",
+        action="store_true",
+    )
+    parser.add_argument(
+        "-c",
+        "--conf",
+        help="Path to configuration YAML file (default: conf.yaml).",
+    )
+    parser.add_argument(
+        "--host-chunk-size",
+        help="Packet count per incremental hosts snapshot (default: 250).",
+        type=int,
+        default=250,
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        help="Enable verbose output for debugging.",
+        action="count",
+        default=0,
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run in HTTP bridge server mode.",
+    )
+    parser.add_argument(
+        "--server-host",
+        default="127.0.0.1",
+        help="HTTP bridge bind host (server mode).",
+    )
+    parser.add_argument(
+        "--server-port",
+        type=int,
+        default=9020,
+        help="HTTP bridge bind port (server mode).",
+    )
+    return parser
 
-totalPackets = 0
-packets = scapy.rdpcap(args.pcap_file)  # type: ignore
-tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
-allPacketCount = len(packets)
-totalPackets = len(packets)
-if totalPackets == 0:
-    print("[Main] No packets found in the capture.", file=sys.stderr)
-    sys.exit(1)
-numWorkerThreads = os.cpu_count() or 4
-outputDir = currentDir + "/" + "testcases"
-if args.output and args.output != "testcases":
-    outputDir = args.output
-    print("[Main] Using output directory: " + args.output, file=sys.stderr)
-if "output_dir" in config:
-    outputDir = currentDir + "/" + config["output_dir"]
-    print("[Main] Using output directory from config: " + outputDir, file=sys.stderr)
-if not args.active_recon:
-    if config["active_recon"]:
-        activeRecon = config["active_recon"]
+
+def initializeRuntimeResources():
+    global runtimeInitialized
+    global geoIpReader
+
+    if runtimeInitialized:
+        return
+
+    geoDbPath = scriptDir + "common/GeoLite2-City.mmdb"
+    macVendorsPath = scriptDir + "common/mac-vendors-export.csv"
+    icannCsvPath = scriptDir + "common/service-names-port-numbers.csv"
+
+    if os.path.exists(geoDbPath):
+        geoIpReader = geoip2.database.Reader(geoDbPath)
     else:
-        activeRecon = False
-print(
-    "[Main] Preparing to process "
-    + str(totalPackets)
-    + " packets with "
-    + str(numWorkerThreads)
-    + " threads.",
-    file=sys.stderr,
-)
-if not os.path.exists(args.pcap_file):
-    print("The .pcap file does not exist.", file=sys.stderr)
-    sys.exit(1)
-try:
-    if os.path.isdir(outputDir):
-        shutil.rmtree(outputDir, ignore_errors=True)
-    # Small delay to ensure file system has completed deletions
-    time.sleep(1)
-    os.makedirs(outputDir, exist_ok=True)
-    try:
-        threadingResult = startThreading()
-    except Exception as startErr:
+        print("[Main] Warning: GeoIP database not found at " + geoDbPath, file=sys.stderr)
+
+    if os.path.exists(icannCsvPath):
+        with open(icannCsvPath, newline="", encoding="utf-8") as csvFile:
+            for csvRow in csv.DictReader(csvFile):
+                try:
+                    portNum = int(csvRow.get("Port Number", ""))
+                    protoStr = csvRow.get("Transport Protocol", "").strip().lower()
+                    portDescription = csvRow.get("Description", "No description available")
+                    serviceName = csvRow.get("Service Name", "Unknown")
+                    if portNum and protoStr:
+                        portDescriptionMap[(portNum, protoStr)] = portDescription
+                        portServiceNameMap[(portNum, protoStr)] = serviceName
+                except (ValueError, TypeError):
+                    pass
+    else:
         print(
-            f"[Main] Warning: startThreading raised an exception ({startErr}); retrying.",
+            "[Main] Warning: ICANN port CSV not found at " + icannCsvPath,
             file=sys.stderr,
         )
-        threadingResult = startThreading()
-finally:
-    # Always write hosts.json so the frontend can load data regardless of
-    # backend summarisation status.
-    with allPacketInfoLock:
-        finalPacketInfoSnapshot = list(allPacketInfo)
-    writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
+
+    if os.path.exists(macVendorsPath):
+        with open(macVendorsPath, newline="", encoding="utf-8") as csvFile:
+            for csvRow in csv.DictReader(csvFile):
+                if "Mac Prefix" in csvRow and "Vendor Name" in csvRow:
+                    macVendorMap[csvRow["Mac Prefix"].upper()] = csvRow["Vendor Name"]
+    else:
+        print(
+            "[Main] Warning: MAC vendor CSV not found at " + macVendorsPath,
+            file=sys.stderr,
+        )
+
+    runtimeInitialized = True
+
+
+def runCaptureFromArgs(runArgs):
+    global args
+    global verbose
+    global hostChunkSize
+    global pcapFilePath
+    global config
+    global packets
+    global totalPackets
+    global allPacketCount
+    global numWorkerThreads
+    global outputDir
+    global activeRecon
+    global allPacketInfo
+    global tcpStreamInitialDstPortMap
+
+    args = runArgs
+    verbose = int(getattr(runArgs, "verbose", 0) or 0)
+    hostChunkSize = max(1, int(getattr(runArgs, "host_chunk_size", 250) or 250))
+    stopEvent.clear()
+
+    allPacketInfo = []
+    with cachedBannersLock:
+        cachedBanners.clear()
+    with geoIpCacheLock:
+        geoIpCache.clear()
+    with http2DetectedStreamsLock:
+        http2DetectedStreams.clear()
+
+    initializeRuntimeResources()
+
+    try:
+        config = configLoader(runArgs.conf if getattr(runArgs, "conf", None) else "conf.yaml")
+    except Exception:
+        config = {
+            "active_recon": True,
+        }
+
+    pcapFilePath = runArgs.pcap_file
+    if not pcapFilePath or not os.path.exists(pcapFilePath):
+        return {
+            "success": False,
+            "error": "The .pcap file does not exist.",
+        }
+
+    packets = scapy.rdpcap(runArgs.pcap_file)  # type: ignore
+    tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
+    allPacketCount = len(packets)
+    totalPackets = len(packets)
+    if totalPackets == 0:
+        return {
+            "success": False,
+            "error": "No packets found in the capture.",
+        }
+
+    numWorkerThreads = os.cpu_count() or 4
+    outputDir = currentDir + "/" + "testcases"
+    if runArgs.output and runArgs.output != "testcases":
+        outputDir = runArgs.output
+        print("[Main] Using output directory: " + runArgs.output, file=sys.stderr)
+    if "output_dir" in config:
+        outputDir = currentDir + "/" + config["output_dir"]
+        print("[Main] Using output directory from config: " + outputDir, file=sys.stderr)
+
+    if not runArgs.active_recon:
+        activeRecon = bool(config.get("active_recon", False))
+    else:
+        activeRecon = True
+
     print(
-        f"{progressLinePrefix} path={outputDir + '/' + hostOutputFile} processed={len(finalPacketInfoSnapshot)} total={totalPackets} final=1",
+        "[Main] Preparing to process "
+        + str(totalPackets)
+        + " packets with "
+        + str(numWorkerThreads)
+        + " threads.",
         file=sys.stderr,
     )
 
-    # Close the GeoIP reader now that all packets have been processed
-    if geoIpReader is not None:
-        geoIpReader.close()
+    try:
+        if os.path.isdir(outputDir):
+            shutil.rmtree(outputDir, ignore_errors=True)
+        time.sleep(1)
+        os.makedirs(outputDir, exist_ok=True)
+        try:
+            startThreading()
+        except Exception as startErr:
+            print(
+                f"[Main] Warning: startThreading raised an exception ({startErr}); retrying.",
+                file=sys.stderr,
+            )
+            startThreading()
+    finally:
+        with allPacketInfoLock:
+            finalPacketInfoSnapshot = list(allPacketInfo)
+        writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
+        emitBridgeProgress(
+            outputDir + "/" + hostOutputFile,
+            len(finalPacketInfoSnapshot),
+            totalPackets,
+            True,
+        )
 
     print(
         "[Main] Processing complete. Generated testcases and info files are located in: "
@@ -4901,4 +4988,188 @@ finally:
         file=sys.stderr,
     )
 
-    sys.exit(0)
+    return {
+        "success": True,
+        "outputDir": outputDir,
+        "processedPackets": len(finalPacketInfoSnapshot),
+        "totalPackets": totalPackets,
+    }
+
+
+class SnitchHttpHandler(BaseHTTPRequestHandler):
+    server_version = "SnitchHTTP/1.0"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, formatStr, *args):
+        print(f"[BridgeServer] {self.address_string()} - {formatStr % args}", file=sys.stderr)
+
+    def sendJson(self, statusCode, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(int(statusCode))
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def parseJsonBody(self):
+        try:
+            contentLen = int(self.headers.get("Content-Length", "0"))
+        except Exception:
+            contentLen = 0
+        if contentLen <= 0:
+            return None
+        rawBody = self.rfile.read(contentLen)
+        if not rawBody:
+            return None
+        return json.loads(rawBody.decode("utf-8"))
+
+    def do_GET(self):
+        if self.path == "/ping":
+            self.sendJson(
+                200,
+                {
+                    "type": "pong",
+                    "service": "snitch-http",
+                },
+            )
+            return
+        self.sendJson(
+            404,
+            {
+                "success": False,
+                "error": "Not found",
+            },
+        )
+
+    def do_POST(self):
+        global progressEventCallback
+
+        if self.path != "/process":
+            self.sendJson(
+                404,
+                {
+                    "success": False,
+                    "error": "Not found",
+                },
+            )
+            return
+
+        tempPcapPath = None
+        progressEvents = []
+        try:
+            request = self.parseJsonBody()
+            if not isinstance(request, dict):
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid JSON request",
+                    },
+                )
+                return
+
+            pcapPath = request.get("pcapPath")
+            pcapBase64 = request.get("pcapBase64")
+            pcapFileName = request.get("pcapFileName") or "http-request.pcap"
+
+            if isinstance(pcapBase64, str) and pcapBase64.strip():
+                decoded = base64.b64decode(pcapBase64.strip())
+                ext = ".pcapng" if str(pcapFileName).lower().endswith(".pcapng") else ".pcap"
+                fd, tempPcapPath = tempfile.mkstemp(prefix="snitch-http-", suffix=ext)
+                with os.fdopen(fd, "wb") as tempFile:
+                    tempFile.write(decoded)
+                pcapPath = tempPcapPath
+
+            runArgs = argparse.Namespace(
+                pcap_file=pcapPath,
+                output=request.get("output") or "testcases",
+                source_port=request.get("sourcePort"),
+                dest_port=request.get("destPort"),
+                timeout=int(request.get("timeout") or 3),
+                active_recon=bool(request.get("activeRecon", True)),
+                conf=request.get("conf"),
+                host_chunk_size=int(request.get("hostChunkSize") or 250),
+                verbose=int(request.get("verbose") or 0),
+                server=False,
+                server_host="127.0.0.1",
+                server_port=0,
+            )
+
+            with processingLock:
+                previousProgressCallback = progressEventCallback
+                progressEventCallback = lambda payload: progressEvents.append({
+                    "path": payload.get("path"),
+                    "processedPackets": payload.get("processedPackets", 0),
+                    "totalPackets": payload.get("totalPackets", 0),
+                    "complete": bool(payload.get("complete", False)),
+                })
+                try:
+                    result = runCaptureFromArgs(runArgs)
+                finally:
+                    progressEventCallback = previousProgressCallback
+
+            self.sendJson(
+                200,
+                {
+                    "success": bool(result.get("success")),
+                    "error": result.get("error"),
+                    "stdout": "",
+                    "progressEvents": progressEvents,
+                },
+            )
+        except Exception as requestError:
+            self.sendJson(
+                500,
+                {
+                    "success": False,
+                    "error": str(requestError),
+                    "traceback": traceback.format_exc(),
+                    "progressEvents": progressEvents,
+                },
+            )
+        finally:
+            if tempPcapPath and os.path.exists(tempPcapPath):
+                try:
+                    os.unlink(tempPcapPath)
+                except Exception:
+                    pass
+
+
+def runHttpServer(serverHost, serverPort):
+    class ThreadedHttpServer(ThreadingHTTPServer):
+        allow_reuse_address = True
+
+    with ThreadedHttpServer((serverHost, int(serverPort)), SnitchHttpHandler) as server:
+        print(
+            f"[BridgeServer] Listening host={serverHost} port={int(serverPort)}",
+            file=sys.stderr,
+        )
+        server.serve_forever()
+
+
+def main():
+    parser = buildParser()
+    parsedArgs = parser.parse_args()
+
+    if parsedArgs.server:
+        runHttpServer(parsedArgs.server_host, parsedArgs.server_port)
+        return 0
+
+    if not parsedArgs.pcap_file:
+        parser.error("pcap_file is required unless --server is used")
+
+    result = runCaptureFromArgs(parsedArgs)
+    return 0 if result.get("success") else 1
+
+
+if __name__ == "__main__":
+    try:
+        exitCode = main()
+    finally:
+        if geoIpReader is not None:
+            try:
+                geoIpReader.close()
+            except Exception:
+                pass
+    sys.exit(exitCode)

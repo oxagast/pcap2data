@@ -1,5 +1,6 @@
 const { BrowserWindow, ipcMain } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, exec } = require("child_process");
+const http = require("http");
 const os = require("os");
 const platform = os.platform();
 const path = require("path");
@@ -13,6 +14,386 @@ let entries = [];
 
 const DEFAULT_HOST_CHUNK_SIZE = 250;
 const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
+const BACKEND_HTTP_HOST = "127.0.0.1";
+const BACKEND_HTTP_PORT = 9020;
+const BACKEND_HTTP_READY_TIMEOUT_MS = 4000;
+const BACKEND_HTTP_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+
+let backendHttpServerProc = null;
+let backendHttpReadyPromise = null;
+let currentBackendHttpHost = BACKEND_HTTP_HOST;
+let currentBackendHttpPort = BACKEND_HTTP_PORT;
+let backendHttpShutdownExpected = false;
+
+function probeSnitchHttpBackendReady(host = BACKEND_HTTP_HOST, port = BACKEND_HTTP_PORT, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(ready));
+    };
+
+    const req = http.request(
+      {
+        host,
+        port,
+        path: "/ping",
+        method: "GET",
+        timeout: timeoutMs,
+        headers: {
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          try {
+            const payload = JSON.parse(body);
+            finish(
+              res.statusCode === 200
+              && payload?.type === "pong"
+              && payload?.service === "snitch-http",
+            );
+          } catch (_err) {
+            finish(false);
+          }
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP ping timed out"));
+    });
+    req.on("error", () => finish(false));
+    req.end();
+  });
+}
+
+function normalizeBackendTransportOptions(rawOptions = {}) {
+  const source = rawOptions && typeof rawOptions === "object" ? rawOptions : {};
+  const host =
+    typeof source.tcpHost === "string" && source.tcpHost.trim()
+      ? source.tcpHost.trim()
+      : BACKEND_HTTP_HOST;
+  const parsedPort = Number.parseInt(String(source.tcpPort ?? BACKEND_HTTP_PORT), 10);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0
+    ? parsedPort
+    : BACKEND_HTTP_PORT;
+  const forceLegacySpawn = Boolean(source.forceLegacySpawn);
+  return {
+    tcpHost: host,
+    tcpPort: port,
+    forceLegacySpawn,
+  };
+}
+
+function applyBackendTransportOptions(options = {}) {
+  const normalized = normalizeBackendTransportOptions(options);
+  const hostChanged = normalized.tcpHost !== currentBackendHttpHost;
+  const portChanged = normalized.tcpPort !== currentBackendHttpPort;
+  if (hostChanged || portChanged) {
+    shutdownHttpBackendService();
+    currentBackendHttpHost = normalized.tcpHost;
+    currentBackendHttpPort = normalized.tcpPort;
+  }
+  return normalized;
+}
+
+function resolveBackendRuntime() {
+  const isDev = !require("electron").app.isPackaged;
+  const basePath = isDev
+    ? path.join(__dirname, "../../src/backend/")
+    : process.resourcesPath;
+  const backendScriptPath = path.join(basePath, "snitch.py");
+  const hasBackendScript = fs.existsSync(backendScriptPath);
+
+  let snitchExePath;
+  if (platform === "win32") {
+    snitchExePath = path.join(basePath, "\\snitch\\snitch.exe");
+  } else if (platform === "linux") {
+    snitchExePath = path.join(basePath, "/snitch/snitch");
+  } else {
+    snitchExePath = path.join(basePath, "/snitch/snitch");
+  }
+
+  const hasBundledBackendExe = fs.existsSync(snitchExePath);
+  const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
+  const canUsePythonServer = isDev && hasBackendScript;
+  const backendCommandPath = usePythonBackend
+    ? platform === "win32"
+      ? "python"
+      : "python3"
+    : snitchExePath;
+  const pythonCommandPath = platform === "win32" ? "python" : "python3";
+
+  return {
+    isDev,
+    basePath,
+    backendScriptPath,
+    hasBackendScript,
+    snitchExePath,
+    hasBundledBackendExe,
+    usePythonBackend,
+    canUsePythonServer,
+    pythonCommandPath,
+    backendCommandPath,
+  };
+}
+
+function shutdownHttpBackendService() {
+  if (backendHttpServerProc) {
+    backendHttpShutdownExpected = true;
+    try {
+      backendHttpServerProc.kill("SIGTERM");
+    } catch (_err) {
+      // ignore shutdown errors
+    }
+  }
+  backendHttpServerProc = null;
+  backendHttpReadyPromise = null;
+}
+
+function killBackendProcess() {
+  shutdownHttpBackendService();
+  if (platform === "win32") {
+    exec("taskkill /IM snitch.exe /T /F", () => {
+      // best-effort kill path for compatibility with legacy backend mode
+    });
+  }
+  if (platform === "linux") {
+    exec('pkill -f "snitch.py"', () => {
+      // best-effort kill path for compatibility with legacy backend mode
+    });
+    exec('pkill -f "snitch/snitch"', () => {
+      // best-effort kill path for compatibility with legacy backend mode
+    });
+  }
+}
+
+async function ensureBackendHttpServerReady() {
+  if (backendHttpReadyPromise) {
+    return backendHttpReadyPromise;
+  }
+
+  if (await probeSnitchHttpBackendReady(currentBackendHttpHost, currentBackendHttpPort)) {
+    return true;
+  }
+
+  backendHttpReadyPromise = new Promise((resolve) => {
+    const runtime = resolveBackendRuntime();
+    if (!runtime.canUsePythonServer || !runtime.hasBackendScript) {
+      resolve(false);
+      return;
+    }
+
+    const backendArgs = [
+      runtime.backendScriptPath,
+      "--server",
+      "--server-host",
+      currentBackendHttpHost,
+      "--server-port",
+      String(currentBackendHttpPort),
+    ];
+
+    let resolved = false;
+    let detectedAddressInUse = false;
+    const finish = (ready) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(readyTimeout);
+      resolve(ready);
+    };
+
+    backendHttpServerProc = spawn(runtime.pythonCommandPath, backendArgs, {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const onBackendOutput = (text) => {
+      if (!text) return;
+      if (/Address already in use|Errno\s*98/i.test(text)) {
+        detectedAddressInUse = true;
+        return;
+      }
+
+      // When a second backend instance races startup against an already-running
+      // service, Python emits a traceback. We suppress that noisy traceback and
+      // rely on the explicit "reusing existing service" bridge log instead.
+      if (
+        detectedAddressInUse
+        && /(Traceback \(most recent call last\)|^\s*File\s+"|socketserver\.py|http\/server\.py|self\.socket\.bind|OSError: \[Errno\s*98\])/m.test(text)
+      ) {
+        return;
+      }
+
+      global.logBackend("", text);
+      if (text.includes("[BridgeServer] Listening")) {
+        void probeSnitchHttpBackendReady(currentBackendHttpHost, currentBackendHttpPort)
+          .then((ready) => finish(ready));
+      }
+    };
+
+    const readyTimeout = setTimeout(() => {
+      finish(false);
+    }, BACKEND_HTTP_READY_TIMEOUT_MS);
+
+    backendHttpServerProc.stdout.on("data", (chunk) => onBackendOutput(chunk.toString()));
+    backendHttpServerProc.stderr.on("data", (chunk) => onBackendOutput(chunk.toString()));
+
+    backendHttpServerProc.on("error", (error) => {
+      global.logBackend("[Bridge] HTTP backend startup failed:", error?.message || String(error));
+      backendHttpServerProc = null;
+      finish(false);
+    });
+
+    backendHttpServerProc.on("close", async (code, signal) => {
+      const expectedShutdown = backendHttpShutdownExpected;
+      backendHttpShutdownExpected = false;
+      const descriptor = code === null
+        ? `signal ${signal || "unknown"}`
+        : `code ${code}`;
+      const readyViaExternalListener = await probeSnitchHttpBackendReady(
+        currentBackendHttpHost,
+        currentBackendHttpPort,
+      );
+      if (expectedShutdown) {
+        global.logBackend(`[Bridge] HTTP backend stopped (${descriptor})`);
+      } else if (detectedAddressInUse && readyViaExternalListener) {
+        global.logBackend(
+          `[Bridge] HTTP backend already running on ${currentBackendHttpHost}:${currentBackendHttpPort}; reusing existing service`,
+        );
+      } else {
+        global.logBackend(`[Bridge] HTTP backend exited unexpectedly (${descriptor})`);
+      }
+      backendHttpServerProc = null;
+      backendHttpReadyPromise = null;
+      finish(readyViaExternalListener);
+    });
+  });
+
+  const ready = await backendHttpReadyPromise;
+  if (!ready) {
+    backendHttpReadyPromise = null;
+  }
+  return ready;
+}
+
+async function runBackendCommandViaHttp(filename, options = {}) {
+  const {
+    hostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
+    pcapSourcePayload = null,
+  } = options;
+
+  const ready = await ensureBackendHttpServerReady();
+  if (!ready) {
+    return {
+      success: false,
+      error: "HTTP backend service unavailable",
+      fallbackRecommended: true,
+    };
+  }
+
+  return new Promise((resolve) => {
+    const requestPayload = {
+      pcapPath: filename,
+      hostChunkSize,
+    };
+    if (pcapSourcePayload && typeof pcapSourcePayload.data === "string") {
+      requestPayload.pcapBase64 = pcapSourcePayload.data;
+      requestPayload.pcapFileName = pcapSourcePayload.fileName || "session-reprocess.pcap";
+    }
+
+    const body = JSON.stringify(requestPayload);
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(result);
+    };
+
+    const req = http.request(
+      {
+        host: currentBackendHttpHost,
+        port: currentBackendHttpPort,
+        path: "/process",
+        method: "POST",
+        timeout: BACKEND_HTTP_REQUEST_TIMEOUT_MS,
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": Buffer.byteLength(body),
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let responseBody = "";
+        res.on("data", (chunk) => {
+          responseBody += chunk.toString();
+        });
+        res.on("end", () => {
+          let parsed;
+          try {
+            parsed = JSON.parse(responseBody || "{}");
+          } catch (_err) {
+            finish({
+              success: false,
+              error: "HTTP backend returned invalid JSON",
+              fallbackRecommended: false,
+              pcapSource: pcapSourcePayload,
+            });
+            return;
+          }
+
+          const progressEvents = Array.isArray(parsed.progressEvents) ? parsed.progressEvents : [];
+          progressEvents.forEach((event) => {
+            if (!event?.path) return;
+            sendJsonPathPayload({
+              path: event.path,
+              processedPackets: Number(event.processedPackets) || 0,
+              totalPackets: Number(event.totalPackets) || 0,
+              complete: Boolean(event.complete),
+              chunkSize: hostChunkSize,
+            });
+          });
+
+          if (res.statusCode !== 200 || !parsed.success) {
+            finish({
+              success: false,
+              error: parsed.error || "HTTP backend processing failed",
+              stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
+              fallbackRecommended: false,
+              pcapSource: pcapSourcePayload,
+            });
+            return;
+          }
+
+          finish({
+            success: true,
+            stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
+            pcapSource: pcapSourcePayload,
+          });
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP backend request timed out"));
+    });
+    req.on("error", (error) => {
+      finish({
+        success: false,
+        error: error?.message || "HTTP backend request failed",
+        fallbackRecommended: true,
+        pcapSource: pcapSourcePayload,
+      });
+    });
+    req.write(body);
+    req.end();
+  });
+}
 
 function normalizeHostChunkSize(rawValue) {
   const parsed = Number(rawValue);
@@ -163,32 +544,19 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   const {
     pcapSourcePayload: providedPcapSourcePayload = null,
     hostChunkSize: requestedHostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
+    backendOptions = {},
   } = options;
   const hostChunkSize = normalizeHostChunkSize(requestedHostChunkSize);
+  const normalizedTransport = applyBackendTransportOptions(backendOptions);
   global.logBackend(`[Bridge] Received pcap: ${filename}`);
-  const isDev = !require("electron").app.isPackaged;
-  const basePath = isDev
-    ? path.join(__dirname, "../../src/backend/")
-    : process.resourcesPath;
-  const backendScriptPath = path.join(basePath, "snitch.py");
-  let snitchExePath;
-  if (platform === "win32") {
-    snitchExePath = path.join(basePath, "\\snitch\\snitch.exe");
-  } else if (platform === "linux") {
-    snitchExePath = path.join(basePath, "/snitch/snitch");
-  } else {
-    snitchExePath = path.join(basePath, "/snitch/snitch");
-  }
-
-  // Prefer the bundled backend executable whenever it exists, even in dev,
-  // to avoid failures caused by missing local Python packages.
-  const hasBundledBackendExe = fs.existsSync(snitchExePath);
-  const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
-  const backendCommandPath = usePythonBackend
-    ? platform === "win32"
-      ? "python"
-      : "python3"
-    : snitchExePath;
+  const runtime = resolveBackendRuntime();
+  const {
+    backendScriptPath,
+    snitchExePath,
+    hasBundledBackendExe,
+    usePythonBackend,
+    backendCommandPath,
+  } = runtime;
 
   if (usePythonBackend) {
     global.logBackend(`[Bridge] Using Python backend script at: ${backendScriptPath}`);
@@ -306,6 +674,30 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     } catch (error) {
       global.logBackend(`[Bridge] Failed to prepare source PCAP payload: ${error.message}`);
     }
+  }
+
+  if (!normalizedTransport.forceLegacySpawn) {
+    const httpResult = await runBackendCommandViaHttp(filename, {
+      hostChunkSize,
+      pcapSourcePayload,
+    });
+    if (httpResult?.success) {
+      global.logBackend("[Bridge] Backend completed using HTTP service mode");
+      return httpResult;
+    }
+    if (!httpResult?.fallbackRecommended) {
+      return {
+        success: false,
+        stdout: httpResult?.stdout || "",
+        error: httpResult?.error || "HTTP backend processing failed",
+        pcapSource: pcapSourcePayload,
+      };
+    }
+    global.logBackend(
+      `[Bridge] HTTP backend unavailable (${httpResult?.error || "unknown error"}); using legacy spawn mode`,
+    );
+  } else {
+    global.logBackend("[Bridge] Force-legacy setting enabled; using legacy backend spawn mode");
   }
 
   const backendArgs = usePythonBackend
@@ -507,13 +899,36 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   });
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize) => {
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, backendOptions) => {
   return runBackendCommandInternal(filename, useLLM, {
     hostChunkSize,
+    backendOptions,
   });
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize) => {
+ipcMain.handle("init-backend-service", async (_event, backendOptions) => {
+  const normalizedTransport = applyBackendTransportOptions(backendOptions);
+  if (normalizedTransport.forceLegacySpawn) {
+    return {
+      success: true,
+      mode: "legacy",
+      ready: false,
+      host: normalizedTransport.tcpHost,
+      port: normalizedTransport.tcpPort,
+    };
+  }
+
+  const ready = await ensureBackendHttpServerReady();
+  return {
+    success: Boolean(ready),
+    mode: "http",
+    ready: Boolean(ready),
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+  };
+});
+
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, backendOptions) => {
   let tempPathForCleanup = "";
   try {
     const prepared = writeSessionPcapTempFile(sessionPcap);
@@ -524,6 +939,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
     const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
       pcapSourcePayload: prepared.payload,
       hostChunkSize,
+      backendOptions,
     });
     return result;
   } catch (error) {
@@ -542,3 +958,24 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
     }
   }
 });
+
+// Start the HTTP backend service as early as possible so the renderer can
+// submit processing requests immediately after startup.
+applyBackendTransportOptions({
+  tcpHost: BACKEND_HTTP_HOST,
+  tcpPort: BACKEND_HTTP_PORT,
+  forceLegacySpawn: false,
+});
+void ensureBackendHttpServerReady().then((ready) => {
+  if (!ready) {
+    global.logBackend("[Bridge] HTTP backend service unavailable; legacy spawn mode remains active");
+  }
+});
+
+module.exports = {
+  shutdownHttpBackendService,
+  ensureBackendHttpServerReady,
+  // Backward-compatible aliases for existing imports in main process code.
+  shutdownTcpBackendService: shutdownHttpBackendService,
+  ensureBackendTcpServerReady: ensureBackendHttpServerReady,
+};
