@@ -436,6 +436,7 @@ strong {
   border: 1px solid grey;
   font-size: small;
   flex: 1;
+  z-index: 1;
 }
 
 .active {
