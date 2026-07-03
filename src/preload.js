@@ -82,6 +82,14 @@ contextBridge.exposeInMainWorld('quitapi', {
 
 contextBridge.exposeInMainWorld('installapi', {
   checkFirstRun: () => ipcRenderer.invoke('check-first-run'),
+  getLlmDiagnostics: () => ipcRenderer.invoke('get-llm-diagnostics'),
+  onLlmDiagnosticsUpdated: (callback) => {
+    const listener = (_event, diagnostics) => {
+      callback(diagnostics);
+    };
+    ipcRenderer.on('llm-diagnostics-updated', listener);
+    return () => ipcRenderer.removeListener('llm-diagnostics-updated', listener);
+  },
   dismissFirstRun: () => ipcRenderer.invoke('dismiss-first-run'),
 });
 

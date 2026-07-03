@@ -654,6 +654,45 @@ strong {
   color: var(--header-text-color);
 }
 
+.settings-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-3);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: bold;
+  background-color: color-mix(in srgb, var(--surface-1) 82%, transparent);
+  color: var(--color-5);
+}
+
+.settings-status-pill.status-ok {
+  background-color: color-mix(in srgb, #214c2a 70%, var(--surface-1));
+  color: #dff3e3;
+}
+
+.settings-status-pill.status-warn {
+  background-color: color-mix(in srgb, #5a4217 68%, var(--surface-1));
+  color: #fff1cc;
+}
+
+.settings-status-pill.status-error {
+  background-color: color-mix(in srgb, #592020 70%, var(--surface-1));
+  color: #ffd7d7;
+}
+
+.settings-status-pill.status-neutral {
+  background-color: color-mix(in srgb, var(--surface-1) 82%, transparent);
+  color: var(--color-6);
+}
+
 .settings-section input[type="text"],
 .settings-section input[type="number"],
 .settings-section input[type="password"],

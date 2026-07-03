@@ -71,6 +71,72 @@ function isOllamaClientModuleAvailable() {
   return typeof Ollama === "function";
 }
 
+const OLLAMA_CLOUD_PING_URL = "https://ollama.com/api/generate";
+const OLLAMA_CLOUD_PING_MODEL = "gpt-oss:120b";
+
+function getLlmDiagnostics() {
+  return {
+    ollamaInstalled: cachedOllamaInstalled,
+    ollamaServerListening: cachedOllamaServerListening,
+    cloudApiReachable: cachedOllamaCloudApiReachable,
+    cloudApiResultCode: cachedOllamaCloudApiResultCode,
+    lastCallResultCode: cachedLlmLastCallResultCode,
+    lastCallAt: cachedLlmLastCallAt,
+    lastCallError: cachedLlmLastCallError,
+    cloudApiCheckedAt: cachedOllamaCloudApiCheckedAt,
+    cloudApiError: cachedOllamaCloudApiError,
+    startupCheckedAt: cachedOllamaStartupCheckedAt,
+  };
+}
+
+function broadcastLlmDiagnosticsUpdate() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("llm-diagnostics-updated", getLlmDiagnostics());
+}
+
+function setLlmDiagnostics(partialDiagnostics = {}) {
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "ollamaInstalled")) {
+    cachedOllamaInstalled = Boolean(partialDiagnostics.ollamaInstalled);
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "ollamaServerListening")) {
+    cachedOllamaServerListening = Boolean(partialDiagnostics.ollamaServerListening);
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "cloudApiReachable")) {
+    cachedOllamaCloudApiReachable = Boolean(partialDiagnostics.cloudApiReachable);
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "cloudApiResultCode")) {
+    cachedOllamaCloudApiResultCode = partialDiagnostics.cloudApiResultCode;
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "lastCallResultCode")) {
+    cachedLlmLastCallResultCode = partialDiagnostics.lastCallResultCode;
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "lastCallAt")) {
+    cachedLlmLastCallAt = partialDiagnostics.lastCallAt;
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "lastCallError")) {
+    cachedLlmLastCallError = partialDiagnostics.lastCallError || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "cloudApiCheckedAt")) {
+    cachedOllamaCloudApiCheckedAt = partialDiagnostics.cloudApiCheckedAt;
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "cloudApiError")) {
+    cachedOllamaCloudApiError = partialDiagnostics.cloudApiError || "";
+  }
+  if (Object.prototype.hasOwnProperty.call(partialDiagnostics, "startupCheckedAt")) {
+    cachedOllamaStartupCheckedAt = partialDiagnostics.startupCheckedAt;
+  }
+  broadcastLlmDiagnosticsUpdate();
+}
+
+function logLlmDiagnostics(prefix, diagnostics) {
+  const installCode = diagnostics?.ollamaInstalled ? 0 : 1;
+  const onlineCode = diagnostics?.ollamaServerListening ? 0 : 1;
+  const cloudCode = diagnostics?.cloudApiReachable ? 0 : 1;
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] ${prefix} ollamaInstalled=${diagnostics?.ollamaInstalled ? "true" : "false"} ollamaServerListening=${diagnostics?.ollamaServerListening ? "true" : "false"} cloudApiReachable=${diagnostics?.cloudApiReachable ? "true" : "false"} installCode=${installCode} onlineCode=${onlineCode} cloudCode=${cloudCode} versionExitCode=${diagnostics?.versionExitCode ?? "n/a"} listExitCode=${diagnostics?.listExitCode ?? "n/a"} cloudResultCode=${diagnostics?.cloudApiResultCode ?? "n/a"}`,
+  );
+}
+
 let mainWindow;
 let selectedFilePath;
 let isBackendLoaded = false;
@@ -81,6 +147,15 @@ const activityLogEntries = [];
 const pendingActivityLogEntries = [];
 let isFirstRunAfterInstall = false;
 let cachedOllamaInstalled = false;
+let cachedOllamaServerListening = false;
+let cachedOllamaCloudApiReachable = false;
+let cachedOllamaCloudApiResultCode = null;
+let cachedLlmLastCallResultCode = null;
+let cachedLlmLastCallAt = null;
+let cachedLlmLastCallError = "";
+let cachedOllamaCloudApiCheckedAt = null;
+let cachedOllamaCloudApiError = "";
+let cachedOllamaStartupCheckedAt = null;
 let sessionCompressionFallbackAccepted = null;
 let goodiesDataCache = null;
 let ollamaModelsCache = null;
@@ -298,8 +373,29 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
         num_predict: settings.llm.maxSummaryTokens,
       },
     });
+    setLlmDiagnostics({
+      lastCallResultCode: 0,
+      lastCallAt: new Date().toISOString(),
+      lastCallError: "",
+    });
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Ollama LLM request completed resultCode=0 model=${settings.llm.ollamaModel}`,
+    );
     return response;
   } catch (error) {
+    const resultCode = Number.isInteger(error?.status)
+      ? error.status
+      : Number.isInteger(error?.code)
+        ? error.code
+        : 1;
+    setLlmDiagnostics({
+      lastCallResultCode: resultCode,
+      lastCallAt: new Date().toISOString(),
+      lastCallError: error?.message || String(error),
+    });
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Ollama LLM request failed resultCode=${resultCode} message=${JSON.stringify(error?.message || String(error))}`,
+    );
     console.error("Error generating response from Ollama:", error);
     throw error;
   }
@@ -336,20 +432,103 @@ async function shutdownBackendGracefullyForExit() {
 function checkOllama() {
   return new Promise((resolve) => {
     if (!isOllamaClientModuleAvailable()) {
-      resolve(false);
+      resolve({
+        ollamaInstalled: false,
+        ollamaServerListening: false,
+        versionExitCode: null,
+        listExitCode: null,
+      });
       return;
     }
     exec("ollama --version", (versionError) => {
       if (versionError) {
-        resolve(false); // not installed or not in PATH
+        resolve({
+          ollamaInstalled: false,
+          ollamaServerListening: false,
+          versionExitCode: versionError?.code ?? 1,
+          listExitCode: null,
+        });
         return;
       }
       // Backend reachability check: this fails when the daemon/API is down.
       exec("ollama list", (listError) => {
-        resolve(!listError);
+        resolve({
+          ollamaInstalled: true,
+          ollamaServerListening: !listError,
+          versionExitCode: 0,
+          listExitCode: listError ? listError?.code ?? 1 : 0,
+        });
       });
     });
   });
+}
+
+async function checkOllamaCloudApi() {
+  const settings = getAppSettings();
+  const apiKey = settings?.llm?.ollamaApiKey;
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
+    return {
+      cloudApiReachable: false,
+      cloudApiResultCode: null,
+      cloudApiCheckedAt: new Date().toISOString(),
+      cloudApiError: "No Ollama API key configured",
+    };
+  }
+
+  const ollamaFetch = getOllamaFetch(Number(settings.llm.ollamaRequestTimeoutSeconds) * 1000);
+  try {
+    const response = await ollamaFetch(OLLAMA_CLOUD_PING_URL, {
+      method: "POST",
+      headers: {
+        Authorization: apiKey.startsWith("Bearer ") ? apiKey : `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OLLAMA_CLOUD_PING_MODEL,
+        prompt: "ping",
+        stream: false,
+      }),
+    });
+
+    const responseText = await response.text();
+    let parsedResponse = null;
+    try {
+      parsedResponse = JSON.parse(responseText);
+    } catch (_parseError) {
+      parsedResponse = null;
+    }
+
+    const pongText = typeof parsedResponse?.response === "string"
+      ? parsedResponse.response
+      : responseText;
+    const ok = response.ok && typeof pongText === "string" && /pong/i.test(pongText);
+    return {
+      cloudApiReachable: ok,
+      cloudApiResultCode: ok ? 0 : response.status,
+      cloudApiCheckedAt: new Date().toISOString(),
+      cloudApiError: ok ? "" : (parsedResponse?.error || response.statusText || responseText || "Cloud ping failed"),
+    };
+  } catch (error) {
+    return {
+      cloudApiReachable: false,
+      cloudApiResultCode: Number.isInteger(error?.status)
+        ? error.status
+        : Number.isInteger(error?.code)
+          ? error.code
+          : 1,
+      cloudApiCheckedAt: new Date().toISOString(),
+      cloudApiError: error?.message || String(error),
+    };
+  }
+}
+
+async function refreshOllamaCloudApiDiagnostics() {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const cloudDiagnostics = await checkOllamaCloudApi();
+  setLlmDiagnostics(cloudDiagnostics);
+  return cloudDiagnostics;
 }
 
 
@@ -921,12 +1100,26 @@ app.whenReady().then(() => {
   void ensureThemeFilesExist().catch((error) => {
     console.warn("Unable to initialize theme directory:", error);
   });
-  checkOllama().then((isInstalled) => {
-    cachedOllamaInstalled = isInstalled;
-    void loadSettingsFromDisk();
-    if (!isInstalled) {
+  checkOllama().then(async (ollamaDiagnostics) => {
+    cachedOllamaInstalled = Boolean(ollamaDiagnostics?.ollamaInstalled);
+    cachedOllamaServerListening = Boolean(ollamaDiagnostics?.ollamaServerListening);
+    cachedOllamaStartupCheckedAt = new Date().toISOString();
+    logLlmDiagnostics("LLM startup diagnostics", ollamaDiagnostics);
+    await loadSettingsFromDisk();
+    refreshOllamaCloudApiDiagnostics()
+      .then((cloudDiagnostics) => {
+        logLlmDiagnostics("LLM cloud diagnostics", cloudDiagnostics);
+      })
+      .catch((error) => {
+        console.warn("Unable to resolve Ollama cloud diagnostics:", error);
+      });
+    if (!cachedOllamaInstalled) {
       console.log(
-        "Ollama is unavailable (not installed or backend not reachable). LLM summarisation will be unavailable.",
+        "Ollama is unavailable (not installed or not in PATH). LLM summarisation will be unavailable.",
+      );
+    } else if (!cachedOllamaServerListening) {
+      console.log(
+        "Ollama is installed but the server is not listening. LLM summarisation will be unavailable until the daemon is started.",
       );
     }
     createWindow();
@@ -998,9 +1191,13 @@ ipcMain.handle("check-first-run", async () => {
     isFirstRun: isFirstRunAfterInstall,
     version: app.getVersion(),
     ollamaInstalled: cachedOllamaInstalled,
+    ollamaServerListening: cachedOllamaServerListening,
+    llmDiagnostics: getLlmDiagnostics(),
     installedFiles,
   };
 });
+
+ipcMain.handle("get-llm-diagnostics", async () => getLlmDiagnostics());
 
 ipcMain.handle("dismiss-first-run", async () => {
   if (app.isPackaged) {
@@ -1414,7 +1611,11 @@ ipcMain.handle("settings-save", async (_event, settings) => {
   if (!appSettings) {
     await loadSettingsFromDisk();
   }
-  return saveSettingsToDisk(settings);
+  const savedSettings = await saveSettingsToDisk(settings);
+  void refreshOllamaCloudApiDiagnostics().then((cloudDiagnostics) => {
+    logLlmDiagnostics("LLM cloud diagnostics", cloudDiagnostics);
+  });
+  return savedSettings;
 });
 
 ipcMain.handle("settings-update", async (_event, partialSettings) => {
@@ -1426,7 +1627,7 @@ ipcMain.handle("settings-update", async (_event, partialSettings) => {
     partialSettings && typeof partialSettings === "object" && partialSettings.llm && typeof partialSettings.llm === "object"
       ? partialSettings.llm
       : {};
-  return saveSettingsToDisk({
+  const savedSettings = await saveSettingsToDisk({
     ...currentSettings,
     ...partialSettings,
     llm: {
@@ -1434,6 +1635,10 @@ ipcMain.handle("settings-update", async (_event, partialSettings) => {
       ...partialLlmSettings,
     },
   });
+  void refreshOllamaCloudApiDiagnostics().then((cloudDiagnostics) => {
+    logLlmDiagnostics("LLM cloud diagnostics", cloudDiagnostics);
+  });
+  return savedSettings;
 });
 
 ipcMain.handle("themes-list", async () => {

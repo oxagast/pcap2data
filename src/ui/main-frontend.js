@@ -295,6 +295,7 @@ let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
+let cachedLlmDiagnostics = null;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -322,18 +323,75 @@ function isLlmRuntimeEnabled() {
 }
 
 async function refreshOllamaStartupAvailability() {
-  if (!window.installapi || typeof window.installapi.checkFirstRun !== "function") {
+  if (!window.installapi || typeof window.installapi.getLlmDiagnostics !== "function") {
     ollamaVersionCheckPassed = false;
+    cachedLlmDiagnostics = null;
     return ollamaVersionCheckPassed;
   }
   try {
-    const installInfo = await window.installapi.checkFirstRun();
-    ollamaVersionCheckPassed = Boolean(installInfo?.ollamaInstalled);
+    const diagnostics = await window.installapi.getLlmDiagnostics();
+    cachedLlmDiagnostics = diagnostics || null;
+    ollamaVersionCheckPassed = Boolean(
+      diagnostics?.ollamaInstalled && diagnostics?.ollamaServerListening,
+    );
+    syncLlmDiagnosticsIndicators();
   } catch (error) {
     console.warn("Unable to resolve Ollama startup availability:", error);
     ollamaVersionCheckPassed = false;
+    cachedLlmDiagnostics = null;
+    syncLlmDiagnosticsIndicators();
   }
   return ollamaVersionCheckPassed;
+}
+
+function getLlmDiagnosticElement(id) {
+  return document.getElementById(id);
+}
+
+function renderLlmDiagnosticIndicator(elementId, label, value, stateClass) {
+  const element = getLlmDiagnosticElement(elementId);
+  if (!element) return;
+  element.textContent = `${label}: ${value}`;
+  element.className = `settings-status-pill ${stateClass}`;
+}
+
+function syncLlmDiagnosticsIndicators() {
+  const diagnostics = cachedLlmDiagnostics;
+  renderLlmDiagnosticIndicator(
+    "settings-llm-installed-status",
+    "Installed",
+    diagnostics?.ollamaInstalled ? "Yes" : "No",
+    diagnostics?.ollamaInstalled ? "status-ok" : "status-error",
+  );
+  renderLlmDiagnosticIndicator(
+    "settings-llm-online-status",
+    "Online",
+    diagnostics?.ollamaServerListening ? "Yes" : "No",
+    diagnostics?.ollamaServerListening ? "status-ok" : "status-error",
+  );
+  const cloudStatusText = diagnostics?.cloudApiResultCode === null || typeof diagnostics?.cloudApiResultCode === "undefined"
+    ? (diagnostics?.cloudApiError === "No Ollama API key configured" ? "No key" : "—")
+    : diagnostics?.cloudApiReachable
+      ? "Pong"
+      : "No";
+  const cloudStatusClass = diagnostics?.cloudApiResultCode === null || typeof diagnostics?.cloudApiResultCode === "undefined"
+    ? (diagnostics?.cloudApiError === "No Ollama API key configured" ? "status-neutral" : "status-neutral")
+    : diagnostics?.cloudApiReachable
+      ? "status-ok"
+      : "status-error";
+  renderLlmDiagnosticIndicator(
+    "settings-llm-cloud-status",
+    "Cloud API",
+    cloudStatusText,
+    cloudStatusClass,
+  );
+  const lastResultCode = diagnostics?.lastCallResultCode;
+  renderLlmDiagnosticIndicator(
+    "settings-llm-last-result-status",
+    "Last call result",
+    lastResultCode === null || typeof lastResultCode === "undefined" ? "—" : String(lastResultCode),
+    lastResultCode === 0 ? "status-ok" : lastResultCode === null || typeof lastResultCode === "undefined" ? "status-neutral" : "status-warn",
+  );
 }
 
 function syncRuntimeLlmToggleFromSettings() {
@@ -703,6 +761,7 @@ function syncSettingsFormFromState() {
   if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
   if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
   if (retryCountEl) retryCountEl.value = String(settings.llm.retryCount);
+  syncLlmDiagnosticsIndicators();
 }
 
 function readSettingsFormState() {
@@ -1055,6 +1114,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (debugPanel) {
     debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
   }
+  if (nextTab === SETTINGS_SUBTAB_LLM) {
+    syncLlmDiagnosticsIndicators();
+  }
 }
 
 function scheduleSessionKeychainAutoPopulate(reason = "startup") {
@@ -1289,6 +1351,16 @@ initializeInstallScreen({
 });
 
 void refreshOllamaStartupAvailability();
+
+if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "function") {
+  window.installapi.onLlmDiagnosticsUpdated((diagnostics) => {
+    cachedLlmDiagnostics = diagnostics || null;
+    ollamaVersionCheckPassed = Boolean(
+      cachedLlmDiagnostics?.ollamaInstalled && cachedLlmDiagnostics?.ollamaServerListening,
+    );
+    syncLlmDiagnosticsIndicators();
+  });
+}
 
 
 

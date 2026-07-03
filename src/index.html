@@ -587,6 +587,12 @@ No keystore entries saved.</pre>
             <div class="settings-grid">
               <div class="settings-section">
                 <div class="settings-section-title">LLM Defaults</div>
+                <div class="settings-status-row" aria-label="LLM diagnostics">
+                  <span id="settings-llm-installed-status" class="settings-status-pill status-neutral">Installed: —</span>
+                  <span id="settings-llm-online-status" class="settings-status-pill status-neutral">Online: —</span>
+                  <span id="settings-llm-cloud-status" class="settings-status-pill status-neutral">Cloud API: —</span>
+                  <span id="settings-llm-last-result-status" class="settings-status-pill status-neutral">Last call result: —</span>
+                </div>
                 <label for="settings-llm-model">Ollama model</label>
                 <select id="settings-llm-model"></select>
                 <div class="settings-help-text">Includes local and cloud variants for common models.</div>
