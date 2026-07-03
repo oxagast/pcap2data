@@ -7,9 +7,10 @@ const DEFAULT_HEATMAP_TIGHTNESS = 145;
 const DEFAULT_HEATMAP_POINT_SIZE = 90;
 const DEFAULT_HEATMAP_BLUR = 72;
 const DEFAULT_HEATMAP_MAP_ZOOM = 100;
-const MIN_HEATMAP_MAP_ZOOM = 120;
-const MAX_HEATMAP_MAP_ZOOM = 600;
-const HEATMAP_MAP_ZOOM_STEP = 150;
+const MIN_HEATMAP_MAP_ZOOM = 100;
+const MAX_HEATMAP_MAP_ZOOM = 1000;
+const HEATMAP_MAP_ZOOM_SLIDER_STEP = 1;
+const HEATMAP_MAP_ZOOM_SELECTION_STEP = 50;
 const HEATMAP_SELECTION_MIN_PIXELS = 12;
 const HEATMAP_SELECTION_DRAW_MS = 170;
 const HEATMAP_SELECTION_BLINK_MS = 280;
@@ -696,7 +697,7 @@ function createStatsHeatmapSection({
   mapZoomInputEl.className = "stats-heatmap-mapzoom-input";
   mapZoomInputEl.min = String(MIN_HEATMAP_MAP_ZOOM);
   mapZoomInputEl.max = String(MAX_HEATMAP_MAP_ZOOM);
-  mapZoomInputEl.step = String(HEATMAP_MAP_ZOOM_STEP);
+  mapZoomInputEl.step = String(HEATMAP_MAP_ZOOM_SLIDER_STEP);
   mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
   const mapZoomValueEl = documentRef.createElement("strong");
   mapZoomValueEl.className = "stats-heatmap-control-value";
@@ -1255,7 +1256,7 @@ function createStatsHeatmapSection({
         clampHeatmapMapZoomPercent(
           mapZoomInputEl.value,
           DEFAULT_HEATMAP_MAP_ZOOM,
-        ) + HEATMAP_MAP_ZOOM_STEP,
+        ) + HEATMAP_MAP_ZOOM_SELECTION_STEP,
       ),
     );
   };
