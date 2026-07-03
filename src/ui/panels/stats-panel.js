@@ -11,6 +11,10 @@ const MIN_HEATMAP_MAP_ZOOM = 100;
 const MAX_HEATMAP_MAP_ZOOM = 1000;
 const HEATMAP_MAP_ZOOM_SLIDER_STEP = 1;
 const HEATMAP_MAP_ZOOM_SELECTION_STEP = 50;
+const HEATMAP_LOCATION_CLICK_ZOOM_PERCENT = 300;
+const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
+const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
+const HEATMAP_LOCATION_SELECTION_SIZE_SCALE = 0.5;
 const HEATMAP_SELECTION_MIN_PIXELS = 12;
 const HEATMAP_SELECTION_DRAW_MS = 170;
 const HEATMAP_SELECTION_BLINK_MS = 280;
@@ -203,8 +207,41 @@ function collectInternetLocationPoint(locationData, fallbackLabel, ipAddress) {
     latitude,
     longitude,
     label: getGeoLocationLabel(locationData, fallbackLabel),
+    city: normalizeStatsTextValue(locationData?.["City"]),
+    country: normalizeStatsTextValue(locationData?.["Country"]),
     ipAddress: normalizeStatsTextValue(ipAddress),
   };
+}
+
+function buildLocationTrafficQueryFromPoint(locationPoint) {
+  const city = normalizeStatsTextValue(locationPoint?.city);
+  const country = normalizeStatsTextValue(locationPoint?.country);
+  if (city || country) {
+    const clauses = [];
+    if (city) {
+      clauses.push(`loc.src.city: ${city} || loc.dst.city: ${city}`);
+    }
+    if (country) {
+      clauses.push(`loc.src.country: ${country} || loc.dst.country: ${country}`);
+    }
+    return clauses.join(" || ");
+  }
+
+  const ipAddresses = Array.isArray(locationPoint?.ipAddresses)
+    ? locationPoint.ipAddresses
+    : locationPoint?.ipAddress
+      ? [locationPoint.ipAddress]
+      : [];
+  const uniqueIps = [...new Set(
+    ipAddresses
+      .map((ipAddress) => normalizeStatsTextValue(ipAddress))
+      .filter((ipAddress) => ipAddress !== null),
+  )];
+  if (uniqueIps.length === 0) return null;
+
+  return uniqueIps
+    .map((ipAddress) => `(ip.src.addr: ${ipAddress} || ip.dst.addr: ${ipAddress})`)
+    .join(" || ");
 }
 
 function projectGeoPoint(
@@ -547,13 +584,29 @@ function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_
       const existingPoint = heatmapPointsByCoordinate.get(coordinateKey);
       if (existingPoint) {
         existingPoint.value += nextValue;
+        if (mappedPoint.ipAddress) {
+          existingPoint.ipAddresses.add(mappedPoint.ipAddress);
+        }
+        if (!existingPoint.city && mappedPoint.city) {
+          existingPoint.city = mappedPoint.city;
+        }
+        if (!existingPoint.country && mappedPoint.country) {
+          existingPoint.country = mappedPoint.country;
+        }
       } else {
+        const ipAddresses = new Set();
+        if (mappedPoint.ipAddress) {
+          ipAddresses.add(mappedPoint.ipAddress);
+        }
         heatmapPointsByCoordinate.set(coordinateKey, {
           pointKey: coordinateKey,
           latitude: mappedPoint.latitude,
           longitude: mappedPoint.longitude,
           label: mappedPoint.label,
+          city: mappedPoint.city,
+          country: mappedPoint.country,
           value: nextValue,
+          ipAddresses,
         });
       }
 
@@ -564,7 +617,10 @@ function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_
   });
 
   return {
-    heatmapPoints: [...heatmapPointsByCoordinate.values()].sort((a, b) => b.value - a.value),
+    heatmapPoints: [...heatmapPointsByCoordinate.values()].map((point) => ({
+      ...point,
+      ipAddresses: [...(point.ipAddresses || [])].sort(),
+    })).sort((a, b) => b.value - a.value),
     heatmapPacketHits,
     heatmapBytes,
     internetHostCount: internetHosts.size,
@@ -671,6 +727,7 @@ function createStatsHeatmapSection({
   getFilteredPackets,
   getProjectionCalibrationSettings,
   getCurrentSettings,
+  applyStatsQuery,
 }) {
   const section = documentRef.createElement("div");
   section.className = "stats-section";
@@ -974,6 +1031,8 @@ function createStatsHeatmapSection({
   };
   let dragSelectionState = null;
   let selectionAnimating = false;
+  let lastClickedLocationPointKey = null;
+  let queuedLocationFilterPoint = null;
   let activeHeatmapData = {
     heatmapPoints: Array.isArray(stats?.heatmapPoints) ? stats.heatmapPoints : [],
     heatmapPacketHits: Number(stats?.heatmapPacketHits) || 0,
@@ -1231,6 +1290,55 @@ function createStatsHeatmapSection({
     return { x, y };
   };
 
+  const showSelectionRect = (bounds, selectionRect) => {
+    dragSelectionState = {
+      bounds,
+      startX: selectionRect.left,
+      startY: selectionRect.top,
+      currentX: selectionRect.left + selectionRect.width,
+      currentY: selectionRect.top + selectionRect.height,
+      selectionRect,
+    };
+    selectionLayerEl.hidden = false;
+    selectionLayerEl.style.left = `${selectionRect.left}px`;
+    selectionLayerEl.style.top = `${selectionRect.top}px`;
+    selectionLayerEl.style.width = `${selectionRect.width}px`;
+    selectionLayerEl.style.height = `${selectionRect.height}px`;
+    updatePixelMask(selectionRect);
+  };
+
+  const getSelectionFocusFromRect = (bounds, selectionRect) => ({
+    focusX: Math.min(
+      1,
+      Math.max(0, ((selectionRect.left + (selectionRect.width / 2)) - bounds.left) / Math.max(1, bounds.width)),
+    ),
+    focusY: Math.min(
+      1,
+      Math.max(0, ((selectionRect.top + (selectionRect.height / 2)) - bounds.top) / Math.max(1, bounds.height)),
+    ),
+  });
+
+  const buildLocationSelectionRect = (bounds, centerX, centerY) => {
+    const aspectRatio =
+      HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH / HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT;
+    let width = Math.max(120, Math.min(bounds.width / 3, bounds.height * 0.42 * aspectRatio));
+    let height = width / aspectRatio;
+    if (height > bounds.height * 0.42) {
+      height = bounds.height * 0.42;
+      width = height * aspectRatio;
+    }
+    width = Math.max(60, width * HEATMAP_LOCATION_SELECTION_SIZE_SCALE);
+    height = Math.max(34, height * HEATMAP_LOCATION_SELECTION_SIZE_SCALE);
+    const maxLeft = (bounds.left + bounds.width) - width;
+    const maxTop = (bounds.top + bounds.height) - height;
+    return {
+      left: Math.max(bounds.left, Math.min(centerX - (width / 2), maxLeft)),
+      top: Math.max(bounds.top, Math.min(centerY - (height / 2), maxTop)),
+      width,
+      height,
+    };
+  };
+
   const applySelectionZoom = () => {
     if (!dragSelectionState) return;
     const bounds = dragSelectionState.bounds;
@@ -1240,31 +1348,84 @@ function createStatsHeatmapSection({
       return;
     }
 
-    const centerX = (dragSelectionState.startX + dragSelectionState.currentX) / 2;
-    const centerY = (dragSelectionState.startY + dragSelectionState.currentY) / 2;
-    mapViewState.focusX = Math.min(
-      1,
-      Math.max(0, (centerX - bounds.left) / Math.max(1, bounds.width)),
-    );
-    mapViewState.focusY = Math.min(
-      1,
-      Math.max(0, (centerY - bounds.top) / Math.max(1, bounds.height)),
-    );
-    mapZoomInputEl.value = String(
-      Math.min(
+    const selectionRect = dragSelectionState.selectionRect || {
+      left: Math.min(dragSelectionState.startX, dragSelectionState.currentX),
+      top: Math.min(dragSelectionState.startY, dragSelectionState.currentY),
+      width: selectionWidth,
+      height: selectionHeight,
+    };
+    const focus = getSelectionFocusFromRect(bounds, selectionRect);
+    return {
+      selectionRect,
+      focusX: focus.focusX,
+      focusY: focus.focusY,
+      targetZoomPercent: Math.min(
         MAX_HEATMAP_MAP_ZOOM,
         clampHeatmapMapZoomPercent(
           mapZoomInputEl.value,
           DEFAULT_HEATMAP_MAP_ZOOM,
         ) + HEATMAP_MAP_ZOOM_SELECTION_STEP,
       ),
-    );
+    };
   };
 
   const waitForSelectionAnimation = (durationMs) =>
     new Promise((resolve) => {
       window.setTimeout(resolve, durationMs);
     });
+
+  const animateSelectionZoom = async ({
+    bounds,
+    selectionRect,
+    targetZoomPercent,
+    focusX,
+    focusY,
+  }) => {
+    if (selectionAnimating || !bounds || !selectionRect) return;
+
+    selectionAnimating = true;
+    showSelectionRect(bounds, selectionRect);
+    mapEl.classList.add("stats-heatmap-selection-animating");
+    mapEl.classList.remove("stats-heatmap-selecting");
+    selectionLayerEl.classList.add("stats-heatmap-selection-capture");
+    await waitForSelectionAnimation(HEATMAP_SELECTION_DRAW_MS);
+    selectionLayerEl.classList.remove("stats-heatmap-selection-capture");
+    selectionLayerEl.classList.add("stats-heatmap-selection-blink");
+    await waitForSelectionAnimation(HEATMAP_SELECTION_BLINK_MS);
+    selectionLayerEl.classList.remove("stats-heatmap-selection-blink");
+
+    mapViewState.focusX = Math.min(1, Math.max(0, Number(focusX) || 0.5));
+    mapViewState.focusY = Math.min(1, Math.max(0, Number(focusY) || 0.5));
+    mapZoomInputEl.value = String(
+      clampHeatmapMapZoomPercent(targetZoomPercent, DEFAULT_HEATMAP_MAP_ZOOM),
+    );
+    render(false);
+    await waitForSelectionAnimation(HEATMAP_ZOOM_SETTLE_MS);
+    selectionAnimating = false;
+    resetSelectionBox();
+    if (queuedLocationFilterPoint) {
+      const queuedPoint = queuedLocationFilterPoint;
+      queuedLocationFilterPoint = null;
+      const query = buildLocationTrafficQueryFromPoint(queuedPoint);
+      if (query && typeof applyStatsQuery === "function") {
+        await applyStatsQuery(query);
+      }
+    }
+  };
+
+  const zoomOutForLocationSelection = async () => {
+    const currentZoom = clampHeatmapMapZoomPercent(
+      mapZoomInputEl.value,
+      DEFAULT_HEATMAP_MAP_ZOOM,
+    );
+    if (currentZoom <= DEFAULT_HEATMAP_MAP_ZOOM) return;
+
+    mapViewState.focusX = 0.5;
+    mapViewState.focusY = 0.5;
+    mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
+    render(false);
+    await waitForSelectionAnimation(HEATMAP_ZOOM_SETTLE_MS);
+  };
 
   const numberFormatter = new Intl.NumberFormat();
   const getScopeLabel = () =>
@@ -1320,13 +1481,61 @@ function createStatsHeatmapSection({
         locationTagEl.className = "stats-tag";
         const metricValueLabel = `${numberFormatter.format(point.value)} ${metric}`;
         locationTagEl.textContent = `${point.label} (${metricValueLabel})`;
-        locationTagEl.title = "Click to blink this location on the map";
-        locationTagEl.addEventListener("click", () => {
-          selectedPointKey = typeof point.pointKey === "string" ? point.pointKey : null;
-          render(false);
+        locationTagEl.title = "Click once to zoom, click twice to filter traffic for this location";
+        locationTagEl.addEventListener("click", async () => {
+          if (lastClickedLocationPointKey === point.pointKey) {
+            lastClickedLocationPointKey = null;
+            if (selectionAnimating) {
+              queuedLocationFilterPoint = point;
+              return;
+            }
+            const query = buildLocationTrafficQueryFromPoint(point);
+            if (query && typeof applyStatsQuery === "function") {
+              await applyStatsQuery(query);
+            }
+            return;
+          }
+
+          lastClickedLocationPointKey = point.pointKey;
+          if (selectionAnimating) return;
+          await focusHeatmapLocation(point);
         });
         locationsListEl.appendChild(locationTagEl);
       });
+  };
+
+  const focusHeatmapLocation = async (locationPoint) => {
+    if (!locationPoint || selectionAnimating) return false;
+
+    const latitude = Number(locationPoint.latitude);
+    const longitude = Number(locationPoint.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return false;
+    }
+
+    await zoomOutForLocationSelection();
+    selectedPointKey = typeof locationPoint.pointKey === "string" ? locationPoint.pointKey : null;
+    const bounds = getCurrentMapBounds();
+    const projected = projectGeoPoint(
+      latitude,
+      longitude,
+      bounds.width,
+      bounds.height,
+      WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+      getProjectionControlState(),
+    );
+    const centerX = bounds.left + projected.x;
+    const centerY = bounds.top + projected.y;
+    const selectionRect = buildLocationSelectionRect(bounds, centerX, centerY);
+    const focus = getSelectionFocusFromRect(bounds, selectionRect);
+    await animateSelectionZoom({
+      bounds,
+      selectionRect,
+      targetZoomPercent: HEATMAP_LOCATION_CLICK_ZOOM_PERCENT,
+      focusX: focus.focusX,
+      focusY: focus.focusY,
+    });
+    return true;
   };
 
   const buildActiveHeatmapData = () => {
@@ -1370,6 +1579,14 @@ function createStatsHeatmapSection({
       activeHeatmapData = buildActiveHeatmapData();
       updateHeatmapSummaryUi();
       updateTopLocationsUi();
+      const locationPointKeys = new Set(
+        Array.isArray(activeHeatmapData.heatmapPoints)
+          ? activeHeatmapData.heatmapPoints.map((point) => point.pointKey)
+          : [],
+      );
+      if (!locationPointKeys.has(lastClickedLocationPointKey)) {
+        lastClickedLocationPointKey = null;
+      }
       const selectedExists = activeHeatmapData.heatmapPoints.some(
         (point) => point.pointKey === selectedPointKey,
       );
@@ -1482,8 +1699,16 @@ function createStatsHeatmapSection({
   };
 
   const onMapMouseMove = (event) => {
+    if (selectionAnimating) return;
     if (!dragSelectionState) return;
     const point = getMapEventPoint(event);
+    const bounds = dragSelectionState.bounds;
+    const withinBounds =
+      point.x >= bounds.left
+      && point.x <= bounds.left + bounds.width
+      && point.y >= bounds.top
+      && point.y <= bounds.top + bounds.height;
+    if (!withinBounds) return;
     dragSelectionState.currentX = point.x;
     dragSelectionState.currentY = point.y;
     updateSelectionBox(
@@ -1494,8 +1719,20 @@ function createStatsHeatmapSection({
     );
   };
 
-  const onMapMouseUp = async () => {
+  const onMapMouseUp = async (event) => {
     if (!dragSelectionState) return;
+
+    const releasePoint = getMapEventPoint(event);
+    const bounds = dragSelectionState.bounds;
+    const withinBounds =
+      releasePoint.x >= bounds.left
+      && releasePoint.x <= bounds.left + bounds.width
+      && releasePoint.y >= bounds.top
+      && releasePoint.y <= bounds.top + bounds.height;
+    if (!withinBounds) {
+      resetSelectionBox();
+      return;
+    }
 
     const selectionWidth = Math.abs(dragSelectionState.currentX - dragSelectionState.startX);
     const selectionHeight = Math.abs(dragSelectionState.currentY - dragSelectionState.startY);
@@ -1507,24 +1744,32 @@ function createStatsHeatmapSection({
       return;
     }
 
-    selectionAnimating = true;
-    mapEl.classList.add("stats-heatmap-selection-animating");
-    mapEl.classList.remove("stats-heatmap-selecting");
-    selectionLayerEl.classList.add("stats-heatmap-selection-capture");
-    await waitForSelectionAnimation(HEATMAP_SELECTION_DRAW_MS);
-    selectionLayerEl.classList.remove("stats-heatmap-selection-capture");
-    selectionLayerEl.classList.add("stats-heatmap-selection-blink");
-    await waitForSelectionAnimation(HEATMAP_SELECTION_BLINK_MS);
-    selectionLayerEl.classList.remove("stats-heatmap-selection-blink");
+    const zoomConfig = applySelectionZoom();
+    if (!zoomConfig) {
+      resetSelectionBox();
+      return;
+    }
+    await animateSelectionZoom({
+      bounds: dragSelectionState.bounds,
+      selectionRect: zoomConfig.selectionRect,
+      targetZoomPercent: zoomConfig.targetZoomPercent,
+      focusX: zoomConfig.focusX,
+      focusY: zoomConfig.focusY,
+    });
+  };
 
-    applySelectionZoom();
-    render(false);
-    await waitForSelectionAnimation(HEATMAP_ZOOM_SETTLE_MS);
-    selectionAnimating = false;
+  const onMapDoubleClick = (event) => {
+    if (selectionAnimating) return;
     resetSelectionBox();
+    mapViewState.focusX = 0.5;
+    mapViewState.focusY = 0.5;
+    mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
+    render(false);
+    event.preventDefault();
   };
 
   mapEl.addEventListener("mousedown", onMapMouseDown);
+  mapEl.addEventListener("dblclick", onMapDoubleClick);
   window.addEventListener("mousemove", onMapMouseMove);
   window.addEventListener("mouseup", onMapMouseUp);
 
@@ -1543,11 +1788,31 @@ function createStatsHeatmapSection({
   return {
     section,
     render,
+    focusLocation: async ({ latitude, longitude }) => {
+      const lat = Number(latitude);
+      const lon = Number(longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+
+      const candidatePoint = Array.isArray(activeHeatmapData.heatmapPoints)
+        ? activeHeatmapData.heatmapPoints.find(
+          (point) => Number(point.latitude) === lat && Number(point.longitude) === lon,
+        )
+        : null;
+
+      return focusHeatmapLocation(
+        candidatePoint || {
+          latitude: lat,
+          longitude: lon,
+          pointKey: null,
+        },
+      );
+    },
     dispose: () => {
       if (persistCalibrationTimeoutId) {
         window.clearTimeout(persistCalibrationTimeoutId);
       }
       mapEl.removeEventListener("mousedown", onMapMouseDown);
+      mapEl.removeEventListener("dblclick", onMapDoubleClick);
       window.removeEventListener("mousemove", onMapMouseMove);
       window.removeEventListener("mouseup", onMapMouseUp);
     },
@@ -1966,13 +2231,29 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
             const existingPoint = heatmapPointsByCoordinate.get(coordinateKey);
             if (existingPoint) {
               existingPoint.value += 1;
+              if (mappedPoint.ipAddress) {
+                existingPoint.ipAddresses.add(mappedPoint.ipAddress);
+              }
+              if (!existingPoint.city && mappedPoint.city) {
+                existingPoint.city = mappedPoint.city;
+              }
+              if (!existingPoint.country && mappedPoint.country) {
+                existingPoint.country = mappedPoint.country;
+              }
             } else {
+              const ipAddresses = new Set();
+              if (mappedPoint.ipAddress) {
+                ipAddresses.add(mappedPoint.ipAddress);
+              }
               heatmapPointsByCoordinate.set(coordinateKey, {
                 pointKey: coordinateKey,
                 latitude: mappedPoint.latitude,
                 longitude: mappedPoint.longitude,
                 label: mappedPoint.label,
+                city: mappedPoint.city,
+                country: mappedPoint.country,
                 value: 1,
+                ipAddresses,
               });
             }
             if (mappedPoint.ipAddress) {
@@ -2156,7 +2437,7 @@ function createStatsPanel(options) {
     }
   }
 
-  function showStats() {
+  function showStats(showOptions = {}) {
     try {
       if (typeof disposeHeatmapResize === "function") {
         disposeHeatmapResize();
@@ -2224,6 +2505,7 @@ function createStatsPanel(options) {
       }
 
       let heatmapSectionRenderer = null;
+      let heatmapSectionFocusLocation = null;
       const setActiveStatsSubtab = (tabId) => {
         const showMap = tabId === "map";
         statisticsTabBtn.classList.toggle("active", !showMap);
@@ -2297,10 +2579,15 @@ function createStatsPanel(options) {
         getFilteredPackets,
         getProjectionCalibrationSettings: () => getProjectionCalibration(getCurrentSettings),
         getCurrentSettings,
+        applyStatsQuery,
       });
       if (heatmapSection) {
         mapPanel.appendChild(heatmapSection.section);
         heatmapSectionRenderer = heatmapSection.render;
+        heatmapSectionFocusLocation =
+          typeof heatmapSection.focusLocation === "function"
+            ? heatmapSection.focusLocation
+            : null;
         const rerenderHeatmap = () => {
           if (mapPanel.style.display !== "none") {
             heatmapSection.render();
@@ -2313,6 +2600,20 @@ function createStatsPanel(options) {
             heatmapSection.dispose();
           }
         };
+      }
+
+      const initialSubtab = showOptions?.openSubtab === "map" ? "map" : "statistics";
+      setActiveStatsSubtab(initialSubtab);
+
+      const focusLocation = showOptions?.focusLocation;
+      if (
+        initialSubtab === "map"
+        && heatmapSectionFocusLocation
+        && focusLocation
+      ) {
+        window.requestAnimationFrame(() => {
+          void heatmapSectionFocusLocation(focusLocation);
+        });
       }
 
       if (stats.undecodableCount > 0) {
@@ -2491,6 +2792,12 @@ function createStatsPanel(options) {
 
   return {
     showStats,
+    showStatsHeatmapLocation: (focusLocation) => {
+      showStats({
+        openSubtab: "map",
+        focusLocation,
+      });
+    },
   };
 }
 

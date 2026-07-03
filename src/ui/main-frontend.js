@@ -1427,7 +1427,7 @@ const {
   consoleRef: console,
 });
 
-const { showStats } = createStatsPanel({
+const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   documentRef: document,
   statusUpdate,
   writeLogEntry,
@@ -12219,6 +12219,37 @@ function infoPanel(pk) {
   const serverInfo = traitsData["Server Info"] || {};
   const srcLocation = networkData?.["Source IP"]?.["Location"] || {};
   const dstLocation = networkData?.["Destination IP"]?.["Location"] || {};
+  const parseLocationCoordinate = (value, min, max) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return null;
+    if (numericValue < min || numericValue > max) return null;
+    return numericValue;
+  };
+  const bindLocationTableToHeatmap = (locationData, locationSideLabel) => {
+    const latitude = parseLocationCoordinate(locationData?.["Latitude"], -90, 90);
+    const longitude = parseLocationCoordinate(locationData?.["Longitude"], -180, 180);
+    if (latitude === null || longitude === null) return;
+
+    const locationContainer = document.getElementById("sideloctable");
+    const locationTable = locationContainer?.querySelector("table:last-of-type");
+    if (!locationTable) return;
+
+    const city = String(locationData?.["City"] || "").trim();
+    const country = String(locationData?.["Country"] || "").trim();
+    const locationLabel = [city, country].filter(Boolean).join(", ") || locationSideLabel;
+
+    const openHeatmapAtLocation = () => {
+      showStatsHeatmapLocation({
+        latitude,
+        longitude,
+        label: locationLabel,
+      });
+    };
+
+    locationTable.style.cursor = "pointer";
+    locationTable.title = "Open Stats map and zoom to this location";
+    locationTable.addEventListener("click", openHeatmapAtLocation);
+  };
   let packetTimestamp = packetInfoData["Packet Timestamp"] || "N/A";
   let ipChecksum = ipData["IP Checksum"] ?? "N/A";
 
@@ -12665,6 +12696,7 @@ function infoPanel(pk) {
     ];
     const srcLocHeaders = ["Source Host", "Location"];
     createTable(srcLocData, srcLocHeaders, "sideloctable");
+    bindLocationTableToHeatmap(srcLocation, "Source location");
   }
   if (
     dstLocation["City"] == undefined
@@ -12691,6 +12723,7 @@ function infoPanel(pk) {
     ];
     const dstLocHeaders = ["Destination Host", "Location"];
     createTable(dstLocData, dstLocHeaders, "sideloctable");
+    bindLocationTableToHeatmap(dstLocation, "Destination location");
   }
 }
 
