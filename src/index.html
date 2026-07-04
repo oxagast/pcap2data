@@ -558,6 +558,18 @@ No keystore entries saved.</pre>
             </div>
           </div>
         </div>
+        <div id="follow-stream-confirm-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Load Follow Stream</div>
+            <div id="follow-stream-confirm-description">
+              This stream contains 0 packets.
+            </div>
+            <div class="crypt-actions-row">
+              <button id="follow-stream-confirm-continue-btn">Continue</button>
+              <button id="follow-stream-confirm-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div id="list_box">
           <div id="list_search_bar">
             <input id="list-search" type="text" placeholder="Filter list by host, IP, port, or protocol..." />
@@ -1312,6 +1324,19 @@ No keystore entries saved.</pre>
       <div class="session-name-dialog-actions">
         <button id="session-name-confirm-btn">Save</button>
         <button id="session-name-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="session-delete-dialog" hidden>
+    <div class="crypt-keystore-unlock-content">
+      <div class="crypt-section-title" id="session-delete-dialog-title">Delete Session</div>
+      <div id="session-delete-dialog-description">
+        Delete this session? This cannot be undone.
+      </div>
+      <div class="crypt-actions-row">
+        <button id="session-delete-confirm-btn">Delete</button>
+        <button id="session-delete-cancel-btn">Cancel</button>
       </div>
     </div>
   </div>

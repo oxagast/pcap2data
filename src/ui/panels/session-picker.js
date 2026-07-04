@@ -46,8 +46,15 @@ function initializeSessionPicker({
   const nameCancelBtn = documentRef.getElementById("session-name-cancel-btn");
   const nameDialogTitle = documentRef.getElementById("session-name-dialog-title");
   const nameDialogStatus = documentRef.getElementById("session-name-dialog-status");
+  const deleteDialog = documentRef.getElementById("session-delete-dialog");
+  const deleteDialogDescription = documentRef.getElementById(
+    "session-delete-dialog-description",
+  );
+  const deleteConfirmBtn = documentRef.getElementById("session-delete-confirm-btn");
+  const deleteCancelBtn = documentRef.getElementById("session-delete-cancel-btn");
 
   let nameDialogResolve = null;
+  let deleteDialogResolve = null;
 
   function showStatus(msg, isError) {
     if (!statusEl) return;
@@ -92,6 +99,37 @@ function initializeSessionPicker({
     }
   }
 
+  function promptDeleteSession(name) {
+    return new Promise((resolve) => {
+      if (!deleteDialog || !deleteDialogDescription) {
+        resolve(
+          window.confirm(
+            'Delete session "' + name + '"?\nThis cannot be undone.',
+          ),
+        );
+        return;
+      }
+      if (deleteDialogResolve) {
+        const cb = deleteDialogResolve;
+        deleteDialogResolve = null;
+        cb(false);
+      }
+      deleteDialogDescription.textContent =
+        'Delete session "' + name + '"? This cannot be undone.';
+      deleteDialog.hidden = false;
+      if (deleteConfirmBtn) deleteConfirmBtn.focus();
+      deleteDialogResolve = resolve;
+    });
+  }
+
+  function resolveDeleteDialog(value) {
+    if (deleteDialog) deleteDialog.hidden = true;
+    if (!deleteDialogResolve) return;
+    const cb = deleteDialogResolve;
+    deleteDialogResolve = null;
+    cb(Boolean(value));
+  }
+
   if (nameConfirmBtn) {
     nameConfirmBtn.addEventListener("click", () => {
       const val = nameInput ? nameInput.value.trim() : "";
@@ -118,6 +156,26 @@ function initializeSessionPicker({
         resolveNameDialog(val);
       } else if (e.key === "Escape") {
         resolveNameDialog(null);
+      }
+    });
+  }
+
+  if (deleteConfirmBtn) {
+    deleteConfirmBtn.addEventListener("click", () => resolveDeleteDialog(true));
+  }
+
+  if (deleteCancelBtn) {
+    deleteCancelBtn.addEventListener("click", () => resolveDeleteDialog(false));
+  }
+
+  if (deleteDialog) {
+    deleteDialog.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        resolveDeleteDialog(true);
+        return;
+      }
+      if (event.key === "Escape") {
+        resolveDeleteDialog(false);
       }
     });
   }
@@ -220,9 +278,7 @@ function initializeSessionPicker({
 
   async function handleDelete(name) {
     clearStatus();
-    const confirmed = window.confirm(
-      'Delete session "' + name + '"?\nThis cannot be undone.',
-    );
+    const confirmed = await promptDeleteSession(name);
     if (!confirmed) return;
     try {
       const result = await sessionsapi.remove(name);

@@ -894,7 +894,9 @@ strong {
 }
 
 #crypt-keystore-unlock-description,
-#crypt-keystore-manual-uri-description {
+#crypt-keystore-manual-uri-description,
+#follow-stream-confirm-description,
+#session-delete-dialog-description {
   font-size: 12px;
   color: var(--color-6);
   overflow-wrap: break-word;
@@ -904,7 +906,9 @@ strong {
 #save-session-dialog,
 #crypt-keystore-unlock-dialog,
 #crypt-keystore-manual-uri-dialog,
-#ctx-llm-question-dialog {
+#ctx-llm-question-dialog,
+#follow-stream-confirm-dialog,
+#session-delete-dialog {
   position: fixed;
   inset: 0;
   background-color: rgba(0, 0, 0, 0.65);
@@ -918,7 +922,9 @@ strong {
 #save-session-dialog[hidden],
 #crypt-keystore-unlock-dialog[hidden],
 #crypt-keystore-manual-uri-dialog[hidden],
-#ctx-llm-question-dialog[hidden] {
+#ctx-llm-question-dialog[hidden],
+#follow-stream-confirm-dialog[hidden],
+#session-delete-dialog[hidden] {
   display: none !important;
 }
 

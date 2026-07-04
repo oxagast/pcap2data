@@ -7075,6 +7075,7 @@ let activeContextStreamCompressionHint = "";
 let activeContextPacket = null;
 let activeContextLlmQuestionDialogResolver = null;
 let activeContextLlmQuestionDialogContext = null;
+let activeFollowStreamConfirmDialogResolver = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -8428,11 +8429,44 @@ function hideStreamLoadingOverlay() {
   if (loadingContainerEl) loadingContainerEl.style.display = "none";
 }
 
-function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
-  if (packetCount <= getStreamContextWarnPacketThreshold()) return true;
-  return window.confirm(
-    `This stream contains ${packetCount} packets. Loading it into the ${tabLabel} tab can consume significant memory and may bog down the UI.\n\nContinue?`,
+function requestFollowStreamContextMenuLoad(tabLabel, packetCount) {
+  const dialogEl = document.getElementById("follow-stream-confirm-dialog");
+  const descriptionEl = document.getElementById("follow-stream-confirm-description");
+  const continueBtnEl = document.getElementById(
+    "follow-stream-confirm-continue-btn",
   );
+  if (!dialogEl || !descriptionEl) {
+    return Promise.resolve(
+      window.confirm(
+        `This stream contains ${packetCount} packets. Loading it into the ${tabLabel} tab can consume significant memory and may bog down the UI.\n\nContinue?`,
+      ),
+    );
+  }
+  if (activeFollowStreamConfirmDialogResolver) {
+    const resolve = activeFollowStreamConfirmDialogResolver;
+    activeFollowStreamConfirmDialogResolver = null;
+    resolve(false);
+  }
+  descriptionEl.textContent = `This stream contains ${packetCount} packets. Loading it into the ${tabLabel} tab can consume significant memory and may bog down the UI. Continue?`;
+  dialogEl.hidden = false;
+  if (continueBtnEl) continueBtnEl.focus();
+  return new Promise((resolve) => {
+    activeFollowStreamConfirmDialogResolver = resolve;
+  });
+}
+
+function resolveFollowStreamContextMenuLoad(shouldContinue) {
+  const dialogEl = document.getElementById("follow-stream-confirm-dialog");
+  if (dialogEl) dialogEl.hidden = true;
+  if (!activeFollowStreamConfirmDialogResolver) return;
+  const resolve = activeFollowStreamConfirmDialogResolver;
+  activeFollowStreamConfirmDialogResolver = null;
+  resolve(Boolean(shouldContinue));
+}
+
+async function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
+  if (packetCount <= getStreamContextWarnPacketThreshold()) return true;
+  return requestFollowStreamContextMenuLoad(tabLabel, packetCount);
 }
 
 function getStreamTupleForPacket(packet) {
@@ -9943,7 +9977,7 @@ async function _runFollowStreamToConvAction(options = {}) {
       statusUpdate("Status: No stream packets found for current packet");
       return;
     }
-    if (!confirmFollowStreamContextMenuLoad("Conv", streamPackets.length)) {
+    if (!(await confirmFollowStreamContextMenuLoad("Conv", streamPackets.length))) {
       statusUpdate("Status: Follow stream to Conv cancelled");
       return;
     }
@@ -10009,7 +10043,7 @@ async function _doFollowStreamToConv(
   writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into Conv tab`);
 }
 
-function followStreamToCrypt() {
+async function followStreamToCrypt() {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
   const streamPackets = getFollowStreamPackets(contextPacket);
@@ -10017,7 +10051,7 @@ function followStreamToCrypt() {
     statusUpdate("Status: No stream packets found for current packet");
     return;
   }
-  if (!confirmFollowStreamContextMenuLoad("Crypt", streamPackets.length)) {
+  if (!(await confirmFollowStreamContextMenuLoad("Crypt", streamPackets.length))) {
     statusUpdate("Status: Follow stream to Crypt cancelled");
     return;
   }
@@ -11135,6 +11169,23 @@ document
     if (event.key !== "Enter") return;
     submitLlmQuestionFromContextMenuDialog();
   });
+document
+  .getElementById("follow-stream-confirm-continue-btn")
+  .addEventListener("click", () => resolveFollowStreamContextMenuLoad(true));
+document
+  .getElementById("follow-stream-confirm-cancel-btn")
+  .addEventListener("click", () => resolveFollowStreamContextMenuLoad(false));
+document
+  .getElementById("follow-stream-confirm-dialog")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      resolveFollowStreamContextMenuLoad(true);
+      return;
+    }
+    if (event.key === "Escape") {
+      resolveFollowStreamContextMenuLoad(false);
+    }
+  });
 
 
 
@@ -11951,10 +12002,9 @@ convertContextButtons.followStreamConvDecompress.addEventListener(
   "click",
   followStreamToConvDecompressed,
 );
-convertContextButtons.followStreamCrypt.addEventListener(
-  "click",
-  followStreamToCrypt,
-);
+convertContextButtons.followStreamCrypt.addEventListener("click", () => {
+  void followStreamToCrypt();
+});
 convertContextButtons.llmQuestion.addEventListener("click", () => {
   void askContextQuestionWithLLM();
 });
