@@ -152,8 +152,155 @@ function normalizeFilterKey(key) {
   return key.toLowerCase().replace(/[._\s-]+/g, '-');
 }
 
+function searchNormalizedKey(obj, normalizedTargetKey) {
+  if (!obj || typeof obj !== 'object') return undefined;
+
+  const stack = [obj];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object') continue;
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item && typeof item === 'object') {
+          stack.push(item);
+        }
+      }
+      continue;
+    }
+
+    for (const [objKey, value] of Object.entries(current)) {
+      if (normalizeFilterKey(objKey) === normalizedTargetKey) {
+        return value;
+      }
+      if (value && typeof value === 'object') {
+        stack.push(value);
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function getAliasedFieldValue(packetItem, normalizedKey) {
   switch (normalizedKey) {
+    case 'transport-proto': {
+      const explicitTransport = searchFullKey(packetItem, 'transport.proto');
+      if (
+        explicitTransport !== undefined &&
+        String(explicitTransport).trim() !== ''
+      ) {
+        return explicitTransport;
+      }
+
+      const packetInfo = packetItem?.['Packet Info'] || {};
+      const explicitProtocol = packetInfo['Protocol'];
+      if (typeof explicitProtocol === 'string' && explicitProtocol) {
+        const normalizedProtocol = explicitProtocol.trim().toUpperCase();
+        const isGenericProtocol =
+          normalizedProtocol === 'FRAME' ||
+          normalizedProtocol === 'UNKNOWN PROTOCOL' ||
+          normalizedProtocol === 'UNKNOWN';
+        if (!isGenericProtocol) {
+          return explicitProtocol;
+        }
+      }
+      if (packetInfo['TCP']) return 'TCP';
+      if (packetInfo['UDP']) return 'UDP';
+      if (packetInfo['SCTP']) return 'SCTP';
+      if (packetInfo['ICMP']) return 'ICMP';
+      if (packetInfo['IGMP']) return 'IGMP';
+      return undefined;
+    }
+    case 'application-proto': {
+      return (
+        searchFullKey(packetItem, 'application.proto') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Port Protocol'] ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Port Protcol']
+      );
+    }
+    case 'link-proto':
+      return searchFullKey(packetItem, 'link.proto');
+    case 'network-proto':
+      return searchFullKey(packetItem, 'network.proto');
+    case 'tcp-src-port':
+      return (
+        searchFullKey(packetItem, 'tcp.src.port') ??
+        searchFullKey(packetItem, 'transport.tcp.src.port') ??
+        packetItem?.['Packet Info']?.['TCP']?.['Source port']
+      );
+    case 'tcp-dst-port':
+      return (
+        searchFullKey(packetItem, 'tcp.dst.port') ??
+        searchFullKey(packetItem, 'transport.tcp.dst.port') ??
+        packetItem?.['Packet Info']?.['TCP']?.['Destination port']
+      );
+    case 'udp-src-port':
+      return (
+        searchFullKey(packetItem, 'udp.src.port') ??
+        searchFullKey(packetItem, 'transport.udp.src.port') ??
+        packetItem?.['Packet Info']?.['UDP']?.['Source port']
+      );
+    case 'udp-dst-port':
+      return (
+        searchFullKey(packetItem, 'udp.dst.port') ??
+        searchFullKey(packetItem, 'transport.udp.dst.port') ??
+        packetItem?.['Packet Info']?.['UDP']?.['Destination port']
+      );
+    case 'sctp-src-port':
+      return (
+        searchFullKey(packetItem, 'sctp.src.port') ??
+        packetItem?.['Packet Info']?.['SCTP']?.['Source port']
+      );
+    case 'sctp-dst-port':
+      return (
+        searchFullKey(packetItem, 'sctp.dst.port') ??
+        packetItem?.['Packet Info']?.['SCTP']?.['Destination port']
+      );
+    case 'loc-src-city':
+      return (
+        searchFullKey(packetItem, 'loc.src.city') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['City']
+      );
+    case 'loc-dst-city':
+      return (
+        searchFullKey(packetItem, 'loc.dst.city') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['City']
+      );
+    case 'loc-src-country':
+      return (
+        searchFullKey(packetItem, 'loc.src.country') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Country']
+      );
+    case 'loc-dst-country':
+      return (
+        searchFullKey(packetItem, 'loc.dst.country') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Country']
+      );
+    case 'loc-src-postal':
+      return (
+        searchFullKey(packetItem, 'loc.src.postal') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Postal']
+      );
+    case 'loc-dst-postal':
+      return (
+        searchFullKey(packetItem, 'loc.dst.postal') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Postal']
+      );
+    case 'loc-src-tz':
+    case 'loc-src-timezone':
+      return (
+        searchFullKey(packetItem, 'loc.src.tz') ??
+        searchFullKey(packetItem, 'loc.src.timezone') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Time Zone']
+      );
+    case 'loc-dst-tz':
+    case 'loc-dst-timezone':
+      return (
+        searchFullKey(packetItem, 'loc.dst.tz') ??
+        searchFullKey(packetItem, 'loc.dst.timezone') ??
+        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Time Zone']
+      );
     case 'wire-proto': {
       const packetInfo = packetItem?.['Packet Info'] || {};
       const explicitProtocol = packetInfo['Protocol'];
@@ -273,6 +420,9 @@ function filterChunk(data, filter) {
       let fieldValue = getAliasedFieldValue(packetItem, normalizedFilterKey);
       if (fieldValue === undefined && originalKey) {
         fieldValue = searchFullKey(packetItem, originalKey);
+      }
+      if (fieldValue === undefined) {
+        fieldValue = searchNormalizedKey(packetItem, normalizedFilterKey);
       }
       if (fieldValue === undefined) continue;
 
