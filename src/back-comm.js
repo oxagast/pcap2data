@@ -443,6 +443,7 @@ async function ensureBackendHttpServerReady() {
 async function runBackendCommandViaHttp(filename, options = {}) {
   const {
     hostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
+    workerThreads = 0,
     pcapSourcePayload = null,
     useHttpDataSnapshots = false,
   } = options;
@@ -492,7 +493,9 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     const requestPayload = {
       pcapPath: filename,
       hostChunkSize,
+      workerThreads,
       emitJsonSnapshots: Boolean(useHttpDataSnapshots),
+      verbose: 1,
     };
     if (pcapSourcePayload && typeof pcapSourcePayload.data === "string") {
       requestPayload.pcapBase64 = pcapSourcePayload.data;
@@ -829,9 +832,14 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   const {
     pcapSourcePayload: providedPcapSourcePayload = null,
     hostChunkSize: requestedHostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
+    workerThreads: requestedWorkerThreads = 0,
     backendOptions = {},
   } = options;
   const hostChunkSize = normalizeHostChunkSize(requestedHostChunkSize);
+  const parsedWorkerThreads = Number.parseInt(String(requestedWorkerThreads || 0), 10);
+  const workerThreads = Number.isFinite(parsedWorkerThreads) && parsedWorkerThreads > 0
+    ? parsedWorkerThreads
+    : 0;
   const normalizedTransport = applyBackendTransportOptions(backendOptions);
   global.logBackend(`[Bridge] Received pcap: ${filename}`);
   const runtime = resolveBackendRuntime();
@@ -964,6 +972,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   if (!normalizedTransport.forceLegacySpawn) {
     const httpResult = await runBackendCommandViaHttp(filename, {
       hostChunkSize,
+      workerThreads,
       pcapSourcePayload,
       useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
     });
@@ -987,8 +996,8 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   }
 
   const backendArgs = usePythonBackend
-    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)]
-    : [filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize)];
+    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)]
+    : [filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)];
   // Always start with a clean output directory so snitch never hits the
   // interactive overwrite prompt on second (and later) runs.
   if (fs.existsSync(testcaseOutputDir)) {
@@ -1183,9 +1192,10 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   });
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, backendOptions) => {
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions) => {
   return runBackendCommandInternal(filename, useLLM, {
     hostChunkSize,
+    workerThreads,
     backendOptions,
   });
 });
@@ -1212,7 +1222,7 @@ ipcMain.handle("init-backend-service", async (_event, backendOptions) => {
   };
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, backendOptions) => {
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions) => {
   let tempPathForCleanup = "";
   try {
     const prepared = writeSessionPcapTempFile(sessionPcap);
@@ -1223,6 +1233,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
     const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
       pcapSourcePayload: prepared.payload,
       hostChunkSize,
+      workerThreads,
       backendOptions,
     });
     return result;

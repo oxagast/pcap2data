@@ -1,9 +1,19 @@
+const DEFAULT_BACKEND_WORKER_THREADS = Math.max(
+    1,
+    2 * (
+        Number(
+            typeof navigator !== "undefined" ? navigator.hardwareConcurrency : 0,
+        ) || 1
+    ),
+);
+
 const DEFAULT_SETTINGS = Object.freeze({
     general: {
         themeId: "snitchbitch",
         convJsonIndentSpaces: 2,
         statusResetSeconds: 10,
         backendPacketChunkSize: 250,
+        backendWorkerThreads: DEFAULT_BACKEND_WORKER_THREADS,
         streamContextWarnPacketThreshold: 20,
     },
     backend: {
@@ -131,6 +141,11 @@ function normalizeSettings(rawSettings = {}) {
             backendPacketChunkSize: VALID_BACKEND_CHUNK_SIZES.has(normalizedBackendChunkSize)
                 ? normalizedBackendChunkSize
                 : generalDefaults.backendPacketChunkSize,
+            backendWorkerThreads: toPositiveInteger(
+                general.backendWorkerThreads,
+                generalDefaults.backendWorkerThreads,
+                1,
+            ),
             streamContextWarnPacketThreshold: toPositiveInteger(
                 general.streamContextWarnPacketThreshold,
                 generalDefaults.streamContextWarnPacketThreshold,

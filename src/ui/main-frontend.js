@@ -701,6 +701,9 @@ function syncSettingsFormFromState() {
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const backendWorkerThreadsEl = document.getElementById(
+    "settings-general-backend-worker-threads",
+  );
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
   );
@@ -738,6 +741,9 @@ function syncSettingsFormFromState() {
   }
   if (backendChunkSizeEl) {
     backendChunkSizeEl.value = String(settings.general.backendPacketChunkSize);
+  }
+  if (backendWorkerThreadsEl) {
+    backendWorkerThreadsEl.value = String(settings.general.backendWorkerThreads);
   }
   if (streamWarnThresholdEl) {
     streamWarnThresholdEl.value = String(settings.general.streamContextWarnPacketThreshold);
@@ -795,6 +801,9 @@ function readSettingsFormState() {
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const backendWorkerThreadsEl = document.getElementById(
+    "settings-general-backend-worker-threads",
+  );
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
   );
@@ -836,6 +845,9 @@ function readSettingsFormState() {
       backendPacketChunkSize: backendChunkSizeEl
         ? backendChunkSizeEl.value
         : DEFAULT_SETTINGS.general.backendPacketChunkSize,
+      backendWorkerThreads: backendWorkerThreadsEl
+        ? backendWorkerThreadsEl.value
+        : DEFAULT_SETTINGS.general.backendWorkerThreads,
       streamContextWarnPacketThreshold: streamWarnThresholdEl
         ? streamWarnThresholdEl.value
         : DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
@@ -951,6 +963,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "backendPacketChunkSize",
     previousGeneral.backendPacketChunkSize,
     nextGeneral.backendPacketChunkSize,
+  );
+  pushChange(
+    "backendWorkerThreads",
+    previousGeneral.backendWorkerThreads,
+    nextGeneral.backendWorkerThreads,
   );
   pushChange(
     "streamContextWarnPacketThreshold",
@@ -1108,6 +1125,14 @@ function getBackendPacketChunkSize() {
     1,
     Number(getCurrentSettings()?.general?.backendPacketChunkSize) ||
     DEFAULT_SETTINGS.general.backendPacketChunkSize,
+  );
+}
+
+function getBackendWorkerThreads() {
+  return Math.max(
+    1,
+    Number(getCurrentSettings()?.general?.backendWorkerThreads) ||
+    DEFAULT_SETTINGS.general.backendWorkerThreads,
   );
 }
 
@@ -11269,6 +11294,12 @@ document.getElementById("settings-general-backend-chunk-size").addEventListener(
 });
 
 document
+  .getElementById("settings-general-backend-worker-threads")
+  .addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated backendWorkerThreads=${event?.target?.value}`);
+  });
+
+document
   .getElementById("settings-general-stream-warn-packet-threshold")
   .addEventListener("change", (event) => {
     writeLogEntry(`Settings updated streamContextWarnPacketThreshold=${event?.target?.value}`);
@@ -13482,6 +13513,7 @@ window.jsonapi.onJsonData((rawPayload) => {
 function runSnitch(file, options = {}) {
   const { fromSessionSource = false } = options;
   const backendChunkSize = getBackendPacketChunkSize();
+  const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
   resetBackendProgressState();
   backendProgressState.processing = true;
@@ -13500,7 +13532,7 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} `,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -13508,10 +13540,17 @@ function runSnitch(file, options = {}) {
         file,
         useLLM,
         backendChunkSize,
+        backendWorkerThreads,
         backendTransportOptions,
       )
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
-    : window.snitchapi.runBackendCommand(file, useLLM, backendChunkSize, backendTransportOptions);
+    : window.snitchapi.runBackendCommand(
+      file,
+      useLLM,
+      backendChunkSize,
+      backendWorkerThreads,
+      backendTransportOptions,
+    );
   backendPromise
     .then((result) => {
       if (result && result.pcapSource) {

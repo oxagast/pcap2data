@@ -644,6 +644,11 @@ No keystore entries saved.</pre>
                 </select>
                 <div class="settings-help-text">Used when backend chunk metadata is unavailable.</div>
 
+                <label for="settings-general-backend-worker-threads">Backend worker threads</label>
+                <input id="settings-general-backend-worker-threads" type="number" min="1" step="1" />
+                <div class="settings-help-text">Number of backend packet-processing threads. Default is 2x CPU cores.
+                </div>
+
                 <label for="settings-general-stream-warn-packet-threshold">Stream warning threshold (packets)</label>
                 <input id="settings-general-stream-warn-packet-threshold" type="number" min="5" step="1" />
                 <div class="settings-help-text">Warn before loading large follow-stream results into Conv or Crypt.

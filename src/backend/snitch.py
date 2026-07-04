@@ -62,7 +62,7 @@ import yaml
 import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from urllib.parse import unquote_plus
 from datetime import datetime
 from decimal import Decimal
@@ -330,6 +330,7 @@ def getIcmpApplicationProtocol(data):
 
     return "ICMP"
 
+@lru_cache(maxsize=4096)
 def reverseDnsLookup(ip):
     """
     Perform a reverse DNS lookup for the given IP address.
@@ -4692,8 +4693,9 @@ def startThreading():
     # Process all packets; packetLoop decides which protocols are handled.
     packetIndices = list(range(len(packets)))
 
-    # Chunk packets to reduce thread scheduling overhead
-    chunkSize = max(1, len(packetIndices) // (numWorkerThreads * 4))
+    # Use consistent worker-sized batches so threads can continuously pull work.
+    # Smaller batches improve responsiveness at the cost of more scheduler overhead.
+    chunkSize = max(1, int(hostChunkSize) // 2)
     packetChunks = [
         packetIndices[i : i + chunkSize]
         for i in range(0, len(packetIndices), chunkSize)
@@ -4701,7 +4703,8 @@ def startThreading():
 
     def processChunk(chunk):
         """Process a chunk of packet indices."""
-        results = []
+        processedCount = 0
+        chunkStart = time.perf_counter()
         for idx in chunk:
             if stopEvent.is_set():
                 break
@@ -4710,7 +4713,7 @@ def startThreading():
                     idx, args.source_port, args.dest_port, args.timeout
                 )
                 if result:
-                    results.append(result)
+                    processedCount += 1
             except Exception as exc:
                 if verbose >= 0:
                     print(
@@ -4718,57 +4721,137 @@ def startThreading():
                         file=sys.stderr,
                     )
                 continue
-        return results
+        return {
+            "processed": processedCount,
+            "elapsed_s": time.perf_counter() - chunkStart,
+        }
 
     # Emit the first in-memory snapshot as soon as at least one packet is ready,
     # then fall back to the normal chunk cadence for later updates.
     nextSnapshotPacketCount = 1 if emitJsonSnapshots else hostChunkSize
 
+    perfStartTime = time.perf_counter()
+    perfWaitSeconds = 0.0
+    perfWorkerSeconds = 0.0
+    perfSnapshotSeconds = 0.0
+    perfCompletedChunks = 0
+    perfProcessedPackets = 0
+    perfSnapshotCount = 0
+
     with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
-        taskFutures = {
-            executor.submit(processChunk, chunk): chunk for chunk in packetChunks
-        }
-        for future in as_completed(taskFutures):
+        # Keep only a small bounded number of in-flight batches so worker threads
+        # pull the next batch when ready without paying the overhead of submitting
+        # thousands of futures up front on very large captures.
+        maxInFlight = max(numWorkerThreads * 2, 1)
+        chunkIter = iter(packetChunks)
+        taskFutures = {}
+
+        def submitNextChunk():
+            if stopEvent.is_set():
+                return False
+            nextChunk = next(chunkIter, None)
+            if nextChunk is None:
+                return False
+            future = executor.submit(processChunk, nextChunk)
+            taskFutures[future] = nextChunk
+            return True
+
+        for _ in range(maxInFlight):
+            if not submitNextChunk():
+                break
+
+        while taskFutures:
             if stopEvent.is_set():
                 break
-            try:
-                future.result()
 
-                with allPacketInfoLock:
-                    processedPacketCount = len(allPacketInfo)
-                    allPacketInfoSnapshot = list(allPacketInfo)
+            waitStart = time.perf_counter()
+            doneFutures, _ = wait(
+                set(taskFutures.keys()),
+                return_when=FIRST_COMPLETED,
+            )
+            perfWaitSeconds += time.perf_counter() - waitStart
 
-                while processedPacketCount >= nextSnapshotPacketCount:
-                    if emitJsonSnapshots:
-                        captureData = buildHostsPayload(allPacketInfoSnapshot, "")
-                        emitBridgeProgress(
-                            f"in-memory://hosts-{nextSnapshotPacketCount}.json",
-                            nextSnapshotPacketCount,
-                            totalPackets,
-                            False,
-                            captureData,
+            for future in doneFutures:
+                chunkRef = taskFutures.pop(future, None)
+                try:
+                    chunkMetrics = future.result() or {}
+                    perfWorkerSeconds += float(chunkMetrics.get("elapsed_s") or 0.0)
+                    perfProcessedPackets += int(chunkMetrics.get("processed") or 0)
+                    perfCompletedChunks += 1
+
+                    with allPacketInfoLock:
+                        processedPacketCount = len(allPacketInfo)
+
+                    if processedPacketCount >= nextSnapshotPacketCount:
+                        with allPacketInfoLock:
+                            # Snapshot only when we are actually emitting progress,
+                            # avoiding O(n) list copies on every completed batch.
+                            allPacketInfoSnapshot = list(allPacketInfo)
+                            processedPacketCount = len(allPacketInfoSnapshot)
+
+                        while processedPacketCount >= nextSnapshotPacketCount:
+                            snapshotStart = time.perf_counter()
+                            if emitJsonSnapshots:
+                                captureData = buildHostsPayload(allPacketInfoSnapshot, "")
+                                emitBridgeProgress(
+                                    f"in-memory://hosts-{nextSnapshotPacketCount}.json",
+                                    nextSnapshotPacketCount,
+                                    totalPackets,
+                                    False,
+                                    captureData,
+                                )
+                            else:
+                                chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
+                                snapshotPath = writeHostsSnapshot(
+                                    outputDir,
+                                    allPacketInfoSnapshot,
+                                    "",
+                                    chunkSnapshotName,
+                                )
+                                emitBridgeProgress(
+                                    snapshotPath,
+                                    nextSnapshotPacketCount,
+                                    totalPackets,
+                                    False,
+                                )
+                            perfSnapshotSeconds += time.perf_counter() - snapshotStart
+                            perfSnapshotCount += 1
+                            nextSnapshotPacketCount += hostChunkSize
+                except Exception as exc:
+                    if verbose >= 0:
+                        print(
+                            f"[Worker {future}] Packet {chunkRef} raised an exception: {exc}",
+                            file=sys.stderr,
                         )
-                    else:
-                        chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
-                        snapshotPath = writeHostsSnapshot(
-                            outputDir,
-                            allPacketInfoSnapshot,
-                            "",
-                            chunkSnapshotName,
-                        )
-                        emitBridgeProgress(
-                            snapshotPath,
-                            nextSnapshotPacketCount,
-                            totalPackets,
-                            False,
-                        )
-                    nextSnapshotPacketCount += hostChunkSize
-            except Exception as exc:
-                if verbose >= 0:
-                    print(
-                        f"[Worker {future}] Packet {taskFutures[future]} raised an exception: {exc}",
-                        file=sys.stderr,
-                    )
+                finally:
+                    submitNextChunk()
+
+    if verbose >= 1:
+        totalElapsed = time.perf_counter() - perfStartTime
+        packetsPerSecond = (
+            (float(perfProcessedPackets) / perfWorkerSeconds)
+            if perfWorkerSeconds > 0.0
+            else 0.0
+        )
+        print(
+            "[Perf][Pref] threading elapsed_s="
+            + f"{totalElapsed:.3f}"
+            + " wait_s="
+            + f"{perfWaitSeconds:.3f}"
+            + " worker_s="
+            + f"{perfWorkerSeconds:.3f}"
+            + " snapshot_s="
+            + f"{perfSnapshotSeconds:.3f}"
+            + " completed_chunks="
+            + str(perfCompletedChunks)
+            + " processed_packets="
+            + str(perfProcessedPackets)
+            + " pps="
+            + f"{packetsPerSecond:.1f}"
+            + " snapshots_emitted="
+            + str(perfSnapshotCount),
+            file=sys.stderr,
+        )
 
 
 def buildParser():
@@ -4834,6 +4917,12 @@ with additional network and server information.
         help="Packet count per incremental hosts snapshot (default: 250).",
         type=int,
         default=250,
+    )
+    parser.add_argument(
+        "--worker-threads",
+        help="Number of backend worker threads (default: 2x CPU cores).",
+        type=int,
+        default=2 * (os.cpu_count() or 1),
     )
     parser.add_argument(
         "-v",
@@ -4966,7 +5055,11 @@ def runCaptureFromArgs(runArgs):
             "error": "No packets found in the capture.",
         }
 
-    numWorkerThreads = os.cpu_count() or 4
+    requestedWorkerThreads = int(
+        getattr(runArgs, "worker_threads", 2 * (os.cpu_count() or 1))
+        or 2 * (os.cpu_count() or 1)
+    )
+    numWorkerThreads = max(1, requestedWorkerThreads)
     outputDir = currentDir + "/" + "testcases"
     if runArgs.output and runArgs.output != "testcases":
         outputDir = runArgs.output
@@ -4993,7 +5086,6 @@ def runCaptureFromArgs(runArgs):
     try:
         if os.path.isdir(outputDir):
             shutil.rmtree(outputDir, ignore_errors=True)
-        time.sleep(1)
         os.makedirs(outputDir, exist_ok=True)
         try:
             startThreading()
@@ -5204,6 +5296,9 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 active_recon=bool(request.get("activeRecon", True)),
                 conf=request.get("conf"),
                 host_chunk_size=int(request.get("hostChunkSize") or 250),
+                worker_threads=int(
+                    request.get("workerThreads") or 2 * (os.cpu_count() or 1)
+                ),
                 emit_json_snapshots=bool(request.get("emitJsonSnapshots", False)),
                 verbose=int(request.get("verbose") or 0),
                 server=False,
