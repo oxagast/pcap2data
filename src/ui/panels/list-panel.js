@@ -522,7 +522,20 @@ function createListPanel({
     });
     if (!response?.success || !virtualListState) return;
 
-    virtualListState.rows = Array.isArray(response.rows) ? response.rows : [];
+    const bookmarkSet = new Set(getBookmarkList());
+    const normalizedRows = (Array.isArray(response.rows) ? response.rows : []).map((row) => ({
+      ...row,
+      pktIdx: Number.isFinite(Number(row?.pktIdx)) ? Number(row.pktIdx) : 0,
+      isBookmarked: bookmarkSet.has(String(row?.packetKey || "")),
+      streamLabel:
+        typeof row?.streamLabel === "string" && row.streamLabel.trim()
+          ? row.streamLabel
+          : Number.isFinite(Number(row?.streamOrder))
+            ? `S${Number(row.streamOrder)}`
+            : "",
+    }));
+
+    virtualListState.rows = normalizedRows;
     virtualListState.totalCount = Number(response.totalCount) || totalCount;
     virtualListState.windowStart = Number(response.startIndex) || 0;
     virtualListState.windowEnd =
@@ -639,7 +652,15 @@ function createListPanel({
           : false;
 
       const canUseSourceBackedList =
-        false;
+        Boolean(
+          typeof isCaptureStoreBackedCapture === "function" &&
+          isCaptureStoreBackedCapture() &&
+          window.captureapi?.getListWindow &&
+          !lc &&
+          !activeGroupByStream &&
+          sortState.key === "idx" &&
+          sortState.direction === "asc",
+        );
 
       if (canUseSourceBackedList) {
         const table = document.createElement("table");

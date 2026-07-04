@@ -405,4 +405,12 @@
 [ ] Conversation Graph
 [ ] Live Capture Mode
 [ ] Local Plugin API
-.
+
+
+Optmizations:
+Add phase timers inside packet processing (not just threading) for:
+getDatatypes
+getTraits
+reverseDnsLookup
+getServBanner
+GeoIP lookup

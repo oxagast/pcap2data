@@ -165,6 +165,23 @@ function compareListEntries(left, right) {
     return String(left?.packetKey || "").localeCompare(String(right?.packetKey || ""));
 }
 
+function applyStreamOrdering(listEntries) {
+    const streamOrderByKey = new Map();
+    let nextStreamOrder = 1;
+
+    listEntries.forEach((entry) => {
+        const streamKey = String(entry?.streamKey || "");
+        if (!streamOrderByKey.has(streamKey)) {
+            streamOrderByKey.set(streamKey, nextStreamOrder);
+            nextStreamOrder += 1;
+        }
+
+        const streamOrder = streamOrderByKey.get(streamKey) || 0;
+        entry.streamOrder = streamOrder;
+        entry.streamLabel = `S${streamOrder}`;
+    });
+}
+
 function addPacketToCache(store, packetKey, packet) {
     if (!store.packetCache.has(packetKey) && store.packetCache.size >= PACKET_CACHE_LIMIT) {
         const oldestKey = store.packetCache.keys().next().value;
@@ -264,6 +281,7 @@ async function buildStoreFromSource(sourcePath) {
 
     fs.fsyncSync(packetDataFd);
     listEntries.sort(compareListEntries);
+    applyStreamOrdering(listEntries);
 
     const hostObject = {};
     hostPackets.forEach((packetList, host) => {
@@ -372,6 +390,7 @@ async function buildStoreFromJsonText(jsonText) {
 
     fs.fsyncSync(packetDataFd);
     listEntries.sort(compareListEntries);
+    applyStreamOrdering(listEntries);
 
     const hostObject = {};
     hostPackets.forEach((packetList, host) => {
