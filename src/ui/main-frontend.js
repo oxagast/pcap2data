@@ -239,6 +239,8 @@ const filterHistory = [];
 const dataToolsHistorySelectEl = getCachedElement("data-tools-history-select");
 const dataToolsInputHistory = [];
 const DATA_TOOLS_INPUT_HISTORY_LIMIT = 10;
+let dataToolsCommittedInputValue = "";
+let dataToolsCommittedInputFormat = "hex";
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const STRICT_IPV4_REGEX =
@@ -2029,6 +2031,75 @@ function addDataToolsInputHistory(format, input) {
     dataToolsInputHistory.length = DATA_TOOLS_INPUT_HISTORY_LIMIT;
   }
   renderDataToolsInputHistory();
+}
+
+function getCurrentDataToolsInputSnapshot() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  return {
+    input: String(inputEl?.value ?? ""),
+    format:
+      typeof formatEl?.value === "string" && formatEl.value.trim()
+        ? formatEl.value.trim().toLowerCase()
+        : "hex",
+  };
+}
+
+function isDataToolsInputEdited() {
+  const snapshot = getCurrentDataToolsInputSnapshot();
+  return (
+    snapshot.input !== dataToolsCommittedInputValue ||
+    snapshot.format !== dataToolsCommittedInputFormat
+  );
+}
+
+function updateDataToolsInputEditedState() {
+  const indicatorEl = document.getElementById("data-tools-input-edited-indicator");
+  const resetButtonEl = document.getElementById("data-tools-input-reset-btn");
+  const edited = isDataToolsInputEdited();
+  if (indicatorEl) {
+    indicatorEl.textContent = edited ? "Edited" : "Ready";
+    indicatorEl.classList.toggle("edited", edited);
+  }
+  if (resetButtonEl) {
+    resetButtonEl.disabled = !edited;
+  }
+}
+
+function markDataToolsInputCommitted() {
+  const snapshot = getCurrentDataToolsInputSnapshot();
+  dataToolsCommittedInputValue = snapshot.input;
+  dataToolsCommittedInputFormat = snapshot.format;
+  updateDataToolsInputEditedState();
+}
+
+function resetDataToolsInputToCommitted() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const errorEl = document.getElementById("data-tools-error");
+  if (!inputEl || !formatEl) return;
+
+  inputEl.value = dataToolsCommittedInputValue;
+  formatEl.value = dataToolsCommittedInputFormat;
+  if (errorEl) {
+    errorEl.textContent = "";
+  }
+
+  updateDataToolsConvertedOutputVisibility();
+  updateDataToolsHexHighlights();
+  syncDataToolsHighlightScroll(
+    "data-tools-input",
+    "data-tools-input-highlight",
+  );
+
+  if (dataToolsCommittedInputValue.trim()) {
+    runDataToolsConversion();
+  } else {
+    dataToolsHistorySelectEl.value = "";
+    resetDataToolsOutputs();
+    clearDataToolsSelectionState();
+    updateDataToolsInputEditedState();
+  }
 }
 
 function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
@@ -5099,7 +5170,8 @@ function syncDataToolsHighlightScroll(textareaId, layerId) {
   const textarea = document.getElementById(textareaId);
   const layer = document.getElementById(layerId);
   if (!textarea || !layer) return;
-  layer.style.transform = `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`;
+  layer.scrollLeft = textarea.scrollLeft;
+  layer.scrollTop = textarea.scrollTop;
 }
 
 function clearDataToolsSelectionState() {
@@ -6244,6 +6316,7 @@ function runDataToolsConversion() {
     errorEl.textContent = "";
     computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
+    markDataToolsInputCommitted();
 
 
   } catch (error) {
@@ -11280,11 +11353,13 @@ document.getElementById("data-tools-input").addEventListener("input", () => {
     "data-tools-input",
     "data-tools-input-highlight",
   );
+  updateDataToolsInputEditedState();
 });
 document.getElementById("data-tools-format").addEventListener("change", () => {
   dataToolsHistorySelectEl.value = "";
   updateDataToolsConvertedOutputVisibility();
   updateDataToolsHexHighlights();
+  updateDataToolsInputEditedState();
 });
 document.getElementById("data-tools-input").addEventListener("scroll", () => {
   syncDataToolsHighlightScroll(
@@ -11334,7 +11409,14 @@ document
     document.getElementById("data-tools-input").value = "";
     document.getElementById("data-tools-error").textContent = "";
     resetDataToolsOutputs();
+    clearDataToolsSelectionState();
     updateDataToolsHexHighlights();
+    updateDataToolsInputEditedState();
+  });
+document
+  .getElementById("data-tools-input-reset-btn")
+  .addEventListener("click", () => {
+    resetDataToolsInputToCommitted();
   });
 dataToolsHistorySelectEl.addEventListener("change", () => {
   const selectedIndex = Number(dataToolsHistorySelectEl.value);
@@ -13372,6 +13454,7 @@ onload = function () {
     "data-tools-hex-output",
     "data-tools-hex-output-highlight",
   );
+  markDataToolsInputCommitted();
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
   document.getElementById("rightside").style.display = "none";
