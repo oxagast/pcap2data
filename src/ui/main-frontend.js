@@ -7003,10 +7003,23 @@ const {
   applyCryptFilterForActiveEntry,
   loadEncounteredCertificateIntoCrypt,
   refreshCryptEncounteredEntries,
+  refreshPgpEncounteredEntries,
   showCryptWorkspace,
   decryptActiveEntryWithLoadedKey,
   sendDecryptedPayloadToConvTab,
   clearCryptDecryptionOutput,
+  selectPgpEncounteredEntry,
+  loadSelectedPgpEncounteredInput,
+  analyzePgpInput,
+  convertPgpInputToBinaryHex,
+  convertPgpInputToArmor,
+  decryptVerifyPgpInput,
+  sendPgpOutputToConvTab,
+  clearPgpOutput,
+  clearPgpInput,
+  useSelectedPgpPasswordCandidate,
+  getLastTlsDecryptedPayload,
+  getLastPgpOutputPayload,
 } = cryptPanel;
 
 const listPanel = createListPanel({
@@ -7079,6 +7092,7 @@ const convertContextButtons = {
   exportConvBase64: getCachedElement("ctx-export-conv-base64"),
   exportConvHashes: getCachedElement("ctx-export-conv-hashes"),
   exportConvDecodes: getCachedElement("ctx-export-conv-decodes"),
+  exportDecrypted: getCachedElement("ctx-export-decrypted"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -7800,6 +7814,9 @@ function showConvertContextMenu(
     isConvTabActive && Boolean(getConvContextExportText("hashes"));
   const hasConvDecodesToExport =
     isConvTabActive && Boolean(getConvContextExportText("decodes"));
+  const hasDecryptedDataToExport = Boolean(
+    getCryptDecryptedExportCandidate(target),
+  );
   const hasConvExportActions =
     hasConvInputToExport ||
     hasConvRawToExport ||
@@ -7859,6 +7876,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportConvDecodes.style.display = hasConvDecodesToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportDecrypted.style.display = hasDecryptedDataToExport
     ? "block"
     : "none";
   convertContextButtons.httpFileSave.style.display = hasHttpBody
@@ -8114,7 +8134,8 @@ function showConvertContextMenu(
     hasPacketToExport ||
     hasPayloadToExport ||
     hasCookieActions ||
-    hasConvExportActions;
+    hasConvExportActions ||
+    hasDecryptedDataToExport;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
   convertContextSubmenus.convert.style.display = hasDataTypeActions
     ? "block"
@@ -10621,6 +10642,119 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
+function isLikelyPrintableUtf8(value) {
+  return /^[\x09\x0A\x0D\x20-\x7E]*$/.test(String(value || ""));
+}
+
+function getCryptDecryptedExportCandidate(target = activeContextTarget) {
+  if (activeMainTab !== MAIN_TAB_CRYPT) return null;
+  const targetEl = target instanceof Element ? target : null;
+  const isTlsPreviewTarget = Boolean(
+    targetEl?.closest?.("#crypt-decrypt-preview"),
+  );
+  const isPgpPreviewTarget = Boolean(
+    targetEl?.closest?.("#crypt-pgp-output-preview"),
+  );
+  if (!isTlsPreviewTarget && !isPgpPreviewTarget) {
+    return null;
+  }
+
+  if (isTlsPreviewTarget) {
+    const tlsPayload = getLastTlsDecryptedPayload();
+    if (!tlsPayload) return null;
+    const utf8Value = String(tlsPayload.utf8Value || "");
+    const hexValue = String(tlsPayload.hexValue || "");
+    return {
+      type: "tls",
+      sourceLabel: tlsPayload.sourceLabel || "TLS payload",
+      utf8Value,
+      hexValue,
+      preferText: Boolean(utf8Value) && isLikelyPrintableUtf8(utf8Value),
+    };
+  }
+
+  const pgpPayload = getLastPgpOutputPayload();
+  if (!pgpPayload) return null;
+  return {
+    type: "pgp",
+    sourceLabel: pgpPayload.sourceLabel || "PGP output",
+    utf8Value: String(pgpPayload.utf8Value || ""),
+    hexValue: String(pgpPayload.hexValue || ""),
+    preferText: true,
+  };
+}
+
+function exportDecryptedDataFromContextMenu() {
+  const exportCandidate = getCryptDecryptedExportCandidate();
+  hideConvertContextMenu();
+  if (!exportCandidate) {
+    statusUpdate("Status: No decrypted data available to export");
+    return;
+  }
+
+  if (exportCandidate.preferText && exportCandidate.utf8Value) {
+    window.saveapi
+      .saveText({
+        text: exportCandidate.utf8Value,
+        title:
+          exportCandidate.type === "pgp"
+            ? "Export Decrypted PGP Data"
+            : "Export Decrypted TLS Data",
+        defaultName:
+          exportCandidate.type === "pgp"
+            ? "decrypted-pgp-output.txt"
+            : "decrypted-tls-output.txt",
+      })
+      .then((result) => {
+        if (result.canceled) {
+          statusUpdate("Status: Export cancelled");
+        } else if (result.success) {
+          statusUpdate("Status: Decrypted data exported successfully");
+          writeLogEntry(
+            `Context menu decrypted export completed type=${exportCandidate.type} mode=text source=${exportCandidate.sourceLabel}`,
+          );
+        } else {
+          const errorMessage =
+            result && typeof result === "object" && "error" in result
+              ? result.error
+              : "unknown";
+          doError("Decrypted data export failed");
+          logErrorEntry("export-decrypted", errorMessage || "unknown");
+          statusUpdate(
+            `Status: Decrypted data export failed - ${errorMessage || "unknown error"}`,
+          );
+        }
+      });
+    return;
+  }
+
+  if (!exportCandidate.hexValue) {
+    statusUpdate("Status: No decrypted binary data available to export");
+    return;
+  }
+
+  window.saveapi.savePayload(exportCandidate.hexValue).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Export cancelled");
+    } else if (result.success) {
+      statusUpdate("Status: Decrypted binary data exported successfully");
+      writeLogEntry(
+        `Context menu decrypted export completed type=${exportCandidate.type} mode=raw source=${exportCandidate.sourceLabel}`,
+      );
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError("Decrypted data export failed");
+      logErrorEntry("export-decrypted", errorMessage || "unknown");
+      statusUpdate(
+        `Status: Decrypted data export failed - ${errorMessage || "unknown error"}`,
+      );
+    }
+  });
+}
+
 function saveCookieJarFromContextMenu() {
   const cookieJarText = activeContextCookieJarText;
   hideConvertContextMenu();
@@ -11258,6 +11392,51 @@ document
   .getElementById("crypt-clear-decrypted-btn")
   .addEventListener("click", clearCryptDecryptionOutput);
 
+document.getElementById("crypt-pgp-refresh-btn").addEventListener("click", () => {
+  refreshPgpEncounteredEntries();
+});
+document
+  .getElementById("crypt-pgp-encountered-list")
+  .addEventListener("change", function () {
+    const selectedIndex = Number(this.value);
+    selectPgpEncounteredEntry(selectedIndex);
+  });
+document
+  .getElementById("crypt-pgp-load-selected-btn")
+  .addEventListener("click", loadSelectedPgpEncounteredInput);
+document
+  .getElementById("crypt-pgp-analyze-btn")
+  .addEventListener("click", () => {
+    void analyzePgpInput();
+  });
+document
+  .getElementById("crypt-pgp-to-armor-btn")
+  .addEventListener("click", () => {
+    void convertPgpInputToArmor();
+  });
+document
+  .getElementById("crypt-pgp-to-binary-btn")
+  .addEventListener("click", () => {
+    void convertPgpInputToBinaryHex();
+  });
+document
+  .getElementById("crypt-pgp-decrypt-verify-btn")
+  .addEventListener("click", () => {
+    void decryptVerifyPgpInput();
+  });
+document
+  .getElementById("crypt-pgp-send-conv-btn")
+  .addEventListener("click", sendPgpOutputToConvTab);
+document
+  .getElementById("crypt-pgp-clear-output-btn")
+  .addEventListener("click", clearPgpOutput);
+document
+  .getElementById("crypt-pgp-clear-input-btn")
+  .addEventListener("click", clearPgpInput);
+document
+  .getElementById("crypt-pgp-use-selected-passphrase-btn")
+  .addEventListener("click", useSelectedPgpPasswordCandidate);
+
 document
   .getElementById("crypt-save-cert-keystore-btn")
   .addEventListener("click", () => {
@@ -11723,6 +11902,10 @@ convertContextButtons.exportConvHashes.addEventListener("click", () => {
 convertContextButtons.exportConvDecodes.addEventListener("click", () => {
   exportConvContextTextFromContextMenu("decodes");
 });
+convertContextButtons.exportDecrypted.addEventListener(
+  "click",
+  exportDecryptedDataFromContextMenu,
+);
 convertContextButtons.saveCookieJar.addEventListener(
   "click",
   saveCookieJarFromContextMenu,

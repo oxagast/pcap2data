@@ -1,10 +1,20 @@
 
 const crypto = require("crypto-browserify");
+const openpgp = require("openpgp");
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
 const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
 const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
 const MAX_ASCII_PREVIEW_LENGTH = 1024;
+const PGP_ARMOR_BLOCK_REGEX =
+  /-----BEGIN PGP [A-Z0-9 ]+-----[\s\S]*?-----END PGP [A-Z0-9 ]+-----/g;
+const PGP_BEGIN_LINE_REGEX = /-----BEGIN (PGP [^-]+)-----/;
+const PGP_END_LINE_REGEX = /-----END (PGP [^-]+)-----/;
+const PGP_PRIVATE_KEY_BLOCK_BEGIN = "-----BEGIN PGP PRIVATE KEY BLOCK-----";
+const PGP_PRIVATE_KEY_BLOCK_END = "-----END PGP PRIVATE KEY BLOCK-----";
+const PGP_PASSWORD_HINT_KEY_REGEX = /(pass(word|phrase|wd)?|pwd|pin|secret|credential)/i;
+const PGP_PASSWORD_CAPTURE_REGEX = /(pass(word|phrase|wd)?|pwd|pin)\s*(is|=|:)?\s*(?:"([^"\r\n]{3,160})"|'([^'\r\n]{3,160})'|([^\s"'`;:,\r\n]{3,160}))/gi;
+const MAX_PGP_PREVIEW_LENGTH = 400;
 const threadName = "Crypt";
 const MAX_DECRYPT_FAILURE_MESSAGES = 8;
 
@@ -37,6 +47,10 @@ function createCryptPanel({
   let cryptEncounteredEntries = [];
   let cryptActiveEntryIndex = -1;
   let cryptLastDecryptedPayload = null;
+  let pgpEncounteredEntries = [];
+  let pgpActiveEntryIndex = -1;
+  let pgpLastOutputPayload = null;
+  let pgpPasswordCandidates = [];
 
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
     const normalized = (rawText || "").trim();
@@ -194,6 +208,249 @@ function createCryptPanel({
     setDecryptSendEnabled(false);
   }
 
+  function setPgpSendEnabled(isEnabled) {
+    const sendBtnEl = document.getElementById("crypt-pgp-send-conv-btn");
+    if (sendBtnEl) {
+      sendBtnEl.disabled = !isEnabled;
+    }
+  }
+
+  function clearPgpOutput() {
+    const outputEl = document.getElementById("crypt-pgp-output-preview");
+    if (outputEl) {
+      outputEl.textContent = "No PGP output yet.";
+    }
+    pgpLastOutputPayload = null;
+    setPgpSendEnabled(false);
+  }
+
+  function clearPgpInput() {
+    const inputEl = document.getElementById("crypt-pgp-input");
+    const analysisEl = document.getElementById("crypt-pgp-analysis-preview");
+    if (inputEl) inputEl.value = "";
+    if (analysisEl) analysisEl.textContent = "No PGP input analyzed yet.";
+  }
+
+  function normalizePgpPasswordCandidate(value) {
+    const normalized = String(value || "")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+      .trim();
+    if (!normalized) return "";
+    if (normalized.length < 3 || normalized.length > 160) return "";
+    return normalized;
+  }
+
+  function parsePgpPasswordCandidatesFromText(textValue) {
+    const text = String(textValue || "");
+    if (!text) return [];
+    const candidates = [];
+    let match;
+    while ((match = PGP_PASSWORD_CAPTURE_REGEX.exec(text)) !== null) {
+      const candidate = normalizePgpPasswordCandidate(
+        match[4] || match[5] || match[6] || "",
+      );
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    }
+    PGP_PASSWORD_CAPTURE_REGEX.lastIndex = 0;
+    return candidates;
+  }
+
+  function extractPgpPasswordCandidatesFromObject(inputObject) {
+    const discovered = [];
+    const stack = [{ node: inputObject, keyHint: "" }];
+    const seen = new Set();
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const node = current?.node;
+      const keyHint = String(current?.keyHint || "");
+      if (!node || typeof node !== "object") continue;
+      if (seen.has(node)) continue;
+      seen.add(node);
+
+      if (Array.isArray(node)) {
+        node.forEach((value) => {
+          if (value && typeof value === "object") {
+            stack.push({ node: value, keyHint });
+          } else if (typeof value === "string" && PGP_PASSWORD_HINT_KEY_REGEX.test(keyHint)) {
+            const candidate = normalizePgpPasswordCandidate(value);
+            if (candidate) discovered.push(candidate);
+          }
+        });
+        continue;
+      }
+
+      Object.entries(node).forEach(([key, value]) => {
+        const nextKeyHint = String(key || "");
+        if (value && typeof value === "object") {
+          stack.push({ node: value, keyHint: nextKeyHint });
+          return;
+        }
+        if (typeof value !== "string") return;
+
+        if (PGP_PASSWORD_HINT_KEY_REGEX.test(nextKeyHint)) {
+          const directCandidate = normalizePgpPasswordCandidate(value);
+          if (directCandidate) discovered.push(directCandidate);
+        }
+
+        const textCandidates = parsePgpPasswordCandidatesFromText(value);
+        textCandidates.forEach((candidate) => discovered.push(candidate));
+      });
+    }
+
+    return discovered;
+  }
+
+  function renderPgpPasswordCandidates() {
+    const selectEl = document.getElementById("crypt-pgp-passphrase-candidates");
+    if (!selectEl) return;
+    selectEl.replaceChildren();
+
+    if (pgpPasswordCandidates.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No password candidates found in capture";
+      option.selected = true;
+      selectEl.appendChild(option);
+      return;
+    }
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select password candidate from capture";
+    placeholder.selected = true;
+    selectEl.appendChild(placeholder);
+
+    pgpPasswordCandidates.forEach((candidate) => {
+      const option = document.createElement("option");
+      option.value = candidate;
+      option.textContent = candidate;
+      selectEl.appendChild(option);
+    });
+  }
+
+  function refreshPgpPasswordCandidates() {
+    const capturedPackets = getCapturedPackets();
+    const candidateSet = new Set();
+    if (!capturedPackets || typeof capturedPackets !== "object" || !capturedPackets["Host"]) {
+      pgpPasswordCandidates = [];
+      renderPgpPasswordCandidates();
+      return;
+    }
+
+    Object.keys(capturedPackets["Host"]).forEach((host) => {
+      const packets = capturedPackets["Host"][host];
+      if (!Array.isArray(packets)) return;
+      packets.forEach((packet) => {
+        const payloadHex = normalizeHexString(getPacketPayloadHex(packet));
+        if (payloadHex) {
+          try {
+            const payloadText = Buffer.from(payloadHex, "hex").toString("utf8");
+            parsePgpPasswordCandidatesFromText(payloadText).forEach((candidate) => {
+              candidateSet.add(candidate);
+            });
+          } catch (_) {
+            // Ignore payload decode failures while harvesting candidates.
+          }
+        }
+
+        extractPgpPasswordCandidatesFromObject(packet).forEach((candidate) => {
+          candidateSet.add(candidate);
+        });
+      });
+    });
+
+    pgpPasswordCandidates = Array.from(candidateSet)
+      .map((candidate) => normalizePgpPasswordCandidate(candidate))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    renderPgpPasswordCandidates();
+  }
+
+  function useSelectedPgpPasswordCandidate() {
+    const selectEl = document.getElementById("crypt-pgp-passphrase-candidates");
+    const inputEl = document.getElementById("crypt-pgp-passphrase-input");
+    const selected = String(selectEl?.value || "").trim();
+    if (!selected) {
+      statusUpdate("Status: Select a password candidate first");
+      return;
+    }
+    if (inputEl) {
+      inputEl.value = selected;
+    }
+    statusUpdate("Status: Password candidate copied to passphrase input");
+  }
+
+  async function saveSuccessfulPgpKeyMaterial({
+    privateKeyText,
+    privateKeyObject,
+    passphrase,
+  }) {
+    let normalizedPrivateKey = "";
+    if (privateKeyObject && typeof privateKeyObject.armor === "function") {
+      try {
+        normalizedPrivateKey = String(await privateKeyObject.armor()).trim();
+      } catch (_) {
+        normalizedPrivateKey = "";
+      }
+    }
+    if (!normalizedPrivateKey) {
+      normalizedPrivateKey = String(privateKeyText || "").trim();
+    }
+
+    const hasPrivateKeyBlockBoundaries =
+      normalizedPrivateKey.includes(PGP_PRIVATE_KEY_BLOCK_BEGIN) &&
+      normalizedPrivateKey.includes(PGP_PRIVATE_KEY_BLOCK_END);
+    if (!hasPrivateKeyBlockBoundaries) {
+      normalizedPrivateKey = "";
+    }
+    const normalizedPassphrase = String(passphrase || "").trim();
+
+    if (normalizedPassphrase) {
+      addSessionKeystoreEntry({
+        type: "secret",
+        label: "PGP Password",
+        source: "pgp-decrypt-success",
+        content: normalizedPassphrase,
+        summary: "Validated by successful PGP decrypt",
+      });
+    }
+
+    if (normalizedPrivateKey) {
+      addSessionKeystoreEntry({
+        type: "private-key",
+        label: "PGP Private Key",
+        source: "pgp-decrypt-success",
+        content: normalizedPrivateKey,
+        summary: "Validated by successful PGP decrypt",
+      });
+    }
+  }
+
+  function normalizeHexString(value) {
+    return String(value || "").replace(/[^0-9A-Fa-f]/g, "");
+  }
+
+  function parseHexToBuffer(value) {
+    const normalized = normalizeHexString(value);
+    if (!normalized) {
+      throw new Error("No binary hex data provided.");
+    }
+    if (normalized.length % 2 !== 0) {
+      throw new Error("Hex payload has an odd length and is invalid.");
+    }
+    return Buffer.from(normalized, "hex");
+  }
+
+  function getPacketPayloadHex(packet) {
+    return String(
+      packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"] ||
+      "",
+    );
+  }
+
   function findPayloadHexForEncounteredEntry(entry) {
     const packets = getCapturedPackets()?.["Host"]?.[entry.host];
     if (!Array.isArray(packets)) return "";
@@ -201,10 +458,599 @@ function createCryptPanel({
       const packetIndex = packet?.["Packet Info"]?.["Index"];
       return String(packetIndex) === String(entry.packetIndex);
     });
-    return String(
-      matchedPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
-      "Hex Encoded"
-      ] || "",
+    return getPacketPayloadHex(matchedPacket);
+  }
+
+  function extractPgpArmorBlocksFromText(textValue) {
+    const text = String(textValue || "");
+    if (!text) return [];
+    const matches = text.match(PGP_ARMOR_BLOCK_REGEX);
+    return Array.isArray(matches) ? matches : [];
+  }
+
+  function getPgpEncounteredEntries() {
+    const entries = [];
+    const capturedPackets = getCapturedPackets();
+    if (
+      !capturedPackets ||
+      typeof capturedPackets !== "object" ||
+      !capturedPackets["Host"]
+    ) {
+      return entries;
+    }
+
+    for (const host of Object.keys(capturedPackets["Host"])) {
+      const packets = capturedPackets["Host"][host];
+      if (!Array.isArray(packets)) continue;
+      packets.forEach((packet) => {
+        const packetInfo = packet?.["Packet Info"];
+        if (!packetInfo) return;
+        const payloadHex = normalizeHexString(getPacketPayloadHex(packet));
+        if (!payloadHex) return;
+        const payloadBytes = Buffer.from(payloadHex, "hex");
+        const payloadText = payloadBytes.toString("utf8");
+        const armoredBlocks = extractPgpArmorBlocksFromText(payloadText);
+        if (armoredBlocks.length === 0) return;
+
+        const protocol = packetInfo["Protocol"] || "Unknown";
+        const transportData = packetInfo[protocol] || {};
+        armoredBlocks.forEach((blockText, blockIndex) => {
+          const beginMatch = blockText.match(PGP_BEGIN_LINE_REGEX);
+          const endMatch = blockText.match(PGP_END_LINE_REGEX);
+          const blockType = beginMatch?.[1] || "PGP data";
+          entries.push({
+            host,
+            packetIndex: packetInfo["Index"] ?? "?",
+            protocol,
+            srcIp: packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
+            dstIp: packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
+            srcPort: transportData?.["Source port"] ?? "N/A",
+            dstPort: transportData?.["Destination port"] ?? "N/A",
+            blockType,
+            blockIndex,
+            armoredText: String(blockText || "").trim(),
+            boundariesDetected: Boolean(beginMatch && endMatch),
+          });
+        });
+      });
+    }
+
+    return entries.sort((a, b) => {
+      const aIdx = Number(a.packetIndex);
+      const bIdx = Number(b.packetIndex);
+      if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+      return String(a.packetIndex).localeCompare(String(b.packetIndex));
+    });
+  }
+
+  function renderPgpEncounteredDetails(entry) {
+    const detailsEl = document.getElementById("crypt-pgp-encountered-details");
+    if (!detailsEl) return;
+    if (!entry) {
+      detailsEl.textContent = "No PGP messages detected in packet payloads.";
+      return;
+    }
+    const preview = String(entry.armoredText || "")
+      .replace(/\r?\n/g, " ")
+      .slice(0, MAX_PGP_PREVIEW_LENGTH);
+    detailsEl.textContent = [
+      `Packet: ${entry.packetIndex}`,
+      `Host: ${entry.host}`,
+      `Path: ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`,
+      `Protocol: ${entry.protocol}`,
+      `Armor type: ${entry.blockType}`,
+      `Armor boundaries: ${entry.boundariesDetected ? "detected" : "not detected"}`,
+      `Block in payload: ${entry.blockIndex + 1}`,
+      "",
+      `Preview: ${preview || "(empty)"}`,
+    ].join("\n");
+  }
+
+  function refreshPgpEncounteredEntries() {
+    const listEl = document.getElementById("crypt-pgp-encountered-list");
+    if (!listEl) return;
+    pgpEncounteredEntries = getPgpEncounteredEntries();
+    listEl.replaceChildren();
+    pgpActiveEntryIndex = -1;
+
+    if (pgpEncounteredEntries.length === 0) {
+      const option = document.createElement("option");
+      option.textContent = "No PGP ASCII-armored messages in loaded capture.";
+      option.disabled = true;
+      listEl.appendChild(option);
+      renderPgpEncounteredDetails(null);
+      clearPgpOutput();
+      return;
+    }
+
+    pgpEncounteredEntries.forEach((entry, entryIndex) => {
+      const option = document.createElement("option");
+      option.value = String(entryIndex);
+      option.textContent = `#${entry.packetIndex} ${entry.blockType} ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`;
+      listEl.appendChild(option);
+    });
+
+    listEl.selectedIndex = 0;
+    pgpActiveEntryIndex = 0;
+    renderPgpEncounteredDetails(pgpEncounteredEntries[0]);
+    clearPgpOutput();
+    refreshPgpPasswordCandidates();
+  }
+
+  function selectPgpEncounteredEntry(selectedIndex) {
+    if (
+      !Number.isFinite(selectedIndex) ||
+      !pgpEncounteredEntries[selectedIndex]
+    ) {
+      return;
+    }
+    pgpActiveEntryIndex = selectedIndex;
+    renderPgpEncounteredDetails(pgpEncounteredEntries[selectedIndex]);
+  }
+
+  function loadSelectedPgpEncounteredInput() {
+    if (pgpActiveEntryIndex < 0 || !pgpEncounteredEntries[pgpActiveEntryIndex]) {
+      statusUpdate("Status: Select an encountered PGP entry first");
+      return;
+    }
+    const entry = pgpEncounteredEntries[pgpActiveEntryIndex];
+    const inputEl = document.getElementById("crypt-pgp-input");
+    if (inputEl) {
+      inputEl.value = entry.armoredText;
+    }
+    statusUpdate(`Status: Loaded PGP block from packet #${entry.packetIndex}`);
+    writeLogEntry(
+      `[${threadName}] PGP encountered payload loaded packet_index=${entry.packetIndex} block_index=${entry.blockIndex}`,
+    );
+  }
+
+  async function tryReadPgpStructure(inputText, binaryBytes) {
+    if (inputText) {
+      if (/^-----BEGIN PGP SIGNED MESSAGE-----/m.test(inputText)) {
+        const cleartextMessage = await openpgp.readCleartextMessage({
+          cleartextMessage: inputText,
+        });
+        return {
+          kind: "cleartext",
+          entity: cleartextMessage,
+          format: "ascii-armor",
+        };
+      }
+      try {
+        const message = await openpgp.readMessage({ armoredMessage: inputText });
+        return { kind: "message", entity: message, format: "ascii-armor" };
+      } catch (_) {
+        // Try other OpenPGP object readers below.
+      }
+      try {
+        const signature = await openpgp.readSignature({
+          armoredSignature: inputText,
+        });
+        return { kind: "signature", entity: signature, format: "ascii-armor" };
+      } catch (_) {
+        // Try key readers below.
+      }
+      try {
+        const publicKey = await openpgp.readKey({ armoredKey: inputText });
+        return { kind: "public-key", entity: publicKey, format: "ascii-armor" };
+      } catch (_) {
+        // Try private key reader below.
+      }
+      try {
+        const privateKey = await openpgp.readPrivateKey({ armoredKey: inputText });
+        return { kind: "private-key", entity: privateKey, format: "ascii-armor" };
+      } catch (_) {
+        // Fall through to invalid input error below.
+      }
+    }
+
+    if (binaryBytes && binaryBytes.length > 0) {
+      const binaryMessage = new Uint8Array(binaryBytes);
+      try {
+        const message = await openpgp.readMessage({ binaryMessage });
+        return { kind: "message", entity: message, format: "binary" };
+      } catch (_) {
+        // Continue through alternative readers.
+      }
+      try {
+        const signature = await openpgp.readSignature({ binarySignature: binaryMessage });
+        return { kind: "signature", entity: signature, format: "binary" };
+      } catch (_) {
+        // Continue through alternative readers.
+      }
+      try {
+        const publicKey = await openpgp.readKey({ binaryKey: binaryMessage });
+        return { kind: "public-key", entity: publicKey, format: "binary" };
+      } catch (_) {
+        // Continue through alternative readers.
+      }
+      try {
+        const privateKey = await openpgp.readPrivateKey({ binaryKey: binaryMessage });
+        return { kind: "private-key", entity: privateKey, format: "binary" };
+      } catch (_) {
+        // Fall through to invalid input error below.
+      }
+    }
+
+    throw new Error("Input is not recognized as valid OpenPGP data.");
+  }
+
+  async function parseCurrentPgpInput() {
+    const inputEl = document.getElementById("crypt-pgp-input");
+    const rawValue = String(inputEl?.value || "").trim();
+    if (!rawValue) {
+      throw new Error("No PGP input provided.");
+    }
+    const looksArmored = /^-----BEGIN PGP /m.test(rawValue);
+    const binaryBytes = looksArmored ? null : parseHexToBuffer(rawValue);
+    const structure = await tryReadPgpStructure(
+      looksArmored ? rawValue : "",
+      binaryBytes,
+    );
+    return {
+      rawValue,
+      looksArmored,
+      binaryBytes,
+      structure,
+    };
+  }
+
+  function getPgpArmorType(textValue) {
+    const beginMatch = String(textValue || "").match(PGP_BEGIN_LINE_REGEX);
+    return beginMatch?.[1] || "Unknown";
+  }
+
+  function getPgpErrorMessage(error, operationLabel) {
+    const rawMessage = String(error?.message || "").trim();
+    const lowerMessage = rawMessage.toLowerCase();
+
+    const isBadPassphrase =
+      lowerMessage.includes("incorrect key passphrase") ||
+      lowerMessage.includes("wrong passphrase") ||
+      lowerMessage.includes("bad passphrase") ||
+      lowerMessage.includes("private key is not decrypted") ||
+      lowerMessage.includes("cannot decrypt private key") ||
+      lowerMessage.includes("error decrypting private key");
+
+    if (isBadPassphrase) {
+      return "PGP key unlock failed: the passphrase appears to be incorrect.";
+    }
+
+    const isCorruptedInput =
+      lowerMessage.includes("no pgp input provided") ||
+      lowerMessage.includes("not recognized as valid openpgp data") ||
+      lowerMessage.includes("invalid") ||
+      lowerMessage.includes("malformed") ||
+      lowerMessage.includes("parse") ||
+      lowerMessage.includes("parsing") ||
+      lowerMessage.includes("armored") ||
+      lowerMessage.includes("armor") ||
+      lowerMessage.includes("checksum") ||
+      lowerMessage.includes("crc") ||
+      lowerMessage.includes("truncated") ||
+      lowerMessage.includes("unexpected end") ||
+      lowerMessage.includes("odd length") ||
+      lowerMessage.includes("binary hex data provided") ||
+      lowerMessage.includes("hex payload");
+
+    if (isCorruptedInput) {
+      return "PGP input appears corrupted or in the wrong format. Verify armor/hex data and try again.";
+    }
+
+    return `PGP ${operationLabel} failed due to an internal app/runtime issue. Try again or restart PacketSnitch. Details: ${rawMessage || "unknown error"}`;
+  }
+
+  function formatOpenPgpKeyId(keyId) {
+    if (!keyId) return "unknown";
+    if (typeof keyId.toHex === "function") return keyId.toHex();
+    return String(keyId);
+  }
+
+  function buildPgpStructureSummaryLines(parsed) {
+    const { rawValue, looksArmored, binaryBytes, structure } = parsed;
+    const lines = [];
+    lines.push(`Input format: ${looksArmored ? "ASCII armor" : "Binary hex"}`);
+    lines.push(`Detected OpenPGP structure: ${structure.kind}`);
+    lines.push(`Input bytes: ${looksArmored ? Buffer.byteLength(rawValue, "utf8") : binaryBytes.length}`);
+    if (looksArmored) {
+      lines.push(`Armor type: ${getPgpArmorType(rawValue)}`);
+    }
+
+    if (structure.kind === "message") {
+      if (typeof structure.entity.getEncryptionKeyIDs === "function") {
+        const ids = structure.entity.getEncryptionKeyIDs();
+        const formatted = Array.isArray(ids)
+          ? ids.map(formatOpenPgpKeyId).join(", ")
+          : "none";
+        lines.push(`Encryption key IDs: ${formatted || "none"}`);
+      }
+      if (typeof structure.entity.getSigningKeyIDs === "function") {
+        const ids = structure.entity.getSigningKeyIDs();
+        const formatted = Array.isArray(ids)
+          ? ids.map(formatOpenPgpKeyId).join(", ")
+          : "none";
+        lines.push(`Signing key IDs: ${formatted || "none"}`);
+      }
+    }
+
+    return lines;
+  }
+
+  async function analyzePgpInput() {
+    const analysisEl = document.getElementById("crypt-pgp-analysis-preview");
+    try {
+      const parsed = await parseCurrentPgpInput();
+      const lines = buildPgpStructureSummaryLines(parsed);
+      if (analysisEl) {
+        analysisEl.textContent = lines.join("\n");
+      }
+      statusUpdate("Status: PGP input analyzed");
+      writeLogEntry(`[${threadName}] PGP input analyzed kind=${parsed.structure.kind}`);
+    } catch (error) {
+      if (analysisEl) {
+        analysisEl.textContent = `PGP analysis failed: ${error.message}`;
+      }
+      logErrorEntry("crypt-pgp-analyze", error);
+      doError(getPgpErrorMessage(error, "analysis"));
+    }
+  }
+
+  async function convertPgpInputToBinaryHex() {
+    const analysisEl = document.getElementById("crypt-pgp-analysis-preview");
+    const inputEl = document.getElementById("crypt-pgp-input");
+    try {
+      const parsed = await parseCurrentPgpInput();
+      if (!parsed.looksArmored) {
+        statusUpdate("Status: PGP input is already binary hex");
+        return;
+      }
+
+      let binaryBytes = null;
+      if (typeof openpgp.unarmor === "function") {
+        const unarmored = await openpgp.unarmor(parsed.rawValue);
+        if (unarmored?.data) {
+          binaryBytes = Buffer.from(unarmored.data);
+        }
+      }
+      if (!binaryBytes && typeof parsed.structure.entity.write === "function") {
+        binaryBytes = Buffer.from(await parsed.structure.entity.write());
+      }
+      if (!binaryBytes) {
+        throw new Error("Unable to convert armored PGP input to binary bytes.");
+      }
+
+      const binaryHex = binaryBytes.toString("hex");
+      if (inputEl) inputEl.value = binaryHex;
+      if (analysisEl) {
+        analysisEl.textContent = [
+          "Converted to binary hex.",
+          `Bytes: ${binaryBytes.length}`,
+          `Hex chars: ${binaryHex.length}`,
+        ].join("\n");
+      }
+      statusUpdate("Status: Converted PGP ASCII armor to binary hex");
+    } catch (error) {
+      logErrorEntry("crypt-pgp-convert-to-binary", error);
+      doError(getPgpErrorMessage(error, "conversion to binary"));
+    }
+  }
+
+  function getArmorEnumForKind(kind) {
+    if (!openpgp.enums?.armor) return null;
+    if (kind === "message") return openpgp.enums.armor.message;
+    if (kind === "signature") return openpgp.enums.armor.signature;
+    if (kind === "public-key") return openpgp.enums.armor.publicKey;
+    if (kind === "private-key") return openpgp.enums.armor.privateKey;
+    return null;
+  }
+
+  async function convertPgpInputToArmor() {
+    const analysisEl = document.getElementById("crypt-pgp-analysis-preview");
+    const inputEl = document.getElementById("crypt-pgp-input");
+    try {
+      const parsed = await parseCurrentPgpInput();
+      if (parsed.looksArmored) {
+        statusUpdate("Status: PGP input is already ASCII armored");
+        return;
+      }
+
+      let armoredText = "";
+      if (typeof parsed.structure.entity.armor === "function") {
+        armoredText = await parsed.structure.entity.armor();
+      }
+      if (!armoredText && typeof openpgp.armor === "function") {
+        const armorType = getArmorEnumForKind(parsed.structure.kind);
+        if (armorType !== null) {
+          armoredText = await openpgp.armor(
+            armorType,
+            new Uint8Array(parsed.binaryBytes),
+          );
+        }
+      }
+      if (!armoredText) {
+        throw new Error("Unable to convert binary PGP data to ASCII armor.");
+      }
+
+      if (inputEl) inputEl.value = armoredText;
+      if (analysisEl) {
+        analysisEl.textContent = [
+          "Converted to ASCII armor.",
+          `Armor type: ${getPgpArmorType(armoredText)}`,
+          `Bytes: ${Buffer.byteLength(armoredText, "utf8")}`,
+        ].join("\n");
+      }
+      statusUpdate("Status: Converted PGP binary hex to ASCII armor");
+    } catch (error) {
+      logErrorEntry("crypt-pgp-convert-to-armor", error);
+      doError(getPgpErrorMessage(error, "conversion to ASCII armor"));
+    }
+  }
+
+  async function summarizePgpSignatures(signatures) {
+    if (!Array.isArray(signatures) || signatures.length === 0) {
+      return ["Signature status: no signatures present."];
+    }
+
+    const lines = [];
+    for (let index = 0; index < signatures.length; index += 1) {
+      const signatureEntry = signatures[index];
+      let verifiedStatus = "not checked";
+      try {
+        if (signatureEntry && signatureEntry.verified) {
+          await signatureEntry.verified;
+          verifiedStatus = "verified";
+        }
+      } catch (error) {
+        verifiedStatus = `failed (${error.message})`;
+      }
+      const signingKey = signatureEntry?.keyID
+        ? formatOpenPgpKeyId(signatureEntry.keyID)
+        : "unknown";
+      lines.push(
+        `Signature ${index + 1}: ${verifiedStatus}; signer key ID: ${signingKey}`,
+      );
+    }
+    return lines;
+  }
+
+  function renderPgpOutput(sourceLabel, plainText, detailsLines) {
+    const outputEl = document.getElementById("crypt-pgp-output-preview");
+    const utf8Value = String(plainText || "");
+    const hexValue = Buffer.from(utf8Value, "utf8").toString("hex");
+    const printablePreview = utf8Value
+      .slice(0, MAX_ASCII_PREVIEW_LENGTH)
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ".");
+    if (outputEl) {
+      outputEl.textContent = [
+        `Source: ${sourceLabel}`,
+        `Bytes: ${Buffer.byteLength(utf8Value, "utf8")}`,
+        ...detailsLines,
+        "",
+        "Decrypted / verified text:",
+        printablePreview || "(empty)",
+      ].join("\n");
+    }
+    pgpLastOutputPayload = {
+      sourceLabel,
+      utf8Value,
+      hexValue,
+    };
+    setPgpSendEnabled(true);
+  }
+
+  async function decryptVerifyPgpInput() {
+    const privateKeyText = String(
+      document.getElementById("crypt-pgp-private-key-input")?.value || "",
+    ).trim();
+    const publicKeyText = String(
+      document.getElementById("crypt-pgp-public-key-input")?.value || "",
+    ).trim();
+    const passphrase = String(
+      document.getElementById("crypt-pgp-passphrase-input")?.value || "",
+    );
+
+    try {
+      const parsed = await parseCurrentPgpInput();
+      const details = [
+        `Input format: ${parsed.looksArmored ? "ASCII armor" : "Binary hex"}`,
+        `PGP structure: ${parsed.structure.kind}`,
+      ];
+
+      if (parsed.structure.kind === "cleartext") {
+        const verifyArgs = {
+          message: parsed.structure.entity,
+        };
+        if (publicKeyText) {
+          verifyArgs.verificationKeys = [
+            await openpgp.readKey({ armoredKey: publicKeyText }),
+          ];
+        }
+        const verifyResult = await openpgp.verify(verifyArgs);
+        const signatureLines = await summarizePgpSignatures(
+          verifyResult.signatures,
+        );
+        renderPgpOutput(
+          "PGP signed message",
+          verifyResult.data,
+          [...details, ...signatureLines],
+        );
+        statusUpdate("Status: Verified PGP signed message");
+        return;
+      }
+
+      if (parsed.structure.kind !== "message") {
+        throw new Error(
+          "Decrypt/verify currently supports PGP messages and cleartext signed messages.",
+        );
+      }
+
+      const decryptArgs = {
+        message: parsed.structure.entity,
+        format: "utf8",
+      };
+      let successfulDecryptionPrivateKey = null;
+
+      if (privateKeyText) {
+        let privateKey = await openpgp.readPrivateKey({
+          armoredKey: privateKeyText,
+        });
+        if (passphrase) {
+          privateKey = await openpgp.decryptKey({
+            privateKey,
+            passphrase,
+          });
+        }
+        successfulDecryptionPrivateKey = privateKey;
+        decryptArgs.decryptionKeys = [privateKey];
+      }
+
+      if (publicKeyText) {
+        decryptArgs.verificationKeys = [
+          await openpgp.readKey({ armoredKey: publicKeyText }),
+        ];
+      }
+
+      const decryptResult = await openpgp.decrypt(decryptArgs);
+      const signatureLines = await summarizePgpSignatures(
+        decryptResult.signatures,
+      );
+      const decryptedText =
+        typeof decryptResult.data === "string"
+          ? decryptResult.data
+          : Buffer.from(decryptResult.data || []).toString("utf8");
+
+      renderPgpOutput(
+        "PGP decrypt/verify",
+        decryptedText,
+        [...details, ...signatureLines],
+      );
+      if (privateKeyText) {
+        await saveSuccessfulPgpKeyMaterial({
+          privateKeyText,
+          privateKeyObject: successfulDecryptionPrivateKey,
+          passphrase,
+        });
+      }
+      statusUpdate("Status: PGP decrypt/verify completed");
+      writeLogEntry("[Crypt] PGP decrypt/verify completed");
+    } catch (error) {
+      clearPgpOutput();
+      logErrorEntry("crypt-pgp-decrypt-verify", error);
+      doError(getPgpErrorMessage(error, "decrypt/verify"));
+    }
+  }
+
+  function sendPgpOutputToConvTab() {
+    if (!pgpLastOutputPayload) {
+      statusUpdate("Status: Decrypt/verify output first before sending to Conv");
+      return;
+    }
+    sendDecryptedToConv(pgpLastOutputPayload);
+    statusUpdate(
+      `Status: Sent PGP output from ${pgpLastOutputPayload.sourceLabel} to Conv`,
+    );
+    writeLogEntry(
+      `[${threadName}] PGP output sent to Conv source="${pgpLastOutputPayload.sourceLabel}"`,
     );
   }
 
@@ -355,6 +1201,10 @@ function createCryptPanel({
     document.getElementById("crypt-ssl-panel").hidden = !sslActive;
     document.getElementById("crypt-pgp-panel").hidden = !pgpActive;
     document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
+    if (pgpActive) {
+      refreshPgpEncounteredEntries();
+      refreshPgpPasswordCandidates();
+    }
   }
 
   function applyCryptCertificateText(rawText, sourceLabel) {
@@ -563,6 +1413,16 @@ function createCryptPanel({
     );
   }
 
+  function getLastTlsDecryptedPayload() {
+    if (!cryptLastDecryptedPayload) return null;
+    return { ...cryptLastDecryptedPayload };
+  }
+
+  function getLastPgpOutputPayload() {
+    if (!pgpLastOutputPayload) return null;
+    return { ...pgpLastOutputPayload };
+  }
+
   function showCryptWorkspace(tabName = CRYPT_SSL_SUBTAB) {
     setActiveMainTab(MAIN_TAB_CRYPT);
     if (getJsonCapture() === "") {
@@ -589,12 +1449,16 @@ function createCryptPanel({
     cryptBoxEl.style.display = "flex";
     setCryptSubtab(tabName);
     refreshCryptEncounteredEntries();
+    refreshPgpEncounteredEntries();
+    refreshPgpPasswordCandidates();
   }
 
   return {
     setCryptSubtab,
     showCryptWorkspace,
     refreshCryptEncounteredEntries,
+    refreshPgpEncounteredEntries,
+    refreshPgpPasswordCandidates,
     readCryptTextFile,
     applyCryptCertificateText,
     applyCryptPrivateKeyText,
@@ -604,6 +1468,18 @@ function createCryptPanel({
     decryptActiveEntryWithLoadedKey,
     sendDecryptedPayloadToConvTab,
     clearCryptDecryptionOutput,
+    selectPgpEncounteredEntry,
+    loadSelectedPgpEncounteredInput,
+    analyzePgpInput,
+    convertPgpInputToBinaryHex,
+    convertPgpInputToArmor,
+    decryptVerifyPgpInput,
+    sendPgpOutputToConvTab,
+    clearPgpOutput,
+    clearPgpInput,
+    useSelectedPgpPasswordCandidate,
+    getLastTlsDecryptedPayload,
+    getLastPgpOutputPayload,
   };
 }
 

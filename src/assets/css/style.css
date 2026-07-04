@@ -819,13 +819,19 @@ strong {
 }
 
 #crypt-encountered-list,
+#crypt-pgp-encountered-list,
 #crypt-keystore-list,
 #crypt-keystore-label,
 #crypt-keystore-mode,
 #crypt-keystore-unlock-password,
+#crypt-pgp-passphrase-candidates,
+#crypt-pgp-passphrase-input,
 #crypt-keystore-manual-uri-input,
 #crypt-cert-input,
 #crypt-key-input,
+#crypt-pgp-input,
+#crypt-pgp-private-key-input,
+#crypt-pgp-public-key-input,
 #crypt-credential-input {
   width: 100%;
   box-sizing: border-box;
@@ -838,6 +844,9 @@ strong {
 
 #crypt-cert-input,
 #crypt-key-input,
+#crypt-pgp-input,
+#crypt-pgp-private-key-input,
+#crypt-pgp-public-key-input,
 #crypt-credential-input {
   min-height: 120px;
   resize: vertical;
@@ -845,6 +854,10 @@ strong {
 }
 
 #crypt-encountered-list {
+  min-height: 180px;
+}
+
+#crypt-pgp-encountered-list {
   min-height: 180px;
 }
 
@@ -864,6 +877,14 @@ strong {
 }
 
 #crypt-keystore-mode {
+  padding: 6px;
+}
+
+#crypt-pgp-passphrase-input {
+  padding: 6px;
+}
+
+#crypt-pgp-passphrase-candidates {
   padding: 6px;
 }
 
@@ -947,9 +968,17 @@ strong {
   white-space: pre-wrap;
 }
 
+#crypt-pgp-encountered-details {
+  font-size: 12px;
+  color: var(--crypt-panel-text);
+  white-space: pre-wrap;
+}
+
 #crypt-cert-preview,
 #crypt-key-preview,
 #crypt-decrypt-preview,
+#crypt-pgp-analysis-preview,
+#crypt-pgp-output-preview,
 #crypt-keystore-details {
   margin: 0;
   white-space: pre-wrap;
@@ -1245,6 +1274,7 @@ strong {
 .data-tools-actions button:hover {
   background-color: var(--color-2-hover);
 }
+
 .data-tools-input-meta {
   display: flex;
   align-items: center;
@@ -1252,6 +1282,7 @@ strong {
   gap: 8px;
   margin-top: 2px;
 }
+
 .data-tools-input-edited {
   display: inline-flex;
   align-items: center;
@@ -1264,10 +1295,12 @@ strong {
   color: var(--color-3);
   background-color: color-mix(in srgb, var(--data-tools-frame-bg) 82%, #000 18%);
 }
+
 .data-tools-input-edited.edited {
   border-color: #ffcf6e;
   color: #ffcf6e;
 }
+
 #data-tools-input-reset-btn {
   background-color: var(--color-2);
   border: 1px solid var(--color-3);
@@ -1275,9 +1308,11 @@ strong {
   padding: 5px 9px;
   cursor: pointer;
 }
+
 #data-tools-input-reset-btn:hover:not(:disabled) {
   background-color: var(--color-2-hover);
 }
+
 #data-tools-input-reset-btn:disabled {
   opacity: 0.6;
   cursor: default;

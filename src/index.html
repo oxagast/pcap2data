@@ -180,12 +180,8 @@
                   </select>
                 </div>
                 <div class="data-tools-input-meta">
-                  <span
-                    id="data-tools-input-edited-indicator"
-                    class="data-tools-input-edited"
-                    aria-live="polite"
-                    aria-atomic="true"
-                  >
+                  <span id="data-tools-input-edited-indicator" class="data-tools-input-edited" aria-live="polite"
+                    aria-atomic="true">
                     Ready
                   </span>
                   <button id="data-tools-input-reset-btn" type="button" disabled>
@@ -391,8 +387,52 @@ No decrypted TLS/SSL output yet.</pre>
           </div>
 
           <div id="crypt-pgp-panel" class="crypt-subtab-panel" hidden>
-            <div class="crypt-placeholder">
-              PGP workspace reserved for future import/decrypt tooling.
+            <div class="crypt-grid">
+              <div class="crypt-section">
+                <div class="crypt-section-title">PGP Messages In Capture</div>
+                <select id="crypt-pgp-encountered-list" size="10"></select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-pgp-refresh-btn">Refresh</button>
+                  <button id="crypt-pgp-load-selected-btn">Load selected</button>
+                </div>
+                <div id="crypt-pgp-encountered-details">
+                  No PGP messages detected in packet payloads.
+                </div>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">PGP Input</div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-pgp-analyze-btn">Analyze</button>
+                  <button id="crypt-pgp-to-armor-btn">To ASCII armor</button>
+                  <button id="crypt-pgp-to-binary-btn">To binary hex</button>
+                  <button id="crypt-pgp-clear-input-btn">Clear input</button>
+                </div>
+                <textarea id="crypt-pgp-input" placeholder="Paste PGP ASCII armor or PGP binary hex here..."></textarea>
+                <pre id="crypt-pgp-analysis-preview">No PGP input analyzed yet.</pre>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">Decrypt / Verify</div>
+                <textarea id="crypt-pgp-private-key-input"
+                  placeholder="Optional: PGP private key (ASCII armored) for decryption..."></textarea>
+                <select id="crypt-pgp-passphrase-candidates">
+                  <option value="" selected>No password candidates found in capture</option>
+                </select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-pgp-use-selected-passphrase-btn">Use selected password</button>
+                </div>
+                <input id="crypt-pgp-passphrase-input" type="password"
+                  placeholder="Optional: passphrase for private key" />
+                <textarea id="crypt-pgp-public-key-input"
+                  placeholder="Optional: PGP public key (ASCII armored) for signature verification..."></textarea>
+                <div class="crypt-actions-row">
+                  <button id="crypt-pgp-decrypt-verify-btn">Decrypt / Verify</button>
+                  <button id="crypt-pgp-send-conv-btn" disabled>Send output to Conv</button>
+                  <button id="crypt-pgp-clear-output-btn">Clear output</button>
+                </div>
+                <pre id="crypt-pgp-output-preview">No PGP output yet.</pre>
+              </div>
             </div>
           </div>
 
@@ -1158,6 +1198,9 @@ No keystore entries saved.</pre>
         </button>
         <button id="ctx-export-conv-decodes" role="menuitem">
           Conv decode output
+        </button>
+        <button id="ctx-export-decrypted" role="menuitem">
+          Decrypted data
         </button>
         <button id="ctx-save-cookie-jar" role="menuitem">
           Cookie Jar
