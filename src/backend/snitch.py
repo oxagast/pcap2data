@@ -35,6 +35,7 @@ import base64
 import csv
 import json
 import os
+import queue
 import re
 import shutil
 import socket
@@ -91,6 +92,7 @@ allPacketInfoLock = threading.Lock()
 
 hostOutputFile = "hosts.json"
 hostChunkSize = 250
+emitJsonSnapshots = False
 progressLinePrefix = "[Bridge]"
 progressEventCallback = None
 currentDir = os.getcwd()
@@ -596,6 +598,21 @@ def byHost(outputDirPath, finalSummary):
         )
 
 
+def buildHostsPayload(packetEntries, finalSummary=""):
+    """
+    Build a frontend-compatible hosts payload from packet entries.
+    """
+    packetMapByHost = {}
+    for entry in packetEntries:
+        host = entry.get("Host")
+        if host not in packetMapByHost:
+            packetMapByHost[host] = []
+        packetMapByHost[host].append(entry.get("Packet"))
+
+    packetMapByHost = sortAndIndexPackets(packetMapByHost)
+    return {"Host": packetMapByHost, "Final Summary": finalSummary}
+
+
 def writeHostsSnapshot(
     outputDirPath,
     packetEntries,
@@ -606,22 +623,13 @@ def writeHostsSnapshot(
     Build and write a complete hosts snapshot file from the supplied packet entries.
     Each snapshot remains frontend-compatible and self-contained.
     """
-    packetMapByHost = {}
-    for entry in packetEntries:
-        host = entry.get("Host")
-        if host not in packetMapByHost:
-            packetMapByHost[host] = []
-        packetMapByHost[host].append(entry.get("Packet"))
-
-    packetMapByHost = sortAndIndexPackets(packetMapByHost)
+    payload = buildHostsPayload(packetEntries, finalSummary)
     snapshotPath = outputDirPath + "/" + outputFilename
     with open(snapshotPath, "w+", encoding="utf-8") as snapshotFile:
-        snapshotFile.write(
-            json.dumps({"Host": packetMapByHost, "Final Summary": finalSummary}, indent=2)
-        )
+        snapshotFile.write(json.dumps(payload, indent=2))
     return snapshotPath
 
-def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal):
+def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal, captureData=None):
     """
     Emit backend progress in the legacy stderr format and, when configured,
     forward a structured payload to the TCP bridge callback.
@@ -635,14 +643,15 @@ def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal):
 
     if callable(progressEventCallback):
         try:
-            progressEventCallback(
-                {
-                    "path": pathValue,
-                    "processedPackets": int(processedPackets),
-                    "totalPackets": int(totalPackets),
-                    "complete": bool(isFinal),
-                }
-            )
+            payload = {
+                "path": pathValue,
+                "processedPackets": int(processedPackets),
+                "totalPackets": int(totalPackets),
+                "complete": bool(isFinal),
+            }
+            if isinstance(captureData, dict):
+                payload["captureData"] = captureData
+            progressEventCallback(payload)
         except Exception:
             # Progress callback failures should not interrupt capture processing.
             pass
@@ -4711,7 +4720,9 @@ def startThreading():
                 continue
         return results
 
-    nextSnapshotPacketCount = hostChunkSize
+    # Emit the first in-memory snapshot as soon as at least one packet is ready,
+    # then fall back to the normal chunk cadence for later updates.
+    nextSnapshotPacketCount = 1 if emitJsonSnapshots else hostChunkSize
 
     with ThreadPoolExecutor(max_workers=numWorkerThreads) as executor:
         taskFutures = {
@@ -4728,19 +4739,29 @@ def startThreading():
                     allPacketInfoSnapshot = list(allPacketInfo)
 
                 while processedPacketCount >= nextSnapshotPacketCount:
-                    chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
-                    snapshotPath = writeHostsSnapshot(
-                        outputDir,
-                        allPacketInfoSnapshot,
-                        "",
-                        chunkSnapshotName,
-                    )
-                    emitBridgeProgress(
-                        snapshotPath,
-                        nextSnapshotPacketCount,
-                        totalPackets,
-                        False,
-                    )
+                    if emitJsonSnapshots:
+                        captureData = buildHostsPayload(allPacketInfoSnapshot, "")
+                        emitBridgeProgress(
+                            f"in-memory://hosts-{nextSnapshotPacketCount}.json",
+                            nextSnapshotPacketCount,
+                            totalPackets,
+                            False,
+                            captureData,
+                        )
+                    else:
+                        chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
+                        snapshotPath = writeHostsSnapshot(
+                            outputDir,
+                            allPacketInfoSnapshot,
+                            "",
+                            chunkSnapshotName,
+                        )
+                        emitBridgeProgress(
+                            snapshotPath,
+                            nextSnapshotPacketCount,
+                            totalPackets,
+                            False,
+                        )
                     nextSnapshotPacketCount += hostChunkSize
             except Exception as exc:
                 if verbose >= 0:
@@ -4893,6 +4914,7 @@ def runCaptureFromArgs(runArgs):
     global args
     global verbose
     global hostChunkSize
+    global emitJsonSnapshots
     global pcapFilePath
     global config
     global packets
@@ -4907,6 +4929,7 @@ def runCaptureFromArgs(runArgs):
     args = runArgs
     verbose = int(getattr(runArgs, "verbose", 0) or 0)
     hostChunkSize = max(1, int(getattr(runArgs, "host_chunk_size", 250) or 250))
+    emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
 
     allPacketInfo = []
@@ -4984,13 +5007,23 @@ def runCaptureFromArgs(runArgs):
     finally:
         with allPacketInfoLock:
             finalPacketInfoSnapshot = list(allPacketInfo)
-        writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
-        emitBridgeProgress(
-            outputDir + "/" + hostOutputFile,
-            len(finalPacketInfoSnapshot),
-            totalPackets,
-            True,
-        )
+        if emitJsonSnapshots:
+            captureData = buildHostsPayload(finalPacketInfoSnapshot, "")
+            emitBridgeProgress(
+                "in-memory://hosts.json",
+                len(finalPacketInfoSnapshot),
+                totalPackets,
+                True,
+                captureData,
+            )
+        else:
+            writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
+            emitBridgeProgress(
+                outputDir + "/" + hostOutputFile,
+                len(finalPacketInfoSnapshot),
+                totalPackets,
+                True,
+            )
 
     print(
         "[Main] Processing complete. Generated testcases and info files are located in: "
@@ -5021,6 +5054,18 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
+
+    def beginNdjsonStream(self, statusCode=200):
+        self.send_response(int(statusCode))
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+    def sendNdjsonLine(self, payload):
+        line = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+        self.wfile.write(line)
         self.wfile.flush()
 
     def parseJsonBody(self):
@@ -5126,7 +5171,6 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
             return
 
         tempPcapPath = None
-        progressEvents = []
         try:
             request = self.parseJsonBody()
             if not isinstance(request, dict):
@@ -5160,45 +5204,99 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 active_recon=bool(request.get("activeRecon", True)),
                 conf=request.get("conf"),
                 host_chunk_size=int(request.get("hostChunkSize") or 250),
+                emit_json_snapshots=bool(request.get("emitJsonSnapshots", False)),
                 verbose=int(request.get("verbose") or 0),
                 server=False,
                 server_host="127.0.0.1",
                 server_port=0,
             )
 
-            with processingLock:
-                previousProgressCallback = progressEventCallback
-                progressEventCallback = lambda payload: progressEvents.append({
-                    "path": payload.get("path"),
-                    "processedPackets": payload.get("processedPackets", 0),
-                    "totalPackets": payload.get("totalPackets", 0),
-                    "complete": bool(payload.get("complete", False)),
-                })
-                try:
-                    result = runCaptureFromArgs(runArgs)
-                finally:
-                    progressEventCallback = previousProgressCallback
+            progressQueue = queue.Queue()
+            processingDone = threading.Event()
+            resultHolder = {}
 
-            self.sendJson(
-                200,
+            def progressCallback(payload):
+                progressQueue.put(
+                    {
+                        "type": "progress",
+                        "path": payload.get("path"),
+                        "processedPackets": payload.get("processedPackets", 0),
+                        "totalPackets": payload.get("totalPackets", 0),
+                        "complete": bool(payload.get("complete", False)),
+                        "captureData": payload.get("captureData")
+                        if isinstance(payload.get("captureData"), dict)
+                        else None,
+                    }
+                )
+
+            def workerRunCapture():
+                global progressEventCallback
+                try:
+                    with processingLock:
+                        previousProgressCallback = progressEventCallback
+                        progressEventCallback = progressCallback
+                        try:
+                            resultHolder["result"] = runCaptureFromArgs(runArgs)
+                        finally:
+                            progressEventCallback = previousProgressCallback
+                except Exception as runError:
+                    resultHolder["error"] = runError
+                    resultHolder["traceback"] = traceback.format_exc()
+                finally:
+                    processingDone.set()
+
+            workerThread = threading.Thread(target=workerRunCapture, daemon=True)
+            workerThread.start()
+
+            self.beginNdjsonStream(200)
+
+            while True:
+                if processingDone.is_set() and progressQueue.empty():
+                    break
+                try:
+                    progressEvent = progressQueue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                self.sendNdjsonLine(progressEvent)
+
+            workerThread.join(timeout=0.1)
+
+            if "error" in resultHolder:
+                self.sendNdjsonLine(
+                    {
+                        "type": "error",
+                        "success": False,
+                        "error": str(resultHolder.get("error")),
+                        "traceback": resultHolder.get("traceback", ""),
+                    }
+                )
+                return
+
+            result = resultHolder.get("result") or {}
+            self.sendNdjsonLine(
                 {
+                    "type": "complete",
                     "success": bool(result.get("success")),
                     "cancelled": bool(result.get("cancelled", False)),
                     "error": result.get("error"),
                     "stdout": "",
-                    "progressEvents": progressEvents,
-                },
+                    "processedPackets": int(result.get("processedPackets") or 0),
+                    "totalPackets": int(result.get("totalPackets") or 0),
+                }
             )
         except Exception as requestError:
-            self.sendJson(
-                500,
-                {
-                    "success": False,
-                    "error": str(requestError),
-                    "traceback": traceback.format_exc(),
-                    "progressEvents": progressEvents,
-                },
-            )
+            try:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(requestError),
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            except Exception:
+                # If streaming already started and socket is gone, there's nothing else to do.
+                pass
         finally:
             if tempPcapPath and os.path.exists(tempPcapPath):
                 try:

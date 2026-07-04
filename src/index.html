@@ -640,6 +640,15 @@ No keystore entries saved.</pre>
                   stability.
                 </div>
 
+                <label class="settings-checkbox-row" for="settings-debug-backend-http-data-mode-enabled">
+                  <input id="settings-debug-backend-http-data-mode-enabled" type="checkbox" />
+                  Enable backend HTTP data mode (no backend snapshot files)
+                </label>
+                <div class="settings-help-text">
+                  Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
+                  instead of writing hosts-*.json files to disk.
+                </div>
+
                 <label for="settings-debug-map-projection-zoom-x">Map projection zoom X</label>
                 <input id="settings-debug-map-projection-zoom-x" type="number" min="0.1" max="3" step="0.001" />
 

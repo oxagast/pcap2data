@@ -710,6 +710,9 @@ function syncSettingsFormFromState() {
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
+  const backendHttpDataModeEnabledEl = document.getElementById(
+    "settings-debug-backend-http-data-mode-enabled",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -749,6 +752,11 @@ function syncSettingsFormFromState() {
   if (ungroupedListVirtualizationEnabledEl) {
     ungroupedListVirtualizationEnabledEl.checked = Boolean(
       settings.debug.ungroupedListVirtualizationEnabled,
+    );
+  }
+  if (backendHttpDataModeEnabledEl) {
+    backendHttpDataModeEnabledEl.checked = Boolean(
+      settings.debug.backendHttpDataModeEnabled,
     );
   }
   if (mapProjectionZoomXEl) {
@@ -796,6 +804,9 @@ function readSettingsFormState() {
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
+  const backendHttpDataModeEnabledEl = document.getElementById(
+    "settings-debug-backend-http-data-mode-enabled",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -842,6 +853,9 @@ function readSettingsFormState() {
       ungroupedListVirtualizationEnabled: ungroupedListVirtualizationEnabledEl
         ? ungroupedListVirtualizationEnabledEl.checked
         : DEFAULT_SETTINGS.debug.ungroupedListVirtualizationEnabled,
+      backendHttpDataModeEnabled: backendHttpDataModeEnabledEl
+        ? backendHttpDataModeEnabledEl.checked
+        : DEFAULT_SETTINGS.debug.backendHttpDataModeEnabled,
       mapProjectionZoomX: mapProjectionZoomXEl
         ? mapProjectionZoomXEl.value
         : DEFAULT_SETTINGS.debug.mapProjectionZoomX,
@@ -952,6 +966,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "ungroupedListVirtualizationEnabled",
     previousDebug.ungroupedListVirtualizationEnabled,
     nextDebug.ungroupedListVirtualizationEnabled,
+  );
+  pushChange(
+    "backendHttpDataModeEnabled",
+    previousDebug.backendHttpDataModeEnabled,
+    nextDebug.backendHttpDataModeEnabled,
   );
   pushChange(
     "mapProjectionZoomX",
@@ -1103,6 +1122,7 @@ function getBackendTransportOptionsFromSettings(settings = getCurrentSettings())
     tcpHost: String(settings?.backend?.tcpHost || DEFAULT_SETTINGS.backend.tcpHost),
     tcpPort: Number(settings?.backend?.tcpPort || DEFAULT_SETTINGS.backend.tcpPort),
     forceLegacySpawn: Boolean(settings?.backend?.forceLegacySpawn),
+    useHttpDataSnapshots: Boolean(settings?.debug?.backendHttpDataModeEnabled),
   };
 }
 
@@ -1115,7 +1135,7 @@ async function initializeBackendServiceFromSettings(settings = getCurrentSetting
   try {
     const result = await window.snitchapi.initBackendService(backendOptions);
     writeLogEntry(
-      `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
+      `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} data_mode=${backendOptions.useHttpDataSnapshots} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
     );
     return result;
   } catch (error) {
@@ -1373,6 +1393,17 @@ function updateBackendProcessingWarning() {
   warningEl.style.display = "block";
 }
 
+function hideLoadingOverlay() {
+  const loadingScreenEl = document.getElementById("loading-screen");
+  const loadingContainerEl = document.getElementById("loading-container");
+  if (loadingScreenEl) {
+    loadingScreenEl.style.display = "none";
+  }
+  if (loadingContainerEl) {
+    loadingContainerEl.style.display = "none";
+  }
+}
+
 function normalizeBackendJsonPathPayload(rawPayload) {
   if (typeof rawPayload === "string") {
     return {
@@ -1395,6 +1426,42 @@ function normalizeBackendJsonPathPayload(rawPayload) {
     complete: Boolean(rawPayload.complete),
     chunkSize: Number(rawPayload.chunkSize) || getBackendPacketChunkSize(),
   };
+}
+
+function normalizeBackendJsonDataPayload(rawPayload) {
+  if (!rawPayload || typeof rawPayload !== "object") {
+    return null;
+  }
+
+  const captureData =
+    rawPayload.captureData && typeof rawPayload.captureData === "object"
+      ? rawPayload.captureData
+      : null;
+  if (!captureData) {
+    return null;
+  }
+
+  return {
+    captureData,
+    processedPackets: Number(rawPayload.processedPackets) || 0,
+    totalPackets: Number(rawPayload.totalPackets) || 0,
+    complete: Boolean(rawPayload.complete),
+    chunkSize: Number(rawPayload.chunkSize) || getBackendPacketChunkSize(),
+    label:
+      typeof rawPayload.label === "string" && rawPayload.label.trim()
+        ? rawPayload.label.trim()
+        : "in-memory-snapshot",
+  };
+}
+
+function countCaptureDataPackets(captureData) {
+  if (!captureData || typeof captureData !== "object") return 0;
+  const hostMap = captureData["Host"];
+  if (!hostMap || typeof hostMap !== "object") return 0;
+  return Object.values(hostMap).reduce((total, hostPackets) => {
+    if (!Array.isArray(hostPackets)) return total;
+    return total + hostPackets.length;
+  }, 0);
 }
 
 initializeInstallScreen({
@@ -4268,6 +4335,9 @@ function restoreSessionState(sessionState) {
 
 async function processCapturePath(capturePath, options = {}) {
   const { suppressLoadingOverlay = false, incrementalUpdate = false } = options;
+  if (incrementalUpdate) {
+    hideLoadingOverlay();
+  }
   if (!suppressLoadingOverlay) {
     document.getElementById("loading-screen").style.display = "flex";
     document.getElementById("loading-container").style.display = "block";
@@ -4282,6 +4352,120 @@ async function processCapturePath(capturePath, options = {}) {
   const loadResult = await window.captureapi.loadFile(capturePath);
   if (!loadResult?.success) {
     doError(`Failed to load capture: ${loadResult?.error || "unknown error"}`);
+    fileLoaded(false);
+    return;
+  }
+
+  if (incrementalUpdate && isFileLoaded) {
+    isCaptureStoreBackedCapture = true;
+    capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+    jsonCapture = "[lazy-capture-store]";
+
+    const targetHostsDropdown = getCachedElement("target_hosts");
+    const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
+    const hostMap =
+      capturedPackets && typeof capturedPackets["Host"] === "object"
+        ? capturedPackets["Host"]
+        : {};
+
+    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
+    while (targetHostsDropdown.options.length > 0) {
+      targetHostsDropdown.remove(0);
+    }
+    appendAllHostsOption(targetHostsDropdown);
+    appendBookmarkedOption(targetHostsDropdown);
+
+    packetStubByKey.clear();
+    hydratedPacketCache.clear();
+    clearStreamPacketHydrationCache();
+
+    Object.keys(hostMap).forEach((host) => {
+      hostsList.push(host);
+      const optionEl = document.createElement("option");
+      optionEl.textContent = host;
+      optionEl.value = host;
+      targetHostsDropdown.appendChild(optionEl);
+      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      hostPackets.forEach((packet, packetIndex) => {
+        const packetKey = getPacketKey(packet, host, packetIndex);
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+      });
+    });
+
+    const availableHosts = hostsList.slice();
+    const selectedHost =
+      previousHost && availableHosts.includes(previousHost)
+        ? previousHost
+        : DUMMY_ALL_HOST;
+    if (selectedHost) {
+      targetHostsDropdown.value = selectedHost;
+      hostFilterEl.value = selectedHost;
+      p = getPacketsForSelectedHost(selectedHost);
+    }
+
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+
+    if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
+      const shouldRefreshFilterUi = activeMainTab === MAIN_TAB_DATA;
+      await runFilterQuery(filterInputEl.value, {
+        trackHistory: false,
+        updateUi: shouldRefreshFilterUi,
+      });
+      if (activeMainTab === MAIN_TAB_LIST) {
+        showPacketList();
+      }
+    } else {
+      filteredPackets = undefined;
+      if (activeMainTab === MAIN_TAB_LIST) {
+        showPacketList();
+      }
+      if (activeMainTab === MAIN_TAB_DATA && p.length > 0) {
+        await handlePacketNavigation(undefined, null);
+      }
+      if (activeMainTab === MAIN_TAB_SUMMARY) {
+        showSummary();
+      }
+    }
+
+    return;
+  }
+
+  capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+  isCaptureStoreBackedCapture = true;
+  jsonCapture = "[lazy-capture-store]";
+  fileLoaded(true);
+
+  const loadedSessionState =
+    loadResult.sessionState && typeof loadResult.sessionState === "object"
+      ? loadResult.sessionState
+      : null;
+
+  await finalizeLoadedCapture(loadedSessionState);
+}
+
+async function processCaptureData(captureData, options = {}) {
+  const { suppressLoadingOverlay = false, incrementalUpdate = false } = options;
+  if (incrementalUpdate) {
+    hideLoadingOverlay();
+  }
+  if (!suppressLoadingOverlay) {
+    document.getElementById("loading-screen").style.display = "flex";
+    document.getElementById("loading-container").style.display = "block";
+    document.getElementById("loading-text").textContent = "Indexing capture...";
+  }
+
+  if (!window.captureapi) {
+    doError("Capture API is unavailable in this build");
+    return;
+  }
+
+  const loadResult = await window.captureapi.loadJson(JSON.stringify(captureData));
+  if (!loadResult?.success) {
+    doError(`Failed to load capture snapshot: ${loadResult?.error || "unknown error"}`);
     fileLoaded(false);
     return;
   }
@@ -10854,6 +11038,14 @@ document
     );
   });
 
+document
+  .getElementById("settings-debug-backend-http-data-mode-enabled")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backendHttpDataModeEnabled=${Boolean(event?.target?.checked)}`,
+    );
+  });
+
 document.getElementById("settings-debug-map-projection-zoom-x").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated mapProjectionZoomX=${event?.target?.value}`);
 });
@@ -12817,16 +13009,19 @@ window.jsonapi.onJsonPath((rawPayload) => {
         writeLogEntry(
           `Backend snapshot received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
         );
+        hideLoadingOverlay();
         await processCapturePath(payload.path, {
-          suppressLoadingOverlay: false,
+          suppressLoadingOverlay: true,
           incrementalUpdate: false,
         });
         backendProgressState.firstChunkLoaded = true;
+        hideLoadingOverlay();
         filterInputEl.value = "";
         updateFilterClearButtonState();
         clearFilterQuery();
         syncFilterHighlight();
       } else {
+        hideLoadingOverlay();
         updateBackendProgressStatus({ force: true });
         await processCapturePath(payload.path, {
           suppressLoadingOverlay: true,
@@ -12839,6 +13034,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
 
       if (payload.complete) {
         backendProgressState.processing = false;
+        hideLoadingOverlay();
         const loadEndTime = performance.now();
         document.getElementById("load-time").textContent =
           "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
@@ -12860,6 +13056,108 @@ window.jsonapi.onJsonPath((rawPayload) => {
     .catch((error) => {
       logErrorEntry("backend-progress", error);
       doError("Failed to process backend update", { backend: true });
+    });
+});
+
+window.jsonapi.onJsonData((rawPayload) => {
+  const payload = normalizeBackendJsonDataPayload(rawPayload);
+  if (!payload || !payload.captureData) return;
+
+  backendCaptureUpdateQueue = backendCaptureUpdateQueue
+    .then(async () => {
+      document.getElementById("error-container").style.display = "none";
+      currentSessionName = null;
+
+      backendProgressState.processedPackets = Math.max(
+        backendProgressState.processedPackets,
+        payload.processedPackets,
+      );
+      backendProgressState.totalPackets = Math.max(
+        backendProgressState.totalPackets,
+        payload.totalPackets,
+      );
+      backendProgressState.processing = !payload.complete;
+
+      if (!payload.complete) {
+        updateBackendProgressStatus();
+      }
+
+      const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
+      const payloadPacketCount = countCaptureDataPackets(payload.captureData);
+      const hasUsableChunk =
+        payload.complete
+        || payload.processedPackets >= minimumChunkSize
+        || payloadPacketCount > 0;
+
+      if (!backendProgressState.firstChunkLoaded) {
+        if (!hasUsableChunk) {
+          document.getElementById("loading-screen").style.display = "flex";
+          document.getElementById("loading-container").style.display = "block";
+          document.getElementById("loading-text").textContent = "Loading packets...";
+          updateBackendProgressStatus({ force: true });
+          writeLogEntry(
+            `Backend in-memory snapshot deferred label=${JSON.stringify(payload.label)} processed=${payload.processedPackets} total=${payload.totalPackets} chunk_size=${minimumChunkSize} payload_packets=${payloadPacketCount}`,
+          );
+          updateBackendProcessingWarning();
+          return;
+        }
+
+        // First usable in-memory chunk: hand control back to the UI immediately.
+        hideLoadingOverlay();
+        updateBackendProgressStatus({ force: true });
+        writeLogEntry(
+          `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_packets = ${payloadPacketCount} complete = ${payload.complete}`,
+        );
+        await yieldToRenderer();
+        await processCaptureData(payload.captureData, {
+          suppressLoadingOverlay: true,
+          incrementalUpdate: false,
+        });
+        backendProgressState.firstChunkLoaded = true;
+        clearSummaryContent();
+        hideLoadingOverlay();
+        filterInputEl.value = "";
+        updateFilterClearButtonState();
+        clearFilterQuery();
+        syncFilterHighlight();
+      } else {
+        hideLoadingOverlay();
+        updateBackendProgressStatus({ force: true });
+        await yieldToRenderer();
+        await processCaptureData(payload.captureData, {
+          suppressLoadingOverlay: true,
+          incrementalUpdate: true,
+        });
+        writeLogEntry(
+          `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
+        );
+      }
+
+      if (payload.complete) {
+        backendProgressState.processing = false;
+        clearSummaryContent();
+        hideLoadingOverlay();
+        const loadEndTime = performance.now();
+        document.getElementById("load-time").textContent =
+          "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+        document.getElementById("total-packets").textContent =
+          "Total Packets: " + totalPacketCount();
+        scheduleSessionKeychainAutoPopulate("backend-complete");
+        writeLogEntry(
+          `Completed processing backend in-memory data total_packets = ${totalPacketCount()} load_time_sec = ${(
+            (loadEndTime - startTime) /
+            1000
+          ).toFixed(2)
+          } `,
+        );
+        statusUpdate("Status: Ready");
+      }
+
+      updateBackendProcessingWarning();
+    })
+    .catch((error) => {
+      logErrorEntry("backend-progress-data", error);
+      doError("Failed to process backend in-memory update", { backend: true });
     });
 });
 
@@ -12885,7 +13183,7 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} `,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -12919,9 +13217,11 @@ function doError(message, { backend = false } = {}) {
     writeLogEntry(`Error shown message = "${message}"`);
   }
   const loadingContainerEl = document.getElementById("loading-container");
+  const loadingScreenEl = document.getElementById("loading-screen");
   const errorContainerEl = document.getElementById("error-container");
   clearSummaryContent();
   loadingContainerEl.style.display = "none";
+  loadingScreenEl.style.display = "none";
   errorContainerEl.style.display = "block";
   errorContainerEl.textContent = message;
   errorContainerEl.addEventListener("click", () => {

@@ -13,6 +13,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     debug: {
         ungroupedListVirtualizationEnabled: false,
+        backendHttpDataModeEnabled: false,
         mapProjectionZoomX: 0.55,
         mapProjectionZoomY: 0.95,
         mapProjectionOffsetX: -0.53,
@@ -125,6 +126,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof debug.ungroupedListVirtualizationEnabled === "boolean"
                     ? debug.ungroupedListVirtualizationEnabled
                     : debugDefaults.ungroupedListVirtualizationEnabled,
+            backendHttpDataModeEnabled:
+                typeof debug.backendHttpDataModeEnabled === "boolean"
+                    ? debug.backendHttpDataModeEnabled
+                    : debugDefaults.backendHttpDataModeEnabled,
             mapProjectionZoomX: toFiniteNumber(
                 debug.mapProjectionZoomX,
                 debugDefaults.mapProjectionZoomX,

@@ -51,10 +51,113 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(body),
-          Accept: "application/json",
+          Accept: "application/x-ndjson, application/json",
         },
       },
       (res) => {
+        const emitProgressEvent = (event) => {
+          const processedPackets = Number(event?.processedPackets) || 0;
+          const totalPackets = Number(event?.totalPackets) || 0;
+          const complete = Boolean(event?.complete);
+          if (event?.captureData && typeof event.captureData === "object") {
+            sendJsonDataPayload({
+              captureData: event.captureData,
+              processedPackets,
+              totalPackets,
+              complete,
+              chunkSize: DEFAULT_HOST_CHUNK_SIZE,
+              label: typeof event?.path === "string" ? event.path : "in-memory-snapshot",
+            });
+            return;
+          }
+          if (event?.path) {
+            sendJsonPathPayload({
+              path: event.path,
+              processedPackets,
+              totalPackets,
+              complete,
+              chunkSize: DEFAULT_HOST_CHUNK_SIZE,
+            });
+          }
+        };
+
+        const contentType = String(res.headers["content-type"] || "").toLowerCase();
+        if (contentType.includes("application/x-ndjson")) {
+          let ndjsonBuffer = "";
+          let latestCaptureData = null;
+          let finalResult = {
+            success: false,
+            error: "HTTP backend stream ended without completion event",
+            stdout: "",
+            fallbackRecommended: false,
+          };
+
+          const processNdjsonLine = (line) => {
+            const trimmed = String(line || "").trim();
+            if (!trimmed) return;
+            let message;
+            try {
+              message = JSON.parse(trimmed);
+            } catch (_err) {
+              return;
+            }
+
+            if (message?.type === "progress") {
+              emitProgressEvent(message);
+              if (message?.captureData && typeof message.captureData === "object") {
+                latestCaptureData = message.captureData;
+              }
+              return;
+            }
+
+            if (message?.type === "complete") {
+              const finalCaptureData =
+                message?.captureData && typeof message.captureData === "object"
+                  ? message.captureData
+                  : latestCaptureData;
+              if (finalCaptureData) {
+                sendJsonDataPayload({
+                  captureData: finalCaptureData,
+                  processedPackets: Number(message?.processedPackets) || 0,
+                  totalPackets: Number(message?.totalPackets) || 0,
+                  complete: true,
+                  chunkSize: hostChunkSize,
+                  label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
+                });
+              }
+              finalResult = {
+                success: Boolean(message?.success),
+                error: message?.error || "",
+                stdout: typeof message?.stdout === "string" ? message.stdout : "",
+                fallbackRecommended: false,
+              };
+              return;
+            }
+
+            if (message?.type === "error") {
+              finalResult = {
+                success: false,
+                error: message?.error || "HTTP backend stream error",
+                stdout: "",
+                fallbackRecommended: false,
+              };
+            }
+          };
+
+          res.on("data", (chunk) => {
+            ndjsonBuffer += chunk.toString();
+            const lines = ndjsonBuffer.split(/\r?\n/);
+            ndjsonBuffer = lines.pop() || "";
+            lines.forEach(processNdjsonLine);
+          });
+
+          res.on("end", () => {
+            processNdjsonLine(ndjsonBuffer);
+            finish(finalResult);
+          });
+          return;
+        }
+
         let responseBody = "";
         res.on("data", (chunk) => {
           responseBody += chunk.toString();
@@ -160,10 +263,12 @@ function normalizeBackendTransportOptions(rawOptions = {}) {
     ? parsedPort
     : BACKEND_HTTP_PORT;
   const forceLegacySpawn = Boolean(source.forceLegacySpawn);
+  const useHttpDataSnapshots = Boolean(source.useHttpDataSnapshots);
   return {
     tcpHost: host,
     tcpPort: port,
     forceLegacySpawn,
+    useHttpDataSnapshots,
   };
 }
 
@@ -339,6 +444,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
   const {
     hostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
     pcapSourcePayload = null,
+    useHttpDataSnapshots = false,
   } = options;
 
   const ready = await ensureBackendHttpServerReady();
@@ -351,9 +457,42 @@ async function runBackendCommandViaHttp(filename, options = {}) {
   }
 
   return new Promise((resolve) => {
+    const emitProgressEvent = (event) => {
+      const processedPackets = Number(event?.processedPackets) || 0;
+      const totalPackets = Number(event?.totalPackets) || 0;
+      const complete = Boolean(event?.complete);
+      if (event?.captureData && typeof event.captureData === "object") {
+        global.logBackend(
+          `[Bridge] HTTP progress json-data processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+        );
+        sendJsonDataPayload({
+          captureData: event.captureData,
+          processedPackets,
+          totalPackets,
+          complete,
+          chunkSize: hostChunkSize,
+          label: typeof event?.path === "string" ? event.path : "in-memory-snapshot",
+        });
+        return;
+      }
+      if (event?.path) {
+        global.logBackend(
+          `[Bridge] HTTP progress json-path processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+        );
+        sendJsonPathPayload({
+          path: event.path,
+          processedPackets,
+          totalPackets,
+          complete,
+          chunkSize: hostChunkSize,
+        });
+      }
+    };
+
     const requestPayload = {
       pcapPath: filename,
       hostChunkSize,
+      emitJsonSnapshots: Boolean(useHttpDataSnapshots),
     };
     if (pcapSourcePayload && typeof pcapSourcePayload.data === "string") {
       requestPayload.pcapBase64 = pcapSourcePayload.data;
@@ -378,10 +517,104 @@ async function runBackendCommandViaHttp(filename, options = {}) {
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(body),
-          Accept: "application/json",
+          Accept: "application/x-ndjson, application/json",
         },
       },
       (res) => {
+        const contentType = String(res.headers["content-type"] || "").toLowerCase();
+
+        if (contentType.includes("application/x-ndjson")) {
+          let ndjsonBuffer = "";
+          let sawComplete = false;
+          let latestCaptureData = null;
+          let finalResult = {
+            success: false,
+            error: "HTTP backend stream ended without completion event",
+            stdout: "",
+            fallbackRecommended: false,
+            pcapSource: pcapSourcePayload,
+          };
+
+          const processNdjsonLine = (line) => {
+            const trimmed = String(line || "").trim();
+            if (!trimmed) return;
+
+            let message;
+            try {
+              message = JSON.parse(trimmed);
+            } catch (_err) {
+              return;
+            }
+
+            if (message?.type === "progress") {
+              emitProgressEvent(message);
+              if (message?.captureData && typeof message.captureData === "object") {
+                latestCaptureData = message.captureData;
+              }
+              return;
+            }
+
+            if (message?.type === "complete") {
+              sawComplete = true;
+              const finalCaptureData =
+                message?.captureData && typeof message.captureData === "object"
+                  ? message.captureData
+                  : latestCaptureData;
+              if (finalCaptureData) {
+                sendJsonDataPayload({
+                  captureData: finalCaptureData,
+                  processedPackets: Number(message?.processedPackets) || 0,
+                  totalPackets: Number(message?.totalPackets) || 0,
+                  complete: true,
+                  chunkSize: hostChunkSize,
+                  label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
+                });
+              }
+              finalResult = {
+                success: Boolean(message?.success),
+                error: message?.error || "",
+                stdout: typeof message?.stdout === "string" ? message.stdout : "",
+                fallbackRecommended: false,
+                pcapSource: pcapSourcePayload,
+              };
+              return;
+            }
+
+            if (message?.type === "error") {
+              finalResult = {
+                success: false,
+                error: message?.error || "HTTP backend stream error",
+                stdout: "",
+                fallbackRecommended: false,
+                pcapSource: pcapSourcePayload,
+              };
+            }
+          };
+
+          res.on("data", (chunk) => {
+            ndjsonBuffer += chunk.toString();
+            const lines = ndjsonBuffer.split(/\r?\n/);
+            ndjsonBuffer = lines.pop() || "";
+            lines.forEach(processNdjsonLine);
+          });
+
+          res.on("end", () => {
+            processNdjsonLine(ndjsonBuffer);
+            if (sawComplete) {
+              finish(finalResult);
+              return;
+            }
+            finish({
+              success: false,
+              error: finalResult.error || "HTTP backend stream ended before completion",
+              stdout: finalResult.stdout || "",
+              fallbackRecommended: false,
+              pcapSource: pcapSourcePayload,
+            });
+          });
+          return;
+        }
+
         let responseBody = "";
         res.on("data", (chunk) => {
           responseBody += chunk.toString();
@@ -400,17 +633,10 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             return;
           }
 
-          const progressEvents = Array.isArray(parsed.progressEvents) ? parsed.progressEvents : [];
-          progressEvents.forEach((event) => {
-            if (!event?.path) return;
-            sendJsonPathPayload({
-              path: event.path,
-              processedPackets: Number(event.processedPackets) || 0,
-              totalPackets: Number(event.totalPackets) || 0,
-              complete: Boolean(event.complete),
-              chunkSize: hostChunkSize,
-            });
-          });
+          const progressEvents = Array.isArray(parsed.progressEvents)
+            ? parsed.progressEvents
+            : [];
+          progressEvents.forEach(emitProgressEvent);
 
           if (res.statusCode !== 200 || !parsed.success) {
             finish({
@@ -481,6 +707,12 @@ function sendJsonPathPayload(payload) {
   const mainWin = getMainWindow();
   if (!mainWin) return;
   mainWin.webContents.send("json-path", payload);
+}
+
+function sendJsonDataPayload(payload) {
+  const mainWin = getMainWindow();
+  if (!mainWin) return;
+  mainWin.webContents.send("json-data", payload);
 }
 
 function sendBackendPcapSource(payload) {
@@ -733,6 +965,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     const httpResult = await runBackendCommandViaHttp(filename, {
       hostChunkSize,
       pcapSourcePayload,
+      useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
     });
     if (httpResult?.success) {
       global.logBackend("[Bridge] Backend completed using HTTP service mode");

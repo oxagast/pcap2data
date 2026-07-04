@@ -259,23 +259,7 @@ async function buildStoreFromSource(sourcePath) {
         encoding: "utf8",
         highWaterMark: 1024 * 64,
     });
-
-    await new Promise((resolve, reject) => {
-        let parseFailed = false;
-
-        stream.on("data", (chunk) => {
-            if (parseFailed) return;
-            try {
-                parser.write(chunk);
-            } catch (error) {
-                parseFailed = true;
-                reject(error);
-            }
-        });
-
-        stream.on("error", (error) => reject(error));
-        stream.on("end", () => resolve());
-    });
+    await parseJsonChunks(parser, stream);
 
     fs.fsyncSync(packetDataFd);
     listEntries.sort(compareListEntries);
@@ -302,6 +286,112 @@ async function buildStoreFromSource(sourcePath) {
     };
 
     return store;
+}
+
+async function parseJsonChunks(parser, chunkSource) {
+    let parseFailed = false;
+    try {
+        for await (const chunk of chunkSource) {
+            if (parseFailed) break;
+            try {
+                parser.write(String(chunk));
+            } catch (error) {
+                parseFailed = true;
+                throw error;
+            }
+        }
+    } finally {
+        if (chunkSource && typeof chunkSource.destroy === "function") {
+            chunkSource.destroy();
+        }
+    }
+}
+
+async function buildStoreFromJsonText(jsonText) {
+    ensureStoreDir();
+
+    const storeId = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}`;
+    const packetDataPath = path.join(CAPTURE_STORE_DIR, `${storeId}.packets.ndjson`);
+    const packetDataFd = fs.openSync(packetDataPath, "w+");
+
+    const refsByKey = new Map();
+    const hostPackets = new Map();
+    const listEntries = [];
+    let finalSummary = "";
+    let sessionState = null;
+    let writeOffset = 0;
+
+    const parser = new JSONParse();
+    parser.onValue = function onValue(value) {
+        const pathKeys = getPathKeys(this);
+
+        if (isFinalSummaryPath(pathKeys)) {
+            finalSummary = typeof value === "string" ? value : "";
+            return;
+        }
+
+        if (isSessionStatePath(pathKeys) && isObject(value)) {
+            sessionState = value;
+            return;
+        }
+
+        const packetPathInfo = getPacketPathInfo(pathKeys);
+        if (!packetPathInfo || !isObject(value) || !isObject(value["Packet Info"])) {
+            return;
+        }
+
+        const { host, hostPacketIndex } = packetPathInfo;
+        const packetKey = derivePacketKey(value, host, hostPacketIndex, refsByKey);
+        const packetStub = buildPacketStub(value, packetKey, host, hostPacketIndex);
+
+        hostPackets.set(host, hostPackets.get(host) || []);
+        hostPackets.get(host).push(packetStub);
+
+        refsByKey.set(packetKey, {
+            packetKey,
+            host,
+            hostPacketIndex,
+            packetListIndex: hostPackets.get(host).length - 1,
+            offset: -1,
+            length: -1,
+        });
+
+        const result = writePacketLineSync(packetDataFd, writeOffset, value);
+        writeOffset += result.length;
+        const ref = refsByKey.get(packetKey);
+        if (ref) {
+            ref.offset = result.offset;
+            ref.length = result.length;
+        }
+
+        listEntries.push(derivePacketListSummary(value, packetKey, host, hostPacketIndex));
+    };
+
+    await parseJsonChunks(parser, [jsonText]);
+
+    fs.fsyncSync(packetDataFd);
+    listEntries.sort(compareListEntries);
+
+    const hostObject = {};
+    hostPackets.forEach((packetList, host) => {
+        hostObject[host] = packetList;
+    });
+
+    return {
+        storeId,
+        sourcePath: "[json-text]",
+        packetDataPath,
+        packetDataFd,
+        refsByKey,
+        hostPackets,
+        packetCache: new Map(),
+        listEntries,
+        captureData: {
+            Host: hostObject,
+            "Final Summary": finalSummary,
+        },
+        sessionState,
+    };
 }
 
 async function closeStore(store) {
@@ -450,15 +540,8 @@ function registerCaptureStoreHandlers(ipcMain) {
         }
 
         try {
-            ensureStoreDir();
-            const sourcePath = path.join(
-                CAPTURE_STORE_DIR,
-                `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.json`,
-            );
-            await fs.promises.writeFile(sourcePath, jsonData, "utf8");
-            const store = await buildStoreFromSource(sourcePath);
+            const store = await buildStoreFromJsonText(jsonData);
             await activateStore(store);
-            fs.promises.rm(sourcePath, { force: true }).catch(() => { });
             return {
                 success: true,
                 captureData: store.captureData,
