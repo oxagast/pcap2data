@@ -419,6 +419,10 @@ function createKeystorePanel({
       updateCryptKeystoreWorkspaceState(null);
       return;
     }
+    const normalizedContent = normalizeSessionSecretValue(entry.content);
+    const contentPreview = normalizedContent
+      ? normalizedContent.replace(/\r?\n/g, " ").slice(0, 140)
+      : "";
     detailsEl.textContent = [
       `Keychain: ${getActiveKeystoreLabel()}`,
       `Type: ${entry.type}`,
@@ -427,6 +431,10 @@ function createKeystorePanel({
       entry.packetIndex !== undefined ? `Packet: ${entry.packetIndex}` : null,
       `Saved: ${entry.createdAt}`,
       entry.summary ? `Summary: ${entry.summary}` : "Summary: n/a",
+      normalizedContent
+        ? `Content bytes: ${new TextEncoder().encode(normalizedContent).length}`
+        : "Content bytes: 0",
+      contentPreview ? `Content preview: ${contentPreview}` : "Content preview: (empty)",
     ]
       .filter(Boolean)
       .join("\n");
@@ -2082,12 +2090,11 @@ function createKeystorePanel({
     }
     renderCryptKeystoreDetails(selectedEntry);
     document.getElementById("crypt-keystore-label").value = selectedEntry.label;
+    document.getElementById("crypt-credential-input").value = loadedContent;
     if (selectedEntry.type === "certificate") {
       getApplyCryptCertificateText()(loadedContent, getActiveKeystoreLabel());
     } else if (selectedEntry.type === "private-key") {
       getApplyCryptPrivateKeyText()(loadedContent, getActiveKeystoreLabel());
-    } else {
-      document.getElementById("crypt-credential-input").value = loadedContent;
     }
     statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
   }

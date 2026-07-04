@@ -10,8 +10,8 @@ const PGP_ARMOR_BLOCK_REGEX =
   /-----BEGIN PGP [A-Z0-9 ]+-----[\s\S]*?-----END PGP [A-Z0-9 ]+-----/g;
 const PGP_BEGIN_LINE_REGEX = /-----BEGIN (PGP [^-]+)-----/;
 const PGP_END_LINE_REGEX = /-----END (PGP [^-]+)-----/;
-const PGP_PRIVATE_KEY_BLOCK_BEGIN = "-----BEGIN PGP PRIVATE KEY BLOCK-----";
-const PGP_PRIVATE_KEY_BLOCK_END = "-----END PGP PRIVATE KEY BLOCK-----";
+const PGP_PRIVATE_KEY_BLOCK_REGEX =
+  /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----/i;
 const PGP_PASSWORD_HINT_KEY_REGEX = /(pass(word|phrase|wd)?|pwd|pin|secret|credential)/i;
 const PGP_PASSWORD_CAPTURE_REGEX = /(pass(word|phrase|wd)?|pwd|pin)\s*(is|=|:)?\s*(?:"([^"\r\n]{3,160})"|'([^'\r\n]{3,160})'|([^\s"'`;:,\r\n]{3,160}))/gi;
 const MAX_PGP_PREVIEW_LENGTH = 400;
@@ -385,27 +385,21 @@ function createCryptPanel({
 
   async function saveSuccessfulPgpKeyMaterial({
     privateKeyText,
-    privateKeyObject,
     passphrase,
   }) {
-    let normalizedPrivateKey = "";
-    if (privateKeyObject && typeof privateKeyObject.armor === "function") {
-      try {
-        normalizedPrivateKey = String(await privateKeyObject.armor()).trim();
-      } catch (_) {
-        normalizedPrivateKey = "";
+    const extractPrivateKeyBlock = (rawValue) => {
+      const text = String(rawValue || "").trim();
+      if (!text) return "";
+      const blockMatch = text.match(PGP_PRIVATE_KEY_BLOCK_REGEX);
+      if (blockMatch?.[0]) {
+        return String(blockMatch[0]).trim();
       }
-    }
-    if (!normalizedPrivateKey) {
-      normalizedPrivateKey = String(privateKeyText || "").trim();
-    }
+      return text;
+    };
 
-    const hasPrivateKeyBlockBoundaries =
-      normalizedPrivateKey.includes(PGP_PRIVATE_KEY_BLOCK_BEGIN) &&
-      normalizedPrivateKey.includes(PGP_PRIVATE_KEY_BLOCK_END);
-    if (!hasPrivateKeyBlockBoundaries) {
-      normalizedPrivateKey = "";
-    }
+    // Persist the exact private key material the user pasted into the PGP private key input.
+    // This avoids saving any transformed/internal representation.
+    const normalizedPrivateKey = extractPrivateKeyBlock(privateKeyText);
     const normalizedPassphrase = String(passphrase || "").trim();
 
     if (normalizedPassphrase) {
@@ -988,7 +982,6 @@ function createCryptPanel({
         message: parsed.structure.entity,
         format: "utf8",
       };
-      let successfulDecryptionPrivateKey = null;
 
       if (privateKeyText) {
         let privateKey = await openpgp.readPrivateKey({
@@ -1000,7 +993,6 @@ function createCryptPanel({
             passphrase,
           });
         }
-        successfulDecryptionPrivateKey = privateKey;
         decryptArgs.decryptionKeys = [privateKey];
       }
 
@@ -1027,7 +1019,6 @@ function createCryptPanel({
       if (privateKeyText) {
         await saveSuccessfulPgpKeyMaterial({
           privateKeyText,
-          privateKeyObject: successfulDecryptionPrivateKey,
           passphrase,
         });
       }
@@ -1239,8 +1230,17 @@ function createCryptPanel({
   function applyCryptPrivateKeyText(rawText, sourceLabel) {
     const keyInputEl = document.getElementById("crypt-key-input");
     const keyPreviewEl = document.getElementById("crypt-key-preview");
+    const pgpPrivateKeyInputEl = document.getElementById(
+      "crypt-pgp-private-key-input",
+    );
     const normalized = (rawText || "").trim();
     keyInputEl.value = normalized;
+    if (
+      pgpPrivateKeyInputEl &&
+      /-----BEGIN PGP PRIVATE KEY BLOCK-----/i.test(normalized)
+    ) {
+      pgpPrivateKeyInputEl.value = normalized;
+    }
     keyPreviewEl.textContent = formatCryptSummary(
       normalized,
       "Private key",

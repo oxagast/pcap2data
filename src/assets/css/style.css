@@ -1027,6 +1027,13 @@ strong {
   height: 100%;
 }
 
+#keystore_box #crypt-credential-input {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  resize: none;
+}
+
 .data-tools-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.6fr);

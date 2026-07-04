@@ -73,6 +73,41 @@ function isOllamaClientModuleAvailable() {
 
 const OLLAMA_CLOUD_PING_URL = "https://ollama.com/api/generate";
 const OLLAMA_CLOUD_PING_MODEL = "gpt-oss:120b";
+const RENDERER_CSP = [
+  "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com data:",
+  "script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:",
+  "worker-src 'self' blob: data:",
+].join("; ");
+
+let isRendererCspHookInstalled = false;
+
+function ensureRendererCspHeader(webContentsSession) {
+  if (isRendererCspHookInstalled || !webContentsSession?.webRequest) {
+    return;
+  }
+
+  webContentsSession.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== "mainFrame") {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+
+    const responseHeaders = {
+      ...(details.responseHeaders || {}),
+      "Content-Security-Policy": [RENDERER_CSP],
+    };
+
+    Object.keys(responseHeaders).forEach((headerName) => {
+      if (headerName.toLowerCase() === "content-security-policy" && headerName !== "Content-Security-Policy") {
+        delete responseHeaders[headerName];
+      }
+    });
+
+    callback({ responseHeaders });
+  });
+
+  isRendererCspHookInstalled = true;
+}
 
 function getLlmDiagnostics() {
   return {
@@ -885,6 +920,7 @@ function createWindow() {
       nodeIntegration: true,
     },
   });
+  ensureRendererCspHeader(mainWindow.webContents.session);
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   const appendRendererDiagnostic = (message) => {
     appendActivityLogLine(
