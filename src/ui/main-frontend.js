@@ -13243,6 +13243,8 @@ function hideAllData() {
     let filterKey = "";
     if (currentFilterStr) {
       filterKey = currentFilterStr.split(":")[0].trim();
+      // we also need to strip off the ! and ( ) if they exist
+      filterKey = filterKey.replace(/^!/, "").replace(/^\(/, "").replace(/\)$/, "");
       if (filterKey !== "" && !validKeysCache.includes(filterKey)) {
         isValidKey = false;
       } else {
