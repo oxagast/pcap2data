@@ -8,9 +8,14 @@ const DEFAULT_HEATMAP_POINT_SIZE = 90;
 const DEFAULT_HEATMAP_BLUR = 72;
 const DEFAULT_HEATMAP_MAP_ZOOM = 100;
 const MIN_HEATMAP_MAP_ZOOM = 100;
-const MAX_HEATMAP_MAP_ZOOM = 1000;
+const MAX_HEATMAP_MAP_ZOOM = 850;
 const HEATMAP_MAP_ZOOM_SLIDER_STEP = 1;
-const HEATMAP_MAP_ZOOM_SELECTION_STEP = 50;
+const HEATMAP_SELECTION_ZOOM_LARGE_AREA_PERCENT = 200;
+const HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT = 450;
+const HEATMAP_SELECTION_ZOOM_TINY_AREA_PERCENT = 800;
+const HEATMAP_SELECTION_AREA_TINY_RATIO = 0.001;
+const HEATMAP_SELECTION_AREA_MID_RATIO = 0.02;
+const HEATMAP_SELECTION_AREA_LARGE_RATIO = 0.4;
 const HEATMAP_LOCATION_CLICK_ZOOM_PERCENT = 300;
 const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
 const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
@@ -400,6 +405,52 @@ function clampHeatmapMapZoomPercent(value, fallback = DEFAULT_HEATMAP_MAP_ZOOM) 
   return Math.min(MAX_HEATMAP_MAP_ZOOM, Math.max(MIN_HEATMAP_MAP_ZOOM, Math.round(numericValue)));
 }
 
+function smoothstep(value) {
+  const x = Math.min(1, Math.max(0, Number(value) || 0));
+  return x * x * (3 - 2 * x);
+}
+
+function getSelectionZoomPercentFromArea(selectionRect, bounds) {
+  const selectionArea = Math.max(1, selectionRect.width * selectionRect.height);
+  const boundsArea = Math.max(1, bounds.width * bounds.height);
+  const areaRatio = Math.min(1, Math.max(0, selectionArea / boundsArea));
+  const tinyRatio = HEATMAP_SELECTION_AREA_TINY_RATIO;
+  const midRatio = HEATMAP_SELECTION_AREA_MID_RATIO;
+  const largeRatio = HEATMAP_SELECTION_AREA_LARGE_RATIO;
+  const safeAreaRatio = Math.min(largeRatio, Math.max(tinyRatio, areaRatio));
+
+  if (!(tinyRatio < midRatio && midRatio < largeRatio)) {
+    return clampHeatmapMapZoomPercent(HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT);
+  }
+
+  const interpolateZoom = (startRatio, endRatio, startZoom, endZoom) => {
+    const span = endRatio - startRatio;
+    if (!Number.isFinite(span) || span <= 0) return startZoom;
+    const normalized = Math.min(1, Math.max(0, (safeAreaRatio - startRatio) / span));
+    const eased = smoothstep(normalized);
+    return startZoom + ((endZoom - startZoom) * eased);
+  };
+
+  let zoomPercent;
+  if (safeAreaRatio <= midRatio) {
+    zoomPercent = interpolateZoom(
+      tinyRatio,
+      midRatio,
+      HEATMAP_SELECTION_ZOOM_TINY_AREA_PERCENT,
+      HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT,
+    );
+  } else {
+    zoomPercent = interpolateZoom(
+      midRatio,
+      largeRatio,
+      HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT,
+      HEATMAP_SELECTION_ZOOM_LARGE_AREA_PERCENT,
+    );
+  }
+
+  return clampHeatmapMapZoomPercent(zoomPercent, HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT);
+}
+
 function buildHeatmapRenderConfig(width, height, controls = {}) {
   const intensityPercent = clampHeatmapPercent(
     controls.intensityPercent,
@@ -476,13 +527,66 @@ function applyHeatmapLayerBounds(layerEl, bounds) {
   layerEl.style.height = `${bounds.height}px`;
 }
 
-function applyHeatmapLayerZoom(layerEl, viewState = {}) {
-  if (!layerEl) return;
+function getHeatmapViewTransform(bounds, viewState = {}) {
   const zoomPercent = clampHeatmapMapZoomPercent(viewState.zoomPercent, DEFAULT_HEATMAP_MAP_ZOOM);
+  const scale = zoomPercent / 100;
   const focusX = Math.min(1, Math.max(0, Number(viewState.focusX) || 0.5));
   const focusY = Math.min(1, Math.max(0, Number(viewState.focusY) || 0.5));
-  layerEl.style.transformOrigin = `${(focusX * 100).toFixed(2)}% ${(focusY * 100).toFixed(2)}%`;
-  layerEl.style.transform = `scale(${(zoomPercent / 100).toFixed(3)})`;
+  const boundsWidth = Math.max(1, Number(bounds?.width) || 1);
+  const boundsHeight = Math.max(1, Number(bounds?.height) || 1);
+
+  let translateX = 0;
+  let translateY = 0;
+  if (scale > 1) {
+    translateX = (boundsWidth / 2) - (focusX * boundsWidth * scale);
+    translateY = (boundsHeight / 2) - (focusY * boundsHeight * scale);
+  }
+
+  return {
+    scale,
+    focusX,
+    focusY,
+    boundsWidth,
+    boundsHeight,
+    translateX,
+    translateY,
+  };
+}
+
+function convertViewportRectToMapRect(bounds, selectionRect, viewState = {}) {
+  const transform = getHeatmapViewTransform(bounds, viewState);
+  const scale = Math.max(0.0001, transform.scale);
+  const leftInBounds = Math.max(0, (selectionRect.left - bounds.left - transform.translateX) / scale);
+  const topInBounds = Math.max(0, (selectionRect.top - bounds.top - transform.translateY) / scale);
+  const rightInBounds = Math.min(
+    transform.boundsWidth,
+    ((selectionRect.left + selectionRect.width) - bounds.left - transform.translateX) / scale,
+  );
+  const bottomInBounds = Math.min(
+    transform.boundsHeight,
+    ((selectionRect.top + selectionRect.height) - bounds.top - transform.translateY) / scale,
+  );
+
+  return {
+    left: Math.min(transform.boundsWidth, Math.max(0, leftInBounds)),
+    top: Math.min(transform.boundsHeight, Math.max(0, topInBounds)),
+    width: Math.max(0, rightInBounds - leftInBounds),
+    height: Math.max(0, bottomInBounds - topInBounds),
+  };
+}
+
+function applyHeatmapLayerZoom(layerEl, bounds, viewState = {}) {
+  if (!layerEl) return;
+  const transform = getHeatmapViewTransform(
+    {
+      width: Math.max(1, Number(bounds?.width) || layerEl.clientWidth || 1),
+      height: Math.max(1, Number(bounds?.height) || layerEl.clientHeight || 1),
+    },
+    viewState,
+  );
+
+  layerEl.style.transformOrigin = "0 0";
+  layerEl.style.transform = `translate(${transform.translateX.toFixed(2)}px, ${transform.translateY.toFixed(2)}px) scale(${transform.scale.toFixed(3)})`;
 }
 
 function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb, renderConfig) {
@@ -664,10 +768,10 @@ function renderStatsHeatmap(
   applyHeatmapLayerBounds(gridLayerEl, mapBounds);
   applyHeatmapLayerBounds(heatmapMountEl, mapBounds);
   applyHeatmapLayerBounds(pointsMountEl, mapBounds);
-  applyHeatmapLayerZoom(basemapFrameEl, viewState);
-  applyHeatmapLayerZoom(gridLayerEl, viewState);
-  applyHeatmapLayerZoom(heatmapMountEl, viewState);
-  applyHeatmapLayerZoom(pointsMountEl, viewState);
+  applyHeatmapLayerZoom(basemapFrameEl, mapBounds, viewState);
+  applyHeatmapLayerZoom(gridLayerEl, mapBounds, viewState);
+  applyHeatmapLayerZoom(heatmapMountEl, mapBounds, viewState);
+  applyHeatmapLayerZoom(pointsMountEl, mapBounds, viewState);
 
   const renderConfig = buildHeatmapRenderConfig(width, height, controls);
   const projectedData = points.map((point) => {
@@ -1307,16 +1411,20 @@ function createStatsHeatmapSection({
     updatePixelMask(selectionRect);
   };
 
-  const getSelectionFocusFromRect = (bounds, selectionRect) => ({
-    focusX: Math.min(
-      1,
-      Math.max(0, ((selectionRect.left + (selectionRect.width / 2)) - bounds.left) / Math.max(1, bounds.width)),
-    ),
-    focusY: Math.min(
-      1,
-      Math.max(0, ((selectionRect.top + (selectionRect.height / 2)) - bounds.top) / Math.max(1, bounds.height)),
-    ),
-  });
+  const getSelectionFocusFromRect = (bounds, selectionRect, viewState = mapViewState) => {
+    const mapRect = convertViewportRectToMapRect(bounds, selectionRect, viewState);
+    return {
+      focusX: Math.min(
+        1,
+        Math.max(0, (mapRect.left + (mapRect.width / 2)) / Math.max(1, bounds.width)),
+      ),
+      focusY: Math.min(
+        1,
+        Math.max(0, (mapRect.top + (mapRect.height / 2)) / Math.max(1, bounds.height)),
+      ),
+      mapRect,
+    };
+  };
 
   const buildLocationSelectionRect = (bounds, centerX, centerY) => {
     const aspectRatio =
@@ -1354,18 +1462,12 @@ function createStatsHeatmapSection({
       width: selectionWidth,
       height: selectionHeight,
     };
-    const focus = getSelectionFocusFromRect(bounds, selectionRect);
+    const focus = getSelectionFocusFromRect(bounds, selectionRect, getMapZoomState());
     return {
       selectionRect,
       focusX: focus.focusX,
       focusY: focus.focusY,
-      targetZoomPercent: Math.min(
-        MAX_HEATMAP_MAP_ZOOM,
-        clampHeatmapMapZoomPercent(
-          mapZoomInputEl.value,
-          DEFAULT_HEATMAP_MAP_ZOOM,
-        ) + HEATMAP_MAP_ZOOM_SELECTION_STEP,
-      ),
+      targetZoomPercent: getSelectionZoomPercentFromArea(focus.mapRect, bounds),
     };
   };
 
