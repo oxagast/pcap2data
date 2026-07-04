@@ -20,6 +20,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         mapProjectionOffsetY: 0,
         mapProjectionCalibrationLocked: true,
     },
+    list: {
+        columnVisibility: {},
+        columnWidths: {},
+    },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
         ollamaApiKey: "",
@@ -67,15 +71,42 @@ function normalizeThemeId(value, fallback) {
     return normalized || fallback;
 }
 
+function normalizeBooleanRecord(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+    }
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key, entryValue]) => typeof key === "string" && typeof entryValue === "boolean")
+            .map(([key, entryValue]) => [key, entryValue]),
+    );
+}
+
+function normalizePositiveIntegerRecord(value, minimum = 1, maximum = Number.POSITIVE_INFINITY) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+    }
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => typeof key === "string")
+            .map(([key, entryValue]) => {
+                const parsedValue = toPositiveInteger(entryValue, minimum, minimum);
+                return [key, Math.min(maximum, Math.max(minimum, parsedValue))];
+            }),
+    );
+}
+
 function normalizeSettings(rawSettings = {}) {
     const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
     const general = source.general && typeof source.general === "object" ? source.general : {};
     const backend = source.backend && typeof source.backend === "object" ? source.backend : {};
     const debug = source.debug && typeof source.debug === "object" ? source.debug : {};
+    const list = source.list && typeof source.list === "object" ? source.list : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
     const backendDefaults = DEFAULT_SETTINGS.backend;
     const debugDefaults = DEFAULT_SETTINGS.debug;
+    const listDefaults = DEFAULT_SETTINGS.list;
     const defaults = DEFAULT_SETTINGS.llm;
 
     const normalizedBackendChunkSize = toPositiveInteger(
@@ -158,6 +189,14 @@ function normalizeSettings(rawSettings = {}) {
                 typeof debug.mapProjectionCalibrationLocked === "boolean"
                     ? debug.mapProjectionCalibrationLocked
                     : debugDefaults.mapProjectionCalibrationLocked,
+        },
+        list: {
+            columnVisibility: normalizeBooleanRecord(list.columnVisibility || listDefaults.columnVisibility),
+            columnWidths: normalizePositiveIntegerRecord(
+                list.columnWidths || listDefaults.columnWidths,
+                48,
+                640,
+            ),
         },
         llm: {
             ollamaModel:

@@ -1,5 +1,7 @@
 
 const threadName = "List";
+const LIST_COLUMN_MIN_WIDTH = 48;
+const LIST_COLUMN_MAX_WIDTH = 640;
 
 function isUnknownLikeProtocol(value) {
   if (value === null || value === undefined) return true;
@@ -126,6 +128,18 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
   return "Unknown protocol";
 }
 
+function getPacketPayloadLength(packetInfo) {
+  const payloadLength = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
+  return Math.floor(payloadLength);
+}
+
+function clampColumnWidth(width) {
+  const parsedWidth = Number.parseInt(String(width), 10);
+  if (!Number.isFinite(parsedWidth)) return null;
+  return Math.max(LIST_COLUMN_MIN_WIDTH, Math.min(LIST_COLUMN_MAX_WIDTH, parsedWidth));
+}
+
 function createListPanel({
   constants,
   getJsonCapture,
@@ -151,6 +165,8 @@ function createListPanel({
   popHexGrid,
   populateDataTypes,
   isCaptureStoreBackedCapture,
+  getCurrentSettings,
+  setCurrentSettings,
   getEnableUngroupedListVirtualization,
 }) {
   const { MAIN_TAB_LIST } = constants;
@@ -160,6 +176,72 @@ function createListPanel({
 
   let virtualListState = null;
   let virtualListScrollFrame = 0;
+  let listPreferencesSaveChain = Promise.resolve();
+
+  function loadListPreferences(columnDefinitions) {
+    const defaultVisibility = Object.fromEntries(
+      columnDefinitions.map((column) => [column.key, column.defaultVisible !== false]),
+    );
+    const defaultWidths = Object.fromEntries(
+      columnDefinitions.map((column) => [column.key, clampColumnWidth(column.defaultWidth) || 120]),
+    );
+    const settings = typeof getCurrentSettings === "function" ? getCurrentSettings() : null;
+    const savedListSettings = settings?.list && typeof settings.list === "object"
+      ? settings.list
+      : {};
+    const savedVisibility = savedListSettings.columnVisibility && typeof savedListSettings.columnVisibility === "object"
+      ? savedListSettings.columnVisibility
+      : {};
+    const savedWidths = savedListSettings.columnWidths && typeof savedListSettings.columnWidths === "object"
+      ? savedListSettings.columnWidths
+      : {};
+
+    columnDefinitions.forEach((column) => {
+      if (typeof savedVisibility[column.key] === "boolean") {
+        defaultVisibility[column.key] = savedVisibility[column.key];
+      }
+      const savedWidth = clampColumnWidth(savedWidths[column.key]);
+      if (savedWidth !== null) {
+        defaultWidths[column.key] = savedWidth;
+      }
+    });
+
+    return {
+      columnVisibility: defaultVisibility,
+      columnWidths: defaultWidths,
+    };
+  }
+
+  function persistListPreferences(columnVisibility, columnWidths) {
+    if (!window.settingsapi || typeof window.settingsapi.update !== "function") {
+      return Promise.resolve(null);
+    }
+    const nextVisibility = Object.fromEntries(
+      Object.entries(columnVisibility).filter(([, value]) => typeof value === "boolean"),
+    );
+    const nextWidths = Object.fromEntries(
+      Object.entries(columnWidths)
+        .map(([key, value]) => [key, clampColumnWidth(value)])
+        .filter(([, value]) => value !== null),
+    );
+
+    listPreferencesSaveChain = listPreferencesSaveChain
+      .catch(() => null)
+      .then(async () => {
+        const savedSettings = await window.settingsapi.update({
+          list: {
+            columnVisibility: nextVisibility,
+            columnWidths: nextWidths,
+          },
+        });
+        if (typeof setCurrentSettings === "function" && savedSettings) {
+          setCurrentSettings(savedSettings);
+        }
+        return savedSettings;
+      });
+
+    return listPreferencesSaveChain;
+  }
 
   function buildStreamFilterQuery(transport, srcIp, dstIp, srcPort, dstPort) {
     if (!srcIp || !dstIp) return null;
@@ -203,7 +285,7 @@ function createListPanel({
     return tr;
   }
 
-  function appendPacketRow(selectionContainer, appendTarget, row, activeGroupByStream, previousStreamLabel) {
+  function appendPacketRow(selectionContainer, appendTarget, row, columns, activeGroupByStream, previousStreamLabel) {
     const tr = document.createElement("tr");
     tr.dataset.host = row.host;
     tr.dataset.pktIdx = row.pktIdx;
@@ -222,20 +304,14 @@ function createListPanel({
       tr.classList.add("packet-list-stream-break");
     }
 
-    [
-      row.idx,
-      row.isBookmarked ? "★" : "",
-      row.streamLabel,
-      row.host,
-      row.srcIp,
-      row.dstIp,
-      row.srcPort,
-      row.dstPort,
-      row.transport,
-      row.appProto,
-    ].forEach((val) => {
+    columns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = val ?? "";
+      td.textContent = String(column.getValue(row) ?? "");
+      if (column.widthPx) {
+        const columnWidth = `${column.widthPx}px`;
+        td.style.width = columnWidth;
+        td.style.minWidth = columnWidth;
+      }
       tr.appendChild(td);
     });
 
@@ -318,6 +394,7 @@ function createListPanel({
       activeGroupByStream,
       onRendered,
       sourceBacked,
+      visibleColumns,
     } = virtualListState;
     const rowHeight = virtualListState.rowHeight || VIRTUAL_LIST_ROW_HEIGHT;
     const viewportHeight = Math.max(0, content.clientHeight || 0);
@@ -374,7 +451,14 @@ function createListPanel({
           : "";
     for (let rowIndex = rowStartOffset; rowIndex < rowEndOffset; rowIndex += 1) {
       const row = visibleRows[rowIndex];
-      appendPacketRow(tbody, fragment, row, activeGroupByStream, previousStreamLabel);
+      appendPacketRow(
+        tbody,
+        fragment,
+        row,
+        visibleColumns,
+        activeGroupByStream,
+        previousStreamLabel,
+      );
       previousStreamLabel = row.streamLabel;
     }
 
@@ -471,19 +555,69 @@ function createListPanel({
     const content = document.getElementById("list_content");
     const searchEl = document.getElementById("list-search");
     const groupByStreamEl = document.getElementById("list-group-streams");
+    const columnsMenuEl = document.getElementById("list-columns-menu");
+    const columnsControlEl = document.getElementById("list-columns-control");
     const columnDefinitions = [
-      { label: "#", key: "idx" },
-      { label: "★", key: "isBookmarked" },
-      { label: "Stream", key: "streamOrder" },
-      { label: "Host", key: "host" },
-      { label: "Src IP", key: "srcIp" },
-      { label: "Dst IP", key: "dstIp" },
-      { label: "Src Port", key: "srcPort" },
-      { label: "Dst Port", key: "dstPort" },
-      { label: "Transport", key: "transport" },
-      { label: "App Protocol", key: "appProto" },
+      { label: "#", key: "idx", defaultWidth: 64, getValue: (row) => row.idx },
+      { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
+      { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
+      { label: "Host", key: "host", defaultWidth: 180, getValue: (row) => row.host },
+      { label: "Src IP", key: "srcIp", defaultWidth: 150, getValue: (row) => row.srcIp },
+      { label: "Dst IP", key: "dstIp", defaultWidth: 150, getValue: (row) => row.dstIp },
+      { label: "Src Port", key: "srcPort", defaultWidth: 96, getValue: (row) => row.srcPort },
+      { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
+      { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
+      { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => row.appProto },
+      { label: "Payload Len", key: "payloadLength", defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
     const sortState = { key: "idx", direction: "asc" };
+    const loadedPreferences = loadListPreferences(columnDefinitions);
+    let columnVisibility = loadedPreferences.columnVisibility;
+    let columnWidths = loadedPreferences.columnWidths;
+
+    const withRuntimeColumnState = (column) => ({
+      ...column,
+      widthPx: clampColumnWidth(columnWidths[column.key]) || clampColumnWidth(column.defaultWidth) || 120,
+    });
+
+    const getVisibleColumns = () => {
+      const visibleColumns = columnDefinitions
+        .filter((column) => columnVisibility[column.key] !== false)
+        .map(withRuntimeColumnState);
+      return visibleColumns.length > 0
+        ? visibleColumns
+        : [withRuntimeColumnState(columnDefinitions[0])];
+    };
+
+    const renderColumnVisibilityControls = () => {
+      if (!columnsMenuEl) return;
+      columnsMenuEl.replaceChildren();
+      columnDefinitions.forEach((column) => {
+        const optionLabel = document.createElement("label");
+        optionLabel.className = "list-columns-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = columnVisibility[column.key] !== false;
+        checkbox.addEventListener("change", () => {
+          const currentlyVisibleCount = columnDefinitions.filter(
+            (candidate) => columnVisibility[candidate.key] !== false,
+          ).length;
+          if (!checkbox.checked && currentlyVisibleCount <= 1) {
+            checkbox.checked = true;
+            return;
+          }
+          columnVisibility[column.key] = checkbox.checked;
+          void persistListPreferences(columnVisibility, columnWidths);
+          buildTable(document.getElementById("list-search")?.value || "");
+        });
+        optionLabel.appendChild(checkbox);
+        optionLabel.appendChild(document.createTextNode(column.label === "★" ? "Bookmarked" : column.label));
+        columnsMenuEl.appendChild(optionLabel);
+      });
+    };
+
+    renderColumnVisibilityControls();
+    columnsControlEl?.removeAttribute("open");
 
     function buildTable(filterText) {
       clearVirtualListState();
@@ -496,6 +630,7 @@ function createListPanel({
 
       const hosts = Object.keys(capturedPackets["Host"]).sort();
       const lc = filterText ? filterText.toLowerCase() : "";
+      const visibleColumns = getVisibleColumns();
       const activeGroupByStream =
         document.getElementById("list-group-streams")?.checked;
       const ungroupedVirtualizationEnabled =
@@ -512,7 +647,7 @@ function createListPanel({
 
         const thead = document.createElement("thead");
         const headerRow = document.createElement("tr");
-        columnDefinitions.forEach((column) => {
+        visibleColumns.forEach((column) => {
           const th = document.createElement("th");
           const isActiveSort = sortState.key === column.key;
           const sortArrow = isActiveSort
@@ -524,6 +659,9 @@ function createListPanel({
           th.classList.add("packet-list-sortable-header");
           th.tabIndex = 0;
           th.title = `Sort by ${column.label}`;
+          const columnWidth = `${column.widthPx}px`;
+          th.style.width = columnWidth;
+          th.style.minWidth = columnWidth;
           th.setAttribute(
             "aria-sort",
             isActiveSort
@@ -548,6 +686,68 @@ function createListPanel({
               sortByColumn();
             }
           });
+          const resizeHandle = document.createElement("span");
+          resizeHandle.className = "packet-list-column-resize-handle";
+          resizeHandle.title = `Resize ${column.label}`;
+          resizeHandle.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          resizeHandle.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const startX = event.clientX;
+            const startWidth = column.widthPx;
+            const pointerId = event.pointerId;
+            const nextVisibleColumns = getVisibleColumns();
+            const columnIndex = nextVisibleColumns.findIndex((entry) => entry.key === column.key);
+            if (columnIndex < 0) return;
+            const tableEl = th.closest("table");
+            const bodyRows = Array.from(tableEl?.querySelectorAll("tbody tr") || []);
+            const applyWidth = (nextWidth) => {
+              const widthPx = clampColumnWidth(nextWidth) || startWidth;
+              th.style.width = `${widthPx}px`;
+              th.style.minWidth = `${widthPx}px`;
+              bodyRows.forEach((rowEl) => {
+                if (rowEl.classList.contains("packet-list-spacer")) return;
+                const cell = rowEl.children[columnIndex];
+                if (!cell) return;
+                cell.style.width = `${widthPx}px`;
+                cell.style.minWidth = `${widthPx}px`;
+              });
+              return widthPx;
+            };
+            let lastWidth = startWidth;
+            const onPointerMove = (moveEvent) => {
+              lastWidth = applyWidth(startWidth + (moveEvent.clientX - startX));
+            };
+            const finishResize = () => {
+              window.removeEventListener("pointermove", onPointerMove);
+              window.removeEventListener("pointerup", onPointerUp);
+              window.removeEventListener("pointercancel", onPointerUp);
+              try {
+                resizeHandle.releasePointerCapture(pointerId);
+              } catch (_error) {
+                // Ignore pointer capture release failures.
+              }
+              columnWidths = {
+                ...columnWidths,
+                [column.key]: lastWidth,
+              };
+              void persistListPreferences(columnVisibility, columnWidths);
+              buildTable(document.getElementById("list-search")?.value || "");
+            };
+            const onPointerUp = () => finishResize();
+            try {
+              resizeHandle.setPointerCapture(pointerId);
+            } catch (_error) {
+              // Ignore pointer capture failures and continue with window listeners.
+            }
+            window.addEventListener("pointermove", onPointerMove);
+            window.addEventListener("pointerup", onPointerUp, { once: true });
+            window.addEventListener("pointercancel", onPointerUp, { once: true });
+          });
+          th.appendChild(resizeHandle);
           headerRow.appendChild(th);
         });
         thead.appendChild(headerRow);
@@ -556,7 +756,7 @@ function createListPanel({
         const tbody = document.createElement("tbody");
         const loadingRow = document.createElement("tr");
         const loadingCell = document.createElement("td");
-        loadingCell.colSpan = columnDefinitions.length;
+        loadingCell.colSpan = visibleColumns.length;
         loadingCell.textContent = "Loading packet list...";
         loadingCell.style.textAlign = "center";
         loadingCell.style.padding = "12px";
@@ -572,8 +772,9 @@ function createListPanel({
           windowEnd: 0,
           tbody,
           content,
-          columnCount: columnDefinitions.length,
+          columnCount: visibleColumns.length,
           activeGroupByStream: false,
+          visibleColumns,
           rowHeight: VIRTUAL_LIST_ROW_HEIGHT,
           rowHeightMeasured: false,
           sourceBacked: true,
@@ -625,6 +826,7 @@ function createListPanel({
           const srcPort = tpData?.["Source port"] ?? "";
           const dstPort = tpData?.["Destination port"] ?? "";
           const appProto = inferApplicationProtocol(pi, ei);
+          const payloadLength = getPacketPayloadLength(pi);
           const packetKey = srcIp + ":" + pi["Index"];
           const isBookmarked = getBookmarkList().includes(packetKey);
           const streamKey = getStreamKey(pi);
@@ -638,6 +840,7 @@ function createListPanel({
               String(dstPort),
               transport,
               appProto,
+              String(payloadLength),
             ]
               .join(" ")
               .toLowerCase();
@@ -653,6 +856,7 @@ function createListPanel({
             dstPort,
             transport,
             appProto,
+            payloadLength,
             pktIdx,
             streamKey,
             isBookmarked,
@@ -687,6 +891,7 @@ function createListPanel({
         switch (columnKey) {
           case "idx":
           case "streamOrder":
+          case "payloadLength":
             return Number(left[columnKey]) - Number(right[columnKey]);
           case "isBookmarked":
             return Number(left.isBookmarked) - Number(right.isBookmarked);
@@ -718,7 +923,7 @@ function createListPanel({
 
       const thead = document.createElement("thead");
       const headerRow = document.createElement("tr");
-      columnDefinitions.forEach((column) => {
+      visibleColumns.forEach((column) => {
         const th = document.createElement("th");
         const isActiveSort = sortState.key === column.key;
         const sortArrow = isActiveSort
@@ -730,6 +935,9 @@ function createListPanel({
         th.classList.add("packet-list-sortable-header");
         th.tabIndex = 0;
         th.title = `Sort by ${column.label}`;
+        const columnWidth = `${column.widthPx}px`;
+        th.style.width = columnWidth;
+        th.style.minWidth = columnWidth;
         th.setAttribute(
           "aria-sort",
           isActiveSort
@@ -754,6 +962,68 @@ function createListPanel({
             sortByColumn();
           }
         });
+        const resizeHandle = document.createElement("span");
+        resizeHandle.className = "packet-list-column-resize-handle";
+        resizeHandle.title = `Resize ${column.label}`;
+        resizeHandle.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        resizeHandle.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const startX = event.clientX;
+          const startWidth = column.widthPx;
+          const pointerId = event.pointerId;
+          const nextVisibleColumns = getVisibleColumns();
+          const columnIndex = nextVisibleColumns.findIndex((entry) => entry.key === column.key);
+          if (columnIndex < 0) return;
+          const tableEl = th.closest("table");
+          const bodyRows = Array.from(tableEl?.querySelectorAll("tbody tr") || []);
+          const applyWidth = (nextWidth) => {
+            const widthPx = clampColumnWidth(nextWidth) || startWidth;
+            th.style.width = `${widthPx}px`;
+            th.style.minWidth = `${widthPx}px`;
+            bodyRows.forEach((rowEl) => {
+              if (rowEl.classList.contains("packet-list-spacer")) return;
+              const cell = rowEl.children[columnIndex];
+              if (!cell) return;
+              cell.style.width = `${widthPx}px`;
+              cell.style.minWidth = `${widthPx}px`;
+            });
+            return widthPx;
+          };
+          let lastWidth = startWidth;
+          const onPointerMove = (moveEvent) => {
+            lastWidth = applyWidth(startWidth + (moveEvent.clientX - startX));
+          };
+          const finishResize = () => {
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", onPointerUp);
+            window.removeEventListener("pointercancel", onPointerUp);
+            try {
+              resizeHandle.releasePointerCapture(pointerId);
+            } catch (_error) {
+              // Ignore pointer capture release failures.
+            }
+            columnWidths = {
+              ...columnWidths,
+              [column.key]: lastWidth,
+            };
+            void persistListPreferences(columnVisibility, columnWidths);
+            buildTable(document.getElementById("list-search")?.value || "");
+          };
+          const onPointerUp = () => finishResize();
+          try {
+            resizeHandle.setPointerCapture(pointerId);
+          } catch (_error) {
+            // Ignore pointer capture failures and continue with window listeners.
+          }
+          window.addEventListener("pointermove", onPointerMove);
+          window.addEventListener("pointerup", onPointerUp, { once: true });
+          window.addEventListener("pointercancel", onPointerUp, { once: true });
+        });
+        th.appendChild(resizeHandle);
         headerRow.appendChild(th);
       });
       thead.appendChild(headerRow);
@@ -764,7 +1034,7 @@ function createListPanel({
       if (rows.length === 0) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
-        td.colSpan = columnDefinitions.length;
+        td.colSpan = visibleColumns.length;
         td.textContent = filterText
           ? "No packets match the filter."
           : "No packets available.";
@@ -778,8 +1048,9 @@ function createListPanel({
           rows,
           tbody,
           content,
-          columnCount: columnDefinitions.length,
+          columnCount: visibleColumns.length,
           activeGroupByStream,
+          visibleColumns,
           rowHeight: VIRTUAL_LIST_ROW_HEIGHT,
           rowHeightMeasured: false,
           onRendered: null,
@@ -799,7 +1070,14 @@ function createListPanel({
       } else {
         let previousStreamLabel = "";
         rows.forEach((row) => {
-          appendPacketRow(tbody, tbody, row, activeGroupByStream, previousStreamLabel);
+          appendPacketRow(
+            tbody,
+            tbody,
+            row,
+            visibleColumns,
+            activeGroupByStream,
+            previousStreamLabel,
+          );
           previousStreamLabel = row.streamLabel;
         });
       }

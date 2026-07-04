@@ -7059,6 +7059,8 @@ const listPanel = createListPanel({
   popHexGrid,
   populateDataTypes,
   isCaptureStoreBackedCapture: () => isCaptureStoreBackedCapture,
+  getCurrentSettings,
+  setCurrentSettings,
   getEnableUngroupedListVirtualization: () =>
     Boolean(getCurrentSettings()?.debug?.ungroupedListVirtualizationEnabled),
 });

@@ -149,6 +149,7 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
         dstPort: destinationPort,
         transport: transportName,
         appProto: String(appProtocol),
+        payloadLength: Number(packetInfo?.["Raw data"]?.["Payload Length"]) || 0,
         streamKey,
     };
 }
