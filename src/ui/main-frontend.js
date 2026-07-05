@@ -1523,6 +1523,7 @@ const {
 });
 
 const { showStats, showStatsHeatmapLocation } = createStatsPanel({
+  getKeystorePanel: () => keystorePanel,
   documentRef: document,
   statusUpdate,
   writeLogEntry,

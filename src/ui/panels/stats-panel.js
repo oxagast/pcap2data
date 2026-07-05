@@ -2475,7 +2475,15 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   };
 }
 
-function makeStatsSection({ documentRef, title, items, queryBuilder, onQuery }) {
+function makeStatsSection({
+  documentRef,
+  title,
+  items,
+  queryBuilder,
+  onQuery,
+  onItemClick,
+  itemTitle,
+}) {
   if (!items || items.length === 0) return null;
   const normalizedItems = Array.from(
     new Set(
@@ -2503,13 +2511,27 @@ function makeStatsSection({ documentRef, title, items, queryBuilder, onQuery }) 
     const tag = documentRef.createElement("span");
     tag.className = "stats-tag";
     tag.textContent = item;
-    tag.title = "Click to filter packets by this value";
+    const isFilterTag = typeof queryBuilder === "function";
+    const hasCustomClick = typeof onItemClick === "function";
+    if (isFilterTag) {
+      tag.title = "Click to filter packets by this value";
+    } else if (typeof itemTitle === "function") {
+      const resolvedTitle = itemTitle(item);
+      if (resolvedTitle) tag.title = resolvedTitle;
+    } else if (typeof itemTitle === "string" && itemTitle.trim()) {
+      tag.title = itemTitle;
+    }
+
     if (queryBuilder) {
       tag.addEventListener("click", () => {
         const query = queryBuilder(item);
         if (query && typeof onQuery === "function") {
           onQuery(query);
         }
+      });
+    } else if (hasCustomClick) {
+      tag.addEventListener("click", () => {
+        onItemClick(item);
       });
     }
     tagList.appendChild(tag);
@@ -2544,6 +2566,7 @@ function totalTrafficBytes(capturedPackets) {
 function createStatsPanel(options) {
   const {
     keystorePanel,
+    getKeystorePanel,
     documentRef,
     statusUpdate,
     writeLogEntry,
@@ -2563,6 +2586,10 @@ function createStatsPanel(options) {
     openCarvedFileInConv,
   } = options;
   let disposeHeatmapResize = null;
+  const resolveKeystorePanel = () => {
+    if (typeof getKeystorePanel === "function") return getKeystorePanel();
+    return keystorePanel;
+  };
 
   function createCarvableFilesSection() {
     const section = documentRef.createElement("div");
@@ -2856,6 +2883,26 @@ function createStatsPanel(options) {
         documentRef,
         title: "Credentials Found",
         items: stats.uniqueCredentialCount > 0 ? stats.uniqueCredentials : ["No credentials found"],
+        itemTitle: (item) =>
+          item === "No credentials found"
+            ? ""
+            : "Click to open the keychain manager",
+        onItemClick: (item) => {
+          if (item === "No credentials found") return;
+          const activeKeystorePanel = resolveKeystorePanel();
+          if (!activeKeystorePanel) return;
+
+          (async () => {
+            if (typeof activeKeystorePanel.unlockPersistentKeystoreAndLoad === "function") {
+              const unlocked = await activeKeystorePanel.unlockPersistentKeystoreAndLoad();
+              if (!unlocked) return;
+            }
+
+            if (typeof activeKeystorePanel.showKeystoreWorkspace === "function") {
+              activeKeystorePanel.showKeystoreWorkspace();
+            }
+          })();
+        },
       });
       if (credsSec) statisticsPanel.appendChild(credsSec);
 
