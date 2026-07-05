@@ -4,8 +4,11 @@
 **Type:** minor
 
 ### ✨ Features
-- Map
+- Worldmap
 - Backend HTTP server
+- PGP workspace in the Crypt tab
+- Settings tab
+- LLM now in frontend
 
 ### 🐛 Fixes
 - Removed duplicates in the backend json

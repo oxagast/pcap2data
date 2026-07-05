@@ -10,7 +10,9 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - Load `.pcap` and `.pcapng` capture files directly from within the app (**Load PCAP** button).
 - Load pre-processed `hosts.json` backend output (**Load JSON** button).
 - Load previously saved PacketSnitch session files (compressed `.json.xz` or `.json.gz`).
+- Session-backed PCAP reprocessing: saved sessions retain the source capture as base64 so the backend can be re-run later without manually re-selecting the file.
 - Progressive capture loading: backend emits chunked host snapshots every 500 packets; the UI becomes interactive after the first chunk arrives while processing continues in the background.
+- Optional backend HTTP data mode: the bridge can stream incremental JSON snapshots directly over the backend HTTP response instead of waiting on `hosts-*.json` files on disk.
 - Lazy packet hydration: packet stubs are built immediately and full payloads are fetched on demand, keeping the UI responsive for large captures.
 - Left-panel partial-data warning shown while incremental backend processing is in progress.
 - Backend preprocessing blocks session save/export until complete, preventing persistence of incomplete data.
@@ -29,13 +31,14 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 
 ### Settings Workspace
 
-- Dedicated **Settings** tab with two sub-tabs: **General** and **LLM**.
+- Dedicated **Settings** tab with four sub-tabs: **General**, **LLM**, **Debug**, and **Backend**.
 - Settings are persisted to `userData/config/settings.json` via main-process IPC (`settings-get`, `settings-save`, `settings-update`).
 - **General** settings:
   - **Theme** selector (`general.themeId`) using discovered theme JSON files.
   - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
   - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
   - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`.
+  - **Backend worker threads** (`general.backendWorkerThreads`) with a default of `2 x CPU cores`.
   - **Stream warning threshold (packets)** (`general.streamContextWarnPacketThreshold`) for follow-stream Conv/Crypt warnings, defaulting to `20` with a minimum accepted value of `5`.
 - **LLM** settings:
   - **Ollama model** (`llm.ollamaModel`).
@@ -43,6 +46,16 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
   - **Active by default** (`llm.activeByDefault`) for the load dialog LLM toggle.
   - **LLM trigger delay (seconds)** (`llm.triggerDelaySeconds`) for stream-summary idle scheduling.
   - **Max tokens for stream summary** (`llm.maxSummaryTokens`) applied to Ollama `num_predict`.
+  - **LLM request timeout (seconds)** (`llm.ollamaRequestTimeoutSeconds`) for request headers/body reads.
+  - **LLM retries** (`llm.retryCount`) for automatic retry attempts after failed calls.
+- **Debug** settings:
+  - **Enable backend HTTP data mode** (`debug.backendHttpDataModeEnabled`) to stream in-memory incremental JSON snapshots from the backend HTTP service.
+  - **Map projection zoom/offset calibration** (`debug.mapProjectionZoomX`, `debug.mapProjectionZoomY`, `debug.mapProjectionOffsetX`, `debug.mapProjectionOffsetY`) for the worldmap overlay.
+  - **Projection lock** (`debug.mapProjectionCalibrationLocked`) to preserve the current calibration.
+  - **Ungrouped list virtualization** (`debug.ungroupedListVirtualizationEnabled`) for large List-tab datasets.
+- **Backend** settings:
+  - **TCP host** (`backend.tcpHost`) and **TCP port** (`backend.tcpPort`) for the bridge HTTP service.
+  - **Force legacy backend spawn mode** (`backend.forceLegacySpawn`) to disable service mode and launch the backend per run.
 - **Save settings** writes normalized values to disk; **Restore defaults** resets to app defaults.
 
 ---
@@ -174,6 +187,17 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **IGMP Message Types**: IGMP type distribution.
 - Clicking any tag (except location) pre-fills the filter bar with the corresponding filter expression.
 
+#### Internet Heatmap / Worldmap
+
+- Worldmap-style Internet Heatmap based on public GeoIP coordinates for source and destination addresses.
+- Basemap is rendered from a bundled SVG world map and themed at runtime to match the current UI colors.
+- **Aggregate By** toggle: whole capture vs. currently filtered packet set.
+- **Intensity By** toggle: packet hits vs. payload bytes.
+- Interactive controls for map zoom, intensity, point size, tightness, and blur.
+- Clickable location dots highlight individual geolocated points; selection zoom helps inspect dense regions.
+- Heatmap summary text reports geolocated host count and current metric total for the active scope.
+- Private/local addresses are excluded; only routable addresses with GeoIP coordinates are plotted.
+
 ---
 
 ### List Tab
@@ -227,11 +251,22 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 
 #### PGP Sub-tab
 
-Reserved workspace for PGP key and decryption tooling.
+- **PGP Messages In Capture**: scans loaded packet payloads for ASCII-armored OpenPGP blocks and lists them by packet.
+- **Refresh** re-scans the current capture; **Load selected** copies the chosen block into the PGP input area.
+- **PGP Input** accepts either ASCII armor or binary hex and can:
+  - **Analyze** detected structure (message, signature, public key, private key, cleartext signed message)
+  - Convert **To ASCII armor**
+  - Convert **To binary hex**
+- **Key Material** inputs:
+  - Optional private key input for decryption
+  - Optional public key input for signature verification
+  - Passphrase input plus auto-discovered passphrase candidates recovered from packet text and metadata
+- **Decrypt / Verify** handles encrypted messages and cleartext signed messages using `openpgp` in the renderer.
+- Successful decrypt/verify output can be **Sent to Conv** and validated private key/passphrase material can be promoted into the session keystore.
 
 #### OpenSSH Sub-tab
 
-Reserved workspace for OpenSSH key and session tooling.
+Reserved workspace for future OpenSSH key and session tooling. The Conv decoder can still parse SSH/OpenSSH text structures today.
 
 ---
 
@@ -377,12 +412,26 @@ Shown when a carve target is available:
 ### LLM-Powered Analysis (Ollama)
 
 - Optional Ollama integration for AI-powered capture analysis.
-- **Use LLM** toggle in the load dialog enables/disables analysis before running the backend.
-- Generated report displayed in the **Summary** tab.
+- LLM calls are initiated from the frontend/main-process bridge (`window.llmapi -> ipcMain('ollama:generate')`), not from the Python backend parser.
+- **Use LLM** toggle in the load dialog mirrors the persisted `llm.activeByDefault` runtime preference.
+- Generated report is displayed in the **Summary** tab and extended by stream-context follow-up summaries while navigating.
 - LLM defaults are configured in the **Settings → LLM** sub-tab and persisted in app settings.
+- LLM diagnostics are surfaced in Settings: install status, local daemon reachability, cloud API reachability, and last call result code.
 - LLM context-menu actions are gated by the same runtime LLM setting and are hidden when LLM is disabled.
 - Stream-context summary generation: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane.
 - Summary deduping/persistence: already-summarized stream keys are tracked to reduce repeat calls, and `currentSummary` is saved/restored with session files.
+
+---
+
+### Backend HTTP Service / Bridge
+
+- The Electron bridge can initialize the Python backend in long-lived HTTP service mode instead of spawning a fresh parser process per run.
+- Service health check endpoint: `GET /ping`.
+- Capture-processing endpoint: `POST /process`.
+- Control endpoint: `POST /control` for stop/shutdown requests.
+- When the backend advertises NDJSON (`application/x-ndjson`), the bridge forwards incremental progress and capture snapshots to the renderer as they arrive.
+- If HTTP service mode is unavailable, the bridge automatically falls back to legacy per-run spawn mode unless disabled by settings.
+- Backend host/port and force-legacy behavior are configurable in **Settings → Backend**.
 
 ---
 

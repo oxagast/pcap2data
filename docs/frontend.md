@@ -4,7 +4,7 @@
 
 ### Overview
 
-The PacketSnitch frontend is an Electron-based desktop application that provides an interactive interface for loading, browsing, and filtering the JSON output produced by the backend (`snitch.py`). It visualizes packet metadata, payloads, protocol details, and GeoIP information, and supports LLM-powered analysis summaries. The frontend also includes a data conversion workspace (Conv), an encryption/certificate workspace (Crypt), an aggregate statistics view (Stats), a sortable packet list (List), an encrypted local key and credential store (Keystore), a session notes workspace (Notes), and a persistent activity log (Log).
+The PacketSnitch frontend is an Electron-based desktop application that provides an interactive interface for loading, browsing, and filtering the JSON output produced by the backend (`snitch.py`). It visualizes packet metadata, payloads, protocol details, and GeoIP information, and supports frontend-driven LLM summaries and packet-context questions through the Electron main process. The frontend also includes a data conversion workspace (Conv), an encryption workspace (Crypt), an aggregate statistics view (Stats), an Internet Heatmap worldmap, a sortable packet list (List), an encrypted local key and credential store (Keystore), a session notes workspace (Notes), and a persistent activity log (Log).
 
 ### Requirements
 
@@ -26,7 +26,7 @@ The PacketSnitch frontend is an Electron-based desktop application that provides
 
 1. Click **Load JSON** to open either a backend `hosts.json` capture or a previously saved PacketSnitch session file.
 2. Click **Load PCAP** to run the backend directly on a `.pcap` file from within the app.
-3. Toggle **Use LLM** to enable or disable Ollama-powered analysis summaries before running.
+3. Toggle **Use LLM** to enable or disable the current runtime LLM workflow before running. This checkbox is seeded from **Settings → LLM → LLM active by default**.
 
 ### Output Frames
 
@@ -65,7 +65,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 
 | Control         | Description                                                                                                                                                       |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Analysis**    | Switch to the Summary Frame to view the LLM-generated analysis report.                                                                                            |
+| **Analysis**    | Switch to the Summary Frame to view the frontend-generated LLM analysis report and appended stream-context findings.                                               |
 | **Host Data**   | Switch to the packet data view (Packet Info + Payload panes) for the currently selected host.                                                                     |
 | **Conv**        | Open the data conversion workspace for translating between hex, binary, base64, ASCII, and decimal, with MIME detection, entropy analysis, and protocol decoding. |
 | **Crypt**       | Open the encryption workspace for inspecting encountered SSL/TLS sessions, loading certificates and private keys, and accessing PGP/OpenSSH workspaces.           |
@@ -73,7 +73,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Stats**       | Show capture-level aggregate statistics (protocols, hosts, ports, MIME types, GeoIP locations, etc.) derived from the full loaded dataset.                        |
 | **List**        | Show all packets in a searchable, sortable, stream-groupable list view.                                                                                           |
 | **Notes**       | Open the session notes workspace for creating, editing, color-tagging, and exporting freeform notes tied to the current session.                                  |
-| **Settings**    | Open the settings workspace for General defaults (themes/UI behavior) and LLM defaults (model, API key, delay, token cap).                                        |
+| **Settings**    | Open the settings workspace for General defaults, LLM defaults and diagnostics, Debug map and transport toggles, and Backend bridge controls.                     |
 | **Log**         | Toggle the Activity Log panel, which records all GUI and backend actions with timestamps.                                                                         |
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
@@ -93,7 +93,8 @@ The Summary Frame displays the LLM-generated analysis report for the loaded capt
 Recent behavior updates:
 
 - The summary content now uses a preformatted text view for better readability of longer model output.
-- Summary generation is stream-aware: when packet navigation settles, the frontend summarizes the active stream context and appends non-duplicate findings.
+- Summary generation is stream-aware: when packet navigation settles, the frontend schedules a follow-up summary for the active stream after the configured idle delay and appends non-duplicate findings.
+- LLM requests are issued through the Electron main process (`ollama:generate` IPC), which applies the configured model, bearer token, timeout, and token cap.
 - Existing summary text is persisted in saved sessions and restored on load.
 
 ---
@@ -247,17 +248,28 @@ The **Crypt** tab provides a multi-panel workspace for inspecting cryptographic 
 
 ##### PGP Sub-tab
 
-Reserved workspace for future PGP key import and decryption tooling.
+The **PGP** workspace is a fully implemented OpenPGP inspection and decrypt/verify tool.
+
+| Panel / Action | Description |
+| -------------- | ----------- |
+| **PGP Messages In Capture** | Scans loaded packet payloads for ASCII-armored PGP blocks and lists them by packet/path. **Refresh** re-runs the scan. **Load selected** copies the current block into the working input area. |
+| **PGP Input** | Accepts either ASCII-armored OpenPGP text or binary hex. **Analyze** identifies the structure type (message, signature, public key, private key, cleartext signed message). **To ASCII armor** and **To binary hex** convert between formats. |
+| **Passphrase candidates** | Packet text and metadata are mined for password/passphrase hints and offered as selectable candidates for decryption attempts. |
+| **Private / Public key inputs** | Optional ASCII-armored private key for decrypt operations and public key for signature verification. |
+| **Decrypt / Verify** | Uses `openpgp` in the renderer to decrypt messages or verify cleartext signed messages. Successful output is rendered as UTF-8 text, and verified/decrypted state is summarized. |
+| **Send output to Conv** | Pushes decrypted/verified text into Conv for further conversion or protocol decoding. |
+
+Successful decrypt/verify operations can also store validated PGP private key/passphrase material into the session keystore for later reuse.
 
 ##### OpenSSH Sub-tab
 
-Reserved workspace for future OpenSSH key and session tooling.
+Reserved workspace for future OpenSSH key and session tooling. For now, PacketSnitch can still recognize SSH/OpenSSH material in Conv decode/detection flows.
 
 ---
 
 #### Settings Tab
 
-The **Settings** tab is a persistent configuration workspace with two sub-tabs: **General** and **LLM**.
+The **Settings** tab is a persistent configuration workspace with four sub-tabs: **General**, **LLM**, **Debug**, and **Backend**.
 
 Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Linux) or `C:\User\Username\AppData\Roaming\packetsnitch\config\settings.json` (Windows).
 
@@ -269,6 +281,7 @@ Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Li
 | **Conv JSON indent spaces**           | `general.convJsonIndentSpaces`    | Number of spaces used when rendering packet JSON in Conv.                                   |
 | **Status reset delay (seconds)**      | `general.statusResetSeconds`      | Delay before transient status text is reset.                                                |
 | **Default backend packet chunk size** | `general.backendPacketChunkSize`  | Fallback chunk size used when backend progress metadata is unavailable.                     |
+| **Backend worker threads**            | `general.backendWorkerThreads`    | Number of parser worker threads requested from the backend bridge.                          |
 | **Stream warning threshold (packets)** | `general.streamContextWarnPacketThreshold` | Warns before loading large follow-stream results into Conv or Crypt; default `20`, minimum `5`. |
 
 Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`.
@@ -284,12 +297,35 @@ The Settings UI also shows the runtime themes directory path so custom theme JSO
 | **Set LLM Active by default**     | `llm.activeByDefault`       | Controls whether LLM-powered frontend features are active by default (load-screen toggle, stream summaries, and LLM context-menu actions). |
 | **LLM trigger delay (seconds)**   | `llm.triggerDelaySeconds`   | Idle delay before stream-context summaries run while navigating packets.                            |
 | **Max tokens for stream summary** | `llm.maxSummaryTokens`      | Maximum generated summary size (`num_predict`).                                                     |
+| **LLM request timeout (seconds)** | `llm.ollamaRequestTimeoutSeconds` | Timeout applied to Ollama request headers and body reads.                                      |
+| **LLM retries**                   | `llm.retryCount`            | Number of retry attempts after an LLM request fails.                                               |
 
 If the API key field is left blank when saving, the currently stored key is retained.
 
+The LLM panel also exposes runtime diagnostics for local install status, daemon reachability, cloud API reachability, and the last call result code.
+
+##### Debug Sub-tab
+
+| Setting | Key | Description |
+| ------- | --- | ----------- |
+| **Enable ungrouped list virtualization** | `debug.ungroupedListVirtualizationEnabled` | Experimental rendering optimization for large ungrouped packet tables. |
+| **Enable backend HTTP data mode** | `debug.backendHttpDataModeEnabled` | Streams incremental capture snapshots over the backend HTTP response instead of relying on temporary `hosts-*.json` files. |
+| **Map projection zoom X / Y** | `debug.mapProjectionZoomX`, `debug.mapProjectionZoomY` | Horizontal/vertical calibration for the Internet Heatmap basemap projection. |
+| **Map projection offset X / Y** | `debug.mapProjectionOffsetX`, `debug.mapProjectionOffsetY` | West/east and north/south alignment offsets for the worldmap overlay. |
+
+##### Backend Sub-tab
+
+| Setting | Key | Description |
+| ------- | --- | ----------- |
+| **Default backend packet chunk size** | `general.backendPacketChunkSize` | Default chunk size used for incremental frontend progress when backend metadata is incomplete. |
+| **Backend worker threads** | `general.backendWorkerThreads` | Worker-thread count passed to the backend parser. |
+| **TCP host** | `backend.tcpHost` | Hostname/IP used for backend HTTP service mode. |
+| **TCP port** | `backend.tcpPort` | Port used for backend HTTP service mode. |
+| **Force legacy backend spawn** | `backend.forceLegacySpawn` | Disables HTTP service mode and launches the backend process per capture run. |
+
 ##### Actions
 
-- **Save settings**: normalizes and persists General + LLM values.
+- **Save settings**: normalizes and persists General, LLM, Debug, and Backend values.
 - **Restore defaults**: resets settings to app defaults.
 - Theme changes are applied immediately after save.
 
@@ -325,6 +361,21 @@ The **Stats** tab shows aggregate statistics computed across the entire loaded c
 | **MIME Types**             | All distinct MIME types found in payload data.                                                                                                              |
 | **Data Types**             | All distinct magic-identified data type strings.                                                                                                            |
 
+##### Internet Heatmap / Worldmap
+
+The Stats tab also includes an **Internet Heatmap** worldmap view for public GeoIP locations.
+
+| Control / Element | Description |
+| ----------------- | ----------- |
+| **Aggregate By** | Switch between plotting the entire capture or only the packets currently returned by the active filter. |
+| **Intensity By** | Weight heatmap intensity by packet count or payload bytes. |
+| **Map Zoom** | Zooms the basemap and overlays without changing the underlying plotted coordinates. |
+| **Intensity / Point Size / Tightness / Blur** | Adjusts the heatmap rendering characteristics and overlay spread. |
+| **Location points** | Clickable projected points representing grouped public GeoIP coordinates. Useful for focusing or highlighting a region. |
+| **Heatmap summary** | Reports how many geolocated internet hosts are currently represented and the active packet/byte total for the chosen scope. |
+
+Private/local addresses are intentionally excluded from the worldmap.
+
 ---
 
 #### List Tab
@@ -358,6 +409,26 @@ The **List** tab shows all packets across all hosts as a searchable, sortable ta
 | **App Protocol** | Application-layer protocol name inferred from port.                      |
 
 Click any column header to sort by that column; click again to reverse direction. Click any row to navigate to that packet in the Host Data view.
+
+---
+
+#### LLM and Backend Bridge
+
+Frontend LLM behavior now lives in the renderer and Electron main process rather than in the Python parser itself.
+
+##### LLM Flow
+
+- Renderer code decides when to call the model based on runtime settings and local Ollama availability.
+- Requests are sent through `window.llmapi.generate(...)` to the Electron main-process `ollama:generate` IPC handler.
+- The main process applies the configured model, optional bearer token, timeout, and `num_predict` token cap before calling the Ollama Node client.
+- Failed requests can be retried automatically according to the configured retry count.
+- LLM-backed features currently include the Summary view, stream-context follow-up summaries, **Explain this data...**, and **Ask PS a question...**.
+
+##### Backend Bridge Modes
+
+- **HTTP service mode**: initializes a long-lived backend service, probes `GET /ping`, posts capture work to `POST /process`, and sends control actions through `POST /control`.
+- **HTTP data mode**: when enabled, the backend can stream NDJSON progress plus in-memory snapshot payloads back to the renderer.
+- **Legacy spawn mode**: fallback per-run process launch path used when the service is unavailable or explicitly disabled.
 
 ---
 

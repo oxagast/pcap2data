@@ -2,12 +2,16 @@
   link: /
 - name: Features
   link: /features
+- name: Backend
+  link: /backend
 - name: Frontend
   link: /frontend
 - name: Filters
   link: /filters
 - name: Context Menu
   link: /context-menu
+- name: Themes
+  link: /themes
 - name: on GitHub
   link: https://github.com/oxasploits/PacketSnitch
 - name: Oxasploits

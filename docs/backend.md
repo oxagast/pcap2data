@@ -6,6 +6,8 @@
 
 PacketSnitch is a Python tool for extracting payloads and rich metadata from network packet capture (`.pcap`) files. It generates testcases for fuzzing, protocol analysis, and research by saving raw packet data and detailed information about each packet, including protocol, entropy, geoip, banners, and more. The tool optionally performs active reconnaissance to enrich output with server banners, SSL certificate info, and web page titles.
 
+In the desktop app, this parser is wrapped by an Electron bridge that can either spawn the backend per capture run or launch `snitch.py` in HTTP service mode and stream incremental results to the renderer.
+
 ### Features
 
 - Extracts TCP, UDP, and ICMP payloads from `.pcap` files and saves them as binary testcase files.
@@ -19,9 +21,10 @@ PacketSnitch is a Python tool for extracting payloads and rich metadata from net
   - Protocol-specific fields for DNS, HTTP, SNMP, DHCP, NTP, SIP, and ICMP
   - Active recon: server banners, SSL certificate info, web page titles (optional)
 - Consolidates all testcase info into `hosts.json`.
+- Supports incremental chunk snapshots (`hosts-<N>.json`) for progressive frontend loading.
+- Supports an HTTP service mode used by the Electron bridge for `ping`, `process`, and control requests.
 - Supports filtering by source/destination port.
 - Handles compressed payloads (gzip/zlib).
-- LLM-powered summaries via Ollama integration.
 - Verbose/debug output modes.
 
 ### Requirements
@@ -37,7 +40,6 @@ PacketSnitch is a Python tool for extracting payloads and rich metadata from net
   - geoip2
   - beautifulsoup4
   - scipy
-  - ollama
 - Databases:
   - GeoIP database (MaxMind `.mmdb`)
   - MAC vendor CSV
@@ -73,6 +75,23 @@ python3 snitch.py traffic.pcap -o output_dir -T 5 -a -v
 - `output_dir/<dest_port>/pcap.data_packet.<index>.dat`: Raw payloads
 - `output_dir/<dest_port>/pcap.info_packet.<index>.json`: Metadata for each testcase
 - `hosts.json`: Consolidated info for all testcases
+- `hosts-<N>.json`: Progressive chunk snapshots emitted during long capture processing for the desktop bridge/UI
+
+### HTTP Service Mode
+
+When the Electron bridge has access to the Python backend, it can request long-lived HTTP service mode instead of spawning a fresh process for each capture.
+
+Current bridge-facing endpoints:
+
+- `GET /ping`: readiness probe used before capture work is submitted
+- `POST /process`: parse a PCAP and emit either accumulated JSON or NDJSON progress events
+- `POST /control`: control actions such as stop-processing and shutdown
+
+Important behavior:
+
+- Progress events may include filesystem snapshot paths or full in-memory capture payloads.
+- NDJSON mode is used for incremental progress streaming.
+- If service mode is unavailable, the Electron bridge falls back to legacy spawn mode.
 
 ### Searchable Attributes
 
@@ -267,7 +286,7 @@ Each testcase JSON contains the following dot-notation keys as leaf nodes, which
 - Active recon (`-a`) may take longer and requires network access.
 - Ensure database files are present and paths are correct in `conf.yaml`.
 - The tool will prompt before overwriting output directories.
-- LLM summaries require a running Ollama server (`minimax-m2.5:cloud` model by default).
+- LLM summaries are now handled by the Electron frontend/main-process bridge, not by the Python parser itself.
 
 ### License
 
