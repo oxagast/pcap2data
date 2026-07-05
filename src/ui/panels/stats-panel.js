@@ -174,7 +174,21 @@ function getTopTalkers(capturedPackets, topN = 5) {
 
 function getUniqueCredentialList() {
   const uniquePasswords = window.keystoreCreds || new Set();
-  return [...uniquePasswords].sort()
+  // mask the passwords for privacy by using only first and last 2 chars and
+  // the rest should be stars
+  const maskedPasswords = [...uniquePasswords].map((password) => {
+    if (password.length <= 4) {
+      const firstChar = password.charAt(0) || "";
+      const lastChar = password.charAt(password.length - 1) || "";
+      const middleStars = "*".repeat(Math.max(0, password.length - 2));
+      return `${firstChar}${middleStars}${lastChar}`;
+    };
+    const firstTwo = password.slice(0, 2);
+    const lastTwo = password.slice(-2);
+    const middleStars = "*".repeat(password.length - 4);
+    return `${firstTwo}${middleStars}${lastTwo}`;
+  });
+  return maskedPasswords.sort();
 };
 
 function getUniqueCredentialCount() {
@@ -2384,12 +2398,21 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
 
       const dt = ei?.["Data Types"];
       if (Array.isArray(dt)) {
+        const uniqueDataTypes = new Set();
         dt.forEach((d) => {
           const normalizedDataType = normalizeStatsTextValue(d, {
             stripNonPrintable: true,
           });
-          if (normalizedDataType) dataTypes.add(normalizedDataType);
+          //  only add up to 40 unique data types to avoid overwhelming the stats panel
+          if (normalizedDataType && uniqueDataTypes.size < 40) {
+            uniqueDataTypes.add(normalizedDataType);
+          }
         });
+        uniqueDataTypes.forEach((normalizedDataType) => {
+
+          dataTypes.add(normalizedDataType);
+        }
+        );
       }
 
       const encData = ei?.["Traits"]?.["Server Info"]?.["Encryption Data"];
@@ -2444,7 +2467,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     avgStreamLength,
     creds: getCredentialsFromKeystore(),
     uniqueCredentialCount: [...getUniqueCredentialList()].length,
-    uniqueCredentials: [...(window.keystoreCreds || new Set())].sort(),
+    uniqueCredentials: [...(getUniqueCredentialList())].sort((a, b) => a.label.localeCompare(b.label)),
     totalTraffic: totalTrafficBytes(capturedPackets),
     retransmissionCount: tcpStreamAnomalyCounts.retransmissionCount,
     outOfOrderCount: tcpStreamAnomalyCounts.outOfOrderCount,
@@ -2968,7 +2991,11 @@ function createStatsPanel(options) {
       const dtSec = makeStatsSection({
         documentRef,
         title: "Data Types",
-        items: stats.dataTypes,
+        items: stats.dataTypes.map((dt) => {
+          const firstSix = dt.substring(0, 6);
+          if (firstSix) { return stats.dataTypes.find((d) => d.startsWith(firstSix)); }
+          return dt;
+        }),
       });
       if (dtSec) statisticsPanel.appendChild(dtSec);
     } catch (error) {
