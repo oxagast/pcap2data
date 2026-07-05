@@ -12,8 +12,6 @@ const PGP_BEGIN_LINE_REGEX = /-----BEGIN (PGP [^-]+)-----/;
 const PGP_END_LINE_REGEX = /-----END (PGP [^-]+)-----/;
 const PGP_PRIVATE_KEY_BLOCK_REGEX =
   /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----/i;
-const PGP_PASSWORD_HINT_KEY_REGEX = /(pass(word|phrase|wd)?|pwd|pin|secret|credential)/i;
-const PGP_PASSWORD_CAPTURE_REGEX = /(pass(word|phrase|wd)?|pwd|pin)\s*(is|=|:)?\s*(?:"([^"\r\n]{3,160})"|'([^'\r\n]{3,160})'|([^\s"'`;:,\r\n]{3,160}))/gi;
 const MAX_PGP_PREVIEW_LENGTH = 400;
 const threadName = "Crypt";
 const MAX_DECRYPT_FAILURE_MESSAGES = 8;
@@ -32,6 +30,7 @@ function createCryptPanel({
   syncFilterHighlight,
   runFilterQuery,
   addSessionKeystoreEntry,
+  getSessionKeychainEntries,
   getFirstLineOrFallback,
   sendDecryptedToConv,
 }) {
@@ -50,7 +49,8 @@ function createCryptPanel({
   let pgpEncounteredEntries = [];
   let pgpActiveEntryIndex = -1;
   let pgpLastOutputPayload = null;
-  let pgpPasswordCandidates = [];
+  let pgpPrivateKeyCandidates = [];
+  let pgpPassphraseCandidates = [];
 
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
     const normalized = (rawText || "").trim();
@@ -231,7 +231,16 @@ function createCryptPanel({
     if (analysisEl) analysisEl.textContent = "No PGP input analyzed yet.";
   }
 
-  function normalizePgpPasswordCandidate(value) {
+  function normalizePgpPrivateKeyCandidate(value) {
+    const normalized = String(value || "")
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+      .trim();
+    if (!normalized) return "";
+    if (!PGP_PRIVATE_KEY_BLOCK_REGEX.test(normalized)) return "";
+    return normalized;
+  }
+
+  function normalizePgpPassphraseCandidate(value) {
     const normalized = String(value || "")
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
       .trim();
@@ -240,78 +249,22 @@ function createCryptPanel({
     return normalized;
   }
 
-  function parsePgpPasswordCandidatesFromText(textValue) {
-    const text = String(textValue || "");
-    if (!text) return [];
-    const candidates = [];
-    let match;
-    while ((match = PGP_PASSWORD_CAPTURE_REGEX.exec(text)) !== null) {
-      const candidate = normalizePgpPasswordCandidate(
-        match[4] || match[5] || match[6] || "",
-      );
-      if (candidate) {
-        candidates.push(candidate);
-      }
-    }
-    PGP_PASSWORD_CAPTURE_REGEX.lastIndex = 0;
-    return candidates;
+  function truncatePgpKeyPreview(value, maxLen = 72) {
+    const normalized = String(value || "").replace(/\r?\n/g, " ").trim();
+    if (!normalized) return "";
+    if (normalized.length <= maxLen) return normalized;
+    return `${normalized.slice(0, maxLen - 3)}...`;
   }
 
-  function extractPgpPasswordCandidatesFromObject(inputObject) {
-    const discovered = [];
-    const stack = [{ node: inputObject, keyHint: "" }];
-    const seen = new Set();
-
-    while (stack.length > 0) {
-      const current = stack.pop();
-      const node = current?.node;
-      const keyHint = String(current?.keyHint || "");
-      if (!node || typeof node !== "object") continue;
-      if (seen.has(node)) continue;
-      seen.add(node);
-
-      if (Array.isArray(node)) {
-        node.forEach((value) => {
-          if (value && typeof value === "object") {
-            stack.push({ node: value, keyHint });
-          } else if (typeof value === "string" && PGP_PASSWORD_HINT_KEY_REGEX.test(keyHint)) {
-            const candidate = normalizePgpPasswordCandidate(value);
-            if (candidate) discovered.push(candidate);
-          }
-        });
-        continue;
-      }
-
-      Object.entries(node).forEach(([key, value]) => {
-        const nextKeyHint = String(key || "");
-        if (value && typeof value === "object") {
-          stack.push({ node: value, keyHint: nextKeyHint });
-          return;
-        }
-        if (typeof value !== "string") return;
-
-        if (PGP_PASSWORD_HINT_KEY_REGEX.test(nextKeyHint)) {
-          const directCandidate = normalizePgpPasswordCandidate(value);
-          if (directCandidate) discovered.push(directCandidate);
-        }
-
-        const textCandidates = parsePgpPasswordCandidatesFromText(value);
-        textCandidates.forEach((candidate) => discovered.push(candidate));
-      });
-    }
-
-    return discovered;
-  }
-
-  function renderPgpPasswordCandidates() {
-    const selectEl = document.getElementById("crypt-pgp-passphrase-candidates");
+  function renderPgpPrivateKeyCandidates() {
+    const selectEl = document.getElementById("crypt-pgp-private-key-candidates");
     if (!selectEl) return;
     selectEl.replaceChildren();
 
-    if (pgpPasswordCandidates.length === 0) {
+    if (pgpPrivateKeyCandidates.length === 0) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "No password candidates found in capture";
+      option.textContent = "No PGP private keys in session keychain";
       option.selected = true;
       selectEl.appendChild(option);
       return;
@@ -319,68 +272,134 @@ function createCryptPanel({
 
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Select password candidate from capture";
+    placeholder.textContent = "Select PGP private key from session keychain";
     placeholder.selected = true;
     selectEl.appendChild(placeholder);
 
-    pgpPasswordCandidates.forEach((candidate) => {
+    pgpPrivateKeyCandidates.forEach((candidate, candidateIndex) => {
       const option = document.createElement("option");
-      option.value = candidate;
-      option.textContent = candidate;
+      option.value = String(candidateIndex);
+      option.textContent = candidate.label;
       selectEl.appendChild(option);
     });
   }
 
-  function refreshPgpPasswordCandidates() {
-    const capturedPackets = getCapturedPackets();
-    const candidateSet = new Set();
-    if (!capturedPackets || typeof capturedPackets !== "object" || !capturedPackets["Host"]) {
-      pgpPasswordCandidates = [];
-      renderPgpPasswordCandidates();
+  function renderPgpPassphraseCandidates() {
+    const selectEl = document.getElementById("crypt-pgp-passphrase-candidates");
+    if (!selectEl) return;
+    selectEl.replaceChildren();
+
+    if (pgpPassphraseCandidates.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No passphrases in session keychain";
+      option.selected = true;
+      selectEl.appendChild(option);
       return;
     }
 
-    Object.keys(capturedPackets["Host"]).forEach((host) => {
-      const packets = capturedPackets["Host"][host];
-      if (!Array.isArray(packets)) return;
-      packets.forEach((packet) => {
-        const payloadHex = normalizeHexString(getPacketPayloadHex(packet));
-        if (payloadHex) {
-          try {
-            const payloadText = Buffer.from(payloadHex, "hex").toString("utf8");
-            parsePgpPasswordCandidatesFromText(payloadText).forEach((candidate) => {
-              candidateSet.add(candidate);
-            });
-          } catch (_) {
-            // Ignore payload decode failures while harvesting candidates.
-          }
-        }
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Select passphrase from session keychain";
+    placeholder.selected = true;
+    selectEl.appendChild(placeholder);
 
-        extractPgpPasswordCandidatesFromObject(packet).forEach((candidate) => {
-          candidateSet.add(candidate);
-        });
+    pgpPassphraseCandidates.forEach((candidate, candidateIndex) => {
+      const option = document.createElement("option");
+      option.value = String(candidateIndex);
+      option.textContent = candidate.label;
+      selectEl.appendChild(option);
+    });
+  }
+
+  function refreshPgpPrivateKeyCandidates() {
+    const entries =
+      typeof getSessionKeychainEntries === "function"
+        ? getSessionKeychainEntries()
+        : [];
+    const candidateMap = new Map();
+    if (!Array.isArray(entries)) {
+      pgpPrivateKeyCandidates = [];
+      renderPgpPrivateKeyCandidates();
+      return;
+    }
+
+    entries.forEach((entry) => {
+      if (!entry || entry.type !== "private-key") return;
+      const normalizedContent = normalizePgpPrivateKeyCandidate(entry.content);
+      if (!normalizedContent || candidateMap.has(normalizedContent)) return;
+      const labelPrefix = String(entry.label || "PGP Private Key").trim();
+      candidateMap.set(normalizedContent, {
+        content: normalizedContent,
+        label: `${labelPrefix} - ${truncatePgpKeyPreview(normalizedContent)}`,
       });
     });
 
-    pgpPasswordCandidates = Array.from(candidateSet)
-      .map((candidate) => normalizePgpPasswordCandidate(candidate))
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
-    renderPgpPasswordCandidates();
+    pgpPrivateKeyCandidates = Array.from(candidateMap.values());
+    renderPgpPrivateKeyCandidates();
+  }
+
+  function refreshPgpPassphraseCandidates() {
+    const entries =
+      typeof getSessionKeychainEntries === "function"
+        ? getSessionKeychainEntries()
+        : [];
+    const candidateMap = new Map();
+    if (!Array.isArray(entries)) {
+      pgpPassphraseCandidates = [];
+      renderPgpPassphraseCandidates();
+      return;
+    }
+
+    entries.forEach((entry) => {
+      if (!entry || entry.type !== "secret") return;
+      const normalizedContent = normalizePgpPassphraseCandidate(entry.content);
+      if (!normalizedContent || candidateMap.has(normalizedContent)) return;
+      const labelPrefix = String(entry.label || "Secret").trim();
+      candidateMap.set(normalizedContent, {
+        content: normalizedContent,
+        label: `${labelPrefix} - ${"*".repeat(Math.min(normalizedContent.length, 8))}`,
+      });
+    });
+
+    pgpPassphraseCandidates = Array.from(candidateMap.values());
+    renderPgpPassphraseCandidates();
+  }
+
+  function useSelectedPgpPrivateKeyCandidate() {
+    const selectEl = document.getElementById("crypt-pgp-private-key-candidates");
+    const inputEl = document.getElementById("crypt-pgp-private-key-input");
+    const selectedIndex = Number.parseInt(String(selectEl?.value || ""), 10);
+    const selectedCandidate =
+      Number.isInteger(selectedIndex) && selectedIndex >= 0
+        ? pgpPrivateKeyCandidates[selectedIndex]
+        : null;
+    if (!selectedCandidate) {
+      statusUpdate("Status: Select a PGP private key first");
+      return;
+    }
+    if (inputEl) {
+      inputEl.value = selectedCandidate.content;
+    }
+    statusUpdate("Status: PGP private key loaded from session keychain");
   }
 
   function useSelectedPgpPasswordCandidate() {
     const selectEl = document.getElementById("crypt-pgp-passphrase-candidates");
     const inputEl = document.getElementById("crypt-pgp-passphrase-input");
-    const selected = String(selectEl?.value || "").trim();
-    if (!selected) {
-      statusUpdate("Status: Select a password candidate first");
+    const selectedIndex = Number.parseInt(String(selectEl?.value || ""), 10);
+    const selectedCandidate =
+      Number.isInteger(selectedIndex) && selectedIndex >= 0
+        ? pgpPassphraseCandidates[selectedIndex]
+        : null;
+    if (!selectedCandidate) {
+      statusUpdate("Status: Select a passphrase first");
       return;
     }
     if (inputEl) {
-      inputEl.value = selected;
+      inputEl.value = selectedCandidate.content;
     }
-    statusUpdate("Status: Password candidate copied to passphrase input");
+    statusUpdate("Status: Passphrase loaded from session keychain");
   }
 
   async function saveSuccessfulPgpKeyMaterial({
@@ -410,6 +429,7 @@ function createCryptPanel({
         content: normalizedPassphrase,
         summary: "Validated by successful PGP decrypt",
       });
+      refreshPgpPassphraseCandidates();
     }
 
     if (normalizedPrivateKey) {
@@ -420,6 +440,7 @@ function createCryptPanel({
         content: normalizedPrivateKey,
         summary: "Validated by successful PGP decrypt",
       });
+      refreshPgpPrivateKeyCandidates();
     }
   }
 
@@ -569,7 +590,8 @@ function createCryptPanel({
     pgpActiveEntryIndex = 0;
     renderPgpEncounteredDetails(pgpEncounteredEntries[0]);
     clearPgpOutput();
-    refreshPgpPasswordCandidates();
+    refreshPgpPrivateKeyCandidates();
+    refreshPgpPassphraseCandidates();
   }
 
   function selectPgpEncounteredEntry(selectedIndex) {
@@ -1195,7 +1217,8 @@ function createCryptPanel({
     document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
     if (pgpActive) {
       refreshPgpEncounteredEntries();
-      refreshPgpPasswordCandidates();
+      refreshPgpPrivateKeyCandidates();
+      refreshPgpPassphraseCandidates();
     }
   }
 
@@ -1241,6 +1264,7 @@ function createCryptPanel({
       /-----BEGIN PGP PRIVATE KEY BLOCK-----/i.test(normalized)
     ) {
       pgpPrivateKeyInputEl.value = normalized;
+      refreshPgpPrivateKeyCandidates();
     }
     keyPreviewEl.textContent = formatCryptSummary(
       normalized,
@@ -1451,7 +1475,8 @@ function createCryptPanel({
     setCryptSubtab(tabName);
     refreshCryptEncounteredEntries();
     refreshPgpEncounteredEntries();
-    refreshPgpPasswordCandidates();
+    refreshPgpPrivateKeyCandidates();
+    refreshPgpPassphraseCandidates();
   }
 
   return {
@@ -1459,7 +1484,8 @@ function createCryptPanel({
     showCryptWorkspace,
     refreshCryptEncounteredEntries,
     refreshPgpEncounteredEntries,
-    refreshPgpPasswordCandidates,
+    refreshPgpPrivateKeyCandidates,
+    refreshPgpPassphraseCandidates,
     readCryptTextFile,
     applyCryptCertificateText,
     applyCryptPrivateKeyText,
@@ -1478,6 +1504,7 @@ function createCryptPanel({
     sendPgpOutputToConvTab,
     clearPgpOutput,
     clearPgpInput,
+    useSelectedPgpPrivateKeyCandidate,
     useSelectedPgpPasswordCandidate,
     getLastTlsDecryptedPayload,
     getLastPgpOutputPayload,

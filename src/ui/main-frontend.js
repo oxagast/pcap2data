@@ -241,6 +241,7 @@ const dataToolsInputHistory = [];
 const DATA_TOOLS_INPUT_HISTORY_LIMIT = 10;
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
+let dataToolsFileNameGuess = "";
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const STRICT_IPV4_REGEX =
@@ -1542,6 +1543,8 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
     p = packets;
   },
   getBookmarkCount: () => bookmarkList.length,
+  listCarvableFilesForStats,
+  openCarvedFileInConv: loadCarvedFileCandidateIntoConvTab,
 });
 
 const summaryPanel = createSummaryPanel({
@@ -2615,7 +2618,7 @@ function parsePacketTimestampMs(packet) {
 function parsePacketProcessedNumber(packet) {
   const processedRaw = Number(
     packet?.["packet.info"]?.["packet.processed"] ??
-      packet?.["packet.info"]?.["Packet Processed"],
+    packet?.["packet.info"]?.["Packet Processed"],
   );
   return Number.isFinite(processedRaw) ? processedRaw : null;
 }
@@ -6168,6 +6171,16 @@ function renderDataToolsLanguageGuess(languageGuess) {
     : "Text Language: Unknown";
 }
 
+function setDataToolsFileNameGuess(fileNameGuess) {
+  const normalizedGuess = String(fileNameGuess || "").trim();
+  dataToolsFileNameGuess = normalizedGuess;
+  const fileNameGuessEl = document.getElementById("data-tools-file-name");
+  if (!fileNameGuessEl) return;
+  fileNameGuessEl.textContent = normalizedGuess
+    ? `Filename Guess: ${normalizedGuess}`
+    : "Filename Guess: Unknown";
+}
+
 function resetDataToolsOutputs() {
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
@@ -6179,6 +6192,7 @@ function resetDataToolsOutputs() {
     "Byte Length: 0";
   document.getElementById("data-tools-mime-type").textContent =
     "MIME Type: Unknown";
+  setDataToolsFileNameGuess("");
   renderDataToolsLanguageGuess(null);
   renderDataTypeGuesses([]);
   document.getElementById("data-tools-entropy").textContent =
@@ -6288,7 +6302,819 @@ function computeDataToolsHashes(bytes) {
   document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
 }
 
-function runDataToolsConversion() {
+function setDataToolsFindReplaceStatus(statusElementId, message, isError = false) {
+  const statusEl = document.getElementById(statusElementId);
+  if (!statusEl) return;
+  statusEl.textContent = String(message || "");
+  statusEl.style.color = isError ? "#ff8f8f" : "";
+}
+
+function clearDataToolsSimpleFindReplaceValues() {
+  const searchEl = document.getElementById("data-tools-simple-search");
+  const replaceEl = document.getElementById("data-tools-simple-replace");
+  const matchCaseEl = document.getElementById("data-tools-simple-match-case");
+  if (searchEl) searchEl.value = "";
+  if (replaceEl) replaceEl.value = "";
+  if (matchCaseEl) matchCaseEl.checked = false;
+  setDataToolsFindReplaceStatus("data-tools-simple-replace-status", "");
+}
+
+function clearDataToolsAdvancedFindReplaceValues() {
+  const searchEl = document.getElementById("data-tools-pcre-search");
+  const replaceEl = document.getElementById("data-tools-pcre-replace");
+  const flagI = document.getElementById("data-tools-pcre-flag-i");
+  const flagM = document.getElementById("data-tools-pcre-flag-m");
+  const flagS = document.getElementById("data-tools-pcre-flag-s");
+  const flagU = document.getElementById("data-tools-pcre-flag-u");
+  if (searchEl) searchEl.value = "";
+  if (replaceEl) replaceEl.value = "";
+  if (flagI) flagI.checked = false;
+  if (flagM) flagM.checked = false;
+  if (flagS) flagS.checked = false;
+  if (flagU) flagU.checked = false;
+  setDataToolsFindReplaceStatus("data-tools-pcre-status", "");
+}
+
+function setDataToolsFindReplaceSectionCollapsed(sectionEl, collapsed) {
+  if (!sectionEl) return;
+  sectionEl.classList.toggle("is-collapsed", Boolean(collapsed));
+  const children = Array.from(sectionEl.children || []);
+  children.forEach((child) => {
+    if (child.classList?.contains("data-tools-find-replace-title")) {
+      child.hidden = false;
+      return;
+    }
+    child.hidden = Boolean(collapsed);
+  });
+}
+
+function setDataToolsFindReplaceMode(mode) {
+  const simpleSection = document.getElementById("data-tools-simple-find-replace-section");
+  const advancedSection = document.getElementById("data-tools-advanced-find-replace-section");
+  if (!simpleSection || !advancedSection) return;
+
+  if (mode === "simple") {
+    setDataToolsFindReplaceSectionCollapsed(simpleSection, false);
+    setDataToolsFindReplaceSectionCollapsed(advancedSection, true);
+    clearDataToolsAdvancedFindReplaceValues();
+    return;
+  }
+
+  if (mode === "advanced") {
+    setDataToolsFindReplaceSectionCollapsed(advancedSection, false);
+    setDataToolsFindReplaceSectionCollapsed(simpleSection, true);
+    clearDataToolsSimpleFindReplaceValues();
+    return;
+  }
+
+  setDataToolsFindReplaceSectionCollapsed(simpleSection, false);
+  setDataToolsFindReplaceSectionCollapsed(advancedSection, false);
+}
+
+function normalizeDataToolsByteToken(byteValue) {
+  const normalized = Number(byteValue);
+  if (!Number.isInteger(normalized) || normalized < 0 || normalized > 255) {
+    return null;
+  }
+  return normalized;
+}
+
+function parseDataToolsEscapedBytesExpression(rawExpression) {
+  const expression = String(rawExpression || "");
+  const bytes = [];
+  let plainStart = 0;
+
+  const flushPlain = (end) => {
+    if (end <= plainStart) return;
+    bytes.push(...DATA_TOOLS_TEXT_ENCODER.encode(expression.slice(plainStart, end)));
+  };
+
+  for (let i = 0; i < expression.length; i++) {
+    if (expression[i] !== "\\") continue;
+    const next = expression[i + 1];
+    if (!next) continue;
+
+    let parsedByte = null;
+    let consumedLength = 0;
+
+    if (next === "x") {
+      const hexPair = expression.slice(i + 2, i + 4);
+      if (/^[0-9A-Fa-f]{2}$/.test(hexPair)) {
+        parsedByte = parseInt(hexPair, 16);
+        consumedLength = 4;
+      }
+    } else if (next === "b") {
+      const bitOctet = expression.slice(i + 2, i + 10);
+      if (/^[01]{8}$/.test(bitOctet)) {
+        parsedByte = parseInt(bitOctet, 2);
+        consumedLength = 10;
+      }
+    } else if (next === "d") {
+      const decimalMatch = expression.slice(i + 2).match(/^(\d{1,3})/);
+      if (decimalMatch?.[1]) {
+        const decimalByte = normalizeDataToolsByteToken(parseInt(decimalMatch[1], 10));
+        if (decimalByte != null) {
+          parsedByte = decimalByte;
+          consumedLength = 2 + decimalMatch[1].length;
+        }
+      }
+    } else if (next === "n") {
+      parsedByte = 0x0a;
+      consumedLength = 2;
+    } else if (next === "r") {
+      parsedByte = 0x0d;
+      consumedLength = 2;
+    } else if (next === "t") {
+      parsedByte = 0x09;
+      consumedLength = 2;
+    } else if (next === "\\") {
+      parsedByte = 0x5c;
+      consumedLength = 2;
+    }
+
+    if (parsedByte == null || consumedLength <= 0) continue;
+    flushPlain(i);
+    bytes.push(parsedByte);
+    i += consumedLength - 1;
+    plainStart = i + 1;
+  }
+
+  flushPlain(expression.length);
+  return new Uint8Array(bytes);
+}
+
+function normalizeDataToolsPcrePatternForByteSearch(rawPattern) {
+  const pattern = String(rawPattern || "");
+  let normalized = "";
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] !== "\\") {
+      normalized += pattern[i];
+      continue;
+    }
+    const next = pattern[i + 1];
+    if (!next) {
+      normalized += "\\";
+      continue;
+    }
+
+    if (next === "x") {
+      const hexPair = pattern.slice(i + 2, i + 4);
+      if (/^[0-9A-Fa-f]{2}$/.test(hexPair)) {
+        normalized += `\\x${hexPair.toUpperCase()}`;
+        i += 3;
+        continue;
+      }
+    } else if (next === "b") {
+      const bitOctet = pattern.slice(i + 2, i + 10);
+      if (/^[01]{8}$/.test(bitOctet)) {
+        const byteValue = parseInt(bitOctet, 2).toString(16).padStart(2, "0").toUpperCase();
+        normalized += `\\x${byteValue}`;
+        i += 9;
+        continue;
+      }
+    } else if (next === "d") {
+      const decimalMatch = pattern.slice(i + 2).match(/^(\d{1,3})/);
+      if (decimalMatch?.[1]) {
+        const decimalByte = normalizeDataToolsByteToken(parseInt(decimalMatch[1], 10));
+        if (decimalByte != null) {
+          normalized += `\\x${decimalByte.toString(16).padStart(2, "0").toUpperCase()}`;
+          i += 1 + decimalMatch[1].length;
+          continue;
+        }
+      }
+    }
+
+    normalized += pattern[i];
+  }
+  return normalized;
+}
+
+function normalizeDataToolsPcreReplacementForByteSearch(rawReplacement) {
+  const replacement = String(rawReplacement || "");
+  let normalized = "";
+  for (let i = 0; i < replacement.length; i++) {
+    if (replacement[i] !== "\\") {
+      normalized += replacement[i];
+      continue;
+    }
+    const next = replacement[i + 1];
+    if (!next) {
+      normalized += "\\";
+      continue;
+    }
+
+    let parsedByte = null;
+    let consumedLength = 0;
+    if (next === "x") {
+      const hexPair = replacement.slice(i + 2, i + 4);
+      if (/^[0-9A-Fa-f]{2}$/.test(hexPair)) {
+        parsedByte = parseInt(hexPair, 16);
+        consumedLength = 4;
+      }
+    } else if (next === "b") {
+      const bitOctet = replacement.slice(i + 2, i + 10);
+      if (/^[01]{8}$/.test(bitOctet)) {
+        parsedByte = parseInt(bitOctet, 2);
+        consumedLength = 10;
+      }
+    } else if (next === "d") {
+      const decimalMatch = replacement.slice(i + 2).match(/^(\d{1,3})/);
+      if (decimalMatch?.[1]) {
+        const decimalByte = normalizeDataToolsByteToken(parseInt(decimalMatch[1], 10));
+        if (decimalByte != null) {
+          parsedByte = decimalByte;
+          consumedLength = 2 + decimalMatch[1].length;
+        }
+      }
+    } else if (next === "n") {
+      parsedByte = 0x0a;
+      consumedLength = 2;
+    } else if (next === "r") {
+      parsedByte = 0x0d;
+      consumedLength = 2;
+    } else if (next === "t") {
+      parsedByte = 0x09;
+      consumedLength = 2;
+    } else if (next === "\\") {
+      parsedByte = 0x5c;
+      consumedLength = 2;
+    }
+
+    if (parsedByte == null || consumedLength <= 0) {
+      normalized += replacement[i];
+      continue;
+    }
+
+    normalized += String.fromCharCode(parsedByte);
+    i += consumedLength - 1;
+  }
+  return normalized;
+}
+
+function encodeDataToolsBytesForFormat(bytes, format) {
+  const safeFormat = String(format || "hex").toLowerCase();
+  if (safeFormat === "hex") {
+    return [...bytes]
+      .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+      .join(" ");
+  }
+  if (safeFormat === "binary") {
+    return [...bytes]
+      .map((byte) => byte.toString(2).padStart(8, "0"))
+      .join(" ");
+  }
+  if (safeFormat === "decimal") {
+    return [...bytes].join(" ");
+  }
+  if (safeFormat === "base64") {
+    return bytesToBase64(bytes);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function byteStringToUint8Array(value) {
+  const input = String(value || "");
+  const result = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    result[i] = input.charCodeAt(i) & 0xff;
+  }
+  return result;
+}
+
+function getDataToolsInputByteContext() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) return null;
+  const format = String(formatEl.value || "hex").toLowerCase();
+  const inputValue = String(inputEl.value || "");
+  const bytes = parseDataToolsInput(format, inputValue);
+  const inputMap = buildInputSelectionMap(inputValue, format, bytes);
+  const selectionStart = Number(inputEl.selectionStart || 0);
+  const selectionEnd = Number(inputEl.selectionEnd || 0);
+  const charToByte = inputMap?.charToByte || [];
+
+  const mapCharIndexToByteIndex = (charIndex) => {
+    if (!bytes.length) return 0;
+    const bounded = Math.max(0, Math.min(Number(charIndex || 0), inputValue.length));
+    for (let i = bounded; i < charToByte.length; i++) {
+      const byteIndex = charToByte[i];
+      if (Number.isInteger(byteIndex)) return byteIndex;
+    }
+    for (let i = Math.min(bounded - 1, charToByte.length - 1); i >= 0; i--) {
+      const byteIndex = charToByte[i];
+      if (Number.isInteger(byteIndex)) return Math.min(byteIndex + 1, bytes.length);
+    }
+    return bytes.length;
+  };
+
+  return {
+    inputEl,
+    format,
+    inputValue,
+    bytes,
+    inputMap,
+    selectionStartByte: mapCharIndexToByteIndex(selectionStart),
+    selectionEndByte: mapCharIndexToByteIndex(selectionEnd),
+  };
+}
+
+function mapDataToolsByteRangeToSelection(inputValue, format, bytes, startByte, endByte) {
+  const map = buildInputSelectionMap(inputValue, format, bytes);
+  const byteRanges = map?.byteRanges || [];
+  const safeStartByte = Math.max(0, Math.min(startByte, bytes.length));
+  const safeEndByte = Math.max(safeStartByte, Math.min(endByte, bytes.length));
+  const startChar =
+    safeStartByte >= bytes.length
+      ? inputValue.length
+      : Number(byteRanges[safeStartByte]?.start ?? inputValue.length);
+  const endChar =
+    safeEndByte <= 0
+      ? 0
+      : safeEndByte > bytes.length
+        ? inputValue.length
+        : Number(byteRanges[safeEndByte - 1]?.end ?? startChar);
+  return { startChar, endChar };
+}
+
+function toLowerAsciiByte(byteValue) {
+  if (byteValue >= 0x41 && byteValue <= 0x5a) return byteValue + 32;
+  return byteValue;
+}
+
+function bytesMatchAt(haystack, needle, atIndex, matchCase) {
+  for (let i = 0; i < needle.length; i++) {
+    const sourceByte = haystack[atIndex + i];
+    const targetByte = needle[i];
+    if (matchCase) {
+      if (sourceByte !== targetByte) return false;
+    } else if (toLowerAsciiByte(sourceByte) !== toLowerAsciiByte(targetByte)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findNextBytePattern(haystack, needle, startIndex, matchCase = true) {
+  if (!needle.length || haystack.length < needle.length) return null;
+  const maxIndex = haystack.length - needle.length;
+  const boundedStart = Math.max(0, Math.min(startIndex, maxIndex + 1));
+  for (let i = boundedStart; i <= maxIndex; i++) {
+    if (bytesMatchAt(haystack, needle, i, matchCase)) {
+      return { start: i, end: i + needle.length, wrapped: false };
+    }
+  }
+  if (boundedStart > 0) {
+    for (let i = 0; i < boundedStart && i <= maxIndex; i++) {
+      if (bytesMatchAt(haystack, needle, i, matchCase)) {
+        return { start: i, end: i + needle.length, wrapped: true };
+      }
+    }
+  }
+  return null;
+}
+
+function replaceAllBytePatterns(haystack, needle, replacement, matchCase = true) {
+  if (!needle.length) {
+    return { bytes: haystack, count: 0 };
+  }
+  const output = [];
+  let replacedCount = 0;
+  let cursor = 0;
+  while (cursor <= haystack.length - needle.length) {
+    if (bytesMatchAt(haystack, needle, cursor, matchCase)) {
+      output.push(...replacement);
+      cursor += needle.length;
+      replacedCount += 1;
+      continue;
+    }
+    output.push(haystack[cursor]);
+    cursor += 1;
+  }
+  while (cursor < haystack.length) {
+    output.push(haystack[cursor]);
+    cursor += 1;
+  }
+  return { bytes: new Uint8Array(output), count: replacedCount };
+}
+
+function getDataToolsPcrePatternAndFlags(includeGlobalFlag = false) {
+  const rawPattern = String(
+    document.getElementById("data-tools-pcre-search")?.value || "",
+  );
+  let pattern = rawPattern;
+  const collectedFlags = new Set();
+
+  if (document.getElementById("data-tools-pcre-flag-i")?.checked) {
+    collectedFlags.add("i");
+  }
+  if (document.getElementById("data-tools-pcre-flag-m")?.checked) {
+    collectedFlags.add("m");
+  }
+  if (document.getElementById("data-tools-pcre-flag-s")?.checked) {
+    collectedFlags.add("s");
+  }
+  if (document.getElementById("data-tools-pcre-flag-u")?.checked) {
+    collectedFlags.add("u");
+  }
+
+  const inlineFlagsMatch = pattern.match(/^\(\?([imsu]+)\)/i);
+  if (inlineFlagsMatch) {
+    inlineFlagsMatch[1]
+      .toLowerCase()
+      .split("")
+      .forEach((flag) => collectedFlags.add(flag));
+    pattern = pattern.slice(inlineFlagsMatch[0].length);
+  }
+
+  if (!pattern) {
+    throw new Error("Enter a PCRE pattern first.");
+  }
+
+  if (includeGlobalFlag) {
+    collectedFlags.add("g");
+  }
+  return { pattern, flags: [...collectedFlags].join("") };
+}
+
+function findNextLiteralMatch(haystack, needle, fromIndex, matchCase) {
+  if (!needle) return null;
+  const normalizedHaystack = matchCase ? haystack : haystack.toLowerCase();
+  const normalizedNeedle = matchCase ? needle : needle.toLowerCase();
+  const boundedStart = Math.max(0, Math.min(fromIndex, haystack.length));
+
+  let idx = normalizedHaystack.indexOf(normalizedNeedle, boundedStart);
+  let wrapped = false;
+  if (idx === -1 && boundedStart > 0) {
+    idx = normalizedHaystack.indexOf(normalizedNeedle, 0);
+    wrapped = idx !== -1;
+  }
+  if (idx === -1) return null;
+  return { start: idx, end: idx + needle.length, wrapped };
+}
+
+function findNextRegexMatch(value, regex, fromIndex) {
+  const boundedStart = Math.max(0, Math.min(fromIndex, value.length));
+  regex.lastIndex = boundedStart;
+  let guard = 0;
+  const maxIterations = value.length + 2;
+
+  while (guard < maxIterations) {
+    const match = regex.exec(value);
+    if (!match) break;
+    const start = match.index;
+    const text = String(match[0] || "");
+    const end = start + text.length;
+    if (text.length === 0 && start < value.length) {
+      regex.lastIndex = start + 1;
+      guard += 1;
+      continue;
+    }
+    return { match, start, end, wrapped: false };
+  }
+
+  if (boundedStart > 0) {
+    regex.lastIndex = 0;
+    guard = 0;
+    while (guard < maxIterations) {
+      const match = regex.exec(value);
+      if (!match) break;
+      const start = match.index;
+      const text = String(match[0] || "");
+      const end = start + text.length;
+      if (text.length === 0 && start < value.length) {
+        regex.lastIndex = start + 1;
+        guard += 1;
+        continue;
+      }
+      return { match, start, end, wrapped: true };
+    }
+  }
+
+  return null;
+}
+
+function updateDataToolsInputAfterSearchReplace(nextValue, selectionStart, selectionEnd) {
+  const inputEl = document.getElementById("data-tools-input");
+  if (!inputEl) return;
+  inputEl.value = nextValue;
+  if (
+    Number.isInteger(selectionStart) &&
+    Number.isInteger(selectionEnd) &&
+    typeof inputEl.setSelectionRange === "function"
+  ) {
+    inputEl.setSelectionRange(selectionStart, selectionEnd);
+  }
+  inputEl.focus();
+  dataToolsHistorySelectEl.value = "";
+  updateDataToolsHexHighlights();
+  syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+  updateDataToolsInputEditedState();
+  if (String(inputEl.value || "").trim()) {
+    runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
+  } else {
+    document.getElementById("data-tools-error").textContent = "";
+    resetDataToolsOutputs();
+    clearDataToolsSelectionState();
+    updateDataToolsInputEditedState();
+  }
+}
+
+function runDataToolsSimpleFindNext() {
+  setDataToolsFindReplaceMode("simple");
+  const context = getDataToolsInputByteContext();
+  const needleBytes = parseDataToolsEscapedBytesExpression(
+    document.getElementById("data-tools-simple-search")?.value || "",
+  );
+  const matchCase = Boolean(
+    document.getElementById("data-tools-simple-match-case")?.checked,
+  );
+  if (!context) return;
+  if (!needleBytes.length) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "Enter text to find (bytes: \\xHH, \\b01010101, \\d10).",
+      true,
+    );
+    return;
+  }
+  const result = findNextBytePattern(
+    context.bytes,
+    needleBytes,
+    context.selectionEndByte,
+    matchCase,
+  );
+  if (!result) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "No match found.",
+      true,
+    );
+    return;
+  }
+  const selectionRange = mapDataToolsByteRangeToSelection(
+    context.inputValue,
+    context.format,
+    context.bytes,
+    result.start,
+    result.end,
+  );
+  context.inputEl.focus();
+  context.inputEl.setSelectionRange(selectionRange.startChar, selectionRange.endChar);
+  syncDataToolsSelectionFromField("data-tools-input");
+  setDataToolsFindReplaceStatus(
+    "data-tools-simple-replace-status",
+    result.wrapped ? "Match found (wrapped to top)." : "Match found.",
+  );
+}
+
+function runDataToolsSimpleReplaceNext() {
+  setDataToolsFindReplaceMode("simple");
+  const context = getDataToolsInputByteContext();
+  const needleBytes = parseDataToolsEscapedBytesExpression(
+    document.getElementById("data-tools-simple-search")?.value || "",
+  );
+  const replacementBytes = parseDataToolsEscapedBytesExpression(
+    document.getElementById("data-tools-simple-replace")?.value || "",
+  );
+  const matchCase = Boolean(
+    document.getElementById("data-tools-simple-match-case")?.checked,
+  );
+  if (!context) return;
+  if (!needleBytes.length) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "Enter text to find (bytes: \\xHH, \\b01010101, \\d10).",
+      true,
+    );
+    return;
+  }
+
+  const target = findNextBytePattern(
+    context.bytes,
+    needleBytes,
+    context.selectionEndByte,
+    matchCase,
+  );
+
+  if (!target) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "No match found to replace.",
+      true,
+    );
+    return;
+  }
+
+  const updatedBytes = new Uint8Array(
+    context.bytes.length - needleBytes.length + replacementBytes.length,
+  );
+  updatedBytes.set(context.bytes.slice(0, target.start), 0);
+  updatedBytes.set(replacementBytes, target.start);
+  updatedBytes.set(context.bytes.slice(target.end), target.start + replacementBytes.length);
+
+  const updatedInputValue = encodeDataToolsBytesForFormat(updatedBytes, context.format);
+  const updatedSelection = mapDataToolsByteRangeToSelection(
+    updatedInputValue,
+    context.format,
+    updatedBytes,
+    target.start,
+    target.start + replacementBytes.length,
+  );
+  updateDataToolsInputAfterSearchReplace(
+    updatedInputValue,
+    updatedSelection.startChar,
+    updatedSelection.endChar,
+  );
+  setDataToolsFindReplaceStatus(
+    "data-tools-simple-replace-status",
+    target.wrapped
+      ? "Replaced 1 match (wrapped to top)."
+      : "Replaced 1 match.",
+  );
+}
+
+function runDataToolsSimpleReplaceAll() {
+  setDataToolsFindReplaceMode("simple");
+  const context = getDataToolsInputByteContext();
+  const needleBytes = parseDataToolsEscapedBytesExpression(
+    document.getElementById("data-tools-simple-search")?.value || "",
+  );
+  const replacementBytes = parseDataToolsEscapedBytesExpression(
+    document.getElementById("data-tools-simple-replace")?.value || "",
+  );
+  const matchCase = Boolean(
+    document.getElementById("data-tools-simple-match-case")?.checked,
+  );
+  if (!context) return;
+  if (!needleBytes.length) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "Enter text to find (bytes: \\xHH, \\b01010101, \\d10).",
+      true,
+    );
+    return;
+  }
+
+  const replaceResult = replaceAllBytePatterns(
+    context.bytes,
+    needleBytes,
+    replacementBytes,
+    matchCase,
+  );
+  const replacedCount = replaceResult.count;
+
+  if (!replacedCount) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-simple-replace-status",
+      "No matches replaced.",
+      true,
+    );
+    return;
+  }
+
+  const updatedInputValue = encodeDataToolsBytesForFormat(replaceResult.bytes, context.format);
+  updateDataToolsInputAfterSearchReplace(updatedInputValue, 0, 0);
+  setDataToolsFindReplaceStatus(
+    "data-tools-simple-replace-status",
+    `Replaced ${replacedCount} match${replacedCount === 1 ? "" : "es"}.`,
+  );
+}
+
+function runDataToolsPcreFindNext() {
+  setDataToolsFindReplaceMode("advanced");
+  const context = getDataToolsInputByteContext();
+  if (!context) return;
+  try {
+    const { pattern, flags } = getDataToolsPcrePatternAndFlags(true);
+    const bytePattern = normalizeDataToolsPcrePatternForByteSearch(pattern);
+    const regex = new RegExp(bytePattern, flags);
+    const byteString = bytesToCharString(context.bytes);
+    const found = findNextRegexMatch(byteString, regex, context.selectionEndByte);
+    if (!found) {
+      setDataToolsFindReplaceStatus("data-tools-pcre-status", "No pattern match found.", true);
+      return;
+    }
+    const selectionRange = mapDataToolsByteRangeToSelection(
+      context.inputValue,
+      context.format,
+      context.bytes,
+      found.start,
+      found.end,
+    );
+    context.inputEl.focus();
+    context.inputEl.setSelectionRange(selectionRange.startChar, selectionRange.endChar);
+    syncDataToolsSelectionFromField("data-tools-input");
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      found.wrapped ? "Pattern match found (wrapped to top)." : "Pattern match found.",
+    );
+  } catch (error) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      error?.message || "Invalid PCRE pattern.",
+      true,
+    );
+  }
+}
+
+function runDataToolsPcreReplaceNext() {
+  setDataToolsFindReplaceMode("advanced");
+  const context = getDataToolsInputByteContext();
+  const replacement = String(document.getElementById("data-tools-pcre-replace")?.value || "");
+  if (!context) return;
+  try {
+    const { pattern, flags } = getDataToolsPcrePatternAndFlags(true);
+    const bytePattern = normalizeDataToolsPcrePatternForByteSearch(pattern);
+    const normalizedReplacement = normalizeDataToolsPcreReplacementForByteSearch(replacement);
+    const globalRegex = new RegExp(bytePattern, flags);
+    const singleRegex = new RegExp(bytePattern, flags.replace(/g/g, ""));
+    const byteString = bytesToCharString(context.bytes);
+    const found = findNextRegexMatch(byteString, globalRegex, context.selectionEndByte);
+
+    if (!found) {
+      setDataToolsFindReplaceStatus("data-tools-pcre-status", "No pattern match found to replace.", true);
+      return;
+    }
+
+    const before = byteString.slice(0, found.start);
+    const after = byteString.slice(found.end);
+    const replacementText = String(found.match[0] || "").replace(
+      singleRegex,
+      normalizedReplacement,
+    );
+    const updatedByteString = `${before}${replacementText}${after}`;
+    const updatedBytes = byteStringToUint8Array(updatedByteString);
+    const updatedInputValue = encodeDataToolsBytesForFormat(updatedBytes, context.format);
+    const updatedSelection = mapDataToolsByteRangeToSelection(
+      updatedInputValue,
+      context.format,
+      updatedBytes,
+      found.start,
+      found.start + replacementText.length,
+    );
+    updateDataToolsInputAfterSearchReplace(
+      updatedInputValue,
+      updatedSelection.startChar,
+      updatedSelection.endChar,
+    );
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      found.wrapped
+        ? "Replaced 1 pattern match (wrapped to top)."
+        : "Replaced 1 pattern match.",
+    );
+  } catch (error) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      error?.message || "Invalid PCRE pattern.",
+      true,
+    );
+  }
+}
+
+function runDataToolsPcreReplaceAll() {
+  setDataToolsFindReplaceMode("advanced");
+  const context = getDataToolsInputByteContext();
+  const replacement = String(document.getElementById("data-tools-pcre-replace")?.value || "");
+  if (!context) return;
+  try {
+    const { pattern, flags } = getDataToolsPcrePatternAndFlags(true);
+    const bytePattern = normalizeDataToolsPcrePatternForByteSearch(pattern);
+    const normalizedReplacement = normalizeDataToolsPcreReplacementForByteSearch(replacement);
+    const regex = new RegExp(bytePattern, flags);
+    const byteString = bytesToCharString(context.bytes);
+    let replacedCount = 0;
+    byteString.replace(regex, () => {
+      replacedCount += 1;
+      return "";
+    });
+    regex.lastIndex = 0;
+    const updatedByteString = byteString.replace(regex, normalizedReplacement);
+
+    if (!replacedCount) {
+      setDataToolsFindReplaceStatus("data-tools-pcre-status", "No pattern matches replaced.", true);
+      return;
+    }
+
+    const updatedBytes = byteStringToUint8Array(updatedByteString);
+    const updatedInputValue = encodeDataToolsBytesForFormat(updatedBytes, context.format);
+    updateDataToolsInputAfterSearchReplace(updatedInputValue, 0, 0);
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      `Replaced ${replacedCount} pattern match${replacedCount === 1 ? "" : "es"}.`,
+    );
+  } catch (error) {
+    setDataToolsFindReplaceStatus(
+      "data-tools-pcre-status",
+      error?.message || "Invalid PCRE pattern.",
+      true,
+    );
+  }
+}
+
+function runDataToolsConversion(options = {}) {
+  const suppressHistory = Boolean(options?.suppressHistory);
+  const suppressCommit = Boolean(options?.suppressCommit);
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
   const errorEl = document.getElementById("data-tools-error");
@@ -6296,7 +7122,9 @@ function runDataToolsConversion() {
 
   try {
     const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
-    addDataToolsInputHistory(formatEl.value, inputEl.value);
+    if (!suppressHistory) {
+      addDataToolsInputHistory(formatEl.value, inputEl.value);
+    }
     const hexValues = [...bytes].map((byte) =>
       byte.toString(16).padStart(2, "0").toUpperCase(),
     );
@@ -6359,7 +7187,9 @@ function runDataToolsConversion() {
     errorEl.textContent = "";
     computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
-    markDataToolsInputCommitted();
+    if (!suppressCommit) {
+      markDataToolsInputCommitted();
+    }
 
 
   } catch (error) {
@@ -7020,6 +7850,7 @@ const cryptPanel = createCryptPanel({
   runFilterQuery,
   addSessionKeystoreEntry: (...args) =>
     keystorePanel.addSessionKeystoreEntry(...args),
+  getSessionKeychainEntries: () => keystorePanel.getSessionKeychainEntries(),
   getFirstLineOrFallback,
   sendDecryptedToConv: ({ hexValue, utf8Value, sourceLabel }) => {
     const inputEl = document.getElementById("data-tools-input");
@@ -7033,6 +7864,7 @@ const cryptPanel = createCryptPanel({
       inputEl.value = normalizedUtf8;
       formatEl.value = "ascii";
     }
+    setDataToolsFileNameGuess("");
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
   },
@@ -7060,6 +7892,7 @@ const {
   sendPgpOutputToConvTab,
   clearPgpOutput,
   clearPgpInput,
+  useSelectedPgpPrivateKeyCandidate,
   useSelectedPgpPasswordCandidate,
   getLastTlsDecryptedPayload,
   getLastPgpOutputPayload,
@@ -8311,6 +9144,7 @@ function loadContextValueIntoDataTools(format) {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
+  setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
   hideConvertContextMenu();
@@ -8329,6 +9163,7 @@ function deriveContextSelectionGuessFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = selectedText;
   formatEl.value = "ascii";
+  setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
   writeLogEntry("Derived data type guess from selected/context data");
@@ -8345,6 +9180,7 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = payloadHex;
   formatEl.value = "hex";
+  setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
@@ -8371,6 +9207,7 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = bytesToHexString(decompressedCandidate.bytes);
   formatEl.value = "hex";
+  setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -8415,6 +9252,7 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = cursorAsciiLoadData.value;
   formatEl.value = cursorAsciiLoadData.format;
+  setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -8985,6 +9823,76 @@ function sanitizeCarveFilename(name) {
   return leaf.replace(/[\u0000-\u001f<>:"|?*]/g, "_").trim();
 }
 
+const CARVE_PGP_PRIVATE_KEY_REGEX =
+  /-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----/i;
+const CARVE_PEM_PRIVATE_KEY_REGEX =
+  /-----BEGIN (?:RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----/i;
+const CARVE_OPENSSH_PRIVATE_KEY_REGEX =
+  /-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*?-----END OPENSSH PRIVATE KEY-----/i;
+const CARVE_SECRET_FILE_HINT_REGEX =
+  /(password|passphrase|secret|token|api[_-]?key|private[_-]?key)\s*(?:=|:)/i;
+
+function detectSensitiveCarveEntry(candidate, protocolLabel) {
+  if (!candidate || !(candidate.bytes instanceof Uint8Array)) return null;
+  if (candidate.bytes.length === 0) return null;
+
+  const sourceLabel = `${String(protocolLabel || "CARVE").toLowerCase()}-file-carve`;
+  const fileName = String(candidate.fileName || "carved.bin").trim();
+  const fileNameLower = fileName.toLowerCase();
+  const textSample = Buffer.from(candidate.bytes.slice(0, 1024 * 1024)).toString("utf8");
+  const normalizedSample = String(textSample || "").trim();
+
+  const pgpPrivateKeyMatch = normalizedSample.match(CARVE_PGP_PRIVATE_KEY_REGEX);
+  if (pgpPrivateKeyMatch?.[0]) {
+    return {
+      type: "private-key",
+      label: `PGP Private Key (${fileName})`,
+      source: sourceLabel,
+      content: String(pgpPrivateKeyMatch[0]).trim(),
+      summary: `Auto-detected PGP private key from carved ${protocolLabel} stream`,
+    };
+  }
+
+  const pemPrivateKeyMatch = normalizedSample.match(CARVE_PEM_PRIVATE_KEY_REGEX);
+  if (pemPrivateKeyMatch?.[0]) {
+    return {
+      type: "private-key",
+      label: `Private Key (${fileName})`,
+      source: sourceLabel,
+      content: String(pemPrivateKeyMatch[0]).trim(),
+      summary: `Auto-detected private key from carved ${protocolLabel} stream`,
+    };
+  }
+
+  const opensshPrivateKeyMatch = normalizedSample.match(CARVE_OPENSSH_PRIVATE_KEY_REGEX);
+  if (opensshPrivateKeyMatch?.[0]) {
+    return {
+      type: "private-key",
+      label: `OpenSSH Private Key (${fileName})`,
+      source: sourceLabel,
+      content: String(opensshPrivateKeyMatch[0]).trim(),
+      summary: `Auto-detected OpenSSH private key from carved ${protocolLabel} stream`,
+    };
+  }
+
+  const looksLikeSecretFile =
+    CARVE_SECRET_FILE_HINT_REGEX.test(normalizedSample) ||
+    [".env", ".ini", ".cfg", ".conf", ".json", ".yaml", ".yml", ".txt"].some(
+      (suffix) => fileNameLower.endsWith(suffix),
+    );
+  if (looksLikeSecretFile && CARVE_SECRET_FILE_HINT_REGEX.test(normalizedSample)) {
+    return {
+      type: "secret",
+      label: `Sensitive Data (${fileName})`,
+      source: sourceLabel,
+      content: normalizedSample.slice(0, 8192),
+      summary: `Auto-detected sensitive data from carved ${protocolLabel} stream`,
+    };
+  }
+
+  return null;
+}
+
 function addSegmentToEntry(entry, offset, bytes) {
   if (!entry || !Number.isInteger(offset) || offset < 0) return;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
@@ -9387,6 +10295,213 @@ function getFtpControlRolesFromStreamTuple(streamTuple) {
   return { clientIp: "", serverIp: "" };
 }
 
+function extractFtpTransferContextFromControlStream(
+  streamPackets,
+  {
+    referenceTimestamp = null,
+    requiredDataPorts = null,
+  } = {},
+) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
+    return {
+      hasControlMetadata: false,
+      transferCommand: "",
+      transferName: "",
+      transferTimestamp: null,
+      candidateDataPorts: new Set(),
+    };
+  }
+
+  const normalizedReferenceTimestamp = Number.isFinite(referenceTimestamp)
+    ? referenceTimestamp
+    : null;
+  const requiredPortSet = requiredDataPorts instanceof Set
+    ? requiredDataPorts
+    : new Set(
+      Array.isArray(requiredDataPorts)
+        ? requiredDataPorts.filter((port) => Number.isInteger(port) && port >= 1 && port <= 65535)
+        : [],
+    );
+
+  let hasControlMetadata = false;
+  let pendingDataPorts = new Set();
+  const transfers = [];
+
+  streamPackets.forEach((packet) => {
+    const transportData = getPacketTransportData(packet);
+    const ftpData = transportData?.["FTP"];
+    if (!ftpData || typeof ftpData !== "object") return;
+    hasControlMetadata = true;
+
+    const ftpType = String(ftpData["Type"] || "").trim().toLowerCase();
+    if (ftpType === "command") {
+      const command = String(ftpData["Command"] || "")
+        .trim()
+        .toUpperCase();
+      const argument = String(ftpData["Argument"] || "").trim();
+
+      if (command === "PORT" || command === "EPRT") {
+        const activePort = parseFtpActiveModeDataPort(argument);
+        pendingDataPorts = activePort ? new Set([activePort]) : new Set();
+        return;
+      }
+
+      if (["RETR", "STOR", "APPE", "LIST", "NLST"].includes(command)) {
+        const packetTs = parsePacketTimestampMs(packet);
+        transfers.push({
+          transferCommand: command,
+          transferName: command === "LIST" || command === "NLST" ? "" : argument,
+          transferTimestamp: Number.isFinite(packetTs) ? packetTs : null,
+          candidateDataPorts: new Set(pendingDataPorts),
+        });
+        pendingDataPorts = new Set();
+      }
+      return;
+    }
+
+    if (ftpType === "response") {
+      const statusCode = String(
+        ftpData["ftp.status_code"] ?? ftpData["Status Code"] ?? "",
+      ).trim();
+      if (statusCode === "227" || statusCode === "229") {
+        const passivePort = parseFtpPassiveModeDataPort(
+          ftpData["Message"] ?? ftpData["ftp.message"],
+        );
+        pendingDataPorts = passivePort ? new Set([passivePort]) : new Set();
+      }
+    }
+  });
+
+  if (transfers.length === 0) {
+    return {
+      hasControlMetadata,
+      transferCommand: "",
+      transferName: "",
+      transferTimestamp: null,
+      candidateDataPorts: new Set(),
+    };
+  }
+
+  let matchingTransfers = transfers.filter((transfer) => {
+    if (requiredPortSet.size === 0 || transfer.candidateDataPorts.size === 0) return true;
+    return Array.from(transfer.candidateDataPorts).some((port) => requiredPortSet.has(port));
+  });
+  if (matchingTransfers.length === 0) matchingTransfers = transfers;
+
+  if (normalizedReferenceTimestamp !== null) {
+    const transfersBeforeReference = matchingTransfers.filter((transfer) => {
+      if (!Number.isFinite(transfer.transferTimestamp)) return true;
+      return transfer.transferTimestamp <= normalizedReferenceTimestamp + 2000;
+    });
+    if (transfersBeforeReference.length > 0) {
+      matchingTransfers = transfersBeforeReference;
+    }
+  }
+
+  const selectedTransfer = matchingTransfers[matchingTransfers.length - 1] || transfers[transfers.length - 1];
+  return {
+    hasControlMetadata,
+    transferCommand: selectedTransfer?.transferCommand || "",
+    transferName: selectedTransfer?.transferName || "",
+    transferTimestamp: Number.isFinite(selectedTransfer?.transferTimestamp)
+      ? selectedTransfer.transferTimestamp
+      : null,
+    candidateDataPorts: selectedTransfer?.candidateDataPorts || new Set(),
+  };
+}
+
+function resolveFtpControlStreamForDataStream(streamPackets, contextPacket = null) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) return null;
+
+  const dataTuple = getStreamTupleForPacket(contextPacket || streamPackets[0]);
+  if (!dataTuple) return null;
+
+  const currentStreamKey = buildBidirectionalStreamKey(
+    (contextPacket || streamPackets[0])?.["packet.info"] || {},
+  );
+  const dataPorts = new Set();
+  streamPackets.forEach((packet) => {
+    const tuple = getStreamTupleForPacket(packet);
+    if (!tuple) return;
+    const srcPort = Number(tuple.srcPort);
+    const dstPort = Number(tuple.dstPort);
+    if (Number.isInteger(srcPort) && srcPort >= 1 && srcPort <= 65535) {
+      dataPorts.add(srcPort);
+    }
+    if (Number.isInteger(dstPort) && dstPort >= 1 && dstPort <= 65535) {
+      dataPorts.add(dstPort);
+    }
+  });
+
+  const referenceTimestamp = parsePacketTimestampMs(streamPackets[0]);
+  const allPackets = getAllPacketsForHostNavigation();
+  const streamMap = new Map();
+
+  allPackets.forEach((packet) => {
+    const packetInfo = packet?.["packet.info"];
+    const tuple = getStreamTupleForPacket(packet);
+    if (!packetInfo || !tuple) return;
+    if (String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase() !== "TCP") {
+      return;
+    }
+
+    const hasSameEndpoints =
+      (tuple.srcIp === dataTuple.srcIp && tuple.dstIp === dataTuple.dstIp) ||
+      (tuple.srcIp === dataTuple.dstIp && tuple.dstIp === dataTuple.srcIp);
+    if (!hasSameEndpoints) return;
+
+    const streamKey = buildBidirectionalStreamKey(packetInfo);
+    if (!streamKey || streamKey === currentStreamKey) return;
+
+    if (!streamMap.has(streamKey)) {
+      streamMap.set(streamKey, []);
+    }
+    streamMap.get(streamKey).push(packet);
+  });
+
+  let bestMatch = null;
+  let bestScore = -1;
+
+  streamMap.forEach((packets) => {
+    if (!Array.isArray(packets) || packets.length === 0) return;
+    packets.sort((left, right) => comparePacketsChronologically(left, right));
+
+    const controlTuple = getStreamTupleForPacket(packets[0]);
+    const controlLooksFtp =
+      Number(controlTuple?.srcPort) === 21 ||
+      Number(controlTuple?.dstPort) === 21 ||
+      packets.some((packet) => {
+        const transportData = getPacketTransportData(packet);
+        return Boolean(transportData?.["FTP"]);
+      });
+    if (!controlLooksFtp) return;
+
+    const transferContext = extractFtpTransferContextFromControlStream(packets, {
+      referenceTimestamp,
+      requiredDataPorts: dataPorts,
+    });
+    if (!transferContext.hasControlMetadata || !transferContext.transferCommand) return;
+
+    const matchedPortCount = Array.from(transferContext.candidateDataPorts).filter((port) =>
+      dataPorts.has(port),
+    ).length;
+    const timeDelta = Number.isFinite(referenceTimestamp) && Number.isFinite(transferContext.transferTimestamp)
+      ? Math.abs(referenceTimestamp - transferContext.transferTimestamp)
+      : Number.MAX_SAFE_INTEGER;
+    const score = matchedPortCount * 1000000 - Math.min(timeDelta, 999999);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = {
+        streamPackets: packets,
+        transferContext,
+      };
+    }
+  });
+
+  return bestMatch;
+}
+
 function buildFtpCandidateFromDataStream(
   streamPackets,
   {
@@ -9473,49 +10588,34 @@ function buildFtpCandidateFromDataStream(
 function extractFtpFileCandidates(streamPackets, contextPacket = null) {
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return [];
 
-  let hasControlMetadata = false;
-  let transferCommand = "";
-  let transferName = "";
-  let transferTimestamp = null;
-  const candidateDataPorts = new Set();
-
-  streamPackets.forEach((packet) => {
-    const transportData = getPacketTransportData(packet);
-    const ftpData = transportData?.["FTP"];
-    if (!ftpData || typeof ftpData !== "object") return;
-    hasControlMetadata = true;
-
-    const ftpType = String(ftpData["Type"] || "").trim().toLowerCase();
-    if (ftpType === "command") {
-      const command = String(ftpData["Command"] || "")
-        .trim()
-        .toUpperCase();
-      const argument = String(ftpData["Argument"] || "").trim();
-
-      if (command === "PORT" || command === "EPRT") {
-        const activePort = parseFtpActiveModeDataPort(argument);
-        if (activePort) candidateDataPorts.add(activePort);
-      }
-
-      if (["RETR", "STOR", "APPE", "LIST", "NLST"].includes(command)) {
-        transferCommand = command;
-        transferName = command === "LIST" || command === "NLST" ? "" : argument;
-        const packetTs = parsePacketTimestampMs(packet);
-        transferTimestamp = Number.isFinite(packetTs) ? packetTs : transferTimestamp;
-      }
-      return;
-    }
-
-    if (ftpType === "response") {
-      const statusCode = String(ftpData["ftp.status_code"] ?? ftpData["Status Code"] ?? "").trim();
-      if (statusCode === "227" || statusCode === "229") {
-        const passivePort = parseFtpPassiveModeDataPort(ftpData["Message"] ?? ftpData["ftp.message"]);
-        if (passivePort) candidateDataPorts.add(passivePort);
-      }
-    }
+  const controlContext = extractFtpTransferContextFromControlStream(streamPackets, {
+    referenceTimestamp: parsePacketTimestampMs(contextPacket || streamPackets[0]),
   });
+  let hasControlMetadata = controlContext.hasControlMetadata;
+  let transferCommand = controlContext.transferCommand;
+  let transferName = controlContext.transferName;
+  let transferTimestamp = controlContext.transferTimestamp;
+  let candidateDataPorts = new Set(controlContext.candidateDataPorts || []);
 
   if (!hasControlMetadata) {
+    const relatedControlStream = resolveFtpControlStreamForDataStream(
+      streamPackets,
+      contextPacket,
+    );
+    if (relatedControlStream?.transferContext?.transferCommand) {
+      const relatedTuple = getStreamTupleForPacket(
+        relatedControlStream.streamPackets?.[0] || null,
+      );
+      const { clientIp, serverIp } = getFtpControlRolesFromStreamTuple(relatedTuple);
+      const carvedCandidate = buildFtpCandidateFromDataStream(streamPackets, {
+        transferCommand: relatedControlStream.transferContext.transferCommand,
+        transferName: relatedControlStream.transferContext.transferName,
+        clientIp,
+        serverIp,
+      });
+      return carvedCandidate ? [carvedCandidate] : [];
+    }
+
     const tuple = getStreamTupleForPacket(contextPacket || streamPackets[0]);
     const srcPort = Number(tuple?.srcPort);
     const dstPort = Number(tuple?.dstPort);
@@ -9715,6 +10815,20 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
     return;
   }
 
+  const sensitiveEntry = detectSensitiveCarveEntry(selectedCandidate, protocolLabel);
+  if (sensitiveEntry) {
+    keystorePanel.addSessionKeystoreEntry(sensitiveEntry);
+    if (
+      sensitiveEntry.type === "private-key" &&
+      CARVE_PGP_PRIVATE_KEY_REGEX.test(String(sensitiveEntry.content || ""))
+    ) {
+      cryptPanel.refreshPgpPrivateKeyCandidates();
+    }
+    writeLogEntry(
+      `${protocolLabel} carve auto-keystore type=${sensitiveEntry.type} label="${sensitiveEntry.label}"`,
+    );
+  }
+
   window.saveapi.savePayload(payloadHex).then((result) => {
     if (result.canceled) {
       statusUpdate("Status: Export cancelled");
@@ -9736,6 +10850,269 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
       console.error(`${protocolLabel} file carve failed:`, errorMessage);
     }
   });
+}
+
+const HTTP_FILENAME_EXT_BY_MIME = Object.freeze({
+  "application/json": "json",
+  "application/pdf": "pdf",
+  "application/zip": "zip",
+  "application/gzip": "gz",
+  "application/x-7z-compressed": "7z",
+  "application/x-rar-compressed": "rar",
+  "application/xml": "xml",
+  "text/plain": "txt",
+  "text/html": "html",
+  "text/css": "css",
+  "text/javascript": "js",
+  "text/csv": "csv",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "audio/mpeg": "mp3",
+  "video/mp4": "mp4",
+});
+
+function extractFilenameFromContentDisposition(dispositionValue) {
+  const rawValue = String(dispositionValue || "").trim();
+  if (!rawValue) return "";
+
+  const utf8Match = rawValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return sanitizeCarveFilename(decodeURIComponent(utf8Match[1]));
+    } catch {
+      return sanitizeCarveFilename(utf8Match[1]);
+    }
+  }
+
+  const quotedMatch = rawValue.match(/filename\s*=\s*"([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return sanitizeCarveFilename(quotedMatch[1]);
+  }
+
+  const bareMatch = rawValue.match(/filename\s*=\s*([^;\s]+)/i);
+  if (bareMatch?.[1]) {
+    return sanitizeCarveFilename(bareMatch[1]);
+  }
+
+  return "";
+}
+
+function getHttpBodyFilenameExtension(contentTypeValue) {
+  const normalizedType = String(contentTypeValue || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  if (!normalizedType) return "bin";
+  return HTTP_FILENAME_EXT_BY_MIME[normalizedType] || "bin";
+}
+
+function extractPathFilenameFromHttpData(httpData) {
+  const requestTarget = String(
+    httpData?.["Request URI"] ||
+    httpData?.["request.uri"] ||
+    httpData?.["URL"] ||
+    httpData?.["Uri"] ||
+    "",
+  ).trim();
+  if (!requestTarget) return "";
+
+  let pathText = requestTarget;
+  try {
+    if (/^https?:\/\//i.test(pathText)) {
+      pathText = new URL(pathText).pathname || "";
+    }
+  } catch {
+    // Keep the raw request target when URL parsing fails.
+  }
+
+  const cleanPath = pathText.split("?")[0].split("#")[0];
+  const parts = cleanPath.split("/").filter(Boolean);
+  if (parts.length === 0) return "";
+  return sanitizeCarveFilename(parts[parts.length - 1]);
+}
+
+function guessHttpBodyFilenameFromPacket(packet, fallbackName = "http-body") {
+  const httpData = getCurrentHttpData(packet) || {};
+
+  const dispositionName = extractFilenameFromContentDisposition(
+    httpData["Content-Disposition"],
+  );
+  if (dispositionName) return dispositionName;
+
+  const pathName = extractPathFilenameFromHttpData(httpData);
+  if (pathName && pathName.includes(".")) return pathName;
+
+  const extension = getHttpBodyFilenameExtension(httpData["Content-Type"]);
+  const fallbackBase = sanitizeCarveFilename(fallbackName) || "http-body";
+  if (pathName) {
+    return pathName.includes(".") ? pathName : `${pathName}.${extension}`;
+  }
+  return `${fallbackBase}.${extension}`;
+}
+
+function loadCarvedFileCandidateIntoConvTab(candidate) {
+  const candidateBytes = candidate?.bytes;
+  if (!(candidateBytes instanceof Uint8Array) || candidateBytes.length === 0) {
+    statusUpdate("Status: Carved file content is unavailable for Conv load");
+    return false;
+  }
+
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) {
+    statusUpdate("Status: Conv input fields are unavailable");
+    return false;
+  }
+
+  inputEl.value = bytesToHexString(candidateBytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(candidate.fileName || "");
+  showDataTools(CONV_CONVERSIONS_SUBTAB);
+  runDataToolsConversion();
+
+  const protocolLabel = String(candidate.protocol || "FILE").toUpperCase();
+  statusUpdate(
+    `Status: Loaded ${protocolLabel} carved file into Conv (${candidateBytes.length} bytes)`,
+  );
+  writeLogEntry(
+    `Stats carve loaded into Conv protocol=${protocolLabel} file="${candidate.fileName || "unknown"}" bytes=${candidateBytes.length}`,
+  );
+  return true;
+}
+
+async function listCarvableFilesForStats() {
+  const allPackets = getAllPacketsForHostNavigation();
+  if (!Array.isArray(allPackets) || allPackets.length === 0) {
+    return [];
+  }
+
+  const streamMap = new Map();
+  allPackets.forEach((packet) => {
+    const packetInfo = packet?.["packet.info"];
+    if (!packetInfo) return;
+    const streamKey = buildBidirectionalStreamKey(packetInfo);
+    if (!streamKey) return;
+    if (!streamMap.has(streamKey)) {
+      streamMap.set(streamKey, []);
+    }
+    streamMap.get(streamKey).push(packet);
+  });
+
+  const carvedEntries = [];
+  const dedupeKeys = new Set();
+  const protocolOrder = ["http", "ftp", "nfs", "smb"];
+
+  const appendEntry = ({ protocol, candidate, streamKey, packetHint }) => {
+    if (!candidate || !(candidate.bytes instanceof Uint8Array)) return;
+    if (candidate.bytes.length === 0) return;
+    const protocolName = String(protocol || "file").toLowerCase();
+    const protocolLabel = protocolName.toUpperCase();
+    const safeName = sanitizeCarveFilename(candidate.fileName) || `${protocolName}-file.bin`;
+    const dedupeKey = `${protocolName}|${streamKey}|${safeName}|${candidate.bytes.length}`;
+    if (dedupeKeys.has(dedupeKey)) return;
+    dedupeKeys.add(dedupeKey);
+
+    const packetInfo = packetHint?.["packet.info"] || {};
+    const packetIndex =
+      packetInfo["index"] ??
+      packetInfo["Index"] ??
+      packetInfo["Packet Processed"] ??
+      null;
+    const sourceDetail = Number.isFinite(Number(packetIndex))
+      ? `packet #${packetIndex}`
+      : "packet context";
+    const label = `${protocolLabel}: ${safeName} (${candidate.bytes.length} bytes)`;
+
+    carvedEntries.push({
+      id: `${protocolName}:${streamKey}:${candidate.bytes.length}:${carvedEntries.length}`,
+      protocol: protocolLabel,
+      fileName: safeName,
+      bytes: candidate.bytes,
+      byteLength: candidate.bytes.length,
+      label,
+      sourceDetail,
+    });
+  };
+
+  for (const [streamKey, streamPacketsRaw] of streamMap.entries()) {
+    const streamPackets = Array.isArray(streamPacketsRaw)
+      ? streamPacketsRaw.slice().sort((left, right) => comparePacketsChronologically(left, right))
+      : [];
+    if (!streamPackets.length) continue;
+    const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+    const contextPacket = hydratedStreamPackets[0] || streamPackets[0] || null;
+
+    ["ftp", "nfs", "smb"].forEach((protocolName) => {
+      const protocolCandidates = buildFileCarveCandidatesForProtocol(
+        protocolName,
+        hydratedStreamPackets,
+        contextPacket,
+      );
+      protocolCandidates.forEach((candidate) => {
+        appendEntry({
+          protocol: protocolName,
+          candidate,
+          streamKey,
+          packetHint: contextPacket,
+        });
+      });
+    });
+
+    const seenHttpDirectionKeys = new Set();
+    hydratedStreamPackets.forEach((packet) => {
+      const httpData = getCurrentHttpData(packet);
+      if (!httpData || typeof httpData !== "object") return;
+      const payloadHex = getCurrentRawPayloadHex(packet);
+      if (!extractHttpBodyHex(payloadHex)) return;
+
+      const tuple = getStreamTupleForPacket(packet);
+      if (!tuple) return;
+      const directionKey = `${tuple.srcIp}:${tuple.srcPort}->${tuple.dstIp}:${tuple.dstPort}`;
+      if (seenHttpDirectionKeys.has(directionKey)) return;
+      seenHttpDirectionKeys.add(directionKey);
+
+      const bodyHex = collectHttpBodyHexFromStream(hydratedStreamPackets, packet);
+      if (!bodyHex) return;
+      let bodyBytes;
+      try {
+        bodyBytes = parseDataToolsInput("hex", bodyHex);
+      } catch {
+        return;
+      }
+      if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
+
+      const packetIndex =
+        packet?.["packet.info"]?.["index"] ??
+        packet?.["packet.info"]?.["Index"] ??
+        "stream";
+      const guessedName = guessHttpBodyFilenameFromPacket(
+        packet,
+        `http-body-${packetIndex}`,
+      );
+      appendEntry({
+        protocol: "http",
+        streamKey,
+        packetHint: packet,
+        candidate: {
+          fileName: guessedName,
+          bytes: bodyBytes,
+        },
+      });
+    });
+  }
+
+  return carvedEntries
+    .sort((left, right) => {
+      const protocolDelta =
+        protocolOrder.indexOf(String(left.protocol || "").toLowerCase()) -
+        protocolOrder.indexOf(String(right.protocol || "").toLowerCase());
+      if (protocolDelta !== 0) return protocolDelta;
+      if (right.byteLength !== left.byteLength) return right.byteLength - left.byteLength;
+      return String(left.fileName || "").localeCompare(String(right.fileName || ""));
+    })
+    .slice(0, 300);
 }
 
 function callLargeLanguageModel(content) {
@@ -10992,6 +12369,12 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = outputHex;
   formatEl.value = "hex";
+  setDataToolsFileNameGuess(
+    guessHttpBodyFilenameFromPacket(
+      contextPacket,
+      decompress ? "http-body-decompressed" : "http-body",
+    ),
+  );
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -11580,6 +12963,9 @@ document
   .getElementById("crypt-pgp-clear-input-btn")
   .addEventListener("click", clearPgpInput);
 document
+  .getElementById("crypt-pgp-use-selected-private-key-btn")
+  .addEventListener("click", useSelectedPgpPrivateKeyCandidate);
+document
   .getElementById("crypt-pgp-use-selected-passphrase-btn")
   .addEventListener("click", useSelectedPgpPasswordCandidate);
 
@@ -11673,6 +13059,7 @@ bindConvertedOutputExpandHandlers();
 updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
   dataToolsHistorySelectEl.value = "";
+  setDataToolsFileNameGuess("");
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(
     "data-tools-input",
@@ -11737,12 +13124,65 @@ document
     clearDataToolsSelectionState();
     updateDataToolsHexHighlights();
     updateDataToolsInputEditedState();
+    setDataToolsFindReplaceMode("none");
   });
 document
   .getElementById("data-tools-input-reset-btn")
   .addEventListener("click", () => {
     resetDataToolsInputToCommitted();
   });
+document
+  .getElementById("data-tools-simple-find-next-btn")
+  .addEventListener("click", runDataToolsSimpleFindNext);
+document
+  .getElementById("data-tools-simple-replace-next-btn")
+  .addEventListener("click", runDataToolsSimpleReplaceNext);
+document
+  .getElementById("data-tools-simple-replace-all-btn")
+  .addEventListener("click", runDataToolsSimpleReplaceAll);
+document
+  .getElementById("data-tools-pcre-find-next-btn")
+  .addEventListener("click", runDataToolsPcreFindNext);
+document
+  .getElementById("data-tools-pcre-replace-next-btn")
+  .addEventListener("click", runDataToolsPcreReplaceNext);
+document
+  .getElementById("data-tools-pcre-replace-all-btn")
+  .addEventListener("click", runDataToolsPcreReplaceAll);
+document
+  .getElementById("data-tools-simple-search")
+  .addEventListener("input", () => setDataToolsFindReplaceMode("simple"));
+document
+  .getElementById("data-tools-simple-replace")
+  .addEventListener("input", () => setDataToolsFindReplaceMode("simple"));
+document
+  .getElementById("data-tools-simple-match-case")
+  .addEventListener("change", () => setDataToolsFindReplaceMode("simple"));
+document
+  .getElementById("data-tools-simple-find-replace-section")
+  .addEventListener("focusin", () => setDataToolsFindReplaceMode("simple"));
+document
+  .getElementById("data-tools-pcre-search")
+  .addEventListener("input", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-pcre-replace")
+  .addEventListener("input", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-pcre-flag-i")
+  .addEventListener("change", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-pcre-flag-m")
+  .addEventListener("change", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-pcre-flag-s")
+  .addEventListener("change", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-pcre-flag-u")
+  .addEventListener("change", () => setDataToolsFindReplaceMode("advanced"));
+document
+  .getElementById("data-tools-advanced-find-replace-section")
+  .addEventListener("focusin", () => setDataToolsFindReplaceMode("advanced"));
+setDataToolsFindReplaceMode("none");
 dataToolsHistorySelectEl.addEventListener("change", () => {
   const selectedIndex = Number(dataToolsHistorySelectEl.value);
   if (!Number.isInteger(selectedIndex) || selectedIndex < 0) return;

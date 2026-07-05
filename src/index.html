@@ -192,6 +192,58 @@
                   <button id="data-tools-convert-btn">Convert</button>
                   <button id="data-tools-clear-btn">Clear</button>
                 </div>
+                <div id="data-tools-simple-find-replace-section" class="data-tools-find-replace-section">
+                  <div class="data-tools-find-replace-title">Search + Replace</div>
+                  <input id="data-tools-simple-search" type="text"
+                    placeholder="Find text or bytes (\\xHH, \\b01010101, \\d10)" />
+                  <input id="data-tools-simple-replace" type="text"
+                    placeholder="Replace with text or bytes (\\xHH, \\b01010101, \\d10)" />
+                  <div class="data-tools-find-replace-options">
+                    <label>
+                      <input id="data-tools-simple-match-case" type="checkbox" />
+                      Match case
+                    </label>
+                  </div>
+                  <div class="data-tools-find-replace-actions">
+                    <button id="data-tools-simple-find-next-btn" type="button">Find Next</button>
+                    <button id="data-tools-simple-replace-next-btn" type="button">Replace Next</button>
+                    <button id="data-tools-simple-replace-all-btn" type="button">Replace All</button>
+                  </div>
+                  <div id="data-tools-simple-replace-status" class="data-tools-find-replace-status" aria-live="polite">
+                  </div>
+                </div>
+                <div id="data-tools-advanced-find-replace-section"
+                  class="data-tools-find-replace-section data-tools-find-replace-advanced">
+                  <div class="data-tools-find-replace-title">Advanced PCRE Search + Replace</div>
+                  <input id="data-tools-pcre-search" type="text"
+                    placeholder="PCRE pattern (supports \\xHH, \\b01010101, \\d10)" />
+                  <input id="data-tools-pcre-replace" type="text"
+                    placeholder="Replacement supports $1 and byte escapes (\\xHH, \\b01010101, \\d10)" />
+                  <div class="data-tools-find-replace-options">
+                    <label>
+                      <input id="data-tools-pcre-flag-i" type="checkbox" />
+                      i
+                    </label>
+                    <label>
+                      <input id="data-tools-pcre-flag-m" type="checkbox" />
+                      m
+                    </label>
+                    <label>
+                      <input id="data-tools-pcre-flag-s" type="checkbox" />
+                      s
+                    </label>
+                    <label>
+                      <input id="data-tools-pcre-flag-u" type="checkbox" />
+                      u
+                    </label>
+                  </div>
+                  <div class="data-tools-find-replace-actions">
+                    <button id="data-tools-pcre-find-next-btn" type="button">Find Next</button>
+                    <button id="data-tools-pcre-replace-next-btn" type="button">Replace Next</button>
+                    <button id="data-tools-pcre-replace-all-btn" type="button">Replace All</button>
+                  </div>
+                  <div id="data-tools-pcre-status" class="data-tools-find-replace-status" aria-live="polite"></div>
+                </div>
                 <div id="data-tools-error" role="alert"></div>
               </div>
               <div class="data-tools-section">
@@ -231,6 +283,9 @@
                 </div>
                 <div id="data-tools-mime-type" class="data-tools-kv">
                   MIME Type: Unknown
+                </div>
+                <div id="data-tools-file-name" class="data-tools-kv">
+                  Filename Guess: Unknown
                 </div>
                 <div id="data-tools-language-guess" class="data-tools-kv">
                   Text Language: Unknown
@@ -416,11 +471,17 @@ No decrypted TLS/SSL output yet.</pre>
                 <div class="crypt-section-title">Decrypt / Verify</div>
                 <textarea id="crypt-pgp-private-key-input"
                   placeholder="Optional: PGP private key (ASCII armored) for decryption..."></textarea>
-                <select id="crypt-pgp-passphrase-candidates">
-                  <option value="" selected>No password candidates found in capture</option>
+                <select id="crypt-pgp-private-key-candidates">
+                  <option value="" selected>No PGP private keys in session keychain</option>
                 </select>
                 <div class="crypt-actions-row">
-                  <button id="crypt-pgp-use-selected-passphrase-btn">Use selected password</button>
+                  <button id="crypt-pgp-use-selected-private-key-btn">Use selected private key</button>
+                </div>
+                <select id="crypt-pgp-passphrase-candidates">
+                  <option value="" selected>No passphrases in session keychain</option>
+                </select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-pgp-use-selected-passphrase-btn">Use selected passphrase</button>
                 </div>
                 <input id="crypt-pgp-passphrase-input" type="password"
                   placeholder="Optional: passphrase for private key" />

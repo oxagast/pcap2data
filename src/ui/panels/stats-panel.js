@@ -2536,8 +2536,81 @@ function createStatsPanel(options) {
     syncTargetHostFromPackets,
     setPacketsForHost,
     getBookmarkCount,
+    listCarvableFilesForStats,
+    openCarvedFileInConv,
   } = options;
   let disposeHeatmapResize = null;
+
+  function createCarvableFilesSection() {
+    const section = documentRef.createElement("div");
+    section.className = "stats-section";
+
+    const heading = documentRef.createElement("div");
+    heading.className = "stats-section-title";
+    heading.textContent = "Carvable Files";
+    section.appendChild(heading);
+
+    const noteEl = documentRef.createElement("div");
+    noteEl.className = "stats-inline-note";
+    noteEl.textContent = "Scanning carve candidates from HTTP/FTP/NFS/SMB streams...";
+    section.appendChild(noteEl);
+
+    const listEl = documentRef.createElement("div");
+    listEl.className = "stats-tag-list";
+    section.appendChild(listEl);
+
+    const renderNoFiles = (messageText) => {
+      listEl.replaceChildren();
+      noteEl.textContent = messageText;
+    };
+
+    const renderFiles = (items) => {
+      listEl.replaceChildren();
+      if (!Array.isArray(items) || items.length === 0) {
+        renderNoFiles("No carvable files were detected in HTTP/FTP/NFS/SMB streams.");
+        return;
+      }
+
+      noteEl.textContent = "Click a carved file candidate to load it into Conv.";
+      items.forEach((item) => {
+        const tag = documentRef.createElement("span");
+        tag.className = "stats-tag";
+        tag.textContent = String(item?.label || "Unknown carved file");
+        tag.title = `Load into Conv (${String(item?.sourceDetail || "stream context")})`;
+        tag.addEventListener("click", async () => {
+          if (typeof openCarvedFileInConv !== "function") return;
+          try {
+            await openCarvedFileInConv(item);
+          } catch (error) {
+            const message = error?.message || String(error || "unknown");
+            statusUpdate(`Status: Failed to load carved file into Conv - ${message}`);
+            writeLogEntry(`[${threadName}] Failed to load carved file candidate: ${message}`);
+          }
+        });
+        listEl.appendChild(tag);
+      });
+    };
+
+    const loadFiles = async () => {
+      if (typeof listCarvableFilesForStats !== "function") {
+        renderNoFiles("Carvable file listing is unavailable in this build.");
+        return;
+      }
+      try {
+        const items = await listCarvableFilesForStats();
+        renderFiles(items);
+      } catch (error) {
+        const message = error?.message || String(error || "unknown");
+        renderNoFiles("Failed to scan carve candidates. Check activity log for details.");
+        writeLogEntry(`[${threadName}] Failed to collect carvable files: ${message}`);
+      }
+    };
+
+    return {
+      section,
+      loadFiles,
+    };
+  }
 
   async function applyStatsQuery(query) {
     filterInputEl.value = query;
@@ -2751,6 +2824,10 @@ function createStatsPanel(options) {
         onQuery: applyStatsQuery,
       });
       if (topTalkersSec) statisticsPanel.appendChild(topTalkersSec);
+
+      const carvableFilesSection = createCarvableFilesSection();
+      statisticsPanel.appendChild(carvableFilesSection.section);
+      void carvableFilesSection.loadFiles();
 
       const credsSec = makeStatsSection({
         documentRef,
