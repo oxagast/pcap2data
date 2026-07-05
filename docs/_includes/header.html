@@ -11,11 +11,13 @@
 
     .wrapper-main {
         max-width: 1050px;
+        margin: 0 auto;
     }
 
     .header {
         max-width: 1200px;
         width: 1200px;
+        margin: 0 auto;
     }
 
     /* Increase vertical breathing room for long-form docs content. */
@@ -86,66 +88,67 @@
     }
 </style>
 <header>
-<div class="header">
-    <a href="https://oxasploits.github.io/PacketSnitch/"><img width="360" height="60" alt="PacketSnitch by oxasploits"
-            src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
-    <br>
-    <h5><i>Documentation for the PacketSnitch project</i></h5>
-    <br>
-    {% include nav.html %}
+    <div class="header">
+        <a href="https://oxasploits.github.io/PacketSnitch/"><img width="360" height="60"
+                alt="PacketSnitch by oxasploits"
+                src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
+        <br>
+        <h5><i>Documentation for the PacketSnitch project</i></h5>
+        <br>
+        {% include nav.html %}
 
-    <div id="downloads">Loading latest release...</div>
+        <div id="downloads">Loading latest release...</div>
 
-    <script>
-        async function loadLatestRelease() {
-            const owner = "oxasploits";
-            const repo = "PacketSnitch";
+        <script>
+            async function loadLatestRelease() {
+                const owner = "oxasploits";
+                const repo = "PacketSnitch";
 
-            const container = document.getElementById("downloads");
+                const container = document.getElementById("downloads");
 
-            try {
-                const response = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/releases/latest`
-                );
+                try {
+                    const response = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/releases/latest`
+                    );
 
-                if (!response.ok) {
-                    throw new Error(`GitHub API returned ${response.status}`);
-                }
-
-                const release = await response.json();
-
-                // Build download links
-                let deb = "";
-                let rpm = "";
-                let exe = "";
-
-                for (const asset of release.assets) {
-                    const name = asset.name.toLowerCase();
-
-                    if (name.endsWith(".deb")) {
-                        deb = `<a href="${asset.browser_download_url}">Debian (.deb)</a>`;
+                    if (!response.ok) {
+                        throw new Error(`GitHub API returned ${response.status}`);
                     }
-                    else if (name.endsWith(".rpm")) {
-                        rpm = `<a href="${asset.browser_download_url}">Fedora (.rpm)</a>`;
-                    }
-                    else if (name.endsWith(".exe")) {
-                        exe = `<a href="${asset.browser_download_url}">Windows (.exe)</a>`;
-                    }
-                }
 
-                // Only include links that actually exist
-                const links = [deb, rpm, exe].filter(Boolean).join(" ");
+                    const release = await response.json();
 
-                container.innerHTML = `
+                    // Build download links
+                    let deb = "";
+                    let rpm = "";
+                    let exe = "";
+
+                    for (const asset of release.assets) {
+                        const name = asset.name.toLowerCase();
+
+                        if (name.endsWith(".deb")) {
+                            deb = `<a href="${asset.browser_download_url}">Debian (.deb)</a>`;
+                        }
+                        else if (name.endsWith(".rpm")) {
+                            rpm = `<a href="${asset.browser_download_url}">Fedora (.rpm)</a>`;
+                        }
+                        else if (name.endsWith(".exe")) {
+                            exe = `<a href="${asset.browser_download_url}">Windows (.exe)</a>`;
+                        }
+                    }
+
+                    // Only include links that actually exist
+                    const links = [deb, rpm, exe].filter(Boolean).join(" ");
+
+                    container.innerHTML = `
             <h5><i>Latest Release:</i> ${release.tag_name}</h5><br>
             ${links}`;
 
-            } catch (err) {
-                console.error(err);
-                container.innerHTML = "Unable to load latest release.";
+                } catch (err) {
+                    console.error(err);
+                    container.innerHTML = "Unable to load latest release.";
+                }
             }
-        }
 
-        document.addEventListener("DOMContentLoaded", loadLatestRelease);
-    </script>
-    <hr>
+            document.addEventListener("DOMContentLoaded", loadLatestRelease);
+        </script>
+        <hr>
