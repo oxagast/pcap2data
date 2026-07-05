@@ -3388,24 +3388,6 @@ async function saveNotesToDisk() {
   }
 }
 
-function buildConvConvertedOutputNoteText() {
-  const outputFields = [
-    ["Hex", "data-tools-hex-output"],
-    ["Binary", "data-tools-binary-output"],
-    ["Decimal bytes", "data-tools-decimal-output"],
-    ["Decimal integer", "data-tools-decimal-integer-output"],
-    ["ASCII", "data-tools-ascii-output"],
-    ["Base64", "data-tools-base64-output"],
-  ];
-  const lines = outputFields
-    .map(([label, id]) => {
-      const value = document.getElementById(id)?.value?.trim() || "";
-      return value ? `${label}: ${value}` : "";
-    })
-    .filter(Boolean);
-  return lines.length > 0 ? lines.join("\n") : "";
-}
-
 function escapeMarkdownTableCell(text) {
   return String(text || "").replace(/\|/g, "\\|").replace(/\n/g, "<br>");
 }
@@ -3692,6 +3674,231 @@ function sendTextToNotesFromContextMenu(text, sourceLabel) {
   const didAdd = addNote(text, NOTE_DEFAULT_COLOR, sourceLabel);
   if (!didAdd) return;
   showNotesWorkspace();
+}
+
+function normalizeHexForNotes(value) {
+  const normalized = String(value || "").replace(/[^0-9a-fA-F]/g, "");
+  if (!normalized || normalized.length % 2 !== 0) return "";
+  if (!/^[0-9a-fA-F]+$/.test(normalized)) return "";
+  return normalized.toLowerCase();
+}
+
+function formatHexAsHexdumpCodeBlock(hexText) {
+  const normalized = normalizeHexForNotes(hexText);
+  if (!normalized) return String(hexText || "").trim();
+
+  const lines = [];
+  for (let byteOffset = 0; byteOffset < normalized.length / 2; byteOffset += 16) {
+    const rowHex = normalized.slice(byteOffset * 2, (byteOffset + 16) * 2);
+    const rowBytes = [];
+    for (let i = 0; i < rowHex.length; i += 2) {
+      rowBytes.push(rowHex.slice(i, i + 2));
+    }
+
+    const left = rowBytes.slice(0, 8).join(" ");
+    const right = rowBytes.slice(8).join(" ");
+    const hexColumn = `${left.padEnd(23, " ")}  ${right.padEnd(23, " ")}`;
+    const asciiColumn = rowBytes
+      .map((byteText) => {
+        const byteValue = Number.parseInt(byteText, 16);
+        return byteValue >= 32 && byteValue <= 126
+          ? String.fromCharCode(byteValue)
+          : ".";
+      })
+      .join("");
+    lines.push(
+      `${byteOffset.toString(16).padStart(8, "0")}  ${hexColumn}  |${asciiColumn.padEnd(16, " ")}|`,
+    );
+  }
+
+  return ["```text", ...lines, "```"].join("\n");
+}
+
+function formatBase64AsCodeBlock(base64Text) {
+  const normalized = String(base64Text || "").replace(/\s+/g, "").trim();
+  if (!normalized) return "";
+  const lines = [];
+  for (let index = 0; index < normalized.length; index += 76) {
+    lines.push(normalized.slice(index, index + 76));
+  }
+  return ["```text", ...lines, "```"].join("\n");
+}
+
+function formatAsciiAsCodeBlockForNotes(asciiText, hexText = "") {
+  const normalizedHex = normalizeHexForNotes(hexText);
+  if (normalizedHex) {
+    let reconstructed = "";
+    for (let index = 0; index < normalizedHex.length; index += 2) {
+      const byteValue = Number.parseInt(normalizedHex.slice(index, index + 2), 16);
+      if (byteValue === 0x0a) {
+        reconstructed += "\n";
+      } else if (byteValue === 0x0d) {
+        const nextByteValue =
+          index + 2 < normalizedHex.length
+            ? Number.parseInt(normalizedHex.slice(index + 2, index + 4), 16)
+            : NaN;
+        if (nextByteValue !== 0x0a) {
+          reconstructed += "\n";
+        }
+      } else if (byteValue >= 32 && byteValue <= 126) {
+        reconstructed += String.fromCharCode(byteValue);
+      } else {
+        reconstructed += ".";
+      }
+    }
+    return ["```text", reconstructed, "```"].join("\n");
+  }
+
+  const raw = String(asciiText || "");
+  if (!raw) return "";
+  // Fallback: preserve existing line breaks if no hex source is available.
+  const normalizedNewlines = raw.replace(/\r\n?/g, "\n");
+  return ["```text", normalizedNewlines, "```"].join("\n");
+}
+
+function buildConvHashesMarkdownTable() {
+  const hashFields = [
+    ["Input", "data-tools-hash-input-reading"],
+    ["MD5", "data-tools-md5-output"],
+    ["SHA-1", "data-tools-sha1-output"],
+    ["SHA-256", "data-tools-sha256-output"],
+    ["SHA-384", "data-tools-sha384-output"],
+    ["SHA-512", "data-tools-sha512-output"],
+    ["SHA3-256", "data-tools-sha3-256-output"],
+    ["SHA3-512", "data-tools-sha3-512-output"],
+    ["RIPEMD-160", "data-tools-ripemd160-output"],
+    ["Whirlpool", "data-tools-whirlpool-output"],
+  ];
+  const rows = hashFields
+    .map(([label, id]) => {
+      const value = document.getElementById(id)?.value?.trim() || "";
+      if (!value) return "";
+      return `| ${escapeMarkdownTableCell(label)} | ${escapeMarkdownTableCell(value)} |`;
+    })
+    .filter(Boolean);
+  if (!rows.length) return "";
+  return ["| Hash | Value |", "| --- | --- |", ...rows].join("\n");
+}
+
+function getContextPacketNumberForNotes(packet) {
+  if (!packet || typeof packet !== "object") return "unknown";
+  const packetInfo = packet["packet.info"] || {};
+  const packetNumber =
+    packetInfo["Packet Processed"] ??
+    packetInfo["index"] ??
+    packetInfo["Index"] ??
+    null;
+  return packetNumber == null || packetNumber === "" ? "unknown" : String(packetNumber);
+}
+
+function getContextHostsForNotes(packet) {
+  if (!packet || typeof packet !== "object") return "unknown";
+  const packetInfo = packet["packet.info"] || {};
+  const ipInfo = packetInfo["IP"] || {};
+  const src =
+    ipInfo["ip.src.addr"] ||
+    ipInfo["Source IP"] ||
+    packetInfo["ip.src.addr"] ||
+    packetInfo["Source IP"] ||
+    "unknown";
+  const dst =
+    ipInfo["ip.dst.addr"] ||
+    ipInfo["Destination IP"] ||
+    packetInfo["ip.dst.addr"] ||
+    packetInfo["Destination IP"] ||
+    "unknown";
+  return `${String(src)} -> ${String(dst)}`;
+}
+
+function getContextDetectedProtocolsForNotes(packet) {
+  if (!packet || typeof packet !== "object") return "unknown";
+  const packetInfo = packet["packet.info"] || {};
+  const protocolCandidates = [];
+
+  const pushCandidate = (value) => {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => pushCandidate(item));
+      return;
+    }
+    const text = String(value).trim();
+    if (!text) return;
+    text
+      .split(/[>,|/]+|\s*->\s*|\s*:\s*|\s{2,}/)
+      .map((token) => token.trim())
+      .filter(Boolean)
+      .forEach((token) => protocolCandidates.push(token));
+  };
+
+  pushCandidate(packetInfo["packet.proto"] ?? packetInfo["Protocol"]);
+  pushCandidate(packetInfo["packet.decoded_protocols"] ?? packetInfo["Decoded Protocols"]);
+  pushCandidate(packetInfo["Link Control"]);
+  const normalized = [...new Set(protocolCandidates.map((token) => token.toUpperCase()))];
+  return normalized.length ? normalized.join(", ") : "unknown";
+}
+
+function buildConvNotesMarkdownHeader(exportType, packet = null) {
+  const normalizedType = String(exportType || "").trim().toLowerCase();
+  const titleByType = {
+    input: "Packet Converted Input",
+    hex: "Packet Hex Payload",
+    ascii: "Packet ASCII Payload",
+    base64: "Packet Base64 Payload",
+    hashes: "Packet Hashes",
+  };
+  const title = titleByType[normalizedType] || "Packet Converted Output";
+  const contextPacket = packet || activeContextPacket || getCurrentContextPacket();
+  const packetNumber = getContextPacketNumberForNotes(contextPacket);
+  const hosts = getContextHostsForNotes(contextPacket);
+  const protocols = getContextDetectedProtocolsForNotes(contextPacket);
+  return [
+    `## ${title}`,
+    `### Converted from packet number ${packetNumber}`,
+    `### Hosts: ${hosts}`,
+    `### Detected Protocols: ${protocols}`,
+    "",
+  ].join("\n");
+}
+
+function sendConvExportToNotesFromContextMenu(exportType, sourceLabel) {
+  const rawText = getConvContextExportText(exportType);
+  if (!rawText) {
+    hideConvertContextMenu();
+    statusUpdate("Status: No Conv data available to send to Notes");
+    return;
+  }
+
+  let noteText = rawText;
+  if (exportType === "hex") {
+    noteText = formatHexAsHexdumpCodeBlock(rawText);
+  } else if (exportType === "base64") {
+    noteText = formatBase64AsCodeBlock(rawText);
+  } else if (exportType === "ascii") {
+    noteText = formatAsciiAsCodeBlockForNotes(
+      rawText,
+      getConvContextExportText("hex"),
+    );
+  } else if (exportType === "input") {
+    const currentInputFormat = String(
+      document.getElementById("data-tools-format")?.value || "",
+    )
+      .trim()
+      .toLowerCase();
+    if (currentInputFormat === "hex") {
+      noteText = formatHexAsHexdumpCodeBlock(rawText);
+    } else if (currentInputFormat === "base64") {
+      noteText = formatBase64AsCodeBlock(rawText);
+    } else if (currentInputFormat === "ascii") {
+      noteText = formatAsciiAsCodeBlockForNotes(
+        rawText,
+        getConvContextExportText("hex"),
+      );
+    }
+  }
+
+  const labeledNoteText = `${buildConvNotesMarkdownHeader(exportType)}${noteText}`;
+
+  sendTextToNotesFromContextMenu(labeledNoteText, sourceLabel);
 }
 
 function buildListVisibleDataNoteText(target = activeContextTarget) {
@@ -8035,7 +8242,10 @@ const convertContextButtons = {
   saveCookieJar: getCachedElement("ctx-save-cookie-jar"),
   notesSendData: getCachedElement("ctx-notes-send-data"),
   notesSendListPacket: getCachedElement("ctx-notes-send-list-packet"),
-  notesSendConvOutput: getCachedElement("ctx-notes-send-conv-output"),
+  notesSendConvInput: getCachedElement("ctx-notes-send-conv-input"),
+  notesSendConvHex: getCachedElement("ctx-notes-send-conv-hex"),
+  notesSendConvAscii: getCachedElement("ctx-notes-send-conv-ascii"),
+  notesSendConvBase64: getCachedElement("ctx-notes-send-conv-base64"),
   notesSendConvHashes: getCachedElement("ctx-notes-send-conv-hashes"),
   httpFileSave: getCachedElement("ctx-http-file-save"),
   httpFileSaveDecompressed: getCachedElement(
@@ -8972,8 +9182,14 @@ function showConvertContextMenu(
   const hasListVisibleDataForNotes =
     activeMainTab === MAIN_TAB_LIST &&
     Boolean(buildListVisibleDataNoteText(target));
-  const hasConvOutputForNotes =
-    allowConvNotesActions && Boolean(buildConvConvertedOutputNoteText());
+  const hasConvInputForNotes =
+    allowConvNotesActions && Boolean(getConvContextExportText("input"));
+  const hasConvHexForNotes =
+    allowConvNotesActions && Boolean(getConvContextExportText("hex"));
+  const hasConvAsciiForNotes =
+    allowConvNotesActions && Boolean(getConvContextExportText("ascii"));
+  const hasConvBase64ForNotes =
+    allowConvNotesActions && Boolean(getConvContextExportText("base64"));
   const hasConvHashesForNotes =
     allowConvNotesActions && Boolean(buildConvHashesNoteText());
   convertContextButtons.notesSendData.style.display = hasContextDataForNotes
@@ -8981,14 +9197,24 @@ function showConvertContextMenu(
     : "none";
   convertContextButtons.notesSendListPacket.style.display =
     hasListVisibleDataForNotes ? "block" : "none";
-  convertContextButtons.notesSendConvOutput.style.display =
-    hasConvOutputForNotes ? "block" : "none";
+  convertContextButtons.notesSendConvInput.style.display =
+    hasConvInputForNotes ? "block" : "none";
+  convertContextButtons.notesSendConvHex.style.display = hasConvHexForNotes
+    ? "block"
+    : "none";
+  convertContextButtons.notesSendConvAscii.style.display =
+    hasConvAsciiForNotes ? "block" : "none";
+  convertContextButtons.notesSendConvBase64.style.display =
+    hasConvBase64ForNotes ? "block" : "none";
   convertContextButtons.notesSendConvHashes.style.display =
     hasConvHashesForNotes ? "block" : "none";
   const hasNotesActions =
     hasContextDataForNotes ||
     hasListVisibleDataForNotes ||
-    hasConvOutputForNotes ||
+    hasConvInputForNotes ||
+    hasConvHexForNotes ||
+    hasConvAsciiForNotes ||
+    hasConvBase64ForNotes ||
     hasConvHashesForNotes;
   const hasCopyActions =
     hasSelectionContext || isHexViewTarget || hasCookieActions;
@@ -13372,15 +13598,24 @@ convertContextButtons.notesSendListPacket.addEventListener("click", () => {
     "context-list-row-visible-data",
   );
 });
-convertContextButtons.notesSendConvOutput.addEventListener("click", () => {
-  sendTextToNotesFromContextMenu(
-    buildConvConvertedOutputNoteText(),
-    "context-conv-output",
-  );
+convertContextButtons.notesSendConvInput.addEventListener("click", () => {
+  sendConvExportToNotesFromContextMenu("input", "context-conv-input");
+});
+convertContextButtons.notesSendConvHex.addEventListener("click", () => {
+  sendConvExportToNotesFromContextMenu("hex", "context-conv-output-hex");
+});
+convertContextButtons.notesSendConvAscii.addEventListener("click", () => {
+  sendConvExportToNotesFromContextMenu("ascii", "context-conv-output-ascii");
+});
+convertContextButtons.notesSendConvBase64.addEventListener("click", () => {
+  sendConvExportToNotesFromContextMenu("base64", "context-conv-output-base64");
 });
 convertContextButtons.notesSendConvHashes.addEventListener("click", () => {
+  const tableMarkdown = buildConvHashesMarkdownTable();
   sendTextToNotesFromContextMenu(
-    buildConvHashesNoteText(),
+    tableMarkdown
+      ? `${buildConvNotesMarkdownHeader("hashes")}${tableMarkdown}`
+      : "",
     "context-conv-hashes",
   );
 });
