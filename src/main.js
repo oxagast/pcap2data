@@ -81,13 +81,22 @@ const RENDERER_CSP = [
 
 let isRendererCspHookInstalled = false;
 
+function shouldApplyRendererCsp(url) {
+  return typeof url === "string"
+    && (url.startsWith("file://")
+      || url.startsWith("app://")
+      || url.startsWith("devtools://")
+      || url.startsWith("http://localhost:")
+      || url.startsWith("http://127.0.0.1:"));
+}
+
 function ensureRendererCspHeader(webContentsSession) {
   if (isRendererCspHookInstalled || !webContentsSession?.webRequest) {
     return;
   }
 
   webContentsSession.webRequest.onHeadersReceived((details, callback) => {
-    if (details.resourceType !== "mainFrame") {
+    if (details.resourceType !== "mainFrame" || !shouldApplyRendererCsp(details.url)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }
