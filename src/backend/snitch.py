@@ -77,7 +77,74 @@ warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
 )
 stopEvent = threading.Event()
 
-PACKETSNITCH_VERSION = "1.8.1384"
+
+def _loadPacketsnitchVersion():
+    """
+    Resolve the backend version from package.json so backend /version stays in
+    sync with the Electron app version.
+
+    Resolution order:
+      1) PACKETSNITCH_VERSION env var (explicit override)
+      2) nearest package.json discovered from likely runtime roots
+      3) fallback default
+    """
+    envVersion = str(os.environ.get("PACKETSNITCH_VERSION", "")).strip()
+    if envVersion:
+        return envVersion, "env:PACKETSNITCH_VERSION"
+
+    candidateRoots = []
+    try:
+        candidateRoots.append(os.path.dirname(os.path.realpath(__file__)))
+    except Exception:
+        pass
+
+    try:
+        candidateRoots.append(os.path.dirname(os.path.realpath(sys.argv[0])))
+    except Exception:
+        pass
+
+    try:
+        candidateRoots.append(os.getcwd())
+    except Exception:
+        pass
+
+    checked = set()
+    for root in candidateRoots:
+        current = os.path.abspath(root)
+        while True:
+            packagePath = os.path.join(current, "package.json")
+            if packagePath not in checked:
+                checked.add(packagePath)
+                if os.path.isfile(packagePath):
+                    try:
+                        with open(packagePath, "r", encoding="utf-8") as pkgFile:
+                            packageJson = json.load(pkgFile)
+                        packageVersion = str(packageJson.get("version", "")).strip()
+                        if packageVersion:
+                            return packageVersion, packagePath
+                    except Exception:
+                        pass
+
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+
+    return "0.0.0", "fallback"
+
+
+PACKETSNITCH_VERSION, PACKETSNITCH_VERSION_SOURCE = _loadPacketsnitchVersion()
+
+
+def logBackendStartup(mode):
+    safeMode = str(mode or "unknown").strip() or "unknown"
+    print(
+        "[Main] Backend startup "
+        + f"mode={safeMode} "
+        + f"version={PACKETSNITCH_VERSION} "
+        + f"version_source={PACKETSNITCH_VERSION_SOURCE}",
+        file=sys.stderr,
+    )
 
 try:
     import scapy.all as scapy
@@ -5486,6 +5553,8 @@ def runHttpServer(serverHost, serverPort):
 def main():
     parser = buildParser()
     parsedArgs = parser.parse_args()
+    startupMode = "http-server" if parsedArgs.server else "cli"
+    logBackendStartup(startupMode)
 
     if parsedArgs.server:
         runHttpServer(parsedArgs.server_host, parsedArgs.server_port)
