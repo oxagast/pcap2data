@@ -77,6 +77,8 @@ warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
 )
 stopEvent = threading.Event()
 
+PACKETSNITCH_VERSION = "1.8.1384"
+
 try:
     import scapy.all as scapy
 except ImportError:
@@ -99,6 +101,7 @@ currentDir = os.getcwd()
 scriptDir = os.path.dirname(os.path.realpath(__file__)) + "/"
 runtimeInitialized = False
 processingLock = threading.Lock()
+runtimeConfigLock = threading.Lock()
 
 # --- Lookup tables loaded once at startup (see init_lookup_tables()) ---
 # Keyed (port_int, "tcp"/"udp") -> description string
@@ -223,6 +226,57 @@ def _extractSetCookieCredentials(setCookieHeader):
         if value:
             creds[f"cookie.{name}"] = value
     return creds
+
+
+def _coercePositiveInt(value, defaultValue):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return defaultValue
+    return max(1, parsed)
+
+
+def _getRuntimeConfigSnapshot():
+    with runtimeConfigLock:
+        return {
+            "hostChunkSize": int(hostChunkSize),
+            "workerThreads": int(numWorkerThreads),
+        }
+
+
+def _applyRuntimeConfigUpdate(request):
+    global hostChunkSize
+    global numWorkerThreads
+
+    updates = {}
+    if "hostChunkSize" in request:
+        updates["hostChunkSize"] = _coercePositiveInt(
+            request.get("hostChunkSize"),
+            hostChunkSize,
+        )
+    if "workerThreads" in request:
+        updates["workerThreads"] = _coercePositiveInt(
+            request.get("workerThreads"),
+            numWorkerThreads,
+        )
+
+    if not updates:
+        return {
+            "success": False,
+            "error": "No runtime config values provided",
+        }, 400
+
+    with runtimeConfigLock:
+        if "hostChunkSize" in updates:
+            hostChunkSize = updates["hostChunkSize"]
+        if "workerThreads" in updates:
+            numWorkerThreads = updates["workerThreads"]
+
+    return {
+        "success": True,
+        "action": "set-runtime-config",
+        **_getRuntimeConfigSnapshot(),
+    }, 200
 
 
 # Matches JSON key-value pairs where the key looks like a credential field.
@@ -5182,6 +5236,16 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if self.path == "/version":
+            self.sendJson(
+                200,
+                {
+                    "type": "version",
+                    "service": "packetsnitch",
+                    "version": PACKETSNITCH_VERSION,
+                },
+            )
+            return
         self.sendJson(
             404,
             {
@@ -5217,6 +5281,11 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                             "processing": processingLock.locked(),
                         },
                     )
+                    return
+
+                if action in {"set-runtime-config", "set-config", "configure"}:
+                    response, statusCode = _applyRuntimeConfigUpdate(request)
+                    self.sendJson(statusCode, response)
                     return
 
                 if action == "shutdown":
@@ -5295,9 +5364,11 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 timeout=int(request.get("timeout") or 3),
                 active_recon=bool(request.get("activeRecon", True)),
                 conf=request.get("conf"),
-                host_chunk_size=int(request.get("hostChunkSize") or 250),
+                host_chunk_size=int(
+                    request.get("hostChunkSize") or _getRuntimeConfigSnapshot()["hostChunkSize"]
+                ),
                 worker_threads=int(
-                    request.get("workerThreads") or 2 * (os.cpu_count() or 1)
+                    request.get("workerThreads") or _getRuntimeConfigSnapshot()["workerThreads"]
                 ),
                 emit_json_snapshots=bool(request.get("emitJsonSnapshots", False)),
                 verbose=int(request.get("verbose") or 0),

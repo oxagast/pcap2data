@@ -1358,6 +1358,22 @@ function createKeystorePanel({
 
   function keystoreTokenWorkerThread() {
     const DEFAULT_CHUNK_SIZE = 120;
+    const SESSION_SECRET_IGNORE_HINTS = [
+      "encrypted",
+      "length",
+      "checksum",
+      "version",
+      "port",
+      "ip",
+      "mac",
+      "ttl",
+      "window",
+      "sequence",
+      "ack",
+      "timestamp",
+      "frame",
+      "packet",
+    ];
 
     function normalizeValue(value) {
       if (value === null || value === undefined) return "";
@@ -1377,6 +1393,19 @@ function createKeystorePanel({
         hash = Math.imul(hash, 16777619);
       }
       return (hash >>> 0).toString(16);
+    }
+
+    function shouldIncludeSessionSecretValue(value) {
+      const normalized = normalizeValue(value);
+      if (!normalized) return false;
+      if (normalized.length < 3) return false;
+      if (normalized.length > 400) return false;
+      if (
+        SESSION_SECRET_IGNORE_HINTS.some((hint) => normalized.includes(hint))
+      ) {
+        return false;
+      }
+      return true;
     }
 
     function collectLeafValues(source, visit, parentPath = "") {
