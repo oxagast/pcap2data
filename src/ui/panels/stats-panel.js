@@ -147,16 +147,16 @@ function getCredentialsFromKeystore() {
 function getTopTalkers(capturedPackets, topN = 5) {
   const talkerCounts = new Map();
 
-  for (const host of Object.keys(capturedPackets["Host"] || {})) {
-    const packets = capturedPackets["Host"][host];
+  for (const host of Object.keys(capturedPackets["host"] || {})) {
+    const packets = capturedPackets["host"][host];
     if (!Array.isArray(packets)) continue;
 
     for (const pkt of packets) {
-      const pi = pkt?.["Packet Info"];
+      const pi = pkt?.["packet.info"];
       if (!pi) continue;
 
-      const srcIp = pi?.["IP"]?.["Source IP"];
-      const dstIp = pi?.["IP"]?.["Destination IP"];
+      const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"];
+      const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"];
       if (srcIp) {
         talkerCounts.set(srcIp, (talkerCounts.get(srcIp) || 0) + 1);
       }
@@ -632,16 +632,16 @@ function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb
 }
 
 function getPacketPayloadLength(packetInfo) {
-  const payloadLength = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   if (!Number.isFinite(payloadLength) || payloadLength <= 0) return 0;
   return payloadLength;
 }
 
 function getCapturePacketList(capturedPackets) {
   const packetList = [];
-  if (!capturedPackets || !capturedPackets["Host"]) return packetList;
-  for (const hostKey of Object.keys(capturedPackets["Host"])) {
-    const hostPackets = capturedPackets["Host"][hostKey];
+  if (!capturedPackets || !capturedPackets["host"]) return packetList;
+  for (const hostKey of Object.keys(capturedPackets["host"])) {
+    const hostPackets = capturedPackets["host"][hostKey];
     if (!Array.isArray(hostPackets)) continue;
     hostPackets.forEach((packet) => packetList.push(packet));
   }
@@ -656,22 +656,22 @@ function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_
 
   const packets = Array.isArray(packetList) ? packetList : [];
   packets.forEach((packet) => {
-    const packetInfo = packet?.["Packet Info"];
-    const extraInfo = packet?.["Extra Info"] || {};
+    const packetInfo = packet?.["packet.info"];
+    const extraInfo = packet?.["extra.info"] || {};
     if (!packetInfo) return;
 
     const payloadLength = getPacketPayloadLength(packetInfo);
     const networkData = extraInfo?.["Traits"]?.["Network Data"];
     if (!networkData) return;
 
-    ["Source IP", "Destination IP"].forEach((side) => {
-      const locationData = networkData?.[side]?.["Location"];
+    [["ip.src", "Source IP"], ["ip.dst", "Destination IP"]].forEach(([dotSide, legacySide]) => {
+      const locationData = networkData?.[dotSide]?.["Location"] ?? networkData?.[legacySide]?.["Location"];
       const city = normalizeStatsTextValue(locationData?.["City"]);
       const country = normalizeStatsTextValue(locationData?.["Country"]);
       const ipAddress =
-        side === "Source IP"
-          ? packetInfo?.["IP"]?.["Source IP"]
-          : packetInfo?.["IP"]?.["Destination IP"];
+        dotSide === "ip.src"
+          ? packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]
+          : packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"];
       const mappedPoint = collectInternetLocationPoint(locationData, city || country, ipAddress);
       if (!mappedPoint) return;
 
@@ -1925,7 +1925,7 @@ function collectPacketDecodedProtocolNames(packetInfo) {
   const decodedNames = new Set();
 
   const packetDecoded =
-    packetInfo?.["Decoded Protocols"] || packetInfo?.["packet.decoded_protocols"];
+    packetInfo?.["packet.decoded_protocols"] || packetInfo?.["Decoded Protocols"];
   if (Array.isArray(packetDecoded)) {
     packetDecoded.forEach((decodedProtocol) => {
       const name = normalizeStatsTextValue(decodedProtocol);
@@ -1981,7 +1981,7 @@ function normalizeStatsPortValue(value) {
 }
 
 function parseStatsPacketTimestampMs(packet) {
-  const packetTimestamp = packet?.["Packet Info"]?.["Packet Timestamp"];
+  const packetTimestamp = packet?.["packet.info"]?.["packet.timestamp"] ?? packet?.["packet.info"]?.["Packet Timestamp"];
   if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
     return null;
   }
@@ -1990,12 +1990,12 @@ function parseStatsPacketTimestampMs(packet) {
 }
 
 function parseStatsPacketProcessedNumber(packet) {
-  const processedRaw = Number(packet?.["Packet Info"]?.["Packet Processed"]);
+  const processedRaw = Number(packet?.["packet.info"]?.["packet.processed"] ?? packet?.["packet.info"]?.["Packet Processed"]);
   return Number.isFinite(processedRaw) ? processedRaw : null;
 }
 
 function parseStatsPacketIndexNumber(packet) {
-  const packetIndexRaw = Number(packet?.["Packet Info"]?.["Index"]);
+  const packetIndexRaw = Number(packet?.["packet.info"]?.["index"] ?? packet?.["packet.info"]?.["Index"]);
   return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
 }
 
@@ -2047,7 +2047,7 @@ function parseStatsTcpSequenceNumber(transportData) {
 }
 
 function getStatsTcpSegmentLength(packetInfo, transportData) {
-  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
     ? payloadLenRaw
     : 0;
@@ -2120,15 +2120,15 @@ function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
 
     const streamStateByDirection = new Map();
     sortedStreamPackets.forEach((packet) => {
-      const packetInfo = packet?.["Packet Info"] || {};
-      const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+      const packetInfo = packet?.["packet.info"] || {};
+      const protocol = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase();
       if (protocol !== "TCP") return;
 
       const transportData = packetInfo["TCP"] || {};
-      const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
-      const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
-      const sourcePort = transportData?.["Source port"] ?? "";
-      const destinationPort = transportData?.["Destination port"] ?? "";
+      const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "";
+      const destinationIp = (packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]) || "";
+      const sourcePort = transportData?.["tcp.src.port"] ?? transportData?.["Source port"] ?? "";
+      const destinationPort = transportData?.["tcp.dst.port"] ?? transportData?.["Destination port"] ?? "";
       const directionKey = `${sourceIp}:${sourcePort}>${destinationIp}:${destinationPort}`;
       const sequenceNumber = parseStatsTcpSequenceNumber(transportData);
       const segmentLength = getStatsTcpSegmentLength(packetInfo, transportData);
@@ -2194,15 +2194,25 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   let unencryptedCount = 0;
   let undecodableCount = 0;
   let totalPackets = 0;
-  if (!capturedPackets || !capturedPackets["Host"]) return null;
+  if (!capturedPackets || !capturedPackets["host"]) return null;
 
   const getStreamKey = (packetInfo) => {
-    const transportName = packetInfo?.["Protocol"] || "Unknown";
+    const transportName = packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "Unknown";
     const transportData = packetInfo?.[transportName] || {};
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
-    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
-    const sourcePort = transportData?.["Source port"] ?? "";
-    const destinationPort = transportData?.["Destination port"] ?? "";
+    const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "";
+    const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "";
+    const sourcePort =
+      transportData?.["tcp.src.port"] ??
+      transportData?.["udp.src.port"] ??
+      transportData?.["sctp.src.port"] ??
+      transportData?.["Source port"] ??
+      "";
+    const destinationPort =
+      transportData?.["tcp.dst.port"] ??
+      transportData?.["udp.dst.port"] ??
+      transportData?.["sctp.dst.port"] ??
+      transportData?.["Destination port"] ??
+      "";
 
     const endpointA = `${sourceIp}:${sourcePort}`;
     const endpointB = `${destinationIp}:${destinationPort}`;
@@ -2210,16 +2220,16 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
   };
 
-  for (const host of Object.keys(capturedPackets["Host"])) {
+  for (const host of Object.keys(capturedPackets["host"])) {
     const normalizedHostKey = normalizeStatsTextValue(host);
     if (normalizedHostKey) hosts.add(normalizedHostKey);
-    const packets = capturedPackets["Host"][host];
+    const packets = capturedPackets["host"][host];
     if (!Array.isArray(packets)) continue;
 
     for (const pkt of packets) {
       totalPackets++;
-      const pi = pkt?.["Packet Info"];
-      const ei = pkt?.["Extra Info"] || {};
+      const pi = pkt?.["packet.info"];
+      const ei = pkt?.["extra.info"] || {};
       if (!pi) continue;
 
       const streamKey = getStreamKey(pi);
@@ -2228,7 +2238,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
       }
       streams.get(streamKey).count++;
 
-      const protocolUpper = String(pi?.["Protocol"] || "").toUpperCase();
+      const protocolUpper = String(pi?.["packet.proto"] ?? pi?.["Protocol"] ?? "").toUpperCase();
       if (protocolUpper === "TCP") {
         if (!tcpStreams.has(streamKey)) {
           tcpStreams.set(streamKey, []);
@@ -2236,7 +2246,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
         tcpStreams.get(streamKey).push(pkt);
       }
 
-      const tp = normalizeStatsTextValue(pi["Protocol"]);
+      const tp = normalizeStatsTextValue(pi["packet.proto"] ?? pi["Protocol"]);
       if (tp) transportProtocols.add(tp);
       if (tp && tp.toLowerCase() === "undecodable") {
         undecodableCount++;
@@ -2278,14 +2288,14 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
         if (igmpType) igmpMessageTypes.add(igmpType);
       }
 
-      const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["Source IP"]);
-      const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["Destination IP"]);
+      const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"]);
+      const dstIp = normalizeStatsTextValue(pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"]);
       if (srcIp) hosts.add(srcIp);
       if (dstIp) hosts.add(dstIp);
 
       const ef = pi?.["Ethernet Frame"];
       if (ef) {
-        const srcVendor = normalizeStatsTextValue(ef["MAC Source Vendor"]);
+        const srcVendor = normalizeStatsTextValue(ef["ether.src.mac.vendor"] ?? ef["MAC Source Vendor"]);
         const dstVendor = normalizeStatsTextValue(ef["MAC Destination Vendor"]);
         if (srcVendor) macVendors.add(srcVendor);
         if (dstVendor) macVendors.add(dstVendor);
@@ -2300,8 +2310,12 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
 
         const tpData = tp ? pi[tp] : null;
         if (tpData) {
-          const srcPort = normalizeStatsPortValue(tpData["Source port"]);
-          const dstPort = normalizeStatsPortValue(tpData["Destination port"]);
+          const srcPort = normalizeStatsPortValue(
+            tpData["tcp.src.port"] ?? tpData["udp.src.port"] ?? tpData["sctp.src.port"] ?? tpData["Source port"],
+          );
+          const dstPort = normalizeStatsPortValue(
+            tpData["tcp.dst.port"] ?? tpData["udp.dst.port"] ?? tpData["sctp.dst.port"] ?? tpData["Destination port"],
+          );
           if (srcPort !== null) ports.add(srcPort);
           if (dstPort !== null) ports.add(dstPort);
         }
@@ -2314,8 +2328,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
           });
         }
 
-        for (const side of ["Source IP", "Destination IP"]) {
-          const loc = netData?.[side]?.["Location"];
+        for (const [dotSide, legacySide] of [["ip.src", "Source IP"], ["ip.dst", "Destination IP"]]) {
+          const loc = netData?.[dotSide]?.["Location"] ?? netData?.[legacySide]?.["Location"];
           const city = normalizeStatsTextValue(loc?.["City"]);
           const country = normalizeStatsTextValue(loc?.["Country"]);
           if (city && country) {
@@ -2324,9 +2338,9 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
           }
 
           const ipAddress =
-            side === "Source IP"
-              ? pi?.["IP"]?.["Source IP"]
-              : pi?.["IP"]?.["Destination IP"];
+            dotSide === "ip.src"
+              ? pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"]
+              : pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"];
           const mappedPoint = collectInternetLocationPoint(loc, city || country, ipAddress);
           if (mappedPoint) {
             const coordinateKey = `${mappedPoint.latitude.toFixed(4)},${mappedPoint.longitude.toFixed(4)}`;
@@ -2484,16 +2498,16 @@ function makeStatsSection({ documentRef, title, items, queryBuilder, onQuery }) 
 
 function totalTrafficBytes(capturedPackets) {
   let totalBytes = 0;
-  for (const host of Object.keys(capturedPackets["Host"] || {})) {
-    const packets = capturedPackets["Host"][host];
+  for (const host of Object.keys(capturedPackets["host"] || {})) {
+    const packets = capturedPackets["host"][host];
     if (!Array.isArray(packets)) continue;
 
     for (const pkt of packets) {
-      const pi = pkt?.["Packet Info"];
+      const pi = pkt?.["packet.info"];
       if (!pi) continue;
 
       const rawData = pi?.["Raw data"];
-      const payloadLength = Number(rawData?.["Payload Length"]);
+      const payloadLength = Number(rawData?.["payload.len"] ?? rawData?.["Payload Length"]);
       if (Number.isFinite(payloadLength) && payloadLength > 0) {
         totalBytes += payloadLength;
       }

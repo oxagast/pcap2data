@@ -490,14 +490,32 @@ function createKeystorePanel({
 
   function extractTransportPorts(transportData, packetInfo) {
     const rawPorts = [
+      transportData?.["tcp.src.port"] ?? null,
+      transportData?.["tcp.dst.port"],
+      transportData?.["udp.src.port"],
+      transportData?.["udp.dst.port"],
+      transportData?.["sctp.src.port"],
+      transportData?.["sctp.dst.port"],
       transportData?.["Source port"],
       transportData?.["Destination port"],
       transportData?.tcp?.["Source port"],
       transportData?.tcp?.["Destination port"],
       transportData?.udp?.["Source port"],
       transportData?.udp?.["Destination port"],
+      packetInfo?.["Transport Layer"]?.["tcp.src.port"],
+      packetInfo?.["Transport Layer"]?.["tcp.dst.port"],
+      packetInfo?.["Transport Layer"]?.["udp.src.port"],
+      packetInfo?.["Transport Layer"]?.["udp.dst.port"],
+      packetInfo?.["Transport Layer"]?.["sctp.src.port"],
+      packetInfo?.["Transport Layer"]?.["sctp.dst.port"],
       packetInfo?.["Transport Layer"]?.["Source port"],
       packetInfo?.["Transport Layer"]?.["Destination port"],
+      packetInfo?.["TCP"]?.["tcp.src.port"],
+      packetInfo?.["TCP"]?.["tcp.dst.port"],
+      packetInfo?.["UDP"]?.["udp.src.port"],
+      packetInfo?.["UDP"]?.["udp.dst.port"],
+      packetInfo?.["SCTP"]?.["sctp.src.port"],
+      packetInfo?.["SCTP"]?.["sctp.dst.port"],
       packetInfo?.["TCP"]?.["Source port"],
       packetInfo?.["TCP"]?.["Destination port"],
       packetInfo?.["tcp"]?.["Source port"],
@@ -1093,7 +1111,12 @@ function createKeystorePanel({
 
   function inferHttpSchemeForPacket(packetInfo) {
     const destinationPort = Number(
+      packetInfo?.["Transport Layer"]?.["tcp.dst.port"] ||
+      packetInfo?.["Transport Layer"]?.["udp.dst.port"] ||
+      packetInfo?.["Transport Layer"]?.["sctp.dst.port"] ||
       packetInfo?.["Transport Layer"]?.["Destination port"] ||
+      packetInfo?.["TCP"]?.["tcp.dst.port"] ||
+      packetInfo?.["tcp"]?.["tcp.dst.port"] ||
       packetInfo?.["TCP"]?.["Destination port"] ||
       packetInfo?.["tcp"]?.["Destination port"] ||
       0,
@@ -1170,9 +1193,10 @@ function createKeystorePanel({
     }
 
     const destinationIp = normalizeSessionSecretValue(
+      packetInfo?.["IP"]?.["ip.dst.addr"],
       packetInfo?.["IP"]?.["Destination IP"],
     );
-    const sourceIp = normalizeSessionSecretValue(packetInfo?.["IP"]?.["Source IP"]);
+    const sourceIp = normalizeSessionSecretValue(packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]);
     const fallbackHost = normalizeSessionSecretValue(host);
     const authority =
       normalizeHttpAuthority(hostHeader) ||
@@ -1545,12 +1569,12 @@ function createKeystorePanel({
       function scanPacket(packetRecord) {
         const host = packetRecord?.host || "Unknown";
         const packet = packetRecord?.packet || {};
-        const packetInfo = packet?.["Packet Info"] || {};
-        const protocol = packetInfo?.["Protocol"] || "Unknown";
-        const packetIndex = packetInfo?.["Index"] ?? "?";
+        const packetInfo = packet?.["packet.info"] || {};
+        const protocol = packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "Unknown";
+        const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? "?";
         const transportData =
           packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
-        const extraInfo = packet?.["Extra Info"] || {};
+        const extraInfo = packet?.["extra.info"] || {};
         const roots = [transportData, extraInfo];
         // check type before going over roots
         if (!Array.isArray(roots) || roots.length === 0) return;
@@ -1718,7 +1742,7 @@ function createKeystorePanel({
   async function buildSessionAutoKeystoreEntries() {
     const generatedEntries = [];
     const dedupe = new Set();
-    const hosts = getCapturedPackets()?.Host;
+    const hosts = getCapturedPackets()?.host ?? getCapturedPackets()?.Host;
     if (!hosts || typeof hosts !== "object") return generatedEntries;
 
     const packetRecords = [];
@@ -1776,12 +1800,12 @@ function createKeystorePanel({
           packet,
           hydratedPacketCache,
         );
-        const packetInfo = hydratedPacket?.["Packet Info"] || {};
-        const protocol = packetInfo?.["Protocol"] ?? "Unknown";
+        const packetInfo = hydratedPacket?.["packet.info"] || {};
+        const protocol = packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "Unknown";
         const transportData =
           packetInfo?.["Transport Layer"] || packetInfo?.[protocol] || {};
-        const extraInfo = hydratedPacket?.["Extra Info"] || {};
-        const packetIndex = packetInfo?.["Index"] ?? "?";
+        const extraInfo = hydratedPacket?.["extra.info"] || {};
+        const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? "?";
         const transportPorts = extractTransportPorts(transportData, packetInfo);
         [transportData, extraInfo].forEach((candidateRoot) => {
           collectSessionSecretCandidates(candidateRoot, (pathKey, rawValue) => {
@@ -1846,6 +1870,7 @@ function createKeystorePanel({
         });
 
         const payloadHex =
+          packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
           packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
         const structuredHttpSection = transportData?.HTTP;
         const structuredHttpLocationEntries = buildHttpRequestLocationCandidates(

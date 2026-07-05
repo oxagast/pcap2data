@@ -651,14 +651,60 @@ def writeTestcase(data, outputDirPath, portDir, index):
         out.write(data)
 
 
+def _jsonValuesEquivalent(leftValue, rightValue):
+    """
+    Compare JSON-like values for semantic equality.
+    Falls back to direct equality when JSON serialisation fails.
+    """
+    try:
+        return json.dumps(leftValue, sort_keys=True, default=str) == json.dumps(
+            rightValue, sort_keys=True, default=str
+        )
+    except Exception:
+        return leftValue == rightValue
+
+
+def _normaliseJsonKeyName(key):
+    if not isinstance(key, str):
+        return key
+    return re.sub(r"\s+", ".", key.strip().lower())
+
+
+def _normaliseJsonKeys(value):
+    """
+    Recursively normalise all JSON object keys to lowercase dot notation.
+    Spaces become periods, and uppercase characters are lowercased.
+    """
+    if isinstance(value, list):
+        return [_normaliseJsonKeys(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    normalised = {}
+    for rawKey, rawValue in value.items():
+        key = _normaliseJsonKeyName(rawKey)
+        childValue = _normaliseJsonKeys(rawValue)
+        if key in normalised:
+            existing = normalised[key]
+            if _jsonValuesEquivalent(existing, childValue):
+                continue
+            if isinstance(existing, dict) and isinstance(childValue, dict):
+                merged = dict(existing)
+                merged.update(childValue)
+                normalised[key] = merged
+                continue
+        normalised[key] = childValue
+    return normalised
+
+
 def joinInfo(outputDirPath, portDir, index, dataTypeJson, packetInfoJson, host):
     """
     Merge packet-level info with extra analysis info and write as a JSON file.
     Thread-safe: uses allPacketInfoLock when appending to the shared allPacketInfo list.
     """
     mergedJson = {
-        "Packet Info": json.loads(packetInfoJson),
-        "Extra Info": json.loads(dataTypeJson),
+        "packet.info": json.loads(packetInfoJson),
+        "extra.info": json.loads(dataTypeJson),
     }
     # the following is commented out because on large captures it can exceed the filesystem's
     # maximum inode limit for temporary files.  It's not strictly necessary anyway.
@@ -669,7 +715,7 @@ def joinInfo(outputDirPath, portDir, index, dataTypeJson, packetInfoJson, host):
         print(json.dumps(mergedJson, indent=2))
     # Protect the shared list from concurrent thread writes
     with allPacketInfoLock:
-        allPacketInfo.append({"Host": host, "Packet": mergedJson})
+        allPacketInfo.append({"host": host, "packet": mergedJson})
     return mergedJson
 
 
@@ -685,13 +731,19 @@ def sortAndIndexPackets(hostPacketMap):
         # Sort packets by timestamp
         packets.sort(
             key=lambda p: datetime.strptime(
-                p["Packet Info"]["Packet Timestamp"], "%Y-%m-%d %H:%M:%S.%f"
+                p.get("packet.info", {}).get(
+                    "packet.timestamp", "1970-01-01 00:00:00.000000"
+                ),
+                "%Y-%m-%d %H:%M:%S.%f",
             )
         )
 
         # Add chronological index
         for i, pkt in enumerate(packets, start=1):
-            pkt["Packet Info"]["Index"] = i
+            packetInfo = pkt.get("packet.info")
+            if isinstance(packetInfo, dict):
+                packetInfo["Index"] = i
+                packetInfo["index"] = i
 
     return hostPacketMap
 
@@ -705,18 +757,18 @@ def byHost(outputDirPath, finalSummary):
     """
     global packetsByHost
     for entry in allPacketInfo:
-        host = entry.get("Host")
+        host = entry.get("host")
         if host not in packetsByHost:
             packetsByHost[host] = []
         # Always append — previously the first packet per host was lost
-        packetsByHost[host].append(entry.get("Packet"))
+        packetsByHost[host].append(entry.get("packet"))
 
     packetsByHost = sortAndIndexPackets(packetsByHost)
 
     # Write the consolidated hosts file; use a context manager to guarantee flush/close
     with open(outputDirPath + "/" + hostOutputFile, "w+", encoding="utf-8") as f:
         f.write(
-            json.dumps({"Host": packetsByHost, "Final Summary": finalSummary}, indent=2)
+            json.dumps({"host": packetsByHost, "final.summary": finalSummary}, indent=2)
         )
 
 
@@ -726,13 +778,13 @@ def buildHostsPayload(packetEntries, finalSummary=""):
     """
     packetMapByHost = {}
     for entry in packetEntries:
-        host = entry.get("Host")
+        host = entry.get("host")
         if host not in packetMapByHost:
             packetMapByHost[host] = []
-        packetMapByHost[host].append(entry.get("Packet"))
+        packetMapByHost[host].append(entry.get("packet"))
 
     packetMapByHost = sortAndIndexPackets(packetMapByHost)
-    return {"Host": packetMapByHost, "Final Summary": finalSummary}
+    return {"host": packetMapByHost, "final.summary": finalSummary}
 
 
 def writeHostsSnapshot(
@@ -1055,7 +1107,7 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
         "Shannon Entropy": shannonEntropy,
         "payload.entropy": shannonEntropy,
         "Network Data": {
-            "Source IP": {
+            "ip.src": {
                 "Class": srcNetClass,
                 "ip.src.class": srcNetClass,
                 "network.src.class": srcNetClass,
@@ -1063,7 +1115,7 @@ def getTraits(data, srcPort, dstPort, sourceIp, destIp, timeout, protocol="tcp",
                 "ip.src.location": srcGeoInfo,
                 "network.src.location": srcGeoInfo,
             },
-            "Destination IP": {
+            "ip.dst": {
                 "Class": dstNetClass,
                 "ip.dst.class": dstNetClass,
                 "network.dst.class": dstNetClass,   
@@ -3310,7 +3362,6 @@ def decodeWebSocket(rawPayload):
             "ws.fin": fin,
             "Masked": masked,
             "ws.masked": masked,
-            "Payload Length": payloadLen,
             "ws.payload_len": payloadLen,
         }
     except Exception:
@@ -3668,18 +3719,14 @@ def _decodeSctpChunks(chunkBytes):
         chunkPayload = chunkBytes[offset + 4 : offset + chunkLength]
         chunkName = SCTP_CHUNK_TYPE_NAMES.get(chunkType, f"Type {chunkType}")
         chunkInfo = {
-            "Chunk Type": chunkName,
             "sctp.chunk.type": chunkType,
-            "Chunk Flags": chunkFlags,
             "sctp.chunk.flags": chunkFlags,
-            "Chunk Length": chunkLength,
             "sctp.chunk.length": chunkLength,
-            "Chunk Payload Length": len(chunkPayload),
+            "sctp.chunk.type_name": chunkName,
             "sctp.chunk.payload.len": len(chunkPayload),
         }
         if chunkPayload:
             preview = chunkPayload[:32].hex()
-            chunkInfo["Chunk Payload Preview"] = preview
             chunkInfo["sctp.chunk.payload.preview"] = preview
         chunks.append(chunkInfo)
         if chunkType == 0 and firstDataPayload is None:
@@ -3735,9 +3782,7 @@ def decodeSctpPacket(p):
     sigtranSection = None
     if sigtranProto is not None:
         sigtranSection = {
-            "Protocol": sigtranProto,
             "sigtran.proto": sigtranProto,
-            "Likely Signaling": "SS7 over SCTP" if sigtranProto in ("M2UA", "M3UA", "SUA", "M2PA", "IUA") else "SCTP adaptation",
             "sigtran.signaling": "SS7 over SCTP" if sigtranProto in ("M2UA", "M3UA", "SUA", "M2PA", "IUA") else "SCTP adaptation",
         }
         if sigtranProto == "M3UA" and firstDataPayload and len(firstDataPayload) >= 8 and firstDataPayload[0] == 1:
@@ -3746,51 +3791,35 @@ def decodeSctpPacket(p):
             messageLength = int.from_bytes(firstDataPayload[4:8], "big")
             sigtranSection.update(
                 {
-                    "Version": int(firstDataPayload[0]),
                     "sigtran.version": int(firstDataPayload[0]),
-                    "Reserved": int(firstDataPayload[1]),
                     "sigtran.reserved": int(firstDataPayload[1]),
-                    "Message Class": M3UA_MESSAGE_CLASS_NAMES.get(messageClass, f"Class {messageClass}"),
                     "sigtran.message.class": messageClass,
-                    "Message Type": messageType,
                     "sigtran.message.type": messageType,
-                    "Message Length": messageLength,
                     "sigtran.length": messageLength,
+                    "sigtran.message.class_name": M3UA_MESSAGE_CLASS_NAMES.get(messageClass, f"Class {messageClass}"),
                 }
             )
             if len(firstDataPayload) > 8:
                 preview = firstDataPayload[8 : min(len(firstDataPayload), 40)].hex()
-                sigtranSection["Protocol Data Preview"] = preview
                 sigtranSection["sigtran.payload.preview"] = preview
-                sigtranSection["Payload Length"] = len(firstDataPayload) - 8
                 sigtranSection["sigtran.payload.len"] = len(firstDataPayload) - 8
         elif firstDataPayload:
             preview = firstDataPayload[:32].hex()
-            sigtranSection["Payload Length"] = len(firstDataPayload)
             sigtranSection["sigtran.payload.len"] = len(firstDataPayload)
-            sigtranSection["Payload Preview"] = preview
             sigtranSection["sigtran.payload.preview"] = preview
 
     section = {
-        "Source port": srcPort,
         "sctp.src.port": srcPort,
-        "Destination port": dstPort,
         "sctp.dst.port": dstPort,
-        "Verification Tag": verificationTag,
         "sctp.vtag": verificationTag,
-        "Checksum": checksum,
         "sctp.chksum": checksum,
-        "Chunk Count": len(chunks),
         "sctp.chunk.count": len(chunks),
-        "Chunks": [chunk["Chunk Type"] for chunk in chunks],
-        "sctp.chunks": [chunk["Chunk Type"] for chunk in chunks],
-        "Wire length": len(sctpBytes),
+        "sctp.chunks": [chunk["sctp.chunk.type_name"] for chunk in chunks],
         "wire.len": len(sctpBytes),
         "transport.len": len(sctpBytes),
         "transport.proto": "SCTP",
     }
     if chunks:
-        section["Chunk Details"] = chunks
         section["sctp.chunk.details"] = chunks
     if sigtranSection is not None:
         section["SIGTRAN"] = sigtranSection
@@ -4018,42 +4047,30 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             )
             decodedProtocols = [protocolName]
             packetInfo = {
-                "Packet Processed": int(packetIndex),
-                "Packet Timestamp": timestamp,
+                "packet.processed": int(packetIndex),
                 "packet.timestamp": timestamp,
-                "Protocol": protocolName,
                 "packet.proto": protocolName,
                 "link.proto": protocolName,
-                "Decoded Protocols": decodedProtocols,
                 "packet.decoded_protocols": decodedProtocols,
                 "Ethernet Frame": {
-                    "MAC Source": srcMacAddr,
                     "ether.src.mac.addr": srcMacAddr,
                     "link.src.mac.addr": srcMacAddr,
-                    "MAC Destination": dstMacAddr,
                     "ether.dst.mac.addr": dstMacAddr,
                     "link.dst.mac.addr": dstMacAddr,
-                    "MAC Source Vendor": srcMacVendor,
                     "ether.src.mac.vendor": srcMacVendor,
                     "link.src.mac.vendor": srcMacVendor,
-                    "MAC Destination Vendor": dstMacVendor,
                     "ether.dst.mac.vendor": dstMacVendor,
                     "link.dst.mac.vendor": dstMacVendor,
                 }
                 if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
                 else "N/A",
-                    "link.proto": "IP",
                 "IP": {
-                    "Source IP": srcIp,
                     "ip.src.addr": srcIp,
                     "network.ip.src.addr": srcIp,
-                    "Destination IP": dstIp,
                     "ip.dst.addr": dstIp,
                     "network.ip.dst.addr": dstIp,
-                    "IP Checksum": "N/A",
                     "network.ip.chksum": "N/A",
                     "ip.chksum": "N/A",
-                    "IP layer length": len(rawPayload),
                     "network.len": len(rawPayload),
                     "ip.len": len(rawPayload),
                     "network.ip.len": len(rawPayload),
@@ -4061,22 +4078,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 protocolName: arpSection,
                 "Raw data": {
                     "Payload": {
-                        "Hex Encoded": rawPayload.hex(),
                         "payload.hex": rawPayload.hex(),
-                        "ASCII Encoded": rawPayload.decode(errors="ignore"),
                         "payload.ascii": rawPayload.decode(errors="ignore"),
                     },
                     "Packet": bytes(p).hex(),
                     "packet.hex": bytes(p).hex(),
-                    "Payload Length": len(rawPayload),
                     "payload.len": len(rawPayload),
                 },
             }
             if wanLinkSection is not None:
                 packetInfo["Link Control"] = wanLinkSection
-                packetInfo["Decoded Protocols"] = decodedProtocols + list(
-                    wanLinkSection.get("wan.detected", [])
-                )
                 packetInfo["packet.decoded_protocols"] = decodedProtocols + list(
                     wanLinkSection.get("wan.detected", [])
                 )
@@ -4107,25 +4118,18 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             else ["FRAME"]
         )
         packetInfo = {
-            "Packet Processed": int(packetIndex),
-            "Packet Timestamp": timestamp,
+            "packet.processed": int(packetIndex),
             "packet.timestamp": timestamp,
-            "Protocol": protocolName,
             "packet.proto": protocolName,
             "link.proto": protocolName,
-            "Decoded Protocols": decodedProtocols,
             "packet.decoded_protocols": decodedProtocols,
             "Ethernet Frame": {
-                "MAC Source": srcMacAddr,
                 "ether.src.mac.addr": srcMacAddr,
                 "link.src.mac.addr": srcMacAddr,
-                "MAC Destination": dstMacAddr,
                 "ether.dst.mac.addr": dstMacAddr,
                 "link.dst.mac.addr": dstMacAddr,
-                "MAC Source Vendor": srcMacVendor,
                 "ether.src.mac.vendor": srcMacVendor,
                 "link.src.mac.vendor": srcMacVendor,
-                "MAC Destination Vendor": dstMacVendor,
                 "ether.dst.mac.vendor": dstMacVendor,
                 "link.dst.mac.vendor": dstMacVendor,
             }
@@ -4133,14 +4137,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             else "N/A",
             "Raw data": {
                 "Payload": {
-                    "Hex Encoded": rawPayload.hex(),
                     "payload.hex": rawPayload.hex(),
-                    "ASCII Encoded": rawPayload.decode(errors="ignore"),
                     "payload.ascii": rawPayload.decode(errors="ignore"),
                 },
                 "Packet": bytes(p).hex(),
                 "packet.hex": bytes(p).hex(),
-                "Payload Length": len(rawPayload),
                 "payload.len": len(rawPayload),
             },
         }
@@ -4293,19 +4294,14 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     tcpFlags = tcpFlags[:-1]
 
                 transportSection = {
-                    "Source port": int(srcPort),
                     "tcp.src.port": int(srcPort),
                     "transport.tcp.src.port": int(srcPort),
-                    "Destination port": int(dstPort),
                     "tcp.dst.port": int(dstPort),
                     "transport.tcp.dst.port": int(dstPort),
-                    "TCP Sequence Number": int(p["TCP"].seq),
                     "tcp.seq": int(p["TCP"].seq),
                     "transport.tcp.seq": int(p["TCP"].seq),
-                    "TCP Acknowledgment Number": int(p["TCP"].ack),
                     "tcp.ack": int(p["TCP"].ack),
                     "transport.tcp.ack": int(p["TCP"].ack),
-                    "TCP checksum": hex(int(p["TCP"].chksum)),
                     "tcp.chksum": hex(int(p["TCP"].chksum)),
                     "transport.tcp.chksum": hex(int(p["TCP"].chksum)),
                     "Urgent flag": bool(p["TCP"].urgptr),
@@ -4322,7 +4318,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "TCP Payload Length": int(len(rawPayload)),
                     "tcp.payload.len": int(len(rawPayload)),
                     "transport.tcp.payload.len": int(len(rawPayload)),
-                    "TCP layer length": int(p["TCP"].dataofs * 4),
                     "tcp.len": int(p["TCP"].dataofs * 4),
                     "transport.tcp.len": int(p["TCP"].dataofs * 4),
                     "Wire length": len(p["TCP"]),
@@ -4535,11 +4530,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     }
 
                 transportSection = {
-                    "Source port": int(srcPort),
                     "udp.src.port": int(srcPort),
-                    "Destination port": int(dstPort),
                     "udp.dst.port": int(dstPort),
-                    "UDP checksum": hex(int(p["UDP"].chksum)),
                     "udp.chksum": hex(int(p["UDP"].chksum)),
                     "UDP length": int(p["UDP"].len),
                     "udp.len": int(p["UDP"].len),
@@ -4615,8 +4607,10 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 sctpSection = decodeSctpPacket(p)
                 if sctpSection is None:
                     sctpSection = {
-                        "Source port": int(srcPort),
-                        "Destination port": int(dstPort),
+                        "sctp.src.port": int(srcPort),
+                        "transport.sctp.src.port": int(srcPort),
+                        "sctp.dst.port": int(dstPort),
+                        "transport.sctp.dst.port": int(dstPort),
                         "Wire length": len(rawPayload),
                         "wire.len": len(rawPayload),
                         "transport.len": len(rawPayload),
@@ -4688,8 +4682,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             else:
                 ipProtoNum = int(getattr(p["IP"], "proto", 0))
                 transportSection = {
-                    "Source port": int(srcPort),
-                    "Destination port": int(dstPort),
+                    "transport.src.port": int(srcPort),
+                    "transport.dst.port": int(dstPort),
                     "IP Protocol Number": ipProtoNum,
                     "ip.proto.num": ipProtoNum,
                     "network.ip.proto.num": ipProtoNum,
@@ -4702,25 +4696,19 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 protocolKey = "Undecodable"
 
             packetInfo = {
-                "Packet Processed": int(packetIndex),
-                "Packet Timestamp": timestamp,
+                "packet.processed": int(packetIndex),
                 "packet.timestamp": timestamp,
-                "Protocol": protocolKey,
                 "packet.proto": protocolKey,
-                    "link.proto": "Ethernet",
+                "link.proto": "Ethernet",
                 # Include Ethernet MAC data when at least one IP is local (private),
                 # so that mixed private+internet traffic still exposes the local device's MAC.
                 "Ethernet Frame": {
-                    "MAC Source": srcMacAddr,
                     "ether.src.mac.addr": srcMacAddr,
                     "link.src.mac.addr": srcMacAddr,
-                    "MAC Destination": dstMacAddr,
                     "ether.dst.mac.addr": dstMacAddr,
                     "link.dst.mac.addr": dstMacAddr,
-                    "MAC Source Vendor": srcMacVendor,
                     "ether.src.mac.vendor": srcMacVendor,
                     "link.src.mac.vendor": srcMacVendor,
-                    "MAC Destination Vendor": dstMacVendor,
                     "ether.dst.mac.vendor": dstMacVendor,
                     "link.dst.mac.vendor": dstMacVendor,
                 }
@@ -4730,16 +4718,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 )
                 else "N/A",
                 "IP": {
-                    "Source IP": str(p["IP"].src),
                     "ip.src.addr": str(p["IP"].src),
                     "network.ip.src.addr": str(p["IP"].src),
-                    "Destination IP": str(p["IP"].dst),
                     "ip.dst.addr": str(p["IP"].dst),
                     "network.ip.dst.addr": str(p["IP"].dst),
-                    "IP Checksum": hex(int(p["IP"].chksum)),
                     "ip.chksum": hex(int(p["IP"].chksum)),
                     "network.ip.chksum": hex(int(p["IP"].chksum)),
-                    "IP layer length": int(p["IP"].len),
                     "ip.len": int(p["IP"].len),
                     "network.ip.len": int(p["IP"].len),
                     "network.proto": "IP",
@@ -4747,31 +4731,24 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 protocolKey: transportSection,
                 "Raw data": {
                     "Payload": {
-                        "Hex Encoded": rawPayload.hex(),
                         "payload.hex": rawPayload.hex(),
-                        "ASCII Encoded": rawPayload.decode(errors="ignore"),
                         "payload.ascii": rawPayload.decode(errors="ignore"),
                     },
                     "Packet": bytes(p).hex(),
                     "packet.hex": bytes(p).hex(),
-                    "Payload Length": len(rawPayload),
                     "payload.len": len(rawPayload),
                 },
             }
             if protocolKey == "IGMP":
-                packetInfo["Decoded Protocols"] = ["IGMP"]
                 packetInfo["packet.decoded_protocols"] = ["IGMP"]
             if wanLinkSection is not None:
                 packetInfo["Link Control"] = wanLinkSection
-                existingDecoded = packetInfo.get("Decoded Protocols", [])
+                existingDecoded = packetInfo.get("packet.decoded_protocols", [])
                 if not isinstance(existingDecoded, list):
                     existingDecoded = []
                 linkDecoded = list(wanLinkSection.get("wan.detected", []))
-                packetInfo["Decoded Protocols"] = list(
-                    dict.fromkeys(existingDecoded + linkDecoded)
-                )
                 packetInfo["packet.decoded_protocols"] = list(
-                    packetInfo["Decoded Protocols"]
+                    dict.fromkeys(existingDecoded + linkDecoded)
                 )
             # Use the non-local IP as the host key; fall back to src for LAN captures
             hostKey = (

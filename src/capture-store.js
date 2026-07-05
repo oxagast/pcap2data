@@ -28,7 +28,7 @@ function getPathKeys(parserContext) {
 function getPacketPathInfo(pathKeys) {
     if (
         pathKeys.length === 3 &&
-        pathKeys[0] === "Host" &&
+        pathKeys[0] === "host" &&
         typeof pathKeys[1] === "string" &&
         typeof pathKeys[2] === "number"
     ) {
@@ -40,8 +40,8 @@ function getPacketPathInfo(pathKeys) {
 
     if (
         pathKeys.length === 4 &&
-        pathKeys[0] === "Capture Data" &&
-        pathKeys[1] === "Host" &&
+        pathKeys[0] === "capture.data" &&
+        pathKeys[1] === "host" &&
         typeof pathKeys[2] === "string" &&
         typeof pathKeys[3] === "number"
     ) {
@@ -56,21 +56,25 @@ function getPacketPathInfo(pathKeys) {
 
 function isFinalSummaryPath(pathKeys) {
     return (
-        (pathKeys.length === 1 && pathKeys[0] === "Final Summary") ||
+        (pathKeys.length === 1 && pathKeys[0] === "final.summary") ||
         (pathKeys.length === 2 &&
-            pathKeys[0] === "Capture Data" &&
-            pathKeys[1] === "Final Summary")
+            pathKeys[0] === "capture.data" &&
+            pathKeys[1] === "final.summary")
     );
 }
 
 function isSessionStatePath(pathKeys) {
-    return pathKeys.length === 1 && pathKeys[0] === "Session State";
+    return pathKeys.length === 1 && pathKeys[0] === "session.state";
 }
 
 function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
-    const packetInfo = packet?.["Packet Info"] || {};
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || host || "Unknown";
-    const packetIndex = packetInfo?.["Index"] ?? hostPacketIndex;
+    const packetInfo = packet?.["packet.info"] || {};
+    const sourceIp =
+        packetInfo?.["ip"]?.["ip.src.addr"] ||
+        packetInfo?.["ip"]?.["source.ip"] ||
+        host ||
+        "Unknown";
+    const packetIndex = packetInfo?.["index"] ?? hostPacketIndex;
     let candidate = `${sourceIp}:${packetIndex}`;
     if (!existingKeys.has(candidate)) return candidate;
 
@@ -82,30 +86,30 @@ function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
 }
 
 function buildPacketStub(packet, packetKey, host, hostPacketIndex) {
-    const packetInfo = isObject(packet?.["Packet Info"])
-        ? packet["Packet Info"]
+    const packetInfo = isObject(packet?.["packet.info"])
+        ? packet["packet.info"]
         : {};
-    const rawData = isObject(packetInfo["Raw data"]) ? packetInfo["Raw data"] : {};
-    const payload = isObject(rawData["Payload"]) ? rawData["Payload"] : {};
+    const rawData = isObject(packetInfo["raw.data"]) ? packetInfo["raw.data"] : {};
+    const payload = isObject(rawData["payload"]) ? rawData["payload"] : {};
     const payloadHex =
-        typeof payload["Hex Encoded"] === "string" ? payload["Hex Encoded"] : "";
+        typeof payload["hex.encoded"] === "string" ? payload["hex.encoded"] : "";
     const payloadBytes = payloadHex
         ? Math.floor(payloadHex.replace(/\s+/g, "").length / 2)
         : 0;
 
     return {
-        "Packet Info": {
+        "packet.info": {
             ...packetInfo,
-            "Raw data": {
+            "raw.data": {
                 ...rawData,
-                Payload: {
+                payload: {
                     ...payload,
-                    "Hex Encoded": "",
+                    "hex.encoded": "",
                 },
-                "Payload Length": payloadBytes,
+                "payload.len": payloadBytes,
             },
         },
-        "Extra Info": isObject(packet?.["Extra Info"]) ? packet["Extra Info"] : {},
+        "extra.info": isObject(packet?.["extra.info"]) ? packet["extra.info"] : {},
         __packetKey: packetKey,
         __host: host,
         __hostPacketIndex: hostPacketIndex,
@@ -114,17 +118,34 @@ function buildPacketStub(packet, packetKey, host, hostPacketIndex) {
 }
 
 function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
-    const packetInfo = isObject(packet?.["Packet Info"]) ? packet["Packet Info"] : {};
-    const extraInfo = isObject(packet?.["Extra Info"]) ? packet["Extra Info"] : {};
-    const transportName = String(packetInfo?.["Protocol"] || "Unknown").toUpperCase();
+    const packetInfo = isObject(packet?.["packet.info"]) ? packet["packet.info"] : {};
+    const extraInfo = isObject(packet?.["extra.info"]) ? packet["extra.info"] : {};
+    const transportName = String(packetInfo?.["protocol"] || "unknown").toUpperCase();
     const transportData =
         isObject(packetInfo[transportName]) ? packetInfo[transportName] :
             isObject(packetInfo[transportName.toLowerCase()]) ? packetInfo[transportName.toLowerCase()] :
                 {};
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || host || "Unknown";
-    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
-    const sourcePort = transportData?.["Source port"] ?? "";
-    const destinationPort = transportData?.["Destination port"] ?? "";
+    const sourceIp =
+        packetInfo?.["ip"]?.["ip.src.addr"] ||
+        packetInfo?.["ip"]?.["source.ip"] ||
+        host ||
+        "Unknown";
+    const destinationIp =
+        packetInfo?.["ip"]?.["ip.dst.addr"] ||
+        packetInfo?.["ip"]?.["destination.ip"] ||
+        "";
+    const sourcePort =
+        transportData?.["tcp.src.port"] ??
+        transportData?.["udp.src.port"] ??
+        transportData?.["sctp.src.port"] ??
+        transportData?.["source.port"] ??
+        "";
+    const destinationPort =
+        transportData?.["tcp.dst.port"] ??
+        transportData?.["udp.dst.port"] ??
+        transportData?.["sctp.dst.port"] ??
+        transportData?.["destination.port"] ??
+        "";
     const hasPorts = sourcePort !== "" && sourcePort !== undefined && sourcePort !== null &&
         destinationPort !== "" && destinationPort !== undefined && destinationPort !== null;
     const endpointA = hasPorts ? `${sourceIp}:${sourcePort}` : sourceIp;
@@ -132,9 +153,8 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
     const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
     const streamKey = `${transportName}|${firstEndpoint}|${secondEndpoint}`;
     const appProtocol =
-        extraInfo?.["Traits"]?.["Network Data"]?.["Port Protocol"] ||
-        extraInfo?.["Traits"]?.["Network Data"]?.["Port Protcol"] ||
-        packetInfo?.["Decoded Protocols"]?.[0] ||
+        extraInfo?.["traits"]?.["network.data"]?.["port.protocol"] ||
+        packetInfo?.["decoded.protocols"]?.[0] ||
         transportName ||
         "Unknown";
 
@@ -142,14 +162,14 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
         packetKey,
         host,
         pktIdx: hostPacketIndex,
-        idx: Number(packetInfo?.["Index"]) || hostPacketIndex,
+        idx: Number(packetInfo?.["index"]) || hostPacketIndex,
         srcIp: sourceIp,
         dstIp: destinationIp,
         srcPort: sourcePort,
         dstPort: destinationPort,
         transport: transportName,
         appProto: String(appProtocol),
-        payloadLength: Number(packetInfo?.["Raw data"]?.["Payload Length"]) || 0,
+        payloadLength: Number(packetInfo?.["raw.data"]?.["payload.len"]) || 0,
         streamKey,
     };
 }
@@ -241,7 +261,7 @@ async function buildStoreFromSource(sourcePath) {
         }
 
         const packetPathInfo = getPacketPathInfo(pathKeys);
-        if (!packetPathInfo || !isObject(value) || !isObject(value["Packet Info"])) {
+        if (!packetPathInfo || !isObject(value) || !isObject(value["packet.info"])) {
             return;
         }
 
@@ -298,8 +318,8 @@ async function buildStoreFromSource(sourcePath) {
         packetCache: new Map(),
         listEntries,
         captureData: {
-            Host: hostObject,
-            "Final Summary": finalSummary,
+            host: hostObject,
+            "final.summary": finalSummary,
         },
         sessionState,
     };
@@ -355,7 +375,7 @@ async function buildStoreFromJsonText(jsonText) {
         }
 
         const packetPathInfo = getPacketPathInfo(pathKeys);
-        if (!packetPathInfo || !isObject(value) || !isObject(value["Packet Info"])) {
+        if (!packetPathInfo || !isObject(value) || !isObject(value["packet.info"])) {
             return;
         }
 
@@ -407,8 +427,8 @@ async function buildStoreFromJsonText(jsonText) {
         packetCache: new Map(),
         listEntries,
         captureData: {
-            Host: hostObject,
-            "Final Summary": finalSummary,
+            host: hostObject,
+            "final.summary": finalSummary,
         },
         sessionState,
     };
@@ -498,8 +518,8 @@ async function buildMaterializedCaptureData() {
     }
 
     return {
-        Host: hostObject,
-        "Final Summary": store.captureData?.["Final Summary"] || "",
+        host: hostObject,
+        "final.summary": store.captureData?.["final.summary"] || "",
     };
 }
 

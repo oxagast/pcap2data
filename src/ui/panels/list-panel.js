@@ -29,7 +29,7 @@ function isProtocolLikeFieldName(fieldName, fieldValue) {
 function collectDecodedProtocolNames(packetInfo) {
   const decodedNames = new Set();
   const packetDecodedValues = [
-    packetInfo?.["Decoded Protocols"],
+    packetInfo?.["packet.decoded_protocols"] ?? packetInfo?.["Decoded Protocols"],
     packetInfo?.["packet.decoded_protocols"],
   ];
   packetDecodedValues.forEach((packetDecoded) => {
@@ -61,7 +61,7 @@ function collectDecodedProtocolNames(packetInfo) {
 }
 
 function inferApplicationProtocol(packetInfo, extraInfo) {
-  const packetProtocol = String(packetInfo?.["Protocol"] || "").trim().toLowerCase();
+  const packetProtocol = String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").trim().toLowerCase();
   if (packetProtocol === "undecodable") {
     return "Unknown protocol";
   }
@@ -129,7 +129,7 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
 }
 
 function getPacketPayloadLength(packetInfo) {
-  const payloadLength = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
   return Math.floor(payloadLength);
 }
@@ -347,7 +347,7 @@ function createListPanel({
         setPacketsForHost(getFilteredPackets());
       } else {
         const capturedPackets = getCapturedPackets();
-        const hostPackets = capturedPackets["Host"][row.host];
+        const hostPackets = capturedPackets["host"][row.host];
         setPacketsForHost(hostPackets);
         setIndex(row.pktIdx);
         setActivePacketCursor(row.pktIdx);
@@ -365,7 +365,9 @@ function createListPanel({
         showAllData();
         infoPanel(hostPackets);
         const hexPayload =
-          hostPackets[row.pktIdx]?.["Packet Info"]?.["Raw data"]?.[
+          hostPackets[row.pktIdx]?.["packet.info"]?.["Raw data"]?.[
+          "Payload"
+          ]?.["payload.hex"] ?? hostPackets[row.pktIdx]?.["packet.info"]?.["Raw data"]?.[
           "Payload"
           ]?.["Hex Encoded"];
         if (hexPayload) popHexGrid(hexPayload);
@@ -636,12 +638,12 @@ function createListPanel({
       clearVirtualListState();
       content.replaceChildren();
       const capturedPackets = getCapturedPackets();
-      if (!capturedPackets || !capturedPackets["Host"]) {
+      if (!capturedPackets || !capturedPackets["host"]) {
         content.textContent = "No packet data available.";
         return;
       }
 
-      const hosts = Object.keys(capturedPackets["Host"]).sort();
+      const hosts = Object.keys(capturedPackets["host"]).sort();
       const lc = filterText ? filterText.toLowerCase() : "";
       const visibleColumns = getVisibleColumns();
       const activeGroupByStream =
@@ -817,12 +819,22 @@ function createListPanel({
       const rows = [];
 
       const getStreamKey = (packetInfo) => {
-        const transportName = packetInfo?.["Protocol"] || "Unknown";
+        const transportName = packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "Unknown";
         const transportData = packetInfo?.[transportName] || {};
-        const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
-        const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
-        const sourcePort = transportData?.["Source port"] ?? "";
-        const destinationPort = transportData?.["Destination port"] ?? "";
+        const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "";
+        const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "";
+        const sourcePort =
+          transportData?.["tcp.src.port"] ??
+          transportData?.["udp.src.port"] ??
+          transportData?.["sctp.src.port"] ??
+          transportData?.["Source port"] ??
+          "";
+        const destinationPort =
+          transportData?.["tcp.dst.port"] ??
+          transportData?.["udp.dst.port"] ??
+          transportData?.["sctp.dst.port"] ??
+          transportData?.["Destination port"] ??
+          "";
 
         const endpointA = `${sourceIp}:${sourcePort}`;
         const endpointB = `${destinationIp}:${destinationPort}`;
@@ -831,24 +843,34 @@ function createListPanel({
       };
 
       for (const host of hosts) {
-        const packets = capturedPackets["Host"][host];
+        const packets = capturedPackets["host"][host];
         if (!Array.isArray(packets)) continue;
 
         packets.forEach((pkt, pktIdx) => {
-          const pi = pkt?.["Packet Info"];
-          const ei = pkt?.["Extra Info"];
+          const pi = pkt?.["packet.info"];
+          const ei = pkt?.["extra.info"];
           if (!pi) return;
 
-          const idx = pi["Index"] ?? pktIdx + 1;
-          const srcIp = pi?.["IP"]?.["Source IP"] ?? "";
-          const dstIp = pi?.["IP"]?.["Destination IP"] ?? "";
-          const transport = pi["Protocol"] || "TCP";
+          const idx = pi["index"] ?? pi["Index"] ?? pktIdx + 1;
+          const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"] ?? "";
+          const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"] ?? "";
+          const transport = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
           const tpData = pi[transport] || null;
-          const srcPort = tpData?.["Source port"] ?? "";
-          const dstPort = tpData?.["Destination port"] ?? "";
+          const srcPort =
+            tpData?.["tcp.src.port"] ??
+            tpData?.["udp.src.port"] ??
+            tpData?.["sctp.src.port"] ??
+            tpData?.["Source port"] ??
+            "";
+          const dstPort =
+            tpData?.["tcp.dst.port"] ??
+            tpData?.["udp.dst.port"] ??
+            tpData?.["sctp.dst.port"] ??
+            tpData?.["Destination port"] ??
+            "";
           const appProto = inferApplicationProtocol(pi, ei);
           const payloadLength = getPacketPayloadLength(pi);
-          const packetKey = srcIp + ":" + pi["Index"];
+          const packetKey = srcIp + ":" + (pi["index"] ?? pi["Index"] ?? pktIdx + 1);
           const isBookmarked = getBookmarkList().includes(packetKey);
           const streamKey = getStreamKey(pi);
 
@@ -881,7 +903,7 @@ function createListPanel({
             pktIdx,
             streamKey,
             isBookmarked,
-            packetKey: srcIp + ":" + pi["Index"],
+            packetKey: srcIp + ":" + (pi["index"] ?? pi["Index"] ?? pktIdx + 1),
           });
         });
       }
@@ -1110,7 +1132,7 @@ function createListPanel({
         renderVirtualRows();
       }
     }
-    if (getCapturedPackets() && Object.keys(getCapturedPackets()["Host"]).length > 1) {
+    if (getCapturedPackets() && Object.keys(getCapturedPackets()["host"]).length > 1) {
       buildTable(searchEl.value);
     }
 

@@ -110,8 +110,8 @@ if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function
 
 
 const SESSION_FILE_SCHEMA_VERSION = 1;
-const SESSION_CAPTURE_KEY = "Capture Data";
-const SESSION_STATE_KEY = "Session State";
+const SESSION_CAPTURE_KEY = "capture.data";
+const SESSION_STATE_KEY = "session.state";
 const MAIN_TAB_SUMMARY = "summary";
 const MAIN_TAB_DATA = "data";
 const MAIN_TAB_STATS = "stats";
@@ -1309,7 +1309,7 @@ function canPersistSessionNow() {
   if (!isFileLoaded) return false;
   if (backendProgressState.processing) return false;
   if (!capturedPackets || typeof capturedPackets !== "object") return false;
-  const hosts = capturedPackets["Host"];
+  const hosts = capturedPackets["host"];
   if (!hosts || typeof hosts !== "object") return false;
   return Object.keys(hosts).some((host) => {
     const hostPackets = hosts[host];
@@ -1483,7 +1483,7 @@ function normalizeBackendJsonDataPayload(rawPayload) {
 
 function countCaptureDataPackets(captureData) {
   if (!captureData || typeof captureData !== "object") return 0;
-  const hostMap = captureData["Host"];
+  const hostMap = captureData["host"];
   if (!hostMap || typeof hostMap !== "object") return 0;
   return Object.values(hostMap).reduce((total, hostPackets) => {
     if (!Array.isArray(hostPackets)) return total;
@@ -1730,12 +1730,14 @@ document.getElementById("summary-btn").addEventListener("click", () => {
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
   const packetTimes = [];
-  if (!capturedPackets["Host"]) return null;
-  for (const host of Object.keys(capturedPackets["Host"])) {
-    const hostPackets = capturedPackets["Host"][host];
+  if (!capturedPackets["host"]) return null;
+  for (const host of Object.keys(capturedPackets["host"])) {
+    const hostPackets = capturedPackets["host"][host];
     if (!Array.isArray(hostPackets)) continue;
     hostPackets.forEach((packet) => {
-      const packetTime = packet?.["Packet Info"]?.["Packet Timestamp"];
+      const packetTime =
+        packet?.["packet.info"]?.["packet.timestamp"] ??
+        packet?.["packet.info"]?.["Packet Timestamp"];
       if (packetTime) {
         packetTimes.push(packetTime);
       }
@@ -2131,10 +2133,10 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
   if (packet && typeof packet.__packetKey === "string" && packet.__packetKey) {
     return packet.__packetKey;
   }
-  const packetInfo = packet?.["Packet Info"];
+  const packetInfo = packet?.["packet.info"];
   const sourceIp =
-    packetInfo?.["IP"]?.["Source IP"] || fallbackHost || "Unknown";
-  const packetIndex = packetInfo?.["Index"] ?? fallbackIndex;
+    (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || fallbackHost || "Unknown";
+  const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? fallbackIndex;
   return sourceIp + ":" + packetIndex;
 }
 
@@ -2233,7 +2235,8 @@ async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0
   if (!packetKey) return packet;
 
   const payloadHex =
-    packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
   if (typeof payloadHex === "string" && payloadHex.length > 0) {
     cacheHydratedPacket(packetKey, packet);
     return packet;
@@ -2281,8 +2284,8 @@ function chooseTargetHostFromPacketMatches(matches) {
   const ipHitCounts = new Map();
 
   matches.forEach((packet) => {
-    const sourceIp = packet?.["Packet Info"]?.["IP"]?.["Source IP"];
-    const destinationIp = packet?.["Packet Info"]?.["IP"]?.["Destination IP"];
+    const sourceIp = packet?.["packet.info"]?.["IP"]?.["ip.src.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Source IP"];
+    const destinationIp = packet?.["packet.info"]?.["IP"]?.["ip.dst.addr"] ?? packet?.["packet.info"]?.["IP"]?.["Destination IP"];
     [sourceIp, destinationIp].forEach((ipValue) => {
       if (typeof ipValue !== "string") return;
       const normalizedIp = ipValue.trim();
@@ -2361,8 +2364,8 @@ function getAllPacketKeysForFiltering() {
   }
 
   const hostMap =
-    capturedPackets && typeof capturedPackets["Host"] === "object"
-      ? capturedPackets["Host"]
+    capturedPackets && typeof capturedPackets["host"] === "object"
+      ? capturedPackets["host"]
       : {};
   const packetKeys = [];
   Object.keys(hostMap).forEach((host) => {
@@ -2463,16 +2466,16 @@ function rebuildTcpStreamFilterIndexes() {
   outOfOrderList = [];
 
   const hostMap =
-    capturedPackets && typeof capturedPackets["Host"] === "object"
-      ? capturedPackets["Host"]
+    capturedPackets && typeof capturedPackets["host"] === "object"
+      ? capturedPackets["host"]
       : {};
   const streamPacketsByKey = new Map();
 
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
     hostPackets.forEach((packet) => {
-      const packetInfo = packet?.["Packet Info"];
-      const protocol = String(packetInfo?.["Protocol"] || "").toUpperCase();
+      const packetInfo = packet?.["packet.info"];
+      const protocol = String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").toUpperCase();
       if (protocol !== "TCP") return;
 
       const streamKey = buildBidirectionalStreamKey(packetInfo);
@@ -2574,8 +2577,8 @@ function evaluateOutOfOrderFilterExpression(expression) {
 
 function getAllPacketsForHostNavigation() {
   const hostMap =
-    capturedPackets && typeof capturedPackets["Host"] === "object"
-      ? capturedPackets["Host"]
+    capturedPackets && typeof capturedPackets["host"] === "object"
+      ? capturedPackets["host"]
       : {};
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
@@ -2592,14 +2595,16 @@ function getPacketsForSelectedHost(selectedHost) {
   if (isBookmarkedSelection(selectedHost)) {
     return getBookmarkedPacketsForHostNavigation();
   }
-  const hostPackets = Array.isArray(capturedPackets?.["Host"]?.[selectedHost])
-    ? capturedPackets["Host"][selectedHost]
+  const hostPackets = Array.isArray(capturedPackets?.["host"]?.[selectedHost])
+    ? capturedPackets["host"][selectedHost]
     : [];
   return sortPacketsByOwnStreamOrder([...hostPackets]);
 }
 
 function parsePacketTimestampMs(packet) {
-  const packetTimestamp = packet?.["Packet Info"]?.["Packet Timestamp"];
+  const packetTimestamp =
+    packet?.["packet.info"]?.["packet.timestamp"] ??
+    packet?.["packet.info"]?.["Packet Timestamp"];
   if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
     return null;
   }
@@ -2608,12 +2613,17 @@ function parsePacketTimestampMs(packet) {
 }
 
 function parsePacketProcessedNumber(packet) {
-  const processedRaw = Number(packet?.["Packet Info"]?.["Packet Processed"]);
+  const processedRaw = Number(
+    packet?.["packet.info"]?.["packet.processed"] ??
+      packet?.["packet.info"]?.["Packet Processed"],
+  );
   return Number.isFinite(processedRaw) ? processedRaw : null;
 }
 
 function parsePacketIndexNumber(packet) {
-  const packetIndexRaw = Number(packet?.["Packet Info"]?.["Index"]);
+  const packetIndexRaw = Number(
+    packet?.["packet.info"]?.["index"] ?? packet?.["packet.info"]?.["Index"],
+  );
   return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
 }
 
@@ -2651,13 +2661,21 @@ function comparePacketsChronologically(
 }
 
 function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
-  const packetInfo = packet?.["Packet Info"] || {};
-  const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
-  const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
-  const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
+  const packetInfo = packet?.["packet.info"] || {};
+  const protocol = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase();
+  const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "";
+  const destinationIp = (packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]) || "";
   const transport = packetInfo[protocol] || packetInfo[protocol.toLowerCase()] || {};
-  const sourcePort = transport?.["Source port"];
-  const destinationPort = transport?.["Destination port"];
+  const sourcePort =
+    transport?.["tcp.src.port"] ??
+    transport?.["udp.src.port"] ??
+    transport?.["sctp.src.port"] ??
+    transport?.["Source port"];
+  const destinationPort =
+    transport?.["tcp.dst.port"] ??
+    transport?.["udp.dst.port"] ??
+    transport?.["sctp.dst.port"] ??
+    transport?.["Destination port"];
   const hasPorts =
     sourcePort !== undefined &&
     sourcePort !== null &&
@@ -2669,7 +2687,7 @@ function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
   const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
   const streamKey = `${protocol}|${firstEndpoint}|${secondEndpoint}`;
 
-  const packetIndexRaw = Number(packetInfo?.["Index"]);
+  const packetIndexRaw = Number(packetInfo?.["index"] ?? packetInfo?.["Index"]);
   const packetIndex = Number.isFinite(packetIndexRaw)
     ? packetIndexRaw
     : fallbackOrder;
@@ -3815,8 +3833,8 @@ function normalizeLoadedSessionPayload(parsedPayload) {
   if (
     !captureData ||
     typeof captureData !== "object" ||
-    !captureData["Host"] ||
-    typeof captureData["Host"] !== "object"
+    !captureData["host"] ||
+    typeof captureData["host"] !== "object"
   ) {
     return null;
   }
@@ -3853,14 +3871,14 @@ async function finalizeLoadedCapture(sessionState) {
   packetStubByKey.clear();
   hydratedPacketCache.clear();
   clearStreamPacketHydrationCache();
-  for (const host in capturedPackets["Host"]) {
+  for (const host in capturedPackets["host"]) {
     hostsList.push(host);
     const newhost = document.createElement("option");
     newhost.textContent = host;
     newhost.value = host;
     targetHostsDropdown.appendChild(newhost);
-    const hostPackets = Array.isArray(capturedPackets["Host"][host])
-      ? capturedPackets["Host"][host]
+    const hostPackets = Array.isArray(capturedPackets["host"][host])
+      ? capturedPackets["host"][host]
       : [];
     hostPackets.forEach((packet, packetIndex) => {
       const packetKey = getPacketKey(packet, host, packetIndex);
@@ -4153,7 +4171,7 @@ async function exportSessionToFile() {
 }
 
 async function maybePromptSaveSessionOnExit() {
-  if (!isFileLoaded || !capturedPackets || !capturedPackets["Host"]) {
+  if (!isFileLoaded || !capturedPackets || !capturedPackets["host"]) {
     return "discard";
   }
   const dialogEl = document.getElementById("save-session-dialog");
@@ -4311,7 +4329,7 @@ function restoreSessionState(sessionState) {
     (
       isAllHostsSelection(selectedHost) ||
       isBookmarkedSelection(selectedHost) ||
-      capturedPackets?.["Host"]?.[selectedHost]
+      capturedPackets?.["host"]?.[selectedHost]
     )
   ) {
     const targetHostsEl = document.getElementById("target_hosts");
@@ -4454,14 +4472,14 @@ async function processCapturePath(capturePath, options = {}) {
 
   if (incrementalUpdate && isFileLoaded) {
     isCaptureStoreBackedCapture = true;
-    capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+    capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
     jsonCapture = "[lazy-capture-store]";
 
     const targetHostsDropdown = getCachedElement("target_hosts");
     const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
     const hostMap =
-      capturedPackets && typeof capturedPackets["Host"] === "object"
-        ? capturedPackets["Host"]
+      capturedPackets && typeof capturedPackets["host"] === "object"
+        ? capturedPackets["host"]
         : {};
 
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
@@ -4530,7 +4548,7 @@ async function processCapturePath(capturePath, options = {}) {
     return;
   }
 
-  capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+  capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
   isCaptureStoreBackedCapture = true;
   jsonCapture = "[lazy-capture-store]";
   fileLoaded(true);
@@ -4568,14 +4586,14 @@ async function processCaptureData(captureData, options = {}) {
 
   if (incrementalUpdate && isFileLoaded) {
     isCaptureStoreBackedCapture = true;
-    capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+    capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
     jsonCapture = "[lazy-capture-store]";
 
     const targetHostsDropdown = getCachedElement("target_hosts");
     const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
     const hostMap =
-      capturedPackets && typeof capturedPackets["Host"] === "object"
-        ? capturedPackets["Host"]
+      capturedPackets && typeof capturedPackets["host"] === "object"
+        ? capturedPackets["host"]
         : {};
 
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
@@ -4644,7 +4662,7 @@ async function processCaptureData(captureData, options = {}) {
     return;
   }
 
-  capturedPackets = loadResult.captureData || { Host: {}, "Final Summary": "" };
+  capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
   isCaptureStoreBackedCapture = true;
   jsonCapture = "[lazy-capture-store]";
   fileLoaded(true);
@@ -5380,13 +5398,13 @@ async function getCurrentPacketCompressionHint() {
   // packet payload hex is for brotli and it has to be the next packet in the stream
   // get the packet num in the current stream
 
-  //const packetPayloadHex = contextPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]["Hex Encoded"];
+  //const packetPayloadHex = contextPacket?.["packet.info"]?.["Raw data"]?.["Payload"]["Hex Encoded"];
   const encoding = String(httpData?.["Content-Encoding"] || "").toLowerCase();
   if (encoding.includes("br") || encoding.includes("brotli")) return "brotli";
   if (encoding.includes("gzip") || encoding.includes("gz")) return "gzip";
   if (encoding.includes("deflate") || encoding.includes("zlib")) return "deflate";
 
-  const extraInfoData = contextPacket?.["Extra Info"];
+  const extraInfoData = contextPacket?.["extra.info"];
   const dataTypes = Array.isArray(extraInfoData?.["Data Types"])
     ? extraInfoData["Data Types"]
     : [];
@@ -7334,7 +7352,7 @@ function getPacketFromListContextTarget(target, offset = 0) {
   const host = String(row.dataset.host || "").trim();
   const packetIndex = Number.parseInt(row.dataset.pktIdx ?? "-1", 10) + offset;
   if (!host || !Number.isInteger(packetIndex) || packetIndex < 0) return null;
-  const hostPackets = capturedPackets?.["Host"]?.[host];
+  const hostPackets = capturedPackets?.["host"]?.[host];
   if (!Array.isArray(hostPackets)) return null;
   return hostPackets[packetIndex] || null;
 }
@@ -7481,11 +7499,11 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
 
   const currentPkt = p?.[index];
   if (currentPkt) {
-    const wireProto = String(currentPkt?.["Packet Info"]?.["Protocol"] ?? "").toLowerCase().trim();
-    const appProto = String(currentPkt?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["Port Protcol"] ?? "").toLowerCase().trim();
+    const wireProto = String(currentPkt?.["packet.info"]?.["packet.proto"] ?? currentPkt?.["packet.info"]?.["Protocol"] ?? "").toLowerCase().trim();
+    const appProto = String(currentPkt?.["extra.info"]?.["Traits"]?.["Network Data"]?.["Port Protcol"] ?? "").toLowerCase().trim();
     const safeWire = wireProto ? sanitizeFilterTerm(wireProto) : "";
     const safeApp = appProto && appProto !== "unknown" ? sanitizeFilterTerm(appProto) : "";
-    const safeLink = String(currentPkt?.["Packet Info"]?.["link.proto"] ?? "").toLowerCase().trim();
+    const safeLink = String(currentPkt?.["packet.info"]?.["link.proto"] ?? "").toLowerCase().trim();
     if (safeLink) {
       filterQueries.linkProtocol = `link.proto: ${safeLink}`;
     }
@@ -8415,7 +8433,7 @@ function getActivePacketCursor() {
  * Used to decide whether to show the stream-loading overlay.
  */
 function getTotalPacketCount() {
-  const hosts = capturedPackets?.["Host"];
+  const hosts = capturedPackets?.["host"];
   if (!hosts || typeof hosts !== "object") return 0;
   return Object.values(hosts).reduce(
     (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
@@ -8497,14 +8515,24 @@ async function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
 }
 
 function getStreamTupleForPacket(packet) {
-  const packetInfo = packet?.["Packet Info"];
+  const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
-  const srcIp = packetInfo["IP"]?.["Source IP"];
-  const dstIp = packetInfo["IP"]?.["Destination IP"];
-  const protocol = packetInfo["Protocol"] || "TCP";
+  const srcIp = packetInfo["IP"]?.["ip.src.addr"] ?? packetInfo["IP"]?.["Source IP"];
+  const dstIp = packetInfo["IP"]?.["ip.dst.addr"] ?? packetInfo["IP"]?.["Destination IP"];
+  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
   const transportData = packetInfo[protocol] || {};
-  const srcPort = transportData["Source port"] ?? null;
-  const dstPort = transportData["Destination port"] ?? null;
+  const srcPort =
+    transportData["tcp.src.port"] ??
+    transportData["udp.src.port"] ??
+    transportData["sctp.src.port"] ??
+    transportData["Source port"] ??
+    null;
+  const dstPort =
+    transportData["tcp.dst.port"] ??
+    transportData["udp.dst.port"] ??
+    transportData["sctp.dst.port"] ??
+    transportData["Destination port"] ??
+    null;
   if (!srcIp || !dstIp) return null;
   return { srcIp, srcPort, dstIp, dstPort, protocol };
 }
@@ -8532,21 +8560,31 @@ function getFollowStreamPackets(packet = null) {
   const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
   const hasPorts = srcPort !== null && dstPort !== null;
   const matches = [];
-  const hosts = capturedPackets?.["Host"];
+  const hosts = capturedPackets?.["host"];
   if (!hosts || typeof hosts !== "object") return [];
   for (const host of Object.values(hosts)) {
     if (!Array.isArray(host)) continue;
     for (const pkt of host) {
-      const pi = pkt?.["Packet Info"];
+      const pi = pkt?.["packet.info"];
       if (!pi) continue;
-      const pProto = pi["Protocol"] || "TCP";
+      const pProto = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
       if (pProto !== protocol) continue;
-      const pSrcIp = pi["IP"]?.["Source IP"];
-      const pDstIp = pi["IP"]?.["Destination IP"];
+      const pSrcIp = pi["IP"]?.["ip.src.addr"] ?? pi["IP"]?.["Source IP"];
+      const pDstIp = pi["IP"]?.["ip.dst.addr"] ?? pi["IP"]?.["Destination IP"];
       if (!pSrcIp || !pDstIp) continue;
       const pTransport = pi[pProto] || {};
-      const pSrcPort = pTransport["Source port"] ?? null;
-      const pDstPort = pTransport["Destination port"] ?? null;
+      const pSrcPort =
+        pTransport["tcp.src.port"] ??
+        pTransport["udp.src.port"] ??
+        pTransport["sctp.src.port"] ??
+        pTransport["Source port"] ??
+        null;
+      const pDstPort =
+        pTransport["tcp.dst.port"] ??
+        pTransport["udp.dst.port"] ??
+        pTransport["sctp.dst.port"] ??
+        pTransport["Destination port"] ??
+        null;
       const forwardMatch =
         pSrcIp === srcIp &&
         pDstIp === dstIp &&
@@ -8575,14 +8613,14 @@ async function getFollowStreamPacketsAsync(packet = null) {
   const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
   const hasPorts = srcPort !== null && dstPort !== null;
   const matches = [];
-  const hosts = capturedPackets?.["Host"];
+  const hosts = capturedPackets?.["host"];
   if (!hosts || typeof hosts !== "object") return [];
 
   let scannedPacketCount = 0;
   for (const host of Object.values(hosts)) {
     if (!Array.isArray(host)) continue;
     for (const pkt of host) {
-      const pi = pkt?.["Packet Info"];
+      const pi = pkt?.["packet.info"];
       if (!pi) {
         scannedPacketCount += 1;
         if (scannedPacketCount % STREAM_ASYNC_PACKET_YIELD_INTERVAL === 0) {
@@ -8591,14 +8629,24 @@ async function getFollowStreamPacketsAsync(packet = null) {
         continue;
       }
 
-      const pProto = pi["Protocol"] || "TCP";
+      const pProto = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
       if (pProto === protocol) {
-        const pSrcIp = pi["IP"]?.["Source IP"];
-        const pDstIp = pi["IP"]?.["Destination IP"];
+        const pSrcIp = pi["IP"]?.["ip.src.addr"] ?? pi["IP"]?.["Source IP"];
+        const pDstIp = pi["IP"]?.["ip.dst.addr"] ?? pi["IP"]?.["Destination IP"];
         if (pSrcIp && pDstIp) {
           const pTransport = pi[pProto] || {};
-          const pSrcPort = pTransport["Source port"] ?? null;
-          const pDstPort = pTransport["Destination port"] ?? null;
+          const pSrcPort =
+            pTransport["tcp.src.port"] ??
+            pTransport["udp.src.port"] ??
+            pTransport["sctp.src.port"] ??
+            pTransport["Source port"] ??
+            null;
+          const pDstPort =
+            pTransport["tcp.dst.port"] ??
+            pTransport["udp.dst.port"] ??
+            pTransport["sctp.dst.port"] ??
+            pTransport["Destination port"] ??
+            null;
           const forwardMatch =
             pSrcIp === srcIp &&
             pDstIp === dstIp &&
@@ -8636,7 +8684,8 @@ function buildStreamHex(streamPackets) {
   let combined = "";
   for (const pkt of streamPackets) {
     const payloadHex =
-      pkt?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+      pkt?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+      pkt?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
     if (typeof payloadHex === "string" && payloadHex.length > 0) {
       combined += payloadHex;
     }
@@ -8650,7 +8699,8 @@ async function buildStreamHexAsync(streamPackets) {
   let scanned = 0;
   for (const pkt of streamPackets) {
     const payloadHex =
-      pkt?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+      pkt?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+      pkt?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
     if (typeof payloadHex === "string" && payloadHex.length > 0) {
       parts.push(payloadHex);
     }
@@ -8674,7 +8724,8 @@ function bytesToHexString(bytes) {
 
 function getPacketPayloadHex(packet) {
   const payloadHex =
-    packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
+    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
@@ -8689,20 +8740,30 @@ function getPacketPayloadBytes(packet) {
 }
 
 function getPacketTransportData(packet) {
-  const packetInfo = packet?.["Packet Info"];
+  const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
-  const protocol = packetInfo["Protocol"] || "TCP";
+  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
   return packetInfo[protocol] || null;
 }
 
 function buildBidirectionalStreamKey(packetInfo) {
   if (!packetInfo || typeof packetInfo !== "object") return "";
-  const transportName = String(packetInfo["Protocol"] || "Unknown");
+  const transportName = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "Unknown");
   const transportData = packetInfo[transportName] || {};
-  const sourceIp = packetInfo?.["IP"]?.["Source IP"] ?? "";
-  const destinationIp = packetInfo?.["IP"]?.["Destination IP"] ?? "";
-  const sourcePort = transportData?.["Source port"] ?? "";
-  const destinationPort = transportData?.["Destination port"] ?? "";
+  const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "";
+  const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "";
+  const sourcePort =
+    transportData?.["tcp.src.port"] ??
+    transportData?.["udp.src.port"] ??
+    transportData?.["sctp.src.port"] ??
+    transportData?.["Source port"] ??
+    "";
+  const destinationPort =
+    transportData?.["tcp.dst.port"] ??
+    transportData?.["udp.dst.port"] ??
+    transportData?.["sctp.dst.port"] ??
+    transportData?.["Destination port"] ??
+    "";
 
   const endpointA = `${sourceIp}:${sourcePort}`;
   const endpointB = `${destinationIp}:${destinationPort}`;
@@ -8725,7 +8786,7 @@ function parseTcpSequenceNumber(transportData) {
 }
 
 function getTcpSegmentLength(packetInfo, transportData) {
-  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
     ? payloadLenRaw
     : 0;
@@ -8785,16 +8846,16 @@ function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
 
   const streamStateByDirection = new Map();
   streamPackets.forEach((packet) => {
-    const packetInfo = packet?.["Packet Info"] || {};
-    const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+    const packetInfo = packet?.["packet.info"] || {};
+    const protocol = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase();
     const packetKey = getPacketKey(packet);
     if (!packetKey || protocol !== "TCP") return;
 
     const transportData = packetInfo["TCP"] || {};
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "";
-    const destinationIp = packetInfo?.["IP"]?.["Destination IP"] || "";
-    const sourcePort = transportData?.["Source port"] ?? "";
-    const destinationPort = transportData?.["Destination port"] ?? "";
+    const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "";
+    const destinationIp = (packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]) || "";
+    const sourcePort = transportData?.["tcp.src.port"] ?? transportData?.["Source port"] ?? "";
+    const destinationPort = transportData?.["tcp.dst.port"] ?? transportData?.["Destination port"] ?? "";
     const directionKey = `${sourceIp}:${sourcePort}>${destinationIp}:${destinationPort}`;
     const sequenceNumber = parseTcpSequenceNumber(transportData);
     const segmentLength = getTcpSegmentLength(packetInfo, transportData);
@@ -9446,9 +9507,9 @@ function extractFtpFileCandidates(streamPackets, contextPacket = null) {
     }
 
     if (ftpType === "response") {
-      const statusCode = String(ftpData["Status Code"] || "").trim();
+      const statusCode = String(ftpData["ftp.status_code"] ?? ftpData["Status Code"] ?? "").trim();
       if (statusCode === "227" || statusCode === "229") {
-        const passivePort = parseFtpPassiveModeDataPort(ftpData["Message"]);
+        const passivePort = parseFtpPassiveModeDataPort(ftpData["Message"] ?? ftpData["ftp.message"]);
         if (passivePort) candidateDataPorts.add(passivePort);
       }
     }
@@ -9477,16 +9538,16 @@ function extractFtpFileCandidates(streamPackets, contextPacket = null) {
   if (!clientIp || !serverIp) return [];
 
   const controlStreamKey = buildBidirectionalStreamKey(
-    (contextPacket || streamPackets[0])?.["Packet Info"] || {},
+    (contextPacket || streamPackets[0])?.["packet.info"] || {},
   );
   const allPackets = getAllPacketsForHostNavigation();
   const streamMap = new Map();
 
   allPackets.forEach((packet) => {
-    const packetInfo = packet?.["Packet Info"];
+    const packetInfo = packet?.["packet.info"];
     const tuple = getStreamTupleForPacket(packet);
     if (!packetInfo || !tuple) return;
-    if (String(packetInfo["Protocol"] || "").toUpperCase() !== "TCP") return;
+    if (String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase() !== "TCP") return;
 
     const hasSameEndpoints =
       (tuple.srcIp === clientIp && tuple.dstIp === serverIp) ||
@@ -9792,12 +9853,12 @@ function getActiveContextTextForNotesAndLlm(destination = "llm") {
 
 function buildPacketContextSummary(packet) {
   if (!packet) return "No packet context available.";
-  const info = packet["Packet Info"] || {};
+  const info = packet["packet.info"] || {};
   const parts = [];
-  const proto = info["Protocol"];
+  const proto = info["packet.proto"] ?? info["Protocol"];
   if (proto) parts.push(`Protocol: ${proto}`);
-  const src = info["Source IP"] || info["Source"];
-  const dst = info["Destination IP"] || info["Destination"];
+  const src = info["ip.src.addr"] || info["Source IP"] || info["Source"];
+  const dst = info["ip.dst.addr"] || info["Destination IP"] || info["Destination"];
   if (src) parts.push(`Source: ${src}`);
   if (dst) parts.push(`Destination: ${dst}`);
   const srcPort = info["Source Port"];
@@ -9806,7 +9867,7 @@ function buildPacketContextSummary(packet) {
   if (dstPort !== undefined) parts.push(`Destination Port: ${dstPort}`);
   const ts = info["Timestamp"] || info["timestamp"];
   if (ts) parts.push(`Timestamp: ${ts}`);
-  const decodedProtos = info["Decoded Protocols"];
+  const decodedProtos = info["packet.decoded_protocols"] ?? info["Decoded Protocols"];
   if (decodedProtos) parts.push(`Decoded Protocols: ${decodedProtos}`);
   return parts.length ? parts.join(", ") : "Packet context unavailable.";
 }
@@ -10128,8 +10189,8 @@ async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) 
 function getFollowStreamJson(streamPackets) {
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return "";
   const jsonArray = streamPackets.map((packet) => {
-    const packetInfo = packet?.["Packet Info"] || {};
-    const protocol = String(packetInfo["Protocol"] || "").toUpperCase();
+    const packetInfo = packet?.["packet.info"] || {};
+    const protocol = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase();
     const timestamp = parsePacketTimestampMs(packet);
     const payloadHex = getPacketPayloadHex(packet);
     return {
@@ -10216,7 +10277,7 @@ function setActivePacketCursor(nextIndex) {
 function getCurrentRawPayloadHex(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
   const payloadHex =
-    contextPacket?.["Packet Info"]?.["Raw data"]?.["Payload"]?.[
+    contextPacket?.["packet.info"]?.["Raw data"]?.["Payload"]?.[
     "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
@@ -10224,9 +10285,9 @@ function getCurrentRawPayloadHex(packet = null) {
 
 function getCurrentHttpData(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
-  const packetInfo = contextPacket?.["Packet Info"];
+  const packetInfo = contextPacket?.["packet.info"];
   if (!packetInfo) return null;
-  const protocol = packetInfo["Protocol"] || "TCP";
+  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
   return packetInfo[protocol]?.["HTTP"] || null;
 }
 
@@ -10305,7 +10366,8 @@ function sliceCompleteChunkedHttpBodyHex(bodyHex) {
 function getPacketIdentity(packet) {
   return (
     packet?.__packetKey ||
-    packet?.["Packet Info"]?.["Index"] ||
+    packet?.["packet.info"]?.["index"] ||
+    packet?.["packet.info"]?.["Index"] ||
     null
   );
 }
@@ -10562,7 +10624,7 @@ function saveJsonFromContextMenu() {
 
 async function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
-  writeLogEntry(`Logged raw packet JSON at index = ${contextPacket?.["Packet Info"]?.["Index"] || "unknown"} to Conv subtab`);
+  writeLogEntry(`Logged raw packet JSON at index = ${contextPacket?.["packet.info"]?.["index"] ?? contextPacket?.["packet.info"]?.["Index"] ?? "unknown"} to Conv subtab`);
 
   // turn it into json object
   const packet = contextPacket || {};
@@ -10573,7 +10635,7 @@ async function currentPacketToConvJson() {
   jsonContainer.innerHTML = "";
   const jsonLines = jsonString.split("\n");
   const currentPacketEl = document.getElementById("data-tools-packet-json-current-packet");
-  currentPacketEl.textContent = `Current packet at index: ${contextPacket?.["Packet Info"]?.["Index"] || "unknown"}`;
+  currentPacketEl.textContent = `Current packet at index: ${contextPacket?.["packet.info"]?.["index"] ?? contextPacket?.["packet.info"]?.["Index"] ?? "unknown"}`;
   jsonLines.forEach((line) => {
     const lineEl = document.createElement("pre");
     // this prevents blank line after each <pre> element
@@ -12063,8 +12125,8 @@ document
     }
     index = bookmarkPacketIndex;
     setActivePacketCursor(index);
-    p = capturedPackets["Host"][bookmarkHost];
-    activeBookmark["Host"] = bookmarkHost;
+    p = capturedPackets["host"][bookmarkHost];
+    activeBookmark["host"] = bookmarkHost;
     activeBookmark["Packet"] = index;
     hostFilterEl.value = bookmarkHost;
     if (bookmarkHost == undefined || index == undefined) {
@@ -12101,9 +12163,9 @@ function syncBookmarkDropdown(packetKey) {
 // function that returns the total number of packets in the entire capture
 function totalPacketCount() {
   let totalCount = 0;
-  if (capturedPackets["Host"] != undefined) {
-    for (const host in capturedPackets["Host"]) {
-      totalCount += capturedPackets["Host"][host].length;
+  if (capturedPackets["host"] != undefined) {
+    for (const host in capturedPackets["host"]) {
+      totalCount += capturedPackets["host"][host].length;
     }
   } else {
     return 0;
@@ -12123,10 +12185,10 @@ function updateCurrentPacketCounters(packetSet, options = {}) {
 
   const packetCursor = Number.isInteger(index) && index >= 0 ? index : null;
   const packetKeyForPacket = (packet, fallbackIndex = 0) => {
-    const packetInfo = packet?.["Packet Info"];
+    const packetInfo = packet?.["packet.info"];
     if (!packetInfo) return null;
-    const sourceIp = packetInfo?.["IP"]?.["Source IP"] || "Unknown";
-    const packetIndex = packetInfo?.["Index"] ?? fallbackIndex;
+    const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "Unknown";
+    const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? fallbackIndex;
     return sourceIp + ":" + packetIndex;
   };
 
@@ -12199,10 +12261,10 @@ function findPacketIndexByKey(packetSet, packetKey) {
   const sourceIp = packetKey.slice(0, separatorIndex);
   const packetIndexValue = packetKey.slice(separatorIndex + 1);
   return packetSet.findIndex((packet) => {
-    const packetInfo = packet?.["Packet Info"];
+    const packetInfo = packet?.["packet.info"];
     if (!packetInfo) return false;
-    const candidateSourceIp = packetInfo?.["IP"]?.["Source IP"];
-    const candidatePacketIndex = packetInfo?.["Index"];
+    const candidateSourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"];
+    const candidatePacketIndex = packetInfo?.["index"] ?? packetInfo?.["Index"];
     return (
       String(candidateSourceIp) === sourceIp &&
       String(candidatePacketIndex) === packetIndexValue
@@ -12283,7 +12345,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
   p = Array.isArray(packetSet) ? packetSet : [];
   if (navAction === "bookmark") {
     if (
-      navBookmark["Host"] == undefined ||
+      navBookmark["host"] == undefined ||
       navBookmark["Packet"] == undefined
     ) {
       statusUpdate("Status: Invalid bookmark data, reverting to first packet");
@@ -12296,12 +12358,12 @@ async function handlePacketNavigation(navAction, navBookmark) {
 
       statusUpdate(
         "Navigating to bookmark: " +
-        navBookmark["Host"] +
+        navBookmark["host"] +
         " packet " +
         navBookmark["Packet"],
       );
       writeLogEntry(
-        `Navigating bookmark host = ${navBookmark["Host"]} packet = ${navBookmark["Packet"]}`,
+        `Navigating bookmark host = ${navBookmark["host"]} packet = ${navBookmark["Packet"]}`,
       );
     }
   } else if (navAction === "next") {
@@ -12363,22 +12425,22 @@ async function handlePacketNavigation(navAction, navBookmark) {
       index,
     );
     packetSet[index] = activePacket;
-    const packetInfo = activePacket?.["Packet Info"];
+    const packetInfo = activePacket?.["packet.info"];
     if (!packetInfo) {
       statusUpdate("Status: Packet data is unavailable for this entry");
       doError("Packet data is unavailable for this entry!");
       return;
     }
-    currentIp = packetInfo?.["IP"]?.["Source IP"] || hostFilterEl.value || "Unknown";
+    currentIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || hostFilterEl.value || "Unknown";
     currentPacketKey =
-      currentIp + ":" + (packetInfo?.["Index"] ?? index);
+      currentIp + ":" + (packetInfo?.["index"] ?? packetInfo?.["Index"] ?? index);
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",
     });
     console.log(activePacket);
     const hexPayload =
-      packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] || "";
+      (packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"] ?? packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"]) || "";
     infoPanel(packetSet);
     popHexGrid(hexPayload);
     populateDataTypes(packetSet);
@@ -12387,7 +12449,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
 }
 
 function getPacketDataTypeItems(packetEntry) {
-  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const extraInfo = packetEntry?.["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
   const serverInfo = traits["Server Info"] || {};
   const networkData = traits["Network Data"] || {};
@@ -12418,8 +12480,8 @@ function normalizeProtocolToken(value) {
 }
 
 function collectPacketProtocolTokens(packetEntry) {
-  const packetInfo = packetEntry?.["Packet Info"] || {};
-  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const packetInfo = packetEntry?.["packet.info"] || {};
+  const extraInfo = packetEntry?.["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
   const networkData = traits["Network Data"] || {};
   const tokens = new Set();
@@ -12440,8 +12502,8 @@ function collectPacketProtocolTokens(packetEntry) {
     });
   };
 
-  pushToken(packetInfo["Protocol"]);
-  pushToken(packetInfo["Decoded Protocols"]);
+  pushToken(packetInfo["packet.proto"] ?? packetInfo["Protocol"]);
+  pushToken(packetInfo["packet.decoded_protocols"] ?? packetInfo["Decoded Protocols"]);
   pushToken(packetInfo["Link Control"]);
   pushToken(networkData["Port Protocol"]);
   pushToken(networkData["Port Protcol"]);
@@ -12468,11 +12530,11 @@ function getMatchedHiddenDataTypeProtocol(packetEntry) {
 }
 
 function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
-  const extraInfo = packetEntry?.["Extra Info"] || {};
+  const extraInfo = packetEntry?.["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
-  const packetInfo = packetEntry?.["Packet Info"] || {};
-  const payloadLenRaw = packetInfo?.["Raw data"]?.["Payload Length"];
+  const packetInfo = packetEntry?.["packet.info"] || {};
+  const payloadLenRaw = packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"];
   const payloadLength = Number(payloadLenRaw);
 
   if (Number.isFinite(payloadLength) && payloadLength <= 0) {
@@ -12576,7 +12638,7 @@ function populateDataTypes(p) {
   const packetEntry = p?.[index] || {};
   const visibilityState = getDataTypesVisibilityState(packetEntry);
   applyDataTypesVisibility(visibilityState);
-  const extraInfo = packetEntry["Extra Info"] || {};
+  const extraInfo = packetEntry["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
 
@@ -12743,7 +12805,7 @@ function infoPanel(pk) {
     return;
   }
   const p = pk[index];
-  if (!p || !p["Packet Info"]) {
+  if (!p || !p["packet.info"]) {
     statusUpdate("Status: Packet data is unavailable for this entry");
     doError("Packet data is unavailable for this entry!");
     return;
@@ -12751,14 +12813,14 @@ function infoPanel(pk) {
   updateCurrentPacketCounters(pk, {
     isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
   });
-  let packetInfoData = p["Packet Info"] || {};
-  let extraInfoData = p["Extra Info"] || {};
+  let packetInfoData = p["packet.info"] || {};
+  let extraInfoData = p["extra.info"] || {};
   const ipData = packetInfoData["IP"] || {};
   const traitsData = extraInfoData["Traits"] || {};
   const networkData = traitsData["Network Data"] || {};
   const serverInfo = traitsData["Server Info"] || {};
-  const srcLocation = networkData?.["Source IP"]?.["Location"] || {};
-  const dstLocation = networkData?.["Destination IP"]?.["Location"] || {};
+  const srcLocation = networkData?.["ip.src"]?.["Location"] || networkData?.["Source IP"]?.["Location"] || {};
+  const dstLocation = networkData?.["ip.dst"]?.["Location"] || networkData?.["Destination IP"]?.["Location"] || {};
   const parseLocationCoordinate = (value, min, max) => {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue)) return null;
@@ -12790,18 +12852,20 @@ function infoPanel(pk) {
     locationTable.title = "Open Stats map and zoom to this location";
     locationTable.addEventListener("click", openHeatmapAtLocation);
   };
-  let packetTimestamp = packetInfoData["Packet Timestamp"] || "N/A";
-  let ipChecksum = ipData["IP Checksum"] ?? "N/A";
+  let packetTimestamp =
+    (packetInfoData["packet.timestamp"] ?? packetInfoData["Packet Timestamp"]) || "N/A";
+  let ipChecksum = ipData["ip.chksum"] ?? ipData["IP Checksum"] ?? "N/A";
 
   // Determine transport protocol (TCP or UDP); fall back to TCP for older captures
-  const protocol = packetInfoData["Protocol"] || "Unknown";
+  const protocol =
+    (packetInfoData["packet.proto"] ?? packetInfoData["Protocol"]) || "Unknown";
   const transportData = packetInfoData[protocol] || {};
 
   const transportChecksum =
     protocol === "TCP"
-      ? transportData["TCP checksum"]
+      ? transportData["tcp.chksum"] ?? transportData["TCP checksum"]
       : protocol === "UDP"
-        ? transportData["UDP checksum"]
+        ? transportData["udp.chksum"] ?? transportData["UDP checksum"]
         : protocol === "IGMP"
           ? transportData["IGMP Checksum"]
           : protocol === "ICMP"
@@ -12809,7 +12873,7 @@ function infoPanel(pk) {
             : "N/A";
   const transportLayerLen =
     protocol === "TCP"
-      ? transportData["TCP layer length"]
+      ? transportData["tcp.len"] ?? transportData["TCP layer length"]
       : protocol === "UDP"
         ? transportData["UDP length"]
         : protocol === "IGMP"
@@ -12823,25 +12887,25 @@ function infoPanel(pk) {
       : "N/A";
 
   const sourceIpPort =
-    (ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown") +
+    (ipData["ip.src.addr"] ?? ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown") +
     ":" +
-    (transportData["Source port"] ?? "?");
+    (transportData["tcp.src.port"] ?? transportData["udp.src.port"] ?? transportData["sctp.src.port"] ?? transportData["Source port"] ?? "?");
   const destIpPort =
-    (ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown") +
+    (ipData["ip.dst.addr"] ?? ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown") +
     ":" +
-    (transportData["Destination port"] ?? "?");
+    (transportData["tcp.dst.port"] ?? transportData["udp.dst.port"] ?? transportData["sctp.dst.port"] ?? transportData["Destination port"] ?? "?");
   const etherFrame =
     typeof packetInfoData["Ethernet Frame"] === "object" &&
       packetInfoData["Ethernet Frame"] !== null
       ? packetInfoData["Ethernet Frame"]
       : {};
-  const srcMac = etherFrame["MAC Source"] ?? "N/A";
-  const dstMac = etherFrame["MAC Destination"] ?? "N/A";
-  const srcMacVendor = etherFrame["MAC Source Vendor"] ?? "N/A";
-  const dstMacVendor = etherFrame["MAC Destination Vendor"] ?? "N/A";
-  const ipLayerLen = ipData["IP layer length"] ?? "N/A";
+  const srcMac = etherFrame["ether.src.mac.addr"] ?? etherFrame["MAC Source"] ?? "N/A";
+  const dstMac = etherFrame["ether.dst.mac.addr"] ?? etherFrame["MAC Destination"] ?? "N/A";
+  const srcMacVendor = etherFrame["ether.src.mac.vendor"] ?? etherFrame["MAC Source Vendor"] ?? "N/A";
+  const dstMacVendor = etherFrame["ether.dst.mac.vendor"] ?? etherFrame["MAC Destination Vendor"] ?? "N/A";
+  const ipLayerLen = ipData["ip.len"] ?? ipData["IP layer length"] ?? "N/A";
   const wireLen = transportData["Wire length"] ?? "N/A";
-  const payloadLen = packetInfoData?.["Raw data"]?.["Payload Length"] ?? "N/A";
+  const payloadLen = packetInfoData?.["Raw data"]?.["payload.len"] ?? packetInfoData?.["Raw data"]?.["Payload Length"] ?? "N/A";
   let sslCert = "";
   let sslVersion = "";
   let sslAlgos = "";
@@ -12886,8 +12950,8 @@ function infoPanel(pk) {
   const isEncrypted = serverInfo["Encrypted"];
   const protoName = networkData["app.proto"] ?? "Unknown";
   const protoDescription = networkData["Port Description"];
-  const srcNetClass = networkData?.["Source IP"]?.["Class"] ?? "N/A";
-  const dstNetClass = networkData?.["Destination IP"]?.["Class"] ?? "N/A";
+  const srcNetClass = networkData?.["ip.src"]?.["Class"] ?? networkData?.["Source IP"]?.["Class"] ?? "N/A";
+  const dstNetClass = networkData?.["ip.dst"]?.["Class"] ?? networkData?.["Destination IP"]?.["Class"] ?? "N/A";
   document.getElementById("sidedatatable").textContent = "";
   document.getElementById("protoInfoSrc").textContent = "Source";
   document.getElementById("protoInfoDest").textContent = "Destination";
@@ -13010,13 +13074,13 @@ function infoPanel(pk) {
   const streamPackets = [];
 
   // ensure that all the packets in the stream all report the same application protocol, for consistency
-  if (capturedPackets && capturedPackets["Host"]) {
-    for (const host of Object.keys(capturedPackets["Host"])) {
-      const hostPackets = capturedPackets["Host"][host];
+  if (capturedPackets && capturedPackets["host"]) {
+    for (const host of Object.keys(capturedPackets["host"])) {
+      const hostPackets = capturedPackets["host"][host];
       if (!Array.isArray(hostPackets)) continue;
       for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
         const pkt = hostPackets[packetIndex];
-        const pi = pkt?.["Packet Info"];
+        const pi = pkt?.["packet.info"];
         if (pi && buildBidirectionalStreamKey(pi) === currentStreamKey) {
           streamPacketRefs.push({
             packet: pkt,
@@ -13028,9 +13092,9 @@ function infoPanel(pk) {
           // if not, we will use the first packet's application protocol
           //  for the stream, for consistency
           const pktProtoName =
-            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["tcp.proto"] ||
-            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["sctp.proto"] ||
-            pi?.["Extra Info"]?.["Traits"]?.["Network Data"]?.["udp.proto"] ||
+            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["tcp.proto"] ||
+            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["sctp.proto"] ||
+            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["udp.proto"] ||
             "Unknown";
           if (streamPackets.length === 1) {
             // first packet in the stream, set the stream protocol

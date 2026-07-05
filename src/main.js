@@ -1973,7 +1973,7 @@ ipcMain.handle("sessions-list", async () => {
         if (await fileExists(jsonPath)) {
           const content = await fs.promises.readFile(jsonPath, "utf8");
           const parsed = JSON.parse(content);
-          const sessionState = parsed["Session State"] || {};
+          const sessionState = parsed["session.state"] || {};
           savedAt = sessionState.savedAt || null;
           filePath = jsonPath;
         } else if (await fileExists(compressedPath)) {

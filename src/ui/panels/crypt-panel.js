@@ -119,8 +119,8 @@ function createCryptPanel({
           host,
           packetIndex: packetInfo["Index"] ?? "?",
           protocol,
-          srcIp: packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
-          dstIp: packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
+          srcIp: packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
+          dstIp: packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
           srcPort: transportData?.["Source port"] ?? "N/A",
           dstPort: transportData?.["Destination port"] ?? "N/A",
           encrypted: serverInfo["Encrypted"] ?? "Unknown",
@@ -440,7 +440,8 @@ function createCryptPanel({
 
   function getPacketPayloadHex(packet) {
     return String(
-      packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"] ||
+      (packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+        packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"]) ||
       "",
     );
   }
@@ -496,8 +497,8 @@ function createCryptPanel({
             host,
             packetIndex: packetInfo["Index"] ?? "?",
             protocol,
-            srcIp: packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
-            dstIp: packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
+            srcIp: packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
+            dstIp: packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
             srcPort: transportData?.["Source port"] ?? "N/A",
             dstPort: transportData?.["Destination port"] ?? "N/A",
             blockType,

@@ -55,7 +55,7 @@ const compare = (a, b, op) => (operators[op] || operators['=='])(a, b);
 const getPacketKey = (p) => {
   const hostKey = Object.keys(p.Host)[0];
   const packetItem = p.Host[hostKey][0];
-  return `${hostKey}-${packetItem['Packet Info']['Packet Processed']}`;
+  return `${hostKey}-${packetItem['packet.info']['packet.processed'] ?? packetItem['packet.info']['Packet Processed']}`;
 };
 
 const unionBy = (arr, keyFn) => {
@@ -193,8 +193,8 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
         return explicitTransport;
       }
 
-      const packetInfo = packetItem?.['Packet Info'] || {};
-      const explicitProtocol = packetInfo['Protocol'];
+      const packetInfo = packetItem?.['packet.info'] || {};
+      const explicitProtocol = packetInfo['packet.proto'] ?? packetInfo['Protocol'];
       if (typeof explicitProtocol === 'string' && explicitProtocol) {
         const normalizedProtocol = explicitProtocol.trim().toUpperCase();
         const isGenericProtocol =
@@ -215,8 +215,8 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
     case 'application-proto': {
       return (
         searchFullKey(packetItem, 'application.proto') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Port Protocol'] ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Port Protcol']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Port Protocol'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Port Protcol']
       );
     }
     case 'link-proto':
@@ -227,83 +227,91 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
       return (
         searchFullKey(packetItem, 'tcp.src.port') ??
         searchFullKey(packetItem, 'transport.tcp.src.port') ??
-        packetItem?.['Packet Info']?.['TCP']?.['Source port']
+        packetItem?.['packet.info']?.['TCP']?.['Source port']
       );
     case 'tcp-dst-port':
       return (
         searchFullKey(packetItem, 'tcp.dst.port') ??
         searchFullKey(packetItem, 'transport.tcp.dst.port') ??
-        packetItem?.['Packet Info']?.['TCP']?.['Destination port']
+        packetItem?.['packet.info']?.['TCP']?.['Destination port']
       );
     case 'udp-src-port':
       return (
         searchFullKey(packetItem, 'udp.src.port') ??
         searchFullKey(packetItem, 'transport.udp.src.port') ??
-        packetItem?.['Packet Info']?.['UDP']?.['Source port']
+        packetItem?.['packet.info']?.['UDP']?.['Source port']
       );
     case 'udp-dst-port':
       return (
         searchFullKey(packetItem, 'udp.dst.port') ??
         searchFullKey(packetItem, 'transport.udp.dst.port') ??
-        packetItem?.['Packet Info']?.['UDP']?.['Destination port']
+        packetItem?.['packet.info']?.['UDP']?.['Destination port']
       );
     case 'sctp-src-port':
       return (
         searchFullKey(packetItem, 'sctp.src.port') ??
-        packetItem?.['Packet Info']?.['SCTP']?.['Source port']
+        packetItem?.['packet.info']?.['SCTP']?.['Source port']
       );
     case 'sctp-dst-port':
       return (
         searchFullKey(packetItem, 'sctp.dst.port') ??
-        packetItem?.['Packet Info']?.['SCTP']?.['Destination port']
+        packetItem?.['packet.info']?.['SCTP']?.['Destination port']
       );
     case 'loc-src-city':
       return (
         searchFullKey(packetItem, 'loc.src.city') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['City']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.src']?.['Location']?.['City'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['City']
       );
     case 'loc-dst-city':
       return (
         searchFullKey(packetItem, 'loc.dst.city') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['City']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.dst']?.['Location']?.['City'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['City']
       );
     case 'loc-src-country':
       return (
         searchFullKey(packetItem, 'loc.src.country') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Country']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.src']?.['Location']?.['Country'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Country']
       );
     case 'loc-dst-country':
       return (
         searchFullKey(packetItem, 'loc.dst.country') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Country']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.dst']?.['Location']?.['Country'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Country']
       );
     case 'loc-src-postal':
       return (
         searchFullKey(packetItem, 'loc.src.postal') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Postal']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.src']?.['Location']?.['Postal'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Postal']
       );
     case 'loc-dst-postal':
       return (
         searchFullKey(packetItem, 'loc.dst.postal') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Postal']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.dst']?.['Location']?.['Postal'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Postal']
       );
     case 'loc-src-tz':
     case 'loc-src-timezone':
       return (
         searchFullKey(packetItem, 'loc.src.tz') ??
         searchFullKey(packetItem, 'loc.src.timezone') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Time Zone']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.src']?.['Location']?.['Time Zone'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Source IP']?.['Location']?.['Time Zone']
       );
     case 'loc-dst-tz':
     case 'loc-dst-timezone':
       return (
         searchFullKey(packetItem, 'loc.dst.tz') ??
         searchFullKey(packetItem, 'loc.dst.timezone') ??
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Time Zone']
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['ip.dst']?.['Location']?.['Time Zone'] ??
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Destination IP']?.['Location']?.['Time Zone']
       );
     case 'wire-proto': {
-      const packetInfo = packetItem?.['Packet Info'] || {};
-      const explicitProtocol = packetInfo['Protocol'];
+      const packetInfo = packetItem?.['packet.info'] || {};
+      const explicitProtocol = packetInfo['packet.proto'] ?? packetInfo['Protocol'];
       if (typeof explicitProtocol === 'string') {
         return explicitProtocol.toLowerCase();
       }
@@ -314,17 +322,17 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
     }
     case 'eth-src-vendor':
       return (
-        packetItem?.['Packet Info']?.['Ethernet Frame']?.['MAC Source Vendor'] ??
-        packetItem?.['Packet Info']?.['Ethernet Frame']?.['ether.src.mac.vendor']
+        packetItem?.['packet.info']?.['Ethernet Frame']?.['MAC Source Vendor'] ??
+        packetItem?.['packet.info']?.['Ethernet Frame']?.['ether.src.mac.vendor']
       );
     case 'mime-type':
       return (
-        packetItem?.['Extra Info']?.['MIME Type'] ??
-        packetItem?.['Extra Info']?.['payload.mime']
+        packetItem?.['extra.info']?.['MIME Type'] ??
+        packetItem?.['extra.info']?.['payload.mime']
       );
     case 'dns-qname': {
       const aliasHostnames =
-        packetItem?.['Extra Info']?.['Traits']?.['Network Data']?.['Hostnames']?.['Hostnames'];
+        packetItem?.['extra.info']?.['Traits']?.['Network Data']?.['Hostnames']?.['Hostnames'];
       const dnsQname = searchFullKey(packetItem, 'dns.qname');
       const dnsQnames = searchFullKey(packetItem, 'dns.qnames');
       return [aliasHostnames, dnsQname, dnsQnames]
@@ -332,14 +340,14 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
         .filter((value) => typeof value === 'string');
     }
     case 'decoded-proto': {
-      const packetInfo = packetItem?.['Packet Info'] || {};
+      const packetInfo = packetItem?.['packet.info'] || {};
       const decodedValues = new Set();
-      const wireProto = packetInfo['Protocol'];
+      const wireProto = packetInfo['packet.proto'] ?? packetInfo['Protocol'];
       if (typeof wireProto === 'string' && wireProto) decodedValues.add(wireProto);
 
       const decodedList =
-        packetInfo['Decoded Protocols'] ||
         packetInfo['packet.decoded_protocols'] ||
+        packetInfo['Decoded Protocols'] ||
         packetInfo?.['Link Control']?.['Detected Protocols'] ||
         packetInfo?.['Link Control']?.['wan.detected'];
       if (Array.isArray(decodedList)) {
