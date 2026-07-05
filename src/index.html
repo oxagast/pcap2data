@@ -634,21 +634,6 @@ No keystore entries saved.</pre>
                 <label for="settings-general-status-reset-seconds">Status reset delay (seconds)</label>
                 <input id="settings-general-status-reset-seconds" type="number" min="1" step="1" />
 
-                <label for="settings-general-backend-chunk-size">Default backend packet chunk size</label>
-                <select id="settings-general-backend-chunk-size">
-                  <option value="25">25</option>
-                  <option value="100">100</option>
-                  <option value="250" selected>250</option>
-                  <option value="500">500</option>
-                  <option value="2000">2000</option>
-                </select>
-                <div class="settings-help-text">Used when backend chunk metadata is unavailable.</div>
-
-                <label for="settings-general-backend-worker-threads">Backend worker threads</label>
-                <input id="settings-general-backend-worker-threads" type="number" min="1" step="1" />
-                <div class="settings-help-text">Number of backend packet-processing threads. Default is 2x CPU cores.
-                </div>
-
                 <label for="settings-general-stream-warn-packet-threshold">Stream warning threshold (packets)</label>
                 <input id="settings-general-stream-warn-packet-threshold" type="number" min="5" step="1" />
                 <div class="settings-help-text">Warn before loading large follow-stream results into Conv or Crypt.
@@ -744,6 +729,21 @@ No keystore entries saved.</pre>
             <div class="settings-grid">
               <div class="settings-section">
                 <div class="settings-section-title">Backend Bridge</div>
+
+                <label for="settings-backend-chunk-size">Default backend packet chunk size</label>
+                <select id="settings-backend-chunk-size">
+                  <option value="25">25</option>
+                  <option value="100">100</option>
+                  <option value="250" selected>250</option>
+                  <option value="500">500</option>
+                  <option value="2000">2000</option>
+                </select>
+                <div class="settings-help-text">Used when backend chunk metadata is unavailable.</div>
+
+                <label for="settings-backend-worker-threads">Backend worker threads</label>
+                <input id="settings-backend-worker-threads" type="number" min="1" step="1" />
+                <div class="settings-help-text">Number of backend packet-processing threads. Default is 2x CPU cores.
+                </div>
 
                 <label for="settings-backend-tcp-host">TCP host</label>
                 <input id="settings-backend-tcp-host" type="text" spellcheck="false" placeholder="127.0.0.1" />

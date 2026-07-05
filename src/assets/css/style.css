@@ -314,11 +314,13 @@ hr {
   color: var(--sidebar-text-color);
   padding: 5px;
   margin-top: 5px;
+  width: 100%;
 }
 
 .sidebar option {
   color: var(--sidebar-text-color);
   padding: 5px;
+  width: 100%;
 }
 
 /* Main panel */
@@ -375,23 +377,23 @@ strong {
 }
 
 .menu_bar {
-  width: 100%;
+  width: 900px;
   align-items: center;
   margin-top: -20px;
-  margin-left: var(--sidebar-width);
+  margin-left: 350px;
   display: flex;
-  gap: 10px;
+  gap: 7px;
 }
 
 .menu-btns {
   font-weight: bold;
-  width: 98%;
+  width: 100%;
   background-color: var(--color-7);
   border: 2px solid black;
   color: var(--color-5);
-  padding: 5px 0px;
+  padding: 5px 2px;
   text-align: center;
-  align-items: center;
+  align-items: flex-start;
   text-decoration: none;
   display: block;
   font-size: 14px;
@@ -409,10 +411,10 @@ strong {
 }
 
 .custom-btns {
-  max-width: 140px;
+  max-width: 200px;
   background-color: var(--color-7);
   border: 3px solid black;
-  width: 140px;
+  width: 160px;
   color: var(--color-5);
   padding: 5px 0px;
   text-align: center;
@@ -484,10 +486,10 @@ strong {
 }
 
 #rotate-btns {
-  position: static;
+  position: absolute;
   margin: 0;
-  margin-left: 110px;
-  width: 140px;
+  margin-left: 1050px;
+  width: 180px;
   z-index: 10;
 }
 
@@ -509,7 +511,7 @@ strong {
 }
 
 #tab-btns {
-  width: 760px;
+  width: 980px;
 }
 
 #summary_box {
@@ -2728,6 +2730,7 @@ strong {
   left: calc(var(--sidebar-width) + 30px);
   top: 165px;
   height: 30px;
+  width: 120px;
 }
 
 #filters-container {

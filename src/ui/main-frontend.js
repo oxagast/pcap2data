@@ -700,9 +700,9 @@ function syncSettingsFormFromState() {
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
-  const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
   const backendWorkerThreadsEl = document.getElementById(
-    "settings-general-backend-worker-threads",
+    "settings-backend-worker-threads",
   );
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
@@ -800,9 +800,9 @@ function readSettingsFormState() {
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
-  const backendChunkSizeEl = document.getElementById("settings-general-backend-chunk-size");
+  const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
   const backendWorkerThreadsEl = document.getElementById(
-    "settings-general-backend-worker-threads",
+    "settings-backend-worker-threads",
   );
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
@@ -11351,12 +11351,12 @@ document.getElementById("settings-general-status-reset-seconds").addEventListene
   writeLogEntry(`Settings updated statusResetSeconds=${event?.target?.value}`);
 });
 
-document.getElementById("settings-general-backend-chunk-size").addEventListener("change", (event) => {
+document.getElementById("settings-backend-chunk-size").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated backendPacketChunkSize=${event?.target?.value}`);
 });
 
 document
-  .getElementById("settings-general-backend-worker-threads")
+  .getElementById("settings-backend-worker-threads")
   .addEventListener("change", (event) => {
     writeLogEntry(`Settings updated backendWorkerThreads=${event?.target?.value}`);
   });
