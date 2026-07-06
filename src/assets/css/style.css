@@ -40,6 +40,10 @@
   --stats-heatmap-land-fill-color: #cccccc;
   --stats-heatmap-land-filter: grayscale(1) contrast(1.14) brightness(0.92);
   --stats-heatmap-land-opacity: 0.96;
+  --stats-heatmap-grid-line-color: color-mix(in srgb, var(--color-6) 14%, transparent);
+  --stats-heatmap-grid-opacity: 0.14;
+  --stats-heatmap-grid-cell-size-x: 28px;
+  --stats-heatmap-grid-cell-size-y: 22px;
   --stats-heatmap-selection-border-color: color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
   --stats-heatmap-selection-highlight-color: color-mix(in srgb, var(--color-1) 22%, transparent);
   --stats-heatmap-selection-active-border-color: color-mix(in srgb, #ff4a4a 82%, #ffffff 18%);
@@ -2258,6 +2262,69 @@ strong {
   transition: height 0.2s ease;
 }
 
+.stats-heatmap-mapzoom {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 44px;
+  z-index: 8;
+  width: 44px;
+  padding: 7px 5px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--color-5) 86%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg,
+      color-mix(in srgb, var(--stats-heatmap-water-color-3-top) 78%, transparent),
+      color-mix(in srgb, var(--stats-heatmap-water-color-3-bottom) 82%, transparent));
+  border: 1px solid color-mix(in srgb, var(--color-3) 74%, transparent);
+  border-radius: 10px;
+  box-shadow: inset 0 0 20px color-mix(in srgb, #000000 45%, transparent);
+  pointer-events: auto;
+}
+
+.stats-heatmap-mapzoom-input {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  width: 16px;
+  height: 100%;
+  min-height: 140px;
+  accent-color: color-mix(in srgb, var(--color-1) 85%, #9fd3ff);
+  cursor: ns-resize;
+  background: transparent;
+}
+
+.stats-heatmap-mapzoom .stats-heatmap-control-value {
+  min-width: 0;
+  text-align: center;
+  color: color-mix(in srgb, var(--color-5) 94%, transparent);
+}
+
+.stats-heatmap-coordinates {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  z-index: 8;
+  pointer-events: none;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-5) 90%, transparent);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-3) 68%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 74%, transparent);
+  box-shadow: 0 1px 8px color-mix(in srgb, #000000 28%, transparent);
+  white-space: nowrap;
+}
+
 .stats-heatmap-map-expanded {
   height: 520px;
 }
@@ -2302,15 +2369,16 @@ strong {
   background:
     repeating-linear-gradient(to right,
       transparent 0,
-      transparent calc(16.666% - 1px),
-      color-mix(in srgb, var(--color-6) 18%, transparent) calc(16.666% - 1px),
-      color-mix(in srgb, var(--color-6) 18%, transparent) 16.666%),
+      transparent calc(var(--stats-heatmap-grid-cell-size-x) - 1px),
+      var(--stats-heatmap-grid-line-color) calc(var(--stats-heatmap-grid-cell-size-x) - 1px),
+      var(--stats-heatmap-grid-line-color) var(--stats-heatmap-grid-cell-size-x)),
     repeating-linear-gradient(to bottom,
       transparent 0,
-      transparent calc(25% - 1px),
-      color-mix(in srgb, var(--color-6) 18%, transparent) calc(25% - 1px),
-      color-mix(in srgb, var(--color-6) 18%, transparent) 25%);
-  opacity: 0.24;
+      transparent calc(var(--stats-heatmap-grid-cell-size-y) - 1px),
+      var(--stats-heatmap-grid-line-color) calc(var(--stats-heatmap-grid-cell-size-y) - 1px),
+      var(--stats-heatmap-grid-line-color) var(--stats-heatmap-grid-cell-size-y));
+  mix-blend-mode: screen;
+  opacity: var(--stats-heatmap-grid-opacity);
 }
 
 .stats-heatmap-map::before {
@@ -2473,7 +2541,7 @@ strong {
 
 .stats-heatmap-axis-center {
   left: calc(50% - 10px);
-  bottom: 8px;
+  bottom: 38px;
 }
 
 .stats-heatmap-axis-east {
@@ -2499,6 +2567,15 @@ strong {
     height: 320px;
   }
 
+  .stats-heatmap-mapzoom {
+    bottom: 40px;
+    width: 40px;
+  }
+
+  .stats-heatmap-mapzoom-input {
+    min-height: 120px;
+  }
+
   .stats-heatmap-map-expanded {
     height: 440px;
   }
@@ -2511,6 +2588,25 @@ strong {
 
   .stats-heatmap-map {
     height: 260px;
+  }
+
+  .stats-heatmap-mapzoom {
+    top: 10px;
+    right: 10px;
+    bottom: 38px;
+    width: 36px;
+    border-radius: 8px;
+  }
+
+  .stats-heatmap-mapzoom-input {
+    min-height: 90px;
+  }
+
+  .stats-heatmap-coordinates {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    bottom: 8px;
   }
 
   .stats-heatmap-map-expanded {

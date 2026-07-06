@@ -17,6 +17,7 @@ const HEATMAP_SELECTION_AREA_TINY_RATIO = 0.001;
 const HEATMAP_SELECTION_AREA_MID_RATIO = 0.02;
 const HEATMAP_SELECTION_AREA_LARGE_RATIO = 0.4;
 const HEATMAP_LOCATION_CLICK_ZOOM_PERCENT = 300;
+const HEATMAP_LOCATION_CLICK_CITY_ZOOM_PERCENT = 650;
 const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
 const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
 const HEATMAP_LOCATION_SELECTION_SIZE_SCALE = 0.5;
@@ -24,6 +25,10 @@ const HEATMAP_SELECTION_MIN_PIXELS = 12;
 const HEATMAP_SELECTION_DRAW_MS = 170;
 const HEATMAP_SELECTION_BLINK_MS = 280;
 const HEATMAP_ZOOM_SETTLE_MS = 200;
+const HEATMAP_GRID_BASE_CELL_SIZE_X = 28;
+const HEATMAP_GRID_BASE_CELL_SIZE_Y = 22;
+const HEATMAP_GRID_MIN_CELL_SIZE = 6;
+const HEATMAP_GRID_ZOOM_RESPONSE_EXPONENT = 2;
 const HEATMAP_SCOPE_CAPTURE = "capture";
 const HEATMAP_SCOPE_FILTERED = "filtered";
 const HEATMAP_METRIC_PACKETS = "packets";
@@ -603,6 +608,41 @@ function applyHeatmapLayerZoom(layerEl, bounds, viewState = {}) {
   layerEl.style.transform = `translate(${transform.translateX.toFixed(2)}px, ${transform.translateY.toFixed(2)}px) scale(${transform.scale.toFixed(3)})`;
 }
 
+function getHeatmapFocusCoordinates(viewState = {}) {
+  const focusX = Math.min(1, Math.max(0, Number(viewState.focusX) || 0.5));
+  const focusY = Math.min(1, Math.max(0, Number(viewState.focusY) || 0.5));
+  return {
+    latitude: (0.5 - focusY) * 180,
+    longitude: (focusX - 0.5) * 360,
+  };
+}
+
+function formatHeatmapCoordinate(value, positiveSuffix, negativeSuffix) {
+  const absoluteValue = Math.abs(Number(value) || 0);
+  const suffix = value >= 0 ? positiveSuffix : negativeSuffix;
+  return `${absoluteValue.toFixed(2)}${suffix}`;
+}
+
+function applyHeatmapGridDensity(gridLayerEl, viewState = {}) {
+  if (!gridLayerEl) return;
+  const zoomPercent = clampHeatmapMapZoomPercent(
+    viewState.zoomPercent,
+    DEFAULT_HEATMAP_MAP_ZOOM,
+  );
+  const zoomScale = Math.max(1, zoomPercent / 100);
+  const responsiveScale = Math.pow(zoomScale, HEATMAP_GRID_ZOOM_RESPONSE_EXPONENT);
+  const cellSizeX = Math.max(
+    HEATMAP_GRID_MIN_CELL_SIZE,
+    HEATMAP_GRID_BASE_CELL_SIZE_X / responsiveScale,
+  );
+  const cellSizeY = Math.max(
+    HEATMAP_GRID_MIN_CELL_SIZE,
+    HEATMAP_GRID_BASE_CELL_SIZE_Y / responsiveScale,
+  );
+  gridLayerEl.style.setProperty("--stats-heatmap-grid-cell-size-x", `${cellSizeX.toFixed(2)}px`);
+  gridLayerEl.style.setProperty("--stats-heatmap-grid-cell-size-y", `${cellSizeY.toFixed(2)}px`);
+}
+
 function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb, renderConfig) {
   if (!pointsMountEl) return;
   pointsMountEl.replaceChildren();
@@ -782,6 +822,7 @@ function renderStatsHeatmap(
   applyHeatmapLayerBounds(gridLayerEl, mapBounds);
   applyHeatmapLayerBounds(heatmapMountEl, mapBounds);
   applyHeatmapLayerBounds(pointsMountEl, mapBounds);
+  applyHeatmapGridDensity(gridLayerEl, viewState);
   applyHeatmapLayerZoom(basemapFrameEl, mapBounds, viewState);
   applyHeatmapLayerZoom(gridLayerEl, mapBounds, viewState);
   applyHeatmapLayerZoom(heatmapMountEl, mapBounds, viewState);
@@ -865,8 +906,8 @@ function createStatsHeatmapSection({
   controlsToolbarEl.className = "stats-heatmap-toolbar";
 
   const mapZoomControlEl = documentRef.createElement("label");
-  mapZoomControlEl.className = "stats-heatmap-toolbar-control";
-  mapZoomControlEl.innerHTML = "<span>Map Zoom</span>";
+  mapZoomControlEl.className = "stats-heatmap-mapzoom";
+  mapZoomControlEl.innerHTML = "<span>Zoom</span>";
   const mapZoomInputEl = documentRef.createElement("input");
   mapZoomInputEl.type = "range";
   mapZoomInputEl.className = "stats-heatmap-mapzoom-input";
@@ -878,7 +919,6 @@ function createStatsHeatmapSection({
   mapZoomValueEl.className = "stats-heatmap-control-value";
   mapZoomControlEl.appendChild(mapZoomInputEl);
   mapZoomControlEl.appendChild(mapZoomValueEl);
-  controlsToolbarEl.appendChild(mapZoomControlEl);
 
   const toggleControlsBtn = documentRef.createElement("button");
   toggleControlsBtn.type = "button";
@@ -1065,6 +1105,13 @@ function createStatsHeatmapSection({
   gridLayerEl.className = "stats-heatmap-grid";
   mapEl.appendChild(gridLayerEl);
 
+  const mapCoordinatesEl = documentRef.createElement("div");
+  mapCoordinatesEl.className = "stats-heatmap-coordinates";
+  mapCoordinatesEl.textContent = "Target 0.00N, 0.00E";
+  mapEl.appendChild(mapCoordinatesEl);
+
+  mapEl.appendChild(mapZoomControlEl);
+
   const latitudeLabels = [
     { className: "north", text: "90N" },
     { className: "equator", text: "EQ" },
@@ -1149,6 +1196,7 @@ function createStatsHeatmapSection({
   };
   let dragSelectionState = null;
   let selectionAnimating = false;
+  let mapZoomInteractionActive = false;
   let lastClickedLocationPointKey = null;
   let queuedLocationFilterPoint = null;
   let activeHeatmapData = {
@@ -1408,6 +1456,11 @@ function createStatsHeatmapSection({
     return { x, y };
   };
 
+  const isMapZoomInteractionTarget = (eventTarget) => {
+    if (!(eventTarget instanceof Element)) return false;
+    return Boolean(eventTarget.closest(".stats-heatmap-mapzoom"));
+  };
+
   const showSelectionRect = (bounds, selectionRect) => {
     dragSelectionState = {
       bounds,
@@ -1644,10 +1697,14 @@ function createStatsHeatmapSection({
     const centerY = bounds.top + projected.y;
     const selectionRect = buildLocationSelectionRect(bounds, centerX, centerY);
     const focus = getSelectionFocusFromRect(bounds, selectionRect);
+    const hasCity = normalizeStatsTextValue(locationPoint.city) !== null;
+    const targetZoomPercent = hasCity
+      ? HEATMAP_LOCATION_CLICK_CITY_ZOOM_PERCENT
+      : HEATMAP_LOCATION_CLICK_ZOOM_PERCENT;
     await animateSelectionZoom({
       bounds,
       selectionRect,
-      targetZoomPercent: HEATMAP_LOCATION_CLICK_ZOOM_PERCENT,
+      targetZoomPercent,
       focusX: focus.focusX,
       focusY: focus.focusY,
     });
@@ -1679,6 +1736,7 @@ function createStatsHeatmapSection({
     const controlState = getControlState();
     const projectionState = getProjectionControlState();
     const zoomState = getMapZoomState();
+    const focusCoordinates = getHeatmapFocusCoordinates(zoomState);
     intensityValueEl.textContent = `${controlState.intensityPercent}%`;
     pointSizeValueEl.textContent = `${controlState.pointSizePercent}%`;
     tightnessValueEl.textContent = `${controlState.tightnessPercent}%`;
@@ -1688,6 +1746,7 @@ function createStatsHeatmapSection({
     offsetXValueEl.textContent = toCalibrationLabel(projectionState.offsetX);
     offsetYValueEl.textContent = toCalibrationLabel(projectionState.offsetY);
     mapZoomValueEl.textContent = `${zoomState.zoomPercent}%`;
+    mapCoordinatesEl.textContent = `Target ${formatHeatmapCoordinate(focusCoordinates.latitude, "N", "S")}, ${formatHeatmapCoordinate(focusCoordinates.longitude, "E", "W")}`;
   };
 
   const render = (refreshData = false) => {
@@ -1742,6 +1801,19 @@ function createStatsHeatmapSection({
   scopeInputEl.addEventListener("change", () => render(true));
   metricInputEl.addEventListener("change", () => render(true));
   mapZoomInputEl.addEventListener("input", () => render(false));
+  mapZoomControlEl.addEventListener("mousedown", (event) => {
+    mapZoomInteractionActive = true;
+    event.stopPropagation();
+  });
+  mapZoomControlEl.addEventListener("mouseup", () => {
+    mapZoomInteractionActive = false;
+  });
+  mapZoomControlEl.addEventListener("mouseleave", () => {
+    mapZoomInteractionActive = false;
+  });
+  mapZoomInputEl.addEventListener("blur", () => {
+    mapZoomInteractionActive = false;
+  });
   zoomXInputEl.addEventListener("input", () => {
     if (calibrationLocked) return;
     render(false);
@@ -1792,6 +1864,8 @@ function createStatsHeatmapSection({
 
   const onMapMouseDown = (event) => {
     if (selectionAnimating) return;
+    if (mapZoomInteractionActive) return;
+    if (isMapZoomInteractionTarget(event.target)) return;
     if (event.button !== 0) return;
     const bounds = getCurrentMapBounds();
     const point = getMapEventPoint(event);
@@ -1887,6 +1961,9 @@ function createStatsHeatmapSection({
   mapEl.addEventListener("mousedown", onMapMouseDown);
   mapEl.addEventListener("dblclick", onMapDoubleClick);
   window.addEventListener("mousemove", onMapMouseMove);
+  window.addEventListener("mouseup", () => {
+    mapZoomInteractionActive = false;
+  });
   window.addEventListener("mouseup", onMapMouseUp);
 
   toggleControlsBtn.addEventListener("click", () => {
