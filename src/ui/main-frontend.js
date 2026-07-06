@@ -1790,11 +1790,7 @@ async function clearCurrentSession() {
 
 document.getElementById("summary-btn").addEventListener("click", () => {
   activeMainTab = MAIN_TAB_SUMMARY;
-  if (summary.length > 300) {
-    document.getElementById("summary_content").textContent = summary || "";
-  } else {
-    document.getElementById("summary_content").textContent = summary;
-  }
+  renderSummaryMarkdownPreview(summary);
   showSummary();
 });
 
@@ -3527,10 +3523,12 @@ function sanitizeMarkdownPreviewHtml(renderedHtml) {
   return template.innerHTML;
 }
 
-function renderMarkdownToHtml(markdownText) {
+function renderMarkdownToHtml(markdownText, options = {}) {
+  const { emptyPlaceholder = "No note selected." } =
+    options && typeof options === "object" ? options : {};
   const source = String(markdownText || "").replace(/\r\n?/g, "\n");
   if (!source.trim()) {
-    return '<p class="notes-markdown-placeholder">No note selected.</p>';
+    return `<p class="notes-markdown-placeholder">${escapeHtml(String(emptyPlaceholder || ""))}</p>`;
   }
 
   const renderedHtml = marked.parse(source, {
@@ -3548,6 +3546,62 @@ function renderSelectedNoteMarkdownPreview(noteText) {
   if (!notesPreviewEl) return;
   initializeNotesMarkdownPreviewLinkHandling();
   notesPreviewEl.innerHTML = renderMarkdownToHtml(noteText);
+}
+
+function normalizeSummaryMarkdownHeadings(markdownText) {
+  const source = String(markdownText || "").replace(/\r\n?/g, "\n");
+  if (!source.trim()) {
+    return "# PacketSnitch's Summary\n\n_No summary available._";
+  }
+
+  const lines = source.split("\n");
+  const normalizedLines = [];
+  let inFence = false;
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (/^(```|~~~)/.test(trimmed)) {
+      inFence = !inFence;
+      normalizedLines.push(line);
+      return;
+    }
+
+    if (!inFence) {
+      const headingMatch = line.match(/^(\s{0,3})(#{1,6})(\s+)(.*)$/);
+      if (headingMatch) {
+        const [, indent, hashes, spacing, titleText] = headingMatch;
+        // Remove any incoming h1 from LLM content; the Summary tab provides one fixed h1.
+        if (hashes.length === 1) {
+          normalizedLines.push(`${indent}##${spacing}${titleText}`);
+          return;
+        }
+
+        // Clamp all remaining headings to h2/h3 for accessible summary structure.
+        const clampedLevel = hashes.length <= 2 ? 2 : 3;
+        normalizedLines.push(`${indent}${"#".repeat(clampedLevel)}${spacing}${titleText}`);
+        return;
+      }
+    }
+
+    normalizedLines.push(line);
+  });
+
+  const normalizedBody = normalizedLines.join("\n").trim();
+  if (!normalizedBody) {
+    return "# PacketSnitch's Summary\n\n_No summary available._";
+  }
+
+  return `# PacketSnitch's Summary\n\n${normalizedBody}`;
+}
+
+function renderSummaryMarkdownPreview(summaryText) {
+  const summaryPreviewEl = document.getElementById("summary_content");
+  if (!summaryPreviewEl) return;
+  initializeSummaryMarkdownLinkHandling();
+  summaryPreviewEl.innerHTML = renderMarkdownToHtml(
+    normalizeSummaryMarkdownHeadings(summaryText),
+    { emptyPlaceholder: "No summary available" },
+  );
 }
 
 function normalizeExternalMarkdownLinkHref(href) {
@@ -3568,6 +3622,33 @@ function initializeNotesMarkdownPreviewLinkHandling() {
     if (!anchorEl || !notesPreviewEl.contains(anchorEl)) return;
 
     const openableUrl = normalizeExternalMarkdownLinkHref(anchorEl.getAttribute("href"));
+    if (!openableUrl) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (typeof window.browserapi?.openExternalUrl !== "function") {
+      return;
+    }
+
+    await window.browserapi.openExternalUrl(openableUrl);
+  });
+}
+
+function initializeSummaryMarkdownLinkHandling() {
+  const summaryPreviewEl = document.getElementById("summary_content");
+  if (!summaryPreviewEl || summaryPreviewEl.dataset.linkHandlingInitialized === "true") {
+    return;
+  }
+
+  summaryPreviewEl.dataset.linkHandlingInitialized = "true";
+  summaryPreviewEl.addEventListener("click", async (event) => {
+    const anchorEl = event.target?.closest?.("a[href]");
+    if (!anchorEl || !summaryPreviewEl.contains(anchorEl)) return;
+
+    const openableUrl = normalizeExternalMarkdownLinkHref(
+      anchorEl.getAttribute("href"),
+    );
     if (!openableUrl) return;
 
     event.preventDefault();
@@ -4850,7 +4931,7 @@ function restoreSessionState(sessionState) {
     summary = sessionState.currentSummary;
     summaryFromSavedSession = true;
   }
-  document.getElementById("summary_content").textContent = summary || "No summary available";
+  renderSummaryMarkdownPreview(summary);
 
   const loadedNotes = Array.isArray(sessionState.notes)
     ? sessionState.notes
@@ -12131,7 +12212,7 @@ async function explainContextWithLLM() {
 
   //const packetCtx = buildPacketContextSummary(contextPacket);
   const packetCtx = contextPacket ? JSON.stringify(contextPacket, null, 2) : "No packet context available.";
-  const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
+  const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking PacketSnitch to explain selection...");
   writeLogEntry(`PacketSnitch explain requested for ${textToExplain.length} chars of context data`);
@@ -12213,7 +12294,7 @@ function submitLlmQuestionFromContextMenuDialog() {
 function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   const packetCtx = buildPacketContextSummary(contextPacket);
   const contextLines = [
-    "You are a network analysis assistant. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
+    "You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
     `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
     "",
     `Packet context: ${packetCtx}`,
@@ -12520,7 +12601,7 @@ function writeSummaryFromLLM() {
     // add the current packet key to the set of already summarized packets
     alreadySummarizedPacketKeys.add(contextPacket?.__packetKey);
     writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
-    let prompt = `Please provide a summary of the following network stream data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -12529,7 +12610,7 @@ function writeSummaryFromLLM() {
       const summPart = llmResponse?.response || "";
       summary = summary + "\n\n" + summPart;
       if (summPart.length > 800) {
-        document.getElementById("summary_content").textContent = summary;
+        renderSummaryMarkdownPreview(summary);
         writeLogEntry(`LLM summary generated for ${streamPackets.length} packets`);
         statusUpdate("Status: LLM summary available for current stream!");
       }

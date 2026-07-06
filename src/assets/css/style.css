@@ -508,7 +508,7 @@ strong {
   margin: 10px;
   box-sizing: border-box;
   word-break: break-word;
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-y: auto;
   overflow-x: hidden;
   font-size: 14px;
