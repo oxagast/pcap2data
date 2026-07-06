@@ -43,6 +43,7 @@ Load the selected text or current packet data into the **Conv** tab with a speci
 | **Cursor ASCII to Conv tab**       | Load the ASCII run at the current hex-grid cursor (or selected byte) into Conv.                                    |
 | **Raw Payload to Conv tab**        | Load the current packet's full raw payload as hex into Conv and run conversion.                                    |
 | **Decompress to Conv tab**         | If Conv input appears compressed (gzip/deflate/brotli), decompress it and load the decompressed bytes into Conv.   |
+| **Import file to Conv tab**        | Open a file picker, load file bytes into Conv as hex, and apply manual-import size limits/warnings from Settings.  |
 
 ---
 
@@ -92,6 +93,8 @@ The **Parentheses** sub-menu provides:
 | **Append (**                      | Append an opening parenthesis to the filter expression. |
 | **Append )**                      | Append a closing parenthesis to the filter expression.  |
 | **Wrap with (...)**               | Surround the entire existing filter with parentheses.   |
+
+When right-clicking directly in the filter input, PacketSnitch also exposes **Save current filter...** so the current query can be stored in the user filter library with a custom label.
 
 ---
 
@@ -160,6 +163,8 @@ Shown only when the current packet contains an HTTP response body.
 | **Body to Conv tab (decompressed)** | Decompress HTTP body first, then load into Conv.    |
 | **Browser preview**  | Open HTTP body in the system browser for preview.   |
 | **Browser preview (decompressed)** | Decompress first, then preview in browser.       |
+
+HTTP body actions use stream reassembly and honor `Content-Length` / chunked framing when available.
 
 ---
 

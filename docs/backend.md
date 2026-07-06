@@ -22,7 +22,7 @@ In the desktop app, this parser is wrapped by an Electron bridge that can either
   - Active recon: server banners, SSL certificate info, web page titles (optional)
 - Consolidates all testcase info into `hosts.json`.
 - Supports incremental chunk snapshots (`hosts-<N>.json`) for progressive frontend loading.
-- Supports an HTTP service mode used by the Electron bridge for `ping`, `process`, and control requests.
+- Supports an HTTP service mode used by the Electron bridge for `ping`, `version`, `process`, and control requests.
 - Supports filtering by source/destination port.
 - Handles compressed payloads (gzip/zlib).
 - Verbose/debug output modes.
@@ -84,8 +84,9 @@ When the Electron bridge has access to the Python backend, it can request long-l
 Current bridge-facing endpoints:
 
 - `GET /ping`: readiness probe used before capture work is submitted
+- `GET /version`: reports backend service/app version metadata
 - `POST /process`: parse a PCAP and emit either accumulated JSON or NDJSON progress events
-- `POST /control`: control actions such as stop-processing and shutdown
+- `POST /control`: control actions such as stop-processing, shutdown, and runtime config updates (`set-runtime-config`)
 
 Important behavior:
 

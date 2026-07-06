@@ -283,6 +283,7 @@ Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Li
 | **Default backend packet chunk size** | `general.backendPacketChunkSize`  | Fallback chunk size used when backend progress metadata is unavailable.                     |
 | **Backend worker threads**            | `general.backendWorkerThreads`    | Number of parser worker threads requested from the backend bridge.                          |
 | **Stream warning threshold (packets)** | `general.streamContextWarnPacketThreshold` | Warns before loading large follow-stream results into Conv or Crypt; default `20`, minimum `5`. |
+| **Manual Conv import limit (MB)**    | `general.manualConvImportMaxBytes` | Maximum allowed size for context-menu manual file imports into Conv (default `2 MiB`).     |
 
 Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`.
 
@@ -360,6 +361,7 @@ The **Stats** tab shows aggregate statistics computed across the entire loaded c
 | **MAC Vendors**            | Ethernet MAC vendor strings identified from OUI lookup.                                                                                                     |
 | **MIME Types**             | All distinct MIME types found in payload data.                                                                                                              |
 | **Data Types**             | All distinct magic-identified data type strings.                                                                                                            |
+| **Carvable Files**         | Candidate files detected from HTTP/FTP/NFS/SMB streams. Clicking a tag loads that carved file directly into Conv.                                         |
 
 ##### Internet Heatmap / Worldmap
 
@@ -427,6 +429,7 @@ Frontend LLM behavior now lives in the renderer and Electron main process rather
 ##### Backend Bridge Modes
 
 - **HTTP service mode**: initializes a long-lived backend service, probes `GET /ping`, posts capture work to `POST /process`, and sends control actions through `POST /control`.
+- Service metadata can be queried through `GET /version`, and runtime parser settings can be updated through `POST /control` (`set-runtime-config`) without restarting the backend service.
 - **HTTP data mode**: when enabled, the backend can stream NDJSON progress plus in-memory snapshot payloads back to the renderer.
 - **Legacy spawn mode**: fallback per-run process launch path used when the service is unavailable or explicitly disabled.
 
@@ -507,6 +510,8 @@ The **Notes** tab is a session notes workspace for creating and editing freeform
 ##### Notes Editor (main area)
 
 The main content area shows a full-width editable text area for the currently selected note. Edits are reflected immediately in the notes list preview. The editor is disabled when no note is selected.
+
+The Notes workspace also includes a sanitized live Markdown preview for the selected note, including GitHub-style pipe tables.
 
 ##### Notes Context Menu
 
@@ -595,6 +600,8 @@ ip.src.addr:192.168.1.1 && tcp.dst.port:443
 ```
 
 Filter keys use the same dot-notation names as the [searchable attributes](filters.md) documented in the Backend docs. Keys are normalized to lowercase with spaces replaced by hyphens.
+
+The filter history dropdown merges session filter history with user-saved named filters. Right-clicking the filter input lets you save the current query with a label (or remove an exact saved match) via an in-app dialog.
 
 #### Filter Examples
 

@@ -6,6 +6,8 @@
 
 PacketSnitch's filter bar lets you search and narrow down the packets displayed in the <a href="/frontend">frontend</a>. Filters are evaluated over the full loaded dataset (all hosts), not just the currently selected host. Results update immediately after pressing **Enter** in the filter bar, and the **Filtered Packets** counter in the left sidebar updates to reflect the number of matching packets.
 
+The filter dropdown merges session history with saved named filters from the user filter library. Right-clicking the filter input provides a **Save current filter...** flow to label and persist the current query.
+
 ---
 
 ### Syntax

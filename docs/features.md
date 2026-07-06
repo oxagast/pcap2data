@@ -147,6 +147,8 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - Case-insensitive key normalization: spaces and hyphens are interchangeable (e.g. `wire-length` = `wire.len`).
 - Substring matching for vendor, MIME, and DNS name fields.
 - Filter history tracked per session and accessible from the filter bar.
+- Saved-filter library persisted in user config (`config/filters.json`) with labeled entries merged into the filter history dropdown.
+- Right-click save/remove flow for the current filter query via in-app modal dialog (no native `window.prompt` dependency).
 - Context menu shortcuts to build filter clauses from current packet attributes (IP, port, MAC, protocol, MIME type).
 - Context menu parenthesis helpers: **Append (**, **Append )**, **Wrap with (...)**.
 - Filter results update the **Filtered Packets** counter in the left sidebar.
@@ -183,6 +185,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **MAC Vendors**: Ethernet OUI vendor strings.
 - **MIME Types**: all distinct payload MIME types.
 - **Data Types**: all distinct magic-identified type strings.
+- **Carvable Files**: discovered carve candidates across HTTP/FTP/NFS/SMB streams; clicking a candidate loads the carved bytes directly into Conv.
 - **ARP/RARP Operations**: ARP/RARP operation type counts.
 - **IGMP Message Types**: IGMP type distribution.
 - Clicking any tag (except location) pre-fills the filter bar with the corresponding filter expression.
@@ -218,7 +221,9 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - Input formats: Base64, Binary, Hex, ASCII/UTF-8, Decimal bytes.
 - Simultaneous output in: Hex, Binary, Decimal bytes, Decimal integer (big-endian), ASCII, Base64.
 - Input history dropdown for the current session.
+- Manual file import into Conv from context menu with size warning threshold and configurable maximum size.
 - **Data Insights**: byte length, MIME type (magic detection), detected text language, up to three ranked data-type guesses (JWT, bcrypt hash, Base64, etc.) with High/Medium/Low confidence, Shannon entropy with Low/Medium/High label.
+- **Filename Guess** in Data Insights, including carved/loaded filename context when available.
 - Entropy range: 0.0–8.0 bits/byte; Low < 4.5, Medium 4.5–6.8, High > 6.8.
 
 #### Hashes Sub-tab
@@ -350,6 +355,7 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 - **Cursor ASCII to Conv tab**: load the ASCII string at the current hex-grid cursor position into Conv.
 - **Raw Payload to Conv tab**: load the current packet's full raw payload as hex into Conv.
 - **Decompress to Conv tab**: when Conv input appears compressed (gzip/deflate/brotli), decompress and load decompressed bytes into Conv.
+- **Import file to Conv tab**: open a local file and load its bytes into Conv as hex, subject to manual-import size policy.
 
 #### Follow stream...
 
@@ -364,6 +370,7 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 - Sub-menus: **Add with &&**, **Add with ||**, **is not** (negated &&), **Clear and...**, **Parentheses**.
 - Attribute options per sub-menu: IP, Port, MAC, Link Proto, Transport Proto, Application Proto, Both Protos, MIME Type.
 - Parentheses options: **Append (**, **Append )**, **Wrap with (...)**.
+- Filter-input context action: **Save current filter...** to store named filters in the persistent filter library.
 
 #### Add to Keystore...
 
@@ -427,8 +434,9 @@ Shown when a carve target is available:
 
 - The Electron bridge can initialize the Python backend in long-lived HTTP service mode instead of spawning a fresh parser process per run.
 - Service health check endpoint: `GET /ping`.
+- Service version endpoint: `GET /version`.
 - Capture-processing endpoint: `POST /process`.
-- Control endpoint: `POST /control` for stop/shutdown requests.
+- Control endpoint: `POST /control` for stop/shutdown requests and runtime updates (`set-runtime-config`).
 - When the backend advertises NDJSON (`application/x-ndjson`), the bridge forwards incremental progress and capture snapshots to the renderer as they arrive.
 - If HTTP service mode is unavailable, the bridge automatically falls back to legacy per-run spawn mode unless disabled by settings.
 - Backend host/port and force-legacy behavior are configurable in **Settings → Backend**.

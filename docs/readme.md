@@ -2,7 +2,7 @@
 
 ## Overview
 
-PacketSnitch is a network packet analysis tool consisting of a Python backend for extracting payloads and rich metadata from `.pcap` files, and an Electron-based frontend for browsing, filtering, visualizing, and post-processing the results. Recent frontend additions include the Internet Heatmap worldmap view, the PGP workspace, expanded Settings and bridge controls, and frontend-driven LLM workflows.
+PacketSnitch is a network packet analysis tool consisting of a Python backend for extracting payloads and rich metadata from `.pcap` files, and an Electron-based frontend for browsing, filtering, visualizing, and post-processing the results. Recent frontend additions include the Internet Heatmap worldmap view, the PGP workspace, expanded Settings and bridge controls, saved-filter library workflows, context-menu manual Conv file import, and frontend-driven LLM workflows.
 
 ## Documentation
 

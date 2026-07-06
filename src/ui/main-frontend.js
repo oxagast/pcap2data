@@ -2262,7 +2262,7 @@ async function saveCurrentFilterToLibraryFromContextMenu() {
 function renderFilterHistory() {
   filterHistorySelectEl.replaceChildren();
 
-  const buildFilterDropdownLabel = (text, maxLength = 144) => {
+  const buildFilterDropdownLabel = (text, maxLength = 165) => {
     const normalized = String(text || "").replace(/\s+/g, " ").trim();
     if (normalized.length <= maxLength) return normalized;
     return `${normalized.slice(0, maxLength - 3)}...`;
