@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         ollamaModel: "minimax-m2.5:cloud",
         ollamaApiKey: "",
         activeByDefault: false,
+        backgroundSummaryGenerationEnabled: true,
         triggerDelaySeconds: 5,
         maxSummaryTokens: 1024,
         ollamaRequestTimeoutSeconds: 300,
@@ -232,6 +233,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof llm.activeByDefault === "boolean"
                     ? llm.activeByDefault
                     : defaults.activeByDefault,
+            backgroundSummaryGenerationEnabled:
+                typeof llm.backgroundSummaryGenerationEnabled === "boolean"
+                    ? llm.backgroundSummaryGenerationEnabled
+                    : defaults.backgroundSummaryGenerationEnabled,
             triggerDelaySeconds: toPositiveInteger(
                 llm.triggerDelaySeconds,
                 defaults.triggerDelaySeconds,

@@ -330,6 +330,11 @@ function isLlmEnabledInSettings() {
   return Boolean(getCurrentSettings()?.llm?.activeByDefault);
 }
 
+function isBackgroundSummaryGenerationEnabled() {
+  const llmSettings = getCurrentSettings()?.llm || {};
+  return llmSettings.backgroundSummaryGenerationEnabled !== false;
+}
+
 function isLlmRuntimeEnabled() {
   return isLlmEnabledInSettings() && ollamaVersionCheckPassed;
 }
@@ -738,6 +743,9 @@ function syncSettingsFormFromState() {
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
+  const backgroundSummaryGenerationEnabledEl = document.getElementById(
+    "settings-llm-background-summary-generation-enabled",
+  );
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
@@ -807,6 +815,11 @@ function syncSettingsFormFromState() {
       : "Leave blank to keep the stored key";
   }
   if (activeByDefaultEl) activeByDefaultEl.checked = Boolean(settings.llm.activeByDefault);
+  if (backgroundSummaryGenerationEnabledEl) {
+    backgroundSummaryGenerationEnabledEl.checked = Boolean(
+      settings.llm.backgroundSummaryGenerationEnabled,
+    );
+  }
   if (delayEl) delayEl.value = String(settings.llm.triggerDelaySeconds);
   if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
   if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
@@ -846,6 +859,9 @@ function readSettingsFormState() {
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
+  const backgroundSummaryGenerationEnabledEl = document.getElementById(
+    "settings-llm-background-summary-generation-enabled",
+  );
   const delayEl = document.getElementById("settings-llm-delay-seconds");
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
@@ -913,6 +929,9 @@ function readSettingsFormState() {
       activeByDefault: activeByDefaultEl
         ? activeByDefaultEl.checked
         : DEFAULT_SETTINGS.llm.activeByDefault,
+      backgroundSummaryGenerationEnabled: backgroundSummaryGenerationEnabledEl
+        ? backgroundSummaryGenerationEnabledEl.checked
+        : DEFAULT_SETTINGS.llm.backgroundSummaryGenerationEnabled,
       triggerDelaySeconds: delayEl ? delayEl.value : DEFAULT_SETTINGS.llm.triggerDelaySeconds,
       maxSummaryTokens: maxTokensEl ? maxTokensEl.value : DEFAULT_SETTINGS.llm.maxSummaryTokens,
       ollamaRequestTimeoutSeconds: timeoutSecondsEl
@@ -1064,6 +1083,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "activeByDefault",
     previousLlm.activeByDefault,
     nextLlm.activeByDefault,
+  );
+  pushChange(
+    "backgroundSummaryGenerationEnabled",
+    previousLlm.backgroundSummaryGenerationEnabled,
+    nextLlm.backgroundSummaryGenerationEnabled,
   );
   pushChange(
     "triggerDelaySeconds",
@@ -11813,7 +11837,7 @@ async function explainContextWithLLM() {
   if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
     statusUpdate(
-      "Status: LLM is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
+      "Status: PacketSnitch's explanation is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
     );
     return;
   }
@@ -11822,7 +11846,7 @@ async function explainContextWithLLM() {
   hideConvertContextMenu();
 
   if (!isTextSignificantForLlmExplain(textToExplain)) {
-    statusUpdate("Status: Selected text is not significant enough for LLM explanation.");
+    statusUpdate("Status: Selected text is not significant enough for PacketSnitch explanation.");
     return;
   }
 
@@ -11830,26 +11854,31 @@ async function explainContextWithLLM() {
   const packetCtx = contextPacket ? JSON.stringify(contextPacket, null, 2) : "No packet context available.";
   const prompt = `You are a network analysis assistant. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
 
-  statusUpdate("Status: Asking LLM to explain selection...");
-  writeLogEntry(`LLM explain requested for ${textToExplain.length} chars of context data`);
+  statusUpdate("Status: Asking PacketSnitch to explain selection...");
+  writeLogEntry(`PacketSnitch explain requested for ${textToExplain.length} chars of context data`);
   try {
     const response = await callLargeLanguageModelWithRetry(prompt);
     const explanation = response?.response?.trim() || "";
     if (!explanation) {
-      statusUpdate("Status: LLM returned no explanation.");
+      statusUpdate("Status: PacketSnitch returned no explanation.");
       return;
     }
-    const noteText = `# LLM Explanation\n## Data: "${textToExplain}"\n\n${explanation}`;
+    const noteText = buildLlmThreadNote({
+      title: "PacketSnitch's Explanation",
+      responseText: explanation,
+      packetSummary: buildPacketContextSummary(contextPacket),
+      selectedText: textToExplain,
+    });
     const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-explain");
     if (didAdd) {
       showNotesWorkspace();
-      statusUpdate("Status: LLM explanation added to Notes.");
+      statusUpdate("Status: PacketSnitch's explanation added to Notes.");
       writeLogEntry(`LLM explain complete (${explanation.length} chars)`);
     }
   } catch (error) {
     const errorMessage = error?.message || String(error);
-    statusUpdate(`Status: LLM explanation failed: ${errorMessage}`);
-    writeLogEntry(`LLM explain failed: ${errorMessage}`);
+    statusUpdate(`Status: PacketSnitch's explanation failed: ${errorMessage}`);
+    writeLogEntry(`PacketSnitch explain failed: ${errorMessage}`);
   }
 }
 
@@ -11926,6 +11955,29 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   return contextLines.join("\n");
 }
 
+function buildLlmThreadNote({
+  title,
+  responseText,
+  packetSummary,
+  questionText = "",
+  selectedText = "",
+}) {
+  return [
+    `# ${title}`,
+    "",
+    responseText,
+    "",
+    "---",
+    "",
+    "## Original Context",
+    questionText ? `Question: ${questionText}` : null,
+    packetSummary ? `Packet: ${packetSummary}` : null,
+    selectedText ? `Data: "${selectedText}"` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 async function askContextQuestionWithLLM() {
   if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
@@ -11957,16 +12009,13 @@ async function askContextQuestionWithLLM() {
       statusUpdate("Status: PacketSnitch returned no answer.");
       return;
     }
-    const noteText = [
-      "PacketSnitch Question",
-      `Packet: ${packetCtx}`,
-      `Question: ${question}`,
-      selectedText ? `Context: "${selectedText}"` : null,
-      "",
-      answer,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    const noteText = buildLlmThreadNote({
+      title: "PacketSnitch Question",
+      responseText: answer,
+      packetSummary: packetCtx,
+      questionText: question,
+      selectedText,
+    });
     const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-question");
     if (didAdd) {
       showNotesWorkspace();
@@ -12145,6 +12194,13 @@ function writeSummaryFromLLM() {
   //  too often when the user is rapidly scrolling through packets.
   // we should also check to make sure if this is a loaded session, and the stream has 
   // already been summmarized, we should not call the llm again for the same stream.
+  if (!isBackgroundSummaryGenerationEnabled()) {
+    if (llmSummaryTimeout) {
+      clearTimeout(llmSummaryTimeout);
+      llmSummaryTimeout = null;
+    }
+    return;
+  }
   if (summaryFromSavedSession) {
     summaryFromSavedSession = false;
     return;
@@ -13387,6 +13443,18 @@ document.getElementById("settings-llm-api-key").addEventListener("change", () =>
 document.getElementById("settings-llm-active-by-default").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated activeByDefault=${Boolean(event?.target?.checked)}`);
 });
+
+document
+  .getElementById("settings-llm-background-summary-generation-enabled")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backgroundSummaryGenerationEnabled=${Boolean(event?.target?.checked)}`,
+    );
+    if (llmSummaryTimeout) {
+      clearTimeout(llmSummaryTimeout);
+      llmSummaryTimeout = null;
+    }
+  });
 
 document.getElementById("settings-llm-delay-seconds").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated triggerDelaySeconds=${event?.target?.value}`);
