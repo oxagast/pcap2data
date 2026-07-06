@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('snitchapi', {
 
 contextBridge.exposeInMainWorld('getfileapi', {
   selectFile: () => ipcRenderer.invoke('select-file'),
+  selectManualConvFile: () => ipcRenderer.invoke('select-manual-conv-file'),
 });
 
 contextBridge.exposeInMainWorld('api', {

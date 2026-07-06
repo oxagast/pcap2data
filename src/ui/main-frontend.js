@@ -239,9 +239,18 @@ const filterHistory = [];
 const dataToolsHistorySelectEl = getCachedElement("data-tools-history-select");
 const dataToolsInputHistory = [];
 const DATA_TOOLS_INPUT_HISTORY_LIMIT = 10;
+const DATA_TOOLS_OUTPUT_PAGE_BYTES = 16384;
+const DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES = 262144;
+const DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES = 65536;
+const DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS = 65536;
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
 let dataToolsFileNameGuess = "";
+let dataToolsLastConversionBytes = new Uint8Array();
+let dataToolsLastRenderedOutputBytes = 0;
+let dataToolsLastConversionDisplay = {
+  decimalInteger: "",
+};
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const STRICT_IPV4_REGEX =
@@ -708,6 +717,9 @@ function syncSettingsFormFromState() {
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
   );
+  const manualConvImportMaxBytesEl = document.getElementById(
+    "settings-general-manual-conv-import-max-bytes",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -748,6 +760,11 @@ function syncSettingsFormFromState() {
   }
   if (streamWarnThresholdEl) {
     streamWarnThresholdEl.value = String(settings.general.streamContextWarnPacketThreshold);
+  }
+  if (manualConvImportMaxBytesEl) {
+    manualConvImportMaxBytesEl.value = formatManualConvImportLimitMb(
+      settings.general.manualConvImportMaxBytes,
+    );
   }
   if (backendTcpHostEl) {
     backendTcpHostEl.value = String(settings.backend.tcpHost || DEFAULT_SETTINGS.backend.tcpHost);
@@ -808,6 +825,9 @@ function readSettingsFormState() {
   const streamWarnThresholdEl = document.getElementById(
     "settings-general-stream-warn-packet-threshold",
   );
+  const manualConvImportMaxBytesEl = document.getElementById(
+    "settings-general-manual-conv-import-max-bytes",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -852,6 +872,9 @@ function readSettingsFormState() {
       streamContextWarnPacketThreshold: streamWarnThresholdEl
         ? streamWarnThresholdEl.value
         : DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
+      manualConvImportMaxBytes: manualConvImportMaxBytesEl
+        ? parseManualConvImportLimitMb(manualConvImportMaxBytesEl.value)
+        : DEFAULT_SETTINGS.general.manualConvImportMaxBytes,
     },
     backend: {
       tcpHost: backendTcpHostEl
@@ -925,6 +948,19 @@ function formatSettingsLogValue(value) {
   }
 }
 
+function formatManualConvImportLimitMb(bytes) {
+  const megabytes = (Number(bytes) || 0) / (1024 * 1024);
+  return Number(megabytes.toFixed(3)).toString();
+}
+
+function parseManualConvImportLimitMb(rawValue) {
+  const parsed = Number.parseFloat(String(rawValue ?? ""));
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_SETTINGS.general.manualConvImportMaxBytes;
+  }
+  return Math.max(1024, Math.round(parsed * 1024 * 1024));
+}
+
 function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   const changes = [];
   const previousGeneral = previousSettings?.general || {};
@@ -974,6 +1010,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "streamContextWarnPacketThreshold",
     previousGeneral.streamContextWarnPacketThreshold,
     nextGeneral.streamContextWarnPacketThreshold,
+  );
+  pushChange(
+    "manualConvImportMaxBytes",
+    previousGeneral.manualConvImportMaxBytes,
+    nextGeneral.manualConvImportMaxBytes,
   );
   pushChange("backendTcpHost", previousBackend.tcpHost, nextBackend.tcpHost);
   pushChange("backendTcpPort", previousBackend.tcpPort, nextBackend.tcpPort);
@@ -3477,24 +3518,19 @@ function getConvDecodedOutputText(outputFormat = "plain") {
 }
 
 function getConvContextExportText(exportType) {
+  if (
+    exportType === "hex" ||
+    exportType === "binary" ||
+    exportType === "decimal" ||
+    exportType === "decimal-integer" ||
+    exportType === "ascii" ||
+    exportType === "base64"
+  ) {
+    return getConvFullOutputText(exportType);
+  }
   switch (exportType) {
     case "input":
       return document.getElementById("data-tools-input")?.value?.trim() || "";
-    case "hex":
-      return document.getElementById("data-tools-hex-output")?.value?.trim() || "";
-    case "binary":
-      return document.getElementById("data-tools-binary-output")?.value?.trim() || "";
-    case "decimal":
-      return document.getElementById("data-tools-decimal-output")?.value?.trim() || "";
-    case "decimal-integer":
-      return (
-        document.getElementById("data-tools-decimal-integer-output")?.value?.trim() ||
-        ""
-      );
-    case "ascii":
-      return document.getElementById("data-tools-ascii-output")?.value?.trim() || "";
-    case "base64":
-      return document.getElementById("data-tools-base64-output")?.value?.trim() || "";
     case "hashes":
       return buildConvHashesNoteText();
     case "decodes":
@@ -3620,8 +3656,7 @@ function exportConvContextTextFromContextMenu(exportType) {
 }
 
 function exportConvRawFromContextMenu() {
-  const payloadHex =
-    document.getElementById("data-tools-hex-output")?.value?.trim() || "";
+  const payloadHex = getConvFullOutputText("hex");
   hideConvertContextMenu();
   if (!payloadHex) {
     statusUpdate("Status: No Conv raw data available to export");
@@ -6390,6 +6425,11 @@ function setDataToolsFileNameGuess(fileNameGuess) {
 }
 
 function resetDataToolsOutputs() {
+  dataToolsLastConversionBytes = new Uint8Array();
+  dataToolsLastRenderedOutputBytes = 0;
+  dataToolsLastConversionDisplay = {
+    decimalInteger: "",
+  };
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
   document.getElementById("data-tools-decimal-output").value = "";
@@ -6410,6 +6450,136 @@ function resetDataToolsOutputs() {
   clearDataToolsSelectionState();
   setExpandedConvertedOutput(null);
   updateDataToolsConvertedOutputVisibility();
+  updateDataToolsOutputPaginationControls();
+}
+
+function getConvFullOutputText(exportType) {
+  const bytes = dataToolsLastConversionBytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    switch (exportType) {
+      case "hex":
+        return document.getElementById("data-tools-hex-output")?.value?.trim() || "";
+      case "binary":
+        return document.getElementById("data-tools-binary-output")?.value?.trim() || "";
+      case "decimal":
+        return document.getElementById("data-tools-decimal-output")?.value?.trim() || "";
+      case "decimal-integer":
+        return document
+          .getElementById("data-tools-decimal-integer-output")
+          ?.value?.trim() || "";
+      case "ascii":
+        return document.getElementById("data-tools-ascii-output")?.value?.trim() || "";
+      case "base64":
+        return document.getElementById("data-tools-base64-output")?.value?.trim() || "";
+      default:
+        return "";
+    }
+  }
+
+  switch (exportType) {
+    case "hex":
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+    case "binary":
+      return Array.from(bytes, (byte) => byte.toString(2).padStart(8, "0")).join(" ");
+    case "decimal":
+      return Array.from(bytes, (byte) => String(byte)).join(" ");
+    case "decimal-integer":
+      return bytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
+        ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
+        : bytesToBigIntDecimal(bytes);
+    case "ascii":
+      return bytesToPrintableAscii(bytes);
+    case "base64":
+      return bytesToBase64(bytes);
+    default:
+      return "";
+  }
+}
+
+function updateDataToolsOutputPaginationControls() {
+  const rowEl = document.getElementById("data-tools-output-pagination-row");
+  const statusEl = document.getElementById("data-tools-output-pagination-status");
+  const buttonEl = document.getElementById("data-tools-load-more-output-btn");
+  if (!rowEl || !statusEl || !buttonEl) return;
+
+  const totalBytes =
+    dataToolsLastConversionBytes instanceof Uint8Array
+      ? dataToolsLastConversionBytes.length
+      : 0;
+  if (!totalBytes) {
+    rowEl.hidden = true;
+    statusEl.textContent = "";
+    buttonEl.disabled = true;
+    return;
+  }
+
+  rowEl.hidden = false;
+  const shownBytes = Math.min(dataToolsLastRenderedOutputBytes, totalBytes);
+  statusEl.textContent = `Showing ${shownBytes.toLocaleString()} / ${totalBytes.toLocaleString()} bytes`;
+  buttonEl.disabled = shownBytes >= totalBytes;
+}
+
+function renderDataToolsOutputPage({ reset = false } = {}) {
+  const totalBytes =
+    dataToolsLastConversionBytes instanceof Uint8Array
+      ? dataToolsLastConversionBytes.length
+      : 0;
+  if (!totalBytes) {
+    updateDataToolsOutputPaginationControls();
+    return;
+  }
+
+  if (reset) {
+    dataToolsLastRenderedOutputBytes = Math.min(DATA_TOOLS_OUTPUT_PAGE_BYTES, totalBytes);
+  } else {
+    dataToolsLastRenderedOutputBytes = Math.min(
+      totalBytes,
+      dataToolsLastRenderedOutputBytes + DATA_TOOLS_OUTPUT_PAGE_BYTES,
+    );
+  }
+
+  const renderedBytes = dataToolsLastConversionBytes.slice(0, dataToolsLastRenderedOutputBytes);
+  const hexValues = Array.from(renderedBytes, (byte) =>
+    byte.toString(16).padStart(2, "0").toUpperCase(),
+  );
+  const binaryValues = Array.from(renderedBytes, (byte) =>
+    byte.toString(2).padStart(8, "0"),
+  );
+  const decimalValues = Array.from(renderedBytes, (byte) => String(byte));
+  const asciiText = bytesToPrintableAscii(renderedBytes);
+  const base64Text = bytesToBase64(renderedBytes);
+
+  document.getElementById("data-tools-hex-output").value = hexValues.join(" ");
+  document.getElementById("data-tools-binary-output").value = binaryValues.join(" ");
+  document.getElementById("data-tools-decimal-output").value = decimalValues.join(" ");
+  document.getElementById("data-tools-decimal-integer-output").value =
+    dataToolsLastConversionDisplay.decimalInteger;
+  document.getElementById("data-tools-ascii-output").value = asciiText;
+  document.getElementById("data-tools-base64-output").value = base64Text;
+
+  updateDataToolsSelectionMaps(
+    document.getElementById("data-tools-format")?.value || DEFAULT_DATA_TOOLS_FORMAT,
+    document.getElementById("data-tools-input")?.value || "",
+    renderedBytes,
+    {
+      hexValues,
+      binaryValues,
+      decimalValues,
+      asciiText,
+      base64Text,
+    },
+  );
+  syncDataToolsSelectionFromField(
+    document.activeElement && DATA_TOOLS_SELECTION_FIELD_IDS.includes(document.activeElement.id)
+      ? document.activeElement.id
+      : "data-tools-input",
+  );
+  updateDataToolsHexHighlights();
+  updateDataToolsOutputPaginationControls();
+}
+
+function loadMoreDataToolsOutputPage() {
+  renderDataToolsOutputPage({ reset: false });
 }
 
 function setExpandedConvertedOutput(expandedOutputId) {
@@ -7330,22 +7500,19 @@ function runDataToolsConversion(options = {}) {
 
   try {
     const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+    const isLargePayload = bytes.length > DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES;
+    const inspectedBytes =
+      bytes.length > DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES
+        ? bytes.slice(0, DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES)
+        : bytes;
+    const inputTextSample =
+      inputEl.value.length > DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS
+        ? inputEl.value.slice(0, DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS)
+        : inputEl.value;
     if (!suppressHistory) {
       addDataToolsInputHistory(formatEl.value, inputEl.value);
     }
-    const hexValues = [...bytes].map((byte) =>
-      byte.toString(16).padStart(2, "0").toUpperCase(),
-    );
-    const binaryValues = [...bytes].map((byte) =>
-      byte.toString(2).padStart(8, "0"),
-    );
-    const decimalValues = [...bytes].map((byte) => String(byte));
-    const hexSpaced = hexValues.join(" ");
-    const binarySpaced = binaryValues.join(" ");
-    const decimalBytes = decimalValues.join(" ");
-    const asciiPreview = bytesToPrintableAscii(bytes);
-    const inspectedText = decodeBytesForTextInspection(bytes);
-    const base64Value = bytesToBase64(bytes);
+    const inspectedText = decodeBytesForTextInspection(inspectedBytes);
     const entropy = calculateShannonEntropy(bytes);
     const entropyLabel = getEntropyLabel(entropy);
     const decimalInteger =
@@ -7353,48 +7520,41 @@ function runDataToolsConversion(options = {}) {
         ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
         : bytesToBigIntDecimal(bytes);
 
-    document.getElementById("data-tools-hex-output").value = hexSpaced;
-    document.getElementById("data-tools-binary-output").value = binarySpaced;
-    document.getElementById("data-tools-decimal-output").value = decimalBytes;
-    document.getElementById("data-tools-decimal-integer-output").value =
-      decimalInteger;
-    document.getElementById("data-tools-ascii-output").value = asciiPreview;
-    document.getElementById("data-tools-base64-output").value = base64Value;
+    dataToolsLastConversionBytes = bytes;
+    dataToolsLastConversionDisplay = {
+      decimalInteger,
+    };
+    renderDataToolsOutputPage({ reset: true });
     document.getElementById("data-tools-byte-length").textContent =
       `Byte Length: ${bytes.length}`;
     document.getElementById("data-tools-mime-type").textContent =
       `MIME Type: ${inferMimeType(bytes)}`;
     renderDataToolsLanguageGuess(
       guessReadableTextLanguage(
-        formatEl.value === "ascii" ? inputEl.value : inspectedText,
-        bytes,
+        formatEl.value === "ascii" ? inputTextSample : inspectedText,
+        inspectedBytes,
       ),
     );
     // ASCII input has already been scanned as raw text; skip duplicate decoded scan.
     renderDataTypeGuesses(
       deriveDataTypeGuesses(
-        inputEl.value,
+        formatEl.value === "ascii" ? inputTextSample : "",
         formatEl.value === "ascii" ? "" : inspectedText,
       ),
-    );
-    updateDataToolsSelectionMaps(formatEl.value, inputEl.value, bytes, {
-      hexValues,
-      binaryValues,
-      decimalValues,
-      asciiText: asciiPreview,
-      base64Text: base64Value,
-    });
-    syncDataToolsSelectionFromField(
-      document.activeElement &&
-        DATA_TOOLS_SELECTION_FIELD_IDS.includes(document.activeElement.id)
-        ? document.activeElement.id
-        : "data-tools-input",
     );
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
-    computeDataToolsHashes(bytes);
-    runProtoDecoder(bytes);
+    if (!isLargePayload || getActiveConvSubtab() === CONV_HASHES_SUBTAB) {
+      computeDataToolsHashes(bytes);
+    } else {
+      resetHashOutputs();
+    }
+    if (!isLargePayload || getActiveConvSubtab() === CONV_DECODES_SUBTAB) {
+      runProtoDecoder(bytes);
+    } else {
+      clearProtoDecoderOutput();
+    }
     if (!suppressCommit) {
       markDataToolsInputCommitted();
     }
@@ -7955,7 +8115,20 @@ function runProtoDecoder(bytes) {
 
 function clearProtoDecoderOutput() {
   const protoOutput = document.getElementById("data-tools-proto-output");
+  activeDataToolsProtoResult = null;
   if (protoOutput) protoOutput.innerHTML = "";
+}
+
+function runDeferredDataToolsAnalysisForActiveSubtab() {
+  const bytes = dataToolsLastConversionBytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+  const activeSubtab = getActiveConvSubtab();
+  if (activeSubtab === CONV_HASHES_SUBTAB) {
+    computeDataToolsHashes(bytes);
+  }
+  if (activeSubtab === CONV_DECODES_SUBTAB) {
+    runProtoDecoder(bytes);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7978,6 +8151,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "flex";
   setConvSubtab(tabName);
+  runDeferredDataToolsAnalysisForActiveSubtab();
 }
 
 function showNotesWorkspace() {
@@ -8162,6 +8336,7 @@ let activeContextPacket = null;
 let activeContextLlmQuestionDialogResolver = null;
 let activeContextLlmQuestionDialogContext = null;
 let activeFollowStreamConfirmDialogResolver = null;
+let activeManualConvImportWarningDialogResolver = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -8186,6 +8361,7 @@ const convertContextButtons = {
   decimal: getCachedElement("convert-context-decimal"),
   ascii: getCachedElement("convert-context-ascii"),
   deriveGuess: getCachedElement("convert-context-derive-guess"),
+  loadFile: getCachedElement("convert-context-load-file"),
   loadCursorAscii: getCachedElement("convert-context-load-cursor-ascii"),
   loadPayload: getCachedElement("convert-context-load-payload"),
   decompressConv: getCachedElement("convert-context-decompress-conv"),
@@ -8576,6 +8752,33 @@ function getTrimmedSelectionText() {
 function getUtf8ByteLength(value) {
   const normalized = typeof value === "string" ? value : String(value || "");
   return DATA_TOOLS_TEXT_ENCODER.encode(normalized).length;
+}
+
+function base64ToUint8Array(base64Value) {
+  const decoded = window.atob(String(base64Value || ""));
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index++) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function getManualConvImportMaxBytes() {
+  return (
+    Number(getCurrentSettings()?.general?.manualConvImportMaxBytes) ||
+    DEFAULT_SETTINGS.general.manualConvImportMaxBytes
+  );
+}
+
+function formatByteCount(byteCount) {
+  const bytes = Number(byteCount) || 0;
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 1 : 2)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 1 : 2)} KB`;
+  }
+  return `${bytes} bytes`;
 }
 
 function getContextSelectionByteLength(target = activeContextTarget) {
@@ -9025,6 +9228,7 @@ function showConvertContextMenu(
   convertContextButtons.loadPayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
+  convertContextButtons.loadFile.style.display = "block";
   activeContextConvDecompression = getActiveConvDecompressionCandidate();
   convertContextButtons.decompressConv.style.display = activeContextConvDecompression
     ? "block"
@@ -9221,9 +9425,11 @@ function showConvertContextMenu(
     hasSelectionContext || isHexViewTarget || hasCookieActions;
   const hasClipboardActions = hasCopyActions || showPaste;
   const hasGeneralActions = hasClipboardActions;
+  const hasManualFileImportAction = true;
   const hasDataTypeActions =
     formats.length > 0 ||
     hasPayloadToExport ||
+    hasManualFileImportAction ||
     Boolean(activeContextConvDecompression) ||
     hasCursorAsciiValue ||
     hasDeriveGuessInput;
@@ -9577,6 +9783,47 @@ function resolveFollowStreamContextMenuLoad(shouldContinue) {
 async function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
   if (packetCount <= getStreamContextWarnPacketThreshold()) return true;
   return requestFollowStreamContextMenuLoad(tabLabel, packetCount);
+}
+
+function requestManualConvImportWarningLoad({
+  fileName,
+  fileSize,
+  warningThreshold,
+}) {
+  const dialogEl = document.getElementById("manual-conv-import-warning-dialog");
+  const descriptionEl = document.getElementById(
+    "manual-conv-import-warning-description",
+  );
+  const continueBtnEl = document.getElementById(
+    "manual-conv-import-warning-continue-btn",
+  );
+  if (!dialogEl || !descriptionEl) {
+    return Promise.resolve(
+      window.confirm(
+        `${fileName || "This file"} is ${formatByteCount(fileSize)}. Files above ${formatByteCount(warningThreshold)} trigger a warning for the current import limit. Loading large files into Conv can consume significant memory and may bog down the UI.\n\nContinue?`,
+      ),
+    );
+  }
+  if (activeManualConvImportWarningDialogResolver) {
+    const resolve = activeManualConvImportWarningDialogResolver;
+    activeManualConvImportWarningDialogResolver = null;
+    resolve(false);
+  }
+  descriptionEl.textContent = `${fileName || "This file"} is ${formatByteCount(fileSize)}. Files above ${formatByteCount(warningThreshold)} trigger a warning for the current import limit. Loading large files into Conv can consume significant memory and may bog down the UI. Continue?`;
+  dialogEl.hidden = false;
+  if (continueBtnEl) continueBtnEl.focus();
+  return new Promise((resolve) => {
+    activeManualConvImportWarningDialogResolver = resolve;
+  });
+}
+
+function resolveManualConvImportWarningLoad(shouldContinue) {
+  const dialogEl = document.getElementById("manual-conv-import-warning-dialog");
+  if (dialogEl) dialogEl.hidden = true;
+  if (!activeManualConvImportWarningDialogResolver) return;
+  const resolve = activeManualConvImportWarningDialogResolver;
+  activeManualConvImportWarningDialogResolver = null;
+  resolve(Boolean(shouldContinue));
 }
 
 function getStreamTupleForPacket(packet) {
@@ -11207,6 +11454,92 @@ function loadCarvedFileCandidateIntoConvTab(candidate) {
     `Stats carve loaded into Conv protocol=${protocolLabel} file="${candidate.fileName || "unknown"}" bytes=${candidateBytes.length}`,
   );
   return true;
+}
+
+async function loadManualFileIntoConvTabFromContextMenu() {
+  hideConvertContextMenu();
+  if (!window.getfileapi || typeof window.getfileapi.selectManualConvFile !== "function") {
+    doError("Manual Conv file import is unavailable.");
+    return;
+  }
+
+  let selectedFile = null;
+  try {
+    selectedFile = await window.getfileapi.selectManualConvFile();
+  } catch (error) {
+    doError("Could not open file picker for Conv import.");
+    logErrorEntry("manual-conv-file-picker", error);
+    return;
+  }
+
+  if (!selectedFile?.base64) {
+    statusUpdate("Status: Manual Conv file import cancelled");
+    return;
+  }
+
+  const fileSize = Number(selectedFile.size) || 0;
+  const configuredLimit = getManualConvImportMaxBytes();
+  if (fileSize > configuredLimit) {
+    const message =
+      `Refused manual Conv import for ${selectedFile.fileName || "selected file"}: ` +
+      `${formatByteCount(fileSize)} exceeds the configured limit of ${formatByteCount(configuredLimit)}.`;
+    doError(message);
+    statusUpdate(`Status: ${message}`);
+    writeLogEntry(
+      `Warning: manual Conv import refused file="${selectedFile.fileName || "unknown"}" bytes=${fileSize} limit=${configuredLimit}`,
+    );
+    return;
+  }
+
+  const largeImportWarningBytes = Math.max(1, Math.floor(configuredLimit / 4));
+  if (fileSize > largeImportWarningBytes) {
+    const shouldContinue = await requestManualConvImportWarningLoad({
+      fileName: selectedFile.fileName || "This file",
+      fileSize,
+      warningThreshold: largeImportWarningBytes,
+    });
+    if (!shouldContinue) {
+      statusUpdate("Status: Manual Conv file import cancelled after size warning");
+      return;
+    }
+  }
+
+  try {
+    const bytes = base64ToUint8Array(selectedFile.base64);
+    const inputEl = document.getElementById("data-tools-input");
+    const formatEl = document.getElementById("data-tools-format");
+    if (!inputEl || !formatEl) {
+      statusUpdate("Status: Conv input fields are unavailable");
+      return;
+    }
+
+    inputEl.value = bytesToHexString(bytes);
+    formatEl.value = "hex";
+    setDataToolsFileNameGuess(selectedFile.fileName || "");
+    showDataTools(CONV_CONVERSIONS_SUBTAB);
+    runDataToolsConversion();
+
+    const decodedText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const keystoreImportCount = keystorePanel.importManualDataIntoSessionKeystore({
+      bytes,
+      text: decodedText,
+      fileName: selectedFile.fileName || "",
+      source: "manual-conv-import",
+    });
+
+    statusUpdate(
+      `Status: Loaded manual file into Conv (${fileSize} bytes)` +
+      (keystoreImportCount > 0
+        ? ` and added ${keystoreImportCount} keystore entr${keystoreImportCount === 1 ? "y" : "ies"}`
+        : ""),
+    );
+    writeLogEntry(
+      `Manual Conv import loaded file="${selectedFile.fileName || "unknown"}" bytes=${fileSize} keystore_entries=${keystoreImportCount}`,
+    );
+  } catch (error) {
+    doError("Manual Conv file import failed.");
+    logErrorEntry("manual-conv-file-import", error);
+  }
 }
 
 async function listCarvableFilesForStats() {
@@ -12886,6 +13219,24 @@ document
     }
   });
 
+document
+  .getElementById("manual-conv-import-warning-continue-btn")
+  .addEventListener("click", () => resolveManualConvImportWarningLoad(true));
+document
+  .getElementById("manual-conv-import-warning-cancel-btn")
+  .addEventListener("click", () => resolveManualConvImportWarningLoad(false));
+document
+  .getElementById("manual-conv-import-warning-dialog")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      resolveManualConvImportWarningLoad(true);
+      return;
+    }
+    if (event.key === "Escape") {
+      resolveManualConvImportWarningLoad(false);
+    }
+  });
+
 
 
 
@@ -13055,16 +13406,28 @@ document.getElementById("settings-llm-retry-count").addEventListener("change", (
 
 document
   .getElementById("conv-subtab-conversions")
-  .addEventListener("click", () => setConvSubtab(CONV_CONVERSIONS_SUBTAB));
+  .addEventListener("click", () => {
+    setConvSubtab(CONV_CONVERSIONS_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
 document
   .getElementById("conv-subtab-hashes")
-  .addEventListener("click", () => setConvSubtab(CONV_HASHES_SUBTAB));
+  .addEventListener("click", () => {
+    setConvSubtab(CONV_HASHES_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
 document
   .getElementById("conv-subtab-decodes")
-  .addEventListener("click", () => setConvSubtab(CONV_DECODES_SUBTAB));
+  .addEventListener("click", () => {
+    setConvSubtab(CONV_DECODES_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
 document
   .getElementById("conv-subtab-packet-json")
-  .addEventListener("click", () => setConvSubtab(CONV_PACKET_JSON_SUBTAB));
+  .addEventListener("click", () => {
+    setConvSubtab(CONV_PACKET_JSON_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
 
 document
   .getElementById("crypt-subtab-ssl")
@@ -13282,6 +13645,9 @@ document
 document
   .getElementById("data-tools-convert-btn")
   .addEventListener("click", runDataToolsConversion);
+document
+  .getElementById("data-tools-load-more-output-btn")
+  .addEventListener("click", loadMoreDataToolsOutputPage);
 bindConvertedOutputExpandHandlers();
 updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
@@ -13427,14 +13793,12 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
 document
   .getElementById("data-tools-proto-select")
   .addEventListener("change", () => {
-    const inputEl = document.getElementById("data-tools-input");
-    const formatEl = document.getElementById("data-tools-format");
-    if (!inputEl.value.trim()) return;
     try {
-      const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+      const bytes = dataToolsLastConversionBytes;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
       runProtoDecoder(bytes);
     } catch {
-      // ignore parse errors; the error will have been shown on convert
+      // ignore failures and preserve existing decoder output
     }
   });
 convertContextButtons.hex.addEventListener("click", () =>
@@ -13454,6 +13818,9 @@ convertContextButtons.ascii.addEventListener("click", () =>
 );
 convertContextButtons.deriveGuess.addEventListener("click", () => {
   deriveContextSelectionGuessFromContextMenu();
+});
+convertContextButtons.loadFile.addEventListener("click", () => {
+  void loadManualFileIntoConvTabFromContextMenu();
 });
 convertContextButtons.loadPayload.addEventListener("click", () => {
   loadRawPayloadIntoDataToolsFromContextMenu();

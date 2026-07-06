@@ -1207,6 +1207,26 @@ app.whenReady().then(() => {
       isBackendLoaded = true;
       return filePaths[0];
     });
+    ipcMain.handle("select-manual-conv-file", async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [
+          {
+            name: "All Files",
+            extensions: ["*"],
+          },
+        ],
+      });
+      if (canceled || !filePaths?.[0]) return null;
+      const filePath = filePaths[0];
+      const fileBuffer = await fs.promises.readFile(filePath);
+      return {
+        filePath,
+        fileName: path.basename(filePath),
+        size: fileBuffer.length,
+        base64: fileBuffer.toString("base64"),
+      };
+    });
   });
 });
 

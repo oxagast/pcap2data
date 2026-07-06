@@ -920,6 +920,7 @@ strong {
 #crypt-keystore-manual-uri-dialog,
 #ctx-llm-question-dialog,
 #follow-stream-confirm-dialog,
+#manual-conv-import-warning-dialog,
 #session-delete-dialog {
   position: fixed;
   inset: 0;
@@ -936,6 +937,7 @@ strong {
 #crypt-keystore-manual-uri-dialog[hidden],
 #ctx-llm-question-dialog[hidden],
 #follow-stream-confirm-dialog[hidden],
+#manual-conv-import-warning-dialog[hidden],
 #session-delete-dialog[hidden] {
   display: none !important;
 }
@@ -1251,6 +1253,20 @@ strong {
 
 .data-tools-output-label-base64 {
   color: var(--data-tools-base64-color);
+}
+
+.data-tools-pagination-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  color: var(--color-6);
+  font-size: 11px;
+}
+
+#data-tools-load-more-output-btn {
+  font-size: 11px;
+  padding: 4px 8px;
 }
 
 #data-tools-hex-output {

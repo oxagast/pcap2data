@@ -993,6 +993,95 @@ function createKeystorePanel({
     return (hash >>> 0).toString(16);
   }
 
+  function detectSessionTokenMatches(rawText, pathKey = "") {
+    const matches = [];
+    const text = normalizeSessionSecretValue(rawText);
+    if (!text) return matches;
+    const lowerPath = String(pathKey || "").toLowerCase();
+
+    const addMatch = (type, token) => {
+      const normalizedToken = normalizeSessionSecretValue(token);
+      if (!normalizedToken) return;
+      matches.push({ type, content: normalizedToken });
+    };
+
+    const regexExtract = (regex, type) => {
+      regex.lastIndex = 0;
+      let regexMatch;
+      while ((regexMatch = regex.exec(text)) !== null) {
+        addMatch(type, regexMatch[0]);
+      }
+    };
+
+    regexExtract(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "aws-access-key");
+    regexExtract(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "github-token");
+    regexExtract(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "github-token");
+    regexExtract(/\bmfa\.[A-Za-z0-9_-]{80,}\b/g, "discord-token");
+    regexExtract(
+      /\b[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b/g,
+      "discord-token",
+    );
+    regexExtract(
+      /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+      "jwt-token",
+    );
+    regexExtract(/\bya29\.[A-Za-z0-9._-]{20,}\b/g, "oauth-token");
+
+    if (/\bBearer\s+[A-Za-z0-9._~-]{20,}\b/i.test(text)) {
+      const bearerToken = text.replace(/^.*?\bBearer\s+/i, "").trim();
+      addMatch("oauth-token", bearerToken);
+    }
+
+    const hasLikelySecretKeyName =
+      lowerPath.includes("token") ||
+      lowerPath.includes("apikey") ||
+      lowerPath.includes("api_key") ||
+      lowerPath.includes("api-key") ||
+      lowerPath.includes("oauth") ||
+      lowerPath.includes("authorization") ||
+      lowerPath.includes("auth") ||
+      lowerPath.includes("discord") ||
+      lowerPath.includes("github") ||
+      lowerPath.includes("azure") ||
+      lowerPath.includes("aws") ||
+      lowerPath.includes("secret") ||
+      lowerPath.includes("accountkey");
+
+    if (hasLikelySecretKeyName) {
+      const normalizedCandidate = text.replace(/^bearer\s+/i, "").trim();
+      if (normalizedCandidate.length >= 20) {
+        let inferredType = "api-token";
+        if (lowerPath.includes("oauth")) inferredType = "oauth-token";
+        else if (lowerPath.includes("discord")) inferredType = "discord-token";
+        else if (lowerPath.includes("github")) inferredType = "github-token";
+        else if (lowerPath.includes("aws")) inferredType = "aws-secret-key";
+        else if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
+          inferredType = "azure-key";
+        }
+        addMatch(inferredType, normalizedCandidate);
+      }
+    }
+
+    const accountKeyMatch = text.match(/AccountKey=([^;\s]+)/i);
+    if (accountKeyMatch?.[1]) {
+      addMatch("azure-key", accountKeyMatch[1]);
+    }
+
+    if (/^[A-Za-z0-9+/]{43}=$/.test(text) || /^[A-Za-z0-9+/]{86}==$/.test(text)) {
+      if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
+        addMatch("azure-key", text);
+      }
+    }
+
+    if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
+      addMatch("aws-secret-key", text);
+    }
+    if (shouldIncludeSessionSecretValue(text)) {
+      addMatch("goodie", text);
+    }
+    return matches;
+  }
+
   function normalizeUriCandidate(uri) {
     if (uri === null || uri === undefined) return "";
     // try to filter out CSS and HTML crap
@@ -2021,6 +2110,160 @@ function createKeystorePanel({
     });
   }
 
+  function buildManualDataKeystoreEntries({
+    bytes = null,
+    text = "",
+    fileName = "",
+    source = "manual-conv-import",
+  } = {}) {
+    const generatedEntries = [];
+    const dedupe = new Set();
+    const normalizedText = normalizeSessionSecretValue(text);
+    const summaryBase = fileName
+      ? `Manual Conv import file=${fileName}`
+      : "Manual Conv import";
+
+    const pushManualEntry = ({
+      type = "secret",
+      label,
+      content,
+      entrySource = source,
+      summary = summaryBase,
+      packetIndex = "manual",
+    }) => {
+      const normalizedContent = normalizeSessionSecretValue(content);
+      if (!normalizedContent) return;
+      const fingerprint = `${type}|${label}|${hashContentForDeduplication(normalizedContent)}`;
+      if (dedupe.has(fingerprint)) return;
+      dedupe.add(fingerprint);
+      generatedEntries.push({
+        type,
+        label: label || `${type}-${new Date().toISOString()}`,
+        source: entrySource,
+        content: normalizedContent,
+        summary,
+        packetIndex,
+      });
+    };
+
+    const scanTextValue = (rawValue, pathKey = "body") => {
+      const rawText = normalizeSessionSecretValue(rawValue);
+      if (!rawText) return;
+
+      extractUriCandidatesFromText(rawText).forEach((uriValue) => {
+        const uriType = /^https?:\/\//i.test(uriValue) ? "url" : "uri";
+        pushManualEntry({
+          type: uriType,
+          label: `${uriType.toUpperCase()} ${uriValue}`,
+          content: uriValue,
+          entrySource: `${source}-uri`,
+          summary: `${summaryBase} ${pathKey}`,
+        });
+      });
+
+      extractEmailCandidatesFromText(rawText).forEach((emailValue) => {
+        pushManualEntry({
+          type: "email",
+          label: `Email ${emailValue}`,
+          content: emailValue,
+          entrySource: `${source}-email`,
+          summary: `${summaryBase} ${pathKey}`,
+        });
+      });
+
+      extractPlaintextProtocolCredentialEntries({
+        protocol: "FILE",
+        pathKey,
+        rawText,
+        port: [21, 25, 80, 143, 443, 465, 5060, 5061, 587, 993, 3389],
+        packetInfo: {},
+      }).forEach((credentialEntry) => {
+        pushManualEntry({
+          type: credentialEntry.type,
+          label: credentialEntry.label,
+          content: credentialEntry.content,
+          entrySource: credentialEntry.source || `${source}-credential`,
+          summary: `${summaryBase} ${pathKey}`,
+        });
+      });
+
+      detectSessionTokenMatches(rawText, pathKey).forEach((tokenMatch) => {
+        pushManualEntry({
+          type: tokenMatch.type,
+          label: `${tokenMatch.type.toUpperCase()} ${tokenMatch.content.slice(0, 64)}`,
+          content: tokenMatch.content,
+          entrySource: `${source}-token`,
+          summary: `${summaryBase} ${pathKey}`,
+        });
+      });
+
+      if (shouldIncludeSessionSecretKey(pathKey) && shouldIncludeSessionSecretValue(rawText)) {
+        const decodedBasic = decodeHttpBasicAuth(rawText);
+        pushManualEntry({
+          type: inferSessionEntryType(pathKey),
+          label: `FILE ${pathKey}`,
+          content: decodedBasic || rawText,
+          entrySource: `${source}-decoded`,
+          summary: `${summaryBase} ${pathKey}`,
+        });
+      }
+    };
+
+    if (normalizedText) {
+      scanTextValue(normalizedText, "body");
+      normalizedText.split(/\r?\n/).forEach((line, lineIndex) => {
+        const normalizedLine = normalizeSessionSecretValue(line);
+        if (!normalizedLine) return;
+        const keyValueMatch = normalizedLine.match(/^([A-Za-z0-9_.\-\[\] ]{2,80})\s*[:=]\s*(.+)$/);
+        if (keyValueMatch) {
+          const derivedPathKey = keyValueMatch[1]
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ".");
+          scanTextValue(keyValueMatch[2], derivedPathKey);
+        }
+        scanTextValue(normalizedLine, `line.${lineIndex + 1}`);
+      });
+    }
+
+    if (bytes instanceof Uint8Array && bytes.length > 0) {
+      const decodedHttp = decodeHttpFromBytes(bytes);
+      if (decodedHttp?.protocol === "HTTP") {
+        decodedHttp.fields.forEach((field) => {
+          const fieldName = String(field?.name || "field")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ".");
+          scanTextValue(field?.value, `http.${fieldName}`);
+        });
+        extractCookieJarEntriesFromHttpFields(decodedHttp.fields).forEach((cookieValue) => {
+          const cookieName = cookieValue.split("=")[0] || cookieValue;
+          pushManualEntry({
+            type: "cookie",
+            label: `COOKIE ${cookieName}`,
+            content: cookieValue,
+            entrySource: `${source}-cookie`,
+            summary: `${summaryBase} http.cookie`,
+          });
+        });
+      }
+    }
+
+    return generatedEntries;
+  }
+
+  function importManualDataIntoSessionKeystore(options = {}) {
+    const generatedEntries = buildManualDataKeystoreEntries(options);
+    let addedCount = 0;
+    generatedEntries.forEach((entry) => {
+      const previousLength = cryptSessionKeystoreEntries.length;
+      addSessionKeystoreEntry(entry);
+      if (cryptSessionKeystoreEntries.length > previousLength) {
+        addedCount += 1;
+      }
+    });
+    return addedCount;
+  }
+
   function addSessionKeystoreEntry({
     type,
     label,
@@ -2715,6 +2958,7 @@ function createKeystorePanel({
     resolveKeystoreUnlockPassword,
     submitManualUriFromContextMenuDialog,
     resolveManualUriFromContextMenuDialog,
+    importManualDataIntoSessionKeystore,
     getActiveCryptKeystoreEntries,
     setActiveMode(mode) {
       cryptActiveKeystoreMode = mode;

@@ -15,6 +15,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendPacketChunkSize: 250,
         backendWorkerThreads: DEFAULT_BACKEND_WORKER_THREADS,
         streamContextWarnPacketThreshold: 20,
+        manualConvImportMaxBytes: 2 * 1024 * 1024,
     },
     backend: {
         tcpHost: "127.0.0.1",
@@ -150,6 +151,11 @@ function normalizeSettings(rawSettings = {}) {
                 general.streamContextWarnPacketThreshold,
                 generalDefaults.streamContextWarnPacketThreshold,
                 5,
+            ),
+            manualConvImportMaxBytes: toPositiveInteger(
+                general.manualConvImportMaxBytes,
+                generalDefaults.manualConvImportMaxBytes,
+                1024,
             ),
         },
         backend: {

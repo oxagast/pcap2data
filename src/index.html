@@ -275,6 +275,10 @@
                   Base64
                 </div>
                 <textarea id="data-tools-base64-output" readonly></textarea>
+                <div id="data-tools-output-pagination-row" class="data-tools-pagination-row" hidden>
+                  <button id="data-tools-load-more-output-btn" type="button">Load more output</button>
+                  <span id="data-tools-output-pagination-status"></span>
+                </div>
               </div>
               <div class="data-tools-section">
                 <div class="data-tools-title">Data Insights</div>
@@ -631,6 +635,18 @@ No keystore entries saved.</pre>
             </div>
           </div>
         </div>
+        <div id="manual-conv-import-warning-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Import File</div>
+            <div id="manual-conv-import-warning-description">
+              This file is 0 bytes.
+            </div>
+            <div class="crypt-actions-row">
+              <button id="manual-conv-import-warning-continue-btn">Continue</button>
+              <button id="manual-conv-import-warning-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div id="list_box">
           <div id="list_search_bar">
             <input id="list-search" type="text" placeholder="Filter list by host, IP, port, or protocol..." />
@@ -699,6 +715,12 @@ No keystore entries saved.</pre>
                 <input id="settings-general-stream-warn-packet-threshold" type="number" min="5" step="1" />
                 <div class="settings-help-text">Warn before loading large follow-stream results into Conv or Crypt.
                   Minimum 5 packets.</div>
+
+                <label for="settings-general-manual-conv-import-max-bytes">Manual Conv import limit (MB)</label>
+                <input id="settings-general-manual-conv-import-max-bytes" type="number" min="0.001" step="0.25" />
+                <div class="settings-help-text">Manual file-to-Conv imports warn above one quarter of this limit and are
+                  refused
+                  above this limit. Default 2 MB.</div>
               </div>
             </div>
           </div>
@@ -988,6 +1010,9 @@ No keystore entries saved.</pre>
         </button>
         <button id="convert-context-decompress-conv" type="button">
           Decompress to Conv tab
+        </button>
+        <button id="convert-context-load-file" type="button">
+          Import File
         </button>
       </div>
     </div>
