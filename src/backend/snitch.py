@@ -134,6 +134,8 @@ def _loadPacketsnitchVersion():
 
 
 PACKETSNITCH_VERSION, PACKETSNITCH_VERSION_SOURCE = _loadPacketsnitchVersion()
+backendRuntimeMode = "unknown"
+backendShutdownReason = "normal"
 
 
 def logBackendStartup(mode):
@@ -143,6 +145,24 @@ def logBackendStartup(mode):
         + f"mode={safeMode} "
         + f"version={PACKETSNITCH_VERSION} "
         + f"version_source={PACKETSNITCH_VERSION_SOURCE}",
+        file=sys.stderr,
+    )
+
+
+def logBackendShutdown(mode, reason, exitCode):
+    safeMode = str(mode or "unknown").strip() or "unknown"
+    safeReason = str(reason or "normal").strip() or "normal"
+    try:
+        safeExitCode = int(exitCode)
+    except Exception:
+        safeExitCode = 0
+
+    print(
+        "[Main] Backend shutdown "
+        + f"mode={safeMode} "
+        + f"reason={safeReason} "
+        + f"exit_code={safeExitCode} "
+        + f"version={PACKETSNITCH_VERSION}",
         file=sys.stderr,
     )
 
@@ -5334,6 +5354,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
                 if action == "shutdown":
                     stopEvent.set()
+                    setattr(self.server, "snitch_shutdown_reason", "control-shutdown")
                     self.sendJson(
                         200,
                         {
@@ -5520,37 +5541,57 @@ def runHttpServer(serverHost, serverPort):
         allow_reuse_address = True
 
     with ThreadedHttpServer((serverHost, int(serverPort)), SnitchHttpHandler) as server:
+        setattr(server, "snitch_shutdown_reason", "server-stop")
         print(
             f"[BridgeServer] Listening host={serverHost} port={int(serverPort)}",
             file=sys.stderr,
         )
-        server.serve_forever()
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            # Suppress traceback for expected interactive/process-manager shutdowns.
+            return "keyboard-interrupt", 130
+
+        return getattr(server, "snitch_shutdown_reason", "server-stop"), 0
 
 
 def main():
+    global backendRuntimeMode
+    global backendShutdownReason
+
     parser = buildParser()
     parsedArgs = parser.parse_args()
     startupMode = "http-server" if parsedArgs.server else "cli"
+    backendRuntimeMode = startupMode
     logBackendStartup(startupMode)
 
     if parsedArgs.server:
-        runHttpServer(parsedArgs.server_host, parsedArgs.server_port)
-        return 0
+        backendShutdownReason, exitCode = runHttpServer(
+            parsedArgs.server_host, parsedArgs.server_port
+        )
+        return int(exitCode)
 
     if not parsedArgs.pcap_file:
         parser.error("pcap_file is required unless --server is used")
 
     result = runCaptureFromArgs(parsedArgs)
+    backendShutdownReason = "completed" if result.get("success") else "failed"
     return 0 if result.get("success") else 1
 
 
 if __name__ == "__main__":
+    exitCode = 0
     try:
         exitCode = main()
+    except KeyboardInterrupt:
+        backendShutdownReason = "keyboard-interrupt"
+        exitCode = 130
     finally:
         if geoIpReader is not None:
             try:
                 geoIpReader.close()
             except Exception:
                 pass
+
+        logBackendShutdown(backendRuntimeMode, backendShutdownReason, exitCode)
     sys.exit(exitCode)

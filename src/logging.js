@@ -81,8 +81,8 @@ function initializeLogging({
       // this is the dummy structure packet
       return;
     }
-    if (message.length > 300) {
-      message = message.substring(0, 300) + " [truncated]";
+    if (message.length > 110) {
+      message = message.substring(0, 110) + " [truncated]";
     }
 
     const now = Date.now();
