@@ -159,6 +159,12 @@ contextBridge.exposeInMainWorld('themeapi', {
   getThemesDirectory: () => ipcRenderer.invoke('themes-directory'),
 });
 
+contextBridge.exposeInMainWorld('savedfiltersapi', {
+  list: () => ipcRenderer.invoke('saved-filters-list'),
+  save: (payload) => ipcRenderer.invoke('saved-filters-save', payload),
+  remove: (payload) => ipcRenderer.invoke('saved-filters-remove', payload),
+});
+
 
 contextBridge.exposeInMainWorld("llmapi", {
   generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),

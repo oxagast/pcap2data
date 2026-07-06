@@ -235,7 +235,10 @@ const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
 const filterHistorySelectEl = getCachedElement("filter-history-select");
+const FILTER_DROPDOWN_OPTION_PREFIX_SAVED = "saved:";
+const FILTER_DROPDOWN_OPTION_PREFIX_SESSION = "session:";
 const filterHistory = [];
+const savedFilterLibrary = [];
 const dataToolsHistorySelectEl = getCachedElement("data-tools-history-select");
 const dataToolsInputHistory = [];
 const DATA_TOOLS_INPUT_HISTORY_LIMIT = 10;
@@ -1747,7 +1750,6 @@ async function clearCurrentSession() {
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
   hostFilterEl.value = "";
-  filterHistorySelectEl.innerHTML = '<option value="" selected>Filter History</option>';
   filterInputEl.value = "";
   dataToolsInputHistory.length = 0;
   dataToolsHistorySelectEl.innerHTML = '<option value="" disabled selected>Data Tools History</option>';
@@ -2040,26 +2042,301 @@ function canClearFilterQuery() {
   return !filterInputEl.disabled && filterInputEl.value.trim() !== "";
 }
 
+function normalizeSavedFilterEntries(rawEntries) {
+  if (!Array.isArray(rawEntries)) return [];
+  return rawEntries
+    .filter((entry) => entry && typeof entry === "object")
+    .flatMap((entry) => {
+      const id =
+        typeof entry.id === "string" && entry.id.trim()
+          ? entry.id.trim()
+          : "";
+      const label =
+        typeof entry.label === "string" ? entry.label.trim() : "";
+      const query =
+        typeof entry.query === "string" ? entry.query.trim() : "";
+      if (!id || !label || !query) return [];
+      return [
+        {
+          id,
+          label,
+          query,
+        },
+      ];
+    });
+}
+
+async function loadSavedFilterLibrary() {
+  if (!window.savedfiltersapi || typeof window.savedfiltersapi.list !== "function") {
+    return;
+  }
+
+  try {
+    const loadedFilters = await window.savedfiltersapi.list();
+    const normalizedFilters = normalizeSavedFilterEntries(loadedFilters);
+    savedFilterLibrary.splice(0, savedFilterLibrary.length, ...normalizedFilters);
+    renderFilterHistory();
+  } catch (error) {
+    logErrorEntry("saved-filters-load", error);
+  }
+}
+
+function resolveSavedFilterById(savedFilterId) {
+  const normalizedId =
+    typeof savedFilterId === "string" ? savedFilterId.trim() : "";
+  if (!normalizedId) return null;
+  return (
+    savedFilterLibrary.find((entry) => entry.id === normalizedId) || null
+  );
+}
+
+function getSavedFilterEntriesMatchingQuery(queryValue) {
+  const normalizedQuery =
+    typeof queryValue === "string" ? queryValue.trim() : "";
+  if (!normalizedQuery) return [];
+  return savedFilterLibrary.filter((entry) => entry.query === normalizedQuery);
+}
+
+function requestSavedFilterLabelDialog(defaultLabel, queryPreview) {
+  const dialogEl = document.getElementById("saved-filter-label-dialog");
+  const descriptionEl = document.getElementById(
+    "saved-filter-label-description",
+  );
+  const inputEl = document.getElementById("saved-filter-label-input");
+  const removeBtnEl = document.getElementById("saved-filter-label-remove-btn");
+  if (!dialogEl || !descriptionEl || !inputEl || !removeBtnEl) {
+    return Promise.resolve(null);
+  }
+
+  if (activeSavedFilterLabelDialogResolver) {
+    const resolve = activeSavedFilterLabelDialogResolver;
+    activeSavedFilterLabelDialogResolver = null;
+    resolve({ action: "cancel" });
+  }
+
+  const compactPreview = String(queryPreview || "").replace(/\s+/g, " ").trim();
+  const shortenedPreview =
+    compactPreview.length > 100
+      ? `${compactPreview.slice(0, 100)}...`
+      : compactPreview;
+  const queryMatches = getSavedFilterEntriesMatchingQuery(queryPreview);
+  const removableFilter = queryMatches[0] || null;
+  activeSavedFilterDialogContext = {
+    query: String(queryPreview || "").trim(),
+    removableFilterId: removableFilter?.id || null,
+    removableFilterLabel: removableFilter?.label || "",
+  };
+  descriptionEl.textContent = shortenedPreview
+    ? `Save current query: ${shortenedPreview}`
+    : "Label your saved filter.";
+  removeBtnEl.hidden = !removableFilter;
+  removeBtnEl.textContent = removableFilter
+    ? `Remove Saved (${removableFilter.label})`
+    : "Remove Saved";
+  dialogEl.hidden = false;
+  inputEl.value = defaultLabel || "";
+  inputEl.focus();
+  inputEl.select();
+
+  return new Promise((resolve) => {
+    activeSavedFilterLabelDialogResolver = resolve;
+  });
+}
+
+function resolveSavedFilterLabelDialog(result) {
+  const dialogEl = document.getElementById("saved-filter-label-dialog");
+  const inputEl = document.getElementById("saved-filter-label-input");
+  const removeBtnEl = document.getElementById("saved-filter-label-remove-btn");
+  if (dialogEl) dialogEl.hidden = true;
+  if (!activeSavedFilterLabelDialogResolver) {
+    if (inputEl) inputEl.value = "";
+    if (removeBtnEl) {
+      removeBtnEl.hidden = true;
+      removeBtnEl.textContent = "Remove Saved";
+    }
+    activeSavedFilterDialogContext = null;
+    return;
+  }
+  const resolve = activeSavedFilterLabelDialogResolver;
+  activeSavedFilterLabelDialogResolver = null;
+  resolve(result);
+  if (inputEl) inputEl.value = "";
+  if (removeBtnEl) {
+    removeBtnEl.hidden = true;
+    removeBtnEl.textContent = "Remove Saved";
+  }
+  activeSavedFilterDialogContext = null;
+}
+
+function submitSavedFilterLabelDialog() {
+  const inputEl = document.getElementById("saved-filter-label-input");
+  resolveSavedFilterLabelDialog({
+    action: "save",
+    label: inputEl?.value || "",
+  });
+}
+
+async function removeSavedFilterFromLabelDialog() {
+  if (!window.savedfiltersapi || typeof window.savedfiltersapi.remove !== "function") {
+    doError("Saved filter remove is unavailable in this build");
+    return;
+  }
+
+  const removableFilterId = activeSavedFilterDialogContext?.removableFilterId;
+  if (!removableFilterId) {
+    statusUpdate("Status: Current query is not a saved filter");
+    return;
+  }
+
+  const removableLabel =
+    activeSavedFilterDialogContext?.removableFilterLabel || "saved filter";
+  try {
+    const nextFilters = await window.savedfiltersapi.remove({
+      id: removableFilterId,
+    });
+    const normalizedFilters = normalizeSavedFilterEntries(nextFilters);
+    savedFilterLibrary.splice(0, savedFilterLibrary.length, ...normalizedFilters);
+    renderFilterHistory();
+    writeLogEntry(`Saved filter removed label="${removableLabel}"`);
+    statusUpdate(`Status: Removed saved filter \"${removableLabel}\"`);
+    resolveSavedFilterLabelDialog({ action: "remove" });
+  } catch (error) {
+    logErrorEntry("saved-filters-remove", error);
+    doError(`Unable to remove saved filter: ${error?.message || String(error)}`);
+  }
+}
+
+async function saveCurrentFilterToLibraryFromContextMenu() {
+  if (!window.savedfiltersapi || typeof window.savedfiltersapi.save !== "function") {
+    statusUpdate("Status: Saved filters are unavailable in this build");
+    return;
+  }
+
+  const currentQuery = String(filterInputEl?.value || "").trim();
+  if (!currentQuery) {
+    statusUpdate("Status: Enter a filter query before saving");
+    return;
+  }
+
+  const suggestedLabel =
+    currentQuery.length > 80 ? `${currentQuery.slice(0, 80)}...` : currentQuery;
+  const dialogLabel = await requestSavedFilterLabelDialog(
+    suggestedLabel,
+    currentQuery,
+  );
+  if (!dialogLabel || dialogLabel.action === "cancel") {
+    statusUpdate("Status: Save filter canceled");
+    return;
+  }
+  if (dialogLabel.action === "remove") {
+    return;
+  }
+
+  const normalizedLabel = String(dialogLabel.label || "").trim();
+  if (!normalizedLabel) {
+    doError("Saved filter label cannot be empty");
+    statusUpdate("Status: Saved filter label is required");
+    return;
+  }
+
+  try {
+    const nextFilters = await window.savedfiltersapi.save({
+      label: normalizedLabel,
+      query: currentQuery,
+    });
+    const normalizedFilters = normalizeSavedFilterEntries(nextFilters);
+    savedFilterLibrary.splice(0, savedFilterLibrary.length, ...normalizedFilters);
+    renderFilterHistory();
+    writeLogEntry(
+      `Saved filter added label="${normalizedLabel}" query="${currentQuery}"`,
+    );
+    statusUpdate(`Status: Saved filter \"${normalizedLabel}\"`);
+  } catch (error) {
+    logErrorEntry("saved-filters-save", error);
+    doError(
+      `Unable to save filter: ${error?.message || String(error)}`,
+    );
+  }
+}
+
 function renderFilterHistory() {
   filterHistorySelectEl.replaceChildren();
 
+  const buildFilterDropdownLabel = (text, maxLength = 144) => {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, maxLength - 3)}...`;
+  };
+
   const placeholderOption = document.createElement("option");
   placeholderOption.value = "";
-  placeholderOption.textContent = filterHistory.length
-    ? "Previous queries"
-    : "No previous queries";
+  placeholderOption.textContent =
+    savedFilterLibrary.length || filterHistory.length
+      ? "Saved and previous filters"
+      : "No saved or previous filters";
   placeholderOption.selected = true;
   filterHistorySelectEl.appendChild(placeholderOption);
 
-  filterHistory.forEach((query) => {
-    const queryOption = document.createElement("option");
-    queryOption.value = query;
-    queryOption.textContent = query;
-    queryOption.title = query;
-    filterHistorySelectEl.appendChild(queryOption);
-  });
+  if (savedFilterLibrary.length) {
+    const savedGroup = document.createElement("optgroup");
+    savedGroup.label = "Saved Filters";
+    savedFilterLibrary.forEach((entry) => {
+      const savedOption = document.createElement("option");
+      savedOption.value = `${FILTER_DROPDOWN_OPTION_PREFIX_SAVED}${entry.id}`;
+      const fullSavedLabel = `${entry.label} - ${entry.query}`;
+      savedOption.textContent = buildFilterDropdownLabel(fullSavedLabel);
+      savedOption.title = `${entry.label}: ${entry.query}`;
+      savedGroup.appendChild(savedOption);
+    });
+    filterHistorySelectEl.appendChild(savedGroup);
+  }
+
+  if (filterHistory.length) {
+    const recentGroup = document.createElement("optgroup");
+    recentGroup.label = "Session History";
+    filterHistory.forEach((query) => {
+      const queryOption = document.createElement("option");
+      queryOption.value = `${FILTER_DROPDOWN_OPTION_PREFIX_SESSION}${query}`;
+      queryOption.textContent = buildFilterDropdownLabel(query);
+      queryOption.title = query;
+      recentGroup.appendChild(queryOption);
+    });
+    filterHistorySelectEl.appendChild(recentGroup);
+  }
+
   filterHistorySelectEl.value = "";
   filterHistorySelectEl.disabled = !isFileLoaded;
+}
+
+function expandFilterHistoryDropdownAlignedToFilterInput() {
+  if (!filterHistorySelectEl || filterHistorySelectEl.disabled) return;
+  const filterInputRect = filterInputEl?.getBoundingClientRect?.();
+  const filterHistoryContainerEl = document.getElementById("filter-history");
+  if (!filterInputRect || !filterHistoryContainerEl) return;
+
+  const filterHistoryContainerRect =
+    filterHistoryContainerEl.getBoundingClientRect();
+  const viewportPadding = 8;
+  const clampedLeft = Math.max(viewportPadding, filterInputRect.left);
+  const clampedRight = Math.min(
+    window.innerWidth - viewportPadding,
+    filterInputRect.right,
+  );
+  const expandedWidth = Math.max(32, Math.round(clampedRight - clampedLeft));
+  const expandedLeft = Math.round(clampedLeft - filterHistoryContainerRect.left);
+
+  filterHistorySelectEl.classList.add("filter-history-expanded");
+  filterHistorySelectEl.style.left = `${expandedLeft}px`;
+  filterHistorySelectEl.style.width = `${expandedWidth}px`;
+  filterHistorySelectEl.style.maxWidth = `${expandedWidth}px`;
+}
+
+function collapseFilterHistoryDropdown() {
+  if (!filterHistorySelectEl) return;
+  filterHistorySelectEl.classList.remove("filter-history-expanded");
+  filterHistorySelectEl.style.left = "";
+  filterHistorySelectEl.style.width = "";
+  filterHistorySelectEl.style.maxWidth = "";
 }
 
 function addFilterHistory(query) {
@@ -8359,6 +8636,8 @@ let activeContextStreamCompressionHint = "";
 let activeContextPacket = null;
 let activeContextLlmQuestionDialogResolver = null;
 let activeContextLlmQuestionDialogContext = null;
+let activeSavedFilterLabelDialogResolver = null;
+let activeSavedFilterDialogContext = null;
 let activeFollowStreamConfirmDialogResolver = null;
 let activeManualConvImportWarningDialogResolver = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
@@ -13249,6 +13528,30 @@ document
   .getElementById("ctx-llm-question-confirm-btn")
   .addEventListener("click", submitLlmQuestionFromContextMenuDialog);
 document
+  .getElementById("saved-filter-label-confirm-btn")
+  .addEventListener("click", submitSavedFilterLabelDialog);
+document
+  .getElementById("saved-filter-label-remove-btn")
+  .addEventListener("click", () => {
+    void removeSavedFilterFromLabelDialog();
+  });
+document
+  .getElementById("saved-filter-label-cancel-btn")
+  .addEventListener("click", () =>
+    resolveSavedFilterLabelDialog({ action: "cancel" }),
+  );
+document
+  .getElementById("saved-filter-label-input")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      submitSavedFilterLabelDialog();
+      return;
+    }
+    if (event.key === "Escape") {
+      resolveSavedFilterLabelDialog({ action: "cancel" });
+    }
+  });
+document
   .getElementById("ctx-llm-question-cancel-btn")
   .addEventListener("click", () => resolveLlmQuestionFromContextMenuDialog(null));
 document
@@ -15837,6 +16140,13 @@ initializeContextMenu({
   detectConvertibleFormats,
   buildContextFilterQueries,
   getCookieJarTextForContextTarget,
+  onFilterBarContextMenu: ({ event, target }) => {
+    if (!(target instanceof Element)) return false;
+    if (!target.closest("#filterStr-wrap")) return false;
+    event.preventDefault();
+    void saveCurrentFilterToLibraryFromContextMenu();
+    return true;
+  },
   showConvertContextMenu,
   hideConvertContextMenu,
 });
@@ -15850,15 +16160,51 @@ filterInputEl.addEventListener("input", () => {
 filterInputEl.addEventListener("scroll", syncFilterHighlightScroll);
 
 filterHistorySelectEl.addEventListener("change", () => {
-  const selectedQuery = filterHistorySelectEl.value;
+  const selectedValue = filterHistorySelectEl.value;
+  if (!selectedValue) return;
+
+  let selectedQuery = "";
+  if (selectedValue.startsWith(FILTER_DROPDOWN_OPTION_PREFIX_SAVED)) {
+    const savedFilterId = selectedValue.slice(
+      FILTER_DROPDOWN_OPTION_PREFIX_SAVED.length,
+    );
+    selectedQuery = resolveSavedFilterById(savedFilterId)?.query || "";
+  } else if (selectedValue.startsWith(FILTER_DROPDOWN_OPTION_PREFIX_SESSION)) {
+    selectedQuery = selectedValue.slice(
+      FILTER_DROPDOWN_OPTION_PREFIX_SESSION.length,
+    );
+  } else {
+    selectedQuery = selectedValue;
+  }
+
   if (!selectedQuery) return;
   filterInputEl.value = selectedQuery;
   syncFilterHighlight();
   void runFilterQuery(selectedQuery);
   filterHistorySelectEl.value = "";
+  collapseFilterHistoryDropdown();
+});
+
+filterHistorySelectEl.addEventListener("focus", () => {
+  expandFilterHistoryDropdownAlignedToFilterInput();
+});
+
+filterHistorySelectEl.addEventListener("mousedown", () => {
+  expandFilterHistoryDropdownAlignedToFilterInput();
+});
+
+filterHistorySelectEl.addEventListener("blur", () => {
+  collapseFilterHistoryDropdown();
+});
+
+window.addEventListener("resize", () => {
+  if (filterHistorySelectEl.classList.contains("filter-history-expanded")) {
+    expandFilterHistoryDropdownAlignedToFilterInput();
+  }
 });
 
 renderFilterHistory();
+void loadSavedFilterLibrary();
 renderDataToolsInputHistory();
 syncFilterHighlight();
 

@@ -11,11 +11,24 @@ function initializeContextMenu({
   detectConvertibleFormats,
   buildContextFilterQueries,
   getCookieJarTextForContextTarget,
+  onFilterBarContextMenu,
   showConvertContextMenu,
   hideConvertContextMenu,
 }) {
   documentRef.addEventListener("contextmenu", (event) => {
     const target = event.target;
+    if (typeof onFilterBarContextMenu === "function") {
+      const handled = onFilterBarContextMenu({
+        event,
+        target,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+      if (handled) {
+        return;
+      }
+    }
+
     const pasteTarget = getPasteTargetFromContextTarget(target);
     const selectedText = getTrimmedSelectionText();
     const insideEligiblePanel = target?.closest(

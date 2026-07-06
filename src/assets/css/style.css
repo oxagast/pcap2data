@@ -907,6 +907,7 @@ strong {
 
 #crypt-keystore-unlock-description,
 #crypt-keystore-manual-uri-description,
+#saved-filter-label-description,
 #follow-stream-confirm-description,
 #session-delete-dialog-description {
   font-size: 12px;
@@ -919,6 +920,7 @@ strong {
 #crypt-keystore-unlock-dialog,
 #crypt-keystore-manual-uri-dialog,
 #ctx-llm-question-dialog,
+#saved-filter-label-dialog,
 #follow-stream-confirm-dialog,
 #manual-conv-import-warning-dialog,
 #session-delete-dialog {
@@ -936,6 +938,7 @@ strong {
 #crypt-keystore-unlock-dialog[hidden],
 #crypt-keystore-manual-uri-dialog[hidden],
 #ctx-llm-question-dialog[hidden],
+#saved-filter-label-dialog[hidden],
 #follow-stream-confirm-dialog[hidden],
 #manual-conv-import-warning-dialog[hidden],
 #session-delete-dialog[hidden] {
@@ -3038,23 +3041,71 @@ strong {
 }
 
 #filter-history {
-  width: 320px;
+  --filter-history-button-size: 32px;
+  --filter-history-expanded-width: min(680px, calc(100vw - 320px));
+  width: var(--filter-history-button-size);
+  flex: 0 0 var(--filter-history-button-size);
   position: relative;
+  height: var(--filter-history-button-size);
 }
 
 #filter-history-select {
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   background-color: var(--input-bg-color);
-  color: var(--input-text-color);
+  color: transparent;
   border: 1px solid grey;
-  padding: 5px;
+  border-radius: 4px;
+  padding: 0;
   font: inherit;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  text-indent: -9999px;
+  overflow: hidden;
+  position: absolute;
+  left: auto;
+  right: 0;
+  top: 0;
+  z-index: 3;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--input-text-color) 50%),
+    linear-gradient(135deg, var(--input-text-color) 50%, transparent 50%);
+  background-position:
+    calc(50% - 4px) calc(50% - 1px),
+    calc(50% + 2px) calc(50% - 1px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+#filter-history-select:hover,
+#filter-history-select:focus {
+  background-color: var(--color-2);
+}
+
+#filter-history-select.filter-history-expanded {
+  min-width: 0;
+  color: var(--input-text-color);
+  text-indent: 0;
+  padding: 5px 30px 5px 8px;
+  left: 0;
+  right: auto;
+  background-position:
+    calc(100% - 14px) calc(50% - 1px),
+    calc(100% - 8px) calc(50% - 1px);
+  z-index: 12;
 }
 
 #filter-history-select:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+#filter-history-select:disabled {
+  color: transparent;
+  text-indent: -9999px;
+  padding: 0;
 }
 
 .query-token-key {

@@ -46,7 +46,7 @@
         </div>
         <div id="filter-history">
           <select id="filter-history-select" disabled aria-label="Previously used filters">
-            <option value="" selected>Previous queries</option>
+            <option value="" selected>Saved and previous filters</option>
           </select>
         </div>
       </div>
@@ -620,6 +620,20 @@ No keystore entries saved.</pre>
             <div class="crypt-actions-row">
               <button id="ctx-llm-question-confirm-btn">Ask</button>
               <button id="ctx-llm-question-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div id="saved-filter-label-dialog" hidden>
+          <div class="crypt-keystore-unlock-content">
+            <div class="crypt-section-title">Save Filter</div>
+            <div id="saved-filter-label-description">
+              Label your saved filter.
+            </div>
+            <input id="saved-filter-label-input" type="text" placeholder="Filter label" />
+            <div class="crypt-actions-row">
+              <button id="saved-filter-label-remove-btn" hidden>Remove Saved</button>
+              <button id="saved-filter-label-confirm-btn">Save</button>
+              <button id="saved-filter-label-cancel-btn">Cancel</button>
             </div>
           </div>
         </div>

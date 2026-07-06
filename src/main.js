@@ -209,6 +209,7 @@ let backendShutdownOnQuitInProgress = false;
 let backendShutdownOnQuitComplete = false;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
+const FILTER_LIBRARY_FILE_NAME = "filters.json";
 const THEMES_DIR_NAME = "themes";
 const THEME_FILE_EXTENSION = ".json";
 const BUNDLED_THEMES_DIR_NAME = "themes";
@@ -591,6 +592,10 @@ function getSettingsFilePath() {
   return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, SETTINGS_FILE_NAME);
 }
 
+function getFilterLibraryFilePath() {
+  return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, FILTER_LIBRARY_FILE_NAME);
+}
+
 function getThemesDir() {
   return path.join(app.getPath("userData"), THEMES_DIR_NAME);
 }
@@ -888,6 +893,140 @@ async function saveSettingsToDisk(nextSettings) {
   appSettings = normalizedSettings;
   await ensureSettingsFileExists(normalizedSettings);
   return normalizedSettings;
+}
+
+function normalizeFilterLibraryEntry(rawEntry = {}) {
+  if (!rawEntry || typeof rawEntry !== "object") return null;
+
+  const label =
+    typeof rawEntry.label === "string" ? rawEntry.label.trim() : "";
+  const query =
+    typeof rawEntry.query === "string" ? rawEntry.query.trim() : "";
+  if (!label || !query) return null;
+
+  const idCandidate =
+    typeof rawEntry.id === "string" && rawEntry.id.trim()
+      ? rawEntry.id.trim()
+      : `saved-filter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const createdAtCandidate =
+    typeof rawEntry.createdAt === "string" && rawEntry.createdAt.trim()
+      ? rawEntry.createdAt.trim()
+      : new Date().toISOString();
+  const updatedAtCandidate =
+    typeof rawEntry.updatedAt === "string" && rawEntry.updatedAt.trim()
+      ? rawEntry.updatedAt.trim()
+      : createdAtCandidate;
+
+  return {
+    id: idCandidate,
+    label,
+    query,
+    createdAt: createdAtCandidate,
+    updatedAt: updatedAtCandidate,
+  };
+}
+
+function normalizeFilterLibrary(rawFilters) {
+  if (!Array.isArray(rawFilters)) return [];
+  const seen = new Set();
+  const normalized = [];
+  for (const entry of rawFilters) {
+    const normalizedEntry = normalizeFilterLibraryEntry(entry);
+    if (!normalizedEntry) continue;
+    const duplicateKey = `${normalizedEntry.label.toLowerCase()}\u0000${normalizedEntry.query}`;
+    if (seen.has(duplicateKey)) continue;
+    seen.add(duplicateKey);
+    normalized.push(normalizedEntry);
+  }
+
+  normalized.sort((left, right) => {
+    const byLabel = left.label.localeCompare(right.label);
+    if (byLabel !== 0) return byLabel;
+    return right.updatedAt.localeCompare(left.updatedAt);
+  });
+  return normalized;
+}
+
+async function loadFilterLibraryFromDisk() {
+  const filePath = getFilterLibraryFilePath();
+  try {
+    const rawText = await fs.promises.readFile(filePath, "utf8");
+    const parsed = JSON.parse(rawText);
+    const sourceEntries = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.filters)
+        ? parsed.filters
+        : [];
+    return normalizeFilterLibrary(sourceEntries);
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      console.warn("Failed to load saved filters; continuing with empty list:", error);
+    }
+    return [];
+  }
+}
+
+async function saveFilterLibraryToDisk(filters) {
+  const normalizedFilters = normalizeFilterLibrary(filters);
+  const filePath = getFilterLibraryFilePath();
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.promises.writeFile(
+    filePath,
+    JSON.stringify({ filters: normalizedFilters }, null, 2) + os.EOL,
+    "utf8",
+  );
+  return normalizedFilters;
+}
+
+async function upsertSavedFilter(label, query) {
+  const normalizedLabel = typeof label === "string" ? label.trim() : "";
+  const normalizedQuery = typeof query === "string" ? query.trim() : "";
+  if (!normalizedLabel || !normalizedQuery) {
+    throw createTaggedError(
+      "EINVAL",
+      "Both filter label and query are required.",
+    );
+  }
+
+  const existingFilters = await loadFilterLibraryFromDisk();
+  const nowIso = new Date().toISOString();
+  const existingIndex = existingFilters.findIndex(
+    (entry) => entry.label.toLowerCase() === normalizedLabel.toLowerCase(),
+  );
+
+  if (existingIndex !== -1) {
+    const existingEntry = existingFilters[existingIndex];
+    existingFilters[existingIndex] = {
+      ...existingEntry,
+      label: normalizedLabel,
+      query: normalizedQuery,
+      updatedAt: nowIso,
+    };
+  } else {
+    existingFilters.push({
+      id: `saved-filter-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      label: normalizedLabel,
+      query: normalizedQuery,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    });
+  }
+
+  return saveFilterLibraryToDisk(existingFilters);
+}
+
+async function removeSavedFilterById(filterId) {
+  const normalizedFilterId =
+    typeof filterId === "string" ? filterId.trim() : "";
+  if (!normalizedFilterId) {
+    throw createTaggedError("EINVAL", "Saved filter id is required.");
+  }
+
+  const existingFilters = await loadFilterLibraryFromDisk();
+  const filtered = existingFilters.filter(
+    (entry) => entry.id !== normalizedFilterId,
+  );
+  return saveFilterLibraryToDisk(filtered);
 }
 
 function getAppSettings() {
@@ -1727,6 +1866,18 @@ ipcMain.handle("themes-get", async (_event, themeId) => {
 
 ipcMain.handle("themes-directory", async () => {
   return ensureThemeFilesExist();
+});
+
+ipcMain.handle("saved-filters-list", async () => {
+  return loadFilterLibraryFromDisk();
+});
+
+ipcMain.handle("saved-filters-save", async (_event, payload = {}) => {
+  return upsertSavedFilter(payload?.label, payload?.query);
+});
+
+ipcMain.handle("saved-filters-remove", async (_event, payload = {}) => {
+  return removeSavedFilterById(payload?.id);
 });
 
 // Session library helpers
