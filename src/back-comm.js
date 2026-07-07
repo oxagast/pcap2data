@@ -252,6 +252,71 @@ function probeSnitchHttpBackendReady(host = BACKEND_HTTP_HOST, port = BACKEND_HT
   });
 }
 
+function requestSnitchHttpBackendVersion(
+  host = BACKEND_HTTP_HOST,
+  port = BACKEND_HTTP_PORT,
+  timeoutMs = 1500,
+) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host,
+        port,
+        path: "/version",
+        method: "GET",
+        timeout: timeoutMs,
+        headers: {
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          try {
+            const payload = JSON.parse(body || "{}");
+            resolve({
+              ok:
+                res.statusCode === 200
+                && payload?.type === "version"
+                && typeof payload?.version === "string"
+                && payload.version.trim().length > 0,
+              service:
+                typeof payload?.service === "string" && payload.service.trim()
+                  ? payload.service.trim()
+                  : null,
+              version:
+                typeof payload?.version === "string" && payload.version.trim()
+                  ? payload.version.trim()
+                  : null,
+            });
+          } catch (_err) {
+            resolve({
+              ok: false,
+              service: null,
+              version: null,
+            });
+          }
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP version request timed out"));
+    });
+    req.on("error", () => {
+      resolve({
+        ok: false,
+        service: null,
+        version: null,
+      });
+    });
+    req.end();
+  });
+}
+
 function normalizeBackendTransportOptions(rawOptions = {}) {
   const source = rawOptions && typeof rawOptions === "object" ? rawOptions : {};
   const host =
@@ -282,6 +347,51 @@ function applyBackendTransportOptions(options = {}) {
     currentBackendHttpPort = normalized.tcpPort;
   }
   return normalized;
+}
+
+async function getBackendServiceDiagnostics(options = {}) {
+  const optionsSource = options && typeof options === "object" ? options : {};
+  const normalizedTransport = applyBackendTransportOptions(
+    optionsSource.backendOptions,
+  );
+  const ensureReady = Boolean(optionsSource.ensureReady);
+  const forceLegacySpawn = Boolean(normalizedTransport.forceLegacySpawn);
+
+  let backendWebserverUp = false;
+  if (!forceLegacySpawn) {
+    backendWebserverUp = ensureReady
+      ? await ensureBackendHttpServerReady()
+      : await probeSnitchHttpBackendReady(
+        currentBackendHttpHost,
+        currentBackendHttpPort,
+      );
+  }
+
+  const versionResult = backendWebserverUp
+    ? await requestSnitchHttpBackendVersion(
+      currentBackendHttpHost,
+      currentBackendHttpPort,
+    )
+    : { ok: false, service: null, version: null };
+
+  const managedProcessAlive = Boolean(
+    backendHttpServerProc && !backendHttpServerProc.killed,
+  );
+  return {
+    success: true,
+    mode: forceLegacySpawn ? "legacy" : "http",
+    forceLegacySpawn,
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+    backendProcessRunning: forceLegacySpawn
+      ? managedProcessAlive
+      : managedProcessAlive || backendWebserverUp,
+    backendWebserverUp,
+    backendVersion: versionResult.version,
+    backendVersionService: versionResult.service,
+    backendVersionReachable: Boolean(versionResult.ok),
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 function resolveBackendRuntime() {
@@ -1285,6 +1395,7 @@ module.exports = {
   ensureBackendHttpServerReady,
   requestBackendStopProcessing,
   requestBackendShutdown,
+  getBackendServiceDiagnostics,
   // Backward-compatible aliases for existing imports in main process code.
   shutdownTcpBackendService: shutdownHttpBackendService,
   ensureBackendTcpServerReady: ensureBackendHttpServerReady,

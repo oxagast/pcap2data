@@ -296,6 +296,7 @@ let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
 let cachedLlmDiagnostics = null;
+let cachedBackendDiagnostics = null;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -409,6 +410,77 @@ function syncLlmDiagnosticsIndicators() {
     lastResultCode === null || typeof lastResultCode === "undefined" ? "—" : String(lastResultCode),
     lastResultCode === 0 ? "status-ok" : lastResultCode === null || typeof lastResultCode === "undefined" ? "status-neutral" : "status-warn",
   );
+}
+
+// Returns backend diagnostic element.
+function getBackendDiagnosticElement(id) {
+  return document.getElementById(id);
+}
+
+// Renders backend diagnostic indicator.
+function renderBackendDiagnosticIndicator(elementId, label, value, stateClass) {
+  const element = getBackendDiagnosticElement(elementId);
+  if (!element) return;
+  element.textContent = `${label}: ${value}`;
+  element.className = `settings-status-pill ${stateClass}`;
+}
+
+// Syncs backend diagnostics indicators.
+function syncBackendDiagnosticsIndicators() {
+  const diagnostics = cachedBackendDiagnostics;
+  const forceLegacySpawn = Boolean(diagnostics?.forceLegacySpawn);
+  const processRunning = Boolean(diagnostics?.backendProcessRunning);
+  const webserverUp = Boolean(diagnostics?.backendWebserverUp);
+  const backendVersion =
+    typeof diagnostics?.backendVersion === "string" && diagnostics.backendVersion.trim()
+      ? diagnostics.backendVersion.trim()
+      : "—";
+
+  renderBackendDiagnosticIndicator(
+    "settings-backend-process-status",
+    "Process",
+    processRunning ? "Running" : "Down",
+    processRunning ? "status-ok" : "status-error",
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-webserver-status",
+    "Webserver",
+    forceLegacySpawn ? "Legacy mode" : webserverUp ? "Up" : "Down",
+    forceLegacySpawn ? "status-warn" : webserverUp ? "status-ok" : "status-error",
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-version-status",
+    "Version",
+    backendVersion,
+    backendVersion !== "—" ? "status-ok" : forceLegacySpawn ? "status-warn" : "status-error",
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-mode-status",
+    "Mode",
+    forceLegacySpawn ? "Legacy spawn" : "HTTP service",
+    forceLegacySpawn ? "status-warn" : "status-ok",
+  );
+}
+
+async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
+  if (!window.snitchapi || typeof window.snitchapi.getBackendDiagnostics !== "function") {
+    cachedBackendDiagnostics = null;
+    syncBackendDiagnosticsIndicators();
+    return null;
+  }
+
+  try {
+    const diagnostics = await window.snitchapi.getBackendDiagnostics({
+      ensureReady: Boolean(ensureReady),
+      backendOptions: getBackendTransportOptionsFromSettings(),
+    });
+    cachedBackendDiagnostics = diagnostics || null;
+  } catch (error) {
+    console.warn("Unable to resolve backend diagnostics:", error);
+    cachedBackendDiagnostics = null;
+  }
+  syncBackendDiagnosticsIndicators();
+  return cachedBackendDiagnostics;
 }
 
 // Syncs runtime llm toggle from settings.
@@ -845,6 +917,7 @@ function syncSettingsFormFromState() {
   if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
   if (retryCountEl) retryCountEl.value = String(settings.llm.retryCount);
   syncLlmDiagnosticsIndicators();
+  syncBackendDiagnosticsIndicators();
 }
 
 // Handles read settings form state.
@@ -1264,9 +1337,11 @@ async function initializeBackendServiceFromSettings(settings = getCurrentSetting
     writeLogEntry(
       `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} data_mode=${backendOptions.useHttpDataSnapshots} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
     );
+    await refreshBackendDiagnostics({ ensureReady: false });
     return result;
   } catch (error) {
     logErrorEntry("backend-init", error);
+    await refreshBackendDiagnostics({ ensureReady: false });
     return null;
   }
 }
@@ -1316,6 +1391,10 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (nextTab === SETTINGS_SUBTAB_LLM) {
     syncLlmDiagnosticsIndicators();
+  }
+  if (nextTab === SETTINGS_SUBTAB_BACKEND) {
+    syncBackendDiagnosticsIndicators();
+    void refreshBackendDiagnostics({ ensureReady: true });
   }
 }
 
@@ -1616,6 +1695,7 @@ initializeInstallScreen({
 });
 
 void refreshOllamaStartupAvailability();
+void refreshBackendDiagnostics({ ensureReady: false });
 
 if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "function") {
   window.installapi.onLlmDiagnosticsUpdated((diagnostics) => {

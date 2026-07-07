@@ -835,6 +835,17 @@ No keystore entries saved.</pre>
               <div class="settings-section">
                 <div class="settings-section-title">Backend Bridge</div>
 
+                <div class="settings-status-row" aria-label="Backend diagnostics">
+                  <span id="settings-backend-process-status" class="settings-status-pill status-neutral">Process:
+                    —</span>
+                  <span id="settings-backend-webserver-status" class="settings-status-pill status-neutral">Webserver:
+                    —</span>
+                  <span id="settings-backend-version-status" class="settings-status-pill status-neutral">Version:
+                    —</span>
+                  <span id="settings-backend-mode-status" class="settings-status-pill status-neutral">Mode:
+                    —</span>
+                </div>
+
                 <label for="settings-backend-chunk-size">Default backend packet chunk size</label>
                 <select id="settings-backend-chunk-size">
                   <option value="25">25</option>
@@ -847,7 +858,8 @@ No keystore entries saved.</pre>
 
                 <label for="settings-backend-worker-threads">Backend worker threads</label>
                 <input id="settings-backend-worker-threads" type="number" min="1" step="1" />
-                <div class="settings-help-text">Number of backend packet-processing threads. Default is 2x CPU cores.
+                <div class="settings-help-text">Number of backend packet-processing threads. Default is half your total
+                  CPU cores.
                 </div>
 
                 <label for="settings-backend-tcp-host">TCP host</label>

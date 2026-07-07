@@ -172,7 +172,7 @@ except ImportError:
     import scapy
 
 activeRecon = "False"
-numWorkerThreads = 2 * (os.cpu_count() or 1)
+numWorkerThreads = (os.cpu_count()//2 or 2)
 isSSH = False
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.

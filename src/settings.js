@@ -1,10 +1,10 @@
 const DEFAULT_BACKEND_WORKER_THREADS = Math.max(
     1,
-    2 * (
-        Number(
+    (
+        (Number(
             typeof navigator !== "undefined" ? navigator.hardwareConcurrency : 0,
-        ) || 1
-    ),
+        ) || 1) // divide by 2
+    ) / 2 | 0,
 );
 
 const DEFAULT_SETTINGS = Object.freeze({

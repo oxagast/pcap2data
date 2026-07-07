@@ -1408,6 +1408,46 @@ ipcMain.handle("check-first-run", async () => {
 
 ipcMain.handle("get-llm-diagnostics", async () => getLlmDiagnostics());
 
+ipcMain.handle("get-backend-diagnostics", async (_event, options = {}) => {
+  if (
+    !backCommModule
+    || typeof backCommModule.getBackendServiceDiagnostics !== "function"
+  ) {
+    return {
+      success: false,
+      error: "Backend bridge is not initialized",
+      mode: "unknown",
+      forceLegacySpawn: false,
+      host: "",
+      port: 0,
+      backendProcessRunning: false,
+      backendWebserverUp: false,
+      backendVersion: null,
+      backendVersionService: null,
+      backendVersionReachable: false,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+  try {
+    return await backCommModule.getBackendServiceDiagnostics(options);
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || "Unable to get backend diagnostics",
+      mode: "unknown",
+      forceLegacySpawn: false,
+      host: "",
+      port: 0,
+      backendProcessRunning: false,
+      backendWebserverUp: false,
+      backendVersion: null,
+      backendVersionService: null,
+      backendVersionReachable: false,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+});
+
 ipcMain.handle("dismiss-first-run", async () => {
   if (app.isPackaged) {
     const currentVersion = app.getVersion();

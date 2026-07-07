@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('captureapi', {
 contextBridge.exposeInMainWorld('snitchapi', {
   initBackendService: (backendOptions) =>
     ipcRenderer.invoke('init-backend-service', backendOptions),
+  getBackendDiagnostics: (options = {}) =>
+    ipcRenderer.invoke('get-backend-diagnostics', options),
   runBackendCommand: (filename, useLLM, chunkSize, workerThreads, backendOptions) =>
     ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, workerThreads, backendOptions),
   runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, workerThreads, backendOptions) =>
