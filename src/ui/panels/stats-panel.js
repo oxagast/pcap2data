@@ -1,6 +1,5 @@
 const threadName = "Stats";
 const h337 = require("heatmap.js");
-const { app, sessionsapi } = window;
 
 const DEFAULT_HEATMAP_INTENSITY = 100;
 const DEFAULT_HEATMAP_TIGHTNESS = 145;
@@ -195,11 +194,6 @@ function getUniqueCredentialList() {
   });
   return maskedPasswords.sort();
 };
-
-function getUniqueCredentialCount() {
-  const uniquePasswords = window.keystoreCreds || new Set();
-  return uniquePasswords.size;
-}
 
 function parseStatsGeoCoordinate(value, min, max) {
   const parsedValue = Number(value);
@@ -2280,7 +2274,6 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const dataTypes = new Set();
   const streams = new Map();
   const tcpStreams = new Map();
-  const credsList = new Map();
   let encryptedCount = 0;
   let unencryptedCount = 0;
   let undecodableCount = 0;

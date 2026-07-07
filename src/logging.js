@@ -1,8 +1,6 @@
 let lastViewMode = "";
 const CONSOLE_DUPLICATE_WINDOW_MS = 5000;
 
-let lastErrorMessage = "";
-
 function initializeLogging({
   logapi = null,
   documentRef = document,
@@ -105,9 +103,6 @@ function initializeLogging({
   }
 
   function logErrorEntry(context, error) {
-    if (error && typeof error === "object" && "message" in error) {
-      lastErrorMessage = error.message;
-    }
     const errorDetails =
       error && typeof error === "object" && "message" in error
         ? error.message

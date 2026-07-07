@@ -18,15 +18,6 @@ function createDataPanel(options) {
     setActiveMainTab,
     handlePacketNavigation,
     getIndex,
-    setIndex,
-    setActivePacketCursor,
-    setCurrentIp,
-    setCurrentPacketKey,
-    getCurrentPacketKey,
-    syncBookmarkDropdown,
-    infoPanel,
-    popHexGrid,
-    populateDataTypes,
   } = options;
   const { MAIN_TAB_DATA } = constants;
 

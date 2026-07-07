@@ -1,11 +1,9 @@
-const threadName = "Summary";
 const SUMMARY_LOADING_MARKUP =
   '<span id="loaderdots" class="loading" role="status" aria-live="polite">Loading</span>';
 
 function createSummaryPanel({
   documentRef,
   getJsonCapture,
-  getFinalSummary,
   setActiveMainTab,
   mainTabSummary,
   statusUpdate,

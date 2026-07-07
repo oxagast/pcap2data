@@ -1,6 +1,4 @@
 
-const threadName = "ContextMenu";
-
 function initializeContextMenu({
   documentRef = document,
   windowRef = window,

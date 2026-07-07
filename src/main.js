@@ -183,7 +183,6 @@ function logLlmDiagnostics(prefix, diagnostics) {
 
 let mainWindow;
 let selectedFilePath;
-let isBackendLoaded = false;
 let versionFilePath;
 let activityLogFilePath;
 let hasLoggedProgramShutdown = false;
@@ -828,10 +827,6 @@ async function listThemeDefinitions() {
       nextTheme = [existing, theme].find((entry) => entry.sourceKind === "user") || existing;
     }
 
-    const mtimeReason = currentMtime === existingMtime
-      ? "modification times are equal (preferring user theme when present)"
-      : "it has the most recent modification time";
-
     themesById.set(theme.id, nextTheme);
   });
 
@@ -1343,7 +1338,6 @@ app.whenReady().then(() => {
       });
       if (canceled) return null;
       selectedFilePath = filePaths[0];
-      isBackendLoaded = true;
       return filePaths[0];
     });
     ipcMain.handle("select-manual-conv-file", async () => {
@@ -1457,7 +1451,6 @@ ipcMain.handle("quit-app", () => {
 });
 
 ipcMain.handle("prompt-save-session-on-exit", async () => {
-  const currentSessionName = path.basename(selectedFilePath || "", path.extname(selectedFilePath || ""));
   const response = await dialog.showMessageBox({
     type: "question",
     buttons: ["Save Session", "Don't Save", "Cancel"],
@@ -2033,39 +2026,6 @@ async function compressSessionJson(name, compression) {
   } catch (err) {
     throw new Error(formatCompressionError(err, "compress session"));
   }
-}
-
-async function ensureSessionJsonFile(name) {
-  const jsonPath = sessionFilePath(name);
-  if (await fileExists(jsonPath)) return jsonPath;
-
-  const compressedSource = await getExistingCompressedSessionPath(name);
-  if (!compressedSource) {
-    throw new Error("Session not found");
-  }
-
-  try {
-    if (compressedSource.compression === SESSION_COMPRESSION_XZ && !lzmaNative) {
-      throw new Error(
-        "Cannot load xz-compressed session (.pss / legacy .json.xz) without Node xz compression support",
-      );
-    }
-
-    const compressedBuffer = await fs.promises.readFile(compressedSource.filePath);
-    const decompressedBuffer =
-      compressedSource.compression === SESSION_COMPRESSION_XZ
-        ? await lzmaNative.decompress(compressedBuffer)
-        : await gunzipAsync(compressedBuffer);
-
-    await fs.promises.writeFile(jsonPath, decompressedBuffer);
-  } catch (err) {
-    throw new Error(formatCompressionError(err, "decompress session"));
-  }
-
-  if (!(await fileExists(jsonPath))) {
-    throw new Error("Session decompression completed but JSON file was not created");
-  }
-  return jsonPath;
 }
 
 async function resolveSessionFilePath(name) {

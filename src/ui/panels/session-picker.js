@@ -5,13 +5,6 @@
 
 // we need to declare the writeLogEntry function here
 
-const threadName = "SessionPicker";
-// pull in the quietapi from the preload script
-const { app, sessionsapi } = window;
-
-// import whats needed for exportSessionToFile function
-const { saveapi, quitapi } = window;
-
 function formatSavedAt(iso) {
   if (!iso) return "No date information";
   try {

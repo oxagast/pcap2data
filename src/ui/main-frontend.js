@@ -1,5 +1,9 @@
 const threadName = "MainFrontend";
 window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
+
+// ============================================================================
+// Imports and module dependencies
+// ============================================================================
 import { bookmarkList } from '../state';
 import "../assets/css/style.css";
 const CryptoJS = require("crypto-js");
@@ -85,20 +89,13 @@ const {
 
 // Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
+// Returns cached element.
 function getCachedElement(id) {
   if (!domCache[id]) {
     domCache[id] = document.getElementById(id);
   }
   return domCache[id];
 }
-const goodiesArray =
-  window.goodiesapi && typeof window.goodiesapi.getGoodies === "function"
-    ? window.goodiesapi.getGoodies().then((goodies) => {
-      console.log(`Loaded ${goodies.length} goodies from preload API`);
-      return goodies;
-    })
-    : Promise.resolve([]);
-
 const validKeysCache = [];
 if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
   window.validkeysapi.getValidKeys().then((keys) => {
@@ -122,14 +119,6 @@ const MAIN_TAB_DATA_TOOLS = "data-tools";
 const MAIN_TAB_CRYPT = "crypt";
 const MAIN_TAB_KEYSTORE = "keystore";
 const NOTE_DEFAULT_COLOR = "#4caf50";
-const NOTE_FALLBACK_COLORS = [
-  "#4caf50",
-  "#ff9800",
-  "#2196f3",
-  "#9c27b0",
-  "#e91e63",
-  "#ffc107",
-];
 const DATA_TYPES_DEFAULT_HIDDEN_PROTOCOLS = new Set([
   "ARP",
   "RARP",
@@ -216,14 +205,12 @@ let outOfOrderList = []; // List of packets marked as out-of-order
 let activeBookmark = {}; // Current bookmark object
 let isFileLoaded = false;
 let isCaptureStoreBackedCapture = false;
-let jsonOfPackets;
 let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
 let summaryFromSavedSession = false;
 let lastFilteredNavigationLogMessage = "";
 let startTime;
-let helpOpen = false;
 let helpWin = null;
 let llmSummaryTimeout = null;
 let summary = "";
@@ -248,7 +235,6 @@ const DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES = 65536;
 const DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS = 65536;
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
-let dataToolsFileNameGuess = "";
 let dataToolsLastConversionBytes = new Uint8Array();
 let dataToolsLastRenderedOutputBytes = 0;
 let dataToolsLastConversionDisplay = {
@@ -280,7 +266,6 @@ const VALID_CRYPT_SUBTABS = [
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
-let activeDataToolsProtoResult = null;
 let keystorePanel;
 let notesList = [];
 let selectedNoteId = null;
@@ -320,24 +305,33 @@ const backendProgressState = {
 };
 let sessionPcapSource = null;
 
+// ============================================================================
+// Settings, diagnostics, and backend option helpers
+// ============================================================================
+
+// Returns current settings.
 function getCurrentSettings() {
   return appSettings;
 }
 
+// Sets current settings.
 function setCurrentSettings(nextSettings) {
   appSettings = normalizeSettings(nextSettings);
   return appSettings;
 }
 
+// Returns whether llm enabled in settings.
 function isLlmEnabledInSettings() {
   return Boolean(getCurrentSettings()?.llm?.activeByDefault);
 }
 
+// Returns whether background summary generation enabled.
 function isBackgroundSummaryGenerationEnabled() {
   const llmSettings = getCurrentSettings()?.llm || {};
   return llmSettings.backgroundSummaryGenerationEnabled !== false;
 }
 
+// Returns whether llm runtime enabled.
 function isLlmRuntimeEnabled() {
   return isLlmEnabledInSettings() && ollamaVersionCheckPassed;
 }
@@ -364,10 +358,12 @@ async function refreshOllamaStartupAvailability() {
   return ollamaVersionCheckPassed;
 }
 
+// Returns llm diagnostic element.
 function getLlmDiagnosticElement(id) {
   return document.getElementById(id);
 }
 
+// Renders llm diagnostic indicator.
 function renderLlmDiagnosticIndicator(elementId, label, value, stateClass) {
   const element = getLlmDiagnosticElement(elementId);
   if (!element) return;
@@ -375,6 +371,7 @@ function renderLlmDiagnosticIndicator(elementId, label, value, stateClass) {
   element.className = `settings-status-pill ${stateClass}`;
 }
 
+// Syncs llm diagnostics indicators.
 function syncLlmDiagnosticsIndicators() {
   const diagnostics = cachedLlmDiagnostics;
   renderLlmDiagnosticIndicator(
@@ -414,6 +411,7 @@ function syncLlmDiagnosticsIndicators() {
   );
 }
 
+// Syncs runtime llm toggle from settings.
 function syncRuntimeLlmToggleFromSettings() {
   const useLlmEl = document.getElementById("use-llm");
   if (useLlmEl) {
@@ -421,20 +419,24 @@ function syncRuntimeLlmToggleFromSettings() {
   }
 }
 
+// Handles sanitize theme id.
 function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
   if (typeof value !== "string") return fallback;
   const normalized = value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
   return normalized || fallback;
 }
 
+// Returns theme select element.
 function getThemeSelectElement() {
   return document.getElementById("settings-general-theme");
 }
 
+// Returns llm model select element.
 function getLlmModelSelectElement() {
   return document.getElementById("settings-llm-model");
 }
 
+// Returns configured ollama models.
 function getConfiguredOllamaModels() {
   if (Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0) {
     return [...availableOllamaModels];
@@ -442,6 +444,7 @@ function getConfiguredOllamaModels() {
   return [DEFAULT_SETTINGS.llm.ollamaModel];
 }
 
+// Normalizes ollama model entry.
 function normalizeOllamaModelEntry(rawValue) {
   if (typeof rawValue !== "string") return "";
   const normalized = rawValue.trim();
@@ -476,6 +479,7 @@ async function loadAvailableOllamaModels() {
   return [...availableOllamaModels];
 }
 
+// Returns ollama model dropdown options.
 function getOllamaModelDropdownOptions() {
   const options = getConfiguredOllamaModels().map((modelName) => ({
     value: modelName,
@@ -484,6 +488,7 @@ function getOllamaModelDropdownOptions() {
   return options;
 }
 
+// Renders llm model options.
 function renderLlmModelOptions(selectedModelValue = "") {
   const modelSelectEl = getLlmModelSelectElement();
   if (!modelSelectEl) return;
@@ -515,16 +520,19 @@ function renderLlmModelOptions(selectedModelValue = "") {
   modelSelectEl.value = normalizedSelectedValue;
 }
 
+// Returns theme by id from list.
 function getThemeByIdFromList(themeId) {
   const normalizedId = sanitizeThemeId(themeId, FALLBACK_THEME_ID);
   return availableThemes.find((theme) => sanitizeThemeId(theme.id, "") === normalizedId) || null;
 }
 
+// Returns theme source suffix.
 function getThemeSourceSuffix(theme) {
   if (!theme || !theme.hasUserBundledDiff) return "";
   return theme.sourceKind === "user" ? " [User Modified]" : " [Bundled]";
 }
 
+// Handles update selected theme source note.
 function updateSelectedThemeSourceNote(themeId) {
   const noteEl = document.getElementById("settings-theme-source-note");
   if (!noteEl) return;
@@ -540,6 +548,7 @@ function updateSelectedThemeSourceNote(themeId) {
   noteEl.hidden = false;
 }
 
+// Renders theme options.
 function renderThemeOptions() {
   const themeSelectEl = getThemeSelectElement();
   if (!themeSelectEl) return;
@@ -566,6 +575,7 @@ function renderThemeOptions() {
   updateSelectedThemeSourceNote(themeSelectEl.value);
 }
 
+// Applies theme variables.
 function applyThemeVariables(theme) {
   const rootStyle = document.documentElement.style;
   if (appliedThemeVariableNames.size > 0) {
@@ -584,6 +594,7 @@ function applyThemeVariables(theme) {
   });
 }
 
+// Applies theme quit button character.
 function applyThemeQuitButtonCharacter(theme) {
   const closeBtn = document.getElementById("close-btn");
   if (!closeBtn) return;
@@ -594,14 +605,17 @@ function applyThemeQuitButtonCharacter(theme) {
   closeBtn.textContent = configuredCharacter || "\u00D7";
 }
 
+// Returns app logo element.
 function getAppLogoElement() {
   return document.getElementById("app-logo") || document.querySelector(".logo-cont img");
 }
 
+// Returns theme backdrop element.
 function getThemeBackdropElement() {
   return document.getElementById("theme-backdrop");
 }
 
+// Builds theme embedded image data uri.
 function buildThemeEmbeddedImageDataUri(imageConfig) {
   if (!imageConfig || typeof imageConfig !== "object") return null;
   const formatRaw = typeof imageConfig.format === "string"
@@ -619,6 +633,7 @@ function buildThemeEmbeddedImageDataUri(imageConfig) {
   return `data:${mime};base64,${normalizedBase64}`;
 }
 
+// Applies theme logo.
 function applyThemeLogo(theme) {
   const logoEl = getAppLogoElement();
   if (!logoEl) return;
@@ -637,6 +652,7 @@ function applyThemeLogo(theme) {
   logoEl.src = logoDataUri;
 }
 
+// Applies theme backdrop image.
 function applyThemeBackdropImage(theme) {
   const backdropEl = getThemeBackdropElement();
   if (!backdropEl) return;
@@ -713,6 +729,7 @@ async function updateThemeDirectoryHint() {
   }
 }
 
+// Syncs settings form from state.
 function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
   const themeSelectEl = getThemeSelectElement();
@@ -830,6 +847,7 @@ function syncSettingsFormFromState() {
   syncLlmDiagnosticsIndicators();
 }
 
+// Handles read settings form state.
 function readSettingsFormState() {
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
@@ -945,6 +963,7 @@ function readSettingsFormState() {
   });
 }
 
+// Sets settings status.
 function setSettingsStatus(message) {
   const statusEl = document.getElementById("settings-status");
   if (statusEl) {
@@ -953,6 +972,7 @@ function setSettingsStatus(message) {
   statusUpdate("Status: " + message);
 }
 
+// Formats settings log value.
 function formatSettingsLogValue(value) {
   if (typeof value === "string") {
     return JSON.stringify(value);
@@ -970,11 +990,13 @@ function formatSettingsLogValue(value) {
   }
 }
 
+// Formats manual conv import limit mb.
 function formatManualConvImportLimitMb(bytes) {
   const megabytes = (Number(bytes) || 0) / (1024 * 1024);
   return Number(megabytes.toFixed(3)).toString();
 }
 
+// Parses manual conv import limit mb.
 function parseManualConvImportLimitMb(rawValue) {
   const parsed = Number.parseFloat(String(rawValue ?? ""));
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -983,6 +1005,7 @@ function parseManualConvImportLimitMb(rawValue) {
   return Math.max(1024, Math.round(parsed * 1024 * 1024));
 }
 
+// Builds settings change summaries.
 function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   const changes = [];
   const previousGeneral = previousSettings?.general || {};
@@ -1116,6 +1139,7 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   return changes;
 }
 
+// Handles log settings mutation.
 function logSettingsMutation(actionLabel, previousSettings, nextSettings) {
   const changes = buildSettingsChangeSummaries(previousSettings, nextSettings);
   if (changes.length === 0) {
@@ -1161,6 +1185,7 @@ async function loadPersistedSettings() {
   return getCurrentSettings();
 }
 
+// Returns llmsummary delay ms.
 function getLLMSummaryDelayMs() {
   return (
     Math.max(
@@ -1171,6 +1196,7 @@ function getLLMSummaryDelayMs() {
   );
 }
 
+// Returns conv json indent spaces.
 function getConvJsonIndentSpaces() {
   return Math.max(
     0,
@@ -1179,6 +1205,7 @@ function getConvJsonIndentSpaces() {
   );
 }
 
+// Returns status reset delay ms.
 function getStatusResetDelayMs() {
   return (
     Math.max(
@@ -1189,6 +1216,7 @@ function getStatusResetDelayMs() {
   );
 }
 
+// Returns backend packet chunk size.
 function getBackendPacketChunkSize() {
   return Math.max(
     1,
@@ -1197,6 +1225,7 @@ function getBackendPacketChunkSize() {
   );
 }
 
+// Returns backend worker threads.
 function getBackendWorkerThreads() {
   return Math.max(
     1,
@@ -1205,6 +1234,7 @@ function getBackendWorkerThreads() {
   );
 }
 
+// Returns stream context warn packet threshold.
 function getStreamContextWarnPacketThreshold() {
   return Math.max(
     5,
@@ -1213,6 +1243,7 @@ function getStreamContextWarnPacketThreshold() {
   );
 }
 
+// Returns backend transport options from settings.
 function getBackendTransportOptionsFromSettings(settings = getCurrentSettings()) {
   return {
     tcpHost: String(settings?.backend?.tcpHost || DEFAULT_SETTINGS.backend.tcpHost),
@@ -1240,6 +1271,7 @@ async function initializeBackendServiceFromSettings(settings = getCurrentSetting
   }
 }
 
+// Sets settings subtab.
 function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const nextTab =
     tabName === SETTINGS_SUBTAB_LLM
@@ -1287,6 +1319,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
 }
 
+// Schedules session keychain auto populate.
 function scheduleSessionKeychainAutoPopulate(reason = "startup") {
   const generation = ++keystoreAutoPopulateGeneration;
   const runAutoPopulate = async () => {
@@ -1317,6 +1350,7 @@ function scheduleSessionKeychainAutoPopulate(reason = "startup") {
   }, 0);
 }
 
+// Handles estimate base64 decoded byte length.
 function estimateBase64DecodedByteLength(base64Data) {
   const normalized = typeof base64Data === "string"
     ? base64Data.replace(/\s+/g, "")
@@ -1327,6 +1361,7 @@ function estimateBase64DecodedByteLength(base64Data) {
   return Math.max(0, Math.floor((normalized.length * 3) / 4) - paddingLength);
 }
 
+// Normalizes session pcap source.
 function normalizeSessionPcapSource(source) {
   if (!source || typeof source !== "object") return null;
   const normalizedBase64 =
@@ -1349,6 +1384,7 @@ function normalizeSessionPcapSource(source) {
   };
 }
 
+// Handles update pcap size display from source.
 function updatePcapSizeDisplayFromSource() {
   const pcapSizeEl = document.getElementById("pcap-size");
   const pcapFileNameEl = document.getElementById("file-name");
@@ -1361,6 +1397,7 @@ function updatePcapSizeDisplayFromSource() {
   pcapSizeEl.textContent = `PCAP size: ${fileSizeKb}kb`;
 }
 
+// Handles update reprocess button state.
 function updateReprocessButtonState() {
   const reprocessBtn = document.getElementById("reprocess-session-pcap-btn");
   if (!reprocessBtn) return;
@@ -1374,6 +1411,7 @@ function updateReprocessButtonState() {
       : "Reprocess stored source PCAP through backend";
 }
 
+// Returns whether persist session now.
 function canPersistSessionNow() {
   if (!isFileLoaded) return false;
   if (backendProgressState.processing) return false;
@@ -1386,10 +1424,12 @@ function canPersistSessionNow() {
   });
 }
 
+// Handles update session save controls.
 function updateSessionSaveControls() {
   // Keep save controls enabled so an early click can surface the warning.
 }
 
+// Handles warn reprocess attempt before ready.
 function warnReprocessAttemptBeforeReady() {
   const message =
     "Status: Backend preprocessing is still running. Wait until processing completes before reprocessing the session PCAP.";
@@ -1403,6 +1443,7 @@ function warnReprocessAttemptBeforeReady() {
   };
 }
 
+// Handles warn session save attempt before ready.
 function warnSessionSaveAttemptBeforeReady(actionLabel) {
   const message =
     "Status: Backend preprocessing is still running. Wait until processing completes before " +
@@ -1417,6 +1458,7 @@ function warnSessionSaveAttemptBeforeReady(actionLabel) {
   };
 }
 
+// Sets session pcap source.
 function setSessionPcapSource(source, options = {}) {
   const { skipLog = false, logLabel = "session" } = options;
   sessionPcapSource = normalizeSessionPcapSource(source);
@@ -1429,6 +1471,7 @@ function setSessionPcapSource(source, options = {}) {
   }
 }
 
+// Resets backend progress state.
 function resetBackendProgressState() {
   backendProgressState.firstChunkLoaded = false;
   backendProgressState.processing = false;
@@ -1438,12 +1481,14 @@ function resetBackendProgressState() {
   updateBackendProcessingWarning();
 }
 
+// Returns backend progress percent.
 function getBackendProgressPercent(processedPackets, totalPackets) {
   if (!Number.isFinite(processedPackets) || processedPackets < 0) return 0;
   if (!Number.isFinite(totalPackets) || totalPackets <= 0) return 0;
   return Math.max(0, Math.min(100, Math.round((processedPackets / totalPackets) * 100)));
 }
 
+// Handles update backend progress status.
 function updateBackendProgressStatus({ force = false } = {}) {
   const processedPackets = Math.max(0, Number(backendProgressState.processedPackets) || 0);
   const totalPackets = Math.max(0, Number(backendProgressState.totalPackets) || 0);
@@ -1462,6 +1507,7 @@ function updateBackendProgressStatus({ force = false } = {}) {
   statusUpdate(`Status: Processing packets... ${percentComplete}%${packetCountsSuffix}`);
 }
 
+// Handles update backend processing warning.
 function updateBackendProcessingWarning() {
   updateSessionSaveControls();
   updateReprocessButtonState();
@@ -1489,6 +1535,7 @@ function updateBackendProcessingWarning() {
   warningEl.style.display = "block";
 }
 
+// Hides loading overlay.
 function hideLoadingOverlay() {
   const loadingScreenEl = document.getElementById("loading-screen");
   const loadingContainerEl = document.getElementById("loading-container");
@@ -1500,6 +1547,7 @@ function hideLoadingOverlay() {
   }
 }
 
+// Normalizes backend json path payload.
 function normalizeBackendJsonPathPayload(rawPayload) {
   if (typeof rawPayload === "string") {
     return {
@@ -1524,6 +1572,7 @@ function normalizeBackendJsonPathPayload(rawPayload) {
   };
 }
 
+// Normalizes backend json data payload.
 function normalizeBackendJsonDataPayload(rawPayload) {
   if (!rawPayload || typeof rawPayload !== "object") {
     return null;
@@ -1550,6 +1599,7 @@ function normalizeBackendJsonDataPayload(rawPayload) {
   };
 }
 
+// Counts capture data packets.
 function countCaptureDataPackets(captureData) {
   if (!captureData || typeof captureData !== "object") return 0;
   const hostMap = captureData["host"];
@@ -1577,6 +1627,11 @@ if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "f
   });
 }
 
+
+
+// ============================================================================
+// Panel composition and cross-panel wiring
+// ============================================================================
 
 
 const {
@@ -1628,7 +1683,7 @@ const summaryPanel = createSummaryPanel({
 });
 
 const { showSummary, showSummaryLoading, clearSummaryContent } = summaryPanel;
-const { initializeDataView, bindDataPanelEvents, logCurrentPacketDisplay } =
+const { bindDataPanelEvents, logCurrentPacketDisplay } =
   createDataPanel({
     constants: {
       MAIN_TAB_DATA,
@@ -1794,6 +1849,7 @@ document.getElementById("summary-btn").addEventListener("click", () => {
   showSummary();
 });
 
+// Returns packet timeframe.
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;
   const packetTimes = [];
@@ -1851,6 +1907,7 @@ document
       });
   });
 
+// Returns whether valid json.
 function isValidJson(str) {
   try {
     JSON.parse(str);
@@ -1914,6 +1971,7 @@ function parseJsonChunked(jsonString, chunkSize = 65536) {
   });
 }
 
+// Handles file loaded.
 function fileLoaded(isLoaded) {
   isFileLoaded = isLoaded;
   if (isLoaded) {
@@ -1955,6 +2013,7 @@ function fileLoaded(isLoaded) {
   updateFilterClearButtonState();
 }
 
+// Handles escape html.
 function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
@@ -1964,6 +2023,7 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
+// Handles decorate expression segment.
 function decorateExpressionSegment(segmentText) {
   if (!segmentText) return "";
 
@@ -1994,6 +2054,7 @@ function decorateExpressionSegment(segmentText) {
   );
 }
 
+// Renders highlighted query.
 function renderHighlightedQuery(query) {
   const source = query || "";
   if (!source) return "&nbsp;";
@@ -2020,24 +2081,29 @@ function renderHighlightedQuery(query) {
   return html;
 }
 
+// Syncs filter highlight.
 function syncFilterHighlight() {
   filterHighlightEl.innerHTML = renderHighlightedQuery(filterInputEl.value);
   syncFilterHighlightScroll();
   updateFilterClearButtonState();
 }
 
+// Syncs filter highlight scroll.
 function syncFilterHighlightScroll() {
   filterHighlightEl.scrollLeft = filterInputEl.scrollLeft;
 }
 
+// Handles update filter clear button state.
 function updateFilterClearButtonState() {
   filterClearButtonEl.disabled = !canClearFilterQuery();
 }
 
+// Returns whether clear filter query.
 function canClearFilterQuery() {
   return !filterInputEl.disabled && filterInputEl.value.trim() !== "";
 }
 
+// Normalizes saved filter entries.
 function normalizeSavedFilterEntries(rawEntries) {
   if (!Array.isArray(rawEntries)) return [];
   return rawEntries
@@ -2077,6 +2143,7 @@ async function loadSavedFilterLibrary() {
   }
 }
 
+// Handles resolve saved filter by id.
 function resolveSavedFilterById(savedFilterId) {
   const normalizedId =
     typeof savedFilterId === "string" ? savedFilterId.trim() : "";
@@ -2086,6 +2153,7 @@ function resolveSavedFilterById(savedFilterId) {
   );
 }
 
+// Returns saved filter entries matching query.
 function getSavedFilterEntriesMatchingQuery(queryValue) {
   const normalizedQuery =
     typeof queryValue === "string" ? queryValue.trim() : "";
@@ -2093,6 +2161,7 @@ function getSavedFilterEntriesMatchingQuery(queryValue) {
   return savedFilterLibrary.filter((entry) => entry.query === normalizedQuery);
 }
 
+// Handles request saved filter label dialog.
 function requestSavedFilterLabelDialog(defaultLabel, queryPreview) {
   const dialogEl = document.getElementById("saved-filter-label-dialog");
   const descriptionEl = document.getElementById(
@@ -2139,6 +2208,7 @@ function requestSavedFilterLabelDialog(defaultLabel, queryPreview) {
   });
 }
 
+// Handles resolve saved filter label dialog.
 function resolveSavedFilterLabelDialog(result) {
   const dialogEl = document.getElementById("saved-filter-label-dialog");
   const inputEl = document.getElementById("saved-filter-label-input");
@@ -2164,6 +2234,7 @@ function resolveSavedFilterLabelDialog(result) {
   activeSavedFilterDialogContext = null;
 }
 
+// Handles submit saved filter label dialog.
 function submitSavedFilterLabelDialog() {
   const inputEl = document.getElementById("saved-filter-label-input");
   resolveSavedFilterLabelDialog({
@@ -2255,6 +2326,7 @@ async function saveCurrentFilterToLibraryFromContextMenu() {
   }
 }
 
+// Renders filter history.
 function renderFilterHistory() {
   filterHistorySelectEl.replaceChildren();
 
@@ -2304,6 +2376,7 @@ function renderFilterHistory() {
   filterHistorySelectEl.disabled = !isFileLoaded;
 }
 
+// Handles expand filter history dropdown aligned to filter input.
 function expandFilterHistoryDropdownAlignedToFilterInput() {
   if (!filterHistorySelectEl || filterHistorySelectEl.disabled) return;
   const filterInputRect = filterInputEl?.getBoundingClientRect?.();
@@ -2327,6 +2400,7 @@ function expandFilterHistoryDropdownAlignedToFilterInput() {
   filterHistorySelectEl.style.maxWidth = `${expandedWidth}px`;
 }
 
+// Handles collapse filter history dropdown.
 function collapseFilterHistoryDropdown() {
   if (!filterHistorySelectEl) return;
   filterHistorySelectEl.classList.remove("filter-history-expanded");
@@ -2335,6 +2409,7 @@ function collapseFilterHistoryDropdown() {
   filterHistorySelectEl.style.maxWidth = "";
 }
 
+// Handles add filter history.
 function addFilterHistory(query) {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return;
@@ -2346,6 +2421,7 @@ function addFilterHistory(query) {
   renderFilterHistory();
 }
 
+// Builds data tools history label.
 function buildDataToolsHistoryLabel(entry) {
   const preview = entry.input.replace(/\s+/g, " ").trim();
   const truncatedPreview =
@@ -2353,6 +2429,7 @@ function buildDataToolsHistoryLabel(entry) {
   return `${entry.format.toUpperCase()}: ${truncatedPreview}`;
 }
 
+// Renders data tools input history.
 function renderDataToolsInputHistory() {
   dataToolsHistorySelectEl.replaceChildren();
 
@@ -2376,6 +2453,7 @@ function renderDataToolsInputHistory() {
   dataToolsHistorySelectEl.disabled = dataToolsInputHistory.length === 0;
 }
 
+// Handles add data tools input history.
 function addDataToolsInputHistory(format, input) {
   const normalizedFormat =
     typeof format === "string" && format.trim()
@@ -2402,6 +2480,7 @@ function addDataToolsInputHistory(format, input) {
   renderDataToolsInputHistory();
 }
 
+// Returns current data tools input snapshot.
 function getCurrentDataToolsInputSnapshot() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -2414,6 +2493,7 @@ function getCurrentDataToolsInputSnapshot() {
   };
 }
 
+// Returns whether data tools input edited.
 function isDataToolsInputEdited() {
   const snapshot = getCurrentDataToolsInputSnapshot();
   return (
@@ -2422,6 +2502,7 @@ function isDataToolsInputEdited() {
   );
 }
 
+// Handles update data tools input edited state.
 function updateDataToolsInputEditedState() {
   const indicatorEl = document.getElementById("data-tools-input-edited-indicator");
   const resetButtonEl = document.getElementById("data-tools-input-reset-btn");
@@ -2435,6 +2516,7 @@ function updateDataToolsInputEditedState() {
   }
 }
 
+// Handles mark data tools input committed.
 function markDataToolsInputCommitted() {
   const snapshot = getCurrentDataToolsInputSnapshot();
   dataToolsCommittedInputValue = snapshot.input;
@@ -2442,6 +2524,7 @@ function markDataToolsInputCommitted() {
   updateDataToolsInputEditedState();
 }
 
+// Resets data tools input to committed.
 function resetDataToolsInputToCommitted() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -2471,6 +2554,7 @@ function resetDataToolsInputToCommitted() {
   }
 }
 
+// Returns packet key.
 function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
   if (packet && typeof packet.__packetKey === "string" && packet.__packetKey) {
     return packet.__packetKey;
@@ -2482,6 +2566,7 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
   return sourceIp + ":" + packetIndex;
 }
 
+// Handles cache packet stub.
 function cachePacketStub(packetKey, packetStub) {
   if (!packetKey || !packetStub) return;
   if (!packetStubByKey.has(packetKey)) {
@@ -2489,6 +2574,7 @@ function cachePacketStub(packetKey, packetStub) {
   }
 }
 
+// Handles cache hydrated packet.
 function cacheHydratedPacket(packetKey, packet) {
   if (!packetKey || !packet) return;
   if (hydratedPacketCache.has(packetKey)) {
@@ -2502,6 +2588,7 @@ function cacheHydratedPacket(packetKey, packet) {
   }
 }
 
+// Clears stream packet hydration cache.
 function clearStreamPacketHydrationCache() {
   streamPacketHydrationCache.clear();
 }
@@ -2539,6 +2626,7 @@ async function warmStreamPacketHydrationCache(streamKey, streamPacketRefs) {
   return hydrationPromise;
 }
 
+// Handles update packet in collections.
 function updatePacketInCollections(packetKey, packet) {
   if (!packetKey || !packet) return;
   const hosts = capturedPackets?.Host || {};
@@ -2607,6 +2695,7 @@ async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0
   return hydrated;
 }
 
+// Returns whether location filter query.
 function isLocationFilterQuery(filterQuery) {
   if (typeof filterQuery !== "string") return false;
   return /\bloc\.(src|dst)\.(city|country|postal|tz|timezone)\s*:/i.test(
@@ -2614,6 +2703,7 @@ function isLocationFilterQuery(filterQuery) {
   );
 }
 
+// Handles choose target host from packet matches.
 function chooseTargetHostFromPacketMatches(matches) {
   if (!Array.isArray(matches) || matches.length === 0) return "";
 
@@ -2649,6 +2739,7 @@ function chooseTargetHostFromPacketMatches(matches) {
   return selectedIp;
 }
 
+// Syncs target host from filtered packets.
 function syncTargetHostFromFilteredPackets(matches, sourceLabel = "filter") {
   const selectedHost = chooseTargetHostFromPacketMatches(matches);
   if (!syncTargetHostSelection(selectedHost)) {
@@ -2658,6 +2749,7 @@ function syncTargetHostFromFilteredPackets(matches, sourceLabel = "filter") {
   return selectedHost;
 }
 
+// Syncs target host selection.
 function syncTargetHostSelection(selectedHost) {
   const normalizedHost =
     typeof selectedHost === "string" ? selectedHost.trim() : "";
@@ -2678,14 +2770,17 @@ function syncTargetHostSelection(selectedHost) {
   return true;
 }
 
+// Returns whether all hosts selection.
 function isAllHostsSelection(selectedHost) {
   return String(selectedHost || "").trim() === DUMMY_ALL_HOST;
 }
 
+// Returns whether bookmarked selection.
 function isBookmarkedSelection(selectedHost) {
   return String(selectedHost || "").trim() === DUMMY_BOOKMARKED_HOST;
 }
 
+// Handles append all hosts option.
 function appendAllHostsOption(targetHostsDropdown) {
   const optionEl = document.createElement("option");
   optionEl.value = DUMMY_ALL_HOST;
@@ -2693,6 +2788,7 @@ function appendAllHostsOption(targetHostsDropdown) {
   targetHostsDropdown.appendChild(optionEl);
 }
 
+// Handles append bookmarked option.
 function appendBookmarkedOption(targetHostsDropdown) {
   const optionEl = document.createElement("option");
   optionEl.value = DUMMY_BOOKMARKED_HOST;
@@ -2700,6 +2796,7 @@ function appendBookmarkedOption(targetHostsDropdown) {
   targetHostsDropdown.appendChild(optionEl);
 }
 
+// Returns all packet keys for filtering.
 function getAllPacketKeysForFiltering() {
   if (packetStubByKey.size > 0) {
     return Array.from(packetStubByKey.keys());
@@ -2719,6 +2816,7 @@ function getAllPacketKeysForFiltering() {
   return packetKeys;
 }
 
+// Returns bookmarked packets for host navigation.
 function getBookmarkedPacketsForHostNavigation() {
   const seenPacketKeys = new Set();
   const packets = [];
@@ -2741,6 +2839,7 @@ function getBookmarkedPacketsForHostNavigation() {
   return sortPacketsByOwnStreamOrder(packets);
 }
 
+// Parses filter expression parts.
 function parseFilterExpressionParts(expression) {
   if (typeof expression !== "string") {
     return null;
@@ -2757,18 +2856,21 @@ function parseFilterExpressionParts(expression) {
   };
 }
 
+// Normalizes local filter key.
 function normalizeLocalFilterKey(filterKey) {
   return String(filterKey || "")
     .toLowerCase()
     .replace(/[._\s-]+/g, "-");
 }
 
+// Returns whether bookmark filter expression.
 function isBookmarkFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
   return normalizeLocalFilterKey(parts.filterKey) === "bookmark";
 }
 
+// Returns whether retransmission filter expression.
 function isRetransmissionFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
@@ -2779,6 +2881,7 @@ function isRetransmissionFilterExpression(expression) {
   );
 }
 
+// Returns whether out of order filter expression.
 function isOutOfOrderFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts?.filterKey) return false;
@@ -2789,6 +2892,7 @@ function isOutOfOrderFilterExpression(expression) {
   );
 }
 
+// Parses bookmark filter bool.
 function parseBookmarkFilterBool(rawValue) {
   const normalized = String(rawValue || "").trim().toLowerCase();
   if (["true", "1", "yes", "y"].includes(normalized)) return true;
@@ -2796,6 +2900,7 @@ function parseBookmarkFilterBool(rawValue) {
   return null;
 }
 
+// Parses retransmission filter bool.
 function parseRetransmissionFilterBool(rawValue) {
   const normalized = String(rawValue || "").trim().toLowerCase();
   if (["true", "1", "yes", "y"].includes(normalized)) return true;
@@ -2803,6 +2908,7 @@ function parseRetransmissionFilterBool(rawValue) {
   return null;
 }
 
+// Handles rebuild tcp stream filter indexes.
 function rebuildTcpStreamFilterIndexes() {
   retransmissionList = [];
   outOfOrderList = [];
@@ -2836,6 +2942,7 @@ function rebuildTcpStreamFilterIndexes() {
   });
 }
 
+// Handles evaluate bookmark filter expression.
 function evaluateBookmarkFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts) return [];
@@ -2863,6 +2970,7 @@ function evaluateBookmarkFilterExpression(expression) {
   });
 }
 
+// Handles evaluate retransmission filter expression.
 function evaluateRetransmissionFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts) return [];
@@ -2890,6 +2998,7 @@ function evaluateRetransmissionFilterExpression(expression) {
   });
 }
 
+// Handles evaluate out of order filter expression.
 function evaluateOutOfOrderFilterExpression(expression) {
   const parts = parseFilterExpressionParts(expression);
   if (!parts) return [];
@@ -2917,6 +3026,7 @@ function evaluateOutOfOrderFilterExpression(expression) {
   });
 }
 
+// Returns all packets for host navigation.
 function getAllPacketsForHostNavigation() {
   const hostMap =
     capturedPackets && typeof capturedPackets["host"] === "object"
@@ -2930,6 +3040,7 @@ function getAllPacketsForHostNavigation() {
   return sortPacketsByOwnStreamOrder(allPackets);
 }
 
+// Returns packets for selected host.
 function getPacketsForSelectedHost(selectedHost) {
   if (isAllHostsSelection(selectedHost)) {
     return getAllPacketsForHostNavigation();
@@ -2943,6 +3054,7 @@ function getPacketsForSelectedHost(selectedHost) {
   return sortPacketsByOwnStreamOrder([...hostPackets]);
 }
 
+// Parses packet timestamp ms.
 function parsePacketTimestampMs(packet) {
   const packetTimestamp =
     packet?.["packet.info"]?.["packet.timestamp"] ??
@@ -2954,6 +3066,7 @@ function parsePacketTimestampMs(packet) {
   return Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
 }
 
+// Parses packet processed number.
 function parsePacketProcessedNumber(packet) {
   const processedRaw = Number(
     packet?.["packet.info"]?.["packet.processed"] ??
@@ -2962,6 +3075,7 @@ function parsePacketProcessedNumber(packet) {
   return Number.isFinite(processedRaw) ? processedRaw : null;
 }
 
+// Parses packet index number.
 function parsePacketIndexNumber(packet) {
   const packetIndexRaw = Number(
     packet?.["packet.info"]?.["index"] ?? packet?.["packet.info"]?.["Index"],
@@ -2969,6 +3083,7 @@ function parsePacketIndexNumber(packet) {
   return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
 }
 
+// Handles compare packets chronologically.
 function comparePacketsChronologically(
   leftPacket,
   rightPacket,
@@ -3002,45 +3117,7 @@ function comparePacketsChronologically(
   return leftFallbackOrder - rightFallbackOrder;
 }
 
-function getPacketStreamSortInfo(packet, fallbackOrder = 0) {
-  const packetInfo = packet?.["packet.info"] || {};
-  const protocol = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "").toUpperCase();
-  const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "";
-  const destinationIp = (packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]) || "";
-  const transport = packetInfo[protocol] || packetInfo[protocol.toLowerCase()] || {};
-  const sourcePort =
-    transport?.["tcp.src.port"] ??
-    transport?.["udp.src.port"] ??
-    transport?.["sctp.src.port"] ??
-    transport?.["Source port"];
-  const destinationPort =
-    transport?.["tcp.dst.port"] ??
-    transport?.["udp.dst.port"] ??
-    transport?.["sctp.dst.port"] ??
-    transport?.["Destination port"];
-  const hasPorts =
-    sourcePort !== undefined &&
-    sourcePort !== null &&
-    destinationPort !== undefined &&
-    destinationPort !== null;
-
-  const endpointA = hasPorts ? `${sourceIp}:${sourcePort}` : sourceIp;
-  const endpointB = hasPorts ? `${destinationIp}:${destinationPort}` : destinationIp;
-  const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
-  const streamKey = `${protocol}|${firstEndpoint}|${secondEndpoint}`;
-
-  const packetIndexRaw = Number(packetInfo?.["index"] ?? packetInfo?.["Index"]);
-  const packetIndex = Number.isFinite(packetIndexRaw)
-    ? packetIndexRaw
-    : fallbackOrder;
-
-  return {
-    streamKey,
-    packetIndex,
-    protocol,
-  };
-}
-
+// Sorts packets by own stream order.
 function sortPacketsByOwnStreamOrder(packetList) {
   if (!Array.isArray(packetList) || packetList.length < 2) {
     return Array.isArray(packetList) ? packetList : [];
@@ -3065,6 +3142,7 @@ function sortPacketsByOwnStreamOrder(packetList) {
   return decorated.map((entry) => entry.packet);
 }
 
+// Handles tokenize local filter query.
 function tokenizeLocalFilterQuery(query) {
   const tokenList = [];
   let cursor = 0;
@@ -3121,15 +3199,18 @@ function tokenizeLocalFilterQuery(query) {
   return tokenList;
 }
 
+// Handles union packet keys.
 function unionPacketKeys(leftKeys, rightKeys) {
   return Array.from(new Set([...leftKeys, ...rightKeys]));
 }
 
+// Handles intersect packet keys.
 function intersectPacketKeys(leftKeys, rightKeys) {
   const rightSet = new Set(rightKeys);
   return leftKeys.filter((packetKey) => rightSet.has(packetKey));
 }
 
+// Handles subtract packet keys.
 function subtractPacketKeys(allKeys, excludedKeys) {
   const excludedSet = new Set(excludedKeys);
   return allKeys.filter((packetKey) => !excludedSet.has(packetKey));
@@ -3312,6 +3393,7 @@ async function runFilterQuery(filterQuery, options = {}) {
   }
 }
 
+// Clears filter query.
 function clearFilterQuery() {
   syncTargetHostSelection(DUMMY_ALL_HOST);
   if (!canClearFilterQuery()) {
@@ -3324,6 +3406,7 @@ function clearFilterQuery() {
   void runFilterQuery("");
 }
 
+// Handles deep clone session data.
 function deepCloneSessionData(value, fallback) {
   try {
     return JSON.parse(JSON.stringify(value));
@@ -3332,6 +3415,7 @@ function deepCloneSessionData(value, fallback) {
   }
 }
 
+// Normalizes note color.
 function normalizeNoteColor(colorValue) {
   const normalized =
     typeof colorValue === "string" ? colorValue.trim().toLowerCase() : "";
@@ -3339,6 +3423,7 @@ function normalizeNoteColor(colorValue) {
   return NOTE_DEFAULT_COLOR;
 }
 
+// Handles generate note id.
 function generateNoteId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
@@ -3347,6 +3432,7 @@ function generateNoteId() {
   return `note-${Date.now()}-${noteIdCounter}`;
 }
 
+// Creates note entry.
 function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
   return {
     id: generateNoteId(),
@@ -3355,103 +3441,14 @@ function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
   };
 }
 
+// Normalizes markdown link url.
 function normalizeMarkdownLinkUrl(urlText) {
   const candidate = String(urlText || "").trim().replace(/&amp;/g, "&");
   if (/^(https?:\/\/|mailto:)/i.test(candidate)) return candidate;
   return "";
 }
 
-function renderInlineMarkdown(markdownText) {
-  let html = escapeHtml(String(markdownText || ""));
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
-    const safeUrl = normalizeMarkdownLinkUrl(url);
-    if (!safeUrl) return label;
-    return `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  });
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-  html = html.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
-  return html;
-}
-
-function splitMarkdownTableRow(line) {
-  const rowText = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
-  const cells = [];
-  let currentCell = "";
-  let isEscaped = false;
-
-  for (const char of rowText) {
-    if (isEscaped) {
-      currentCell += char;
-      isEscaped = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      isEscaped = true;
-      continue;
-    }
-
-    if (char === "|") {
-      cells.push(currentCell.trim());
-      currentCell = "";
-      continue;
-    }
-
-    currentCell += char;
-  }
-
-  cells.push(currentCell.trim());
-  return cells;
-}
-
-function parseMarkdownTableAlignment(cellText) {
-  const normalized = String(cellText || "").trim();
-  if (!/^:?-{3,}:?$/.test(normalized)) {
-    return null;
-  }
-
-  const alignLeft = normalized.startsWith(":");
-  const alignRight = normalized.endsWith(":");
-  if (alignLeft && alignRight) return "center";
-  if (alignRight) return "right";
-  if (alignLeft) return "left";
-  return null;
-}
-
-function renderMarkdownTable(headerRowText, separatorRowText, bodyRowTexts) {
-  const headers = splitMarkdownTableRow(headerRowText);
-  const separatorCells = splitMarkdownTableRow(separatorRowText);
-  const alignments = headers.map((_header, index) => parseMarkdownTableAlignment(separatorCells[index] || ""));
-
-  const headerHtml = headers
-    .map((headerText, index) => {
-      const alignment = alignments[index];
-      const alignAttr = alignment ? ` style="text-align: ${alignment};"` : "";
-      return `<th${alignAttr}>${renderInlineMarkdown(headerText)}</th>`;
-    })
-    .join("");
-
-  const bodyHtml = bodyRowTexts
-    .map((rowText) => {
-      const rowCells = splitMarkdownTableRow(rowText);
-      const rowHtml = headers
-        .map((_headerText, index) => {
-          const cellText = rowCells[index] || "";
-          const alignment = alignments[index];
-          const alignAttr = alignment ? ` style="text-align: ${alignment};"` : "";
-          return `<td${alignAttr}>${renderInlineMarkdown(cellText)}</td>`;
-        })
-        .join("");
-      return `<tr>${rowHtml}</tr>`;
-    })
-    .join("\n");
-
-  return `<table><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
-}
-
+// Handles sanitize markdown preview html.
 function sanitizeMarkdownPreviewHtml(renderedHtml) {
   const template = document.createElement("template");
   template.innerHTML = String(renderedHtml || "");
@@ -3523,6 +3520,7 @@ function sanitizeMarkdownPreviewHtml(renderedHtml) {
   return template.innerHTML;
 }
 
+// Renders markdown to html.
 function renderMarkdownToHtml(markdownText, options = {}) {
   const { emptyPlaceholder = "No note selected." } =
     options && typeof options === "object" ? options : {};
@@ -3541,6 +3539,7 @@ function renderMarkdownToHtml(markdownText, options = {}) {
   return sanitizeMarkdownPreviewHtml(renderedHtml);
 }
 
+// Renders selected note markdown preview.
 function renderSelectedNoteMarkdownPreview(noteText) {
   const notesPreviewEl = document.getElementById("notes-markdown-preview");
   if (!notesPreviewEl) return;
@@ -3548,6 +3547,7 @@ function renderSelectedNoteMarkdownPreview(noteText) {
   notesPreviewEl.innerHTML = renderMarkdownToHtml(noteText);
 }
 
+// Normalizes summary markdown headings.
 function normalizeSummaryMarkdownHeadings(markdownText) {
   const source = String(markdownText || "").replace(/\r\n?/g, "\n");
   if (!source.trim()) {
@@ -3594,6 +3594,7 @@ function normalizeSummaryMarkdownHeadings(markdownText) {
   return `# PacketSnitch's Summary\n\n${normalizedBody}`;
 }
 
+// Renders summary markdown preview.
 function renderSummaryMarkdownPreview(summaryText) {
   const summaryPreviewEl = document.getElementById("summary_content");
   if (!summaryPreviewEl) return;
@@ -3604,12 +3605,14 @@ function renderSummaryMarkdownPreview(summaryText) {
   );
 }
 
+// Normalizes external markdown link href.
 function normalizeExternalMarkdownLinkHref(href) {
   const candidate = String(href || "").trim().replace(/&amp;/g, "&");
   if (/^(https?:|mailto:)/i.test(candidate)) return candidate;
   return "";
 }
 
+// Initializes notes markdown preview link handling.
 function initializeNotesMarkdownPreviewLinkHandling() {
   const notesPreviewEl = document.getElementById("notes-markdown-preview");
   if (!notesPreviewEl || notesPreviewEl.dataset.linkHandlingInitialized === "true") {
@@ -3635,6 +3638,7 @@ function initializeNotesMarkdownPreviewLinkHandling() {
   });
 }
 
+// Initializes summary markdown link handling.
 function initializeSummaryMarkdownLinkHandling() {
   const summaryPreviewEl = document.getElementById("summary_content");
   if (!summaryPreviewEl || summaryPreviewEl.dataset.linkHandlingInitialized === "true") {
@@ -3662,6 +3666,7 @@ function initializeSummaryMarkdownLinkHandling() {
   });
 }
 
+// Syncs notes editor visibility ui.
 function syncNotesEditorVisibilityUi() {
   const notesEditorWrapEl = document.querySelector(".notes-editor-wrap");
   const notesEditorEl = document.getElementById("notes-editor");
@@ -3681,15 +3686,18 @@ function syncNotesEditorVisibilityUi() {
   }
 }
 
+// Sets notes editor visibility.
 function setNotesEditorVisibility(visible) {
   notesEditorVisible = Boolean(visible);
   syncNotesEditorVisibilityUi();
 }
 
+// Returns selected note entry.
 function getSelectedNoteEntry() {
   return notesList.find((entry) => entry.id === selectedNoteId) || null;
 }
 
+// Renders notes list.
 function renderNotesList() {
   const notesSelectEl = document.getElementById("notes-select");
   const notesEditorEl = document.getElementById("notes-editor");
@@ -3731,6 +3739,7 @@ function renderNotesList() {
   syncNotesEditorVisibilityUi();
 }
 
+// Handles add note.
 function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
   const normalizedText =
     typeof text === "string" ? text.trim() : String(text || "").trim();
@@ -3750,6 +3759,7 @@ function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
   return true;
 }
 
+// Handles remove selected note.
 function removeSelectedNote() {
   const selectedNoteEntry = getSelectedNoteEntry();
   if (!selectedNoteEntry) {
@@ -3773,6 +3783,7 @@ function removeSelectedNote() {
   writeLogEntry(`Note removed id=${selectedNoteEntry.id}`);
 }
 
+// Formats notes for export.
 function formatNotesForExport() {
   if (!Array.isArray(notesList) || notesList.length === 0) return "";
   return notesList
@@ -3812,10 +3823,12 @@ async function saveNotesToDisk() {
   }
 }
 
+// Handles escape markdown table cell.
 function escapeMarkdownTableCell(text) {
   return String(text || "").replace(/\|/g, "\\|").replace(/\n/g, "<br>");
 }
 
+// Returns conv decoded result from dom table.
 function getConvDecodedResultFromDomTable() {
   const tableEl = document.querySelector(
     "#data-tools-proto-output table.data-tools-proto-table",
@@ -3849,6 +3862,7 @@ function getConvDecodedResultFromDomTable() {
   };
 }
 
+// Returns conv decoded output text.
 function getConvDecodedOutputText(outputFormat = "plain") {
   const selectedDecoderEl = document.getElementById("data-tools-proto-select");
   const selectedDecoderValue = String(selectedDecoderEl?.value || "auto").trim();
@@ -3899,6 +3913,7 @@ function getConvDecodedOutputText(outputFormat = "plain") {
   return `Protocol Decoder\nProtocol\n${selectedDecoderLabel}`;
 }
 
+// Returns conv context export text.
 function getConvContextExportText(exportType) {
   if (
     exportType === "hex" ||
@@ -3922,6 +3937,7 @@ function getConvContextExportText(exportType) {
   }
 }
 
+// Returns conv context export meta.
 function getConvContextExportMeta(exportType) {
   switch (exportType) {
     case "input":
@@ -3997,6 +4013,7 @@ function getConvContextExportMeta(exportType) {
   }
 }
 
+// Exports conv context text from context menu.
 function exportConvContextTextFromContextMenu(exportType) {
   const exportText = getConvContextExportText(exportType);
   const exportMeta = getConvContextExportMeta(exportType);
@@ -4037,6 +4054,7 @@ function exportConvContextTextFromContextMenu(exportType) {
     });
 }
 
+// Exports conv raw from context menu.
 function exportConvRawFromContextMenu() {
   const payloadHex = getConvFullOutputText("hex");
   hideConvertContextMenu();
@@ -4065,6 +4083,7 @@ function exportConvRawFromContextMenu() {
   });
 }
 
+// Builds conv hashes note text.
 function buildConvHashesNoteText() {
   const hashFields = [
     ["Input", "data-tools-hash-input-reading"],
@@ -4087,6 +4106,7 @@ function buildConvHashesNoteText() {
   return lines.length > 0 ? lines.join("\n") : "";
 }
 
+// Handles send text to notes from context menu.
 function sendTextToNotesFromContextMenu(text, sourceLabel) {
   hideConvertContextMenu();
   const didAdd = addNote(text, NOTE_DEFAULT_COLOR, sourceLabel);
@@ -4094,6 +4114,7 @@ function sendTextToNotesFromContextMenu(text, sourceLabel) {
   showNotesWorkspace();
 }
 
+// Normalizes hex for notes.
 function normalizeHexForNotes(value) {
   const normalized = String(value || "").replace(/[^0-9a-fA-F]/g, "");
   if (!normalized || normalized.length % 2 !== 0) return "";
@@ -4101,6 +4122,7 @@ function normalizeHexForNotes(value) {
   return normalized.toLowerCase();
 }
 
+// Formats hex as hexdump code block.
 function formatHexAsHexdumpCodeBlock(hexText) {
   const normalized = normalizeHexForNotes(hexText);
   if (!normalized) return String(hexText || "").trim();
@@ -4132,6 +4154,7 @@ function formatHexAsHexdumpCodeBlock(hexText) {
   return ["```text", ...lines, "```"].join("\n");
 }
 
+// Formats base64 as code block.
 function formatBase64AsCodeBlock(base64Text) {
   const normalized = String(base64Text || "").replace(/\s+/g, "").trim();
   if (!normalized) return "";
@@ -4142,6 +4165,7 @@ function formatBase64AsCodeBlock(base64Text) {
   return ["```text", ...lines, "```"].join("\n");
 }
 
+// Formats ascii as code block for notes.
 function formatAsciiAsCodeBlockForNotes(asciiText, hexText = "") {
   const normalizedHex = normalizeHexForNotes(hexText);
   if (normalizedHex) {
@@ -4174,6 +4198,7 @@ function formatAsciiAsCodeBlockForNotes(asciiText, hexText = "") {
   return ["```text", normalizedNewlines, "```"].join("\n");
 }
 
+// Builds conv hashes markdown table.
 function buildConvHashesMarkdownTable() {
   const hashFields = [
     ["Input", "data-tools-hash-input-reading"],
@@ -4198,6 +4223,7 @@ function buildConvHashesMarkdownTable() {
   return ["| Hash | Value |", "| --- | --- |", ...rows].join("\n");
 }
 
+// Returns context packet number for notes.
 function getContextPacketNumberForNotes(packet) {
   if (!packet || typeof packet !== "object") return "unknown";
   const packetInfo = packet["packet.info"] || {};
@@ -4209,6 +4235,7 @@ function getContextPacketNumberForNotes(packet) {
   return packetNumber == null || packetNumber === "" ? "unknown" : String(packetNumber);
 }
 
+// Returns context hosts for notes.
 function getContextHostsForNotes(packet) {
   if (!packet || typeof packet !== "object") return "unknown";
   const packetInfo = packet["packet.info"] || {};
@@ -4228,6 +4255,7 @@ function getContextHostsForNotes(packet) {
   return `${String(src)} -> ${String(dst)}`;
 }
 
+// Returns context detected protocols for notes.
 function getContextDetectedProtocolsForNotes(packet) {
   if (!packet || typeof packet !== "object") return "unknown";
   const packetInfo = packet["packet.info"] || {};
@@ -4255,6 +4283,7 @@ function getContextDetectedProtocolsForNotes(packet) {
   return normalized.length ? normalized.join(", ") : "unknown";
 }
 
+// Builds conv notes markdown header.
 function buildConvNotesMarkdownHeader(exportType, packet = null) {
   const normalizedType = String(exportType || "").trim().toLowerCase();
   const titleByType = {
@@ -4278,6 +4307,7 @@ function buildConvNotesMarkdownHeader(exportType, packet = null) {
   ].join("\n");
 }
 
+// Handles send conv export to notes from context menu.
 function sendConvExportToNotesFromContextMenu(exportType, sourceLabel) {
   const rawText = getConvContextExportText(exportType);
   if (!rawText) {
@@ -4319,6 +4349,7 @@ function sendConvExportToNotesFromContextMenu(exportType, sourceLabel) {
   sendTextToNotesFromContextMenu(labeledNoteText, sourceLabel);
 }
 
+// Builds list visible data note text.
 function buildListVisibleDataNoteText(target = activeContextTarget) {
   const row = target?.closest?.("tr[data-host][data-pkt-idx]");
   if (!row) return "";
@@ -4349,6 +4380,7 @@ function buildListVisibleDataNoteText(target = activeContextTarget) {
   return lines.join("\n");
 }
 
+// Initializes notes panel.
 function initializeNotesPanel() {
   const addButtonEl = document.getElementById("notes-add-btn");
   const removeButtonEl = document.getElementById("notes-remove-btn");
@@ -4442,6 +4474,7 @@ function initializeNotesPanel() {
   setNotesEditorVisibility(false);
 }
 
+// Normalizes loaded session payload.
 function normalizeLoadedSessionPayload(parsedPayload) {
   if (!parsedPayload || typeof parsedPayload !== "object") {
     return null;
@@ -4548,6 +4581,7 @@ async function finalizeLoadedCapture(sessionState) {
   document.getElementById("loading-container").style.display = "none";
 }
 
+// Handles rebuild bookmark dropdown.
 function rebuildBookmarkDropdown() {
   const selectBookmarkEl = document.getElementById("selectBookmark");
   while (selectBookmarkEl.options.length > 1) {
@@ -4558,6 +4592,7 @@ function rebuildBookmarkDropdown() {
   });
 }
 
+// Returns session packet view mode.
 function getSessionPacketViewMode() {
   if (
     Array.isArray(filteredPackets) &&
@@ -4569,6 +4604,7 @@ function getSessionPacketViewMode() {
   return "host";
 }
 
+// Builds session state snapshot.
 function buildSessionStateSnapshot() {
   const listSearchEl = document.getElementById("list-search");
   const listGroupStreamsEl = document.getElementById("list-group-streams");
@@ -4639,6 +4675,7 @@ async function buildSessionFilePayload() {
   );
 }
 
+// Returns whether autosave current session.
 function canAutosaveCurrentSession() {
   return canPersistSessionNow();
 }
@@ -4677,6 +4714,7 @@ async function autosaveSessionToDisk() {
   }
 }
 
+// Handles start session autosave timer.
 function startSessionAutosaveTimer() {
   window.setInterval(() => {
     void autosaveSessionToDisk();
@@ -4864,6 +4902,7 @@ async function requestApplicationClose() {
   window.quitapi.quitApp();
 }
 
+// Handles restore session state.
 function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
 
@@ -5332,7 +5371,6 @@ function processFile(file) {
     }
     fileLoaded(true);
     isCaptureStoreBackedCapture = false;
-    jsonOfPackets = event.target.result;
     getCachedElement("error-container").style.display = "none";
 
     // Use chunked parsing for large files (>1MB)
@@ -5405,23 +5443,7 @@ function statusUpdate(message) {
   }, getStatusResetDelayMs());
 }
 
-/**
- * Loads all capturedPackets for a given host IP into packetsForHost.
- */
-function hostPacketInfo(currentIp) {
-  p = getPacketsForSelectedHost(currentIp);
-}
-
-// Use event delegation for dynamically created elements
-// and cache static elements at module load
-const navButtons = {
-  prev: getCachedElement("prev-btn"),
-  next: getCachedElement("next-btn"),
-  summary: getCachedElement("summary-btn"),
-  data: getCachedElement("data-btn"),
-  setBookmark: getCachedElement("setBookmark"),
-};
-
+// Builds host target filter query.
 function buildHostTargetFilterQuery(selectedHost) {
   if (isAllHostsSelection(selectedHost)) return "";
   if (isBookmarkedSelection(selectedHost)) return BOOKMARK_FILTER_QUERY;
@@ -5443,6 +5465,7 @@ getCachedElement("target_hosts").addEventListener("change", function () {
   void runFilterQuery(hostFilterQuery, { trackHistory: false });
 });
 
+// Parses data tools input.
 function parseDataToolsInput(format, rawInput) {
   if (!rawInput || rawInput.trim() === "") {
     throw new Error("Enter input data first.");
@@ -5543,6 +5566,7 @@ const dataToolsSelectionState = {
   lastSelectionSignature: "",
 };
 
+// Handles escape data tools html.
 function escapeDataToolsHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -5550,6 +5574,7 @@ function escapeDataToolsHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
+// Handles classify data tools hex byte.
 function classifyDataToolsHexByte(byteValue) {
   if (DATA_TOOLS_HEX_BREAK_BYTES.has(byteValue)) return "data-tools-hex-break";
   if (
@@ -5562,6 +5587,7 @@ function classifyDataToolsHexByte(byteValue) {
   return "data-tools-hex-binary";
 }
 
+// Builds input selection map.
 function buildInputSelectionMap(rawInput, format, bytes) {
   const text = String(rawInput || "");
   const charToByte = new Array(text.length).fill(null);
@@ -5627,8 +5653,6 @@ function buildInputSelectionMap(rawInput, format, bytes) {
     }
     let byteCursor = 0;
     for (let i = 0; i + 3 < indices.length; i += 4) {
-      const c1 = text[indices[i]];
-      const c2 = text[indices[i + 1]];
       const c3 = text[indices[i + 2]];
       const c4 = text[indices[i + 3]];
       const byteCount = c3 === "=" ? 1 : c4 === "=" ? 2 : 3;
@@ -5668,6 +5692,7 @@ function buildInputSelectionMap(rawInput, format, bytes) {
   return { charToByte, byteRanges };
 }
 
+// Builds rendered selection map.
 function buildRenderedSelectionMap(values) {
   const text = values.join(" ");
   const charToByte = [];
@@ -5690,6 +5715,7 @@ function buildRenderedSelectionMap(values) {
   return { text, charToByte, byteRanges };
 }
 
+// Builds base64 selection map.
 function buildBase64SelectionMap(base64Text, bytes) {
   const charToByte = new Array(base64Text.length).fill(null);
   const byteRanges = Array.from({ length: bytes.length }, () => ({
@@ -5725,6 +5751,7 @@ function buildBase64SelectionMap(base64Text, bytes) {
   return { text: base64Text, charToByte, byteRanges };
 }
 
+// Returns data tools byte range for selection.
 function getDataToolsByteRangeForSelection(selectionMap, start, end) {
   if (!selectionMap) return null;
   const max = selectionMap.charToByte.length;
@@ -5755,6 +5782,7 @@ function getDataToolsByteRangeForSelection(selectionMap, start, end) {
   return null;
 }
 
+// Returns data tools selection for byte range.
 function getDataToolsSelectionForByteRange(selectionMap, byteRange) {
   if (!selectionMap || !byteRange) return null;
   const startByte = Math.max(0, byteRange.start);
@@ -5766,6 +5794,7 @@ function getDataToolsSelectionForByteRange(selectionMap, byteRange) {
   return { start: startRange.start, end: endRange.end };
 }
 
+// Builds colorized hex html.
 function buildColorizedHexHtml(rawText, selectionMap, bytes, byteRange) {
   const text = String(rawText || "");
   const hasSelection = Boolean(byteRange);
@@ -5791,6 +5820,7 @@ function buildColorizedHexHtml(rawText, selectionMap, bytes, byteRange) {
   return html;
 }
 
+// Handles update data tools hex highlights.
 function updateDataToolsHexHighlights() {
   const inputHighlightEl = document.getElementById(
     "data-tools-input-highlight",
@@ -5837,6 +5867,7 @@ function updateDataToolsHexHighlights() {
   );
 }
 
+// Syncs data tools highlight scroll.
 function syncDataToolsHighlightScroll(textareaId, layerId) {
   const textarea = document.getElementById(textareaId);
   const layer = document.getElementById(layerId);
@@ -5845,6 +5876,7 @@ function syncDataToolsHighlightScroll(textareaId, layerId) {
   layer.scrollTop = textarea.scrollTop;
 }
 
+// Clears data tools selection state.
 function clearDataToolsSelectionState() {
   dataToolsSelectionState.bytes = new Uint8Array();
   dataToolsSelectionState.maps = {};
@@ -5861,6 +5893,7 @@ function clearDataToolsSelectionState() {
   );
 }
 
+// Handles update data tools selection maps.
 function updateDataToolsSelectionMaps(format, rawInput, bytes, outputs) {
   dataToolsSelectionState.bytes = bytes;
   dataToolsSelectionState.lastSelectionSignature = "";
@@ -5889,6 +5922,7 @@ function updateDataToolsSelectionMaps(format, rawInput, bytes, outputs) {
   };
 }
 
+// Syncs data tools selection from field.
 function syncDataToolsSelectionFromField(sourceFieldId) {
   if (dataToolsSelectionState.syncingSelection) return;
   const sourceEl = document.getElementById(sourceFieldId);
@@ -5928,6 +5962,7 @@ function syncDataToolsSelectionFromField(sourceFieldId) {
   updateDataToolsHexHighlights();
 }
 
+// Handles bytes to base64.
 function bytesToBase64(bytes) {
   let binary = "";
   bytes.forEach((byte) => {
@@ -5936,6 +5971,7 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// Handles bytes to printable ascii.
 function bytesToPrintableAscii(bytes) {
   return [...bytes]
     .map((byte) =>
@@ -5944,6 +5980,7 @@ function bytesToPrintableAscii(bytes) {
     .join("");
 }
 
+// Handles bytes to big int decimal.
 function bytesToBigIntDecimal(bytes) {
   let total = 0n;
   bytes.forEach((byte) => {
@@ -5952,6 +5989,7 @@ function bytesToBigIntDecimal(bytes) {
   return total.toString(10);
 }
 
+// Returns compression algorithms by priority.
 function getCompressionAlgorithmsByPriority(preferredAlgorithm = "") {
   const normalizedPreferred = String(preferredAlgorithm || "").toLowerCase();
   const allAlgorithms = ["gzip", "deflate", "brotli"];
@@ -5961,6 +5999,7 @@ function getCompressionAlgorithmsByPriority(preferredAlgorithm = "") {
   return [normalizedPreferred, ...allAlgorithms.filter((a) => a !== normalizedPreferred)];
 }
 
+// Handles infer compression from bytes.
 function inferCompressionFromBytes(bytes) {
   if (!bytes || bytes.length < 2) return "";
   if (bytes[0] === 0x1f && bytes[1] === 0x8b) return "gzip";
@@ -6054,6 +6093,7 @@ async function getCurrentPacketCompressionHint() {
   }
 }
 
+// Returns active conv decompression candidate.
 function getActiveConvDecompressionCandidate() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -6071,6 +6111,7 @@ function getActiveConvDecompressionCandidate() {
   }
 }
 
+// Handles calculate shannon entropy.
 function calculateShannonEntropy(bytes) {
   if (!bytes.length) return 0;
   const counts = new Array(256).fill(0);
@@ -6086,6 +6127,7 @@ function calculateShannonEntropy(bytes) {
   return entropy;
 }
 
+// Handles infer mime type.
 function inferMimeType(bytes) {
   if (!bytes || !bytes.length) return "application/octet-stream";
 
@@ -6126,6 +6168,7 @@ function inferMimeType(bytes) {
   return "application/octet-stream";
 }
 
+// Returns entropy label.
 function getEntropyLabel(entropy) {
   if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return "High";
   if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return "Medium";
@@ -6241,6 +6284,7 @@ const DATA_TOOLS_LANGUAGE_STOPWORDS = {
   Italian: ["che", "per", "con", "una", "non", "della", "sono", "degli"],
 };
 
+// Handles decode bytes for text inspection.
 function decodeBytesForTextInspection(bytes) {
   if (!bytes || !bytes.length) return "";
   if (
@@ -6262,6 +6306,7 @@ function decodeBytesForTextInspection(bytes) {
 
 
 
+// Returns whether likely readable text.
 function isLikelyReadableText(text, bytes = null) {
   const normalized = String(text || "");
   if (!normalized.trim()) return false;
@@ -6292,6 +6337,7 @@ function isLikelyReadableText(text, bytes = null) {
   );
 }
 
+// Handles looks like html source.
 function looksLikeHtmlSource(text) {
   return (
     /<!doctype\s+html/i.test(text) ||
@@ -6300,6 +6346,7 @@ function looksLikeHtmlSource(text) {
   );
 }
 
+// Handles looks like xml source.
 function looksLikeXmlSource(text) {
   return (
     /^<\?xml\b/i.test(text) ||
@@ -6307,6 +6354,7 @@ function looksLikeXmlSource(text) {
   );
 }
 
+// Handles looks like css source.
 function looksLikeCssSource(text) {
   if (
     /@(?:media|import|supports|font-face)\b/i.test(text) ||
@@ -6331,6 +6379,7 @@ function looksLikeCssSource(text) {
   );
 }
 
+// Handles looks like java script source.
 function looksLikeJavaScriptSource(text) {
   return (
     /\b(?:const|let|var|function|export|import|async|await|document|window|console)\b/.test(
@@ -6339,6 +6388,7 @@ function looksLikeJavaScriptSource(text) {
   );
 }
 
+// Handles looks like python source.
 function looksLikePythonSource(text) {
   return (
     /^\s*#!\/(?:usr\/bin\/env\s+)?python\d*\b/m.test(text) ||
@@ -6348,6 +6398,7 @@ function looksLikePythonSource(text) {
   );
 }
 
+// Handles looks like shell source.
 function looksLikeShellSource(text) {
   return (
     /^\s*#!\/(?:usr\/bin\/env\s+)?(?:bash|sh|zsh|fish)\b/m.test(text) ||
@@ -6356,32 +6407,38 @@ function looksLikeShellSource(text) {
   );
 }
 
+// Handles looks like power shell source.
 function looksLikePowerShellSource(text) {
   return /\b(?:Get-|Set-|Write-Host|New-Object|Param\s*\(|\$env:)\b/i.test(
     text,
   );
 }
 
+// Handles looks like sql source.
 function looksLikeSqlSource(text) {
   return /\b(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE)\b/i.test(
     text,
   );
 }
 
+// Handles looks like php source.
 function looksLikePhpSource(text) {
   return /<\?php\b/i.test(text);
 }
 
+// Handles looks like go source.
 function looksLikeGoSource(text) {
   return /\bpackage\s+\w+\b/.test(text) && /\bfunc\s+\w+\s*\(/.test(text);
 }
 
+// Handles looks like rust source.
 function looksLikeRustSource(text) {
   return (
     /\bfn\s+\w+\s*\(/.test(text) && /\b(?:let\s+mut|impl|use\s+\w)/.test(text)
   );
 }
 
+// Handles looks like java or csharp source.
 function looksLikeJavaOrCSharpSource(text) {
   return (
     /\b(?:public|private|protected)\s+(?:class|static|void)\b/.test(text) ||
@@ -6390,6 +6447,7 @@ function looksLikeJavaOrCSharpSource(text) {
   );
 }
 
+// Handles looks like yaml source.
 function looksLikeYamlSource(text) {
   return (
     /^\s*[A-Za-z0-9_.-]+\s*:\s+\S+/m.test(text) &&
@@ -6398,6 +6456,7 @@ function looksLikeYamlSource(text) {
   );
 }
 
+// Handles looks like any source code.
 function looksLikeAnySourceCode(text) {
   return (
     looksLikeHtmlSource(text) ||
@@ -6416,6 +6475,7 @@ function looksLikeAnySourceCode(text) {
   );
 }
 
+// Handles add structured text type guesses.
 function addStructuredTextTypeGuesses(inputText, candidateScores) {
   const text = String(inputText || "");
   const trimmed = text.trim();
@@ -6474,6 +6534,7 @@ function addStructuredTextTypeGuesses(inputText, candidateScores) {
   }
 }
 
+// Handles guess readable text language.
 function guessReadableTextLanguage(text, bytes = null) {
   const normalized = String(text || "").trim();
   if (!isLikelyReadableText(normalized, bytes)) return null;
@@ -6543,6 +6604,7 @@ function guessReadableTextLanguage(text, bytes = null) {
   return null;
 }
 
+// Handles add data type guess candidate.
 function addDataTypeGuessCandidate(candidateScores, label, score) {
   const currentScore = candidateScores.get(label) || 0;
   if (score > currentScore) {
@@ -6550,6 +6612,7 @@ function addDataTypeGuessCandidate(candidateScores, label, score) {
   }
 }
 
+// Detects data type guess from token.
 function detectDataTypeGuessFromToken(token, candidateScores) {
   const normalizedToken = String(token || "").trim();
   if (!normalizedToken) return;
@@ -6711,6 +6774,7 @@ function detectDataTypeGuessFromToken(token, candidateScores) {
 
 }
 
+// Handles scan ascii text for data type guesses.
 function scanAsciiTextForDataTypeGuesses(inputText, candidateScores) {
   const sourceText = String(inputText || "");
   if (!sourceText.trim()) return;
@@ -6744,6 +6808,7 @@ function scanAsciiTextForDataTypeGuesses(inputText, candidateScores) {
   }
 }
 
+// Handles derive data type guesses.
 function deriveDataTypeGuesses(rawInput, decodedAsciiInput = "") {
   const candidateScores = new Map();
   scanAsciiTextForDataTypeGuesses(rawInput, candidateScores);
@@ -6767,6 +6832,7 @@ function deriveDataTypeGuesses(rawInput, decodedAsciiInput = "") {
     }));
 }
 
+// Renders data type guesses.
 function renderDataTypeGuesses(guesses) {
   const guessesEl = document.getElementById("data-tools-data-type-guesses");
   if (!guessesEl) return;
@@ -6788,6 +6854,7 @@ function renderDataTypeGuesses(guesses) {
   });
 }
 
+// Renders data tools language guess.
 function renderDataToolsLanguageGuess(languageGuess) {
   const languageEl = document.getElementById("data-tools-language-guess");
   if (!languageEl) return;
@@ -6796,9 +6863,9 @@ function renderDataToolsLanguageGuess(languageGuess) {
     : "Text Language: Unknown";
 }
 
+// Sets data tools file name guess.
 function setDataToolsFileNameGuess(fileNameGuess) {
   const normalizedGuess = String(fileNameGuess || "").trim();
-  dataToolsFileNameGuess = normalizedGuess;
   const fileNameGuessEl = document.getElementById("data-tools-file-name");
   if (!fileNameGuessEl) return;
   fileNameGuessEl.textContent = normalizedGuess
@@ -6806,6 +6873,7 @@ function setDataToolsFileNameGuess(fileNameGuess) {
     : "Filename Guess: Unknown";
 }
 
+// Resets data tools outputs.
 function resetDataToolsOutputs() {
   dataToolsLastConversionBytes = new Uint8Array();
   dataToolsLastRenderedOutputBytes = 0;
@@ -6835,6 +6903,7 @@ function resetDataToolsOutputs() {
   updateDataToolsOutputPaginationControls();
 }
 
+// Returns conv full output text.
 function getConvFullOutputText(exportType) {
   const bytes = dataToolsLastConversionBytes;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
@@ -6878,6 +6947,7 @@ function getConvFullOutputText(exportType) {
   }
 }
 
+// Handles update data tools output pagination controls.
 function updateDataToolsOutputPaginationControls() {
   const rowEl = document.getElementById("data-tools-output-pagination-row");
   const statusEl = document.getElementById("data-tools-output-pagination-status");
@@ -6901,6 +6971,7 @@ function updateDataToolsOutputPaginationControls() {
   buttonEl.disabled = shownBytes >= totalBytes;
 }
 
+// Renders data tools output page.
 function renderDataToolsOutputPage({ reset = false } = {}) {
   const totalBytes =
     dataToolsLastConversionBytes instanceof Uint8Array
@@ -6960,10 +7031,12 @@ function renderDataToolsOutputPage({ reset = false } = {}) {
   updateDataToolsOutputPaginationControls();
 }
 
+// Loads more data tools output page.
 function loadMoreDataToolsOutputPage() {
   renderDataToolsOutputPage({ reset: false });
 }
 
+// Sets expanded converted output.
 function setExpandedConvertedOutput(expandedOutputId) {
   DATA_TOOLS_CONVERTED_OUTPUT_IDS.forEach((outputId) => {
     const outputEl = document.getElementById(outputId);
@@ -6977,6 +7050,7 @@ function setExpandedConvertedOutput(expandedOutputId) {
   });
 }
 
+// Handles bind converted output expand handlers.
 function bindConvertedOutputExpandHandlers() {
   DATA_TOOLS_CONVERTED_OUTPUT_IDS.forEach((outputId) => {
     const outputEl = document.getElementById(outputId);
@@ -6988,6 +7062,7 @@ function bindConvertedOutputExpandHandlers() {
   });
 }
 
+// Handles update data tools converted output visibility.
 function updateDataToolsConvertedOutputVisibility() {
   const formatEl = document.getElementById("data-tools-format");
   const activeFormat = String(formatEl?.value || DEFAULT_DATA_TOOLS_FORMAT);
@@ -7018,12 +7093,14 @@ const HASH_IDS = [
   "data-tools-whirlpool-output",
 ];
 
+// Resets hash outputs.
 function resetHashOutputs() {
   for (const id of HASH_IDS) {
     document.getElementById(id).value = "";
   }
 }
 
+// Handles bytes to char string.
 function bytesToCharString(bytes) {
   const CHUNK_SIZE = 0x8000;
   let result = "";
@@ -7034,6 +7111,7 @@ function bytesToCharString(bytes) {
   return result;
 }
 
+// Computes data tools hashes.
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
   const byteString = bytesToCharString(bytes);
@@ -7062,6 +7140,7 @@ function computeDataToolsHashes(bytes) {
   document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
 }
 
+// Sets data tools find replace status.
 function setDataToolsFindReplaceStatus(statusElementId, message, isError = false) {
   const statusEl = document.getElementById(statusElementId);
   if (!statusEl) return;
@@ -7069,6 +7148,7 @@ function setDataToolsFindReplaceStatus(statusElementId, message, isError = false
   statusEl.style.color = isError ? "#ff8f8f" : "";
 }
 
+// Clears data tools simple find replace values.
 function clearDataToolsSimpleFindReplaceValues() {
   const searchEl = document.getElementById("data-tools-simple-search");
   const replaceEl = document.getElementById("data-tools-simple-replace");
@@ -7079,6 +7159,7 @@ function clearDataToolsSimpleFindReplaceValues() {
   setDataToolsFindReplaceStatus("data-tools-simple-replace-status", "");
 }
 
+// Clears data tools advanced find replace values.
 function clearDataToolsAdvancedFindReplaceValues() {
   const searchEl = document.getElementById("data-tools-pcre-search");
   const replaceEl = document.getElementById("data-tools-pcre-replace");
@@ -7095,6 +7176,7 @@ function clearDataToolsAdvancedFindReplaceValues() {
   setDataToolsFindReplaceStatus("data-tools-pcre-status", "");
 }
 
+// Sets data tools find replace section collapsed.
 function setDataToolsFindReplaceSectionCollapsed(sectionEl, collapsed) {
   if (!sectionEl) return;
   sectionEl.classList.toggle("is-collapsed", Boolean(collapsed));
@@ -7108,6 +7190,7 @@ function setDataToolsFindReplaceSectionCollapsed(sectionEl, collapsed) {
   });
 }
 
+// Sets data tools find replace mode.
 function setDataToolsFindReplaceMode(mode) {
   const simpleSection = document.getElementById("data-tools-simple-find-replace-section");
   const advancedSection = document.getElementById("data-tools-advanced-find-replace-section");
@@ -7131,6 +7214,7 @@ function setDataToolsFindReplaceMode(mode) {
   setDataToolsFindReplaceSectionCollapsed(advancedSection, false);
 }
 
+// Normalizes data tools byte token.
 function normalizeDataToolsByteToken(byteValue) {
   const normalized = Number(byteValue);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 255) {
@@ -7139,6 +7223,7 @@ function normalizeDataToolsByteToken(byteValue) {
   return normalized;
 }
 
+// Parses data tools escaped bytes expression.
 function parseDataToolsEscapedBytesExpression(rawExpression) {
   const expression = String(rawExpression || "");
   const bytes = [];
@@ -7203,6 +7288,7 @@ function parseDataToolsEscapedBytesExpression(rawExpression) {
   return new Uint8Array(bytes);
 }
 
+// Normalizes data tools pcre pattern for byte search.
 function normalizeDataToolsPcrePatternForByteSearch(rawPattern) {
   const pattern = String(rawPattern || "");
   let normalized = "";
@@ -7249,6 +7335,7 @@ function normalizeDataToolsPcrePatternForByteSearch(rawPattern) {
   return normalized;
 }
 
+// Normalizes data tools pcre replacement for byte search.
 function normalizeDataToolsPcreReplacementForByteSearch(rawReplacement) {
   const replacement = String(rawReplacement || "");
   let normalized = "";
@@ -7311,6 +7398,7 @@ function normalizeDataToolsPcreReplacementForByteSearch(rawReplacement) {
   return normalized;
 }
 
+// Handles encode data tools bytes for format.
 function encodeDataToolsBytesForFormat(bytes, format) {
   const safeFormat = String(format || "hex").toLowerCase();
   if (safeFormat === "hex") {
@@ -7332,6 +7420,7 @@ function encodeDataToolsBytesForFormat(bytes, format) {
   return new TextDecoder().decode(bytes);
 }
 
+// Handles byte string to uint8 array.
 function byteStringToUint8Array(value) {
   const input = String(value || "");
   const result = new Uint8Array(input.length);
@@ -7341,6 +7430,7 @@ function byteStringToUint8Array(value) {
   return result;
 }
 
+// Returns data tools input byte context.
 function getDataToolsInputByteContext() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -7378,6 +7468,7 @@ function getDataToolsInputByteContext() {
   };
 }
 
+// Handles map data tools byte range to selection.
 function mapDataToolsByteRangeToSelection(inputValue, format, bytes, startByte, endByte) {
   const map = buildInputSelectionMap(inputValue, format, bytes);
   const byteRanges = map?.byteRanges || [];
@@ -7396,11 +7487,13 @@ function mapDataToolsByteRangeToSelection(inputValue, format, bytes, startByte, 
   return { startChar, endChar };
 }
 
+// Handles to lower ascii byte.
 function toLowerAsciiByte(byteValue) {
   if (byteValue >= 0x41 && byteValue <= 0x5a) return byteValue + 32;
   return byteValue;
 }
 
+// Handles bytes match at.
 function bytesMatchAt(haystack, needle, atIndex, matchCase) {
   for (let i = 0; i < needle.length; i++) {
     const sourceByte = haystack[atIndex + i];
@@ -7414,6 +7507,7 @@ function bytesMatchAt(haystack, needle, atIndex, matchCase) {
   return true;
 }
 
+// Finds next byte pattern.
 function findNextBytePattern(haystack, needle, startIndex, matchCase = true) {
   if (!needle.length || haystack.length < needle.length) return null;
   const maxIndex = haystack.length - needle.length;
@@ -7433,6 +7527,7 @@ function findNextBytePattern(haystack, needle, startIndex, matchCase = true) {
   return null;
 }
 
+// Handles replace all byte patterns.
 function replaceAllBytePatterns(haystack, needle, replacement, matchCase = true) {
   if (!needle.length) {
     return { bytes: haystack, count: 0 };
@@ -7457,6 +7552,7 @@ function replaceAllBytePatterns(haystack, needle, replacement, matchCase = true)
   return { bytes: new Uint8Array(output), count: replacedCount };
 }
 
+// Returns data tools pcre pattern and flags.
 function getDataToolsPcrePatternAndFlags(includeGlobalFlag = false) {
   const rawPattern = String(
     document.getElementById("data-tools-pcre-search")?.value || "",
@@ -7496,22 +7592,7 @@ function getDataToolsPcrePatternAndFlags(includeGlobalFlag = false) {
   return { pattern, flags: [...collectedFlags].join("") };
 }
 
-function findNextLiteralMatch(haystack, needle, fromIndex, matchCase) {
-  if (!needle) return null;
-  const normalizedHaystack = matchCase ? haystack : haystack.toLowerCase();
-  const normalizedNeedle = matchCase ? needle : needle.toLowerCase();
-  const boundedStart = Math.max(0, Math.min(fromIndex, haystack.length));
-
-  let idx = normalizedHaystack.indexOf(normalizedNeedle, boundedStart);
-  let wrapped = false;
-  if (idx === -1 && boundedStart > 0) {
-    idx = normalizedHaystack.indexOf(normalizedNeedle, 0);
-    wrapped = idx !== -1;
-  }
-  if (idx === -1) return null;
-  return { start: idx, end: idx + needle.length, wrapped };
-}
-
+// Finds next regex match.
 function findNextRegexMatch(value, regex, fromIndex) {
   const boundedStart = Math.max(0, Math.min(fromIndex, value.length));
   regex.lastIndex = boundedStart;
@@ -7553,6 +7634,7 @@ function findNextRegexMatch(value, regex, fromIndex) {
   return null;
 }
 
+// Handles update data tools input after search replace.
 function updateDataToolsInputAfterSearchReplace(nextValue, selectionStart, selectionEnd) {
   const inputEl = document.getElementById("data-tools-input");
   if (!inputEl) return;
@@ -7579,6 +7661,7 @@ function updateDataToolsInputAfterSearchReplace(nextValue, selectionStart, selec
   }
 }
 
+// Runs data tools simple find next.
 function runDataToolsSimpleFindNext() {
   setDataToolsFindReplaceMode("simple");
   const context = getDataToolsInputByteContext();
@@ -7627,6 +7710,7 @@ function runDataToolsSimpleFindNext() {
   );
 }
 
+// Runs data tools simple replace next.
 function runDataToolsSimpleReplaceNext() {
   setDataToolsFindReplaceMode("simple");
   const context = getDataToolsInputByteContext();
@@ -7693,6 +7777,7 @@ function runDataToolsSimpleReplaceNext() {
   );
 }
 
+// Runs data tools simple replace all.
 function runDataToolsSimpleReplaceAll() {
   setDataToolsFindReplaceMode("simple");
   const context = getDataToolsInputByteContext();
@@ -7740,6 +7825,7 @@ function runDataToolsSimpleReplaceAll() {
   );
 }
 
+// Runs data tools pcre find next.
 function runDataToolsPcreFindNext() {
   setDataToolsFindReplaceMode("advanced");
   const context = getDataToolsInputByteContext();
@@ -7777,6 +7863,7 @@ function runDataToolsPcreFindNext() {
   }
 }
 
+// Runs data tools pcre replace next.
 function runDataToolsPcreReplaceNext() {
   setDataToolsFindReplaceMode("advanced");
   const context = getDataToolsInputByteContext();
@@ -7832,6 +7919,7 @@ function runDataToolsPcreReplaceNext() {
   }
 }
 
+// Runs data tools pcre replace all.
 function runDataToolsPcreReplaceAll() {
   setDataToolsFindReplaceMode("advanced");
   const context = getDataToolsInputByteContext();
@@ -7872,6 +7960,7 @@ function runDataToolsPcreReplaceAll() {
   }
 }
 
+// Runs data tools conversion.
 function runDataToolsConversion(options = {}) {
   const suppressHistory = Boolean(options?.suppressHistory);
   const suppressCommit = Boolean(options?.suppressCommit);
@@ -8034,6 +8123,7 @@ function decodeHttpFromBytes(bytes) {
   return { protocol: "HTTP", fields };
 }
 
+// Handles decode telnet from bytes.
 function decodeTelnetFromBytes(bytes) {
   const IAC = 0xff;
   const WILL = 0xfb,
@@ -8110,6 +8200,7 @@ function decodeTelnetFromBytes(bytes) {
   return { protocol: "Telnet", fields };
 }
 
+// Handles decode ssh from bytes.
 function decodeSshFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 512),
@@ -8135,6 +8226,7 @@ function decodeSshFromBytes(bytes) {
   return { protocol: "SSH / OpenSSH", fields };
 }
 
+// Handles decode pop3 from bytes.
 function decodePop3FromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -8183,6 +8275,7 @@ function decodePop3FromBytes(bytes) {
   return { protocol: "POP3", fields };
 }
 
+// Handles decode imap from bytes.
 function decodeImapFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -8259,6 +8352,7 @@ function decodeImapFromBytes(bytes) {
   return { protocol: "IMAP", fields };
 }
 
+// Handles decode smtp from bytes.
 function decodeSmtpFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -8306,6 +8400,7 @@ function decodeSmtpFromBytes(bytes) {
   return { protocol: "SMTP", fields };
 }
 
+// Handles decode ftp from bytes.
 function decodeFtpFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((line) => line.trim());
@@ -8375,6 +8470,7 @@ function decodeFtpFromBytes(bytes) {
   return { protocol: "FTP", fields };
 }
 
+// Handles auto detect proto from bytes.
 function autoDetectProtoFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
@@ -8421,10 +8517,10 @@ function autoDetectProtoFromBytes(bytes) {
   return null;
 }
 
+// Renders proto decoder output.
 function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (!protoOutput) return;
-  activeDataToolsProtoResult = result || null;
   protoOutput.innerHTML = "";
   if (!result) {
     const span = document.createElement("span");
@@ -8459,6 +8555,7 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   protoOutput.appendChild(table);
 }
 
+// Runs proto decoder.
 function runProtoDecoder(bytes) {
   const selectEl = document.getElementById("data-tools-proto-select");
   const selectedProtocol = selectEl ? selectEl.value : "auto";
@@ -8495,12 +8592,13 @@ function runProtoDecoder(bytes) {
   renderProtoDecoderOutput(result, selectedProtocol, protocol);
 }
 
+// Clears proto decoder output.
 function clearProtoDecoderOutput() {
   const protoOutput = document.getElementById("data-tools-proto-output");
-  activeDataToolsProtoResult = null;
   if (protoOutput) protoOutput.innerHTML = "";
 }
 
+// Runs deferred data tools analysis for active subtab.
 function runDeferredDataToolsAnalysisForActiveSubtab() {
   const bytes = dataToolsLastConversionBytes;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
@@ -8514,6 +8612,10 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ============================================================================
+// Data tools and workspace display toggles
+// ============================================================================
 
 function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   activeMainTab = MAIN_TAB_DATA_TOOLS;
@@ -8536,6 +8638,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   runDeferredDataToolsAnalysisForActiveSubtab();
 }
 
+// Shows notes workspace.
 function showNotesWorkspace() {
   activeMainTab = MAIN_TAB_NOTES;
   statusUpdate("Status: Displaying session notes");
@@ -8560,6 +8663,7 @@ function showNotesWorkspace() {
   renderNotesList();
 }
 
+// Shows settings workspace.
 function showSettingsWorkspace() {
   activeMainTab = MAIN_TAB_SETTINGS;
   statusUpdate("Status: Displaying settings");
@@ -8582,6 +8686,7 @@ function showSettingsWorkspace() {
   syncSettingsFormFromState();
 }
 
+// Returns first line or fallback.
 function getFirstLineOrFallback(elementId, fallback = "") {
   const text = document.getElementById(elementId)?.textContent || "";
   const firstLine = text.split("\n")[0]?.trim();
@@ -8616,7 +8721,7 @@ const cryptPanel = createCryptPanel({
     keystorePanel.addSessionKeystoreEntry(...args),
   getSessionKeychainEntries: () => keystorePanel.getSessionKeychainEntries(),
   getFirstLineOrFallback,
-  sendDecryptedToConv: ({ hexValue, utf8Value, sourceLabel }) => {
+  sendDecryptedToConv: ({ hexValue, utf8Value }) => {
     const inputEl = document.getElementById("data-tools-input");
     const formatEl = document.getElementById("data-tools-format");
     const normalizedHex = String(hexValue || "").trim();
@@ -8858,12 +8963,14 @@ const convertContextSubmenuEls = Array.from(
   convertContextMenuEl.querySelectorAll(".ctx-submenu"),
 );
 
+// Resets convert context submenu positions.
 function resetConvertContextSubmenuPositions() {
   convertContextSubmenuEls.forEach((submenuEl) => {
     submenuEl.classList.remove("ctx-submenu-flip-x", "ctx-submenu-flip-y");
   });
 }
 
+// Handles update convert context submenu positions.
 function updateConvertContextSubmenuPositions() {
   const viewportPadding = 8;
   resetConvertContextSubmenuPositions();
@@ -8938,6 +9045,7 @@ function updateConvertContextSubmenuPositions() {
   });
 }
 
+// Hides convert context menu.
 function hideConvertContextMenu() {
   activeContextConversionText = "";
   activeContextTarget = null;
@@ -8950,6 +9058,7 @@ function hideConvertContextMenu() {
   convertContextMenuEl.hidden = true;
 }
 
+// Returns packet from list context target.
 function getPacketFromListContextTarget(target, offset = 0) {
   const row = target?.closest?.("tr[data-host][data-pkt-idx]");
   if (!row) return null;
@@ -8961,6 +9070,7 @@ function getPacketFromListContextTarget(target, offset = 0) {
   return hostPackets[packetIndex] || null;
 }
 
+// Returns current context packet.
 function getCurrentContextPacket(target = null, offset = 0) {
   if (activeMainTab === MAIN_TAB_LIST) {
     const listPacket = getPacketFromListContextTarget(target || activeContextTarget, offset);
@@ -8972,17 +9082,20 @@ function getCurrentContextPacket(target = null, offset = 0) {
   return p?.[packetCursor] || null;
 }
 
+// Normalizes context token.
 function normalizeContextToken(value) {
   if (value === null || value === undefined) return "";
   return String(value).replace(/\s+/g, " ").trim();
 }
 
+// Extracts context ip.
 function extractContextIp(value) {
   const normalized = normalizeContextToken(value);
   const match = normalized.match(CONTEXT_IPV4_REGEX);
   return match ? match[0] : "";
 }
 
+// Extracts context port.
 function extractContextPort(value, allowStandaloneNumber = false) {
   const normalized = normalizeContextToken(value);
   const ipPortMatch = normalized.match(
@@ -8999,12 +9112,14 @@ function extractContextPort(value, allowStandaloneNumber = false) {
   return portValue >= 0 && portValue <= 65535 ? String(portValue) : "";
 }
 
+// Extracts context mac.
 function extractContextMac(value) {
   const normalized = normalizeContextToken(value);
   const match = normalized.match(CONTEXT_MAC_REGEX);
   return match ? match[0].toLowerCase() : "";
 }
 
+// Extracts context mime type.
 function extractContextMimeType(value) {
   const normalized = normalizeContextToken(value);
   const labelStripped = normalized
@@ -9016,12 +9131,14 @@ function extractContextMimeType(value) {
 }
 
 
+// Handles sanitize filter term.
 function sanitizeFilterTerm(value) {
   return normalizeContextToken(value)
     .replace(/[^a-zA-Z0-9:./+-]/g, "")
     .trim();
 }
 
+// Builds context filter queries.
 function buildContextFilterQueries(target, selectedText, conversionText) {
   const candidates = [];
   const addCandidate = (value) => {
@@ -9129,15 +9246,18 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
   return filterQueries;
 }
 
+// Returns trimmed selection text.
 function getTrimmedSelectionText() {
   return window.getSelection()?.toString().trim() || "";
 }
 
+// Returns utf8 byte length.
 function getUtf8ByteLength(value) {
   const normalized = typeof value === "string" ? value : String(value || "");
   return DATA_TOOLS_TEXT_ENCODER.encode(normalized).length;
 }
 
+// Handles base64 to uint8 array.
 function base64ToUint8Array(base64Value) {
   const decoded = window.atob(String(base64Value || ""));
   const bytes = new Uint8Array(decoded.length);
@@ -9147,6 +9267,7 @@ function base64ToUint8Array(base64Value) {
   return bytes;
 }
 
+// Returns manual conv import max bytes.
 function getManualConvImportMaxBytes() {
   return (
     Number(getCurrentSettings()?.general?.manualConvImportMaxBytes) ||
@@ -9154,6 +9275,7 @@ function getManualConvImportMaxBytes() {
   );
 }
 
+// Formats byte count.
 function formatByteCount(byteCount) {
   const bytes = Number(byteCount) || 0;
   if (bytes >= 1024 * 1024) {
@@ -9165,6 +9287,7 @@ function formatByteCount(byteCount) {
   return `${bytes} bytes`;
 }
 
+// Returns context selection byte length.
 function getContextSelectionByteLength(target = activeContextTarget) {
   if (
     activeMainTab === MAIN_TAB_DATA_TOOLS &&
@@ -9182,6 +9305,7 @@ function getContextSelectionByteLength(target = activeContextTarget) {
   return getUtf8ByteLength(getTrimmedSelectionText());
 }
 
+// Handles looks like base64.
 function looksLikeBase64(text) {
   const normalized = text.replace(/\s+/g, "");
   return (
@@ -9192,6 +9316,7 @@ function looksLikeBase64(text) {
   );
 }
 
+// Detects convertible formats.
 function detectConvertibleFormats(text) {
   const formats = [];
   const value = text.trim();
@@ -9215,6 +9340,7 @@ function detectConvertibleFormats(text) {
   return formats;
 }
 
+// Handles split cookie header entries.
 function splitCookieHeaderEntries(headerValue) {
   if (typeof headerValue !== "string" || !headerValue.trim()) return [];
   const entries = [];
@@ -9252,6 +9378,7 @@ function splitCookieHeaderEntries(headerValue) {
   return entries;
 }
 
+// Extracts cookie jar entries from http fields.
 function extractCookieJarEntriesFromHttpFields(fields) {
   if (!Array.isArray(fields)) return [];
   const cookieEntries = [];
@@ -9308,10 +9435,12 @@ keystorePanel = createKeystorePanel({
 });
 
 
+// Builds cookie jar text from http fields.
 function buildCookieJarTextFromHttpFields(fields) {
   return extractCookieJarEntriesFromHttpFields(fields).join("\n");
 }
 
+// Returns cookie jar text for current packet.
 function getCookieJarTextForCurrentPacket() {
   const payloadHex = getCurrentRawPayloadHex();
   if (!payloadHex) return "";
@@ -9328,6 +9457,7 @@ function getCookieJarTextForCurrentPacket() {
   }
 }
 
+// Returns cookie jar text for context target.
 function getCookieJarTextForContextTarget(target) {
   if (target?.closest?.("#data-tools-proto-output")) {
     const dataToolsCookieJarText =
@@ -9341,6 +9471,7 @@ function getCookieJarTextForContextTarget(target) {
   return getCookieJarTextForCurrentPacket();
 }
 
+// Returns conversion text from target.
 function getConversionTextFromTarget(target) {
   // For Conv Decodes, prefer specific context (selection/cell value) and
   // fallback to the full decoder table only when no granular context exists.
@@ -9396,6 +9527,7 @@ function getConversionTextFromTarget(target) {
   return textContent;
 }
 
+// Returns paste target from context target.
 function getPasteTargetFromContextTarget(target) {
   if (!(target instanceof Element)) return null;
   const editableTarget = target.closest(
@@ -9426,6 +9558,7 @@ function getPasteTargetFromContextTarget(target) {
   return editableTarget;
 }
 
+// Shows convert context menu.
 function showConvertContextMenu(
   x,
   y,
@@ -9435,7 +9568,6 @@ function showConvertContextMenu(
     isHexViewTarget = false,
     target = null,
     pasteTarget = null,
-    showCopySelection = false,
     showPaste = true,
     showSaveJson = true,
     filterQueries = {},
@@ -9955,6 +10087,7 @@ function showConvertContextMenu(
   updateConvertContextSubmenuPositions();
 }
 
+// Loads context value into data tools.
 function loadContextValueIntoDataTools(format) {
   if (!activeContextConversionText) return;
   const inputEl = document.getElementById("data-tools-input");
@@ -9968,6 +10101,7 @@ function loadContextValueIntoDataTools(format) {
   writeLogEntry(`Context conversion loaded format=${format}`);
 }
 
+// Handles derive context selection guess from context menu.
 function deriveContextSelectionGuessFromContextMenu() {
   const selectedText =
     getTrimmedSelectionText() || (activeContextConversionText || "").trim();
@@ -9986,6 +10120,7 @@ function deriveContextSelectionGuessFromContextMenu() {
   writeLogEntry("Derived data type guess from selected/context data");
 }
 
+// Loads raw payload into data tools from context menu.
 function loadRawPayloadIntoDataToolsFromContextMenu() {
   const payloadHex = getCurrentRawPayloadHex();
   hideConvertContextMenu();
@@ -10032,6 +10167,7 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
   );
 }
 
+// Returns cursor ascii context load data.
 function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
   if (byteIndex < 0 || !payloadHex) return null;
   const decodedAscii = hexToAscii(payloadHex);
@@ -10050,6 +10186,7 @@ function getCursorAsciiContextLoadData(payloadHex, byteIndex) {
   return { value: hexPair.toUpperCase(), format: "hex" };
 }
 
+// Loads cursor ascii into data tools from context menu.
 function loadCursorAsciiIntoDataToolsFromContextMenu() {
   const payloadHex = getCurrentRawPayloadHex();
   const byteIndex = Number.parseInt(
@@ -10077,6 +10214,7 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
   );
 }
 
+// Returns active packet cursor.
 function getActivePacketCursor() {
   return Number.isInteger(activePacketCursor) && activePacketCursor >= 0
     ? activePacketCursor
@@ -10103,6 +10241,7 @@ const STREAM_LOADING_THRESHOLD = 10;
 const STREAM_ASYNC_PACKET_YIELD_INTERVAL = 2000;
 const STREAM_ASYNC_HEX_YIELD_INTERVAL = 200;
 
+// Handles yield to renderer.
 function yieldToRenderer() {
   if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
     return new Promise((resolve) => {
@@ -10129,6 +10268,7 @@ function hideStreamLoadingOverlay() {
   if (loadingContainerEl) loadingContainerEl.style.display = "none";
 }
 
+// Handles request follow stream context menu load.
 function requestFollowStreamContextMenuLoad(tabLabel, packetCount) {
   const dialogEl = document.getElementById("follow-stream-confirm-dialog");
   const descriptionEl = document.getElementById("follow-stream-confirm-description");
@@ -10155,6 +10295,7 @@ function requestFollowStreamContextMenuLoad(tabLabel, packetCount) {
   });
 }
 
+// Handles resolve follow stream context menu load.
 function resolveFollowStreamContextMenuLoad(shouldContinue) {
   const dialogEl = document.getElementById("follow-stream-confirm-dialog");
   if (dialogEl) dialogEl.hidden = true;
@@ -10169,6 +10310,7 @@ async function confirmFollowStreamContextMenuLoad(tabLabel, packetCount) {
   return requestFollowStreamContextMenuLoad(tabLabel, packetCount);
 }
 
+// Handles request manual conv import warning load.
 function requestManualConvImportWarningLoad({
   fileName,
   fileSize,
@@ -10201,6 +10343,7 @@ function requestManualConvImportWarningLoad({
   });
 }
 
+// Handles resolve manual conv import warning load.
 function resolveManualConvImportWarningLoad(shouldContinue) {
   const dialogEl = document.getElementById("manual-conv-import-warning-dialog");
   if (dialogEl) dialogEl.hidden = true;
@@ -10210,6 +10353,7 @@ function resolveManualConvImportWarningLoad(shouldContinue) {
   resolve(Boolean(shouldContinue));
 }
 
+// Returns stream tuple for packet.
 function getStreamTupleForPacket(packet) {
   const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
@@ -10408,16 +10552,19 @@ async function buildStreamHexAsync(streamPackets) {
   return parts.length ? parts.join("") : null;
 }
 
+// Handles align to4.
 function alignTo4(value) {
   return (value + 3) & ~3;
 }
 
+// Handles bytes to hex string.
 function bytesToHexString(bytes) {
   return Array.from(bytes || [])
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
+// Returns packet payload hex.
 function getPacketPayloadHex(packet) {
   const payloadHex =
     packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
@@ -10425,6 +10572,7 @@ function getPacketPayloadHex(packet) {
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
+// Returns packet payload bytes.
 function getPacketPayloadBytes(packet) {
   const payloadHex = getPacketPayloadHex(packet);
   if (!payloadHex) return null;
@@ -10435,6 +10583,7 @@ function getPacketPayloadBytes(packet) {
   }
 }
 
+// Returns packet transport data.
 function getPacketTransportData(packet) {
   const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
@@ -10442,6 +10591,7 @@ function getPacketTransportData(packet) {
   return packetInfo[protocol] || null;
 }
 
+// Builds bidirectional stream key.
 function buildBidirectionalStreamKey(packetInfo) {
   if (!packetInfo || typeof packetInfo !== "object") return "";
   const transportName = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "Unknown");
@@ -10467,6 +10617,7 @@ function buildBidirectionalStreamKey(packetInfo) {
   return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
 }
 
+// Parses tcp sequence number.
 function parseTcpSequenceNumber(transportData) {
   const sequenceCandidates = [
     transportData?.["TCP Sequence Number"],
@@ -10481,6 +10632,7 @@ function parseTcpSequenceNumber(transportData) {
   return null;
 }
 
+// Returns tcp segment length.
 function getTcpSegmentLength(packetInfo, transportData) {
   const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
@@ -10493,6 +10645,7 @@ function getTcpSegmentLength(packetInfo, transportData) {
   return payloadLen + controlByteLength;
 }
 
+// Handles merge sequence range.
 function mergeSequenceRange(ranges, start, end) {
   if (!Array.isArray(ranges) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
     return;
@@ -10519,6 +10672,7 @@ function mergeSequenceRange(ranges, start, end) {
   ranges.push(...merged);
 }
 
+// Returns sequence range overlap length.
 function getSequenceRangeOverlapLength(ranges, start, end) {
   if (!Array.isArray(ranges) || end <= start) return 0;
   let overlapLength = 0;
@@ -10534,6 +10688,7 @@ function getSequenceRangeOverlapLength(ranges, start, end) {
   return overlapLength;
 }
 
+// Returns tcp stream arrival status by packet key.
 function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
   const statusByPacketKey = new Map();
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
@@ -10609,24 +10764,28 @@ function getTcpStreamArrivalStatusByPacketKey(streamPackets) {
   return statusByPacketKey;
 }
 
+// Handles read uint32 le.
 function readUint32Le(bytes, offset) {
   if (!bytes || offset < 0 || offset + 4 > bytes.length) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return view.getUint32(offset, true);
 }
 
+// Handles read uint16 le.
 function readUint16Le(bytes, offset) {
   if (!bytes || offset < 0 || offset + 2 > bytes.length) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return view.getUint16(offset, true);
 }
 
+// Handles read uint32 be.
 function readUint32Be(bytes, offset) {
   if (!bytes || offset < 0 || offset + 4 > bytes.length) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return view.getUint32(offset, false);
 }
 
+// Handles read uint64 le number.
 function readUint64LeNumber(bytes, offset) {
   if (!bytes || offset < 0 || offset + 8 > bytes.length) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -10642,6 +10801,7 @@ function readUint64LeNumber(bytes, offset) {
   return high * 0x100000000 + low;
 }
 
+// Handles read uint64 be number.
 function readUint64BeNumber(bytes, offset) {
   if (!bytes || offset < 0 || offset + 8 > bytes.length) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -10657,11 +10817,13 @@ function readUint64BeNumber(bytes, offset) {
   return high * 0x100000000 + low;
 }
 
+// Handles read uint64 le hex.
 function readUint64LeHex(bytes, offset) {
   if (!bytes || offset < 0 || offset + 8 > bytes.length) return "";
   return bytesToHexString(bytes.slice(offset, offset + 8).reverse());
 }
 
+// Handles decode utf16 le.
 function decodeUtf16Le(bytes) {
   if (!bytes || bytes.length === 0) return "";
   const maxLen = bytes.length - (bytes.length % 2);
@@ -10673,6 +10835,7 @@ function decodeUtf16Le(bytes) {
   }
 }
 
+// Handles sanitize carve filename.
 function sanitizeCarveFilename(name) {
   const raw = String(name || "").trim();
   if (!raw) return "";
@@ -10690,6 +10853,7 @@ const CARVE_OPENSSH_PRIVATE_KEY_REGEX =
 const CARVE_SECRET_FILE_HINT_REGEX =
   /(password|passphrase|secret|token|api[_-]?key|private[_-]?key)\s*(?:=|:)/i;
 
+// Detects sensitive carve entry.
 function detectSensitiveCarveEntry(candidate, protocolLabel) {
   if (!candidate || !(candidate.bytes instanceof Uint8Array)) return null;
   if (candidate.bytes.length === 0) return null;
@@ -10751,12 +10915,14 @@ function detectSensitiveCarveEntry(candidate, protocolLabel) {
   return null;
 }
 
+// Handles add segment to entry.
 function addSegmentToEntry(entry, offset, bytes) {
   if (!entry || !Number.isInteger(offset) || offset < 0) return;
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
   entry.segments.push({ offset, bytes });
 }
 
+// Handles assemble segments.
 function assembleSegments(segments) {
   if (!Array.isArray(segments) || segments.length === 0) return null;
   const ordered = segments
@@ -10783,6 +10949,7 @@ function assembleSegments(segments) {
   return output;
 }
 
+// Extracts smb file candidates.
 function extractSmbFileCandidates(streamPackets) {
   const fileEntries = new Map();
   const createRequestByMessageId = new Map();
@@ -10932,6 +11099,7 @@ async function hydratePacketCollection(packetList) {
   return hydratedPackets;
 }
 
+// Parses rpc base offset.
 function parseRpcBaseOffset(payload) {
   if (!payload || payload.length < 8) return 0;
   const recordMark = readUint32Be(payload, 0);
@@ -10945,6 +11113,7 @@ function parseRpcBaseOffset(payload) {
   return 0;
 }
 
+// Parses rpc call args offset.
 function parseRpcCallArgsOffset(payload, baseOffset) {
   let cursor = baseOffset + 24;
   if (cursor + 8 > payload.length) return null;
@@ -10959,6 +11128,7 @@ function parseRpcCallArgsOffset(payload, baseOffset) {
   return cursor;
 }
 
+// Parses rpc reply results offset.
 function parseRpcReplyResultsOffset(payload, baseOffset) {
   let cursor = baseOffset + 8;
   if (cursor + 4 > payload.length) return null;
@@ -10976,6 +11146,7 @@ function parseRpcReplyResultsOffset(payload, baseOffset) {
   return cursor <= payload.length ? cursor : null;
 }
 
+// Parses rpc opaque.
 function parseRpcOpaque(payload, offset) {
   if (!payload || offset < 0 || offset + 4 > payload.length) return null;
   const length = readUint32Be(payload, offset);
@@ -10991,6 +11162,7 @@ function parseRpcOpaque(payload, offset) {
   };
 }
 
+// Extracts nfs file candidates.
 function extractNfsFileCandidates(streamPackets) {
   const fileEntries = new Map();
   const readRequestByXid = new Map();
@@ -11089,6 +11261,7 @@ function extractNfsFileCandidates(streamPackets) {
   return candidates;
 }
 
+// Parses ftp active mode data port.
 function parseFtpActiveModeDataPort(argument) {
   const value = String(argument || "").trim();
   if (!value) return null;
@@ -11114,6 +11287,7 @@ function parseFtpActiveModeDataPort(argument) {
   return null;
 }
 
+// Parses ftp passive mode data port.
 function parseFtpPassiveModeDataPort(message) {
   const text = String(message || "").trim();
   if (!text) return null;
@@ -11140,6 +11314,7 @@ function parseFtpPassiveModeDataPort(message) {
   return null;
 }
 
+// Returns ftp control roles from stream tuple.
 function getFtpControlRolesFromStreamTuple(streamTuple) {
   if (!streamTuple) return { clientIp: "", serverIp: "" };
   const srcPort = Number(streamTuple.srcPort);
@@ -11153,6 +11328,7 @@ function getFtpControlRolesFromStreamTuple(streamTuple) {
   return { clientIp: "", serverIp: "" };
 }
 
+// Extracts ftp transfer context from control stream.
 function extractFtpTransferContextFromControlStream(
   streamPackets,
   {
@@ -11268,6 +11444,7 @@ function extractFtpTransferContextFromControlStream(
   };
 }
 
+// Handles resolve ftp control stream for data stream.
 function resolveFtpControlStreamForDataStream(streamPackets, contextPacket = null) {
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return null;
 
@@ -11360,6 +11537,7 @@ function resolveFtpControlStreamForDataStream(streamPackets, contextPacket = nul
   return bestMatch;
 }
 
+// Builds ftp candidate from data stream.
 function buildFtpCandidateFromDataStream(
   streamPackets,
   {
@@ -11443,6 +11621,7 @@ function buildFtpCandidateFromDataStream(
   };
 }
 
+// Extracts ftp file candidates.
 function extractFtpFileCandidates(streamPackets, contextPacket = null) {
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return [];
 
@@ -11577,6 +11756,7 @@ function extractFtpFileCandidates(streamPackets, contextPacket = null) {
   return carvedCandidate ? [carvedCandidate] : [];
 }
 
+// Builds file carve candidates for protocol.
 function buildFileCarveCandidatesForProtocol(
   protocolName,
   streamPackets,
@@ -11591,6 +11771,7 @@ function buildFileCarveCandidatesForProtocol(
   return [];
 }
 
+// Returns whether carve current stream for protocol.
 function canCarveCurrentStreamForProtocol(protocolName, packet = null) {
   const normalized = String(protocolName || "").toLowerCase().trim();
   if (!normalized) return false;
@@ -11604,6 +11785,7 @@ function canCarveCurrentStreamForProtocol(protocolName, packet = null) {
   return candidates.length > 0;
 }
 
+// Selects carve candidate.
 function selectCarveCandidate(candidates, protocolLabel) {
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];
@@ -11731,6 +11913,7 @@ const HTTP_FILENAME_EXT_BY_MIME = Object.freeze({
   "video/mp4": "mp4",
 });
 
+// Extracts filename from content disposition.
 function extractFilenameFromContentDisposition(dispositionValue) {
   const rawValue = String(dispositionValue || "").trim();
   if (!rawValue) return "";
@@ -11757,6 +11940,7 @@ function extractFilenameFromContentDisposition(dispositionValue) {
   return "";
 }
 
+// Returns http body filename extension.
 function getHttpBodyFilenameExtension(contentTypeValue) {
   const normalizedType = String(contentTypeValue || "")
     .split(";")[0]
@@ -11766,6 +11950,7 @@ function getHttpBodyFilenameExtension(contentTypeValue) {
   return HTTP_FILENAME_EXT_BY_MIME[normalizedType] || "bin";
 }
 
+// Extracts path filename from http data.
 function extractPathFilenameFromHttpData(httpData) {
   const requestTarget = String(
     httpData?.["Request URI"] ||
@@ -11791,6 +11976,7 @@ function extractPathFilenameFromHttpData(httpData) {
   return sanitizeCarveFilename(parts[parts.length - 1]);
 }
 
+// Handles guess http body filename from packet.
 function guessHttpBodyFilenameFromPacket(packet, fallbackName = "http-body") {
   const httpData = getCurrentHttpData(packet) || {};
 
@@ -11810,6 +11996,7 @@ function guessHttpBodyFilenameFromPacket(packet, fallbackName = "http-body") {
   return `${fallbackBase}.${extension}`;
 }
 
+// Loads carved file candidate into conv tab.
 function loadCarvedFileCandidateIntoConvTab(candidate) {
   const candidateBytes = candidate?.bytes;
   if (!(candidateBytes instanceof Uint8Array) || candidateBytes.length === 0) {
@@ -12059,6 +12246,7 @@ async function listCarvableFilesForStats() {
     .slice(0, 300);
 }
 
+// Handles call large language model.
 function callLargeLanguageModel(content) {
   if (!isLlmEnabledInSettings()) {
     throw new Error("LLM is disabled in settings");
@@ -12075,11 +12263,13 @@ function callLargeLanguageModel(content) {
   return window.llmapi.generate(content);
 }
 
+// Handles wait for llm retry delay.
 function waitForLlmRetryDelay(attemptNumber) {
   const delayMs = attemptNumber * 500;
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+// Returns configured llm retry attempts.
 function getConfiguredLlmRetryAttempts() {
   const retryCount = Number(getCurrentSettings()?.llm?.retryCount);
   if (Number.isFinite(retryCount) && retryCount >= 0) {
@@ -12103,6 +12293,7 @@ async function callLargeLanguageModelWithRetry(content, maxAttempts = getConfigu
   throw lastError;
 }
 
+// Builds markdown response instruction.
 function buildMarkdownResponseInstruction() {
   return [
     "Return your response as valid Markdown (.md compatible).",
@@ -12111,6 +12302,7 @@ function buildMarkdownResponseInstruction() {
   ].join(" ");
 }
 
+// Returns whether text significant for llm explain.
 function isTextSignificantForLlmExplain(text) {
   if (!text || typeof text !== "string") return false;
   const trimmed = text.trim();
@@ -12126,6 +12318,7 @@ function isTextSignificantForLlmExplain(text) {
   return true;
 }
 
+// Builds utf8 byte preview.
 function buildUtf8BytePreview(text, maxBytes = 24) {
   const normalized = String(text || "").trim();
   if (!normalized) {
@@ -12149,6 +12342,7 @@ function buildUtf8BytePreview(text, maxBytes = 24) {
   };
 }
 
+// Returns active context text for notes and llm.
 function getActiveContextTextForNotesAndLlm(destination = "llm") {
   if (activeContextTarget?.closest?.("#conv-decodes-panel")) {
     const selectedContextText = (getTrimmedSelectionText() || "").trim();
@@ -12172,6 +12366,7 @@ function getActiveContextTextForNotesAndLlm(destination = "llm") {
   return (getTrimmedSelectionText() || activeContextConversionText || "").trim();
 }
 
+// Builds packet context summary.
 function buildPacketContextSummary(packet) {
   if (!packet) return "No packet context available.";
   const info = packet["packet.info"] || {};
@@ -12242,6 +12437,7 @@ async function explainContextWithLLM() {
   }
 }
 
+// Handles request llm question from context menu dialog.
 function requestLlmQuestionFromContextMenuDialog() {
   const dialogEl = document.getElementById("ctx-llm-question-dialog");
   const descriptionEl = document.getElementById("ctx-llm-question-description");
@@ -12270,6 +12466,7 @@ function requestLlmQuestionFromContextMenuDialog() {
   });
 }
 
+// Handles resolve llm question from context menu dialog.
 function resolveLlmQuestionFromContextMenuDialog(value) {
   const dialogEl = document.getElementById("ctx-llm-question-dialog");
   const inputEl = document.getElementById("ctx-llm-question-input");
@@ -12286,11 +12483,13 @@ function resolveLlmQuestionFromContextMenuDialog(value) {
   activeContextLlmQuestionDialogContext = null;
 }
 
+// Handles submit llm question from context menu dialog.
 function submitLlmQuestionFromContextMenuDialog() {
   const inputEl = document.getElementById("ctx-llm-question-input");
   resolveLlmQuestionFromContextMenuDialog(inputEl?.value || "");
 }
 
+// Builds llm question prompt.
 function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   const packetCtx = buildPacketContextSummary(contextPacket);
   const contextLines = [
@@ -12315,6 +12514,7 @@ function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
   return contextLines.join("\n");
 }
 
+// Builds llm thread note.
 function buildLlmThreadNote({
   title,
   responseText,
@@ -12389,12 +12589,14 @@ async function askContextQuestionWithLLM() {
   }
 }
 
+// Handles follow stream to conv.
 function followStreamToConv() {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
   void _runFollowStreamToConvAction({ contextPacket });
 }
 
+// Handles follow stream to conv decompressed.
 function followStreamToConvDecompressed() {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
@@ -12532,6 +12734,7 @@ async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) 
   );
 }
 
+// Returns follow stream json.
 function getFollowStreamJson(streamPackets) {
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return "";
   const jsonArray = streamPackets.map((packet) => {
@@ -12548,6 +12751,7 @@ function getFollowStreamJson(streamPackets) {
   return JSON.stringify(jsonArray, null, getConvJsonIndentSpaces());
 }
 
+// Handles write summary from llm.
 function writeSummaryFromLLM() {
   // we will wait 5 seconds and make sure we are sitting on a packet before calling the
   // llm to generate a summary of the packets stream. This is to avoid calling the llm
@@ -12588,7 +12792,6 @@ function writeSummaryFromLLM() {
     const jsonOfPacketStream = getFollowStreamJson(hydratedStreamPackets);
     const combinedHex = buildStreamHex(hydratedStreamPackets);
     if (!combinedHex) return;
-    const asciiContent = hexToAscii(combinedHex);
     // make sure we don't recall if we are on the same packet stream as before
     if (lastLLMSummaryPacketKey === contextPacket?.__packetKey) return;
     lastLLMSummaryPacketKey = contextPacket?.__packetKey;
@@ -12620,6 +12823,7 @@ function writeSummaryFromLLM() {
   }, getLLMSummaryDelayMs());  // wait before calling the LLM to avoid too many calls when scrolling rapidly
 }
 
+// Sets active packet cursor.
 function setActivePacketCursor(nextIndex) {
   const parsedIndex = Number.parseInt(nextIndex, 10);
   activePacketCursor =
@@ -12627,6 +12831,7 @@ function setActivePacketCursor(nextIndex) {
   return activePacketCursor;
 }
 
+// Returns current raw payload hex.
 function getCurrentRawPayloadHex(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
   const payloadHex =
@@ -12636,6 +12841,7 @@ function getCurrentRawPayloadHex(packet = null) {
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
+// Returns current http data.
 function getCurrentHttpData(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
   const packetInfo = contextPacket?.["packet.info"];
@@ -12644,6 +12850,7 @@ function getCurrentHttpData(packet = null) {
   return packetInfo[protocol]?.["HTTP"] || null;
 }
 
+// Extracts http body hex.
 function extractHttpBodyHex(payloadHex) {
   if (!payloadHex) return "";
   // Locate the HTTP header/body separator in hex space.
@@ -12657,6 +12864,7 @@ function extractHttpBodyHex(payloadHex) {
   return normalized.slice(bodyStart);
 }
 
+// Parses http content length.
 function parseHttpContentLength(packet = null) {
   const httpData = getCurrentHttpData(packet);
   const rawLength = String(httpData?.["Content-Length"] || "").trim();
@@ -12667,6 +12875,7 @@ function parseHttpContentLength(packet = null) {
     : null;
 }
 
+// Returns whether chunked http transfer.
 function isChunkedHttpTransfer(packet = null) {
   const httpData = getCurrentHttpData(packet);
   return String(httpData?.["Transfer-Encoding"] || "")
@@ -12674,6 +12883,7 @@ function isChunkedHttpTransfer(packet = null) {
     .includes("chunked");
 }
 
+// Handles hex to ascii string.
 function hexToAsciiString(hex) {
   const normalized = typeof hex === "string" ? hex.replace(/\s+/g, "") : "";
   let result = "";
@@ -12683,6 +12893,7 @@ function hexToAsciiString(hex) {
   return result;
 }
 
+// Handles slice complete chunked http body hex.
 function sliceCompleteChunkedHttpBodyHex(bodyHex) {
   const normalized = typeof bodyHex === "string" ? bodyHex.replace(/\s+/g, "") : "";
   let cursor = 0;
@@ -12716,6 +12927,7 @@ function sliceCompleteChunkedHttpBodyHex(bodyHex) {
   return null;
 }
 
+// Returns packet identity.
 function getPacketIdentity(packet) {
   return (
     packet?.__packetKey ||
@@ -12725,6 +12937,7 @@ function getPacketIdentity(packet) {
   );
 }
 
+// Returns whether same directional stream packet.
 function isSameDirectionalStreamPacket(packet, referencePacket) {
   const packetTuple = getStreamTupleForPacket(packet);
   const referenceTuple = getStreamTupleForPacket(referencePacket);
@@ -12738,6 +12951,7 @@ function isSameDirectionalStreamPacket(packet, referencePacket) {
   );
 }
 
+// Collects http body hex from stream.
 function collectHttpBodyHexFromStream(streamPackets, referencePacket) {
   if (!Array.isArray(streamPackets) || !streamPackets.length || !referencePacket) {
     return "";
@@ -12782,6 +12996,7 @@ async function getCurrentHttpBodyHex(packet = null) {
   return collectHttpBodyHexFromStream(hydratedStreamPackets, contextPacket) || localBodyHex;
 }
 
+// Returns current http body compression hint.
 function getCurrentHttpBodyCompressionHint(packet = null, bodyHexOverride = "") {
   const contextPacket = packet || getCurrentContextPacket();
   const httpData = getCurrentHttpData(contextPacket);
@@ -12814,6 +13029,7 @@ async function getCurrentHttpBodyDecompressionCandidate(packet = null) {
   }
 }
 
+// Returns current packet for export.
 function getCurrentPacketForExport() {
   return getCurrentContextPacket();
 }
@@ -12842,6 +13058,7 @@ async function copyTextToClipboard(text, label) {
   writeLogEntry(`Copied ${label} length = ${text.length}`);
 }
 
+// Returns ascii preview for hex offset.
 function getAsciiPreviewForHexOffset(payloadHex, byteIndex) {
   if (byteIndex < 0) return "";
   const decodedAscii = hexToAscii(payloadHex);
@@ -12887,6 +13104,7 @@ async function copyRawPayloadFromContext() {
   hideConvertContextMenu();
 }
 
+// Handles copy selected text from context menu.
 function copySelectedTextFromContextMenu() {
   const selectedText = getTrimmedSelectionText();
   hideConvertContextMenu();
@@ -12912,6 +13130,7 @@ async function copyCookieJarFromContextMenu() {
   await copyTextToClipboard(cookieJarText, "Cookie Jar");
 }
 
+// Handles paste text from context menu.
 function pasteTextFromContextMenu() {
   const pasteTarget = activeContextPasteTarget;
   hideConvertContextMenu();
@@ -12970,6 +13189,7 @@ function pasteTextFromContextMenu() {
     });
 }
 
+// Saves json from context menu.
 function saveJsonFromContextMenu() {
   hideConvertContextMenu();
   void persistSessionToDisk("context-menu");
@@ -12983,7 +13203,6 @@ async function currentPacketToConvJson() {
   const packet = contextPacket || {};
   const jsonString = JSON.stringify(packet, null, getConvJsonIndentSpaces());
 
-  const outputEl = document.getElementById("data-tools-packet-json-pre");
   const jsonContainer = document.getElementById("data-tools-packet-json-output");
   jsonContainer.innerHTML = "";
   const jsonLines = jsonString.split("\n");
@@ -13060,6 +13279,7 @@ async function currentPacketToConvJson() {
 }
 
 
+// Exports current packet from context menu.
 function exportCurrentPacketFromContextMenu() {
   const contextPacket = getCurrentPacketForExport();
   hideConvertContextMenu();
@@ -13089,6 +13309,7 @@ function exportCurrentPacketFromContextMenu() {
   });
 }
 
+// Exports current payload from context menu.
 function exportCurrentPayloadFromContextMenu() {
   const contextPacket = getCurrentContextPacket();
   hideConvertContextMenu();
@@ -13118,10 +13339,12 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
+// Returns whether likely printable utf8.
 function isLikelyPrintableUtf8(value) {
   return /^[\x09\x0A\x0D\x20-\x7E]*$/.test(String(value || ""));
 }
 
+// Returns crypt decrypted export candidate.
 function getCryptDecryptedExportCandidate(target = activeContextTarget) {
   if (activeMainTab !== MAIN_TAB_CRYPT) return null;
   const targetEl = target instanceof Element ? target : null;
@@ -13160,6 +13383,7 @@ function getCryptDecryptedExportCandidate(target = activeContextTarget) {
   };
 }
 
+// Exports decrypted data from context menu.
 function exportDecryptedDataFromContextMenu() {
   const exportCandidate = getCryptDecryptedExportCandidate();
   hideConvertContextMenu();
@@ -13231,6 +13455,7 @@ function exportDecryptedDataFromContextMenu() {
   });
 }
 
+// Saves cookie jar from context menu.
 function saveCookieJarFromContextMenu() {
   const cookieJarText = activeContextCookieJarText;
   hideConvertContextMenu();
@@ -13259,11 +13484,13 @@ function saveCookieJarFromContextMenu() {
   });
 }
 
+// Returns http content type for current packet.
 function getHttpContentTypeForCurrentPacket(packet = null) {
   const httpData = getCurrentHttpData(packet);
   return (httpData && httpData["Content-Type"]) || "application/octet-stream";
 }
 
+// Saves http body from context menu.
 function saveHttpBodyFromContextMenu() {
   void saveHttpBodyFromContextMenuImpl(false);
 }
@@ -13316,6 +13543,7 @@ async function saveHttpBodyFromContextMenuImpl(decompress = false) {
   });
 }
 
+// Loads http body into conv tab from context menu.
 function loadHttpBodyIntoConvTabFromContextMenu() {
   void loadHttpBodyIntoConvTabFromContextMenuImpl(false);
 }
@@ -13358,6 +13586,7 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   );
 }
 
+// Handles preview http body in browser from context menu.
 function previewHttpBodyInBrowserFromContextMenu() {
   void previewHttpBodyInBrowserFromContextMenuImpl(false);
 }
@@ -13413,6 +13642,7 @@ async function previewHttpBodyInBrowserFromContextMenuImpl(
   });
 }
 
+// Handles append filter query from context menu.
 function appendFilterQueryFromContextMenu(
   type,
   joinOperator = "&&",
@@ -13450,6 +13680,7 @@ function appendFilterQueryFromContextMenu(
   );
 }
 
+// Clears and filter query from context menu.
 function clearAndFilterQueryFromContextMenu(type) {
   const query = activeContextFilterQueries[type];
   hideConvertContextMenu();
@@ -13466,6 +13697,7 @@ function clearAndFilterQueryFromContextMenu(type) {
   );
 }
 
+// Handles append parenthesis token from context menu.
 function appendParenthesisTokenFromContextMenu(token) {
   hideConvertContextMenu();
   if (token !== "(" && token !== ")") {
@@ -13481,6 +13713,7 @@ function appendParenthesisTokenFromContextMenu(token) {
   );
 }
 
+// Handles wrap current filter with parentheses from context menu.
 function wrapCurrentFilterWithParenthesesFromContextMenu() {
   hideConvertContextMenu();
   const existingQuery = filterInputEl.value.trim();
@@ -14668,6 +14901,7 @@ function totalPacketCount() {
   return totalCount;
 }
 
+// Handles update current packet counters.
 function updateCurrentPacketCounters(packetSet, options = {}) {
   const { isFilteredView = false } = options;
   const currentStreamPacketEl = document.getElementById("current-stream-packet");
@@ -14767,6 +15001,7 @@ function findPacketIndexByKey(packetSet, packetKey) {
   });
 }
 
+// Sets prev next button visibility.
 function setPrevNextButtonVisibility(packetSet, index) {
   document.getElementById("prev-btn").style.display = "block";
   document.getElementById("next-btn").style.display = "block";
@@ -14943,6 +15178,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
   }
 }
 
+// Returns packet data type items.
 function getPacketDataTypeItems(packetEntry) {
   const extraInfo = packetEntry?.["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
@@ -14967,6 +15203,7 @@ function getPacketDataTypeItems(packetEntry) {
   return dataItems;
 }
 
+// Normalizes protocol token.
 function normalizeProtocolToken(value) {
   return String(value ?? "")
     .trim()
@@ -14974,6 +15211,7 @@ function normalizeProtocolToken(value) {
     .replace(/[^A-Z0-9]/g, "");
 }
 
+// Collects packet protocol tokens.
 function collectPacketProtocolTokens(packetEntry) {
   const packetInfo = packetEntry?.["packet.info"] || {};
   const extraInfo = packetEntry?.["extra.info"] || {};
@@ -15007,6 +15245,7 @@ function collectPacketProtocolTokens(packetEntry) {
   return [...tokens];
 }
 
+// Returns matched hidden data type protocol.
 function getMatchedHiddenDataTypeProtocol(packetEntry) {
   const protocolTokens = collectPacketProtocolTokens(packetEntry);
   for (const token of protocolTokens) {
@@ -15024,6 +15263,7 @@ function getMatchedHiddenDataTypeProtocol(packetEntry) {
   return "";
 }
 
+// Returns whether likely file like data types.
 function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
   const extraInfo = packetEntry?.["extra.info"] || {};
   const traits = extraInfo["Traits"] || {};
@@ -15076,6 +15316,7 @@ function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
   return hasUsefulDataType;
 }
 
+// Returns data types visibility state.
 function getDataTypesVisibilityState(packetEntry) {
   const dataItems = getPacketDataTypeItems(packetEntry);
   const hiddenProtocolToken = getMatchedHiddenDataTypeProtocol(packetEntry);
@@ -15094,6 +15335,7 @@ function getDataTypesVisibilityState(packetEntry) {
   };
 }
 
+// Applies data types visibility.
 function applyDataTypesVisibility(visibilityState) {
   const dataTypesEl = document.getElementById("data-types");
   const dataTypesPaneEl = document.getElementById("dataTypesPane");
@@ -15118,12 +15360,16 @@ function applyDataTypesVisibility(visibilityState) {
   dataTypesEl.classList.toggle("data-types-collapsed", !visibilityState.showPane);
 }
 
+// ============================================================================
+// Packet detail rendering and hex/ASCII visualization
+// ============================================================================
+
+// Populates data types.
 function populateDataTypes(p) {
   setPrevNextButtonVisibility(p, index);
   const typesListEl = document.getElementById("types-list");
   typesListEl.textContent = "";
   const mimeTypeEl = document.getElementById("mime-type");
-  const charsetEl = document.getElementById("charset");
   const encodingEl = document.getElementById("encoding");
   const languageEl = document.getElementById("language");
   encodingEl.textContent = "";
@@ -15137,7 +15383,6 @@ function populateDataTypes(p) {
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
 
-  let charsetText = String(characters["Charset"] ?? "Unknown");
   const encodingData = characters["Encoding"];
   if (encodingData === "Unavailable for high entropy data") {
     encodingText = "Unavailable for high entropy data";
@@ -15153,7 +15398,6 @@ function populateDataTypes(p) {
   const dataItems = getPacketDataTypeItems(packetEntry);
 
   mimeTypeEl.textContent = "MIME type: " + mimeTypeText;
-  charsetText = charsetText == "" ? "Unknown" : charsetText;
   encodingText = encodingText == "" ? "Unknown" : encodingText;
   if (encodingText !== undefined) {
     encodingEl.textContent =
@@ -15202,11 +15446,6 @@ function hexToAscii(hex) {
 function truncate(str, maxLength) {
   if (str.length <= maxLength) return str;
   return str.slice(0, maxLength);
-}
-
-// returns a 0 padded hex string of a number with a given length
-function decToHex(num, pad) {
-  return num.toString(16).padStart(pad, "0");
 }
 
 // clears the higlights (its called after the moouse leaves grid)
@@ -15292,7 +15531,6 @@ function infoPanel(pk) {
   const infoPaneEl = document.getElementById("packetInfoPane");
   document.getElementById("rightside").style.display = "block";
   document.getElementById("leftside").style.display = "block";
-  const infoPaneOrigHtml = infoPaneEl.innerHTML;
   infoPaneEl.style.display = "block";
   if (!Array.isArray(pk) || pk.length === 0) {
     statusUpdate("Status: No packet information found for this host");
@@ -15401,18 +15639,15 @@ function infoPanel(pk) {
   const ipLayerLen = ipData["ip.len"] ?? ipData["IP layer length"] ?? "N/A";
   const wireLen = transportData["Wire length"] ?? "N/A";
   const payloadLen = packetInfoData?.["Raw data"]?.["payload.len"] ?? packetInfoData?.["Raw data"]?.["Payload Length"] ?? "N/A";
-  let sslCert = "";
   let sslVersion = "";
   let sslAlgos = "";
   if (
     serverInfo["Encryption Data"] == "N/A" ||
     serverInfo.hasOwnProperty("Encryption Data") == false
   ) {
-    sslCert = "Not encrypted";
     sslVersion = "Not encrypted";
     sslAlgos = "";
   } else {
-    sslCert = serverInfo["Encryption Data"]?.["SSL Cert"] ?? "Not available";
     sslVersion = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Not available";
     sslAlgos =
       serverInfo["Encryption Data"]?.["Encrypted With"]?.join(
@@ -16124,6 +16359,7 @@ function runSnitch(file, options = {}) {
     });
 }
 
+// Handles do error.
 function doError(message, { backend = false } = {}) {
   console.error("Error from backend:", message);
   if (backend) {
@@ -16145,6 +16381,7 @@ function doError(message, { backend = false } = {}) {
   });
 }
 
+// Hides all data.
 function hideAllData() {
   //  document.getElementById("packetInfoPane").textContent =
   //    "No matching packets found.";
@@ -16186,6 +16423,7 @@ function hideAllData() {
   });
   popHexGrid("");
 }
+// Shows all data.
 function showAllData() {
   document.getElementById("prev-btn").style.opacity = "1";
   document.getElementById("next-btn").style.opacity = "1";
@@ -16198,6 +16436,10 @@ function showAllData() {
   document.getElementById("hexg").hidden = false;
   document.getElementById("error-container").style.display = "none";
 }
+
+// ============================================================================
+// Event wiring and application bootstrap
+// ============================================================================
 
 document
   .getElementById("filterStr")
@@ -16289,7 +16531,7 @@ void loadSavedFilterLibrary();
 renderDataToolsInputHistory();
 syncFilterHighlight();
 
-window.onerror = (message, source, lineno, colno, error) => {
+window.onerror = (message, source, lineno, colno) => {
   doError(message + " at " + source + ":" + lineno + ":" + colno);
 };
 
