@@ -40,6 +40,7 @@ def wget_backend_version(port: int) -> str:
             text=True,
             check=True
         )
+        print("Backend version response:", result.stdout.strip(), end="", flush=True)
         return result.stdout.strip()
     except subprocess.CalledProcessError as e:
         pytest.fail(f"Failed to fetch backend version: {e.stderr}")
@@ -70,13 +71,6 @@ def test_backend_serves_http(port: int = 9020):
     
     # fire off the wget in a different thread or process to avoid blocking the backend server
 
-    curl = subprocess.Popen(
-        ["curl", f"http://localhost:{port}/version"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    stdout, stderr = curl.communicate(timeout=5)
-    assert stdout.strip(), "No version response from backend server"
+    version = wget_backend_version(port=port)
+    assert version, "No version response from backend server"
     kill_backend(startbend)

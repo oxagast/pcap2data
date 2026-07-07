@@ -102,3 +102,5 @@ def test_backend_generates_valid_hosts_json(tmp_path: Path):
 
     hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
     _assert_hosts_json_valid(hosts_data)
+    # print status with no newline
+    print("Backend hosts.json validation passed.", end="", flush=True)
