@@ -7,7 +7,7 @@ const DEFAULT_HEATMAP_POINT_SIZE = 90;
 const DEFAULT_HEATMAP_BLUR = 72;
 const DEFAULT_HEATMAP_MAP_ZOOM = 100;
 const MIN_HEATMAP_MAP_ZOOM = 100;
-const MAX_HEATMAP_MAP_ZOOM = 850;
+const MAX_HEATMAP_MAP_ZOOM = 2000;
 const HEATMAP_MAP_ZOOM_SLIDER_STEP = 1;
 const HEATMAP_SELECTION_ZOOM_LARGE_AREA_PERCENT = 200;
 const HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT = 450;
@@ -15,8 +15,8 @@ const HEATMAP_SELECTION_ZOOM_TINY_AREA_PERCENT = 800;
 const HEATMAP_SELECTION_AREA_TINY_RATIO = 0.001;
 const HEATMAP_SELECTION_AREA_MID_RATIO = 0.02;
 const HEATMAP_SELECTION_AREA_LARGE_RATIO = 0.4;
-const HEATMAP_LOCATION_CLICK_ZOOM_PERCENT = 300;
-const HEATMAP_LOCATION_CLICK_CITY_ZOOM_PERCENT = 650;
+const HEATMAP_LOCATION_CLICK_ZOOM_PERCENT = 550;
+const HEATMAP_LOCATION_CLICK_CITY_ZOOM_PERCENT = 1600;
 const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
 const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
 const HEATMAP_LOCATION_SELECTION_SIZE_SCALE = 0.5;
@@ -32,7 +32,7 @@ const HEATMAP_SCOPE_CAPTURE = "capture";
 const HEATMAP_SCOPE_FILTERED = "filtered";
 const HEATMAP_METRIC_PACKETS = "packets";
 const HEATMAP_METRIC_BYTES = "bytes";
-const WIKIMEDIA_WORLD_MAP_ASSET_PATH = "../assets/images/blankmap-world-gray.svg";
+const WIKIMEDIA_WORLD_MAP_ASSET_PATH = "../assets/images/world.svg";
 const WIKIMEDIA_WORLD_MAP_WIDTH = 1404.7773;
 const WIKIMEDIA_WORLD_MAP_HEIGHT = 600.81262;
 const WIKIMEDIA_WORLD_MAP_ASPECT_RATIO =
@@ -43,13 +43,22 @@ const WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS = Object.freeze({
   top: 0.02,
   bottom: 0.98,
 });
-const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X = 0.55;
-const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 0.95;
-const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -0.53;
-const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y = 0;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X = 0.29;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y = 0.83;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X = -1.30;
+const WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y = 0.39;
 let lastStatsMapProjectionCalibration = null;
 let statsBasemapSvgSourceCache = null;
-const statsBasemapSvgThemeCache = new Map();
+const statsBasemapSvgMarkupThemeCache = new Map();
+const statsBasemapSvgDataUriThemeCache = new Map();
+const statsBasemapRasterThemeCache = new Map();
+const BASEMAP_RASTER_MIN_ZOOM_PERCENT = 125;
+const BASEMAP_RASTER_ZOOM_BUCKET_PERCENT = 20;
+const BASEMAP_RASTER_HIGH_ZOOM_BUCKET_PERCENT = 10;
+const BASEMAP_RASTER_HIGH_ZOOM_THRESHOLD_PERCENT = 400;
+const BASEMAP_RASTER_MAX_DIMENSION = 16384;
+const BASEMAP_RASTER_MAX_PIXELS = 68_000_000;
+const BASEMAP_RASTER_CACHE_LIMIT = 8;
 
 // Sets inline svg style property.
 function setInlineSvgStyleProperty(styleText, propertyName, propertyValue) {
@@ -60,6 +69,68 @@ function setInlineSvgStyleProperty(styleText, propertyName, propertyValue) {
     .filter((part) => !part.toLowerCase().startsWith(`${propertyName.toLowerCase()}:`));
   declarations.unshift(`${propertyName}:${propertyValue}`);
   return declarations.join(";");
+}
+
+// Sets inline svg fill on matching element markup.
+function setInlineSvgFillOnElementMarkup(elementMarkup, fillColor) {
+  if (!elementMarkup || !fillColor) return elementMarkup;
+
+  const styleAttrRegex = /\sstyle="([^"]*)"/i;
+  if (styleAttrRegex.test(elementMarkup)) {
+    return elementMarkup.replace(styleAttrRegex, (_match, styleValue) => {
+      const nextStyle = setInlineSvgStyleProperty(styleValue, "fill", fillColor);
+      return ` style="${nextStyle}"`;
+    });
+  }
+
+  const fillAttrRegex = /\sfill="[^"]*"/i;
+  if (fillAttrRegex.test(elementMarkup)) {
+    return elementMarkup.replace(fillAttrRegex, ` fill="${fillColor}"`);
+  }
+
+  return elementMarkup.replace(/\/>$|>$/, (ending) => ` fill="${fillColor}"${ending}`);
+}
+
+// Applies themed land fill color to svg content.
+function applyStatsBasemapLandFill(svgSource, landFillColor) {
+  if (!svgSource || !landFillColor) return svgSource;
+
+  const groupStyleRegex = /(<g[^>]*id="layer1"[^>]*style=")([^"]*)(")/i;
+  if (groupStyleRegex.test(svgSource)) {
+    return svgSource.replace(groupStyleRegex, (_fullMatch, prefix, styleValue, suffix) => {
+      const nextStyle = setInlineSvgStyleProperty(styleValue, "fill", landFillColor);
+      return `${prefix}${nextStyle}${suffix}`;
+    });
+  }
+
+  const groupTagRegex = /<g[^>]*id="layer1"[^>]*>/i;
+  if (groupTagRegex.test(svgSource)) {
+    return svgSource.replace(groupTagRegex, (groupTag) =>
+      setInlineSvgFillOnElementMarkup(groupTag, landFillColor),
+    );
+  }
+
+  // Fallback used by world.svg and other country-path maps.
+  return svgSource.replace(/<path\b[^>]*\/?>/gi, (pathTag) =>
+    setInlineSvgFillOnElementMarkup(pathTag, landFillColor),
+  );
+}
+
+// Applies themed water gradient fill to svg background.
+function applyStatsBasemapWaterFill(svgSource, waterTopColor, waterBottomColor) {
+  if (!svgSource || !waterTopColor || !waterBottomColor) return svgSource;
+
+  const defsBlock = [
+    '<defs id="ps-heatmap-water-defs">',
+    '  <linearGradient id="ps-heatmap-water-gradient" x1="0" y1="0" x2="0" y2="1">',
+    `    <stop offset="0%" stop-color="${waterTopColor}"/>`,
+    `    <stop offset="100%" stop-color="${waterBottomColor}"/>`,
+    "  </linearGradient>",
+    "</defs>",
+    '<rect id="ps-heatmap-water-bg" x="0" y="0" width="100%" height="100%" fill="url(#ps-heatmap-water-gradient)"/>',
+  ].join("\n");
+
+  return svgSource.replace(/<svg\b[^>]*>/i, (svgTag) => `${svgTag}\n${defsBlock}`);
 }
 
 // Handles fetch stats basemap svg source.
@@ -77,59 +148,257 @@ async function fetchStatsBasemapSvgSource() {
 }
 
 // Builds themed stats basemap svg.
-function buildThemedStatsBasemapSvg(svgSource, landFillColor) {
-  if (!svgSource || !landFillColor) return svgSource;
+function buildThemedStatsBasemapSvg(
+  svgSource,
+  landFillColor,
+  waterTopColor,
+  waterBottomColor,
+) {
+  if (!svgSource) return svgSource;
 
-  const groupStyleRegex = /(<g[^>]*id="layer1"[^>]*style=")([^"]*)(")/i;
-  if (groupStyleRegex.test(svgSource)) {
-    return svgSource.replace(groupStyleRegex, (fullMatch, prefix, styleValue, suffix) => {
-      const nextStyle = setInlineSvgStyleProperty(styleValue, "fill", landFillColor);
-      return `${prefix}${nextStyle}${suffix}`;
-    });
+  const withWaterFill = applyStatsBasemapWaterFill(
+    svgSource,
+    waterTopColor,
+    waterBottomColor,
+  );
+  return applyStatsBasemapLandFill(withWaterFill, landFillColor);
+}
+
+// Returns themed stats basemap color values from active theme.
+function getStatsBasemapThemeColors(rootStyles) {
+  const resolveColor = (primaryVar, fallbackVar, hardFallback) =>
+    String(rootStyles.getPropertyValue(primaryVar) || rootStyles.getPropertyValue(fallbackVar) || hardFallback)
+      .trim();
+
+  return {
+    landFillColor: resolveColor(
+      "--stats-heatmap-land-fill-color",
+      "--color-1",
+      "#cccccc",
+    ),
+    waterTopColor: resolveColor(
+      "--stats-heatmap-water-color-3-top",
+      "--stats-heatmap-water-color-1",
+      "#0f1720",
+    ),
+    waterBottomColor: resolveColor(
+      "--stats-heatmap-water-color-3-bottom",
+      "--stats-heatmap-water-color-2",
+      "#04070b",
+    ),
+  };
+}
+
+// Builds cache key for themed basemap.
+function buildStatsBasemapThemeCacheKey(themeColors) {
+  return `${String(themeColors.landFillColor || "").trim()}|${String(themeColors.waterTopColor || "").trim()}|${String(themeColors.waterBottomColor || "").trim()}`;
+}
+
+// Returns themed stats basemap svg markup.
+async function getThemedStatsBasemapSvgMarkup(themeColors) {
+  const themeKey = buildStatsBasemapThemeCacheKey(themeColors);
+  if (statsBasemapSvgMarkupThemeCache.has(themeKey)) {
+    return {
+      themeKey,
+      svgMarkup: statsBasemapSvgMarkupThemeCache.get(themeKey),
+    };
   }
 
-  const groupTagRegex = /<g[^>]*id="layer1"[^>]*>/i;
-  if (groupTagRegex.test(svgSource)) {
-    return svgSource.replace(groupTagRegex, (groupTag) =>
-      groupTag.replace(/>$/, ` style="fill:${landFillColor}">`),
-    );
-  }
-
-  return svgSource;
+  const svgSource = await fetchStatsBasemapSvgSource();
+  const themedSvg = buildThemedStatsBasemapSvg(
+    svgSource,
+    themeColors.landFillColor,
+    themeColors.waterTopColor,
+    themeColors.waterBottomColor,
+  );
+  statsBasemapSvgMarkupThemeCache.set(themeKey, themedSvg);
+  return { themeKey, svgMarkup: themedSvg };
 }
 
 // Returns themed stats basemap data uri.
-async function getThemedStatsBasemapDataUri(landFillColor) {
-  const normalizedFillColor = String(landFillColor || "").trim() || "#cccccc";
-  if (statsBasemapSvgThemeCache.has(normalizedFillColor)) {
-    return statsBasemapSvgThemeCache.get(normalizedFillColor);
+async function getThemedStatsBasemapDataUri(themeColors) {
+  const { themeKey, svgMarkup } = await getThemedStatsBasemapSvgMarkup(themeColors);
+  if (statsBasemapSvgDataUriThemeCache.has(themeKey)) {
+    return {
+      themeKey,
+      dataUri: statsBasemapSvgDataUriThemeCache.get(themeKey),
+    };
   }
 
-  try {
-    const svgSource = await fetchStatsBasemapSvgSource();
-    const themedSvg = buildThemedStatsBasemapSvg(svgSource, normalizedFillColor);
-    const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedSvg)}`;
-    statsBasemapSvgThemeCache.set(normalizedFillColor, dataUri);
-    return dataUri;
-  } catch {
-    return null;
+  const dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup)}`;
+  statsBasemapSvgDataUriThemeCache.set(themeKey, dataUri);
+  return { themeKey, dataUri };
+}
+
+// Loads image from url.
+function loadImageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const imageEl = new Image();
+    imageEl.onload = () => resolve(imageEl);
+    imageEl.onerror = reject;
+    imageEl.src = url;
+  });
+}
+
+// Returns zoom bucket percent for raster keying.
+function getBasemapRasterZoomBucketPercent(zoomPercent) {
+  const bucketStep = zoomPercent >= BASEMAP_RASTER_HIGH_ZOOM_THRESHOLD_PERCENT
+    ? BASEMAP_RASTER_HIGH_ZOOM_BUCKET_PERCENT
+    : BASEMAP_RASTER_ZOOM_BUCKET_PERCENT;
+  return Math.round(zoomPercent / bucketStep) * bucketStep;
+}
+
+// Bounds raster dimensions to avoid oversized canvas allocations.
+function clampBasemapRasterDimensions(width, height) {
+  let boundedWidth = Math.max(1, Math.round(width));
+  let boundedHeight = Math.max(1, Math.round(height));
+
+  const limitByDimension = Math.min(
+    BASEMAP_RASTER_MAX_DIMENSION / boundedWidth,
+    BASEMAP_RASTER_MAX_DIMENSION / boundedHeight,
+    1,
+  );
+  if (limitByDimension < 1) {
+    boundedWidth = Math.max(1, Math.round(boundedWidth * limitByDimension));
+    boundedHeight = Math.max(1, Math.round(boundedHeight * limitByDimension));
+  }
+
+  const pixelCount = boundedWidth * boundedHeight;
+  if (pixelCount > BASEMAP_RASTER_MAX_PIXELS) {
+    const areaScale = Math.sqrt(BASEMAP_RASTER_MAX_PIXELS / pixelCount);
+    boundedWidth = Math.max(1, Math.round(boundedWidth * areaScale));
+    boundedHeight = Math.max(1, Math.round(boundedHeight * areaScale));
+  }
+
+  return {
+    width: boundedWidth,
+    height: boundedHeight,
+  };
+}
+
+// Stores raster in cache and evicts oldest entries.
+function setStatsBasemapRasterCacheEntry(cacheKey, dataUri) {
+  if (statsBasemapRasterThemeCache.has(cacheKey)) {
+    statsBasemapRasterThemeCache.delete(cacheKey);
+  }
+  statsBasemapRasterThemeCache.set(cacheKey, dataUri);
+  while (statsBasemapRasterThemeCache.size > BASEMAP_RASTER_CACHE_LIMIT) {
+    const oldestKey = statsBasemapRasterThemeCache.keys().next().value;
+    if (!oldestKey) break;
+    statsBasemapRasterThemeCache.delete(oldestKey);
   }
 }
 
+// Rasterizes svg data uri to png data uri.
+async function rasterizeSvgDataUriToPngDataUri(svgDataUri, width, height) {
+  const targetWidth = Math.max(1, Math.floor(width));
+  const targetHeight = Math.max(1, Math.floor(height));
+  const sourceImage = await loadImageFromUrl(svgDataUri);
+  const canvasEl = document.createElement("canvas");
+  canvasEl.width = targetWidth;
+  canvasEl.height = targetHeight;
+  const context = canvasEl.getContext("2d");
+  if (!context) {
+    throw new Error("Unable to rasterize basemap SVG: 2D canvas unavailable");
+  }
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.clearRect(0, 0, targetWidth, targetHeight);
+  context.drawImage(sourceImage, 0, 0, targetWidth, targetHeight);
+  return canvasEl.toDataURL("image/png");
+}
+
 // Applies themed stats basemap image.
-async function applyThemedStatsBasemapImage(basemapImageEl) {
+async function applyThemedStatsBasemapImage(basemapImageEl, options = {}) {
   if (!basemapImageEl || !window.getComputedStyle) return;
   const rootStyles = window.getComputedStyle(document.documentElement);
-  const landFillColor =
-    rootStyles.getPropertyValue("--stats-heatmap-land-fill-color")
-    || rootStyles.getPropertyValue("--color-1")
-    || "#cccccc";
-  const themedDataUri = await getThemedStatsBasemapDataUri(landFillColor);
-  if (typeof themedDataUri === "string" && themedDataUri) {
-    basemapImageEl.src = themedDataUri;
+  const themeColors = getStatsBasemapThemeColors(rootStyles);
+  const { zoomPercent, boundsWidth, boundsHeight } = options || {};
+  const normalizedZoomPercent = clampHeatmapMapZoomPercent(
+    zoomPercent,
+    DEFAULT_HEATMAP_MAP_ZOOM,
+  );
+  const themeKey = buildStatsBasemapThemeCacheKey(themeColors);
+  const requestId =
+    Number.parseInt(basemapImageEl.dataset.rasterRequestId || "0", 10) + 1;
+  basemapImageEl.dataset.rasterRequestId = String(requestId);
+
+  try {
+    const { dataUri: themedSvgDataUri } = await getThemedStatsBasemapDataUri(
+      themeColors,
+    );
+
+    const supportsZoomRaster =
+      Number.isFinite(boundsWidth)
+      && Number.isFinite(boundsHeight)
+      && boundsWidth > 0
+      && boundsHeight > 0
+      && normalizedZoomPercent >= BASEMAP_RASTER_MIN_ZOOM_PERCENT;
+
+    if (!supportsZoomRaster) {
+      const sourceKey = `${themeKey}|vector`;
+      if (basemapImageEl.dataset.basemapSourceKey !== sourceKey) {
+        basemapImageEl.src = themedSvgDataUri;
+        basemapImageEl.dataset.basemapSourceKey = sourceKey;
+      }
+      return;
+    }
+
+    const zoomBucketPercent = getBasemapRasterZoomBucketPercent(normalizedZoomPercent);
+    const deviceScale = Math.min(
+      4,
+      Math.max(1, Number(window.devicePixelRatio) || 1),
+    );
+    const highZoomBoost = zoomBucketPercent >= 600 ? 1.12 : 1;
+    const targetScale = (zoomBucketPercent / 100) * deviceScale * highZoomBoost;
+    const rasterDims = clampBasemapRasterDimensions(
+      boundsWidth * targetScale,
+      boundsHeight * targetScale,
+    );
+    const rasterWidth = rasterDims.width;
+    const rasterHeight = rasterDims.height;
+    const rasterKey = `${themeKey}|${rasterWidth}x${rasterHeight}`;
+
+    if (statsBasemapRasterThemeCache.has(rasterKey)) {
+      if (basemapImageEl.dataset.rasterRequestId !== String(requestId)) return;
+      if (basemapImageEl.dataset.basemapSourceKey !== rasterKey) {
+        basemapImageEl.src = statsBasemapRasterThemeCache.get(rasterKey);
+        basemapImageEl.dataset.basemapSourceKey = rasterKey;
+      }
+      return;
+    }
+
+    const rasterDataUri = await rasterizeSvgDataUriToPngDataUri(
+      themedSvgDataUri,
+      rasterWidth,
+      rasterHeight,
+    );
+    setStatsBasemapRasterCacheEntry(rasterKey, rasterDataUri);
+    if (basemapImageEl.dataset.rasterRequestId !== String(requestId)) return;
+    if (basemapImageEl.dataset.basemapSourceKey !== rasterKey) {
+      basemapImageEl.src = rasterDataUri;
+      basemapImageEl.dataset.basemapSourceKey = rasterKey;
+    }
     return;
+  } catch {
+    // Fall through to legacy path below.
   }
+
+  try {
+    const { themeKey: fallbackThemeKey, dataUri: legacyDataUri } =
+      await getThemedStatsBasemapDataUri(themeColors);
+    const sourceKey = `${fallbackThemeKey}|vector`;
+    if (basemapImageEl.dataset.basemapSourceKey !== sourceKey) {
+      basemapImageEl.src = legacyDataUri;
+      basemapImageEl.dataset.basemapSourceKey = sourceKey;
+    }
+    return;
+  } catch {
+    // Final fallback below.
+  }
+
   basemapImageEl.src = WIKIMEDIA_WORLD_MAP_ASSET_PATH;
+  basemapImageEl.dataset.basemapSourceKey = "asset-default";
 }
 
 // Handles clamp projection setting.
@@ -633,6 +902,31 @@ function applyHeatmapLayerZoom(layerEl, bounds, viewState = {}) {
   layerEl.style.transform = `translate(${transform.translateX.toFixed(2)}px, ${transform.translateY.toFixed(2)}px) scale(${transform.scale.toFixed(3)})`;
 }
 
+// Applies basemap zoom by resizing and panning the image directly inside the frame.
+function applyHeatmapBasemapZoom(basemapFrameEl, bounds, viewState = {}) {
+  if (!basemapFrameEl) return;
+  const basemapImageEl = basemapFrameEl.querySelector(".stats-heatmap-basemap");
+  if (!basemapImageEl) return;
+
+  const transform = getHeatmapViewTransform(
+    {
+      width: Math.max(1, Number(bounds?.width) || basemapFrameEl.clientWidth || 1),
+      height: Math.max(1, Number(bounds?.height) || basemapFrameEl.clientHeight || 1),
+    },
+    viewState,
+  );
+
+  basemapFrameEl.style.transformOrigin = "0 0";
+  basemapFrameEl.style.transform = "translate(0px, 0px) scale(1)";
+
+  const renderedWidth = Math.max(1, transform.boundsWidth * transform.scale);
+  const renderedHeight = Math.max(1, transform.boundsHeight * transform.scale);
+  basemapImageEl.style.left = `${transform.translateX.toFixed(2)}px`;
+  basemapImageEl.style.top = `${transform.translateY.toFixed(2)}px`;
+  basemapImageEl.style.width = `${renderedWidth.toFixed(2)}px`;
+  basemapImageEl.style.height = `${renderedHeight.toFixed(2)}px`;
+}
+
 // Returns heatmap focus coordinates.
 function getHeatmapFocusCoordinates(viewState = {}) {
   const focusX = Math.min(1, Math.max(0, Number(viewState.focusX) || 0.5));
@@ -852,12 +1146,20 @@ function renderStatsHeatmap(
   const width = Math.max(320, mapContainerEl?.clientWidth || 0);
   const height = Math.max(220, mapContainerEl?.clientHeight || 0);
   const mapBounds = getHeatmapMapBounds(width, height);
+  const basemapImageEl = basemapFrameEl?.querySelector(".stats-heatmap-basemap");
+  if (basemapImageEl) {
+    void applyThemedStatsBasemapImage(basemapImageEl, {
+      zoomPercent: viewState?.zoomPercent,
+      boundsWidth: mapBounds.width,
+      boundsHeight: mapBounds.height,
+    });
+  }
   applyHeatmapLayerBounds(basemapFrameEl, mapBounds);
   applyHeatmapLayerBounds(gridLayerEl, mapBounds);
   applyHeatmapLayerBounds(heatmapMountEl, mapBounds);
   applyHeatmapLayerBounds(pointsMountEl, mapBounds);
   applyHeatmapGridDensity(gridLayerEl, viewState);
-  applyHeatmapLayerZoom(basemapFrameEl, mapBounds, viewState);
+  applyHeatmapBasemapZoom(basemapFrameEl, mapBounds, viewState);
   applyHeatmapLayerZoom(gridLayerEl, mapBounds, viewState);
   applyHeatmapLayerZoom(heatmapMountEl, mapBounds, viewState);
   applyHeatmapLayerZoom(pointsMountEl, mapBounds, viewState);
