@@ -1572,14 +1572,41 @@ ipcMain.handle("save-text", async (_event, options = {}) => {
       ? options.defaultName.trim()
       : "packetsnitch-export.txt";
   const defaultName = path.basename(defaultNameRaw);
+  const customFilters = Array.isArray(options?.filters)
+    ? options.filters
+      .map((entry) => {
+        const name =
+          typeof entry?.name === "string" && entry.name.trim()
+            ? entry.name.trim()
+            : "";
+        const extensions = Array.isArray(entry?.extensions)
+          ? entry.extensions
+            .map((extension) =>
+              typeof extension === "string" ? extension.trim().replace(/^\./, "") : "",
+            )
+            .filter(Boolean)
+          : [];
+        if (!name || !extensions.length) return null;
+        return { name, extensions };
+      })
+      .filter(Boolean)
+    : [];
+  const dialogFilters = customFilters.length
+    ? customFilters
+    : [
+      { name: "Text Files", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+  const defaultExtension =
+    typeof options?.defaultExtension === "string" && options.defaultExtension.trim()
+      ? options.defaultExtension.trim().replace(/^\./, "")
+      : undefined;
 
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: dialogTitle,
     defaultPath: path.join(app.getPath("documents"), defaultName),
-    filters: [
-      { name: "Text Files", extensions: ["txt"] },
-      { name: "All Files", extensions: ["*"] },
-    ],
+    filters: dialogFilters,
+    defaultExtension,
   });
   if (canceled || !filePath) return { success: false, canceled: true };
 

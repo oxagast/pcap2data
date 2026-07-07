@@ -3605,6 +3605,223 @@ function renderSummaryMarkdownPreview(summaryText) {
   );
 }
 
+// Returns normalized summary markdown for export.
+function getSummaryMarkdownForExport() {
+  return normalizeSummaryMarkdownHeadings(summary);
+}
+
+// Normalizes plain-text export segment.
+function normalizePlainTextExportSegment(value) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+// Extracts inline text from html node.
+function extractInlineTextFromHtmlNode(node) {
+  if (!node) return "";
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.textContent || "";
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return "";
+  }
+  if (node.tagName === "BR") {
+    return "\n";
+  }
+  return Array.from(node.childNodes)
+    .map((childNode) => extractInlineTextFromHtmlNode(childNode))
+    .join("");
+}
+
+// Builds an ascii table from row data.
+function buildAsciiTableFromRows(rows, headerRowCount = 0) {
+  if (!Array.isArray(rows) || rows.length === 0) return "";
+  const normalizeTableCell = (value) =>
+    normalizePlainTextExportSegment(value)
+      .replace(/\s*\n+\s*/g, " / ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+  const normalizedRows = rows.map((row) =>
+    Array.isArray(row)
+      ? row.map((cell) => normalizeTableCell(cell))
+      : [normalizeTableCell(row)],
+  );
+  const columnCount = normalizedRows.reduce(
+    (max, row) => Math.max(max, row.length),
+    0,
+  );
+  if (columnCount === 0) return "";
+
+  normalizedRows.forEach((row) => {
+    while (row.length < columnCount) row.push("");
+  });
+
+  const widths = new Array(columnCount).fill(0);
+  normalizedRows.forEach((row) => {
+    row.forEach((cell, index) => {
+      widths[index] = Math.max(widths[index], String(cell).length);
+    });
+  });
+
+  const divider = `+${widths.map((width) => "-".repeat(width + 2)).join("+")}+`;
+  const formattedRows = normalizedRows.map(
+    (row) =>
+      `| ${row
+        .map((cell, index) => String(cell).padEnd(widths[index], " "))
+        .join(" | ")} |`,
+  );
+
+  const lines = [divider];
+  formattedRows.forEach((line, index) => {
+    lines.push(line);
+    if (headerRowCount > 0 && index === headerRowCount - 1) {
+      lines.push(divider);
+    }
+  });
+  lines.push(divider);
+  return lines.join("\n");
+}
+
+// Converts html table element to an ascii table.
+function tableElementToAscii(tableEl) {
+  const headerRows = Array.from(tableEl.querySelectorAll("thead tr")).map((rowEl) =>
+    Array.from(rowEl.querySelectorAll("th, td")).map((cellEl) =>
+      extractInlineTextFromHtmlNode(cellEl),
+    ),
+  );
+  const bodyRows = Array.from(tableEl.querySelectorAll("tbody tr")).map((rowEl) =>
+    Array.from(rowEl.querySelectorAll("th, td")).map((cellEl) =>
+      extractInlineTextFromHtmlNode(cellEl),
+    ),
+  );
+  const fallbackRows =
+    headerRows.length === 0 && bodyRows.length === 0
+      ? Array.from(tableEl.querySelectorAll("tr")).map((rowEl) =>
+        Array.from(rowEl.querySelectorAll("th, td")).map((cellEl) =>
+          extractInlineTextFromHtmlNode(cellEl),
+        ),
+      )
+      : [];
+
+  const rows = [...headerRows, ...bodyRows, ...fallbackRows];
+  return buildAsciiTableFromRows(rows, headerRows.length);
+}
+
+// Converts html list to plain text lines.
+function listElementToPlainText(listEl, level = 0, ordered = false) {
+  const lines = [];
+  const listItems = Array.from(listEl.children).filter(
+    (child) => child.tagName === "LI",
+  );
+
+  listItems.forEach((itemEl, itemIndex) => {
+    const marker = ordered ? `${itemIndex + 1}.` : "-";
+    const cloneEl = itemEl.cloneNode(true);
+    Array.from(cloneEl.children).forEach((child) => {
+      if (child.tagName === "UL" || child.tagName === "OL") {
+        child.remove();
+      }
+    });
+    const itemText = normalizePlainTextExportSegment(
+      extractInlineTextFromHtmlNode(cloneEl),
+    );
+    if (itemText) {
+      lines.push(`${"  ".repeat(level)}${marker} ${itemText}`);
+    }
+
+    Array.from(itemEl.children).forEach((child) => {
+      if (child.tagName === "UL") {
+        const nested = listElementToPlainText(child, level + 1, false);
+        if (nested) lines.push(nested);
+      }
+      if (child.tagName === "OL") {
+        const nested = listElementToPlainText(child, level + 1, true);
+        if (nested) lines.push(nested);
+      }
+    });
+  });
+
+  return lines.join("\n");
+}
+
+// Converts markdown summary text to plain text and renders markdown tables as ascii.
+function convertSummaryMarkdownToPlainText(markdownText) {
+  const renderedHtml = renderMarkdownToHtml(markdownText, {
+    emptyPlaceholder: "No summary available",
+  });
+  const template = document.createElement("template");
+  template.innerHTML = renderedHtml;
+
+  const blocks = [];
+  const appendBlock = (value, { preserveSpacing = false } = {}) => {
+    const normalized = preserveSpacing
+      ? String(value || "")
+        .replace(/\r\n?/g, "\n")
+        .replace(/\u00a0/g, " ")
+        .trim()
+      : normalizePlainTextExportSegment(value);
+    if (!normalized) return;
+    blocks.push(normalized);
+  };
+
+  Array.from(template.content.childNodes).forEach((node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      appendBlock(node.textContent);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const tagName = node.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tagName) || tagName === "p") {
+      appendBlock(extractInlineTextFromHtmlNode(node));
+      return;
+    }
+    if (tagName === "blockquote") {
+      const quoteText = normalizePlainTextExportSegment(
+        extractInlineTextFromHtmlNode(node),
+      );
+      appendBlock(
+        quoteText
+          .split("\n")
+          .map((line) => `> ${line}`)
+          .join("\n"),
+      );
+      return;
+    }
+    if (tagName === "pre") {
+      const preText = String(node.textContent || "")
+        .replace(/\r\n?/g, "\n")
+        .trimEnd();
+      if (preText.trim()) blocks.push(preText);
+      return;
+    }
+    if (tagName === "table") {
+      appendBlock(tableElementToAscii(node), { preserveSpacing: true });
+      return;
+    }
+    if (tagName === "ul") {
+      appendBlock(listElementToPlainText(node, 0, false));
+      return;
+    }
+    if (tagName === "ol") {
+      appendBlock(listElementToPlainText(node, 0, true));
+      return;
+    }
+    if (tagName === "hr") {
+      blocks.push("----------------------------------------");
+      return;
+    }
+
+    appendBlock(extractInlineTextFromHtmlNode(node));
+  });
+
+  return blocks.join("\n\n").trim();
+}
+
 // Normalizes external markdown link href.
 function normalizeExternalMarkdownLinkHref(href) {
   const candidate = String(href || "").trim().replace(/&amp;/g, "&");
@@ -8844,6 +9061,8 @@ const convertContextButtons = {
   exportConvHashes: getCachedElement("ctx-export-conv-hashes"),
   exportConvDecodes: getCachedElement("ctx-export-conv-decodes"),
   exportDecrypted: getCachedElement("ctx-export-decrypted"),
+  exportSummaryMarkdown: getCachedElement("ctx-export-summary-md"),
+  exportSummaryText: getCachedElement("ctx-export-summary-txt"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -9626,6 +9845,12 @@ function showConvertContextMenu(
   const hasDecryptedDataToExport = Boolean(
     getCryptDecryptedExportCandidate(target),
   );
+  const isSummaryTabContext =
+    activeMainTab === MAIN_TAB_SUMMARY &&
+    Boolean(target?.closest?.("#summary_box"));
+  const hasSummaryMarkdownToExport =
+    isSummaryTabContext && Boolean(getSummaryMarkdownForExport().trim());
+  const hasSummaryTextToExport = hasSummaryMarkdownToExport;
   const hasConvExportActions =
     hasConvInputToExport ||
     hasConvRawToExport ||
@@ -9688,6 +9913,11 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportDecrypted.style.display = hasDecryptedDataToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportSummaryMarkdown.style.display =
+    hasSummaryMarkdownToExport ? "block" : "none";
+  convertContextButtons.exportSummaryText.style.display = hasSummaryTextToExport
     ? "block"
     : "none";
   convertContextButtons.httpFileSave.style.display = hasHttpBody
@@ -9963,7 +10193,9 @@ function showConvertContextMenu(
     hasPayloadToExport ||
     hasCookieActions ||
     hasConvExportActions ||
-    hasDecryptedDataToExport;
+    hasDecryptedDataToExport ||
+    hasSummaryMarkdownToExport ||
+    hasSummaryTextToExport;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
   convertContextSubmenus.convert.style.display = hasDataTypeActions
     ? "block"
@@ -13195,6 +13427,74 @@ function saveJsonFromContextMenu() {
   void persistSessionToDisk("context-menu");
 }
 
+// Saves summary output from context menu.
+function saveSummaryFromContextMenu(format = "markdown") {
+  const normalizedFormat = format === "text" ? "text" : "markdown";
+  const summaryMarkdown = getSummaryMarkdownForExport();
+  hideConvertContextMenu();
+  if (!summaryMarkdown.trim()) {
+    statusUpdate("Status: No summary available to export");
+    return;
+  }
+
+  const exportText =
+    normalizedFormat === "text"
+      ? convertSummaryMarkdownToPlainText(summaryMarkdown)
+      : summaryMarkdown;
+  const title =
+    normalizedFormat === "text"
+      ? "Export Summary (Text)"
+      : "Export Summary (Markdown)";
+  const defaultName =
+    normalizedFormat === "text"
+      ? "packetsnitch-summary.txt"
+      : "packetsnitch-summary.md";
+  const filters =
+    normalizedFormat === "text"
+      ? [
+        { name: "Text Files", extensions: ["txt"] },
+        { name: "All Files", extensions: ["*"] },
+      ]
+      : [
+        { name: "Markdown Files", extensions: ["md"] },
+        { name: "Text Files", extensions: ["txt"] },
+        { name: "All Files", extensions: ["*"] },
+      ];
+
+  window.saveapi
+    .saveText({
+      text: exportText,
+      title,
+      defaultName,
+      defaultExtension: normalizedFormat === "text" ? "txt" : "md",
+      filters,
+    })
+    .then((result) => {
+      if (result.canceled) {
+        statusUpdate("Status: Export cancelled");
+      } else if (result.success) {
+        statusUpdate(
+          normalizedFormat === "text"
+            ? "Status: Summary exported as text"
+            : "Status: Summary exported as markdown",
+        );
+        writeLogEntry(
+          `Context menu summary export completed format=${normalizedFormat}`,
+        );
+      } else {
+        const errorMessage =
+          result && typeof result === "object" && "error" in result
+            ? result.error
+            : "unknown";
+        doError("Summary export failed");
+        logErrorEntry("export-summary", errorMessage || "unknown");
+        statusUpdate(
+          `Status: Summary export failed - ${errorMessage || "unknown error"}`,
+        );
+      }
+    });
+}
+
 async function currentPacketToConvJson() {
   const contextPacket = getCurrentContextPacket();
   writeLogEntry(`Logged raw packet JSON at index = ${contextPacket?.["packet.info"]?.["index"] ?? contextPacket?.["packet.info"]?.["Index"] ?? "unknown"} to Conv subtab`);
@@ -14780,6 +15080,12 @@ convertContextButtons.exportDecrypted.addEventListener(
   "click",
   exportDecryptedDataFromContextMenu,
 );
+convertContextButtons.exportSummaryMarkdown.addEventListener("click", () => {
+  saveSummaryFromContextMenu("markdown");
+});
+convertContextButtons.exportSummaryText.addEventListener("click", () => {
+  saveSummaryFromContextMenu("text");
+});
 convertContextButtons.saveCookieJar.addEventListener(
   "click",
   saveCookieJarFromContextMenu,
