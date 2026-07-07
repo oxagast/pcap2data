@@ -10,9 +10,9 @@
     "start": "electron-forge start -- --ozone-platform=x11",
     "package": "npm run build-backend && electron-forge package",
     "patch-rpm-build": "patch -Np0 < patches/spec.ejs.patch",
-    "test": "pytest test/backend-json-test.py test/backend-server-test.py -s --maxfail=1",
-    "make": "npm run test && npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make",
-    "build-backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
+    "tests": "pytest test/backend-json-test.py test/backend-server-test.py -s --maxfail=1",
+    "make": "npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make",
+    "build-backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && npm run tests && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish"
   },
   "publishConfig": {
