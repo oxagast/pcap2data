@@ -52,6 +52,7 @@ const SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE = 120;
 
 let goodiesStash = null;
 
+// Creates keystore panel.
 function createKeystorePanel({
   statusUpdate,
   writeLogEntry,

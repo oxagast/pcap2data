@@ -1,4 +1,5 @@
 
+// Initializes context menu.
 function initializeContextMenu({
   documentRef = document,
   windowRef = window,

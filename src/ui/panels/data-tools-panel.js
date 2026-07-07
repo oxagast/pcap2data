@@ -51,6 +51,7 @@ let _writeLogEntry = () => { };
 let _statusUpdate = () => { };
 let _setActiveMainTab = () => { };
 
+// Initializes conv panel.
 function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
@@ -63,6 +64,7 @@ function getActiveConvSubtab() {
   return activeConvSubtab;
 }
 
+// Returns active data tools proto result.
 function getActiveDataToolsProtoResult() {
   return activeDataToolsProtoResult;
 }
@@ -149,6 +151,7 @@ function parseDataToolsInput(format, rawInput) {
   return new TextEncoder().encode(rawInput);
 }
 
+// Handles bytes to base64.
 function bytesToBase64(bytes) {
   let binary = "";
   bytes.forEach((byte) => {
@@ -157,6 +160,7 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// Handles bytes to printable ascii.
 function bytesToPrintableAscii(bytes) {
   return [...bytes]
     .map((byte) =>
@@ -165,6 +169,7 @@ function bytesToPrintableAscii(bytes) {
     .join("");
 }
 
+// Handles bytes to big int decimal.
 function bytesToBigIntDecimal(bytes) {
   let total = 0n;
   bytes.forEach((byte) => {
@@ -173,6 +178,7 @@ function bytesToBigIntDecimal(bytes) {
   return total.toString(10);
 }
 
+// Handles calculate shannon entropy.
 function calculateShannonEntropy(bytes) {
   if (!bytes.length) return 0;
   const counts = new Array(256).fill(0);
@@ -188,6 +194,7 @@ function calculateShannonEntropy(bytes) {
   return entropy;
 }
 
+// Handles infer mime type.
 function inferMimeType(bytes) {
   if (!bytes || !bytes.length) return "application/octet-stream";
 
@@ -228,6 +235,7 @@ function inferMimeType(bytes) {
   return "application/octet-stream";
 }
 
+// Returns entropy label.
 function getEntropyLabel(entropy) {
   if (entropy >= DATA_TOOLS_ENTROPY_HIGH_THRESHOLD) return "High";
   if (entropy >= DATA_TOOLS_ENTROPY_MEDIUM_THRESHOLD) return "Medium";
@@ -243,6 +251,7 @@ const GUESS_JWT_RE =
 const BASE64_VALID_PADDING_SCORE = 80;
 const BASE64_MISSING_PADDING_SCORE = 50;
 
+// Handles guess data type.
 function guessDataType(rawInput) {
   const trimmed = rawInput.trim();
   if (!trimmed) return [];
@@ -331,6 +340,7 @@ function guessDataType(rawInput) {
   }));
 }
 
+// Renders data type guesses.
 function renderDataTypeGuesses(guesses) {
   const el = document.getElementById("data-tools-data-type-guesses");
   if (!el) return;
@@ -361,6 +371,7 @@ function resetHashOutputs() {
   }
 }
 
+// Handles bytes to char string.
 function bytesToCharString(bytes) {
   const CHUNK_SIZE = 0x8000;
   let result = "";
@@ -371,6 +382,7 @@ function bytesToCharString(bytes) {
   return result;
 }
 
+// Formats hash input reading.
 function formatHashInputReading(bytes) {
   return [...bytes]
     .map((byte) => {
@@ -384,11 +396,13 @@ function formatHashInputReading(bytes) {
     .join("");
 }
 
+// Sets hash input reading from bytes.
 function setHashInputReadingFromBytes(bytes) {
   document.getElementById("data-tools-hash-input-reading").value =
     formatHashInputReading(bytes);
 }
 
+// Computes data tools hashes.
 function computeDataToolsHashes(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
   const byteString = bytesToCharString(bytes);
@@ -419,6 +433,7 @@ function runDataToolsHashesFromInput() {
   computeDataToolsHashes(bytes);
 }
 
+// Parses hash input reading bytes.
 function parseHashInputReadingBytes(input) {
   const bytes = [];
   let plainStart = 0;
@@ -480,6 +495,7 @@ function resetDataToolsOutputs() {
   clearProtoDecoderOutput();
 }
 
+// Runs data tools conversion.
 function runDataToolsConversion() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -615,6 +631,7 @@ function decodeHttpFromBytes(bytes) {
   return { protocol: "HTTP", fields };
 }
 
+// Handles decode telnet from bytes.
 function decodeTelnetFromBytes(bytes) {
   const IAC = 0xff;
   const WILL = 0xfb,
@@ -689,6 +706,7 @@ function decodeTelnetFromBytes(bytes) {
   return { protocol: "Telnet", fields };
 }
 
+// Handles decode ssh from bytes.
 function decodeSshFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 512),
@@ -714,6 +732,7 @@ function decodeSshFromBytes(bytes) {
   return { protocol: "SSH / OpenSSH", fields };
 }
 
+// Handles decode pop3 from bytes.
 function decodePop3FromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -762,6 +781,7 @@ function decodePop3FromBytes(bytes) {
   return { protocol: "POP3", fields };
 }
 
+// Handles decode imap from bytes.
 function decodeImapFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -838,6 +858,7 @@ function decodeImapFromBytes(bytes) {
   return { protocol: "IMAP", fields };
 }
 
+// Handles decode smtp from bytes.
 function decodeSmtpFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -885,6 +906,7 @@ function decodeSmtpFromBytes(bytes) {
   return { protocol: "SMTP", fields };
 }
 
+// Handles decode ftp from bytes.
 function decodeFtpFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/).filter((line) => line.trim());
@@ -954,6 +976,7 @@ function decodeFtpFromBytes(bytes) {
   return { protocol: "FTP", fields };
 }
 
+// Handles decode sip from bytes.
 function decodeSipFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/);
@@ -1037,6 +1060,7 @@ function decodeSipFromBytes(bytes) {
   return { protocol: "SIP", fields };
 }
 
+// Handles auto detect proto from bytes.
 function autoDetectProtoFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
@@ -1090,6 +1114,7 @@ function autoDetectProtoFromBytes(bytes) {
   return null;
 }
 
+// Renders proto decoder output.
 function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (!protoOutput) return;
@@ -1128,6 +1153,7 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   protoOutput.appendChild(table);
 }
 
+// Runs proto decoder.
 function runProtoDecoder(bytes) {
   const selectEl = document.getElementById("data-tools-proto-select");
   const selectedProtocol = selectEl ? selectEl.value : "auto";
@@ -1167,6 +1193,7 @@ function runProtoDecoder(bytes) {
   renderProtoDecoderOutput(result, selectedProtocol, protocol);
 }
 
+// Clears proto decoder output.
 function clearProtoDecoderOutput() {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (protoOutput) protoOutput.innerHTML = "";
@@ -1199,6 +1226,7 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   setConvSubtab(tabName);
 }
 
+// Sets conv subtab.
 function setConvSubtab(tabName) {
   activeConvSubtab = tabName;
   const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;

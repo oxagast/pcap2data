@@ -16,6 +16,7 @@ const MAX_PGP_PREVIEW_LENGTH = 400;
 const threadName = "Crypt";
 const MAX_DECRYPT_FAILURE_MESSAGES = 8;
 
+// Creates crypt panel.
 function createCryptPanel({
   constants,
   getCapturedPackets,

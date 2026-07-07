@@ -1,6 +1,7 @@
 const SUMMARY_LOADING_MARKUP =
   '<span id="loaderdots" class="loading" role="status" aria-live="polite">Loading</span>';
 
+// Creates summary panel.
 function createSummaryPanel({
   documentRef,
   getJsonCapture,

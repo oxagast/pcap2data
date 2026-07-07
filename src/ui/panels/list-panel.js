@@ -3,6 +3,7 @@ const threadName = "List";
 const LIST_COLUMN_MIN_WIDTH = 48;
 const LIST_COLUMN_MAX_WIDTH = 640;
 
+// Returns whether unknown like protocol.
 function isUnknownLikeProtocol(value) {
   if (value === null || value === undefined) return true;
   const normalized = String(value).trim().toLowerCase();
@@ -17,6 +18,7 @@ function isUnknownLikeProtocol(value) {
   );
 }
 
+// Returns whether protocol like field name.
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -26,6 +28,7 @@ function isProtocolLikeFieldName(fieldName, fieldValue) {
   return true;
 }
 
+// Collects decoded protocol names.
 function collectDecodedProtocolNames(packetInfo) {
   const decodedNames = new Set();
   const packetDecodedValues = [
@@ -60,6 +63,7 @@ function collectDecodedProtocolNames(packetInfo) {
   return [...decodedNames];
 }
 
+// Handles infer application protocol.
 function inferApplicationProtocol(packetInfo, extraInfo) {
   const packetProtocol = String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").trim().toLowerCase();
   if (packetProtocol === "undecodable") {
@@ -128,18 +132,21 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
   return "Unknown protocol";
 }
 
+// Returns packet payload length.
 function getPacketPayloadLength(packetInfo) {
   const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
   return Math.floor(payloadLength);
 }
 
+// Handles clamp column width.
 function clampColumnWidth(width) {
   const parsedWidth = Number.parseInt(String(width), 10);
   if (!Number.isFinite(parsedWidth)) return null;
   return Math.max(LIST_COLUMN_MIN_WIDTH, Math.min(LIST_COLUMN_MAX_WIDTH, parsedWidth));
 }
 
+// Creates list panel.
 function createListPanel({
   constants,
   getJsonCapture,

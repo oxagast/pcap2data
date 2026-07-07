@@ -14,6 +14,7 @@ function formatSavedAt(iso) {
   }
 }
 
+// Initializes session picker.
 function initializeSessionPicker({
   sessionsapi,
   documentRef,

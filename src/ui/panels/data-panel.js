@@ -1,6 +1,7 @@
 
 const threadName = "Data";
 
+// Creates data panel.
 function createDataPanel(options) {
   const {
     constants,

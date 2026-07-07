@@ -51,6 +51,7 @@ let lastStatsMapProjectionCalibration = null;
 let statsBasemapSvgSourceCache = null;
 const statsBasemapSvgThemeCache = new Map();
 
+// Sets inline svg style property.
 function setInlineSvgStyleProperty(styleText, propertyName, propertyValue) {
   const declarations = String(styleText || "")
     .split(";")
@@ -61,6 +62,7 @@ function setInlineSvgStyleProperty(styleText, propertyName, propertyValue) {
   return declarations.join(";");
 }
 
+// Handles fetch stats basemap svg source.
 async function fetchStatsBasemapSvgSource() {
   if (typeof statsBasemapSvgSourceCache === "string" && statsBasemapSvgSourceCache.length > 0) {
     return statsBasemapSvgSourceCache;
@@ -74,6 +76,7 @@ async function fetchStatsBasemapSvgSource() {
   return svgText;
 }
 
+// Builds themed stats basemap svg.
 function buildThemedStatsBasemapSvg(svgSource, landFillColor) {
   if (!svgSource || !landFillColor) return svgSource;
 
@@ -95,6 +98,7 @@ function buildThemedStatsBasemapSvg(svgSource, landFillColor) {
   return svgSource;
 }
 
+// Returns themed stats basemap data uri.
 async function getThemedStatsBasemapDataUri(landFillColor) {
   const normalizedFillColor = String(landFillColor || "").trim() || "#cccccc";
   if (statsBasemapSvgThemeCache.has(normalizedFillColor)) {
@@ -112,6 +116,7 @@ async function getThemedStatsBasemapDataUri(landFillColor) {
   }
 }
 
+// Applies themed stats basemap image.
 async function applyThemedStatsBasemapImage(basemapImageEl) {
   if (!basemapImageEl || !window.getComputedStyle) return;
   const rootStyles = window.getComputedStyle(document.documentElement);
@@ -127,12 +132,14 @@ async function applyThemedStatsBasemapImage(basemapImageEl) {
   basemapImageEl.src = WIKIMEDIA_WORLD_MAP_ASSET_PATH;
 }
 
+// Handles clamp projection setting.
 function clampProjectionSetting(value, fallback, minimum, maximum) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return fallback;
   return Math.min(maximum, Math.max(minimum, numericValue));
 }
 
+// Returns whether protocol like field name.
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
   if (!fieldValue || typeof fieldValue !== "object") return false;
@@ -143,11 +150,13 @@ function isProtocolLikeFieldName(fieldName, fieldValue) {
 }
 
 
+// Returns credentials from keystore.
 function getCredentialsFromKeystore() {
 
   return window.keystoreCredsCount;
 }
 
+// Returns top talkers.
 function getTopTalkers(capturedPackets, topN = 5) {
   const talkerCounts = new Map();
 
@@ -176,6 +185,7 @@ function getTopTalkers(capturedPackets, topN = 5) {
     .map(([ip, count]) => ({ ip, count }));
 }
 
+// Returns unique credential list.
 function getUniqueCredentialList() {
   const uniquePasswords = window.keystoreCreds || new Set();
   // mask the passwords for privacy by using only first and last 2 chars and
@@ -195,6 +205,7 @@ function getUniqueCredentialList() {
   return maskedPasswords.sort();
 };
 
+// Parses stats geo coordinate.
 function parseStatsGeoCoordinate(value, min, max) {
   const parsedValue = Number(value);
   if (!Number.isFinite(parsedValue)) return null;
@@ -202,6 +213,7 @@ function parseStatsGeoCoordinate(value, min, max) {
   return parsedValue;
 }
 
+// Returns geo location label.
 function getGeoLocationLabel(locationData, fallbackLabel) {
   const city = normalizeStatsTextValue(locationData?.["City"]);
   const country = normalizeStatsTextValue(locationData?.["Country"]);
@@ -209,6 +221,7 @@ function getGeoLocationLabel(locationData, fallbackLabel) {
   return country || city || fallbackLabel || "Unknown";
 }
 
+// Collects internet location point.
 function collectInternetLocationPoint(locationData, fallbackLabel, ipAddress) {
   if (!locationData || typeof locationData !== "object") return null;
 
@@ -231,6 +244,7 @@ function collectInternetLocationPoint(locationData, fallbackLabel, ipAddress) {
   };
 }
 
+// Builds location traffic query from point.
 function buildLocationTrafficQueryFromPoint(locationPoint) {
   const city = normalizeStatsTextValue(locationPoint?.city);
   const country = normalizeStatsTextValue(locationPoint?.country);
@@ -262,6 +276,7 @@ function buildLocationTrafficQueryFromPoint(locationPoint) {
     .join(" || ");
 }
 
+// Handles project geo point.
 function projectGeoPoint(
   latitude,
   longitude,
@@ -303,6 +318,7 @@ function projectGeoPoint(
   };
 }
 
+// Returns projection calibration.
 function getProjectionCalibration(settingsGetter) {
   const debugSettings = settingsGetter?.()?.debug || {};
   const calibration = {
@@ -335,6 +351,7 @@ function getProjectionCalibration(settingsGetter) {
   return calibration;
 }
 
+// Returns projection calibration lock state.
 function getProjectionCalibrationLockState(settingsGetter) {
   const debugSettings = settingsGetter?.()?.debug || {};
   if (typeof debugSettings.mapProjectionCalibrationLocked === "boolean") {
@@ -343,6 +360,7 @@ function getProjectionCalibrationLockState(settingsGetter) {
   return true;
 }
 
+// Parses theme rgb value.
 function parseThemeRgbValue(colorValue) {
   const normalizedColor = typeof colorValue === "string" ? colorValue.trim() : "";
   if (!normalizedColor) return null;
@@ -372,6 +390,7 @@ function parseThemeRgbValue(colorValue) {
   };
 }
 
+// Returns stats heatmap theme rgb.
 function getStatsHeatmapThemeRgb() {
   const rootStyles = window.getComputedStyle(document.documentElement);
   return (
@@ -381,6 +400,7 @@ function getStatsHeatmapThemeRgb() {
   );
 }
 
+// Builds stats heatmap gradient.
 function buildStatsHeatmapGradient(themeRgb) {
   if (!themeRgb) {
     return {
@@ -401,28 +421,33 @@ function buildStatsHeatmapGradient(themeRgb) {
   };
 }
 
+// Returns heatmap display value.
 function getHeatmapDisplayValue(rawValue, intensityScale = 1) {
   const numericValue = Math.max(1, Number(rawValue) || 1);
   return Math.max(1, Math.round(Math.sqrt(numericValue) * 10 * intensityScale));
 }
 
+// Handles clamp heatmap percent.
 function clampHeatmapPercent(value, fallback) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return fallback;
   return Math.min(200, Math.max(40, Math.round(numericValue)));
 }
 
+// Handles clamp heatmap map zoom percent.
 function clampHeatmapMapZoomPercent(value, fallback = DEFAULT_HEATMAP_MAP_ZOOM) {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue)) return fallback;
   return Math.min(MAX_HEATMAP_MAP_ZOOM, Math.max(MIN_HEATMAP_MAP_ZOOM, Math.round(numericValue)));
 }
 
+// Handles smoothstep.
 function smoothstep(value) {
   const x = Math.min(1, Math.max(0, Number(value) || 0));
   return x * x * (3 - 2 * x);
 }
 
+// Returns selection zoom percent from area.
 function getSelectionZoomPercentFromArea(selectionRect, bounds) {
   const selectionArea = Math.max(1, selectionRect.width * selectionRect.height);
   const boundsArea = Math.max(1, bounds.width * bounds.height);
@@ -464,6 +489,7 @@ function getSelectionZoomPercentFromArea(selectionRect, bounds) {
   return clampHeatmapMapZoomPercent(zoomPercent, HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT);
 }
 
+// Builds heatmap render config.
 function buildHeatmapRenderConfig(width, height, controls = {}) {
   const intensityPercent = clampHeatmapPercent(
     controls.intensityPercent,
@@ -500,6 +526,7 @@ function buildHeatmapRenderConfig(width, height, controls = {}) {
   };
 }
 
+// Returns heatmap map bounds.
 function getHeatmapMapBounds(containerWidth, containerHeight) {
   if (!Number.isFinite(containerWidth) || !Number.isFinite(containerHeight)) {
     return {
@@ -532,6 +559,7 @@ function getHeatmapMapBounds(containerWidth, containerHeight) {
   };
 }
 
+// Applies heatmap layer bounds.
 function applyHeatmapLayerBounds(layerEl, bounds) {
   if (!layerEl || !bounds) return;
   layerEl.style.left = `${bounds.left}px`;
@@ -540,6 +568,7 @@ function applyHeatmapLayerBounds(layerEl, bounds) {
   layerEl.style.height = `${bounds.height}px`;
 }
 
+// Returns heatmap view transform.
 function getHeatmapViewTransform(bounds, viewState = {}) {
   const zoomPercent = clampHeatmapMapZoomPercent(viewState.zoomPercent, DEFAULT_HEATMAP_MAP_ZOOM);
   const scale = zoomPercent / 100;
@@ -566,6 +595,7 @@ function getHeatmapViewTransform(bounds, viewState = {}) {
   };
 }
 
+// Handles convert viewport rect to map rect.
 function convertViewportRectToMapRect(bounds, selectionRect, viewState = {}) {
   const transform = getHeatmapViewTransform(bounds, viewState);
   const scale = Math.max(0.0001, transform.scale);
@@ -588,6 +618,7 @@ function convertViewportRectToMapRect(bounds, selectionRect, viewState = {}) {
   };
 }
 
+// Applies heatmap layer zoom.
 function applyHeatmapLayerZoom(layerEl, bounds, viewState = {}) {
   if (!layerEl) return;
   const transform = getHeatmapViewTransform(
@@ -602,6 +633,7 @@ function applyHeatmapLayerZoom(layerEl, bounds, viewState = {}) {
   layerEl.style.transform = `translate(${transform.translateX.toFixed(2)}px, ${transform.translateY.toFixed(2)}px) scale(${transform.scale.toFixed(3)})`;
 }
 
+// Returns heatmap focus coordinates.
 function getHeatmapFocusCoordinates(viewState = {}) {
   const focusX = Math.min(1, Math.max(0, Number(viewState.focusX) || 0.5));
   const focusY = Math.min(1, Math.max(0, Number(viewState.focusY) || 0.5));
@@ -611,12 +643,14 @@ function getHeatmapFocusCoordinates(viewState = {}) {
   };
 }
 
+// Formats heatmap coordinate.
 function formatHeatmapCoordinate(value, positiveSuffix, negativeSuffix) {
   const absoluteValue = Math.abs(Number(value) || 0);
   const suffix = value >= 0 ? positiveSuffix : negativeSuffix;
   return `${absoluteValue.toFixed(2)}${suffix}`;
 }
 
+// Applies heatmap grid density.
 function applyHeatmapGridDensity(gridLayerEl, viewState = {}) {
   if (!gridLayerEl) return;
   const zoomPercent = clampHeatmapMapZoomPercent(
@@ -637,6 +671,7 @@ function applyHeatmapGridDensity(gridLayerEl, viewState = {}) {
   gridLayerEl.style.setProperty("--stats-heatmap-grid-cell-size-y", `${cellSizeY.toFixed(2)}px`);
 }
 
+// Renders stats heatmap points.
 function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb, renderConfig) {
   if (!pointsMountEl) return;
   pointsMountEl.replaceChildren();
@@ -679,12 +714,14 @@ function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb
   pointsMountEl.appendChild(fragment);
 }
 
+// Returns packet payload length.
 function getPacketPayloadLength(packetInfo) {
   const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   if (!Number.isFinite(payloadLength) || payloadLength <= 0) return 0;
   return payloadLength;
 }
 
+// Returns capture packet list.
 function getCapturePacketList(capturedPackets) {
   const packetList = [];
   if (!capturedPackets || !capturedPackets["host"]) return packetList;
@@ -696,6 +733,7 @@ function getCapturePacketList(capturedPackets) {
   return packetList;
 }
 
+// Builds heatmap stats from packet list.
 function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_PACKETS) {
   const heatmapPointsByCoordinate = new Map();
   const internetHosts = new Set();
@@ -779,6 +817,7 @@ function buildHeatmapStatsFromPacketList(packetList, valueMode = HEATMAP_METRIC_
   };
 }
 
+// Handles highlight heatmap point.
 function highlightHeatmapPoint(pointsMountEl, pointKey) {
   if (!pointsMountEl) return;
   const pointEls = pointsMountEl.querySelectorAll(".stats-heatmap-point");
@@ -790,6 +829,7 @@ function highlightHeatmapPoint(pointsMountEl, pointKey) {
   }
 }
 
+// Renders stats heatmap.
 function renderStatsHeatmap(
   mapContainerEl,
   basemapFrameEl,
@@ -873,6 +913,7 @@ function renderStatsHeatmap(
   );
 }
 
+// Creates stats heatmap section.
 function createStatsHeatmapSection({
   documentRef,
   stats,
@@ -2006,6 +2047,7 @@ function createStatsHeatmapSection({
   };
 }
 
+// Collects packet decoded protocol names.
 function collectPacketDecodedProtocolNames(packetInfo) {
   const decodedNames = new Set();
 
@@ -2043,6 +2085,7 @@ function collectPacketDecodedProtocolNames(packetInfo) {
   return [...decodedNames];
 }
 
+// Normalizes stats text value.
 function normalizeStatsTextValue(value, options = {}) {
   if (value === null || value === undefined) return null;
 
@@ -2057,6 +2100,7 @@ function normalizeStatsTextValue(value, options = {}) {
   return normalized ? normalized : null;
 }
 
+// Normalizes stats port value.
 function normalizeStatsPortValue(value) {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -2065,6 +2109,7 @@ function normalizeStatsPortValue(value) {
   return Number(normalizedText);
 }
 
+// Parses stats packet timestamp ms.
 function parseStatsPacketTimestampMs(packet) {
   const packetTimestamp = packet?.["packet.info"]?.["packet.timestamp"] ?? packet?.["packet.info"]?.["Packet Timestamp"];
   if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
@@ -2074,16 +2119,19 @@ function parseStatsPacketTimestampMs(packet) {
   return Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
 }
 
+// Parses stats packet processed number.
 function parseStatsPacketProcessedNumber(packet) {
   const processedRaw = Number(packet?.["packet.info"]?.["packet.processed"] ?? packet?.["packet.info"]?.["Packet Processed"]);
   return Number.isFinite(processedRaw) ? processedRaw : null;
 }
 
+// Parses stats packet index number.
 function parseStatsPacketIndexNumber(packet) {
   const packetIndexRaw = Number(packet?.["packet.info"]?.["index"] ?? packet?.["packet.info"]?.["Index"]);
   return Number.isFinite(packetIndexRaw) ? packetIndexRaw : null;
 }
 
+// Handles compare stats packets chronologically.
 function compareStatsPacketsChronologically(
   leftPacket,
   rightPacket,
@@ -2117,6 +2165,7 @@ function compareStatsPacketsChronologically(
   return leftFallbackOrder - rightFallbackOrder;
 }
 
+// Parses stats tcp sequence number.
 function parseStatsTcpSequenceNumber(transportData) {
   const sequenceCandidates = [
     transportData?.["TCP Sequence Number"],
@@ -2131,6 +2180,7 @@ function parseStatsTcpSequenceNumber(transportData) {
   return null;
 }
 
+// Returns stats tcp segment length.
 function getStatsTcpSegmentLength(packetInfo, transportData) {
   const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
@@ -2143,6 +2193,7 @@ function getStatsTcpSegmentLength(packetInfo, transportData) {
   return payloadLen + controlByteLength;
 }
 
+// Handles merge stats sequence range.
 function mergeStatsSequenceRange(ranges, start, end) {
   if (!Array.isArray(ranges) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
     return;
@@ -2169,6 +2220,7 @@ function mergeStatsSequenceRange(ranges, start, end) {
   ranges.push(...merged);
 }
 
+// Returns stats sequence range overlap length.
 function getStatsSequenceRangeOverlapLength(ranges, start, end) {
   if (!Array.isArray(ranges) || end <= start) return 0;
   let overlapLength = 0;
@@ -2184,6 +2236,7 @@ function getStatsSequenceRangeOverlapLength(ranges, start, end) {
   return overlapLength;
 }
 
+// Computes tcp stream anomaly counts.
 function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
   let retransmissionCount = 0;
   let outOfOrderCount = 0;
@@ -2255,6 +2308,7 @@ function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
   };
 }
 
+// Builds capture stats.
 function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const protocols = new Set();
   const networkProtocols = new Set();
@@ -2545,6 +2599,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   };
 }
 
+// Handles make stats section.
 function makeStatsSection({
   documentRef,
   title,
@@ -2611,6 +2666,7 @@ function makeStatsSection({
   return section;
 }
 
+// Handles total traffic bytes.
 function totalTrafficBytes(capturedPackets) {
   let totalBytes = 0;
   for (const host of Object.keys(capturedPackets["host"] || {})) {
@@ -2633,6 +2689,7 @@ function totalTrafficBytes(capturedPackets) {
 
 
 
+// Creates stats panel.
 function createStatsPanel(options) {
   const {
     keystorePanel,

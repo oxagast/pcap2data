@@ -1,3 +1,4 @@
+// Shows install screen.
 function showInstallScreen(installInfo, documentRef) {
   const screen = documentRef.getElementById("install-screen");
   if (!screen) return;
@@ -31,6 +32,7 @@ function showInstallScreen(installInfo, documentRef) {
   screen.style.display = "flex";
 }
 
+// Initializes install screen.
 function initializeInstallScreen({ installapi, documentRef }) {
   if (installapi) {
     installapi.checkFirstRun().then((installInfo) => {

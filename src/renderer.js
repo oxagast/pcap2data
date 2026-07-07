@@ -60,6 +60,7 @@ window.addEventListener("unhandledrejection", (event) => {
     console.error("Unhandled promise rejection in renderer:", message);
 });
 
+// Handles bootstrap renderer.
 async function bootstrapRenderer() {
     try {
         await import('./assets/css/style.css');

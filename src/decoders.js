@@ -9,6 +9,7 @@ function dotField(data, dotKey, legacyKey, fallback = '—') {
   return value === undefined || value === null || value === '' ? fallback : value;
 }
 
+// Creates table.
 function createTable(data, headers, containerId) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -42,6 +43,7 @@ function createTable(data, headers, containerId) {
   container.appendChild(fragment);
 }
 
+// Renders dns table.
 function renderDnsTable(transportData) {
   const dnsData = transportData['DNS'];
   if (!dnsData) return;
@@ -65,6 +67,7 @@ function renderDnsTable(transportData) {
   createTable(dnsRows, ['DNS Field', 'Value'], 'sidedatatable');
 }
 
+// Renders icmp table.
 function renderIcmpTable(protocol, transportData) {
   if (protocol !== 'ICMP') return;
   const icmpRows = [
@@ -76,6 +79,7 @@ function renderIcmpTable(protocol, transportData) {
   createTable(icmpRows, ['ICMP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders igmp table.
 function renderIgmpTable(protocol, transportData) {
   if (protocol !== 'IGMP') return;
   const igmpRows = [
@@ -91,6 +95,7 @@ function renderIgmpTable(protocol, transportData) {
   createTable(igmpRows, ['IGMP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders arp table.
 function renderArpTable(protocol, transportData) {
   if (protocol !== 'ARP' && protocol !== 'RARP') return;
   const arpRows = [
@@ -106,6 +111,7 @@ function renderArpTable(protocol, transportData) {
   createTable(arpRows, [`${protocol} Field`, 'Value'], 'sidedatatable');
 }
 
+// Renders link control table.
 function renderLinkControlTable(packetInfoData) {
   const linkData = packetInfoData['Link Control'];
   if (!linkData) return;
@@ -133,6 +139,7 @@ function renderLinkControlTable(packetInfoData) {
   createTable(linkRows, ['WAN Field', 'Value'], 'sidedatatable');
 }
 
+// Renders snmp table.
 function renderSnmpTable(transportData) {
   const snmpData = transportData['SNMP'];
   if (!snmpData) return;
@@ -144,6 +151,7 @@ function renderSnmpTable(transportData) {
   createTable(snmpRows, ['SNMP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders dhcp table.
 function renderDhcpTable(transportData) {
   const dhcpData = transportData['DHCP'];
   if (!dhcpData) return;
@@ -157,6 +165,7 @@ function renderDhcpTable(transportData) {
   createTable(dhcpRows, ['DHCP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders ntp table.
 function renderNtpTable(transportData) {
   const ntpData = transportData['NTP'];
   if (!ntpData) return;
@@ -170,6 +179,7 @@ function renderNtpTable(transportData) {
   createTable(ntpRows, ['NTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders sip table.
 function renderSipTable(transportData) {
   const sipData = transportData['SIP'];
   if (!sipData) return;
@@ -192,6 +202,7 @@ function renderSipTable(transportData) {
   createTable(sipRows, ['SIP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders http table.
 function renderHttpTable(transportData) {
   const httpData = transportData['HTTP'];
   if (!httpData) return;
@@ -233,6 +244,7 @@ function renderHttpTable(transportData) {
   createTable(httpRows, ['HTTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders ftp table.
 function renderFtpTable(transportData) {
   const ftpData = transportData['FTP'];
   if (!ftpData) return;
@@ -251,6 +263,7 @@ function renderFtpTable(transportData) {
   createTable(ftpRows, ['FTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders smtp table.
 function renderSmtpTable(transportData) {
   const smtpData = transportData['SMTP'];
   if (!smtpData) return;
@@ -269,6 +282,7 @@ function renderSmtpTable(transportData) {
   createTable(smtpRows, ['SMTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders pop3 table.
 function renderPop3Table(transportData) {
   const pop3Data = transportData['POP3'];
   if (!pop3Data) return;
@@ -287,6 +301,7 @@ function renderPop3Table(transportData) {
   createTable(pop3Rows, ['POP3 Field', 'Value'], 'sidedatatable');
 }
 
+// Renders imap table.
 function renderImapTable(transportData) {
   const imapData = transportData['IMAP'];
   if (!imapData) return;
@@ -312,6 +327,7 @@ function renderImapTable(transportData) {
   createTable(imapRows, ['IMAP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders telnet table.
 function renderTelnetTable(transportData) {
   const telnetData = transportData['Telnet'];
   if (!telnetData) return;
@@ -323,6 +339,7 @@ function renderTelnetTable(transportData) {
   createTable(telnetRows, ['Telnet Field', 'Value'], 'sidedatatable');
 }
 
+// Renders irc table.
 function renderIrcTable(transportData) {
   const ircData = transportData['IRC'];
   if (!ircData) return;
@@ -335,6 +352,7 @@ function renderIrcTable(transportData) {
   createTable(ircRows, ['IRC Field', 'Value'], 'sidedatatable');
 }
 
+// Renders mtp table.
 function renderMtpTable(transportData) {
   const mtpData = transportData['MTP'];
   if (!mtpData) return;
@@ -347,6 +365,7 @@ function renderMtpTable(transportData) {
   createTable(mtpRows, ['MTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders ldap table.
 function renderLdapTable(transportData) {
   const ldapData = transportData['LDAP'];
   if (!ldapData) return;
@@ -357,6 +376,7 @@ function renderLdapTable(transportData) {
   createTable(ldapRows, ['LDAP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders mysql table.
 function renderMysqlTable(transportData) {
   const mysqlData = transportData['MySQL'];
   if (!mysqlData) return;
@@ -383,6 +403,7 @@ function renderMysqlTable(transportData) {
   createTable(mysqlRows, ['MySQL Field', 'Value'], 'sidedatatable');
 }
 
+// Renders postgresql table.
 function renderPostgresqlTable(transportData) {
   const pgData = transportData['PostgreSQL'];
   if (!pgData) return;
@@ -402,6 +423,7 @@ function renderPostgresqlTable(transportData) {
   createTable(pgRows, ['PostgreSQL Field', 'Value'], 'sidedatatable');
 }
 
+// Renders xmpp table.
 function renderXmppTable(transportData) {
   const xmppData = transportData['XMPP'];
   if (!xmppData) return;
@@ -413,6 +435,7 @@ function renderXmppTable(transportData) {
   createTable(xmppRows, ['XMPP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders smb table.
 function renderSmbTable(transportData) {
   const smbData = transportData['SMB'];
   if (!smbData) return;
@@ -425,6 +448,7 @@ function renderSmbTable(transportData) {
   createTable(smbRows, ['SMB Field', 'Value'], 'sidedatatable');
 }
 
+// Renders mqtt table.
 function renderMqttTable(transportData) {
   const mqttData = transportData['MQTT'];
   if (!mqttData) return;
@@ -440,6 +464,7 @@ function renderMqttTable(transportData) {
   createTable(mqttRows, ['MQTT Field', 'Value'], 'sidedatatable');
 }
 
+// Renders rtsp table.
 function renderRtspTable(transportData) {
   const rtspData = transportData['RTSP'];
   if (!rtspData) return;
@@ -466,6 +491,7 @@ function renderRtspTable(transportData) {
   createTable(rtspRows, ['RTSP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders tftp table.
 function renderTftpTable(transportData) {
   const tftpData = transportData['TFTP'];
   if (!tftpData) return;
@@ -492,6 +518,7 @@ function renderTftpTable(transportData) {
   createTable(tftpRows, ['TFTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders bgp table.
 function renderBgpTable(transportData) {
   const bgpData = transportData['BGP'];
   if (!bgpData) return;
@@ -517,6 +544,7 @@ function renderBgpTable(transportData) {
   createTable(bgpRows, ['BGP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders http2 table.
 function renderHttp2Table(transportData) {
   const http2Data = transportData['HTTP2'];
   if (!http2Data) return;
@@ -537,6 +565,7 @@ function renderHttp2Table(transportData) {
   createTable(http2Rows, ['HTTP/2 Field', 'Value'], 'sidedatatable');
 }
 
+// Renders nntp table.
 function renderNntpTable(transportData) {
   const nntpData = transportData['NNTP'];
   if (!nntpData) return;
@@ -555,6 +584,7 @@ function renderNntpTable(transportData) {
   createTable(nntpRows, ['NNTP Field', 'Value'], 'sidedatatable');
 }
 
+// Renders radius table.
 function renderRadiusTable(transportData) {
   const radiusData = transportData['RADIUS'];
   if (!radiusData) return;
@@ -570,6 +600,7 @@ function renderRadiusTable(transportData) {
   createTable(radiusRows, ['RADIUS Field', 'Value'], 'sidedatatable');
 }
 
+// Renders web socket table.
 function renderWebSocketTable(transportData) {
   const wsData = transportData['WebSocket'];
   if (!wsData) return;
@@ -591,6 +622,7 @@ function renderWebSocketTable(transportData) {
   createTable(wsRows, ['WebSocket Field', 'Value'], 'sidedatatable');
 }
 
+// Renders nfs table.
 function renderNfsTable(transportData) {
   const nfsData = transportData['NFS'];
   if (!nfsData) return;
@@ -612,6 +644,7 @@ function renderNfsTable(transportData) {
   createTable(nfsRows, ['NFS/RPC Field', 'Value'], 'sidedatatable');
 }
 
+// Renders kerberos table.
 function renderKerberosTable(transportData) {
   const krbData = transportData['Kerberos'];
   if (!krbData) return;
@@ -624,6 +657,7 @@ function renderKerberosTable(transportData) {
   createTable(krbRows, ['Kerberos Field', 'Value'], 'sidedatatable');
 }
 
+// Renders ssh table.
 function renderSshTable(transportData) {
   const sshData = transportData['SSH'];
   if (!sshData) return;
@@ -650,6 +684,7 @@ function renderSshTable(transportData) {
   createTable(sshRows, ['SSH Field', 'Value'], 'sidedatatable');
 }
 
+// Renders sctp table.
 function renderSctpTable(transportData) {
   const sctpData = transportData;
   if (!sctpData) return;
