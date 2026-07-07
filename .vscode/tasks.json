@@ -19,6 +19,29 @@
 			"problemMatcher": [],
 			"label": "npm: install",
 			"detail": "install dependencies from package"
+		},
+		{
+			"type": "npm",
+			"script": "make",
+			"problemMatcher": [],
+			"label": "npm: make",
+			"detail": "npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make"
+		},
+		{
+			"label": "Run Backend JSON validity test",
+			"type": "shell",
+			"command": ".venv/bin/pytest",
+			"args": [
+				"test/backend-json-test.py"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
 		}
 	]
 }
