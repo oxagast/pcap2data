@@ -63,7 +63,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import unquote_plus
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -172,7 +172,7 @@ except ImportError:
     import scapy
 
 activeRecon = "False"
-numWorkerThreads = (os.cpu_count()//2 or 2)
+numWorkerThreads = 2 * (os.cpu_count() or 1)
 isSSH = False
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.
@@ -960,50 +960,6 @@ def getGeoipInfo(ip, srcOrDst):
     with geoIpCacheLock:
         geoIpCache[geoIpCacheKey] = geoIpResult
     return geoIpResult
-
-
-def buildGeoipLookupResponse(ip, srcOrDst="src"):
-    """
-    Return a normalized GeoIP lookup payload for ad-hoc frontend queries.
-    """
-    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
-    normalizedSide = "dst" if str(srcOrDst).strip().lower() == "dst" else "src"
-    locationData = getGeoipInfo(normalizedIp, normalizedSide)
-    locationStatus = ""
-    if isinstance(locationData, dict):
-        locationStatus = str(locationData.get("Location") or "").strip()
-
-    latitude = None
-    longitude = None
-    if isinstance(locationData, dict):
-        rawLatitude = locationData.get("Latitude")
-        rawLongitude = locationData.get("Longitude")
-        try:
-            latitude = float(rawLatitude) if rawLatitude is not None else None
-        except Exception:
-            latitude = None
-        try:
-            longitude = float(rawLongitude) if rawLongitude is not None else None
-        except Exception:
-            longitude = None
-
-    isLocalnet = locationStatus.lower() == "localnet"
-    isError = locationStatus.lower().startswith("error:")
-    return {
-        "success": not isError,
-        "ip": normalizedIp,
-        "version": 6 if ":" in normalizedIp else 4,
-        "side": normalizedSide,
-        "isLocalnet": isLocalnet,
-        "isError": isError,
-        "location": locationData,
-        "mapPoint": {
-            "latitude": latitude,
-            "longitude": longitude,
-        }
-        if latitude is not None and longitude is not None
-        else None,
-    }
 
 
 def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
@@ -4489,7 +4445,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         transportSection["SMB"] = smbSection
                 # Decode MQTT on TCP ports 1883/8883
                 if streamLabelPort in (1883, 8883) or srcPort in (1883, 8883):
-                    mqttSection = decodeMQTT(rawPayload)
+                    mqttSection = decodeMQTT(rawPayload).argparse
                     if mqttSection is not None:
                         transportSection["MQTT"] = mqttSection
                 # Decode RTSP on TCP port 554
@@ -4736,9 +4692,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.icmp.chksum": icmpChksum,
                     "Wire length": len(p["ICMP"]),
                     "wire.len": len(p["ICMP"]),
-                    "transport.len": len(p["ICMP"]),
-                    "transport.proto": "ICMP",
-                }
+                    }
                 protocolKey = "ICMP"
             elif isIgmp:
                 transportSection = decodeIGMP(p, rawPayload)
@@ -4758,14 +4712,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.proto": "Unknown protocol",
                 }
                 protocolKey = "Undecodable"
-
             packetInfo = {
                 "packet.processed": int(packetIndex),
                 "packet.timestamp": timestamp,
                 "packet.proto": protocolKey,
                 "link.proto": "Ethernet",
-                # Include Ethernet MAC data when at least one IP is local (private),
-                # so that mixed private+internet traffic still exposes the local device's MAC.
                 "Ethernet Frame": {
                     "ether.src.mac.addr": srcMacAddr,
                     "link.src.mac.addr": srcMacAddr,
@@ -4792,17 +4743,34 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "network.ip.len": int(p["IP"].len),
                     "network.proto": "IP",
                 },
+
                 protocolKey: transportSection,
+
                 "Raw data": {
                     "Payload": {
                         "payload.hex": rawPayload.hex(),
                         "payload.ascii": rawPayload.decode(errors="ignore"),
                     },
-                    "Packet": bytes(p).hex(),
-                    "packet.hex": bytes(p).hex(),
-                    "payload.len": len(rawPayload),
-                },
-            }
+                        "Packet": bytes(p).hex(),
+                        "packet.hex": bytes(p).hex(),
+                        "payload.len": len(rawPayload),
+                    },
+                }
+
+            if checkTor:
+                if p["IP"].dst in torNetworkIps:
+                    torInfo = torNetworkIps[p["IP"].dst]
+                    packetInfo["Tor Info"] = {
+                        "tor.nickname": torInfo["nickname"],
+                        "tor.platform": torInfo["platform"],
+                        "tor.exit.node": True,
+                    }
+                else:
+                    packetInfo["Tor Info"] = {
+                        "tor.nickname": None,
+                        "tor.platform": None,
+                        "tor.exit.node": False,
+                    }
             if protocolKey == "IGMP":
                 packetInfo["packet.decoded_protocols"] = ["IGMP"]
             if wanLinkSection is not None:
@@ -4818,6 +4786,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             hostKey = (
                 p["IP"].dst if dstGeoInfo.get("Location") != "Localnet" else p["IP"].src
             )
+
             mergedInfo = joinInfo(
                 outputDir,
                 dstPortStr,
@@ -4851,7 +4820,7 @@ def startThreading():
     handles work-stealing, so threads stay busy even if individual packets take different
     amounts of time (e.g. when active-recon network calls vary in latency).
     """
-    # Always process when called; this function can be invoked from embedded/frozen contexts.
+    # Always process when called; this function can be invoked from embedded/frozen contexts.argparse
     # Process all packets; packetLoop decides which protocols are handled.
     packetIndices = list(range(len(packets)))
 
@@ -5038,6 +5007,7 @@ with additional network and server information.
         epilog="Example usage: \n   python3 snitch.py traffic.pcap -o outputDirPath -s 80 -d 8080 -T 5 -a",
     )
     parser.add_argument("pcap_file", nargs="?", help="The .pcap file to parse.")
+    parser.add_argument("--use-tor-check", type=bool, default=True, help="Check if ip is part of the tor network.")
     parser.add_argument(
         "-o",
         "--output",
@@ -5176,12 +5146,28 @@ def runCaptureFromArgs(runArgs):
     global activeRecon
     global allPacketInfo
     global tcpStreamInitialDstPortMap
+    global checkTor
+    global torJsonData
+    global torNetworkIps
 
     args = runArgs
     verbose = int(getattr(runArgs, "verbose", 0) or 0)
     hostChunkSize = max(1, int(getattr(runArgs, "host_chunk_size", 250) or 250))
     emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
+
+    checkTor = args.use_tor_check
+    if checkTor:
+        torJsonData = requests.get("https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform", timeout=25).json()
+        torNetworkIps = {}
+        for relay in torJsonData["relays"]:
+            for addr in relay["or_addresses"]:
+                ip = addr.rsplit(":", 1)[0]
+                torNetworkIps[ip] = {
+                    "nickname": relay.get("nickname"),
+                    "platform": relay.get("platform")
+                }
+
 
     allPacketInfo = []
     with cachedBannersLock:
@@ -5335,10 +5321,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         return json.loads(rawBody.decode("utf-8"))
 
     def do_GET(self):
-        parsedUrl = urlparse(self.path)
-        queryParams = parse_qs(parsedUrl.query or "", keep_blank_values=False)
-
-        if parsedUrl.path == "/ping":
+        if self.path == "/ping":
             self.sendJson(
                 200,
                 {
@@ -5347,7 +5330,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if parsedUrl.path == "/version":
+        if self.path == "/version":
             self.sendJson(
                 200,
                 {
@@ -5356,52 +5339,6 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     "version": PACKETSNITCH_VERSION,
                 },
             )
-            return
-        if parsedUrl.path == "/geoip":
-            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
-            querySide = str((queryParams.get("side") or ["src"])[0] or "src").strip().lower()
-            if not queryIp:
-                self.sendJson(
-                    400,
-                    {
-                        "success": False,
-                        "error": "Missing ip query parameter",
-                    },
-                )
-                return
-
-            if querySide not in {"src", "dst"}:
-                self.sendJson(
-                    400,
-                    {
-                        "success": False,
-                        "error": "Invalid side query parameter",
-                    },
-                )
-                return
-
-            try:
-                response = buildGeoipLookupResponse(queryIp, querySide)
-            except ValueError:
-                self.sendJson(
-                    400,
-                    {
-                        "success": False,
-                        "error": "Invalid IP address",
-                    },
-                )
-                return
-            except Exception as geoLookupError:
-                self.sendJson(
-                    500,
-                    {
-                        "success": False,
-                        "error": str(geoLookupError),
-                    },
-                )
-                return
-
-            self.sendJson(200, response)
             return
         self.sendJson(
             404,
