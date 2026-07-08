@@ -424,7 +424,7 @@ Frontend LLM behavior now lives in the renderer and Electron main process rather
 - Requests are sent through `window.llmapi.generate(...)` to the Electron main-process `ollama:generate` IPC handler.
 - The main process applies the configured model, optional bearer token, timeout, and `num_predict` token cap before calling the Ollama Node client.
 - Failed requests can be retried automatically according to the configured retry count.
-- LLM-backed features currently include the Summary view, stream-context follow-up summaries, **Explain this data...**, and **Ask PS a question...**.
+- LLM-backed features currently include the Summary view, stream-context follow-up summaries, and the **Explain this Packet...** context-menu submenu with **Explain this data...**, **Ask PS a question...**, and **Summarize this packet...**.
 
 ##### Backend Bridge Modes
 

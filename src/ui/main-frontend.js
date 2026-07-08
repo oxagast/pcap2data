@@ -511,22 +511,51 @@ function getLlmModelSelectElement() {
 // Returns configured ollama models.
 function getConfiguredOllamaModels() {
   if (Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0) {
-    return [...availableOllamaModels];
+    return availableOllamaModels.map((entry) => ({ ...entry }));
   }
-  return [DEFAULT_SETTINGS.llm.ollamaModel];
+  return [{
+    value: DEFAULT_SETTINGS.llm.ollamaModel,
+    label: DEFAULT_SETTINGS.llm.ollamaModel,
+  }];
 }
 
 // Normalizes ollama model entry.
 function normalizeOllamaModelEntry(rawValue) {
-  if (typeof rawValue !== "string") return "";
-  const normalized = rawValue.trim();
-  if (!normalized || normalized.startsWith("#")) return "";
-  return normalized;
+  if (typeof rawValue === "string") {
+    const normalized = rawValue.trim();
+    if (!normalized || normalized.startsWith("#")) return null;
+    return {
+      value: normalized,
+      label: normalized,
+    };
+  }
+
+  if (!rawValue || typeof rawValue !== "object") return null;
+
+  const value =
+    typeof rawValue.value === "string" && rawValue.value.trim()
+      ? rawValue.value.trim()
+      : typeof rawValue.name === "string" && rawValue.name.trim()
+        ? rawValue.name.trim()
+        : typeof rawValue.model === "string" && rawValue.model.trim()
+          ? rawValue.model.trim()
+          : "";
+  if (!value || value.startsWith("#")) return null;
+
+  const label =
+    typeof rawValue.label === "string" && rawValue.label.trim()
+      ? rawValue.label.trim()
+      : value;
+
+  return { value, label };
 }
 
 async function loadAvailableOllamaModels() {
   if (!window.modelsapi || typeof window.modelsapi.getOllamaModels !== "function") {
-    availableOllamaModels = [DEFAULT_SETTINGS.llm.ollamaModel];
+    availableOllamaModels = [{
+      value: DEFAULT_SETTINGS.llm.ollamaModel,
+      label: DEFAULT_SETTINGS.llm.ollamaModel,
+    }];
     renderLlmModelOptions(getCurrentSettings()?.llm?.ollamaModel || DEFAULT_SETTINGS.llm.ollamaModel);
     return availableOllamaModels;
   }
@@ -544,7 +573,10 @@ async function loadAvailableOllamaModels() {
   }
 
   if (availableOllamaModels.length === 0) {
-    availableOllamaModels = [DEFAULT_SETTINGS.llm.ollamaModel];
+    availableOllamaModels = [{
+      value: DEFAULT_SETTINGS.llm.ollamaModel,
+      label: DEFAULT_SETTINGS.llm.ollamaModel,
+    }];
   }
 
   renderLlmModelOptions(getCurrentSettings()?.llm?.ollamaModel || DEFAULT_SETTINGS.llm.ollamaModel);
@@ -553,11 +585,10 @@ async function loadAvailableOllamaModels() {
 
 // Returns ollama model dropdown options.
 function getOllamaModelDropdownOptions() {
-  const options = getConfiguredOllamaModels().map((modelName) => ({
-    value: modelName,
-    label: modelName,
+  return getConfiguredOllamaModels().map((modelEntry) => ({
+    value: modelEntry.value,
+    label: modelEntry.label,
   }));
-  return options;
 }
 
 // Renders llm model options.
@@ -3656,8 +3687,9 @@ function normalizeSummaryMarkdownHeadings(markdownText) {
           return;
         }
 
-        // Clamp all remaining headings to h2/h3 for accessible summary structure.
-        const clampedLevel = hashes.length <= 2 ? 2 : 3;
+        // Clamp all remaining headings to h2/h3/h4 for accessible summary structure.
+        //const clampedLevel = hashes.length <= 2 ? 2 : 3;
+        const clampedLevel = Math.min(Math.max(hashes.length, 2), 4);
         normalizedLines.push(`${indent}${"#".repeat(clampedLevel)}${spacing}${titleText}`);
         return;
       }
@@ -4037,7 +4069,12 @@ function renderNotesList() {
 }
 
 // Handles add note.
-function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
+function addNote(
+  text,
+  color = NOTE_DEFAULT_COLOR,
+  sourceLabel = "manual",
+  editorVisible = true,
+) {
   const normalizedText =
     typeof text === "string" ? text.trim() : String(text || "").trim();
   if (!normalizedText) {
@@ -4047,7 +4084,7 @@ function addNote(text, color = NOTE_DEFAULT_COLOR, sourceLabel = "manual") {
   const noteEntry = createNoteEntry(normalizedText, color);
   notesList.unshift(noteEntry);
   selectedNoteId = noteEntry.id;
-  notesEditorVisible = true;
+  notesEditorVisible = Boolean(editorVisible);
   renderNotesList();
   statusUpdate("Status: Note added");
   writeLogEntry(
@@ -9227,11 +9264,13 @@ const convertContextButtons = {
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
+  llmBranch: getCachedElement("ctx-llm-branch"),
   llmQuestion: getCachedElement("ctx-llm-question"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
   followStreamConvDecompress: getCachedElement("ctx-follow-stream-conv-decompress"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
   llmExplain: getCachedElement("ctx-llm-explain"),
+  llmSummarize: getCachedElement("ctx-llm-summarize"),
 };
 const convertContextSubmenus = {
   copy: getCachedElement("ctx-copy-submenu"),
@@ -9253,6 +9292,7 @@ const convertContextSubmenus = {
   httpFile: getCachedElement("ctx-http-file-submenu"),
   fileCarve: getCachedElement("ctx-file-carve-submenu"),
   followStream: getCachedElement("ctx-follow-stream-submenu"),
+  llm: getCachedElement("ctx-llm-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
@@ -10339,14 +10379,21 @@ function showConvertContextMenu(
   const llmEnabled = isLlmRuntimeEnabled();
   const llmExplainText = (getTrimmedSelectionText() || sourceText || "").trim();
   const hasLlmQuestionAction = llmEnabled && Boolean(activeContextPacket);
+  const hasLlmSummarizeAction = llmEnabled && Boolean(activeContextPacket);
   const hasLlmExplainAction =
     llmEnabled && Boolean(activeContextPacket) && isTextSignificantForLlmExplain(llmExplainText);
+  const hasLlmActions =
+    hasLlmQuestionAction || hasLlmExplainAction || hasLlmSummarizeAction;
   convertContextButtons.llmQuestion.style.display = hasLlmQuestionAction
     ? "block"
     : "none";
   convertContextButtons.llmExplain.style.display = hasLlmExplainAction
     ? "block"
     : "none";
+  convertContextButtons.llmSummarize.style.display = hasLlmSummarizeAction
+    ? "block"
+    : "none";
+  convertContextSubmenus.llm.style.display = hasLlmActions ? "block" : "none";
   if (
     !hasGeneralActions &&
     !hasDataTypeActions &&
@@ -10359,8 +10406,7 @@ function showConvertContextMenu(
     !hasHttpBody &&
     !hasFileCarveActions &&
     !hasFollowStreamActions &&
-    !hasLlmQuestionAction &&
-    !hasLlmExplainAction
+    !hasLlmActions
   ) {
     hideConvertContextMenu();
     return;
@@ -12700,6 +12746,10 @@ function buildPacketContextSummary(packet) {
   return parts.length ? parts.join(", ") : "Packet context unavailable.";
 }
 
+function buildFullPacketJsonContext(packet) {
+  return packet ? JSON.stringify(packet, null, 2) : "No packet context available.";
+}
+
 async function explainContextWithLLM() {
   if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
@@ -12717,8 +12767,7 @@ async function explainContextWithLLM() {
     return;
   }
 
-  //const packetCtx = buildPacketContextSummary(contextPacket);
-  const packetCtx = contextPacket ? JSON.stringify(contextPacket, null, 2) : "No packet context available.";
+  const packetCtx = buildFullPacketJsonContext(contextPacket);
   const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking PacketSnitch to explain selection...");
@@ -12736,7 +12785,12 @@ async function explainContextWithLLM() {
       packetSummary: buildPacketContextSummary(contextPacket),
       selectedText: textToExplain,
     });
-    const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-explain");
+    const didAdd = addNote(
+      noteText,
+      NOTE_DEFAULT_COLOR,
+      "llm-explain",
+      false,
+    );
     if (didAdd) {
       showNotesWorkspace();
       statusUpdate("Status: PacketSnitch's explanation added to Notes.");
@@ -12747,6 +12801,19 @@ async function explainContextWithLLM() {
     statusUpdate(`Status: PacketSnitch's explanation failed: ${errorMessage}`);
     writeLogEntry(`PacketSnitch explain failed: ${errorMessage}`);
   }
+}
+
+function buildLlmPacketSummaryPrompt(contextPacket) {
+  const packetCtx = buildFullPacketJsonContext(contextPacket);
+  return [
+    "You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and wants a concise summary of the packet data.",
+    `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    "Summarize the packet for a network analyst. Identify the main protocol flow, notable headers or payload clues, and anything unusual or security-relevant that stands out. If the packet data is incomplete or ambiguous, say so.",
+    "",
+    "Packet JSON:",
+    packetCtx,
+  ].join("\n");
 }
 
 // Handles request llm question from context menu dialog.
@@ -12850,6 +12917,56 @@ function buildLlmThreadNote({
     .join("\n");
 }
 
+async function summarizeContextPacketWithLLM() {
+  if (!isLlmRuntimeEnabled()) {
+    hideConvertContextMenu();
+    statusUpdate(
+      "Status: PacketSnitch's packet summary is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
+    );
+    return;
+  }
+  const contextPacket = activeContextPacket || getCurrentContextPacket();
+  hideConvertContextMenu();
+  if (!contextPacket) {
+    statusUpdate("Status: No packet context available for PacketSnitch summary.");
+    return;
+  }
+
+  const packetSummary = buildPacketContextSummary(contextPacket);
+  const prompt = buildLlmPacketSummaryPrompt(contextPacket);
+
+  statusUpdate("Status: Asking PacketSnitch to summarize packet data...");
+  writeLogEntry("PacketSnitch packet summary requested for current context packet");
+  try {
+    const response = await callLargeLanguageModelWithRetry(prompt);
+    const summary = response?.response?.trim() || "";
+    if (!summary) {
+      statusUpdate("Status: PacketSnitch returned no packet summary.");
+      return;
+    }
+    const noteText = buildLlmThreadNote({
+      title: "PacketSnitch Packet Summary",
+      responseText: summary,
+      packetSummary,
+    });
+    const didAdd = addNote(
+      noteText,
+      NOTE_DEFAULT_COLOR,
+      "llm-packet-summary",
+      false,
+    );
+    if (didAdd) {
+      showNotesWorkspace();
+      statusUpdate("Status: PacketSnitch packet summary added to Notes.");
+      writeLogEntry(`PacketSnitch packet summary complete (${summary.length} chars)`);
+    }
+  } catch (error) {
+    const errorMessage = error?.message || String(error);
+    statusUpdate(`Status: PacketSnitch packet summary failed: ${errorMessage}`);
+    writeLogEntry(`PacketSnitch packet summary failed: ${errorMessage}`);
+  }
+}
+
 async function askContextQuestionWithLLM() {
   if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
@@ -12888,7 +13005,12 @@ async function askContextQuestionWithLLM() {
       questionText: question,
       selectedText,
     });
-    const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "llm-question");
+    const didAdd = addNote(
+      noteText,
+      NOTE_DEFAULT_COLOR,
+      "llm-question",
+      false,
+    );
     if (didAdd) {
       showNotesWorkspace();
       statusUpdate("Status: PacketSnitch question answer added to Notes.");
@@ -15219,6 +15341,9 @@ convertContextButtons.llmQuestion.addEventListener("click", () => {
 });
 convertContextButtons.llmExplain.addEventListener("click", () => {
   void explainContextWithLLM();
+});
+convertContextButtons.llmSummarize.addEventListener("click", () => {
+  void summarizeContextPacketWithLLM();
 });
 
 // Handle bookmark selection from dropdown

@@ -1404,8 +1404,16 @@ No keystore entries saved.</pre>
         </button>
       </div>
     </div>
-    <button id="ctx-llm-question" role="menuitem">Ask PS a question...</button>
-    <button id="ctx-llm-explain" role="menuitem">Explain this data...</button>
+    <div id="ctx-llm-submenu" class="ctx-submenu">
+      <button id="ctx-llm-branch" class="ctx-branch" type="button">
+        Ask PacketSnitch...
+      </button>
+      <div class="ctx-submenu-panel">
+        <button id="ctx-llm-question" role="menuitem">Ask a question...</button>
+        <button id="ctx-llm-explain" role="menuitem">Explain this data...</button>
+        <button id="ctx-llm-summarize" role="menuitem">Summarize this packet...</button>
+      </div>
+    </div>
     <hr id="convert-context-bottom-divider" class="ctx-divider" />
     <button id="ctx-save-json" role="menuitem">Save Session</button>
   </div>

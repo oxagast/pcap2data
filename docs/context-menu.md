@@ -186,10 +186,12 @@ Shown when at least one carve target is available for the current packet or stre
 
 Shown only when LLM is enabled in Settings and packet context is available.
 
-| Item                          | Description                                                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Ask PS a question...**      | Opens a prompt dialog, then asks the LLM a user-supplied question with packet context and optional selected text. |
-| **Explain this data...**      | Sends selected/context data plus packet context to the LLM and requests a concise analyst-focused explanation.     |
+| Item                                   | Description                                                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Explain this Packet...**             | Opens an LLM submenu for packet-focused actions when packet context is available.                                        |
+| **Explain this Packet > Ask PS a question...** | Opens a prompt dialog, then asks the LLM a user-supplied question with packet context and optional selected text. |
+| **Explain this Packet > Explain this data...** | Sends selected/context data plus packet context to the LLM and requests a concise analyst-focused explanation.     |
+| **Explain this Packet > Summarize this packet...** | Sends the full current packet JSON to the LLM and asks for a concise analyst-focused packet summary.            |
 
 Both actions write results into a new note and switch to the Notes workspace.
 

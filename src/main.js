@@ -209,6 +209,7 @@ let backendShutdownOnQuitComplete = false;
 const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
 const FILTER_LIBRARY_FILE_NAME = "filters.json";
+const MODELS_LIBRARY_FILE_NAME = "models.json";
 const THEMES_DIR_NAME = "themes";
 const THEME_FILE_EXTENSION = ".json";
 const BUNDLED_THEMES_DIR_NAME = "themes";
@@ -595,6 +596,14 @@ function getFilterLibraryFilePath() {
   return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, FILTER_LIBRARY_FILE_NAME);
 }
 
+function getModelsLibraryFilePath() {
+  return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, MODELS_LIBRARY_FILE_NAME);
+}
+
+function getBundledModelsLibraryFilePath() {
+  return path.join(app.getAppPath(), SETTINGS_DIR_NAME, MODELS_LIBRARY_FILE_NAME);
+}
+
 function getThemesDir() {
   return path.join(app.getPath("userData"), THEMES_DIR_NAME);
 }
@@ -971,6 +980,136 @@ async function saveFilterLibraryToDisk(filters) {
     "utf8",
   );
   return normalizedFilters;
+}
+
+function normalizeOllamaModelName(rawValue) {
+  if (typeof rawValue !== "string") return "";
+  const normalized = rawValue.trim();
+  if (!normalized || normalized.startsWith("#")) return "";
+  return normalized;
+}
+
+function normalizeOllamaModelLabel(rawValue, fallbackValue) {
+  if (typeof rawValue !== "string") {
+    return fallbackValue;
+  }
+  const normalized = rawValue.trim();
+  return normalized || fallbackValue;
+}
+
+function normalizeOllamaModelEntry(rawEntry) {
+  if (typeof rawEntry === "string") {
+    const value = normalizeOllamaModelName(rawEntry);
+    return value ? { value, label: value } : null;
+  }
+  if (!rawEntry || typeof rawEntry !== "object") return null;
+
+  const valueCandidates = [
+    rawEntry.name,
+    rawEntry.model,
+    rawEntry.id,
+    rawEntry.value,
+  ];
+
+  for (const candidate of valueCandidates) {
+    const value = normalizeOllamaModelName(candidate);
+    if (value) {
+      return {
+        value,
+        label: normalizeOllamaModelLabel(rawEntry.label, value),
+      };
+    }
+  }
+
+  return null;
+}
+
+function normalizeOllamaModelsLibrary(rawLibrary) {
+  const entries = Array.isArray(rawLibrary)
+    ? rawLibrary
+    : Array.isArray(rawLibrary?.models)
+      ? rawLibrary.models
+      : [];
+  const seen = new Set();
+  const normalized = [];
+
+  for (const entry of entries) {
+    const normalizedEntry = normalizeOllamaModelEntry(entry);
+    if (!normalizedEntry || seen.has(normalizedEntry.value)) continue;
+    seen.add(normalizedEntry.value);
+    normalized.push(normalizedEntry);
+  }
+
+  return normalized;
+}
+
+async function getBundledOllamaModels() {
+  const bundledModelsPath = getBundledModelsLibraryFilePath();
+  try {
+    const rawText = await fs.promises.readFile(bundledModelsPath, "utf8");
+    const parsed = JSON.parse(rawText);
+    const models = normalizeOllamaModelsLibrary(parsed);
+    if (models.length > 0) {
+      return models;
+    }
+  } catch (error) {
+    console.warn("Unable to load bundled models library from config/models.json:", error);
+  }
+
+  const legacyModelsPath = path.join(
+    app.isPackaged ? process.resourcesPath : "src",
+    "data",
+    "models.txt",
+  );
+  try {
+    const modelsData = await fs.promises.readFile(legacyModelsPath, "utf8");
+    return modelsData
+      .split("\n")
+      .map((line) => normalizeOllamaModelEntry(line))
+      .filter(Boolean);
+  } catch (error) {
+    console.warn("Unable to load legacy models.txt fallback:", error);
+    return [];
+  }
+}
+
+async function ensureModelsLibraryFileExists() {
+  const filePath = getModelsLibraryFilePath();
+  try {
+    await fs.promises.access(filePath, fs.constants.F_OK);
+    return filePath;
+  } catch {
+    const defaultModels = await getBundledOllamaModels();
+    const initialPayload = {
+      models: defaultModels.map((entry) => ({
+        name: entry.value,
+        label: entry.label,
+      })),
+    };
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(
+      filePath,
+      JSON.stringify(initialPayload, null, 2) + os.EOL,
+      "utf8",
+    );
+    return filePath;
+  }
+}
+
+async function loadOllamaModelsFromDisk() {
+  const filePath = await ensureModelsLibraryFileExists();
+  try {
+    const rawText = await fs.promises.readFile(filePath, "utf8");
+    const parsed = JSON.parse(rawText);
+    const models = normalizeOllamaModelsLibrary(parsed);
+    if (models.length > 0) {
+      return models;
+    }
+  } catch (error) {
+    console.warn("Failed to load config/models.json; falling back to bundled defaults:", error);
+  }
+
+  return getBundledOllamaModels();
 }
 
 async function upsertSavedFilter(label, query) {
@@ -1708,21 +1847,7 @@ ipcMain.handle("get-ollama-models", async () => {
     return ollamaModelsCache;
   }
 
-  const modelsPath = path.join(
-    app.isPackaged ? process.resourcesPath : "src",
-    "data",
-    "models.txt",
-  );
-  if (!fs.existsSync(modelsPath)) {
-    console.warn(`Models file not found at ${modelsPath}`);
-    return [];
-  }
-
-  const modelsData = fs.readFileSync(modelsPath, "utf8");
-  const models = modelsData
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  const models = await loadOllamaModelsFromDisk();
   ollamaModelsCache = models;
   return models;
 });
