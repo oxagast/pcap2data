@@ -145,7 +145,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - **Bookmark filter**: `bookmark:true` / `bookmark:false` (client-side, composable with backend expressions).
 - **`decoded-proto` alias**: aggregates transport + decoded protocol names including link-control for queries like `decoded-proto:ppp`.
 - Case-insensitive key normalization: spaces and hyphens are interchangeable (e.g. `wire-length` = `wire.len`).
-- Substring matching for vendor, MIME, and DNS name fields.
+- Wildcard glob matching.
 - Filter history tracked per session and accessible from the filter bar.
 - Saved-filter library persisted in user config (`config/filters.json`) with labeled entries merged into the filter history dropdown.
 - Right-click save/remove flow for the current filter query via in-app modal dialog (no native `window.prompt` dependency).
