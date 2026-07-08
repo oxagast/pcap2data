@@ -15,6 +15,8 @@ function createSubnetCalculatorPanel({
     const summaryEl = document.getElementById("subnet-calc-summary");
     const rangeEl = document.getElementById("subnet-calc-range");
     const binaryEl = document.getElementById("subnet-calc-binary");
+    const whoisEl = document.getElementById("subnet-calc-whois");
+    const reputationEl = document.getElementById("subnet-calc-reputation");
     const geoEl = document.getElementById("subnet-calc-geo");
 
     function setPanelStatus(message, isError = false) {
@@ -30,6 +32,15 @@ function createSubnetCalculatorPanel({
         placeholder.className = "data-tools-proto-none";
         placeholder.textContent = message;
         container.appendChild(placeholder);
+    }
+
+    function appendRowValue(container, row) {
+        if (!container) return;
+        if (row?.valueElement instanceof Node) {
+            container.appendChild(row.valueElement);
+            return;
+        }
+        container.textContent = row?.value ?? "";
     }
 
     function renderKeyValueTable(container, title, rows) {
@@ -62,7 +73,7 @@ function createSubnetCalculatorPanel({
             const tdName = document.createElement("td");
             tdName.textContent = row.name;
             const tdValue = document.createElement("td");
-            tdValue.textContent = row.value;
+            appendRowValue(tdValue, row);
             tr.appendChild(tdName);
             tr.appendChild(tdValue);
             table.appendChild(tr);
@@ -596,7 +607,112 @@ function createSubnetCalculatorPanel({
         renderKeyValueTable(summaryEl, "Summary", summaryRows);
         renderKeyValueTable(rangeEl, "Range", rangeRows);
         renderBinaryTable(binaryEl, "Binary Notation", binaryRows);
+        setPlaceholder(whoisEl, "Looking up WHOIS / RDAP data...");
+        setPlaceholder(reputationEl, "Looking up IPSum reputation data...");
         setPlaceholder(geoEl, "Looking up GeoIP data...");
+    }
+
+    function renderIpsumResult(analysis, reputationResult) {
+        if (!reputationEl) return;
+        reputationEl.innerHTML = "";
+        const titleEl = document.createElement("div");
+        titleEl.className = "data-tools-output-label subnet-calc-section-title";
+        titleEl.textContent = "IPSum Threat Intelligence Grade";
+        reputationEl.appendChild(titleEl);
+
+        if (!reputationResult || reputationResult.success === false) {
+            const message = reputationResult?.error || "IP reputation lookup failed.";
+            setPlaceholder(reputationEl, message);
+            return;
+        }
+
+        const gradeBadge = document.createElement("span");
+        const normalizedGrade = String(reputationResult.grade || "Unknown").trim().toUpperCase();
+        gradeBadge.className = `subnet-calc-grade-badge subnet-calc-grade-${normalizedGrade.toLowerCase()}`;
+        gradeBadge.textContent = reputationResult.grade && reputationResult.gradeLabel
+            ? `${reputationResult.grade} ${reputationResult.gradeLabel}`
+            : String(reputationResult.gradeLabel || "Unknown");
+
+        const rows = [
+            { name: "Lookup Target", value: reputationResult.ip || analysis.lookupTargetIp },
+            {
+                name: "Grade",
+                valueElement: gradeBadge,
+            },
+            {
+                name: "Thread Intelligence Hits",
+                value: Number.isFinite(Number(reputationResult.hitCount))
+                    ? String(reputationResult.hitCount)
+                    : "Unknown",
+            },
+            { name: "Listed", value: reputationResult.listed ? "Yes" : "No" },
+            { name: "Dataset Fetch Date", value: String(reputationResult.fetchedDate || "Unknown") },
+        ];
+
+        if (reputationResult.supported === false) {
+            rows.push({
+                name: "Status",
+                value: String(reputationResult.message || "Unsupported"),
+            });
+        }
+        if (reputationResult.isLocalnet) {
+            rows.push({
+                name: "Status",
+                value: "Local / special-use IPs are not part of internet threat lists.",
+            });
+        }
+
+        renderKeyValueTable(reputationEl, "IPSum Thread Intelligence Grade", rows);
+
+        const actionRow = document.createElement("div");
+        actionRow.className = "data-tools-actions subnet-calc-map-actions";
+        const sourceButton = document.createElement("button");
+        sourceButton.type = "button";
+        sourceButton.textContent = "Open IPSum project";
+        sourceButton.addEventListener("click", async () => {
+            const openableUrl = String(
+                reputationResult.projectUrl || "https://github.com/stamparm/ipsum",
+            );
+            if (typeof window.browserapi?.openExternalUrl !== "function") {
+                return;
+            }
+            await window.browserapi.openExternalUrl(openableUrl);
+        });
+        actionRow.appendChild(sourceButton);
+        reputationEl.appendChild(actionRow);
+    }
+
+    function renderWhoisResult(analysis, whoisResult) {
+        if (!whoisEl) return;
+        whoisEl.innerHTML = "";
+        const titleEl = document.createElement("div");
+        titleEl.className = "data-tools-output-label subnet-calc-section-title";
+        titleEl.textContent = "WHOIS / RDAP";
+        whoisEl.appendChild(titleEl);
+
+        if (!whoisResult || whoisResult.success === false) {
+            const message = whoisResult?.error || "WHOIS lookup failed.";
+            setPlaceholder(whoisEl, message);
+            return;
+        }
+
+        const whois = whoisResult.whois && typeof whoisResult.whois === "object"
+            ? whoisResult.whois
+            : {};
+        const rows = [
+            { name: "Lookup Target", value: whoisResult.ip || analysis.lookupTargetIp },
+            { name: "ISP", value: String(whois.isp || "Unknown") },
+            { name: "NetName", value: String(whois.netName || "Unknown") },
+            { name: "Net Type", value: String(whois.netType || "Unknown") },
+            { name: "Parent", value: String(whois.parent || "Unknown") },
+            { name: "Registration Date", value: String(whois.registrationDate || "Unknown") },
+            { name: "Updated Date", value: String(whois.updatedDate || "Unknown") },
+            { name: "Range Start", value: String(whois.rangeStart || "Unknown") },
+            { name: "Range End", value: String(whois.rangeEnd || "Unknown") },
+            { name: "CIDR", value: String(whois.cidr || "Unknown") },
+            { name: "RIR", value: String(whois.rirHost || "Unknown") },
+        ];
+        renderKeyValueTable(whoisEl, "WHOIS / RDAP", rows);
     }
 
     function renderGeoipResult(analysis, geoResult) {
@@ -650,8 +766,8 @@ function createSubnetCalculatorPanel({
         }
     }
 
-    async function lookupGeoip(analysis) {
-        const currentToken = ++lookupRequestToken;
+    async function lookupGeoip(analysis, requestToken) {
+        const currentToken = requestToken;
         if (!window.snitchapi || typeof window.snitchapi.lookupGeoip !== "function") {
             renderGeoipResult(analysis, {
                 success: false,
@@ -671,7 +787,6 @@ function createSubnetCalculatorPanel({
                 setPanelStatus(result.error || "GeoIP lookup failed.", true);
                 return;
             }
-            setPanelStatus(`Analyzed ${analysis.normalizedInput}`);
         } catch (error) {
             if (currentToken !== lookupRequestToken) return;
             renderGeoipResult(analysis, {
@@ -682,14 +797,79 @@ function createSubnetCalculatorPanel({
         }
     }
 
+    async function lookupWhois(analysis, requestToken) {
+        const currentToken = requestToken;
+        if (!window.snitchapi || typeof window.snitchapi.lookupWhois !== "function") {
+            renderWhoisResult(analysis, {
+                success: false,
+                error: "Backend WHOIS lookup API is unavailable.",
+            });
+            return;
+        }
+
+        try {
+            const result = await window.snitchapi.lookupWhois(analysis.lookupTargetIp, {
+                backendOptions: getBackendTransportOptions(),
+            });
+            if (currentToken !== lookupRequestToken) return;
+            renderWhoisResult(analysis, result);
+            if (result?.success === false) {
+                setPanelStatus(result.error || "WHOIS lookup failed.", true);
+            }
+        } catch (error) {
+            if (currentToken !== lookupRequestToken) return;
+            renderWhoisResult(analysis, {
+                success: false,
+                error: error?.message || "WHOIS lookup failed.",
+            });
+            setPanelStatus(error?.message || "WHOIS lookup failed.", true);
+        }
+    }
+
+    async function lookupIpsum(analysis, requestToken) {
+        const currentToken = requestToken;
+        if (!window.snitchapi || typeof window.snitchapi.lookupIpsum !== "function") {
+            renderIpsumResult(analysis, {
+                success: false,
+                error: "Backend IPSum lookup API is unavailable.",
+            });
+            return;
+        }
+
+        try {
+            const result = await window.snitchapi.lookupIpsum(analysis.lookupTargetIp, {
+                backendOptions: getBackendTransportOptions(),
+            });
+            if (currentToken !== lookupRequestToken) return;
+            renderIpsumResult(analysis, result);
+            if (result?.success === false) {
+                setPanelStatus(result.error || "IP reputation lookup failed.", true);
+            }
+        } catch (error) {
+            if (currentToken !== lookupRequestToken) return;
+            renderIpsumResult(analysis, {
+                success: false,
+                error: error?.message || "IP reputation lookup failed.",
+            });
+            setPanelStatus(error?.message || "IP reputation lookup failed.", true);
+        }
+    }
+
     async function analyzeCurrentInput() {
         try {
             const analysis = analyzeSubnetInput(inputEl?.value || "");
+            const requestToken = ++lookupRequestToken;
             renderAnalysisResults(analysis);
             setPanelStatus(`Analyzing ${analysis.normalizedInput}...`);
             statusUpdate(`Status: Calculated subnet data for ${analysis.address}`);
             writeLogEntry(`Conv subnet calculator analyzed ${JSON.stringify(analysis.normalizedInput)}`);
-            await lookupGeoip(analysis);
+            await Promise.all([
+                lookupGeoip(analysis, requestToken),
+                lookupWhois(analysis, requestToken),
+                lookupIpsum(analysis, requestToken),
+            ]);
+            if (requestToken !== lookupRequestToken) return;
+            setPanelStatus(`Analyzed ${analysis.normalizedInput}`);
         } catch (error) {
             renderEmptyState();
             const message = error?.message || String(error);
@@ -727,6 +907,8 @@ function createSubnetCalculatorPanel({
         setPlaceholder(summaryEl, "Enter an IP address, host/prefix, or subnet to inspect.");
         setPlaceholder(rangeEl, "Range details will appear here.");
         setPlaceholder(binaryEl, "Binary notation will appear here.");
+        setPlaceholder(whoisEl, "WHOIS / RDAP data will appear here.");
+        setPlaceholder(reputationEl, "IPSum reputation data will appear here.");
         setPlaceholder(geoEl, "GeoIP data will appear here.");
     }
 

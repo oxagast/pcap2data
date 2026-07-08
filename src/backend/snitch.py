@@ -202,6 +202,12 @@ macVendorMap: dict = {}
 geoIpReader = None
 geoIpCache: dict = {}
 geoIpCacheLock = threading.Lock()
+ipsumCacheLock = threading.Lock()
+ipsumDatasetByIp: dict = {}
+ipsumCacheDate = ""
+PACKETSNITCH_USERDATA_PATH = str(os.environ.get("PACKETSNITCH_USERDATA_PATH", "")).strip()
+IPSUM_SOURCE_URL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
+IPSUM_PROJECT_URL = "https://github.com/stamparm/ipsum"
 
 # --- Banner cache: (ip, port) -> banner dict, avoids redundant socket probes ---
 cachedBanners: dict = {}
@@ -1003,6 +1009,393 @@ def buildGeoipLookupResponse(ip, srcOrDst="src"):
         }
         if latitude is not None and longitude is not None
         else None,
+    }
+
+
+def _extractRdapVcardField(vcardEntries, fieldName):
+    if not isinstance(vcardEntries, list):
+        return ""
+    targetKey = str(fieldName or "").strip().lower()
+    for entry in vcardEntries:
+        if not isinstance(entry, list) or len(entry) < 4:
+            continue
+        key = str(entry[0] or "").strip().lower()
+        if key != targetKey:
+            continue
+        value = entry[3]
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value if item is not None)
+        return str(value or "").strip()
+    return ""
+
+
+def _extractRdapEntityDisplayName(entity):
+    if not isinstance(entity, dict):
+        return ""
+    vcardArray = entity.get("vcardArray")
+    vcardEntries = vcardArray[1] if isinstance(vcardArray, list) and len(vcardArray) > 1 else []
+    for fieldName in ("fn", "org", "name"):
+        value = _extractRdapVcardField(vcardEntries, fieldName)
+        if value:
+            return value
+    handle = str(entity.get("handle") or "").strip()
+    return handle
+
+
+def _extractRdapBestIspName(entities):
+    if not isinstance(entities, list):
+        return ""
+
+    preferredRoles = [
+        "registrant",
+        "technical",
+        "administrative",
+        "abuse",
+    ]
+
+    bestName = ""
+    bestScore = 10**9
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        roles = [str(role or "").strip().lower() for role in entity.get("roles") or []]
+        roleScore = len(preferredRoles)
+        for idx, preferredRole in enumerate(preferredRoles):
+            if preferredRole in roles:
+                roleScore = idx
+                break
+        displayName = _extractRdapEntityDisplayName(entity)
+        if not displayName:
+            continue
+        if roleScore < bestScore:
+            bestScore = roleScore
+            bestName = displayName
+
+    return bestName
+
+
+def _extractRdapEventDate(events, actionTokens):
+    if not isinstance(events, list):
+        return ""
+    normalizedTokens = [str(token or "").strip().lower() for token in actionTokens]
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        action = str(event.get("eventAction") or "").strip().lower()
+        if not action:
+            continue
+        if not any(token in action for token in normalizedTokens):
+            continue
+        eventDate = str(event.get("eventDate") or "").strip()
+        if eventDate:
+            return eventDate
+    return ""
+
+
+def buildWhoisLookupResponse(ip):
+    """
+    Return WHOIS-like ownership metadata by querying RDAP.
+    """
+    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
+    ipObj = ipaddress.ip_address(normalizedIp)
+
+    if (
+        ipObj.is_private
+        or ipObj.is_loopback
+        or ipObj.is_link_local
+        or ipObj.is_multicast
+        or ipObj.is_reserved
+        or ipObj.is_unspecified
+    ):
+        return {
+            "success": True,
+            "ip": normalizedIp,
+            "version": 6 if ipObj.version == 6 else 4,
+            "isLocalnet": True,
+            "whois": {
+                "isp": "Local / special-use",
+                "netName": "N/A",
+                "netType": "N/A",
+                "parent": "N/A",
+                "registrationDate": "N/A",
+                "updatedDate": "N/A",
+                "rangeStart": normalizedIp,
+                "rangeEnd": normalizedIp,
+                "cidr": "N/A",
+                "rirHost": "N/A",
+                "rdapUrl": "",
+            },
+        }
+
+    rdapUrls = [
+        f"https://rdap.arin.net/registry/ip/{normalizedIp}",
+        f"https://rdap.db.ripe.net/ip/{normalizedIp}",
+        f"https://rdap.apnic.net/ip/{normalizedIp}",
+        f"https://rdap.lacnic.net/rdap/ip/{normalizedIp}",
+        f"https://rdap.afrinic.net/rdap/ip/{normalizedIp}",
+    ]
+
+    lastError = "RDAP lookup failed"
+    rdapPayload = None
+    finalUrl = ""
+    for rdapUrl in rdapUrls:
+        try:
+            response = requests.get(
+                rdapUrl,
+                timeout=6,
+                verify=False,
+                headers={
+                    "Accept": "application/rdap+json, application/json",
+                    "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
+                },
+            )
+            if response.status_code >= 400:
+                lastError = f"RDAP HTTP {response.status_code}"
+                continue
+            rdapPayload = response.json()
+            finalUrl = str(response.url or rdapUrl)
+            break
+        except Exception as rdapError:
+            lastError = str(rdapError)
+
+    if not isinstance(rdapPayload, dict):
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "version": 6 if ipObj.version == 6 else 4,
+            "error": lastError,
+        }
+
+    rangeStart = str(rdapPayload.get("startAddress") or normalizedIp).strip()
+    rangeEnd = str(rdapPayload.get("endAddress") or rangeStart).strip()
+    netName = str(rdapPayload.get("name") or rdapPayload.get("handle") or "Unknown").strip()
+    netType = str(rdapPayload.get("type") or rdapPayload.get("objectClassName") or "Unknown").strip()
+    parent = str(rdapPayload.get("parentHandle") or rdapPayload.get("port43") or "Unknown").strip()
+    events = rdapPayload.get("events") or []
+    registrationDate = _extractRdapEventDate(events, ["registration", "allocated", "assignment"])
+    updatedDate = _extractRdapEventDate(events, ["last changed", "last update", "updated", "changed"])
+
+    isp = _extractRdapBestIspName(rdapPayload.get("entities") or [])
+    if not isp:
+        isp = str(rdapPayload.get("country") or netName or "Unknown").strip()
+
+    cidr = ""
+    cidrEntries = rdapPayload.get("cidr0_cidrs")
+    if isinstance(cidrEntries, list) and len(cidrEntries) > 0 and isinstance(cidrEntries[0], dict):
+        firstCidr = cidrEntries[0]
+        prefixKey = "v6prefix" if "v6prefix" in firstCidr else "v4prefix"
+        prefixVal = str(firstCidr.get(prefixKey) or "").strip()
+        lengthVal = firstCidr.get("length")
+        if prefixVal and lengthVal is not None:
+            cidr = f"{prefixVal}/{lengthVal}"
+
+    return {
+        "success": True,
+        "ip": normalizedIp,
+        "version": 6 if ipObj.version == 6 else 4,
+        "isLocalnet": False,
+        "whois": {
+            "isp": isp or "Unknown",
+            "netName": netName or "Unknown",
+            "netType": netType or "Unknown",
+            "parent": parent or "Unknown",
+            "registrationDate": registrationDate or "Unknown",
+            "updatedDate": updatedDate or "Unknown",
+            "rangeStart": rangeStart or normalizedIp,
+            "rangeEnd": rangeEnd or normalizedIp,
+            "cidr": cidr or "Unknown",
+            "rirHost": str(urlparse(finalUrl).hostname or "Unknown").strip(),
+            "rdapUrl": finalUrl,
+        },
+    }
+
+
+def getIpsumCacheDirectory():
+    basePath = PACKETSNITCH_USERDATA_PATH or os.path.join(
+        tempfile.gettempdir(), "packetsnitch-cache"
+    )
+    cacheDir = os.path.join(basePath, "cache", "ipsum")
+    os.makedirs(cacheDir, exist_ok=True)
+    return cacheDir
+
+
+def getIpsumCachePaths():
+    cacheDir = getIpsumCacheDirectory()
+    return {
+        "dir": cacheDir,
+        "data": os.path.join(cacheDir, "ipsum.txt"),
+        "meta": os.path.join(cacheDir, "ipsum-meta.json"),
+    }
+
+
+def parseIpsumDataset(rawText):
+    parsed = {}
+    if not isinstance(rawText, str):
+        return parsed
+    for rawLine in rawText.splitlines():
+        line = rawLine.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        ipText = str(parts[0] or "").strip()
+        countText = str(parts[1] or "").strip()
+        try:
+            normalizedIp = str(ipaddress.ip_address(ipText))
+            parsed[normalizedIp] = max(0, int(countText))
+        except Exception:
+            continue
+    return parsed
+
+
+def getIpsumDailyCache():
+    global ipsumDatasetByIp
+    global ipsumCacheDate
+
+    todayStr = datetime.utcnow().strftime("%Y-%m-%d")
+    with ipsumCacheLock:
+        if (
+            ipsumCacheDate == todayStr
+            and isinstance(ipsumDatasetByIp, dict)
+            and ipsumDatasetByIp
+        ):
+            return {
+                "dataset": ipsumDatasetByIp,
+                "fetchedDate": ipsumCacheDate,
+                "sourceUrl": IPSUM_SOURCE_URL,
+            }
+
+        cachePaths = getIpsumCachePaths()
+        meta = {}
+        if os.path.isfile(cachePaths["meta"]):
+            try:
+                with open(cachePaths["meta"], "r", encoding="utf-8") as metaFile:
+                    meta = json.load(metaFile)
+            except Exception:
+                meta = {}
+
+        cachedDate = str(meta.get("fetched_date") or "").strip()
+        if cachedDate == todayStr and os.path.isfile(cachePaths["data"]):
+            with open(cachePaths["data"], "r", encoding="utf-8") as dataFile:
+                rawText = dataFile.read()
+            ipsumDatasetByIp = parseIpsumDataset(rawText)
+            ipsumCacheDate = todayStr
+            return {
+                "dataset": ipsumDatasetByIp,
+                "fetchedDate": ipsumCacheDate,
+                "sourceUrl": IPSUM_SOURCE_URL,
+            }
+
+        response = requests.get(
+            IPSUM_SOURCE_URL,
+            timeout=20,
+            verify=False,
+            headers={
+                "Accept": "text/plain",
+                "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
+            },
+        )
+        response.raise_for_status()
+        rawText = response.text
+        parsedDataset = parseIpsumDataset(rawText)
+
+        tempDataPath = cachePaths["data"] + ".tmp"
+        tempMetaPath = cachePaths["meta"] + ".tmp"
+        with open(tempDataPath, "w", encoding="utf-8") as dataFile:
+            dataFile.write(rawText)
+        with open(tempMetaPath, "w", encoding="utf-8") as metaFile:
+            json.dump(
+                {
+                    "source_url": IPSUM_SOURCE_URL,
+                    "project_url": IPSUM_PROJECT_URL,
+                    "fetched_at": datetime.utcnow().isoformat() + "Z",
+                    "fetched_date": todayStr,
+                    "entry_count": len(parsedDataset),
+                },
+                metaFile,
+                indent=2,
+            )
+        os.replace(tempDataPath, cachePaths["data"])
+        os.replace(tempMetaPath, cachePaths["meta"])
+
+        ipsumDatasetByIp = parsedDataset
+        ipsumCacheDate = todayStr
+        return {
+            "dataset": ipsumDatasetByIp,
+            "fetchedDate": ipsumCacheDate,
+            "sourceUrl": IPSUM_SOURCE_URL,
+        }
+
+
+def getIpsumGrade(hitCount):
+    hits = max(0, int(hitCount or 0))
+    if hits <= 0:
+        return {"grade": "A", "label": "Clean"}
+    if hits <= 2:
+        return {"grade": "B", "label": "Low"}
+    if hits <= 5:
+        return {"grade": "C", "label": "Elevated"}
+    if hits <= 10:
+        return {"grade": "D", "label": "High"}
+    return {"grade": "F", "label": "Severe"}
+
+
+def buildIpsumLookupResponse(ip):
+    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
+    ipObj = ipaddress.ip_address(normalizedIp)
+
+    if ipObj.version != 4:
+        return {
+            "success": True,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "supported": False,
+            "message": "IPSum currently provides IPv4 reputation data only.",
+            "projectUrl": IPSUM_PROJECT_URL,
+            "sourceUrl": IPSUM_SOURCE_URL,
+        }
+
+    if (
+        ipObj.is_private
+        or ipObj.is_loopback
+        or ipObj.is_link_local
+        or ipObj.is_multicast
+        or ipObj.is_reserved
+        or ipObj.is_unspecified
+    ):
+        return {
+            "success": True,
+            "ip": normalizedIp,
+            "version": 4,
+            "supported": True,
+            "listed": False,
+            "isLocalnet": True,
+            "grade": "A",
+            "gradeLabel": "Local / special-use",
+            "hitCount": 0,
+            "projectUrl": IPSUM_PROJECT_URL,
+            "sourceUrl": IPSUM_SOURCE_URL,
+            "fetchedDate": datetime.utcnow().strftime("%Y-%m-%d"),
+        }
+
+    cacheData = getIpsumDailyCache()
+    dataset = cacheData.get("dataset") or {}
+    hitCount = max(0, int(dataset.get(normalizedIp, 0)))
+    gradeInfo = getIpsumGrade(hitCount)
+    return {
+        "success": True,
+        "ip": normalizedIp,
+        "version": 4,
+        "supported": True,
+        "listed": hitCount > 0,
+        "isLocalnet": False,
+        "grade": gradeInfo["grade"],
+        "gradeLabel": gradeInfo["label"],
+        "hitCount": hitCount,
+        "projectUrl": IPSUM_PROJECT_URL,
+        "sourceUrl": cacheData.get("sourceUrl") or IPSUM_SOURCE_URL,
+        "fetchedDate": cacheData.get("fetchedDate") or "",
     }
 
 
@@ -5403,6 +5796,76 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
             self.sendJson(200, response)
             return
+        if parsedUrl.path == "/whois":
+            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
+            if not queryIp:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing ip query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildWhoisLookupResponse(queryIp)
+            except ValueError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid IP address",
+                    },
+                )
+                return
+            except Exception as whoisLookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(whoisLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
+            return
+        if parsedUrl.path == "/ipsum":
+            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
+            if not queryIp:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing ip query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildIpsumLookupResponse(queryIp)
+            except ValueError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid IP address",
+                    },
+                )
+                return
+            except Exception as ipsumLookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(ipsumLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
+            return
         self.sendJson(
             404,
             {
@@ -5657,6 +6120,11 @@ def main():
     startupMode = "http-server" if parsedArgs.server else "cli"
     backendRuntimeMode = startupMode
     logBackendStartup(startupMode)
+
+    # Ensure shared runtime resources are ready for both server and CLI modes.
+    # Without this, server-only workflows (e.g. loading a saved session and
+    # calling /geoip) can run before the GeoIP reader is initialized.
+    initializeRuntimeResources()
 
     if parsedArgs.server:
         backendShutdownReason, exitCode = runHttpServer(
