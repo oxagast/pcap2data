@@ -624,6 +624,10 @@ strong {
   color: var(--color-5);
 }
 
+.host-data-workspace-header,
+.summary-workspace-header,
+.list-workspace-header,
+.stats-workspace-header,
 .keystore-workspace-header,
 .crypt-workspace-header,
 .settings-workspace-header {
@@ -1317,6 +1321,91 @@ strong {
 
 .data-tools-actions button:hover {
   background-color: var(--color-2-hover);
+}
+
+#subnet-calc-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  margin-top: 6px;
+  margin-bottom: 8px;
+  padding: 6px;
+}
+
+.subnet-calc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.subnet-calc-controls,
+.subnet-calc-card {
+  min-width: 0;
+}
+
+.subnet-calc-controls {
+  grid-column: 1 / -1;
+}
+
+.subnet-calc-card-wide {
+  grid-column: 1 / -1;
+}
+
+.subnet-calc-section-title {
+  margin-bottom: 8px;
+}
+
+.subnet-calc-status {
+  margin-top: 8px;
+  min-height: 1.2em;
+  color: var(--color-6);
+  font-size: 12px;
+}
+
+.subnet-calc-status.is-error {
+  color: #ff9b9b;
+}
+
+.subnet-calc-binary-row+.subnet-calc-binary-row {
+  margin-top: 10px;
+}
+
+.subnet-calc-binary-label {
+  color: var(--color-1);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.subnet-calc-binary-pre {
+  margin: 0;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--color-3);
+  background-color: var(--data-tools-frame-bg);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.subnet-calc-map-actions {
+  margin-top: 10px;
+}
+
+@media (max-width: 1100px) {
+  .subnet-calc-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .subnet-calc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .data-tools-find-replace-section {

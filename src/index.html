@@ -132,12 +132,14 @@
           <p id="error-message"></p>
         </div>
         <div id="summary_box">
+          <div class="summary-workspace-header">Analysis Summary</div>
           <div id="summary_content" class="notes-markdown-preview">
             Load a file to get started!
             <!--            <span id="loaderdots" class="loading">Loading</span>  -->
           </div>
         </div>
         <div id="stats_box">
+          <div class="stats-workspace-header">Capture Statistics</div>
           <div id="stats_content"></div>
         </div>
         <div id="data_tools_box">
@@ -151,6 +153,9 @@
             </button>
             <button id="conv-subtab-decodes" class="crypt-subtab-btn">
               Decodes
+            </button>
+            <button id="conv-subtab-subnet" class="crypt-subtab-btn">
+              Subnet Calculator
             </button>
             <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
               Packet JSON
@@ -357,6 +362,37 @@
                 <option value="sip">SIP</option>
               </select>
               <div id="data-tools-proto-output"></div>
+            </div>
+          </div>
+          <div id="conv-subnet-panel" class="crypt-subtab-panel" hidden>
+            <div class="subnet-calc-grid">
+              <div class="data-tools-section subnet-calc-controls">
+                <div class="data-tools-title">Subnet Calculator</div>
+                <label for="subnet-calc-input">IPv4 / IPv6 address, host/prefix, or subnet</label>
+                <input id="subnet-calc-input" type="text"
+                  placeholder="192.168.1.10/24, 10.0.0.0 255.255.255.0, 2001:db8::1/64" />
+                <div class="data-tools-actions subnet-calc-actions-row">
+                  <button id="subnet-calc-analyze-btn" type="button">Analyze</button>
+                  <button id="subnet-calc-clear-btn" type="button">Clear</button>
+                  <button id="subnet-calc-use-src-btn" type="button">Use packet source IP</button>
+                  <button id="subnet-calc-use-dst-btn" type="button">Use packet destination IP</button>
+                </div>
+                <div id="subnet-calc-status" class="subnet-calc-status" aria-live="polite">
+                  Enter an IPv4 or IPv6 address/network to analyze.
+                </div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-summary"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-range"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-geo"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
+                <div id="subnet-calc-binary"></div>
+              </div>
             </div>
           </div>
           <div id="conv-packet-json-panel" class="crypt-subtab-panel" hidden>
@@ -662,6 +698,7 @@ No keystore entries saved.</pre>
           </div>
         </div>
         <div id="list_box">
+          <div class="list-workspace-header">Packets List</div>
           <div id="list_search_bar">
             <input id="list-search" type="text" placeholder="Filter list by host, IP, port, or protocol..." />
             <label id="list-group-streams-wrap">

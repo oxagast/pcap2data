@@ -19,12 +19,14 @@ const DATA_TOOLS_HEX_BYTE_RE = /^[0-9a-fA-F]{2}$/;
 const CONV_CONVERSIONS_SUBTAB = "conversions";
 const CONV_HASHES_SUBTAB = "hashes";
 const CONV_DECODES_SUBTAB = "decodes";
+const CONV_SUBNET_SUBTAB = "subnet";
 const CONV_PACKET_JSON_SUBTAB = "packet-json";
 
 const VALID_CONV_SUBTABS = [
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_SUBNET_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
 ];
 
@@ -1232,6 +1234,7 @@ function setConvSubtab(tabName) {
   const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
   const hashesActive = tabName === CONV_HASHES_SUBTAB;
   const decodesActive = tabName === CONV_DECODES_SUBTAB;
+  const subnetActive = tabName === CONV_SUBNET_SUBTAB;
   const packetJsonActive = tabName === CONV_PACKET_JSON_SUBTAB;
   document
     .getElementById("conv-subtab-conversions")
@@ -1243,11 +1246,15 @@ function setConvSubtab(tabName) {
     .getElementById("conv-subtab-decodes")
     .classList.toggle("active", decodesActive);
   document
+    .getElementById("conv-subtab-subnet")
+    .classList.toggle("active", subnetActive);
+  document
     .getElementById("conv-subtab-packet-json")
     .classList.toggle("active", packetJsonActive);
   document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
   document.getElementById("conv-hashes-panel").hidden = !hashesActive;
   document.getElementById("conv-decodes-panel").hidden = !decodesActive;
+  document.getElementById("conv-subnet-panel").hidden = !subnetActive;
   document.getElementById("conv-packet-json-panel").hidden = !packetJsonActive;
 }
 
@@ -1260,6 +1267,7 @@ module.exports = {
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_SUBNET_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,

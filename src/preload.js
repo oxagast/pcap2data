@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('init-backend-service', backendOptions),
   getBackendDiagnostics: (options = {}) =>
     ipcRenderer.invoke('get-backend-diagnostics', options),
+  lookupGeoip: (ipAddress, options = {}) =>
+    ipcRenderer.invoke('lookup-backend-geoip', ipAddress, options),
   runBackendCommand: (filename, useLLM, chunkSize, workerThreads, backendOptions) =>
     ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, workerThreads, backendOptions),
   runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, workerThreads, backendOptions) =>

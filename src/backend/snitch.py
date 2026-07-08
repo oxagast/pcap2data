@@ -63,7 +63,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from urllib.parse import unquote_plus
+from urllib.parse import parse_qs, unquote_plus, urlparse
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -960,6 +960,50 @@ def getGeoipInfo(ip, srcOrDst):
     with geoIpCacheLock:
         geoIpCache[geoIpCacheKey] = geoIpResult
     return geoIpResult
+
+
+def buildGeoipLookupResponse(ip, srcOrDst="src"):
+    """
+    Return a normalized GeoIP lookup payload for ad-hoc frontend queries.
+    """
+    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
+    normalizedSide = "dst" if str(srcOrDst).strip().lower() == "dst" else "src"
+    locationData = getGeoipInfo(normalizedIp, normalizedSide)
+    locationStatus = ""
+    if isinstance(locationData, dict):
+        locationStatus = str(locationData.get("Location") or "").strip()
+
+    latitude = None
+    longitude = None
+    if isinstance(locationData, dict):
+        rawLatitude = locationData.get("Latitude")
+        rawLongitude = locationData.get("Longitude")
+        try:
+            latitude = float(rawLatitude) if rawLatitude is not None else None
+        except Exception:
+            latitude = None
+        try:
+            longitude = float(rawLongitude) if rawLongitude is not None else None
+        except Exception:
+            longitude = None
+
+    isLocalnet = locationStatus.lower() == "localnet"
+    isError = locationStatus.lower().startswith("error:")
+    return {
+        "success": not isError,
+        "ip": normalizedIp,
+        "version": 6 if ":" in normalizedIp else 4,
+        "side": normalizedSide,
+        "isLocalnet": isLocalnet,
+        "isError": isError,
+        "location": locationData,
+        "mapPoint": {
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+        if latitude is not None and longitude is not None
+        else None,
+    }
 
 
 def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
@@ -5291,7 +5335,10 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         return json.loads(rawBody.decode("utf-8"))
 
     def do_GET(self):
-        if self.path == "/ping":
+        parsedUrl = urlparse(self.path)
+        queryParams = parse_qs(parsedUrl.query or "", keep_blank_values=False)
+
+        if parsedUrl.path == "/ping":
             self.sendJson(
                 200,
                 {
@@ -5300,7 +5347,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if self.path == "/version":
+        if parsedUrl.path == "/version":
             self.sendJson(
                 200,
                 {
@@ -5309,6 +5356,52 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     "version": PACKETSNITCH_VERSION,
                 },
             )
+            return
+        if parsedUrl.path == "/geoip":
+            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
+            querySide = str((queryParams.get("side") or ["src"])[0] or "src").strip().lower()
+            if not queryIp:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing ip query parameter",
+                    },
+                )
+                return
+
+            if querySide not in {"src", "dst"}:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid side query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildGeoipLookupResponse(queryIp, querySide)
+            except ValueError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid IP address",
+                    },
+                )
+                return
+            except Exception as geoLookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(geoLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
             return
         self.sendJson(
             404,

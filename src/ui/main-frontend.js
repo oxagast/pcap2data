@@ -60,6 +60,7 @@ const {
 const { createStatsPanel } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
+const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
 const { initializeInstallScreen } = require("./panels/install-screen");
 const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
@@ -74,6 +75,7 @@ const {
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
+  CONV_SUBNET_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
@@ -11954,7 +11956,7 @@ function buildFtpCandidateFromDataStream(
     reverseHex
   ) {
     selectedHex = reverseHex;
-  } else {
+    p = activePacket; // Corrected to assign the hydrated packet
     selectedHex = forwardBytes >= reverseBytes ? forwardHex : reverseHex;
   }
   if (!selectedHex) return null;
@@ -14237,6 +14239,25 @@ initConvPanel({
     activeMainTab = tab;
   },
 });
+
+const subnetCalculatorPanel = createSubnetCalculatorPanel({
+  statusUpdate,
+  writeLogEntry,
+  getBackendTransportOptions: () => getBackendTransportOptionsFromSettings(),
+  openHeatmapLocation: ({ latitude, longitude, label }) => {
+    showStatsHeatmapLocation({ latitude, longitude, label });
+  },
+  getCurrentPacketIps: () => {
+    const contextPacket = getCurrentContextPacket();
+    const packetInfo = contextPacket?.["packet.info"] || {};
+    const ipInfo = packetInfo["IP"] || {};
+    return {
+      src: String(ipInfo["ip.src.addr"] ?? ipInfo["Source IP"] ?? "").trim(),
+      dst: String(ipInfo["ip.dst.addr"] ?? ipInfo["Destination IP"] ?? "").trim(),
+    };
+  },
+});
+
 initializeNotesPanel();
 document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
@@ -14608,6 +14629,11 @@ document
   .addEventListener("click", () => {
     setConvSubtab(CONV_DECODES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
+  });
+document
+  .getElementById("conv-subtab-subnet")
+  .addEventListener("click", () => {
+    setConvSubtab(CONV_SUBNET_SUBTAB);
   });
 document
   .getElementById("conv-subtab-packet-json")
@@ -15660,6 +15686,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
     doError("No packet information found for this host!");
     return;
   } else {
+    p = packetSet;
     const activePacket = await ensurePacketHydrated(
       packetSet[index],
       hostFilterEl.value,
