@@ -6,8 +6,9 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 ## Screenshot
 
+<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
 <img alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png" width="1280">
-
+</a>
 
 
 ## Documentation
