@@ -174,6 +174,9 @@ except ImportError:
 activeRecon = "False"
 numWorkerThreads = 2 * (os.cpu_count() or 1)
 isSSH = False
+checkTor = True
+torJsonData = {}
+torNetworkIps = {}
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.
 allPacketInfo = []
@@ -4882,7 +4885,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         transportSection["SMB"] = smbSection
                 # Decode MQTT on TCP ports 1883/8883
                 if streamLabelPort in (1883, 8883) or srcPort in (1883, 8883):
-                    mqttSection = decodeMQTT(rawPayload).argparse
+                    mqttSection = decodeMQTT(rawPayload)
                     if mqttSection is not None:
                         transportSection["MQTT"] = mqttSection
                 # Decode RTSP on TCP port 554
@@ -5444,7 +5447,19 @@ with additional network and server information.
         epilog="Example usage: \n   python3 snitch.py traffic.pcap -o outputDirPath -s 80 -d 8080 -T 5 -a",
     )
     parser.add_argument("pcap_file", nargs="?", help="The .pcap file to parse.")
-    parser.add_argument("--use-tor-check", type=bool, default=True, help="Check if ip is part of the tor network.")
+    parser.add_argument(
+        "--use-tor-check",
+        dest="use_tor_check",
+        action="store_true",
+        default=True,
+        help="Check if packet destination IP is part of the Tor exit network.",
+    )
+    parser.add_argument(
+        "--no-tor-check",
+        dest="use_tor_check",
+        action="store_false",
+        help="Disable Tor exit-node lookup and continue without Tor enrichment.",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -5593,17 +5608,37 @@ def runCaptureFromArgs(runArgs):
     emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
 
-    checkTor = args.use_tor_check
+    checkTor = bool(getattr(args, "use_tor_check", True))
+    torJsonData = {}
+    torNetworkIps = {}
     if checkTor:
-        torJsonData = requests.get("https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform", timeout=25).json()
-        torNetworkIps = {}
-        for relay in torJsonData["relays"]:
-            for addr in relay["or_addresses"]:
-                ip = addr.rsplit(":", 1)[0]
-                torNetworkIps[ip] = {
-                    "nickname": relay.get("nickname"),
-                    "platform": relay.get("platform")
-                }
+        try:
+            torResponse = requests.get(
+                "https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform",
+                timeout=25,
+            )
+            torResponse.raise_for_status()
+            torJsonData = torResponse.json()
+            for relay in torJsonData.get("relays", []):
+                for addr in relay.get("or_addresses", []):
+                    ip = str(addr).rsplit(":", 1)[0].strip("[]")
+                    if not ip:
+                        continue
+                    torNetworkIps[ip] = {
+                        "nickname": relay.get("nickname"),
+                        "platform": relay.get("platform"),
+                    }
+        except Exception as torErr:
+            # Tor enrichment is optional; continue packet processing when
+            # Onionoo is unavailable or returns invalid data.
+            checkTor = False
+            torJsonData = {}
+            torNetworkIps = {}
+            if verbose >= 0:
+                print(
+                    f"[Main] Warning: Tor network lookup unavailable: {torErr}",
+                    file=sys.stderr,
+                )
 
 
     allPacketInfo = []
@@ -6011,6 +6046,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 dest_port=request.get("destPort"),
                 timeout=int(request.get("timeout") or 3),
                 active_recon=bool(request.get("activeRecon", True)),
+                use_tor_check=bool(request.get("useTorCheck", True)),
                 conf=request.get("conf"),
                 host_chunk_size=int(
                     request.get("hostChunkSize") or _getRuntimeConfigSnapshot()["hostChunkSize"]
