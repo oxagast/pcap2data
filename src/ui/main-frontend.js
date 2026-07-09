@@ -283,6 +283,11 @@ let pendingBackendCaptureUpdate = null;
 let backendCaptureUpdateDrainActive = false;
 let backendLastAppliedSnapshotProcessedPackets = 0;
 let backendLastAppliedSnapshotAtMs = 0;
+let captureIngestWorkers = [];
+let captureIngestWorkerThreadCount = 0;
+let captureIngestWorkerCursor = 0;
+let captureIngestWorkerRequestId = 0;
+const pendingCaptureIngestWorkerRequests = new Map();
 let sessionAutosaveInFlight = false;
 let appSettings = cloneDefaultSettings();
 let statusResetTimeoutId = null;
@@ -871,6 +876,12 @@ function syncSettingsFormFromState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const frontendIngestThreadingEnabledEl = document.getElementById(
+    "settings-debug-frontend-ingest-threading-enabled",
+  );
+  const frontendIngestWorkerThreadsEl = document.getElementById(
+    "settings-debug-frontend-ingest-worker-threads",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -936,6 +947,19 @@ function syncSettingsFormFromState() {
   if (backendRefreshMinPacketsEl) {
     backendRefreshMinPacketsEl.value = String(
       settings.debug.backendIncrementalRefreshMinPackets,
+    );
+  }
+  if (frontendIngestThreadingEnabledEl) {
+    frontendIngestThreadingEnabledEl.checked = Boolean(
+      settings.debug.frontendIngestThreadingEnabled,
+    );
+  }
+  if (frontendIngestWorkerThreadsEl) {
+    frontendIngestWorkerThreadsEl.value = String(
+      settings.debug.frontendIngestWorkerThreads,
+    );
+    frontendIngestWorkerThreadsEl.disabled = !Boolean(
+      settings.debug.frontendIngestThreadingEnabled,
     );
   }
   if (mapProjectionZoomXEl) {
@@ -1005,6 +1029,12 @@ function readSettingsFormState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const frontendIngestThreadingEnabledEl = document.getElementById(
+    "settings-debug-frontend-ingest-threading-enabled",
+  );
+  const frontendIngestWorkerThreadsEl = document.getElementById(
+    "settings-debug-frontend-ingest-worker-threads",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -1069,6 +1099,12 @@ function readSettingsFormState() {
       backendIncrementalRefreshMinPackets: backendRefreshMinPacketsEl
         ? backendRefreshMinPacketsEl.value
         : DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
+      frontendIngestThreadingEnabled: frontendIngestThreadingEnabledEl
+        ? frontendIngestThreadingEnabledEl.checked
+        : DEFAULT_SETTINGS.debug.frontendIngestThreadingEnabled,
+      frontendIngestWorkerThreads: frontendIngestWorkerThreadsEl
+        ? frontendIngestWorkerThreadsEl.value
+        : DEFAULT_SETTINGS.debug.frontendIngestWorkerThreads,
       mapProjectionZoomX: mapProjectionZoomXEl
         ? mapProjectionZoomXEl.value
         : DEFAULT_SETTINGS.debug.mapProjectionZoomX,
@@ -1227,6 +1263,16 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     nextDebug.backendIncrementalRefreshMinPackets,
   );
   pushChange(
+    "frontendIngestThreadingEnabled",
+    previousDebug.frontendIngestThreadingEnabled,
+    nextDebug.frontendIngestThreadingEnabled,
+  );
+  pushChange(
+    "frontendIngestWorkerThreads",
+    previousDebug.frontendIngestWorkerThreads,
+    nextDebug.frontendIngestWorkerThreads,
+  );
+  pushChange(
     "mapProjectionZoomX",
     previousDebug.mapProjectionZoomX,
     nextDebug.mapProjectionZoomX,
@@ -1306,6 +1352,7 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
+  syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
   syncRuntimeLlmToggleFromSettings();
   await applyThemeById(savedSettings.general.themeId);
@@ -1326,6 +1373,7 @@ async function loadPersistedSettings() {
   }
   const loadedSettings = await window.settingsapi.get();
   setCurrentSettings(loadedSettings);
+  syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(loadedSettings);
   syncRuntimeLlmToggleFromSettings();
   await applyThemeById(loadedSettings.general.themeId);
@@ -1405,6 +1453,28 @@ function getBackendIncrementalRefreshMinPackets() {
     Number(getCurrentSettings()?.debug?.backendIncrementalRefreshMinPackets) ||
     DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
   );
+}
+
+function isFrontendIngestThreadingEnabled() {
+  const setting = getCurrentSettings()?.debug?.frontendIngestThreadingEnabled;
+  const enabled =
+    typeof setting === "boolean"
+      ? setting
+      : DEFAULT_SETTINGS.debug.frontendIngestThreadingEnabled;
+  return enabled && typeof Worker === "function";
+}
+
+function getFrontendIngestWorkerThreads() {
+  const configured = Math.max(
+    1,
+    Number(getCurrentSettings()?.debug?.frontendIngestWorkerThreads) ||
+    DEFAULT_SETTINGS.debug.frontendIngestWorkerThreads,
+  );
+  const hardwareThreads =
+    typeof navigator !== "undefined"
+      ? Number(navigator.hardwareConcurrency) || configured
+      : configured;
+  return Math.max(1, Math.min(configured, Math.max(1, hardwareThreads * 2)));
 }
 
 // Returns backend transport options from settings.
@@ -1781,6 +1851,188 @@ function countCaptureDataPackets(captureData) {
     if (!Array.isArray(hostPackets)) return total;
     return total + hostPackets.length;
   }, 0);
+}
+
+function createCaptureIngestWorker() {
+  if (typeof Worker !== "function") {
+    return null;
+  }
+
+  try {
+    return new Worker(new URL("./workers/capture-ingest-worker.js", import.meta.url));
+  } catch (error) {
+    console.warn("Failed to initialize capture ingest worker:", error);
+    return null;
+  }
+}
+
+function terminateCaptureIngestWorkers(reason = "disabled") {
+  pendingCaptureIngestWorkerRequests.forEach(({ reject }) => {
+    reject(new Error(`Capture ingest worker stopped: ${reason}`));
+  });
+  pendingCaptureIngestWorkerRequests.clear();
+
+  captureIngestWorkers.forEach((worker) => {
+    try {
+      worker.terminate();
+    } catch {
+      // no-op
+    }
+  });
+  captureIngestWorkers = [];
+  captureIngestWorkerThreadCount = 0;
+  captureIngestWorkerCursor = 0;
+}
+
+function wireCaptureIngestWorker(worker) {
+  worker.onmessage = (event) => {
+    const payload = event?.data || {};
+    const requestId = Number(payload.id);
+    if (!requestId || !pendingCaptureIngestWorkerRequests.has(requestId)) {
+      return;
+    }
+
+    const pendingRequest = pendingCaptureIngestWorkerRequests.get(requestId);
+    pendingCaptureIngestWorkerRequests.delete(requestId);
+
+    if (!pendingRequest) {
+      return;
+    }
+
+    if (payload.ok) {
+      pendingRequest.resolve(payload.result || null);
+      return;
+    }
+
+    pendingRequest.reject(
+      new Error(
+        typeof payload.error === "string" && payload.error
+          ? payload.error
+          : "Capture ingest worker failed",
+      ),
+    );
+  };
+
+  worker.onerror = (error) => {
+    console.warn("Capture ingest worker crashed, switching to fallback path:", error);
+    terminateCaptureIngestWorkers("crash");
+  };
+}
+
+function ensureCaptureIngestWorkers() {
+  if (!isFrontendIngestThreadingEnabled()) {
+    if (captureIngestWorkers.length > 0) {
+      terminateCaptureIngestWorkers("threading-disabled");
+    }
+    return [];
+  }
+
+  const targetThreadCount = getFrontendIngestWorkerThreads();
+  if (
+    captureIngestWorkers.length === targetThreadCount
+    && captureIngestWorkerThreadCount === targetThreadCount
+  ) {
+    return captureIngestWorkers;
+  }
+
+  if (captureIngestWorkers.length > 0) {
+    terminateCaptureIngestWorkers("reconfigure");
+  }
+
+  const nextWorkers = [];
+  for (let i = 0; i < targetThreadCount; i += 1) {
+    const worker = createCaptureIngestWorker();
+    if (!worker) {
+      terminateCaptureIngestWorkers("create-failed");
+      return [];
+    }
+    wireCaptureIngestWorker(worker);
+    nextWorkers.push(worker);
+  }
+
+  captureIngestWorkers = nextWorkers;
+  captureIngestWorkerThreadCount = targetThreadCount;
+  captureIngestWorkerCursor = 0;
+  return captureIngestWorkers;
+}
+
+function syncCaptureIngestWorkersFromSettings() {
+  ensureCaptureIngestWorkers();
+}
+
+function requestCaptureIngestWorker(action, payload) {
+  const workerPool = ensureCaptureIngestWorkers();
+  if (!workerPool.length) {
+    return Promise.resolve(null);
+  }
+
+  captureIngestWorkerCursor = (captureIngestWorkerCursor + 1) % workerPool.length;
+  const worker = workerPool[captureIngestWorkerCursor];
+
+  return new Promise((resolve, reject) => {
+    captureIngestWorkerRequestId += 1;
+    const requestId = captureIngestWorkerRequestId;
+    pendingCaptureIngestWorkerRequests.set(requestId, { resolve, reject });
+
+    try {
+      worker.postMessage({
+        id: requestId,
+        action,
+        payload,
+      });
+    } catch (error) {
+      pendingCaptureIngestWorkerRequests.delete(requestId);
+      reject(error);
+    }
+  });
+}
+
+async function serializeCaptureDataForBackendLoad(captureData) {
+  try {
+    const workerResult = await requestCaptureIngestWorker("serialize-capture-data", {
+      captureData,
+    });
+    if (workerResult && typeof workerResult.serializedCaptureData === "string") {
+      return workerResult.serializedCaptureData;
+    }
+  } catch (error) {
+    console.warn("Falling back to main-thread capture serialization:", error);
+  }
+
+  return JSON.stringify(captureData);
+}
+
+async function stageIncrementalCapturePacketsInWorker(nextHostMap, previousHostMap, previousRealHosts) {
+  const previousHostPacketCounts = {};
+  Object.keys(previousHostMap || {}).forEach((host) => {
+    const previousHostPackets = Array.isArray(previousHostMap[host])
+      ? previousHostMap[host]
+      : [];
+    previousHostPacketCounts[host] = previousHostPackets.length;
+  });
+
+  try {
+    const workerResult = await requestCaptureIngestWorker("stage-incremental-packets", {
+      nextHostMap,
+      previousHostPacketCounts,
+      previousRealHosts: Array.isArray(previousRealHosts) ? previousRealHosts : [],
+    });
+
+    if (!workerResult || typeof workerResult !== "object") {
+      return null;
+    }
+
+    return {
+      nextHosts: Array.isArray(workerResult.nextHosts) ? workerResult.nextHosts : [],
+      hostSetChanged: Boolean(workerResult.hostSetChanged),
+      newPacketRefs: Array.isArray(workerResult.newPacketRefs)
+        ? workerResult.newPacketRefs
+        : [],
+    };
+  } catch (error) {
+    console.warn("Falling back to main-thread incremental packet staging:", error);
+    return null;
+  }
 }
 
 function shouldReplacePendingBackendCaptureUpdate(currentUpdate, nextUpdate) {
@@ -5624,14 +5876,25 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData) {
     previousCapturedPackets && typeof previousCapturedPackets["host"] === "object"
       ? previousCapturedPackets["host"]
       : {};
-  const nextHosts = Object.keys(hostMap);
   const previousRealHosts = hostsList.filter(
     (host) => host !== DUMMY_ALL_HOST && host !== DUMMY_BOOKMARKED_HOST,
   );
-  const previousHostSet = new Set(previousRealHosts);
+  const stagedPacketPlan = await stageIncrementalCapturePacketsInWorker(
+    hostMap,
+    previousHostMap,
+    previousRealHosts,
+  );
+  const nextHosts = stagedPacketPlan?.nextHosts || Object.keys(hostMap);
   const hostSetChanged =
-    nextHosts.length !== previousRealHosts.length
-    || nextHosts.some((host) => !previousHostSet.has(host));
+    typeof stagedPacketPlan?.hostSetChanged === "boolean"
+      ? stagedPacketPlan.hostSetChanged
+      : (() => {
+        const previousHostSet = new Set(previousRealHosts);
+        return (
+          nextHosts.length !== previousRealHosts.length
+          || nextHosts.some((host) => !previousHostSet.has(host))
+        );
+      })();
 
   if (hostSetChanged) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
@@ -5650,22 +5913,41 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
   }
 
-  nextHosts.forEach((host) => {
-    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-    const previousHostPackets = Array.isArray(previousHostMap[host])
-      ? previousHostMap[host]
-      : [];
-    const startIndex = Math.min(previousHostPackets.length, hostPackets.length);
-
-    for (let packetIndex = startIndex; packetIndex < hostPackets.length; packetIndex += 1) {
-      const packet = hostPackets[packetIndex];
-      const packetKey = getPacketKey(packet, host, packetIndex);
-      if (packet && typeof packet === "object") {
-        packet.__packetKey = packetKey;
+  if (stagedPacketPlan && stagedPacketPlan.newPacketRefs.length > 0) {
+    stagedPacketPlan.newPacketRefs.forEach((packetRef) => {
+      if (!packetRef || typeof packetRef !== "object") return;
+      const host = typeof packetRef.host === "string" ? packetRef.host : "";
+      const packetIndex = Number(packetRef.packetIndex);
+      const packetKey = typeof packetRef.packetKey === "string" ? packetRef.packetKey : "";
+      if (!host || !Number.isFinite(packetIndex) || packetIndex < 0 || !packetKey) {
+        return;
       }
+      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      const packet = hostPackets[packetIndex];
+      if (!packet || typeof packet !== "object") {
+        return;
+      }
+      packet.__packetKey = packetKey;
       cachePacketStub(packetKey, packet);
-    }
-  });
+    });
+  } else {
+    nextHosts.forEach((host) => {
+      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      const previousHostPackets = Array.isArray(previousHostMap[host])
+        ? previousHostMap[host]
+        : [];
+      const startIndex = Math.min(previousHostPackets.length, hostPackets.length);
+
+      for (let packetIndex = startIndex; packetIndex < hostPackets.length; packetIndex += 1) {
+        const packet = hostPackets[packetIndex];
+        const packetKey = getPacketKey(packet, host, packetIndex);
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+      }
+    });
+  }
 
   const selectedHost =
     previousHost &&
@@ -5722,7 +6004,8 @@ async function processCaptureData(captureData, options = {}) {
     return;
   }
 
-  const loadResult = await window.captureapi.loadJson(JSON.stringify(captureData));
+  const serializedCaptureData = await serializeCaptureDataForBackendLoad(captureData);
+  const loadResult = await window.captureapi.loadJson(serializedCaptureData);
   if (!loadResult?.success) {
     doError(`Failed to load capture snapshot: ${loadResult?.error || "unknown error"}`);
     fileLoaded(false);
@@ -14681,6 +14964,25 @@ document
     );
   });
 
+document
+  .getElementById("settings-debug-frontend-ingest-threading-enabled")
+  .addEventListener("change", (event) => {
+    const checked = Boolean(event?.target?.checked);
+    const workerCountInput = document.getElementById(
+      "settings-debug-frontend-ingest-worker-threads",
+    );
+    if (workerCountInput) {
+      workerCountInput.disabled = !checked;
+    }
+    writeLogEntry(`Settings updated frontendIngestThreadingEnabled=${checked}`);
+  });
+
+document
+  .getElementById("settings-debug-frontend-ingest-worker-threads")
+  .addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated frontendIngestWorkerThreads=${event?.target?.value}`);
+  });
+
 document.getElementById("settings-debug-map-projection-zoom-x").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated mapProjectionZoomX=${event?.target?.value}`);
 });
@@ -16912,7 +17214,9 @@ async function processBackendJsonDataPayload(payload) {
   }
 
   const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
-  const payloadPacketCount = countCaptureDataPackets(payload.captureData);
+  const payloadPacketCount = backendProgressState.firstChunkLoaded
+    ? 0
+    : countCaptureDataPackets(payload.captureData);
   const hasUsableChunk =
     payload.complete
     || payload.processedPackets >= minimumChunkSize

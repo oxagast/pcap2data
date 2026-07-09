@@ -7,12 +7,20 @@ const DEFAULT_BACKEND_WORKER_THREADS = Math.max(
     ) / 2 | 0,
 );
 
+const DEFAULT_FRONTEND_INGEST_WORKER_THREADS = Math.max(
+    1,
+    Math.min(
+        8,
+        Number(typeof navigator !== "undefined" ? navigator.hardwareConcurrency : 2) || 2,
+    ),
+);
+
 const DEFAULT_SETTINGS = Object.freeze({
     general: {
         themeId: "snitchbitch",
         convJsonIndentSpaces: 2,
         statusResetSeconds: 10,
-        backendPacketChunkSize: 250,
+        backendPacketChunkSize: 2000,
         backendWorkerThreads: DEFAULT_BACKEND_WORKER_THREADS,
         streamContextWarnPacketThreshold: 20,
         manualConvImportMaxBytes: 2 * 1024 * 1024,
@@ -27,6 +35,8 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendHttpDataModeEnabled: false,
         backendIncrementalRefreshMinIntervalMs: 1500,
         backendIncrementalRefreshMinPackets: 4000,
+        frontendIngestThreadingEnabled: true,
+        frontendIngestWorkerThreads: DEFAULT_FRONTEND_INGEST_WORKER_THREADS,
         mapProjectionZoomX: 0.55,
         mapProjectionZoomY: 0.95,
         mapProjectionOffsetX: -0.53,
@@ -49,7 +59,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
 });
 
-const VALID_BACKEND_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
+const VALID_BACKEND_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000, 8000]);
 
 function cloneDefaultSettings() {
     return JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
@@ -194,6 +204,15 @@ function normalizeSettings(rawSettings = {}) {
                 debug.backendIncrementalRefreshMinPackets,
                 debugDefaults.backendIncrementalRefreshMinPackets,
                 100,
+            ),
+            frontendIngestThreadingEnabled:
+                typeof debug.frontendIngestThreadingEnabled === "boolean"
+                    ? debug.frontendIngestThreadingEnabled
+                    : debugDefaults.frontendIngestThreadingEnabled,
+            frontendIngestWorkerThreads: toPositiveInteger(
+                debug.frontendIngestWorkerThreads,
+                debugDefaults.frontendIngestWorkerThreads,
+                1,
             ),
             mapProjectionZoomX: toFiniteNumber(
                 debug.mapProjectionZoomX,

@@ -183,7 +183,8 @@ allPacketInfo = []
 allPacketInfoLock = threading.Lock()
 
 hostOutputFile = "hosts.json"
-hostChunkSize = 250
+DEFAULT_HOST_CHUNK_SIZE = 2000
+hostChunkSize = DEFAULT_HOST_CHUNK_SIZE
 emitJsonSnapshots = False
 progressLinePrefix = "[Bridge]"
 progressEventCallback = None
@@ -5734,9 +5735,9 @@ with additional network and server information.
     )
     parser.add_argument(
         "--host-chunk-size",
-        help="Packet count per incremental hosts snapshot (default: 250).",
+        help="Packet count per incremental hosts snapshot (default: 2000).",
         type=int,
-        default=250,
+        default=DEFAULT_HOST_CHUNK_SIZE,
     )
     parser.add_argument(
         "--worker-threads",
@@ -5840,7 +5841,10 @@ def runCaptureFromArgs(runArgs):
 
     args = runArgs
     verbose = int(getattr(runArgs, "verbose", 0) or 0)
-    hostChunkSize = max(1, int(getattr(runArgs, "host_chunk_size", 250) or 250))
+    hostChunkSize = _coercePositiveInt(
+        getattr(runArgs, "host_chunk_size", DEFAULT_HOST_CHUNK_SIZE),
+        DEFAULT_HOST_CHUNK_SIZE,
+    )
     emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
 
@@ -6322,8 +6326,9 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 active_recon=bool(request.get("activeRecon", True)),
                 use_tor_check=bool(request.get("useTorCheck", True)),
                 conf=request.get("conf"),
-                host_chunk_size=int(
-                    request.get("hostChunkSize") or _getRuntimeConfigSnapshot()["hostChunkSize"]
+                host_chunk_size=_coercePositiveInt(
+                    request.get("hostChunkSize"),
+                    _getRuntimeConfigSnapshot()["hostChunkSize"],
                 ),
                 worker_threads=int(
                     request.get("workerThreads") or _getRuntimeConfigSnapshot()["workerThreads"]
