@@ -4,6 +4,12 @@
 
 PacketSnitch is a network packet analysis tool consisting of a Python backend for extracting payloads and rich metadata from `.pcap` files, and an Electron-based frontend for browsing, filtering, visualizing, and post-processing the results. Recent frontend additions include the Internet Heatmap worldmap view, the PGP workspace, expanded Settings and bridge controls, saved-filter library workflows, context-menu manual Conv file import, and frontend-driven LLM workflows.
 
+## Screenshot
+
+<p align=center"><img alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png" width="1280">
+</p>
+
+
 ## Documentation
 
 - [**Backend Documentation**](backend.md) — Python backend (`snitch.py`) plus the Electron bridge HTTP service mode: usage, arguments, output structure, transport modes, and searchable attributes.
@@ -14,9 +20,8 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 ## Demo
 
-<p align="center"><a href="https://www.youtube.com/watch?v=fSeLVu0ElZk" rel="alternate external" target="_blank">
-<img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/720p-packetsnitch-oxasploits.png" width=1280></a>
-</p>
+<p align="center"><iframe width="560" height="315" src="https://www.youtube.com/embed/fSeLVu0ElZk" title="" frameBorder="0"   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"  allowFullScreen></iframe></p>
+
 
 ## Quick Start
 
