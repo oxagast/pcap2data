@@ -3311,7 +3311,7 @@ function createStatsPanel(options) {
       const credsSec = makeStatsSection({
         documentRef,
         title: "Credentials Found",
-        items: stats.uniqueCredentialCount > 0 ? stats.uniqueCredentials : ["No credentials found"],
+        items: stats.uniqueCredentialCount > 0 ? stats.uniqueCredentials : [""],
         itemTitle: (item) =>
           item === "No credentials found"
             ? ""
@@ -3463,7 +3463,7 @@ function createStatsPanel(options) {
         onQuery: applyStatsQuery,
       });
       if (mimeSec) statisticsPanel.appendChild(mimeSec);
-
+      /*
       const dtSec = makeStatsSection({
         documentRef,
         title: "Data Types",
@@ -3474,6 +3474,7 @@ function createStatsPanel(options) {
         }),
       });
       if (dtSec) statisticsPanel.appendChild(dtSec);
+      */
     } catch (error) {
       const message = error?.stack || error?.message || String(error);
       writeLogEntry(`[${threadName}] Failed to render stats panel: ${message}`);

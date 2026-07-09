@@ -682,18 +682,25 @@ function createSubnetCalculatorPanel({
             if (torResult.success === false) {
                 setPlaceholder(torSection, torResult.error || "Tor lookup failed.");
             } else {
+                const exitNodeBadge = document.createElement("span");
+                exitNodeBadge.className = torResult.isExitNode
+                    ? "subnet-calc-grade-badge subnet-calc-bool-yes"
+                    : "subnet-calc-grade-badge subnet-calc-bool-no";
+                exitNodeBadge.textContent = torResult.isExitNode ? "Yes" : "No";
+
                 const rows = [
                     { name: "Lookup Target", value: torResult.ip || analysis.lookupTargetIp },
-                    { name: "Exit Node", value: torResult.isExitNode ? "Yes" : "No" },
-                    { name: "Matched Nodes", value: String(torResult.nodeCount || 0) },
+                    { name: "Exit Node", valueElement: exitNodeBadge },
+                    { name: "Total Node Match", value: String(torResult.nodeCount || 0) },
                     { name: "Dataset Fetch Date", value: String(torResult.fetchedDate || "Unknown") },
                 ];
 
                 if (Array.isArray(torResult.nodes) && torResult.nodes.length > 0) {
-                    torResult.nodes.forEach((node, index) => {
-                        rows.push({ name: `Node ${index + 1} Nickname`, value: String(node.nickname || "Unknown") });
-                        rows.push({ name: `Node ${index + 1} Platform`, value: String(node.platform || "Unknown") });
-                    });
+                    // now just use the first node, because the others will be dupes
+                    // the same node with different exit ports
+                    const firstNode = torResult.nodes[0];
+                    rows.push({ name: "Node Nickname", value: String(firstNode.nickname || "Unknown") });
+                    rows.push({ name: "Node Platform", value: String(firstNode.platform || "Unknown") });
                 }
 
                 renderKeyValueTable(torSection, "Tor", rows);

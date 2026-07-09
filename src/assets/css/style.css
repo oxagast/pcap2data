@@ -1455,6 +1455,18 @@ strong {
   color: #d0d7de;
 }
 
+.subnet-calc-bool-yes {
+  background-color: rgba(218, 54, 51, 0.22);
+  border-color: rgba(218, 54, 51, 0.55);
+  color: #ffaba8;
+}
+
+.subnet-calc-bool-no {
+  background-color: rgba(46, 160, 67, 0.18);
+  border-color: rgba(46, 160, 67, 0.55);
+  color: #9be9a8;
+}
+
 @media (max-width: 1100px) {
   .subnet-calc-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
