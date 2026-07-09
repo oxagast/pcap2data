@@ -10714,13 +10714,47 @@ function resolveManualConvImportWarningLoad(shouldContinue) {
 }
 
 // Returns stream tuple for packet.
+function getTransportProtocolName(packetInfo) {
+  const rawProtocol = String(
+    packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "",
+  )
+    .trim()
+    .toUpperCase();
+  if (rawProtocol) return rawProtocol;
+  if (packetInfo?.TCP && typeof packetInfo.TCP === "object") return "TCP";
+  if (packetInfo?.UDP && typeof packetInfo.UDP === "object") return "UDP";
+  if (packetInfo?.SCTP && typeof packetInfo.SCTP === "object") return "SCTP";
+  return "TCP";
+}
+
+function getTransportDataForPacketInfo(packetInfo, protocolName = "") {
+  if (!packetInfo || typeof packetInfo !== "object") return {};
+  const normalizedProtocol = String(protocolName || "").trim();
+  const candidates = [
+    normalizedProtocol,
+    normalizedProtocol.toUpperCase(),
+    normalizedProtocol.toLowerCase(),
+    "TCP",
+    "UDP",
+    "SCTP",
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const transportData = packetInfo[candidate];
+    if (transportData && typeof transportData === "object") {
+      return transportData;
+    }
+  }
+  return {};
+}
+
 function getStreamTupleForPacket(packet) {
   const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
   const srcIp = packetInfo["IP"]?.["ip.src.addr"] ?? packetInfo["IP"]?.["Source IP"];
   const dstIp = packetInfo["IP"]?.["ip.dst.addr"] ?? packetInfo["IP"]?.["Destination IP"];
-  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
-  const transportData = packetInfo[protocol] || {};
+  const protocol = getTransportProtocolName(packetInfo);
+  const transportData = getTransportDataForPacketInfo(packetInfo, protocol);
   const srcPort =
     transportData["tcp.src.port"] ??
     transportData["udp.src.port"] ??
@@ -10767,12 +10801,12 @@ function getFollowStreamPackets(packet = null) {
     for (const pkt of host) {
       const pi = pkt?.["packet.info"];
       if (!pi) continue;
-      const pProto = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
+      const pProto = getTransportProtocolName(pi);
       if (pProto !== protocol) continue;
       const pSrcIp = pi["IP"]?.["ip.src.addr"] ?? pi["IP"]?.["Source IP"];
       const pDstIp = pi["IP"]?.["ip.dst.addr"] ?? pi["IP"]?.["Destination IP"];
       if (!pSrcIp || !pDstIp) continue;
-      const pTransport = pi[pProto] || {};
+      const pTransport = getTransportDataForPacketInfo(pi, pProto);
       const pSrcPort =
         pTransport["tcp.src.port"] ??
         pTransport["udp.src.port"] ??
@@ -10829,12 +10863,12 @@ async function getFollowStreamPacketsAsync(packet = null) {
         continue;
       }
 
-      const pProto = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
+      const pProto = getTransportProtocolName(pi);
       if (pProto === protocol) {
         const pSrcIp = pi["IP"]?.["ip.src.addr"] ?? pi["IP"]?.["Source IP"];
         const pDstIp = pi["IP"]?.["ip.dst.addr"] ?? pi["IP"]?.["Destination IP"];
         if (pSrcIp && pDstIp) {
-          const pTransport = pi[pProto] || {};
+          const pTransport = getTransportDataForPacketInfo(pi, pProto);
           const pSrcPort =
             pTransport["tcp.src.port"] ??
             pTransport["udp.src.port"] ??
@@ -10947,15 +10981,15 @@ function getPacketPayloadBytes(packet) {
 function getPacketTransportData(packet) {
   const packetInfo = packet?.["packet.info"];
   if (!packetInfo) return null;
-  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
-  return packetInfo[protocol] || null;
+  const protocol = getTransportProtocolName(packetInfo);
+  return getTransportDataForPacketInfo(packetInfo, protocol);
 }
 
 // Builds bidirectional stream key.
 function buildBidirectionalStreamKey(packetInfo) {
   if (!packetInfo || typeof packetInfo !== "object") return "";
-  const transportName = String(packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "Unknown");
-  const transportData = packetInfo[transportName] || {};
+  const transportName = getTransportProtocolName(packetInfo);
+  const transportData = getTransportDataForPacketInfo(packetInfo, transportName);
   const sourceIp = packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "";
   const destinationIp = packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "";
   const sourcePort =
@@ -11956,7 +11990,7 @@ function buildFtpCandidateFromDataStream(
     reverseHex
   ) {
     selectedHex = reverseHex;
-    p = activePacket; // Corrected to assign the hydrated packet
+  } else {
     selectedHex = forwardBytes >= reverseBytes ? forwardHex : reverseHex;
   }
   if (!selectedHex) return null;
@@ -13272,6 +13306,9 @@ function getCurrentRawPayloadHex(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
   const payloadHex =
     contextPacket?.["packet.info"]?.["Raw data"]?.["Payload"]?.[
+    "payload.hex"
+    ] ??
+    contextPacket?.["packet.info"]?.["Raw data"]?.["Payload"]?.[
     "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
@@ -13282,8 +13319,9 @@ function getCurrentHttpData(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
   const packetInfo = contextPacket?.["packet.info"];
   if (!packetInfo) return null;
-  const protocol = packetInfo["packet.proto"] ?? packetInfo["Protocol"] ?? "TCP";
-  return packetInfo[protocol]?.["HTTP"] || null;
+  const protocol = getTransportProtocolName(packetInfo);
+  const transportData = getTransportDataForPacketInfo(packetInfo, protocol);
+  return transportData?.["HTTP"] || null;
 }
 
 // Extracts http body hex.
