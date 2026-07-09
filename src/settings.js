@@ -25,6 +25,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     debug: {
         ungroupedListVirtualizationEnabled: false,
         backendHttpDataModeEnabled: false,
+        backendIncrementalRefreshMinIntervalMs: 1500,
+        backendIncrementalRefreshMinPackets: 4000,
         mapProjectionZoomX: 0.55,
         mapProjectionZoomY: 0.95,
         mapProjectionOffsetX: -0.53,
@@ -183,6 +185,16 @@ function normalizeSettings(rawSettings = {}) {
                 typeof debug.backendHttpDataModeEnabled === "boolean"
                     ? debug.backendHttpDataModeEnabled
                     : debugDefaults.backendHttpDataModeEnabled,
+            backendIncrementalRefreshMinIntervalMs: toPositiveInteger(
+                debug.backendIncrementalRefreshMinIntervalMs,
+                debugDefaults.backendIncrementalRefreshMinIntervalMs,
+                100,
+            ),
+            backendIncrementalRefreshMinPackets: toPositiveInteger(
+                debug.backendIncrementalRefreshMinPackets,
+                debugDefaults.backendIncrementalRefreshMinPackets,
+                100,
+            ),
             mapProjectionZoomX: toFiniteNumber(
                 debug.mapProjectionZoomX,
                 debugDefaults.mapProjectionZoomX,

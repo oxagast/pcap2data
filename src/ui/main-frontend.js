@@ -279,6 +279,10 @@ let sessionPickerPanel = null;
 const LLM_MAX_CONTENT_LENGTH = 180000;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
+let pendingBackendCaptureUpdate = null;
+let backendCaptureUpdateDrainActive = false;
+let backendLastAppliedSnapshotProcessedPackets = 0;
+let backendLastAppliedSnapshotAtMs = 0;
 let sessionAutosaveInFlight = false;
 let appSettings = cloneDefaultSettings();
 let statusResetTimeoutId = null;
@@ -861,6 +865,12 @@ function syncSettingsFormFromState() {
   const backendHttpDataModeEnabledEl = document.getElementById(
     "settings-debug-backend-http-data-mode-enabled",
   );
+  const backendRefreshIntervalMsEl = document.getElementById(
+    "settings-debug-backend-refresh-interval-ms",
+  );
+  const backendRefreshMinPacketsEl = document.getElementById(
+    "settings-debug-backend-refresh-min-packets",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -916,6 +926,16 @@ function syncSettingsFormFromState() {
   if (backendHttpDataModeEnabledEl) {
     backendHttpDataModeEnabledEl.checked = Boolean(
       settings.debug.backendHttpDataModeEnabled,
+    );
+  }
+  if (backendRefreshIntervalMsEl) {
+    backendRefreshIntervalMsEl.value = String(
+      settings.debug.backendIncrementalRefreshMinIntervalMs,
+    );
+  }
+  if (backendRefreshMinPacketsEl) {
+    backendRefreshMinPacketsEl.value = String(
+      settings.debug.backendIncrementalRefreshMinPackets,
     );
   }
   if (mapProjectionZoomXEl) {
@@ -979,6 +999,12 @@ function readSettingsFormState() {
   const backendHttpDataModeEnabledEl = document.getElementById(
     "settings-debug-backend-http-data-mode-enabled",
   );
+  const backendRefreshIntervalMsEl = document.getElementById(
+    "settings-debug-backend-refresh-interval-ms",
+  );
+  const backendRefreshMinPacketsEl = document.getElementById(
+    "settings-debug-backend-refresh-min-packets",
+  );
   const mapProjectionZoomXEl = document.getElementById("settings-debug-map-projection-zoom-x");
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
@@ -1037,6 +1063,12 @@ function readSettingsFormState() {
       backendHttpDataModeEnabled: backendHttpDataModeEnabledEl
         ? backendHttpDataModeEnabledEl.checked
         : DEFAULT_SETTINGS.debug.backendHttpDataModeEnabled,
+      backendIncrementalRefreshMinIntervalMs: backendRefreshIntervalMsEl
+        ? backendRefreshIntervalMsEl.value
+        : DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinIntervalMs,
+      backendIncrementalRefreshMinPackets: backendRefreshMinPacketsEl
+        ? backendRefreshMinPacketsEl.value
+        : DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
       mapProjectionZoomX: mapProjectionZoomXEl
         ? mapProjectionZoomXEl.value
         : DEFAULT_SETTINGS.debug.mapProjectionZoomX,
@@ -1183,6 +1215,16 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "backendHttpDataModeEnabled",
     previousDebug.backendHttpDataModeEnabled,
     nextDebug.backendHttpDataModeEnabled,
+  );
+  pushChange(
+    "backendIncrementalRefreshMinIntervalMs",
+    previousDebug.backendIncrementalRefreshMinIntervalMs,
+    nextDebug.backendIncrementalRefreshMinIntervalMs,
+  );
+  pushChange(
+    "backendIncrementalRefreshMinPackets",
+    previousDebug.backendIncrementalRefreshMinPackets,
+    nextDebug.backendIncrementalRefreshMinPackets,
   );
   pushChange(
     "mapProjectionZoomX",
@@ -1346,6 +1388,22 @@ function getStreamContextWarnPacketThreshold() {
     5,
     Number(getCurrentSettings()?.general?.streamContextWarnPacketThreshold) ||
     DEFAULT_SETTINGS.general.streamContextWarnPacketThreshold,
+  );
+}
+
+function getBackendIncrementalRefreshMinIntervalMs() {
+  return Math.max(
+    100,
+    Number(getCurrentSettings()?.debug?.backendIncrementalRefreshMinIntervalMs) ||
+    DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinIntervalMs,
+  );
+}
+
+function getBackendIncrementalRefreshMinPackets() {
+  return Math.max(
+    100,
+    Number(getCurrentSettings()?.debug?.backendIncrementalRefreshMinPackets) ||
+    DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
   );
 }
 
@@ -1590,6 +1648,9 @@ function resetBackendProgressState() {
   backendProgressState.processedPackets = 0;
   backendProgressState.totalPackets = 0;
   backendProgressState.lastReportedPercent = -1;
+  pendingBackendCaptureUpdate = null;
+  backendLastAppliedSnapshotProcessedPackets = 0;
+  backendLastAppliedSnapshotAtMs = 0;
   updateBackendProcessingWarning();
 }
 
@@ -1720,6 +1781,57 @@ function countCaptureDataPackets(captureData) {
     if (!Array.isArray(hostPackets)) return total;
     return total + hostPackets.length;
   }, 0);
+}
+
+function shouldReplacePendingBackendCaptureUpdate(currentUpdate, nextUpdate) {
+  if (!currentUpdate) return true;
+  if (!nextUpdate) return false;
+
+  const currentComplete = Boolean(currentUpdate.payload?.complete);
+  const nextComplete = Boolean(nextUpdate.payload?.complete);
+  if (currentComplete !== nextComplete) {
+    return nextComplete;
+  }
+
+  const currentProcessed = Number(currentUpdate.payload?.processedPackets) || 0;
+  const nextProcessed = Number(nextUpdate.payload?.processedPackets) || 0;
+  if (currentProcessed !== nextProcessed) {
+    return nextProcessed > currentProcessed;
+  }
+
+  const currentTotal = Number(currentUpdate.payload?.totalPackets) || 0;
+  const nextTotal = Number(nextUpdate.payload?.totalPackets) || 0;
+  if (currentTotal !== nextTotal) {
+    return nextTotal > currentTotal;
+  }
+
+  return true;
+}
+
+function shouldApplyIncrementalBackendSnapshot(payload) {
+  if (!backendProgressState.firstChunkLoaded || payload?.complete) {
+    return true;
+  }
+
+  const processedPackets = Number(payload?.processedPackets) || 0;
+  const packetThreshold = Math.max(
+    (Number(payload?.chunkSize) || getBackendPacketChunkSize()) * 8,
+    getBackendIncrementalRefreshMinPackets(),
+  );
+  const packetDelta = Math.max(
+    0,
+    processedPackets - backendLastAppliedSnapshotProcessedPackets,
+  );
+  const elapsedMs = Math.max(0, performance.now() - backendLastAppliedSnapshotAtMs);
+
+  return (
+    packetDelta >= packetThreshold || elapsedMs >= getBackendIncrementalRefreshMinIntervalMs()
+  );
+}
+
+function markAppliedBackendSnapshot(payload) {
+  backendLastAppliedSnapshotProcessedPackets = Number(payload?.processedPackets) || 0;
+  backendLastAppliedSnapshotAtMs = performance.now();
 }
 
 initializeInstallScreen({
@@ -14594,6 +14706,22 @@ document
     );
   });
 
+document
+  .getElementById("settings-debug-backend-refresh-interval-ms")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backendIncrementalRefreshMinIntervalMs=${event?.target?.value}`,
+    );
+  });
+
+document
+  .getElementById("settings-debug-backend-refresh-min-packets")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backendIncrementalRefreshMinPackets=${event?.target?.value}`,
+    );
+  });
+
 document.getElementById("settings-debug-map-projection-zoom-x").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated mapProjectionZoomX=${event?.target?.value}`);
 });
@@ -16681,202 +16809,239 @@ if (sessionsLibraryBtn) {
 // the next two have hooks into IPC handlers for main.js
 // data transactions
 
-// when the main.js returns the capture path from snitch.py
-window.jsonapi.onJsonPath((rawPayload) => {
-  const payload = normalizeBackendJsonPathPayload(rawPayload);
-  if (!payload || !payload.path) return;
+function queueBackendCaptureUpdate(kind, payload) {
+  const nextUpdate = { kind, payload };
+  if (shouldReplacePendingBackendCaptureUpdate(pendingBackendCaptureUpdate, nextUpdate)) {
+    pendingBackendCaptureUpdate = nextUpdate;
+  }
+
+  if (backendCaptureUpdateDrainActive) {
+    return;
+  }
 
   backendCaptureUpdateQueue = backendCaptureUpdateQueue
     .then(async () => {
-      document.getElementById("error-container").style.display = "none";
-      // Clear library session name – this is a new PCAP capture, not a library session
-      currentSessionName = null;
-
-      backendProgressState.processedPackets = Math.max(
-        backendProgressState.processedPackets,
-        payload.processedPackets,
-      );
-      backendProgressState.totalPackets = Math.max(
-        backendProgressState.totalPackets,
-        payload.totalPackets,
-      );
-      backendProgressState.processing = !payload.complete;
-
-      if (!payload.complete) {
-        updateBackendProgressStatus();
-      }
-
-      const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
-      const hasUsableChunk =
-        payload.complete || payload.processedPackets >= minimumChunkSize;
-
-      if (!backendProgressState.firstChunkLoaded) {
-        if (!hasUsableChunk) {
-          document.getElementById("loading-screen").style.display = "flex";
-          document.getElementById("loading-container").style.display = "block";
-          document.getElementById("loading-text").textContent = "Loading packets...";
-          updateBackendProgressStatus({ force: true });
-          updateBackendProcessingWarning();
-          return;
+      if (backendCaptureUpdateDrainActive) return;
+      backendCaptureUpdateDrainActive = true;
+      try {
+        while (pendingBackendCaptureUpdate) {
+          const update = pendingBackendCaptureUpdate;
+          pendingBackendCaptureUpdate = null;
+          if (update.kind === "path") {
+            await processBackendJsonPathPayload(update.payload);
+          } else if (update.kind === "data") {
+            await processBackendJsonDataPayload(update.payload);
+          }
         }
-
-        document.getElementById("loading-screen").style.display = "flex";
-        document.getElementById("loading-container").style.display = "block";
-        document.getElementById("loading-text").textContent = "Loading packets...";
-        updateBackendProgressStatus({ force: true });
-        writeLogEntry(
-          `Backend snapshot received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
-        );
-        hideLoadingOverlay();
-        await processCapturePath(payload.path, {
-          suppressLoadingOverlay: true,
-          incrementalUpdate: false,
-        });
-        backendProgressState.firstChunkLoaded = true;
-        hideLoadingOverlay();
-        filterInputEl.value = "";
-        updateFilterClearButtonState();
-        clearFilterQuery();
-        syncFilterHighlight();
-      } else {
-        hideLoadingOverlay();
-        updateBackendProgressStatus({ force: true });
-        await processCapturePath(payload.path, {
-          suppressLoadingOverlay: true,
-          incrementalUpdate: true,
-        });
-        writeLogEntry(
-          `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
-        );
+      } finally {
+        backendCaptureUpdateDrainActive = false;
       }
-
-      if (payload.complete) {
-        backendProgressState.processing = false;
-        hideLoadingOverlay();
-        const loadEndTime = performance.now();
-        document.getElementById("load-time").textContent =
-          "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
-        document.getElementById("total-packets").textContent =
-          "Total Packets: " + totalPacketCount();
-        scheduleSessionKeychainAutoPopulate("backend-complete");
-        writeLogEntry(
-          `Completed processing backend data total_packets = ${totalPacketCount()} load_time_sec = ${(
-            (loadEndTime - startTime) /
-            1000
-          ).toFixed(2)
-          } `,
-        );
-        statusUpdate("Status: Ready");
-      }
-
-      updateBackendProcessingWarning();
     })
     .catch((error) => {
       logErrorEntry("backend-progress", error);
       doError("Failed to process backend update", { backend: true });
+      backendCaptureUpdateDrainActive = false;
     });
+}
+
+async function processBackendJsonPathPayload(payload) {
+  document.getElementById("error-container").style.display = "none";
+  currentSessionName = null;
+
+  backendProgressState.processedPackets = Math.max(
+    backendProgressState.processedPackets,
+    payload.processedPackets,
+  );
+  backendProgressState.totalPackets = Math.max(
+    backendProgressState.totalPackets,
+    payload.totalPackets,
+  );
+  backendProgressState.processing = !payload.complete;
+
+  if (!payload.complete) {
+    updateBackendProgressStatus();
+  }
+
+  const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
+  const hasUsableChunk =
+    payload.complete || payload.processedPackets >= minimumChunkSize;
+
+  if (!backendProgressState.firstChunkLoaded) {
+    if (!hasUsableChunk) {
+      document.getElementById("loading-screen").style.display = "flex";
+      document.getElementById("loading-container").style.display = "block";
+      document.getElementById("loading-text").textContent = "Loading packets...";
+      updateBackendProgressStatus({ force: true });
+      updateBackendProcessingWarning();
+      return;
+    }
+
+    document.getElementById("loading-screen").style.display = "flex";
+    document.getElementById("loading-container").style.display = "block";
+    document.getElementById("loading-text").textContent = "Loading packets...";
+    updateBackendProgressStatus({ force: true });
+    writeLogEntry(
+      `Backend snapshot received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
+    );
+    hideLoadingOverlay();
+    await processCapturePath(payload.path, {
+      suppressLoadingOverlay: true,
+      incrementalUpdate: false,
+    });
+    backendProgressState.firstChunkLoaded = true;
+    markAppliedBackendSnapshot(payload);
+    hideLoadingOverlay();
+    filterInputEl.value = "";
+    updateFilterClearButtonState();
+    clearFilterQuery();
+    syncFilterHighlight();
+  } else {
+    if (!shouldApplyIncrementalBackendSnapshot(payload)) {
+      updateBackendProcessingWarning();
+      return;
+    }
+    hideLoadingOverlay();
+    updateBackendProgressStatus({ force: true });
+    await processCapturePath(payload.path, {
+      suppressLoadingOverlay: true,
+      incrementalUpdate: true,
+    });
+    markAppliedBackendSnapshot(payload);
+    writeLogEntry(
+      `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
+    );
+  }
+
+  if (payload.complete) {
+    backendProgressState.processing = false;
+    hideLoadingOverlay();
+    const loadEndTime = performance.now();
+    document.getElementById("load-time").textContent =
+      "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+    scheduleSessionKeychainAutoPopulate("backend-complete");
+    writeLogEntry(
+      `Completed processing backend data total_packets = ${totalPacketCount()} load_time_sec = ${(
+        (loadEndTime - startTime) /
+        1000
+      ).toFixed(2)
+      } `,
+    );
+    statusUpdate("Status: Ready");
+  }
+
+  updateBackendProcessingWarning();
+}
+
+async function processBackendJsonDataPayload(payload) {
+  document.getElementById("error-container").style.display = "none";
+  currentSessionName = null;
+
+  backendProgressState.processedPackets = Math.max(
+    backendProgressState.processedPackets,
+    payload.processedPackets,
+  );
+  backendProgressState.totalPackets = Math.max(
+    backendProgressState.totalPackets,
+    payload.totalPackets,
+  );
+  backendProgressState.processing = !payload.complete;
+
+  if (!payload.complete) {
+    updateBackendProgressStatus();
+  }
+
+  const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
+  const payloadPacketCount = countCaptureDataPackets(payload.captureData);
+  const hasUsableChunk =
+    payload.complete
+    || payload.processedPackets >= minimumChunkSize
+    || payloadPacketCount > 0;
+
+  if (!backendProgressState.firstChunkLoaded) {
+    if (!hasUsableChunk) {
+      document.getElementById("loading-screen").style.display = "flex";
+      document.getElementById("loading-container").style.display = "block";
+      document.getElementById("loading-text").textContent = "Loading packets...";
+      updateBackendProgressStatus({ force: true });
+      writeLogEntry(
+        `Backend in-memory snapshot deferred label=${JSON.stringify(payload.label)} processed=${payload.processedPackets} total=${payload.totalPackets} chunk_size=${minimumChunkSize} payload_packets=${payloadPacketCount}`,
+      );
+      updateBackendProcessingWarning();
+      return;
+    }
+
+    hideLoadingOverlay();
+    updateBackendProgressStatus({ force: true });
+    writeLogEntry(
+      `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_packets = ${payloadPacketCount} complete = ${payload.complete}`,
+    );
+    await yieldToRenderer();
+    await processCaptureData(payload.captureData, {
+      suppressLoadingOverlay: true,
+      incrementalUpdate: false,
+    });
+    backendProgressState.firstChunkLoaded = true;
+    markAppliedBackendSnapshot(payload);
+    clearSummaryContent();
+    hideLoadingOverlay();
+    filterInputEl.value = "";
+    updateFilterClearButtonState();
+    clearFilterQuery();
+    syncFilterHighlight();
+  } else {
+    if (!shouldApplyIncrementalBackendSnapshot(payload)) {
+      updateBackendProcessingWarning();
+      return;
+    }
+    hideLoadingOverlay();
+    updateBackendProgressStatus({ force: true });
+    await yieldToRenderer();
+    await processCaptureData(payload.captureData, {
+      suppressLoadingOverlay: true,
+      incrementalUpdate: true,
+    });
+    markAppliedBackendSnapshot(payload);
+    writeLogEntry(
+      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
+    );
+  }
+
+  if (payload.complete) {
+    backendProgressState.processing = false;
+    clearSummaryContent();
+    hideLoadingOverlay();
+    const loadEndTime = performance.now();
+    document.getElementById("load-time").textContent =
+      "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
+    document.getElementById("total-packets").textContent =
+      "Total Packets: " + totalPacketCount();
+    scheduleSessionKeychainAutoPopulate("backend-complete");
+    writeLogEntry(
+      `Completed processing backend in-memory data total_packets = ${totalPacketCount()} load_time_sec = ${(
+        (loadEndTime - startTime) /
+        1000
+      ).toFixed(2)
+      } `,
+    );
+    statusUpdate("Status: Ready");
+  }
+
+  updateBackendProcessingWarning();
+}
+
+// when the main.js returns the capture path from snitch.py
+window.jsonapi.onJsonPath((rawPayload) => {
+  const payload = normalizeBackendJsonPathPayload(rawPayload);
+  if (!payload || !payload.path) return;
+  queueBackendCaptureUpdate("path", payload);
 });
 
 window.jsonapi.onJsonData((rawPayload) => {
   const payload = normalizeBackendJsonDataPayload(rawPayload);
   if (!payload || !payload.captureData) return;
-
-  backendCaptureUpdateQueue = backendCaptureUpdateQueue
-    .then(async () => {
-      document.getElementById("error-container").style.display = "none";
-      currentSessionName = null;
-
-      backendProgressState.processedPackets = Math.max(
-        backendProgressState.processedPackets,
-        payload.processedPackets,
-      );
-      backendProgressState.totalPackets = Math.max(
-        backendProgressState.totalPackets,
-        payload.totalPackets,
-      );
-      backendProgressState.processing = !payload.complete;
-
-      if (!payload.complete) {
-        updateBackendProgressStatus();
-      }
-
-      const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
-      const payloadPacketCount = countCaptureDataPackets(payload.captureData);
-      const hasUsableChunk =
-        payload.complete
-        || payload.processedPackets >= minimumChunkSize
-        || payloadPacketCount > 0;
-
-      if (!backendProgressState.firstChunkLoaded) {
-        if (!hasUsableChunk) {
-          document.getElementById("loading-screen").style.display = "flex";
-          document.getElementById("loading-container").style.display = "block";
-          document.getElementById("loading-text").textContent = "Loading packets...";
-          updateBackendProgressStatus({ force: true });
-          writeLogEntry(
-            `Backend in-memory snapshot deferred label=${JSON.stringify(payload.label)} processed=${payload.processedPackets} total=${payload.totalPackets} chunk_size=${minimumChunkSize} payload_packets=${payloadPacketCount}`,
-          );
-          updateBackendProcessingWarning();
-          return;
-        }
-
-        // First usable in-memory chunk: hand control back to the UI immediately.
-        hideLoadingOverlay();
-        updateBackendProgressStatus({ force: true });
-        writeLogEntry(
-          `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_packets = ${payloadPacketCount} complete = ${payload.complete}`,
-        );
-        await yieldToRenderer();
-        await processCaptureData(payload.captureData, {
-          suppressLoadingOverlay: true,
-          incrementalUpdate: false,
-        });
-        backendProgressState.firstChunkLoaded = true;
-        clearSummaryContent();
-        hideLoadingOverlay();
-        filterInputEl.value = "";
-        updateFilterClearButtonState();
-        clearFilterQuery();
-        syncFilterHighlight();
-      } else {
-        hideLoadingOverlay();
-        updateBackendProgressStatus({ force: true });
-        await yieldToRenderer();
-        await processCaptureData(payload.captureData, {
-          suppressLoadingOverlay: true,
-          incrementalUpdate: true,
-        });
-        writeLogEntry(
-          `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
-        );
-      }
-
-      if (payload.complete) {
-        backendProgressState.processing = false;
-        clearSummaryContent();
-        hideLoadingOverlay();
-        const loadEndTime = performance.now();
-        document.getElementById("load-time").textContent =
-          "Load time: " + ((loadEndTime - startTime) / 1000).toFixed(2) + " seconds";
-        document.getElementById("total-packets").textContent =
-          "Total Packets: " + totalPacketCount();
-        scheduleSessionKeychainAutoPopulate("backend-complete");
-        writeLogEntry(
-          `Completed processing backend in-memory data total_packets = ${totalPacketCount()} load_time_sec = ${(
-            (loadEndTime - startTime) /
-            1000
-          ).toFixed(2)
-          } `,
-        );
-        statusUpdate("Status: Ready");
-      }
-
-      updateBackendProcessingWarning();
-    })
-    .catch((error) => {
-      logErrorEntry("backend-progress-data", error);
-      doError("Failed to process backend in-memory update", { backend: true });
-    });
+  queueBackendCaptureUpdate("data", payload);
 });
 
 // here we create the backend process and hook it to the handler
