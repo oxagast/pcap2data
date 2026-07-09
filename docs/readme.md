@@ -95,6 +95,7 @@ Marshall Whittaker <marshall@oxasploits.com>
 
 ## Thanks / Contibutions
 
+- Vesteria (backend tor node detection code)
 - blissfulboy (frontend design suggestions and feedback)
 - kusanagi (frontend feedback and some sponsorship stuff)
 - Martin Ollivere (Rat on wheel spinning gif)
