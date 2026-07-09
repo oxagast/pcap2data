@@ -1,9 +1,11 @@
 import json
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 
 import pytest
+from scapy.all import CookedLinux, IP, UDP, Raw, wrpcap
 
 
 def _project_root() -> Path:
@@ -12,6 +14,15 @@ def _project_root() -> Path:
 
 def _backend_script() -> Path:
     return _project_root() / "src" / "backend" / "snitch.py"
+
+
+def _load_backend_module():
+    spec = importlib.util.spec_from_file_location("snitch_backend_test_module", _backend_script())
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load backend module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _sample_pcap() -> Path:
@@ -104,3 +115,87 @@ def test_backend_generates_valid_hosts_json(tmp_path: Path):
     _assert_hosts_json_valid(hosts_data)
     # print status with no newline
     print("Backend hosts.json validation passed.", end="", flush=True)
+
+
+def test_backend_handles_linux_cooked_capture(tmp_path: Path):
+    backend = _backend_script()
+
+    if not backend.exists():
+        pytest.skip(f"Backend script not found: {backend}")
+
+    packet = (
+        CookedLinux(pkttype=0, lladdrtype=1, lladdrlen=6, src=b"\x00\x11\x22\x33\x44\x55", proto=0x0800)
+        / IP(src="10.0.0.10", dst="10.0.0.20")
+        / UDP(sport=5353, dport=1900)
+        / Raw(load=b"packetsnitch-linux-cooked")
+    )
+
+    pcap_file = tmp_path / "linux-cooked-any.pcap"
+    wrpcap(str(pcap_file), [packet])
+
+    output_dir = tmp_path / "snitch-output-sll"
+    conf_file = tmp_path / "test-conf-linux-cooked.yaml"
+    _write_test_config(conf_file)
+
+    result = _run_backend(pcap_file=pcap_file, output_dir=output_dir, conf_file=conf_file)
+    if result.returncode != 0:
+        pytest.fail(
+            "Backend execution failed for Linux cooked capture.\n"
+            f"exit={result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    hosts_file = output_dir / "hosts.json"
+    assert hosts_file.exists(), f"Expected output file not found: {hosts_file}"
+
+    hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    _assert_hosts_json_valid(hosts_data)
+
+    packets = []
+    for packet_list in hosts_data.get("host", {}).values():
+        if isinstance(packet_list, list):
+            packets.extend(packet_list)
+
+    assert packets, "Expected at least one decoded packet in hosts.json"
+
+    packet_info = packets[0].get("packet.info", {})
+    assert isinstance(packet_info, dict), "packet.info must be a JSON object"
+    assert packet_info.get("link.proto") in (
+        "Linux Cooked",
+        "Linux Cooked v2",
+    ), "Expected Linux cooked link.proto for any-interface capture"
+    assert "Linux Cooked" in packet_info, "Expected Linux cooked metadata section"
+
+
+def test_backend_builds_tor_lookup_response(monkeypatch):
+    backend = _load_backend_module()
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "relays": [
+                    {
+                        "nickname": "TestRelay",
+                        "platform": "Tor 0.4.x on Linux",
+                        "fingerprint": "ABCDEF123456",
+                        "or_addresses": ["1.2.3.4:9001"],
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(backend, "torNetworkNodesByIp", {})
+    monkeypatch.setattr(backend, "torNetworkIps", {})
+    monkeypatch.setattr(backend, "torNetworkCacheDate", "")
+    monkeypatch.setattr(backend.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    result = backend.buildTorLookupResponse("1.2.3.4")
+    assert result["success"] is True
+    assert result["listed"] is True
+    assert result["isExitNode"] is True
+    assert result["nodeCount"] == 1
+    assert result["projectUrl"] == "https://www.torproject.org/"
+    assert result["nodes"][0]["nickname"] == "TestRelay"

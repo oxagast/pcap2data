@@ -522,6 +522,69 @@ function requestSnitchHttpBackendIpsum(
   });
 }
 
+function requestSnitchHttpBackendTor(
+  ipAddress,
+  {
+    host = currentBackendHttpHost,
+    port = currentBackendHttpPort,
+    timeoutMs = 7000,
+  } = {},
+) {
+  return new Promise((resolve) => {
+    const normalizedIp = String(ipAddress || "").trim();
+    if (!normalizedIp) {
+      resolve({
+        success: false,
+        error: "Missing IP address",
+      });
+      return;
+    }
+
+    const requestPath = `/tor?ip=${encodeURIComponent(normalizedIp)}`;
+    const req = http.request(
+      {
+        host,
+        port,
+        path: requestPath,
+        method: "GET",
+        timeout: timeoutMs,
+        headers: {
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          let payload = {};
+          try {
+            payload = JSON.parse(body || "{}");
+          } catch (_err) {
+            payload = {};
+          }
+          resolve({
+            success: res.statusCode === 200 && payload?.success !== false,
+            ...payload,
+          });
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP Tor request timed out"));
+    });
+    req.on("error", (error) => {
+      resolve({
+        success: false,
+        error: error?.message || "HTTP Tor request failed",
+      });
+    });
+    req.end();
+  });
+}
+
 function normalizeBackendTransportOptions(rawOptions = {}) {
   const source = rawOptions && typeof rawOptions === "object" ? rawOptions : {};
   const host =
@@ -1678,6 +1741,37 @@ ipcMain.handle("lookup-backend-ipsum", async (_event, ipAddress, options = {}) =
   });
 });
 
+ipcMain.handle("lookup-backend-tor", async (_event, ipAddress, options = {}) => {
+  const optionsSource = options && typeof options === "object" ? options : {};
+  const normalizedTransport = applyBackendTransportOptions(
+    optionsSource.backendOptions,
+  );
+  if (normalizedTransport.forceLegacySpawn) {
+    return {
+      success: false,
+      error: "Backend Tor lookup requires HTTP backend mode",
+      mode: "legacy",
+    };
+  }
+
+  const ready = await ensureBackendHttpServerReady();
+  if (!ready) {
+    return {
+      success: false,
+      error: "Backend HTTP service unavailable",
+      mode: "http",
+    };
+  }
+
+  return requestSnitchHttpBackendTor(ipAddress, {
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+    timeoutMs: Number(optionsSource.timeoutMs) > 0
+      ? Number(optionsSource.timeoutMs)
+      : 7000,
+  });
+});
+
 // Start the HTTP backend service as early as possible so the renderer can
 // submit processing requests immediately after startup.
 applyBackendTransportOptions({
@@ -1700,6 +1794,7 @@ module.exports = {
   requestSnitchHttpBackendGeoip,
   requestSnitchHttpBackendWhois,
   requestSnitchHttpBackendIpsum,
+  requestSnitchHttpBackendTor,
   // Backward-compatible aliases for existing imports in main process code.
   shutdownTcpBackendService: shutdownHttpBackendService,
   ensureBackendTcpServerReady: ensureBackendHttpServerReady,

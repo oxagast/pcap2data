@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('lookup-backend-whois', ipAddress, options),
   lookupIpsum: (ipAddress, options = {}) =>
     ipcRenderer.invoke('lookup-backend-ipsum', ipAddress, options),
+  lookupTor: (ipAddress, options = {}) =>
+    ipcRenderer.invoke('lookup-backend-tor', ipAddress, options),
   runBackendCommand: (filename, useLLM, chunkSize, workerThreads, backendOptions) =>
     ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, workerThreads, backendOptions),
   runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, workerThreads, backendOptions) =>

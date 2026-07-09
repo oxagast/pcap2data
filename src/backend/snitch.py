@@ -63,7 +63,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from urllib.parse import unquote_plus
+from urllib.parse import parse_qs, unquote_plus, urlparse
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -211,6 +211,12 @@ ipsumCacheDate = ""
 PACKETSNITCH_USERDATA_PATH = str(os.environ.get("PACKETSNITCH_USERDATA_PATH", "")).strip()
 IPSUM_SOURCE_URL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsum.txt"
 IPSUM_PROJECT_URL = "https://github.com/stamparm/ipsum"
+TOR_ONIONOO_URL = "https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform"
+TOR_PROJECT_URL = "https://www.torproject.org/"
+torNetworkCacheLock = threading.Lock()
+torNetworkNodesByIp: dict = {}
+torNetworkIps: dict = {}
+torNetworkCacheDate = ""
 
 # --- Banner cache: (ip, port) -> banner dict, avoids redundant socket probes ---
 cachedBanners: dict = {}
@@ -1402,6 +1408,108 @@ def buildIpsumLookupResponse(ip):
     }
 
 
+def _extractTorIpFromAddress(addressText):
+    rawAddress = str(addressText or "").strip()
+    if not rawAddress:
+        return ""
+    if rawAddress.startswith("[") and "]" in rawAddress:
+        return rawAddress[1:rawAddress.index("]")].strip()
+    if rawAddress.count(":") == 1:
+        return rawAddress.rsplit(":", 1)[0].strip()
+    return rawAddress
+
+
+def getTorExitNodeCache():
+    global torNetworkNodesByIp
+    global torNetworkIps
+    global torNetworkCacheDate
+
+    todayStr = datetime.utcnow().strftime("%Y-%m-%d")
+    with torNetworkCacheLock:
+        if torNetworkCacheDate == todayStr and torNetworkNodesByIp:
+            return {
+                "nodesByIp": torNetworkNodesByIp,
+                "primaryByIp": torNetworkIps,
+                "fetchedDate": torNetworkCacheDate,
+                "sourceUrl": TOR_ONIONOO_URL,
+            }
+
+    response = requests.get(
+        TOR_ONIONOO_URL,
+        timeout=25,
+        verify=False,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    nodesByIp = {}
+    primaryByIp = {}
+    relays = payload.get("relays", []) if isinstance(payload, dict) else []
+    for relay in relays:
+        if not isinstance(relay, dict):
+            continue
+        nodeInfo = {
+            "nickname": str(relay.get("nickname") or "Unknown"),
+            "platform": str(relay.get("platform") or "Unknown"),
+            "fingerprint": str(relay.get("fingerprint") or ""),
+            "orAddresses": list(relay.get("or_addresses") or []),
+        }
+        for address in nodeInfo["orAddresses"]:
+            torIp = _extractTorIpFromAddress(address)
+            if not torIp:
+                continue
+            try:
+                torIp = str(ipaddress.ip_address(torIp))
+            except Exception:
+                continue
+            nodesByIp.setdefault(torIp, []).append(nodeInfo)
+            primaryByIp.setdefault(torIp, nodeInfo)
+
+    with torNetworkCacheLock:
+        torNetworkNodesByIp = nodesByIp
+        torNetworkIps = primaryByIp
+        torNetworkCacheDate = todayStr
+
+    return {
+        "nodesByIp": torNetworkNodesByIp,
+        "primaryByIp": torNetworkIps,
+        "fetchedDate": torNetworkCacheDate,
+        "sourceUrl": TOR_ONIONOO_URL,
+    }
+
+
+def buildTorLookupResponse(ip):
+    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
+    try:
+        cacheData = getTorExitNodeCache()
+    except Exception as torLookupError:
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "error": str(torLookupError),
+            "sourceUrl": TOR_PROJECT_URL,
+        }
+
+    nodesByIp = cacheData.get("nodesByIp") or {}
+    matchedNodes = nodesByIp.get(normalizedIp, [])
+    return {
+        "success": True,
+        "ip": normalizedIp,
+        "version": 6 if ":" in normalizedIp else 4,
+        "listed": bool(matchedNodes),
+        "isExitNode": bool(matchedNodes),
+        "nodeCount": len(matchedNodes),
+        "nodes": matchedNodes,
+        "fetchedDate": cacheData.get("fetchedDate") or "",
+        "sourceUrl": cacheData.get("sourceUrl") or TOR_ONIONOO_URL,
+        "projectUrl": TOR_PROJECT_URL,
+    }
+
+
 def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
     """
     Return a direction-agnostic key for a TCP stream.
@@ -1619,6 +1727,127 @@ def macAddrToVendor(macAddr):
     """
     macPrefix = macAddr[:8].upper()
     return macVendorMap.get(macPrefix, "Unknown Vendor")
+
+
+def _formatLinkAddress(addrValue, addrLen=None):
+    """
+    Convert a link-layer address to a readable string.
+    Returns "N/A" for empty/zero addresses.
+    """
+    if addrValue is None:
+        return "N/A"
+
+    rawAddr = None
+    if isinstance(addrValue, (bytes, bytearray)):
+        rawAddr = bytes(addrValue)
+    elif isinstance(addrValue, int):
+        byteLen = max(1, (addrValue.bit_length() + 7) // 8)
+        rawAddr = addrValue.to_bytes(byteLen, "big")
+
+    if rawAddr is not None:
+        if isinstance(addrLen, int) and addrLen > 0 and len(rawAddr) >= addrLen:
+            rawAddr = rawAddr[:addrLen]
+        if not rawAddr or all(byte == 0 for byte in rawAddr):
+            return "N/A"
+        return ":".join(f"{byte:02x}" for byte in rawAddr)
+
+    addrText = str(addrValue).strip()
+    if not addrText or addrText == "00:00:00:00:00:00":
+        return "N/A"
+    return addrText
+
+
+def extractLinkLayerInfo(p):
+    """
+    Return normalized link-layer metadata for Ethernet and Linux cooked packets.
+    Returns a dict with keys: linkProto, srcAddr, dstAddr, linuxCooked.
+    """
+    etherClass = getattr(scapy, "Ether", None)
+    if (etherClass and p.haslayer(etherClass)) or p.haslayer("Ether"):
+        etherLayer = p[etherClass] if etherClass and p.haslayer(etherClass) else p["Ether"]
+        return {
+            "linkProto": "Ethernet",
+            "srcAddr": str(getattr(etherLayer, "src", "N/A") or "N/A"),
+            "dstAddr": str(getattr(etherLayer, "dst", "N/A") or "N/A"),
+            "linuxCooked": None,
+        }
+
+    cookedV2Class = getattr(scapy, "CookedLinuxV2", None)
+    cookedV1Class = getattr(scapy, "CookedLinux", None)
+    cookedLayer = None
+    cookedVersion = None
+
+    if cookedV2Class and p.haslayer(cookedV2Class):
+        cookedLayer = p[cookedV2Class]
+        cookedVersion = "v2"
+    elif cookedV1Class and p.haslayer(cookedV1Class):
+        cookedLayer = p[cookedV1Class]
+        cookedVersion = "v1"
+
+    if cookedLayer is None:
+        # Fall back to raw p.src / p.dst for other link types
+        srcAddr = str(p.src) if hasattr(p, "src") else "N/A"
+        dstAddr = str(p.dst) if hasattr(p, "dst") else "N/A"
+        return {
+            "linkProto": "Unknown",
+            "srcAddr": srcAddr,
+            "dstAddr": dstAddr,
+            "linuxCooked": None,
+        }
+
+    try:
+        lladdrLen = int(getattr(cookedLayer, "lladdrlen", 0) or 0)
+    except Exception:
+        lladdrLen = 0
+
+    srcAddr = _formatLinkAddress(getattr(cookedLayer, "src", None), lladdrLen)
+
+    try:
+        packetType = int(getattr(cookedLayer, "pkttype", 0) or 0)
+    except Exception:
+        packetType = 0
+
+    try:
+        linkAddrType = int(getattr(cookedLayer, "lladdrtype", 0) or 0)
+    except Exception:
+        linkAddrType = 0
+
+    protoValue = getattr(cookedLayer, "proto", None)
+    if isinstance(protoValue, int):
+        protoText = f"0x{protoValue:04x}"
+    else:
+        protoText = str(protoValue) if protoValue is not None else "N/A"
+
+    linkProto = "Linux Cooked" if cookedVersion == "v1" else "Linux Cooked v2"
+    linuxCookedSection = {
+        "Version": cookedVersion.upper(),
+        "sll.version": cookedVersion,
+        "Packet Type": packetType,
+        "sll.pkttype": packetType,
+        "Link Address Type": linkAddrType,
+        "sll.lladdrtype": linkAddrType,
+        "Link Address Length": lladdrLen,
+        "sll.lladdrlen": lladdrLen,
+        "Source Link Address": srcAddr,
+        "sll.src": srcAddr,
+        "Protocol": protoText,
+        "sll.proto": protoText,
+    }
+
+    if cookedVersion == "v2":
+        try:
+            ifIndex = int(getattr(cookedLayer, "ifindex", 0) or 0)
+        except Exception:
+            ifIndex = 0
+        linuxCookedSection["Interface Index"] = ifIndex
+        linuxCookedSection["sll.ifindex"] = ifIndex
+
+    return {
+        "linkProto": linkProto,
+        "srcAddr": srcAddr,
+        "dstAddr": "N/A",
+        "linuxCooked": linuxCookedSection,
+    }
 
 
 def decodeSNMP(p):
@@ -4457,8 +4686,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     if packetIndex % 250 == 0:
         print(f"[Worker] Processing packet #{packetIndex}")
     initialDstPort = None
-    srcMacAddr = p.src if hasattr(p, "src") else "N/A"
-    dstMacAddr = p.dst if hasattr(p, "dst") else "N/A"
+    linkLayerInfo = extractLinkLayerInfo(p)
+    linkProto = linkLayerInfo["linkProto"]
+    srcMacAddr = linkLayerInfo["srcAddr"]
+    dstMacAddr = linkLayerInfo["dstAddr"]
+    linuxCookedSection = linkLayerInfo["linuxCooked"]
     srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
     dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
     isSSH = False
@@ -5132,7 +5364,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.icmp.chksum": icmpChksum,
                     "Wire length": len(p["ICMP"]),
                     "wire.len": len(p["ICMP"]),
-                    }
+                    "transport.len": len(p["ICMP"]),
+                    "transport.proto": "ICMP",
+                }
                 protocolKey = "ICMP"
             elif isIgmp:
                 transportSection = decodeIGMP(p, rawPayload)
@@ -5156,7 +5390,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 "packet.processed": int(packetIndex),
                 "packet.timestamp": timestamp,
                 "packet.proto": protocolKey,
-                "link.proto": "Ethernet",
+                "link.proto": linkProto,
                 "Ethernet Frame": {
                     "ether.src.mac.addr": srcMacAddr,
                     "link.src.mac.addr": srcMacAddr,
@@ -5197,6 +5431,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     },
                 }
 
+            if linuxCookedSection is not None:
+                packetInfo["Linux Cooked"] = linuxCookedSection
             if checkTor:
                 if p["IP"].dst in torNetworkIps:
                     torInfo = torNetworkIps[p["IP"].dst]
@@ -5793,7 +6029,10 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         return json.loads(rawBody.decode("utf-8"))
 
     def do_GET(self):
-        if self.path == "/ping":
+        parsedUrl = urlparse(self.path)
+        queryParams = parse_qs(parsedUrl.query or "", keep_blank_values=False)
+
+        if parsedUrl.path == "/ping":
             self.sendJson(
                 200,
                 {
@@ -5802,7 +6041,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if self.path == "/version":
+        if parsedUrl.path == "/version":
             self.sendJson(
                 200,
                 {
@@ -5922,6 +6161,41 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     {
                         "success": False,
                         "error": str(ipsumLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
+            return
+        if parsedUrl.path == "/tor":
+            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
+            if not queryIp:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing ip query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildTorLookupResponse(queryIp)
+            except ValueError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid IP address",
+                    },
+                )
+                return
+            except Exception as torLookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(torLookupError),
                     },
                 )
                 return

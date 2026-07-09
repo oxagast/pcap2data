@@ -18,6 +18,10 @@ function createSubnetCalculatorPanel({
     const whoisEl = document.getElementById("subnet-calc-whois");
     const reputationEl = document.getElementById("subnet-calc-reputation");
     const geoEl = document.getElementById("subnet-calc-geo");
+    let threatIntelState = {
+        ipsum: null,
+        tor: null,
+    };
 
     function setPanelStatus(message, isError = false) {
         if (!statusEl) return;
@@ -608,78 +612,122 @@ function createSubnetCalculatorPanel({
         renderKeyValueTable(rangeEl, "Range", rangeRows);
         renderBinaryTable(binaryEl, "Binary Notation", binaryRows);
         setPlaceholder(whoisEl, "Looking up WHOIS / RDAP data...");
-        setPlaceholder(reputationEl, "Looking up IPSum reputation data...");
+        setPlaceholder(reputationEl, "Looking up Threat Intelligence data...");
         setPlaceholder(geoEl, "Looking up GeoIP data...");
     }
 
-    function renderIpsumResult(analysis, reputationResult) {
+    function renderThreatIntelResult(analysis) {
         if (!reputationEl) return;
         reputationEl.innerHTML = "";
         const titleEl = document.createElement("div");
         titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "IPSum Threat Intelligence Grade";
+        titleEl.textContent = "Threat Intelligence";
         reputationEl.appendChild(titleEl);
 
-        if (!reputationResult || reputationResult.success === false) {
-            const message = reputationResult?.error || "IP reputation lookup failed.";
-            setPlaceholder(reputationEl, message);
+        const ipsumResult = threatIntelState.ipsum;
+        const torResult = threatIntelState.tor;
+        if (!ipsumResult && !torResult) {
+            setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
             return;
         }
 
-        const gradeBadge = document.createElement("span");
-        const normalizedGrade = String(reputationResult.grade || "Unknown").trim().toUpperCase();
-        gradeBadge.className = `subnet-calc-grade-badge subnet-calc-grade-${normalizedGrade.toLowerCase()}`;
-        gradeBadge.textContent = reputationResult.grade && reputationResult.gradeLabel
-            ? `${reputationResult.grade} ${reputationResult.gradeLabel}`
-            : String(reputationResult.gradeLabel || "Unknown");
+        if (ipsumResult) {
+            const ipsumSection = document.createElement("div");
+            if (ipsumResult.success === false) {
+                setPlaceholder(ipsumSection, ipsumResult.error || "IP reputation lookup failed.");
+            } else {
+                const gradeBadge = document.createElement("span");
+                const normalizedGrade = String(ipsumResult.grade || "Unknown").trim().toUpperCase();
+                gradeBadge.className = `subnet-calc-grade-badge subnet-calc-grade-${normalizedGrade.toLowerCase()}`;
+                gradeBadge.textContent = ipsumResult.grade && ipsumResult.gradeLabel
+                    ? `${ipsumResult.grade} ${ipsumResult.gradeLabel}`
+                    : String(ipsumResult.gradeLabel || "Unknown");
 
-        const rows = [
-            { name: "Lookup Target", value: reputationResult.ip || analysis.lookupTargetIp },
-            {
-                name: "Grade",
-                valueElement: gradeBadge,
-            },
-            {
-                name: "Thread Intelligence Hits",
-                value: Number.isFinite(Number(reputationResult.hitCount))
-                    ? String(reputationResult.hitCount)
-                    : "Unknown",
-            },
-            { name: "Listed", value: reputationResult.listed ? "Yes" : "No" },
-            { name: "Dataset Fetch Date", value: String(reputationResult.fetchedDate || "Unknown") },
-        ];
+                const rows = [
+                    { name: "Lookup Target", value: ipsumResult.ip || analysis.lookupTargetIp },
+                    {
+                        name: "Grade",
+                        valueElement: gradeBadge,
+                    },
+                    {
+                        name: "Threat Intelligence Hits",
+                        value: Number.isFinite(Number(ipsumResult.hitCount))
+                            ? String(ipsumResult.hitCount)
+                            : "Unknown",
+                    },
+                    { name: "Listed", value: ipsumResult.listed ? "Yes" : "No" },
+                    { name: "Dataset Fetch Date", value: String(ipsumResult.fetchedDate || "Unknown") },
+                ];
 
-        if (reputationResult.supported === false) {
-            rows.push({
-                name: "Status",
-                value: String(reputationResult.message || "Unsupported"),
-            });
+                if (ipsumResult.supported === false) {
+                    rows.push({
+                        name: "Status",
+                        value: String(ipsumResult.message || "Unsupported"),
+                    });
+                }
+                if (ipsumResult.isLocalnet) {
+                    rows.push({
+                        name: "Status",
+                        value: "Local / special-use IPs are not part of internet threat lists.",
+                    });
+                }
+
+                renderKeyValueTable(ipsumSection, "IPSum", rows);
+            }
+            reputationEl.appendChild(ipsumSection);
         }
-        if (reputationResult.isLocalnet) {
-            rows.push({
-                name: "Status",
-                value: "Local / special-use IPs are not part of internet threat lists.",
-            });
-        }
 
-        renderKeyValueTable(reputationEl, "IPSum Thread Intelligence Grade", rows);
+        if (torResult) {
+            const torSection = document.createElement("div");
+            if (torResult.success === false) {
+                setPlaceholder(torSection, torResult.error || "Tor lookup failed.");
+            } else {
+                const rows = [
+                    { name: "Lookup Target", value: torResult.ip || analysis.lookupTargetIp },
+                    { name: "Exit Node", value: torResult.isExitNode ? "Yes" : "No" },
+                    { name: "Matched Nodes", value: String(torResult.nodeCount || 0) },
+                    { name: "Dataset Fetch Date", value: String(torResult.fetchedDate || "Unknown") },
+                ];
+
+                if (Array.isArray(torResult.nodes) && torResult.nodes.length > 0) {
+                    torResult.nodes.forEach((node, index) => {
+                        rows.push({ name: `Node ${index + 1} Nickname`, value: String(node.nickname || "Unknown") });
+                        rows.push({ name: `Node ${index + 1} Platform`, value: String(node.platform || "Unknown") });
+                    });
+                }
+
+                renderKeyValueTable(torSection, "Tor", rows);
+            }
+            reputationEl.appendChild(torSection);
+        }
 
         const actionRow = document.createElement("div");
         actionRow.className = "data-tools-actions subnet-calc-map-actions";
-        const sourceButton = document.createElement("button");
-        sourceButton.type = "button";
-        sourceButton.textContent = "Open IPSum project";
-        sourceButton.addEventListener("click", async () => {
-            const openableUrl = String(
-                reputationResult.projectUrl || "https://github.com/stamparm/ipsum",
-            );
-            if (typeof window.browserapi?.openExternalUrl !== "function") {
-                return;
-            }
-            await window.browserapi.openExternalUrl(openableUrl);
-        });
-        actionRow.appendChild(sourceButton);
+        const addLinkButton = (label, url) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.addEventListener("click", async () => {
+                if (typeof window.browserapi?.openExternalUrl !== "function") {
+                    return;
+                }
+                await window.browserapi.openExternalUrl(String(url));
+            });
+            actionRow.appendChild(button);
+        };
+        addLinkButton("Open IPSum project", "https://github.com/stamparm/ipsum");
+        addLinkButton("Open Tor Project", "https://www.torproject.org/");
         reputationEl.appendChild(actionRow);
+    }
+
+    function renderIpsumResult(analysis, reputationResult) {
+        threatIntelState.ipsum = reputationResult;
+        renderThreatIntelResult(analysis);
+    }
+
+    function renderTorResult(analysis, torResult) {
+        threatIntelState.tor = torResult;
+        renderThreatIntelResult(analysis);
     }
 
     function renderWhoisResult(analysis, whoisResult) {
@@ -855,10 +903,40 @@ function createSubnetCalculatorPanel({
         }
     }
 
+    async function lookupTor(analysis, requestToken) {
+        const currentToken = requestToken;
+        if (!window.snitchapi || typeof window.snitchapi.lookupTor !== "function") {
+            renderTorResult(analysis, {
+                success: false,
+                error: "Backend Tor lookup API is unavailable.",
+            });
+            return;
+        }
+
+        try {
+            const result = await window.snitchapi.lookupTor(analysis.lookupTargetIp, {
+                backendOptions: getBackendTransportOptions(),
+            });
+            if (currentToken !== lookupRequestToken) return;
+            renderTorResult(analysis, result);
+            if (result?.success === false) {
+                setPanelStatus(result.error || "Tor lookup failed.", true);
+            }
+        } catch (error) {
+            if (currentToken !== lookupRequestToken) return;
+            renderTorResult(analysis, {
+                success: false,
+                error: error?.message || "Tor lookup failed.",
+            });
+            setPanelStatus(error?.message || "Tor lookup failed.", true);
+        }
+    }
+
     async function analyzeCurrentInput() {
         try {
             const analysis = analyzeSubnetInput(inputEl?.value || "");
             const requestToken = ++lookupRequestToken;
+            threatIntelState = { ipsum: null, tor: null };
             renderAnalysisResults(analysis);
             setPanelStatus(`Analyzing ${analysis.normalizedInput}...`);
             statusUpdate(`Status: Calculated subnet data for ${analysis.address}`);
@@ -867,6 +945,7 @@ function createSubnetCalculatorPanel({
                 lookupGeoip(analysis, requestToken),
                 lookupWhois(analysis, requestToken),
                 lookupIpsum(analysis, requestToken),
+                lookupTor(analysis, requestToken),
             ]);
             if (requestToken !== lookupRequestToken) return;
             setPanelStatus(`Analyzed ${analysis.normalizedInput}`);
@@ -908,7 +987,7 @@ function createSubnetCalculatorPanel({
         setPlaceholder(rangeEl, "Range details will appear here.");
         setPlaceholder(binaryEl, "Binary notation will appear here.");
         setPlaceholder(whoisEl, "WHOIS / RDAP data will appear here.");
-        setPlaceholder(reputationEl, "IPSum reputation data will appear here.");
+        setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
         setPlaceholder(geoEl, "GeoIP data will appear here.");
     }
 
