@@ -5586,80 +5586,9 @@ async function processCapturePath(capturePath, options = {}) {
   }
 
   if (incrementalUpdate && isFileLoaded) {
-    isCaptureStoreBackedCapture = true;
-    capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
-    jsonCapture = "[lazy-capture-store]";
-
-    const targetHostsDropdown = getCachedElement("target_hosts");
-    const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
-    const hostMap =
-      capturedPackets && typeof capturedPackets["host"] === "object"
-        ? capturedPackets["host"]
-        : {};
-
-    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
-    while (targetHostsDropdown.options.length > 0) {
-      targetHostsDropdown.remove(0);
-    }
-    appendAllHostsOption(targetHostsDropdown);
-    appendBookmarkedOption(targetHostsDropdown);
-
-    packetStubByKey.clear();
-    hydratedPacketCache.clear();
-    clearStreamPacketHydrationCache();
-
-    Object.keys(hostMap).forEach((host) => {
-      hostsList.push(host);
-      const optionEl = document.createElement("option");
-      optionEl.textContent = host;
-      optionEl.value = host;
-      targetHostsDropdown.appendChild(optionEl);
-      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-      hostPackets.forEach((packet, packetIndex) => {
-        const packetKey = getPacketKey(packet, host, packetIndex);
-        if (packet && typeof packet === "object") {
-          packet.__packetKey = packetKey;
-        }
-        cachePacketStub(packetKey, packet);
-      });
-    });
-
-    const availableHosts = hostsList.slice();
-    const selectedHost =
-      previousHost && availableHosts.includes(previousHost)
-        ? previousHost
-        : DUMMY_ALL_HOST;
-    if (selectedHost) {
-      targetHostsDropdown.value = selectedHost;
-      hostFilterEl.value = selectedHost;
-      p = getPacketsForSelectedHost(selectedHost);
-    }
-
-    document.getElementById("total-packets").textContent =
-      "Total Packets: " + totalPacketCount();
-
-    if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
-      const shouldRefreshFilterUi = activeMainTab === MAIN_TAB_DATA;
-      await runFilterQuery(filterInputEl.value, {
-        trackHistory: false,
-        updateUi: shouldRefreshFilterUi,
-      });
-      if (activeMainTab === MAIN_TAB_LIST) {
-        showPacketList();
-      }
-    } else {
-      filteredPackets = undefined;
-      if (activeMainTab === MAIN_TAB_LIST) {
-        showPacketList();
-      }
-      if (activeMainTab === MAIN_TAB_DATA && p.length > 0) {
-        await handlePacketNavigation(undefined, null);
-      }
-      if (activeMainTab === MAIN_TAB_SUMMARY) {
-        showSummary();
-      }
-    }
-
+    await applyIncrementalCaptureSnapshot(
+      loadResult.captureData || { host: {}, "final.summary": "" },
+    );
     return;
   }
 
@@ -5674,6 +5603,107 @@ async function processCapturePath(capturePath, options = {}) {
       : null;
 
   await finalizeLoadedCapture(loadedSessionState);
+}
+
+async function applyIncrementalCaptureSnapshot(nextCaptureData) {
+  isCaptureStoreBackedCapture = true;
+  const previousCapturedPackets =
+    capturedPackets && typeof capturedPackets === "object"
+      ? capturedPackets
+      : { host: {}, "final.summary": "" };
+  capturedPackets = nextCaptureData || { host: {}, "final.summary": "" };
+  jsonCapture = "[lazy-capture-store]";
+
+  const targetHostsDropdown = getCachedElement("target_hosts");
+  const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
+  const hostMap =
+    capturedPackets && typeof capturedPackets["host"] === "object"
+      ? capturedPackets["host"]
+      : {};
+  const previousHostMap =
+    previousCapturedPackets && typeof previousCapturedPackets["host"] === "object"
+      ? previousCapturedPackets["host"]
+      : {};
+  const nextHosts = Object.keys(hostMap);
+  const previousRealHosts = hostsList.filter(
+    (host) => host !== DUMMY_ALL_HOST && host !== DUMMY_BOOKMARKED_HOST,
+  );
+  const previousHostSet = new Set(previousRealHosts);
+  const hostSetChanged =
+    nextHosts.length !== previousRealHosts.length
+    || nextHosts.some((host) => !previousHostSet.has(host));
+
+  if (hostSetChanged) {
+    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
+    while (targetHostsDropdown.options.length > 0) {
+      targetHostsDropdown.remove(0);
+    }
+    appendAllHostsOption(targetHostsDropdown);
+    appendBookmarkedOption(targetHostsDropdown);
+    nextHosts.forEach((host) => {
+      const optionEl = document.createElement("option");
+      optionEl.textContent = host;
+      optionEl.value = host;
+      targetHostsDropdown.appendChild(optionEl);
+    });
+  } else {
+    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
+  }
+
+  nextHosts.forEach((host) => {
+    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+    const previousHostPackets = Array.isArray(previousHostMap[host])
+      ? previousHostMap[host]
+      : [];
+    const startIndex = Math.min(previousHostPackets.length, hostPackets.length);
+
+    for (let packetIndex = startIndex; packetIndex < hostPackets.length; packetIndex += 1) {
+      const packet = hostPackets[packetIndex];
+      const packetKey = getPacketKey(packet, host, packetIndex);
+      if (packet && typeof packet === "object") {
+        packet.__packetKey = packetKey;
+      }
+      cachePacketStub(packetKey, packet);
+    }
+  });
+
+  const selectedHost =
+    previousHost &&
+      (previousHost === DUMMY_ALL_HOST
+        || previousHost === DUMMY_BOOKMARKED_HOST
+        || Object.prototype.hasOwnProperty.call(hostMap, previousHost))
+      ? previousHost
+      : DUMMY_ALL_HOST;
+  if (selectedHost) {
+    targetHostsDropdown.value = selectedHost;
+    hostFilterEl.value = selectedHost;
+    p = getPacketsForSelectedHost(selectedHost);
+  }
+
+  document.getElementById("total-packets").textContent =
+    "Total Packets: " + totalPacketCount();
+
+  if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
+    const shouldRefreshFilterUi = activeMainTab === MAIN_TAB_DATA;
+    await runFilterQuery(filterInputEl.value, {
+      trackHistory: false,
+      updateUi: shouldRefreshFilterUi,
+    });
+    if (activeMainTab === MAIN_TAB_LIST) {
+      showPacketList();
+    }
+  } else {
+    filteredPackets = undefined;
+    if (activeMainTab === MAIN_TAB_LIST) {
+      showPacketList();
+    }
+    if (activeMainTab === MAIN_TAB_DATA && p.length > 0) {
+      await handlePacketNavigation(undefined, null);
+    }
+    if (activeMainTab === MAIN_TAB_SUMMARY) {
+      showSummary();
+    }
+  }
 }
 
 async function processCaptureData(captureData, options = {}) {
@@ -5700,80 +5730,9 @@ async function processCaptureData(captureData, options = {}) {
   }
 
   if (incrementalUpdate && isFileLoaded) {
-    isCaptureStoreBackedCapture = true;
-    capturedPackets = loadResult.captureData || { host: {}, "final.summary": "" };
-    jsonCapture = "[lazy-capture-store]";
-
-    const targetHostsDropdown = getCachedElement("target_hosts");
-    const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
-    const hostMap =
-      capturedPackets && typeof capturedPackets["host"] === "object"
-        ? capturedPackets["host"]
-        : {};
-
-    hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
-    while (targetHostsDropdown.options.length > 0) {
-      targetHostsDropdown.remove(0);
-    }
-    appendAllHostsOption(targetHostsDropdown);
-    appendBookmarkedOption(targetHostsDropdown);
-
-    packetStubByKey.clear();
-    hydratedPacketCache.clear();
-    clearStreamPacketHydrationCache();
-
-    Object.keys(hostMap).forEach((host) => {
-      hostsList.push(host);
-      const optionEl = document.createElement("option");
-      optionEl.textContent = host;
-      optionEl.value = host;
-      targetHostsDropdown.appendChild(optionEl);
-      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-      hostPackets.forEach((packet, packetIndex) => {
-        const packetKey = getPacketKey(packet, host, packetIndex);
-        if (packet && typeof packet === "object") {
-          packet.__packetKey = packetKey;
-        }
-        cachePacketStub(packetKey, packet);
-      });
-    });
-
-    const availableHosts = hostsList.slice();
-    const selectedHost =
-      previousHost && availableHosts.includes(previousHost)
-        ? previousHost
-        : DUMMY_ALL_HOST;
-    if (selectedHost) {
-      targetHostsDropdown.value = selectedHost;
-      hostFilterEl.value = selectedHost;
-      p = getPacketsForSelectedHost(selectedHost);
-    }
-
-    document.getElementById("total-packets").textContent =
-      "Total Packets: " + totalPacketCount();
-
-    if (typeof filterInputEl.value === "string" && filterInputEl.value.trim()) {
-      const shouldRefreshFilterUi = activeMainTab === MAIN_TAB_DATA;
-      await runFilterQuery(filterInputEl.value, {
-        trackHistory: false,
-        updateUi: shouldRefreshFilterUi,
-      });
-      if (activeMainTab === MAIN_TAB_LIST) {
-        showPacketList();
-      }
-    } else {
-      filteredPackets = undefined;
-      if (activeMainTab === MAIN_TAB_LIST) {
-        showPacketList();
-      }
-      if (activeMainTab === MAIN_TAB_DATA && p.length > 0) {
-        await handlePacketNavigation(undefined, null);
-      }
-      if (activeMainTab === MAIN_TAB_SUMMARY) {
-        showSummary();
-      }
-    }
-
+    await applyIncrementalCaptureSnapshot(
+      loadResult.captureData || { host: {}, "final.summary": "" },
+    );
     return;
   }
 
