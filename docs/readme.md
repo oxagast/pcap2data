@@ -84,17 +84,19 @@ Have fun!
 
 [GPL v3](https://www.gnu.org/licenses/gpl-3.0.en.html)
 
-## Author
+## Contact Resources
 
-Marshall Whittaker <marshall@oxasploits.com>
+Project Head: Marshall Whittaker <marshall@oxasploits.com>
 
 ## Thanks / Contibutions
 
+- Marshall Whittaker (project design, primary frontend/backend dev)
 - Vesteria (backend tor node detection code)
 - blissfulboy (frontend design suggestions and feedback)
 - kusanagi (frontend feedback and some sponsorship stuff)
 - Martin Ollivere (Rat on wheel spinning gif)
 - tiamo64 (Performance optimizations)
+- aestetix (inspiration on how this documentation page should be formatted)
 - Everyone else who has tested or contributed in some way, big or small, thank you!
 
 ## Sponsors
