@@ -21,7 +21,7 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 ## Demo
 
-<p align="center"><iframe width="1000" src="https://www.youtube.com/embed/fSeLVu0ElZk" title="" frameBorder="0"   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"  allowFullScreen></iframe></p>
+<p align="center"><iframe width="1280" height="720" src="https://www.youtube.com/embed/fSeLVu0ElZk" title="" frameBorder="0"   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"  allowFullScreen></iframe></p>
 
 
 ## Quick Start
