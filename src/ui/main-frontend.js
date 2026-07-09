@@ -219,7 +219,9 @@ let summary = "";
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
 const streamPacketHydrationCache = new Map();
+const streamPayloadHexCache = new Map();
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
+const STREAM_PAYLOAD_HEX_CACHE_LIMIT = 64;
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -3068,6 +3070,35 @@ function cacheHydratedPacket(packetKey, packet) {
 // Clears stream packet hydration cache.
 function clearStreamPacketHydrationCache() {
   streamPacketHydrationCache.clear();
+  streamPayloadHexCache.clear();
+}
+
+function buildStreamPayloadHexCacheKey(streamPackets) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
+    return "";
+  }
+  const firstPacket = streamPackets[0];
+  const lastPacket = streamPackets[streamPackets.length - 1];
+  const firstPacketKey = getPacketKey(firstPacket, "", 0);
+  const lastPacketKey = getPacketKey(lastPacket, "", streamPackets.length - 1);
+  const packetInfo = firstPacket?.["packet.info"] || {};
+  const streamKey = buildBidirectionalStreamKey(packetInfo) || "unknown-stream";
+  return `${streamKey}|${streamPackets.length}|${firstPacketKey}|${lastPacketKey}`;
+}
+
+function setStreamPayloadHexCache(cacheKey, payloadHex) {
+  if (!cacheKey || typeof payloadHex !== "string") {
+    return;
+  }
+  if (streamPayloadHexCache.has(cacheKey)) {
+    streamPayloadHexCache.delete(cacheKey);
+  }
+  streamPayloadHexCache.set(cacheKey, payloadHex);
+  while (streamPayloadHexCache.size > STREAM_PAYLOAD_HEX_CACHE_LIMIT) {
+    const oldestKey = streamPayloadHexCache.keys().next().value;
+    if (!oldestKey) break;
+    streamPayloadHexCache.delete(oldestKey);
+  }
 }
 
 async function warmStreamPacketHydrationCache(streamKey, streamPacketRefs) {
@@ -5232,6 +5263,9 @@ async function finalizeLoadedCapture(sessionState) {
   packetStubByKey.clear();
   hydratedPacketCache.clear();
   clearStreamPacketHydrationCache();
+  if (keystorePanel && typeof keystorePanel.clearSessionScanCaches === "function") {
+    keystorePanel.clearSessionScanCaches();
+  }
   for (const host in capturedPackets["host"]) {
     hostsList.push(host);
     const newhost = document.createElement("option");
@@ -5815,7 +5849,11 @@ function restoreSessionState(sessionState) {
 }
 
 async function processCapturePath(capturePath, options = {}) {
-  const { suppressLoadingOverlay = false, incrementalUpdate = false } = options;
+  const {
+    suppressLoadingOverlay = false,
+    incrementalUpdate = false,
+    finalUpdate = false,
+  } = options;
   if (incrementalUpdate) {
     hideLoadingOverlay();
   }
@@ -5840,6 +5878,7 @@ async function processCapturePath(capturePath, options = {}) {
   if (incrementalUpdate && isFileLoaded) {
     await applyIncrementalCaptureSnapshot(
       loadResult.captureData || { host: {}, "final.summary": "" },
+      { forceFullReindex: finalUpdate },
     );
     return;
   }
@@ -5857,7 +5896,8 @@ async function processCapturePath(capturePath, options = {}) {
   await finalizeLoadedCapture(loadedSessionState);
 }
 
-async function applyIncrementalCaptureSnapshot(nextCaptureData) {
+async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
+  const { forceFullReindex = false } = options;
   isCaptureStoreBackedCapture = true;
   const previousCapturedPackets =
     capturedPackets && typeof capturedPackets === "object"
@@ -5913,7 +5953,23 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
   }
 
-  if (stagedPacketPlan && stagedPacketPlan.newPacketRefs.length > 0) {
+  if (forceFullReindex) {
+    packetStubByKey.clear();
+    hydratedPacketCache.clear();
+    clearStreamPacketHydrationCache();
+
+    nextHosts.forEach((host) => {
+      const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+      for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
+        const packet = hostPackets[packetIndex];
+        const packetKey = getPacketKey(packet, host, packetIndex);
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+      }
+    });
+  } else if (stagedPacketPlan && stagedPacketPlan.newPacketRefs.length > 0) {
     stagedPacketPlan.newPacketRefs.forEach((packetRef) => {
       if (!packetRef || typeof packetRef !== "object") return;
       const host = typeof packetRef.host === "string" ? packetRef.host : "";
@@ -5989,7 +6045,11 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData) {
 }
 
 async function processCaptureData(captureData, options = {}) {
-  const { suppressLoadingOverlay = false, incrementalUpdate = false } = options;
+  const {
+    suppressLoadingOverlay = false,
+    incrementalUpdate = false,
+    finalUpdate = false,
+  } = options;
   if (incrementalUpdate) {
     hideLoadingOverlay();
   }
@@ -6015,6 +6075,7 @@ async function processCaptureData(captureData, options = {}) {
   if (incrementalUpdate && isFileLoaded) {
     await applyIncrementalCaptureSnapshot(
       loadResult.captureData || { host: {}, "final.summary": "" },
+      { forceFullReindex: finalUpdate },
     );
     return;
   }
@@ -11269,6 +11330,10 @@ async function getFollowStreamPacketsAsync(packet = null) {
  */
 function buildStreamHex(streamPackets) {
   if (!streamPackets.length) return null;
+  const cacheKey = buildStreamPayloadHexCacheKey(streamPackets);
+  if (cacheKey && streamPayloadHexCache.has(cacheKey)) {
+    return streamPayloadHexCache.get(cacheKey) || null;
+  }
   let combined = "";
   for (const pkt of streamPackets) {
     const payloadHex =
@@ -11278,11 +11343,19 @@ function buildStreamHex(streamPackets) {
       combined += payloadHex;
     }
   }
-  return combined || null;
+  const streamHex = combined || null;
+  if (cacheKey && streamHex) {
+    setStreamPayloadHexCache(cacheKey, streamHex);
+  }
+  return streamHex;
 }
 
 async function buildStreamHexAsync(streamPackets) {
   if (!streamPackets.length) return null;
+  const cacheKey = buildStreamPayloadHexCacheKey(streamPackets);
+  if (cacheKey && streamPayloadHexCache.has(cacheKey)) {
+    return streamPayloadHexCache.get(cacheKey) || null;
+  }
   const parts = [];
   let scanned = 0;
   for (const pkt of streamPackets) {
@@ -11297,7 +11370,11 @@ async function buildStreamHexAsync(streamPackets) {
       await yieldToRenderer();
     }
   }
-  return parts.length ? parts.join("") : null;
+  const streamHex = parts.length ? parts.join("") : null;
+  if (cacheKey && streamHex) {
+    setStreamPayloadHexCache(cacheKey, streamHex);
+  }
+  return streamHex;
 }
 
 // Handles align to4.
@@ -17118,6 +17195,9 @@ async function processBackendJsonPathPayload(payload) {
     payload.totalPackets,
   );
   backendProgressState.processing = !payload.complete;
+  if (payload.complete) {
+    updateBackendProcessingWarning();
+  }
 
   if (!payload.complete) {
     updateBackendProgressStatus();
@@ -17157,6 +17237,10 @@ async function processBackendJsonPathPayload(payload) {
     clearFilterQuery();
     syncFilterHighlight();
   } else {
+    if (!payload.complete) {
+      updateBackendProcessingWarning();
+      return;
+    }
     if (!shouldApplyIncrementalBackendSnapshot(payload)) {
       updateBackendProcessingWarning();
       return;
@@ -17166,6 +17250,7 @@ async function processBackendJsonPathPayload(payload) {
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
+      finalUpdate: true,
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
@@ -17208,6 +17293,9 @@ async function processBackendJsonDataPayload(payload) {
     payload.totalPackets,
   );
   backendProgressState.processing = !payload.complete;
+  if (payload.complete) {
+    updateBackendProcessingWarning();
+  }
 
   if (!payload.complete) {
     updateBackendProgressStatus();
@@ -17254,6 +17342,10 @@ async function processBackendJsonDataPayload(payload) {
     clearFilterQuery();
     syncFilterHighlight();
   } else {
+    if (!payload.complete) {
+      updateBackendProcessingWarning();
+      return;
+    }
     if (!shouldApplyIncrementalBackendSnapshot(payload)) {
       updateBackendProcessingWarning();
       return;
@@ -17264,6 +17356,7 @@ async function processBackendJsonDataPayload(payload) {
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
+      finalUpdate: true,
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
@@ -17360,6 +17453,10 @@ function runSnitch(file, options = {}) {
     .catch((error) => {
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
+    })
+    .finally(() => {
+      backendProgressState.processing = false;
+      updateBackendProcessingWarning();
     });
 }
 

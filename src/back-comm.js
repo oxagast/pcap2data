@@ -96,7 +96,9 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
         const contentType = String(res.headers["content-type"] || "").toLowerCase();
         if (contentType.includes("application/x-ndjson")) {
           let ndjsonBuffer = "";
+          let sawComplete = false;
           let latestCaptureData = null;
+          let latestProgressPath = "";
           let finalResult = {
             success: false,
             error: "HTTP backend stream ended without completion event",
@@ -115,6 +117,12 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
             }
 
             if (message?.type === "progress") {
+              if (sawComplete) {
+                return;
+              }
+              if (typeof message?.path === "string" && message.path.trim()) {
+                latestProgressPath = message.path.trim();
+              }
               emitProgressEvent(message);
               if (message?.captureData && typeof message.captureData === "object") {
                 latestCaptureData = message.captureData;
@@ -123,6 +131,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
             }
 
             if (message?.type === "complete") {
+              sawComplete = true;
               const finalCaptureData =
                 message?.captureData && typeof message.captureData === "object"
                   ? message.captureData
@@ -136,6 +145,14 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
                   chunkSize: hostChunkSize,
                   label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
                 });
+              } else if (latestProgressPath) {
+                sendJsonPathPayload({
+                  path: latestProgressPath,
+                  processedPackets: Number(message?.processedPackets) || 0,
+                  totalPackets: Number(message?.totalPackets) || 0,
+                  complete: true,
+                  chunkSize: hostChunkSize,
+                });
               }
               finalResult = {
                 success: Boolean(message?.success),
@@ -147,6 +164,9 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
             }
 
             if (message?.type === "error") {
+              if (sawComplete) {
+                return;
+              }
               finalResult = {
                 success: false,
                 error: message?.error || "HTTP backend stream error",
@@ -909,6 +929,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           let ndjsonBuffer = "";
           let sawComplete = false;
           let latestCaptureData = null;
+          let latestProgressPath = "";
           let finalResult = {
             success: false,
             error: "HTTP backend stream ended without completion event",
@@ -929,6 +950,12 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             }
 
             if (message?.type === "progress") {
+              if (sawComplete) {
+                return;
+              }
+              if (typeof message?.path === "string" && message.path.trim()) {
+                latestProgressPath = message.path.trim();
+              }
               emitProgressEvent(message);
               if (message?.captureData && typeof message.captureData === "object") {
                 latestCaptureData = message.captureData;
@@ -951,6 +978,14 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                   chunkSize: hostChunkSize,
                   label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
                 });
+              } else if (latestProgressPath) {
+                sendJsonPathPayload({
+                  path: latestProgressPath,
+                  processedPackets: Number(message?.processedPackets) || 0,
+                  totalPackets: Number(message?.totalPackets) || 0,
+                  complete: true,
+                  chunkSize: hostChunkSize,
+                });
               }
               finalResult = {
                 success: Boolean(message?.success),
@@ -963,6 +998,9 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             }
 
             if (message?.type === "error") {
+              if (sawComplete) {
+                return;
+              }
               finalResult = {
                 success: false,
                 error: message?.error || "HTTP backend stream error",

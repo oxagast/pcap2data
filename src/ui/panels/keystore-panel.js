@@ -49,6 +49,7 @@ const SESSION_SECRET_IGNORE_KEY_HINTS = [
 ];
 const SESSION_AUTO_BUILD_CHUNK_SIZE = 50;
 const SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE = 120;
+const SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT = 4096;
 
 let goodiesStash = null;
 
@@ -81,6 +82,24 @@ function createKeystorePanel({
   let cryptManualUriDialogResolver = null;
   let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
   let sessionRebuildGeneration = 0;
+  const sessionScanHydratedPacketCache = new Map();
+
+  function setBoundedCacheEntry(cacheMap, key, value, limit) {
+    if (!cacheMap || !key) return;
+    if (cacheMap.has(key)) {
+      cacheMap.delete(key);
+    }
+    cacheMap.set(key, value);
+    while (cacheMap.size > limit) {
+      const oldestKey = cacheMap.keys().next().value;
+      if (!oldestKey) break;
+      cacheMap.delete(oldestKey);
+    }
+  }
+
+  function clearSessionScanCaches() {
+    sessionScanHydratedPacketCache.clear();
+  }
 
   function generateCryptEntryId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -1755,7 +1774,10 @@ function createKeystorePanel({
     renderCryptKeystoreList(newEntries);
   });
 
-  async function hydratePacketForSessionScan(packet, hydrationCache) {
+  async function hydratePacketForSessionScan(
+    packet,
+    hydrationCache = sessionScanHydratedPacketCache,
+  ) {
     if (!packet || typeof packet !== "object") return packet;
     if (!packet.__packetStub) return packet;
 
@@ -1775,7 +1797,14 @@ function createKeystorePanel({
       const hydrationResult = await window.captureapi.getPacket(packetKey);
       const hydratedPacket = hydrationResult?.packet;
       if (!hydratedPacket || typeof hydratedPacket !== "object") {
-        if (hydrationCache) hydrationCache.set(packetKey, packet);
+        if (hydrationCache) {
+          setBoundedCacheEntry(
+            hydrationCache,
+            packetKey,
+            packet,
+            SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT,
+          );
+        }
         return packet;
       }
 
@@ -1785,11 +1814,25 @@ function createKeystorePanel({
         __packetKey: packetKey,
         __packetStub: false,
       };
-      if (hydrationCache) hydrationCache.set(packetKey, mergedPacket);
+      if (hydrationCache) {
+        setBoundedCacheEntry(
+          hydrationCache,
+          packetKey,
+          mergedPacket,
+          SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT,
+        );
+      }
       return mergedPacket;
     } catch (error) {
       logErrorEntry("crypt-keystore-packet-hydration", error);
-      if (hydrationCache) hydrationCache.set(packetKey, packet);
+      if (hydrationCache) {
+        setBoundedCacheEntry(
+          hydrationCache,
+          packetKey,
+          packet,
+          SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT,
+        );
+      }
       return packet;
     }
   }
@@ -1836,7 +1879,6 @@ function createKeystorePanel({
     if (!hosts || typeof hosts !== "object") return generatedEntries;
 
     const packetRecords = [];
-    const hydratedPacketCache = new Map();
     Object.entries(hosts).forEach(([host, packets]) => {
       if (!Array.isArray(packets)) return;
       packets.forEach((packet) => {
@@ -1888,7 +1930,7 @@ function createKeystorePanel({
       for (const { host, packet } of chunk) {
         const hydratedPacket = await hydratePacketForSessionScan(
           packet,
-          hydratedPacketCache,
+          sessionScanHydratedPacketCache,
         );
         const packetInfo = hydratedPacket?.["packet.info"] || {};
         const protocol = packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "Unknown";
@@ -2976,6 +3018,7 @@ function createKeystorePanel({
     },
     restoreSessionState(sessionKeychainEntries, keystoreMode) {
       sessionRebuildGeneration += 1;
+      clearSessionScanCaches();
       cryptSessionKeystoreEntries = sessionKeychainEntries;
       if (
         keystoreMode === CRYPT_KEYSTORE_MODE_SESSION ||
@@ -2998,6 +3041,7 @@ function createKeystorePanel({
     },
     resetKeystoreState() {
       sessionRebuildGeneration += 1;
+      clearSessionScanCaches();
       cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
       cryptSessionKeystoreEntries = [];
       cryptPersistentKeystoreEntries = [];
@@ -3008,6 +3052,7 @@ function createKeystorePanel({
       cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
       renderCryptKeystoreList();
     },
+    clearSessionScanCaches,
   };
 }
 

@@ -2860,6 +2860,7 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
       ? (streamStats.reduce((a, b) => a + b, 0) / streamStats.length).toFixed(2)
       : 0;
   const tcpStreamAnomalyCounts = computeTcpStreamAnomalyCounts(tcpStreams);
+  const uniqueCredentials = getUniqueCredentialList();
 
   return {
     protocols: [...protocols].sort(),
@@ -2892,8 +2893,8 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     minStreamLength,
     avgStreamLength,
     creds: getCredentialsFromKeystore(),
-    uniqueCredentialCount: [...getUniqueCredentialList()].length,
-    uniqueCredentials: [...(getUniqueCredentialList())].sort((a, b) => a.label.localeCompare(b.label)),
+    uniqueCredentialCount: uniqueCredentials.length,
+    uniqueCredentials,
     totalTraffic: totalTrafficBytes(capturedPackets),
     retransmissionCount: tcpStreamAnomalyCounts.retransmissionCount,
     outOfOrderCount: tcpStreamAnomalyCounts.outOfOrderCount,
