@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('lookup-backend-ipsum', ipAddress, options),
   lookupTor: (ipAddress, options = {}) =>
     ipcRenderer.invoke('lookup-backend-tor', ipAddress, options),
+  checkNmapInstalled: () =>
+    ipcRenderer.invoke('check-nmap-installed'),
+  getNmapScanStatus: () =>
+    ipcRenderer.invoke('get-nmap-scan-status'),
+  runNmapServiceScan: (targets, options = {}) =>
+    ipcRenderer.invoke('run-nmap-service-scan', targets, options),
   runBackendCommand: (filename, useLLM, chunkSize, workerThreads, backendOptions) =>
     ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, workerThreads, backendOptions),
   runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, workerThreads, backendOptions) =>

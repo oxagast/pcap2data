@@ -376,10 +376,17 @@
                   <button id="subnet-calc-clear-btn" type="button">Clear</button>
                   <button id="subnet-calc-use-src-btn" type="button">Use packet source IP</button>
                   <button id="subnet-calc-use-dst-btn" type="button">Use packet destination IP</button>
+                  <button id="subnet-calc-nmap-scan-btn" type="button">Enumerate Services</button>
                 </div>
                 <div id="subnet-calc-status" class="subnet-calc-status" aria-live="polite">
                   Enter an IPv4 or IPv6 address/network to analyze.
                 </div>
+              </div>
+              <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
+                <div id="subnet-calc-capture-targets"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
+                <div id="subnet-calc-nmap"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
                 <div id="subnet-calc-summary"></div>
@@ -778,6 +785,15 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">Manual file-to-Conv imports warn above one quarter of this limit and are
                   refused
                   above this limit. Default 2 MB.</div>
+
+                <label class="settings-checkbox-row" for="settings-general-nmap-service-scan-enabled">
+                  <input id="settings-general-nmap-service-scan-enabled" type="checkbox" />
+                  Enable Conv Subnet internet-host Nmap service scans
+                </label>
+                <div class="settings-help-text">
+                  Uses capture-derived internet IP + port targets and runs nmap -sV with XML output. Disabled by
+                  default.
+                </div>
               </div>
             </div>
           </div>

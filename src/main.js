@@ -4,7 +4,7 @@ const userAgent = `PacketSnitch v${app.getVersion()} (${process.platform}; ${pro
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
-const { exec } = require("child_process");
+const { exec, execFile } = require("child_process");
 const os = require("os");
 const util = require("util");
 const { gzip, gunzip } = require("zlib");
@@ -33,6 +33,7 @@ try {
 }
 const gzipAsync = util.promisify(gzip);
 const gunzipAsync = util.promisify(gunzip);
+const execFileAsync = util.promisify(execFile);
 const platform = os.platform();
 const SESSION_COMPRESSION_XZ = "xz";
 const SESSION_COMPRESSION_GZIP = "gzip";
@@ -40,6 +41,7 @@ const testcaseTempDir = path.join(os.tmpdir(), "testcases");
 const CONSOLE_INSPECT_DEPTH = 6;
 const CONSOLE_MAX_ARRAY_LENGTH = 50;
 const ollamaDispatcherCache = new Map();
+const activeNmapScans = new Set();
 
 function getOllamaDispatcher(timeoutMs) {
   const normalizedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -116,6 +118,216 @@ function ensureRendererCspHeader(webContentsSession) {
   });
 
   isRendererCspHookInstalled = true;
+}
+
+function isLikelyIpAddress(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return false;
+  if (rawValue.includes(":")) {
+    return /^[0-9a-fA-F:]+$/.test(rawValue);
+  }
+  const ipv4Parts = rawValue.split(".");
+  if (ipv4Parts.length !== 4) return false;
+  return ipv4Parts.every((part) => {
+    if (!/^\d+$/.test(part)) return false;
+    const parsed = Number(part);
+    return Number.isInteger(parsed) && parsed >= 0 && parsed <= 255;
+  });
+}
+
+function normalizeNmapTargets(rawTargets) {
+  if (!Array.isArray(rawTargets)) return [];
+  const byIp = new Map();
+  for (const candidate of rawTargets) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const ip = String(candidate.ip || "").trim();
+    if (!isLikelyIpAddress(ip)) continue;
+    const ports = Array.isArray(candidate.ports)
+      ? candidate.ports
+      : [];
+    const validPorts = ports
+      .map((portValue) => Number.parseInt(String(portValue), 10))
+      .filter((portValue) => Number.isInteger(portValue) && portValue >= 1 && portValue <= 65535);
+    if (!validPorts.length) continue;
+    if (!byIp.has(ip)) {
+      byIp.set(ip, new Set());
+    }
+    const portSet = byIp.get(ip);
+    validPorts.forEach((portValue) => portSet.add(portValue));
+  }
+
+  return Array.from(byIp.entries()).map(([ip, portSet]) => ({
+    ip,
+    ports: Array.from(portSet).sort((a, b) => a - b),
+  }));
+}
+
+async function checkNmapInstalled() {
+  try {
+    const { stdout } = await execFileAsync("nmap", ["--version"], {
+      timeout: 4000,
+      windowsHide: true,
+      maxBuffer: 512 * 1024,
+    });
+    const versionLine = String(stdout || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
+      || "nmap --version";
+    return {
+      installed: true,
+      version: versionLine,
+    };
+  } catch (error) {
+    return {
+      installed: false,
+      version: "",
+      error: error?.message || "nmap executable not available",
+    };
+  }
+}
+
+function ensureNmapOutputDirectory() {
+  const nmapDir = path.join(app.getPath("userData"), "nmap-scans");
+  fs.mkdirSync(nmapDir, { recursive: true });
+  return nmapDir;
+}
+
+function buildNmapScanFilePath(outputDir, ipAddress) {
+  const safeIp = String(ipAddress || "host")
+    .trim()
+    .replace(/[^a-zA-Z0-9._:-]/g, "_")
+    .replace(/:/g, "-");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(outputDir, `nmap-sv-${safeIp}-${timestamp}.xml`);
+}
+
+function getNmapScanRuntimeStatus() {
+  let runningCount = 0;
+  activeNmapScans.forEach((childProc) => {
+    if (!childProc) return;
+    if (childProc.exitCode === null && childProc.signalCode === null) {
+      runningCount += 1;
+    }
+  });
+  return {
+    running: runningCount > 0,
+    runningCount,
+  };
+}
+
+function runTrackedNmapExec(args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const childProc = execFile(
+      "nmap",
+      args,
+      {
+        timeout: timeoutMs,
+        windowsHide: true,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        activeNmapScans.delete(childProc);
+        if (settled) return;
+        settled = true;
+        if (error) {
+          error.stdout = stdout;
+          error.stderr = stderr;
+          reject(error);
+          return;
+        }
+        resolve({ stdout, stderr });
+      },
+    );
+
+    activeNmapScans.add(childProc);
+    childProc.once("error", () => {
+      activeNmapScans.delete(childProc);
+    });
+    childProc.once("exit", () => {
+      activeNmapScans.delete(childProc);
+    });
+  });
+}
+
+function isNmapServiceScanEnabledInSettings() {
+  const settings = appSettings && typeof appSettings === "object"
+    ? appSettings
+    : DEFAULT_SETTINGS;
+  return Boolean(settings?.general?.nmapServiceScanEnabled);
+}
+
+async function runNmapServiceScan(targets, options = {}) {
+  const normalizedTargets = normalizeNmapTargets(targets);
+  if (!normalizedTargets.length) {
+    return {
+      success: false,
+      error: "No valid nmap targets were provided",
+      targets: [],
+      results: [],
+    };
+  }
+
+  const nmapStatus = await checkNmapInstalled();
+  if (!nmapStatus.installed) {
+    return {
+      success: false,
+      error: nmapStatus.error || "nmap is not installed",
+      nmapInstalled: false,
+      targets: normalizedTargets,
+      results: [],
+    };
+  }
+
+  const timeoutMs = Number(options?.timeoutMs) > 0
+    ? Number(options.timeoutMs)
+    : 120000;
+  const outputDir = ensureNmapOutputDirectory();
+  const results = await Promise.all(
+    normalizedTargets.map(async (target) => {
+      const xmlOutputPath = buildNmapScanFilePath(outputDir, target.ip);
+      const portsArg = target.ports.join(",");
+      const args = ["-sV", "-p", portsArg, "-oX", xmlOutputPath, target.ip];
+      try {
+        const { stdout, stderr } = await runTrackedNmapExec(args, timeoutMs);
+        const xml = fs.existsSync(xmlOutputPath)
+          ? fs.readFileSync(xmlOutputPath, "utf8")
+          : "";
+        return {
+          ip: target.ip,
+          ports: target.ports,
+          xmlPath: xmlOutputPath,
+          xml,
+          stdout: String(stdout || ""),
+          stderr: String(stderr || ""),
+          success: true,
+        };
+      } catch (error) {
+        const xml = fs.existsSync(xmlOutputPath)
+          ? fs.readFileSync(xmlOutputPath, "utf8")
+          : "";
+        return {
+          ip: target.ip,
+          ports: target.ports,
+          xmlPath: xmlOutputPath,
+          xml,
+          stdout: String(error?.stdout || ""),
+          stderr: String(error?.stderr || ""),
+          success: false,
+          error: error?.message || "nmap scan failed",
+        };
+      }
+    }),
+  );
+
+  return {
+    success: results.some((entry) => entry.success),
+    nmapInstalled: true,
+    version: nmapStatus.version || "",
+    targets: normalizedTargets,
+    results,
+  };
 }
 
 function getLlmDiagnostics() {
@@ -1583,6 +1795,43 @@ ipcMain.handle("get-backend-diagnostics", async (_event, options = {}) => {
       backendVersionService: null,
       backendVersionReachable: false,
       checkedAt: new Date().toISOString(),
+    };
+  }
+});
+
+ipcMain.handle("check-nmap-installed", async () => {
+  return checkNmapInstalled();
+});
+
+ipcMain.handle("get-nmap-scan-status", async () => {
+  return getNmapScanRuntimeStatus();
+});
+
+ipcMain.handle("run-nmap-service-scan", async (_event, targets = [], options = {}) => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+
+  if (!isNmapServiceScanEnabledInSettings()) {
+    return {
+      success: false,
+      nmapInstalled: false,
+      error: "Nmap service scans are disabled in Settings",
+      results: [],
+      targets: [],
+      disabledBySettings: true,
+    };
+  }
+
+  try {
+    return await runNmapServiceScan(targets, options);
+  } catch (error) {
+    return {
+      success: false,
+      nmapInstalled: false,
+      error: error?.message || "Nmap service scan failed",
+      results: [],
+      targets: normalizeNmapTargets(targets),
     };
   }
 });

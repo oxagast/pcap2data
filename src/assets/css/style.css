@@ -1359,6 +1359,16 @@ strong {
   margin-bottom: 8px;
 }
 
+.subnet-calc-table-badge-row {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#conv-subnet-panel .subnet-calc-table-badge-row .subnet-calc-grade-badge {
+  text-decoration: none;
+}
+
 .subnet-calc-status {
   margin-top: 8px;
   min-height: 1.2em;
@@ -1654,6 +1664,7 @@ strong {
   border-collapse: collapse;
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
+  table-layout: fixed;
 }
 
 .data-tools-proto-table th,

@@ -5,13 +5,19 @@ function createSubnetCalculatorPanel({
     statusUpdate = () => { },
     writeLogEntry = () => { },
     getBackendTransportOptions = () => ({}),
+    getCurrentSettings = () => ({}),
+    getCapturePackets = () => ({}),
     openHeatmapLocation = () => { },
     getCurrentPacketIps = () => ({ src: "", dst: "" }),
 } = {}) {
     let lookupRequestToken = 0;
+    let nmapScanToken = 0;
 
     const inputEl = document.getElementById("subnet-calc-input");
     const statusEl = document.getElementById("subnet-calc-status");
+    const nmapScanBtnEl = document.getElementById("subnet-calc-nmap-scan-btn");
+    const captureTargetsEl = document.getElementById("subnet-calc-capture-targets");
+    const nmapEl = document.getElementById("subnet-calc-nmap");
     const summaryEl = document.getElementById("subnet-calc-summary");
     const rangeEl = document.getElementById("subnet-calc-range");
     const binaryEl = document.getElementById("subnet-calc-binary");
@@ -22,6 +28,19 @@ function createSubnetCalculatorPanel({
         ipsum: null,
         tor: null,
     };
+    const nmapScanState = {
+        inFlight: false,
+        lastRequestedTargetsKey: "",
+        lastCompletedTargetsKey: "",
+        lastKickoffAt: 0,
+        lastInstallCheckAt: 0,
+        installStatus: null,
+        latestScanResponse: null,
+        inFlightPromise: null,
+        currentInspectedIp: "",
+    };
+    const NMAP_AUTO_SCAN_MIN_INTERVAL_MS = 15000;
+    const NMAP_INSTALL_CHECK_TTL_MS = 60000;
 
     function setPanelStatus(message, isError = false) {
         if (!statusEl) return;
@@ -112,6 +131,411 @@ function createSubnetCalculatorPanel({
             rowWrap.appendChild(preEl);
             container.appendChild(rowWrap);
         });
+    }
+
+    function isNmapServiceScanEnabled() {
+        return Boolean(getCurrentSettings()?.general?.nmapServiceScanEnabled);
+    }
+
+    function updateNmapScanButtonState() {
+        if (!nmapScanBtnEl) return;
+        const enabled = isNmapServiceScanEnabled();
+        nmapScanBtnEl.disabled = !enabled;
+        nmapScanBtnEl.title = enabled
+            ? "Run nmap -sV on internet hosts/ports seen in this capture"
+            : "Enable this in Settings > General";
+    }
+
+    function parsePortNumber(rawValue) {
+        const parsed = Number.parseInt(String(rawValue ?? "").trim(), 10);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+            return null;
+        }
+        return parsed;
+    }
+
+    function buildTargetsSignature(targets) {
+        if (!Array.isArray(targets) || !targets.length) return "";
+        return targets
+            .map((entry) => {
+                const ip = String(entry?.ip || "").trim();
+                const ports = Array.isArray(entry?.ports)
+                    ? entry.ports
+                        .map((portValue) => Number.parseInt(String(portValue), 10))
+                        .filter((portValue) => Number.isInteger(portValue) && portValue >= 1 && portValue <= 65535)
+                        .sort((a, b) => a - b)
+                    : [];
+                return `${ip}:${ports.join(",")}`;
+            })
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+            .join("|");
+    }
+
+    function getPacketTransportName(packetInfo) {
+        if (packetInfo?.TCP && typeof packetInfo.TCP === "object") return "TCP";
+        if (packetInfo?.UDP && typeof packetInfo.UDP === "object") return "UDP";
+        if (packetInfo?.SCTP && typeof packetInfo.SCTP === "object") return "SCTP";
+        return "TCP";
+    }
+
+    function getTransportDataForPacketInfo(packetInfo, protocolName = "") {
+        if (!packetInfo || typeof packetInfo !== "object") return {};
+        const normalizedProtocol = String(protocolName || "").trim();
+        const candidates = [
+            normalizedProtocol,
+            normalizedProtocol.toUpperCase(),
+            normalizedProtocol.toLowerCase(),
+            "TCP",
+            "UDP",
+            "SCTP",
+        ].filter(Boolean);
+
+        for (const candidate of candidates) {
+            const transportData = packetInfo[candidate];
+            if (transportData && typeof transportData === "object") {
+                return transportData;
+            }
+        }
+        return {};
+    }
+
+    function getCaptureInternetTargets() {
+        const captureData = getCapturePackets() || {};
+        const hostBuckets = captureData?.host;
+        const targetsByIp = new Map();
+
+        if (!hostBuckets || typeof hostBuckets !== "object") {
+            return [];
+        }
+
+        for (const hostPackets of Object.values(hostBuckets)) {
+            if (!Array.isArray(hostPackets)) continue;
+            for (const packet of hostPackets) {
+                const packetInfo = packet?.["packet.info"] || {};
+                const ipInfo = packetInfo.IP || {};
+                const srcIp = String(ipInfo["ip.src.addr"] ?? ipInfo["Source IP"] ?? "").trim();
+                const dstIp = String(ipInfo["ip.dst.addr"] ?? ipInfo["Destination IP"] ?? "").trim();
+                const protocol = getPacketTransportName(packetInfo);
+                if (protocol !== "TCP") {
+                    continue;
+                }
+                const transportData = getTransportDataForPacketInfo(packetInfo, protocol);
+                const srcPort = parsePortNumber(
+                    transportData["tcp.src.port"]
+                    ?? transportData["udp.src.port"]
+                    ?? transportData["sctp.src.port"]
+                    ?? transportData["Source port"],
+                );
+                const dstPort = parsePortNumber(
+                    transportData["tcp.dst.port"]
+                    ?? transportData["udp.dst.port"]
+                    ?? transportData["sctp.dst.port"]
+                    ?? transportData["Destination port"],
+                );
+
+                const captureCandidate = (ipAddress, port) => {
+                    if (!ipAddress || !port) return;
+                    let analysis;
+                    try {
+                        analysis = analyzeSubnetInput(ipAddress);
+                    } catch (_error) {
+                        return;
+                    }
+                    if (analysis.exposure !== "Public") return;
+                    if (!targetsByIp.has(ipAddress)) {
+                        targetsByIp.set(ipAddress, {
+                            ip: ipAddress,
+                            ports: new Set(),
+                            packetCount: 0,
+                        });
+                    }
+                    const target = targetsByIp.get(ipAddress);
+                    target.packetCount += 1;
+                    target.ports.add(port);
+                };
+
+                captureCandidate(srcIp, srcPort);
+                captureCandidate(dstIp, dstPort);
+            }
+        }
+
+        return Array.from(targetsByIp.values())
+            .map((entry) => ({
+                ip: entry.ip,
+                packetCount: entry.packetCount,
+                ports: Array.from(entry.ports).sort((a, b) => a - b),
+            }))
+            .filter((entry) => entry.ports.length > 0)
+            .sort((a, b) => a.ip.localeCompare(b.ip, undefined, { numeric: true }));
+    }
+
+    function getCurrentInspectedIp() {
+        return String(nmapScanState.currentInspectedIp || "").trim();
+    }
+
+    function resolveManualScanInspectedIp(targets) {
+        let inspectedIp = getCurrentInspectedIp();
+        if (inspectedIp) {
+            return inspectedIp;
+        }
+
+        const rawInput = String(inputEl?.value || "").trim();
+        if (rawInput) {
+            try {
+                const analysis = analyzeSubnetInput(rawInput);
+                inspectedIp = String(analysis.lookupTargetIp || analysis.address || "").trim();
+                if (inspectedIp) {
+                    return inspectedIp;
+                }
+            } catch (_error) {
+                // Ignore parse errors and continue with packet-based fallback.
+            }
+        }
+
+        const packetIps = getCurrentPacketIps() || {};
+        const srcIp = String(packetIps.src || "").trim();
+        const dstIp = String(packetIps.dst || "").trim();
+        const targetIps = new Set((Array.isArray(targets) ? targets : []).map((entry) => String(entry?.ip || "").trim()));
+        if (srcIp && targetIps.has(srcIp)) {
+            return srcIp;
+        }
+        if (dstIp && targetIps.has(dstIp)) {
+            return dstIp;
+        }
+        if (srcIp) return srcIp;
+        if (dstIp) return dstIp;
+        return "";
+    }
+
+    function renderCaptureTargets(targets, inspectedIp = "") {
+        if (!captureTargetsEl) return;
+        captureTargetsEl.innerHTML = "";
+        const titleEl = document.createElement("div");
+        titleEl.className = "data-tools-output-label subnet-calc-section-title";
+        titleEl.textContent = "Capture Internet Targets (TCP)";
+        captureTargetsEl.appendChild(titleEl);
+
+        const latestScanResponse = nmapScanState.latestScanResponse;
+
+        const scanByIp = new Map();
+        const scanErrorsByIp = new Map();
+        if (latestScanResponse && Array.isArray(latestScanResponse.results)) {
+            latestScanResponse.results.forEach((scanResult) => {
+                const resultIp = String(scanResult?.ip || "").trim();
+                if (!resultIp) return;
+
+                if (!scanResult?.success) {
+                    scanErrorsByIp.set(resultIp, String(scanResult?.error || "nmap scan failed").trim());
+                    return;
+                }
+
+                const parsedFindings = parseNmapXmlFindings(scanResult.xml, resultIp);
+                parsedFindings.forEach((hostFinding) => {
+                    const hostIp = String(hostFinding?.ipAddress || resultIp).trim();
+                    if (!hostIp) return;
+
+                    if (!scanByIp.has(hostIp)) {
+                        scanByIp.set(hostIp, new Map());
+                    }
+                    const servicesByPort = scanByIp.get(hostIp);
+                    (hostFinding.openPorts || []).forEach((openPort) => {
+                        const portId = String(openPort?.portId || "").trim();
+                        if (!portId) return;
+                        const serviceName = String(openPort?.serviceName || "unknown").trim() || "unknown";
+                        const software = String(openPort?.software || "").trim();
+                        const label = software ? `${serviceName} (${software})` : serviceName;
+                        servicesByPort.set(portId, label);
+                    });
+                });
+            });
+        }
+
+        if (!isNmapServiceScanEnabled()) {
+            setPlaceholder(
+                captureTargetsEl,
+                "Enable Conv Subnet internet-host Nmap scans in Settings > General to run service scans.",
+            );
+            return;
+        }
+
+        if (!Array.isArray(targets) || targets.length === 0) {
+            setPlaceholder(captureTargetsEl, "No internet IP + TCP port targets found in loaded capture.");
+            return;
+        }
+
+        const normalizedInspectedIp = String(inspectedIp || getCurrentInspectedIp()).trim();
+        if (!normalizedInspectedIp) {
+            setPlaceholder(captureTargetsEl, "Analyze or select a specific IP to view only that host's observed ports.");
+            return;
+        }
+
+        const filteredTargets = targets.filter((entry) => String(entry?.ip || "").trim() === normalizedInspectedIp);
+        if (!filteredTargets.length) {
+            setPlaceholder(
+                captureTargetsEl,
+                `No observed TCP ports in capture for inspected IP ${normalizedInspectedIp}.`,
+            );
+            return;
+        }
+
+        const table = document.createElement("table");
+        table.className = "data-tools-proto-table";
+        const headerRow = document.createElement("tr");
+        ["Internet IP", "Observed Ports", "Observed Packets", "Nmap Service/Version"].forEach((title) => {
+            const th = document.createElement("th");
+            th.textContent = title;
+            headerRow.appendChild(th);
+        });
+        table.appendChild(headerRow);
+
+        filteredTargets.forEach((target) => {
+            const tr = document.createElement("tr");
+            const ipTd = document.createElement("td");
+            ipTd.textContent = target.ip;
+            const portsTd = document.createElement("td");
+            portsTd.textContent = target.ports.join(", ");
+            const packetCountTd = document.createElement("td");
+            packetCountTd.textContent = String(target.packetCount);
+            const nmapTd = document.createElement("td");
+            const targetScanError = scanErrorsByIp.get(String(target.ip || "").trim());
+            const serviceByPort = scanByIp.get(String(target.ip || "").trim()) || new Map();
+            const lines = target.ports.map((portValue) => {
+                const portText = String(portValue);
+                const serviceLabel = serviceByPort.get(portText);
+                if (serviceLabel) return `${portText}: ${serviceLabel}`;
+                if (targetScanError) return `${portText}: error (${targetScanError})`;
+                if (!latestScanResponse) return `${portText}: scan not run`;
+                return `${portText}: unknown`;
+            });
+            nmapTd.textContent = lines.join(" | ");
+            tr.appendChild(ipTd);
+            tr.appendChild(portsTd);
+            tr.appendChild(packetCountTd);
+            tr.appendChild(nmapTd);
+            table.appendChild(tr);
+        });
+
+        captureTargetsEl.appendChild(table);
+
+        const actionRow = document.createElement("div");
+        actionRow.className = "data-tools-actions subnet-calc-map-actions";
+        const addLinkButton = (label, url) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = label;
+            button.addEventListener("click", async () => {
+                if (typeof window.browserapi?.openExternalUrl !== "function") {
+                    return;
+                }
+                await window.browserapi.openExternalUrl(String(url));
+            });
+            actionRow.appendChild(button);
+        };
+        addLinkButton("NMap Project", "https://nmap.org");
+        captureTargetsEl.appendChild(actionRow);
+    }
+
+    function parseNmapXmlFindings(xmlText, fallbackIp = "") {
+        if (!xmlText || typeof xmlText !== "string") return [];
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+        if (xmlDoc.querySelector("parsererror")) {
+            return [];
+        }
+
+        const hosts = Array.from(xmlDoc.getElementsByTagName("host"));
+        const findings = [];
+        hosts.forEach((hostNode) => {
+            const addressNode = hostNode.querySelector("address[addrtype='ipv4'], address[addrtype='ipv6']");
+            const ipAddress = addressNode?.getAttribute("addr") || fallbackIp || "Unknown";
+            const hostnameNode = hostNode.querySelector("hostnames > hostname");
+            const hostname = hostnameNode?.getAttribute("name") || "";
+            const openPorts = Array.from(hostNode.querySelectorAll("ports > port"))
+                .map((portNode) => {
+                    const state = portNode.querySelector("state")?.getAttribute("state") || "unknown";
+                    const portId = portNode.getAttribute("portid") || "";
+                    const serviceNode = portNode.querySelector("service");
+                    const serviceName = serviceNode?.getAttribute("name") || "unknown";
+                    const product = serviceNode?.getAttribute("product") || "";
+                    const version = serviceNode?.getAttribute("version") || "";
+                    const extra = serviceNode?.getAttribute("extrainfo") || "";
+                    const software = [product, version, extra].filter(Boolean).join(" ").trim();
+                    return {
+                        portId,
+                        state,
+                        serviceName,
+                        software,
+                    };
+                })
+                .filter((entry) => entry.state === "open");
+
+            findings.push({
+                ipAddress,
+                hostname,
+                openPorts,
+            });
+        });
+        return findings;
+    }
+
+    function renderNmapResults(scanResponse, inspectedIp = "") {
+        if (!nmapEl) return;
+        nmapEl.innerHTML = "";
+        const titleEl = document.createElement("div");
+        titleEl.className = "data-tools-output-label subnet-calc-section-title";
+        titleEl.textContent = "Nmap Scan Status";
+        nmapEl.appendChild(titleEl);
+
+        renderCaptureTargets(getCaptureInternetTargets(), inspectedIp);
+
+        if (!scanResponse || !Array.isArray(scanResponse.results) || scanResponse.results.length === 0) {
+            setPlaceholder(nmapEl, "No nmap scan findings yet. Results appear in the table above.");
+            return;
+        }
+
+        const normalizedInspectedIp = String(inspectedIp || getCurrentInspectedIp()).trim();
+        if (!normalizedInspectedIp) {
+            setPlaceholder(nmapEl, "Analyze or select a specific IP before running nmap scans.");
+            return;
+        }
+
+        const filteredResults = scanResponse.results.filter(
+            (scanResult) => String(scanResult?.ip || "").trim() === normalizedInspectedIp,
+        );
+        if (!filteredResults.length) {
+            setPlaceholder(nmapEl, `No nmap findings are available yet for inspected IP ${normalizedInspectedIp}.`);
+            return;
+        }
+
+        const summary = document.createElement("div");
+        summary.className = "subnet-calc-binary-label";
+        const successful = filteredResults.filter((entry) => entry?.success).length;
+        summary.textContent = `Inspected IP ${normalizedInspectedIp}: ${successful}/${filteredResults.length} nmap job(s) succeeded. Service/version output is shown in the table above.`;
+        nmapEl.appendChild(summary);
+    }
+
+    async function ensureNmapInstalledCached() {
+        const now = Date.now();
+        if (
+            nmapScanState.installStatus
+            && now - nmapScanState.lastInstallCheckAt < NMAP_INSTALL_CHECK_TTL_MS
+        ) {
+            return nmapScanState.installStatus;
+        }
+        if (!window.snitchapi || typeof window.snitchapi.checkNmapInstalled !== "function") {
+            const unavailable = {
+                installed: false,
+                error: "Nmap scan API is unavailable.",
+            };
+            nmapScanState.installStatus = unavailable;
+            nmapScanState.lastInstallCheckAt = now;
+            return unavailable;
+        }
+        const installStatus = await window.snitchapi.checkNmapInstalled();
+        nmapScanState.installStatus = installStatus;
+        nmapScanState.lastInstallCheckAt = now;
+        return installStatus;
     }
 
     function parseIpv4Octets(value) {
@@ -939,12 +1363,291 @@ function createSubnetCalculatorPanel({
         }
     }
 
+    async function runCaptureNmapScan({ auto = false, reason = "manual", force = false } = {}) {
+        updateNmapScanButtonState();
+        if (nmapScanState.inFlight) {
+            let nmapRuntimeStatus = { running: true };
+            if (window.snitchapi && typeof window.snitchapi.getNmapScanStatus === "function") {
+                try {
+                    nmapRuntimeStatus = await window.snitchapi.getNmapScanStatus();
+                } catch (_error) {
+                    nmapRuntimeStatus = { running: true };
+                }
+            }
+
+            if (!nmapRuntimeStatus?.running) {
+                nmapScanState.inFlight = false;
+                nmapScanState.inFlightPromise = null;
+            }
+        }
+
+        if (nmapScanState.inFlight) {
+            if (!auto) {
+                setPanelStatus("Nmap scan already running. Waiting for current scan to finish...");
+                setPlaceholder(nmapEl, "Nmap scan already in progress. Waiting for existing results...");
+            }
+            if (nmapScanState.inFlightPromise) {
+                await nmapScanState.inFlightPromise;
+            }
+            if (!auto && nmapScanState.latestScanResponse) {
+                renderNmapResults(nmapScanState.latestScanResponse, getCurrentInspectedIp());
+            }
+            return;
+        }
+
+        if (!isNmapServiceScanEnabled()) {
+            setPanelStatus("Enable Conv Subnet internet-host Nmap scans in Settings > General.", true);
+            renderCaptureTargets([], getCurrentInspectedIp());
+            setPlaceholder(nmapEl, "Nmap scans are disabled in settings.");
+            return;
+        }
+
+        const targets = getCaptureInternetTargets();
+        const inspectedIp = auto ? getCurrentInspectedIp() : resolveManualScanInspectedIp(targets);
+        if (!auto && inspectedIp) {
+            nmapScanState.currentInspectedIp = inspectedIp;
+            if (inputEl && !String(inputEl.value || "").trim()) {
+                inputEl.value = inspectedIp;
+            }
+        }
+        const scopedTargets = auto
+            ? targets
+            : targets.filter((entry) => String(entry?.ip || "").trim() === inspectedIp);
+        const targetsKey = buildTargetsSignature(scopedTargets);
+        renderCaptureTargets(targets, inspectedIp);
+
+        if (!auto && !inspectedIp) {
+            setPanelStatus("Analyze/select an IP in Subnet/IP first, then rescan that host.", true);
+            setPlaceholder(nmapEl, "No inspected IP selected for host rescan.");
+            return;
+        }
+
+        if (!scopedTargets.length) {
+            if (!auto) {
+                setPanelStatus(`No nmap targets available for inspected host ${inspectedIp}.`, true);
+                setPlaceholder(nmapEl, `No observed TCP ports for inspected host ${inspectedIp}.`);
+            }
+            return;
+        }
+
+        const now = Date.now();
+        if (!force && auto) {
+            if (nmapScanState.inFlight && targetsKey === nmapScanState.lastRequestedTargetsKey) {
+                return;
+            }
+            if (targetsKey === nmapScanState.lastCompletedTargetsKey) {
+                return;
+            }
+            if (now - nmapScanState.lastKickoffAt < NMAP_AUTO_SCAN_MIN_INTERVAL_MS) {
+                return;
+            }
+        }
+
+        const currentToken = ++nmapScanToken;
+        nmapScanState.inFlight = true;
+        nmapScanState.lastRequestedTargetsKey = targetsKey;
+        nmapScanState.lastKickoffAt = now;
+        let resolveInFlightPromise = () => { };
+        nmapScanState.inFlightPromise = new Promise((resolve) => {
+            resolveInFlightPromise = resolve;
+        });
+        let finalizedInFlight = false;
+        const finalizeInFlightState = () => {
+            if (finalizedInFlight) return;
+            finalizedInFlight = true;
+            nmapScanState.inFlight = false;
+            nmapScanState.inFlightPromise = null;
+            resolveInFlightPromise();
+        };
+        if (!auto) {
+            setPanelStatus(`Checking nmap installation for host ${inspectedIp}...`);
+            setPlaceholder(nmapEl, "Checking nmap installation...");
+        }
+
+        let installStatus;
+        try {
+            installStatus = await ensureNmapInstalledCached();
+        } catch (error) {
+            if (currentToken !== nmapScanToken) {
+                finalizeInFlightState();
+                return;
+            }
+            finalizeInFlightState();
+            if (!auto) {
+                setPanelStatus(error?.message || "Unable to check nmap installation.", true);
+                setPlaceholder(nmapEl, error?.message || "Unable to check nmap installation.");
+            }
+            return;
+        }
+        if (currentToken !== nmapScanToken) {
+            finalizeInFlightState();
+            return;
+        }
+
+        if (!installStatus?.installed) {
+            const installError = installStatus?.error || "nmap is not installed or not in PATH.";
+            finalizeInFlightState();
+            if (!auto) {
+                setPanelStatus(installError, true);
+                setPlaceholder(nmapEl, installError);
+                statusUpdate(`Status: ${installError}`);
+            }
+            writeLogEntry(`Conv subnet nmap pre-check failed error=${JSON.stringify(installError)}`);
+            return;
+        }
+
+        if (!auto) {
+            setPanelStatus(`Running nmap -sV on inspected host ${inspectedIp}...`);
+            setPlaceholder(nmapEl, "Running nmap service scans. This may take a while...");
+        } else {
+            writeLogEntry(
+                `Conv subnet nmap auto-scan started reason=${JSON.stringify(reason)} targets=${scopedTargets.length}`,
+            );
+        }
+
+        const requestTargets = scopedTargets.map((entry) => ({
+            ip: entry.ip,
+            ports: entry.ports,
+        }));
+
+        const scanPromise = (async () => {
+            try {
+                const scanResponse = await window.snitchapi.runNmapServiceScan(requestTargets, {
+                    timeoutMs: 120000,
+                });
+                if (currentToken !== nmapScanToken) return;
+                nmapScanState.latestScanResponse = scanResponse;
+                if (scanResponse?.success) {
+                    nmapScanState.lastCompletedTargetsKey = targetsKey;
+                }
+                renderNmapResults(scanResponse, getCurrentInspectedIp());
+
+                if (!scanResponse?.success) {
+                    const errorMessage = scanResponse?.error || "Nmap scan did not return findings.";
+                    if (!auto) {
+                        setPanelStatus(errorMessage, true);
+                        statusUpdate(`Status: ${errorMessage}`);
+                    }
+                    writeLogEntry(`Conv subnet nmap scan failed error=${JSON.stringify(errorMessage)}`);
+                    return;
+                }
+
+                const scannedHosts = Array.isArray(scanResponse.results)
+                    ? scanResponse.results.filter((entry) => entry?.success).length
+                    : 0;
+                const outputPaths = Array.isArray(scanResponse.results)
+                    ? scanResponse.results
+                        .map((entry) => String(entry?.xmlPath || "").trim())
+                        .filter(Boolean)
+                    : [];
+                if (!auto) {
+                    setPanelStatus(`Nmap service scan complete. Scanned ${scannedHosts}/${requestTargets.length} hosts.`);
+                    statusUpdate(`Status: Nmap service scan complete (${scannedHosts}/${requestTargets.length} hosts)`);
+                }
+                writeLogEntry(
+                    `Conv subnet nmap scan complete auto=${auto} scanned=${scannedHosts}/${requestTargets.length} xml=${JSON.stringify(outputPaths)}`,
+                );
+            } catch (error) {
+                if (currentToken !== nmapScanToken) return;
+                const message = error?.message || "Nmap scan failed.";
+                if (!auto) {
+                    setPanelStatus(message, true);
+                    statusUpdate(`Status: ${message}`);
+                    setPlaceholder(nmapEl, message);
+                }
+                writeLogEntry(`Conv subnet nmap scan threw error=${JSON.stringify(message)}`);
+            } finally {
+                finalizeInFlightState();
+            }
+        })();
+
+        await scanPromise;
+    }
+
+    function maybeAutoStartCaptureNmapScan(progressInfo = {}) {
+        if (!isNmapServiceScanEnabled()) {
+            return;
+        }
+        const processedPackets = Number(progressInfo?.processedPackets) || 0;
+        const complete = Boolean(progressInfo?.complete);
+        if (!complete && processedPackets <= 0) {
+            return;
+        }
+        void runCaptureNmapScan({
+            auto: true,
+            reason: progressInfo?.reason || "backend-progress",
+            force: false,
+        });
+    }
+
+    function maybeKickoffNmapOnTabOpen() {
+        if (!isNmapServiceScanEnabled()) {
+            return;
+        }
+        if (nmapScanState.inFlight) {
+            return;
+        }
+
+        const targets = getCaptureInternetTargets();
+        if (!targets.length) {
+            return;
+        }
+
+        const inspectedIp = getCurrentInspectedIp() || resolveManualScanInspectedIp(targets);
+        if (inspectedIp) {
+            nmapScanState.currentInspectedIp = inspectedIp;
+        }
+
+        const latestResults = Array.isArray(nmapScanState.latestScanResponse?.results)
+            ? nmapScanState.latestScanResponse.results
+            : [];
+        const hasAnyOutput = latestResults.length > 0;
+        const hasInspectedOutput = inspectedIp
+            ? latestResults.some((entry) => String(entry?.ip || "").trim() === inspectedIp)
+            : hasAnyOutput;
+
+        if (hasAnyOutput && hasInspectedOutput) {
+            renderCaptureTargets(targets, inspectedIp);
+            renderNmapResults(nmapScanState.latestScanResponse, inspectedIp);
+            return;
+        }
+
+        void runCaptureNmapScan({
+            auto: true,
+            reason: "subnet-tab-open",
+            force: false,
+        });
+    }
+
+    function resetCaptureNmapState() {
+        nmapScanToken += 1;
+        nmapScanState.inFlight = false;
+        nmapScanState.lastRequestedTargetsKey = "";
+        nmapScanState.lastCompletedTargetsKey = "";
+        nmapScanState.lastKickoffAt = 0;
+        nmapScanState.latestScanResponse = null;
+        nmapScanState.installStatus = null;
+        nmapScanState.lastInstallCheckAt = 0;
+        nmapScanState.inFlightPromise = null;
+        nmapScanState.currentInspectedIp = "";
+        updateNmapScanButtonState();
+        renderCaptureTargets(getCaptureInternetTargets(), "");
+        setPlaceholder(nmapEl, "Nmap scan status for the selected host will appear here.");
+    }
+
     async function analyzeCurrentInput() {
         try {
             const analysis = analyzeSubnetInput(inputEl?.value || "");
+            nmapScanState.currentInspectedIp = String(analysis.lookupTargetIp || analysis.address || "").trim();
             const requestToken = ++lookupRequestToken;
             threatIntelState = { ipsum: null, tor: null };
             renderAnalysisResults(analysis);
+            renderCaptureTargets(getCaptureInternetTargets(), nmapScanState.currentInspectedIp);
+            if (nmapScanState.latestScanResponse) {
+                renderNmapResults(nmapScanState.latestScanResponse, nmapScanState.currentInspectedIp);
+            } else {
+                setPlaceholder(nmapEl, `Nmap scan status for ${nmapScanState.currentInspectedIp} will appear here.`);
+            }
             setPanelStatus(`Analyzing ${analysis.normalizedInput}...`);
             statusUpdate(`Status: Calculated subnet data for ${analysis.address}`);
             writeLogEntry(`Conv subnet calculator analyzed ${JSON.stringify(analysis.normalizedInput)}`);
@@ -976,12 +1679,19 @@ function createSubnetCalculatorPanel({
         if (inputEl) {
             inputEl.value = value;
         }
+        nmapScanState.currentInspectedIp = String(value || "").trim();
+        renderCaptureTargets(getCaptureInternetTargets(), nmapScanState.currentInspectedIp);
+        if (nmapScanState.latestScanResponse) {
+            renderNmapResults(nmapScanState.latestScanResponse, nmapScanState.currentInspectedIp);
+        }
         setPanelStatus(`Loaded current packet ${side === "dst" ? "destination" : "source"} IP.`);
         void analyzeCurrentInput();
     }
 
     function clear() {
         lookupRequestToken += 1;
+        nmapScanToken += 1;
+        nmapScanState.currentInspectedIp = "";
         if (inputEl) {
             inputEl.value = "";
         }
@@ -990,12 +1700,19 @@ function createSubnetCalculatorPanel({
     }
 
     function renderEmptyState() {
+        updateNmapScanButtonState();
         setPlaceholder(summaryEl, "Enter an IP address, host/prefix, or subnet to inspect.");
         setPlaceholder(rangeEl, "Range details will appear here.");
         setPlaceholder(binaryEl, "Binary notation will appear here.");
         setPlaceholder(whoisEl, "WHOIS / RDAP data will appear here.");
         setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
         setPlaceholder(geoEl, "GeoIP data will appear here.");
+        renderCaptureTargets(getCaptureInternetTargets(), getCurrentInspectedIp());
+        if (nmapScanState.latestScanResponse) {
+            renderNmapResults(nmapScanState.latestScanResponse, getCurrentInspectedIp());
+        } else {
+            setPlaceholder(nmapEl, "Nmap scan status for the selected host will appear here.");
+        }
     }
 
     document.getElementById("subnet-calc-analyze-btn")?.addEventListener("click", () => {
@@ -1007,6 +1724,9 @@ function createSubnetCalculatorPanel({
     });
     document.getElementById("subnet-calc-use-dst-btn")?.addEventListener("click", () => {
         loadCurrentPacketAddress("dst");
+    });
+    nmapScanBtnEl?.addEventListener("click", () => {
+        void runCaptureNmapScan({ auto: false, reason: "manual-button", force: true });
     });
     inputEl?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
@@ -1022,6 +1742,9 @@ function createSubnetCalculatorPanel({
         analyzeCurrentInput,
         clear,
         loadCurrentPacketAddress,
+        maybeAutoStartCaptureNmapScan,
+        maybeKickoffNmapOnTabOpen,
+        resetCaptureNmapState,
     };
 }
 

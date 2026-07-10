@@ -861,6 +861,9 @@ function syncSettingsFormFromState() {
   const manualConvImportMaxBytesEl = document.getElementById(
     "settings-general-manual-conv-import-max-bytes",
   );
+  const nmapServiceScanEnabledEl = document.getElementById(
+    "settings-general-nmap-service-scan-enabled",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -921,6 +924,9 @@ function syncSettingsFormFromState() {
     manualConvImportMaxBytesEl.value = formatManualConvImportLimitMb(
       settings.general.manualConvImportMaxBytes,
     );
+  }
+  if (nmapServiceScanEnabledEl) {
+    nmapServiceScanEnabledEl.checked = Boolean(settings.general.nmapServiceScanEnabled);
   }
   if (backendTcpHostEl) {
     backendTcpHostEl.value = String(settings.backend.tcpHost || DEFAULT_SETTINGS.backend.tcpHost);
@@ -1014,6 +1020,9 @@ function readSettingsFormState() {
   const manualConvImportMaxBytesEl = document.getElementById(
     "settings-general-manual-conv-import-max-bytes",
   );
+  const nmapServiceScanEnabledEl = document.getElementById(
+    "settings-general-nmap-service-scan-enabled",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -1076,6 +1085,9 @@ function readSettingsFormState() {
       manualConvImportMaxBytes: manualConvImportMaxBytesEl
         ? parseManualConvImportLimitMb(manualConvImportMaxBytesEl.value)
         : DEFAULT_SETTINGS.general.manualConvImportMaxBytes,
+      nmapServiceScanEnabled: nmapServiceScanEnabledEl
+        ? nmapServiceScanEnabledEl.checked
+        : DEFAULT_SETTINGS.general.nmapServiceScanEnabled,
     },
     backend: {
       tcpHost: backendTcpHostEl
@@ -1236,6 +1248,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "manualConvImportMaxBytes",
     previousGeneral.manualConvImportMaxBytes,
     nextGeneral.manualConvImportMaxBytes,
+  );
+  pushChange(
+    "nmapServiceScanEnabled",
+    previousGeneral.nmapServiceScanEnabled,
+    nextGeneral.nmapServiceScanEnabled,
   );
   pushChange("backendTcpHost", previousBackend.tcpHost, nextBackend.tcpHost);
   pushChange("backendTcpPort", previousBackend.tcpPort, nextBackend.tcpPort);
@@ -5812,6 +5829,9 @@ function restoreSessionState(sessionState) {
     showSettingsWorkspace();
   } else if (savedMainTab === MAIN_TAB_DATA_TOOLS) {
     showDataTools(savedConvTab);
+    if (savedConvTab === CONV_SUBNET_SUBTAB) {
+      subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
+    }
   } else if (savedMainTab === MAIN_TAB_CRYPT) {
     showCryptWorkspace(savedCryptTab);
   } else if (savedMainTab === MAIN_TAB_KEYSTORE && keystorePanel.isUnlocked()) {
@@ -14713,6 +14733,8 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
   statusUpdate,
   writeLogEntry,
   getBackendTransportOptions: () => getBackendTransportOptionsFromSettings(),
+  getCurrentSettings: () => getCurrentSettings(),
+  getCapturePackets: () => capturedPackets,
   openHeatmapLocation: ({ latitude, longitude, label }) => {
     showStatsHeatmapLocation({ latitude, longitude, label });
   },
@@ -14993,6 +15015,14 @@ document
     writeLogEntry(`Settings updated streamContextWarnPacketThreshold=${event?.target?.value}`);
   });
 
+document
+  .getElementById("settings-general-nmap-service-scan-enabled")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated nmapServiceScanEnabled=${Boolean(event?.target?.checked)}`,
+    );
+  });
+
 document.getElementById("settings-backend-tcp-host").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated backendTcpHost=${JSON.stringify(event?.target?.value || "")}`);
 });
@@ -15138,6 +15168,7 @@ document
   .getElementById("conv-subtab-subnet")
   .addEventListener("click", () => {
     setConvSubtab(CONV_SUBNET_SUBTAB);
+    subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
   });
 document
   .getElementById("conv-subtab-packet-json")
@@ -17229,6 +17260,12 @@ async function processBackendJsonPathPayload(payload) {
       suppressLoadingOverlay: true,
       incrementalUpdate: false,
     });
+    subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
+      reason: "backend-path-first-chunk",
+      processedPackets: payload.processedPackets,
+      totalPackets: payload.totalPackets,
+      complete: payload.complete,
+    });
     backendProgressState.firstChunkLoaded = true;
     markAppliedBackendSnapshot(payload);
     hideLoadingOverlay();
@@ -17251,6 +17288,12 @@ async function processBackendJsonPathPayload(payload) {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
       finalUpdate: true,
+    });
+    subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
+      reason: "backend-path-final",
+      processedPackets: payload.processedPackets,
+      totalPackets: payload.totalPackets,
+      complete: payload.complete,
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
@@ -17333,6 +17376,12 @@ async function processBackendJsonDataPayload(payload) {
       suppressLoadingOverlay: true,
       incrementalUpdate: false,
     });
+    subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
+      reason: "backend-data-first-chunk",
+      processedPackets: payload.processedPackets,
+      totalPackets: payload.totalPackets,
+      complete: payload.complete,
+    });
     backendProgressState.firstChunkLoaded = true;
     markAppliedBackendSnapshot(payload);
     clearSummaryContent();
@@ -17357,6 +17406,12 @@ async function processBackendJsonDataPayload(payload) {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
       finalUpdate: true,
+    });
+    subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
+      reason: "backend-data-final",
+      processedPackets: payload.processedPackets,
+      totalPackets: payload.totalPackets,
+      complete: payload.complete,
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
@@ -17407,6 +17462,7 @@ function runSnitch(file, options = {}) {
   const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
   resetBackendProgressState();
+  subnetCalculatorPanel.resetCaptureNmapState();
   backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
   document.getElementById("loading-container").style.display = "block";
