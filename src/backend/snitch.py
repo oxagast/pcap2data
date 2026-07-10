@@ -214,6 +214,8 @@ IPSUM_SOURCE_URL = "https://raw.githubusercontent.com/stamparm/ipsum/master/ipsu
 IPSUM_PROJECT_URL = "https://github.com/stamparm/ipsum"
 TOR_ONIONOO_URL = "https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform"
 TOR_PROJECT_URL = "https://www.torproject.org/"
+SHODAN_INTERNETDB_URL = "https://internetdb.shodan.io"
+SHODAN_INTERNETDB_DOCS_URL = "https://internetdb.shodan.io"
 torNetworkCacheLock = threading.Lock()
 torNetworkNodesByIp: dict = {}
 torNetworkIps: dict = {}
@@ -1508,6 +1510,116 @@ def buildTorLookupResponse(ip):
         "fetchedDate": cacheData.get("fetchedDate") or "",
         "sourceUrl": cacheData.get("sourceUrl") or TOR_ONIONOO_URL,
         "projectUrl": TOR_PROJECT_URL,
+    }
+
+
+def buildShodanInternetDbLookupResponse(ip):
+    normalizedIp = str(ipaddress.ip_address(str(ip).strip()))
+    ipObj = ipaddress.ip_address(normalizedIp)
+
+    if (
+        ipObj.is_private
+        or ipObj.is_loopback
+        or ipObj.is_link_local
+        or ipObj.is_multicast
+        or ipObj.is_reserved
+        or ipObj.is_unspecified
+    ):
+        return {
+            "success": True,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "supported": False,
+            "message": "Local / special-use IPs are not indexed by Shodan InternetDB.",
+            "sourceUrl": SHODAN_INTERNETDB_URL,
+            "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+            "cpes": [],
+            "hostnames": [],
+            "ports": [],
+            "tags": [],
+            "vulns": [],
+        }
+
+    try:
+        response = requests.get(
+            f"{SHODAN_INTERNETDB_URL}/{normalizedIp}",
+            timeout=8,
+            verify=False,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
+            },
+        )
+    except Exception as lookupError:
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "error": str(lookupError),
+            "sourceUrl": SHODAN_INTERNETDB_URL,
+            "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+        }
+
+    if response.status_code >= 400:
+        errorDetail = ""
+        try:
+            errorPayload = response.json()
+            if isinstance(errorPayload, dict):
+                errorDetail = str(
+                    errorPayload.get("detail")
+                    or errorPayload.get("error")
+                    or errorPayload.get("message")
+                    or ""
+                ).strip()
+        except Exception:
+            errorDetail = str(response.text or "").strip()
+
+        if not errorDetail:
+            errorDetail = "No Shodan InternetDB data found for this IP."
+
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "error": f"HTTP {response.status_code}: {errorDetail}",
+            "sourceUrl": SHODAN_INTERNETDB_URL,
+            "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+        }
+
+    try:
+        payload = response.json()
+    except Exception:
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "error": "Invalid JSON received from Shodan InternetDB.",
+            "sourceUrl": SHODAN_INTERNETDB_URL,
+            "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "success": False,
+            "ip": normalizedIp,
+            "version": ipObj.version,
+            "error": "Unexpected response payload from Shodan InternetDB.",
+            "sourceUrl": SHODAN_INTERNETDB_URL,
+            "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+        }
+
+    return {
+        "success": True,
+        "ip": str(payload.get("ip") or normalizedIp),
+        "version": ipObj.version,
+        "supported": True,
+        "cpes": payload.get("cpes") if isinstance(payload.get("cpes"), list) else [],
+        "hostnames": payload.get("hostnames") if isinstance(payload.get("hostnames"), list) else [],
+        "ports": payload.get("ports") if isinstance(payload.get("ports"), list) else [],
+        "tags": payload.get("tags") if isinstance(payload.get("tags"), list) else [],
+        "vulns": payload.get("vulns") if isinstance(payload.get("vulns"), list) else [],
+        "sourceUrl": SHODAN_INTERNETDB_URL,
+        "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
     }
 
 
@@ -6200,6 +6312,41 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     {
                         "success": False,
                         "error": str(torLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
+            return
+        if parsedUrl.path == "/shodan":
+            queryIp = str((queryParams.get("ip") or [""])[0] or "").strip()
+            if not queryIp:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing ip query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildShodanInternetDbLookupResponse(queryIp)
+            except ValueError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Invalid IP address",
+                    },
+                )
+                return
+            except Exception as shodanLookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(shodanLookupError),
                     },
                 )
                 return

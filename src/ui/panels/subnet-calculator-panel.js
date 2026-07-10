@@ -24,6 +24,7 @@ function createSubnetCalculatorPanel({
     const whoisEl = document.getElementById("subnet-calc-whois");
     const reputationEl = document.getElementById("subnet-calc-reputation");
     const geoEl = document.getElementById("subnet-calc-geo");
+    const shodanEl = document.getElementById("subnet-calc-shodan");
     let threatIntelState = {
         ipsum: null,
         tor: null,
@@ -403,9 +404,9 @@ function createSubnetCalculatorPanel({
             const lines = target.ports.map((portValue) => {
                 const portText = String(portValue);
                 const serviceLabel = serviceByPort.get(portText);
-                if (serviceLabel) return `${portText}: ${serviceLabel}`;
-                if (targetScanError) return `${portText}: error (${targetScanError})`;
-                if (!latestScanResponse) return `${portText}: scan not run`;
+                if (serviceLabel) return `${serviceLabel}`;
+                if (targetScanError) return `error (${targetScanError})`;
+                if (!latestScanResponse) return `scan not run`;
                 return `${portText}: unknown`;
             });
             nmapTd.textContent = lines.join(" | ");
@@ -1038,6 +1039,52 @@ function createSubnetCalculatorPanel({
         setPlaceholder(whoisEl, "Looking up WHOIS / RDAP data...");
         setPlaceholder(reputationEl, "Looking up Threat Intelligence data...");
         setPlaceholder(geoEl, "Looking up GeoIP data...");
+        setPlaceholder(shodanEl, "Looking up Shodan InternetDB data...");
+    }
+
+    function renderShodanResult(analysis, shodanResult) {
+        if (!shodanEl) return;
+        shodanEl.innerHTML = "";
+        const titleEl = document.createElement("div");
+        titleEl.className = "data-tools-output-label subnet-calc-section-title";
+        titleEl.textContent = "Shodan InternetDB";
+        shodanEl.appendChild(titleEl);
+
+        if (!shodanResult || shodanResult.success === false) {
+            const message = shodanResult?.error || "Shodan InternetDB lookup failed.";
+            setPlaceholder(shodanEl, message);
+            return;
+        }
+
+        const arrayToText = (value) => {
+            if (!Array.isArray(value) || value.length === 0) return "None";
+            return value.map((entry) => String(entry)).join(", ");
+        };
+
+        const rows = [
+            { name: "Lookup Target", value: analysis.lookupTargetIp },
+            { name: "Returned IP", value: String(shodanResult.ip || "Unknown") },
+            { name: "Ports", value: arrayToText(shodanResult.ports) },
+            { name: "Hostnames", value: arrayToText(shodanResult.hostnames) },
+            { name: "CPEs", value: arrayToText(shodanResult.cpes) },
+            { name: "Tags", value: arrayToText(shodanResult.tags) },
+            { name: "Vulns", value: arrayToText(shodanResult.vulns) },
+        ];
+        renderKeyValueTable(shodanEl, "Shodan InternetDB", rows);
+
+        const actionRow = document.createElement("div");
+        actionRow.className = "data-tools-actions subnet-calc-map-actions";
+        const docButton = document.createElement("button");
+        docButton.type = "button";
+        docButton.textContent = "Open Shodan InternetDB";
+        docButton.addEventListener("click", async () => {
+            if (typeof window.browserapi?.openExternalUrl !== "function") {
+                return;
+            }
+            await window.browserapi.openExternalUrl("https://internetdb.shodan.io");
+        });
+        actionRow.appendChild(docButton);
+        shodanEl.appendChild(actionRow);
     }
 
     function renderThreatIntelResult(analysis) {
@@ -1363,6 +1410,50 @@ function createSubnetCalculatorPanel({
         }
     }
 
+    async function lookupShodanInternetDb(analysis, requestToken) {
+        const currentToken = requestToken;
+
+        if (analysis.exposure !== "Public") {
+            renderShodanResult(analysis, {
+                success: false,
+                error: "Local / special-use IPs are not indexed by Shodan InternetDB.",
+            });
+            return;
+        }
+
+        if (!window.snitchapi || typeof window.snitchapi.lookupShodan !== "function") {
+            renderShodanResult(analysis, {
+                success: false,
+                error: "Backend Shodan lookup API is unavailable.",
+            });
+            return;
+        }
+
+        const lookupIp = String(analysis.lookupTargetIp || "").trim();
+        if (!lookupIp) {
+            renderShodanResult(analysis, {
+                success: false,
+                error: "No lookup IP is available for Shodan InternetDB.",
+            });
+            return;
+        }
+
+        try {
+            const response = await window.snitchapi.lookupShodan(lookupIp, {
+                backendOptions: getBackendTransportOptions(),
+            });
+            if (currentToken !== lookupRequestToken) return;
+
+            renderShodanResult(analysis, response);
+        } catch (error) {
+            if (currentToken !== lookupRequestToken) return;
+            renderShodanResult(analysis, {
+                success: false,
+                error: error?.message || "Shodan InternetDB lookup failed.",
+            });
+        }
+    }
+
     async function runCaptureNmapScan({ auto = false, reason = "manual", force = false } = {}) {
         updateNmapScanButtonState();
         if (nmapScanState.inFlight) {
@@ -1656,6 +1747,7 @@ function createSubnetCalculatorPanel({
                 lookupWhois(analysis, requestToken),
                 lookupIpsum(analysis, requestToken),
                 lookupTor(analysis, requestToken),
+                lookupShodanInternetDb(analysis, requestToken),
             ]);
             if (requestToken !== lookupRequestToken) return;
             setPanelStatus(`Analyzed ${analysis.normalizedInput}`);
@@ -1707,6 +1799,7 @@ function createSubnetCalculatorPanel({
         setPlaceholder(whoisEl, "WHOIS / RDAP data will appear here.");
         setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
         setPlaceholder(geoEl, "GeoIP data will appear here.");
+        setPlaceholder(shodanEl, "Shodan InternetDB data will appear here.");
         renderCaptureTargets(getCaptureInternetTargets(), getCurrentInspectedIp());
         if (nmapScanState.latestScanResponse) {
             renderNmapResults(nmapScanState.latestScanResponse, getCurrentInspectedIp());

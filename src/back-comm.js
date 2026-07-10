@@ -605,6 +605,69 @@ function requestSnitchHttpBackendTor(
   });
 }
 
+function requestSnitchHttpBackendShodan(
+  ipAddress,
+  {
+    host = currentBackendHttpHost,
+    port = currentBackendHttpPort,
+    timeoutMs = 8000,
+  } = {},
+) {
+  return new Promise((resolve) => {
+    const normalizedIp = String(ipAddress || "").trim();
+    if (!normalizedIp) {
+      resolve({
+        success: false,
+        error: "Missing IP address",
+      });
+      return;
+    }
+
+    const requestPath = `/shodan?ip=${encodeURIComponent(normalizedIp)}`;
+    const req = http.request(
+      {
+        host,
+        port,
+        path: requestPath,
+        method: "GET",
+        timeout: timeoutMs,
+        headers: {
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          let payload = {};
+          try {
+            payload = JSON.parse(body || "{}");
+          } catch (_err) {
+            payload = {};
+          }
+          resolve({
+            success: res.statusCode === 200 && payload?.success !== false,
+            ...payload,
+          });
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP Shodan request timed out"));
+    });
+    req.on("error", (error) => {
+      resolve({
+        success: false,
+        error: error?.message || "HTTP Shodan request failed",
+      });
+    });
+    req.end();
+  });
+}
+
 function normalizeBackendTransportOptions(rawOptions = {}) {
   const source = rawOptions && typeof rawOptions === "object" ? rawOptions : {};
   const host =
@@ -1807,6 +1870,37 @@ ipcMain.handle("lookup-backend-tor", async (_event, ipAddress, options = {}) => 
     timeoutMs: Number(optionsSource.timeoutMs) > 0
       ? Number(optionsSource.timeoutMs)
       : 7000,
+  });
+});
+
+ipcMain.handle("lookup-backend-shodan", async (_event, ipAddress, options = {}) => {
+  const optionsSource = options && typeof options === "object" ? options : {};
+  const normalizedTransport = applyBackendTransportOptions(
+    optionsSource.backendOptions,
+  );
+  if (normalizedTransport.forceLegacySpawn) {
+    return {
+      success: false,
+      error: "Backend Shodan lookup requires HTTP backend mode",
+      mode: "legacy",
+    };
+  }
+
+  const ready = await ensureBackendHttpServerReady();
+  if (!ready) {
+    return {
+      success: false,
+      error: "Backend HTTP service unavailable",
+      mode: "http",
+    };
+  }
+
+  return requestSnitchHttpBackendShodan(ipAddress, {
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+    timeoutMs: Number(optionsSource.timeoutMs) > 0
+      ? Number(optionsSource.timeoutMs)
+      : 8000,
   });
 });
 

@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('lookup-backend-ipsum', ipAddress, options),
   lookupTor: (ipAddress, options = {}) =>
     ipcRenderer.invoke('lookup-backend-tor', ipAddress, options),
+  lookupShodan: (ipAddress, options = {}) =>
+    ipcRenderer.invoke('lookup-backend-shodan', ipAddress, options),
   checkNmapInstalled: () =>
     ipcRenderer.invoke('check-nmap-installed'),
   getNmapScanStatus: () =>
