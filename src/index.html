@@ -155,11 +155,10 @@
               Decodes
             </button>
             <button id="conv-subtab-subnet" class="crypt-subtab-btn">
-              Subnet / IP Analysis
-            </button>
-            <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
-              Packet JSON
-            </button>
+              Analyze Subnet
+              <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
+                Packet JSON
+              </button>
           </div>
 
           <div id="conv-conversions-panel" class="crypt-subtab-panel">
@@ -367,7 +366,10 @@
           <div id="conv-subnet-panel" class="crypt-subtab-panel" hidden>
             <div class="subnet-calc-grid">
               <div class="data-tools-section subnet-calc-controls">
-                <div class="data-tools-title">Subnet Calculator</div>
+                <div class="data-tools-title">Host Analysis</div>
+                <div class="subnet-calc-note">
+                  Note: this panel shows current lookup/enrichment data. The only values taken from the loaded pcap are IP addresses.
+                </div>
                 <label for="subnet-calc-input">IPv4 / IPv6 address, host/prefix, or subnet</label>
                 <input id="subnet-calc-input" type="text"
                   placeholder="192.168.1.10/24, 10.0.0.0 255.255.255.0, 2001:db8::1/64" />

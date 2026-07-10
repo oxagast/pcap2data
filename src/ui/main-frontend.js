@@ -5380,6 +5380,12 @@ function buildSessionStateSnapshot() {
     currentSummary: summary,
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
+    subnet: deepCloneSessionData(
+      typeof subnetCalculatorPanel?.getSessionState === "function"
+        ? subnetCalculatorPanel.getSessionState()
+        : null,
+      null,
+    ),
     sourcePcap: sessionPcapSource
       ? {
         fileName: sessionPcapSource.fileName,
@@ -5656,6 +5662,12 @@ async function requestApplicationClose() {
 // Handles restore session state.
 function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
+
+  if (typeof subnetCalculatorPanel?.restoreSessionState === "function") {
+    subnetCalculatorPanel.restoreSessionState(
+      sessionState.subnet || sessionState.subnetState || null,
+    );
+  }
 
   setSessionPcapSource(sessionState.sourcePcap, {
     skipLog: true,
@@ -17462,7 +17474,11 @@ function runSnitch(file, options = {}) {
   const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
   resetBackendProgressState();
-  subnetCalculatorPanel.resetCaptureNmapState();
+  if (typeof subnetCalculatorPanel?.resetSessionCacheState === "function") {
+    subnetCalculatorPanel.resetSessionCacheState();
+  } else {
+    subnetCalculatorPanel.resetCaptureNmapState();
+  }
   backendProgressState.processing = true;
   document.getElementById("loading-screen").style.display = "block";
   document.getElementById("loading-container").style.display = "block";

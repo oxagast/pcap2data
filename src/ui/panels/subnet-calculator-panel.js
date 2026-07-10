@@ -29,6 +29,8 @@ function createSubnetCalculatorPanel({
         ipsum: null,
         tor: null,
     };
+    let whoisCacheByIp = Object.create(null);
+    let shodanCacheByIp = Object.create(null);
     const nmapScanState = {
         inFlight: false,
         lastRequestedTargetsKey: "",
@@ -42,6 +44,111 @@ function createSubnetCalculatorPanel({
     };
     const NMAP_AUTO_SCAN_MIN_INTERVAL_MS = 15000;
     const NMAP_INSTALL_CHECK_TTL_MS = 60000;
+
+    function clonePlainData(value, fallbackValue = null) {
+        if (value === undefined) return fallbackValue;
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch (_error) {
+            return fallbackValue;
+        }
+    }
+
+    function normalizeLookupIp(value) {
+        return String(value || "").trim();
+    }
+
+    function setCachedWhoisResult(ipAddress, result) {
+        const normalizedIp = normalizeLookupIp(ipAddress);
+        if (!normalizedIp) return;
+        whoisCacheByIp[normalizedIp] = clonePlainData(result, null);
+    }
+
+    function getCachedWhoisResult(ipAddress) {
+        const normalizedIp = normalizeLookupIp(ipAddress);
+        if (!normalizedIp) return null;
+        return clonePlainData(whoisCacheByIp[normalizedIp], null);
+    }
+
+    function setCachedShodanResult(ipAddress, result) {
+        const normalizedIp = normalizeLookupIp(ipAddress);
+        if (!normalizedIp) return;
+        shodanCacheByIp[normalizedIp] = clonePlainData(result, null);
+    }
+
+    function getCachedShodanResult(ipAddress) {
+        const normalizedIp = normalizeLookupIp(ipAddress);
+        if (!normalizedIp) return null;
+        return clonePlainData(shodanCacheByIp[normalizedIp], null);
+    }
+
+    function getSessionState() {
+        return {
+            whoisByIp: clonePlainData(whoisCacheByIp, {}),
+            shodanByIp: clonePlainData(shodanCacheByIp, {}),
+            nmap: {
+                currentInspectedIp: String(nmapScanState.currentInspectedIp || "").trim(),
+                lastCompletedTargetsKey: String(nmapScanState.lastCompletedTargetsKey || "").trim(),
+                latestScanResponse: clonePlainData(nmapScanState.latestScanResponse, null),
+            },
+        };
+    }
+
+    function restoreSessionState(restoredState = {}) {
+        const normalizedState = restoredState && typeof restoredState === "object"
+            ? restoredState
+            : {};
+
+        whoisCacheByIp = clonePlainData(normalizedState.whoisByIp, {}) || {};
+        shodanCacheByIp = clonePlainData(normalizedState.shodanByIp, {}) || {};
+
+        const restoredNmap = normalizedState.nmap && typeof normalizedState.nmap === "object"
+            ? normalizedState.nmap
+            : {};
+        nmapScanState.latestScanResponse = clonePlainData(restoredNmap.latestScanResponse, null);
+        nmapScanState.lastCompletedTargetsKey = String(restoredNmap.lastCompletedTargetsKey || "").trim();
+        nmapScanState.currentInspectedIp = String(restoredNmap.currentInspectedIp || "").trim();
+        nmapScanState.inFlight = false;
+        nmapScanState.inFlightPromise = null;
+
+        const inputValue = String(inputEl?.value || "").trim();
+        let restoredAnalysis = null;
+        if (inputValue) {
+            try {
+                restoredAnalysis = analyzeSubnetInput(inputValue);
+            } catch (_error) {
+                restoredAnalysis = null;
+            }
+        }
+
+        if (restoredAnalysis) {
+            const lookupIp = normalizeLookupIp(restoredAnalysis.lookupTargetIp || restoredAnalysis.address);
+            if (lookupIp) {
+                nmapScanState.currentInspectedIp = lookupIp;
+                const cachedWhois = getCachedWhoisResult(lookupIp);
+                if (cachedWhois) {
+                    renderWhoisResult(restoredAnalysis, cachedWhois);
+                }
+                const cachedShodan = getCachedShodanResult(lookupIp);
+                if (cachedShodan) {
+                    renderShodanResult(restoredAnalysis, cachedShodan);
+                }
+            }
+        }
+
+        renderCaptureTargets(getCaptureInternetTargets(), getCurrentInspectedIp());
+        if (nmapScanState.latestScanResponse) {
+            renderNmapResults(nmapScanState.latestScanResponse, getCurrentInspectedIp());
+        } else {
+            setPlaceholder(nmapEl, "Nmap scan status for the selected host will appear here.");
+        }
+    }
+
+    function resetSessionCacheState() {
+        whoisCacheByIp = Object.create(null);
+        shodanCacheByIp = Object.create(null);
+        resetCaptureNmapState();
+    }
 
     function setPanelStatus(message, isError = false) {
         if (!statusEl) return;
@@ -1325,11 +1432,19 @@ function createSubnetCalculatorPanel({
 
     async function lookupWhois(analysis, requestToken) {
         const currentToken = requestToken;
+        const cachedResult = getCachedWhoisResult(analysis.lookupTargetIp);
+        if (cachedResult) {
+            renderWhoisResult(analysis, cachedResult);
+            return;
+        }
+
         if (!window.snitchapi || typeof window.snitchapi.lookupWhois !== "function") {
-            renderWhoisResult(analysis, {
+            const unavailableResult = {
                 success: false,
                 error: "Backend WHOIS lookup API is unavailable.",
-            });
+            };
+            setCachedWhoisResult(analysis.lookupTargetIp, unavailableResult);
+            renderWhoisResult(analysis, unavailableResult);
             return;
         }
 
@@ -1338,16 +1453,19 @@ function createSubnetCalculatorPanel({
                 backendOptions: getBackendTransportOptions(),
             });
             if (currentToken !== lookupRequestToken) return;
+            setCachedWhoisResult(analysis.lookupTargetIp, result);
             renderWhoisResult(analysis, result);
             if (result?.success === false) {
                 setPanelStatus(result.error || "WHOIS lookup failed.", true);
             }
         } catch (error) {
             if (currentToken !== lookupRequestToken) return;
-            renderWhoisResult(analysis, {
+            const errorResult = {
                 success: false,
                 error: error?.message || "WHOIS lookup failed.",
-            });
+            };
+            setCachedWhoisResult(analysis.lookupTargetIp, errorResult);
+            renderWhoisResult(analysis, errorResult);
             setPanelStatus(error?.message || "WHOIS lookup failed.", true);
         }
     }
@@ -1412,29 +1530,40 @@ function createSubnetCalculatorPanel({
 
     async function lookupShodanInternetDb(analysis, requestToken) {
         const currentToken = requestToken;
+        const cachedResult = getCachedShodanResult(analysis.lookupTargetIp);
+        if (cachedResult) {
+            renderShodanResult(analysis, cachedResult);
+            return;
+        }
 
         if (analysis.exposure !== "Public") {
-            renderShodanResult(analysis, {
+            const unsupportedResult = {
                 success: false,
                 error: "Local / special-use IPs are not indexed by Shodan InternetDB.",
-            });
+            };
+            setCachedShodanResult(analysis.lookupTargetIp, unsupportedResult);
+            renderShodanResult(analysis, unsupportedResult);
             return;
         }
 
         if (!window.snitchapi || typeof window.snitchapi.lookupShodan !== "function") {
-            renderShodanResult(analysis, {
+            const unavailableResult = {
                 success: false,
                 error: "Backend Shodan lookup API is unavailable.",
-            });
+            };
+            setCachedShodanResult(analysis.lookupTargetIp, unavailableResult);
+            renderShodanResult(analysis, unavailableResult);
             return;
         }
 
         const lookupIp = String(analysis.lookupTargetIp || "").trim();
         if (!lookupIp) {
-            renderShodanResult(analysis, {
+            const missingIpResult = {
                 success: false,
                 error: "No lookup IP is available for Shodan InternetDB.",
-            });
+            };
+            setCachedShodanResult(analysis.lookupTargetIp, missingIpResult);
+            renderShodanResult(analysis, missingIpResult);
             return;
         }
 
@@ -1444,13 +1573,16 @@ function createSubnetCalculatorPanel({
             });
             if (currentToken !== lookupRequestToken) return;
 
+            setCachedShodanResult(lookupIp, response);
             renderShodanResult(analysis, response);
         } catch (error) {
             if (currentToken !== lookupRequestToken) return;
-            renderShodanResult(analysis, {
+            const errorResult = {
                 success: false,
                 error: error?.message || "Shodan InternetDB lookup failed.",
-            });
+            };
+            setCachedShodanResult(lookupIp, errorResult);
+            renderShodanResult(analysis, errorResult);
         }
     }
 
@@ -1834,10 +1966,13 @@ function createSubnetCalculatorPanel({
     return {
         analyzeCurrentInput,
         clear,
+        getSessionState,
         loadCurrentPacketAddress,
         maybeAutoStartCaptureNmapScan,
         maybeKickoffNmapOnTabOpen,
+        resetSessionCacheState,
         resetCaptureNmapState,
+        restoreSessionState,
     };
 }
 
