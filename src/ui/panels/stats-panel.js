@@ -21,9 +21,11 @@ const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
 const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
 const HEATMAP_LOCATION_SELECTION_SIZE_SCALE = 0.5;
 const HEATMAP_SELECTION_MIN_PIXELS = 12;
-const HEATMAP_SELECTION_DRAW_MS = 170;
-const HEATMAP_SELECTION_BLINK_MS = 280;
-const HEATMAP_ZOOM_SETTLE_MS = 200;
+const HEATMAP_SELECTION_DRAW_MS = 320;
+const HEATMAP_SELECTION_BLINK_MS = 360;
+const HEATMAP_ZOOM_SETTLE_MS = 420;
+const HEATMAP_SELECTION_RUSH_MS = 420;
+const HEATMAP_ZOOM_TRANSITION_RASTER_PERCENT = 125;
 const HEATMAP_GRID_BASE_CELL_SIZE_X = 28;
 const HEATMAP_GRID_BASE_CELL_SIZE_Y = 22;
 const HEATMAP_GRID_MIN_CELL_SIZE = 6;
@@ -587,6 +589,92 @@ function projectGeoPoint(
   };
 }
 
+// Returns calibrated projection bounds.
+function getCalibratedProjectionBounds(
+  projectionBounds = WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+  projectionCalibration = null,
+) {
+  const calibration = projectionCalibration || {
+    zoomX: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_X,
+    zoomY: WIKIMEDIA_WORLD_MAP_PROJECTION_ZOOM_Y,
+    offsetX: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_X,
+    offsetY: WIKIMEDIA_WORLD_MAP_PROJECTION_OFFSET_Y,
+  };
+  const baseCenterX = (projectionBounds.left + projectionBounds.right) / 2;
+  const baseCenterY = (projectionBounds.top + projectionBounds.bottom) / 2;
+  const calibratedCenterX = baseCenterX + calibration.offsetX;
+  const calibratedCenterY = baseCenterY + calibration.offsetY;
+  const baseWidth = projectionBounds.right - projectionBounds.left;
+  const baseHeight = projectionBounds.bottom - projectionBounds.top;
+  const calibratedWidth = baseWidth / calibration.zoomX;
+  const calibratedHeight = baseHeight / calibration.zoomY;
+
+  return {
+    left: Math.max(0, calibratedCenterX - (calibratedWidth / 2)),
+    right: Math.min(1, calibratedCenterX + (calibratedWidth / 2)),
+    top: Math.max(0, calibratedCenterY - (calibratedHeight / 2)),
+    bottom: Math.min(1, calibratedCenterY + (calibratedHeight / 2)),
+  };
+}
+
+// Converts viewport point into geo coordinates for current zoom/pan state.
+function convertViewportPointToGeoCoordinates(
+  bounds,
+  point,
+  viewState = {},
+  projectionCalibration = null,
+  projectionBounds = WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+) {
+  if (!bounds || !point) return null;
+  const transform = getHeatmapViewTransform(bounds, viewState);
+  const scale = Math.max(0.0001, transform.scale);
+
+  const mapX = Math.min(
+    bounds.width,
+    Math.max(0, (Number(point.x) - bounds.left - transform.translateX) / scale),
+  );
+  const mapY = Math.min(
+    bounds.height,
+    Math.max(0, (Number(point.y) - bounds.top - transform.translateY) / scale),
+  );
+
+  const calibrated = getCalibratedProjectionBounds(projectionBounds, projectionCalibration);
+  const usableWidth = Math.max(1, bounds.width * (calibrated.right - calibrated.left));
+  const usableHeight = Math.max(1, bounds.height * (calibrated.bottom - calibrated.top));
+
+  const normalizedX = ((mapX - (bounds.width * calibrated.left)) / usableWidth);
+  const normalizedY = ((mapY - (bounds.height * calibrated.top)) / usableHeight);
+
+  return {
+    latitude: Math.min(90, Math.max(-90, 90 - (normalizedY * 180))),
+    longitude: Math.min(180, Math.max(-180, (normalizedX * 360) - 180)),
+  };
+}
+
+// Converts geo coordinates into viewport point for current zoom/pan state.
+function convertGeoCoordinatesToViewportPoint(
+  bounds,
+  latitude,
+  longitude,
+  viewState = {},
+  projectionCalibration = null,
+) {
+  if (!bounds) return null;
+  const projected = projectGeoPoint(
+    latitude,
+    longitude,
+    bounds.width,
+    bounds.height,
+    WIKIMEDIA_WORLD_MAP_PROJECTION_BOUNDS,
+    projectionCalibration,
+  );
+  const transform = getHeatmapViewTransform(bounds, viewState);
+  return {
+    x: bounds.left + transform.translateX + (projected.x * transform.scale),
+    y: bounds.top + transform.translateY + (projected.y * transform.scale),
+  };
+}
+
 // Returns projection calibration.
 function getProjectionCalibration(settingsGetter) {
   const debugSettings = settingsGetter?.()?.debug || {};
@@ -1134,6 +1222,7 @@ function renderStatsHeatmap(
   projectionCalibration,
   controls = {},
   viewState = {},
+  options = {},
 ) {
   if (!heatmapMountEl) return;
 
@@ -1148,8 +1237,11 @@ function renderStatsHeatmap(
   const mapBounds = getHeatmapMapBounds(width, height);
   const basemapImageEl = basemapFrameEl?.querySelector(".stats-heatmap-basemap");
   if (basemapImageEl) {
+    const basemapZoomPercent = options?.preferLowResBasemap
+      ? HEATMAP_ZOOM_TRANSITION_RASTER_PERCENT
+      : viewState?.zoomPercent;
     void applyThemedStatsBasemapImage(basemapImageEl, {
-      zoomPercent: viewState?.zoomPercent,
+      zoomPercent: basemapZoomPercent,
       boundsWidth: mapBounds.width,
       boundsHeight: mapBounds.height,
     });
@@ -1447,6 +1539,11 @@ function createStatsHeatmapSection({
   mapCoordinatesEl.textContent = "Target 0.00N, 0.00E";
   mapEl.appendChild(mapCoordinatesEl);
 
+  const aimEl = documentRef.createElement("div");
+  aimEl.className = "stats-heatmap-aim";
+  aimEl.hidden = true;
+  mapEl.appendChild(aimEl);
+
   mapEl.appendChild(mapZoomControlEl);
 
   const latitudeLabels = [
@@ -1485,6 +1582,10 @@ function createStatsHeatmapSection({
   selectionLayerEl.className = "stats-heatmap-selection";
   selectionLayerEl.hidden = true;
   mapEl.appendChild(selectionLayerEl);
+
+  const zoomTintEl = documentRef.createElement("div");
+  zoomTintEl.className = "stats-heatmap-zoom-tint";
+  mapEl.appendChild(zoomTintEl);
 
   const pixelMaskEl = documentRef.createElement("div");
   pixelMaskEl.className = "stats-heatmap-pixel-mask";
@@ -1534,7 +1635,12 @@ function createStatsHeatmapSection({
   let dragSelectionState = null;
   let selectionAnimating = false;
   let mapZoomInteractionActive = false;
+  let mapZoomVisualTransitionToken = 0;
+  let mapZoomVisualTransitionActive = false;
+  let lastRenderedZoomPercent = DEFAULT_HEATMAP_MAP_ZOOM;
   let lastClickedLocationPointKey = null;
+  let hoverAimState = null;
+  let lockedCoordinate = null;
   let queuedLocationFilterPoint = null;
   let activeHeatmapData = {
     heatmapPoints: Array.isArray(stats?.heatmapPoints) ? stats.heatmapPoints : [],
@@ -1710,6 +1816,66 @@ function createStatsHeatmapSection({
     return getHeatmapMapBounds(width, height);
   };
 
+  const setAimPosition = (x, y, visible = true) => {
+    if (!aimEl) return;
+    aimEl.hidden = !visible;
+    if (!visible) return;
+    aimEl.style.left = `${Number(x).toFixed(2)}px`;
+    aimEl.style.top = `${Number(y).toFixed(2)}px`;
+  };
+
+  const clearAimState = () => {
+    hoverAimState = null;
+    setAimPosition(0, 0, false);
+  };
+
+  const lockCoordinateTarget = (latitude, longitude) => {
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    lockedCoordinate = {
+      latitude: Math.min(90, Math.max(-90, lat)),
+      longitude: Math.min(180, Math.max(-180, lon)),
+    };
+    hoverAimState = null;
+  };
+
+  const updateLockedAimPosition = () => {
+    if (!lockedCoordinate) return;
+    const bounds = getCurrentMapBounds();
+    const point = convertGeoCoordinatesToViewportPoint(
+      bounds,
+      lockedCoordinate.latitude,
+      lockedCoordinate.longitude,
+      getMapZoomState(),
+      getProjectionControlState(),
+    );
+    if (!point) return;
+    setAimPosition(point.x, point.y, true);
+  };
+
+  const setCoordinateLabelFromState = (fallbackViewState) => {
+    let latitude = null;
+    let longitude = null;
+    let prefix = "Target";
+
+    if (lockedCoordinate) {
+      latitude = lockedCoordinate.latitude;
+      longitude = lockedCoordinate.longitude;
+      prefix = "Locked";
+    } else if (hoverAimState) {
+      latitude = hoverAimState.latitude;
+      longitude = hoverAimState.longitude;
+      prefix = "Aim";
+    } else {
+      const focusCoordinates = getHeatmapFocusCoordinates(fallbackViewState || getMapZoomState());
+      latitude = focusCoordinates.latitude;
+      longitude = focusCoordinates.longitude;
+    }
+
+    mapCoordinatesEl.textContent = `${prefix} ${formatHeatmapCoordinate(latitude, "N", "S")}, ${formatHeatmapCoordinate(longitude, "E", "W")}`;
+  };
+
   const resetSelectionBox = () => {
     dragSelectionState = null;
     pixelMaskEl.hidden = true;
@@ -1719,7 +1885,9 @@ function createStatsHeatmapSection({
     selectionLayerEl.classList.remove(
       "stats-heatmap-selection-capture",
       "stats-heatmap-selection-blink",
+      "stats-heatmap-selection-rush",
     );
+    zoomTintEl.classList.remove("stats-heatmap-zoom-tint-pass");
     mapEl.classList.remove("stats-heatmap-selecting", "stats-heatmap-selection-animating");
   };
 
@@ -1880,6 +2048,33 @@ function createStatsHeatmapSection({
       window.setTimeout(resolve, durationMs);
     });
 
+  const waitForMapZoomTransition = () =>
+    new Promise((resolve) => {
+      const fallbackTimeout = window.setTimeout(resolve, HEATMAP_ZOOM_SETTLE_MS + 80);
+      const onTransitionEnd = (event) => {
+        if (event?.propertyName !== "transform") return;
+        window.clearTimeout(fallbackTimeout);
+        pointLayerEl.removeEventListener("transitionend", onTransitionEnd);
+        resolve();
+      };
+      pointLayerEl.addEventListener("transitionend", onTransitionEnd);
+    });
+
+  const beginMapZoomVisualTransition = () => {
+    mapZoomVisualTransitionActive = true;
+    mapEl.classList.add("stats-heatmap-zooming");
+    mapZoomVisualTransitionToken += 1;
+    return mapZoomVisualTransitionToken;
+  };
+
+  const endMapZoomVisualTransition = (transitionToken) => {
+    if (transitionToken !== mapZoomVisualTransitionToken) return;
+    mapZoomVisualTransitionActive = false;
+    mapEl.classList.remove("stats-heatmap-zooming");
+    // Refresh once at settled zoom so basemap raster updates at final resolution.
+    render(false);
+  };
+
   const animateSelectionZoom = async ({
     bounds,
     selectionRect,
@@ -1899,14 +2094,25 @@ function createStatsHeatmapSection({
     selectionLayerEl.classList.add("stats-heatmap-selection-blink");
     await waitForSelectionAnimation(HEATMAP_SELECTION_BLINK_MS);
     selectionLayerEl.classList.remove("stats-heatmap-selection-blink");
+    selectionLayerEl.style.setProperty("--stats-heatmap-selection-rush-duration", `${HEATMAP_SELECTION_RUSH_MS}ms`);
+    zoomTintEl.style.setProperty("--stats-heatmap-zoom-tint-duration", `${HEATMAP_SELECTION_RUSH_MS}ms`);
+    selectionLayerEl.classList.add("stats-heatmap-selection-rush");
+    zoomTintEl.classList.add("stats-heatmap-zoom-tint-pass");
+    // Stop the pixel mesh immediately once zoom starts so it never lingers.
+    pixelMaskEl.hidden = true;
 
     mapViewState.focusX = Math.min(1, Math.max(0, Number(focusX) || 0.5));
     mapViewState.focusY = Math.min(1, Math.max(0, Number(focusY) || 0.5));
+    const targetCoordinates = getHeatmapFocusCoordinates({
+      focusX: mapViewState.focusX,
+      focusY: mapViewState.focusY,
+    });
+    lockCoordinateTarget(targetCoordinates.latitude, targetCoordinates.longitude);
     mapZoomInputEl.value = String(
       clampHeatmapMapZoomPercent(targetZoomPercent, DEFAULT_HEATMAP_MAP_ZOOM),
     );
     render(false);
-    await waitForSelectionAnimation(HEATMAP_ZOOM_SETTLE_MS);
+    await waitForMapZoomTransition();
     selectionAnimating = false;
     resetSelectionBox();
     if (queuedLocationFilterPoint) {
@@ -2038,6 +2244,7 @@ function createStatsHeatmapSection({
     const targetZoomPercent = hasCity
       ? HEATMAP_LOCATION_CLICK_CITY_ZOOM_PERCENT
       : HEATMAP_LOCATION_CLICK_ZOOM_PERCENT;
+    lockCoordinateTarget(latitude, longitude);
     await animateSelectionZoom({
       bounds,
       selectionRect,
@@ -2073,7 +2280,6 @@ function createStatsHeatmapSection({
     const controlState = getControlState();
     const projectionState = getProjectionControlState();
     const zoomState = getMapZoomState();
-    const focusCoordinates = getHeatmapFocusCoordinates(zoomState);
     intensityValueEl.textContent = `${controlState.intensityPercent}%`;
     pointSizeValueEl.textContent = `${controlState.pointSizePercent}%`;
     tightnessValueEl.textContent = `${controlState.tightnessPercent}%`;
@@ -2083,7 +2289,7 @@ function createStatsHeatmapSection({
     offsetXValueEl.textContent = toCalibrationLabel(projectionState.offsetX);
     offsetYValueEl.textContent = toCalibrationLabel(projectionState.offsetY);
     mapZoomValueEl.textContent = `${zoomState.zoomPercent}%`;
-    mapCoordinatesEl.textContent = `Target ${formatHeatmapCoordinate(focusCoordinates.latitude, "N", "S")}, ${formatHeatmapCoordinate(focusCoordinates.longitude, "E", "W")}`;
+    setCoordinateLabelFromState(zoomState);
   };
 
   const render = (refreshData = false) => {
@@ -2114,8 +2320,21 @@ function createStatsHeatmapSection({
       valueLabel: `${numberFormatter.format(point.value)} ${metricSuffix}`,
     }));
 
+    const previousZoomPercent = clampHeatmapMapZoomPercent(
+      lastRenderedZoomPercent,
+      DEFAULT_HEATMAP_MAP_ZOOM,
+    );
     projectionCalibration = getProjectionControlState();
     mapViewState = getMapZoomState();
+    const nextZoomPercent = clampHeatmapMapZoomPercent(
+      mapViewState.zoomPercent,
+      DEFAULT_HEATMAP_MAP_ZOOM,
+    );
+    const zoomChanged = previousZoomPercent !== nextZoomPercent;
+    let zoomTransitionToken = 0;
+    if (zoomChanged) {
+      zoomTransitionToken = beginMapZoomVisualTransition();
+    }
     syncControlLabels();
     renderStatsHeatmap(
       mapEl,
@@ -2127,8 +2346,23 @@ function createStatsHeatmapSection({
       projectionCalibration,
       getControlState(),
       mapViewState,
+      {
+        preferLowResBasemap: mapZoomVisualTransitionActive,
+      },
     );
     highlightHeatmapPoint(pointLayerEl, selectedPointKey);
+    if (lockedCoordinate) {
+      updateLockedAimPosition();
+    } else if (hoverAimState) {
+      setAimPosition(hoverAimState.x, hoverAimState.y, true);
+    }
+    lastRenderedZoomPercent = nextZoomPercent;
+
+    if (zoomChanged) {
+      void waitForMapZoomTransition().then(() => {
+        endMapZoomVisualTransition(zoomTransitionToken);
+      });
+    }
   };
 
   intensityInputEl.addEventListener("input", () => render(false));
@@ -2213,6 +2447,9 @@ function createStatsHeatmapSection({
       && point.y <= bounds.top + bounds.height;
     if (!withinBounds) return;
 
+    lockedCoordinate = null;
+    clearAimState();
+
     dragSelectionState = {
       bounds,
       startX: point.x,
@@ -2290,12 +2527,57 @@ function createStatsHeatmapSection({
     resetSelectionBox();
     mapViewState.focusX = 0.5;
     mapViewState.focusY = 0.5;
+    lockedCoordinate = null;
+    clearAimState();
     mapZoomInputEl.value = String(DEFAULT_HEATMAP_MAP_ZOOM);
     render(false);
     event.preventDefault();
   };
 
+  const onMapHoverMove = (event) => {
+    if (selectionAnimating || dragSelectionState || lockedCoordinate) return;
+    if (isMapZoomInteractionTarget(event.target)) return;
+    const bounds = getCurrentMapBounds();
+    const point = getMapEventPoint(event);
+    const withinBounds =
+      point.x >= bounds.left
+      && point.x <= bounds.left + bounds.width
+      && point.y >= bounds.top
+      && point.y <= bounds.top + bounds.height;
+    if (!withinBounds) {
+      hoverAimState = null;
+      setAimPosition(0, 0, false);
+      setCoordinateLabelFromState(getMapZoomState());
+      return;
+    }
+
+    const geo = convertViewportPointToGeoCoordinates(
+      bounds,
+      point,
+      getMapZoomState(),
+      getProjectionControlState(),
+    );
+    if (!geo) return;
+    hoverAimState = {
+      x: point.x,
+      y: point.y,
+      latitude: geo.latitude,
+      longitude: geo.longitude,
+    };
+    setAimPosition(point.x, point.y, true);
+    setCoordinateLabelFromState(getMapZoomState());
+  };
+
+  const onMapMouseLeave = () => {
+    if (lockedCoordinate) return;
+    hoverAimState = null;
+    setAimPosition(0, 0, false);
+    setCoordinateLabelFromState(getMapZoomState());
+  };
+
   mapEl.addEventListener("mousedown", onMapMouseDown);
+  mapEl.addEventListener("mousemove", onMapHoverMove);
+  mapEl.addEventListener("mouseleave", onMapMouseLeave);
   mapEl.addEventListener("dblclick", onMapDoubleClick);
   window.addEventListener("mousemove", onMapMouseMove);
   window.addEventListener("mouseup", () => {
@@ -2342,6 +2624,8 @@ function createStatsHeatmapSection({
         window.clearTimeout(persistCalibrationTimeoutId);
       }
       mapEl.removeEventListener("mousedown", onMapMouseDown);
+      mapEl.removeEventListener("mousemove", onMapHoverMove);
+      mapEl.removeEventListener("mouseleave", onMapMouseLeave);
       mapEl.removeEventListener("dblclick", onMapDoubleClick);
       window.removeEventListener("mousemove", onMapMouseMove);
       window.removeEventListener("mouseup", onMapMouseUp);

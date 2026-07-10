@@ -46,8 +46,8 @@
   --stats-heatmap-grid-cell-size-y: 22px;
   --stats-heatmap-selection-border-color: color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
   --stats-heatmap-selection-highlight-color: color-mix(in srgb, var(--color-1) 22%, transparent);
-  --stats-heatmap-selection-active-border-color: color-mix(in srgb, #ff4a4a 82%, #ffffff 18%);
-  --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, #ff2e2e 34%, transparent);
+  --stats-heatmap-selection-active-border-color: color-mix(in srgb, var(--color-1) 90%, #ffffff 10%);
+  --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, var(--color-1) 36%, transparent);
 }
 
 /* Page background */
@@ -2525,6 +2525,56 @@ strong {
   white-space: nowrap;
 }
 
+.stats-heatmap-aim {
+  position: absolute;
+  z-index: 8;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--stats-heatmap-selection-border-color) 88%, transparent);
+  background: color-mix(in srgb, var(--stats-heatmap-selection-highlight-color) 52%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--stats-heatmap-selection-border-color) 42%, transparent);
+  animation: stats-heatmap-aim-pulse 1.05s ease-in-out infinite;
+}
+
+.stats-heatmap-aim::before,
+.stats-heatmap-aim::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: color-mix(in srgb, var(--stats-heatmap-selection-border-color) 92%, #ffffff 8%);
+}
+
+.stats-heatmap-aim::before {
+  width: 12px;
+  height: 2px;
+  border-radius: 2px;
+}
+
+.stats-heatmap-aim::after {
+  width: 2px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+@keyframes stats-heatmap-aim-pulse {
+
+  0%,
+  100% {
+    opacity: 0.82;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
 .stats-heatmap-map-expanded {
   height: 520px;
 }
@@ -2542,7 +2592,7 @@ strong {
 .stats-heatmap-layer,
 .stats-heatmap-points {
   position: absolute;
-  transition: transform 180ms ease-out;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
 
@@ -2564,6 +2614,11 @@ strong {
   object-fit: fill;
   filter: var(--stats-heatmap-land-filter);
   opacity: var(--stats-heatmap-land-opacity);
+  transition:
+    left 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    top 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    width 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .stats-heatmap-grid {
@@ -2613,6 +2668,9 @@ strong {
   border: 2px solid var(--stats-heatmap-selection-border-color);
   background: var(--stats-heatmap-selection-highlight-color);
   box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 52%, transparent);
+  transform-origin: center center;
+  will-change: transform, opacity, box-shadow;
+  --stats-heatmap-selection-rush-duration: 420ms;
 }
 
 .stats-heatmap-selecting .stats-heatmap-selection {
@@ -2621,11 +2679,15 @@ strong {
 }
 
 .stats-heatmap-selection-capture {
-  animation: stats-heatmap-selection-capture 170ms ease-out;
+  animation: stats-heatmap-selection-capture 320ms ease-out;
 }
 
 .stats-heatmap-selection-blink {
-  animation: stats-heatmap-selection-blink 140ms ease-in-out 2;
+  animation: stats-heatmap-selection-blink 180ms ease-in-out 2;
+}
+
+.stats-heatmap-selection-rush {
+  animation: stats-heatmap-selection-rush var(--stats-heatmap-selection-rush-duration, 420ms) cubic-bezier(0.16, 0.84, 0.2, 1) forwards;
 }
 
 @keyframes stats-heatmap-selection-capture {
@@ -2651,6 +2713,57 @@ strong {
   50% {
     opacity: 0.12;
     box-shadow: 0 0 0 1px color-mix(in srgb, #ffffff 95%, transparent);
+  }
+}
+
+@keyframes stats-heatmap-selection-rush {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+    background: color-mix(in srgb, var(--color-1) 24%, transparent);
+    border-color: color-mix(in srgb, var(--color-1) 85%, #ffffff 15%);
+  }
+
+  60% {
+    transform: scale(2.6);
+    opacity: 0.95;
+    background: color-mix(in srgb, var(--color-1) 72%, transparent);
+    border-color: color-mix(in srgb, var(--color-1) 94%, #ffffff 6%);
+  }
+
+  100% {
+    transform: scale(8.5);
+    opacity: 0;
+    background: color-mix(in srgb, var(--color-1) 90%, transparent);
+    border-color: color-mix(in srgb, var(--color-1) 95%, #ffffff 5%);
+  }
+}
+
+.stats-heatmap-zoom-tint {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  opacity: 0;
+  background: color-mix(in srgb, var(--color-1) 68%, transparent);
+  --stats-heatmap-zoom-tint-duration: 420ms;
+}
+
+.stats-heatmap-zoom-tint-pass {
+  animation: stats-heatmap-zoom-tint-pass var(--stats-heatmap-zoom-tint-duration, 420ms) cubic-bezier(0.16, 0.84, 0.2, 1) forwards;
+}
+
+@keyframes stats-heatmap-zoom-tint-pass {
+  0% {
+    opacity: 0;
+  }
+
+  60% {
+    opacity: 0.7;
+  }
+
+  100% {
+    opacity: 0;
   }
 }
 
