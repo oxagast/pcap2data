@@ -297,6 +297,15 @@ const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
+const SETTINGS_SUBTAB_ABOUT = "about";
+const PACKETSNITCH_RELEASES_PAGE_URL =
+  "https://github.com/oxasploits/PacketSnitch/releases";
+const PACKETSNITCH_RELEASES_LATEST_API_URL =
+  "https://api.github.com/repos/oxasploits/PacketSnitch/releases/latest";
+const PACKETSNITCH_RELEASES_API_URL =
+  "https://api.github.com/repos/oxasploits/PacketSnitch/releases?per_page=20";
+const PACKETSNITCH_AUTHOR_NAME = "Marshall Whittaker / oxagast";
+const PACKETSNITCH_TERMINAL_IDENTITY = "marshall@oxasploits";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
 const FALLBACK_THEME_ID = "snitchbitch";
 let availableThemes = [];
@@ -310,6 +319,10 @@ let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
 let cachedLlmDiagnostics = null;
 let cachedBackendDiagnostics = null;
+let cachedSettingsAboutReleaseInfo = null;
+let settingsAboutReleaseInfoLoadPromise = null;
+let settingsAboutTypewriterToken = 0;
+let settingsAboutTypewriterTimeoutId = null;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -494,6 +507,282 @@ async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
   }
   syncBackendDiagnosticsIndicators();
   return cachedBackendDiagnostics;
+}
+
+function normalizeReleaseVersionToken(value) {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^v+/, "")
+    .replace(/^packetsnitch[-_\s]*/i, "");
+}
+
+function getReleaseVersionToken(release) {
+  if (!release || typeof release !== "object") return "";
+  const candidateValues = [release.tag_name, release.name];
+  for (const candidate of candidateValues) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      const normalized = normalizeReleaseVersionToken(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return "";
+}
+
+function normalizeReleaseNotesForTerminal(bodyText) {
+  if (typeof bodyText !== "string" || !bodyText.trim()) {
+    return "No release notes were provided for this release.";
+  }
+  const normalizedNewlines = bodyText.replace(/\r\n/g, "\n");
+
+  // Strip HTML tags/content wrappers (e.g. <img ...>, <a ...>, <br>) from release text.
+  let plainText = normalizedNewlines.replace(/<[^>]*>/g, " ");
+
+  // Remove fenced code blocks and inline code markers.
+  plainText = plainText.replace(/```[\s\S]*?```/g, " ");
+  plainText = plainText.replace(/`([^`]+)`/g, "$1");
+
+  // Convert common markdown links/images to plain text.
+  plainText = plainText.replace(/!\[[^\]]*\]\([^\)]*\)/g, " ");
+  plainText = plainText.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, "$1");
+
+  // Remove markdown heading/quote/list markers and emphasis syntax.
+  plainText = plainText.replace(/^\s{0,3}#{1,6}\s*/gm, "");
+  plainText = plainText.replace(/^\s{0,3}>\s?/gm, "");
+  plainText = plainText.replace(/^\s*[-*+]\s+/gm, "");
+  plainText = plainText.replace(/^\s*\d+\.\s+/gm, "");
+  plainText = plainText.replace(/\*\*([^*]+)\*\*/g, "$1");
+  plainText = plainText.replace(/__([^_]+)__/g, "$1");
+  plainText = plainText.replace(/\*([^*]+)\*/g, "$1");
+  plainText = plainText.replace(/_([^_]+)_/g, "$1");
+  plainText = plainText.replace(/~~([^~]+)~~/g, "$1");
+  plainText = plainText.replace(/^\s*[-*_]{3,}\s*$/gm, "");
+
+  // Normalize whitespace for terminal display.
+  plainText = plainText
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return plainText || "No release notes were provided for this release.";
+}
+
+function buildSettingsAboutTerminalReadout({
+  runningVersion,
+  latestReleaseVersion,
+  latestReleaseNotes,
+  latestReleaseUrl,
+  fetchError = "",
+}) {
+  const lines = [];
+  lines.push(`${PACKETSNITCH_TERMINAL_IDENTITY}:~$ cat packetsnitch.txt`);
+  lines.push("PacketSnitch - network packet analysis workstation");
+  lines.push(`Author: ${PACKETSNITCH_AUTHOR_NAME}`);
+  lines.push(`Running PacketSnitch version: ${runningVersion || "Unknown"}`);
+  lines.push(`Latest release version: ${latestReleaseVersion || "Unavailable"}`);
+  lines.push(`Release source: ${PACKETSNITCH_RELEASES_PAGE_URL}`);
+  lines.push("");
+  lines.push("=== Latest Release Notes ===");
+
+  if (fetchError) {
+    lines.push(`Unable to fetch releases: ${fetchError}`);
+    lines.push("Showing local app metadata only.");
+  } else {
+    lines.push(`Release URL: ${latestReleaseUrl || PACKETSNITCH_RELEASES_PAGE_URL}`);
+    lines.push("");
+    lines.push(latestReleaseNotes || "No release notes available.");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function clearSettingsAboutTypewriterTimeout() {
+  if (settingsAboutTypewriterTimeoutId !== null) {
+    clearTimeout(settingsAboutTypewriterTimeoutId);
+    settingsAboutTypewriterTimeoutId = null;
+  }
+}
+
+function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = false } = {}) {
+  const outputEl = document.getElementById("settings-about-terminal-output");
+  if (!outputEl) return;
+
+  const fullText = String(readoutText || "");
+  settingsAboutTypewriterToken += 1;
+  const activeToken = settingsAboutTypewriterToken;
+  clearSettingsAboutTypewriterTimeout();
+
+  if (!animateCommand) {
+    outputEl.textContent = fullText;
+    return;
+  }
+
+  const firstNewlineIndex = fullText.indexOf("\n");
+  const commandLine = firstNewlineIndex === -1
+    ? fullText
+    : fullText.slice(0, firstNewlineIndex);
+  const remainingOutput = firstNewlineIndex === -1
+    ? ""
+    : fullText.slice(firstNewlineIndex);
+
+  if (!commandLine) {
+    outputEl.textContent = fullText;
+    return;
+  }
+
+  const promptMarker = "$ ";
+  const promptIndex = commandLine.indexOf(promptMarker);
+  const hasPrompt = promptIndex !== -1;
+  const promptText = hasPrompt
+    ? commandLine.slice(0, promptIndex + promptMarker.length)
+    : "";
+  const typedCommandText = hasPrompt
+    ? commandLine.slice(promptIndex + promptMarker.length)
+    : commandLine;
+
+  outputEl.textContent = promptText;
+  let cursor = 0;
+  const charDelayMs = 18;
+  const preTypeDelayMs = 120;
+  const preReturnDelayMs = 180;
+
+  const typeNextCharacter = () => {
+    if (activeToken !== settingsAboutTypewriterToken) return;
+
+    if (cursor < typedCommandText.length) {
+      outputEl.textContent += typedCommandText[cursor];
+      cursor += 1;
+      settingsAboutTypewriterTimeoutId = setTimeout(typeNextCharacter, charDelayMs);
+      return;
+    }
+
+    settingsAboutTypewriterTimeoutId = setTimeout(() => {
+      if (activeToken !== settingsAboutTypewriterToken) return;
+      outputEl.textContent = `${commandLine}${remainingOutput}`;
+      settingsAboutTypewriterTimeoutId = null;
+    }, preReturnDelayMs);
+  };
+
+  settingsAboutTypewriterTimeoutId = setTimeout(typeNextCharacter, preTypeDelayMs);
+}
+
+async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
+  const runningVersion = String(psVer || "").trim() || "Unknown";
+  if (!forceRefresh && cachedSettingsAboutReleaseInfo) {
+    renderSettingsAboutTerminalReadout(
+      buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
+      { animateCommand: true },
+    );
+    return cachedSettingsAboutReleaseInfo;
+  }
+
+  if (settingsAboutReleaseInfoLoadPromise && !forceRefresh) {
+    await settingsAboutReleaseInfoLoadPromise;
+    if (cachedSettingsAboutReleaseInfo) {
+      renderSettingsAboutTerminalReadout(
+        buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
+        { animateCommand: true },
+      );
+    }
+    return cachedSettingsAboutReleaseInfo;
+  }
+
+  renderSettingsAboutTerminalReadout(
+    buildSettingsAboutTerminalReadout({
+      runningVersion,
+      latestReleaseVersion: "Loading...",
+      latestReleaseNotes: "Fetching latest release metadata from GitHub...",
+      latestReleaseUrl: PACKETSNITCH_RELEASES_PAGE_URL,
+    }),
+    { animateCommand: false },
+  );
+
+  const loadPromise = (async () => {
+    try {
+      const githubHeaders = {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      };
+
+      let latestRelease = null;
+
+      // Prefer the dedicated latest-release endpoint for reliability.
+      try {
+        const latestResponse = await fetch(PACKETSNITCH_RELEASES_LATEST_API_URL, {
+          headers: githubHeaders,
+        });
+        if (!latestResponse.ok) {
+          throw new Error(`GitHub latest endpoint returned HTTP ${latestResponse.status}`);
+        }
+        const latestPayload = await latestResponse.json();
+        if (latestPayload && typeof latestPayload === "object" && !latestPayload.draft) {
+          latestRelease = latestPayload;
+        }
+      } catch (latestEndpointError) {
+        // Fall through to releases list endpoint.
+      }
+
+      if (!latestRelease) {
+        const releasesResponse = await fetch(PACKETSNITCH_RELEASES_API_URL, {
+          headers: githubHeaders,
+        });
+        if (!releasesResponse.ok) {
+          throw new Error(`GitHub releases endpoint returned HTTP ${releasesResponse.status}`);
+        }
+        const payload = await releasesResponse.json();
+        const releases = Array.isArray(payload)
+          ? payload.filter((release) => release && typeof release === "object" && !release.draft)
+          : [];
+        latestRelease = releases.find((release) => !release.prerelease) || releases[0] || null;
+      }
+
+      if (!latestRelease) {
+        throw new Error("No releases returned by GitHub API");
+      }
+
+      cachedSettingsAboutReleaseInfo = {
+        runningVersion,
+        latestReleaseVersion: getReleaseVersionToken(latestRelease) || "Unavailable",
+        latestReleaseNotes: normalizeReleaseNotesForTerminal(latestRelease?.body),
+        latestReleaseUrl:
+          typeof latestRelease?.html_url === "string" && latestRelease.html_url.trim()
+            ? latestRelease.html_url.trim()
+            : PACKETSNITCH_RELEASES_PAGE_URL,
+        fetchError: "",
+      };
+    } catch (error) {
+      const errorMessage =
+        error && typeof error.message === "string" && error.message.trim()
+          ? error.message.trim()
+          : String(error || "Unknown error");
+      cachedSettingsAboutReleaseInfo = {
+        runningVersion,
+        latestReleaseVersion: "Lookup failed",
+        latestReleaseNotes:
+          "Unable to retrieve release notes from GitHub right now.\n"
+          + "Use the Refresh release notes button to retry.",
+        latestReleaseUrl: PACKETSNITCH_RELEASES_PAGE_URL,
+        fetchError: errorMessage,
+      };
+      console.warn("Unable to load PacketSnitch release metadata:", error);
+    }
+    renderSettingsAboutTerminalReadout(
+      buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
+      { animateCommand: true },
+    );
+    return cachedSettingsAboutReleaseInfo;
+  })();
+
+  settingsAboutReleaseInfoLoadPromise = loadPromise;
+  try {
+    return await loadPromise;
+  } finally {
+    if (settingsAboutReleaseInfoLoadPromise === loadPromise) {
+      settingsAboutReleaseInfoLoadPromise = null;
+    }
+  }
 }
 
 // Syncs runtime llm toggle from settings.
@@ -691,6 +980,67 @@ function renderThemeOptions() {
   updateSelectedThemeSourceNote(themeSelectEl.value);
 }
 
+function parseHexColorToRgb(colorValue) {
+  if (typeof colorValue !== "string") return null;
+  const normalized = colorValue.trim().toLowerCase();
+  const hexMatch = normalized.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!hexMatch) return null;
+  const hexBody = hexMatch[1];
+  const expanded = hexBody.length === 3
+    ? hexBody.split("").map((part) => `${part}${part}`).join("")
+    : hexBody;
+  const red = parseInt(expanded.slice(0, 2), 16);
+  const green = parseInt(expanded.slice(2, 4), 16);
+  const blue = parseInt(expanded.slice(4, 6), 16);
+  if ([red, green, blue].some((value) => Number.isNaN(value))) return null;
+  return { red, green, blue };
+}
+
+function toLinearSrgb(value) {
+  const normalized = value / 255;
+  if (normalized <= 0.04045) {
+    return normalized / 12.92;
+  }
+  return ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function getRelativeLuminanceFromRgb({ red, green, blue }) {
+  const linearRed = toLinearSrgb(red);
+  const linearGreen = toLinearSrgb(green);
+  const linearBlue = toLinearSrgb(blue);
+  return (0.2126 * linearRed) + (0.7152 * linearGreen) + (0.0722 * linearBlue);
+}
+
+function resolveSettingsAboutTerminalColorToken(themeVariables, tokenName, fallbackValue = "") {
+  if (!themeVariables || typeof themeVariables !== "object") return fallbackValue;
+  const raw = themeVariables[tokenName];
+  if (typeof raw !== "string" || !raw.trim()) return fallbackValue;
+  return raw.trim();
+}
+
+function applySettingsAboutTerminalTheme(theme) {
+  const rootStyle = document.documentElement.style;
+  const themeVariables = theme && typeof theme === "object" ? theme.variables : null;
+  const fallbackTextColor = "#e6e6e6";
+
+  const borderAndTextColor =
+    resolveSettingsAboutTerminalColorToken(themeVariables, "--color-5", "")
+    || resolveSettingsAboutTerminalColorToken(themeVariables, "--header-text-color", "")
+    || fallbackTextColor;
+
+  const parsedTextColor = parseHexColorToRgb(borderAndTextColor);
+  const textLuminance = parsedTextColor
+    ? getRelativeLuminanceFromRgb(parsedTextColor)
+    : 0.8;
+
+  // Keep terminal background strictly black/white while maximizing contrast.
+  const terminalBackgroundColor = textLuminance >= 0.5 ? "#000000" : "#ffffff";
+
+  rootStyle.setProperty("--settings-about-terminal-bg", terminalBackgroundColor);
+  rootStyle.setProperty("--settings-about-terminal-fg", borderAndTextColor);
+  rootStyle.setProperty("--settings-about-terminal-border", borderAndTextColor);
+}
+
 // Applies theme variables.
 function applyThemeVariables(theme) {
   const rootStyle = document.documentElement.style;
@@ -708,6 +1058,8 @@ function applyThemeVariables(theme) {
     rootStyle.setProperty(variableName, String(variableValue));
     appliedThemeVariableNames.add(String(variableName));
   });
+
+  applySettingsAboutTerminalTheme(theme);
 }
 
 // Applies theme quit button character.
@@ -1535,16 +1887,20 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
         ? SETTINGS_SUBTAB_BACKEND
         : tabName === SETTINGS_SUBTAB_DEBUG
           ? SETTINGS_SUBTAB_DEBUG
-          : SETTINGS_SUBTAB_GENERAL;
+          : tabName === SETTINGS_SUBTAB_ABOUT
+            ? SETTINGS_SUBTAB_ABOUT
+            : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
+  const aboutBtn = document.getElementById("settings-subtab-about");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
+  const aboutPanel = document.getElementById("settings-about-panel");
   if (generalBtn) {
     generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
   }
@@ -1556,6 +1912,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (debugBtn) {
     debugBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_DEBUG);
+  }
+  if (aboutBtn) {
+    aboutBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_ABOUT);
   }
   if (generalPanel) {
     generalPanel.hidden = nextTab !== SETTINGS_SUBTAB_GENERAL;
@@ -1569,12 +1928,18 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (debugPanel) {
     debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
   }
+  if (aboutPanel) {
+    aboutPanel.hidden = nextTab !== SETTINGS_SUBTAB_ABOUT;
+  }
   if (nextTab === SETTINGS_SUBTAB_LLM) {
     syncLlmDiagnosticsIndicators();
   }
   if (nextTab === SETTINGS_SUBTAB_BACKEND) {
     syncBackendDiagnosticsIndicators();
     void refreshBackendDiagnostics({ ensureReady: true });
+  }
+  if (nextTab === SETTINGS_SUBTAB_ABOUT) {
+    void loadSettingsAboutReleaseInfo();
   }
 }
 
@@ -14982,6 +15347,14 @@ document.getElementById("settings-subtab-backend").addEventListener("click", () 
 
 document.getElementById("settings-subtab-debug").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_DEBUG);
+});
+
+document.getElementById("settings-subtab-about").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_ABOUT);
+});
+
+document.getElementById("settings-about-refresh-btn").addEventListener("click", () => {
+  void loadSettingsAboutReleaseInfo({ forceRefresh: true });
 });
 
 document.getElementById("settings-general-theme").addEventListener("change", (event) => {

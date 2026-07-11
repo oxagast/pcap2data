@@ -655,6 +655,40 @@ strong {
   max-width: 700px;
 }
 
+.settings-about-section {
+  max-width: none;
+  height: 100%;
+}
+
+.settings-about-terminal-wrap {
+  border: 2px solid var(--settings-about-terminal-border, var(--color-5));
+  background: var(--settings-about-terminal-bg, #000000);
+  height: 90%;
+  min-height: 0;
+  flex: 0 0 90%;
+  overflow: auto;
+  box-shadow: none;
+}
+
+.settings-about-terminal-output {
+  margin: 0;
+  padding: 12px;
+  color: var(--settings-about-terminal-fg, var(--color-5));
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-shadow: none;
+  caret-color: var(--settings-about-terminal-fg, var(--color-5));
+}
+
+.settings-about-terminal-output::selection {
+  background-color: var(--settings-about-terminal-fg, var(--color-5));
+  color: var(--settings-about-terminal-bg, #000000);
+}
+
 .settings-section-title {
   font-size: 14px;
   font-weight: bold;

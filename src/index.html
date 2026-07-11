@@ -8,6 +8,7 @@
     default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com data:;
     script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:;
     worker-src 'self' blob: data:;
+    connect-src 'self' https://api.github.com https://github.com;
   ">
   <title>PacketSnitch</title>
 
@@ -761,6 +762,9 @@ No keystore entries saved.</pre>
             <button id="settings-subtab-debug" class="settings-subtab-btn">
               Debug
             </button>
+            <button id="settings-subtab-about" class="settings-subtab-btn">
+              About
+            </button>
           </div>
 
           <div id="settings-general-panel" class="settings-subtab-panel">
@@ -962,6 +966,19 @@ No keystore entries saved.</pre>
                 </label>
                 <div class="settings-help-text">
                   When enabled, disables TCP server mode and always uses the original per-run backend launch path.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-about-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section settings-about-section">
+                <div class="settings-about-terminal-wrap">
+                  <pre id="settings-about-terminal-output" class="settings-about-terminal-output"></pre>
+                </div>
+                <div class="settings-actions-row">
+                  <button id="settings-about-refresh-btn" type="button">Refresh release notes</button>
                 </div>
               </div>
             </div>
