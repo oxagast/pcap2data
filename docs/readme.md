@@ -101,8 +101,6 @@ Project Head: Marshall Whittaker <marshall@oxasploits.com>
 
 ## Sponsors
 
-- <a href="https://github.com/sponsors/oxagast">Sponsor on Github</a>
-- <a href="https://thanks.dev/oxasploits">Sponsor on Thanks.Dev</a>
-- <a href="https://buymeacoffee.com/oxagast">Sponsor on Buy me a Coffee</a>
+- <a href="https://buymeacoffee.com/oxagast">Sponsor PacketSnitch!</a>
 
 _If you sponsor PacketSnitch, your name and a link of your choice will be added here!_
