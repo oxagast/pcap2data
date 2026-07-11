@@ -1470,6 +1470,19 @@ function createWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     mainWindow.webContents.setZoomFactor(0.7); // makes everything fit snuggly
   });
+  mainWindow.webContents.once("did-finish-load", () => {
+    const settings = getAppSettings();
+    if (settings?.backend?.forceLegacySpawn) {
+      return;
+    }
+    if (backCommModule && typeof backCommModule.primeBackendHttpServer === "function") {
+      void backCommModule.primeBackendHttpServer(settings?.backend).then((ready) => {
+        if (!ready) {
+          global.logBackend("[Bridge] HTTP backend service unavailable; legacy spawn mode remains active");
+        }
+      });
+    }
+  });
   mainWindow.once("close", () => {
     appendActivityLogLine(
       timestampLifecycleMessage(

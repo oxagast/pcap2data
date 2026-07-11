@@ -745,6 +745,14 @@ async function getBackendServiceDiagnostics(options = {}) {
   };
 }
 
+async function primeBackendHttpServer(options = {}) {
+  const normalizedTransport = applyBackendTransportOptions(options);
+  if (normalizedTransport.forceLegacySpawn) {
+    return false;
+  }
+  return ensureBackendHttpServerReady();
+}
+
 function resolveBackendRuntime() {
   const isDev = !require("electron").app.isPackaged;
   const basePath = isDev
@@ -1904,22 +1912,10 @@ ipcMain.handle("lookup-backend-shodan", async (_event, ipAddress, options = {}) 
   });
 });
 
-// Start the HTTP backend service as early as possible so the renderer can
-// submit processing requests immediately after startup.
-applyBackendTransportOptions({
-  tcpHost: BACKEND_HTTP_HOST,
-  tcpPort: BACKEND_HTTP_PORT,
-  forceLegacySpawn: false,
-});
-void ensureBackendHttpServerReady().then((ready) => {
-  if (!ready) {
-    global.logBackend("[Bridge] HTTP backend service unavailable; legacy spawn mode remains active");
-  }
-});
-
 module.exports = {
   shutdownHttpBackendService,
   ensureBackendHttpServerReady,
+  primeBackendHttpServer,
   requestBackendStopProcessing,
   requestBackendShutdown,
   getBackendServiceDiagnostics,
