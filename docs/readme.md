@@ -97,6 +97,7 @@ Project Head: Marshall Whittaker <marshall@oxasploits.com>
 - Martin Ollivere (Rat on wheel spinning gif)
 - tiamo64 (Performance optimizations)
 - aestetix (inspiration on how this documentation page should be formatted)
+- 2600net staff (hosting the irc server where our dev channel resides)
 - Everyone else who has tested or contributed in some way, big or small, thank you!
 
 ## Sponsors
