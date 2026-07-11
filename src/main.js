@@ -1268,21 +1268,7 @@ async function getBundledOllamaModels() {
     console.warn("Unable to load bundled models library from config/models.json:", error);
   }
 
-  const legacyModelsPath = path.join(
-    app.isPackaged ? process.resourcesPath : "src",
-    "data",
-    "models.txt",
-  );
-  try {
-    const modelsData = await fs.promises.readFile(legacyModelsPath, "utf8");
-    return modelsData
-      .split("\n")
-      .map((line) => normalizeOllamaModelEntry(line))
-      .filter(Boolean);
-  } catch (error) {
-    console.warn("Unable to load legacy models.txt fallback:", error);
-    return [];
-  }
+  return [];
 }
 
 async function ensureModelsLibraryFileExists() {

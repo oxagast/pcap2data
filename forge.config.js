@@ -123,7 +123,7 @@ module.exports = {
   packagerConfig: {
     icon: path.join(__dirname, "logo", "ps-icon"),
     asar: true,
-    extraResource: ["src/backend/snitch", "src/backend/common/", "src/data/new_session.json", "src/data/goodies.txt", "src/data/valid-keys.txt"],
+    extraResource: ["src/backend/snitch", "src/backend/common/", "src/data/new_session.json", "src/data/goodies.txt", "src/data/valid-keys.txt", "config/models.json"],
   },
   rebuildConfig: {},
   makers,
