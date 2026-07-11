@@ -323,6 +323,7 @@ let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
 let settingsAboutTypewriterTimeoutId = null;
+let settingsAboutDownloadButtonUrl = "";
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -530,6 +531,136 @@ function getReleaseVersionToken(release) {
   return "";
 }
 
+function compareReleaseVersionTokens(leftValue, rightValue) {
+  const leftToken = normalizeReleaseVersionToken(leftValue);
+  const rightToken = normalizeReleaseVersionToken(rightValue);
+  const leftParts = leftToken.match(/\d+|[a-z]+/g) || [];
+  const rightParts = rightToken.match(/\d+|[a-z]+/g) || [];
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index];
+    const rightPart = rightParts[index];
+    if (typeof leftPart === "undefined" && typeof rightPart === "undefined") {
+      return 0;
+    }
+    if (typeof leftPart === "undefined") {
+      return -1;
+    }
+    if (typeof rightPart === "undefined") {
+      return 1;
+    }
+
+    const leftIsNumber = /^\d+$/.test(leftPart);
+    const rightIsNumber = /^\d+$/.test(rightPart);
+    if (leftIsNumber && rightIsNumber) {
+      const numericDiff = Number.parseInt(leftPart, 10) - Number.parseInt(rightPart, 10);
+      if (numericDiff !== 0) {
+        return numericDiff;
+      }
+      continue;
+    }
+    if (leftIsNumber !== rightIsNumber) {
+      return leftIsNumber ? 1 : -1;
+    }
+
+    const lexicalDiff = leftPart.localeCompare(rightPart);
+    if (lexicalDiff !== 0) {
+      return lexicalDiff;
+    }
+  }
+
+  return 0;
+}
+
+function getReleaseDownloadAssetPreferences(platformName = (typeof process !== "undefined" ? process.platform : "")) {
+  switch (platformName) {
+    case "win32":
+      return [".exe"];
+    case "darwin":
+      return [".dmg", ".pkg", ".zip"];
+    case "linux":
+      return [".deb", ".rpm", ".AppImage", ".tar.gz", ".tgz", ".zip"];
+    default:
+      return [".zip", ".tar.gz", ".tgz"];
+  }
+}
+
+function selectReleaseDownloadAsset(release) {
+  if (!release || typeof release !== "object") return null;
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  if (assets.length === 0) return null;
+  const preferences = getReleaseDownloadAssetPreferences();
+  const normalizedAssets = assets.filter((asset) => asset && typeof asset === "object");
+
+  for (const preferredSuffix of preferences) {
+    const matchedAsset = normalizedAssets.find((asset) => {
+      const assetName = String(asset.name || "").trim().toLowerCase();
+      return assetName.endsWith(preferredSuffix.toLowerCase());
+    });
+    if (matchedAsset?.browser_download_url) {
+      return matchedAsset;
+    }
+  }
+
+  return normalizedAssets.find((asset) => typeof asset.browser_download_url === "string" && asset.browser_download_url.trim()) || null;
+}
+
+function buildReleaseDownloadInfo(release, runningVersion) {
+  const latestReleaseVersion = getReleaseVersionToken(release);
+  const newVersionAvailable = compareReleaseVersionTokens(latestReleaseVersion, runningVersion) > 0;
+  if (!newVersionAvailable) {
+    return {
+      newVersionAvailable: false,
+      downloadUrl: "",
+      downloadAssetName: "",
+    };
+  }
+
+  const selectedAsset = selectReleaseDownloadAsset(release);
+  return {
+    newVersionAvailable: Boolean(selectedAsset?.browser_download_url),
+    downloadUrl: typeof selectedAsset?.browser_download_url === "string"
+      ? selectedAsset.browser_download_url.trim()
+      : "",
+    downloadAssetName: typeof selectedAsset?.name === "string" ? selectedAsset.name.trim() : "",
+  };
+}
+
+function syncSettingsAboutDownloadButton() {
+  const downloadButtonEl = document.getElementById("settings-about-download-btn");
+  if (!downloadButtonEl) return;
+
+  const downloadUrl = settingsAboutDownloadButtonUrl || "";
+  const visible = Boolean(downloadUrl);
+  downloadButtonEl.hidden = !visible;
+  downloadButtonEl.disabled = !visible;
+  downloadButtonEl.setAttribute("aria-hidden", visible ? "false" : "true");
+  downloadButtonEl.dataset.downloadUrl = downloadUrl;
+  downloadButtonEl.title = visible ? "Download the latest PacketSnitch release for this OS" : "";
+}
+
+function setSettingsAboutDownloadButtonState(downloadInfo = {}) {
+  settingsAboutDownloadButtonUrl =
+    typeof downloadInfo.downloadUrl === "string" && downloadInfo.downloadUrl.trim()
+      ? downloadInfo.downloadUrl.trim()
+      : "";
+  syncSettingsAboutDownloadButton();
+}
+
+async function openSettingsAboutDownloadUrl() {
+  const downloadUrl = settingsAboutDownloadButtonUrl;
+  if (!downloadUrl || !window.browserapi || typeof window.browserapi.openExternalUrl !== "function") {
+    return;
+  }
+
+  try {
+    await window.browserapi.openExternalUrl(downloadUrl);
+  } catch (error) {
+    console.warn("Unable to open PacketSnitch release download URL:", error);
+  }
+}
+
 function normalizeReleaseNotesForTerminal(bodyText) {
   if (typeof bodyText !== "string" || !bodyText.trim()) {
     return "No release notes were provided for this release.";
@@ -577,8 +708,15 @@ function buildSettingsAboutTerminalReadout({
   fetchError = "",
 }) {
   const lines = [];
+  lines.push("                          _       _ _");
+  lines.push("  _____  ____ _ ___ _ __ | | ___ (_) |_ ___   ___ ___  _ __ ___");
+  lines.push(" / _ \\\\ \/ / _` / __| '_ \\| |/ _ \\| | __/ __| / __/ _ \\| '_ ` _ \\");
+  lines.push("| (_) >  < (_| \\__ \\ |_) | | (_) | | |_\\__ \\| (_| (_) | | | | | |");
+  lines.push(" \\___/_/\\_\\__,_|___/ .__/|_|\\___/|_|\\__|___(_)___\\___/|_| |_| |_|");
+  lines.push("                   |_|          Welcome to the oxsploits network.");
+  lines.push("");
   lines.push(`${PACKETSNITCH_TERMINAL_IDENTITY}:~$ cat packetsnitch.txt`);
-  lines.push("PacketSnitch - network packet analysis workstation");
+  lines.push("PacketSnitch: A feature rich network packet capture and analysis tool built in Python and Electron.");
   lines.push(`Author: ${PACKETSNITCH_AUTHOR_NAME}`);
   lines.push(`Running PacketSnitch version: ${runningVersion || "Unknown"}`);
   lines.push(`Latest release version: ${latestReleaseVersion || "Unavailable"}`);
@@ -619,13 +757,18 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
     return;
   }
 
-  const firstNewlineIndex = fullText.indexOf("\n");
-  const commandLine = firstNewlineIndex === -1
-    ? fullText
-    : fullText.slice(0, firstNewlineIndex);
-  const remainingOutput = firstNewlineIndex === -1
-    ? ""
-    : fullText.slice(firstNewlineIndex);
+  const allLines = fullText.split("\n");
+  const commandLineIndex = allLines.findIndex((line) => line.includes(":~$ "));
+  if (commandLineIndex === -1) {
+    outputEl.textContent = fullText;
+    return;
+  }
+
+  const commandLine = allLines[commandLineIndex] || "";
+  const preCommandOutput = allLines.slice(0, commandLineIndex).join("\n");
+  const postCommandOutput = allLines.slice(commandLineIndex + 1).join("\n");
+  const preCommandText = preCommandOutput ? `${preCommandOutput}\n` : "";
+  const trailingText = postCommandOutput ? `\n${postCommandOutput}` : "";
 
   if (!commandLine) {
     outputEl.textContent = fullText;
@@ -642,7 +785,7 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
     ? commandLine.slice(promptIndex + promptMarker.length)
     : commandLine;
 
-  outputEl.textContent = promptText;
+  outputEl.textContent = `${preCommandText}${promptText}`;
   let cursor = 0;
   const charDelayMs = 18;
   const preTypeDelayMs = 120;
@@ -660,7 +803,7 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
 
     settingsAboutTypewriterTimeoutId = setTimeout(() => {
       if (activeToken !== settingsAboutTypewriterToken) return;
-      outputEl.textContent = `${commandLine}${remainingOutput}`;
+      outputEl.textContent = `${preCommandText}${commandLine}${trailingText}`;
       settingsAboutTypewriterTimeoutId = null;
     }, preReturnDelayMs);
   };
@@ -671,6 +814,7 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
 async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
   const runningVersion = String(psVer || "").trim() || "Unknown";
   if (!forceRefresh && cachedSettingsAboutReleaseInfo) {
+    setSettingsAboutDownloadButtonState(cachedSettingsAboutReleaseInfo.downloadInfo || {});
     renderSettingsAboutTerminalReadout(
       buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
       { animateCommand: true },
@@ -681,6 +825,7 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
   if (settingsAboutReleaseInfoLoadPromise && !forceRefresh) {
     await settingsAboutReleaseInfoLoadPromise;
     if (cachedSettingsAboutReleaseInfo) {
+      setSettingsAboutDownloadButtonState(cachedSettingsAboutReleaseInfo.downloadInfo || {});
       renderSettingsAboutTerminalReadout(
         buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
         { animateCommand: true },
@@ -750,6 +895,7 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
           typeof latestRelease?.html_url === "string" && latestRelease.html_url.trim()
             ? latestRelease.html_url.trim()
             : PACKETSNITCH_RELEASES_PAGE_URL,
+        downloadInfo: buildReleaseDownloadInfo(latestRelease, runningVersion),
         fetchError: "",
       };
     } catch (error) {
@@ -764,10 +910,16 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
           "Unable to retrieve release notes from GitHub right now.\n"
           + "Use the Refresh release notes button to retry.",
         latestReleaseUrl: PACKETSNITCH_RELEASES_PAGE_URL,
+        downloadInfo: {
+          newVersionAvailable: false,
+          downloadUrl: "",
+          downloadAssetName: "",
+        },
         fetchError: errorMessage,
       };
       console.warn("Unable to load PacketSnitch release metadata:", error);
     }
+    setSettingsAboutDownloadButtonState(cachedSettingsAboutReleaseInfo.downloadInfo || {});
     renderSettingsAboutTerminalReadout(
       buildSettingsAboutTerminalReadout(cachedSettingsAboutReleaseInfo),
       { animateCommand: true },
@@ -15355,6 +15507,10 @@ document.getElementById("settings-subtab-about").addEventListener("click", () =>
 
 document.getElementById("settings-about-refresh-btn").addEventListener("click", () => {
   void loadSettingsAboutReleaseInfo({ forceRefresh: true });
+});
+
+document.getElementById("settings-about-download-btn").addEventListener("click", () => {
+  void openSettingsAboutDownloadUrl();
 });
 
 document.getElementById("settings-general-theme").addEventListener("change", (event) => {
