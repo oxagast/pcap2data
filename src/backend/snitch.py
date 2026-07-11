@@ -1870,6 +1870,16 @@ def _formatLinkAddress(addrValue, addrLen=None):
     return addrText
 
 
+def _isLikelyMacAddress(value):
+    """
+    Return True when the provided value looks like a MAC address.
+    """
+    valueText = str(value or "").strip()
+    if not valueText or valueText == "N/A":
+        return False
+    return bool(re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", valueText))
+
+
 def extractLinkLayerInfo(p):
     """
     Return normalized link-layer metadata for Ethernet and Linux cooked packets.
@@ -1898,9 +1908,13 @@ def extractLinkLayerInfo(p):
         cookedVersion = "v1"
 
     if cookedLayer is None:
-        # Fall back to raw p.src / p.dst for other link types
-        srcAddr = str(p.src) if hasattr(p, "src") else "N/A"
-        dstAddr = str(p.dst) if hasattr(p, "dst") else "N/A"
+        # Fall back to p.src / p.dst only when they look like link-layer addresses.
+        srcAddr = _formatLinkAddress(getattr(p, "src", None))
+        dstAddr = _formatLinkAddress(getattr(p, "dst", None))
+        if not _isLikelyMacAddress(srcAddr):
+            srcAddr = "N/A"
+        if not _isLikelyMacAddress(dstAddr):
+            dstAddr = "N/A"
         return {
             "linkProto": "Unknown",
             "srcAddr": srcAddr,

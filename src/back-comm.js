@@ -772,7 +772,7 @@ function resolveBackendRuntime() {
 
   const hasBundledBackendExe = fs.existsSync(snitchExePath);
   const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
-  const canUsePythonServer = isDev && hasBackendScript;
+  const canUseServerMode = Boolean(hasBundledBackendExe || hasBackendScript);
   const backendCommandPath = usePythonBackend
     ? platform === "win32"
       ? "python"
@@ -788,7 +788,7 @@ function resolveBackendRuntime() {
     snitchExePath,
     hasBundledBackendExe,
     usePythonBackend,
-    canUsePythonServer,
+    canUseServerMode,
     pythonCommandPath,
     backendCommandPath,
   };
@@ -812,19 +812,30 @@ async function ensureBackendHttpServerReady() {
 
   backendHttpReadyPromise = new Promise((resolve) => {
     const runtime = resolveBackendRuntime();
-    if (!runtime.canUsePythonServer || !runtime.hasBackendScript) {
+    if (!runtime.canUseServerMode) {
       resolve(false);
       return;
     }
 
-    const backendArgs = [
-      runtime.backendScriptPath,
-      "--server",
-      "--server-host",
-      currentBackendHttpHost,
-      "--server-port",
-      String(currentBackendHttpPort),
-    ];
+    const backendCommandPath = runtime.usePythonBackend
+      ? runtime.pythonCommandPath
+      : runtime.backendCommandPath;
+    const backendArgs = runtime.usePythonBackend
+      ? [
+        runtime.backendScriptPath,
+        "--server",
+        "--server-host",
+        currentBackendHttpHost,
+        "--server-port",
+        String(currentBackendHttpPort),
+      ]
+      : [
+        "--server",
+        "--server-host",
+        currentBackendHttpHost,
+        "--server-port",
+        String(currentBackendHttpPort),
+      ];
 
     let resolved = false;
     let detectedAddressInUse = false;
@@ -835,7 +846,7 @@ async function ensureBackendHttpServerReady() {
       resolve(ready);
     };
 
-    backendHttpServerProc = spawn(runtime.pythonCommandPath, backendArgs, {
+    backendHttpServerProc = spawn(backendCommandPath, backendArgs, {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: buildBackendProcessEnv(),
