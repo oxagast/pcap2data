@@ -1,5 +1,6 @@
 :root {
   --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, var(--color-1) 36%, transparent);
+  --sidebar-width: 300px;
 }
 
 /* Page background */
@@ -247,7 +248,8 @@ hr {
 .sidebar {
   display: block;
   position: static;
-  width: var(--sidebar-width);
+  width: var(--sidebar-width, 300px);
+  flex: 0 0 var(--sidebar-width, 300px);
   min-width: 160px;
   max-width: 300px;
   background-color: color-mix(in srgb, var(--color-4) var(--panel-bg-opacity), transparent);
