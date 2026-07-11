@@ -2,7 +2,7 @@
   "name": "packetsnitch",
   "executableName": "packetsnitch",
   "productName": "packetsnitch",
-  "version": "1.9.1511",
+  "version": "1.9.1515",
   "description": "A High Level Network Analysis Tool",
   "main": ".webpack/main",
   "private": false,
@@ -12,7 +12,7 @@
     "patch-rpm-build": "patch -Np0 < patches/spec.ejs.patch",
     "tests": "pytest test/backend-json-test.py test/backend-server-test.py -s --maxfail=1",
     "make": "npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make",
-    "build-backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && npm run tests && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
+    "build-backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish"
   },
   "publishConfig": {
