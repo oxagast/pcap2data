@@ -1539,11 +1539,6 @@ function createStatsHeatmapSection({
   mapCoordinatesEl.textContent = "Target 0.00N, 0.00E";
   mapEl.appendChild(mapCoordinatesEl);
 
-  const aimEl = documentRef.createElement("div");
-  aimEl.className = "stats-heatmap-aim";
-  aimEl.hidden = true;
-  mapEl.appendChild(aimEl);
-
   mapEl.appendChild(mapZoomControlEl);
 
   const latitudeLabels = [
@@ -1817,11 +1812,7 @@ function createStatsHeatmapSection({
   };
 
   const setAimPosition = (x, y, visible = true) => {
-    if (!aimEl) return;
-    aimEl.hidden = !visible;
-    if (!visible) return;
-    aimEl.style.left = `${Number(x).toFixed(2)}px`;
-    aimEl.style.top = `${Number(y).toFixed(2)}px`;
+    return;
   };
 
   const clearAimState = () => {

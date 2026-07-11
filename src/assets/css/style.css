@@ -1,52 +1,4 @@
 :root {
-  --app-bg: #333333;
-  --surface-0: #000000;
-  --surface-1: #111111;
-  --surface-2: #000000;
-  --scrollbar-track: #000000;
-  --border-strong: #000000;
-  --color-1: #7f80ff;
-  --color-2: #2a284a;
-  --color-2-hover: #201e3d;
-  --color-3: #8a87c0;
-  --color-4: #161a2b;
-  --color-5: #ccbdde;
-  --color-6: #b5b5b5;
-  --color-7: #413f6e;
-  --top-bar-bg: var(--color-7);
-  --data-tools-frame-bg: #0d1f47;
-  --data-tools-hex-color: #ccbdde;
-  --data-tools-binary-color: #ccbdde;
-  --data-tools-decimal-color: #ccbdde;
-  --data-tools-decimal-integer-color: #ccbdde;
-  --data-tools-ascii-color: #ccbdde;
-  --data-tools-base64-color: #ccbdde;
-  --header-text-color: var(--color-1);
-  --sidebar-text-color: var(--color-5);
-  --input-bg-color: var(--surface-0);
-  --input-text-color: var(--color-5);
-  --stats-tag-text-color: #ffffff;
-  --notes-link-color: var(--color-2);
-  --notes-markdown-bg: color-mix(in srgb, var(--input-bg-color) 86%, #000 14%);
-  --crypt-panel-bg: var(--color-7);
-  --crypt-panel-text: var(--color-6);
-  --panel-bg-opacity: 100%;
-  --tab-inactive-opacity: 0.4;
-  --sidebar-width: 20%;
-  --stats-heatmap-water-color-1: color-mix(in srgb, var(--color-2) 55%, transparent);
-  --stats-heatmap-water-color-2: color-mix(in srgb, var(--color-1) 18%, transparent);
-  --stats-heatmap-water-color-3-top: color-mix(in srgb, var(--surface-1) 88%, #101216);
-  --stats-heatmap-water-color-3-bottom: color-mix(in srgb, var(--surface-0) 92%, #020304);
-  --stats-heatmap-land-fill-color: #cccccc;
-  --stats-heatmap-land-filter: grayscale(1) contrast(1.14) brightness(0.92);
-  --stats-heatmap-land-opacity: 0.96;
-  --stats-heatmap-grid-line-color: color-mix(in srgb, var(--color-6) 14%, transparent);
-  --stats-heatmap-grid-opacity: 0.14;
-  --stats-heatmap-grid-cell-size-x: 28px;
-  --stats-heatmap-grid-cell-size-y: 22px;
-  --stats-heatmap-selection-border-color: color-mix(in srgb, var(--color-1) 82%, #ffffff 18%);
-  --stats-heatmap-selection-highlight-color: color-mix(in srgb, var(--color-1) 22%, transparent);
-  --stats-heatmap-selection-active-border-color: color-mix(in srgb, var(--color-1) 90%, #ffffff 10%);
   --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, var(--color-1) 36%, transparent);
 }
 
@@ -2523,56 +2475,6 @@ strong {
   background: color-mix(in srgb, var(--surface-1) 74%, transparent);
   box-shadow: 0 1px 8px color-mix(in srgb, #000000 28%, transparent);
   white-space: nowrap;
-}
-
-.stats-heatmap-aim {
-  position: absolute;
-  z-index: 8;
-  width: 18px;
-  height: 18px;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--stats-heatmap-selection-border-color) 88%, transparent);
-  background: color-mix(in srgb, var(--stats-heatmap-selection-highlight-color) 52%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--stats-heatmap-selection-border-color) 42%, transparent);
-  animation: stats-heatmap-aim-pulse 1.05s ease-in-out infinite;
-}
-
-.stats-heatmap-aim::before,
-.stats-heatmap-aim::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  background: color-mix(in srgb, var(--stats-heatmap-selection-border-color) 92%, #ffffff 8%);
-}
-
-.stats-heatmap-aim::before {
-  width: 12px;
-  height: 2px;
-  border-radius: 2px;
-}
-
-.stats-heatmap-aim::after {
-  width: 2px;
-  height: 12px;
-  border-radius: 2px;
-}
-
-@keyframes stats-heatmap-aim-pulse {
-
-  0%,
-  100% {
-    opacity: 0.82;
-    transform: translate(-50%, -50%) scale(1);
-  }
-
-  50% {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1.08);
-  }
 }
 
 .stats-heatmap-map-expanded {
