@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         streamContextWarnPacketThreshold: 20,
         manualConvImportMaxBytes: 2 * 1024 * 1024,
         nmapServiceScanEnabled: false,
+        checkForNewReleasesOnStartup: true,
     },
     backend: {
         tcpHost: "127.0.0.1",
@@ -175,6 +176,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof general.nmapServiceScanEnabled === "boolean"
                     ? general.nmapServiceScanEnabled
                     : generalDefaults.nmapServiceScanEnabled,
+            checkForNewReleasesOnStartup:
+                typeof general.checkForNewReleasesOnStartup === "boolean"
+                    ? general.checkForNewReleasesOnStartup
+                    : generalDefaults.checkForNewReleasesOnStartup,
         },
         backend: {
             tcpHost:

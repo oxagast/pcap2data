@@ -339,9 +339,23 @@ function initializeSessionPicker({
   }
 
   // Check for saved sessions and show picker if any exist
-  sessionsapi.list().then((result) => {
-    if (result.success && result.sessions && result.sessions.length > 0) {
-      show();
+  sessionsapi.list().then(async (result) => {
+    try {
+      const startupReleaseCheckPromise = window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__;
+      if (startupReleaseCheckPromise && typeof startupReleaseCheckPromise.then === "function") {
+        const aboutShown = await startupReleaseCheckPromise;
+        if (aboutShown) {
+          return;
+        }
+      }
+      if (result.success && result.sessions && result.sessions.length > 0) {
+        show();
+      }
+    } catch (_error) {
+      // If the startup gate fails, fall back to the existing behavior.
+      if (result.success && result.sessions && result.sessions.length > 0) {
+        show();
+      }
     }
   }).catch(() => {
     // If listing fails, just don't show the picker

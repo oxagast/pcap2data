@@ -324,6 +324,12 @@ let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
 let settingsAboutTypewriterTimeoutId = null;
 let settingsAboutDownloadButtonUrl = "";
+let startupReleaseCheckHandled = false;
+let resolveStartupReleaseCheckPromise = null;
+let startupReleaseCheckPromise = new Promise((resolve) => {
+  resolveStartupReleaseCheckPromise = resolve;
+});
+window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = startupReleaseCheckPromise;
 const backendProgressState = {
   firstChunkLoaded: false,
   processing: false,
@@ -625,6 +631,39 @@ function buildReleaseDownloadInfo(release, runningVersion) {
       : "",
     downloadAssetName: typeof selectedAsset?.name === "string" ? selectedAsset.name.trim() : "",
   };
+}
+
+function shouldCheckForNewReleasesOnStartup() {
+  return Boolean(getCurrentSettings()?.general?.checkForNewReleasesOnStartup);
+}
+
+async function maybeShowSettingsAboutForNewRelease() {
+  startupReleaseCheckHandled = true;
+  if (!shouldCheckForNewReleasesOnStartup()) {
+    if (resolveStartupReleaseCheckPromise) {
+      resolveStartupReleaseCheckPromise(false);
+      resolveStartupReleaseCheckPromise = null;
+    }
+    return false;
+  }
+
+  const releaseInfo = await loadSettingsAboutReleaseInfo({ forceRefresh: true });
+  const newVersionAvailable = Boolean(releaseInfo?.downloadInfo?.newVersionAvailable);
+  if (!newVersionAvailable) {
+    if (resolveStartupReleaseCheckPromise) {
+      resolveStartupReleaseCheckPromise(false);
+      resolveStartupReleaseCheckPromise = null;
+    }
+    return false;
+  }
+
+  showSettingsWorkspace();
+  setSettingsSubtab(SETTINGS_SUBTAB_ABOUT);
+  if (resolveStartupReleaseCheckPromise) {
+    resolveStartupReleaseCheckPromise(true);
+    resolveStartupReleaseCheckPromise = null;
+  }
+  return true;
 }
 
 function syncSettingsAboutDownloadButton() {
@@ -1368,6 +1407,9 @@ function syncSettingsFormFromState() {
   const nmapServiceScanEnabledEl = document.getElementById(
     "settings-general-nmap-service-scan-enabled",
   );
+  const checkForNewReleasesOnStartupEl = document.getElementById(
+    "settings-general-check-for-new-releases-on-startup",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -1431,6 +1473,11 @@ function syncSettingsFormFromState() {
   }
   if (nmapServiceScanEnabledEl) {
     nmapServiceScanEnabledEl.checked = Boolean(settings.general.nmapServiceScanEnabled);
+  }
+  if (checkForNewReleasesOnStartupEl) {
+    checkForNewReleasesOnStartupEl.checked = Boolean(
+      settings?.general?.checkForNewReleasesOnStartup,
+    );
   }
   if (backendTcpHostEl) {
     backendTcpHostEl.value = String(settings.backend.tcpHost || DEFAULT_SETTINGS.backend.tcpHost);
@@ -1527,6 +1574,9 @@ function readSettingsFormState() {
   const nmapServiceScanEnabledEl = document.getElementById(
     "settings-general-nmap-service-scan-enabled",
   );
+  const checkForNewReleasesOnStartupEl = document.getElementById(
+    "settings-general-check-for-new-releases-on-startup",
+  );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendForceLegacySpawnEl = document.getElementById(
@@ -1592,6 +1642,9 @@ function readSettingsFormState() {
       nmapServiceScanEnabled: nmapServiceScanEnabledEl
         ? nmapServiceScanEnabledEl.checked
         : DEFAULT_SETTINGS.general.nmapServiceScanEnabled,
+      checkForNewReleasesOnStartup: checkForNewReleasesOnStartupEl
+        ? checkForNewReleasesOnStartupEl.checked
+        : DEFAULT_SETTINGS.general.checkForNewReleasesOnStartup,
     },
     backend: {
       tcpHost: backendTcpHostEl
@@ -15564,6 +15617,14 @@ document
     );
   });
 
+document
+  .getElementById("settings-general-check-for-new-releases-on-startup")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated checkForNewReleasesOnStartup=${Boolean(event?.target?.checked)}`,
+    );
+  });
+
 document.getElementById("settings-backend-tcp-host").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated backendTcpHost=${JSON.stringify(event?.target?.value || "")}`);
 });
@@ -18251,6 +18312,11 @@ void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
   .then(() => loadAvailableOllamaModels())
   .then(() => loadPersistedSettings())
+  .then(async () => {
+    startupReleaseCheckPromise = maybeShowSettingsAboutForNewRelease();
+    window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = startupReleaseCheckPromise;
+    return startupReleaseCheckPromise;
+  })
   .catch((error) => {
     console.warn("Unable to initialize themes/settings:", error);
     syncSettingsFormFromState();
