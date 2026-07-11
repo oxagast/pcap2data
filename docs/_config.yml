@@ -1,4 +1,4 @@
-title: "PacketSnitch DocsHub"
+title: "PacketSnitch"
 name: "PacketSnitch"
 keywords: ["network analysis", "security", "packet sniffer", "traffic monitoring", "pcap analysis", "network security", "intrusion detection", "network forensics"]
 author: "Marshall W."
@@ -14,7 +14,7 @@ remote_theme: "tajacks/lightspeed"
 # If your site is at username.github.io, leave baseurl as "".
 # If your site is a project repository (username.github.io/repo-name), set it to "/repo-name".
 baseurl: "" 
-url: "https://packetsnitch.oxasploits.com" 
+url: "https://packetsnitch.com" 
 
 # Social Links (Used by standard theme footers)
 twitter_username: oxagast
