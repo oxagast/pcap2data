@@ -63,7 +63,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, urlparse
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -171,6 +171,43 @@ try:
 except ImportError:
     import scapy
 
+backendDir = os.path.dirname(os.path.realpath(__file__))
+if backendDir not in sys.path:
+    sys.path.insert(0, backendDir)
+
+import decoders.address_resolution as dec_address_resolution
+import decoders.bgp as dec_bgp
+import decoders.dhcp as dec_dhcp
+import decoders.ftp as dec_ftp
+import decoders.http as dec_http
+import decoders.http2 as dec_http2
+import decoders.igmp as dec_igmp
+import decoders.imap as dec_imap
+import decoders.irc as dec_irc
+import decoders.kerberos as dec_kerberos
+import decoders.ldap as dec_ldap
+import decoders.mqtt as dec_mqtt
+import decoders.mtp as dec_mtp
+import decoders.mysql as dec_mysql
+import decoders.nfs as dec_nfs
+import decoders.nntp as dec_nntp
+import decoders.ntp as dec_ntp
+import decoders.pop3 as dec_pop3
+import decoders.postgresql as dec_postgresql
+import decoders.radius as dec_radius
+import decoders.rtsp as dec_rtsp
+import decoders.sctp as dec_sctp
+import decoders.sip as dec_sip
+import decoders.smb as dec_smb
+import decoders.smtp as dec_smtp
+import decoders.snmp as dec_snmp
+import decoders.ssh as dec_ssh
+import decoders.telnet as dec_telnet
+import decoders.tftp as dec_tftp
+import decoders.wan_link as dec_wan_link
+import decoders.websocket as dec_websocket
+import decoders.xmpp as dec_xmpp
+
 activeRecon = "False"
 numWorkerThreads = 2 * (os.cpu_count() or 1)
 isSSH = False
@@ -231,106 +268,8 @@ tcpStreamInitialDstPortMap: dict = {}
 http2DetectedStreams: set = set()
 http2DetectedStreamsLock = threading.Lock()
 
-# --- HTTP method set used by decodeHTTP() for request-line detection ---
-HTTP_METHODS: set = {
-    "GET",
-    "POST",
-    "HEAD",
-    "PUT",
-    "DELETE",
-    "PATCH",
-    "OPTIONS",
-    "TRACE",
-    "CONNECT",
-}
-
 TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
 HTTP2_PREFACE_BYTES = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-
-# Matches common credential-related field names in HTTP query strings, POST bodies, etc.
-# Each keyword is an independent alternative; compound names like "auth_token" or
-# "api_key" are covered by the optional prefix/suffix anchors.
-CREDENTIAL_FIELD_RE = re.compile(
-    r"^(?:.*[_\-.])?(?:pass(?:w(?:or)?d?)?|pw|secret|auth|auth_token|"
-    r"credential|api[_\-.]?key|token|user(?:name)?|login|email)(?:[_\-.].*)?$",
-    re.IGNORECASE,
-)
-
-
-def _extractUrlCredentials(paramStr):
-    """
-    Parse a URL-encoded query string or POST body (e.g. ``user=alice&pass=s3cr3t``).
-    Returns a dict of {fieldName: value} for every field whose name matches
-    CREDENTIAL_FIELD_RE and whose value is non-empty.  Returns an empty dict when
-    nothing interesting is found.
-    """
-    creds = {}
-    if not paramStr:
-        return creds
-    for pair in paramStr.split("&"):
-        if "=" not in pair:
-            continue
-        rawKey, _, rawVal = pair.partition("=")
-        key = unquote_plus(rawKey.strip())
-        val = unquote_plus(rawVal.strip())
-        if val and CREDENTIAL_FIELD_RE.match(key):
-            creds[key] = val
-    return creds
-
-
-# Cookie names that are always treated as sensitive regardless of CREDENTIAL_FIELD_RE.
-# These are common session / auth cookie names used by popular frameworks and platforms.
-_SENSITIVE_COOKIE_RE = re.compile(
-    r"^(?:sess(?:ion)?(?:id)?|auth(?:_?token)?|access_token|refresh_token|"
-    r"remember(?:_me)?(?:_token)?|jwt|bearer|csrf(?:_token)?|xsrf(?:_token)?|"
-    r"sid|uid|user(?:id)?|login|pass(?:w(?:or)?d?)?|pw|secret|"
-    r"PHPSESSID|ASP\.NET_SessionId|__Secure-.*|__Host-.*)$",
-    re.IGNORECASE,
-)
-
-
-def _extractCookieCredentials(cookieHeader):
-    """
-    Parse a ``Cookie:`` request header (e.g. ``session=abc; token=xyz; q=1``).
-    Always stores the raw full cookie string under the key ``cookie_raw``.
-    Also stores each individual cookie whose name matches CREDENTIAL_FIELD_RE or
-    _SENSITIVE_COOKIE_RE under the key ``cookie.<name>``.
-    Returns a dict; an empty dict means nothing sensitive was found.
-    """
-    if not cookieHeader:
-        return {}
-    creds = {"cookie_raw": cookieHeader}
-    for crumb in cookieHeader.split(";"):
-        crumb = crumb.strip()
-        if "=" not in crumb:
-            continue
-        name, _, value = crumb.partition("=")
-        name = name.strip()
-        value = value.strip()
-        if value and (
-            CREDENTIAL_FIELD_RE.match(name) or _SENSITIVE_COOKIE_RE.match(name)
-        ):
-            creds[f"cookie.{name}"] = value
-    return creds
-
-
-def _extractSetCookieCredentials(setCookieHeader):
-    """
-    Parse a ``Set-Cookie:`` response header and return a dict with the raw value
-    and the parsed cookie name/value pair (before any attributes like HttpOnly).
-    """
-    if not setCookieHeader:
-        return {}
-    creds = {"set_cookie_raw": setCookieHeader}
-    # The first pair before any ";" is the actual cookie name=value
-    firstPair = setCookieHeader.split(";")[0].strip()
-    if "=" in firstPair:
-        name, _, value = firstPair.partition("=")
-        name = name.strip()
-        value = value.strip()
-        if value:
-            creds[f"cookie.{name}"] = value
-    return creds
 
 
 def _coercePositiveInt(value, defaultValue):
@@ -382,62 +321,6 @@ def _applyRuntimeConfigUpdate(request):
         "action": "set-runtime-config",
         **_getRuntimeConfigSnapshot(),
     }, 200
-
-
-# Matches JSON key-value pairs where the key looks like a credential field.
-# The keyword list mirrors CREDENTIAL_FIELD_RE but is spelled out explicitly here
-# so the pattern is self-contained and does not depend on regex string manipulation.
-_CRED_KEYWORDS = (
-    r"pass(?:w(?:or)?d?)?|pw|secret|auth|auth_token|credential|"
-    r"api[_\-.]?key|token|user(?:name)?|login|email"
-)
-_JSON_CRED_RE = re.compile(
-    r'"(?:(?:.*[_\-.])?' + r"(?:" + _CRED_KEYWORDS + r")" + r'(?:[_\-.].*)?)"'
-    r'\s*:\s*"([^"]{1,512})"',
-    re.IGNORECASE,
-)
-
-# Matches plain-text key:value or key=value lines where the key is credential-like.
-# Delimiters before the key include whitespace, common punctuation, and '&' (form data).
-_TEXT_CRED_RE = re.compile(
-    r"(?:^|[\s,{;&])"
-    r"(?:(?:.*[_\-.])?(?:" + _CRED_KEYWORDS + r")(?:[_\-.].*)?)"
-    r'(?:\s*[=:]\s*)([^\s&"\'<>,;]{1,512})',
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-def _extractPostBodyCredentials(body, contentType):
-    """
-    Scan a POST/PUT/PATCH body for credential fields regardless of content type.
-    - For ``application/json`` bodies: uses JSON key-value regex.
-    - For all other bodies (multipart, plain-text, XML, etc.): uses a more general
-      key=value / key:value regex.
-    Returns a dict of {fieldName: value}; empty dict when nothing is found.
-    """
-    if not body or not body.strip():
-        return {}
-    creds = {}
-    lowerContentType = contentType.lower()
-    if "json" in lowerContentType:
-        for match in _JSON_CRED_RE.finditer(body):
-            val = match.group(1).strip()
-            if val:
-                # Derive a human-readable key from the JSON property name
-                fullMatch = match.group(0)
-                keyEnd = fullMatch.index('"', 1)
-                creds[fullMatch[1:keyEnd]] = val
-    else:
-        for match in _TEXT_CRED_RE.finditer(body):
-            val = match.group(1).strip()
-            if val:
-                # Use the raw matched token before the separator as the key
-                raw = match.group(0).lstrip(" \t,{;&")
-                sep = next((i for i, c in enumerate(raw) if c in "=:"), len(raw))
-                key = raw[:sep].strip()
-                if key:
-                    creds[key] = val
-    return creds
 
 
 def configLoader(filename="conf.yaml"):
@@ -508,17 +391,6 @@ def reverseDnsLookup(ip):
             "Resolved": False,
             "Error": "Address resolution error: " + str(e),
         }
-
-def streamStabilzeProtocol(streamKey, initialDstPort):
-    """
-    Stabilize the protocol for a TCP stream based on its initial destination port.
-    Updates the global tcpStreamInitialDstPortMap with the canonical stream key.
-    """
-    # we need to follow the four tuple of the stream, and store the initial destination port for that stream
-    if streamKey not in tcpStreamInitialDstPortMap:
-        tcpStreamInitialDstPortMap[streamKey] = initialDstPort
-    return tcpStreamInitialDstPortMap[streamKey]
-
 
 def getServBanner(ip, port, timeout, hostname, serviceName=None):
     """
@@ -757,9 +629,6 @@ def joinInfo(outputDirPath, portDir, index, dataTypeJson, packetInfoJson, host):
     return mergedJson
 
 
-packetsByHost = {}
-
-
 def sortAndIndexPackets(hostPacketMap):
     for host, packets in hostPacketMap.items():
         # Skip empty or invalid entries
@@ -784,30 +653,6 @@ def sortAndIndexPackets(hostPacketMap):
                 packetInfo["index"] = i
 
     return hostPacketMap
-
-
-def byHost(outputDirPath, finalSummary):
-    """
-    Organise allPacketInfo entries by destination host and write the result to hosts.json.
-    Bug fix: the original code created the empty list but then only appended on the
-    *else* branch, silently dropping the first packet for every unique host.
-    Now every packet is always appended.
-    """
-    global packetsByHost
-    for entry in allPacketInfo:
-        host = entry.get("host")
-        if host not in packetsByHost:
-            packetsByHost[host] = []
-        # Always append — previously the first packet per host was lost
-        packetsByHost[host].append(entry.get("packet"))
-
-    packetsByHost = sortAndIndexPackets(packetsByHost)
-
-    # Write the consolidated hosts file; use a context manager to guarantee flush/close
-    with open(outputDirPath + "/" + hostOutputFile, "w+", encoding="utf-8") as f:
-        f.write(
-            json.dumps({"host": packetsByHost, "final.summary": finalSummary}, indent=2)
-        )
 
 
 def buildHostsPayload(packetEntries, finalSummary=""):
@@ -1977,2670 +1822,16 @@ def extractLinkLayerInfo(p):
     }
 
 
-def decodeSNMP(p):
-    """
-    Decode SNMP layer fields from a scapy packet.
-    Returns a dict with both display-friendly keys (e.g., 'Version') and
-    dot-notation keys (e.g., 'snmp.version') for version, community, and PDU type,
-    or None if the packet does not contain an SNMP layer or decoding fails.
-    """
-    if not p.haslayer("SNMP"):
-        return None
-    snmpLayer = p["SNMP"]
-    try:
-        version = int(snmpLayer.version)
-        versionMap = {0: "SNMPv1", 1: "SNMPv2c", 3: "SNMPv3"}
-        versionStr = versionMap.get(version, f"Unknown({version})")
-        community = ""
-        if hasattr(snmpLayer, "community") and snmpLayer.community is not None:
-            community = (
-                snmpLayer.community.decode(errors="ignore")
-                if isinstance(snmpLayer.community, bytes)
-                else str(snmpLayer.community)
-            )
-        pduType = "Unknown"
-        if hasattr(snmpLayer, "PDU") and snmpLayer.PDU is not None:
-            pduType = snmpLayer.PDU.__class__.__name__
-        return {
-            "Version": versionStr,
-            "snmp.version": versionStr,
-            "Community": community,
-            "snmp.community": community,
-            "PDU Type": pduType,
-            "snmp.pdu_type": pduType,
-        }
-    except Exception:
-        return None
-
-
-def decodeDHCP(p):
-    """
-    Decode DHCP/BOOTP layer fields from a scapy packet.
-    Returns a dict with both display-friendly keys and dot-notation keys for message
-    type, transaction ID, and IP fields (Client IP, Your IP, Server IP), or None if
-    the packet does not contain a DHCP layer or decoding fails.
-    """
-    if not p.haslayer("DHCP"):
-        return None
-    dhcpLayer = p["DHCP"]
-    bootpLayer = p["BOOTP"] if p.haslayer("BOOTP") else None
-    try:
-        msgType = "Unknown"
-        msgTypeMap = {
-            1: "Discover",
-            2: "Offer",
-            3: "Request",
-            4: "Decline",
-            5: "ACK",
-            6: "NAK",
-            7: "Release",
-            8: "Inform",
-        }
-        for opt in dhcpLayer.options:
-            if isinstance(opt, tuple) and opt[0] == "message-type" and len(opt) > 1:
-                msgType = msgTypeMap.get(opt[1], str(opt[1]))
-                break
-        result = {
-            "Message Type": msgType,
-            "dhcp.msg_type": msgType,
-        }
-        if bootpLayer:
-            try:
-                xid = hex(int(bootpLayer.xid)) if hasattr(bootpLayer, "xid") else "N/A"
-            except (TypeError, ValueError):
-                xid = "N/A"
-            ciaddr = str(bootpLayer.ciaddr) if hasattr(bootpLayer, "ciaddr") else "N/A"
-            yiaddr = str(bootpLayer.yiaddr) if hasattr(bootpLayer, "yiaddr") else "N/A"
-            siaddr = str(bootpLayer.siaddr) if hasattr(bootpLayer, "siaddr") else "N/A"
-            result["Transaction ID"] = xid
-            result["dhcp.xid"] = xid
-            result["Client IP"] = ciaddr
-            result["dhcp.ciaddr"] = ciaddr
-            result["Your IP"] = yiaddr
-            result["dhcp.yiaddr"] = yiaddr
-            result["Server IP"] = siaddr
-            result["dhcp.siaddr"] = siaddr
-        return result
-    except Exception:
-        return None
-
-
-def decodeNTP(p):
-    """
-    Decode NTP layer fields from a scapy packet.
-    Returns a dict with both display-friendly keys and dot-notation keys for leap
-    indicator, version, mode, stratum, and reference ID, or None if the packet does
-    not contain an NTP layer or decoding fails.
-    """
-    if not p.haslayer("NTP"):
-        return None
-    ntpLayer = p["NTP"]
-    modeMap = {
-        0: "Reserved",
-        1: "Symmetric Active",
-        2: "Symmetric Passive",
-        3: "Client",
-        4: "Server",
-        5: "Broadcast",
-        6: "NTP Control",
-        7: "Private",
-    }
-    try:
-        leap = int(ntpLayer.leap) if hasattr(ntpLayer, "leap") else 0
-        version = int(ntpLayer.version) if hasattr(ntpLayer, "version") else 0
-        mode = int(ntpLayer.mode) if hasattr(ntpLayer, "mode") else 0
-        stratum = int(ntpLayer.stratum) if hasattr(ntpLayer, "stratum") else 0
-        modeStr = modeMap.get(mode, f"Unknown({mode})")
-        refId = str(ntpLayer.id) if hasattr(ntpLayer, "id") else "N/A"
-        return {
-            "Leap Indicator": leap,
-            "ntp.leap": leap,
-            "Version": version,
-            "ntp.version": version,
-            "Mode": modeStr,
-            "ntp.mode": modeStr,
-            "Stratum": stratum,
-            "ntp.stratum": stratum,
-            "Reference ID": refId,
-            "ntp.ref_id": refId,
-        }
-    except Exception:
-        return None
-
-
-def decodeIGMP(p, rawPayload):
-    """
-    Decode IGMP fields from a packet. Uses the scapy IGMP layer when available,
-    otherwise falls back to parsing the first 8 bytes of the raw IP payload.
-    """
-    igmpTypeMap = {
-        0x11: "Membership Query",
-        0x12: "IGMPv1 Membership Report",
-        0x16: "IGMPv2 Membership Report",
-        0x17: "Leave Group",
-        0x22: "IGMPv3 Membership Report",
-    }
-
-    igmpTypeNum = 0
-    maxRespCode = 0
-    checksumVal = 0
-    groupAddr = "0.0.0.0"
-
-    igmpClass = getattr(scapy, "IGMP", None)
-    hasIgmpLayer = bool(igmpClass and p.haslayer(igmpClass)) or p.haslayer("IGMP")
-    if hasIgmpLayer:
-        igmpLayer = p[igmpClass] if igmpClass and p.haslayer(igmpClass) else p["IGMP"]
-        try:
-            igmpTypeNum = int(getattr(igmpLayer, "type", 0) or 0)
-        except Exception:
-            igmpTypeNum = 0
-        try:
-            maxRespCode = int(getattr(igmpLayer, "mrcode", 0) or 0)
-        except Exception:
-            maxRespCode = 0
-        try:
-            checksumVal = int(getattr(igmpLayer, "chksum", 0) or 0)
-        except Exception:
-            checksumVal = 0
-        groupAddr = str(getattr(igmpLayer, "gaddr", "0.0.0.0") or "0.0.0.0")
-    elif rawPayload and len(rawPayload) >= 8:
-        igmpTypeNum = int(rawPayload[0])
-        maxRespCode = int(rawPayload[1])
-        checksumVal = int.from_bytes(rawPayload[2:4], byteorder="big", signed=False)
-        try:
-            groupAddr = socket.inet_ntoa(rawPayload[4:8])
-        except Exception:
-            groupAddr = "0.0.0.0"
-
-    igmpType = igmpTypeMap.get(igmpTypeNum, f"Type {igmpTypeNum}")
-    igmpVersion = "Unknown"
-    if igmpTypeNum == 0x12:
-        igmpVersion = "v1"
-    elif igmpTypeNum in (0x16, 0x17, 0x11):
-        igmpVersion = "v2"
-    elif igmpTypeNum == 0x22:
-        igmpVersion = "v3"
-
-    return {
-        "Type": igmpType,
-        "igmp.type": igmpType,
-        "network.igmp.type": igmpType,
-        "Type Number": igmpTypeNum,
-        "igmp.type_num": igmpTypeNum,
-        "network.igmp.type_num": igmpTypeNum,
-        "Version": igmpVersion,
-        "igmp.version": igmpVersion,
-        "network.igmp.version": igmpVersion,
-        "Max Response Time (ds)": maxRespCode,
-        "igmp.max_resp_time_ds": maxRespCode,
-        "network.igmp.max_resp_time_ds": maxRespCode,
-        "Group Address": groupAddr,
-        "igmp.group_addr": groupAddr,
-        "network.igmp.group_addr": groupAddr,
-        "IGMP Checksum": hex(checksumVal),
-        "igmp.chksum": hex(checksumVal),
-        "network.igmp.chksum": hex(checksumVal),
-        "Wire length": len(rawPayload) if rawPayload is not None else 0,
-        "wire.len": len(rawPayload) if rawPayload is not None else 0,
-        "network.igmp.wire.len": len(rawPayload) if rawPayload is not None else 0,
-    }
-
-
-def decodeSIP(rawPayload):
-    """
-    Decode SIP message fields from raw payload bytes.
-    Parses the first line and common headers (From, To, Call-ID, Authorization).
-    Returns a dict with both display-friendly keys and dot-notation keys for message
-    type, method/status, and headers, or None if the payload is not a SIP message or
-    decoding fails.
-    """
-    sipMethods = {
-        "INVITE",
-        "ACK",
-        "BYE",
-        "CANCEL",
-        "REGISTER",
-        "OPTIONS",
-        "SUBSCRIBE",
-        "NOTIFY",
-        "REFER",
-        "INFO",
-        "UPDATE",
-        "PRACK",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.split("\r\n") if "\r\n" in text else text.split("\n")
-        if not lines:
-            return None
-        firstLine = lines[0].strip()
-        isSipResponse = firstLine.startswith("SIP/")
-        isSipRequest = (
-            firstLine.split(" ")[0] in sipMethods if " " in firstLine else False
-        )
-        if not isSipResponse and not isSipRequest:
-            return None
-        headers = {}
-        for line in lines[1:]:
-            if ": " in line:
-                key, _, val = line.partition(": ")
-                headers[key.strip()] = val.strip()
-        
-        # Extract Authorization and Proxy-Authorization headers for credentials
-        authorization = headers.get("Authorization", "")
-        proxyAuthorization = headers.get("Proxy-Authorization", "")
-        
-        if isSipRequest:
-            parts = firstLine.split(" ", 2)
-            method = parts[0]
-            requestUri = parts[1] if len(parts) > 1 else "Unknown"
-            result = {
-                "Type": "Request",
-                "sip.type": "Request",
-                "Method": method,
-                "sip.method": method,
-                "Request URI": requestUri,
-                "sip.uri": requestUri,
-                "From": headers.get("From", "Unknown"),
-                "sip.from": headers.get("From", "Unknown"),
-                "To": headers.get("To", "Unknown"),
-                "sip.to": headers.get("To", "Unknown"),
-                "Call-ID": headers.get("Call-ID", "Unknown"),
-                "sip.call_id": headers.get("Call-ID", "Unknown"),
-            }
-            if authorization:
-                result["Authorization"] = authorization
-                result["sip.authorization"] = authorization
-            if proxyAuthorization:
-                result["Proxy-Authorization"] = proxyAuthorization
-                result["sip.proxy_authorization"] = proxyAuthorization
-            return result
-        else:
-            parts = firstLine.split(" ", 2)
-            statusCode = parts[1] if len(parts) > 1 else "Unknown"
-            statusMsg = parts[2] if len(parts) > 2 else "Unknown"
-            result = {
-                "Type": "Response",
-                "sip.type": "Response",
-                "Status Code": statusCode,
-                "sip.status_code": statusCode,
-                "Status Message": statusMsg,
-                "sip.status_msg": statusMsg,
-                "From": headers.get("From", "Unknown"),
-                "sip.from": headers.get("From", "Unknown"),
-                "To": headers.get("To", "Unknown"),
-                "sip.to": headers.get("To", "Unknown"),
-                "Call-ID": headers.get("Call-ID", "Unknown"),
-                "sip.call_id": headers.get("Call-ID", "Unknown"),
-            }
-            if authorization:
-                result["Authorization"] = authorization
-                result["sip.authorization"] = authorization
-            if proxyAuthorization:
-                result["Proxy-Authorization"] = proxyAuthorization
-                result["sip.proxy_authorization"] = proxyAuthorization
-            return result
-    except Exception:
-        return None
-
-
-def decodeHTTP(rawPayload):
-    """
-    Decode an HTTP request or response from raw payload bytes.
-    Handles both HTTP/1.x requests and responses.  Returns a dict with
-    both display-friendly keys (e.g., 'Method') and dot-notation keys
-    (e.g., 'http.method') for use by the frontend, or None if the payload
-    does not look like an HTTP message.
-
-    For requests the following fields are extracted:
-      Method, URL, HTTP Version, Host, User-Agent, Content-Type,
-      Content-Length, Referer, Accept, Accept-Encoding, Connection.
-    For responses the following fields are extracted:
-      HTTP Version, Status Code, Status Message, Content-Type,
-      Content-Length, Server, Content-Encoding, Transfer-Encoding,
-      Connection, Location (for redirects).
-    """
-    try:
-        text = rawPayload.decode(errors="ignore")
-        # Normalise line endings so both CRLF and bare-LF messages are handled uniformly
-        normalised = text.replace("\r\n", "\n")
-        headerSection = normalised.split("\n\n")[0]
-        lines = headerSection.split("\n")
-        if not lines:
-            return None
-        firstLine = lines[0].strip()
-        isHttpResponse = firstLine.startswith("HTTP/")
-        isHttpRequest = (
-            firstLine.split(" ")[0] in HTTP_METHODS if " " in firstLine else False
-        )
-        if not isHttpResponse and not isHttpRequest:
-            return None
-
-        # Parse headers into a dict (lowercase keys for case-insensitive lookup)
-        headers = {}
-        for line in lines[1:]:
-            if ": " in line:
-                key, _, val = line.partition(": ")
-                headers[key.strip().lower()] = val.strip()
-
-        if isHttpRequest:
-            parts = firstLine.split(" ", 2)
-            method = parts[0]
-            url = parts[1] if len(parts) > 1 else "Unknown"
-            httpVersion = parts[2] if len(parts) > 2 else "Unknown"
-            result = {
-                "Type": "Request",
-                "http.type": "Request",
-                "Method": method,
-                "http.method": method,
-                "URL": url,
-                "http.url": url,
-                "HTTP Version": httpVersion,
-                "http.version": httpVersion,
-                "Host": headers.get("host", "Unknown"),
-                "http.host": headers.get("host", "Unknown"),
-                "User-Agent": headers.get("user-agent", "Unknown"),
-                "http.user_agent": headers.get("user-agent", "Unknown"),
-                "Content-Type": headers.get("content-type", "Unknown"),
-                "http.content_type": headers.get("content-type", "Unknown"),
-                "Content-Length": headers.get("content-length", "Unknown"),
-                "http.content_length": headers.get("content-length", "Unknown"),
-                "Referer": headers.get("referer", "Unknown"),
-                "http.referer": headers.get("referer", "Unknown"),
-                "Accept": headers.get("accept", "Unknown"),
-                "http.accept": headers.get("accept", "Unknown"),
-                "Accept-Encoding": headers.get("accept-encoding", "Unknown"),
-                "http.accept_encoding": headers.get("accept-encoding", "Unknown"),
-                "Connection": headers.get("connection", "Unknown"),
-                "http.connection": headers.get("connection", "Unknown"),
-            }
-            # --- Credential extraction ----------------------------------------
-            # Extract credential fields from query-string (GET, POST, any method)
-            creds = {}
-            if "?" in url:
-                queryStr = url.split("?", 1)[1].split("#")[0]
-                creds.update(_extractUrlCredentials(queryStr))
-            # Also check Authorization header (Basic auth decoded by the frontend,
-            # but include the raw value so the frontend decoder can handle it too)
-            authHeader = headers.get("authorization", "")
-            if authHeader:
-                creds["authorization"] = authHeader
-            # Extract Cookie header — session tokens and auth cookies are sensitive
-            cookieHeader = headers.get("cookie", "")
-            if cookieHeader:
-                creds.update(_extractCookieCredentials(cookieHeader))
-            # For request bodies (POST/PUT/PATCH) scan for credential fields
-            contentType = headers.get("content-type", "")
-            if method in ("POST", "PUT", "PATCH"):
-                bodyStart = normalised.find("\n\n")
-                if bodyStart != -1:
-                    body = normalised[bodyStart + 2 :]
-                    if body.strip():
-                        if "urlencoded" in contentType.lower():
-                            creds.update(_extractUrlCredentials(body))
-                        else:
-                            # JSON, multipart, plain-text, XML — regex scan
-                            creds.update(_extractPostBodyCredentials(body, contentType))
-            if creds:
-                result["Credentials"] = creds
-            return result
-        else:
-            parts = firstLine.split(" ", 2)
-            httpVersion = parts[0]
-            statusCode = parts[1] if len(parts) > 1 else "Unknown"
-            statusMessage = parts[2] if len(parts) > 2 else "Unknown"
-            responseResult = {
-                "Type": "Response",
-                "http.type": "Response",
-                "HTTP Version": httpVersion,
-                "http.version": httpVersion,
-                "Status Code": statusCode,
-                "http.status_code": statusCode,
-                "Status Message": statusMessage,
-                "http.status_msg": statusMessage,
-                "Content-Type": headers.get("content-type", "Unknown"),
-                "http.content_type": headers.get("content-type", "Unknown"),
-                "Content-Length": headers.get("content-length", "Unknown"),
-                "http.content_length": headers.get("content-length", "Unknown"),
-                "Server": headers.get("server", "Unknown"),
-                "http.server": headers.get("server", "Unknown"),
-                "Content-Encoding": headers.get("content-encoding", "Unknown"),
-                "http.content_encoding": headers.get("content-encoding", "Unknown"),
-                "Transfer-Encoding": headers.get("transfer-encoding", "Unknown"),
-                "http.transfer_encoding": headers.get("transfer-encoding", "Unknown"),
-                "Connection": headers.get("connection", "Unknown"),
-                "http.connection": headers.get("connection", "Unknown"),
-                "Location": headers.get("location", "Unknown"),
-                "http.location": headers.get("location", "Unknown"),
-            }
-            setCookieVal = headers.get("set-cookie", "")
-            if setCookieVal:
-                responseCreds = _extractSetCookieCredentials(setCookieVal)
-                if responseCreds:
-                    responseResult["Credentials"] = responseCreds
-            return responseResult
-    except Exception:
-        return None
-
-
-def decodeFTP(rawPayload):
-    """
-    Decode FTP commands and responses from raw payload bytes.
-    Returns a dict with Type (Command/Response), command/status, and argument/message,
-    or None if the payload is not recognisable as FTP traffic.
-    """
-    FTP_COMMANDS = {
-        "USER",
-        "PASS",
-        "ACCT",
-        "CWD",
-        "CDUP",
-        "SMNT",
-        "QUIT",
-        "REIN",
-        "PORT",
-        "PASV",
-        "TYPE",
-        "STRU",
-        "MODE",
-        "RETR",
-        "STOR",
-        "STOU",
-        "APPE",
-        "ALLO",
-        "REST",
-        "RNFR",
-        "RNTO",
-        "ABOR",
-        "DELE",
-        "RMD",
-        "MKD",
-        "PWD",
-        "LIST",
-        "NLST",
-        "SITE",
-        "SYST",
-        "STAT",
-        "HELP",
-        "NOOP",
-        "FEAT",
-        "OPTS",
-        "MLST",
-        "MLSD",
-        "SIZE",
-        "MDTM",
-        "EPRT",
-        "EPSV",
-        "AUTH",
-        "PBSZ",
-        "PROT",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.replace("\r\n", "\n").split("\n")
-        firstLine = lines[0].strip()
-        if not firstLine:
-            return None
-        parts = firstLine.split(" ", 1)
-        word = parts[0].upper()
-        if word in FTP_COMMANDS:
-            arg = parts[1].strip() if len(parts) > 1 else ""
-            result = {
-                "Type": "Command",
-                "ftp.type": "Command",
-                "Command": word,
-                "ftp.command": word,
-                "Argument": arg,
-                "ftp.argument": arg,
-            }
-            if word == "USER" and arg:
-                result["Credentials"] = {"username": arg}
-            elif word == "PASS" and arg:
-                result["Credentials"] = {"password": arg}
-                # Keep plaintext out of display argument fields while preserving
-                # extracted credential metadata for downstream processing.
-                result["Argument"] = "***"
-                result["ftp.argument"] = "***"
-            return result
-        if len(word) == 3 and word.isdigit():
-            statusCode = word
-            message = parts[1].strip() if len(parts) > 1 else ""
-            return {
-                "Type": "Response",
-                "ftp.type": "Response",
-                "Status Code": statusCode,
-                "ftp.status_code": statusCode,
-                "Message": message,
-                "ftp.message": message,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeSMTP(rawPayload):
-    """
-    Decode SMTP commands and responses from raw payload bytes.
-    Returns a dict with Type (Command/Response), command/status code, and arguments/message,
-    or None if the payload is not recognisable as SMTP traffic.
-    """
-    SMTP_COMMANDS = {
-        "EHLO",
-        "HELO",
-        "MAIL",
-        "RCPT",
-        "DATA",
-        "RSET",
-        "VRFY",
-        "EXPN",
-        "HELP",
-        "NOOP",
-        "QUIT",
-        "AUTH",
-        "STARTTLS",
-        "BDAT",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.replace("\r\n", "\n").split("\n")
-        firstLine = lines[0].strip()
-        if not firstLine:
-            return None
-        parts = firstLine.split(" ", 1)
-        word = parts[0].upper()
-        if word in SMTP_COMMANDS:
-            arg = parts[1].strip() if len(parts) > 1 else ""
-            result = {
-                "Type": "Command",
-                "smtp.type": "Command",
-                "Command": word,
-                "smtp.command": word,
-                "Argument": arg,
-                "smtp.argument": arg,
-            }
-            # --- Credential extraction for AUTH commands ----------------------
-            # AUTH PLAIN <base64>  →  decode "\0username\0password"
-            # AUTH LOGIN           →  subsequent lines are base64 user then pass
-            if word == "AUTH":
-                argParts = arg.split()
-                mechanism = argParts[0].upper() if argParts else ""
-                creds = {}
-                if mechanism == "PLAIN" and len(argParts) > 1:
-                    try:
-                        decoded = base64.b64decode(argParts[1]).decode(errors="replace")
-                        segments = decoded.split("\x00")
-                        segments = [s for s in segments if s]
-                        if len(segments) >= 2:
-                            creds["username"] = segments[0]
-                            creds["password"] = segments[1]
-                        elif len(segments) == 1:
-                            creds["username"] = segments[0]
-                    except Exception:
-                        pass
-                elif mechanism == "LOGIN":
-                    # Subsequent packets carry the base64-encoded username and
-                    # password separately; capture what we have in this packet.
-                    if len(argParts) > 1:
-                        try:
-                            creds["username"] = base64.b64decode(argParts[1]).decode(
-                                errors="replace"
-                            )
-                        except Exception:
-                            pass
-                    # Scan remaining lines in the same payload for the password
-                    for extraLine in lines[1:]:
-                        extraLine = extraLine.strip()
-                        if extraLine:
-                            try:
-                                creds["password"] = base64.b64decode(extraLine).decode(
-                                    errors="replace"
-                                )
-                            except Exception:
-                                pass
-                            break
-                # Mask the argument in the display field only when inline credential
-                # data was present (so "AUTH LOGIN" without inline data stays readable)
-                if len(argParts) > 1:
-                    result["Argument"] = mechanism + " ***"
-                    result["smtp.argument"] = mechanism + " ***"
-                if creds:
-                    result["Credentials"] = creds
-            return result
-        if len(word) == 3 and word.isdigit():
-            statusCode = word
-            message = parts[1].strip() if len(parts) > 1 else ""
-            return {
-                "Type": "Response",
-                "smtp.type": "Response",
-                "Status Code": statusCode,
-                "smtp.status_code": statusCode,
-                "Message": message,
-                "smtp.message": message,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodePOP3(rawPayload):
-    """
-    Decode POP3 commands and responses from raw payload bytes.
-    Returns a dict with Type (Command/Response), command/status, and argument/message,
-    or None if the payload is not recognisable as POP3 traffic.
-    """
-    POP3_COMMANDS = {
-        "USER",
-        "PASS",
-        "APOP",
-        "QUIT",
-        "STAT",
-        "LIST",
-        "RETR",
-        "DELE",
-        "NOOP",
-        "RSET",
-        "TOP",
-        "UIDL",
-        "CAPA",
-        "AUTH",
-        "STLS",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.replace("\r\n", "\n").split("\n")
-        firstLine = lines[0].strip()
-        if not firstLine:
-            return None
-        parts = firstLine.split(" ", 1)
-        word = parts[0].upper()
-        if word in POP3_COMMANDS:
-            arg = parts[1].strip() if len(parts) > 1 else ""
-            result = {
-                "Type": "Command",
-                "pop3.type": "Command",
-                "Command": word,
-                "pop3.command": word,
-                "Argument": arg,
-                "pop3.argument": arg,
-            }
-            # Capture credentials; mask the display field for PASS
-            if word == "USER" and arg:
-                result["Credentials"] = {"username": arg}
-            elif word == "PASS" and arg:
-                result["Credentials"] = {"password": arg}
-                result["Argument"] = "***"
-                result["pop3.argument"] = "***"
-            return result
-        if word in ("+OK", "-ERR"):
-            message = parts[1].strip() if len(parts) > 1 else ""
-            return {
-                "Type": "Response",
-                "pop3.type": "Response",
-                "Status": word,
-                "pop3.status": word,
-                "Message": message,
-                "pop3.message": message,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeIMAP(rawPayload):
-    """
-    Decode IMAP commands and server responses from raw payload bytes.
-    Returns a dict with Type (Command/Response/Untagged), tag, command/status, and argument,
-    or None if the payload is not recognisable as IMAP traffic.
-    """
-    IMAP_COMMANDS = {
-        "CAPABILITY",
-        "NOOP",
-        "LOGOUT",
-        "AUTHENTICATE",
-        "LOGIN",
-        "SELECT",
-        "EXAMINE",
-        "CREATE",
-        "DELETE",
-        "RENAME",
-        "SUBSCRIBE",
-        "UNSUBSCRIBE",
-        "LIST",
-        "LSUB",
-        "STATUS",
-        "APPEND",
-        "CHECK",
-        "CLOSE",
-        "EXPUNGE",
-        "SEARCH",
-        "FETCH",
-        "STORE",
-        "COPY",
-        "UID",
-        "IDLE",
-        "NAMESPACE",
-        "STARTTLS",
-        "ENABLE",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.replace("\r\n", "\n").split("\n")
-        firstLine = lines[0].strip()
-        if not firstLine:
-            return None
-        if firstLine.startswith("* "):
-            rest = firstLine[2:].strip()
-            restParts = rest.split(" ", 1)
-            status = restParts[0]
-            info = restParts[1].strip() if len(restParts) > 1 else ""
-            return {
-                "Type": "Untagged",
-                "imap.type": "Untagged",
-                "Status": status,
-                "imap.status": status,
-                "Info": info,
-                "imap.info": info,
-            }
-        parts = firstLine.split(" ", 2)
-        if len(parts) >= 2:
-            tag = parts[0]
-            word = parts[1].upper()
-            arg = parts[2].strip() if len(parts) > 2 else ""
-            if word in IMAP_COMMANDS:
-                result = {
-                    "Type": "Command",
-                    "imap.type": "Command",
-                    "Tag": tag,
-                    "imap.tag": tag,
-                    "Command": word,
-                    "imap.command": word,
-                    "Argument": arg,
-                    "imap.argument": arg,
-                }
-                # Extract LOGIN credentials and mask the password in the display field
-                if word == "LOGIN" and arg:
-                    argParts = arg.split(" ", 1)
-                    username = argParts[0].strip('"')
-                    if len(argParts) > 1:
-                        password = argParts[1].strip('"')
-                        result["Credentials"] = {
-                            "username": username,
-                            "password": password,
-                        }
-                        result["Argument"] = username + " ***"
-                        result["imap.argument"] = username + " ***"
-                    else:
-                        result["Credentials"] = {"username": username}
-                return result
-            if word in ("OK", "NO", "BAD", "PREAUTH", "BYE"):
-                return {
-                    "Type": "Response",
-                    "imap.type": "Response",
-                    "Tag": tag,
-                    "imap.tag": tag,
-                    "Status": word,
-                    "imap.status": word,
-                    "Message": arg,
-                    "imap.message": arg,
-                }
-        return None
-    except Exception:
-        return None
-
-
-def decodeTelnet(rawPayload):
-    """
-    Decode Telnet IAC (Interpret As Command) negotiation bytes from raw payload.
-    Returns a dict with negotiation options and any printable text found,
-    or None if no Telnet IAC bytes are present.
-    """
-    IAC = 0xFF
-    TELNET_COMMANDS = {
-        0xF0: "SE",
-        0xF1: "NOP",
-        0xF2: "Data Mark",
-        0xF3: "Break",
-        0xF4: "Interrupt Process",
-        0xF5: "Abort Output",
-        0xF6: "Are You There",
-        0xF7: "Erase Character",
-        0xF8: "Erase Line",
-        0xF9: "Go Ahead",
-        0xFA: "SB",
-        0xFB: "WILL",
-        0xFC: "WONT",
-        0xFD: "DO",
-        0xFE: "DONT",
-        0xFF: "IAC",
-    }
-    TELNET_OPTIONS = {
-        0: "Binary",
-        1: "Echo",
-        2: "Reconnection",
-        3: "Suppress GA",
-        5: "Status",
-        6: "Timing Mark",
-        24: "Terminal Type",
-        31: "Window Size",
-        32: "Terminal Speed",
-        33: "Remote Flow",
-        34: "Linemode",
-        36: "Environment",
-        39: "New Environment",
-    }
-    try:
-        if IAC not in rawPayload:
-            return None
-        negotiations = []
-        i = 0
-        while i < len(rawPayload):
-            if rawPayload[i] == IAC and i + 1 < len(rawPayload):
-                cmd = rawPayload[i + 1]
-                cmdName = TELNET_COMMANDS.get(cmd, f"0x{cmd:02X}")
-                if cmd in (0xFB, 0xFC, 0xFD, 0xFE) and i + 2 < len(rawPayload):
-                    optByte = rawPayload[i + 2]
-                    optName = TELNET_OPTIONS.get(optByte, f"Option-{optByte}")
-                    negotiations.append(f"{cmdName} {optName}")
-                    i += 3
-                else:
-                    negotiations.append(cmdName)
-                    i += 2
-            else:
-                i += 1
-        printableText = "".join(chr(b) for b in rawPayload if 32 <= b <= 126).strip()
-        result = {
-            "Negotiations": negotiations,
-            "telnet.negotiations": negotiations,
-            "Printable Text": printableText[:200] if printableText else "",
-            "telnet.text": printableText[:200] if printableText else "",
-        }
-        # Scan negotiation packets' printable text for any embedded credentials
-        creds = _extractTelnetCredentialText(printableText)
-        if creds:
-            result["Credentials"] = creds
-        return result
-    except Exception:
-        return None
-
-
-# Compiled patterns for Telnet credential extraction (reused across all calls)
-_TELNET_USER_RE = re.compile(r"(?:login|user(?:name)?)\s*:\s*(\S+)", re.IGNORECASE)
-_TELNET_PASS_RE = re.compile(r"(?:pass(?:w(?:or)?d?)?|pw)\s*:\s*(\S+)", re.IGNORECASE)
-
-
-def _extractTelnetCredentialText(text):
-    """
-    Scan a printable Telnet text snippet for login/password prompt-response patterns
-    (e.g. ``login: alice`` or ``Password: s3cr3t``).
-    Returns a dict of found credential fields, or an empty dict.
-    """
-    if not text:
-        return {}
-    creds = {}
-    userMatch = _TELNET_USER_RE.search(text)
-    passMatch = _TELNET_PASS_RE.search(text)
-    if userMatch:
-        creds["username"] = userMatch.group(1)
-    if passMatch:
-        creds["password"] = passMatch.group(1)
-    return creds
-
-
-def extractTelnetCredentials(rawPayload):
-    """
-    Detect cleartext Telnet login credentials from raw TCP port-23 payloads that
-    do NOT necessarily contain IAC negotiation bytes.  This handles the data-transfer
-    phase of a Telnet session where usernames and passwords are transmitted as plain
-    ASCII lines (line-at-a-time mode) or labelled prompt/response pairs.
-
-    Returns a dict with any found credential fields, or an empty dict.
-    """
-    try:
-        printableText = "".join(chr(b) for b in rawPayload if 32 <= b <= 126).strip()
-        if not printableText:
-            return {}
-        # Check for labelled prompt-response patterns (server echo or combined packet)
-        creds = _extractTelnetCredentialText(printableText)
-        return creds
-    except Exception:
-        return {}
-
-
-def decodeIRC(rawPayload):
-    """
-    Decode IRC protocol messages from raw payload bytes.
-    Parses prefix, command, and parameters per RFC 1459.
-    Returns a dict with the IRC command and parameters, or None if not recognisable.
-    """
-    IRC_COMMANDS = {
-        "NICK",
-        "USER",
-        "JOIN",
-        "PART",
-        "PRIVMSG",
-        "NOTICE",
-        "QUIT",
-        "PING",
-        "PONG",
-        "MODE",
-        "TOPIC",
-        "NAMES",
-        "LIST",
-        "INVITE",
-        "KICK",
-        "WHOIS",
-        "WHO",
-        "WHOWAS",
-        "MOTD",
-        "LUSERS",
-        "VERSION",
-        "STATS",
-        "LINKS",
-        "TIME",
-        "CONNECT",
-        "TRACE",
-        "ADMIN",
-        "INFO",
-        "SERVLIST",
-        "SQUERY",
-        "KILL",
-        "PASS",
-        "OPER",
-        "REHASH",
-        "DIE",
-        "RESTART",
-        "AWAY",
-        "USERHOST",
-        "ISON",
-        "CAP",
-        "AUTHENTICATE",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        messages = []
-        for line in text.replace("\r\n", "\n").split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            prefix = ""
-            if line.startswith(":"):
-                pparts = line.split(" ", 1)
-                prefix = pparts[0][1:]
-                line = pparts[1] if len(pparts) > 1 else ""
-            parts = line.split(" ", 1)
-            command = parts[0].upper()
-            params = parts[1] if len(parts) > 1 else ""
-            if command in IRC_COMMANDS or (len(command) == 3 and command.isdigit()):
-                messages.append(
-                    {"Prefix": prefix, "Command": command, "Parameters": params}
-                )
-        if not messages:
-            return None
-        first = messages[0]
-        return {
-            "Command": first["Command"],
-            "irc.command": first["Command"],
-            "Prefix": first["Prefix"],
-            "irc.prefix": first["Prefix"],
-            "Parameters": first["Parameters"],
-            "irc.params": first["Parameters"],
-            "Message Count": len(messages),
-            "irc.msg_count": len(messages),
-        }
-    except Exception:
-        return None
-
-
-def decodeMTP(rawPayload):
-    """
-    Decode MTP/MMS (Microsoft Media Services over TCP, port 1755) packets.
-    Checks for the MMS command identifier prefix (0x00000001 little-endian).
-    Returns basic MTP/MMS info dict or None if not recognisable.
-    """
-    import struct
-
-    MMS_COMMANDS = {
-        0x00030001: "CONNECT_REQUEST",
-        0x00030002: "CONNECT_RESPONSE",
-        0x00030003: "TRANSPORT_INFO_REQUEST",
-        0x00030004: "TRANSPORT_INFO_RESPONSE",
-        0x00030005: "MEDIA_DETAILS_REQUEST",
-        0x00030006: "PLAY_REQUEST",
-        0x00030007: "STOP",
-        0x00030009: "STREAM_STOPPED",
-        0x0004001B: "HEADER",
-        0x0004001A: "DATA",
-    }
-    try:
-        if len(rawPayload) < 12:
-            return None
-        prefix = struct.unpack_from("<I", rawPayload, 0)[0]
-        if prefix != 0x00000001:
-            return None
-        length = struct.unpack_from("<I", rawPayload, 4)[0]
-        cmdId = struct.unpack_from("<I", rawPayload, 8)[0]
-        cmdName = MMS_COMMANDS.get(cmdId, f"0x{cmdId:08X}")
-        return {
-            "Protocol": "MMS/MTP",
-            "mtp.protocol": "MMS/MTP",
-            "Command ID": f"0x{cmdId:08X}",
-            "mtp.cmd_id": f"0x{cmdId:08X}",
-            "Command": cmdName,
-            "mtp.command": cmdName,
-            "Length": length,
-            "mtp.length": length,
-        }
-    except Exception:
-        return None
-
-
-def decodeLDAP(rawPayload):
-    """
-    Decode basic LDAP message fields from raw payload bytes using ASN.1 BER structure.
-    Extracts message ID and operation type from the outer SEQUENCE.
-    Returns a dict with message ID and operation, or None if the payload does not look like LDAP.
-    """
-    LDAP_OPERATIONS = {
-        0x60: "BindRequest",
-        0x61: "BindResponse",
-        0x62: "UnbindRequest",
-        0x63: "SearchRequest",
-        0x64: "SearchResEntry",
-        0x65: "SearchResDone",
-        0x66: "SearchResRef",
-        0x67: "ModifyRequest",
-        0x68: "ModifyResponse",
-        0x69: "AddRequest",
-        0x6A: "AddResponse",
-        0x6B: "DelRequest",
-        0x6C: "DelResponse",
-        0x6D: "ModDNRequest",
-        0x6E: "ModDNResponse",
-        0x6F: "CompareRequest",
-        0x70: "CompareResponse",
-        0x77: "ExtendedRequest",
-        0x78: "ExtendedResponse",
-        0x79: "IntermediateResponse",
-    }
-    try:
-        if len(rawPayload) < 4:
-            return None
-        if rawPayload[0] != 0x30:
-            return None
-        idx = 1
-        if rawPayload[idx] & 0x80:
-            numBytes = rawPayload[idx] & 0x7F
-            idx += 1 + numBytes
-        else:
-            idx += 1
-        if idx >= len(rawPayload) or rawPayload[idx] != 0x02:
-            return None
-        idxLen = rawPayload[idx + 1]
-        msgId = int.from_bytes(rawPayload[idx + 2 : idx + 2 + idxLen], "big")
-        idx += 2 + idxLen
-        if idx >= len(rawPayload):
-            return None
-        opTag = rawPayload[idx]
-        opName = LDAP_OPERATIONS.get(opTag, f"0x{opTag:02X}")
-        return {
-            "Message ID": msgId,
-            "ldap.msg_id": msgId,
-            "Operation": opName,
-            "ldap.operation": opName,
-        }
-    except Exception:
-        return None
-
-
-def decodeMySQL(rawPayload):
-    """
-    Decode MySQL protocol packets from raw payload bytes.
-    Handles server greeting (handshake), OK, ERR, and client command packets.
-    Returns a dict with packet type and relevant fields, or None if not recognisable.
-    """
-    import struct
-
-    MYSQL_COMMANDS = {
-        0x00: "Sleep",
-        0x01: "Quit",
-        0x02: "Init DB",
-        0x03: "Query",
-        0x04: "Field List",
-        0x05: "Create DB",
-        0x06: "Drop DB",
-        0x07: "Refresh",
-        0x08: "Shutdown",
-        0x09: "Statistics",
-        0x0A: "Process Info",
-        0x0B: "Connect",
-        0x0C: "Process Kill",
-        0x0D: "Debug",
-        0x0E: "Ping",
-        0x0F: "Time",
-        0x10: "Delayed Insert",
-        0x11: "Change User",
-        0x16: "Stmt Prepare",
-        0x17: "Stmt Execute",
-        0x19: "Stmt Close",
-        0x1A: "Stmt Reset",
-        0x1C: "Set Option",
-        0x1D: "Stmt Fetch",
-    }
-    try:
-        if len(rawPayload) < 5:
-            return None
-        pktLen = struct.unpack_from("<I", rawPayload[:4])[0] & 0xFFFFFF
-        seqNum = rawPayload[3]
-        payload = rawPayload[4:]
-        if not payload:
-            return None
-        firstByte = payload[0]
-        if firstByte == 0x0A:
-            versionEnd = payload.find(b"\x00", 1)
-            version = (
-                payload[1:versionEnd].decode(errors="ignore")
-                if versionEnd > 1
-                else "Unknown"
-            )
-            return {
-                "Type": "Server Greeting",
-                "mysql.type": "Server Greeting",
-                "Protocol Version": 10,
-                "mysql.proto_version": 10,
-                "Server Version": version,
-                "mysql.server_version": version,
-                "Sequence": seqNum,
-                "mysql.seq": seqNum,
-            }
-        if firstByte == 0x00:
-            return {
-                "Type": "OK",
-                "mysql.type": "OK",
-                "Sequence": seqNum,
-                "mysql.seq": seqNum,
-            }
-        if firstByte == 0xFF:
-            errCode = (
-                struct.unpack_from("<H", payload, 1)[0] if len(payload) >= 3 else 0
-            )
-            errMsg = payload[9:].decode(errors="ignore") if len(payload) > 9 else ""
-            return {
-                "Type": "Error",
-                "mysql.type": "Error",
-                "Error Code": errCode,
-                "mysql.error_code": errCode,
-                "Error Message": errMsg[:100],
-                "mysql.error_msg": errMsg[:100],
-                "Sequence": seqNum,
-                "mysql.seq": seqNum,
-            }
-        if seqNum == 0 and firstByte in MYSQL_COMMANDS:
-            cmdName = MYSQL_COMMANDS[firstByte]
-            query = (
-                payload[1:].decode(errors="ignore")[:200] if len(payload) > 1 else ""
-            )
-            return {
-                "Type": "Command",
-                "mysql.type": "Command",
-                "Command": cmdName,
-                "mysql.command": cmdName,
-                "Query": query,
-                "mysql.query": query,
-                "Sequence": seqNum,
-                "mysql.seq": seqNum,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodePostgreSQL(rawPayload):
-    """
-    Decode PostgreSQL frontend/backend protocol messages from raw payload bytes.
-    Returns a dict with message type and relevant fields, or None if not recognisable.
-    """
-    import struct
-
-    PG_BACKEND_TYPES = {
-        b"R": "Authentication",
-        b"K": "BackendKeyData",
-        b"2": "BindComplete",
-        b"3": "CloseComplete",
-        b"C": "CommandComplete",
-        b"d": "CopyData",
-        b"c": "CopyDone",
-        b"f": "CopyFail",
-        b"G": "CopyInResponse",
-        b"H": "CopyOutResponse",
-        b"D": "DataRow",
-        b"I": "EmptyQueryResponse",
-        b"E": "ErrorResponse",
-        b"V": "FunctionCallResponse",
-        b"n": "NoData",
-        b"N": "NoticeResponse",
-        b"A": "NotificationResponse",
-        b"t": "ParameterDescription",
-        b"S": "ParameterStatus",
-        b"1": "ParseComplete",
-        b"s": "PortalSuspended",
-        b"Z": "ReadyForQuery",
-        b"T": "RowDescription",
-    }
-    PG_FRONTEND_TYPES = {
-        b"B": "Bind",
-        b"C": "Close",
-        b"d": "CopyData",
-        b"c": "CopyDone",
-        b"f": "CopyFail",
-        b"D": "Describe",
-        b"E": "Execute",
-        b"H": "Flush",
-        b"F": "FunctionCall",
-        b"P": "Parse",
-        b"p": "Password",
-        b"Q": "Query",
-        b"S": "Sync",
-        b"X": "Terminate",
-    }
-    try:
-        if len(rawPayload) < 5:
-            return None
-        firstInt = struct.unpack_from(">I", rawPayload, 0)[0]
-        if firstInt == len(rawPayload) and len(rawPayload) >= 8:
-            protoMajor = struct.unpack_from(">H", rawPayload, 4)[0]
-            protoMinor = struct.unpack_from(">H", rawPayload, 6)[0]
-            return {
-                "Type": "StartupMessage",
-                "pg.type": "StartupMessage",
-                "Protocol Version": f"{protoMajor}.{protoMinor}",
-                "pg.proto_version": f"{protoMajor}.{protoMinor}",
-            }
-        msgType = rawPayload[0:1]
-        if msgType in PG_BACKEND_TYPES:
-            typeName = PG_BACKEND_TYPES[msgType]
-            msgLen = struct.unpack_from(">I", rawPayload, 1)[0]
-            return {
-                "Type": typeName,
-                "pg.type": typeName,
-                "Direction": "Backend",
-                "pg.direction": "Backend",
-                "Message Length": msgLen,
-                "pg.msg_length": msgLen,
-            }
-        if msgType in PG_FRONTEND_TYPES:
-            typeName = PG_FRONTEND_TYPES[msgType]
-            msgLen = struct.unpack_from(">I", rawPayload, 1)[0]
-            body = (
-                rawPayload[5 : 5 + min(msgLen - 4, 200)].decode(errors="ignore")
-                if msgLen > 4
-                else ""
-            )
-            return {
-                "Type": typeName,
-                "pg.type": typeName,
-                "Direction": "Frontend",
-                "pg.direction": "Frontend",
-                "Message Length": msgLen,
-                "pg.msg_length": msgLen,
-                "Body": body,
-                "pg.body": body,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeXMPP(rawPayload):
-    """
-    Decode XMPP (Extensible Messaging and Presence Protocol) XML stream data.
-    Parses stream open tags, message, presence, and IQ stanzas.
-    Returns a dict with the stanza type and attributes, or None if not XMPP.
-    """
-    import re
-
-    try:
-        text = rawPayload.decode(errors="ignore").strip()
-        if not text:
-            return None
-        isXmpp = (
-            text.startswith("<?xml")
-            or "<stream:stream" in text
-            or text.startswith("<message")
-            or text.startswith("<presence")
-            or text.startswith("<iq ")
-            or text.startswith("<iq>")
-            or "<message " in text
-            or "<presence" in text
-        )
-        if not isXmpp:
-            return None
-        stanzaType = "Unknown"
-        if "<stream:stream" in text:
-            stanzaType = "StreamOpen"
-        elif "</stream:stream>" in text:
-            stanzaType = "StreamClose"
-        elif "<message" in text:
-            stanzaType = "Message"
-        elif "<presence" in text:
-            stanzaType = "Presence"
-        elif "<iq " in text or "<iq>" in text:
-            stanzaType = "IQ"
-        toMatch = re.search(r'\bto=["\']([^"\']+)["\']', text)
-        fromMatch = re.search(r'\bfrom=["\']([^"\']+)["\']', text)
-        toAttr = toMatch.group(1) if toMatch else "Unknown"
-        fromAttr = fromMatch.group(1) if fromMatch else "Unknown"
-        return {
-            "Stanza Type": stanzaType,
-            "xmpp.stanza": stanzaType,
-            "To": toAttr,
-            "xmpp.to": toAttr,
-            "From": fromAttr,
-            "xmpp.from": fromAttr,
-        }
-    except Exception:
-        return None
-
-
-def decodeSMB(rawPayload):
-    """
-    Decode SMB (Server Message Block) protocol frames from raw payload bytes.
-    Supports both SMBv1 (\\xFFSMB signature) and SMBv2/3 (\\xFESMB signature).
-    Returns a dict with SMB version, command, status, and flags, or None if not SMB.
-    """
-    import struct
-
-    SMB1_COMMANDS = {
-        0x00: "CREATE_DIRECTORY",
-        0x01: "DELETE_DIRECTORY",
-        0x02: "OPEN",
-        0x03: "CREATE",
-        0x04: "CLOSE",
-        0x05: "FLUSH",
-        0x06: "DELETE",
-        0x07: "RENAME",
-        0x08: "QUERY_INFORMATION",
-        0x09: "SET_INFORMATION",
-        0x0A: "READ",
-        0x0B: "WRITE",
-        0x24: "LOCKING_ANDX",
-        0x25: "TRANSACTION",
-        0x2D: "OPEN_ANDX",
-        0x2E: "READ_ANDX",
-        0x2F: "WRITE_ANDX",
-        0x32: "TRANSACTION2",
-        0x70: "TREE_CONNECT",
-        0x71: "TREE_DISCONNECT",
-        0x72: "NEGOTIATE",
-        0x73: "SESSION_SETUP_ANDX",
-        0x74: "LOGOFF_ANDX",
-        0x75: "TREE_CONNECT_ANDX",
-        0xA0: "NT_TRANSACT",
-        0xA2: "NT_CREATE_ANDX",
-        0xA4: "NT_CANCEL",
-        0xFE: "INVALID",
-        0xFF: "NO_ANDX",
-    }
-    SMB2_COMMANDS = {
-        0x0000: "NEGOTIATE",
-        0x0001: "SESSION_SETUP",
-        0x0002: "LOGOFF",
-        0x0003: "TREE_CONNECT",
-        0x0004: "TREE_DISCONNECT",
-        0x0005: "CREATE",
-        0x0006: "CLOSE",
-        0x0007: "FLUSH",
-        0x0008: "READ",
-        0x0009: "WRITE",
-        0x000A: "LOCK",
-        0x000B: "IOCTL",
-        0x000C: "CANCEL",
-        0x000D: "ECHO",
-        0x000E: "QUERY_DIRECTORY",
-        0x000F: "CHANGE_NOTIFY",
-        0x0010: "QUERY_INFO",
-        0x0011: "SET_INFO",
-        0x0012: "OPLOCK_BREAK",
-    }
-    try:
-        if len(rawPayload) < 8:
-            return None
-        if rawPayload[:4] == b"\xff\x53\x4d\x42":
-            cmd = rawPayload[4]
-            status = struct.unpack_from("<I", rawPayload, 5)[0]
-            flags = rawPayload[9]
-            cmdName = SMB1_COMMANDS.get(cmd, f"0x{cmd:02X}")
-            isResponse = bool(flags & 0x80)
-            return {
-                "Version": "SMBv1",
-                "smb.version": "SMBv1",
-                "Command": cmdName,
-                "smb.command": cmdName,
-                "Status": f"0x{status:08X}",
-                "smb.status": f"0x{status:08X}",
-                "Is Response": isResponse,
-                "smb.is_response": isResponse,
-            }
-        if rawPayload[:4] == b"\xfe\x53\x4d\x42":
-            cmd = struct.unpack_from("<H", rawPayload, 12)[0]
-            flags = struct.unpack_from("<I", rawPayload, 16)[0]
-            status = struct.unpack_from("<I", rawPayload, 8)[0]
-            cmdName = SMB2_COMMANDS.get(cmd, f"0x{cmd:04X}")
-            isResponse = bool(flags & 0x00000001)
-            return {
-                "Version": "SMBv2/v3",
-                "smb.version": "SMBv2/v3",
-                "Command": cmdName,
-                "smb.command": cmdName,
-                "Status": f"0x{status:08X}",
-                "smb.status": f"0x{status:08X}",
-                "Is Response": isResponse,
-                "smb.is_response": isResponse,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeMQTT(rawPayload):
-    """
-    Decode MQTT protocol messages from raw payload bytes.
-    Extracts message type, QoS level, and topic from PUBLISH messages.
-    Returns a dict with MQTT fields, or None if the payload does not look like MQTT.
-    """
-    import struct
-
-    MQTT_TYPES = {
-        1: "CONNECT",
-        2: "CONNACK",
-        3: "PUBLISH",
-        4: "PUBACK",
-        5: "PUBREC",
-        6: "PUBREL",
-        7: "PUBCOMP",
-        8: "SUBSCRIBE",
-        9: "SUBACK",
-        10: "UNSUBSCRIBE",
-        11: "UNSUBACK",
-        12: "PINGREQ",
-        13: "PINGRESP",
-        14: "DISCONNECT",
-    }
-    try:
-        if len(rawPayload) < 2:
-            return None
-        firstByte = rawPayload[0]
-        msgType = (firstByte >> 4) & 0x0F
-        if msgType not in MQTT_TYPES:
-            return None
-        flags = firstByte & 0x0F
-        qos = (flags >> 1) & 0x03
-        dup = bool(flags & 0x08)
-        retain = bool(flags & 0x01)
-        typeName = MQTT_TYPES[msgType]
-        result = {
-            "Message Type": typeName,
-            "mqtt.msg_type": typeName,
-            "QoS": qos,
-            "mqtt.qos": qos,
-            "DUP Flag": dup,
-            "mqtt.dup": dup,
-            "Retain Flag": retain,
-            "mqtt.retain": retain,
-        }
-        if msgType == 3 and len(rawPayload) > 4:
-            idx = 1
-            remainLen = 0
-            shift = 0
-            while idx < len(rawPayload):
-                b = rawPayload[idx]
-                idx += 1
-                remainLen |= (b & 0x7F) << shift
-                shift += 7
-                if not (b & 0x80):
-                    break
-            if idx + 2 <= len(rawPayload):
-                topicLen = struct.unpack_from(">H", rawPayload, idx)[0]
-                topic = rawPayload[idx + 2 : idx + 2 + topicLen].decode(errors="ignore")
-                result["Topic"] = topic
-                result["mqtt.topic"] = topic
-        return result
-    except Exception:
-        return None
-
-
-def decodeRTSP(rawPayload):
-    """
-    Decode RTSP (Real Time Streaming Protocol) requests and responses from raw payload bytes.
-    Similar in structure to HTTP/1.1 text-based protocol.
-    Returns a dict with RTSP method/status and headers, or None if not recognisable as RTSP.
-    """
-    RTSP_METHODS = {
-        "OPTIONS",
-        "DESCRIBE",
-        "ANNOUNCE",
-        "SETUP",
-        "PLAY",
-        "PAUSE",
-        "RECORD",
-        "TEARDOWN",
-        "GET_PARAMETER",
-        "SET_PARAMETER",
-        "REDIRECT",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        normalised = text.replace("\r\n", "\n")
-        headerSection = normalised.split("\n\n")[0]
-        lines = headerSection.split("\n")
-        if not lines:
-            return None
-        firstLine = lines[0].strip()
-        isRtspResponse = firstLine.startswith("RTSP/")
-        isRtspRequest = (
-            firstLine.split(" ")[0].upper() in RTSP_METHODS
-            if " " in firstLine
-            else False
-        )
-        if not isRtspResponse and not isRtspRequest:
-            return None
-        headers = {}
-        for line in lines[1:]:
-            if ": " in line:
-                key, _, val = line.partition(": ")
-                headers[key.strip().lower()] = val.strip()
-        if isRtspRequest:
-            parts = firstLine.split(" ", 2)
-            method = parts[0].upper()
-            url = parts[1] if len(parts) > 1 else "Unknown"
-            rtspVersion = parts[2] if len(parts) > 2 else "Unknown"
-            return {
-                "Type": "Request",
-                "rtsp.type": "Request",
-                "Method": method,
-                "rtsp.method": method,
-                "URL": url,
-                "rtsp.url": url,
-                "RTSP Version": rtspVersion,
-                "rtsp.version": rtspVersion,
-                "CSeq": headers.get("cseq", "Unknown"),
-                "rtsp.cseq": headers.get("cseq", "Unknown"),
-                "Session": headers.get("session", "Unknown"),
-                "rtsp.session": headers.get("session", "Unknown"),
-                "Transport": headers.get("transport", "Unknown"),
-                "rtsp.transport": headers.get("transport", "Unknown"),
-            }
-        else:
-            parts = firstLine.split(" ", 2)
-            rtspVersion = parts[0]
-            statusCode = parts[1] if len(parts) > 1 else "Unknown"
-            statusMsg = parts[2] if len(parts) > 2 else "Unknown"
-            return {
-                "Type": "Response",
-                "rtsp.type": "Response",
-                "RTSP Version": rtspVersion,
-                "rtsp.version": rtspVersion,
-                "Status Code": statusCode,
-                "rtsp.status_code": statusCode,
-                "Status Message": statusMsg,
-                "rtsp.status_msg": statusMsg,
-                "CSeq": headers.get("cseq", "Unknown"),
-                "rtsp.cseq": headers.get("cseq", "Unknown"),
-                "Session": headers.get("session", "Unknown"),
-                "rtsp.session": headers.get("session", "Unknown"),
-                "Content-Type": headers.get("content-type", "Unknown"),
-                "rtsp.content_type": headers.get("content-type", "Unknown"),
-                "Content-Length": headers.get("content-length", "Unknown"),
-                "rtsp.content_length": headers.get("content-length", "Unknown"),
-            }
-    except Exception:
-        return None
-
-
-def decodeTFTP(rawPayload):
-    """
-    Decode TFTP (Trivial File Transfer Protocol) packets from raw payload bytes.
-    TFTP runs over UDP. Extracts opcode and relevant fields per RFC 1350.
-    Returns a dict with opcode type and arguments, or None if not recognisable as TFTP.
-    """
-    import struct
-
-    TFTP_OPCODES = {1: "RRQ", 2: "WRQ", 3: "DATA", 4: "ACK", 5: "ERROR"}
-    TFTP_ERRORS = {
-        0: "Not defined",
-        1: "File not found",
-        2: "Access violation",
-        3: "Disk full",
-        4: "Illegal operation",
-        5: "Unknown TID",
-        6: "File already exists",
-        7: "No such user",
-    }
-    try:
-        if len(rawPayload) < 4:
-            return None
-        opcode = struct.unpack_from(">H", rawPayload, 0)[0]
-        if opcode not in TFTP_OPCODES:
-            return None
-        opName = TFTP_OPCODES[opcode]
-        if opcode in (1, 2):
-            rest = rawPayload[2:]
-            nullIdx = rest.find(b"\x00")
-            filename = (
-                rest[:nullIdx].decode(errors="ignore")
-                if nullIdx >= 0
-                else rest.decode(errors="ignore")
-            )
-            modeStart = nullIdx + 1 if nullIdx >= 0 else len(rest)
-            modeEnd = rest.find(b"\x00", modeStart)
-            mode = (
-                rest[modeStart:modeEnd].decode(errors="ignore")
-                if modeEnd > modeStart
-                else "Unknown"
-            )
-            return {
-                "Opcode": opName,
-                "tftp.opcode": opName,
-                "Filename": filename,
-                "tftp.filename": filename,
-                "Mode": mode,
-                "tftp.mode": mode,
-            }
-        if opcode == 3:
-            block = struct.unpack_from(">H", rawPayload, 2)[0]
-            return {
-                "Opcode": opName,
-                "tftp.opcode": opName,
-                "Block Number": block,
-                "tftp.block": block,
-                "Data Length": len(rawPayload) - 4,
-                "tftp.data_len": len(rawPayload) - 4,
-            }
-        if opcode == 4:
-            block = struct.unpack_from(">H", rawPayload, 2)[0]
-            return {
-                "Opcode": opName,
-                "tftp.opcode": opName,
-                "Block Number": block,
-                "tftp.block": block,
-            }
-        if opcode == 5:
-            errCode = struct.unpack_from(">H", rawPayload, 2)[0]
-            errMsg = rawPayload[4:].rstrip(b"\x00").decode(errors="ignore")
-            errDesc = TFTP_ERRORS.get(errCode, f"Error {errCode}")
-            return {
-                "Opcode": opName,
-                "tftp.opcode": opName,
-                "Error Code": errCode,
-                "tftp.error_code": errCode,
-                "Error Description": errDesc,
-                "tftp.error_desc": errDesc,
-                "Error Message": errMsg,
-                "tftp.error_msg": errMsg,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeBGP(rawPayload):
-    """
-    Decode BGP (Border Gateway Protocol) messages from raw payload bytes.
-    BGP runs over TCP port 179. Checks for the 16-byte all-0xFF marker.
-    Returns a dict with BGP message type and length, or None if not BGP.
-    """
-    import struct
-
-    BGP_TYPES = {
-        1: "OPEN",
-        2: "UPDATE",
-        3: "NOTIFICATION",
-        4: "KEEPALIVE",
-        5: "ROUTE-REFRESH",
-    }
-    BGP_ERRORS = {
-        1: "Message Header Error",
-        2: "OPEN Message Error",
-        3: "UPDATE Message Error",
-        4: "Hold Timer Expired",
-        5: "Finite State Machine Error",
-        6: "Cease",
-    }
-    try:
-        if len(rawPayload) < 19:
-            return None
-        if rawPayload[:16] != b"\xff" * 16:
-            return None
-        msgLen = struct.unpack_from(">H", rawPayload, 16)[0]
-        msgType = rawPayload[18]
-        typeName = BGP_TYPES.get(msgType, f"Unknown({msgType})")
-        result = {
-            "Message Type": typeName,
-            "bgp.type": typeName,
-            "Message Length": msgLen,
-            "bgp.length": msgLen,
-        }
-        if msgType == 1 and len(rawPayload) >= 29:
-            version = rawPayload[19]
-            asn = struct.unpack_from(">H", rawPayload, 20)[0]
-            holdTime = struct.unpack_from(">H", rawPayload, 22)[0]
-            routerId = ".".join(str(b) for b in rawPayload[24:28])
-            result["BGP Version"] = version
-            result["bgp.version"] = version
-            result["ASN"] = asn
-            result["bgp.asn"] = asn
-            result["Hold Time"] = holdTime
-            result["bgp.hold_time"] = holdTime
-            result["Router ID"] = routerId
-            result["bgp.router_id"] = routerId
-        if msgType == 3 and len(rawPayload) >= 21:
-            errCode = rawPayload[19]
-            errSubcode = rawPayload[20]
-            errName = BGP_ERRORS.get(errCode, f"Error {errCode}")
-            result["Error Code"] = errCode
-            result["bgp.error_code"] = errCode
-            result["Error Name"] = errName
-            result["bgp.error_name"] = errName
-            result["Error Subcode"] = errSubcode
-            result["bgp.error_subcode"] = errSubcode
-        return result
-    except Exception:
-        return None
-
-
-def decodeHTTP2(rawPayload):
-    """
-    Decode HTTP/2 frames from raw payload bytes.
-    Detects the HTTP/2 connection preface and binary frame headers (RFC 7540).
-    Returns a dict with HTTP/2 frame info, or None if not HTTP/2.
-    """
-    import struct
-
-    HTTP2_FRAME_TYPES = {
-        0x0: "DATA",
-        0x1: "HEADERS",
-        0x2: "PRIORITY",
-        0x3: "RST_STREAM",
-        0x4: "SETTINGS",
-        0x5: "PUSH_PROMISE",
-        0x6: "PING",
-        0x7: "GOAWAY",
-        0x8: "WINDOW_UPDATE",
-        0x9: "CONTINUATION",
-    }
-    try:
-        if len(rawPayload) < 9:
-            return None
-        hasPreface = rawPayload.startswith(HTTP2_PREFACE_BYTES)
-        offset = len(HTTP2_PREFACE_BYTES) if hasPreface else 0
-        if offset + 9 > len(rawPayload):
-            if hasPreface:
-                return {
-                    "Connection Preface": True,
-                    "http2.preface": True,
-                    "Frame Type": "N/A",
-                    "http2.frame_type": "N/A",
-                }
-            return None
-        frameLen = struct.unpack_from(">I", b"\x00" + rawPayload[offset : offset + 3])[
-            0
-        ]
-        frameType = rawPayload[offset + 3]
-        frameFlags = rawPayload[offset + 4]
-        streamId = struct.unpack_from(">I", rawPayload, offset + 5)[0] & 0x7FFFFFFF
-        # Tight sanity checks to avoid treating random encrypted bytes as HTTP/2.
-        if frameLen > 16384:
-            return None
-        # SETTINGS, PING and GOAWAY are connection-level frames and must use stream 0.
-        if frameType in (0x4, 0x6, 0x7) and streamId != 0:
-            return None
-        # DATA/HEADERS/PUSH_PROMISE/CONTINUATION are stream-level and cannot use 0.
-        if frameType in (0x0, 0x1, 0x5, 0x9) and streamId == 0:
-            return None
-        typeName = HTTP2_FRAME_TYPES.get(frameType, f"0x{frameType:02X}")
-        return {
-            "Connection Preface": hasPreface,
-            "http2.preface": hasPreface,
-            "Frame Type": typeName,
-            "http2.frame_type": typeName,
-            "Frame Length": frameLen,
-            "http2.frame_length": frameLen,
-            "Frame Flags": f"0x{frameFlags:02X}",
-            "http2.frame_flags": f"0x{frameFlags:02X}",
-            "Stream ID": streamId,
-            "http2.stream_id": streamId,
-        }
-    except Exception:
-        return None
-
-
-def decodeSSH(rawPayload, srcPort=None, dstPort=None):
-    """
-    Decode SSH protocol metadata from raw TCP payload bytes.
-    Extracts cleartext identification banners (RFC 4253 section 4.2) and,
-    when present, basic packet framing metadata from binary SSH transport
-    packets without attempting decryption.
-    Returns a dict with SSH fields, or None if not recognisable as SSH traffic.
-    """
-    SSH_MESSAGE_TYPES = {
-        1: "DISCONNECT",
-        2: "IGNORE",
-        3: "UNIMPLEMENTED",
-        4: "DEBUG",
-        5: "SERVICE_REQUEST",
-        6: "SERVICE_ACCEPT",
-        20: "KEXINIT",
-        21: "NEWKEYS",
-        30: "KEXDH_INIT",
-        31: "KEXDH_REPLY",
-        50: "USERAUTH_REQUEST",
-        51: "USERAUTH_FAILURE",
-        52: "USERAUTH_SUCCESS",
-        53: "USERAUTH_BANNER",
-        80: "GLOBAL_REQUEST",
-        81: "REQUEST_SUCCESS",
-        82: "REQUEST_FAILURE",
-        90: "CHANNEL_OPEN",
-        91: "CHANNEL_OPEN_CONFIRMATION",
-        92: "CHANNEL_OPEN_FAILURE",
-        93: "CHANNEL_WINDOW_ADJUST",
-        94: "CHANNEL_DATA",
-        95: "CHANNEL_EXTENDED_DATA",
-        96: "CHANNEL_EOF",
-        97: "CHANNEL_CLOSE",
-        98: "CHANNEL_REQUEST",
-        99: "CHANNEL_SUCCESS",
-        100: "CHANNEL_FAILURE",
-    }
-
-    try:
-        if not rawPayload or len(rawPayload) == 0:
-            return None
-
-        payloadPrefix = rawPayload[:4]
-        isBanner = rawPayload.startswith(b"SSH-")
-
-        # SSH cleartext version exchange line, e.g.:
-        # SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.3\r\n
-        if isBanner:
-            firstLineRaw = rawPayload.split(b"\n", 1)[0].rstrip(b"\r")
-            banner = firstLineRaw.decode(errors="ignore").strip()
-            m = re.match(r"^SSH-(\d+\.\d+)-([^\s]+)(?:\s+(.*))?$", banner)
-
-            direction = "Unknown"
-            if srcPort in (22, 2222):
-                direction = "Server Identification"
-            elif dstPort in (22, 2222):
-                direction = "Client Identification"
-            isSSH = True
-            if not m:
-                return {
-                    "Type": "Identification",
-                    "ssh.type": "Identification",
-                    "Banner": banner,
-                    "ssh.banner": banner,
-                    "Direction": direction,
-                    "ssh.direction": direction,
-                }
-
-            protoVersion = m.group(1)
-            softwareVersion = m.group(2)
-            comments = m.group(3).strip() if m.group(3) else ""
-            isSSH = True
-            result = {
-                "Type": "Identification",
-                "ssh.type": "Identification",
-                "Banner": banner,
-                "ssh.banner": banner,
-                "Protocol Version": protoVersion,
-                "ssh.protocol_version": protoVersion,
-                "Software Version": softwareVersion,
-                "ssh.software_version": softwareVersion,
-                "Direction": direction,
-                "ssh.direction": direction,
-            }
-            if comments:
-                result["Comments"] = comments
-                result["ssh.comments"] = comments
-            return result
-
-        # SSH binary packet framing starts with a uint32 packet_length then
-        # one byte padding_length. This remains visible even when payload data
-        # itself is encrypted.
-        if len(rawPayload) < 6:
-            return None
-
-        packetLength = int.from_bytes(payloadPrefix, byteorder="big", signed=False)
-        if packetLength <= 0 or packetLength > 35000:
-            return None
-
-        paddingLength = int(rawPayload[4])
-        # Sanity checks from RFC 4253: padding >= 4, packet_length >= padding+1
-        if paddingLength < 4 or packetLength < (paddingLength + 1):
-            return None
-
-        # The first byte of packet payload is the SSH message number only when
-        # encryption is not yet active; otherwise it is encrypted/random.
-        msgTypeNum = int(rawPayload[5])
-        msgTypeName = SSH_MESSAGE_TYPES.get(msgTypeNum, f"Unknown({msgTypeNum})")
-        knownClearMessage = msgTypeNum in SSH_MESSAGE_TYPES
-        isSSH = True
-        return {
-            "Type": "Binary Packet",
-            "ssh.type": "Binary Packet",
-            "Packet Length": packetLength,
-            "ssh.packet_length": packetLength,
-            "Padding Length": paddingLength,
-            "ssh.padding_length": paddingLength,
-            "Message Type": msgTypeName,
-            "ssh.msg_type": msgTypeName,
-            "Message Type Number": msgTypeNum,
-            "ssh.msg_type_num": msgTypeNum,
-            "Likely Encrypted": not knownClearMessage,
-            "ssh.likely_encrypted": not knownClearMessage,
-        }
-    except Exception:
-        return None
-
-
-def decodeNNTP(rawPayload):
-    """
-    Decode NNTP (Network News Transfer Protocol) commands and responses.
-    Returns a dict with Type (Command/Response), command/status, and message,
-    or None if the payload is not recognisable as NNTP traffic.
-    """
-    NNTP_COMMANDS = {
-        "ARTICLE",
-        "BODY",
-        "DATE",
-        "GROUP",
-        "HDR",
-        "HEAD",
-        "HELP",
-        "IHAVE",
-        "LAST",
-        "LIST",
-        "LISTGROUP",
-        "MODE",
-        "NEWGROUPS",
-        "NEWNEWS",
-        "NEXT",
-        "OVER",
-        "POST",
-        "QUIT",
-        "READER",
-        "STAT",
-        "AUTHINFO",
-        "COMPRESS",
-    }
-    try:
-        text = rawPayload.decode(errors="ignore")
-        lines = text.replace("\r\n", "\n").split("\n")
-        firstLine = lines[0].strip()
-        if not firstLine:
-            return None
-        parts = firstLine.split(" ", 1)
-        word = parts[0].upper()
-        if word in NNTP_COMMANDS:
-            arg = parts[1].strip() if len(parts) > 1 else ""
-            return {
-                "Type": "Command",
-                "nntp.type": "Command",
-                "Command": word,
-                "nntp.command": word,
-                "Argument": arg,
-                "nntp.argument": arg,
-            }
-        if len(word) == 3 and word.isdigit():
-            message = parts[1].strip() if len(parts) > 1 else ""
-            return {
-                "Type": "Response",
-                "nntp.type": "Response",
-                "Status Code": word,
-                "nntp.status_code": word,
-                "Message": message,
-                "nntp.message": message,
-            }
-        return None
-    except Exception:
-        return None
-
-
-def decodeRADIUS(rawPayload):
-    """
-    Decode RADIUS (Remote Authentication Dial-In User Service) packets from raw payload bytes.
-    Extracts code, identifier, length, and basic attributes.
-    Returns a dict with RADIUS fields, or None if not recognisable as RADIUS.
-    """
-    import struct
-
-    RADIUS_CODES = {
-        1: "Access-Request",
-        2: "Access-Accept",
-        3: "Access-Reject",
-        4: "Accounting-Request",
-        5: "Accounting-Response",
-        11: "Access-Challenge",
-        12: "Status-Server",
-        13: "Status-Client",
-        255: "Reserved",
-    }
-    RADIUS_ATTRIBUTES = {
-        1: "User-Name",
-        2: "User-Password",
-        3: "CHAP-Password",
-        4: "NAS-IP-Address",
-        5: "NAS-Port",
-        6: "Service-Type",
-        7: "Framed-Protocol",
-        8: "Framed-IP-Address",
-        18: "Reply-Message",
-        24: "State",
-        25: "Class",
-        26: "Vendor-Specific",
-        27: "Session-Timeout",
-        28: "Idle-Timeout",
-        30: "Called-Station-Id",
-        31: "Calling-Station-Id",
-        32: "NAS-Identifier",
-        40: "Acct-Status-Type",
-        41: "Acct-Delay-Time",
-        42: "Acct-Input-Octets",
-        43: "Acct-Output-Octets",
-        44: "Acct-Session-Id",
-        61: "NAS-Port-Type",
-        77: "Connect-Info",
-        79: "EAP-Message",
-        80: "Message-Authenticator",
-    }
-    try:
-        if len(rawPayload) < 20:
-            return None
-        code = rawPayload[0]
-        identifier = rawPayload[1]
-        length = struct.unpack_from(">H", rawPayload, 2)[0]
-        if length < 20 or length > len(rawPayload):
-            return None
-        codeName = RADIUS_CODES.get(code, f"Unknown({code})")
-        attributes = []
-        idx = 20
-        while idx + 2 <= length and idx + 2 <= len(rawPayload):
-            attrType = rawPayload[idx]
-            attrLen = rawPayload[idx + 1]
-            if attrLen < 2:
-                break
-            attrValue = rawPayload[idx + 2 : idx + attrLen]
-            attrName = RADIUS_ATTRIBUTES.get(attrType, f"Attr-{attrType}")
-            if attrType == 1:
-                attrValueStr = attrValue.decode(errors="ignore")
-            elif attrType in (4, 8):
-                attrValueStr = (
-                    ".".join(str(b) for b in attrValue)
-                    if len(attrValue) == 4
-                    else attrValue.hex()
-                )
-            elif attrType in (2, 3):
-                attrValueStr = "***"
-            else:
-                attrValueStr = (
-                    attrValue.decode(errors="ignore")
-                    if all(32 <= b <= 126 for b in attrValue)
-                    else attrValue.hex()
-                )
-            attributes.append({"Type": attrName, "Value": attrValueStr})
-            idx += attrLen
-        return {
-            "Code": codeName,
-            "radius.code": codeName,
-            "Identifier": identifier,
-            "radius.id": identifier,
-            "Length": length,
-            "radius.length": length,
-            "Attributes": attributes,
-            "radius.attrs": attributes,
-        }
-    except Exception:
-        return None
-
-
-def decodeWebSocket(rawPayload):
-    """
-    Decode WebSocket frames (RFC 6455) from raw payload bytes.
-    Detects the binary frame header: FIN bit, opcode, mask bit, and payload length.
-    Also detects WebSocket HTTP Upgrade handshake packets.
-    Returns a dict with frame info, or None if not recognisable as WebSocket.
-    """
-    WS_OPCODES = {
-        0x0: "Continuation",
-        0x1: "Text",
-        0x2: "Binary",
-        0x8: "Close",
-        0x9: "Ping",
-        0xA: "Pong",
-    }
-    try:
-        # Detect WebSocket HTTP Upgrade request
-        text = rawPayload.decode(errors="ignore")
-        if "Upgrade: websocket" in text or "upgrade: websocket" in text.lower():
-            normalised = text.replace("\r\n", "\n")
-            lines = normalised.split("\n\n")[0].split("\n")
-            headers = {}
-            for line in lines[1:]:
-                if ": " in line:
-                    k, _, v = line.partition(": ")
-                    headers[k.strip().lower()] = v.strip()
-            return {
-                "Type": "Upgrade",
-                "ws.type": "Upgrade",
-                "Upgrade": headers.get("upgrade", "websocket"),
-                "ws.upgrade": headers.get("upgrade", "websocket"),
-                "Host": headers.get("host", "Unknown"),
-                "ws.host": headers.get("host", "Unknown"),
-                "Sec-WebSocket-Key": headers.get("sec-websocket-key", "Unknown"),
-                "ws.key": headers.get("sec-websocket-key", "Unknown"),
-                "Sec-WebSocket-Version": headers.get("sec-websocket-version", "Unknown"),
-                "ws.version": headers.get("sec-websocket-version", "Unknown"),
-            }
-        # Detect WebSocket binary frame framing
-        if len(rawPayload) < 2:
-            return None
-        firstByte = rawPayload[0]
-        secondByte = rawPayload[1]
-        fin = bool(firstByte & 0x80)
-        rsv1 = bool(firstByte & 0x40)
-        rsv2 = bool(firstByte & 0x20)
-        rsv3 = bool(firstByte & 0x10)
-        opcode = firstByte & 0x0F
-        # RSV bits should be 0 unless extension negotiated; opcode must be known
-        if (rsv1 or rsv2 or rsv3) and opcode not in WS_OPCODES:
-            return None
-        if opcode not in WS_OPCODES:
-            return None
-        masked = bool(secondByte & 0x80)
-        payloadLen = secondByte & 0x7F
-        opcodeName = WS_OPCODES[opcode]
-        # Determine extended payload length
-        if payloadLen == 126:
-            if len(rawPayload) < 4:
-                return None
-            import struct
-            payloadLen = struct.unpack_from(">H", rawPayload, 2)[0]
-        elif payloadLen == 127:
-            if len(rawPayload) < 10:
-                return None
-            import struct
-            payloadLen = struct.unpack_from(">Q", rawPayload, 2)[0]
-        return {
-            "Type": "Frame",
-            "ws.type": "Frame",
-            "Opcode": opcodeName,
-            "ws.opcode": opcodeName,
-            "FIN": fin,
-            "ws.fin": fin,
-            "Masked": masked,
-            "ws.masked": masked,
-            "ws.payload_len": payloadLen,
-        }
-    except Exception:
-        return None
-
-
-def decodeNFS(rawPayload):
-    """
-    Decode NFS/RPC (Sun RPC) packets from raw payload bytes.
-    NFS runs over TCP/UDP port 2049; portmapper uses port 111.
-    Parses the ONC RPC (RFC 5531) header: XID, message type, and for CALL messages
-    the RPC version, program, procedure, and credentials.
-    Returns a dict with RPC/NFS fields, or None if not recognisable.
-    """
-    import struct
-
-    RPC_MSG_TYPES = {0: "Call", 1: "Reply"}
-    NFS_PROCEDURES = {
-        0: "NULL",
-        1: "GETATTR",
-        2: "SETATTR",
-        3: "LOOKUP",
-        4: "ACCESS",
-        5: "READLINK",
-        6: "READ",
-        7: "WRITE",
-        8: "CREATE",
-        9: "MKDIR",
-        10: "SYMLINK",
-        11: "MKNOD",
-        12: "REMOVE",
-        13: "RMDIR",
-        14: "RENAME",
-        15: "LINK",
-        16: "READDIR",
-        17: "READDIRPLUS",
-        18: "FSSTAT",
-        19: "FSINFO",
-        20: "PATHCONF",
-        21: "COMMIT",
-    }
-    PORTMAP_PROCEDURES = {
-        0: "NULL",
-        1: "SET",
-        2: "UNSET",
-        3: "GETPORT",
-        4: "DUMP",
-        5: "CALLIT",
-    }
-    RPC_PROGRAMS = {
-        100000: "Portmapper",
-        100003: "NFS",
-        100005: "Mount",
-        100021: "NLM",
-        100227: "NFS_ACL",
-    }
-    try:
-        if len(rawPayload) < 8:
-            return None
-        # TCP NFS framing: 4-byte record mark (fragment header) may prefix the RPC
-        offset = 0
-        if len(rawPayload) >= 4:
-            recordMark = struct.unpack_from(">I", rawPayload, 0)[0]
-            # High bit set = last fragment; lower 31 bits = fragment length
-            if recordMark & 0x80000000:
-                fragLen = recordMark & 0x7FFFFFFF
-                if fragLen > 0 and fragLen + 4 <= len(rawPayload):
-                    offset = 4
-        if len(rawPayload) < offset + 8:
-            return None
-        xid = struct.unpack_from(">I", rawPayload, offset)[0]
-        msgType = struct.unpack_from(">I", rawPayload, offset + 4)[0]
-        if msgType not in RPC_MSG_TYPES:
-            return None
-        msgTypeName = RPC_MSG_TYPES[msgType]
-        result = {
-            "XID": f"0x{xid:08X}",
-            "rpc.xid": f"0x{xid:08X}",
-            "Message Type": msgTypeName,
-            "rpc.msg_type": msgTypeName,
-        }
-        if msgType == 0:  # Call
-            if len(rawPayload) < offset + 24:
-                return None
-            rpcVersion = struct.unpack_from(">I", rawPayload, offset + 8)[0]
-            program = struct.unpack_from(">I", rawPayload, offset + 12)[0]
-            progVersion = struct.unpack_from(">I", rawPayload, offset + 16)[0]
-            procedure = struct.unpack_from(">I", rawPayload, offset + 20)[0]
-            progName = RPC_PROGRAMS.get(program, f"Prog-{program}")
-            if program == 100003:
-                procName = NFS_PROCEDURES.get(procedure, f"Proc-{procedure}")
-            elif program == 100000:
-                procName = PORTMAP_PROCEDURES.get(procedure, f"Proc-{procedure}")
-            else:
-                procName = f"Proc-{procedure}"
-            result.update({
-                "RPC Version": rpcVersion,
-                "rpc.version": rpcVersion,
-                "Program": progName,
-                "rpc.program": progName,
-                "Program Version": progVersion,
-                "rpc.prog_version": progVersion,
-                "Procedure": procName,
-                "rpc.procedure": procName,
-            })
-        elif msgType == 1:  # Reply
-            if len(rawPayload) < offset + 12:
-                return None
-            replyStatus = struct.unpack_from(">I", rawPayload, offset + 8)[0]
-            statusName = "Accepted" if replyStatus == 0 else "Denied"
-            result["Reply Status"] = statusName
-            result["rpc.reply_status"] = statusName
-        return result
-    except Exception:
-        return None
-
-
-def decodeKerberos(rawPayload):
-    """
-    Decode Kerberos 5 messages from raw payload bytes using ASN.1 BER/DER structure.
-    Kerberos runs over TCP/UDP port 88. Extracts the message type tag.
-    For AS-REQ messages also attempts to extract the client principal name.
-    Returns a dict with Kerberos message type info, or None if not recognisable.
-    """
-    KRB5_MSG_TYPES = {
-        0x6A: "AS-REQ",       # [APPLICATION 10]
-        0x6B: "AS-REP",       # [APPLICATION 11]
-        0x6C: "TGS-REQ",      # [APPLICATION 12]
-        0x6D: "TGS-REP",      # [APPLICATION 13]
-        0x6E: "AP-REQ",       # [APPLICATION 14]
-        0x6F: "AP-REP",       # [APPLICATION 15]
-        0x74: "KRB-ERROR",    # [APPLICATION 30]
-        0x79: "KRB-PRIV",     # [APPLICATION 25]
-        0x7A: "KRB-CRED",     # [APPLICATION 26]
-    }
-    try:
-        payload = rawPayload
-        # TCP Kerberos may be prefixed by a 4-byte big-endian length
-        if len(payload) < 2:
-            return None
-        import struct
-        if len(payload) >= 4:
-            tcpLen = struct.unpack_from(">I", payload, 0)[0]
-            if tcpLen + 4 == len(payload) and tcpLen > 0:
-                payload = payload[4:]
-        if len(payload) < 2:
-            return None
-        # ASN.1 application tag for Kerberos messages
-        tag = payload[0]
-        if tag not in KRB5_MSG_TYPES:
-            return None
-        msgTypeName = KRB5_MSG_TYPES[tag]
-        result = {
-            "Message Type": msgTypeName,
-            "krb5.msg_type": msgTypeName,
-        }
-        # For AS-REQ (0x6A), attempt to extract pvno (protocol version)
-        # ASN.1 structure: [APP tag] length SEQUENCE { pvno INTEGER, ... }
-        try:
-            idx = 1
-            # skip outer tag length
-            if payload[idx] & 0x80:
-                numBytes = payload[idx] & 0x7F
-                idx += 1 + numBytes
-            else:
-                idx += 1
-            # expect SEQUENCE (0x30)
-            if idx < len(payload) and payload[idx] == 0x30:
-                idx += 1
-                if payload[idx] & 0x80:
-                    numBytes = payload[idx] & 0x7F
-                    idx += 1 + numBytes
-                else:
-                    idx += 1
-                # expect [0] pvno context
-                if idx < len(payload) and payload[idx] == 0xA0:
-                    idx += 1
-                    if payload[idx] & 0x80:
-                        numBytes = payload[idx] & 0x7F
-                        idx += 1 + numBytes
-                    else:
-                        idx += 1
-                    # INTEGER
-                    if idx + 2 < len(payload) and payload[idx] == 0x02:
-                        pvnoLen = payload[idx + 1]
-                        pvno = int.from_bytes(payload[idx + 2: idx + 2 + pvnoLen], "big")
-                        result["Protocol Version"] = pvno
-                        result["krb5.pvno"] = pvno
-        except Exception:
-            pass
-        return result
-    except Exception:
-        return None
-
-
-def decodeWanLinkProtocols(p):
-    """
-    Detect and decode WAN/link-control protocols from available scapy layers.
-    Supports ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP, LCP, LAP, and NCP.
-    Returns a dict with both display-friendly keys and dot-notation keys, or None
-    when no requested protocol indicators are present.
-    """
-    try:
-        layerNames = [
-            getattr(layer, "__name__", str(layer)).lower() for layer in p.layers()
-        ]
-    except Exception:
-        layerNames = []
-
-    if not layerNames:
-        return None
-
-    def hasLayerName(*names):
-        return any(
-            layerName == name or layerName.startswith(name + "_")
-            for layerName in layerNames
-            for name in names
-        )
-
-    detectedProtocols = []
-
-    def mark(protoName, present):
-        if present and protoName not in detectedProtocols:
-            detectedProtocols.append(protoName)
-
-    mark("ATM", hasLayerName("atm", "atmad", "atmmeta"))
-    mark("ATM", hasLayerName("clip", "aal5", "pppoatm", "pppoa"))
-    mark("Token Ring", hasLayerName("tokenring", "dot5"))
-    mark("Frame Relay", hasLayerName("framerelay", "frame_relay"))
-    mark("SDLC", hasLayerName("sdlc"))
-    mark("HDLC", hasLayerName("hdlc"))
-    mark("SLIP", hasLayerName("slip"))
-    mark("PPP", hasLayerName("ppp", "pppoe"))
-    mark("LCP", hasLayerName("lcp", "ppp_lcp"))
-    mark("LAP", hasLayerName("lap", "lapb", "lapd"))
-    mark("NCP", hasLayerName("ncp", "ipcp", "ipv6cp", "ppp_ncp"))
-
-    # PPP protocol field can reveal LCP/NCP even when sublayers are not decoded.
-    pppProtocolHex = "N/A"
-    pppProtocolName = "Unknown"
-    if p.haslayer("PPP"):
-        try:
-            pppProtoVal = int(p["PPP"].proto)
-            pppProtocolHex = f"0x{pppProtoVal:04x}"
-            pppProtocolMap = {
-                0x0021: "IPv4",
-                0x0057: "IPv6",
-                0x8021: "IPCP (NCP)",
-                0x8057: "IPv6CP (NCP)",
-                0x80FD: "CCP (NCP)",
-                0xC021: "LCP",
-                0xC023: "PAP (LCP Auth)",
-                0xC223: "CHAP (LCP Auth)",
-            }
-            pppProtocolName = pppProtocolMap.get(pppProtoVal, f"0x{pppProtoVal:04x}")
-            if pppProtoVal in (0xC021, 0xC023, 0xC223):
-                mark("LCP", True)
-            if pppProtoVal in (0x8021, 0x8057, 0x80FD):
-                mark("NCP", True)
-        except Exception:
-            pass
-
-    if not detectedProtocols:
-        return None
-
-    result = {
-        "Detected Protocols": detectedProtocols,
-        "wan.detected": detectedProtocols,
-        "Layer Names": layerNames,
-        "wan.layers": layerNames,
-        "Primary WAN Protocol": detectedProtocols[0],
-        "wan.primary": detectedProtocols[0],
-        "link.proto": detectedProtocols[0].lower().replace(" ", "_"),
-    }
-
-    if pppProtocolHex != "N/A":
-        result["PPP Protocol Field"] = f"{pppProtocolHex} ({pppProtocolName})"
-        result["ppp.proto_field"] = f"{pppProtocolHex} ({pppProtocolName})"
-
-    if hasLayerName("clip"):
-        result["ATM Encapsulation"] = "Classical IP over ATM (CLIP)"
-        result["atm.encapsulation"] = "Classical IP over ATM (CLIP)"
-    elif hasLayerName("pppoatm", "pppoa"):
-        result["ATM Encapsulation"] = "PPP over ATM (PPPoA)"
-        result["atm.encapsulation"] = "PPP over ATM (PPPoA)"
-    elif hasLayerName("aal5"):
-        result["ATM Encapsulation"] = "ATM AAL5"
-        result["atm.encapsulation"] = "ATM AAL5"
-
-    for proto in detectedProtocols:
-        protoKey = proto.lower().replace(" ", "_")
-        result[f"wan.proto.{protoKey}"] = proto
-
-    return result
-
-
-SIGTRAN_PORT_PROTOCOLS = {
+SCTP_PORT_PROTOCOLS = {
     2904: "M2UA",
     2905: "M3UA",
     2906: "SUA",
     3565: "M2PA",
     9900: "IUA",
-}
-
-SCTP_PORT_PROTOCOLS = {
-    **SIGTRAN_PORT_PROTOCOLS,
     2944: "H.248/MEGACO",
     3868: "Diameter",
     3869: "Diameter",
 }
-
-SCTP_CHUNK_TYPE_NAMES = {
-    0: "DATA",
-    1: "INIT",
-    2: "INIT ACK",
-    3: "SACK",
-    4: "HEARTBEAT",
-    5: "HEARTBEAT ACK",
-    6: "ABORT",
-    7: "SHUTDOWN",
-    8: "SHUTDOWN ACK",
-    9: "ERROR",
-    10: "COOKIE ECHO",
-    11: "COOKIE ACK",
-    12: "ECNE",
-    13: "CWR",
-    14: "SHUTDOWN COMPLETE",
-}
-
-M3UA_MESSAGE_CLASS_NAMES = {
-    0: "Transfer Messages",
-    1: "SS7 Signalling Network Management",
-    2: "ASP State Maintenance",
-    3: "ASP Traffic Maintenance",
-    4: "Routing Key Management",
-    5: "ASP Interface Management",
-    6: "Error Messages",
-    7: "Reserved",
-    8: "Network Appearance Management",
-}
-
-
-def _decodeSctpChunks(chunkBytes):
-    chunks = []
-    firstDataPayload = None
-    offset = 0
-
-    while offset + 4 <= len(chunkBytes):
-        chunkType = int(chunkBytes[offset])
-        chunkFlags = int(chunkBytes[offset + 1])
-        chunkLength = int.from_bytes(chunkBytes[offset + 2 : offset + 4], "big")
-        if chunkLength < 4 or offset + chunkLength > len(chunkBytes):
-            break
-
-        chunkPayload = chunkBytes[offset + 4 : offset + chunkLength]
-        chunkName = SCTP_CHUNK_TYPE_NAMES.get(chunkType, f"Type {chunkType}")
-        chunkInfo = {
-            "sctp.chunk.type": chunkType,
-            "sctp.chunk.flags": chunkFlags,
-            "sctp.chunk.length": chunkLength,
-            "sctp.chunk.type_name": chunkName,
-            "sctp.chunk.payload.len": len(chunkPayload),
-        }
-        if chunkPayload:
-            preview = chunkPayload[:32].hex()
-            chunkInfo["sctp.chunk.payload.preview"] = preview
-        chunks.append(chunkInfo)
-        if chunkType == 0 and firstDataPayload is None:
-            firstDataPayload = chunkPayload
-
-        offset += (chunkLength + 3) & ~3
-
-    return chunks, firstDataPayload
-
-
-def decodeSctpPacket(p):
-    """
-    Decode SCTP transport headers and rudimentary SIGTRAN/M3UA metadata.
-    Returns a dict with SCTP header fields and, when present, a nested SIGTRAN section.
-    """
-
-    sctpLayer = None
-    try:
-        if p.haslayer("SCTP"):
-            sctpLayer = p["SCTP"]
-    except Exception:
-        sctpLayer = None
-
-    try:
-        if sctpLayer is not None:
-            sctpBytes = bytes(sctpLayer)
-        else:
-            sctpBytes = bytes(p["IP"].payload)
-    except Exception:
-        return None
-
-    if len(sctpBytes) < 12:
-        return None
-
-    try:
-        srcPort = int(getattr(sctpLayer, "sport", int.from_bytes(sctpBytes[0:2], "big")))
-    except Exception:
-        srcPort = int.from_bytes(sctpBytes[0:2], "big")
-    try:
-        dstPort = int(getattr(sctpLayer, "dport", int.from_bytes(sctpBytes[2:4], "big")))
-    except Exception:
-        dstPort = int.from_bytes(sctpBytes[2:4], "big")
-
-    verificationTag = int.from_bytes(sctpBytes[4:8], "big")
-    checksum = f"0x{sctpBytes[8:12].hex()}"
-    chunkBytes = sctpBytes[12:]
-    chunks, firstDataPayload = _decodeSctpChunks(chunkBytes)
-
-    sigtranProto = SIGTRAN_PORT_PROTOCOLS.get(srcPort) or SIGTRAN_PORT_PROTOCOLS.get(dstPort)
-    if sigtranProto is None and firstDataPayload and len(firstDataPayload) >= 8 and firstDataPayload[0] == 1:
-        sigtranProto = "M3UA"
-
-    sigtranSection = None
-    if sigtranProto is not None:
-        sigtranSection = {
-            "sigtran.proto": sigtranProto,
-            "sigtran.signaling": "SS7 over SCTP" if sigtranProto in ("M2UA", "M3UA", "SUA", "M2PA", "IUA") else "SCTP adaptation",
-        }
-        if sigtranProto == "M3UA" and firstDataPayload and len(firstDataPayload) >= 8 and firstDataPayload[0] == 1:
-            messageClass = int(firstDataPayload[2])
-            messageType = int(firstDataPayload[3])
-            messageLength = int.from_bytes(firstDataPayload[4:8], "big")
-            sigtranSection.update(
-                {
-                    "sigtran.version": int(firstDataPayload[0]),
-                    "sigtran.reserved": int(firstDataPayload[1]),
-                    "sigtran.message.class": messageClass,
-                    "sigtran.message.type": messageType,
-                    "sigtran.length": messageLength,
-                    "sigtran.message.class_name": M3UA_MESSAGE_CLASS_NAMES.get(messageClass, f"Class {messageClass}"),
-                }
-            )
-            if len(firstDataPayload) > 8:
-                preview = firstDataPayload[8 : min(len(firstDataPayload), 40)].hex()
-                sigtranSection["sigtran.payload.preview"] = preview
-                sigtranSection["sigtran.payload.len"] = len(firstDataPayload) - 8
-        elif firstDataPayload:
-            preview = firstDataPayload[:32].hex()
-            sigtranSection["sigtran.payload.len"] = len(firstDataPayload)
-            sigtranSection["sigtran.payload.preview"] = preview
-
-    section = {
-        "sctp.src.port": srcPort,
-        "sctp.dst.port": dstPort,
-        "sctp.vtag": verificationTag,
-        "sctp.chksum": checksum,
-        "sctp.chunk.count": len(chunks),
-        "sctp.chunks": [chunk["sctp.chunk.type_name"] for chunk in chunks],
-        "wire.len": len(sctpBytes),
-        "transport.len": len(sctpBytes),
-        "transport.proto": "SCTP",
-    }
-    if chunks:
-        section["sctp.chunk.details"] = chunks
-    if sigtranSection is not None:
-        section["SIGTRAN"] = sigtranSection
-
-    return section
 
 
 def isSctpPacket(p):
@@ -4680,111 +1871,6 @@ def _inferSctpApplicationProtocol(data, srcPort, dstPort):
     return "SCTP"
 
 
-def decodeAddressResolutionPacket(p):
-    """
-    Decode ARP/RARP packet fields from a scapy packet.
-    Returns a tuple of (protocolName, sectionDict, srcIp, dstIp) where protocolName
-    is "ARP" or "RARP". Returns None when ARP layer data is unavailable.
-    """
-    arpClass = getattr(scapy, "ARP", None)
-    hasArpLayer = bool(arpClass and p.haslayer(arpClass)) or p.haslayer("ARP")
-    if not hasArpLayer:
-        return None
-
-    arpLayer = p[arpClass] if arpClass and p.haslayer(arpClass) else p["ARP"]
-
-    opMap = {
-        1: "Request",
-        2: "Reply",
-        3: "RARP Request",
-        4: "RARP Reply",
-        8: "InARP Request",
-        9: "InARP Reply",
-    }
-
-    try:
-        opCode = int(getattr(arpLayer, "op", 0))
-    except Exception:
-        opCode = 0
-    opLabel = opMap.get(opCode, f"Opcode {opCode}")
-
-    etherType = None
-    if p.haslayer("Ether"):
-        try:
-            etherType = int(p["Ether"].type)
-        except Exception:
-            etherType = None
-
-    isRarp = opCode in (3, 4) or etherType == 0x8035
-    protocolName = "RARP" if isRarp else "ARP"
-
-    srcIp = str(getattr(arpLayer, "psrc", "0.0.0.0") or "0.0.0.0")
-    dstIp = str(getattr(arpLayer, "pdst", "0.0.0.0") or "0.0.0.0")
-    srcMac = str(getattr(arpLayer, "hwsrc", "N/A") or "N/A")
-    dstMac = str(getattr(arpLayer, "hwdst", "N/A") or "N/A")
-
-    hwTypeVal = int(getattr(arpLayer, "hwtype", 0) or 0)
-    protoTypeVal = int(getattr(arpLayer, "ptype", 0) or 0)
-    hwSizeVal = int(getattr(arpLayer, "hwlen", 0) or 0)
-    protoSizeVal = int(getattr(arpLayer, "plen", 0) or 0)
-
-    section = {
-        "Operation": opLabel,
-        "arp.op": opLabel,
-        "rarp.op": opLabel,
-        "link.rarp": opLabel,
-        "link.arp.op": opLabel,
-        "Opcode": opCode,
-        "arp.opcode": opCode,
-        "rarp.opcode": opCode,
-        "link.arp.opcode": opCode,
-        "link.rarp.opcode": opCode,
-        "Sender MAC": srcMac,
-        "arp.src.mac": srcMac,
-        "rarp.src.mac": srcMac,
-        "link.arp.src.mac": srcMac,
-        "link.rarp.src.mac": srcMac,
-        "Target MAC": dstMac,
-        "arp.dst.mac": dstMac,
-        "rarp.dst.mac": dstMac,
-        "link.arp.dst.mac": dstMac,
-        "link.rarp.dst.mac": dstMac,
-        "Sender IP": srcIp,
-        "arp.src.ip": srcIp,
-        "rarp.src.ip": srcIp,
-        "link.arp.src.ip": srcIp,
-        "link.rarp.src.ip": srcIp,
-        "Target IP": dstIp,
-        "arp.dst.ip": dstIp,
-        "rarp.dst.ip": dstIp,
-        "link.arp.dst.ip": dstIp,
-        "link.rarp.dst.ip": dstIp,
-        "Hardware Type": hwTypeVal,
-        "arp.hw.type": hwTypeVal,
-        "link.arp.hw.type": hwTypeVal,
-        "rarp.hw.type": hwTypeVal,
-        "link.rarp.hw.type": hwTypeVal,
-        "Protocol Type": f"0x{protoTypeVal:04x}",
-        "arp.proto.type": f"0x{protoTypeVal:04x}",
-        "link.arp.proto.type": f"0x{protoTypeVal:04x}",
-        "rarp.proto.type": f"0x{protoTypeVal:04x}",
-        "link.rarp.proto.type": f"0x{protoTypeVal:04x}",
-        "Hardware Size": hwSizeVal,
-        "arp.hw.size": hwSizeVal,
-        "link.arp.hw.size": hwSizeVal,
-        "rarp.hw.size": hwSizeVal,
-        "link.rarp.hw.size": hwSizeVal,
-        "Protocol Size": protoSizeVal,
-        "arp.proto.size": protoSizeVal,
-        "link.arp.proto.size": protoSizeVal,
-        "rarp.proto.size": protoSizeVal,
-        "link.rarp.proto.size": protoSizeVal,
-        "link.proto": "ARP" if not isRarp else "RARP",
-    }
-
-    return protocolName, section, srcIp, dstIp
-
-
 def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     """
     Process a single scapy packet: extract TCP, UDP, or ICMP payload, write the raw
@@ -4821,11 +1907,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
     dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
     isSSH = False
-    wanLinkSection = decodeWanLinkProtocols(p)
+    wanLinkSection = dec_wan_link.decodeWanLinkProtocols(p)
 
     # Decode ARP/RARP packets that do not carry an IP layer.
     if not p.haslayer("IP"):
-        arpDecoded = decodeAddressResolutionPacket(p)
+        arpDecoded = dec_address_resolution.decodeAddressResolutionPacket(p)
         if arpDecoded is not None:
             protocolName, arpSection, srcIp, dstIp = arpDecoded
             arpClass = getattr(scapy, "ARP", None)
@@ -5009,8 +2095,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         else:
             initialDstPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
         dstPortStr = str(initialDstPort if initialDstPort is not None else dstPort)
-        #dstPort = streamStabilzeProtocol(streamKey, dstPort)
-        #srcPort = streamStabilzeProtocol(streamKey, srcPort)
     elif isUdp:
         rawPayload = p["UDP"].payload.original
         srcPort = p["UDP"].sport
@@ -5146,16 +2230,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 }
                 # Decode SIP on TCP ports 5060/5061
                 if streamLabelPort in (5060, 5061) or srcPort in (5060, 5061):
-                    sipSection = decodeSIP(rawPayload)
+                    sipSection = dec_sip.decodeSIP(rawPayload)
                     if sipSection is not None:
                         transportSection["SIP"] = sipSection
                 # Decode SNMP on TCP port 161/162 (less common but valid)
                 if streamLabelPort in (161, 162) or srcPort in (161, 162):
-                    snmpSection = decodeSNMP(p)
+                    snmpSection = dec_snmp.decodeSNMP(p)
                     if snmpSection is not None:
                         transportSection["SNMP"] = snmpSection
                 # Decode HTTP on any TCP port — decodeHTTP() returns None for non-HTTP payloads
-                httpSection = decodeHTTP(rawPayload)
+                httpSection = dec_http.decodeHTTP(rawPayload)
                 if httpSection is not None:
                     transportSection["HTTP"] = httpSection
                 # Decode HTTP/2 only for streams that have presented the client
@@ -5171,36 +2255,36 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         shouldDecodeHttp2 = streamKey in http2DetectedStreams
 
                 if shouldDecodeHttp2:
-                    http2Section = decodeHTTP2(rawPayload)
+                    http2Section = dec_http2.decodeHTTP2(rawPayload)
                     if http2Section is not None:
                         transportSection["HTTP2"] = http2Section
                 # Decode FTP on TCP ports 20/21
                 if streamLabelPort in (20, 21) or srcPort in (20, 21):
-                    ftpSection = decodeFTP(rawPayload)
+                    ftpSection = dec_ftp.decodeFTP(rawPayload)
                     if ftpSection is not None:
                         transportSection["FTP"] = ftpSection
                 # Decode SMTP on TCP ports 25/587/465
                 if streamLabelPort in (25, 587, 465) or srcPort in (25, 587, 465):
-                    smtpSection = decodeSMTP(rawPayload)
+                    smtpSection = dec_smtp.decodeSMTP(rawPayload)
                     if smtpSection is not None:
                         transportSection["SMTP"] = smtpSection
                 # Decode POP3/POP on TCP ports 110/995
                 if streamLabelPort in (110, 995) or srcPort in (110, 995):
-                    pop3Section = decodePOP3(rawPayload)
+                    pop3Section = dec_pop3.decodePOP3(rawPayload)
                     if pop3Section is not None:
                         transportSection["POP3"] = pop3Section
                 # Decode IMAP/IMAP4 on TCP ports 143/993
                 if streamLabelPort in (143, 993) or srcPort in (143, 993):
-                    imapSection = decodeIMAP(rawPayload)
+                    imapSection = dec_imap.decodeIMAP(rawPayload)
                     if imapSection is not None:
                         transportSection["IMAP"] = imapSection
                 # Decode Telnet on TCP port 23
                 if streamLabelPort == 23 or srcPort == 23:
-                    telnetSection = decodeTelnet(rawPayload)
+                    telnetSection = dec_telnet.decodeTelnet(rawPayload)
                     if telnetSection is not None:
                         transportSection["Telnet"] = telnetSection
                     # Also scan non-IAC data packets for cleartext credentials
-                    telnetCreds = extractTelnetCredentials(rawPayload)
+                    telnetCreds = dec_telnet.extractTelnetCredentials(rawPayload)
                     if telnetCreds:
                         if "Telnet" not in transportSection:
                             transportSection["Telnet"] = {}
@@ -5209,57 +2293,57 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         )
                 # Decode IRC on TCP ports 6667/6668/6669
                 if streamLabelPort in (6667, 6668, 6669) or srcPort in (6667, 6668, 6669):
-                    ircSection = decodeIRC(rawPayload)
+                    ircSection = dec_irc.decodeIRC(rawPayload)
                     if ircSection is not None:
                         transportSection["IRC"] = ircSection
                 # Decode MTP/MMS on TCP port 1755
                 if streamLabelPort == 1755 or srcPort == 1755:
-                    mtpSection = decodeMTP(rawPayload)
+                    mtpSection = dec_mtp.decodeMTP(rawPayload)
                     if mtpSection is not None:
                         transportSection["MTP"] = mtpSection
                 # Decode LDAP on TCP ports 389/636
                 if streamLabelPort in (389, 636) or srcPort in (389, 636):
-                    ldapSection = decodeLDAP(rawPayload)
+                    ldapSection = dec_ldap.decodeLDAP(rawPayload)
                     if ldapSection is not None:
                         transportSection["LDAP"] = ldapSection
                 # Decode MySQL on TCP port 3306
                 if streamLabelPort == 3306 or srcPort == 3306:
-                    mysqlSection = decodeMySQL(rawPayload)
+                    mysqlSection = dec_mysql.decodeMySQL(rawPayload)
                     if mysqlSection is not None:
                         transportSection["MySQL"] = mysqlSection
                 # Decode PostgreSQL on TCP port 5432
                 if streamLabelPort == 5432 or srcPort == 5432:
-                    pgSection = decodePostgreSQL(rawPayload)
+                    pgSection = dec_postgresql.decodePostgreSQL(rawPayload)
                     if pgSection is not None:
                         transportSection["PostgreSQL"] = pgSection
                 # Decode XMPP on TCP ports 5222/5223
                 if streamLabelPort in (5222, 5223) or srcPort in (5222, 5223):
-                    xmppSection = decodeXMPP(rawPayload)
+                    xmppSection = dec_xmpp.decodeXMPP(rawPayload)
                     if xmppSection is not None:
                         transportSection["XMPP"] = xmppSection
                 # Decode SMB on TCP ports 139/445
                 if streamLabelPort in (139, 445) or srcPort in (139, 445):
-                    smbSection = decodeSMB(rawPayload)
+                    smbSection = dec_smb.decodeSMB(rawPayload)
                     if smbSection is not None:
                         transportSection["SMB"] = smbSection
                 # Decode MQTT on TCP ports 1883/8883
                 if streamLabelPort in (1883, 8883) or srcPort in (1883, 8883):
-                    mqttSection = decodeMQTT(rawPayload)
+                    mqttSection = dec_mqtt.decodeMQTT(rawPayload)
                     if mqttSection is not None:
                         transportSection["MQTT"] = mqttSection
                 # Decode RTSP on TCP port 554
                 if streamLabelPort == 554 or srcPort == 554:
-                    rtspSection = decodeRTSP(rawPayload)
+                    rtspSection = dec_rtsp.decodeRTSP(rawPayload)
                     if rtspSection is not None:
                         transportSection["RTSP"] = rtspSection
                 # Decode BGP on TCP port 179
                 if streamLabelPort == 179 or srcPort == 179:
-                    bgpSection = decodeBGP(rawPayload)
+                    bgpSection = dec_bgp.decodeBGP(rawPayload)
                     if bgpSection is not None:
                         transportSection["BGP"] = bgpSection
                 # Decode NNTP on TCP port 119
                 if streamLabelPort == 119 or srcPort == 119:
-                    nntpSection = decodeNNTP(rawPayload)
+                    nntpSection = dec_nntp.decodeNNTP(rawPayload)
                     if nntpSection is not None:
                         transportSection["NNTP"] = nntpSection
                 # Decode RADIUS on TCP ports 1812/1813/1645/1646 (RFC 6614 defines RADIUS over TCP)
@@ -5269,22 +2353,22 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     1645,
                     1646,
                 ):
-                    radiusSection = decodeRADIUS(rawPayload)
+                    radiusSection = dec_radius.decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
                 # Decode WebSocket on TCP ports 80/443/8080/8443/8765 (stream-following aware)
                 if streamLabelPort in (80, 443, 8080, 8443, 8765) or srcPort in (80, 443, 8080, 8443, 8765):
-                    wsSection = decodeWebSocket(rawPayload)
+                    wsSection = dec_websocket.decodeWebSocket(rawPayload)
                     if wsSection is not None:
                         transportSection["WebSocket"] = wsSection
                 # Decode NFS/RPC on TCP ports 2049/111
                 if streamLabelPort in (2049, 111) or srcPort in (2049, 111):
-                    nfsSection = decodeNFS(rawPayload)
+                    nfsSection = dec_nfs.decodeNFS(rawPayload)
                     if nfsSection is not None:
                         transportSection["NFS"] = nfsSection
                 # Decode Kerberos on TCP port 88
                 if streamLabelPort == 88 or srcPort == 88:
-                    kerberosSection = decodeKerberos(rawPayload)
+                    kerberosSection = dec_kerberos.decodeKerberos(rawPayload)
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
                 # Decode SSH metadata on TCP ports 22/2222, or when payload starts with SSH banner
@@ -5293,7 +2377,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     or srcPort in (22, 2222) or dstPort in (22, 2222)
                     or rawPayload.startswith(b"SSH-")
                 ):
-                    sshSection = decodeSSH(rawPayload, srcPort, dstPort)
+                    sshSection = dec_ssh.decodeSSH(rawPayload, srcPort, dstPort)
                     if sshSection is not None:
                         transportSection["SSH"] = sshSection
                 protocolKey = "TCP"
@@ -5368,37 +2452,37 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     transportSection["DNS"] = dnsSection
                 # Decode SNMP on UDP ports 161/162
                 if dstPort in (161, 162) or srcPort in (161, 162):
-                    snmpSection = decodeSNMP(p)
+                    snmpSection = dec_snmp.decodeSNMP(p)
                     if snmpSection is not None:
                         transportSection["SNMP"] = snmpSection
                 # Decode DHCP on UDP ports 67/68
                 if dstPort in (67, 68) or srcPort in (67, 68):
-                    dhcpSection = decodeDHCP(p)
+                    dhcpSection = dec_dhcp.decodeDHCP(p)
                     if dhcpSection is not None:
                         transportSection["DHCP"] = dhcpSection
                 # Decode NTP on UDP port 123
                 if dstPort == 123 or srcPort == 123:
-                    ntpSection = decodeNTP(p)
+                    ntpSection = dec_ntp.decodeNTP(p)
                     if ntpSection is not None:
                         transportSection["NTP"] = ntpSection
                 # Decode SIP on UDP ports 5060/5061
                 if dstPort in (5060, 5061) or srcPort in (5060, 5061):
-                    sipSection = decodeSIP(rawPayload)
+                    sipSection = dec_sip.decodeSIP(rawPayload)
                     if sipSection is not None:
                         transportSection["SIP"] = sipSection
                 # Decode TFTP on UDP port 69
                 if dstPort == 69 or srcPort == 69:
-                    tftpSection = decodeTFTP(rawPayload)
+                    tftpSection = dec_tftp.decodeTFTP(rawPayload)
                     if tftpSection is not None:
                         transportSection["TFTP"] = tftpSection
                 # Decode MQTT on UDP ports 1883/8883
                 if dstPort in (1883, 8883) or srcPort in (1883, 8883):
-                    mqttSection = decodeMQTT(rawPayload)
+                    mqttSection = dec_mqtt.decodeMQTT(rawPayload)
                     if mqttSection is not None:
                         transportSection["MQTT"] = mqttSection
                 # Decode LDAP on UDP ports 389/636
                 if dstPort in (389, 636) or srcPort in (389, 636):
-                    ldapSection = decodeLDAP(rawPayload)
+                    ldapSection = dec_ldap.decodeLDAP(rawPayload)
                     if ldapSection is not None:
                         transportSection["LDAP"] = ldapSection
                 # Decode RADIUS on UDP ports 1812/1813/1645/1646
@@ -5408,22 +2492,22 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     1645,
                     1646,
                 ):
-                    radiusSection = decodeRADIUS(rawPayload)
+                    radiusSection = dec_radius.decodeRADIUS(rawPayload)
                     if radiusSection is not None:
                         transportSection["RADIUS"] = radiusSection
                 # Decode NFS/RPC on UDP ports 2049/111
                 if dstPort in (2049, 111) or srcPort in (2049, 111):
-                    nfsSection = decodeNFS(rawPayload)
+                    nfsSection = dec_nfs.decodeNFS(rawPayload)
                     if nfsSection is not None:
                         transportSection["NFS"] = nfsSection
                 # Decode Kerberos on UDP port 88
                 if dstPort == 88 or srcPort == 88:
-                    kerberosSection = decodeKerberos(rawPayload)
+                    kerberosSection = dec_kerberos.decodeKerberos(rawPayload)
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
                 protocolKey = "UDP"
             elif isSctp:
-                sctpSection = decodeSctpPacket(p)
+                sctpSection = dec_sctp.decodeSctpPacket(p)
                 if sctpSection is None:
                     sctpSection = {
                         "sctp.src.port": int(srcPort),
@@ -5496,7 +2580,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 }
                 protocolKey = "ICMP"
             elif isIgmp:
-                transportSection = decodeIGMP(p, rawPayload)
+                transportSection = dec_igmp.decodeIGMP(p, rawPayload)
                 protocolKey = "IGMP"
             else:
                 ipProtoNum = int(getattr(p["IP"], "proto", 0))
