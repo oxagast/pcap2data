@@ -251,7 +251,7 @@ function createSubnetCalculatorPanel({
         nmapScanBtnEl.disabled = !enabled;
         nmapScanBtnEl.title = enabled
             ? "Run nmap -sV on internet hosts/ports seen in this capture"
-            : "Enable this in Settings > General";
+            : "Enable this in Settings > Frontend";
     }
 
     function parsePortNumber(rawValue) {
@@ -462,7 +462,7 @@ function createSubnetCalculatorPanel({
         if (!isNmapServiceScanEnabled()) {
             setPlaceholder(
                 captureTargetsEl,
-                "Enable Conv Subnet internet-host Nmap scans in Settings > General to run service scans.",
+                "Enable Conv Subnet internet-host Nmap scans in Settings > Frontend to run service scans.",
             );
             return;
         }
@@ -1619,7 +1619,7 @@ function createSubnetCalculatorPanel({
         }
 
         if (!isNmapServiceScanEnabled()) {
-            setPanelStatus("Enable Conv Subnet internet-host Nmap scans in Settings > General.", true);
+            setPanelStatus("Enable Conv Subnet internet-host Nmap scans in Settings > Frontend.", true);
             renderCaptureTargets([], getCurrentInspectedIp());
             setPlaceholder(nmapEl, "Nmap scans are disabled in settings.");
             return;

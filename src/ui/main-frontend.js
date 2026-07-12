@@ -1562,7 +1562,7 @@ function syncSettingsFormFromState() {
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
   const backendHttpDataModeEnabledEl = document.getElementById(
-    "settings-debug-backend-http-data-mode-enabled",
+    "settings-backend-http-data-mode-enabled",
   );
   const backendRefreshIntervalMsEl = document.getElementById(
     "settings-debug-backend-refresh-interval-ms",
@@ -1729,7 +1729,7 @@ function readSettingsFormState() {
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
   const backendHttpDataModeEnabledEl = document.getElementById(
-    "settings-debug-backend-http-data-mode-enabled",
+    "settings-backend-http-data-mode-enabled",
   );
   const backendRefreshIntervalMsEl = document.getElementById(
     "settings-debug-backend-refresh-interval-ms",
@@ -15839,7 +15839,7 @@ document
   });
 
 document
-  .getElementById("settings-debug-backend-http-data-mode-enabled")
+  .getElementById("settings-backend-http-data-mode-enabled")
   .addEventListener("change", (event) => {
     writeLogEntry(
       `Settings updated backendHttpDataModeEnabled=${Boolean(event?.target?.checked)}`,

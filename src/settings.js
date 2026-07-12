@@ -34,7 +34,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     debug: {
         ungroupedListVirtualizationEnabled: false,
-        backendHttpDataModeEnabled: false,
+        backendHttpDataModeEnabled: true,
         backendIncrementalRefreshMinIntervalMs: 1500,
         backendIncrementalRefreshMinPackets: 4000,
         frontendIngestThreadingEnabled: true,

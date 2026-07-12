@@ -751,13 +751,13 @@ No keystore entries saved.</pre>
           <div class="settings-workspace-header">Settings</div>
           <div class="settings-subtab-row">
             <button id="settings-subtab-general" class="settings-subtab-btn active">
-              General
-            </button>
-            <button id="settings-subtab-llm" class="settings-subtab-btn">
-              LLM
+              Frontend
             </button>
             <button id="settings-subtab-backend" class="settings-subtab-btn">
               Backend
+            </button>
+            <button id="settings-subtab-llm" class="settings-subtab-btn">
+              LLM
             </button>
             <button id="settings-subtab-debug" class="settings-subtab-btn">
               Debug
@@ -770,7 +770,7 @@ No keystore entries saved.</pre>
           <div id="settings-general-panel" class="settings-subtab-panel">
             <div class="settings-grid">
               <div class="settings-section">
-                <div class="settings-section-title">General Defaults</div>
+                <div class="settings-section-title">Frontend Defaults</div>
 
                 <label for="settings-general-theme">Theme</label>
                 <select id="settings-general-theme"></select>
@@ -811,6 +811,18 @@ No keystore entries saved.</pre>
                 </label>
                 <div class="settings-help-text">
                   Automatically opens About when a newer PacketSnitch release is available.
+                </div>
+
+                <label class="settings-checkbox-row" for="settings-debug-frontend-ingest-threading-enabled">
+                  <input id="settings-debug-frontend-ingest-threading-enabled" type="checkbox" />
+                  Enable frontend ingest threading
+                </label>
+
+                <label for="settings-debug-frontend-ingest-worker-threads">Frontend ingest worker threads</label>
+                <input id="settings-debug-frontend-ingest-worker-threads" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  Offloads snapshot serialization and incremental packet staging to renderer workers. Increase threads
+                  for faster large-capture intake, or disable threading for compatibility testing.
                 </div>
               </div>
             </div>
@@ -881,15 +893,6 @@ No keystore entries saved.</pre>
                   stability.
                 </div>
 
-                <label class="settings-checkbox-row" for="settings-debug-backend-http-data-mode-enabled">
-                  <input id="settings-debug-backend-http-data-mode-enabled" type="checkbox" />
-                  Enable backend HTTP data mode (no backend snapshot files)
-                </label>
-                <div class="settings-help-text">
-                  Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
-                  instead of writing hosts-*.json files to disk.
-                </div>
-
                 <label for="settings-debug-backend-refresh-interval-ms">Incremental refresh interval (ms)</label>
                 <input id="settings-debug-backend-refresh-interval-ms" type="number" min="100" step="100" />
 
@@ -898,18 +901,6 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">
                   Controls how often heavy frontend snapshot refreshes occur while backend processing is in progress.
                   Higher values reduce UI overhead but delay partial data updates.
-                </div>
-
-                <label class="settings-checkbox-row" for="settings-debug-frontend-ingest-threading-enabled">
-                  <input id="settings-debug-frontend-ingest-threading-enabled" type="checkbox" />
-                  Enable frontend ingest threading
-                </label>
-
-                <label for="settings-debug-frontend-ingest-worker-threads">Frontend ingest worker threads</label>
-                <input id="settings-debug-frontend-ingest-worker-threads" type="number" min="1" step="1" />
-                <div class="settings-help-text">
-                  Offloads snapshot serialization and incremental packet staging to renderer workers. Increase threads
-                  for faster large-capture intake, or disable threading for compatibility testing.
                 </div>
 
                 <label for="settings-debug-map-projection-zoom-x">Map projection zoom X</label>
@@ -974,6 +965,15 @@ No keystore entries saved.</pre>
                 </label>
                 <div class="settings-help-text">
                   When enabled, disables TCP server mode and always uses the original per-run backend launch path.
+                </div>
+
+                <label class="settings-checkbox-row" for="settings-backend-http-data-mode-enabled">
+                  <input id="settings-backend-http-data-mode-enabled" type="checkbox" />
+                  Enable backend HTTP data mode (no backend snapshot files)
+                </label>
+                <div class="settings-help-text">
+                  Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
+                  instead of writing hosts-*.json files to disk.
                 </div>
               </div>
             </div>
