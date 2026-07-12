@@ -117,10 +117,130 @@ function buildPacketStub(packet, packetKey, host, hostPacketIndex) {
     };
 }
 
+function isUnknownLikeProtocol(value) {
+    if (value === null || value === undefined) return true;
+    const normalized = String(value).trim().toLowerCase();
+    return (
+        normalized === "" ||
+        normalized === "unknown" ||
+        normalized === "n/a" ||
+        normalized === "na" ||
+        normalized === "none" ||
+        normalized === "unavailable" ||
+        normalized === "null"
+    );
+}
+
+function collectDecodedProtocolNames(packetInfo) {
+    const decodedNames = new Set();
+    const packetDecodedValues = [
+        packetInfo?.["packet.decoded_protocols"],
+        packetInfo?.["decoded.protocols"],
+        packetInfo?.["Decoded Protocols"],
+    ];
+
+    packetDecodedValues.forEach((packetDecoded) => {
+        if (Array.isArray(packetDecoded)) {
+            packetDecoded.forEach((name) => {
+                if (typeof name === "string" && name.trim()) {
+                    decodedNames.add(name.trim());
+                }
+            });
+            return;
+        }
+        if (typeof packetDecoded === "string" && packetDecoded.trim()) {
+            decodedNames.add(packetDecoded.trim());
+        }
+    });
+
+    return [...decodedNames];
+}
+
+function getPacketPayloadLength(packetInfo) {
+    const payloadLength = Number(
+        packetInfo?.["raw.data"]?.["payload.len"] ??
+        packetInfo?.["Raw data"]?.["payload.len"] ??
+        packetInfo?.["Raw data"]?.["Payload Length"]
+    );
+    if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
+    return Math.floor(payloadLength);
+}
+
+function inferZeroPayloadProtocolLabel(packetInfo, transportName, transportData) {
+    if (transportName === "TCP") {
+        const tcpFlags = String(
+            transportData?.["tcp.flags"] ??
+            transportData?.["transport.tcp.flags"] ??
+            transportData?.["TCP Flag Data"]?.["Flags"] ??
+            ""
+        ).trim();
+        if (tcpFlags && tcpFlags.toLowerCase() !== "none") {
+            return `TCP ${tcpFlags.replace(/\|+/g, "-")}`;
+        }
+        return "TCP control";
+    }
+
+    if (transportName === "UDP") return "UDP datagram";
+    if (transportName === "SCTP") return "SCTP packet";
+    if (transportName === "IGMP") return "IGMP control";
+    if (transportName === "LINK") return "Link-layer frame";
+    if (transportName === "FRAME") return "Frame";
+    if (transportName === "UNDECODABLE") return "IP packet";
+
+    return "";
+}
+
+function inferApplicationProtocol(packetInfo, extraInfo, transportName, transportData) {
+    const netData =
+        extraInfo?.["traits"]?.["network.data"] ||
+        extraInfo?.["Traits"]?.["Network Data"] ||
+        {};
+    const fromTraitsRaw =
+        netData?.["port.protocol"] ??
+        netData?.["Port Protocol"] ??
+        netData?.["Port Protcol"] ??
+        "";
+    const fromTraits = typeof fromTraitsRaw === "string" ? fromTraitsRaw.trim() : "";
+
+    const decodedNames = collectDecodedProtocolNames(packetInfo);
+    const preferred = [
+        "SSH",
+        "HTTP2",
+        "HTTP",
+        "WebSocket",
+        "DNS",
+        "TLS",
+        "Kerberos",
+        "NFS",
+        "RADIUS",
+    ];
+    const decodedByLower = new Map(
+        decodedNames.map((name) => [String(name).toLowerCase(), name])
+    );
+
+    for (const name of preferred) {
+        const matched = decodedByLower.get(name.toLowerCase());
+        if (matched) return matched;
+    }
+
+    if (decodedNames.length > 0) return decodedNames[0];
+    if (!isUnknownLikeProtocol(fromTraits)) return fromTraits;
+    if (getPacketPayloadLength(packetInfo) === 0) {
+        const zeroPayloadLabel = inferZeroPayloadProtocolLabel(packetInfo, transportName, transportData);
+        if (zeroPayloadLabel) return zeroPayloadLabel;
+    }
+    return transportName || "Unknown";
+}
+
 function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
     const packetInfo = isObject(packet?.["packet.info"]) ? packet["packet.info"] : {};
     const extraInfo = isObject(packet?.["extra.info"]) ? packet["extra.info"] : {};
-    const transportName = String(packetInfo?.["protocol"] || "unknown").toUpperCase();
+    const transportName = String(
+        packetInfo?.["packet.proto"] ||
+        packetInfo?.["protocol"] ||
+        packetInfo?.["Protocol"] ||
+        "unknown"
+    ).toUpperCase();
     const transportData =
         isObject(packetInfo[transportName]) ? packetInfo[transportName] :
             isObject(packetInfo[transportName.toLowerCase()]) ? packetInfo[transportName.toLowerCase()] :
@@ -152,17 +272,15 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
     const endpointB = hasPorts ? `${destinationIp}:${destinationPort}` : destinationIp;
     const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
     const streamKey = `${transportName}|${firstEndpoint}|${secondEndpoint}`;
-    const appProtocol =
-        extraInfo?.["traits"]?.["network.data"]?.["port.protocol"] ||
-        packetInfo?.["decoded.protocols"]?.[0] ||
-        transportName ||
-        "Unknown";
+    const appProtocol = inferApplicationProtocol(packetInfo, extraInfo, transportName, transportData);
+    const packetProcessed = Number(packetInfo?.["packet.processed"]);
 
     return {
         packetKey,
         host,
         pktIdx: hostPacketIndex,
         idx: Number(packetInfo?.["index"]) || hostPacketIndex,
+        pcapOrder: Number.isFinite(packetProcessed) ? packetProcessed + 1 : Number(packetInfo?.["index"]) || hostPacketIndex,
         srcIp: sourceIp,
         dstIp: destinationIp,
         srcPort: sourcePort,

@@ -629,6 +629,17 @@ def joinInfo(outputDirPath, portDir, index, dataTypeJson, packetInfoJson, host):
     return mergedJson
 
 
+def buildEmptyPayloadDataTypeInfo():
+    return {
+        "MIME Type": "application/octet-stream",
+        "payload.mime": "application/octet-stream",
+        "Decompressed": {"Decompressed": False},
+        "payload.decompressed": {"Decompressed": False},
+        "Data Types": ["Empty payload"],
+        "Traits": {"Length": 0},
+    }
+
+
 def sortAndIndexPackets(hostPacketMap):
     for host, packets in hostPacketMap.items():
         # Skip empty or invalid entries
@@ -2133,13 +2144,15 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     if (srcPortFilter is None or srcPort == srcPortFilter) and (
         dstPortFilter is None or dstPort == dstPortFilter
     ):
-        if rawPayload is not None and len(rawPayload) > 0:
+        if rawPayload is not None:
             streamLabelPort = dstPort
             if isTcp:
                 streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
                 streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
             #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
-            if transportProtocol == "ip":
+            if len(rawPayload) == 0:
+                dataTypeInfo = buildEmptyPayloadDataTypeInfo()
+            elif transportProtocol == "ip":
                 mimeType = magic.from_buffer(rawPayload, mime=True)
                 dataTypeInfo = {
                     "MIME Type": mimeType,

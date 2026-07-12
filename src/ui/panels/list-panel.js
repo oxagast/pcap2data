@@ -63,6 +63,35 @@ function collectDecodedProtocolNames(packetInfo) {
   return [...decodedNames];
 }
 
+function inferZeroPayloadProtocolLabel(packetInfo) {
+  const packetProtocol = String(
+    packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "",
+  ).trim().toUpperCase();
+
+  if (packetProtocol === "TCP") {
+    const tcpSection = packetInfo?.["TCP"] || {};
+    const tcpFlags = String(
+      tcpSection?.["TCP Flag Data"]?.["Flags"] ??
+      tcpSection?.["tcp.flags"] ??
+      tcpSection?.["transport.tcp.flags"] ??
+      "",
+    ).trim();
+    if (tcpFlags && tcpFlags.toLowerCase() !== "none") {
+      return `TCP ${tcpFlags.replace(/\|+/g, "-")}`;
+    }
+    return "TCP control";
+  }
+
+  if (packetProtocol === "UDP") return "UDP datagram";
+  if (packetProtocol === "SCTP") return "SCTP packet";
+  if (packetProtocol === "IGMP") return "IGMP control";
+  if (packetProtocol === "LINK") return "Link-layer frame";
+  if (packetProtocol === "FRAME") return "Frame";
+  if (packetProtocol === "UNDECODABLE") return "IP packet";
+
+  return "";
+}
+
 // Handles infer application protocol.
 function inferApplicationProtocol(packetInfo, extraInfo) {
   const packetProtocol = String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").trim().toLowerCase();
@@ -129,6 +158,10 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
 
   if (decodedNames.length > 0) return decodedNames[0];
   if (!isUnknownLikeProtocol(fromTraits)) return fromTraits;
+  if (getPacketPayloadLength(packetInfo) === 0) {
+    const zeroPayloadLabel = inferZeroPayloadProtocolLabel(packetInfo);
+    if (zeroPayloadLabel) return zeroPayloadLabel;
+  }
   return "Unknown protocol";
 }
 
@@ -535,6 +568,7 @@ function createListPanel({
     const normalizedRows = (Array.isArray(response.rows) ? response.rows : []).map((row) => ({
       ...row,
       pktIdx: Number.isFinite(Number(row?.pktIdx)) ? Number(row.pktIdx) : 0,
+      pcapOrder: Number.isFinite(Number(row?.pcapOrder)) ? Number(row.pcapOrder) : 0,
       isBookmarked: bookmarkSet.has(String(row?.packetKey || "")),
       streamLabel:
         typeof row?.streamLabel === "string" && row.streamLabel.trim()
@@ -581,6 +615,7 @@ function createListPanel({
     const columnsControlEl = document.getElementById("list-columns-control");
     const columnDefinitions = [
       { label: "#", key: "idx", defaultWidth: 64, getValue: (row) => row.idx },
+      { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
       { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
       { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
       { label: "Host", key: "host", defaultWidth: 180, getValue: (row) => row.host },
@@ -859,6 +894,8 @@ function createListPanel({
           if (!pi) return;
 
           const idx = pi["index"] ?? pi["Index"] ?? pktIdx + 1;
+          const pcapOrderRaw = Number(pi["packet.processed"]);
+          const pcapOrder = Number.isFinite(pcapOrderRaw) ? pcapOrderRaw + 1 : idx;
           const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"] ?? "";
           const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"] ?? "";
           const transport = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
@@ -883,6 +920,7 @@ function createListPanel({
 
           if (lc) {
             const rowText = [
+              String(pcapOrder),
               host,
               srcIp,
               dstIp,
@@ -899,6 +937,7 @@ function createListPanel({
 
           rows.push({
             idx,
+            pcapOrder,
             host,
             srcIp,
             dstIp,
@@ -940,6 +979,7 @@ function createListPanel({
       const compareByColumn = (left, right, columnKey) => {
         switch (columnKey) {
           case "idx":
+          case "pcapOrder":
           case "streamOrder":
           case "payloadLength":
             return Number(left[columnKey]) - Number(right[columnKey]);

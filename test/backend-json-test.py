@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from scapy.all import CookedLinux, IP, UDP, Raw, wrpcap
+from scapy.all import CookedLinux, Ether, IP, TCP, UDP, Raw, wrpcap
 
 
 def _project_root() -> Path:
@@ -82,6 +82,8 @@ def _assert_hosts_json_valid(hosts_data: dict) -> None:
             assert (
                 "packet.proto" in packet_info or "Protocol" in packet_info
             ), "packet.info missing protocol field (packet.proto/Protocol)"
+            assert "packet.processed" in packet_info, "packet.info missing original pcap order field (packet.processed)"
+            assert isinstance(packet_info["packet.processed"], int), "packet.processed must be an integer"
 
     assert has_any_packet, "hosts.json contains no packet entries"
 
@@ -166,6 +168,68 @@ def test_backend_handles_linux_cooked_capture(tmp_path: Path):
         "Linux Cooked v2",
     ), "Expected Linux cooked link.proto for any-interface capture"
     assert "Linux Cooked" in packet_info, "Expected Linux cooked metadata section"
+
+
+def test_backend_keeps_zero_payload_ip_packets(tmp_path: Path):
+    backend = _backend_script()
+
+    if not backend.exists():
+        pytest.skip(f"Backend script not found: {backend}")
+
+    packets = [
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IP(src="10.0.0.10", dst="10.0.0.20")
+        / TCP(sport=12345, dport=80, flags="S", seq=100),
+        Ether(src="66:77:88:99:aa:bb", dst="00:11:22:33:44:55")
+        / IP(src="10.0.0.20", dst="10.0.0.10")
+        / TCP(sport=80, dport=12345, flags="SA", seq=200, ack=101),
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IP(src="10.0.0.10", dst="10.0.0.20")
+        / TCP(sport=12345, dport=80, flags="A", seq=101, ack=201),
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IP(src="10.0.0.10", dst="10.0.0.20")
+        / TCP(sport=12345, dport=80, flags="PA", seq=101, ack=201)
+        / Raw(load=b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"),
+    ]
+
+    pcap_file = tmp_path / "tcp-handshake.pcap"
+    wrpcap(str(pcap_file), packets)
+
+    output_dir = tmp_path / "snitch-output-zero-payload"
+    conf_file = tmp_path / "test-conf-zero-payload.yaml"
+    _write_test_config(conf_file)
+
+    result = _run_backend(pcap_file=pcap_file, output_dir=output_dir, conf_file=conf_file)
+    if result.returncode != 0:
+        pytest.fail(
+            "Backend execution failed for zero-payload TCP capture.\n"
+            f"exit={result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    hosts_file = output_dir / "hosts.json"
+    assert hosts_file.exists(), f"Expected output file not found: {hosts_file}"
+
+    hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    _assert_hosts_json_valid(hosts_data)
+
+    processed_packets = []
+    payload_lengths = {}
+    for packet_list in hosts_data.get("host", {}).values():
+        if not isinstance(packet_list, list):
+            continue
+        for packet in packet_list:
+            packet_info = packet.get("packet.info", {})
+            processed = packet_info.get("packet.processed")
+            processed_packets.append(processed)
+            payload_lengths[processed] = packet_info.get("Raw data", {}).get("payload.len")
+
+    assert sorted(processed_packets) == [0, 1, 2, 3]
+    assert payload_lengths[0] == 0
+    assert payload_lengths[1] == 0
+    assert payload_lengths[2] == 0
+    assert payload_lengths[3] and payload_lengths[3] > 0
 
 
 def test_backend_builds_tor_lookup_response(monkeypatch):
