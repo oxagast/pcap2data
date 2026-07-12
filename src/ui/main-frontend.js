@@ -15550,7 +15550,7 @@ document.getElementById("help-btn").addEventListener("click", function () {
   }
   // open the help page in a new window
   writeLogEntry("Calling help page in new window");
-  helpWin = window.open("https://packetsnitch.oxasploits.com/", "_blank");
+  helpWin = window.open("https://packetsnitch.com/", "_blank");
   // if the window is closed, set helpWin to null
   helpWin.addEventListener("beforeunload", () => {
     helpWin = null;

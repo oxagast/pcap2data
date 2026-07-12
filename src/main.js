@@ -1490,16 +1490,18 @@ function createWindow() {
   mainWindow.webContents.on('did-create-window', (helpWinChild) => {
     helpWinChild.webContents.on('will-navigate', (event, url) => {
       const hostname = new URL(url).hostname;
+      const isPacketSnitchHost = hostname === 'packetsnitch.com' || hostname.endsWith('.packetsnitch.com');
+      const isBuyMeACoffeeHost = hostname === 'buymeacoffee.com' || hostname.endsWith('.buymeacoffee.com');
 
-      if ((hostname !== 'github.com' && hostname !== 'packetsnitch.oxasploits.com')) {
-        if (!url.startsWith('https://github.com/oxasploits/packetsnitch/') && !url.startsWith('https://packetsnitch.oxasploits.com/')) {
+      if ((hostname !== 'github.com' && !isPacketSnitchHost && !isBuyMeACoffeeHost)) {
+        if (!url.startsWith('https://github.com/oxasploits/packetsnitch/') && !url.startsWith('https://packetsnitch.com/') && !url.startsWith('https://www.packetsnitch.com/') && !url.startsWith('https://buymeacoffee.com/') && !url.startsWith('https://www.buymeacoffee.com/')) {
           console.log(`Blocked navigation to external domain: ${url}`);
           event.preventDefault();
         }
       }
     });
     helpWinChild.removeMenu();
-    helpWinChild.setSize(1000, 900);
+    helpWinChild.setSize(1200, 900);
     helpWinChild.webContents.setUserAgent(userAgent);
     helpWinChild.webContents.on('did-finish-load', () => {
       let helpPage = "";
@@ -1507,7 +1509,7 @@ function createWindow() {
       // regex for matching the help page within the URL
       const helpPageRegex = /.*\/(.+?)\/$/;
       pageMatch = helpURL.match(helpPageRegex);
-      if (helpURL.startsWith("https://packetsnitch.oxasploits.com/")) {
+      if (helpURL.startsWith("https://packetsnitch.com/")) {
         helpPage = pageMatch ? pageMatch[1] : "unknown";
       }
       else if (helpURL.startsWith("https://github.com/oxasploits/PacketSnitch")) {
@@ -1519,7 +1521,7 @@ function createWindow() {
       if (pageMatch && pageMatch[1]) {
         helpPage = helpPage.replace(/\//g, ""); // remove slashes
       }
-      if (helpPage === "packetsnitch.oxasploits.com") {
+      if (helpPage === "packetsnitch.com") {
         helpPage = "Home";
       }
       helpPage = helpPage.charAt(0).toUpperCase() + helpPage.slice(1);
