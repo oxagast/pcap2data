@@ -140,7 +140,9 @@ function inferZeroPayloadProtocolLabel(packetInfo) {
 function inferApplicationProtocol(packetInfo, extraInfo) {
   const packetProtocol = String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").trim().toLowerCase();
   if (packetProtocol === "undecodable") {
-    return "Unknown protocol";
+    return getPacketPayloadLength(packetInfo) > 0 || getPacketPayloadHex(packetInfo) !== ""
+      ? "Undecodable"
+      : "Unknown protocol";
   }
 
   if (packetProtocol === "icmp") {
@@ -206,6 +208,9 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
   if (!isUnknownLikeProtocol(fromTraits)) {
     return normalizeGenericApplicationProtocolLabel(fromTraits, packetProtocol);
   }
+  if (getPacketPayloadLength(packetInfo) === 0 && getPacketPayloadHex(packetInfo) !== "") {
+    return "Undecodable";
+  }
   if (getPacketPayloadLength(packetInfo) === 0) {
     const zeroPayloadLabel = inferZeroPayloadProtocolLabel(packetInfo);
     if (zeroPayloadLabel) return zeroPayloadLabel;
@@ -216,8 +221,37 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
 // Returns packet payload length.
 function getPacketPayloadLength(packetInfo) {
   const payloadLength = Number(packetInfo?.["raw.data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
-  if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
-  return Math.floor(payloadLength);
+  if (Number.isFinite(payloadLength) && payloadLength > 0) {
+    return Math.floor(payloadLength);
+  }
+
+  const payloadHex = getPacketPayloadHex(packetInfo);
+  if (payloadHex) {
+    return Math.floor(payloadHex.replace(/\s+/g, "").length / 2);
+  }
+
+  return 0;
+}
+
+function getPacketPayloadHex(packetInfo) {
+  const payloadHexCandidates = [
+    packetInfo?.["raw.data"]?.["payload"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload"]?.["hex.encoded"],
+    packetInfo?.["raw.data"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload.hex.encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["hex.encoded"],
+    packetInfo?.["Raw data"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["payload.hex.encoded"],
+  ];
+
+  for (const candidate of payloadHexCandidates) {
+    if (typeof candidate === "string" && candidate.replace(/\s+/g, "").length > 0) {
+      return candidate;
+    }
+  }
+  return "";
 }
 
 // Handles clamp column width.
@@ -458,7 +492,7 @@ function createListPanel({
           ]?.["payload.hex"] ?? hostPackets[row.pktIdx]?.["packet.info"]?.["Raw data"]?.[
           "Payload"
           ]?.["Hex Encoded"];
-        if (hexPayload) popHexGrid(hexPayload);
+        popHexGrid(hexPayload || "");
         populateDataTypes(hostPackets);
       }
 

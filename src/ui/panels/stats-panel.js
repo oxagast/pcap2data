@@ -1098,7 +1098,11 @@ function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb
 
 // Returns packet payload length.
 function getPacketPayloadLength(packetInfo) {
-  const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLength = Number(
+    packetInfo?.["raw.data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["Payload Length"]
+  );
   if (!Number.isFinite(payloadLength) || payloadLength <= 0) return 0;
   return payloadLength;
 }
@@ -2759,7 +2763,11 @@ function parseStatsTcpSequenceNumber(transportData) {
 
 // Returns stats tcp segment length.
 function getStatsTcpSegmentLength(packetInfo, transportData) {
-  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLenRaw = Number(
+    packetInfo?.["raw.data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["Payload Length"]
+  );
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
     ? payloadLenRaw
     : 0;
@@ -3255,7 +3263,7 @@ function totalTrafficBytes(capturedPackets) {
       const pi = pkt?.["packet.info"];
       if (!pi) continue;
 
-      const rawData = pi?.["Raw data"];
+      const rawData = pi?.["raw.data"] ?? pi?.["Raw data"];
       const payloadLength = Number(rawData?.["payload.len"] ?? rawData?.["Payload Length"]);
       if (Number.isFinite(payloadLength) && payloadLength > 0) {
         totalBytes += payloadLength;

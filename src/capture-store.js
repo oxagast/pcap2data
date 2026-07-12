@@ -92,10 +92,22 @@ function buildPacketStub(packet, packetKey, host, hostPacketIndex) {
     const rawData = isObject(packetInfo["raw.data"]) ? packetInfo["raw.data"] : {};
     const payload = isObject(rawData["payload"]) ? rawData["payload"] : {};
     const payloadHex =
-        typeof payload["hex.encoded"] === "string" ? payload["hex.encoded"] : "";
+        typeof rawData["payload.len"] === "number"
+            ? null
+            : typeof payload["payload.hex"] === "string"
+                ? payload["payload.hex"]
+                : typeof payload["hex.encoded"] === "string"
+                    ? payload["hex.encoded"]
+                    : typeof payload["hex"] === "string"
+                        ? payload["hex"]
+                        : typeof rawData["payload.hex"] === "string"
+                            ? rawData["payload.hex"]
+                            : typeof rawData["payload.hex.encoded"] === "string"
+                                ? rawData["payload.hex.encoded"]
+                                : "";
     const payloadBytes = payloadHex
         ? Math.floor(payloadHex.replace(/\s+/g, "").length / 2)
-        : 0;
+        : Number(rawData["payload.len"]) || 0;
 
     return {
         "packet.info": {
@@ -207,6 +219,27 @@ function getPacketPayloadLength(packetInfo) {
     return Math.floor(payloadLength);
 }
 
+function getPacketPayloadHex(packetInfo) {
+    const payloadHexCandidates = [
+        packetInfo?.["raw.data"]?.["payload"]?.["payload.hex"],
+        packetInfo?.["raw.data"]?.["payload"]?.["hex.encoded"],
+        packetInfo?.["raw.data"]?.["payload.hex"],
+        packetInfo?.["raw.data"]?.["payload.hex.encoded"],
+        packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"],
+        packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"],
+        packetInfo?.["Raw data"]?.["Payload"]?.["hex.encoded"],
+        packetInfo?.["Raw data"]?.["payload.hex"],
+        packetInfo?.["Raw data"]?.["payload.hex.encoded"],
+    ];
+
+    for (const candidate of payloadHexCandidates) {
+        if (typeof candidate === "string" && candidate.replace(/\s+/g, "").length > 0) {
+            return candidate;
+        }
+    }
+    return "";
+}
+
 function inferZeroPayloadProtocolLabel(packetInfo, transportName, transportData) {
     if (transportName === "TCP") {
         const tcpFlags = String(
@@ -269,6 +302,7 @@ function inferApplicationProtocol(packetInfo, extraInfo, transportName, transpor
 
     if (decodedNames.length > 0) return normalizeGenericApplicationProtocolLabel(decodedNames[0], transportName);
     if (!isUnknownLikeProtocol(fromTraits)) return normalizeGenericApplicationProtocolLabel(fromTraits, transportName);
+    if (getPacketPayloadLength(packetInfo) === 0 && getPacketPayloadHex(packetInfo) !== "") return "Undecodable";
     if (getPacketPayloadLength(packetInfo) === 0) {
         const zeroPayloadLabel = inferZeroPayloadProtocolLabel(packetInfo, transportName, transportData);
         if (zeroPayloadLabel) return zeroPayloadLabel;

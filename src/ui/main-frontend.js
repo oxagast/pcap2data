@@ -12214,7 +12214,11 @@ function parseTcpSequenceNumber(transportData) {
 
 // Returns tcp segment length.
 function getTcpSegmentLength(packetInfo, transportData) {
-  const payloadLenRaw = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLenRaw = Number(
+    packetInfo?.["raw.data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["Payload Length"]
+  );
   const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
     ? payloadLenRaw
     : 0;
@@ -17097,7 +17101,10 @@ function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
   const packetInfo = packetEntry?.["packet.info"] || {};
-  const payloadLenRaw = packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"];
+  const payloadLenRaw =
+    packetInfo?.["raw.data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["Payload Length"];
   const payloadLength = Number(payloadLenRaw);
 
   if (Number.isFinite(payloadLength) && payloadLength <= 0) {
@@ -17287,12 +17294,31 @@ function clearGridHighlights() {
  * Populates the hex grid display with the given hex string.
  */
 function popHexGrid(hex) {
+  const safeHex = typeof hex === "string" ? hex : "";
   // swap it back to ASCII for the fade box
   const payloadAsciiBox = document.getElementById("payloadascii");
-  const decodedAscii = hexToAscii(hex);
-  document.getElementById("hexg").textContent = "";
   const hexGridContainer = document.getElementById("hexg");
-  const hexPairs = hex.toUpperCase().match(/.{1,2}/g) || [];
+  const hexOffsetDisplay = document.getElementById("asciiOffset");
+  const asciiTextBox = document.getElementById("asciiText");
+  if (payloadAsciiBox) {
+    payloadAsciiBox.classList.remove("visible");
+  }
+  if (hexGridContainer) {
+    hexGridContainer.textContent = "";
+  }
+  if (hexOffsetDisplay) {
+    hexOffsetDisplay.textContent = "";
+  }
+  if (asciiTextBox) {
+    asciiTextBox.textContent = "";
+  }
+  window.currentPrintableSequence = "";
+  if (!safeHex) {
+    return;
+  }
+
+  const decodedAscii = hexToAscii(safeHex);
+  const hexPairs = safeHex.toUpperCase().match(/.{1,2}/g) || [];
   // this block populates the grid with boxes for hex codes
   hexPairs.forEach((hexPair, byteIndex) => {
     const item = document.createElement("div");
@@ -17313,8 +17339,6 @@ function popHexGrid(hex) {
   document.querySelectorAll(".griditem").forEach((item, idx) => {
     item.addEventListener("mouseenter", (e) => {
       //box fade in
-      const hexOffsetDisplay = document.getElementById("asciiOffset");
-      const asciiTextBox = document.getElementById("asciiText");
       payloadAsciiBox.style.top = e.clientY + 18 + "px";
       payloadAsciiBox.style.left = e.clientX + 18 + "px";
       payloadAsciiBox.classList.add("visible");
@@ -17466,7 +17490,11 @@ function infoPanel(pk) {
   const dstMacVendor = etherFrame["ether.dst.mac.vendor"] ?? etherFrame["MAC Destination Vendor"] ?? "N/A";
   const ipLayerLen = ipData["ip.len"] ?? ipData["IP layer length"] ?? "N/A";
   const wireLen = transportData["Wire length"] ?? "N/A";
-  const payloadLen = packetInfoData?.["Raw data"]?.["payload.len"] ?? packetInfoData?.["Raw data"]?.["Payload Length"] ?? "N/A";
+  const payloadLen =
+    packetInfoData?.["raw.data"]?.["payload.len"] ??
+    packetInfoData?.["Raw data"]?.["payload.len"] ??
+    packetInfoData?.["Raw data"]?.["Payload Length"] ??
+    "N/A";
   let sslVersion = "";
   let sslAlgos = "";
   if (
