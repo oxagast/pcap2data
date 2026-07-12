@@ -42,6 +42,35 @@
 				"reveal": "always",
 				"panel": "shared"
 			}
+		},
+		{
+			"type": "npm",
+			"script": "tests:backend",
+			"label": "npm: tests:backend",
+			"group": {
+				"kind": "test"
+			},
+			"problemMatcher": []
+		},
+		{
+			"type": "npm",
+			"script": "tests:frontend",
+			"label": "npm: tests:frontend",
+			"group": {
+				"kind": "test"
+			},
+			"problemMatcher": []
+		},
+		{
+			"type": "npm",
+			"script": "tests",
+			"label": "npm: tests",
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"problemMatcher": [],
+			"detail": "npm run test:backend && npm run test:frontend"
 		}
 	]
 }
