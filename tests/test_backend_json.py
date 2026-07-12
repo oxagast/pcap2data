@@ -265,6 +265,209 @@ def test_backend_builds_tor_lookup_response(monkeypatch):
     assert result["nodes"][0]["nickname"] == "TestRelay"
 
 
+def _make_stream_packet(
+    processed,
+    app_proto,
+    src_port=50000,
+    dst_port=80,
+    src_ip="10.10.10.1",
+    dst_ip="10.10.10.2",
+):
+    network_data = {
+        "tcp.proto": app_proto,
+        "application.proto": app_proto,
+        "app.proto": app_proto,
+        "Port Protocol": app_proto,
+        "Port Protcol": app_proto,
+    }
+    return {
+        "packet.info": {
+            "packet.processed": int(processed),
+            "packet.timestamp": f"2026-01-01 00:00:{int(processed):02d}.000000",
+            "packet.proto": "TCP",
+            "IP": {
+                "ip.src.addr": str(src_ip),
+                "ip.dst.addr": str(dst_ip),
+            },
+            "TCP": {
+                "tcp.src.port": int(src_port),
+                "tcp.dst.port": int(dst_port),
+            },
+        },
+        "extra.info": {
+            "Traits": {
+                "Network Data": network_data,
+            }
+        },
+    }
+
+
+def _flatten_packets(hosts_payload):
+    flattened = []
+    for packet_list in hosts_payload.get("host", {}).values():
+        if isinstance(packet_list, list):
+            flattened.extend(packet_list)
+    return flattened
+
+
+def _packet_stream_key_and_app_proto(packet):
+    packet_info = packet.get("packet.info", {}) if isinstance(packet, dict) else {}
+    extra_info = packet.get("extra.info", {}) if isinstance(packet, dict) else {}
+
+    transport_name = str(packet_info.get("packet.proto", "")).strip().upper()
+    if transport_name not in {"TCP", "UDP", "SCTP"}:
+        return None, ""
+
+    ip_section = packet_info.get("IP", {})
+    if not isinstance(ip_section, dict):
+        return None, ""
+    src_ip = str(ip_section.get("ip.src.addr", "")).strip()
+    dst_ip = str(ip_section.get("ip.dst.addr", "")).strip()
+    if not src_ip or not dst_ip:
+        return None, ""
+
+    transport_section = packet_info.get(transport_name, {})
+    if not isinstance(transport_section, dict):
+        return None, ""
+    proto_prefix = transport_name.lower()
+    src_port = transport_section.get(f"{proto_prefix}.src.port")
+    dst_port = transport_section.get(f"{proto_prefix}.dst.port")
+    try:
+        src_port = int(src_port)
+        dst_port = int(dst_port)
+    except (TypeError, ValueError):
+        return None, ""
+
+    endpoint_a = f"{src_ip}:{src_port}"
+    endpoint_b = f"{dst_ip}:{dst_port}"
+    ordered_endpoints = sorted([endpoint_a, endpoint_b])
+    stream_key = f"{proto_prefix}|{ordered_endpoints[0]}|{ordered_endpoints[1]}"
+
+    network_data = (
+        extra_info.get("Traits", {}).get("Network Data", {})
+        if isinstance(extra_info, dict)
+        else {}
+    )
+    if not isinstance(network_data, dict):
+        network_data = {}
+
+    app_proto = (
+        network_data.get(f"{proto_prefix}.proto")
+        or network_data.get("application.proto")
+        or network_data.get("app.proto")
+        or network_data.get("Port Protocol")
+        or network_data.get("Port Protcol")
+        or ""
+    )
+    app_proto = str(app_proto).strip().lower()
+    return stream_key, app_proto
+
+
+def test_stream_app_proto_prefers_first_packet_label():
+    backend = _load_backend_module()
+
+    packet_entries = [
+        {"host": "10.10.10.2", "packet": _make_stream_packet(0, "ssh")},
+        {"host": "10.10.10.2", "packet": _make_stream_packet(1, "http")},
+        {"host": "10.10.10.2", "packet": _make_stream_packet(2, "smtp")},
+    ]
+
+    hosts_payload = backend.buildHostsPayload(packet_entries, "")
+    packets = _flatten_packets(hosts_payload)
+    assert len(packets) == 3
+
+    for packet in packets:
+        network_data = packet["extra.info"]["Traits"]["Network Data"]
+        assert network_data["tcp.proto"] == "ssh"
+        assert network_data["application.proto"] == "ssh"
+        assert network_data["Port Protcol"] == "ssh"
+
+
+def test_stream_app_proto_falls_back_to_last_decodable_when_first_unavailable():
+    backend = _load_backend_module()
+
+    packet_entries = [
+        {"host": "10.10.10.2", "packet": _make_stream_packet(0, "unknown")},
+        {"host": "10.10.10.2", "packet": _make_stream_packet(1, "imap")},
+        {"host": "10.10.10.2", "packet": _make_stream_packet(2, "unknown")},
+        {"host": "10.10.10.2", "packet": _make_stream_packet(3, "smtp")},
+    ]
+
+    hosts_payload = backend.buildHostsPayload(packet_entries, "")
+    packets = _flatten_packets(hosts_payload)
+    assert len(packets) == 4
+
+    for packet in packets:
+        network_data = packet["extra.info"]["Traits"]["Network Data"]
+        assert network_data["tcp.proto"] == "smtp"
+        assert network_data["application.proto"] == "smtp"
+        assert network_data["Port Protcol"] == "smtp"
+
+
+def test_stream_app_proto_priority_survives_bidirectional_out_of_order_input():
+    backend = _load_backend_module()
+
+    # Intentionally out-of-order entries and mixed directions for the same TCP stream.
+    packet_entries = [
+        {
+            "host": "10.10.10.1",
+            "packet": _make_stream_packet(
+                2,
+                "unknown",
+                src_port=80,
+                dst_port=50000,
+                src_ip="10.10.10.2",
+                dst_ip="10.10.10.1",
+            ),
+        },
+        {
+            "host": "10.10.10.2",
+            "packet": _make_stream_packet(
+                0,
+                "unknown",
+                src_port=50000,
+                dst_port=80,
+                src_ip="10.10.10.1",
+                dst_ip="10.10.10.2",
+            ),
+        },
+        {
+            "host": "10.10.10.1",
+            "packet": _make_stream_packet(
+                1,
+                "http",
+                src_port=80,
+                dst_port=50000,
+                src_ip="10.10.10.2",
+                dst_ip="10.10.10.1",
+            ),
+        },
+        {
+            "host": "10.10.10.2",
+            "packet": _make_stream_packet(
+                3,
+                "unknown",
+                src_port=50000,
+                dst_port=80,
+                src_ip="10.10.10.1",
+                dst_ip="10.10.10.2",
+            ),
+        },
+    ]
+
+    hosts_payload = backend.buildHostsPayload(packet_entries, "")
+    packets = _flatten_packets(hosts_payload)
+    assert len(packets) == 4
+
+    for packet in packets:
+        network_data = packet["extra.info"]["Traits"]["Network Data"]
+        assert network_data["tcp.proto"] == "http"
+        assert network_data["application.proto"] == "http"
+        assert network_data["app.proto"] == "http"
+        assert network_data["Port Protocol"] == "http"
+        assert network_data["Port Protcol"] == "http"
+
+
 def test_backend_falls_back_when_packet_decoder_raises(monkeypatch, tmp_path: Path):
     backend = _load_backend_module()
 
@@ -290,3 +493,58 @@ def test_backend_falls_back_when_packet_decoder_raises(monkeypatch, tmp_path: Pa
     assert packet_info.get("Raw data", {}).get("payload.len") == 0
     assert packet_info.get("TCP", {}).get("TCP Flag Data", {}).get("Flags") == "ACK"
     assert "fallback after decoder error" in str(extra_info.get("processing.error", ""))
+
+
+def test_backend_real_pcap_stream_app_protocol_labels_are_consistent(tmp_path: Path):
+    backend = _backend_script()
+    pcap_file = _sample_pcap()
+
+    if not backend.exists():
+        pytest.skip(f"Backend script not found: {backend}")
+    if not pcap_file.exists():
+        pytest.skip(f"Sample pcap not found: {pcap_file}")
+
+    output_dir = tmp_path / "snitch-output-real-pcap-stream-proto"
+    conf_file = tmp_path / "test-conf-real-pcap-stream-proto.yaml"
+    _write_test_config(conf_file)
+
+    result = _run_backend(pcap_file=pcap_file, output_dir=output_dir, conf_file=conf_file)
+    if result.returncode != 0:
+        pytest.fail(
+            "Backend execution failed for real-pcap stream protocol consistency test.\n"
+            f"exit={result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    hosts_file = output_dir / "hosts.json"
+    assert hosts_file.exists(), f"Expected output file not found: {hosts_file}"
+
+    hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    packets = _flatten_packets(hosts_data)
+    assert packets, "Expected decoded packets in hosts.json"
+
+    stream_protocols = {}
+    for packet in packets:
+        stream_key, app_proto = _packet_stream_key_and_app_proto(packet)
+        if not stream_key:
+            continue
+        stream_protocols.setdefault(stream_key, []).append(app_proto)
+
+    assert stream_protocols, "Expected at least one TCP/UDP/SCTP stream in sample pcap"
+
+    checked_stream_count = 0
+    for app_values in stream_protocols.values():
+        normalized = [
+            value
+            for value in app_values
+            if value and value not in {"unknown", "n/a", "null", "none", "undecodable"}
+        ]
+        if not normalized:
+            continue
+        checked_stream_count += 1
+        assert len(set(normalized)) == 1, (
+            f"Expected one app protocol per stream, got {sorted(set(normalized))}"
+        )
+
+    assert checked_stream_count > 0, "Expected at least one stream with a decodable app protocol"

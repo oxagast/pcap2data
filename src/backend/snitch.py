@@ -41,6 +41,12 @@ import shutil
 import socket
 import ssl
 import sys
+
+EARLY_VERSION_ONLY_MODE = "--version" in sys.argv
+if EARLY_VERSION_ONLY_MODE:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
 import tempfile
 import textwrap
 import threading
@@ -70,11 +76,12 @@ from functools import lru_cache
 from cryptography.utils import CryptographyDeprecationWarning
 
 
-warnings.simplefilter("module")
-os.environ["PYTHONWARNINGS"] = "module"
-warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
-    f"[Main] {cat.__name__} {msg}\n"
-)
+if not EARLY_VERSION_ONLY_MODE:
+    warnings.simplefilter("module")
+    os.environ["PYTHONWARNINGS"] = "module"
+    warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
+        f"[Main] {cat.__name__} {msg}\n"
+    )
 stopEvent = threading.Event()
 
 
@@ -983,10 +990,158 @@ def sortAndIndexPackets(hostPacketMap):
     return hostPacketMap
 
 
+def _normaliseAppProtocolLabel(value):
+    textValue = str(value or "").strip().lower()
+    if textValue in {"", "unknown", "n/a", "null", "none", "undecodable"}:
+        return ""
+    return textValue
+
+
+def _packetSortKeyForStream(packetWrapper):
+    packetInfo = packetWrapper.get("packet.info", {}) if isinstance(packetWrapper, dict) else {}
+    processedValue = packetInfo.get("packet.processed")
+    try:
+        processedOrder = int(processedValue)
+    except (TypeError, ValueError):
+        processedOrder = 1 << 60
+    timestampValue = str(packetInfo.get("packet.timestamp", ""))
+    return (processedOrder, timestampValue)
+
+
+def _extractStreamIdentity(packetWrapper):
+    if not isinstance(packetWrapper, dict):
+        return None
+    packetInfo = packetWrapper.get("packet.info")
+    if not isinstance(packetInfo, dict):
+        return None
+
+    transportName = str(packetInfo.get("packet.proto", "")).strip().upper()
+    if transportName not in {"TCP", "UDP", "SCTP"}:
+        return None
+
+    ipSection = packetInfo.get("IP")
+    if not isinstance(ipSection, dict):
+        return None
+    srcIp = str(ipSection.get("ip.src.addr", "")).strip()
+    dstIp = str(ipSection.get("ip.dst.addr", "")).strip()
+    if not srcIp or not dstIp:
+        return None
+
+    transportSection = packetInfo.get(transportName)
+    if not isinstance(transportSection, dict):
+        return None
+
+    protocolPrefix = transportName.lower()
+    srcPortValue = transportSection.get(f"{protocolPrefix}.src.port")
+    dstPortValue = transportSection.get(f"{protocolPrefix}.dst.port")
+    try:
+        srcPort = int(srcPortValue)
+        dstPort = int(dstPortValue)
+    except (TypeError, ValueError):
+        return None
+
+    endpointA = f"{srcIp}:{srcPort}"
+    endpointB = f"{dstIp}:{dstPort}"
+    orderedEndpoints = sorted([endpointA, endpointB])
+    streamKey = f"{protocolPrefix}|{orderedEndpoints[0]}|{orderedEndpoints[1]}"
+    return {
+        "transport": protocolPrefix,
+        "streamKey": streamKey,
+    }
+
+
+def _getPacketNetworkData(packetWrapper):
+    if not isinstance(packetWrapper, dict):
+        return None
+    extraInfo = packetWrapper.get("extra.info")
+    if not isinstance(extraInfo, dict):
+        return None
+    traitsInfo = extraInfo.get("Traits")
+    if not isinstance(traitsInfo, dict):
+        return None
+    networkData = traitsInfo.get("Network Data")
+    if not isinstance(networkData, dict):
+        return None
+    return networkData
+
+
+def _getPacketAppProtocol(packetWrapper, transportPrefix):
+    networkData = _getPacketNetworkData(packetWrapper)
+    if not isinstance(networkData, dict):
+        return ""
+
+    candidateValues = [
+        networkData.get(f"{transportPrefix}.proto"),
+        networkData.get("application.proto"),
+        networkData.get("app.proto"),
+        networkData.get("Port Protocol"),
+        networkData.get("Port Protcol"),
+    ]
+    for candidate in candidateValues:
+        normalised = _normaliseAppProtocolLabel(candidate)
+        if normalised:
+            return normalised
+    return ""
+
+
+def normalizeStreamApplicationProtocols(packetEntries):
+    streamPackets = {}
+
+    for entry in packetEntries:
+        if not isinstance(entry, dict):
+            continue
+        packetWrapper = entry.get("packet")
+        streamIdentity = _extractStreamIdentity(packetWrapper)
+        if not streamIdentity:
+            continue
+        streamKey = streamIdentity["streamKey"]
+        if streamKey not in streamPackets:
+            streamPackets[streamKey] = {
+                "transport": streamIdentity["transport"],
+                "packets": [],
+            }
+        streamPackets[streamKey]["packets"].append(packetWrapper)
+
+    for streamData in streamPackets.values():
+        streamPacketList = streamData.get("packets", [])
+        if not streamPacketList:
+            continue
+
+        streamPacketList.sort(key=_packetSortKeyForStream)
+        transportPrefix = streamData.get("transport", "")
+        if not transportPrefix:
+            continue
+
+        # Prefer the first packet's destination-port protocol label.
+        chosenProtocol = _getPacketAppProtocol(streamPacketList[0], transportPrefix)
+        if not chosenProtocol:
+            # If the first packet is undecodable, fall back to the last decodable
+            # packet label in the stream.
+            for packetWrapper in reversed(streamPacketList):
+                chosenProtocol = _getPacketAppProtocol(packetWrapper, transportPrefix)
+                if chosenProtocol:
+                    break
+
+        if not chosenProtocol:
+            continue
+
+        for packetWrapper in streamPacketList:
+            networkData = _getPacketNetworkData(packetWrapper)
+            if not isinstance(networkData, dict):
+                continue
+            networkData[f"{transportPrefix}.proto"] = chosenProtocol
+            networkData["app.proto"] = chosenProtocol
+            networkData["application.proto"] = chosenProtocol
+            networkData["Port Protocol"] = chosenProtocol
+            networkData["Port Protcol"] = chosenProtocol
+
+
 def buildHostsPayload(packetEntries, finalSummary=""):
     """
     Build a frontend-compatible hosts payload from packet entries.
     """
+    normalizeStreamApplicationProtocols(packetEntries)
+
     packetMapByHost = {}
     for entry in packetEntries:
         host = entry.get("host")
@@ -3222,6 +3377,11 @@ with additional network and server information.
         ),
         epilog="Example usage: \n   python3 snitch.py traffic.pcap -o outputDirPath -s 80 -d 8080 -T 5 -a",
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print backend version and exit.",
+    )
     parser.add_argument("pcap_file", nargs="?", help="The .pcap file to parse.")
     parser.add_argument(
         "--use-tor-check",
@@ -4045,6 +4205,13 @@ def main():
 
     parser = buildParser()
     parsedArgs = parser.parse_args()
+
+    if parsedArgs.version:
+        backendRuntimeMode = "version"
+        backendShutdownReason = "version-request"
+        print(PACKETSNITCH_VERSION)
+        return 0
+
     startupMode = "http-server" if parsedArgs.server else "cli"
     backendRuntimeMode = startupMode
     logBackendStartup(startupMode)
@@ -4082,5 +4249,6 @@ if __name__ == "__main__":
             except Exception:
                 pass
 
-        logBackendShutdown(backendRuntimeMode, backendShutdownReason, exitCode)
+        if backendRuntimeMode != "version":
+            logBackendShutdown(backendRuntimeMode, backendShutdownReason, exitCode)
     sys.exit(exitCode)
