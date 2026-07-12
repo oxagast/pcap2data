@@ -212,6 +212,7 @@ activeRecon = "False"
 numWorkerThreads = 2 * (os.cpu_count() or 1)
 isSSH = False
 checkTor = True
+verbose = 0
 torJsonData = {}
 torNetworkIps = {}
 # Shared result lists, protected by their respective locks so that threads
@@ -638,6 +639,206 @@ def buildEmptyPayloadDataTypeInfo():
         "Data Types": ["Empty payload"],
         "Traits": {"Length": 0},
     }
+
+
+def buildGenericPayloadDataTypeInfo(rawPayload, errorMessage=None):
+    payloadBytes = rawPayload if isinstance(rawPayload, (bytes, bytearray)) else b""
+    if len(payloadBytes) == 0:
+        dataTypeInfo = buildEmptyPayloadDataTypeInfo()
+    else:
+        try:
+            mimeType = magic.from_buffer(payloadBytes, mime=True)
+        except Exception:
+            mimeType = "application/octet-stream"
+        dataTypeInfo = {
+            "MIME Type": mimeType,
+            "payload.mime": mimeType,
+            "Decompressed": {"Decompressed": False},
+            "payload.decompressed": {"Decompressed": False},
+            "Data Types": ["Unknown data type"],
+            "Traits": {"Length": len(payloadBytes)},
+        }
+
+    if errorMessage:
+        dataTypeInfo["Processing Error"] = str(errorMessage)
+        dataTypeInfo["processing.error"] = str(errorMessage)
+    return dataTypeInfo
+
+
+def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
+    linkLayerInfo = extractLinkLayerInfo(p)
+    linkProto = linkLayerInfo["linkProto"]
+    srcMacAddr = linkLayerInfo["srcAddr"]
+    dstMacAddr = linkLayerInfo["dstAddr"]
+    linuxCookedSection = linkLayerInfo["linuxCooked"]
+    srcMacVendor = macAddrToVendor(srcMacAddr) if srcMacAddr != "N/A" else "N/A"
+    dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
+
+    timestampValue = getattr(p, "time", 0)
+    try:
+        timestamp = datetime.fromtimestamp(float(Decimal(timestampValue))).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )
+    except Exception:
+        timestamp = "1970-01-01 00:00:00.000000"
+
+    protocolKey = "FRAME"
+    dstPortStr = "frame"
+    hostKey = "0.0.0.0"
+    transportSection = None
+    ipSection = "N/A"
+
+    if p.haslayer("TCP") and p.haslayer("IP"):
+        tcpLayer = p["TCP"]
+        ipLayer = p["IP"]
+        rawPayload = bytes(tcpLayer.payload) if bytes(tcpLayer.payload) else b""
+        tcpFlags = []
+        if tcpLayer.flags.S:
+            tcpFlags.append("SYN")
+        if tcpLayer.flags.A:
+            tcpFlags.append("ACK")
+        if tcpLayer.flags.F:
+            tcpFlags.append("FIN")
+        if tcpLayer.flags.R:
+            tcpFlags.append("RST")
+        if tcpLayer.flags.P:
+            tcpFlags.append("PSH")
+        if tcpLayer.flags.U:
+            tcpFlags.append("URG")
+        if tcpLayer.flags.ECE:
+            tcpFlags.append("ECE")
+        if tcpLayer.flags.CWR:
+            tcpFlags.append("CWR")
+        protocolKey = "TCP"
+        dstPortStr = str(int(getattr(tcpLayer, "dport", 0) or 0))
+        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        transportSection = {
+            "tcp.src.port": int(getattr(tcpLayer, "sport", 0) or 0),
+            "transport.tcp.src.port": int(getattr(tcpLayer, "sport", 0) or 0),
+            "tcp.dst.port": int(getattr(tcpLayer, "dport", 0) or 0),
+            "transport.tcp.dst.port": int(getattr(tcpLayer, "dport", 0) or 0),
+            "TCP Flag Data": {
+                "Flags": "|".join(tcpFlags) if tcpFlags else "None",
+                "tcp.flags": "|".join(tcpFlags) if tcpFlags else "None",
+                "transport.tcp.flags": "|".join(tcpFlags) if tcpFlags else "None",
+            },
+            "TCP Payload Length": int(len(rawPayload)),
+            "tcp.payload.len": int(len(rawPayload)),
+            "transport.tcp.payload.len": int(len(rawPayload)),
+            "transport.proto": "TCP",
+        }
+        ipSection = {
+            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+        }
+    elif p.haslayer("UDP") and p.haslayer("IP"):
+        udpLayer = p["UDP"]
+        ipLayer = p["IP"]
+        rawPayload = bytes(udpLayer.payload) if bytes(udpLayer.payload) else b""
+        protocolKey = "UDP"
+        dstPortStr = str(int(getattr(udpLayer, "dport", 0) or 0))
+        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        transportSection = {
+            "udp.src.port": int(getattr(udpLayer, "sport", 0) or 0),
+            "transport.udp.src.port": int(getattr(udpLayer, "sport", 0) or 0),
+            "udp.dst.port": int(getattr(udpLayer, "dport", 0) or 0),
+            "transport.udp.dst.port": int(getattr(udpLayer, "dport", 0) or 0),
+            "UDP length": int(getattr(udpLayer, "len", len(rawPayload)) or len(rawPayload)),
+            "udp.len": int(getattr(udpLayer, "len", len(rawPayload)) or len(rawPayload)),
+            "transport.proto": "UDP",
+        }
+        ipSection = {
+            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+        }
+    elif p.haslayer("ICMP") and p.haslayer("IP"):
+        icmpLayer = p["ICMP"]
+        ipLayer = p["IP"]
+        rawPayload = bytes(icmpLayer)
+        protocolKey = "ICMP"
+        dstPortStr = "icmp"
+        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        transportSection = {
+            "Type": int(getattr(icmpLayer, "type", 0) or 0),
+            "icmp.type": int(getattr(icmpLayer, "type", 0) or 0),
+            "Code": int(getattr(icmpLayer, "code", 0) or 0),
+            "icmp.code": int(getattr(icmpLayer, "code", 0) or 0),
+            "transport.proto": "ICMP",
+        }
+        ipSection = {
+            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+        }
+    elif p.haslayer("IP"):
+        ipLayer = p["IP"]
+        rawPayload = bytes(ipLayer.payload) if bytes(ipLayer.payload) else bytes(ipLayer)
+        protocolKey = "Undecodable"
+        dstPortStr = "undecodable"
+        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        transportSection = {
+            "IP Protocol Number": int(getattr(ipLayer, "proto", 0) or 0),
+            "ip.proto.num": int(getattr(ipLayer, "proto", 0) or 0),
+            "transport.proto": "Unknown protocol",
+        }
+        ipSection = {
+            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+        }
+    else:
+        rawPayload = bytes(p.payload) if bytes(p.payload) else bytes(p)
+        protocolKey = "FRAME"
+        dstPortStr = "frame"
+
+    dataTypeInfo = buildGenericPayloadDataTypeInfo(rawPayload, errorMessage)
+    packetInfo = {
+        "packet.processed": int(packetIndex),
+        "packet.timestamp": timestamp,
+        "packet.proto": protocolKey,
+        "link.proto": linkProto if linkProto else protocolKey,
+        "packet.decoded_protocols": [protocolKey],
+        "Ethernet Frame": {
+            "ether.src.mac.addr": srcMacAddr,
+            "link.src.mac.addr": srcMacAddr,
+            "ether.dst.mac.addr": dstMacAddr,
+            "link.dst.mac.addr": dstMacAddr,
+            "ether.src.mac.vendor": srcMacVendor,
+            "link.src.mac.vendor": srcMacVendor,
+            "ether.dst.mac.vendor": dstMacVendor,
+            "link.dst.mac.vendor": dstMacVendor,
+        }
+        if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+        else "N/A",
+        "IP": ipSection,
+        protocolKey: transportSection if transportSection is not None else {},
+        "Raw data": {
+            "Payload": {
+                "payload.hex": rawPayload.hex(),
+                "payload.ascii": rawPayload.decode(errors="ignore"),
+            },
+            "Packet": bytes(p).hex(),
+            "packet.hex": bytes(p).hex(),
+            "payload.len": len(rawPayload),
+        },
+    }
+    if linuxCookedSection is not None:
+        packetInfo["Linux Cooked"] = linuxCookedSection
+
+    return joinInfo(
+        outputDir,
+        dstPortStr,
+        packetIndex,
+        json.dumps(dataTypeInfo).encode(),
+        json.dumps(packetInfo).encode(),
+        hostKey,
+    )
 
 
 def sortAndIndexPackets(hostPacketMap):
@@ -2707,7 +2908,16 @@ def processPacketAtIndex(packetIndex, srcPortFilter, dstPortFilter, timeout):
     if stopEvent.is_set():
         return None
     p = packets[packetIndex]
-    return packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout)
+    try:
+        return packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout)
+    except Exception as exc:
+        errorMessage = f"fallback after decoder error: {exc}"
+        if verbose >= 0:
+            print(
+                f"[Worker] Packet index {packetIndex} fallback after error: {exc}",
+                file=sys.stderr,
+            )
+        return buildFallbackPacketEntry(p, packetIndex, errorMessage)
 
 
 def startThreading():

@@ -5952,17 +5952,27 @@ function normalizeLoadedSessionPayload(parsedPayload) {
       ? parsedPayload[SESSION_STATE_KEY]
       : null;
 
+  // Backward compatibility: older templates/sessions used "Host" instead of "host".
+  const normalizedCaptureData =
+    captureData &&
+      typeof captureData === "object" &&
+      !captureData.host &&
+      captureData.Host &&
+      typeof captureData.Host === "object"
+      ? { ...captureData, host: captureData.Host }
+      : captureData;
+
   if (
-    !captureData ||
-    typeof captureData !== "object" ||
-    !captureData["host"] ||
-    typeof captureData["host"] !== "object"
+    !normalizedCaptureData ||
+    typeof normalizedCaptureData !== "object" ||
+    !normalizedCaptureData["host"] ||
+    typeof normalizedCaptureData["host"] !== "object"
   ) {
     return null;
   }
 
   return {
-    captureData,
+    captureData: normalizedCaptureData,
     sessionState:
       sessionState && typeof sessionState === "object" ? sessionState : null,
   };

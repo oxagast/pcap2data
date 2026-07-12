@@ -63,6 +63,47 @@ function collectDecodedProtocolNames(packetInfo) {
   return [...decodedNames];
 }
 
+function formatLayerOnlyLabel(baseLabel, layerName) {
+  const normalizedBase = String(baseLabel ?? "").trim();
+  const normalizedLayer = String(layerName ?? "").trim();
+  if (!normalizedBase) return "";
+  if (!normalizedLayer) return normalizedBase;
+  return `${normalizedBase} (${normalizedLayer} Only)`;
+}
+
+function normalizeGenericApplicationProtocolLabel(label, packetProtocol) {
+  const normalizedLabel = String(label ?? "").trim();
+  const normalizedProtocol = String(packetProtocol ?? "").trim().toUpperCase();
+  if (!normalizedLabel) return "";
+
+  if (normalizedLabel.toUpperCase() === "TCP" || normalizedProtocol === "TCP" && normalizedLabel.toUpperCase() === normalizedProtocol) {
+    return formatLayerOnlyLabel("TCP", "Transport");
+  }
+  if (normalizedLabel.toUpperCase() === "UDP" || normalizedProtocol === "UDP" && normalizedLabel.toUpperCase() === normalizedProtocol) {
+    return formatLayerOnlyLabel("UDP", "Transport");
+  }
+  if (normalizedLabel.toUpperCase() === "SCTP" || normalizedProtocol === "SCTP" && normalizedLabel.toUpperCase() === normalizedProtocol) {
+    return formatLayerOnlyLabel("SCTP", "Transport");
+  }
+  if (normalizedLabel.toUpperCase() === "ICMP" || normalizedProtocol === "ICMP" && normalizedLabel.toUpperCase() === normalizedProtocol) {
+    return formatLayerOnlyLabel("ICMP", "Network");
+  }
+  if (normalizedLabel.toUpperCase() === "IGMP" || normalizedProtocol === "IGMP" && normalizedLabel.toUpperCase() === normalizedProtocol) {
+    return formatLayerOnlyLabel("IGMP", "Network");
+  }
+  if (normalizedLabel.toUpperCase() === "LINK") {
+    return formatLayerOnlyLabel("LINK", "Link");
+  }
+  if (normalizedLabel.toUpperCase() === "FRAME") {
+    return formatLayerOnlyLabel("FRAME", "Link");
+  }
+  if (normalizedLabel.toUpperCase() === "IP" || normalizedLabel.toUpperCase() === "UNDECODABLE") {
+    return formatLayerOnlyLabel("IP", "Network");
+  }
+
+  return normalizedLabel;
+}
+
 function inferZeroPayloadProtocolLabel(packetInfo) {
   const packetProtocol = String(
     packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "",
@@ -77,17 +118,20 @@ function inferZeroPayloadProtocolLabel(packetInfo) {
       "",
     ).trim();
     if (tcpFlags && tcpFlags.toLowerCase() !== "none") {
-      return `TCP ${tcpFlags.replace(/\|+/g, "-")}`;
+      return formatLayerOnlyLabel(
+        `TCP ${tcpFlags.replace(/\|+/g, "-")}`,
+        "Transport",
+      );
     }
-    return "TCP control";
+    return formatLayerOnlyLabel("TCP control", "Transport");
   }
 
-  if (packetProtocol === "UDP") return "UDP datagram";
-  if (packetProtocol === "SCTP") return "SCTP packet";
-  if (packetProtocol === "IGMP") return "IGMP control";
-  if (packetProtocol === "LINK") return "Link-layer frame";
-  if (packetProtocol === "FRAME") return "Frame";
-  if (packetProtocol === "UNDECODABLE") return "IP packet";
+  if (packetProtocol === "UDP") return formatLayerOnlyLabel("UDP datagram", "Transport");
+  if (packetProtocol === "SCTP") return formatLayerOnlyLabel("SCTP packet", "Transport");
+  if (packetProtocol === "IGMP") return formatLayerOnlyLabel("IGMP control", "Network");
+  if (packetProtocol === "LINK") return formatLayerOnlyLabel("Link-layer frame", "Link");
+  if (packetProtocol === "FRAME") return formatLayerOnlyLabel("Frame", "Link");
+  if (packetProtocol === "UNDECODABLE") return formatLayerOnlyLabel("IP packet", "Network");
 
   return "";
 }
@@ -156,18 +200,22 @@ function inferApplicationProtocol(packetInfo, extraInfo) {
     if (matched) return matched;
   }
 
-  if (decodedNames.length > 0) return decodedNames[0];
-  if (!isUnknownLikeProtocol(fromTraits)) return fromTraits;
+  if (decodedNames.length > 0) {
+    return normalizeGenericApplicationProtocolLabel(decodedNames[0], packetProtocol);
+  }
+  if (!isUnknownLikeProtocol(fromTraits)) {
+    return normalizeGenericApplicationProtocolLabel(fromTraits, packetProtocol);
+  }
   if (getPacketPayloadLength(packetInfo) === 0) {
     const zeroPayloadLabel = inferZeroPayloadProtocolLabel(packetInfo);
     if (zeroPayloadLabel) return zeroPayloadLabel;
   }
-  return "Unknown protocol";
+  return normalizeGenericApplicationProtocolLabel(packetProtocol || "Unknown protocol", packetProtocol);
 }
 
 // Returns packet payload length.
 function getPacketPayloadLength(packetInfo) {
-  const payloadLength = Number(packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
+  const payloadLength = Number(packetInfo?.["raw.data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["payload.len"] ?? packetInfo?.["Raw data"]?.["Payload Length"]);
   if (!Number.isFinite(payloadLength) || payloadLength < 0) return 0;
   return Math.floor(payloadLength);
 }

@@ -263,3 +263,30 @@ def test_backend_builds_tor_lookup_response(monkeypatch):
     assert result["nodeCount"] == 1
     assert result["projectUrl"] == "https://www.torproject.org/"
     assert result["nodes"][0]["nickname"] == "TestRelay"
+
+
+def test_backend_falls_back_when_packet_decoder_raises(monkeypatch, tmp_path: Path):
+    backend = _load_backend_module()
+
+    packet = (
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IP(src="10.0.0.10", dst="10.0.0.20")
+        / TCP(sport=12345, dport=80, flags="A", seq=101, ack=201)
+    )
+
+    monkeypatch.setattr(backend, "stopEvent", backend.threading.Event())
+    monkeypatch.setattr(backend, "packets", [packet], raising=False)
+    monkeypatch.setattr(backend, "outputDir", str(tmp_path), raising=False)
+    monkeypatch.setattr(backend, "allPacketInfo", [], raising=False)
+    monkeypatch.setattr(backend, "packetLoop", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    result = backend.processPacketAtIndex(0, None, None, 1)
+
+    assert isinstance(result, dict)
+    packet_info = result.get("packet.info", {})
+    extra_info = result.get("extra.info", {})
+    assert packet_info.get("packet.processed") == 0
+    assert packet_info.get("packet.proto") == "TCP"
+    assert packet_info.get("Raw data", {}).get("payload.len") == 0
+    assert packet_info.get("TCP", {}).get("TCP Flag Data", {}).get("Flags") == "ACK"
+    assert "fallback after decoder error" in str(extra_info.get("processing.error", ""))
