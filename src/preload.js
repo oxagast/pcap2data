@@ -92,6 +92,7 @@ contextBridge.exposeInMainWorld('previewapi', {
 
 contextBridge.exposeInMainWorld('browserapi', {
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
+  getLinuxReleasePackageFamily: () => ipcRenderer.invoke('get-linux-release-package-family'),
 });
 
 contextBridge.exposeInMainWorld('quitapi', {

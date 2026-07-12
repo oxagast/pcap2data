@@ -324,6 +324,7 @@ let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
 let settingsAboutTypewriterTimeoutId = null;
 let settingsAboutDownloadButtonUrl = "";
+let cachedLinuxReleasePackageFamily = null;
 let startupReleaseCheckHandled = false;
 let resolveStartupReleaseCheckPromise = null;
 let startupReleaseCheckPromise = new Promise((resolve) => {
@@ -579,24 +580,58 @@ function compareReleaseVersionTokens(leftValue, rightValue) {
   return 0;
 }
 
-function getReleaseDownloadAssetPreferences(platformName = (typeof process !== "undefined" ? process.platform : "")) {
+async function detectLinuxReleasePackageFamily() {
+  if (typeof process === "undefined" || process.platform !== "linux") {
+    return "";
+  }
+  if (cachedLinuxReleasePackageFamily !== null) {
+    return cachedLinuxReleasePackageFamily;
+  }
+
+  if (!window.browserapi || typeof window.browserapi.getLinuxReleasePackageFamily !== "function") {
+    cachedLinuxReleasePackageFamily = "";
+    return cachedLinuxReleasePackageFamily;
+  }
+
+  try {
+    const response = await window.browserapi.getLinuxReleasePackageFamily();
+    const family = typeof response?.family === "string" ? response.family.trim().toLowerCase() : "";
+    cachedLinuxReleasePackageFamily = family === "debian" || family === "redhat" ? family : "";
+  } catch (_error) {
+    cachedLinuxReleasePackageFamily = "";
+  }
+  return cachedLinuxReleasePackageFamily;
+}
+
+function getReleaseDownloadAssetPreferences(
+  platformName = (typeof process !== "undefined" ? process.platform : ""),
+  linuxPackageFamily = "",
+) {
   switch (platformName) {
     case "win32":
       return [".exe"];
     case "darwin":
       return [".dmg", ".pkg", ".zip"];
-    case "linux":
-      return [".deb", ".rpm", ".AppImage", ".tar.gz", ".tgz", ".zip"];
+    case "linux": {
+      if (linuxPackageFamily === "debian") {
+        return [".deb", ".rpm", ".appimage", ".tar.gz", ".tgz", ".zip"];
+      }
+      if (linuxPackageFamily === "redhat") {
+        return [".rpm", ".deb", ".appimage", ".tar.gz", ".tgz", ".zip"];
+      }
+      return [".deb", ".rpm", ".appimage", ".tar.gz", ".tgz", ".zip"];
+    }
     default:
       return [".zip", ".tar.gz", ".tgz"];
   }
 }
 
-function selectReleaseDownloadAsset(release) {
+function selectReleaseDownloadAsset(release, { linuxPackageFamily = "" } = {}) {
   if (!release || typeof release !== "object") return null;
   const assets = Array.isArray(release.assets) ? release.assets : [];
   if (assets.length === 0) return null;
-  const preferences = getReleaseDownloadAssetPreferences();
+  const platformName = typeof process !== "undefined" ? process.platform : "";
+  const preferences = getReleaseDownloadAssetPreferences(platformName, linuxPackageFamily);
   const normalizedAssets = assets.filter((asset) => asset && typeof asset === "object");
 
   for (const preferredSuffix of preferences) {
@@ -609,10 +644,15 @@ function selectReleaseDownloadAsset(release) {
     }
   }
 
+  // For Windows we should only offer the executable package.
+  if (platformName === "win32") {
+    return null;
+  }
+
   return normalizedAssets.find((asset) => typeof asset.browser_download_url === "string" && asset.browser_download_url.trim()) || null;
 }
 
-function buildReleaseDownloadInfo(release, runningVersion) {
+function buildReleaseDownloadInfo(release, runningVersion, { linuxPackageFamily = "" } = {}) {
   const latestReleaseVersion = getReleaseVersionToken(release);
   const newVersionAvailable = compareReleaseVersionTokens(latestReleaseVersion, runningVersion) > 0;
   if (!newVersionAvailable) {
@@ -623,7 +663,7 @@ function buildReleaseDownloadInfo(release, runningVersion) {
     };
   }
 
-  const selectedAsset = selectReleaseDownloadAsset(release);
+  const selectedAsset = selectReleaseDownloadAsset(release, { linuxPackageFamily });
   return {
     newVersionAvailable: Boolean(selectedAsset?.browser_download_url),
     downloadUrl: typeof selectedAsset?.browser_download_url === "string"
@@ -926,6 +966,8 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
         throw new Error("No releases returned by GitHub API");
       }
 
+      const linuxPackageFamily = await detectLinuxReleasePackageFamily();
+
       cachedSettingsAboutReleaseInfo = {
         runningVersion,
         latestReleaseVersion: getReleaseVersionToken(latestRelease) || "Unavailable",
@@ -934,7 +976,9 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
           typeof latestRelease?.html_url === "string" && latestRelease.html_url.trim()
             ? latestRelease.html_url.trim()
             : PACKETSNITCH_RELEASES_PAGE_URL,
-        downloadInfo: buildReleaseDownloadInfo(latestRelease, runningVersion),
+        downloadInfo: buildReleaseDownloadInfo(latestRelease, runningVersion, {
+          linuxPackageFamily,
+        }),
         fetchError: "",
       };
     } catch (error) {

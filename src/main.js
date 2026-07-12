@@ -2240,6 +2240,52 @@ ipcMain.handle("open-external-url", async (_event, rawUrl) => {
   }
 });
 
+ipcMain.handle("get-linux-release-package-family", async () => {
+  if (process.platform !== "linux") {
+    return { success: true, family: "" };
+  }
+
+  const hasFile = (filePath) => {
+    try {
+      return fs.existsSync(filePath);
+    } catch (_error) {
+      return false;
+    }
+  };
+
+  const readTextFile = (filePath) => {
+    try {
+      return fs.readFileSync(filePath, "utf8");
+    } catch (_error) {
+      return "";
+    }
+  };
+
+  const osReleaseContent = readTextFile("/etc/os-release").toLowerCase();
+  const linuxReleaseHints = [
+    osReleaseContent,
+    hasFile("/etc/debian_version") ? "debian" : "",
+    hasFile("/etc/redhat-release") ? "redhat" : "",
+    hasFile("/etc/fedora-release") ? "fedora" : "",
+    hasFile("/etc/centos-release") ? "centos" : "",
+    hasFile("/etc/almalinux-release") ? "almalinux" : "",
+    hasFile("/etc/rocky-release") ? "rocky" : "",
+    hasFile("/etc/SuSE-release") ? "suse" : "",
+  ].join(" ");
+
+  const debianLikeTokens = ["debian", "ubuntu", "kali", "mint", "pop", "raspbian"];
+  const redhatLikeTokens = ["rhel", "redhat", "fedora", "centos", "rocky", "almalinux", "suse"];
+
+  if (debianLikeTokens.some((token) => linuxReleaseHints.includes(token))) {
+    return { success: true, family: "debian" };
+  }
+  if (redhatLikeTokens.some((token) => linuxReleaseHints.includes(token))) {
+    return { success: true, family: "redhat" };
+  }
+
+  return { success: true, family: "" };
+});
+
 ipcMain.handle("append-activity-log", async (_event, entry) => {
   const normalizedEntry = normalizeActivityLogEntry(entry);
   if (!normalizedEntry) {
