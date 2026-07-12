@@ -2286,6 +2286,13 @@ ipcMain.handle("get-linux-release-package-family", async () => {
   return { success: true, family: "" };
 });
 
+ipcMain.handle("get-runtime-platform", async () => {
+  return {
+    success: true,
+    platform: process.platform,
+  };
+});
+
 ipcMain.handle("append-activity-log", async (_event, entry) => {
   const normalizedEntry = normalizeActivityLogEntry(entry);
   if (!normalizedEntry) {

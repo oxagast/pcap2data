@@ -325,6 +325,7 @@ let settingsAboutTypewriterToken = 0;
 let settingsAboutTypewriterTimeoutId = null;
 let settingsAboutDownloadButtonUrl = "";
 let cachedLinuxReleasePackageFamily = null;
+let cachedRuntimePlatform = "";
 let startupReleaseCheckHandled = false;
 let resolveStartupReleaseCheckPromise = null;
 let startupReleaseCheckPromise = new Promise((resolve) => {
@@ -603,6 +604,32 @@ async function detectLinuxReleasePackageFamily() {
   return cachedLinuxReleasePackageFamily;
 }
 
+async function detectRuntimePlatform() {
+  if (cachedRuntimePlatform) {
+    return cachedRuntimePlatform;
+  }
+
+  if (window.browserapi && typeof window.browserapi.getRuntimePlatform === "function") {
+    try {
+      const response = await window.browserapi.getRuntimePlatform();
+      const runtimePlatform = typeof response?.platform === "string"
+        ? response.platform.trim().toLowerCase()
+        : "";
+      if (runtimePlatform) {
+        cachedRuntimePlatform = runtimePlatform;
+        return cachedRuntimePlatform;
+      }
+    } catch (_error) {
+      // Fall back to local process metadata below.
+    }
+  }
+
+  cachedRuntimePlatform = typeof process !== "undefined" && typeof process.platform === "string"
+    ? process.platform
+    : "";
+  return cachedRuntimePlatform;
+}
+
 function getReleaseDownloadAssetPreferences(
   platformName = (typeof process !== "undefined" ? process.platform : ""),
   linuxPackageFamily = "",
@@ -626,11 +653,12 @@ function getReleaseDownloadAssetPreferences(
   }
 }
 
-function selectReleaseDownloadAsset(release, { linuxPackageFamily = "" } = {}) {
+function selectReleaseDownloadAsset(release, { linuxPackageFamily = "", runtimePlatform = "" } = {}) {
   if (!release || typeof release !== "object") return null;
   const assets = Array.isArray(release.assets) ? release.assets : [];
   if (assets.length === 0) return null;
-  const platformName = typeof process !== "undefined" ? process.platform : "";
+  const platformName = runtimePlatform
+    || (typeof process !== "undefined" ? process.platform : "");
   const preferences = getReleaseDownloadAssetPreferences(platformName, linuxPackageFamily);
   const normalizedAssets = assets.filter((asset) => asset && typeof asset === "object");
 
@@ -652,7 +680,11 @@ function selectReleaseDownloadAsset(release, { linuxPackageFamily = "" } = {}) {
   return normalizedAssets.find((asset) => typeof asset.browser_download_url === "string" && asset.browser_download_url.trim()) || null;
 }
 
-function buildReleaseDownloadInfo(release, runningVersion, { linuxPackageFamily = "" } = {}) {
+function buildReleaseDownloadInfo(
+  release,
+  runningVersion,
+  { linuxPackageFamily = "", runtimePlatform = "" } = {},
+) {
   const latestReleaseVersion = getReleaseVersionToken(release);
   const newVersionAvailable = compareReleaseVersionTokens(latestReleaseVersion, runningVersion) > 0;
   if (!newVersionAvailable) {
@@ -663,7 +695,10 @@ function buildReleaseDownloadInfo(release, runningVersion, { linuxPackageFamily 
     };
   }
 
-  const selectedAsset = selectReleaseDownloadAsset(release, { linuxPackageFamily });
+  const selectedAsset = selectReleaseDownloadAsset(release, {
+    linuxPackageFamily,
+    runtimePlatform,
+  });
   return {
     newVersionAvailable: Boolean(selectedAsset?.browser_download_url),
     downloadUrl: typeof selectedAsset?.browser_download_url === "string"
@@ -966,7 +1001,10 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
         throw new Error("No releases returned by GitHub API");
       }
 
-      const linuxPackageFamily = await detectLinuxReleasePackageFamily();
+      const runtimePlatform = await detectRuntimePlatform();
+      const linuxPackageFamily = runtimePlatform === "linux"
+        ? await detectLinuxReleasePackageFamily()
+        : "";
 
       cachedSettingsAboutReleaseInfo = {
         runningVersion,
@@ -978,6 +1016,7 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
             : PACKETSNITCH_RELEASES_PAGE_URL,
         downloadInfo: buildReleaseDownloadInfo(latestRelease, runningVersion, {
           linuxPackageFamily,
+          runtimePlatform,
         }),
         fetchError: "",
       };
