@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const appLock = app.requestSingleInstanceLock();
-const userAgent = `PacketSnitch v${app.getVersion()} (${process.platform}; ${process.arch})`;
+const userAgent = `Mozilla/5.0 (compatible; PacketSnitch/${app.getVersion()}; +http://packetsnitch.com)`;
+app.userAgentFallback = userAgent;
+app.on("web-contents-created", (_event, webContents) => {
+  webContents.setUserAgent(userAgent);
+});
 const fs = require("fs");
 const path = require("path");
 const { pathToFileURL } = require("url");
@@ -65,6 +69,11 @@ function getOllamaFetch(timeoutMs) {
   return (input, init = {}) =>
     undiciFetch(input, {
       ...init,
+      headers: (() => {
+        const headers = new Headers(init.headers || {});
+        headers.set("User-Agent", userAgent);
+        return headers;
+      })(),
       dispatcher,
     });
 }
@@ -1410,6 +1419,7 @@ function createWindow() {
       nodeIntegration: true,
     },
   });
+  mainWindow.webContents.setUserAgent(userAgent);
   ensureRendererCspHeader(mainWindow.webContents.session);
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   const appendRendererDiagnostic = (message) => {

@@ -134,8 +134,22 @@ def _loadPacketsnitchVersion():
 
 
 PACKETSNITCH_VERSION, PACKETSNITCH_VERSION_SOURCE = _loadPacketsnitchVersion()
+PACKETSNITCH_USER_AGENT = (
+    f"Mozilla/5.0 (compatible; PacketSnitch/{PACKETSNITCH_VERSION}; +http://packetsnitch.com)"
+)
 backendRuntimeMode = "unknown"
 backendShutdownReason = "normal"
+
+
+def packetSnitchRequestHeaders(accept=None, extraHeaders=None):
+    headers = {
+        "User-Agent": PACKETSNITCH_USER_AGENT,
+    }
+    if accept:
+        headers["Accept"] = accept
+    if extraHeaders:
+        headers.update(extraHeaders)
+    return headers
 
 
 def logBackendStartup(mode):
@@ -537,7 +551,12 @@ def getPageTitle(url, timeout):
         requests.packages.urllib3.disable_warnings(  # ignore
             category=InsecureRequestWarning  # ignore request warning
         )  # ignore
-        httpResponse = requests.get(url, timeout=timeout, verify=False)
+        httpResponse = requests.get(
+            url,
+            timeout=timeout,
+            verify=False,
+            headers=packetSnitchRequestHeaders(),
+        )
         httpResponse.raise_for_status()
         responseContent = httpResponse.content
         htmlParser = BeautifulSoup(responseContent, "html.parser")
@@ -1213,10 +1232,9 @@ def buildWhoisLookupResponse(ip):
                 rdapUrl,
                 timeout=6,
                 verify=False,
-                headers={
-                    "Accept": "application/rdap+json, application/json",
-                    "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
-                },
+                headers=packetSnitchRequestHeaders(
+                    "application/rdap+json, application/json"
+                ),
             )
             if response.status_code >= 400:
                 lastError = f"RDAP HTTP {response.status_code}"
@@ -1360,10 +1378,7 @@ def getIpsumDailyCache():
             IPSUM_SOURCE_URL,
             timeout=20,
             verify=False,
-            headers={
-                "Accept": "text/plain",
-                "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
-            },
+            headers=packetSnitchRequestHeaders("text/plain"),
         )
         response.raise_for_status()
         rawText = response.text
@@ -1498,10 +1513,7 @@ def getTorExitNodeCache():
         TOR_ONIONOO_URL,
         timeout=25,
         verify=False,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
-        },
+        headers=packetSnitchRequestHeaders("application/json"),
     )
     response.raise_for_status()
     payload = response.json()
@@ -1602,10 +1614,7 @@ def buildShodanInternetDbLookupResponse(ip):
             f"{SHODAN_INTERNETDB_URL}/{normalizedIp}",
             timeout=8,
             verify=False,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": f"PacketSnitch/{PACKETSNITCH_VERSION}",
-            },
+            headers=packetSnitchRequestHeaders("application/json"),
         )
     except Exception as lookupError:
         return {
@@ -3289,6 +3298,7 @@ def runCaptureFromArgs(runArgs):
             torResponse = requests.get(
                 "https://onionoo.torproject.org/details?running=true&flag=Exit&fields=nickname,or_addresses,platform",
                 timeout=25,
+                headers=packetSnitchRequestHeaders(),
             )
             torResponse.raise_for_status()
             torJsonData = torResponse.json()

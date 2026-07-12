@@ -18,6 +18,15 @@ const BACKEND_HTTP_HOST = "127.0.0.1";
 const BACKEND_HTTP_PORT = 9020;
 const BACKEND_HTTP_READY_TIMEOUT_MS = 4000;
 const BACKEND_HTTP_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+const PACKETSNITCH_USER_AGENT =
+  `Mozilla/5.0 (compatible; PacketSnitch/${app.getVersion()}; +http://packetsnitch.com)`;
+
+function buildSnitchHttpHeaders(extraHeaders = {}) {
+  return {
+    "User-Agent": PACKETSNITCH_USER_AGENT,
+    ...extraHeaders,
+  };
+}
 
 let backendHttpServerProc = null;
 let backendHttpReadyPromise = null;
@@ -60,11 +69,11 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
         path: "/control",
         method: "POST",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(body),
           Accept: "application/x-ndjson, application/json",
-        },
+        }),
       },
       (res) => {
         const emitProgressEvent = (event) => {
@@ -252,9 +261,9 @@ function probeSnitchHttpBackendReady(host = BACKEND_HTTP_HOST, port = BACKEND_HT
         path: "/ping",
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -297,9 +306,9 @@ function requestSnitchHttpBackendVersion(
         path: "/version",
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -379,9 +388,9 @@ function requestSnitchHttpBackendGeoip(
         path: requestPath,
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -442,9 +451,9 @@ function requestSnitchHttpBackendWhois(
         path: requestPath,
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -505,9 +514,9 @@ function requestSnitchHttpBackendIpsum(
         path: requestPath,
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -568,9 +577,9 @@ function requestSnitchHttpBackendTor(
         path: requestPath,
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -631,9 +640,9 @@ function requestSnitchHttpBackendShodan(
         path: requestPath,
         method: "GET",
         timeout: timeoutMs,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           Accept: "application/json",
-        },
+        }),
       },
       (res) => {
         let body = "";
@@ -998,11 +1007,11 @@ async function runBackendCommandViaHttp(filename, options = {}) {
         path: "/process",
         method: "POST",
         timeout: BACKEND_HTTP_REQUEST_TIMEOUT_MS,
-        headers: {
+        headers: buildSnitchHttpHeaders({
           "Content-Type": "application/json; charset=utf-8",
           "Content-Length": Buffer.byteLength(body),
           Accept: "application/x-ndjson, application/json",
-        },
+        }),
       },
       (res) => {
         const contentType = String(res.headers["content-type"] || "").toLowerCase();
