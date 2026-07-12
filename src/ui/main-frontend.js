@@ -12146,10 +12146,49 @@ function bytesToHexString(bytes) {
 
 // Returns packet payload hex.
 function getPacketPayloadHex(packet) {
-  const payloadHex =
-    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
-    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
-  return typeof payloadHex === "string" ? payloadHex : "";
+  return getPacketInfoPayloadHex(packet?.["packet.info"]);
+}
+
+// Returns packet.info payload hex across supported schema variants.
+function getPacketInfoPayloadHex(packetInfo) {
+  const candidates = [
+    packetInfo?.["raw.data"]?.["payload"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload"]?.["hex.encoded"],
+    packetInfo?.["raw.data"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload.hex.encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["hex.encoded"],
+    packetInfo?.["Raw data"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["payload.hex.encoded"],
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+
+  return "";
+}
+
+// Returns packet.info payload length with hex-derived fallback.
+function getPacketInfoPayloadLength(packetInfo) {
+  const payloadLengthRaw = Number(
+    packetInfo?.["raw.data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["payload.len"] ??
+    packetInfo?.["Raw data"]?.["Payload Length"],
+  );
+  if (Number.isFinite(payloadLengthRaw) && payloadLengthRaw > 0) {
+    return Math.floor(payloadLengthRaw);
+  }
+
+  const payloadHex = getPacketInfoPayloadHex(packetInfo);
+  if (payloadHex) {
+    return Math.floor(payloadHex.replace(/\s+/g, "").length / 2);
+  }
+
+  return 0;
 }
 
 // Returns packet payload bytes.
@@ -12214,14 +12253,7 @@ function parseTcpSequenceNumber(transportData) {
 
 // Returns tcp segment length.
 function getTcpSegmentLength(packetInfo, transportData) {
-  const payloadLenRaw = Number(
-    packetInfo?.["raw.data"]?.["payload.len"] ??
-    packetInfo?.["Raw data"]?.["payload.len"] ??
-    packetInfo?.["Raw data"]?.["Payload Length"]
-  );
-  const payloadLen = Number.isFinite(payloadLenRaw) && payloadLenRaw > 0
-    ? payloadLenRaw
-    : 0;
+  const payloadLen = getPacketInfoPayloadLength(packetInfo);
 
   const flagsText = String(transportData?.["TCP Flag Data"]?.["Flags"] || "").toUpperCase();
   const controlByteLength =
@@ -17101,11 +17133,7 @@ function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
   const traits = extraInfo["Traits"] || {};
   const characters = traits["Characters"] || {};
   const packetInfo = packetEntry?.["packet.info"] || {};
-  const payloadLenRaw =
-    packetInfo?.["raw.data"]?.["payload.len"] ??
-    packetInfo?.["Raw data"]?.["payload.len"] ??
-    packetInfo?.["Raw data"]?.["Payload Length"];
-  const payloadLength = Number(payloadLenRaw);
+  const payloadLength = getPacketInfoPayloadLength(packetInfo);
 
   if (Number.isFinite(payloadLength) && payloadLength <= 0) {
     return false;
@@ -17490,11 +17518,7 @@ function infoPanel(pk) {
   const dstMacVendor = etherFrame["ether.dst.mac.vendor"] ?? etherFrame["MAC Destination Vendor"] ?? "N/A";
   const ipLayerLen = ipData["ip.len"] ?? ipData["IP layer length"] ?? "N/A";
   const wireLen = transportData["Wire length"] ?? "N/A";
-  const payloadLen =
-    packetInfoData?.["raw.data"]?.["payload.len"] ??
-    packetInfoData?.["Raw data"]?.["payload.len"] ??
-    packetInfoData?.["Raw data"]?.["Payload Length"] ??
-    "N/A";
+  const payloadLen = getPacketInfoPayloadLength(packetInfoData);
   let sslVersion = "";
   let sslAlgos = "";
   if (
