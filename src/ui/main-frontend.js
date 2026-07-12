@@ -861,7 +861,7 @@ function buildSettingsAboutTerminalReadout({
   lines.push("                   |_|          Welcome to the oxsploits network.");
   lines.push("");
   lines.push(`${PACKETSNITCH_TERMINAL_IDENTITY}:~$ cat packetsnitch.txt`);
-  lines.push("PacketSnitch: A feature rich network packet capture and analysis tool built in Python and Electron.");
+  lines.push("PacketSnitch: A feature rich network packet capture and analysis tool built in Python and NodeJS/Electron.");
   lines.push(`Author: ${PACKETSNITCH_AUTHOR_NAME}`);
   lines.push(`Running PacketSnitch version: ${runningVersion || "Unknown"}`);
   lines.push(`Latest release version: ${latestReleaseVersion || "Unavailable"}`);
@@ -932,9 +932,9 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
 
   outputEl.textContent = `${preCommandText}${promptText}`;
   let cursor = 0;
-  const charDelayMs = 18;
-  const preTypeDelayMs = 120;
-  const preReturnDelayMs = 180;
+  const charDelayMs = 30;
+  const preTypeDelayMs = 1000;
+  const preReturnDelayMs = 500;
 
   const typeNextCharacter = () => {
     if (activeToken !== settingsAboutTypewriterToken) return;
