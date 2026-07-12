@@ -581,8 +581,10 @@ function compareReleaseVersionTokens(leftValue, rightValue) {
   return 0;
 }
 
-async function detectLinuxReleasePackageFamily() {
-  if (typeof process === "undefined" || process.platform !== "linux") {
+async function detectLinuxReleasePackageFamily(runtimePlatform = "") {
+  const normalizedRuntimePlatform = String(runtimePlatform || "").trim().toLowerCase();
+  const platformName = normalizedRuntimePlatform || await detectRuntimePlatform();
+  if (platformName !== "linux") {
     return "";
   }
   if (cachedLinuxReleasePackageFamily !== null) {
@@ -662,10 +664,17 @@ function selectReleaseDownloadAsset(release, { linuxPackageFamily = "", runtimeP
   const preferences = getReleaseDownloadAssetPreferences(platformName, linuxPackageFamily);
   const normalizedAssets = assets.filter((asset) => asset && typeof asset === "object");
 
+  const assetMatchesSuffix = (asset, suffix) => {
+    const suffixLower = String(suffix || "").toLowerCase();
+    const suffixRegex = new RegExp(`${suffixLower.replace(/\./g, "\\.")}(?:$|[?#])`, "i");
+    const assetName = String(asset?.name || "").trim().toLowerCase();
+    const assetUrl = String(asset?.browser_download_url || "").trim().toLowerCase();
+    return suffixRegex.test(assetName) || suffixRegex.test(assetUrl);
+  };
+
   for (const preferredSuffix of preferences) {
     const matchedAsset = normalizedAssets.find((asset) => {
-      const assetName = String(asset.name || "").trim().toLowerCase();
-      return assetName.endsWith(preferredSuffix.toLowerCase());
+      return assetMatchesSuffix(asset, preferredSuffix);
     });
     if (matchedAsset?.browser_download_url) {
       return matchedAsset;
@@ -675,6 +684,28 @@ function selectReleaseDownloadAsset(release, { linuxPackageFamily = "", runtimeP
   // For Windows we should only offer the executable package.
   if (platformName === "win32") {
     return null;
+  }
+
+  if (platformName === "linux" && linuxPackageFamily === "redhat") {
+    const bestNonDebAsset = normalizedAssets.find(
+      (asset) => typeof asset.browser_download_url === "string"
+        && asset.browser_download_url.trim()
+        && !assetMatchesSuffix(asset, ".deb"),
+    );
+    if (bestNonDebAsset) {
+      return bestNonDebAsset;
+    }
+  }
+
+  if (platformName === "linux" && linuxPackageFamily === "debian") {
+    const bestNonRpmAsset = normalizedAssets.find(
+      (asset) => typeof asset.browser_download_url === "string"
+        && asset.browser_download_url.trim()
+        && !assetMatchesSuffix(asset, ".rpm"),
+    );
+    if (bestNonRpmAsset) {
+      return bestNonRpmAsset;
+    }
   }
 
   return normalizedAssets.find((asset) => typeof asset.browser_download_url === "string" && asset.browser_download_url.trim()) || null;
@@ -1003,7 +1034,7 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
 
       const runtimePlatform = await detectRuntimePlatform();
       const linuxPackageFamily = runtimePlatform === "linux"
-        ? await detectLinuxReleasePackageFamily()
+        ? await detectLinuxReleasePackageFamily(runtimePlatform)
         : "";
 
       cachedSettingsAboutReleaseInfo = {

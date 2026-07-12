@@ -2261,26 +2261,47 @@ ipcMain.handle("get-linux-release-package-family", async () => {
     }
   };
 
-  const osReleaseContent = readTextFile("/etc/os-release").toLowerCase();
-  const linuxReleaseHints = [
-    osReleaseContent,
-    hasFile("/etc/debian_version") ? "debian" : "",
-    hasFile("/etc/redhat-release") ? "redhat" : "",
-    hasFile("/etc/fedora-release") ? "fedora" : "",
-    hasFile("/etc/centos-release") ? "centos" : "",
-    hasFile("/etc/almalinux-release") ? "almalinux" : "",
-    hasFile("/etc/rocky-release") ? "rocky" : "",
-    hasFile("/etc/SuSE-release") ? "suse" : "",
-  ].join(" ");
+  const parseOsRelease = (rawText) => {
+    const parsed = {};
+    String(rawText || "")
+      .split(/\r?\n/)
+      .forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) return;
+        const equalsIndex = trimmed.indexOf("=");
+        if (equalsIndex <= 0) return;
+        const key = trimmed.slice(0, equalsIndex).trim().toUpperCase();
+        const valueRaw = trimmed.slice(equalsIndex + 1).trim();
+        const unquoted = valueRaw.replace(/^"|"$/g, "").replace(/^'|'$/g, "");
+        parsed[key] = unquoted.toLowerCase();
+      });
+    return parsed;
+  };
 
-  const debianLikeTokens = ["debian", "ubuntu", "kali", "mint", "pop", "raspbian"];
+  const osReleaseRaw = readTextFile("/etc/os-release");
+  const osRelease = parseOsRelease(osReleaseRaw);
+  const idTokens = [osRelease.ID || "", osRelease.ID_LIKE || "", osRelease.NAME || ""]
+    .join(" ")
+    .toLowerCase();
+
   const redhatLikeTokens = ["rhel", "redhat", "fedora", "centos", "rocky", "almalinux", "suse"];
+  const debianLikeTokens = ["debian", "ubuntu", "kali", "mint", "pop", "raspbian"];
 
-  if (debianLikeTokens.some((token) => linuxReleaseHints.includes(token))) {
-    return { success: true, family: "debian" };
-  }
-  if (redhatLikeTokens.some((token) => linuxReleaseHints.includes(token))) {
+  const hasRedhatMarkerFile =
+    hasFile("/etc/redhat-release")
+    || hasFile("/etc/fedora-release")
+    || hasFile("/etc/centos-release")
+    || hasFile("/etc/almalinux-release")
+    || hasFile("/etc/rocky-release")
+    || hasFile("/etc/SuSE-release");
+  const hasDebianMarkerFile = hasFile("/etc/debian_version");
+
+  // Prefer explicit Fedora/RHEL markers when present.
+  if (hasRedhatMarkerFile || redhatLikeTokens.some((token) => idTokens.includes(token))) {
     return { success: true, family: "redhat" };
+  }
+  if (hasDebianMarkerFile || debianLikeTokens.some((token) => idTokens.includes(token))) {
+    return { success: true, family: "debian" };
   }
 
   return { success: true, family: "" };
