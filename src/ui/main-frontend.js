@@ -1323,6 +1323,34 @@ function resolveSettingsAboutTerminalColorToken(themeVariables, tokenName, fallb
   return raw.trim();
 }
 
+function resolveThemeBgColorToken(themeVariables) {
+  if (!themeVariables || typeof themeVariables !== "object") return "";
+  const candidateTokens = ["--app-bg", "--surface-0", "--surface-1", "--input-bg-color"];
+  for (const tokenName of candidateTokens) {
+    const tokenValue = resolveSettingsAboutTerminalColorToken(themeVariables, tokenName, "");
+    if (tokenValue) return tokenValue;
+  }
+  return "";
+}
+
+function isThemeLight(themeVariables) {
+  const backgroundToken = resolveThemeBgColorToken(themeVariables);
+  const parsedBackground = parseHexColorToRgb(backgroundToken);
+  if (!parsedBackground) return false;
+  return getRelativeLuminanceFromRgb(parsedBackground) >= 0.5;
+}
+
+function applyThemeDropdownColors(theme) {
+  const rootStyle = document.documentElement.style;
+  const themeVariables = theme && typeof theme === "object" ? theme.variables : null;
+  const lightTheme = isThemeLight(themeVariables);
+  const dropdownBackgroundColor = lightTheme ? "#ffffff" : "#000000";
+  const dropdownTextColor = lightTheme ? "#000000" : "#ffffff";
+
+  rootStyle.setProperty("--dropdown-bg-color", dropdownBackgroundColor);
+  rootStyle.setProperty("--dropdown-text-color", dropdownTextColor);
+}
+
 function applySettingsAboutTerminalTheme(theme) {
   const rootStyle = document.documentElement.style;
   const themeVariables = theme && typeof theme === "object" ? theme.variables : null;
@@ -1364,6 +1392,7 @@ function applyThemeVariables(theme) {
     appliedThemeVariableNames.add(String(variableName));
   });
 
+  applyThemeDropdownColors(theme);
   applySettingsAboutTerminalTheme(theme);
 }
 
