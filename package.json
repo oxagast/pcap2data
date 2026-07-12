@@ -4,6 +4,7 @@
   "productName": "packetsnitch",
   "version": "1.9.1529",
   "description": "A High Level Network Analysis Tool",
+  "homepage": "https://packetsnitch.com",
   "main": ".webpack/main",
   "private": false,
   "scripts": {
@@ -14,6 +15,10 @@
     "make": "npm run build-backend && cross-env QA_SKIP_RPATHS=1 electron-forge make",
     "build-backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oxagast/PacketSnitch"
   },
   "publishConfig": {
     "@oxagast:registry": "https://npm.pkg.github.com"

@@ -139,6 +139,14 @@ PACKETSNITCH_USER_AGENT = (
 )
 backendRuntimeMode = "unknown"
 backendShutdownReason = "normal"
+backendStartedAtEpoch = time.time()
+processingJobLock = threading.Lock()
+processingJobInfo = {
+    "jobId": None,
+    "startedAtEpoch": None,
+    "pcapPath": None,
+}
+backendJobsProcessedSinceStart = 0
 
 
 def packetSnitchRequestHeaders(accept=None, extraHeaders=None):
@@ -336,6 +344,95 @@ def _applyRuntimeConfigUpdate(request):
         "action": "set-runtime-config",
         **_getRuntimeConfigSnapshot(),
     }, 200
+
+
+def _setActiveProcessingJob(jobId, pcapPath):
+    with processingJobLock:
+        processingJobInfo["jobId"] = str(jobId)
+        processingJobInfo["startedAtEpoch"] = float(time.time())
+        processingJobInfo["pcapPath"] = str(pcapPath or "")
+
+
+def _clearActiveProcessingJob():
+    with processingJobLock:
+        processingJobInfo["jobId"] = None
+        processingJobInfo["startedAtEpoch"] = None
+        processingJobInfo["pcapPath"] = None
+
+
+def _buildBackendStatusPayload(server=None):
+    nowEpoch = float(time.time())
+    uptimeSeconds = max(0.0, nowEpoch - float(backendStartedAtEpoch))
+    runtimeConfig = _getRuntimeConfigSnapshot()
+
+    with processingJobLock:
+        jobId = processingJobInfo.get("jobId")
+        startedAtEpoch = processingJobInfo.get("startedAtEpoch")
+        pcapPath = processingJobInfo.get("pcapPath")
+        jobsProcessedSinceStart = int(backendJobsProcessedSinceStart)
+
+    runningJobs = []
+    if processingLock.locked():
+        runningJobs.append(
+            {
+                "name": "process",
+                "jobId": jobId,
+                "pcapPath": pcapPath,
+                "startedAt": datetime.utcfromtimestamp(startedAtEpoch).isoformat() + "Z"
+                if isinstance(startedAtEpoch, (int, float))
+                else None,
+                "elapsedSeconds": round(max(0.0, nowEpoch - float(startedAtEpoch)), 3)
+                if isinstance(startedAtEpoch, (int, float))
+                else None,
+            }
+        )
+
+    serverAddress = None
+    if server is not None:
+        try:
+            serverAddress = f"{server.server_address[0]}:{int(server.server_address[1])}"
+        except Exception:
+            serverAddress = None
+
+    statusLine = (
+        "status=ok "
+        + f"mode={backendRuntimeMode} "
+        + f"version={PACKETSNITCH_VERSION} "
+        + f"uptime_s={uptimeSeconds:.3f} "
+        + f"workerThreads={runtimeConfig['workerThreads']} "
+        + f"hostChunkSize={runtimeConfig['hostChunkSize']} "
+        + f"runningJobs={len(runningJobs)} "
+        + f"jobsProcessed={jobsProcessedSinceStart}"
+    )
+
+    return {
+        "type": "status",
+        "status": "ok",
+        "statusLine": statusLine,
+        "service": "packetsnitch",
+        "version": PACKETSNITCH_VERSION,
+        "versionSource": PACKETSNITCH_VERSION_SOURCE,
+        "mode": backendRuntimeMode,
+        "pid": int(os.getpid()),
+        "python": {
+            "version": str(sys.version).split()[0],
+            "executable": sys.executable,
+        },
+        "server": {
+            "address": serverAddress,
+            "shutdownReason": backendShutdownReason,
+        },
+        "uptimeSeconds": round(uptimeSeconds, 3),
+        "runtime": {
+            **runtimeConfig,
+            "processing": bool(processingLock.locked()),
+            "stopRequested": bool(stopEvent.is_set()),
+            "jobsProcessedSinceStart": jobsProcessedSinceStart,
+        },
+        "jobsProcessedSinceStart": jobsProcessedSinceStart,
+        "runningJobs": runningJobs,
+        "timestamp": datetime.utcfromtimestamp(nowEpoch).isoformat() + "Z",
+    }
 
 
 def configLoader(filename="conf.yaml"):
@@ -3479,6 +3576,9 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         parsedUrl = urlparse(self.path)
         queryParams = parse_qs(parsedUrl.query or "", keep_blank_values=False)
 
+        if parsedUrl.path in {"/", "/status"}:
+            self.sendJson(200, _buildBackendStatusPayload(self.server))
+            return
         if parsedUrl.path == "/ping":
             self.sendJson(
                 200,
@@ -3838,14 +3938,22 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
             def workerRunCapture():
                 global progressEventCallback
+                global backendJobsProcessedSinceStart
                 try:
                     with processingLock:
+                        _setActiveProcessingJob(
+                            jobId=f"process-{int(time.time() * 1000)}",
+                            pcapPath=runArgs.pcap_file,
+                        )
                         previousProgressCallback = progressEventCallback
                         progressEventCallback = progressCallback
                         try:
                             resultHolder["result"] = runCaptureFromArgs(runArgs)
                         finally:
+                            with processingJobLock:
+                                backendJobsProcessedSinceStart += 1
                             progressEventCallback = previousProgressCallback
+                            _clearActiveProcessingJob()
                 except Exception as runError:
                     resultHolder["error"] = runError
                     resultHolder["traceback"] = traceback.format_exc()
