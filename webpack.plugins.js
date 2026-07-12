@@ -35,6 +35,10 @@ module.exports = [
         from: path.resolve(__dirname, 'src/assets'),
         to: 'assets',
       },
+      {
+        from: path.resolve(__dirname, 'src/data'),
+        to: 'data',
+      },
     ],
   }),
   new FixForgeRendererPathsPlugin(),

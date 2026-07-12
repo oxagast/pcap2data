@@ -318,6 +318,9 @@ let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
 let cachedLlmDiagnostics = null;
+let startupWindowLoaded = false;
+let startupSettingsInitialized = false;
+let startupPreloadHidden = false;
 let cachedBackendDiagnostics = null;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
@@ -2520,6 +2523,23 @@ function hideLoadingOverlay() {
   if (loadingContainerEl) {
     loadingContainerEl.style.display = "none";
   }
+}
+
+// Hides the startup preload overlay once window load and settings/theme init have finished.
+function maybeHideStartupPreload() {
+  if (!startupWindowLoaded || !startupSettingsInitialized || startupPreloadHidden) {
+    return;
+  }
+  const preloadEl = document.getElementById("startup-preload-screen");
+  if (!preloadEl) {
+    startupPreloadHidden = true;
+    return;
+  }
+  startupPreloadHidden = true;
+  preloadEl.classList.add("is-hidden");
+  window.setTimeout(() => {
+    preloadEl.style.display = "none";
+  }, 300);
 }
 
 // Normalizes backend json path payload.
@@ -18517,6 +18537,10 @@ void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
   .then(() => loadAvailableOllamaModels())
   .then(() => loadPersistedSettings())
+  .then(() => {
+    startupSettingsInitialized = true;
+    maybeHideStartupPreload();
+  })
   .then(async () => {
     startupReleaseCheckPromise = maybeShowSettingsAboutForNewRelease();
     window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = startupReleaseCheckPromise;
@@ -18525,6 +18549,8 @@ void loadAvailableThemes()
   .catch((error) => {
     console.warn("Unable to initialize themes/settings:", error);
     syncSettingsFormFromState();
+    startupSettingsInitialized = true;
+    maybeHideStartupPreload();
   });
 
 // On page load, hide packet info and payload panes
@@ -18560,4 +18586,10 @@ onload = function () {
   updateReprocessButtonState();
   document.getElementById("leftside").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
+  const startupVersionEl = document.getElementById("startup-preload-version");
+  if (startupVersionEl) {
+    startupVersionEl.textContent = `PacketSnitch v${psVer}`;
+  }
+  startupWindowLoaded = true;
+  maybeHideStartupPreload();
 };

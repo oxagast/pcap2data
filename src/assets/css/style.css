@@ -71,6 +71,63 @@ option {
   z-index: 1;
 }
 
+#startup-preload-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 200001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.86);
+  backdrop-filter: blur(12px) brightness(0.42);
+  -webkit-backdrop-filter: blur(12px) brightness(0.42);
+  opacity: 1;
+  transition: opacity 260ms ease;
+}
+
+#startup-preload-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(47, 140, 255, 0.2) 0%, rgba(0, 0, 0, 0.55) 100%);
+  z-index: 0;
+}
+
+#startup-preload-screen.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+#startup-preload-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: min(34vw, 300px);
+  min-height: min(34vw, 300px);
+}
+
+#startup-preload-logo {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 28px rgba(0, 0, 0, 0.45));
+}
+
+#startup-preload-version {
+  margin-top: 10px;
+  color: #7fb8ff;
+  font-family: "Orbitron", "Courier New", Courier, monospace;
+  font-weight: 700;
+  font-size: clamp(16px, 1.7vw, 24px);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 10px rgba(47, 140, 255, 0.65), 0 0 20px rgba(47, 140, 255, 0.45);
+  white-space: nowrap;
+}
+
 #error-container {
   position: absolute;
   top: 50%;
