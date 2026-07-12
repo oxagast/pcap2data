@@ -265,6 +265,23 @@ def test_backend_builds_tor_lookup_response(monkeypatch):
     assert result["nodes"][0]["nickname"] == "TestRelay"
 
 
+def test_backend_json_dump_encoded_handles_bytes_values():
+    backend = _load_backend_module()
+
+    payload = {
+        "plain": "ok",
+        "byte_value": b"\x00\x01\xff",
+        "nested": {"items": [b"abc", 123]},
+    }
+
+    encoded = backend._jsonDumpEncoded(payload)
+    decoded = json.loads(encoded.decode("utf-8"))
+
+    assert decoded["plain"] == "ok"
+    assert decoded["byte_value"] == "0001ff"
+    assert decoded["nested"]["items"][0] == "616263"
+
+
 def _make_stream_packet(
     processed,
     app_proto,

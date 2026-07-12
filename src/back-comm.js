@@ -772,11 +772,11 @@ function resolveBackendRuntime() {
 
   let snitchExePath;
   if (platform === "win32") {
-    snitchExePath = path.join(basePath, "\\snitch\\snitch.exe");
+    snitchExePath = path.join(basePath, "snitch", "snitch.exe");
   } else if (platform === "linux") {
-    snitchExePath = path.join(basePath, "/snitch/snitch");
+    snitchExePath = path.join(basePath, "snitch", "snitch");
   } else {
-    snitchExePath = path.join(basePath, "/snitch/snitch");
+    snitchExePath = path.join(basePath, "snitch", "snitch");
   }
 
   const hasBundledBackendExe = fs.existsSync(snitchExePath);

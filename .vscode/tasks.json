@@ -32,7 +32,7 @@
 			"type": "shell",
 			"command": ".venv/bin/pytest",
 			"args": [
-				"test/backend-json-test.py"
+				"tests/test_backend_json.py"
 			],
 			"group": {
 				"kind": "build",

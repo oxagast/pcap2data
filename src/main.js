@@ -1741,10 +1741,30 @@ ipcMain.handle("check-first-run", async () => {
     ? path.join(__dirname, "../../src/backend/")
     : process.resourcesPath;
   const backendExe = platform === "win32" ? "snitch.exe" : "snitch";
+
+  const backendCandidates = [
+    path.join(basePath, "snitch", backendExe),
+    path.join(basePath, backendExe),
+  ];
+  if (isDev) {
+    backendCandidates.push(path.join(basePath, "snitch.py"));
+  }
+
+  let resolvedBackendPath = backendCandidates[0];
+  let backendExists = false;
+  for (const candidatePath of backendCandidates) {
+    if (fs.existsSync(candidatePath)) {
+      resolvedBackendPath = candidatePath;
+      backendExists = true;
+      break;
+    }
+  }
+
   const filesToCheck = [
     {
       name: "PacketSnitch Backend (" + backendExe + ")",
-      path: path.join(basePath, "snitch", backendExe),
+      path: resolvedBackendPath,
+      exists: backendExists,
     },
     {
       name: "GeoIP Database (GeoLite2-City.mmdb)",
@@ -1763,11 +1783,16 @@ ipcMain.handle("check-first-run", async () => {
       path: path.join(process.resourcesPath, "app.asar"),
     },
   ];
-  const installedFiles = filesToCheck.map((f) => ({
-    name: f.name,
-    path: f.path,
-    exists: fs.existsSync(f.path),
-  }));
+  const installedFiles = filesToCheck.map((f) => {
+    const exists = Object.prototype.hasOwnProperty.call(f, "exists")
+      ? Boolean(f.exists)
+      : fs.existsSync(f.path);
+    return {
+      name: f.name,
+      path: f.path,
+      exists,
+    };
+  });
   return {
     isFirstRun: isFirstRunAfterInstall,
     version: app.getVersion(),

@@ -1,7 +1,7 @@
 :root {
   --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, var(--color-1) 36%, transparent);
   --sidebar-width: 300px;
-  --dropdown-bg-color: var(--input-bg-color, #000000);
+  --dropdown-bg-color: color-mix(in srgb, var(--input-bg-color, #000000) 94%, transparent);
   --dropdown-text-color: var(--input-text-color, #ffffff);
 }
 
@@ -1796,7 +1796,7 @@ strong {
 #convert-context-menu {
   position: fixed;
   z-index: 99999;
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) 93%, transparent);
   border: 1px solid var(--color-1);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
@@ -1855,7 +1855,7 @@ strong {
   top: -4px;
   min-width: 180px;
   max-width: 380px;
-  background-color: var(--color-4);
+  background-color: color-mix(in srgb, var(--color-4) 94%, transparent);
   border: 1px solid var(--color-1);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
@@ -3354,7 +3354,7 @@ strong {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
-  background-color: var(--input-bg-color);
+  background-color: color-mix(in srgb, var(--input-bg-color) 94%, black);
   color: transparent;
   border: 1px solid grey;
   border-radius: 4px;
@@ -3382,7 +3382,7 @@ strong {
 
 #filter-history-select:hover,
 #filter-history-select:focus {
-  background-color: var(--color-2);
+  background-color: color-mix(in srgb, var(--input-bg-color) 70%, black);
 }
 
 #filter-history-select.filter-history-expanded {

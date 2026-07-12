@@ -691,11 +691,32 @@ def _jsonValuesEquivalent(leftValue, rightValue):
     Falls back to direct equality when JSON serialisation fails.
     """
     try:
-        return json.dumps(leftValue, sort_keys=True, default=str) == json.dumps(
-            rightValue, sort_keys=True, default=str
+        return json.dumps(
+            leftValue,
+            sort_keys=True,
+            default=_jsonDefaultSerializer,
+        ) == json.dumps(
+            rightValue,
+            sort_keys=True,
+            default=_jsonDefaultSerializer,
         )
     except Exception:
         return leftValue == rightValue
+
+
+def _jsonDefaultSerializer(value):
+    """
+    Convert non-JSON-native values into safe serializable primitives.
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).hex()
+    if isinstance(value, Decimal):
+        return float(value)
+    return str(value)
+
+
+def _jsonDumpEncoded(value):
+    return json.dumps(value, default=_jsonDefaultSerializer).encode()
 
 
 def _normaliseJsonKeyName(key):
@@ -958,8 +979,8 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
         outputDir,
         dstPortStr,
         packetIndex,
-        json.dumps(dataTypeInfo).encode(),
-        json.dumps(packetInfo).encode(),
+        _jsonDumpEncoded(dataTypeInfo),
+        _jsonDumpEncoded(packetInfo),
         hostKey,
     )
 
@@ -2474,8 +2495,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 outputDir,
                 dstPortStr,
                 packetIndex,
-                json.dumps(dataTypeInfo).encode(),
-                json.dumps(packetInfo).encode(),
+                _jsonDumpEncoded(dataTypeInfo),
+                _jsonDumpEncoded(packetInfo),
                 dstIp if dstIp != "0.0.0.0" else srcIp,
             )
 
@@ -2537,8 +2558,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             outputDir,
             dstPortStr,
             packetIndex,
-            json.dumps(dataTypeInfo).encode(),
-            json.dumps(packetInfo).encode(),
+            _jsonDumpEncoded(dataTypeInfo),
+            _jsonDumpEncoded(packetInfo),
             "0.0.0.0",
         )
 
@@ -3153,8 +3174,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 outputDir,
                 dstPortStr,
                 packetIndex,
-                json.dumps(dataTypeInfo).encode(),
-                json.dumps(packetInfo).encode(),
+                _jsonDumpEncoded(dataTypeInfo),
+                _jsonDumpEncoded(packetInfo),
                 hostKey,
             )
             return mergedInfo
