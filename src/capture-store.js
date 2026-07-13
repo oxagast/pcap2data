@@ -428,6 +428,106 @@ function writePacketLineSync(packetDataFd, writeOffset, packet) {
     };
 }
 
+async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = null) {
+    ensureStoreDir();
+
+    const storeId = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}`;
+    const packetDataPath = path.join(CAPTURE_STORE_DIR, `${storeId}.packets.ndjson`);
+    const packetDataFd = fs.openSync(packetDataPath, "w+");
+
+    const refsByKey = new Map();
+    const hostPackets = new Map();
+    const listEntries = [];
+    let writeOffset = 0;
+
+    const normalizedCaptureData = isObject(captureDataInput)
+        ? isObject(captureDataInput["capture.data"])
+            ? captureDataInput["capture.data"]
+            : captureDataInput
+        : null;
+    if (!normalizedCaptureData || !isObject(normalizedCaptureData)) {
+        throw new Error("Invalid capture data payload");
+    }
+
+    const hostMap = isObject(normalizedCaptureData["host"])
+        ? normalizedCaptureData["host"]
+        : isObject(normalizedCaptureData["Host"])
+            ? normalizedCaptureData["Host"]
+            : null;
+    if (!hostMap) {
+        throw new Error("Invalid capture data payload");
+    }
+
+    const finalSummary = typeof normalizedCaptureData["final.summary"] === "string"
+        ? normalizedCaptureData["final.summary"]
+        : "";
+    const sessionState = isObject(sessionStateInput)
+        ? sessionStateInput
+        : isObject(captureDataInput?.["session.state"])
+            ? captureDataInput["session.state"]
+            : null;
+
+    Object.keys(hostMap).forEach((host) => {
+        const sourcePackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+        const packetStubs = [];
+        hostPackets.set(host, packetStubs);
+
+        sourcePackets.forEach((value, hostPacketIndex) => {
+            if (!isObject(value) || !isObject(value["packet.info"])) {
+                return;
+            }
+
+            const packetKey = derivePacketKey(value, host, hostPacketIndex, refsByKey);
+            const packetStub = buildPacketStub(value, packetKey, host, hostPacketIndex);
+            packetStubs.push(packetStub);
+
+            refsByKey.set(packetKey, {
+                packetKey,
+                host,
+                hostPacketIndex,
+                packetListIndex: packetStubs.length - 1,
+                offset: -1,
+                length: -1,
+            });
+
+            const result = writePacketLineSync(packetDataFd, writeOffset, value);
+            writeOffset += result.length;
+            const ref = refsByKey.get(packetKey);
+            if (ref) {
+                ref.offset = result.offset;
+                ref.length = result.length;
+            }
+
+            listEntries.push(derivePacketListSummary(value, packetKey, host, hostPacketIndex));
+        });
+    });
+
+    fs.fsyncSync(packetDataFd);
+    listEntries.sort(compareListEntries);
+    applyStreamOrdering(listEntries);
+
+    const hostObject = {};
+    hostPackets.forEach((packetList, host) => {
+        hostObject[host] = packetList;
+    });
+
+    return {
+        storeId,
+        sourcePath: "[capture-data]",
+        packetDataPath,
+        packetDataFd,
+        refsByKey,
+        hostPackets,
+        packetCache: new Map(),
+        listEntries,
+        captureData: {
+            host: hostObject,
+            "final.summary": finalSummary,
+        },
+        sessionState,
+    };
+}
+
 async function buildStoreFromSource(sourcePath) {
     ensureStoreDir();
 
@@ -787,6 +887,29 @@ function registerCaptureStoreHandlers(ipcMain) {
             return {
                 success: false,
                 error: error?.message || "Failed to load JSON capture",
+            };
+        }
+    });
+
+    ipcMain.handle("capture-store-load-data", async (_event, payload) => {
+        const captureData = isObject(payload) ? payload.captureData : null;
+        const sessionState = isObject(payload) ? payload.sessionState : null;
+        if (!captureData || !isObject(captureData)) {
+            return { success: false, error: "Invalid capture data payload" };
+        }
+
+        try {
+            const store = await buildStoreFromCaptureData(captureData, sessionState);
+            await activateStore(store);
+            return {
+                success: true,
+                captureData: store.captureData,
+                sessionState: store.sessionState,
+            };
+        } catch (error) {
+            return {
+                success: false,
+                error: error?.message || "Failed to load in-memory capture",
             };
         }
     });

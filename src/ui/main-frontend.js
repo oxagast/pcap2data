@@ -220,8 +220,14 @@ const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
 const streamPacketHydrationCache = new Map();
 const streamPayloadHexCache = new Map();
+let packetNavigationCacheVersion = 0;
+let allHostsNavigationPacketsCache = null;
+const hostNavigationPacketsCache = new Map();
+let bookmarkedNavigationPacketsCache = null;
+let totalPacketCountCache = null;
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
 const STREAM_PAYLOAD_HEX_CACHE_LIMIT = 64;
+const PACKET_STUB_INDEX_MAX = 200000;
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -285,6 +291,12 @@ let pendingBackendCaptureUpdate = null;
 let backendCaptureUpdateDrainActive = false;
 let backendLastAppliedSnapshotProcessedPackets = 0;
 let backendLastAppliedSnapshotAtMs = 0;
+const ingestionChunkLogState = new Map();
+const deferredIngestionBacklogState = {
+  active: false,
+  deferredCount: 0,
+  lastDeferredAtMs: 0,
+};
 let captureIngestWorkers = [];
 let captureIngestWorkerThreadCount = 0;
 let captureIngestWorkerCursor = 0;
@@ -341,6 +353,9 @@ const backendProgressState = {
   processedPackets: 0,
   totalPackets: 0,
   lastReportedPercent: -1,
+  etaLastSampleAtMs: 0,
+  etaLastSampleProcessedPackets: 0,
+  etaPacketsPerSecond: 0,
 };
 let sessionPcapSource = null;
 
@@ -351,6 +366,20 @@ let sessionPcapSource = null;
 // Returns current settings.
 function getCurrentSettings() {
   return appSettings;
+}
+
+// Invalidates packet-navigation derived caches.
+function invalidatePacketNavigationCaches() {
+  allHostsNavigationPacketsCache = null;
+  hostNavigationPacketsCache.clear();
+  bookmarkedNavigationPacketsCache = null;
+  totalPacketCountCache = null;
+}
+
+// Bumps navigation cache version after capture mutations.
+function bumpPacketNavigationCacheVersion() {
+  packetNavigationCacheVersion += 1;
+  invalidatePacketNavigationCaches();
 }
 
 // Sets current settings.
@@ -2453,10 +2482,70 @@ function resetBackendProgressState() {
   backendProgressState.processedPackets = 0;
   backendProgressState.totalPackets = 0;
   backendProgressState.lastReportedPercent = -1;
+  backendProgressState.etaLastSampleAtMs = 0;
+  backendProgressState.etaLastSampleProcessedPackets = 0;
+  backendProgressState.etaPacketsPerSecond = 0;
   pendingBackendCaptureUpdate = null;
   backendLastAppliedSnapshotProcessedPackets = 0;
   backendLastAppliedSnapshotAtMs = 0;
+  ingestionChunkLogState.clear();
+  deferredIngestionBacklogState.active = false;
+  deferredIngestionBacklogState.deferredCount = 0;
+  deferredIngestionBacklogState.lastDeferredAtMs = 0;
   updateBackendProcessingWarning();
+}
+
+// Formats a human-readable ETA label from seconds.
+function formatBackendEtaLabel(etaSeconds) {
+  const clampedSeconds = Math.max(0, Math.floor(Number(etaSeconds) || 0));
+  if (!Number.isFinite(clampedSeconds)) return "";
+
+  const hours = Math.floor(clampedSeconds / 3600);
+  const minutes = Math.floor((clampedSeconds % 3600) / 60);
+  const seconds = clampedSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+// Estimates remaining ingestion seconds from smoothed packet throughput.
+function estimateBackendRemainingSeconds(processedPackets, totalPackets) {
+  const nowMs = performance.now();
+  const previousSampleAtMs = Number(backendProgressState.etaLastSampleAtMs) || 0;
+  const previousSampleProcessed =
+    Number(backendProgressState.etaLastSampleProcessedPackets) || 0;
+  const elapsedMs = previousSampleAtMs > 0 ? nowMs - previousSampleAtMs : 0;
+  const packetDelta = Math.max(0, processedPackets - previousSampleProcessed);
+
+  if (elapsedMs >= 200 && packetDelta > 0) {
+    const instantaneousPps = packetDelta / (elapsedMs / 1000);
+    if (Number.isFinite(instantaneousPps) && instantaneousPps > 0) {
+      const previousPps = Number(backendProgressState.etaPacketsPerSecond) || 0;
+      backendProgressState.etaPacketsPerSecond = previousPps > 0
+        ? previousPps * 0.7 + instantaneousPps * 0.3
+        : instantaneousPps;
+    }
+  }
+
+  backendProgressState.etaLastSampleAtMs = nowMs;
+  backendProgressState.etaLastSampleProcessedPackets = processedPackets;
+
+  const remainingPackets = Math.max(0, totalPackets - processedPackets);
+  const smoothedPps = Number(backendProgressState.etaPacketsPerSecond) || 0;
+  if (!remainingPackets || !Number.isFinite(smoothedPps) || smoothedPps <= 0) {
+    return null;
+  }
+
+  const etaSeconds = remainingPackets / smoothedPps;
+  if (!Number.isFinite(etaSeconds) || etaSeconds < 0) {
+    return null;
+  }
+  return etaSeconds;
 }
 
 // Returns backend progress percent.
@@ -2482,7 +2571,14 @@ function updateBackendProgressStatus({ force = false } = {}) {
     ? ` (${processedPackets} / ${totalPackets} packets)`
     : ` (${processedPackets} packets processed)`;
 
-  statusUpdate(`Status: Processing packets... ${percentComplete}%${packetCountsSuffix}`);
+  const etaSeconds = estimateBackendRemainingSeconds(processedPackets, totalPackets);
+  const etaSuffix = etaSeconds !== null
+    ? ` - est. ${formatBackendEtaLabel(etaSeconds)} remaining`
+    : "";
+
+  statusUpdate(
+    `Status: Processing packets... ${percentComplete}%${packetCountsSuffix}${etaSuffix}`,
+  );
 }
 
 // Handles update backend processing warning.
@@ -2504,12 +2600,19 @@ function updateBackendProcessingWarning() {
   const totalText = backendProgressState.totalPackets > 0
     ? String(backendProgressState.totalPackets)
     : "?";
-  warningEl.textContent =
-    "Warning: packets are still being processed (" +
-    processedText +
-    " / " +
-    totalText +
-    "). Data is partial until backend processing completes.";
+
+  const etaSeconds = estimateBackendRemainingSeconds(
+    Number(backendProgressState.processedPackets) || 0,
+    Number(backendProgressState.totalPackets) || 0,
+  );
+  const etaText = etaSeconds !== null
+    ? `ETA: ${formatBackendEtaLabel(etaSeconds)} remaining (${processedText} / ${totalText})`
+    : `ETA: Calculating... (${processedText} / ${totalText})`;
+
+  warningEl.innerHTML =
+    "Warning: packets are still being processed." +
+    "<br>" +
+    etaText;
   warningEl.style.display = "block";
 }
 
@@ -2603,6 +2706,16 @@ function countCaptureDataPackets(captureData) {
     if (!Array.isArray(hostPackets)) return total;
     return total + hostPackets.length;
   }, 0);
+}
+
+// Returns whether capture payload contains at least one packet.
+function hasAnyCaptureDataPackets(captureData) {
+  if (!captureData || typeof captureData !== "object") return false;
+  const hostMap = captureData["host"];
+  if (!hostMap || typeof hostMap !== "object") return false;
+  return Object.values(hostMap).some(
+    (hostPackets) => Array.isArray(hostPackets) && hostPackets.length > 0,
+  );
 }
 
 function createCaptureIngestWorker() {
@@ -3025,6 +3138,7 @@ async function clearCurrentSession() {
   currentSessionName = null;
   p = [];
   capturedPackets = {};
+  bumpPacketNavigationCacheVersion();
   activePacketCursor = 0;
   index = 0;
   currentIp = null;
@@ -3798,8 +3912,14 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
 // Handles cache packet stub.
 function cachePacketStub(packetKey, packetStub) {
   if (!packetKey || !packetStub) return;
-  if (!packetStubByKey.has(packetKey)) {
-    packetStubByKey.set(packetKey, packetStub);
+  if (packetStubByKey.has(packetKey)) {
+    packetStubByKey.delete(packetKey);
+  }
+  packetStubByKey.set(packetKey, packetStub);
+  while (packetStubByKey.size > PACKET_STUB_INDEX_MAX) {
+    const oldestKey = packetStubByKey.keys().next().value;
+    if (!oldestKey) break;
+    packetStubByKey.delete(oldestKey);
   }
 }
 
@@ -4056,10 +4176,6 @@ function appendBookmarkedOption(targetHostsDropdown) {
 
 // Returns all packet keys for filtering.
 function getAllPacketKeysForFiltering() {
-  if (packetStubByKey.size > 0) {
-    return Array.from(packetStubByKey.keys());
-  }
-
   const hostMap =
     capturedPackets && typeof capturedPackets["host"] === "object"
       ? capturedPackets["host"]
@@ -4074,27 +4190,103 @@ function getAllPacketKeysForFiltering() {
   return packetKeys;
 }
 
+// Finds a packet stub by key in current capture data.
+function findPacketStubInCaptureDataByKey(packetKey) {
+  if (!packetKey) return null;
+  const hostMap =
+    capturedPackets && typeof capturedPackets["host"] === "object"
+      ? capturedPackets["host"]
+      : {};
+  for (const host of Object.keys(hostMap)) {
+    const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
+    for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
+      const packet = hostPackets[packetIndex];
+      if (getPacketKey(packet, host, packetIndex) === packetKey) {
+        if (packet && typeof packet === "object") {
+          packet.__packetKey = packetKey;
+        }
+        cachePacketStub(packetKey, packet);
+        return packet;
+      }
+    }
+  }
+  return null;
+}
+
+// Resolves packet stubs for keys, fetching evicted stubs on demand.
+async function resolvePacketStubsByKeys(packetKeys) {
+  if (!Array.isArray(packetKeys) || packetKeys.length === 0) {
+    return [];
+  }
+
+  const resolvedPackets = [];
+  for (let i = 0; i < packetKeys.length; i += 1) {
+    const packetKey = packetKeys[i];
+    if (typeof packetKey !== "string" || !packetKey) {
+      continue;
+    }
+
+    let packetStub = packetStubByKey.get(packetKey) || null;
+    if (!packetStub && window.captureapi && typeof window.captureapi.getPacketStub === "function") {
+      try {
+        const stubResult = await window.captureapi.getPacketStub(packetKey);
+        if (stubResult?.success && stubResult.packet) {
+          packetStub = stubResult.packet;
+          if (packetStub && typeof packetStub === "object") {
+            packetStub.__packetKey = packetKey;
+          }
+          cachePacketStub(packetKey, packetStub);
+        }
+      } catch {
+        // Fallback to captureData scan below.
+      }
+    }
+
+    if (!packetStub) {
+      packetStub = findPacketStubInCaptureDataByKey(packetKey);
+    }
+
+    if (packetStub) {
+      resolvedPackets.push(packetStub);
+    }
+
+    if (i > 0 && i % 1000 === 0) {
+      await yieldToRenderer();
+    }
+  }
+
+  return resolvedPackets;
+}
+
 // Returns bookmarked packets for host navigation.
 function getBookmarkedPacketsForHostNavigation() {
+  const bookmarkSignature = bookmarkList.join("|");
+  if (
+    bookmarkedNavigationPacketsCache
+    && bookmarkedNavigationPacketsCache.version === packetNavigationCacheVersion
+    && bookmarkedNavigationPacketsCache.signature === bookmarkSignature
+  ) {
+    return bookmarkedNavigationPacketsCache.packets;
+  }
+
   const seenPacketKeys = new Set();
   const packets = [];
-  const allPackets = getAllPacketsForHostNavigation();
   bookmarkList.forEach((packetKey) => {
     if (seenPacketKeys.has(packetKey)) return;
     seenPacketKeys.add(packetKey);
 
-    const packetStub = packetStubByKey.get(packetKey);
+    const packetStub = packetStubByKey.get(packetKey) || findPacketStubInCaptureDataByKey(packetKey);
     if (packetStub) {
       packets.push(packetStub);
-      return;
-    }
-
-    const packetIndex = findPacketIndexByKey(allPackets, packetKey);
-    if (packetIndex >= 0) {
-      packets.push(allPackets[packetIndex]);
     }
   });
-  return sortPacketsByOwnStreamOrder(packets);
+  const sortedBookmarkedPackets = sortPacketsByOwnStreamOrder(packets);
+  bookmarkedNavigationPacketsCache = {
+    version: packetNavigationCacheVersion,
+    signature: bookmarkSignature,
+    packets: sortedBookmarkedPackets,
+  };
+  return sortedBookmarkedPackets;
 }
 
 // Parses filter expression parts.
@@ -4286,6 +4478,13 @@ function evaluateOutOfOrderFilterExpression(expression) {
 
 // Returns all packets for host navigation.
 function getAllPacketsForHostNavigation() {
+  if (
+    allHostsNavigationPacketsCache
+    && allHostsNavigationPacketsCache.version === packetNavigationCacheVersion
+  ) {
+    return allHostsNavigationPacketsCache.packets;
+  }
+
   const hostMap =
     capturedPackets && typeof capturedPackets["host"] === "object"
       ? capturedPackets["host"]
@@ -4295,7 +4494,12 @@ function getAllPacketsForHostNavigation() {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
     allPackets.push(...hostPackets);
   });
-  return sortPacketsByOwnStreamOrder(allPackets);
+  const sortedAllPackets = sortPacketsByOwnStreamOrder(allPackets);
+  allHostsNavigationPacketsCache = {
+    version: packetNavigationCacheVersion,
+    packets: sortedAllPackets,
+  };
+  return sortedAllPackets;
 }
 
 // Returns packets for selected host.
@@ -4306,10 +4510,25 @@ function getPacketsForSelectedHost(selectedHost) {
   if (isBookmarkedSelection(selectedHost)) {
     return getBookmarkedPacketsForHostNavigation();
   }
+
+  const normalizedHost = String(selectedHost || "").trim();
+  const cachedHostPackets = hostNavigationPacketsCache.get(normalizedHost);
+  if (
+    cachedHostPackets
+    && cachedHostPackets.version === packetNavigationCacheVersion
+  ) {
+    return cachedHostPackets.packets;
+  }
+
   const hostPackets = Array.isArray(capturedPackets?.["host"]?.[selectedHost])
     ? capturedPackets["host"][selectedHost]
     : [];
-  return sortPacketsByOwnStreamOrder([...hostPackets]);
+  const sortedHostPackets = sortPacketsByOwnStreamOrder([...hostPackets]);
+  hostNavigationPacketsCache.set(normalizedHost, {
+    version: packetNavigationCacheVersion,
+    packets: sortedHostPackets,
+  });
+  return sortedHostPackets;
 }
 
 // Parses packet timestamp ms.
@@ -4605,9 +4824,7 @@ async function runFilterQuery(filterQuery, options = {}) {
 
   try {
     const matchedPacketKeys = await evaluateFilterQueryToPacketKeys(filterQuery);
-    filteredPackets = matchedPacketKeys
-      .map((packetKey) => packetStubByKey.get(packetKey))
-      .filter(Boolean);
+    filteredPackets = await resolvePacketStubsByKeys(matchedPacketKeys);
     filteredPackets = sortPacketsByOwnStreamOrder(filteredPackets);
   } catch (error) {
     const errorText =
@@ -6023,6 +6240,7 @@ async function finalizeLoadedCapture(sessionState) {
   packetStubByKey.clear();
   hydratedPacketCache.clear();
   clearStreamPacketHydrationCache();
+  bumpPacketNavigationCacheVersion();
   if (keystorePanel && typeof keystorePanel.clearSessionScanCaches === "function") {
     keystorePanel.clearSessionScanCaches();
   }
@@ -6035,13 +6253,7 @@ async function finalizeLoadedCapture(sessionState) {
     const hostPackets = Array.isArray(capturedPackets["host"][host])
       ? capturedPackets["host"][host]
       : [];
-    hostPackets.forEach((packet, packetIndex) => {
-      const packetKey = getPacketKey(packet, host, packetIndex);
-      if (packet && typeof packet === "object") {
-        packet.__packetKey = packetKey;
-      }
-      cachePacketStub(packetKey, packet);
-    });
+    await cachePacketStubsForHost(host, hostPackets);
     isFileLoaded = true;
   }
 
@@ -6054,8 +6266,9 @@ async function finalizeLoadedCapture(sessionState) {
       `Packet timeframe start="${timeframe.first}" end="${timeframe.last}"`,
     );
   }
-  if (totalPacketCount() > 1) {
-    writeLogEntry(`Total packet count=${totalPacketCount()}`);
+  const loadedTotalPacketCount = totalPacketCount();
+  if (loadedTotalPacketCount > 1) {
+    writeLogEntry(`Total packet count=${loadedTotalPacketCount}`);
   }
 
   clearFilterQuery();
@@ -6068,7 +6281,7 @@ async function finalizeLoadedCapture(sessionState) {
     statusUpdate("Status: File loaded successfully");
     writeLogEntry("New session initialized: created new session state");
     document.getElementById("total-packets").textContent =
-      "Total Packets: " + totalPacketCount();
+      "Total Packets: " + loadedTotalPacketCount;
     showPacketList();
   }
   document.getElementById("loading-screen").style.display = "none";
@@ -6679,6 +6892,7 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
       ? capturedPackets
       : { host: {}, "final.summary": "" };
   capturedPackets = nextCaptureData || { host: {}, "final.summary": "" };
+  bumpPacketNavigationCacheVersion();
   jsonCapture = "[lazy-capture-store]";
 
   const targetHostsDropdown = getCachedElement("target_hosts");
@@ -6733,51 +6947,43 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
     hydratedPacketCache.clear();
     clearStreamPacketHydrationCache();
 
-    nextHosts.forEach((host) => {
+    for (const host of nextHosts) {
       const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-      for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
-        const packet = hostPackets[packetIndex];
-        const packetKey = getPacketKey(packet, host, packetIndex);
-        if (packet && typeof packet === "object") {
-          packet.__packetKey = packetKey;
-        }
-        cachePacketStub(packetKey, packet);
-      }
-    });
+      await cachePacketStubsForHost(host, hostPackets, { startIndex: 0 });
+    }
   } else if (stagedPacketPlan && stagedPacketPlan.newPacketRefs.length > 0) {
-    stagedPacketPlan.newPacketRefs.forEach((packetRef) => {
-      if (!packetRef || typeof packetRef !== "object") return;
+    let indexedCount = 0;
+    const stagedYieldInterval = getIngestionIndexYieldInterval();
+    for (const packetRef of stagedPacketPlan.newPacketRefs) {
+      if (!packetRef || typeof packetRef !== "object") continue;
       const host = typeof packetRef.host === "string" ? packetRef.host : "";
       const packetIndex = Number(packetRef.packetIndex);
       const packetKey = typeof packetRef.packetKey === "string" ? packetRef.packetKey : "";
       if (!host || !Number.isFinite(packetIndex) || packetIndex < 0 || !packetKey) {
-        return;
+        continue;
       }
       const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
       const packet = hostPackets[packetIndex];
       if (!packet || typeof packet !== "object") {
-        return;
+        continue;
       }
       packet.__packetKey = packetKey;
       cachePacketStub(packetKey, packet);
-    });
+      indexedCount += 1;
+      if (stagedYieldInterval > 0 && indexedCount % stagedYieldInterval === 0) {
+        await yieldToRenderer();
+      }
+    }
   } else {
-    nextHosts.forEach((host) => {
+    for (const host of nextHosts) {
       const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
       const previousHostPackets = Array.isArray(previousHostMap[host])
         ? previousHostMap[host]
         : [];
       const startIndex = Math.min(previousHostPackets.length, hostPackets.length);
 
-      for (let packetIndex = startIndex; packetIndex < hostPackets.length; packetIndex += 1) {
-        const packet = hostPackets[packetIndex];
-        const packetKey = getPacketKey(packet, host, packetIndex);
-        if (packet && typeof packet === "object") {
-          packet.__packetKey = packetKey;
-        }
-        cachePacketStub(packetKey, packet);
-      }
-    });
+      await cachePacketStubsForHost(host, hostPackets, { startIndex });
+    }
   }
 
   const selectedHost =
@@ -6839,8 +7045,15 @@ async function processCaptureData(captureData, options = {}) {
     return;
   }
 
-  const serializedCaptureData = await serializeCaptureDataForBackendLoad(captureData);
-  const loadResult = await window.captureapi.loadJson(serializedCaptureData);
+  const canLoadDataDirectly =
+    typeof window.captureapi.loadData === "function"
+    && captureData
+    && typeof captureData === "object";
+  const loadResult = canLoadDataDirectly
+    ? await window.captureapi.loadData({ captureData })
+    : await window.captureapi.loadJson(
+      await serializeCaptureDataForBackendLoad(captureData),
+    );
   if (!loadResult?.success) {
     doError(`Failed to load capture snapshot: ${loadResult?.error || "unknown error"}`);
     fileLoaded(false);
@@ -11776,12 +11989,29 @@ function getActivePacketCursor() {
  * Used to decide whether to show the stream-loading overlay.
  */
 function getTotalPacketCount() {
+  if (
+    totalPacketCountCache
+    && totalPacketCountCache.version === packetNavigationCacheVersion
+  ) {
+    return totalPacketCountCache.value;
+  }
   const hosts = capturedPackets?.["host"];
-  if (!hosts || typeof hosts !== "object") return 0;
-  return Object.values(hosts).reduce(
+  if (!hosts || typeof hosts !== "object") {
+    totalPacketCountCache = {
+      version: packetNavigationCacheVersion,
+      value: 0,
+    };
+    return 0;
+  }
+  const computedCount = Object.values(hosts).reduce(
     (sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0),
     0,
   );
+  totalPacketCountCache = {
+    version: packetNavigationCacheVersion,
+    value: computedCount,
+  };
+  return computedCount;
 }
 
 // Minimum total-packet count that triggers the stream-loading overlay.
@@ -11790,6 +12020,10 @@ function getTotalPacketCount() {
 const STREAM_LOADING_THRESHOLD = 10;
 const STREAM_ASYNC_PACKET_YIELD_INTERVAL = 2000;
 const STREAM_ASYNC_HEX_YIELD_INTERVAL = 200;
+const INGESTION_INDEX_YIELD_INTERVAL_BASE = 2000;
+const INGESTION_INDEX_YIELD_INTERVAL_BACKLOG = 8000;
+const INGESTION_DEFERRED_BACKLOG_THRESHOLD = 3;
+const INGESTION_DEFERRED_BACKLOG_DECAY_MS = 15000;
 
 // Handles yield to renderer.
 function yieldToRenderer() {
@@ -11799,6 +12033,168 @@ function yieldToRenderer() {
     });
   }
   return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// Returns current ingestion yield interval, increasing while deferred backlog is active.
+function getIngestionIndexYieldInterval() {
+  if (!deferredIngestionBacklogState.active) {
+    return INGESTION_INDEX_YIELD_INTERVAL_BASE;
+  }
+
+  const nowMs = performance.now();
+  if (
+    deferredIngestionBacklogState.lastDeferredAtMs > 0
+    && nowMs - deferredIngestionBacklogState.lastDeferredAtMs
+    > INGESTION_DEFERRED_BACKLOG_DECAY_MS
+  ) {
+    deferredIngestionBacklogState.active = false;
+    deferredIngestionBacklogState.deferredCount = 0;
+    deferredIngestionBacklogState.lastDeferredAtMs = 0;
+    return INGESTION_INDEX_YIELD_INTERVAL_BASE;
+  }
+
+  return INGESTION_INDEX_YIELD_INTERVAL_BACKLOG;
+}
+
+// Updates deferred backlog state from ingestion chunk phase transitions.
+function updateDeferredIngestionBacklogState(phase, payload, extra = {}) {
+  if (
+    Boolean(payload?.complete)
+    || phase === "first-chunk-applied"
+    || phase === "final-chunk-applied"
+  ) {
+    deferredIngestionBacklogState.active = false;
+    deferredIngestionBacklogState.deferredCount = 0;
+    deferredIngestionBacklogState.lastDeferredAtMs = 0;
+    return;
+  }
+
+  if (phase !== "deferred") {
+    return;
+  }
+
+  const reason = typeof extra?.reason === "string" ? extra.reason : "";
+  if (reason !== "waiting-for-complete" && reason !== "waiting-for-minimum-chunk") {
+    return;
+  }
+
+  deferredIngestionBacklogState.deferredCount += 1;
+  deferredIngestionBacklogState.lastDeferredAtMs = performance.now();
+  if (deferredIngestionBacklogState.deferredCount >= INGESTION_DEFERRED_BACKLOG_THRESHOLD) {
+    deferredIngestionBacklogState.active = true;
+  }
+}
+
+// Returns a rounded ingestion duration in milliseconds.
+function formatIngestionDurationMs(durationMs) {
+  const normalized = Number(durationMs);
+  if (!Number.isFinite(normalized) || normalized < 0) {
+    return 0;
+  }
+  return Number(normalized.toFixed(2));
+}
+
+// Returns whether ingestion chunk timing log should emit for this phase.
+function shouldEmitIngestionChunkTimingLog(kind, phase, payload, extra = {}) {
+  const phaseKey = `${kind}:${phase}`;
+  const nowMs = performance.now();
+  const processedPackets = Number(payload?.processedPackets) || 0;
+  const reason = typeof extra?.reason === "string" ? extra.reason : "";
+  const state = ingestionChunkLogState.get(phaseKey) || null;
+  const alwaysLogPhases = new Set([
+    "first-chunk-applied",
+    "final-chunk-applied",
+  ]);
+  if (alwaysLogPhases.has(phase)) {
+    ingestionChunkLogState.set(phaseKey, {
+      nowMs,
+      processedPackets,
+      reason,
+    });
+    return true;
+  }
+
+  if (!state) {
+    ingestionChunkLogState.set(phaseKey, {
+      nowMs,
+      processedPackets,
+      reason,
+    });
+    return true;
+  }
+
+  const elapsedMs = Math.max(0, nowMs - (state.nowMs || 0));
+  const packetDelta = Math.max(0, processedPackets - (state.processedPackets || 0));
+  const reasonChanged = reason !== (state.reason || "");
+  const shouldLog =
+    reasonChanged || elapsedMs >= 1500 || packetDelta >= 2000 || Boolean(payload?.complete);
+
+  if (shouldLog) {
+    ingestionChunkLogState.set(phaseKey, {
+      nowMs,
+      processedPackets,
+      reason,
+    });
+  }
+
+  return shouldLog;
+}
+
+// Logs per-chunk ingestion timing and packet progress.
+function logIngestionChunkTiming(kind, phase, payload, durationMs, extra = {}) {
+  updateDeferredIngestionBacklogState(phase, payload, extra);
+  if (!shouldEmitIngestionChunkTimingLog(kind, phase, payload, extra)) {
+    return;
+  }
+  const processed = Number(payload?.processedPackets) || 0;
+  const total = Number(payload?.totalPackets) || 0;
+  const complete = Boolean(payload?.complete);
+  const durationRounded = formatIngestionDurationMs(durationMs);
+  const detailPairs = Object.entries(extra)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .join(" ");
+  const detailSuffix = detailPairs ? ` ${detailPairs}` : "";
+  writeLogEntry(
+    `Ingestion chunk kind=${kind} phase=${phase} processed=${processed} total=${total} complete=${complete} duration_ms=${durationRounded}${detailSuffix}`,
+  );
+}
+
+// Caches packet stubs for a host packet array in yield-friendly batches.
+async function cachePacketStubsForHost(
+  host,
+  hostPackets,
+  options = {},
+) {
+  const {
+    startIndex = 0,
+    yieldInterval = null,
+  } = options;
+  if (!Array.isArray(hostPackets) || !hostPackets.length) {
+    return 0;
+  }
+
+  const safeStartIndex = Math.max(0, Number(startIndex) || 0);
+  const effectiveYieldInterval = Number.isFinite(Number(yieldInterval)) && Number(yieldInterval) > 0
+    ? Math.floor(Number(yieldInterval))
+    : getIngestionIndexYieldInterval();
+  let indexedCount = 0;
+
+  for (let packetIndex = safeStartIndex; packetIndex < hostPackets.length; packetIndex += 1) {
+    const packet = hostPackets[packetIndex];
+    const packetKey = getPacketKey(packet, host, packetIndex);
+    if (packet && typeof packet === "object") {
+      packet.__packetKey = packetKey;
+    }
+    cachePacketStub(packetKey, packet);
+    indexedCount += 1;
+
+    if (effectiveYieldInterval > 0 && indexedCount % effectiveYieldInterval === 0) {
+      await yieldToRenderer();
+    }
+  }
+
+  return indexedCount;
 }
 
 /**
@@ -16773,15 +17169,7 @@ function syncBookmarkDropdown(packetKey) {
 
 // function that returns the total number of packets in the entire capture
 function totalPacketCount() {
-  let totalCount = 0;
-  if (capturedPackets["host"] != undefined) {
-    for (const host in capturedPackets["host"]) {
-      totalCount += capturedPackets["host"][host].length;
-    }
-  } else {
-    return 0;
-  }
-  return totalCount;
+  return getTotalPacketCount();
 }
 
 // Handles update current packet counters.
@@ -16942,9 +17330,18 @@ async function handlePacketNavigation(navAction, navBookmark) {
       hasActiveFilterQuery &&
       Array.isArray(filteredPackets));
 
-  let packetSet = shouldUseFilteredPacketSet
-    ? filteredPackets
-    : getPacketsForSelectedHost(hostFilterEl.value);
+  let packetSet;
+  if (shouldUseFilteredPacketSet) {
+    packetSet = filteredPackets;
+  } else if (
+    (navAction === "next" || navAction === "prev")
+    && Array.isArray(p)
+    && p.length > 0
+  ) {
+    packetSet = p;
+  } else {
+    packetSet = getPacketsForSelectedHost(hostFilterEl.value);
+  }
   if (shouldUseFilteredPacketSet) {
     const filteredNavigationLogMessage =
       `Filtered packet navigation packets_returned = ${packetSet.length}`;
@@ -18041,6 +18438,7 @@ function queueBackendCaptureUpdate(kind, payload) {
 }
 
 async function processBackendJsonPathPayload(payload) {
+  const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
   currentSessionName = null;
 
@@ -18072,6 +18470,9 @@ async function processBackendJsonPathPayload(payload) {
       document.getElementById("loading-text").textContent = "Loading packets...";
       updateBackendProgressStatus({ force: true });
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("path", "deferred", payload, performance.now() - chunkStartTime, {
+        reason: "waiting-for-minimum-chunk",
+      });
       return;
     }
 
@@ -18100,13 +18501,20 @@ async function processBackendJsonPathPayload(payload) {
     updateFilterClearButtonState();
     clearFilterQuery();
     syncFilterHighlight();
+    logIngestionChunkTiming("path", "first-chunk-applied", payload, performance.now() - chunkStartTime);
   } else {
     if (!payload.complete) {
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("path", "deferred", payload, performance.now() - chunkStartTime, {
+        reason: "waiting-for-complete",
+      });
       return;
     }
     if (!shouldApplyIncrementalBackendSnapshot(payload)) {
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("path", "skipped", payload, performance.now() - chunkStartTime, {
+        reason: "incremental-throttle",
+      });
       return;
     }
     hideLoadingOverlay();
@@ -18114,7 +18522,7 @@ async function processBackendJsonPathPayload(payload) {
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
-      finalUpdate: true,
+      finalUpdate: false,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-path-final",
@@ -18126,6 +18534,7 @@ async function processBackendJsonPathPayload(payload) {
     writeLogEntry(
       `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
     );
+    logIngestionChunkTiming("path", "final-chunk-applied", payload, performance.now() - chunkStartTime);
   }
 
   if (payload.complete) {
@@ -18151,6 +18560,7 @@ async function processBackendJsonPathPayload(payload) {
 }
 
 async function processBackendJsonDataPayload(payload) {
+  const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
   currentSessionName = null;
 
@@ -18172,13 +18582,13 @@ async function processBackendJsonDataPayload(payload) {
   }
 
   const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
-  const payloadPacketCount = backendProgressState.firstChunkLoaded
-    ? 0
-    : countCaptureDataPackets(payload.captureData);
+  const payloadHasPackets = backendProgressState.firstChunkLoaded
+    ? false
+    : hasAnyCaptureDataPackets(payload.captureData);
   const hasUsableChunk =
     payload.complete
     || payload.processedPackets >= minimumChunkSize
-    || payloadPacketCount > 0;
+    || payloadHasPackets;
 
   if (!backendProgressState.firstChunkLoaded) {
     if (!hasUsableChunk) {
@@ -18186,17 +18596,18 @@ async function processBackendJsonDataPayload(payload) {
       document.getElementById("loading-container").style.display = "block";
       document.getElementById("loading-text").textContent = "Loading packets...";
       updateBackendProgressStatus({ force: true });
-      writeLogEntry(
-        `Backend in-memory snapshot deferred label=${JSON.stringify(payload.label)} processed=${payload.processedPackets} total=${payload.totalPackets} chunk_size=${minimumChunkSize} payload_packets=${payloadPacketCount}`,
-      );
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("data", "deferred", payload, performance.now() - chunkStartTime, {
+        reason: "waiting-for-minimum-chunk",
+        label: payload.label,
+      });
       return;
     }
 
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
     writeLogEntry(
-      `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_packets = ${payloadPacketCount} complete = ${payload.complete}`,
+      `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_has_packets = ${payloadHasPackets} complete = ${payload.complete}`,
     );
     await yieldToRenderer();
     await processCaptureData(payload.captureData, {
@@ -18217,13 +18628,24 @@ async function processBackendJsonDataPayload(payload) {
     updateFilterClearButtonState();
     clearFilterQuery();
     syncFilterHighlight();
+    logIngestionChunkTiming("data", "first-chunk-applied", payload, performance.now() - chunkStartTime, {
+      label: payload.label,
+    });
   } else {
     if (!payload.complete) {
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("data", "deferred", payload, performance.now() - chunkStartTime, {
+        reason: "waiting-for-complete",
+        label: payload.label,
+      });
       return;
     }
     if (!shouldApplyIncrementalBackendSnapshot(payload)) {
       updateBackendProcessingWarning();
+      logIngestionChunkTiming("data", "skipped", payload, performance.now() - chunkStartTime, {
+        reason: "incremental-throttle",
+        label: payload.label,
+      });
       return;
     }
     hideLoadingOverlay();
@@ -18232,7 +18654,7 @@ async function processBackendJsonDataPayload(payload) {
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
-      finalUpdate: true,
+      finalUpdate: false,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-final",
@@ -18244,6 +18666,9 @@ async function processBackendJsonDataPayload(payload) {
     writeLogEntry(
       `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
     );
+    logIngestionChunkTiming("data", "final-chunk-applied", payload, performance.now() - chunkStartTime, {
+      label: payload.label,
+    });
   }
 
   if (payload.complete) {

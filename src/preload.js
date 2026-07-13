@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('jsonapi', {
 contextBridge.exposeInMainWorld('captureapi', {
   loadFile: (sourcePath) => ipcRenderer.invoke('capture-store-load-file', sourcePath),
   loadJson: (jsonData) => ipcRenderer.invoke('capture-store-load-json', jsonData),
+  loadData: (payload) => ipcRenderer.invoke('capture-store-load-data', payload),
   getPacket: (packetKey) => ipcRenderer.invoke('capture-store-get-packet', packetKey),
   getPacketStub: (packetKey) => ipcRenderer.invoke('capture-store-get-packet-stub', packetKey),
   getListWindow: (request) => ipcRenderer.invoke('capture-store-get-list-window', request),
