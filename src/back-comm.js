@@ -14,7 +14,7 @@ let entries = [];
 
 const DEFAULT_HOST_CHUNK_SIZE = 250;
 const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
-const DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS = 350;
+const DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS = 800;
 const JSON_DATA_EMIT_MIN_PACKET_DELTA = 2000;
 const BACKEND_HTTP_HOST = "127.0.0.1";
 const BACKEND_HTTP_PORT = 9020;
@@ -735,7 +735,7 @@ function normalizeBackendTransportOptions(rawOptions = {}) {
     10,
   );
   const jsonDataEmitMinIntervalMs =
-    Number.isFinite(parsedJsonDataEmitMinIntervalMs) && parsedJsonDataEmitMinIntervalMs >= 50
+    Number.isFinite(parsedJsonDataEmitMinIntervalMs) && parsedJsonDataEmitMinIntervalMs >= 250
       ? parsedJsonDataEmitMinIntervalMs
       : DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
   return {

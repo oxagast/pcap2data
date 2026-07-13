@@ -2255,7 +2255,7 @@ function getBackendTransportOptionsFromSettings(settings = getCurrentSettings())
     forceLegacySpawn: Boolean(settings?.backend?.forceLegacySpawn),
     useHttpDataSnapshots: Boolean(settings?.debug?.backendHttpDataModeEnabled),
     jsonDataEmitMinIntervalMs: Math.max(
-      50,
+      250,
       Number(settings?.debug?.backendJsonDataEmitMinIntervalMs)
       || DEFAULT_SETTINGS.debug.backendJsonDataEmitMinIntervalMs,
     ),
