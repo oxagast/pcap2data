@@ -71,6 +71,24 @@ function formatLayerOnlyLabel(baseLabel, layerName) {
   return `${normalizedBase} (${normalizedLayer} Only)`;
 }
 
+function normalizeAppProtocolForDisplay(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return "";
+
+  const layerOnlyMatch = normalized.match(/^(.*?)\s*\(\s*([^)]+?)\s+only\s*\)$/i);
+  if (!layerOnlyMatch) {
+    return normalized.toUpperCase();
+  }
+
+  const protocolLabel = String(layerOnlyMatch[1] ?? "").trim().toUpperCase();
+  const layerLabel = String(layerOnlyMatch[2] ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+
+  return `${protocolLabel} (${layerLabel} Only)`;
+}
+
 function normalizeGenericApplicationProtocolLabel(label, packetProtocol) {
   const normalizedLabel = String(label ?? "").trim();
   const normalizedProtocol = String(packetProtocol ?? "").trim().toUpperCase();
@@ -732,7 +750,7 @@ function createListPanel({
       { label: "Src Port", key: "srcPort", defaultWidth: 96, getValue: (row) => row.srcPort },
       { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
       { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
-      { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => row.appProto },
+      { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
       { label: "Payload Len", key: "payloadLength", defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
     const sortState = { key: "pcapOrder", direction: "asc" };

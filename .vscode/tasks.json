@@ -54,8 +54,8 @@
 		},
 		{
 			"type": "npm",
-			"script": "tests:frontend",
-			"label": "npm: tests:frontend",
+			"script": "test:frontend",
+			"label": "npm: test:frontend",
 			"group": {
 				"kind": "test"
 			},

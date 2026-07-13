@@ -19025,7 +19025,7 @@ onload = function () {
   markDataToolsInputCommitted();
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("rightside").style.display = "none";
+  document.getElementById("rightside").style.display = "block";
   document.getElementById("help-btn").style.opacity = "1";
   document.getElementById("log-btn").style.opacity = "1";
   document.getElementById("settings-btn").style.opacity = "1";
@@ -19035,7 +19035,7 @@ onload = function () {
   if (rightsideNotesEl) rightsideNotesEl.hidden = true;
   updatePcapSizeDisplayFromSource();
   updateReprocessButtonState();
-  document.getElementById("leftside").style.display = "none";
+  document.getElementById("leftside").style.display = "block";
   document.getElementById("loading-container").style.display = "none";
   const startupVersionEl = document.getElementById("startup-preload-version");
   if (startupVersionEl) {

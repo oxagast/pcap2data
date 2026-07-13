@@ -140,6 +140,8 @@ option {
   z-index: 10000;
   width: 400px;
   display: none;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 #loading-screen {
@@ -961,15 +963,20 @@ strong {
 #crypt-keystore-unlock-status {
   font-size: 12px;
   color: var(--color-6);
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 #crypt-keystore-unlock-description,
 #crypt-keystore-manual-uri-description,
+#ctx-llm-question-description,
 #saved-filter-label-description,
 #follow-stream-confirm-description,
+#manual-conv-import-warning-description,
 #session-delete-dialog-description {
   font-size: 12px;
   color: var(--color-6);
+  word-break: normal;
   overflow-wrap: break-word;
   max-width: 400px;
 }
@@ -989,6 +996,7 @@ strong {
   align-items: center;
   justify-content: center;
   z-index: 9999;
+  word-break: normal;
   overflow-wrap: break-word;
 }
 
@@ -1006,6 +1014,7 @@ strong {
 #save-session-dialog-description {
   font-size: 12px;
   color: var(--color-6);
+  word-break: normal;
   overflow-wrap: break-word;
   max-width: 400px;
 }
@@ -1438,6 +1447,8 @@ strong {
   min-height: 1.2em;
   color: var(--color-6);
   font-size: 12px;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .subnet-calc-status.is-error {
@@ -1682,6 +1693,8 @@ strong {
   min-height: 18px;
   color: #ff8f8f;
   margin-top: 8px;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .data-tools-kv {
@@ -3920,6 +3933,8 @@ strong {
 
 #session-picker-status.error {
   color: #e06b6b;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 /* ── Session Name dialog ── */
@@ -3934,6 +3949,8 @@ strong {
   display: flex;
   justify-content: center;
   align-items: center;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 #session-name-dialog[hidden] {
@@ -3962,6 +3979,8 @@ strong {
   font-size: 13px;
   color: var(--color-6);
   margin-bottom: 10px;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 #session-name-input {
@@ -3987,6 +4006,8 @@ strong {
   font-size: 12px;
   color: #e06b6b;
   margin-bottom: 10px;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .session-name-dialog-actions {
