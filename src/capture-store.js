@@ -14,6 +14,52 @@ function isObject(value) {
     return Boolean(value) && typeof value === "object";
 }
 
+function normalizeIpCandidate(value) {
+    if (value === null || value === undefined) return "";
+    const normalized = String(value).trim();
+    if (!normalized) return "";
+    if (normalized.toLowerCase() === "n/a") return "";
+    return normalized;
+}
+
+function extractPacketIpAddress(packetInfo, direction) {
+    const normalizedDirection = String(direction || "").toLowerCase() === "dst"
+        ? "dst"
+        : "src";
+    const sourceCandidates = [
+        packetInfo?.["IP"]?.["ip.src.addr"],
+        packetInfo?.["IP"]?.["network.ip.src.addr"],
+        packetInfo?.["IP"]?.["Source IP"],
+        packetInfo?.["ip"]?.["ip.src.addr"],
+        packetInfo?.["ip"]?.["network.ip.src.addr"],
+        packetInfo?.["ip"]?.["source.ip"],
+        packetInfo?.["ip.src.addr"],
+        packetInfo?.["network.ip.src.addr"],
+        packetInfo?.["source.ip"],
+        packetInfo?.["Source IP"],
+    ];
+    const destinationCandidates = [
+        packetInfo?.["IP"]?.["ip.dst.addr"],
+        packetInfo?.["IP"]?.["network.ip.dst.addr"],
+        packetInfo?.["IP"]?.["Destination IP"],
+        packetInfo?.["ip"]?.["ip.dst.addr"],
+        packetInfo?.["ip"]?.["network.ip.dst.addr"],
+        packetInfo?.["ip"]?.["destination.ip"],
+        packetInfo?.["ip.dst.addr"],
+        packetInfo?.["network.ip.dst.addr"],
+        packetInfo?.["destination.ip"],
+        packetInfo?.["Destination IP"],
+    ];
+    const candidates = normalizedDirection === "dst"
+        ? destinationCandidates
+        : sourceCandidates;
+    for (const candidate of candidates) {
+        const normalized = normalizeIpCandidate(candidate);
+        if (normalized) return normalized;
+    }
+    return "";
+}
+
 function ensureStoreDir() {
     fs.mkdirSync(CAPTURE_STORE_DIR, { recursive: true });
 }
@@ -69,11 +115,7 @@ function isSessionStatePath(pathKeys) {
 
 function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
     const packetInfo = packet?.["packet.info"] || {};
-    const sourceIp =
-        packetInfo?.["ip"]?.["ip.src.addr"] ||
-        packetInfo?.["ip"]?.["source.ip"] ||
-        host ||
-        "Unknown";
+    const sourceIp = extractPacketIpAddress(packetInfo, "src") || host || "Unknown";
     const packetIndex = packetInfo?.["index"] ?? hostPacketIndex;
     let candidate = `${sourceIp}:${packetIndex}`;
     if (!existingKeys.has(candidate)) return candidate;
@@ -323,15 +365,8 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
         isObject(packetInfo[transportName]) ? packetInfo[transportName] :
             isObject(packetInfo[transportName.toLowerCase()]) ? packetInfo[transportName.toLowerCase()] :
                 {};
-    const sourceIp =
-        packetInfo?.["ip"]?.["ip.src.addr"] ||
-        packetInfo?.["ip"]?.["source.ip"] ||
-        host ||
-        "Unknown";
-    const destinationIp =
-        packetInfo?.["ip"]?.["ip.dst.addr"] ||
-        packetInfo?.["ip"]?.["destination.ip"] ||
-        "";
+    const sourceIp = extractPacketIpAddress(packetInfo, "src") || host || "Unknown";
+    const destinationIp = extractPacketIpAddress(packetInfo, "dst") || "";
     const sourcePort =
         transportData?.["tcp.src.port"] ??
         transportData?.["udp.src.port"] ??
@@ -371,6 +406,14 @@ function derivePacketListSummary(packet, packetKey, host, hostPacketIndex) {
 }
 
 function compareListEntries(left, right) {
+    const leftPcapOrder = Number(left?.pcapOrder);
+    const rightPcapOrder = Number(right?.pcapOrder);
+    if (Number.isFinite(leftPcapOrder) && Number.isFinite(rightPcapOrder) && leftPcapOrder !== rightPcapOrder) {
+        return leftPcapOrder - rightPcapOrder;
+    }
+    if (Number.isFinite(leftPcapOrder) && !Number.isFinite(rightPcapOrder)) return -1;
+    if (!Number.isFinite(leftPcapOrder) && Number.isFinite(rightPcapOrder)) return 1;
+
     const leftIndex = Number(left?.idx);
     const rightIndex = Number(right?.idx);
     if (Number.isFinite(leftIndex) && Number.isFinite(rightIndex) && leftIndex !== rightIndex) {

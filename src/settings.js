@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     list: {
         columnVisibility: {},
         columnWidths: {},
+        columnOrder: [],
     },
     llm: {
         ollamaModel: "minimax-m2.5:cloud",
@@ -120,6 +121,15 @@ function normalizePositiveIntegerRecord(value, minimum = 1, maximum = Number.POS
                 return [key, Math.min(maximum, Math.max(minimum, parsedValue))];
             }),
     );
+}
+
+function normalizeStringArray(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+    return value
+        .filter((entry) => typeof entry === "string" && entry.trim())
+        .map((entry) => entry.trim());
 }
 
 function normalizeSettings(rawSettings = {}) {
@@ -260,6 +270,7 @@ function normalizeSettings(rawSettings = {}) {
                 48,
                 640,
             ),
+            columnOrder: normalizeStringArray(list.columnOrder || listDefaults.columnOrder),
         },
         llm: {
             ollamaModel:

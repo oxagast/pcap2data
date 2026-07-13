@@ -301,6 +301,7 @@ function createListPanel({
   let listPreferencesSaveChain = Promise.resolve();
 
   function loadListPreferences(columnDefinitions) {
+    const defaultColumnOrder = columnDefinitions.map((column) => column.key);
     const defaultVisibility = Object.fromEntries(
       columnDefinitions.map((column) => [column.key, column.defaultVisible !== false]),
     );
@@ -317,6 +318,9 @@ function createListPanel({
     const savedWidths = savedListSettings.columnWidths && typeof savedListSettings.columnWidths === "object"
       ? savedListSettings.columnWidths
       : {};
+    const savedOrder = Array.isArray(savedListSettings.columnOrder)
+      ? savedListSettings.columnOrder
+      : [];
 
     columnDefinitions.forEach((column) => {
       if (typeof savedVisibility[column.key] === "boolean") {
@@ -328,13 +332,24 @@ function createListPanel({
       }
     });
 
+    const savedOrderSet = new Set(
+      savedOrder
+        .filter((columnKey) => typeof columnKey === "string")
+        .filter((columnKey) => defaultColumnOrder.includes(columnKey)),
+    );
+    const mergedColumnOrder = [
+      ...savedOrder.filter((columnKey) => savedOrderSet.has(columnKey)),
+      ...defaultColumnOrder.filter((columnKey) => !savedOrderSet.has(columnKey)),
+    ];
+
     return {
       columnVisibility: defaultVisibility,
       columnWidths: defaultWidths,
+      columnOrder: mergedColumnOrder,
     };
   }
 
-  function persistListPreferences(columnVisibility, columnWidths) {
+  function persistListPreferences(columnVisibility, columnWidths, columnOrder) {
     if (!window.settingsapi || typeof window.settingsapi.update !== "function") {
       return Promise.resolve(null);
     }
@@ -346,6 +361,9 @@ function createListPanel({
         .map(([key, value]) => [key, clampColumnWidth(value)])
         .filter(([, value]) => value !== null),
     );
+    const nextOrder = Array.isArray(columnOrder)
+      ? columnOrder.filter((columnKey) => typeof columnKey === "string" && columnKey.trim())
+      : [];
 
     listPreferencesSaveChain = listPreferencesSaveChain
       .catch(() => null)
@@ -354,6 +372,7 @@ function createListPanel({
           list: {
             columnVisibility: nextVisibility,
             columnWidths: nextWidths,
+            columnOrder: nextOrder,
           },
         });
         if (typeof setCurrentSettings === "function" && savedSettings) {
@@ -555,12 +574,12 @@ function createListPanel({
     const endIndex = sourceBacked
       ? Math.min(desiredEndIndex, virtualListState.windowEnd)
       : Math.min(rows.length, startIndex + visibleCount);
+    const windowStart = sourceBacked ? virtualListState.windowStart : 0;
     const fragment = document.createDocumentFragment();
 
-    const windowStart = sourceBacked ? virtualListState.windowStart : 0;
-    if (startIndex > windowStart) {
+    if (startIndex > 0) {
       fragment.appendChild(
-        createSpacerRow(columnCount, (startIndex - windowStart) * rowHeight),
+        createSpacerRow(columnCount, startIndex * rowHeight),
       );
     }
 
@@ -709,10 +728,32 @@ function createListPanel({
       { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => row.appProto },
       { label: "Payload Len", key: "payloadLength", defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
-    const sortState = { key: "idx", direction: "asc" };
+    const sortState = { key: "pcapOrder", direction: "asc" };
     const loadedPreferences = loadListPreferences(columnDefinitions);
     let columnVisibility = loadedPreferences.columnVisibility;
     let columnWidths = loadedPreferences.columnWidths;
+    let columnOrder = loadedPreferences.columnOrder;
+
+    const getOrderedColumnDefinitions = () => {
+      const columnsByKey = new Map(columnDefinitions.map((column) => [column.key, column]));
+      const orderedColumns = [];
+      const seenKeys = new Set();
+
+      columnOrder.forEach((columnKey) => {
+        const column = columnsByKey.get(columnKey);
+        if (!column || seenKeys.has(columnKey)) return;
+        orderedColumns.push(column);
+        seenKeys.add(columnKey);
+      });
+
+      columnDefinitions.forEach((column) => {
+        if (seenKeys.has(column.key)) return;
+        orderedColumns.push(column);
+        seenKeys.add(column.key);
+      });
+
+      return orderedColumns;
+    };
 
     const withRuntimeColumnState = (column) => ({
       ...column,
@@ -720,7 +761,7 @@ function createListPanel({
     });
 
     const getVisibleColumns = () => {
-      const visibleColumns = columnDefinitions
+      const visibleColumns = getOrderedColumnDefinitions()
         .filter((column) => columnVisibility[column.key] !== false)
         .map(withRuntimeColumnState);
       return visibleColumns.length > 0
@@ -731,14 +772,24 @@ function createListPanel({
     const renderColumnVisibilityControls = () => {
       if (!columnsMenuEl) return;
       columnsMenuEl.replaceChildren();
-      columnDefinitions.forEach((column) => {
+      let draggedColumnKey = "";
+      const orderedColumns = getOrderedColumnDefinitions();
+      orderedColumns.forEach((column) => {
         const optionLabel = document.createElement("label");
         optionLabel.className = "list-columns-option";
+        optionLabel.setAttribute("draggable", "true");
+        optionLabel.dataset.columnKey = column.key;
+
+        const dragHandle = document.createElement("span");
+        dragHandle.className = "list-columns-drag-handle";
+        dragHandle.textContent = "☰";
+        dragHandle.title = "Drag to reorder columns";
+
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = columnVisibility[column.key] !== false;
         checkbox.addEventListener("change", () => {
-          const currentlyVisibleCount = columnDefinitions.filter(
+          const currentlyVisibleCount = getOrderedColumnDefinitions().filter(
             (candidate) => columnVisibility[candidate.key] !== false,
           ).length;
           if (!checkbox.checked && currentlyVisibleCount <= 1) {
@@ -746,9 +797,60 @@ function createListPanel({
             return;
           }
           columnVisibility[column.key] = checkbox.checked;
-          void persistListPreferences(columnVisibility, columnWidths);
+          void persistListPreferences(columnVisibility, columnWidths, columnOrder);
           buildTable(document.getElementById("list-search")?.value || "");
         });
+
+        optionLabel.addEventListener("dragstart", (event) => {
+          draggedColumnKey = column.key;
+          optionLabel.classList.add("is-dragging");
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", column.key);
+          }
+        });
+        optionLabel.addEventListener("dragend", () => {
+          draggedColumnKey = "";
+          columnsMenuEl
+            .querySelectorAll(".list-columns-option")
+            .forEach((entry) => entry.classList.remove("is-dragging", "drop-before", "drop-after"));
+        });
+        optionLabel.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          if (!draggedColumnKey || draggedColumnKey === column.key) return;
+          const rect = optionLabel.getBoundingClientRect();
+          const placeBefore = event.clientY < rect.top + rect.height / 2;
+          optionLabel.classList.toggle("drop-before", placeBefore);
+          optionLabel.classList.toggle("drop-after", !placeBefore);
+        });
+        optionLabel.addEventListener("dragleave", () => {
+          optionLabel.classList.remove("drop-before", "drop-after");
+        });
+        optionLabel.addEventListener("drop", (event) => {
+          event.preventDefault();
+          optionLabel.classList.remove("drop-before", "drop-after");
+          if (!draggedColumnKey || draggedColumnKey === column.key) return;
+
+          const rect = optionLabel.getBoundingClientRect();
+          const placeBefore = event.clientY < rect.top + rect.height / 2;
+          const nextOrder = [...getOrderedColumnDefinitions().map((entry) => entry.key)];
+          const fromIndex = nextOrder.indexOf(draggedColumnKey);
+          const targetIndex = nextOrder.indexOf(column.key);
+          if (fromIndex < 0 || targetIndex < 0) return;
+
+          nextOrder.splice(fromIndex, 1);
+          const insertionIndex = placeBefore
+            ? (fromIndex < targetIndex ? targetIndex - 1 : targetIndex)
+            : (fromIndex < targetIndex ? targetIndex : targetIndex + 1);
+          nextOrder.splice(Math.max(0, Math.min(nextOrder.length, insertionIndex)), 0, draggedColumnKey);
+          columnOrder = nextOrder;
+
+          void persistListPreferences(columnVisibility, columnWidths, columnOrder);
+          renderColumnVisibilityControls();
+          buildTable(document.getElementById("list-search")?.value || "");
+        });
+
+        optionLabel.appendChild(dragHandle);
         optionLabel.appendChild(checkbox);
         optionLabel.appendChild(document.createTextNode(column.label === "★" ? "Bookmarked" : column.label));
         columnsMenuEl.appendChild(optionLabel);
@@ -784,7 +886,7 @@ function createListPanel({
           window.captureapi?.getListWindow &&
           !lc &&
           !activeGroupByStream &&
-          sortState.key === "idx" &&
+          sortState.key === "pcapOrder" &&
           sortState.direction === "asc",
         );
 

@@ -2240,12 +2240,37 @@ strong {
 }
 
 .list-columns-option {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: 14px auto 1fr;
   align-items: center;
   gap: 6px;
   color: var(--color-5);
   font-size: 12px;
   white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 4px;
+  user-select: none;
+}
+
+.list-columns-option.is-dragging {
+  opacity: 0.6;
+}
+
+.list-columns-option.drop-before {
+  border-top-color: var(--color-1);
+}
+
+.list-columns-option.drop-after {
+  border-bottom-color: var(--color-1);
+}
+
+.list-columns-drag-handle {
+  color: var(--color-6);
+  cursor: grab;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
 }
 
 #list_content {
