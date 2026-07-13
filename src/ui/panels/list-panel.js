@@ -704,6 +704,7 @@ function createListPanel({
     document.getElementById("data_tools_box").style.display = "none";
     document.getElementById("crypt_box").style.display = "none";
     document.getElementById("keystore_box").style.display = "none";
+    document.getElementById("settings_box").style.display = "none";
     document.getElementById("notes_box").style.display = "none";
     document.getElementById("rightside").style.display = "none";
     const listBox = document.getElementById("list_box");

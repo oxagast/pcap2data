@@ -3186,12 +3186,6 @@ async function clearCurrentSession() {
   }
 }
 
-document.getElementById("summary-btn").addEventListener("click", () => {
-  activeMainTab = MAIN_TAB_SUMMARY;
-  renderSummaryMarkdownPreview(summary);
-  showSummary();
-});
-
 // Returns packet timeframe.
 function getPacketTimeframe() {
   if (!capturedPackets || typeof capturedPackets !== "object") return null;

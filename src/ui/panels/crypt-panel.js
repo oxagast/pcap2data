@@ -1470,6 +1470,7 @@ function createCryptPanel({
     document.getElementById("list_box").style.display = "none";
     document.getElementById("notes_box").style.display = "none";
     document.getElementById("keystore_box").style.display = "none";
+    document.getElementById("settings_box").style.display = "none";
     document.getElementById("rightside").style.display = "none";
     const cryptBoxEl = document.getElementById("crypt_box");
     cryptBoxEl.style.display = "flex";
