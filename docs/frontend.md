@@ -157,7 +157,7 @@ An interactive hex dump of the full raw payload. Clicking a cell in the hex grid
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/conv-tab.png">
 </p>
 
-The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar. It has three sub-tabs: **Conversions**, **Hashes**, and **Decodes**.
+The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar. It has five sub-tabs: **Conversions**, **Hashes**, **Decodes**, **Analyze Subnet**, and **Packet JSON**.
 
 ##### Conversions Sub-tab
 
@@ -214,9 +214,25 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 ##### Decodes Sub-tab
 
-The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, SIP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, SIP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
 > The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu.md](context-menu.md) for details.
+
+##### Analyze Subnet Sub-tab
+
+The **Analyze Subnet** sub-tab is a host and subnet enrichment workspace for IPv4/IPv6 addresses and CIDR/netmask input.
+
+| Panel / Control | Description |
+| --------------- | ----------- |
+| **Host Analysis input** | Accepts single IPs, host/prefix values, and subnet forms (for example CIDR or dotted netmask form). |
+| **Analyze / Clear** | Runs subnet math and enrichment lookup, or clears current analysis state. |
+| **Use packet source IP / destination IP** | Seeds the analyzer from the currently selected packet's source or destination IP. |
+| **Summary / Range / Binary cards** | Show normalized network metadata, host range, and binary breakdown views. |
+| **WHOIS / Reputation / Geo / Shodan cards** | Pull backend HTTP lookups from `/whois`, `/ipsum`, `/geoip`, and `/shodan`. |
+| **Capture internet targets** | Lists public internet hosts + observed TCP ports derived from the loaded capture. |
+| **Enumerate Services** | Runs `nmap -sV` against capture-derived internet targets and renders parsed service/version results. |
+
+Nmap service enumeration is gated by **Settings -> Frontend -> Enable Conv Subnet internet-host Nmap service scans** and is disabled by default.
 
 ##### Packet JSON Sub-tab
 
@@ -269,11 +285,11 @@ Reserved workspace for future OpenSSH key and session tooling. For now, PacketSn
 
 #### Settings Tab
 
-The **Settings** tab is a persistent configuration workspace with four sub-tabs: **General**, **LLM**, **Debug**, and **Backend**.
+The **Settings** tab is a persistent configuration workspace with five sub-tabs: **Frontend**, **Backend**, **LLM**, **Debug**, and **About**.
 
 Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Linux) or `C:\User\Username\AppData\Roaming\packetsnitch\config\settings.json` (Windows).
 
-##### General Sub-tab
+##### Frontend Sub-tab
 
 | Setting                               | Key                               | Description                                                                                  |
 | ------------------------------------- | --------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -284,8 +300,12 @@ Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Li
 | **Backend worker threads**            | `general.backendWorkerThreads`    | Number of parser worker threads requested from the backend bridge.                          |
 | **Stream warning threshold (packets)** | `general.streamContextWarnPacketThreshold` | Warns before loading large follow-stream results into Conv or Crypt; default `20`, minimum `5`. |
 | **Manual Conv import limit (MB)**    | `general.manualConvImportMaxBytes` | Maximum allowed size for context-menu manual file imports into Conv (default `2 MiB`).     |
+| **Enable Conv Subnet internet-host Nmap service scans** | `general.nmapServiceScanEnabled` | Enables Analyze Subnet service enumeration against capture-derived internet hosts/ports. |
+| **Check for new releases on startup** | `general.checkForNewReleasesOnStartup` | Automatically checks releases and opens About when a newer version is available. |
+| **Enable frontend ingest threading** | `debug.frontendIngestThreadingEnabled` | Enables worker-based progressive-ingest processing in the renderer. |
+| **Frontend ingest worker threads** | `debug.frontendIngestWorkerThreads` | Number of renderer worker threads used for progressive ingest processing. |
 
-Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`.
+Allowed backend chunk sizes are fixed to: `25`, `100`, `250`, `500`, `2000`, `8000`.
 
 The Settings UI also shows the runtime themes directory path so custom theme JSON files can be dropped in place and loaded.
 
@@ -296,6 +316,7 @@ The Settings UI also shows the runtime themes directory path so custom theme JSO
 | **Ollama model**                  | `llm.ollamaModel`           | Model used for summary generation.                                                                  |
 | **Ollama API key**                | `llm.ollamaApiKey`          | Optional bearer token for authenticated Ollama endpoints.                                           |
 | **Set LLM Active by default**     | `llm.activeByDefault`       | Controls whether LLM-powered frontend features are active by default (load-screen toggle, stream summaries, and LLM context-menu actions). |
+| **Generate background summaries automatically** | `llm.backgroundSummaryGenerationEnabled` | Enables/disables automatic stream-context follow-up summaries while keeping manual LLM actions available. |
 | **LLM trigger delay (seconds)**   | `llm.triggerDelaySeconds`   | Idle delay before stream-context summaries run while navigating packets.                            |
 | **Max tokens for stream summary** | `llm.maxSummaryTokens`      | Maximum generated summary size (`num_predict`).                                                     |
 | **LLM request timeout (seconds)** | `llm.ollamaRequestTimeoutSeconds` | Timeout applied to Ollama request headers and body reads.                                      |
@@ -310,7 +331,8 @@ The LLM panel also exposes runtime diagnostics for local install status, daemon 
 | Setting | Key | Description |
 | ------- | --- | ----------- |
 | **Enable ungrouped list virtualization** | `debug.ungroupedListVirtualizationEnabled` | Experimental rendering optimization for large ungrouped packet tables. |
-| **Enable backend HTTP data mode** | `debug.backendHttpDataModeEnabled` | Streams incremental capture snapshots over the backend HTTP response instead of relying on temporary `hosts-*.json` files. |
+| **Incremental refresh interval (ms)** | `debug.backendIncrementalRefreshMinIntervalMs` | Minimum time between heavy frontend snapshot refreshes during backend processing. |
+| **Incremental refresh packet threshold** | `debug.backendIncrementalRefreshMinPackets` | Minimum packet growth before heavy frontend snapshot refreshes are applied. |
 | **Map projection zoom X / Y** | `debug.mapProjectionZoomX`, `debug.mapProjectionZoomY` | Horizontal/vertical calibration for the Internet Heatmap basemap projection. |
 | **Map projection offset X / Y** | `debug.mapProjectionOffsetX`, `debug.mapProjectionOffsetY` | West/east and north/south alignment offsets for the worldmap overlay. |
 
@@ -323,6 +345,11 @@ The LLM panel also exposes runtime diagnostics for local install status, daemon 
 | **TCP host** | `backend.tcpHost` | Hostname/IP used for backend HTTP service mode. |
 | **TCP port** | `backend.tcpPort` | Port used for backend HTTP service mode. |
 | **Force legacy backend spawn** | `backend.forceLegacySpawn` | Disables HTTP service mode and launches the backend process per capture run. |
+| **Enable backend HTTP data mode** | `debug.backendHttpDataModeEnabled` | Streams incremental capture snapshots over backend HTTP response payloads instead of relying on temporary `hosts-*.json` files. |
+
+##### About Sub-tab
+
+The **About** sub-tab provides release-note refresh and direct download actions for newer releases, and is also used when startup release checks detect an available update.
 
 ##### Actions
 
@@ -424,7 +451,7 @@ Frontend LLM behavior now lives in the renderer and Electron main process rather
 - Requests are sent through `window.llmapi.generate(...)` to the Electron main-process `ollama:generate` IPC handler.
 - The main process applies the configured model, optional bearer token, timeout, and `num_predict` token cap before calling the Ollama Node client.
 - Failed requests can be retried automatically according to the configured retry count.
-- LLM-backed features currently include the Summary view, stream-context follow-up summaries, and the **Explain this Packet...** context-menu submenu with **Explain this data...**, **Ask PS a question...**, and **Summarize this packet...**.
+- LLM-backed features currently include the Summary view, stream-context follow-up summaries, and the **Ask PacketSnitch...** context-menu submenu with **Ask a question...**, **Explain this data...**, and **Summarize this packet...**.
 
 ##### Backend Bridge Modes
 

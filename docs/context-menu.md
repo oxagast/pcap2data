@@ -184,16 +184,18 @@ Shown when at least one carve target is available for the current packet or stre
 
 ### LLM Actions
 
-Shown only when LLM is enabled in Settings and packet context is available.
+Shown only when runtime LLM is available (enabled in Settings and Ollama runtime checks pass) and packet context is available.
 
-| Item                                   | Description                                                                                                              |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **Explain this Packet...**             | Opens an LLM submenu for packet-focused actions when packet context is available.                                        |
-| **Explain this Packet > Ask PS a question...** | Opens a prompt dialog, then asks the LLM a user-supplied question with packet context and optional selected text. |
-| **Explain this Packet > Explain this data...** | Sends selected/context data plus packet context to the LLM and requests a concise analyst-focused explanation.     |
-| **Explain this Packet > Summarize this packet...** | Sends the full current packet JSON to the LLM and asks for a concise analyst-focused packet summary.            |
+| Item | Description |
+| ---- | ----------- |
+| **Ask PacketSnitch...** | Opens the LLM submenu for packet-context actions. |
+| **Ask PacketSnitch > Ask a question...** | Opens an in-app dialog, then asks a user-supplied question using packet context plus selected/context data (when present). |
+| **Ask PacketSnitch > Explain this data...** | Sends selected/context data plus packet JSON context and requests a concise analyst-focused explanation. |
+| **Ask PacketSnitch > Summarize this packet...** | Sends the full current packet JSON and requests a concise packet summary for analysts. |
 
-Both actions write results into a new note and switch to the Notes workspace.
+`Explain this data...` is shown only when the selected/context text passes significance checks (for example, minimum length and not purely numeric/hex noise).
+
+All three LLM actions write Markdown output into a new note and switch to the Notes workspace.
 
 ---
 

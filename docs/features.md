@@ -31,31 +31,41 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 
 ### Settings Workspace
 
-- Dedicated **Settings** tab with four sub-tabs: **General**, **LLM**, **Debug**, and **Backend**.
+- Dedicated **Settings** tab with five sub-tabs: **Frontend**, **Backend**, **LLM**, **Debug**, and **About**.
 - Settings are persisted to `userData/config/settings.json` via main-process IPC (`settings-get`, `settings-save`, `settings-update`).
-- **General** settings:
+- **Frontend** settings:
   - **Theme** selector (`general.themeId`) using discovered theme JSON files.
   - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
   - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
   - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`.
   - **Backend worker threads** (`general.backendWorkerThreads`) with a default of `2 x CPU cores`.
   - **Stream warning threshold (packets)** (`general.streamContextWarnPacketThreshold`) for follow-stream Conv/Crypt warnings, defaulting to `20` with a minimum accepted value of `5`.
+  - **Manual Conv import limit (MB)** (`general.manualConvImportMaxBytes`) for file-to-Conv hard limits and warning thresholds.
+  - **Enable Conv Subnet internet-host Nmap service scans** (`general.nmapServiceScanEnabled`) to allow Analyze Subnet service enumeration.
+  - **Check for new releases on startup** (`general.checkForNewReleasesOnStartup`) for startup update checks.
+  - **Enable frontend ingest threading** (`debug.frontendIngestThreadingEnabled`) for worker-based progressive ingest.
+  - **Frontend ingest worker threads** (`debug.frontendIngestWorkerThreads`) for progressive ingest worker-pool size.
 - **LLM** settings:
   - **Ollama model** (`llm.ollamaModel`).
   - **Ollama API key** (`llm.ollamaApiKey`) stored locally in settings.
   - **Active by default** (`llm.activeByDefault`) for the load dialog LLM toggle.
+  - **Generate background summaries automatically** (`llm.backgroundSummaryGenerationEnabled`).
   - **LLM trigger delay (seconds)** (`llm.triggerDelaySeconds`) for stream-summary idle scheduling.
   - **Max tokens for stream summary** (`llm.maxSummaryTokens`) applied to Ollama `num_predict`.
   - **LLM request timeout (seconds)** (`llm.ollamaRequestTimeoutSeconds`) for request headers/body reads.
   - **LLM retries** (`llm.retryCount`) for automatic retry attempts after failed calls.
 - **Debug** settings:
-  - **Enable backend HTTP data mode** (`debug.backendHttpDataModeEnabled`) to stream in-memory incremental JSON snapshots from the backend HTTP service.
+  - **Incremental refresh interval** (`debug.backendIncrementalRefreshMinIntervalMs`) to throttle heavy frontend snapshot refreshes.
+  - **Incremental refresh packet threshold** (`debug.backendIncrementalRefreshMinPackets`) to throttle heavy frontend snapshot refreshes.
   - **Map projection zoom/offset calibration** (`debug.mapProjectionZoomX`, `debug.mapProjectionZoomY`, `debug.mapProjectionOffsetX`, `debug.mapProjectionOffsetY`) for the worldmap overlay.
   - **Projection lock** (`debug.mapProjectionCalibrationLocked`) to preserve the current calibration.
   - **Ungrouped list virtualization** (`debug.ungroupedListVirtualizationEnabled`) for large List-tab datasets.
 - **Backend** settings:
   - **TCP host** (`backend.tcpHost`) and **TCP port** (`backend.tcpPort`) for the bridge HTTP service.
   - **Force legacy backend spawn mode** (`backend.forceLegacySpawn`) to disable service mode and launch the backend per run.
+  - **Enable backend HTTP data mode** (`debug.backendHttpDataModeEnabled`) for in-memory incremental snapshots over HTTP payloads.
+- **About** settings panel:
+  - Release note refresh and update download actions when newer versions are detected.
 - **Save settings** writes normalized values to disk; **Restore defaults** resets to app defaults.
 
 ---
@@ -236,9 +246,18 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### Decodes Sub-tab
 
 - Protocol decoder with auto-detect and manual protocol selection.
-- Supported protocols: HTTP, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, SIP.
+- Supported protocols: HTTP, FTP, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, SIP.
 - Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.).
 - **Follow stream to Conv**: assembles a full bidirectional TCP stream into Conv with async chunked scanning and loading overlay to prevent UI freezes on large streams.
+
+#### Analyze Subnet Sub-tab
+
+- Conv now includes **Analyze Subnet** for IPv4/IPv6 host/subnet math and enrichment lookups.
+- Supports manual IP/CIDR/netmask input plus quick-fill from current packet source/destination IP.
+- Shows summary, range, binary, WHOIS, GeoIP, Shodan, and reputation cards.
+- Uses backend HTTP lookup endpoints (`/geoip`, `/whois`, `/ipsum`, `/tor`, `/shodan`).
+- Includes capture-derived internet target listing and optional Nmap `-sV` service enumeration.
+- Nmap enumeration is controlled by `general.nmapServiceScanEnabled` and is disabled by default.
 
 ---
 
@@ -410,11 +429,12 @@ Shown when a carve target is available:
 
 #### LLM Actions
 
-- **Explain this Packet...** submenu: groups packet-focused LLM actions in the context menu.
-- **Explain this Packet > Ask PS a question...**: opens a context dialog, sends packet context plus optional selected text and user question to the LLM, then writes answer to Notes.
-- **Explain this Packet > Explain this data...**: sends selected/context data plus packet context to the LLM for a concise analyst-focused explanation and writes result to Notes.
-- **Explain this Packet > Summarize this packet...**: sends the full current packet JSON to the LLM and writes a concise analyst-focused summary to Notes.
-- LLM actions are only shown when LLM is enabled in Settings.
+- **Ask PacketSnitch...** submenu: groups packet-focused LLM actions in the context menu.
+- **Ask PacketSnitch > Ask a question...**: opens an in-app dialog, sends packet context plus optional selected text and user question to the LLM, then writes answer to Notes.
+- **Ask PacketSnitch > Explain this data...**: sends selected/context data plus packet context to the LLM for a concise analyst-focused explanation and writes result to Notes.
+- **Ask PacketSnitch > Summarize this packet...**: sends the full current packet JSON to the LLM and writes a concise analyst-focused summary to Notes.
+- LLM actions are only shown when runtime LLM checks pass and packet context is available.
+- Explain action visibility also requires significant context text (minimum-length and non-noise checks).
 
 ---
 
@@ -435,10 +455,12 @@ Shown when a carve target is available:
 ### Backend HTTP Service / Bridge
 
 - The Electron bridge can initialize the Python backend in long-lived HTTP service mode instead of spawning a fresh parser process per run.
+- Service status/stats endpoint: `GET /status` (also `GET /`).
 - Service health check endpoint: `GET /ping`.
 - Service version endpoint: `GET /version`.
 - Capture-processing endpoint: `POST /process`.
 - Control endpoint: `POST /control` for stop/shutdown requests and runtime updates (`set-runtime-config`).
+- Lookup endpoints used by Analyze Subnet and host enrichment: `GET /geoip`, `GET /whois`, `GET /ipsum`, `GET /tor`, `GET /shodan`.
 - When the backend advertises NDJSON (`application/x-ndjson`), the bridge forwards incremental progress and capture snapshots to the renderer as they arrive.
 - If HTTP service mode is unavailable, the bridge automatically falls back to legacy per-run spawn mode unless disabled by settings.
 - Backend host/port and force-legacy behavior are configurable in **Settings → Backend**.

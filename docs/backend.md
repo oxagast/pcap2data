@@ -22,7 +22,7 @@ In the desktop app, this parser is wrapped by an Electron bridge that can either
   - Active recon: server banners, SSL certificate info, web page titles (optional)
 - Consolidates all testcase info into `hosts.json`.
 - Supports incremental chunk snapshots (`hosts-<N>.json`) for progressive frontend loading.
-- Supports an HTTP service mode used by the Electron bridge for `ping`, `version`, `process`, and control requests.
+- Supports an HTTP service mode used by the Electron bridge for status/stats, `ping`, `version`, `process`, and control requests.
 - Supports filtering by source/destination port.
 - Handles compressed payloads (gzip/zlib).
 - Verbose/debug output modes.
@@ -48,7 +48,11 @@ In the desktop app, this parser is wrapped by an Electron bridge that can either
 ### Usage
 
 ```bash
-python3 snitch.py traffic.pcap -o output_dir [-s SRC_PORT] [-d DST_PORT] [-T TIMEOUT] [-a] [-c conf.yaml] [-v]
+python3 snitch.py traffic.pcap -o output_dir [-s SRC_PORT] [-d DST_PORT] [-T TIMEOUT] [-a] [-c conf.yaml] [--host-chunk-size N] [--worker-threads N] [--server --server-host HOST --server-port PORT] [-v]
+```
+
+```bash
+python3 snitch.py --version
 ```
 
 #### Arguments
@@ -62,6 +66,14 @@ python3 snitch.py traffic.pcap -o output_dir [-s SRC_PORT] [-d DST_PORT] [-T TIM
 | `-T, --timeout`      | Timeout for network requests (default: 3 seconds)     |
 | `-a, --active-recon` | Perform active recon (banners, SSL, titles)           |
 | `-c, --conf`         | Path to YAML config file (default: `conf.yaml`)       |
+| `--version`          | Print backend version and exit                         |
+| `--use-tor-check`    | Enable Tor exit-node enrichment (default: on)          |
+| `--no-tor-check`     | Disable Tor exit-node enrichment                       |
+| `--host-chunk-size`  | Packet count per incremental host snapshot             |
+| `--worker-threads`   | Backend parser worker thread count                     |
+| `--server`           | Run in HTTP service mode                               |
+| `--server-host`      | Bind host for HTTP service mode (default: `127.0.0.1`) |
+| `--server-port`      | Bind port for HTTP service mode (default: `9020`)      |
 | `-v, --verbose`      | Increase verbosity (repeat for more detail)           |
 
 #### Example
@@ -83,10 +95,19 @@ When the Electron bridge has access to the Python backend, it can request long-l
 
 Current bridge-facing endpoints:
 
+- `GET /` and `GET /status`: backend runtime status/statistics payload (uptime, runtime config, active job metadata)
 - `GET /ping`: readiness probe used before capture work is submitted
 - `GET /version`: reports backend service/app version metadata
 - `POST /process`: parse a PCAP and emit either accumulated JSON or NDJSON progress events
-- `POST /control`: control actions such as stop-processing, shutdown, and runtime config updates (`set-runtime-config`)
+- `POST /control`: control actions such as stop-processing, shutdown, and runtime config updates (`set-runtime-config`/`set-config`/`configure`)
+
+Lookup/enrichment endpoints used by frontend tooling (including Conv Analyze Subnet):
+
+- `GET /geoip?ip=<addr>&side=src|dst`: GeoIP lookup
+- `GET /whois?ip=<addr>`: WHOIS lookup
+- `GET /ipsum?ip=<addr>`: IP reputation lookup
+- `GET /tor?ip=<addr>`: Tor exit-node presence lookup
+- `GET /shodan?ip=<addr>`: Shodan InternetDB lookup
 
 Important behavior:
 
