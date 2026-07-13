@@ -99,6 +99,34 @@ describe('filter alias regression tests', () => {
         expect(filterPackets(data, 'application.proto: http')).toHaveLength(1);
     });
 
+    test('application.proto prefers network data protocol when explicit fields conflict', () => {
+        const conflictingAliasData = buildHostData([
+            {
+                'Packet Info': {
+                    Protocol: 'TCP',
+                    'transport.proto': 'TCP',
+                    TCP: {
+                        'Source port': 31337,
+                        'Destination port': 2049,
+                    },
+                },
+                'Extra Info': {
+                    Traits: {
+                        'Network Data': {
+                            'application.proto': 'openvpn',
+                            'app.proto': 'openvpn',
+                            'Port Protocol': 'nfs',
+                            'Port Protcol': 'nfs',
+                        },
+                    },
+                },
+            },
+        ]);
+
+        expect(filterPackets(conflictingAliasData, 'application.proto: openvpn')).toHaveLength(0);
+        expect(filterPackets(conflictingAliasData, 'application.proto: nfs')).toHaveLength(1);
+    });
+
     test('loc.src.city alias resolves nested location city', () => {
         const locationAliasData = buildHostData([
             {

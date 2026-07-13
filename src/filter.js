@@ -177,6 +177,18 @@ function searchNormalizedKey(obj, normalizedTargetKey) {
   return undefined;
 }
 
+function isUnknownLikeProtocolLabel(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return (
+    normalized === '' ||
+    normalized === 'unknown' ||
+    normalized === 'unknown protocol' ||
+    normalized === 'n/a' ||
+    normalized === 'na' ||
+    normalized === 'none'
+  );
+}
+
 // Alias resolution and key normalization for query expressions.
 function getAliasedFieldValue(packetItem, normalizedKey) {
   const packetInfo = getPacketInfo(packetItem);
@@ -212,11 +224,39 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
       return undefined;
     }
     case 'application-proto': {
-      return (
+      const explicitApplicationProtocol =
         searchFullKey(packetItem, 'application.proto') ??
+        searchFullKey(packetItem, 'app.proto');
+      const networkApplicationProtocol =
         networkData?.['Port Protocol'] ??
-        networkData?.['Port Protcol']
-      );
+        networkData?.['Port Protcol'];
+
+      const explicitNormalized = String(
+        explicitApplicationProtocol ?? ''
+      ).trim().toLowerCase();
+      const networkNormalized = String(
+        networkApplicationProtocol ?? ''
+      ).trim().toLowerCase();
+
+      if (
+        !isUnknownLikeProtocolLabel(networkApplicationProtocol) &&
+        !isUnknownLikeProtocolLabel(explicitApplicationProtocol) &&
+        explicitNormalized &&
+        networkNormalized &&
+        explicitNormalized !== networkNormalized
+      ) {
+        // When legacy and explicit app-protocol labels disagree, prefer
+        // network-layer protocol labeling used across Host Data/List views.
+        return networkApplicationProtocol;
+      }
+
+      if (!isUnknownLikeProtocolLabel(explicitApplicationProtocol)) {
+        return explicitApplicationProtocol;
+      }
+      if (!isUnknownLikeProtocolLabel(networkApplicationProtocol)) {
+        return networkApplicationProtocol;
+      }
+      return explicitApplicationProtocol ?? networkApplicationProtocol;
     }
     case 'link-proto':
       return searchFullKey(packetItem, 'link.proto');
