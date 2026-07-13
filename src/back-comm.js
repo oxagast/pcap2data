@@ -14,6 +14,8 @@ let entries = [];
 
 const DEFAULT_HOST_CHUNK_SIZE = 250;
 const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
+const DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS = 350;
+const JSON_DATA_EMIT_MIN_PACKET_DELTA = 2000;
 const BACKEND_HTTP_HOST = "127.0.0.1";
 const BACKEND_HTTP_PORT = 9020;
 const BACKEND_HTTP_READY_TIMEOUT_MS = 4000;
@@ -33,6 +35,45 @@ let backendHttpReadyPromise = null;
 let currentBackendHttpHost = BACKEND_HTTP_HOST;
 let currentBackendHttpPort = BACKEND_HTTP_PORT;
 let backendHttpShutdownExpected = false;
+let pendingJsonDataPayload = null;
+let jsonDataEmitTimer = null;
+let lastJsonDataEmitAtMs = 0;
+let lastJsonDataEmitProcessedPackets = 0;
+let currentJsonDataEmitMinIntervalMs = DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
+const bridgeProgressLogState = {
+  "json-data": { lastPercent: -1, lastProcessed: 0 },
+  "json-path": { lastPercent: -1, lastProcessed: 0 },
+};
+
+function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete) {
+  const key = kind === "json-path" ? "json-path" : "json-data";
+  const state = bridgeProgressLogState[key];
+  const processed = Math.max(0, Number(processedPackets) || 0);
+  const total = Math.max(0, Number(totalPackets) || 0);
+  const isComplete = Boolean(complete);
+
+  if (isComplete) {
+    state.lastPercent = -1;
+    state.lastProcessed = processed;
+    return true;
+  }
+
+  if (total > 0) {
+    const percent = Math.max(0, Math.min(100, Math.round((processed / total) * 100)));
+    if (percent === state.lastPercent) {
+      return false;
+    }
+    state.lastPercent = percent;
+    state.lastProcessed = processed;
+    return true;
+  }
+
+  if (processed - state.lastProcessed < 5000) {
+    return false;
+  }
+  state.lastProcessed = processed;
+  return true;
+}
 
 function buildBackendProcessEnv() {
   const env = {
@@ -689,11 +730,20 @@ function normalizeBackendTransportOptions(rawOptions = {}) {
     : BACKEND_HTTP_PORT;
   const forceLegacySpawn = Boolean(source.forceLegacySpawn);
   const useHttpDataSnapshots = Boolean(source.useHttpDataSnapshots);
+  const parsedJsonDataEmitMinIntervalMs = Number.parseInt(
+    String(source.jsonDataEmitMinIntervalMs ?? currentJsonDataEmitMinIntervalMs),
+    10,
+  );
+  const jsonDataEmitMinIntervalMs =
+    Number.isFinite(parsedJsonDataEmitMinIntervalMs) && parsedJsonDataEmitMinIntervalMs >= 50
+      ? parsedJsonDataEmitMinIntervalMs
+      : DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
   return {
     tcpHost: host,
     tcpPort: port,
     forceLegacySpawn,
     useHttpDataSnapshots,
+    jsonDataEmitMinIntervalMs,
   };
 }
 
@@ -706,6 +756,7 @@ function applyBackendTransportOptions(options = {}) {
     currentBackendHttpHost = normalized.tcpHost;
     currentBackendHttpPort = normalized.tcpPort;
   }
+  currentJsonDataEmitMinIntervalMs = normalized.jsonDataEmitMinIntervalMs;
   return normalized;
 }
 
@@ -953,9 +1004,11 @@ async function runBackendCommandViaHttp(filename, options = {}) {
       const totalPackets = Number(event?.totalPackets) || 0;
       const complete = Boolean(event?.complete);
       if (event?.captureData && typeof event.captureData === "object") {
-        global.logBackend(
-          `[Bridge] HTTP progress json-data processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
-        );
+        if (shouldLogBridgeProgress("json-data", processedPackets, totalPackets, complete)) {
+          global.logBackend(
+            `[Bridge] HTTP progress json-data processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+          );
+        }
         sendJsonDataPayload({
           captureData: event.captureData,
           processedPackets,
@@ -967,9 +1020,11 @@ async function runBackendCommandViaHttp(filename, options = {}) {
         return;
       }
       if (event?.path) {
-        global.logBackend(
-          `[Bridge] HTTP progress json-path processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
-        );
+        if (shouldLogBridgeProgress("json-path", processedPackets, totalPackets, complete)) {
+          global.logBackend(
+            `[Bridge] HTTP progress json-path processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+          );
+        }
         sendJsonPathPayload({
           path: event.path,
           processedPackets,
@@ -1221,9 +1276,67 @@ function sendJsonPathPayload(payload) {
 }
 
 function sendJsonDataPayload(payload) {
-  const mainWin = getMainWindow();
-  if (!mainWin) return;
-  mainWin.webContents.send("json-data", payload);
+  if (!payload || typeof payload !== "object") return;
+
+  const nextPayload = {
+    ...payload,
+    processedPackets: Number(payload.processedPackets) || 0,
+    totalPackets: Number(payload.totalPackets) || 0,
+    complete: Boolean(payload.complete),
+  };
+
+  const flushNow = () => {
+    if (jsonDataEmitTimer) {
+      clearTimeout(jsonDataEmitTimer);
+      jsonDataEmitTimer = null;
+    }
+
+    if (!pendingJsonDataPayload) {
+      return;
+    }
+
+    const mainWin = getMainWindow();
+    if (!mainWin) {
+      pendingJsonDataPayload = null;
+      return;
+    }
+
+    const payloadToSend = pendingJsonDataPayload;
+    pendingJsonDataPayload = null;
+    mainWin.webContents.send("json-data", payloadToSend);
+    lastJsonDataEmitAtMs = Date.now();
+    lastJsonDataEmitProcessedPackets = Number(payloadToSend.processedPackets) || 0;
+  };
+
+  if (nextPayload.complete) {
+    pendingJsonDataPayload = nextPayload;
+    flushNow();
+    return;
+  }
+
+  pendingJsonDataPayload = nextPayload;
+  const nowMs = Date.now();
+  const elapsedMs = Math.max(0, nowMs - lastJsonDataEmitAtMs);
+  const packetDelta = Math.max(
+    0,
+    nextPayload.processedPackets - lastJsonDataEmitProcessedPackets,
+  );
+  const chunkSize = Number(nextPayload.chunkSize) || DEFAULT_HOST_CHUNK_SIZE;
+  const minPacketDelta = Math.max(
+    JSON_DATA_EMIT_MIN_PACKET_DELTA,
+    chunkSize * 4,
+  );
+  if (elapsedMs >= currentJsonDataEmitMinIntervalMs || packetDelta >= minPacketDelta) {
+    flushNow();
+    return;
+  }
+
+  if (!jsonDataEmitTimer) {
+    const waitMs = Math.max(0, currentJsonDataEmitMinIntervalMs - elapsedMs);
+    jsonDataEmitTimer = setTimeout(() => {
+      flushNow();
+    }, waitMs);
+  }
 }
 
 function sendBackendPcapSource(payload) {

@@ -1602,6 +1602,9 @@ function syncSettingsFormFromState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const backendJsonDataEmitIntervalMsEl = document.getElementById(
+    "settings-debug-backend-json-data-emit-interval-ms",
+  );
   const frontendIngestThreadingEnabledEl = document.getElementById(
     "settings-debug-frontend-ingest-threading-enabled",
   );
@@ -1681,6 +1684,11 @@ function syncSettingsFormFromState() {
   if (backendRefreshMinPacketsEl) {
     backendRefreshMinPacketsEl.value = String(
       settings.debug.backendIncrementalRefreshMinPackets,
+    );
+  }
+  if (backendJsonDataEmitIntervalMsEl) {
+    backendJsonDataEmitIntervalMsEl.value = String(
+      settings.debug.backendJsonDataEmitMinIntervalMs,
     );
   }
   if (frontendIngestThreadingEnabledEl) {
@@ -1769,6 +1777,9 @@ function readSettingsFormState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const backendJsonDataEmitIntervalMsEl = document.getElementById(
+    "settings-debug-backend-json-data-emit-interval-ms",
+  );
   const frontendIngestThreadingEnabledEl = document.getElementById(
     "settings-debug-frontend-ingest-threading-enabled",
   );
@@ -1845,6 +1856,9 @@ function readSettingsFormState() {
       backendIncrementalRefreshMinPackets: backendRefreshMinPacketsEl
         ? backendRefreshMinPacketsEl.value
         : DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
+      backendJsonDataEmitMinIntervalMs: backendJsonDataEmitIntervalMsEl
+        ? backendJsonDataEmitIntervalMsEl.value
+        : DEFAULT_SETTINGS.debug.backendJsonDataEmitMinIntervalMs,
       frontendIngestThreadingEnabled: frontendIngestThreadingEnabledEl
         ? frontendIngestThreadingEnabledEl.checked
         : DEFAULT_SETTINGS.debug.frontendIngestThreadingEnabled,
@@ -2012,6 +2026,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "backendIncrementalRefreshMinPackets",
     previousDebug.backendIncrementalRefreshMinPackets,
     nextDebug.backendIncrementalRefreshMinPackets,
+  );
+  pushChange(
+    "backendJsonDataEmitMinIntervalMs",
+    previousDebug.backendJsonDataEmitMinIntervalMs,
+    nextDebug.backendJsonDataEmitMinIntervalMs,
   );
   pushChange(
     "frontendIngestThreadingEnabled",
@@ -2235,6 +2254,11 @@ function getBackendTransportOptionsFromSettings(settings = getCurrentSettings())
     tcpPort: Number(settings?.backend?.tcpPort || DEFAULT_SETTINGS.backend.tcpPort),
     forceLegacySpawn: Boolean(settings?.backend?.forceLegacySpawn),
     useHttpDataSnapshots: Boolean(settings?.debug?.backendHttpDataModeEnabled),
+    jsonDataEmitMinIntervalMs: Math.max(
+      50,
+      Number(settings?.debug?.backendJsonDataEmitMinIntervalMs)
+      || DEFAULT_SETTINGS.debug.backendJsonDataEmitMinIntervalMs,
+    ),
   };
 }
 
@@ -2247,7 +2271,7 @@ async function initializeBackendServiceFromSettings(settings = getCurrentSetting
   try {
     const result = await window.snitchapi.initBackendService(backendOptions);
     writeLogEntry(
-      `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} data_mode=${backendOptions.useHttpDataSnapshots} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
+      `Backend service init requested tcp_host=${JSON.stringify(backendOptions.tcpHost)} tcp_port=${backendOptions.tcpPort} force_legacy=${backendOptions.forceLegacySpawn} data_mode=${backendOptions.useHttpDataSnapshots} json_data_emit_interval_ms=${backendOptions.jsonDataEmitMinIntervalMs} ready=${Boolean(result?.ready)} mode=${JSON.stringify(result?.mode || "unknown")}`,
     );
     await refreshBackendDiagnostics({ ensureReady: false });
     return result;
@@ -16273,6 +16297,14 @@ document
   });
 
 document
+  .getElementById("settings-debug-backend-json-data-emit-interval-ms")
+  .addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated backendJsonDataEmitMinIntervalMs=${event?.target?.value}`,
+    );
+  });
+
+document
   .getElementById("settings-debug-frontend-ingest-threading-enabled")
   .addEventListener("change", (event) => {
     const checked = Boolean(event?.target?.checked);
@@ -18729,7 +18761,7 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} `,
+    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"

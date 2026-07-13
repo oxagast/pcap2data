@@ -586,14 +586,20 @@ function createListPanel({
     const visibleRows = sourceBacked ? rows : rows.slice(startIndex, endIndex);
     const rowStartOffset = sourceBacked ? startIndex - windowStart : 0;
     const rowEndOffset = sourceBacked ? endIndex - windowStart : visibleRows.length;
+    const safeRowStartOffset = Math.max(0, Math.min(visibleRows.length, rowStartOffset));
+    const safeRowEndOffset = Math.max(
+      safeRowStartOffset,
+      Math.min(visibleRows.length, rowEndOffset),
+    );
     let previousStreamLabel =
       sourceBacked && startIndex > windowStart
         ? rows[startIndex - windowStart - 1]?.streamLabel || ""
         : startIndex > 0
-          ? rows[startIndex - 1].streamLabel
+          ? rows[startIndex - 1]?.streamLabel || ""
           : "";
-    for (let rowIndex = rowStartOffset; rowIndex < rowEndOffset; rowIndex += 1) {
+    for (let rowIndex = safeRowStartOffset; rowIndex < safeRowEndOffset; rowIndex += 1) {
       const row = visibleRows[rowIndex];
+      if (!row) continue;
       appendPacketRow(
         tbody,
         fragment,

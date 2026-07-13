@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     debug: {
         ungroupedListVirtualizationEnabled: false,
         backendHttpDataModeEnabled: true,
+        backendJsonDataEmitMinIntervalMs: 350,
         backendIncrementalRefreshMinIntervalMs: 1500,
         backendIncrementalRefreshMinPackets: 4000,
         frontendIngestThreadingEnabled: true,
@@ -215,6 +216,11 @@ function normalizeSettings(rawSettings = {}) {
                 typeof debug.backendHttpDataModeEnabled === "boolean"
                     ? debug.backendHttpDataModeEnabled
                     : debugDefaults.backendHttpDataModeEnabled,
+            backendJsonDataEmitMinIntervalMs: toPositiveInteger(
+                debug.backendJsonDataEmitMinIntervalMs,
+                debugDefaults.backendJsonDataEmitMinIntervalMs,
+                50,
+            ),
             backendIncrementalRefreshMinIntervalMs: toPositiveInteger(
                 debug.backendIncrementalRefreshMinIntervalMs,
                 debugDefaults.backendIncrementalRefreshMinIntervalMs,
