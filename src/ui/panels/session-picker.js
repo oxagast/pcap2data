@@ -14,6 +14,39 @@ function formatSavedAt(iso) {
   }
 }
 
+function formatBytes(value) {
+  const byteCount = Number(value);
+  if (!Number.isFinite(byteCount) || byteCount <= 0) return "Unknown";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let unitIndex = 0;
+  let displayValue = byteCount;
+  while (displayValue >= 1024 && unitIndex < units.length - 1) {
+    displayValue /= 1024;
+    unitIndex += 1;
+  }
+  const digits = displayValue >= 100 ? 0 : displayValue >= 10 ? 1 : 2;
+  return `${displayValue.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatSessionInfo(session) {
+  const saveType =
+    typeof session?.saveType === "string" && session.saveType.trim()
+      ? session.saveType.trim()
+      : "Unknown";
+  const packetsnitchVersion =
+    typeof session?.packetsnitchVersion === "string" && session.packetsnitchVersion.trim()
+      ? session.packetsnitchVersion.trim()
+      : "Unknown";
+  const pcapSizeLabel = formatBytes(session?.pcapSizeBytes);
+  const saveSizeLabel = formatBytes(session?.totalSizeBytes);
+  return [
+    `Type: ${saveType}`,
+    `PCAP: ${pcapSizeLabel}`,
+    `Save size: ${saveSizeLabel}`,
+    `PS: ${packetsnitchVersion}`,
+  ].join("\n");
+}
+
 // Initializes session picker.
 function initializeSessionPicker({
   sessionsapi,
@@ -176,13 +209,13 @@ function initializeSessionPicker({
 
   async function loadSessions() {
     if (!listEl) return;
-    listEl.innerHTML = '<tr><td colspan="3" class="session-picker-loading">Loading sessions…</td></tr>';
+    listEl.innerHTML = '<tr><td colspan="4" class="session-picker-loading">Loading sessions…</td></tr>';
     clearStatus();
     try {
       const result = await sessionsapi.list();
       listEl.innerHTML = "";
       if (!result.success || !result.sessions || result.sessions.length === 0) {
-        listEl.innerHTML = '<tr><td colspan="3" class="session-picker-empty">No saved sessions found. Start by loading a PCAP or JSON file.</td></tr>';
+        listEl.innerHTML = '<tr><td colspan="4" class="session-picker-empty">No saved sessions found. Start by loading a PCAP or JSON file.</td></tr>';
         return;
       }
       result.sessions.forEach((session) => {
@@ -197,6 +230,12 @@ function initializeSessionPicker({
         const dateTd = documentRef.createElement("td");
         dateTd.className = "session-picker-date";
         dateTd.textContent = formatSavedAt(session.savedAt);
+
+        const infoTd = documentRef.createElement("td");
+        infoTd.className = "session-picker-info";
+        const infoText = formatSessionInfo(session);
+        infoTd.textContent = infoText;
+        infoTd.title = infoText;
 
         const actionsTd = documentRef.createElement("td");
         actionsTd.className = "session-picker-actions";
@@ -228,6 +267,7 @@ function initializeSessionPicker({
 
         tr.appendChild(nameTd);
         tr.appendChild(dateTd);
+        tr.appendChild(infoTd);
         tr.appendChild(actionsTd);
         listEl.appendChild(tr);
       });

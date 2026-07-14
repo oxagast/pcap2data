@@ -2703,6 +2703,81 @@ async function ensureSessionsDir() {
   return dir;
 }
 
+function estimateBase64DecodedByteLength(base64Data) {
+  const normalized = typeof base64Data === "string"
+    ? base64Data.replace(/\s+/g, "")
+    : "";
+  if (!normalized) return 0;
+  const paddingMatch = normalized.match(/=+$/);
+  const paddingLength = paddingMatch ? paddingMatch[0].length : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - paddingLength);
+}
+
+function normalizeSessionVersionValue(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function readSessionGeneratedByVersion(parsedPayload, sessionState) {
+  const sessionStateVersionCandidates = [
+    sessionState?.packetsnitchVersion,
+    sessionState?.packetSnitchVersion,
+    sessionState?.generatedByPacketSnitchVersion,
+    sessionState?.generatedBy?.packetsnitchVersion,
+    sessionState?.generatedBy?.packetSnitchVersion,
+  ];
+  for (const candidate of sessionStateVersionCandidates) {
+    const normalized = normalizeSessionVersionValue(candidate);
+    if (normalized) return normalized;
+  }
+
+  const rootVersionCandidates = [
+    parsedPayload?.packetsnitchVersion,
+    parsedPayload?.packetSnitchVersion,
+    parsedPayload?.generatedByPacketSnitchVersion,
+    parsedPayload?.generatedBy?.packetsnitchVersion,
+    parsedPayload?.generatedBy?.packetSnitchVersion,
+  ];
+  for (const candidate of rootVersionCandidates) {
+    const normalized = normalizeSessionVersionValue(candidate);
+    if (normalized) return normalized;
+  }
+
+  return null;
+}
+
+function readSessionPcapSizeBytes(sessionState) {
+  if (!sessionState || typeof sessionState !== "object") return null;
+  const explicitByteLength = Number(sessionState?.sourcePcap?.byteLength);
+  if (Number.isFinite(explicitByteLength) && explicitByteLength > 0) {
+    return Math.floor(explicitByteLength);
+  }
+  const base64Data = sessionState?.sourcePcap?.data;
+  const estimatedSize = estimateBase64DecodedByteLength(base64Data);
+  return estimatedSize > 0 ? estimatedSize : null;
+}
+
+function inferSessionSaveType(filePath, compression) {
+  if (compression === SESSION_FORMAT_BSON_GZIP) {
+    return "BSON + gzip (.psb)";
+  }
+  if (compression === SESSION_COMPRESSION_XZ) {
+    return filePath.endsWith(".json.xz")
+      ? "JSON + xz (legacy .json.xz)"
+      : "JSON + xz (.pss)";
+  }
+  if (compression === SESSION_COMPRESSION_GZIP) {
+    return filePath.endsWith(".json.gz")
+      ? "JSON + gzip (legacy .json.gz)"
+      : "JSON + gzip (.pss.gz)";
+  }
+  if (filePath.endsWith(".json")) {
+    return "JSON (.json)";
+  }
+  return "Unknown";
+}
+
 ipcMain.handle("sessions-list", async () => {
   try {
     const dir = await ensureSessionsDir();
@@ -2736,49 +2811,68 @@ ipcMain.handle("sessions-list", async () => {
       try {
         let savedAt = null;
         let filePath = compressedPath;
+        let compression = SESSION_COMPRESSION_XZ;
         if (await fileExists(jsonPath)) {
-          const content = await fs.promises.readFile(jsonPath, "utf8");
-          const parsed = JSON.parse(content);
-          const sessionState = parsed["session.state"] || {};
-          savedAt = sessionState.savedAt || null;
           filePath = jsonPath;
+          compression = null;
         } else if (await fileExists(bsonGzipPath)) {
-          const stats = await fs.promises.stat(bsonGzipPath);
-          if (stats?.mtime) {
-            savedAt = stats.mtime.toISOString();
-          }
           filePath = bsonGzipPath;
+          compression = SESSION_FORMAT_BSON_GZIP;
         } else if (await fileExists(compressedPath)) {
-          const stats = await fs.promises.stat(compressedPath);
-          if (stats?.mtime) {
-            savedAt = stats.mtime.toISOString();
-          }
+          compression = SESSION_COMPRESSION_XZ;
         } else if (await fileExists(gzipPath)) {
-          const stats = await fs.promises.stat(gzipPath);
-          if (stats?.mtime) {
-            savedAt = stats.mtime.toISOString();
-          }
           filePath = gzipPath;
+          compression = SESSION_COMPRESSION_GZIP;
         } else if (await fileExists(legacyXzPath)) {
-          const stats = await fs.promises.stat(legacyXzPath);
-          if (stats?.mtime) {
-            savedAt = stats.mtime.toISOString();
-          }
           filePath = legacyXzPath;
+          compression = SESSION_COMPRESSION_XZ;
         } else if (await fileExists(legacyGzipPath)) {
-          const stats = await fs.promises.stat(legacyGzipPath);
-          if (stats?.mtime) {
-            savedAt = stats.mtime.toISOString();
-          }
           filePath = legacyGzipPath;
+          compression = SESSION_COMPRESSION_GZIP;
         } else {
           continue;
+        }
+
+        const stats = await fs.promises.stat(filePath);
+        if (stats?.mtime) {
+          savedAt = stats.mtime.toISOString();
+        }
+
+        let packetsnitchVersion = null;
+        let pcapSizeBytes = null;
+        try {
+          const content = await readSessionFileContent(filePath, compression);
+          const parsedPayload = JSON.parse(content);
+          const sessionState =
+            parsedPayload && typeof parsedPayload === "object"
+              && parsedPayload["session.state"]
+              && typeof parsedPayload["session.state"] === "object"
+              ? parsedPayload["session.state"]
+              : null;
+
+          const stateSavedAt =
+            typeof sessionState?.savedAt === "string" ? sessionState.savedAt.trim() : "";
+          if (stateSavedAt) {
+            savedAt = stateSavedAt;
+          }
+
+          packetsnitchVersion = readSessionGeneratedByVersion(
+            parsedPayload,
+            sessionState,
+          );
+          pcapSizeBytes = readSessionPcapSizeBytes(sessionState);
+        } catch (_metadataErr) {
+          // Keep listing robust for older/corrupted saves that still have a file timestamp.
         }
 
         sessions.push({
           name,
           savedAt,
           filePath,
+          saveType: inferSessionSaveType(filePath, compression),
+          totalSizeBytes: Number.isFinite(stats?.size) ? stats.size : null,
+          pcapSizeBytes,
+          packetsnitchVersion,
         });
       } catch (_err) {
         // Skip files that cannot be read or parsed – they may be corrupted

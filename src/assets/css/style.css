@@ -3805,6 +3805,13 @@ strong {
   font-size: 13px;
 }
 
+#session-picker-table th,
+#session-picker-table td {
+  width: auto;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 #session-picker-table thead tr {
   background-color: var(--color-2);
   position: sticky;
@@ -3821,15 +3828,20 @@ strong {
 }
 
 .session-picker-th-name {
-  width: 38%;
+  width: 18%;
 }
 
 .session-picker-th-date {
-  width: 26%;
+  width: 16%;
+}
+
+.session-picker-th-info {
+  width: 41%;
 }
 
 .session-picker-th-actions {
-  width: 36%;
+  width: 25%;
+  min-width: 180px;
 }
 
 .session-picker-row {
@@ -3842,13 +3854,13 @@ strong {
 }
 
 .session-picker-row td {
-  padding: 7px 10px;
-  vertical-align: middle;
+  padding: 4px 8px;
+  vertical-align: top;
 }
 
 .session-picker-name {
   color: var(--color-5);
-  max-width: 220px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3857,23 +3869,39 @@ strong {
 .session-picker-date {
   color: var(--color-6);
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.session-picker-info {
+  color: var(--color-6);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: pre-line;
 }
 
 .session-picker-actions {
   display: flex;
-  gap: 5px;
+  gap: 4px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  min-width: 180px;
 }
 
 .session-picker-action-btn {
   border: 1px solid var(--color-7);
   border-radius: 4px;
-  padding: 3px 9px;
+  padding: 2px 7px;
   font-family: "Courier New", Courier, monospace;
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.2;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
   background-color: transparent;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  min-width: 52px;
 }
 
 .session-open-btn {

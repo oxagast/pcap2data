@@ -109,6 +109,7 @@ if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function
 
 
 const SESSION_FILE_SCHEMA_VERSION = 1;
+const PACKETSNITCH_VERSION = String(psVer || "").trim() || "unknown";
 const SESSION_CAPTURE_KEY = "capture.data";
 const SESSION_STATE_KEY = "session.state";
 const MAIN_TAB_SUMMARY = "summary";
@@ -6387,6 +6388,7 @@ function buildSessionStateSnapshot() {
   const listGroupStreamsEl = document.getElementById("list-group-streams");
   return {
     schemaVersion: SESSION_FILE_SCHEMA_VERSION,
+    packetsnitchVersion: PACKETSNITCH_VERSION,
     savedAt: new Date().toISOString(),
     currentFilterQuery: filterInputEl.value || "",
     filterHistory: [...filterHistory],
