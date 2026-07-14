@@ -2681,7 +2681,7 @@ function maybeHideStartupPreload() {
   }
 
   const STARTUP_PRELOAD_MIN_VISIBLE_MS = 6000;
-  const STARTUP_PRELOAD_FADE_OUT_MS = 1500;
+  const STARTUP_PRELOAD_FADE_OUT_MS = 1800;
   const elapsedMs = Date.now() - startupPreloadShownAtMs;
   const remainingVisibleMs = Math.max(0, STARTUP_PRELOAD_MIN_VISIBLE_MS - elapsedMs);
 
