@@ -336,6 +336,8 @@ let cachedLlmDiagnostics = null;
 let startupWindowLoaded = false;
 let startupSettingsInitialized = false;
 let startupPreloadHidden = false;
+let startupPreloadShownAtMs = Date.now();
+let startupPreloadHideStartTimeoutId = null;
 let cachedBackendDiagnostics = null;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
@@ -2677,11 +2679,25 @@ function maybeHideStartupPreload() {
     startupPreloadHidden = true;
     return;
   }
-  startupPreloadHidden = true;
-  preloadEl.classList.add("is-hidden");
-  window.setTimeout(() => {
-    preloadEl.style.display = "none";
-  }, 300);
+
+  const STARTUP_PRELOAD_MIN_VISIBLE_MS = 6000;
+  const STARTUP_PRELOAD_FADE_OUT_MS = 1500;
+  const elapsedMs = Date.now() - startupPreloadShownAtMs;
+  const remainingVisibleMs = Math.max(0, STARTUP_PRELOAD_MIN_VISIBLE_MS - elapsedMs);
+
+  if (startupPreloadHideStartTimeoutId !== null) {
+    window.clearTimeout(startupPreloadHideStartTimeoutId);
+    startupPreloadHideStartTimeoutId = null;
+  }
+
+  startupPreloadHideStartTimeoutId = window.setTimeout(() => {
+    startupPreloadHidden = true;
+    preloadEl.classList.add("is-hidden");
+    window.setTimeout(() => {
+      preloadEl.style.display = "none";
+    }, STARTUP_PRELOAD_FADE_OUT_MS);
+    startupPreloadHideStartTimeoutId = null;
+  }, remainingVisibleMs);
 }
 
 // Normalizes backend json path payload.
