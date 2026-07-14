@@ -10267,8 +10267,191 @@ function decodeFtpFromBytes(bytes) {
   return { protocol: "FTP", fields };
 }
 
+function normalizeSmbDecoderBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4) return bytes;
+  for (let offset = 0; offset <= Math.min(bytes.length - 4, 16); offset += 1) {
+    const first = bytes[offset];
+    if (
+      (first === 0xff || first === 0xfe) &&
+      bytes[offset + 1] === 0x53 &&
+      bytes[offset + 2] === 0x4d &&
+      bytes[offset + 3] === 0x42
+    ) {
+      return bytes.slice(offset);
+    }
+  }
+  return bytes;
+}
+
+function findBytesSubsequence(bytes, subsequence) {
+  if (!(bytes instanceof Uint8Array) || !(subsequence instanceof Uint8Array)) return -1;
+  if (!subsequence.length || subsequence.length > bytes.length) return -1;
+  for (let index = 0; index <= bytes.length - subsequence.length; index += 1) {
+    let matched = true;
+    for (let offset = 0; offset < subsequence.length; offset += 1) {
+      if (bytes[index + offset] !== subsequence[offset]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return index;
+  }
+  return -1;
+}
+
+function parseSmbNtlmSecurityBuffer(bytes, fieldOffset) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < fieldOffset + 8) return new Uint8Array();
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const valueLength = view.getUint16(fieldOffset, true);
+  const bufferOffset = view.getUint32(fieldOffset + 4, true);
+  if (valueLength <= 0 || bufferOffset + valueLength > bytes.length) return new Uint8Array();
+  return bytes.slice(bufferOffset, bufferOffset + valueLength);
+}
+
+function decodeSmbTextBytes(bytes, useUnicode = true) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return "";
+  try {
+    const decoder = new TextDecoder(useUnicode ? "utf-16le" : "utf-8", {
+      fatal: false,
+    });
+    return decoder.decode(bytes).replace(/\u0000+$/g, "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function bytesToHexLower(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return "";
+  return Array.from(bytes, (byteValue) =>
+    byteValue.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function decodeSmbFromBytes(bytes) {
+  const normalized = normalizeSmbDecoderBytes(bytes);
+  if (!(normalized instanceof Uint8Array) || normalized.length < 8) return null;
+
+  const SMB1_COMMANDS = {
+    0x70: "TREE_CONNECT",
+    0x72: "NEGOTIATE",
+    0x73: "SESSION_SETUP_ANDX",
+    0x74: "LOGOFF_ANDX",
+    0x75: "TREE_CONNECT_ANDX",
+  };
+  const SMB2_COMMANDS = {
+    0x0000: "NEGOTIATE",
+    0x0001: "SESSION_SETUP",
+    0x0002: "LOGOFF",
+    0x0003: "TREE_CONNECT",
+    0x0004: "TREE_DISCONNECT",
+    0x0005: "CREATE",
+    0x0008: "READ",
+    0x0009: "WRITE",
+    0x0010: "QUERY_INFO",
+    0x0011: "SET_INFO",
+  };
+
+  const view = new DataView(
+    normalized.buffer,
+    normalized.byteOffset,
+    normalized.byteLength,
+  );
+  let result = null;
+  let blobStart = 0;
+
+  if (
+    normalized[0] === 0xff && normalized[1] === 0x53 && normalized[2] === 0x4d && normalized[3] === 0x42
+  ) {
+    const commandCode = normalized[4];
+    const status = view.getUint32(5, true);
+    const isResponse = Boolean(normalized[9] & 0x80);
+    result = {
+      protocol: "SMB",
+      fields: [
+        { name: "Version", value: "SMBv1" },
+        { name: "Command", value: SMB1_COMMANDS[commandCode] || `0x${commandCode.toString(16).padStart(2, "0")}` },
+        { name: "Status", value: `0x${status.toString(16).padStart(8, "0")}` },
+        { name: "Is Response", value: isResponse ? "Yes" : "No" },
+      ],
+    };
+    blobStart = 32;
+  } else if (
+    normalized[0] === 0xfe && normalized[1] === 0x53 && normalized[2] === 0x4d && normalized[3] === 0x42
+  ) {
+    const commandCode = view.getUint16(12, true);
+    const status = view.getUint32(8, true);
+    const isResponse = Boolean(view.getUint32(16, true) & 0x00000001);
+    result = {
+      protocol: "SMB",
+      fields: [
+        { name: "Version", value: "SMBv2/v3" },
+        { name: "Command", value: SMB2_COMMANDS[commandCode] || `0x${commandCode.toString(16).padStart(4, "0")}` },
+        { name: "Status", value: `0x${status.toString(16).padStart(8, "0")}` },
+        { name: "Is Response", value: isResponse ? "Yes" : "No" },
+      ],
+    };
+    blobStart = 64;
+  }
+
+  if (!result) return null;
+
+  const blob = normalized.slice(blobStart);
+  const ntlmIndex = findBytesSubsequence(blob, new Uint8Array([0x4e, 0x54, 0x4c, 0x4d, 0x53, 0x53, 0x50, 0x00]));
+  if (ntlmIndex === -1) return result;
+  const ntlmBlob = blob.slice(ntlmIndex);
+  if (ntlmBlob.length < 12) return result;
+
+  const ntlmView = new DataView(ntlmBlob.buffer, ntlmBlob.byteOffset, ntlmBlob.byteLength);
+  const messageType = ntlmView.getUint32(8, true);
+  const pushField = (name, value) => {
+    if (typeof value === "string" && value) result.fields.push({ name, value });
+  };
+
+  if (messageType === 1) {
+    pushField("NTLMSSP", "NEGOTIATE");
+    return result;
+  }
+  if (messageType === 2) {
+    pushField("NTLMSSP", "CHALLENGE");
+    pushField(
+      "Target Name",
+      decodeSmbTextBytes(parseSmbNtlmSecurityBuffer(ntlmBlob, 12), true),
+    );
+    return result;
+  }
+  if (messageType !== 3) {
+    pushField("NTLMSSP", `TYPE_${messageType}`);
+    return result;
+  }
+
+  const flags = ntlmBlob.length >= 64 ? ntlmView.getUint32(60, true) : 0;
+  const useUnicode = Boolean(flags & 0x00000001);
+  const lmResponse = parseSmbNtlmSecurityBuffer(ntlmBlob, 12);
+  const ntlmResponse = parseSmbNtlmSecurityBuffer(ntlmBlob, 20);
+  const domain = parseSmbNtlmSecurityBuffer(ntlmBlob, 28);
+  const username = parseSmbNtlmSecurityBuffer(ntlmBlob, 36);
+  const workstation = parseSmbNtlmSecurityBuffer(ntlmBlob, 44);
+
+  pushField("NTLMSSP", "AUTHENTICATE");
+  pushField("Domain", decodeSmbTextBytes(domain, useUnicode));
+  pushField("Username", decodeSmbTextBytes(username, useUnicode));
+  pushField("Workstation", decodeSmbTextBytes(workstation, useUnicode));
+  if (lmResponse.length) pushField("LM Response", bytesToHexLower(lmResponse));
+  if (ntlmResponse.length) pushField("NTLM Response", bytesToHexLower(ntlmResponse));
+  return result;
+}
+
 // Handles auto detect proto from bytes.
 function autoDetectProtoFromBytes(bytes) {
+  const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
+  if (
+    normalizedSmbBytes instanceof Uint8Array &&
+    normalizedSmbBytes.length >= 4 &&
+    ((normalizedSmbBytes[0] === 0xff && normalizedSmbBytes[1] === 0x53 && normalizedSmbBytes[2] === 0x4d && normalizedSmbBytes[3] === 0x42) ||
+      (normalizedSmbBytes[0] === 0xfe && normalizedSmbBytes[1] === 0x53 && normalizedSmbBytes[2] === 0x4d && normalizedSmbBytes[3] === 0x42))
+  ) {
+    return "smb";
+  }
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
   );
@@ -10382,6 +10565,9 @@ function runProtoDecoder(bytes) {
       break;
     case "ftp":
       result = decodeFtpFromBytes(bytes);
+      break;
+    case "smb":
+      result = decodeSmbFromBytes(bytes);
       break;
     default:
       protocol = null;
@@ -13047,6 +13233,19 @@ function assembleSegments(segments) {
   return output;
 }
 
+function isSmbNamedPipePath(filePath) {
+  const normalizedPath = String(filePath || "")
+    .replace(/\//g, "\\")
+    .trim()
+    .toUpperCase();
+  if (!normalizedPath) return false;
+  return (
+    normalizedPath.startsWith("\\PIPE\\") ||
+    normalizedPath.includes("\\PIPE\\") ||
+    normalizedPath.includes("IPC$")
+  );
+}
+
 // Extracts smb file candidates.
 function extractSmbFileCandidates(streamPackets) {
   const fileEntries = new Map();
@@ -13068,7 +13267,7 @@ function extractSmbFileCandidates(streamPackets) {
   streamPackets.forEach((packet) => {
     const transportData = getPacketTransportData(packet);
     if (!transportData?.["SMB"]) return;
-    const payload = getPacketPayloadBytes(packet);
+    const payload = normalizeSmbDecoderBytes(getPacketPayloadBytes(packet));
     if (!payload || payload.length < 64) return;
     if (
       payload[0] !== 0xfe ||
@@ -13099,7 +13298,7 @@ function extractSmbFileCandidates(streamPackets) {
             payload.slice(nameOffset, nameOffset + nameLength),
           );
           const cleanedName = rawName.trim();
-          if (cleanedName) {
+          if (cleanedName && !isSmbNamedPipePath(cleanedName)) {
             createRequestByMessageId.set(messageId, cleanedName);
           }
         }
@@ -13108,6 +13307,7 @@ function extractSmbFileCandidates(streamPackets) {
         const fileId = bytesToHexString(payload.slice(128, 144));
         if (!fileId) return;
         const fileName = createRequestByMessageId.get(messageId) || "";
+        if (fileName && isSmbNamedPipePath(fileName)) return;
         if (fileName) fileIdToName.set(fileId, fileName);
         const entry = getOrCreateFileEntry(fileId);
         if (fileName) entry.name = fileName;
@@ -13131,6 +13331,9 @@ function extractSmbFileCandidates(streamPackets) {
       if (!fileId || dataLength === 0) return;
       const dataEnd = dataOffset + dataLength;
       if (dataOffset < 0 || dataEnd > payload.length) return;
+      if (fileIdToName.has(fileId) && isSmbNamedPipePath(fileIdToName.get(fileId))) {
+        return;
+      }
       const chunk = payload.slice(dataOffset, dataEnd);
       const entry = getOrCreateFileEntry(fileId);
       if (!entry.name && fileIdToName.has(fileId)) {
@@ -13161,6 +13364,12 @@ function extractSmbFileCandidates(streamPackets) {
       const dataEnd = dataOffset + dataLength;
       if (dataOffset < 0 || dataEnd > payload.length) return;
       const chunk = payload.slice(dataOffset, dataEnd);
+      if (
+        fileIdToName.has(readRequest.fileId) &&
+        isSmbNamedPipePath(fileIdToName.get(readRequest.fileId))
+      ) {
+        return;
+      }
       const entry = getOrCreateFileEntry(readRequest.fileId);
       if (!entry.name && fileIdToName.has(readRequest.fileId)) {
         entry.name = fileIdToName.get(readRequest.fileId);
@@ -13174,6 +13383,7 @@ function extractSmbFileCandidates(streamPackets) {
     const bytes = assembleSegments(entry.segments);
     if (!bytes || bytes.length === 0) continue;
     const cleanName = sanitizeCarveFilename(entry.name);
+    if (isSmbNamedPipePath(entry.name)) continue;
     const fallbackId = entry.fileId.slice(0, 12) || "unknown";
     const label = cleanName
       ? `${cleanName} (${bytes.length} bytes)`

@@ -1437,6 +1437,261 @@ function createKeystorePanel({
     return cookieEntries;
   }
 
+  function extractSmbCredentialEntriesFromMetadata(smbCandidate) {
+    if (!smbCandidate || typeof smbCandidate !== "object") {
+      return [];
+    }
+
+    const entries = [];
+    const discovered = new Set();
+    const pushEntry = ({ type = "secret", label, source, content, protocol = "SMB" }) => {
+      const normalizedContent = normalizeSessionSecretValue(content);
+      const normalizedLabel = normalizeSessionSecretValue(label);
+      if (!normalizedContent || !normalizedLabel) return;
+      const fingerprint = `${type}|${normalizedLabel}|${normalizedContent}`;
+      if (discovered.has(fingerprint)) return;
+      discovered.add(fingerprint);
+      entries.push({
+        type,
+        label: normalizedLabel,
+        source,
+        content: normalizedContent,
+        protocol,
+      });
+    };
+
+    const username = normalizeSessionSecretValue(
+      smbCandidate.Username || smbCandidate["smb.auth.username"],
+    );
+    const domain = normalizeSessionSecretValue(
+      smbCandidate.Domain || smbCandidate["smb.auth.domain"],
+    );
+    const workstation = normalizeSessionSecretValue(
+      smbCandidate.Workstation || smbCandidate["smb.auth.workstation"],
+    );
+    const ntlmResponse = normalizeSessionSecretValue(
+      smbCandidate["NTLM Response"] || smbCandidate["smb.auth.ntlm_response"],
+    );
+    const lmResponse = normalizeSessionSecretValue(
+      smbCandidate["LM Response"] || smbCandidate["smb.auth.lm_response"],
+    );
+    const ntlmType = normalizeSessionSecretValue(
+      smbCandidate.NTLMSSP || smbCandidate["smb.ntlm.type"],
+    );
+
+    if (username) {
+      pushEntry({
+        type: isLikelyEmailAddress(username) ? "email" : "secret",
+        label: "SMB Username",
+        source: "session-auto-smb-username",
+        content: username,
+      });
+    }
+    if (domain) {
+      pushEntry({
+        type: "secret",
+        label: "SMB Domain",
+        source: "session-auto-smb-domain",
+        content: domain,
+      });
+    }
+    if (workstation) {
+      pushEntry({
+        type: "secret",
+        label: "SMB Workstation",
+        source: "session-auto-smb-workstation",
+        content: workstation,
+      });
+    }
+    if (lmResponse) {
+      pushEntry({
+        type: "secret",
+        label: `SMB LM Response${ntlmType ? ` (${ntlmType})` : ""}`,
+        source: "session-auto-smb-lm-response",
+        content: lmResponse,
+      });
+    }
+    if (ntlmResponse) {
+      pushEntry({
+        type: "secret",
+        label: `SMB NTLM Response${ntlmType ? ` (${ntlmType})` : ""}`,
+        source: "session-auto-smb-ntlm-response",
+        content: ntlmResponse,
+      });
+    }
+
+    return entries;
+  }
+
+  function normalizeSmbPayloadBytes(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 4) return bytes;
+    for (let offset = 0; offset <= Math.min(bytes.length - 4, 16); offset += 1) {
+      const firstByte = bytes[offset];
+      if (
+        (firstByte === 0xff || firstByte === 0xfe) &&
+        bytes[offset + 1] === 0x53 &&
+        bytes[offset + 2] === 0x4d &&
+        bytes[offset + 3] === 0x42
+      ) {
+        return bytes.slice(offset);
+      }
+    }
+    return bytes;
+  }
+
+  function readUint32LeFromBytes(bytes, offset) {
+    if (!(bytes instanceof Uint8Array) || offset < 0 || offset + 4 > bytes.length) return null;
+    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true);
+  }
+
+  function readSmbSecurityBuffer(bytes, offset) {
+    if (!(bytes instanceof Uint8Array) || offset < 0 || offset + 8 > bytes.length) {
+      return new Uint8Array();
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const valueLength = view.getUint16(offset, true);
+    const bufferOffset = view.getUint32(offset + 4, true);
+    if (valueLength <= 0 || bufferOffset < 0 || bufferOffset + valueLength > bytes.length) {
+      return new Uint8Array();
+    }
+    return bytes.slice(bufferOffset, bufferOffset + valueLength);
+  }
+
+  function decodeSmbUtf16Text(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) return "";
+    try {
+      return new TextDecoder("utf-16le", { fatal: false })
+        .decode(bytes)
+        .replace(/\u0000+$/g, "")
+        .trim();
+    } catch {
+      return "";
+    }
+  }
+
+  function findBytesPatternIndex(bytes, pattern) {
+    if (!(bytes instanceof Uint8Array) || !(pattern instanceof Uint8Array)) return -1;
+    if (!pattern.length || pattern.length > bytes.length) return -1;
+    for (let index = 0; index <= bytes.length - pattern.length; index += 1) {
+      let matched = true;
+      for (let offset = 0; offset < pattern.length; offset += 1) {
+        if (bytes[index + offset] !== pattern[offset]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) return index;
+    }
+    return -1;
+  }
+
+  function bytesToHexStringLower(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) return "";
+    return Array.from(bytes, (byteValue) => byteValue.toString(16).padStart(2, "0")).join("");
+  }
+
+  function extractSmbCredentialEntriesFromPayloadHex(payloadHex) {
+    const normalizedHex = typeof payloadHex === "string" ? payloadHex.trim() : "";
+    if (!normalizedHex) return [];
+
+    let payloadBytes;
+    try {
+      payloadBytes = parseDataToolsInput("hex", normalizedHex);
+    } catch {
+      return [];
+    }
+
+    const smbBytes = normalizeSmbPayloadBytes(payloadBytes);
+    if (!(smbBytes instanceof Uint8Array) || smbBytes.length < 72) return [];
+    if (!((smbBytes[0] === 0xff || smbBytes[0] === 0xfe) && smbBytes[1] === 0x53 && smbBytes[2] === 0x4d && smbBytes[3] === 0x42)) {
+      return [];
+    }
+
+    const ntlmMarkerIndex = findBytesPatternIndex(
+      smbBytes,
+      new Uint8Array([0x4e, 0x54, 0x4c, 0x4d, 0x53, 0x53, 0x50, 0x00]),
+    );
+    if (ntlmMarkerIndex === -1) return [];
+    const ntlmBytes = smbBytes.slice(ntlmMarkerIndex);
+    if (ntlmBytes.length < 64) return [];
+
+    const messageType = readUint32LeFromBytes(ntlmBytes, 8);
+    if (messageType !== 3) return [];
+    const flags = readUint32LeFromBytes(ntlmBytes, 60) || 0;
+    const useUnicode = Boolean(flags & 0x00000001);
+
+    const domainBytes = readSmbSecurityBuffer(ntlmBytes, 28);
+    const usernameBytes = readSmbSecurityBuffer(ntlmBytes, 36);
+    const workstationBytes = readSmbSecurityBuffer(ntlmBytes, 44);
+    const lmResponseBytes = readSmbSecurityBuffer(ntlmBytes, 12);
+    const ntlmResponseBytes = readSmbSecurityBuffer(ntlmBytes, 20);
+
+    const entries = [];
+    const pushEntry = (entry) => {
+      if (!entry?.content) return;
+      entries.push(entry);
+    };
+
+    const decodeText = (bytes) => {
+      if (useUnicode) return decodeSmbUtf16Text(bytes);
+      return normalizeSessionSecretValue(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
+    };
+
+    const username = decodeText(usernameBytes);
+    const domain = decodeText(domainBytes);
+    const workstation = decodeText(workstationBytes);
+    const lmResponse = bytesToHexStringLower(lmResponseBytes);
+    const ntlmResponse = bytesToHexStringLower(ntlmResponseBytes);
+
+    if (username) {
+      pushEntry({
+        type: isLikelyEmailAddress(username) ? "email" : "secret",
+        label: "SMB Username",
+        source: "session-auto-smb-username",
+        content: username,
+        protocol: "SMB",
+      });
+    }
+    if (domain) {
+      pushEntry({
+        type: "secret",
+        label: "SMB Domain",
+        source: "session-auto-smb-domain",
+        content: domain,
+        protocol: "SMB",
+      });
+    }
+    if (workstation) {
+      pushEntry({
+        type: "secret",
+        label: "SMB Workstation",
+        source: "session-auto-smb-workstation",
+        content: workstation,
+        protocol: "SMB",
+      });
+    }
+    if (lmResponse) {
+      pushEntry({
+        type: "secret",
+        label: "SMB LM Response (AUTHENTICATE)",
+        source: "session-auto-smb-lm-response",
+        content: lmResponse,
+        protocol: "SMB",
+      });
+    }
+    if (ntlmResponse) {
+      pushEntry({
+        type: "secret",
+        label: "SMB NTLM Response (AUTHENTICATE)",
+        source: "session-auto-smb-ntlm-response",
+        content: ntlmResponse,
+        protocol: "SMB",
+      });
+    }
+
+    return entries;
+  }
+
   function shouldIncludeSessionSecretKey(pathKey) {
     if (!pathKey) return false;
     const lower = pathKey.toLowerCase();
@@ -2045,7 +2300,37 @@ function createKeystorePanel({
           });
         });
 
+        const structuredSmbSection = transportData?.SMB;
+        const structuredSmbEntries = extractSmbCredentialEntriesFromMetadata(
+          structuredSmbSection,
+        );
+        structuredSmbEntries.forEach((smbEntry) => {
+          pushSessionEntry({
+            type: smbEntry.type,
+            label: smbEntry.label,
+            source: smbEntry.source,
+            content: smbEntry.content,
+            summary: `Host ${host} packet #${packetIndex} SMB authentication`,
+            packetIndex,
+            protocol: smbEntry.protocol || "SMB",
+          });
+        });
+
         if (typeof payloadHex === "string" && payloadHex.trim()) {
+          const payloadSmbEntries = extractSmbCredentialEntriesFromPayloadHex(
+            payloadHex,
+          );
+          payloadSmbEntries.forEach((smbEntry) => {
+            pushSessionEntry({
+              type: smbEntry.type,
+              label: smbEntry.label,
+              source: smbEntry.source,
+              content: smbEntry.content,
+              summary: `Host ${host} packet #${packetIndex} SMB authentication payload`,
+              packetIndex,
+              protocol: smbEntry.protocol || "SMB",
+            });
+          });
           try {
             const payloadBytes = parseDataToolsInput("hex", payloadHex);
             const payloadText = new TextDecoder("utf-8", {
@@ -2846,7 +3131,10 @@ function createKeystorePanel({
       return;
     }
 
-    if (!cryptKeystoreUnlockKeyMaterial) {
+    if (
+      cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT &&
+      !cryptKeystoreUnlockKeyMaterial
+    ) {
       doError("Please unlock the keychain with password first.");
       return;
     }
