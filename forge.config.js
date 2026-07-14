@@ -60,7 +60,7 @@ if (platform === "windows") {
         "https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-icon.ico",
       setupIcon: path.resolve(__dirname, "logo/ps-installer-icon.ico"),
       name: "PacketSnitch",
-      setupExe: "PacketSnitchInstaller.exe",
+      setupExe: `PacketSnitch-${require("./package.json").version}-Installer.exe`,
       vendor: vendor,
       authors: author,
       copyright: copyright,
