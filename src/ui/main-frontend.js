@@ -9843,80 +9843,117 @@ function decodeHttpFromBytes(bytes) {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/);
   if (!lines.length) return null;
-  const firstLine = lines[0].trim();
-  const requestMatch = firstLine.match(/^([A-Z]+)\s+(\S+)\s+(HTTP\/[\d.]+)$/);
-  const responseMatch = firstLine.match(/^(HTTP\/[\d.]+)\s+(\d{3})\s*(.*)/);
-  if (!requestMatch && !responseMatch) return null;
+  const requestPattern = /^([A-Z]+)\s+(\S+)\s+(HTTP\/[\d.]+)$/;
+  const responsePattern = /^(HTTP\/[\d.]+)\s+(\d{3})\s*(.*)/;
+  const isHttpStartLine = (line) => requestPattern.test(line) || responsePattern.test(line);
 
-  const emptyLineIdx = lines.findIndex((l, i) => i > 0 && l.trim() === "");
-  const headerLines = lines.slice(
-    1,
-    emptyLineIdx > 0 ? emptyLineIdx : lines.length,
-  );
-  const headers = {};
-  headerLines.forEach((hl) => {
-    const idx = hl.indexOf(":");
-    if (idx > 0) {
-      headers[hl.slice(0, idx).trim()] = hl.slice(idx + 1).trim();
+  const startIndexes = [];
+  lines.forEach((rawLine, index) => {
+    const trimmed = rawLine.trim();
+    if (trimmed && isHttpStartLine(trimmed)) {
+      startIndexes.push(index);
     }
   });
+  if (!startIndexes.length) return null;
 
   const fields = [];
-  if (requestMatch) {
-    fields.push(
-      { name: "Type", value: "Request" },
-      { name: "Method", value: requestMatch[1] },
-      { name: "URL", value: requestMatch[2] },
-      { name: "Version", value: requestMatch[3] },
-    );
-    [
-      "Host",
-      "User-Agent",
-      "Content-Type",
-      "Content-Length",
-      "Accept",
-      "Accept-Encoding",
-      "Connection",
-      "Authorization",
-      "Referer",
-      "Cookie",
-    ].forEach((h) => {
-      if (headers[h]) fields.push({ name: h, value: headers[h] });
+  const maxBlocks = 25;
+  for (let blockIndex = 0; blockIndex < startIndexes.length && blockIndex < maxBlocks; blockIndex += 1) {
+    const startLineIndex = startIndexes[blockIndex];
+    const nextStartLineIndex =
+      blockIndex + 1 < startIndexes.length ? startIndexes[blockIndex + 1] : lines.length;
+    const firstLine = (lines[startLineIndex] || "").trim();
+    const requestMatch = firstLine.match(requestPattern);
+    const responseMatch = firstLine.match(responsePattern);
+    if (!requestMatch && !responseMatch) continue;
+
+    const headerEndIndex = lines
+      .slice(startLineIndex + 1, nextStartLineIndex)
+      .findIndex((line) => line.trim() === "");
+    const absoluteHeaderEndIndex =
+      headerEndIndex >= 0
+        ? startLineIndex + 1 + headerEndIndex
+        : nextStartLineIndex;
+    const headerLines = lines.slice(startLineIndex + 1, absoluteHeaderEndIndex);
+    const headers = {};
+    headerLines.forEach((headerLine) => {
+      const separatorIndex = headerLine.indexOf(":");
+      if (separatorIndex > 0) {
+        headers[headerLine.slice(0, separatorIndex).trim()] =
+          headerLine.slice(separatorIndex + 1).trim();
+      }
     });
-  } else {
-    fields.push(
-      { name: "Type", value: "Response" },
-      { name: "Version", value: responseMatch[1] },
-      { name: "Status Code", value: responseMatch[2] },
-      { name: "Status Message", value: responseMatch[3] || "—" },
-    );
-    [
-      "Server",
-      "Content-Type",
-      "Content-Length",
-      "Content-Encoding",
-      "Transfer-Encoding",
-      "Connection",
-      "Location",
-      "Set-Cookie",
-      "Cache-Control",
-      "Date",
-    ].forEach((h) => {
-      if (headers[h]) fields.push({ name: h, value: headers[h] });
-    });
-  }
-  if (emptyLineIdx > 0 && emptyLineIdx < lines.length - 1) {
-    const body = lines
-      .slice(emptyLineIdx + 1)
-      .join("\n")
-      .trim();
-    if (body) {
-      fields.push({
-        name: "Body (preview)",
-        value: body.length > 200 ? body.slice(0, 200) + "…" : body,
+
+    fields.push({ name: `Block ${blockIndex + 1}`, value: requestMatch ? "HTTP Request" : "HTTP Response" });
+    if (requestMatch) {
+      fields.push(
+        { name: "Type", value: "Request" },
+        { name: "Method", value: requestMatch[1] },
+        { name: "URL", value: requestMatch[2] },
+        { name: "Version", value: requestMatch[3] },
+      );
+      [
+        "Host",
+        "User-Agent",
+        "Content-Type",
+        "Content-Length",
+        "Accept",
+        "Accept-Encoding",
+        "Connection",
+        "Authorization",
+        "Referer",
+        "Cookie",
+      ].forEach((headerName) => {
+        if (headers[headerName]) fields.push({ name: headerName, value: headers[headerName] });
+      });
+    } else {
+      fields.push(
+        { name: "Type", value: "Response" },
+        { name: "Version", value: responseMatch[1] },
+        { name: "Status Code", value: responseMatch[2] },
+        { name: "Status Message", value: responseMatch[3] || "—" },
+      );
+      [
+        "Server",
+        "Content-Type",
+        "Content-Length",
+        "Content-Encoding",
+        "Transfer-Encoding",
+        "Connection",
+        "Location",
+        "Set-Cookie",
+        "Cache-Control",
+        "Date",
+      ].forEach((headerName) => {
+        if (headers[headerName]) fields.push({ name: headerName, value: headers[headerName] });
       });
     }
+
+    const bodyStartIndex = absoluteHeaderEndIndex < nextStartLineIndex
+      ? absoluteHeaderEndIndex + 1
+      : absoluteHeaderEndIndex;
+    if (bodyStartIndex < nextStartLineIndex) {
+      const bodyPreview = lines
+        .slice(bodyStartIndex, nextStartLineIndex)
+        .join("\n")
+        .trim();
+      if (bodyPreview) {
+        fields.push({
+          name: "Body (preview)",
+          value: bodyPreview.length > 200 ? bodyPreview.slice(0, 200) + "…" : bodyPreview,
+        });
+      }
+    }
   }
+
+  if (startIndexes.length > maxBlocks) {
+    fields.push({
+      name: "Notice",
+      value: `Showing first ${maxBlocks} HTTP blocks out of ${startIndexes.length}.`,
+    });
+  }
+
+  if (!fields.length) return null;
   return { protocol: "HTTP", fields };
 }
 
@@ -10066,7 +10103,6 @@ function decodePop3FromBytes(bytes) {
         detected = true;
       }
     }
-    if (fields.length >= 10) break;
   }
   if (!detected) return null;
   return { protocol: "POP3", fields };
@@ -10143,7 +10179,6 @@ function decodeImapFromBytes(bytes) {
         }
       }
     }
-    if (fields.length >= 12) break;
   }
   if (!detected) return null;
   return { protocol: "IMAP", fields };
@@ -10191,7 +10226,6 @@ function decodeSmtpFromBytes(bytes) {
         detected = true;
       }
     }
-    if (fields.length >= 12) break;
   }
   if (!detected) return null;
   return { protocol: "SMTP", fields };
@@ -10259,12 +10293,164 @@ function decodeFtpFromBytes(bytes) {
         detected = true;
       }
     }
-
-    if (fields.length >= 12) break;
   }
 
   if (!detected) return null;
   return { protocol: "FTP", fields };
+}
+
+function decodeLdapFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4) return null;
+
+  const LDAP_OPERATIONS = {
+    0x60: "BindRequest",
+    0x61: "BindResponse",
+    0x62: "UnbindRequest",
+    0x63: "SearchRequest",
+    0x64: "SearchResEntry",
+    0x65: "SearchResDone",
+    0x66: "SearchResRef",
+    0x67: "ModifyRequest",
+    0x68: "ModifyResponse",
+    0x69: "AddRequest",
+    0x6a: "AddResponse",
+    0x6b: "DelRequest",
+    0x6c: "DelResponse",
+    0x6d: "ModDNRequest",
+    0x6e: "ModDNResponse",
+    0x6f: "CompareRequest",
+    0x70: "CompareResponse",
+    0x77: "ExtendedRequest",
+    0x78: "ExtendedResponse",
+    0x79: "IntermediateResponse",
+  };
+
+  const parseBerLength = (buffer, startIndex, endIndex) => {
+    if (startIndex >= endIndex) return null;
+    const firstByte = buffer[startIndex];
+    if ((firstByte & 0x80) === 0) {
+      return { length: firstByte, nextIndex: startIndex + 1 };
+    }
+
+    const octetCount = firstByte & 0x7f;
+    if (octetCount === 0 || octetCount > 4) return null;
+    if (startIndex + octetCount >= endIndex) return null;
+
+    let length = 0;
+    for (let offset = 1; offset <= octetCount; offset += 1) {
+      length = (length << 8) | buffer[startIndex + offset];
+    }
+    return {
+      length,
+      nextIndex: startIndex + 1 + octetCount,
+    };
+  };
+
+  try {
+    const fields = [];
+    const maxMessages = 100;
+    let parsedMessages = 0;
+    let index = 0;
+
+    while (index < bytes.length && parsedMessages < maxMessages) {
+      while (index < bytes.length && bytes[index] !== 0x30) {
+        index += 1;
+      }
+      if (index >= bytes.length) break;
+
+      const sequenceStart = index;
+      const sequenceLengthInfo = parseBerLength(bytes, sequenceStart + 1, bytes.length);
+      if (!sequenceLengthInfo) {
+        index = sequenceStart + 1;
+        continue;
+      }
+
+      const sequenceValueStart = sequenceLengthInfo.nextIndex;
+      const sequenceEnd = sequenceValueStart + sequenceLengthInfo.length;
+      if (sequenceEnd > bytes.length) break;
+
+      let cursor = sequenceValueStart;
+      if (cursor >= sequenceEnd || bytes[cursor] !== 0x02) {
+        index = sequenceStart + 1;
+        continue;
+      }
+
+      const messageIdLengthInfo = parseBerLength(bytes, cursor + 1, sequenceEnd);
+      if (!messageIdLengthInfo) {
+        index = sequenceStart + 1;
+        continue;
+      }
+
+      const messageIdStart = messageIdLengthInfo.nextIndex;
+      const messageIdEnd = messageIdStart + messageIdLengthInfo.length;
+      if (messageIdLengthInfo.length < 1 || messageIdEnd > sequenceEnd) {
+        index = sequenceStart + 1;
+        continue;
+      }
+
+      let messageId = 0;
+      for (let offset = messageIdStart; offset < messageIdEnd; offset += 1) {
+        messageId = (messageId << 8) | bytes[offset];
+      }
+
+      cursor = messageIdEnd;
+      if (cursor >= sequenceEnd) {
+        index = Math.max(sequenceEnd, sequenceStart + 1);
+        continue;
+      }
+
+      const operationTag = bytes[cursor];
+      if (operationTag < 0x60 || operationTag > 0x7f) {
+        index = sequenceStart + 1;
+        continue;
+      }
+
+      parsedMessages += 1;
+      fields.push(
+        { name: `Message ${parsedMessages} ID`, value: String(messageId) },
+        {
+          name: `Message ${parsedMessages} Operation`,
+          value:
+            LDAP_OPERATIONS[operationTag] ||
+            `0x${operationTag.toString(16).padStart(2, "0").toUpperCase()}`,
+        },
+      );
+
+      index = Math.max(sequenceEnd, sequenceStart + 1);
+    }
+
+    if (!fields.length) return null;
+    if (parsedMessages >= maxMessages && index < bytes.length) {
+      fields.push({
+        name: "Notice",
+        value: `Showing first ${maxMessages} LDAP messages from stream.`,
+      });
+    }
+
+    return {
+      protocol: "LDAP",
+      fields,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function resolveDecoderInputBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return bytes;
+
+  const contextPacket = getCurrentContextPacket() || getCurrentPacketForExport();
+  const streamPackets = getFollowStreamPackets(contextPacket);
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) return bytes;
+
+  const streamHex = buildStreamHex(streamPackets);
+  if (!streamHex) return bytes;
+
+  try {
+    return parseDataToolsInput("hex", streamHex);
+  } catch {
+    return bytes;
+  }
 }
 
 function normalizeSmbDecoderBytes(bytes) {
@@ -10486,6 +10672,7 @@ function autoDetectProtoFromBytes(bytes) {
     /^\S+ (SELECT|LOGIN|FETCH|AUTHENTICATE)\b/i.test(text)
   )
     return "imap";
+  if (decodeLdapFromBytes(bytes)) return "ldap";
   // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
   const TELNET_COMMANDS = new Set([
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
@@ -10537,37 +10724,41 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
 
 // Runs proto decoder.
 function runProtoDecoder(bytes) {
+  const decodeBytes = resolveDecoderInputBytes(bytes);
   const selectEl = document.getElementById("data-tools-proto-select");
   const selectedProtocol = selectEl ? selectEl.value : "auto";
   let protocol = selectedProtocol;
   if (protocol === "auto") {
-    protocol = autoDetectProtoFromBytes(bytes);
+    protocol = autoDetectProtoFromBytes(decodeBytes);
   }
   let result = null;
   switch (protocol) {
     case "http":
-      result = decodeHttpFromBytes(bytes);
+      result = decodeHttpFromBytes(decodeBytes);
       break;
     case "telnet":
-      result = decodeTelnetFromBytes(bytes);
+      result = decodeTelnetFromBytes(decodeBytes);
       break;
     case "ssh":
-      result = decodeSshFromBytes(bytes);
+      result = decodeSshFromBytes(decodeBytes);
       break;
     case "pop3":
-      result = decodePop3FromBytes(bytes);
+      result = decodePop3FromBytes(decodeBytes);
       break;
     case "imap":
-      result = decodeImapFromBytes(bytes);
+      result = decodeImapFromBytes(decodeBytes);
       break;
     case "smtp":
-      result = decodeSmtpFromBytes(bytes);
+      result = decodeSmtpFromBytes(decodeBytes);
       break;
     case "ftp":
-      result = decodeFtpFromBytes(bytes);
+      result = decodeFtpFromBytes(decodeBytes);
+      break;
+    case "ldap":
+      result = decodeLdapFromBytes(decodeBytes);
       break;
     case "smb":
-      result = decodeSmbFromBytes(bytes);
+      result = decodeSmbFromBytes(decodeBytes);
       break;
     default:
       protocol = null;
