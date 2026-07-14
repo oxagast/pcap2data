@@ -3663,11 +3663,13 @@ def runCaptureFromArgs(runArgs):
         file=sys.stderr,
     )
 
+    needsOutputDir = not emitJsonSnapshots
     processingCancelled = False
     try:
-        if os.path.isdir(outputDir):
-            shutil.rmtree(outputDir, ignore_errors=True)
-        os.makedirs(outputDir, exist_ok=True)
+        if needsOutputDir:
+            if os.path.isdir(outputDir):
+                shutil.rmtree(outputDir, ignore_errors=True)
+            os.makedirs(outputDir, exist_ok=True)
         try:
             startThreading()
         except Exception as startErr:
@@ -3698,11 +3700,17 @@ def runCaptureFromArgs(runArgs):
                 True,
             )
 
-    print(
-        "[Main] Processing complete. Generated testcases and info files are located in: "
-        + outputDir,
-        file=sys.stderr,
-    )
+    if needsOutputDir:
+        print(
+            "[Main] Processing complete. Generated testcases and info files are located in: "
+            + outputDir,
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "[Main] Processing complete. Results streamed in-memory (no testcase directory created).",
+            file=sys.stderr,
+        )
 
     return {
         "success": True,
@@ -4092,7 +4100,11 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 worker_threads=int(
                     request.get("workerThreads") or _getRuntimeConfigSnapshot()["workerThreads"]
                 ),
-                emit_json_snapshots=bool(request.get("emitJsonSnapshots", False)),
+                emit_json_snapshots=bool(
+                    request["emitJsonSnapshots"]
+                    if "emitJsonSnapshots" in request
+                    else True
+                ),
                 verbose=int(request.get("verbose") or 0),
                 server=False,
                 server_host="127.0.0.1",
