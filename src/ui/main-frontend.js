@@ -11088,6 +11088,138 @@ function decodeSmbFromBytes(bytes) {
   return result;
 }
 
+function decodeSipFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return null;
+
+  const firstLine = (lines[0] || "").trim();
+  if (!firstLine) return null;
+
+  const sipMethods = new Set([
+    "INVITE",
+    "ACK",
+    "BYE",
+    "CANCEL",
+    "REGISTER",
+    "OPTIONS",
+    "SUBSCRIBE",
+    "NOTIFY",
+    "REFER",
+    "INFO",
+    "UPDATE",
+    "PRACK",
+    "MESSAGE",
+    "PUBLISH",
+  ]);
+  const requestMatch = firstLine.match(/^([A-Z]+)\s+(\S+)\s+SIP\/([\d.]+)$/i);
+  const responseMatch = firstLine.match(/^SIP\/([\d.]+)\s+(\d{3})(?:\s+(.*))?$/i);
+  const isRequest = Boolean(requestMatch && sipMethods.has(requestMatch[1].toUpperCase()));
+  const isResponse = Boolean(responseMatch);
+  if (!isRequest && !isResponse) return null;
+
+  const headerLines = [];
+  let bodyStartIndex = lines.length;
+  for (let i = 1; i < lines.length; i += 1) {
+    const rawLine = lines[i] || "";
+    if (!rawLine.trim()) {
+      bodyStartIndex = i + 1;
+      break;
+    }
+    if (/^[ \t]/.test(rawLine) && headerLines.length) {
+      headerLines[headerLines.length - 1] += ` ${rawLine.trim()}`;
+      continue;
+    }
+    headerLines.push(rawLine);
+  }
+
+  const compactHeaderNames = {
+    f: "from",
+    t: "to",
+    i: "call-id",
+    m: "contact",
+    v: "via",
+    l: "content-length",
+    c: "content-type",
+    r: "refer-to",
+  };
+  const headerMap = new Map();
+  headerLines.forEach((line) => {
+    const separator = line.indexOf(":");
+    if (separator <= 0) return;
+    const rawName = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (!rawName || !value) return;
+    const lowered = rawName.toLowerCase();
+    const normalizedName = compactHeaderNames[lowered] || lowered;
+    if (!headerMap.has(normalizedName)) headerMap.set(normalizedName, []);
+    headerMap.get(normalizedName).push(value);
+  });
+
+  const truncateField = (value, limit = 180) => {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
+  };
+  const getHeaderValue = (name) => {
+    const values = headerMap.get(String(name || "").toLowerCase());
+    if (!Array.isArray(values) || !values.length) return "";
+    return values.join(" | ");
+  };
+
+  const fields = [];
+  if (isRequest && requestMatch) {
+    fields.push(
+      { name: "Type", value: "Request" },
+      { name: "Method", value: requestMatch[1].toUpperCase() },
+      { name: "Request URI", value: requestMatch[2] || "N/A" },
+      { name: "SIP Version", value: requestMatch[3] || "N/A" },
+    );
+  }
+  if (isResponse && responseMatch) {
+    fields.push(
+      { name: "Type", value: "Response" },
+      { name: "SIP Version", value: responseMatch[1] || "N/A" },
+      { name: "Status Code", value: responseMatch[2] || "N/A" },
+      { name: "Reason Phrase", value: responseMatch[3] || "N/A" },
+    );
+  }
+
+  [
+    ["from", "From"],
+    ["to", "To"],
+    ["call-id", "Call-ID"],
+    ["cseq", "CSeq"],
+    ["via", "Via"],
+    ["contact", "Contact"],
+    ["max-forwards", "Max-Forwards"],
+    ["user-agent", "User-Agent"],
+    ["authorization", "Authorization"],
+    ["proxy-authorization", "Proxy-Authorization"],
+    ["route", "Route"],
+    ["record-route", "Record-Route"],
+    ["content-type", "Content-Type"],
+    ["content-length", "Content-Length"],
+    ["expires", "Expires"],
+  ].forEach(([headerKey, label]) => {
+    const value = truncateField(getHeaderValue(headerKey));
+    if (value) fields.push({ name: label, value });
+  });
+
+  const bodyText = lines.slice(bodyStartIndex).join("\n").trim();
+  if (bodyText) {
+    fields.push({
+      name: "Body Preview",
+      value: truncateField(bodyText, 220),
+    });
+  }
+
+  return fields.length ? { protocol: "SIP", fields } : null;
+}
+
 // Handles auto detect proto from bytes.
 function autoDetectProtoFromBytes(bytes) {
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
@@ -11145,6 +11277,13 @@ function autoDetectProtoFromBytes(bytes) {
   )
     return "imap";
   if (decodeLdapFromBytes(bytes)) return "ldap";
+  if (
+    /^(INVITE|ACK|BYE|CANCEL|REGISTER|OPTIONS|SUBSCRIBE|NOTIFY|REFER|INFO|UPDATE|PRACK|MESSAGE|PUBLISH)\s+\S+\s+SIP\/[\d.]+/i.test(
+      trimmedText,
+    ) ||
+    /^SIP\/[\d.]+\s+\d{3}(?:\s|$)/i.test(trimmedText)
+  )
+    return "sip";
   // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
   const TELNET_COMMANDS = new Set([
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
@@ -11255,6 +11394,9 @@ function runProtoDecoder(bytes) {
       break;
     case "smb":
       result = decodeSmbFromBytes(decodeBytes);
+      break;
+    case "sip":
+      result = decodeSipFromBytes(decodeBytes);
       break;
     default:
       protocol = null;

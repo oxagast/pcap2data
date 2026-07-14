@@ -1719,11 +1719,15 @@ function decodeSmbFromBytes(bytes) {
 
 // Handles decode sip from bytes.
 function decodeSipFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   const lines = text.split(/\r?\n/);
   if (!lines.length) return null;
 
-  const firstLine = lines[0].trim();
+  const firstLine = (lines[0] || "").trim();
+  if (!firstLine) return null;
+
   const sipMethods = new Set([
     "INVITE",
     "ACK",
@@ -1737,68 +1741,113 @@ function decodeSipFromBytes(bytes) {
     "INFO",
     "UPDATE",
     "PRACK",
+    "MESSAGE",
+    "PUBLISH",
   ]);
-
-  // Check if first line is a SIP request or response
-  const isRequest =
-    sipMethods.has(firstLine.split(/\s+/)[0]?.toUpperCase());
-  const isResponse = firstLine.startsWith("SIP/");
-
+  const requestMatch = firstLine.match(/^([A-Z]+)\s+(\S+)\s+SIP\/([\d.]+)$/i);
+  const responseMatch = firstLine.match(/^SIP\/([\d.]+)\s+(\d{3})(?:\s+(.*))?$/i);
+  const isRequest = Boolean(requestMatch && sipMethods.has(requestMatch[1].toUpperCase()));
+  const isResponse = Boolean(responseMatch);
   if (!isRequest && !isResponse) return null;
 
-  const fields = [];
-  const headers = {};
-
-  // Parse headers
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim()) break;
-    if (line.includes(": ")) {
-      const [key, value] = line.split(": ", 2);
-      headers[key.trim()] = value.trim();
+  const headerLines = [];
+  let bodyStartIndex = lines.length;
+  for (let i = 1; i < lines.length; i += 1) {
+    const rawLine = lines[i] || "";
+    if (!rawLine.trim()) {
+      bodyStartIndex = i + 1;
+      break;
     }
+    if (/^[ \t]/.test(rawLine) && headerLines.length) {
+      headerLines[headerLines.length - 1] += ` ${rawLine.trim()}`;
+      continue;
+    }
+    headerLines.push(rawLine);
   }
 
-  if (isRequest) {
-    const parts = firstLine.split(/\s+/);
-    fields.push(
-      { name: "Type", value: "Request" },
-      { name: "Method", value: parts[0] || "—" },
-      { name: "Request URI", value: parts[1] || "—" },
-    );
-  } else {
-    const parts = firstLine.split(/\s+/);
-    fields.push(
-      { name: "Type", value: "Response" },
-      { name: "Status Code", value: parts[1] || "—" },
-      { name: "Status Message", value: parts[2] || "—" },
-    );
-  }
-
-  // Add common SIP headers
-  [
-    "From",
-    "To",
-    "Call-ID",
-    "CSeq",
-    "Via",
-    "Contact",
-    "Authorization",
-    "Proxy-Authorization",
-    "Route",
-    "Record-Route",
-  ].forEach((headerName) => {
-    if (headers[headerName]) {
-      const value = headers[headerName];
-      fields.push({
-        name: headerName,
-        value: value.length > 100 ? value.slice(0, 100) + "…" : value,
-      });
-    }
+  const compactHeaderNames = {
+    f: "from",
+    t: "to",
+    i: "call-id",
+    m: "contact",
+    v: "via",
+    l: "content-length",
+    c: "content-type",
+    r: "refer-to",
+  };
+  const headerMap = new Map();
+  headerLines.forEach((line) => {
+    const separator = line.indexOf(":");
+    if (separator <= 0) return;
+    const rawName = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (!rawName || !value) return;
+    const lowered = rawName.toLowerCase();
+    const normalizedName = compactHeaderNames[lowered] || lowered;
+    if (!headerMap.has(normalizedName)) headerMap.set(normalizedName, []);
+    headerMap.get(normalizedName).push(value);
   });
 
-  if (!fields.length) return null;
-  return { protocol: "SIP", fields };
+  const truncateField = (value, limit = 180) => {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return trimmed.length > limit ? `${trimmed.slice(0, limit)}...` : trimmed;
+  };
+  const getHeaderValue = (name) => {
+    const values = headerMap.get(String(name || "").toLowerCase());
+    if (!Array.isArray(values) || !values.length) return "";
+    return values.join(" | ");
+  };
+
+  const fields = [];
+  if (isRequest && requestMatch) {
+    fields.push(
+      { name: "Type", value: "Request" },
+      { name: "Method", value: requestMatch[1].toUpperCase() },
+      { name: "Request URI", value: requestMatch[2] || "N/A" },
+      { name: "SIP Version", value: requestMatch[3] || "N/A" },
+    );
+  }
+  if (isResponse && responseMatch) {
+    fields.push(
+      { name: "Type", value: "Response" },
+      { name: "SIP Version", value: responseMatch[1] || "N/A" },
+      { name: "Status Code", value: responseMatch[2] || "N/A" },
+      { name: "Reason Phrase", value: responseMatch[3] || "N/A" },
+    );
+  }
+
+  [
+    ["from", "From"],
+    ["to", "To"],
+    ["call-id", "Call-ID"],
+    ["cseq", "CSeq"],
+    ["via", "Via"],
+    ["contact", "Contact"],
+    ["max-forwards", "Max-Forwards"],
+    ["user-agent", "User-Agent"],
+    ["authorization", "Authorization"],
+    ["proxy-authorization", "Proxy-Authorization"],
+    ["route", "Route"],
+    ["record-route", "Record-Route"],
+    ["content-type", "Content-Type"],
+    ["content-length", "Content-Length"],
+    ["expires", "Expires"],
+  ].forEach(([headerKey, label]) => {
+    const value = truncateField(getHeaderValue(headerKey));
+    if (value) fields.push({ name: label, value });
+  });
+
+  const bodyText = lines.slice(bodyStartIndex).join("\n").trim();
+  if (bodyText) {
+    fields.push({
+      name: "Body Preview",
+      value: truncateField(bodyText, 220),
+    });
+  }
+
+  return fields.length ? { protocol: "SIP", fields } : null;
 }
 
 // Handles auto detect proto from bytes.
@@ -1859,10 +1908,10 @@ function autoDetectProtoFromBytes(bytes) {
     return "imap";
   if (decodeLdapFromBytes(bytes)) return "ldap";
   if (
-    /^(INVITE|ACK|BYE|CANCEL|REGISTER|OPTIONS|SUBSCRIBE|NOTIFY|REFER|INFO|UPDATE|PRACK)\s+\S+\s+SIP\/[\d.]+/i.test(
-      text,
+    /^(INVITE|ACK|BYE|CANCEL|REGISTER|OPTIONS|SUBSCRIBE|NOTIFY|REFER|INFO|UPDATE|PRACK|MESSAGE|PUBLISH)\s+\S+\s+SIP\/[\d.]+/i.test(
+      trimmedText,
     ) ||
-    /^SIP\/[\d.]+ \d{3}/i.test(text)
+    /^SIP\/[\d.]+\s+\d{3}(?:\s|$)/i.test(trimmedText)
   )
     return "sip";
   // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
