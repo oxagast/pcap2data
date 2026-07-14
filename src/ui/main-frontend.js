@@ -248,6 +248,7 @@ const DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS = 65536;
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
 let dataToolsLastConversionBytes = new Uint8Array();
+let dataToolsDecodeUseRawConvInputOverride = false;
 let dataToolsLastRenderedOutputBytes = 0;
 let dataToolsLastConversionDisplay = {
   decimalInteger: "",
@@ -10900,6 +10901,10 @@ function decodeBsonFromBytes(bytes) {
 function resolveDecoderInputBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return bytes;
 
+  if (dataToolsDecodeUseRawConvInputOverride) {
+    return bytes;
+  }
+
   const contextPacket = getCurrentContextPacket() || getCurrentPacketForExport();
   const streamPackets = getFollowStreamPackets(contextPacket);
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return bytes;
@@ -17683,6 +17688,7 @@ document.getElementById("settings-llm-retry-count").addEventListener("change", (
 document
   .getElementById("conv-subtab-conversions")
   .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_CONVERSIONS_SUBTAB);
     normalizeDataToolsHexInputFormatting();
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -17690,24 +17696,29 @@ document
 document
   .getElementById("conv-subtab-hashes")
   .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_HASHES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
   });
 document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => {
+    // Manual Decodes tab open keeps the default stream-based decoder behavior.
+    dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_DECODES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
   });
 document
   .getElementById("conv-subtab-subnet")
   .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_SUBNET_SUBTAB);
     subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
   });
 document
   .getElementById("conv-subtab-packet-json")
   .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_PACKET_JSON_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
   });
@@ -17928,6 +17939,18 @@ document
 document
   .getElementById("data-tools-convert-btn")
   .addEventListener("click", runDataToolsConversion);
+document
+  .getElementById("data-tools-send-to-decodes-btn")
+  .addEventListener("click", async () => {
+    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
+    const hasConvertedBytes =
+      dataToolsLastConversionBytes instanceof Uint8Array &&
+      dataToolsLastConversionBytes.length > 0;
+    if (!hasConvertedBytes) return;
+    dataToolsDecodeUseRawConvInputOverride = true;
+    setConvSubtab(CONV_DECODES_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
 document
   .getElementById("data-tools-load-more-output-btn")
   .addEventListener("click", loadMoreDataToolsOutputPage);
