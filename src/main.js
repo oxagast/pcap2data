@@ -2582,6 +2582,42 @@ function formatCompressionError(err, operation) {
   return `Unable to ${operation}: ${err?.message || "unknown error"}`;
 }
 
+function serializeSessionDocumentToBson(doc) {
+  if (!BSON || typeof BSON.serialize !== "function") {
+    throw new Error("bson module is unavailable");
+  }
+
+  const serializerOptions = {};
+  if (typeof BSON.calculateObjectSize === "function") {
+    try {
+      const estimatedSize = BSON.calculateObjectSize(doc);
+      if (Number.isFinite(estimatedSize) && estimatedSize > 0) {
+        // Add headroom so near-boundary writes do not overflow BSON's
+        // internal serialization buffer.
+        serializerOptions.minInternalBufferSize = Math.max(
+          1024 * 1024,
+          estimatedSize + 64 * 1024,
+        );
+      }
+    } catch (_sizeErr) {
+      // If estimation fails, fall through to the serializer defaults.
+    }
+  }
+
+  try {
+    return BSON.serialize(doc, serializerOptions);
+  } catch (err) {
+    if (!serializerOptions.minInternalBufferSize) {
+      throw err;
+    }
+
+    const retryOptions = {
+      minInternalBufferSize: serializerOptions.minInternalBufferSize + 2 * 1024 * 1024,
+    };
+    return BSON.serialize(doc, retryOptions);
+  }
+}
+
 /**
  * Serialise jsonData as BSON and gzip the result, writing to the .psb path.
  * Removes any legacy JSON/.pss/.pss.gz files for the same session name so the
@@ -2592,7 +2628,7 @@ async function saveBsonGzipSession(name, jsonData) {
   const bsonPath = sessionBsonGzipFilePath(name);
   try {
     const doc = JSON.parse(jsonData);
-    const bsonBuffer = BSON.serialize(doc);
+    const bsonBuffer = serializeSessionDocumentToBson(doc);
     const compressedBuffer = await gzipAsync(bsonBuffer, { level: 9 });
     await fs.promises.writeFile(bsonPath, compressedBuffer);
 
@@ -2920,7 +2956,21 @@ ipcMain.handle("session-save", async (_event, name, jsonData) => {
     await ensureSessionsDir();
     const format = await getPreferredSaveFormat();
     if (format === SESSION_FORMAT_BSON_GZIP) {
-      await saveBsonGzipSession(name, jsonData);
+      try {
+        await saveBsonGzipSession(name, jsonData);
+      } catch (bsonErr) {
+        // Large/complex session payloads can exceed BSON serializer limits.
+        // Fall back to the standard JSON session compression path instead of
+        // failing the save entirely.
+        console.warn(
+          "session-save bson fallback triggered:",
+          bsonErr?.message || bsonErr,
+        );
+        const fallbackCompression = await getPreferredSaveCompression();
+        const filePath = sessionFilePath(name);
+        await fs.promises.writeFile(filePath, jsonData, "utf8");
+        await compressSessionJson(name, fallbackCompression);
+      }
     } else {
       const filePath = sessionFilePath(name);
       await fs.promises.writeFile(filePath, jsonData, "utf8");
@@ -3071,13 +3121,14 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
   }
 
   if (format === SESSION_FORMAT_BSON_GZIP) {
-    const defaultName =
+    const defaultSessionBaseName =
       typeof name === "string" && name.trim()
-        ? sanitizeSessionName(name) + ".psb"
-        : "packetsnitch-session.psb";
+        ? sanitizeSessionName(name)
+        : "packetsnitch-session";
+    const bsonDefaultName = `${defaultSessionBaseName}.psb`;
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: "Export PacketSnitch Session",
-      defaultPath: path.join(app.getPath("documents"), defaultName),
+      defaultPath: path.join(app.getPath("documents"), bsonDefaultName),
       filters: [
         { name: "PacketSnitch BSON Session (PSB)", extensions: ["psb"] },
         { name: "PacketSnitch Session (PSS GZip)", extensions: ["pss.gz", "gz"] },
@@ -3088,13 +3139,39 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
     try {
       const outputPath = filePath.endsWith(".psb") ? filePath : filePath + ".psb";
       const doc = JSON.parse(jsonData);
-      const bsonBuffer = BSON.serialize(doc);
+      const bsonBuffer = serializeSessionDocumentToBson(doc);
       const compressedBuffer = await gzipAsync(bsonBuffer, { level: 9 });
       await fs.promises.writeFile(outputPath, compressedBuffer);
       return { success: true };
     } catch (err) {
-      console.error("session-export (bson) error:", err);
-      return { success: false, error: err.message };
+      console.warn(
+        "session-export bson fallback triggered:",
+        err?.message || err,
+      );
+
+      const fallbackCompression = await getPreferredSaveCompression();
+      const fallbackOutputPath =
+        fallbackCompression === SESSION_COMPRESSION_XZ
+          ? (filePath.endsWith(".pss") ? filePath : `${filePath}.pss`)
+          : (filePath.endsWith(".pss.gz") || filePath.endsWith(".gz")
+            ? filePath
+            : `${filePath}.pss.gz`);
+
+      try {
+        const sourceBuffer = Buffer.from(jsonData, "utf8");
+        const compressedBuffer =
+          fallbackCompression === SESSION_COMPRESSION_XZ
+            ? await lzmaNative.compress(sourceBuffer, 6)
+            : await gzipAsync(sourceBuffer, { level: 9 });
+        await fs.promises.writeFile(fallbackOutputPath, compressedBuffer);
+        return { success: true };
+      } catch (fallbackErr) {
+        console.error("session-export fallback error:", fallbackErr);
+        return {
+          success: false,
+          error: fallbackErr?.message || err?.message || "Unable to export session",
+        };
+      }
     }
   }
 

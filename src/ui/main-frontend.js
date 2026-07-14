@@ -9772,17 +9772,21 @@ function runDataToolsPcreReplaceAll() {
 }
 
 // Runs data tools conversion.
-function runDataToolsConversion(options = {}) {
+async function runDataToolsConversion(options = {}) {
   const suppressHistory = Boolean(options?.suppressHistory);
   const suppressCommit = Boolean(options?.suppressCommit);
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
   const errorEl = document.getElementById("data-tools-error");
   updateDataToolsConvertedOutputVisibility();
+  await yieldToRenderer();
 
   try {
     const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
     const isLargePayload = bytes.length > DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES;
+    if (isLargePayload) {
+      await yieldToRenderer();
+    }
     const inspectedBytes =
       bytes.length > DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES
         ? bytes.slice(0, DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES)
@@ -9807,6 +9811,9 @@ function runDataToolsConversion(options = {}) {
       decimalInteger,
     };
     renderDataToolsOutputPage({ reset: true });
+    if (isLargePayload) {
+      await yieldToRenderer();
+    }
     document.getElementById("data-tools-byte-length").textContent =
       `Byte Length: ${bytes.length}`;
     document.getElementById("data-tools-mime-type").textContent =
@@ -9827,10 +9834,16 @@ function runDataToolsConversion(options = {}) {
     document.getElementById("data-tools-entropy").textContent =
       `Shannon Entropy: ${entropy.toFixed(2)} (${entropyLabel})`;
     errorEl.textContent = "";
+    if (isLargePayload) {
+      await yieldToRenderer();
+    }
     if (!isLargePayload || getActiveConvSubtab() === CONV_HASHES_SUBTAB) {
       computeDataToolsHashes(bytes);
     } else {
       resetHashOutputs();
+    }
+    if (isLargePayload) {
+      await yieldToRenderer();
     }
     if (!isLargePayload || getActiveConvSubtab() === CONV_DECODES_SUBTAB) {
       runProtoDecoder(bytes);
@@ -12863,6 +12876,7 @@ function getTotalPacketCount() {
 const STREAM_LOADING_THRESHOLD = 10;
 const STREAM_ASYNC_PACKET_YIELD_INTERVAL = 2000;
 const STREAM_ASYNC_HEX_YIELD_INTERVAL = 200;
+const STREAM_ASYNC_HYDRATE_YIELD_INTERVAL = 25;
 const INGESTION_INDEX_YIELD_INTERVAL_BASE = 2000;
 const INGESTION_INDEX_YIELD_INTERVAL_BACKLOG = 8000;
 const INGESTION_DEFERRED_BACKLOG_THRESHOLD = 3;
@@ -13994,6 +14008,12 @@ async function hydratePacketCollection(packetList) {
   for (let packetIndex = 0; packetIndex < packetList.length; packetIndex += 1) {
     const hydratedPacket = await ensurePacketHydrated(packetList[packetIndex]);
     hydratedPackets.push(hydratedPacket || packetList[packetIndex]);
+    if (
+      (packetIndex + 1) % STREAM_ASYNC_HYDRATE_YIELD_INTERVAL === 0 &&
+      packetIndex + 1 < packetList.length
+    ) {
+      await yieldToRenderer();
+    }
   }
   return hydratedPackets;
 }
