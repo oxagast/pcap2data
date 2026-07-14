@@ -850,6 +850,14 @@ function getBundledThemesDir() {
   return path.join(app.getAppPath(), BUNDLED_THEMES_DIR_NAME);
 }
 
+function getBundledThemeDirs() {
+  const candidateDirs = [
+    getBundledThemesDir(),
+    path.join(process.resourcesPath, BUNDLED_THEMES_DIR_NAME),
+  ];
+  return Array.from(new Set(candidateDirs.filter((entry) => typeof entry === "string" && entry.trim())));
+}
+
 function sanitizeThemeId(value, fallback = "snitchbitch") {
   const safeFallback = typeof fallback === "string" && fallback ? fallback : "snitchbitch";
   if (typeof value !== "string") return safeFallback;
@@ -979,15 +987,19 @@ async function readThemeDefinitionsFromDir(dirPath) {
 }
 
 async function getDefaultThemeDefinitions() {
-  const bundledThemesDir = getBundledThemesDir();
-  try {
-    const bundledThemes = await readThemeDefinitionsFromDir(bundledThemesDir);
-    if (bundledThemes.length > 0) {
-      return bundledThemes;
+  const bundledThemeDirs = getBundledThemeDirs();
+  for (const bundledThemesDir of bundledThemeDirs) {
+    try {
+      const bundledThemes = await readThemeDefinitionsFromDir(bundledThemesDir);
+      if (bundledThemes.length > 0) {
+        return bundledThemes;
+      }
+    } catch {
+      // Try the next bundled theme directory candidate.
     }
-  } catch {
-    // Fallback to in-code defaults when bundled theme files are unavailable.
   }
+
+  // Fallback to in-code defaults when bundled theme files are unavailable.
   return DEFAULT_THEME_DEFINITIONS.map((theme) => ({
     ...theme,
     variables: { ...theme.variables },
@@ -1017,7 +1029,7 @@ async function ensureThemeFilesExist() {
 async function listThemeDefinitions() {
   await ensureThemeFilesExist();
   const themesDir = getThemesDir();
-  const bundledThemesDir = getBundledThemesDir();
+  const bundledThemeDirs = getBundledThemeDirs();
 
   const userThemes = await readThemeDefinitionsFromDir(themesDir);
   userThemes.forEach((theme) => {
@@ -1025,13 +1037,16 @@ async function listThemeDefinitions() {
   });
 
   let bundledThemes = [];
-  try {
-    bundledThemes = await readThemeDefinitionsFromDir(bundledThemesDir);
-    bundledThemes.forEach((theme) => {
-      theme.sourceKind = "bundled";
-    });
-  } catch (error) {
-    console.warn("Unable to read bundled theme definitions:", error);
+  for (const bundledThemesDir of bundledThemeDirs) {
+    try {
+      const themesFromDir = await readThemeDefinitionsFromDir(bundledThemesDir);
+      themesFromDir.forEach((theme) => {
+        theme.sourceKind = "bundled";
+      });
+      bundledThemes = bundledThemes.concat(themesFromDir);
+    } catch (error) {
+      console.warn(`Unable to read bundled theme definitions from ${bundledThemesDir}:`, error);
+    }
   }
 
   const allThemes = [...userThemes, ...bundledThemes];
