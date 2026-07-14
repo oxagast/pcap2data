@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         forceLegacySpawn: false,
     },
     debug: {
-        bsonGzipSessionEnabled: false,
+        bsonGzipSessionEnabled: true,
         ungroupedListVirtualizationEnabled: false,
         backendHttpDataModeEnabled: true,
         backendJsonDataEmitMinIntervalMs: 800,
