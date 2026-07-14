@@ -35,12 +35,19 @@ try {
 } catch (err) {
   console.warn("lzma-native is unavailable, session compression will require fallback", err);
 }
+let BSON = null;
+try {
+  BSON = require("bson");
+} catch (err) {
+  console.warn("bson is unavailable, BSON session format will be disabled", err);
+}
 const gzipAsync = util.promisify(gzip);
 const gunzipAsync = util.promisify(gunzip);
 const execFileAsync = util.promisify(execFile);
 const platform = os.platform();
 const SESSION_COMPRESSION_XZ = "xz";
 const SESSION_COMPRESSION_GZIP = "gzip";
+const SESSION_FORMAT_BSON_GZIP = "bson-gzip";
 const testcaseTempDir = path.join(os.tmpdir(), "testcases");
 const CONSOLE_INSPECT_DEPTH = 6;
 const CONSOLE_MAX_ARRAY_LENGTH = 50;
@@ -2459,6 +2466,10 @@ function sessionCompressedFilePath(name, compression = SESSION_COMPRESSION_XZ) {
   throw new Error(`Unsupported compression: ${compression}`);
 }
 
+function sessionBsonGzipFilePath(name) {
+  return path.join(getSessionsDir(), sanitizeSessionName(name) + ".psb");
+}
+
 function sessionLegacyCompressedFilePath(name, compression = SESSION_COMPRESSION_XZ) {
   const base = path.join(getSessionsDir(), sanitizeSessionName(name) + ".json");
   if (compression === SESSION_COMPRESSION_XZ) return base + ".xz";
@@ -2482,6 +2493,7 @@ function createTaggedError(code, message) {
 }
 
 function getExistingCompressedSessionPath(name) {
+  const bsonGzipPath = sessionBsonGzipFilePath(name);
   const xzPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_XZ);
   const gzipPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_GZIP);
   const legacyXzPath = sessionLegacyCompressedFilePath(
@@ -2493,11 +2505,15 @@ function getExistingCompressedSessionPath(name) {
     SESSION_COMPRESSION_GZIP,
   );
   return Promise.all([
+    fileExists(bsonGzipPath),
     fileExists(xzPath),
     fileExists(gzipPath),
     fileExists(legacyXzPath),
     fileExists(legacyGzipPath),
-  ]).then(([hasXz, hasGzip, hasLegacyXz, hasLegacyGzip]) => {
+  ]).then(([hasBsonGzip, hasXz, hasGzip, hasLegacyXz, hasLegacyGzip]) => {
+    if (hasBsonGzip) {
+      return { compression: SESSION_FORMAT_BSON_GZIP, filePath: bsonGzipPath };
+    }
     if (hasXz) {
       return { compression: SESSION_COMPRESSION_XZ, filePath: xzPath };
     }
@@ -2512,6 +2528,19 @@ function getExistingCompressedSessionPath(name) {
     }
     return null;
   });
+}
+
+/**
+ * Returns SESSION_FORMAT_BSON_GZIP when the debug setting is on and the bson
+ * module is available, otherwise falls through to the standard compression
+ * selection path.  Callers that receive SESSION_FORMAT_BSON_GZIP should use
+ * saveBsonGzipSession() directly instead of compressSessionJson().
+ */
+async function getPreferredSaveFormat() {
+  if (appSettings?.debug?.bsonGzipSessionEnabled && BSON) {
+    return SESSION_FORMAT_BSON_GZIP;
+  }
+  return getPreferredSaveCompression();
 }
 
 async function getPreferredSaveCompression() {
@@ -2552,6 +2581,36 @@ async function getPreferredSaveCompression() {
 function formatCompressionError(err, operation) {
   return `Unable to ${operation}: ${err?.message || "unknown error"}`;
 }
+
+/**
+ * Serialise jsonData as BSON and gzip the result, writing to the .psb path.
+ * Removes any legacy JSON/.pss/.pss.gz files for the same session name so the
+ * library doesn't accumulate duplicate files.
+ */
+async function saveBsonGzipSession(name, jsonData) {
+  if (!BSON) throw new Error("bson module is unavailable");
+  const bsonPath = sessionBsonGzipFilePath(name);
+  try {
+    const doc = JSON.parse(jsonData);
+    const bsonBuffer = BSON.serialize(doc);
+    const compressedBuffer = await gzipAsync(bsonBuffer, { level: 9 });
+    await fs.promises.writeFile(bsonPath, compressedBuffer);
+
+    // Clean up older format files for the same session name
+    for (const stale of [
+      sessionFilePath(name),
+      sessionCompressedFilePath(name, SESSION_COMPRESSION_XZ),
+      sessionCompressedFilePath(name, SESSION_COMPRESSION_GZIP),
+      sessionLegacyCompressedFilePath(name, SESSION_COMPRESSION_XZ),
+      sessionLegacyCompressedFilePath(name, SESSION_COMPRESSION_GZIP),
+    ]) {
+      if (await fileExists(stale)) await fs.promises.unlink(stale);
+    }
+  } catch (err) {
+    throw new Error(formatCompressionError(err, "save BSON session"));
+  }
+}
+
 
 async function compressSessionJson(name, compression) {
   const jsonPath = sessionFilePath(name);
@@ -2608,6 +2667,18 @@ async function readSessionFileContent(filePath, compression) {
     return fs.promises.readFile(filePath, "utf8");
   }
 
+  if (compression === SESSION_FORMAT_BSON_GZIP) {
+    if (!BSON) {
+      throw new Error(
+        "Cannot load BSON session (.psb) without the bson module",
+      );
+    }
+    const compressedBuffer = await fs.promises.readFile(filePath);
+    const bsonBuffer = await gunzipAsync(compressedBuffer);
+    const doc = BSON.deserialize(bsonBuffer);
+    return JSON.stringify(doc);
+  }
+
   if (compression === SESSION_COMPRESSION_XZ && !lzmaNative) {
     throw new Error(
       "Cannot load xz-compressed session (.pss / legacy .json.xz) without Node xz compression support",
@@ -2648,6 +2719,8 @@ ipcMain.handle("sessions-list", async () => {
         names.add(file.slice(0, -8));
       } else if (file.endsWith(".pss.gz")) {
         names.add(file.slice(0, -7));
+      } else if (file.endsWith(".psb")) {
+        names.add(file.slice(0, -4));
       } else if (file.endsWith(".pss")) {
         names.add(file.slice(0, -4));
       }
@@ -2655,6 +2728,7 @@ ipcMain.handle("sessions-list", async () => {
 
     for (const name of names) {
       const jsonPath = path.join(dir, name + ".json");
+      const bsonGzipPath = path.join(dir, name + ".psb");
       const compressedPath = path.join(dir, name + ".pss");
       const gzipPath = path.join(dir, name + ".pss.gz");
       const legacyXzPath = path.join(dir, name + ".json.xz");
@@ -2668,6 +2742,12 @@ ipcMain.handle("sessions-list", async () => {
           const sessionState = parsed["session.state"] || {};
           savedAt = sessionState.savedAt || null;
           filePath = jsonPath;
+        } else if (await fileExists(bsonGzipPath)) {
+          const stats = await fs.promises.stat(bsonGzipPath);
+          if (stats?.mtime) {
+            savedAt = stats.mtime.toISOString();
+          }
+          filePath = bsonGzipPath;
         } else if (await fileExists(compressedPath)) {
           const stats = await fs.promises.stat(compressedPath);
           if (stats?.mtime) {
@@ -2744,10 +2824,14 @@ ipcMain.handle("session-save", async (_event, name, jsonData) => {
 
   try {
     await ensureSessionsDir();
-    const compression = await getPreferredSaveCompression();
-    const filePath = sessionFilePath(name);
-    await fs.promises.writeFile(filePath, jsonData, "utf8");
-    await compressSessionJson(name, compression);
+    const format = await getPreferredSaveFormat();
+    if (format === SESSION_FORMAT_BSON_GZIP) {
+      await saveBsonGzipSession(name, jsonData);
+    } else {
+      const filePath = sessionFilePath(name);
+      await fs.promises.writeFile(filePath, jsonData, "utf8");
+      await compressSessionJson(name, format);
+    }
     return { success: true, name: sanitizeSessionName(name) };
   } catch (err) {
     if (err && err.code === "COMPRESSION_FALLBACK_DECLINED") {
@@ -2774,9 +2858,11 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
   try {
     await ensureSessionsDir();
     const oldJsonPath = sessionFilePath(oldName);
+    const oldBsonGzipPath = sessionBsonGzipFilePath(oldName);
     const oldXzPath = sessionCompressedFilePath(oldName, SESSION_COMPRESSION_XZ);
     const oldGzipPath = sessionCompressedFilePath(oldName, SESSION_COMPRESSION_GZIP);
     const newJsonPath = sessionFilePath(sanitizedNew);
+    const newBsonGzipPath = sessionBsonGzipFilePath(sanitizedNew);
     const newXzPath = sessionCompressedFilePath(sanitizedNew, SESSION_COMPRESSION_XZ);
     const newGzipPath = sessionCompressedFilePath(
       sanitizedNew,
@@ -2784,14 +2870,16 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
     );
 
     const oldJsonExists = await fileExists(oldJsonPath);
+    const oldBsonGzipExists = await fileExists(oldBsonGzipPath);
     const oldXzExists = await fileExists(oldXzPath);
     const oldGzipExists = await fileExists(oldGzipPath);
-    if (!oldJsonExists && !oldXzExists && !oldGzipExists) {
+    if (!oldJsonExists && !oldBsonGzipExists && !oldXzExists && !oldGzipExists) {
       return { success: false, error: "Session not found" };
     }
 
     if (
       (oldJsonPath !== newJsonPath && (await fileExists(newJsonPath))) ||
+      (oldBsonGzipPath !== newBsonGzipPath && (await fileExists(newBsonGzipPath))) ||
       (oldXzPath !== newXzPath && (await fileExists(newXzPath))) ||
       (oldGzipPath !== newGzipPath && (await fileExists(newGzipPath)))
     ) {
@@ -2800,6 +2888,9 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
 
     if (oldJsonExists && oldJsonPath !== newJsonPath) {
       await fs.promises.rename(oldJsonPath, newJsonPath);
+    }
+    if (oldBsonGzipExists && oldBsonGzipPath !== newBsonGzipPath) {
+      await fs.promises.rename(oldBsonGzipPath, newBsonGzipPath);
     }
     if (oldXzExists && oldXzPath !== newXzPath) {
       await fs.promises.rename(oldXzPath, newXzPath);
@@ -2821,18 +2912,23 @@ ipcMain.handle("session-delete", async (_event, name) => {
   }
   try {
     const jsonPath = sessionFilePath(name);
+    const bsonGzipPath = sessionBsonGzipFilePath(name);
     const xzPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_XZ);
     const gzipPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_GZIP);
     const hasJson = await fileExists(jsonPath);
+    const hasBsonGzip = await fileExists(bsonGzipPath);
     const hasXz = await fileExists(xzPath);
     const hasGzip = await fileExists(gzipPath);
 
-    if (!hasJson && !hasXz && !hasGzip) {
+    if (!hasJson && !hasBsonGzip && !hasXz && !hasGzip) {
       return { success: false, error: "Session not found" };
     }
 
     if (hasJson) {
       await fs.promises.unlink(jsonPath);
+    }
+    if (hasBsonGzip) {
+      await fs.promises.unlink(bsonGzipPath);
     }
     if (hasXz) {
       await fs.promises.unlink(xzPath);
@@ -2870,16 +2966,45 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
     return { success: false, error: "No JSON data to export" };
   }
 
-  let compression;
+  let format;
   try {
-    compression = await getPreferredSaveCompression();
+    format = await getPreferredSaveFormat();
   } catch (err) {
     if (err && err.code === "COMPRESSION_FALLBACK_DECLINED") {
       return { success: false, canceled: true, error: err.message };
     }
-    return { success: false, error: err?.message || "Failed to choose compression" };
+    return { success: false, error: err?.message || "Failed to choose save format" };
   }
 
+  if (format === SESSION_FORMAT_BSON_GZIP) {
+    const defaultName =
+      typeof name === "string" && name.trim()
+        ? sanitizeSessionName(name) + ".psb"
+        : "packetsnitch-session.psb";
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: "Export PacketSnitch Session",
+      defaultPath: path.join(app.getPath("documents"), defaultName),
+      filters: [
+        { name: "PacketSnitch BSON Session (PSB)", extensions: ["psb"] },
+        { name: "PacketSnitch Session (PSS GZip)", extensions: ["pss.gz", "gz"] },
+        { name: "PacketSnitch Session (PSS)", extensions: ["pss"] },
+      ],
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+    try {
+      const outputPath = filePath.endsWith(".psb") ? filePath : filePath + ".psb";
+      const doc = JSON.parse(jsonData);
+      const bsonBuffer = BSON.serialize(doc);
+      const compressedBuffer = await gzipAsync(bsonBuffer, { level: 9 });
+      await fs.promises.writeFile(outputPath, compressedBuffer);
+      return { success: true };
+    } catch (err) {
+      console.error("session-export (bson) error:", err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  const compression = format;
   const defaultExtension =
     compression === SESSION_COMPRESSION_XZ ? "pss" : "pss.gz";
   const defaultName =

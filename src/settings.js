@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         forceLegacySpawn: false,
     },
     debug: {
+        bsonGzipSessionEnabled: false,
         ungroupedListVirtualizationEnabled: false,
         backendHttpDataModeEnabled: true,
         backendJsonDataEmitMinIntervalMs: 800,
@@ -208,6 +209,10 @@ function normalizeSettings(rawSettings = {}) {
                     : backendDefaults.forceLegacySpawn,
         },
         debug: {
+            bsonGzipSessionEnabled:
+                typeof debug.bsonGzipSessionEnabled === "boolean"
+                    ? debug.bsonGzipSessionEnabled
+                    : debugDefaults.bsonGzipSessionEnabled,
             ungroupedListVirtualizationEnabled:
                 typeof debug.ungroupedListVirtualizationEnabled === "boolean"
                     ? debug.ungroupedListVirtualizationEnabled

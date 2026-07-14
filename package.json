@@ -86,6 +86,7 @@
     "webpack-cli": "^7.0.2"
   },
   "dependencies": {
+    "bson": "^7.3.1",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",
     "crypto-js": "^4.2.0",

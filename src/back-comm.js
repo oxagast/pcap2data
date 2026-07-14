@@ -10,6 +10,8 @@ const zlib = require("zlib");
 const gunzipAsync = promisify(zlib.gunzip);
 const systemTempDir = os.tmpdir();
 const testcaseOutputDir = path.join(systemTempDir, "testcases");
+let BSON = null;
+try { BSON = require("bson"); } catch { }
 let entries = [];
 
 const DEFAULT_HOST_CHUNK_SIZE = 250;
@@ -1504,10 +1506,17 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     isCompressedSession = true;
     sessionCompression = "xz";
   } else if (fileForMagic.startsWith("\x1f\x8b")) {
-    global.logBackend("[Bridge] File looks like a gzip-compressed file, this is probably a .pss.gz session file!");
-    isSession = true;
-    isCompressedSession = true;
-    sessionCompression = "gzip";
+    if (filename.endsWith(".psb")) {
+      global.logBackend("[Bridge] File looks like a gzip-compressed BSON file (.psb session)!");
+      isSession = true;
+      isCompressedSession = true;
+      sessionCompression = "bson-gzip";
+    } else {
+      global.logBackend("[Bridge] File looks like a gzip-compressed file, this is probably a .pss.gz session file!");
+      isSession = true;
+      isCompressedSession = true;
+      sessionCompression = "gzip";
+    }
   } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
     global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
     isPCAP = true;
@@ -1540,7 +1549,18 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         try {
           const compressedBuffer = fs.readFileSync(filename);
           let decompressedBuffer;
-          if (sessionCompression === "gzip") {
+          if (sessionCompression === "bson-gzip") {
+            if (!BSON) {
+              sendError("[Bridge] Cannot load BSON session (.psb) without the bson module!");
+              return {
+                success: false,
+                error: "Cannot load BSON session without bson module",
+              };
+            }
+            const gunzipped = await gunzipAsync(compressedBuffer);
+            const doc = BSON.deserialize(gunzipped);
+            decompressedBuffer = Buffer.from(JSON.stringify(doc), "utf8");
+          } else if (sessionCompression === "gzip") {
             decompressedBuffer = await gunzipAsync(compressedBuffer);
           } else {
             let lzmaNative = null;

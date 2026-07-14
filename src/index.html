@@ -367,6 +367,14 @@
                 <option value="pop3">POP3</option>
                 <option value="imap">IMAP</option>
                 <option value="smtp">SMTP</option>
+                <option value="json">JSON (Generic)</option>
+                <option value="xml">XML (Generic)</option>
+                <option value="yaml">YAML (Generic)</option>
+                <option value="protobuf">Protobuf (Generic)</option>
+                <option value="msgpack">MessagePack (Generic)</option>
+                <option value="bson">BSON (Generic)</option>
+                <option value="ber">ASN.1 BER (Generic)</option>
+                <option value="der">ASN.1 DER (Generic)</option>
                 <option value="ldap">LDAP</option>
                 <option value="sip">SIP</option>
               </select>
@@ -892,6 +900,16 @@ No keystore entries saved.</pre>
             <div class="settings-grid">
               <div class="settings-section">
                 <div class="settings-section-title">Debug Options</div>
+
+                <label class="settings-checkbox-row" for="settings-debug-bson-gzip-session-enabled">
+                  <input id="settings-debug-bson-gzip-session-enabled" type="checkbox" />
+                  Use BSON+gzip session format (.psb) — PacketSnitch 2.0
+                </label>
+                <div class="settings-help-text">
+                  When enabled, sessions are saved as gzip-compressed BSON (.psb) instead of the legacy XZ/gzip JSON
+                  formats. BSON natively supports binary data, so base64-encoded fields can be stored in raw binary form
+                  in future versions. Disabled by default; Windows-safe (no xz dependency).
+                </div>
 
                 <label class="settings-checkbox-row" for="settings-debug-ungrouped-list-virtualization-enabled">
                   <input id="settings-debug-ungrouped-list-virtualization-enabled" type="checkbox" />

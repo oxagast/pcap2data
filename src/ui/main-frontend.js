@@ -1590,6 +1590,9 @@ function syncSettingsFormFromState() {
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
+  const bsonGzipSessionEnabledEl = document.getElementById(
+    "settings-debug-bson-gzip-session-enabled",
+  );
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
@@ -1665,6 +1668,9 @@ function syncSettingsFormFromState() {
   }
   if (backendForceLegacySpawnEl) {
     backendForceLegacySpawnEl.checked = Boolean(settings.backend.forceLegacySpawn);
+  }
+  if (bsonGzipSessionEnabledEl) {
+    bsonGzipSessionEnabledEl.checked = Boolean(settings.debug.bsonGzipSessionEnabled);
   }
   if (ungroupedListVirtualizationEnabledEl) {
     ungroupedListVirtualizationEnabledEl.checked = Boolean(
@@ -1765,6 +1771,9 @@ function readSettingsFormState() {
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
+  const bsonGzipSessionEnabledEl = document.getElementById(
+    "settings-debug-bson-gzip-session-enabled",
+  );
   const ungroupedListVirtualizationEnabledEl = document.getElementById(
     "settings-debug-ungrouped-list-virtualization-enabled",
   );
@@ -1844,6 +1853,9 @@ function readSettingsFormState() {
         : DEFAULT_SETTINGS.backend.forceLegacySpawn,
     },
     debug: {
+      bsonGzipSessionEnabled: bsonGzipSessionEnabledEl
+        ? bsonGzipSessionEnabledEl.checked
+        : DEFAULT_SETTINGS.debug.bsonGzipSessionEnabled,
       ungroupedListVirtualizationEnabled: ungroupedListVirtualizationEnabledEl
         ? ungroupedListVirtualizationEnabledEl.checked
         : DEFAULT_SETTINGS.debug.ungroupedListVirtualizationEnabled,
@@ -10299,6 +10311,36 @@ function decodeFtpFromBytes(bytes) {
   return { protocol: "FTP", fields };
 }
 
+function parseAsn1Length(buffer, startIndex, endIndex, enforceDer = false) {
+  if (!(buffer instanceof Uint8Array)) return null;
+  if (startIndex >= endIndex) return null;
+  const firstByte = buffer[startIndex];
+  if ((firstByte & 0x80) === 0) {
+    return { length: firstByte, nextIndex: startIndex + 1 };
+  }
+
+  const octetCount = firstByte & 0x7f;
+  if (octetCount === 0 || octetCount > 4) return null;
+  if (startIndex + octetCount >= endIndex) return null;
+
+  if (enforceDer && octetCount === 1 && buffer[startIndex + 1] < 0x80) {
+    return null;
+  }
+
+  let length = 0;
+  for (let offset = 1; offset <= octetCount; offset += 1) {
+    const byteValue = buffer[startIndex + offset];
+    if (enforceDer && offset === 1 && byteValue === 0x00) {
+      return null;
+    }
+    length = (length << 8) | byteValue;
+  }
+  return {
+    length,
+    nextIndex: startIndex + 1 + octetCount,
+  };
+}
+
 function decodeLdapFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length < 4) return null;
 
@@ -10325,27 +10367,6 @@ function decodeLdapFromBytes(bytes) {
     0x79: "IntermediateResponse",
   };
 
-  const parseBerLength = (buffer, startIndex, endIndex) => {
-    if (startIndex >= endIndex) return null;
-    const firstByte = buffer[startIndex];
-    if ((firstByte & 0x80) === 0) {
-      return { length: firstByte, nextIndex: startIndex + 1 };
-    }
-
-    const octetCount = firstByte & 0x7f;
-    if (octetCount === 0 || octetCount > 4) return null;
-    if (startIndex + octetCount >= endIndex) return null;
-
-    let length = 0;
-    for (let offset = 1; offset <= octetCount; offset += 1) {
-      length = (length << 8) | buffer[startIndex + offset];
-    }
-    return {
-      length,
-      nextIndex: startIndex + 1 + octetCount,
-    };
-  };
-
   try {
     const fields = [];
     const maxMessages = 100;
@@ -10359,7 +10380,7 @@ function decodeLdapFromBytes(bytes) {
       if (index >= bytes.length) break;
 
       const sequenceStart = index;
-      const sequenceLengthInfo = parseBerLength(bytes, sequenceStart + 1, bytes.length);
+      const sequenceLengthInfo = parseAsn1Length(bytes, sequenceStart + 1, bytes.length);
       if (!sequenceLengthInfo) {
         index = sequenceStart + 1;
         continue;
@@ -10375,7 +10396,7 @@ function decodeLdapFromBytes(bytes) {
         continue;
       }
 
-      const messageIdLengthInfo = parseBerLength(bytes, cursor + 1, sequenceEnd);
+      const messageIdLengthInfo = parseAsn1Length(bytes, cursor + 1, sequenceEnd);
       if (!messageIdLengthInfo) {
         index = sequenceStart + 1;
         continue;
@@ -10434,6 +10455,348 @@ function decodeLdapFromBytes(bytes) {
   } catch {
     return null;
   }
+}
+
+function getAsn1TagDescription(tagByte) {
+  const tagClass = (tagByte & 0xc0) >> 6;
+  const classLabel = ["Universal", "Application", "Context-specific", "Private"][tagClass] || "Unknown";
+  const constructed = Boolean(tagByte & 0x20);
+  const tagNumber = tagByte & 0x1f;
+  return {
+    classLabel,
+    constructed,
+    tagNumber,
+    tagHex: `0x${tagByte.toString(16).padStart(2, "0").toUpperCase()}`,
+  };
+}
+
+function decodeAsn1GenericFromBytes(bytes, { encodingLabel = "BER", enforceDer = false } = {}) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 2) return null;
+
+  const fields = [];
+  const maxNodes = 100;
+  let parsedNodes = 0;
+  let index = 0;
+
+  while (index < bytes.length && parsedNodes < maxNodes) {
+    const tagByte = bytes[index];
+    const lengthInfo = parseAsn1Length(bytes, index + 1, bytes.length, enforceDer);
+    if (!lengthInfo) {
+      index += 1;
+      continue;
+    }
+
+    const valueStart = lengthInfo.nextIndex;
+    const valueEnd = valueStart + lengthInfo.length;
+    if (valueEnd > bytes.length) break;
+
+    parsedNodes += 1;
+    const tagInfo = getAsn1TagDescription(tagByte);
+    fields.push(
+      {
+        name: `Node ${parsedNodes} Tag`,
+        value: `${tagInfo.tagHex} (${tagInfo.classLabel}, ${tagInfo.constructed ? "Constructed" : "Primitive"}, #${tagInfo.tagNumber})`,
+      },
+      { name: `Node ${parsedNodes} Length`, value: String(lengthInfo.length) },
+    );
+
+    if (lengthInfo.length > 0) {
+      const previewBytes = bytes.slice(valueStart, Math.min(valueEnd, valueStart + 32));
+      const previewHex = Array.from(previewBytes, (byteValue) =>
+        byteValue.toString(16).padStart(2, "0"),
+      ).join(" ");
+      fields.push({
+        name: `Node ${parsedNodes} Value (hex preview)`,
+        value: valueEnd - valueStart > 32 ? `${previewHex} …` : previewHex,
+      });
+    }
+
+    index = Math.max(valueEnd, index + 1);
+  }
+
+  if (!fields.length) return null;
+  if (parsedNodes >= maxNodes && index < bytes.length) {
+    fields.push({
+      name: "Notice",
+      value: `Showing first ${maxNodes} ASN.1 nodes from stream.`,
+    });
+  }
+  return {
+    protocol: `ASN.1 ${encodingLabel}`,
+    fields,
+  };
+}
+
+function decodeBerFromBytes(bytes) {
+  return decodeAsn1GenericFromBytes(bytes, { encodingLabel: "BER", enforceDer: false });
+}
+
+function decodeDerFromBytes(bytes) {
+  return decodeAsn1GenericFromBytes(bytes, { encodingLabel: "DER", enforceDer: true });
+}
+
+function decodeJsonFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes).trim();
+  if (!rawText) return null;
+  if (!rawText.startsWith("{") && !rawText.startsWith("[")) return null;
+
+  try {
+    const parsed = JSON.parse(rawText);
+    const pretty = JSON.stringify(parsed, null, 2) || "";
+    const fields = [];
+    if (Array.isArray(parsed)) {
+      fields.push({ name: "Type", value: "Array" });
+      fields.push({ name: "Items", value: String(parsed.length) });
+    } else if (parsed && typeof parsed === "object") {
+      const keys = Object.keys(parsed);
+      fields.push({ name: "Type", value: "Object" });
+      fields.push({ name: "Top-level keys", value: keys.length ? keys.join(", ") : "(none)" });
+    } else {
+      fields.push({ name: "Type", value: typeof parsed });
+    }
+    fields.push({
+      name: "Pretty JSON",
+      value: pretty.length > 2000 ? `${pretty.slice(0, 2000)}…` : pretty,
+    });
+    return { protocol: "JSON", fields };
+  } catch {
+    return null;
+  }
+}
+
+function decodeXmlFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes).trim();
+  if (!rawText) return null;
+  if (!rawText.startsWith("<")) return null;
+
+  try {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(rawText, "application/xml");
+    const parserError = xmlDoc.querySelector("parsererror");
+    if (parserError) return null;
+
+    const rootTag = xmlDoc.documentElement?.tagName || "(none)";
+    const childCount = xmlDoc.documentElement?.childElementCount || 0;
+    const attrs = Array.from(xmlDoc.documentElement?.attributes || []).map((attr) => `${attr.name}=${JSON.stringify(attr.value)}`);
+    const fields = [
+      { name: "Root Element", value: rootTag },
+      { name: "Child Elements", value: String(childCount) },
+      { name: "Root Attributes", value: attrs.length ? attrs.join(", ") : "(none)" },
+      {
+        name: "Preview",
+        value: rawText.length > 2000 ? `${rawText.slice(0, 2000)}…` : rawText,
+      },
+    ];
+    return { protocol: "XML", fields };
+  } catch {
+    return null;
+  }
+}
+
+function decodeYamlFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  const lines = rawText
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\t/g, "  "))
+    .filter((line) => line.trim() && !line.trimStart().startsWith("#"));
+  if (!lines.length) return null;
+
+  const hasDocMarker = /^---|^\.\.\./m.test(trimmed);
+  const hasKeyValue = lines.some((line) => /^\s*[A-Za-z0-9_"'\-]+\s*:\s*.*$/.test(line));
+  const hasList = lines.some((line) => /^\s*-\s+.+$/.test(line));
+  if (!hasDocMarker && !hasKeyValue && !hasList) return null;
+
+  const topLevelKeys = [];
+  lines.forEach((line) => {
+    const match = line.match(/^([A-Za-z0-9_"'\-]+)\s*:/);
+    if (match && !line.startsWith(" ")) {
+      topLevelKeys.push(match[1].replace(/^['"]|['"]$/g, ""));
+    }
+  });
+
+  return {
+    protocol: "YAML",
+    fields: [
+      { name: "Top-level keys", value: topLevelKeys.length ? topLevelKeys.join(", ") : "(none detected)" },
+      { name: "Contains lists", value: hasList ? "Yes" : "No" },
+      {
+        name: "Preview",
+        value: trimmed.length > 2000 ? `${trimmed.slice(0, 2000)}…` : trimmed,
+      },
+    ],
+  };
+}
+
+function readVarint(bytes, startIndex) {
+  let value = 0;
+  let shift = 0;
+  let index = startIndex;
+  while (index < bytes.length && shift < 35) {
+    const byteValue = bytes[index];
+    value |= (byteValue & 0x7f) << shift;
+    index += 1;
+    if ((byteValue & 0x80) === 0) {
+      return { value, nextIndex: index };
+    }
+    shift += 7;
+  }
+  return null;
+}
+
+function decodeProtobufFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
+  const fields = [];
+  const maxFields = 100;
+  let index = 0;
+  let parsedFields = 0;
+
+  while (index < bytes.length && parsedFields < maxFields) {
+    const keyInfo = readVarint(bytes, index);
+    if (!keyInfo || keyInfo.value <= 0) break;
+    index = keyInfo.nextIndex;
+
+    const fieldNumber = keyInfo.value >> 3;
+    const wireType = keyInfo.value & 0x07;
+    if (fieldNumber <= 0) break;
+
+    let valueLabel = "";
+    if (wireType === 0) {
+      const valueInfo = readVarint(bytes, index);
+      if (!valueInfo) break;
+      index = valueInfo.nextIndex;
+      valueLabel = `varint=${valueInfo.value}`;
+    } else if (wireType === 1) {
+      if (index + 8 > bytes.length) break;
+      const raw = bytes.slice(index, index + 8);
+      index += 8;
+      valueLabel = `fixed64=${Array.from(raw).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+    } else if (wireType === 2) {
+      const lengthInfo = readVarint(bytes, index);
+      if (!lengthInfo) break;
+      index = lengthInfo.nextIndex;
+      const length = lengthInfo.value;
+      if (index + length > bytes.length) break;
+      const raw = bytes.slice(index, index + length);
+      index += length;
+      const previewHex = Array.from(raw.slice(0, 24), (b) => b.toString(16).padStart(2, "0")).join(" ");
+      valueLabel = `len=${length} data=${raw.length > 24 ? `${previewHex} …` : previewHex}`;
+    } else if (wireType === 5) {
+      if (index + 4 > bytes.length) break;
+      const raw = bytes.slice(index, index + 4);
+      index += 4;
+      valueLabel = `fixed32=${Array.from(raw).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+    } else {
+      break;
+    }
+
+    parsedFields += 1;
+    fields.push({ name: `Field ${fieldNumber} (wire ${wireType})`, value: valueLabel || "(empty)" });
+  }
+
+  if (!fields.length) return null;
+  return { protocol: "Protobuf", fields };
+}
+
+function decodeMessagePackFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
+  const firstByte = bytes[0];
+  const byteLength = bytes.length;
+  let classification = "unknown";
+  if ((firstByte & 0x80) === 0x00 || (firstByte & 0xe0) === 0xe0) classification = "int";
+  else if ((firstByte & 0xe0) === 0xa0 || firstByte === 0xd9 || firstByte === 0xda || firstByte === 0xdb) classification = "string";
+  else if ((firstByte & 0xf0) === 0x90 || firstByte === 0xdc || firstByte === 0xdd) classification = "array";
+  else if ((firstByte & 0xf0) === 0x80 || firstByte === 0xde || firstByte === 0xdf) classification = "map";
+  else if ((firstByte & 0xe0) === 0xc0) classification = "misc/bin/ext/float";
+
+  if (classification === "unknown") return null;
+  const previewHex = Array.from(bytes.slice(0, 48), (byteValue) =>
+    byteValue.toString(16).padStart(2, "0"),
+  ).join(" ");
+  return {
+    protocol: "MessagePack",
+    fields: [
+      { name: "First byte", value: `0x${firstByte.toString(16).padStart(2, "0").toUpperCase()}` },
+      { name: "Likely type", value: classification },
+      { name: "Byte length", value: String(byteLength) },
+      { name: "Preview (hex)", value: byteLength > 48 ? `${previewHex} …` : previewHex },
+    ],
+  };
+}
+
+function decodeBsonFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 5) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const totalLength = view.getInt32(0, true);
+  if (totalLength < 5 || totalLength > bytes.length) return null;
+  if (bytes[totalLength - 1] !== 0x00) return null;
+
+  const typeNames = {
+    0x01: "double",
+    0x02: "string",
+    0x03: "document",
+    0x04: "array",
+    0x05: "binary",
+    0x08: "boolean",
+    0x09: "datetime",
+    0x0a: "null",
+    0x10: "int32",
+    0x12: "int64",
+  };
+
+  const fields = [{ name: "Document length", value: String(totalLength) }];
+  let index = 4;
+  let elementCount = 0;
+  const maxElements = 100;
+  while (index < totalLength - 1 && elementCount < maxElements) {
+    const typeByte = bytes[index++];
+    if (typeByte === 0x00) break;
+
+    let keyEnd = index;
+    while (keyEnd < totalLength && bytes[keyEnd] !== 0x00) keyEnd += 1;
+    if (keyEnd >= totalLength) break;
+    const key = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(index, keyEnd));
+    index = keyEnd + 1;
+
+    const typeName = typeNames[typeByte] || `0x${typeByte.toString(16).padStart(2, "0")}`;
+    fields.push({ name: `Element ${elementCount + 1}`, value: `${key || "(empty-key)"}: ${typeName}` });
+    elementCount += 1;
+
+    if (typeByte === 0x01) index += 8;
+    else if (typeByte === 0x02) {
+      if (index + 4 > totalLength) break;
+      const strLen = new DataView(bytes.buffer, bytes.byteOffset + index, 4).getInt32(0, true);
+      index += 4 + Math.max(0, strLen);
+    } else if (typeByte === 0x03 || typeByte === 0x04) {
+      if (index + 4 > totalLength) break;
+      const docLen = new DataView(bytes.buffer, bytes.byteOffset + index, 4).getInt32(0, true);
+      index += Math.max(0, docLen);
+    } else if (typeByte === 0x05) {
+      if (index + 4 > totalLength) break;
+      const binLen = new DataView(bytes.buffer, bytes.byteOffset + index, 4).getInt32(0, true);
+      index += 4 + 1 + Math.max(0, binLen);
+    } else if (typeByte === 0x08) index += 1;
+    else if (typeByte === 0x09) index += 8;
+    else if (typeByte === 0x0a) index += 0;
+    else if (typeByte === 0x10) index += 4;
+    else if (typeByte === 0x12) index += 8;
+    else break;
+
+    if (index > totalLength) break;
+  }
+
+  if (elementCount === 0) return null;
+  if (elementCount >= maxElements) {
+    fields.push({ name: "Notice", value: `Showing first ${maxElements} BSON elements.` });
+  }
+  return { protocol: "BSON", fields };
 }
 
 function resolveDecoderInputBytes(bytes) {
@@ -10642,6 +11005,17 @@ function autoDetectProtoFromBytes(bytes) {
     bytes.slice(0, 256),
   );
   if (/^SSH-/.test(text)) return "ssh";
+  const trimmedText = text.trimStart();
+  if ((trimmedText.startsWith("{") || trimmedText.startsWith("[")) && decodeJsonFromBytes(bytes)) {
+    return "json";
+  }
+  if (trimmedText.startsWith("<") && decodeXmlFromBytes(bytes)) return "xml";
+  if (decodeBsonFromBytes(bytes)) return "bson";
+  if (decodeMessagePackFromBytes(bytes)) return "msgpack";
+  if (decodeProtobufFromBytes(bytes)) return "protobuf";
+  if (decodeBerFromBytes(bytes)) return "ber";
+  if (decodeDerFromBytes(bytes)) return "der";
+  if (decodeYamlFromBytes(bytes)) return "yaml";
   if (
     /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s/.test(text) ||
     /^HTTP\/[\d.]+ \d{3}/.test(text)
@@ -10753,6 +11127,30 @@ function runProtoDecoder(bytes) {
       break;
     case "ftp":
       result = decodeFtpFromBytes(decodeBytes);
+      break;
+    case "ber":
+      result = decodeBerFromBytes(decodeBytes);
+      break;
+    case "der":
+      result = decodeDerFromBytes(decodeBytes);
+      break;
+    case "json":
+      result = decodeJsonFromBytes(decodeBytes);
+      break;
+    case "xml":
+      result = decodeXmlFromBytes(decodeBytes);
+      break;
+    case "yaml":
+      result = decodeYamlFromBytes(decodeBytes);
+      break;
+    case "protobuf":
+      result = decodeProtobufFromBytes(decodeBytes);
+      break;
+    case "msgpack":
+      result = decodeMessagePackFromBytes(decodeBytes);
+      break;
+    case "bson":
+      result = decodeBsonFromBytes(decodeBytes);
       break;
     case "ldap":
       result = decodeLdapFromBytes(decodeBytes);
