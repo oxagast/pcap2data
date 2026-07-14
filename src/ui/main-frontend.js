@@ -5823,11 +5823,50 @@ function buildConvHashesNoteText() {
 }
 
 // Handles send text to notes from context menu.
-function sendTextToNotesFromContextMenu(text, sourceLabel) {
+function sendTextToNotesFromContextMenu(
+  text,
+  sourceLabel,
+  editorVisible = true,
+) {
   hideConvertContextMenu();
-  const didAdd = addNote(text, NOTE_DEFAULT_COLOR, sourceLabel);
+  const didAdd = addNote(text, NOTE_DEFAULT_COLOR, sourceLabel, editorVisible);
   if (!didAdd) return;
   showNotesWorkspace();
+}
+
+// Formats selected context data as markdown for notes using llm when available.
+async function formatContextDataAsMarkdownForNotesWithLlm(text, contextPacket = null) {
+  const normalizedText =
+    typeof text === "string" ? text.trim() : String(text || "").trim();
+  if (!normalizedText) return "";
+  if (!isLlmRuntimeEnabled()) return normalizedText;
+
+  const packetSummary = buildPacketContextSummary(
+    contextPacket || activeContextPacket || getCurrentContextPacket(),
+  );
+  const prompt = [
+    "You are a network analysis assistant named PacketSnitch.",
+    `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    "Task: Reformat the provided context data as clean, readable Markdown for notes display.",
+    "The first line must be exactly: # Contextually Selected Data",
+    "The second section must be an H2 where you guess the data type and label it, for example: ## Data Type: HTTP Header.",
+    "Do not explain, summarize, infer, or add new facts.",
+    "Preserve original values exactly. Keep all important fields and data points.",
+    "If the data is already structured, use headings and bullet lists.",
+    "If the data looks like raw/unstructured content, preserve it in a fenced code block.",
+    "After the H1 and H2, include the formatted data body.",
+    "Return only the formatted Markdown.",
+    "",
+    `Packet context: ${packetSummary}`,
+    "",
+    "Context data to format:",
+    normalizedText,
+  ].join("\n");
+
+  const response = await callLargeLanguageModelWithRetry(prompt);
+  const formatted = String(response?.response || "").trim();
+  return formatted || normalizedText;
 }
 
 // Normalizes hex for notes.
@@ -6082,7 +6121,7 @@ function buildListVisibleDataNoteText(target = activeContextTarget) {
   );
   if (!values.length) return "";
 
-  const lines = ["List Tab Visible Row Data:"];
+  const lines = ["# List Tab", "## Visible Row Data:"];
   values.forEach((value, index) => {
     const header = headers[index] || `Column ${index + 1}`;
     const normalizedHeader = header === "★" ? "Bookmarked" : header;
@@ -6091,7 +6130,8 @@ function buildListVisibleDataNoteText(target = activeContextTarget) {
         ? "Yes"
         : "No"
       : value || "(empty)";
-    lines.push(`${normalizedHeader}: ${normalizedValue}`);
+    const escapedValue = String(normalizedValue).replace(/`/g, "\\`");
+    lines.push(`* ${normalizedHeader}: \`${escapedValue}\``);
   });
   return lines.join("\n");
 }
@@ -10689,6 +10729,7 @@ const convertContextButtons = {
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
   llmBranch: getCachedElement("ctx-llm-branch"),
   llmQuestion: getCachedElement("ctx-llm-question"),
+  llmSubnetHostSummary: getCachedElement("ctx-llm-subnet-host-summary"),
   followStreamConv: getCachedElement("ctx-follow-stream-conv"),
   followStreamConvDecompress: getCachedElement("ctx-follow-stream-conv-decompress"),
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
@@ -11803,10 +11844,15 @@ function showConvertContextMenu(
   const llmExplainText = (getTrimmedSelectionText() || sourceText || "").trim();
   const hasLlmQuestionAction = llmEnabled && Boolean(activeContextPacket);
   const hasLlmSummarizeAction = llmEnabled && Boolean(activeContextPacket);
+  const hasLlmSubnetHostSummaryAction =
+    llmEnabled && Boolean(getSubnetHostIpFromContextTarget(target));
   const hasLlmExplainAction =
     llmEnabled && Boolean(activeContextPacket) && isTextSignificantForLlmExplain(llmExplainText);
   const hasLlmActions =
-    hasLlmQuestionAction || hasLlmExplainAction || hasLlmSummarizeAction;
+    hasLlmQuestionAction ||
+    hasLlmExplainAction ||
+    hasLlmSummarizeAction ||
+    hasLlmSubnetHostSummaryAction;
   convertContextButtons.llmQuestion.style.display = hasLlmQuestionAction
     ? "block"
     : "none";
@@ -11816,6 +11862,8 @@ function showConvertContextMenu(
   convertContextButtons.llmSummarize.style.display = hasLlmSummarizeAction
     ? "block"
     : "none";
+  convertContextButtons.llmSubnetHostSummary.style.display =
+    hasLlmSubnetHostSummaryAction ? "block" : "none";
   convertContextSubmenus.llm.style.display = hasLlmActions ? "block" : "none";
   if (
     !hasGeneralActions &&
@@ -14442,6 +14490,210 @@ function buildFullPacketJsonContext(packet) {
   return packet ? JSON.stringify(packet, null, 2) : "No packet context available.";
 }
 
+function isConvSubnetContextTarget(target = activeContextTarget) {
+  return (
+    activeMainTab === MAIN_TAB_DATA_TOOLS &&
+    getActiveConvSubtab() === CONV_SUBNET_SUBTAB &&
+    Boolean(target?.closest?.("#conv-subnet-panel"))
+  );
+}
+
+function getSubnetHostIpFromContextTarget(target = activeContextTarget) {
+  if (!isConvSubnetContextTarget(target)) return "";
+  const row = target?.closest?.("#subnet-calc-capture-targets table tr");
+  const ipCell = row?.querySelector?.("td");
+  const rowIp = normalizeContextToken(ipCell?.textContent || "");
+  if (rowIp) return rowIp;
+
+  const inputValue = normalizeContextToken(
+    document.getElementById("subnet-calc-input")?.value || "",
+  );
+  return inputValue;
+}
+
+function collectSubnetSectionTableData(containerEl, hostIp = "") {
+  const tables = [];
+  const tableEls = Array.from(containerEl?.querySelectorAll?.("table") || []);
+  tableEls.forEach((tableEl) => {
+    const rowEls = Array.from(tableEl.querySelectorAll("tr"));
+    const tableRows = rowEls
+      .map((rowEl) => {
+        const thCells = Array.from(rowEl.querySelectorAll("th")).map((cellEl) =>
+          normalizeContextToken(cellEl.textContent),
+        );
+        const tdCells = Array.from(rowEl.querySelectorAll("td")).map((cellEl) =>
+          normalizeContextToken(cellEl.textContent),
+        );
+        return {
+          headers: thCells,
+          values: tdCells,
+        };
+      })
+      .filter((row) => row.headers.length > 0 || row.values.length > 0);
+
+    tables.push(tableRows);
+  });
+
+  if (!hostIp || !tables.length) return tables;
+
+  return tables
+    .map((tableRows) => {
+      if (!tableRows.length) return [];
+      const hasHostRow = tableRows.some((row) => {
+        const firstValue = normalizeContextToken(row.values?.[0] || "");
+        return firstValue === hostIp;
+      });
+      if (!hasHostRow) return tableRows;
+      return tableRows.filter((row, rowIndex) => {
+        if (rowIndex === 0 && row.headers.length > 0) return true;
+        const firstValue = normalizeContextToken(row.values?.[0] || "");
+        return firstValue === hostIp;
+      });
+    })
+    .filter((tableRows) => tableRows.length > 0);
+}
+
+function collectSubnetHostSummaryContext(hostIp) {
+  const sectionDefs = [
+    ["subnet-calc-summary", "Summary"],
+    ["subnet-calc-range", "Range"],
+    ["subnet-calc-binary", "Binary Notation"],
+    ["subnet-calc-whois", "WHOIS / RDAP"],
+    ["subnet-calc-reputation", "Threat Intelligence"],
+    ["subnet-calc-geo", "GeoIP"],
+    ["subnet-calc-capture-targets", "Capture Internet Targets"],
+    ["subnet-calc-shodan", "Shodan InternetDB"],
+    ["subnet-calc-nmap", "Nmap Scan Status"],
+  ];
+
+  const sections = sectionDefs
+    .map(([id, fallbackTitle]) => {
+      const containerEl = document.getElementById(id);
+      if (!containerEl) return null;
+      const title =
+        normalizeContextToken(
+          containerEl.querySelector(".subnet-calc-section-title, .data-tools-output-label")
+            ?.textContent || "",
+        ) || fallbackTitle;
+      const placeholder = normalizeContextToken(
+        containerEl.querySelector(".data-tools-proto-none")?.textContent || "",
+      );
+      const binaryRows = Array.from(
+        containerEl.querySelectorAll(".subnet-calc-binary-row"),
+      )
+        .map((rowEl) => {
+          const label = normalizeContextToken(
+            rowEl.querySelector(".subnet-calc-binary-label")?.textContent || "",
+          );
+          const value = String(
+            rowEl.querySelector(".subnet-calc-binary-pre")?.textContent || "",
+          ).trim();
+          if (!label && !value) return null;
+          return { label, value };
+        })
+        .filter(Boolean);
+      const tableData = collectSubnetSectionTableData(containerEl, hostIp);
+      return {
+        id,
+        title,
+        placeholder,
+        binaryRows,
+        tables: tableData,
+      };
+    })
+    .filter(Boolean);
+
+  const analyzedInput = normalizeContextToken(
+    document.getElementById("subnet-calc-input")?.value || "",
+  );
+  const panelStatus = normalizeContextToken(
+    document.getElementById("subnet-calc-status")?.textContent || "",
+  );
+  const hasSectionData = sections.some(
+    (section) =>
+      (Array.isArray(section.tables) && section.tables.some((tableRows) => tableRows.length > 0)) ||
+      (Array.isArray(section.binaryRows) && section.binaryRows.length > 0) ||
+      Boolean(section.placeholder),
+  );
+
+  return {
+    hostIp,
+    analyzedInput,
+    panelStatus,
+    sections,
+    hasSectionData,
+  };
+}
+
+function buildLlmSubnetHostSummaryPrompt(contextData) {
+  return [
+    "You are a network analysis assistant named PacketSnitch.",
+    `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    `Task: Distill and summarize the current Conv Analyze Subnet table data for host ${contextData.hostIp}.`,
+    "Use only the provided data. Do not invent values or infer unsupported facts.",
+    "Return clean Markdown only.",
+    "The first line must be exactly: # PacketSnitch Subnet Host Summary",
+    "Include concise sections for host overview, addressing/classification, threat/reputation, service exposure, and notable analyst takeaways.",
+    "When a section has missing data, explicitly say data is unavailable.",
+    "Use a short markdown table for key facts when appropriate.",
+    "",
+    "Current subnet panel data (JSON):",
+    JSON.stringify(contextData, null, 2),
+  ].join("\n");
+}
+
+async function summarizeSubnetHostContextWithLLM() {
+  if (!isLlmRuntimeEnabled()) {
+    hideConvertContextMenu();
+    statusUpdate(
+      "Status: PacketSnitch host summary is unavailable. Ensure LLM is enabled in settings and Ollama is installed.",
+    );
+    return;
+  }
+
+  const hostIp = getSubnetHostIpFromContextTarget(activeContextTarget);
+  hideConvertContextMenu();
+  if (!hostIp) {
+    statusUpdate("Status: Select a host row in Conv > Analyze Subnet first.");
+    return;
+  }
+
+  const contextData = collectSubnetHostSummaryContext(hostIp);
+  if (!contextData.hasSectionData) {
+    statusUpdate("Status: No subnet host table data is currently available to summarize.");
+    return;
+  }
+
+  statusUpdate(`Status: Asking PacketSnitch to summarize subnet host ${hostIp}...`);
+  writeLogEntry(`PacketSnitch subnet-host summary requested host=${JSON.stringify(hostIp)}`);
+
+  try {
+    const prompt = buildLlmSubnetHostSummaryPrompt(contextData);
+    const response = await callLargeLanguageModelWithRetry(prompt);
+    const summaryMarkdown = String(response?.response || "").trim();
+    if (!summaryMarkdown) {
+      statusUpdate("Status: PacketSnitch returned no subnet host summary.");
+      return;
+    }
+    const didAdd = addNote(
+      summaryMarkdown,
+      NOTE_DEFAULT_COLOR,
+      "llm-subnet-host-summary",
+      false,
+    );
+    if (didAdd) {
+      showNotesWorkspace();
+      statusUpdate(`Status: Subnet host summary for ${hostIp} added to Notes.`);
+      writeLogEntry(`PacketSnitch subnet-host summary complete host=${JSON.stringify(hostIp)} chars=${summaryMarkdown.length}`);
+    }
+  } catch (error) {
+    const errorMessage = error?.message || String(error);
+    statusUpdate(`Status: PacketSnitch subnet host summary failed: ${errorMessage}`);
+    writeLogEntry(`PacketSnitch subnet-host summary failed host=${JSON.stringify(hostIp)} error=${JSON.stringify(errorMessage)}`);
+  }
+}
+
 async function explainContextWithLLM() {
   if (!isLlmRuntimeEnabled()) {
     hideConvertContextMenu();
@@ -14459,8 +14711,8 @@ async function explainContextWithLLM() {
     return;
   }
 
-  const packetCtx = buildFullPacketJsonContext(contextPacket);
-  const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and has selected a piece of data they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nThe user has selected the following data from the packet to explain: "${textToExplain}"\n\nPlease explain what this data likely represents in the context of the packet. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.  The relevant packet data is: ${packetCtx}\n\nProvide your explanation in Markdown format.`;
+  const packetCtx = buildPacketContextSummary(contextPacket);
+  const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting captured network data and selected a specific value they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nSelected data to explain: "${textToExplain}"\n\nPacket context summary (concise): ${packetCtx}\n\nImportant: Focus on the selected data itself. Do not attempt to summarize the whole packet or host dataset.\n\nPlease explain what this data likely represents in context. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking PacketSnitch to explain selection...");
   writeLogEntry(`PacketSnitch explain requested for ${textToExplain.length} chars of context data`);
@@ -16935,16 +17187,35 @@ convertContextButtons.copyCookieJar.addEventListener(
   copyCookieJarFromContextMenu,
 );
 convertContextButtons.paste.addEventListener("click", pasteTextFromContextMenu);
-convertContextButtons.notesSendData.addEventListener("click", () => {
-  sendTextToNotesFromContextMenu(
-    getActiveContextTextForNotesAndLlm("notes"),
-    "context-data",
-  );
+convertContextButtons.notesSendData.addEventListener("click", async () => {
+  const rawContextText = getActiveContextTextForNotesAndLlm("notes");
+  if (!String(rawContextText || "").trim()) {
+    sendTextToNotesFromContextMenu(rawContextText, "context-data");
+    return;
+  }
+
+  let noteText = rawContextText;
+  if (isLlmRuntimeEnabled()) {
+    statusUpdate("Status: Formatting context data as Markdown for Notes...");
+    try {
+      noteText = await formatContextDataAsMarkdownForNotesWithLlm(
+        rawContextText,
+        activeContextPacket || getCurrentContextPacket(),
+      );
+    } catch (error) {
+      const errorMessage = error?.message || String(error);
+      writeLogEntry(`Context-to-notes markdown formatting fallback: ${errorMessage}`);
+      statusUpdate("Status: LLM markdown formatting failed; using original context data");
+    }
+  }
+
+  sendTextToNotesFromContextMenu(noteText, "context-data");
 });
 convertContextButtons.notesSendListPacket.addEventListener("click", () => {
   sendTextToNotesFromContextMenu(
     buildListVisibleDataNoteText(),
     "context-list-row-visible-data",
+    false,
   );
 });
 convertContextButtons.notesSendConvInput.addEventListener("click", () => {
@@ -17138,6 +17409,9 @@ convertContextButtons.llmExplain.addEventListener("click", () => {
 });
 convertContextButtons.llmSummarize.addEventListener("click", () => {
   void summarizeContextPacketWithLLM();
+});
+convertContextButtons.llmSubnetHostSummary.addEventListener("click", () => {
+  void summarizeSubnetHostContextWithLLM();
 });
 
 // Handle bookmark selection from dropdown
