@@ -85,6 +85,7 @@ const {
   DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
+  formatHexInputBytes,
   setConvSubtab,
   runDataToolsHashesFromInput,
 } = require("./panels/data-tools-panel");
@@ -3890,6 +3891,30 @@ function updateDataToolsInputEditedState() {
   }
 }
 
+// Normalizes hex input formatting (AA BB ... with 16-byte line wraps).
+function normalizeDataToolsHexInputFormatting() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl || formatEl.value !== "hex") return;
+  if (!inputEl.value.trim()) {
+    updateDataToolsHexHighlights();
+    syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+    return;
+  }
+  try {
+    const bytes = parseDataToolsInput("hex", inputEl.value);
+    const normalized = formatHexInputBytes(bytes);
+    if (inputEl.value !== normalized) {
+      inputEl.value = normalized;
+    }
+  } catch {
+    // Keep user's input untouched when partially invalid.
+  }
+  updateDataToolsHexHighlights();
+  syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+  updateDataToolsInputEditedState();
+}
+
 // Handles mark data tools input committed.
 function markDataToolsInputCommitted() {
   const snapshot = getCurrentDataToolsInputSnapshot();
@@ -7283,20 +7308,29 @@ function parseDataToolsInput(format, rawInput) {
   }
 
   if (format === "hex") {
-    const normalized = rawInput
-      .replace(/0x/gi, "")
-      .replace(/[\s,:;-]+/g, "")
-      .trim();
-    if (!normalized) throw new Error("No hex bytes were found.");
-    if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-      throw new Error("Hex input can only contain 0-9 and A-F.");
-    }
-    if (normalized.length % 2 !== 0) {
-      throw new Error("Hex input must contain an even number of characters.");
-    }
-    const bytes = new Uint8Array(normalized.length / 2);
-    for (let i = 0; i < normalized.length; i += 2) {
-      bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+    const byteTokens = [];
+    const lines = rawInput.split(/\r?\n/);
+    lines.forEach((line) => {
+      let work = line;
+      const pipeIdx = work.indexOf("|");
+      if (pipeIdx !== -1) {
+        work = work.slice(0, pipeIdx);
+      }
+
+      work = work.replace(/^\s*[0-9a-fA-F]{1,8}:?\s{2,}/, "");
+
+      const tokens = work.match(/(?:0x)?[0-9a-fA-F]{2}/g);
+      if (tokens) {
+        tokens.forEach((token) => {
+          byteTokens.push(token.replace(/^0x/i, ""));
+        });
+      }
+    });
+
+    if (!byteTokens.length) throw new Error("No hex bytes were found.");
+    const bytes = new Uint8Array(byteTokens.length);
+    for (let i = 0; i < byteTokens.length; i += 1) {
+      bytes[i] = parseInt(byteTokens[i], 16);
     }
     return bytes;
   }
@@ -7504,8 +7538,17 @@ function buildInputSelectionMap(rawInput, format, bytes) {
 }
 
 // Builds rendered selection map.
-function buildRenderedSelectionMap(values) {
-  const text = values.join(" ");
+function buildRenderedSelectionMap(values, { valuesPerLine = 0 } = {}) {
+  const parts = [];
+  values.forEach((value, byteIndex) => {
+    if (byteIndex > 0) {
+      parts.push(
+        valuesPerLine > 0 && byteIndex % valuesPerLine === 0 ? "\n" : " ",
+      );
+    }
+    parts.push(value);
+  });
+  const text = parts.join("");
   const charToByte = [];
   const byteRanges = Array.from({ length: values.length }, () => ({
     start: null,
@@ -7513,15 +7556,19 @@ function buildRenderedSelectionMap(values) {
   }));
   let cursor = 0;
   values.forEach((value, byteIndex) => {
+    if (byteIndex > 0) {
+      const separator =
+        valuesPerLine > 0 && byteIndex % valuesPerLine === 0 ? "\n" : " ";
+      for (let s = 0; s < separator.length; s += 1) {
+        charToByte[cursor] = null;
+        cursor += 1;
+      }
+    }
     for (let i = 0; i < value.length; i++) {
       charToByte[cursor + i] = byteIndex;
     }
     byteRanges[byteIndex] = { start: cursor, end: cursor + value.length };
     cursor += value.length;
-    if (byteIndex < values.length - 1) {
-      charToByte[cursor] = null;
-      cursor += 1;
-    }
   });
   return { text, charToByte, byteRanges };
 }
@@ -7631,8 +7678,27 @@ function buildColorizedHexHtml(rawText, selectionMap, bytes, byteRange) {
   return html;
 }
 
+// Builds the Conv input offset gutter for hex mode.
+function buildDataToolsInputOffsetText(rawText, format) {
+  if (format !== "hex") return "";
+  const text = String(rawText || "");
+  if (!text) return "";
+  const lines = text.split(/\r?\n/);
+  let offset = 0;
+  return lines
+    .map((line) => {
+      const work = line.split("|")[0].replace(/^\s*[0-9a-fA-F]{1,8}:?\s{2,}/, "");
+      const tokens = work.match(/(?:0x)?[0-9a-fA-F]{2}/g) || [];
+      const label = offset.toString(16).padStart(8, "0");
+      offset += tokens.length;
+      return label;
+    })
+    .join("\n");
+}
+
 // Handles update data tools hex highlights.
 function updateDataToolsHexHighlights() {
+  const inputOffsetsEl = document.getElementById("data-tools-input-offsets");
   const inputHighlightEl = document.getElementById(
     "data-tools-input-highlight",
   );
@@ -7643,6 +7709,7 @@ function updateDataToolsHexHighlights() {
   const formatEl = document.getElementById("data-tools-format");
   const outputEl = document.getElementById("data-tools-hex-output");
   if (
+    !inputOffsetsEl ||
     !inputHighlightEl ||
     !outputHighlightEl ||
     !inputEl ||
@@ -7661,6 +7728,10 @@ function updateDataToolsHexHighlights() {
   };
   const bytes = dataToolsSelectionState.bytes || new Uint8Array();
   if (formatEl.value === "hex") {
+    inputOffsetsEl.value = buildDataToolsInputOffsetText(
+      inputEl.value,
+      formatEl.value,
+    );
     inputHighlightEl.innerHTML = buildColorizedHexHtml(
       inputEl.value,
       inputMap,
@@ -7668,6 +7739,7 @@ function updateDataToolsHexHighlights() {
       dataToolsSelectionState.selectedByteRange,
     );
   } else {
+    inputOffsetsEl.value = "";
     inputHighlightEl.innerHTML = escapeDataToolsHtml(inputEl.value);
   }
   outputHighlightEl.innerHTML = buildColorizedHexHtml(
@@ -7685,6 +7757,12 @@ function syncDataToolsHighlightScroll(textareaId, layerId) {
   if (!textarea || !layer) return;
   layer.scrollLeft = textarea.scrollLeft;
   layer.scrollTop = textarea.scrollTop;
+  if (textareaId === "data-tools-input") {
+    const offsetsEl = document.getElementById("data-tools-input-offsets");
+    if (offsetsEl) {
+      offsetsEl.scrollTop = textarea.scrollTop;
+    }
+  }
 }
 
 // Clears data tools selection state.
@@ -7710,7 +7788,9 @@ function updateDataToolsSelectionMaps(format, rawInput, bytes, outputs) {
   dataToolsSelectionState.lastSelectionSignature = "";
   dataToolsSelectionState.maps = {
     "data-tools-input": buildInputSelectionMap(rawInput, format, bytes),
-    "data-tools-hex-output": buildRenderedSelectionMap(outputs.hexValues),
+    "data-tools-hex-output": buildRenderedSelectionMap(outputs.hexValues, {
+      valuesPerLine: 16,
+    }),
     "data-tools-binary-output": buildRenderedSelectionMap(outputs.binaryValues),
     "data-tools-decimal-output": buildRenderedSelectionMap(
       outputs.decimalValues,
@@ -8812,8 +8892,11 @@ function renderDataToolsOutputPage({ reset = false } = {}) {
   const decimalValues = Array.from(renderedBytes, (byte) => String(byte));
   const asciiText = bytesToPrintableAscii(renderedBytes);
   const base64Text = bytesToBase64(renderedBytes);
+  const hexOutputText = buildRenderedSelectionMap(hexValues, {
+    valuesPerLine: 16,
+  }).text;
 
-  document.getElementById("data-tools-hex-output").value = hexValues.join(" ");
+  document.getElementById("data-tools-hex-output").value = hexOutputText;
   document.getElementById("data-tools-binary-output").value = binaryValues.join(" ");
   document.getElementById("data-tools-decimal-output").value = decimalValues.join(" ");
   document.getElementById("data-tools-decimal-integer-output").value =
@@ -11222,6 +11305,9 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   document.getElementById("rightside").style.display = "none";
   document.getElementById("data_tools_box").style.display = "flex";
   setConvSubtab(tabName);
+  if (tabName === CONV_CONVERSIONS_SUBTAB) {
+    normalizeDataToolsHexInputFormatting();
+  }
   runDeferredDataToolsAnalysisForActiveSubtab();
 }
 
@@ -17456,6 +17542,7 @@ document
   .getElementById("conv-subtab-conversions")
   .addEventListener("click", () => {
     setConvSubtab(CONV_CONVERSIONS_SUBTAB);
+    normalizeDataToolsHexInputFormatting();
     runDeferredDataToolsAnalysisForActiveSubtab();
   });
 document
@@ -17714,8 +17801,48 @@ document.getElementById("data-tools-input").addEventListener("input", () => {
   );
   updateDataToolsInputEditedState();
 });
+document.getElementById("data-tools-input").addEventListener("paste", () => {
+  const formatEl = document.getElementById("data-tools-format");
+  if (formatEl?.value !== "hex") return;
+  requestAnimationFrame(() => {
+    const inputEl = document.getElementById("data-tools-input");
+    try {
+      const bytes = parseDataToolsInput("hex", inputEl.value);
+      inputEl.value = formatHexInputBytes(bytes);
+      updateDataToolsHexHighlights();
+      syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+      updateDataToolsInputEditedState();
+    } catch { /* leave as-is if not yet valid */ }
+  });
+});
+document.getElementById("data-tools-input").addEventListener("blur", () => {
+  const formatEl = document.getElementById("data-tools-format");
+  if (formatEl?.value !== "hex") return;
+  requestAnimationFrame(() => {
+    const nextFocusedId = document.activeElement?.id || "";
+    if (
+      DATA_TOOLS_SELECTION_FIELD_IDS.includes(nextFocusedId) &&
+      nextFocusedId !== "data-tools-input"
+    ) {
+      return;
+    }
+    const inputEl = document.getElementById("data-tools-input");
+    if (!inputEl.value.trim()) return;
+    try {
+      const bytes = parseDataToolsInput("hex", inputEl.value);
+      inputEl.value = formatHexInputBytes(bytes);
+      updateDataToolsHexHighlights();
+      syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+      updateDataToolsInputEditedState();
+    } catch { /* leave as-is if invalid */ }
+  });
+});
 document.getElementById("data-tools-format").addEventListener("change", () => {
   dataToolsHistorySelectEl.value = "";
+  if (document.getElementById("data-tools-format")?.value === "hex") {
+    normalizeDataToolsHexInputFormatting();
+    return;
+  }
   updateDataToolsConvertedOutputVisibility();
   updateDataToolsHexHighlights();
   updateDataToolsInputEditedState();

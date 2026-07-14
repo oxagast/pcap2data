@@ -81,20 +81,34 @@ function parseDataToolsInput(format, rawInput) {
   }
 
   if (format === "hex") {
-    const normalized = rawInput
-      .replace(/0x/gi, "")
-      .replace(/[\s,:;-]+/g, "")
-      .trim();
-    if (!normalized) throw new Error("No hex bytes were found.");
-    if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-      throw new Error("Hex input can only contain 0-9 and A-F.");
+    // Parse forgiving hexdump-like input: ignore leading offsets, ASCII sidebars,
+    // and arbitrary spacing/separators; keep only explicit 2-digit byte tokens.
+    const byteTokens = [];
+    const lines = rawInput.split(/\r?\n/);
+    lines.forEach((line) => {
+      let work = line;
+      const pipeIdx = work.indexOf("|");
+      if (pipeIdx !== -1) {
+        work = work.slice(0, pipeIdx);
+      }
+
+      // Remove optional offset prefixes like "00000000  " or "1a3f:  ".
+      work = work.replace(/^\s*[0-9a-fA-F]{1,8}:?\s{2,}/, "");
+
+      const tokens = work.match(/(?:0x)?[0-9a-fA-F]{2}/g);
+      if (tokens) {
+        tokens.forEach((token) => {
+          byteTokens.push(token.replace(/^0x/i, ""));
+        });
+      }
+    });
+
+    if (!byteTokens.length) {
+      throw new Error("No hex bytes were found.");
     }
-    if (normalized.length % 2 !== 0) {
-      throw new Error("Hex input must contain an even number of characters.");
-    }
-    const bytes = new Uint8Array(normalized.length / 2);
-    for (let i = 0; i < normalized.length; i += 2) {
-      bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+    const bytes = new Uint8Array(byteTokens.length);
+    for (let i = 0; i < byteTokens.length; i += 1) {
+      bytes[i] = parseInt(byteTokens[i], 16);
     }
     return bytes;
   }
@@ -151,6 +165,38 @@ function parseDataToolsInput(format, rawInput) {
 
   // ascii / utf-8 fallback
   return new TextEncoder().encode(rawInput);
+}
+
+// Formats bytes as a hexdump with ASCII sidebar (output display).
+function bytesToHexdump(bytes) {
+  if (!bytes.length) return "";
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const row = bytes.slice(i, i + 16);
+    const offset = i.toString(16).padStart(8, "0");
+    const hexParts = [...row].map((b) => b.toString(16).padStart(2, "0").toUpperCase());
+    const group1 = hexParts.slice(0, 8).join(" ").padEnd(23, " ");
+    const group2 = hexParts.slice(8, 16).join(" ").padEnd(23, " ");
+    const ascii = [...row]
+      .map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : "."))
+      .join("");
+    lines.push(`${offset}  ${group1}  ${group2}  |${ascii}|`);
+  }
+  return lines.join("\n");
+}
+
+// Formats bytes as hex groups for input display (no ASCII sidebar).
+function formatHexInputBytes(bytes) {
+  if (!bytes.length) return "";
+  const lines = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const row = bytes.slice(i, i + 16);
+    const hexParts = [...row].map((b) =>
+      b.toString(16).padStart(2, "0").toUpperCase(),
+    );
+    lines.push(hexParts.join(" "));
+  }
+  return lines.join("\n");
 }
 
 // Handles bytes to base64.
@@ -505,9 +551,10 @@ function runDataToolsConversion() {
 
   try {
     const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
-    const hexSpaced = [...bytes]
-      .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
-      .join(" ");
+    if (formatEl.value === "hex") {
+      inputEl.value = formatHexInputBytes(bytes);
+    }
+    const hexDump = bytesToHexdump(bytes);
     const binarySpaced = [...bytes]
       .map((byte) => byte.toString(2).padStart(8, "0"))
       .join(" ");
@@ -521,7 +568,7 @@ function runDataToolsConversion() {
         ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
         : bytesToBigIntDecimal(bytes);
 
-    document.getElementById("data-tools-hex-output").value = hexSpaced;
+    document.getElementById("data-tools-hex-output").value = hexDump;
     document.getElementById("data-tools-binary-output").value = binarySpaced;
     document.getElementById("data-tools-decimal-output").value = decimalBytes;
     document.getElementById("data-tools-decimal-integer-output").value =
@@ -2028,6 +2075,7 @@ module.exports = {
   decodeSmbFromBytes,
   resetDataToolsOutputs,
   runProtoDecoder,
+  formatHexInputBytes,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
   showDataTools,
