@@ -823,14 +823,21 @@ function resolveBackendRuntime() {
   const backendScriptPath = path.join(basePath, "snitch.py");
   const hasBackendScript = fs.existsSync(backendScriptPath);
 
-  let snitchExePath;
-  if (platform === "win32") {
-    snitchExePath = path.join(basePath, "snitch", "snitch.exe");
-  } else if (platform === "linux") {
-    snitchExePath = path.join(basePath, "snitch", "snitch");
-  } else {
-    snitchExePath = path.join(basePath, "snitch", "snitch");
-  }
+  const snitchExecutableCandidates = platform === "win32"
+    ? [
+      path.join(basePath, "snitch.exe"),
+      path.join(basePath, "snitch", "snitch.exe"),
+      path.join(basePath, "snitch"),
+    ]
+    : [
+      path.join(basePath, "snitch"),
+      path.join(basePath, "snitch", "snitch"),
+      path.join(basePath, "snitch.exe"),
+    ];
+
+  const snitchExePath =
+    snitchExecutableCandidates.find((candidatePath) => fs.existsSync(candidatePath))
+    || snitchExecutableCandidates[0];
 
   const hasBundledBackendExe = fs.existsSync(snitchExePath);
   const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
@@ -848,6 +855,7 @@ function resolveBackendRuntime() {
     backendScriptPath,
     hasBackendScript,
     snitchExePath,
+    snitchExecutableCandidates,
     hasBundledBackendExe,
     usePythonBackend,
     canUseServerMode,
@@ -1469,6 +1477,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   const {
     backendScriptPath,
     snitchExePath,
+    snitchExecutableCandidates,
     hasBundledBackendExe,
     usePythonBackend,
     backendCommandPath,
@@ -1480,6 +1489,9 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
   } else {
     global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
+    global.logBackend(
+      `[Bridge] Checked executable candidates: ${(snitchExecutableCandidates || []).join(", ")}`,
+    );
     sendError(
       "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
     );
