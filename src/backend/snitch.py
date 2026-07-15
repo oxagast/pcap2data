@@ -302,6 +302,62 @@ TLS_SERVICE_PORTS = {443, 465, 636, 853, 8443, 9443, 5061}
 HTTP2_PREFACE_BYTES = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
 
 
+def _candidateCommonDirectories():
+    """
+    Return likely directories containing backend helper data files.
+
+    This must support:
+      - direct Python execution from src/backend
+      - onefile PyInstaller execution (temp extraction for __file__)
+      - packaged Electron resources layouts
+    """
+
+    candidates = []
+
+    def addPath(pathValue):
+        normalized = str(pathValue or "").strip()
+        if not normalized:
+            return
+        absolutePath = os.path.abspath(normalized)
+        if absolutePath not in candidates:
+            candidates.append(absolutePath)
+
+    # Existing script-relative location (works for plain python execution).
+    addPath(os.path.join(scriptDir, "common"))
+
+    # Executable-relative locations (works for onefile and packaged backend exe).
+    executableDir = os.path.dirname(os.path.realpath(sys.executable or ""))
+    addPath(os.path.join(executableDir, "common"))
+    addPath(os.path.join(os.path.dirname(executableDir), "common"))
+
+    # argv[0]-relative fallback.
+    argv0Dir = os.path.dirname(os.path.realpath(sys.argv[0] if sys.argv else ""))
+    addPath(os.path.join(argv0Dir, "common"))
+    addPath(os.path.join(os.path.dirname(argv0Dir), "common"))
+
+    # Environment-driven overrides for packaged runtimes.
+    commonOverride = str(os.environ.get("PACKETSNITCH_COMMON_PATH", "")).strip()
+    if commonOverride:
+        addPath(commonOverride)
+
+    resourcesPath = str(os.environ.get("PACKETSNITCH_RESOURCES_PATH", "")).strip()
+    if resourcesPath:
+        addPath(os.path.join(resourcesPath, "common"))
+
+    # Development cwd fallback.
+    addPath(os.path.join(os.getcwd(), "src", "backend", "common"))
+
+    return candidates
+
+
+def _resolveCommonResourcePath(resourceFileName):
+    for commonDir in _candidateCommonDirectories():
+        candidateFile = os.path.join(commonDir, resourceFileName)
+        if os.path.exists(candidateFile):
+            return candidateFile
+    return ""
+
+
 def _coercePositiveInt(value, defaultValue):
     try:
         parsed = int(value)
@@ -1190,17 +1246,28 @@ def writeHostsSnapshot(
         snapshotFile.write(json.dumps(payload, indent=2))
     return snapshotPath
 
-def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal, captureData=None):
+def emitBridgeProgress(
+    pathValue,
+    processedPackets,
+    totalPackets,
+    isFinal,
+    captureData=None,
+    jobId=None,
+):
     """
     Emit backend progress in the legacy stderr format and, when configured,
     forward a structured payload to the TCP bridge callback.
     """
 
     finalFlag = 1 if isFinal else 0
-    print(
-        f"{progressLinePrefix} path={pathValue} processed={processedPackets} total={totalPackets} final={finalFlag}",
-        file=sys.stderr,
+    line = (
+        f"{progressLinePrefix} path={pathValue} processed={processedPackets} "
+        + f"total={totalPackets} final={finalFlag}"
     )
+    normalizedJobId = str(jobId or "").strip()
+    if normalizedJobId:
+        line += f" jobId={normalizedJobId}"
+    print(line, file=sys.stderr)
 
     if callable(progressEventCallback):
         try:
@@ -1210,6 +1277,8 @@ def emitBridgeProgress(pathValue, processedPackets, totalPackets, isFinal, captu
                 "totalPackets": int(totalPackets),
                 "complete": bool(isFinal),
             }
+            if normalizedJobId:
+                payload["jobId"] = normalizedJobId
             if isinstance(captureData, dict):
                 payload["captureData"] = captureData
             progressEventCallback(payload)
@@ -3322,6 +3391,7 @@ def startThreading():
                                     totalPackets,
                                     False,
                                     captureData,
+                                    str(getattr(args, "job_id", "") or "").strip(),
                                 )
                             else:
                                 chunkSnapshotName = f"hosts-{nextSnapshotPacketCount}.json"
@@ -3336,6 +3406,7 @@ def startThreading():
                                     nextSnapshotPacketCount,
                                     totalPackets,
                                     False,
+                                    jobId=str(getattr(args, "job_id", "") or "").strip(),
                                 )
                             perfSnapshotSeconds += time.perf_counter() - snapshotStart
                             perfSnapshotCount += 1
@@ -3498,16 +3569,21 @@ def initializeRuntimeResources():
     if runtimeInitialized:
         return
 
-    geoDbPath = scriptDir + "common/GeoLite2-City.mmdb"
-    macVendorsPath = scriptDir + "common/mac-vendors-export.csv"
-    icannCsvPath = scriptDir + "common/service-names-port-numbers.csv"
+    geoDbPath = _resolveCommonResourcePath("GeoLite2-City.mmdb")
+    macVendorsPath = _resolveCommonResourcePath("mac-vendors-export.csv")
+    icannCsvPath = _resolveCommonResourcePath("service-names-port-numbers.csv")
 
-    if os.path.exists(geoDbPath):
+    if geoDbPath and os.path.exists(geoDbPath):
         geoIpReader = geoip2.database.Reader(geoDbPath)
+        print("[Main] GeoIP database loaded from " + geoDbPath, file=sys.stderr)
     else:
-        print("[Main] Warning: GeoIP database not found at " + geoDbPath, file=sys.stderr)
+        print(
+            "[Main] Warning: GeoIP database not found. Checked common dirs: "
+            + ", ".join(_candidateCommonDirectories()),
+            file=sys.stderr,
+        )
 
-    if os.path.exists(icannCsvPath):
+    if icannCsvPath and os.path.exists(icannCsvPath):
         with open(icannCsvPath, newline="", encoding="utf-8") as csvFile:
             for csvRow in csv.DictReader(csvFile):
                 try:
@@ -3522,18 +3598,20 @@ def initializeRuntimeResources():
                     pass
     else:
         print(
-            "[Main] Warning: ICANN port CSV not found at " + icannCsvPath,
+            "[Main] Warning: ICANN port CSV not found. Checked common dirs: "
+            + ", ".join(_candidateCommonDirectories()),
             file=sys.stderr,
         )
 
-    if os.path.exists(macVendorsPath):
+    if macVendorsPath and os.path.exists(macVendorsPath):
         with open(macVendorsPath, newline="", encoding="utf-8") as csvFile:
             for csvRow in csv.DictReader(csvFile):
                 if "Mac Prefix" in csvRow and "Vendor Name" in csvRow:
                     macVendorMap[csvRow["Mac Prefix"].upper()] = csvRow["Vendor Name"]
     else:
         print(
-            "[Main] Warning: MAC vendor CSV not found at " + macVendorsPath,
+            "[Main] Warning: MAC vendor CSV not found. Checked common dirs: "
+            + ", ".join(_candidateCommonDirectories()),
             file=sys.stderr,
         )
 
@@ -3560,6 +3638,7 @@ def runCaptureFromArgs(runArgs):
     global torNetworkIps
 
     args = runArgs
+    currentJobId = str(getattr(runArgs, "job_id", "") or "").strip()
     verbose = int(getattr(runArgs, "verbose", 0) or 0)
     hostChunkSize = _coercePositiveInt(
         getattr(runArgs, "host_chunk_size", DEFAULT_HOST_CHUNK_SIZE),
@@ -3690,6 +3769,7 @@ def runCaptureFromArgs(runArgs):
                 totalPackets,
                 True,
                 captureData,
+                currentJobId,
             )
         else:
             writeHostsSnapshot(outputDir, finalPacketInfoSnapshot, "", hostOutputFile)
@@ -3698,6 +3778,7 @@ def runCaptureFromArgs(runArgs):
                 len(finalPacketInfoSnapshot),
                 totalPackets,
                 True,
+                jobId=currentJobId,
             )
 
     if needsOutputDir:
@@ -4084,6 +4165,10 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     tempFile.write(decoded)
                 pcapPath = tempPcapPath
 
+            requestJobId = str(request.get("jobId") or "").strip()
+            if not requestJobId:
+                requestJobId = f"process-{int(time.time() * 1000)}"
+
             runArgs = argparse.Namespace(
                 pcap_file=pcapPath,
                 output=request.get("output") or "testcases",
@@ -4109,6 +4194,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 server=False,
                 server_host="127.0.0.1",
                 server_port=0,
+                job_id=requestJobId,
             )
 
             progressQueue = queue.Queue()
@@ -4119,6 +4205,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 progressQueue.put(
                     {
                         "type": "progress",
+                        "jobId": str(payload.get("jobId") or runArgs.job_id),
                         "path": payload.get("path"),
                         "processedPackets": payload.get("processedPackets", 0),
                         "totalPackets": payload.get("totalPackets", 0),
@@ -4135,7 +4222,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 try:
                     with processingLock:
                         _setActiveProcessingJob(
-                            jobId=f"process-{int(time.time() * 1000)}",
+                            jobId=runArgs.job_id,
                             pcapPath=runArgs.pcap_file,
                         )
                         previousProgressCallback = progressEventCallback
@@ -4173,6 +4260,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 self.sendNdjsonLine(
                     {
                         "type": "error",
+                        "jobId": str(runArgs.job_id),
                         "success": False,
                         "error": str(resultHolder.get("error")),
                         "traceback": resultHolder.get("traceback", ""),
@@ -4184,6 +4272,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
             self.sendNdjsonLine(
                 {
                     "type": "complete",
+                    "jobId": str(runArgs.job_id),
                     "success": bool(result.get("success")),
                     "cancelled": bool(result.get("cancelled", False)),
                     "error": result.get("error"),

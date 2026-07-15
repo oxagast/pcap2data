@@ -37,19 +37,37 @@ let backendHttpReadyPromise = null;
 let currentBackendHttpHost = BACKEND_HTTP_HOST;
 let currentBackendHttpPort = BACKEND_HTTP_PORT;
 let backendHttpShutdownExpected = false;
-let pendingJsonDataPayload = null;
-let jsonDataEmitTimer = null;
-let lastJsonDataEmitAtMs = 0;
-let lastJsonDataEmitProcessedPackets = 0;
+const pendingJsonDataPayloadByJob = new Map();
+const jsonDataEmitTimerByJob = new Map();
+const lastJsonDataEmitAtMsByJob = new Map();
+const lastJsonDataEmitProcessedPacketsByJob = new Map();
 let currentJsonDataEmitMinIntervalMs = DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
-const bridgeProgressLogState = {
-  "json-data": { lastPercent: -1, lastProcessed: 0 },
-  "json-path": { lastPercent: -1, lastProcessed: 0 },
-};
+const bridgeProgressLogStateByKey = new Map();
+let activeBackendRunCount = 0;
 
-function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete) {
-  const key = kind === "json-path" ? "json-path" : "json-data";
-  const state = bridgeProgressLogState[key];
+function normalizeBackendJobId(jobId) {
+  const normalized = String(jobId || "").trim();
+  return normalized || "";
+}
+
+function getBackendJobMapKey(jobId) {
+  const normalized = normalizeBackendJobId(jobId);
+  return normalized || "__default_job__";
+}
+
+function createBackendJobId(prefix = "job") {
+  const safePrefix = String(prefix || "job").trim() || "job";
+  return `${safePrefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete, jobId = "") {
+  const kindKey = kind === "json-path" ? "json-path" : "json-data";
+  const progressKey = `${kindKey}:${getBackendJobMapKey(jobId)}`;
+  const state = bridgeProgressLogStateByKey.get(progressKey) || {
+    lastPercent: -1,
+    lastProcessed: 0,
+  };
+  bridgeProgressLogStateByKey.set(progressKey, state);
   const processed = Math.max(0, Number(processedPackets) || 0);
   const total = Math.max(0, Number(totalPackets) || 0);
   const isComplete = Boolean(complete);
@@ -81,6 +99,8 @@ function buildBackendProcessEnv() {
   const env = {
     ...process.env,
   };
+  env.PACKETSNITCH_RESOURCES_PATH = process.resourcesPath;
+  env.PACKETSNITCH_COMMON_PATH = path.join(process.resourcesPath, "common");
   try {
     env.PACKETSNITCH_USERDATA_PATH = app.getPath("userData");
   } catch (_error) {
@@ -997,11 +1017,14 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     workerThreads = 0,
     pcapSourcePayload = null,
     useHttpDataSnapshots = false,
+    jobId = "",
   } = options;
+  const normalizedJobId = normalizeBackendJobId(jobId) || createBackendJobId("http");
 
   const ready = await ensureBackendHttpServerReady();
   if (!ready) {
     return {
+      jobId: normalizedJobId,
       success: false,
       error: "HTTP backend service unavailable",
       fallbackRecommended: true,
@@ -1010,16 +1033,18 @@ async function runBackendCommandViaHttp(filename, options = {}) {
 
   return new Promise((resolve) => {
     const emitProgressEvent = (event) => {
+      const eventJobId = normalizeBackendJobId(event?.jobId) || normalizedJobId;
       const processedPackets = Number(event?.processedPackets) || 0;
       const totalPackets = Number(event?.totalPackets) || 0;
       const complete = Boolean(event?.complete);
       if (event?.captureData && typeof event.captureData === "object") {
-        if (shouldLogBridgeProgress("json-data", processedPackets, totalPackets, complete)) {
+        if (shouldLogBridgeProgress("json-data", processedPackets, totalPackets, complete, eventJobId)) {
           global.logBackend(
-            `[Bridge] HTTP progress json-data processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+            `[Bridge] HTTP progress jobId=${eventJobId} json-data processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
           );
         }
         sendJsonDataPayload({
+          jobId: eventJobId,
           captureData: event.captureData,
           processedPackets,
           totalPackets,
@@ -1030,12 +1055,13 @@ async function runBackendCommandViaHttp(filename, options = {}) {
         return;
       }
       if (event?.path) {
-        if (shouldLogBridgeProgress("json-path", processedPackets, totalPackets, complete)) {
+        if (shouldLogBridgeProgress("json-path", processedPackets, totalPackets, complete, eventJobId)) {
           global.logBackend(
-            `[Bridge] HTTP progress json-path processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+            `[Bridge] HTTP progress jobId=${eventJobId} json-path processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
           );
         }
         sendJsonPathPayload({
+          jobId: eventJobId,
           path: event.path,
           processedPackets,
           totalPackets,
@@ -1046,6 +1072,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     };
 
     const requestPayload = {
+      jobId: normalizedJobId,
       pcapPath: filename,
       hostChunkSize,
       workerThreads,
@@ -1087,6 +1114,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           let latestCaptureData = null;
           let latestProgressPath = "";
           let finalResult = {
+            jobId: normalizedJobId,
             success: false,
             error: "HTTP backend stream ended without completion event",
             stdout: "",
@@ -1127,6 +1155,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                   : latestCaptureData;
               if (finalCaptureData) {
                 sendJsonDataPayload({
+                  jobId: normalizeBackendJobId(message?.jobId) || normalizedJobId,
                   captureData: finalCaptureData,
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
@@ -1136,6 +1165,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                 });
               } else if (latestProgressPath) {
                 sendJsonPathPayload({
+                  jobId: normalizeBackendJobId(message?.jobId) || normalizedJobId,
                   path: latestProgressPath,
                   processedPackets: Number(message?.processedPackets) || 0,
                   totalPackets: Number(message?.totalPackets) || 0,
@@ -1144,6 +1174,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                 });
               }
               finalResult = {
+                jobId: normalizeBackendJobId(message?.jobId) || normalizedJobId,
                 success: Boolean(message?.success),
                 error: message?.error || "",
                 stdout: typeof message?.stdout === "string" ? message.stdout : "",
@@ -1158,6 +1189,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                 return;
               }
               finalResult = {
+                jobId: normalizeBackendJobId(message?.jobId) || normalizedJobId,
                 success: false,
                 error: message?.error || "HTTP backend stream error",
                 stdout: "",
@@ -1181,6 +1213,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
               return;
             }
             finish({
+              jobId: finalResult.jobId || normalizedJobId,
               success: false,
               error: finalResult.error || "HTTP backend stream ended before completion",
               stdout: finalResult.stdout || "",
@@ -1201,6 +1234,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             parsed = JSON.parse(responseBody || "{}");
           } catch (_err) {
             finish({
+              jobId: normalizedJobId,
               success: false,
               error: "HTTP backend returned invalid JSON",
               fallbackRecommended: false,
@@ -1216,6 +1250,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
 
           if (res.statusCode !== 200 || !parsed.success) {
             finish({
+              jobId: normalizedJobId,
               success: false,
               error: parsed.error || "HTTP backend processing failed",
               stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
@@ -1226,6 +1261,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           }
 
           finish({
+            jobId: normalizedJobId,
             success: true,
             stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
             pcapSource: pcapSourcePayload,
@@ -1239,6 +1275,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     });
     req.on("error", (error) => {
       finish({
+        jobId: normalizedJobId,
         success: false,
         error: error?.message || "HTTP backend request failed",
         fallbackRecommended: true,
@@ -1282,54 +1319,69 @@ function sendError(message) {
 function sendJsonPathPayload(payload) {
   const mainWin = getMainWindow();
   if (!mainWin) return;
-  mainWin.webContents.send("json-path", payload);
+  const nextPayload = {
+    ...(payload || {}),
+    jobId: normalizeBackendJobId(payload?.jobId),
+  };
+  mainWin.webContents.send("json-path", nextPayload);
 }
 
 function sendJsonDataPayload(payload) {
   if (!payload || typeof payload !== "object") return;
 
+  const jobMapKey = getBackendJobMapKey(payload?.jobId);
+
   const nextPayload = {
     ...payload,
+    jobId: normalizeBackendJobId(payload.jobId),
     processedPackets: Number(payload.processedPackets) || 0,
     totalPackets: Number(payload.totalPackets) || 0,
     complete: Boolean(payload.complete),
   };
 
   const flushNow = () => {
-    if (jsonDataEmitTimer) {
-      clearTimeout(jsonDataEmitTimer);
-      jsonDataEmitTimer = null;
+    const existingTimer = jsonDataEmitTimerByJob.get(jobMapKey);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      jsonDataEmitTimerByJob.delete(jobMapKey);
     }
 
-    if (!pendingJsonDataPayload) {
+    const pendingPayload = pendingJsonDataPayloadByJob.get(jobMapKey);
+    if (!pendingPayload) {
       return;
     }
 
     const mainWin = getMainWindow();
     if (!mainWin) {
-      pendingJsonDataPayload = null;
+      pendingJsonDataPayloadByJob.delete(jobMapKey);
       return;
     }
 
-    const payloadToSend = pendingJsonDataPayload;
-    pendingJsonDataPayload = null;
+    const payloadToSend = pendingPayload;
+    pendingJsonDataPayloadByJob.delete(jobMapKey);
     mainWin.webContents.send("json-data", payloadToSend);
-    lastJsonDataEmitAtMs = Date.now();
-    lastJsonDataEmitProcessedPackets = Number(payloadToSend.processedPackets) || 0;
+    lastJsonDataEmitAtMsByJob.set(jobMapKey, Date.now());
+    lastJsonDataEmitProcessedPacketsByJob.set(
+      jobMapKey,
+      Number(payloadToSend.processedPackets) || 0,
+    );
   };
 
   if (nextPayload.complete) {
-    pendingJsonDataPayload = nextPayload;
+    pendingJsonDataPayloadByJob.set(jobMapKey, nextPayload);
     flushNow();
     return;
   }
 
-  pendingJsonDataPayload = nextPayload;
+  pendingJsonDataPayloadByJob.set(jobMapKey, nextPayload);
   const nowMs = Date.now();
-  const elapsedMs = Math.max(0, nowMs - lastJsonDataEmitAtMs);
+  const previousEmitAt = Number(lastJsonDataEmitAtMsByJob.get(jobMapKey)) || 0;
+  const previousProcessed =
+    Number(lastJsonDataEmitProcessedPacketsByJob.get(jobMapKey)) || 0;
+  const elapsedMs = Math.max(0, nowMs - previousEmitAt);
   const packetDelta = Math.max(
     0,
-    nextPayload.processedPackets - lastJsonDataEmitProcessedPackets,
+    nextPayload.processedPackets - previousProcessed,
   );
   const chunkSize = Number(nextPayload.chunkSize) || DEFAULT_HOST_CHUNK_SIZE;
   const minPacketDelta = Math.max(
@@ -1341,18 +1393,23 @@ function sendJsonDataPayload(payload) {
     return;
   }
 
-  if (!jsonDataEmitTimer) {
+  if (!jsonDataEmitTimerByJob.has(jobMapKey)) {
     const waitMs = Math.max(0, currentJsonDataEmitMinIntervalMs - elapsedMs);
-    jsonDataEmitTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       flushNow();
     }, waitMs);
+    jsonDataEmitTimerByJob.set(jobMapKey, timer);
   }
 }
 
 function sendBackendPcapSource(payload) {
   const mainWin = getMainWindow();
   if (!mainWin) return;
-  mainWin.webContents.send("backend-pcap-source", payload);
+  const nextPayload = {
+    ...(payload || {}),
+    jobId: normalizeBackendJobId(payload?.jobId),
+  };
+  mainWin.webContents.send("backend-pcap-source", nextPayload);
 }
 
 function sanitizeBase64PcapInput(value) {
@@ -1372,11 +1429,14 @@ function buildPcapSourcePayloadFromBuffer(buffer, fileName) {
   };
 }
 
-function emitPcapSourceFromFile(filePath) {
+function emitPcapSourceFromFile(filePath, jobId = "") {
   const fileBuffer = fs.readFileSync(filePath);
   const payload = buildPcapSourcePayloadFromBuffer(fileBuffer, path.basename(filePath));
   if (payload) {
-    sendBackendPcapSource(payload);
+    sendBackendPcapSource({
+      ...payload,
+      jobId: normalizeBackendJobId(jobId),
+    });
   }
   return payload;
 }
@@ -1420,10 +1480,12 @@ function parseBridgeProgressLine(line, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) 
   const processedMatch = line.match(/processed=(\d+)/);
   const totalMatch = line.match(/total=(\d+)/);
   const finalMatch = line.match(/final=(\d+)/);
+  const jobIdMatch = line.match(/jobId=([^\s]+)/);
   if (!pathMatch) return null;
 
   return {
     path: pathMatch[1],
+    jobId: jobIdMatch ? String(jobIdMatch[1] || "").trim() : "",
     processedPackets: processedMatch ? Number(processedMatch[1]) : 0,
     totalPackets: totalMatch ? Number(totalMatch[1]) : 0,
     complete: finalMatch ? finalMatch[1] === "1" : false,
@@ -1431,10 +1493,10 @@ function parseBridgeProgressLine(line, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) 
   };
 }
 
-function scanChunkSnapshots(sentSnapshotPaths, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) {
-  if (!fs.existsSync(testcaseOutputDir)) return [];
+function scanChunkSnapshots(outputDirPath, sentSnapshotPaths, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) {
+  if (!outputDirPath || !fs.existsSync(outputDirPath)) return [];
   const entries = fs
-    .readdirSync(testcaseOutputDir)
+    .readdirSync(outputDirPath)
     .filter((name) => /^hosts-\d+\.json$/.test(name))
     .sort((left, right) => {
       const leftCount = Number(left.match(/hosts-(\d+)\.json/)?.[1] || 0);
@@ -1444,7 +1506,7 @@ function scanChunkSnapshots(sentSnapshotPaths, hostChunkSize = DEFAULT_HOST_CHUN
 
   const unsent = [];
   entries.forEach((entryName) => {
-    const fullPath = path.join(testcaseOutputDir, entryName);
+    const fullPath = path.join(outputDirPath, entryName);
     if (sentSnapshotPaths.has(fullPath)) return;
     sentSnapshotPaths.add(fullPath);
     const processedPackets = Number(entryName.match(/hosts-(\d+)\.json/)?.[1] || 0);
@@ -1465,392 +1527,431 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     hostChunkSize: requestedHostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
     workerThreads: requestedWorkerThreads = 0,
     backendOptions = {},
+    jobId: requestedJobId = "",
   } = options;
-  const hostChunkSize = normalizeHostChunkSize(requestedHostChunkSize);
-  const parsedWorkerThreads = Number.parseInt(String(requestedWorkerThreads || 0), 10);
-  const workerThreads = Number.isFinite(parsedWorkerThreads) && parsedWorkerThreads > 0
-    ? parsedWorkerThreads
-    : 0;
-  const normalizedTransport = applyBackendTransportOptions(backendOptions);
-  global.logBackend(`[Bridge] Received pcap: ${filename}`);
-  const runtime = resolveBackendRuntime();
-  const {
-    backendScriptPath,
-    snitchExePath,
-    snitchExecutableCandidates,
-    hasBundledBackendExe,
-    usePythonBackend,
-    backendCommandPath,
-  } = runtime;
+  const backendJobId = normalizeBackendJobId(requestedJobId) || createBackendJobId("backend");
+  const concurrentRunDetected = activeBackendRunCount > 0;
+  activeBackendRunCount += 1;
 
-  if (usePythonBackend) {
-    global.logBackend(`[Bridge] Using Python backend script at: ${backendScriptPath}`);
-  } else if (hasBundledBackendExe) {
-    global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
-  } else {
-    global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
-    global.logBackend(
-      `[Bridge] Checked executable candidates: ${(snitchExecutableCandidates || []).join(", ")}`,
-    );
-    sendError(
-      "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
-    );
-    return {
-      success: false,
-      error: "Snitch executable not found",
-    };
-  }
-  let isPCAP = false;
-  let isSession = false;
-  let isCompressedSession = false;
-  let sessionCompression = null;
-  // try to make a prelimienary determination of what type of file this is based on magic
-  const fileForMagic = fs.readFileSync(filename, "binary", { encoding: "utf8" });
-  if (fileForMagic.startsWith("{") && fileForMagic.endsWith("}")) {
-    global.logBackend("[Bridge] File looks like a JSON file");
-    if (fileForMagic.includes("hosts") && fileForMagic.includes("packets")) {
-      global.logBackend("[Bridge] File looks like a PacketSnitch session file with hosts and packets!");
-      isSession = true;
-    }
-  } else if (fileForMagic.startsWith("\xfd\x37\x7a\x58\x5a")) {
-    global.logBackend("[Bridge] File looks like an xz-compressed file, this is probably a .pss session file!");
-    isSession = true;
-    isCompressedSession = true;
-    sessionCompression = "xz";
-  } else if (fileForMagic.startsWith("\x1f\x8b")) {
-    if (filename.endsWith(".psb")) {
-      global.logBackend("[Bridge] File looks like a gzip-compressed BSON file (.psb session)!");
-      isSession = true;
-      isCompressedSession = true;
-      sessionCompression = "bson-gzip";
+  try {
+    const hostChunkSize = normalizeHostChunkSize(requestedHostChunkSize);
+    const parsedWorkerThreads = Number.parseInt(String(requestedWorkerThreads || 0), 10);
+    const workerThreads = Number.isFinite(parsedWorkerThreads) && parsedWorkerThreads > 0
+      ? parsedWorkerThreads
+      : 0;
+    const normalizedTransport = applyBackendTransportOptions(backendOptions);
+    global.logBackend(`[Bridge] Received pcap: ${filename}`);
+    const runtime = resolveBackendRuntime();
+    const {
+      backendScriptPath,
+      snitchExePath,
+      snitchExecutableCandidates,
+      hasBundledBackendExe,
+      usePythonBackend,
+      backendCommandPath,
+    } = runtime;
+
+    if (usePythonBackend) {
+      global.logBackend(`[Bridge] Using Python backend script at: ${backendScriptPath}`);
+    } else if (hasBundledBackendExe) {
+      global.logBackend(`[Bridge] Found snitch executable at: ${snitchExePath}`);
     } else {
-      global.logBackend("[Bridge] File looks like a gzip-compressed file, this is probably a .pss.gz session file!");
-      isSession = true;
-      isCompressedSession = true;
-      sessionCompression = "gzip";
-    }
-  } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
-    global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
-    isPCAP = true;
-  } else if (fileForMagic.startsWith("\x0a\x0d\x0d\x0a")) {
-    global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block in little-endian byte order");
-    isPCAP = true;
-  } else if (fileForMagic.startsWith("\x50\x41\x43\x45\x54\x43\x4f\x4e\x46")) {
-    global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block");
-    isPCAP = true;
-  } else if (fileForMagic.startsWith("\x4d\x3c\x2b\x1a")) {
-    global.logBackend("[Bridge] File looks like PCAP file with reversed byte order");
-    isPCAP = true;
-  } else if (fileForMagic.startsWith("\xc3\xd4\xa1\xb2")) {
-    global.logBackend("[Bridge] File looks like PCAP file with reversed byte order and nanosecond resolution");
-    isPCAP = true;
-  } else {
-    global.logBackend("[Bridge] File type is unknown based on magic (we will try to parse it anyway, but may fail!");
-    isPCAP = true;
-    // we can still try to parse it and see if snitch can make sense of it
-    // , but it likely will fail and that's ok since snitch will report 
-    // the error back to us and we can show that to the user
-  }
-  if (!isPCAP) {
-    if (!isSession) {
-      global.logBackend("[Bridge] File does not appear to be a session file or a known pcap format?");
-      sendError("[Bridge] File does not appear to be a session file or a known pcap format!");
-    } else {
-      let sessionJsonPath = filename;
-      if (isCompressedSession) {
-        try {
-          const compressedBuffer = fs.readFileSync(filename);
-          let decompressedBuffer;
-          if (sessionCompression === "bson-gzip") {
-            if (!BSON) {
-              sendError("[Bridge] Cannot load BSON session (.psb) without the bson module!");
-              return {
-                success: false,
-                error: "Cannot load BSON session without bson module",
-              };
-            }
-            const gunzipped = await gunzipAsync(compressedBuffer);
-            const doc = BSON.deserialize(gunzipped);
-            decompressedBuffer = Buffer.from(JSON.stringify(doc), "utf8");
-          } else if (sessionCompression === "gzip") {
-            decompressedBuffer = await gunzipAsync(compressedBuffer);
-          } else {
-            let lzmaNative = null;
-            try { lzmaNative = require("lzma-native"); } catch { }
-            if (!lzmaNative) {
-              sendError("[Bridge] Cannot load xz-compressed session (.pss / .json.xz) without lzma-native support!");
-              return {
-                success: false,
-                error: "Cannot load xz-compressed session without lzma-native support",
-              };
-            }
-            decompressedBuffer = await lzmaNative.decompress(compressedBuffer);
-          }
-          const tempPath = path.join(systemTempDir, `pss-session-${Date.now()}.json`);
-          fs.writeFileSync(tempPath, decompressedBuffer);
-          sessionJsonPath = tempPath;
-          global.logBackend(`[Bridge] Decompressed session to temp file: ${tempPath}`);
-        } catch (err) {
-          sendError(`[Bridge] Failed to decompress session file: ${err.message}`);
-          return {
-            success: false,
-            error: err.message,
-          };
-        }
-      }
-      sendJsonPathPayload({
-        path: sessionJsonPath,
-        processedPackets: 0,
-        totalPackets: 0,
-        complete: true,
-        chunkSize: hostChunkSize,
-      });
-    }
-    return {
-      success: true,
-      stdout: "",
-      pcapSource: null,
-    };
-  }
-
-  let pcapSourcePayload = providedPcapSourcePayload;
-  if (!pcapSourcePayload) {
-    try {
-      pcapSourcePayload = emitPcapSourceFromFile(filename);
-    } catch (error) {
-      global.logBackend(`[Bridge] Failed to prepare source PCAP payload: ${error.message}`);
-    }
-  }
-
-  if (!normalizedTransport.forceLegacySpawn) {
-    const httpResult = await runBackendCommandViaHttp(filename, {
-      hostChunkSize,
-      workerThreads,
-      pcapSourcePayload,
-      useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
-    });
-    if (httpResult?.success) {
-      global.logBackend("[Bridge] Backend completed using HTTP service mode");
-      return httpResult;
-    }
-    if (!httpResult?.fallbackRecommended) {
+      global.logBackend(`[Bridge] Snitch executable not found at: ${snitchExePath}`);
+      global.logBackend(
+        `[Bridge] Checked executable candidates: ${(snitchExecutableCandidates || []).join(", ")}`,
+      );
+      sendError(
+        "[Bridge] Snitch executable not found! Please ensure it is included in the resources.",
+      );
       return {
+        jobId: backendJobId,
         success: false,
-        stdout: httpResult?.stdout || "",
-        error: httpResult?.error || "HTTP backend processing failed",
-        pcapSource: pcapSourcePayload,
+        error: "Snitch executable not found",
       };
     }
-    global.logBackend(
-      `[Bridge] HTTP backend unavailable (${httpResult?.error || "unknown error"}); using legacy spawn mode`,
-    );
-  } else {
-    global.logBackend("[Bridge] Force-legacy setting enabled; using legacy backend spawn mode");
-  }
-
-  const backendArgs = usePythonBackend
-    ? [backendScriptPath, filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)]
-    : [filename, "-v", "-a", "-o", testcaseOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)];
-  // Always start with a clean output directory so snitch never hits the
-  // interactive overwrite prompt on second (and later) runs.
-  if (fs.existsSync(testcaseOutputDir)) {
-    fs.rmSync(testcaseOutputDir, { recursive: true, force: true });
-  }
-
-  global.logBackend("[Bridge]", `${backendCommandPath} ${backendArgs.join(" ")}`);
-
-  return new Promise((resolve) => {
-    const sentSnapshotPaths = new Set();
-    let stdoutBuffer = "";
-    let stderrBuffer = "";
-    let parsedTotalPackets = 0;
-    let latestProcessedPackets = 0;
-    const backendProc = spawn(backendCommandPath, backendArgs, {
-      windowsHide: true,
-      env: buildBackendProcessEnv(),
-    });
-
-    const snapshotScanTimer = setInterval(() => {
-      const snapshotPayloads = scanChunkSnapshots(sentSnapshotPaths, hostChunkSize);
-      // thisis to avoid exceeding our disk inode limit on large captures
-      // we remove the oldest snapshot file after sending the latest one to the renderer
-      // first we check if it has been used (sent) already
-      // we should then give it some time to make sure the frontend has caught up before
-      // removing it.
-      if (entries[0] && sentSnapshotPaths.has(path.join(testcaseOutputDir, entries[0]))) {
-        // give some time for the frontend to catch up before removing
-        setTimeout(() => {
-          removePacketsChunkFromFS(path.join(testcaseOutputDir, entries[0]));
-        }, 10000);
+    let isPCAP = false;
+    let isSession = false;
+    let isCompressedSession = false;
+    let sessionCompression = null;
+    // try to make a prelimienary determination of what type of file this is based on magic
+    const fileForMagic = fs.readFileSync(filename, "binary", { encoding: "utf8" });
+    if (fileForMagic.startsWith("{") && fileForMagic.endsWith("}")) {
+      global.logBackend("[Bridge] File looks like a JSON file");
+      if (fileForMagic.includes("hosts") && fileForMagic.includes("packets")) {
+        global.logBackend("[Bridge] File looks like a PacketSnitch session file with hosts and packets!");
+        isSession = true;
       }
-      snapshotPayloads.forEach((payload) => {
-        latestProcessedPackets = Math.max(
-          latestProcessedPackets,
-          payload.processedPackets,
-        );
-        payload.totalPackets = parsedTotalPackets;
-        sendJsonPathPayload(payload);
-      });
-    }, 600);
-
-    const handleProgressText = (text) => {
-      if (!text) return;
-      const progressPayload = parseBridgeProgressLine(text, hostChunkSize);
-      if (progressPayload) {
-        parsedTotalPackets = Math.max(
-          parsedTotalPackets,
-          progressPayload.totalPackets || 0,
-        );
-        latestProcessedPackets = Math.max(
-          latestProcessedPackets,
-          progressPayload.processedPackets || 0,
-        );
-        sentSnapshotPaths.add(progressPayload.path);
-        sendJsonPathPayload(progressPayload);
-        return;
+    } else if (fileForMagic.startsWith("\xfd\x37\x7a\x58\x5a")) {
+      global.logBackend("[Bridge] File looks like an xz-compressed file, this is probably a .pss session file!");
+      isSession = true;
+      isCompressedSession = true;
+      sessionCompression = "xz";
+    } else if (fileForMagic.startsWith("\x1f\x8b")) {
+      if (filename.endsWith(".psb")) {
+        global.logBackend("[Bridge] File looks like a gzip-compressed BSON file (.psb session)!");
+        isSession = true;
+        isCompressedSession = true;
+        sessionCompression = "bson-gzip";
+      } else {
+        global.logBackend("[Bridge] File looks like a gzip-compressed file, this is probably a .pss.gz session file!");
+        isSession = true;
+        isCompressedSession = true;
+        sessionCompression = "gzip";
       }
-
-      const totalMatch = text.match(/Preparing to process\s+(\d+)/);
-      if (totalMatch) {
-        parsedTotalPackets = Number(totalMatch[1]);
-      }
-    };
-
-    backendProc.stdout.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdoutBuffer += text;
-      global.logBackend("", text);
-      text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .forEach(handleProgressText);
-    });
-
-    backendProc.stderr.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
-      global.logBackend("", text);
-      text
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .forEach(handleProgressText);
-    });
-
-    backendProc.on("error", (error) => {
-      clearInterval(snapshotScanTimer);
-      sendError("[Bridge] Backend execution error! " + error);
-      resolve({
-        success: false,
-        stdout: stdoutBuffer,
-        error: error?.message || "Backend execution error",
-        pcapSource: pcapSourcePayload,
-      });
-    });
-
-    backendProc.on("close", (code) => {
-      clearInterval(snapshotScanTimer);
-
-      const trailingSnapshots = scanChunkSnapshots(sentSnapshotPaths, hostChunkSize);
-      // thisis to avoid exceeding our disk inode limit on large captures
-      // we remove the oldest snapshot file after sending the latest one to the renderer
-      // first we check if it has been used (sent) already
-      // we should then give it some time to make sure the frontend has caught up before
-      // removing it.
-      if (entries[0] && sentSnapshotPaths.has(path.join(testcaseOutputDir, entries[0]))) {
-        // give some time for the frontend to catch up before removing
-        setTimeout(() => {
-          removePacketsChunkFromFS(path.join(testcaseOutputDir, entries[0]));
-        }, 10000);
-      }
-      trailingSnapshots.forEach((payload) => {
-        latestProcessedPackets = Math.max(
-          latestProcessedPackets,
-          payload.processedPackets,
-        );
-        payload.totalPackets = parsedTotalPackets;
-        sendJsonPathPayload(payload);
-      });
-      if (stderrBuffer.includes("No such file or directory")) {
-        sendError("[Bridge] Backend execution error! File not found.  Please be sure the last pcap is not still being processed.");
-        resolve({
-          success: false,
-          stdout: stdoutBuffer,
-          error: "Backend execution error: PCAP not found! Wait for processing to complete before requesting a reprocess.",
-          pcapSource: pcapSourcePayload,
+    } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
+      global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
+      isPCAP = true;
+    } else if (fileForMagic.startsWith("\x0a\x0d\x0d\x0a")) {
+      global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block in little-endian byte order");
+      isPCAP = true;
+    } else if (fileForMagic.startsWith("\x50\x41\x43\x45\x54\x43\x4f\x4e\x46")) {
+      global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block");
+      isPCAP = true;
+    } else if (fileForMagic.startsWith("\x4d\x3c\x2b\x1a")) {
+      global.logBackend("[Bridge] File looks like PCAP file with reversed byte order");
+      isPCAP = true;
+    } else if (fileForMagic.startsWith("\xc3\xd4\xa1\xb2")) {
+      global.logBackend("[Bridge] File looks like PCAP file with reversed byte order and nanosecond resolution");
+      isPCAP = true;
+    } else {
+      global.logBackend("[Bridge] File type is unknown based on magic (we will try to parse it anyway, but may fail!");
+      isPCAP = true;
+      // we can still try to parse it and see if snitch can make sense of it
+      // , but it likely will fail and that's ok since snitch will report 
+      // the error back to us and we can show that to the user
+    }
+    if (!isPCAP) {
+      if (!isSession) {
+        global.logBackend("[Bridge] File does not appear to be a session file or a known pcap format?");
+        sendError("[Bridge] File does not appear to be a session file or a known pcap format!");
+      } else {
+        let sessionJsonPath = filename;
+        if (isCompressedSession) {
+          try {
+            const compressedBuffer = fs.readFileSync(filename);
+            let decompressedBuffer;
+            if (sessionCompression === "bson-gzip") {
+              if (!BSON) {
+                sendError("[Bridge] Cannot load BSON session (.psb) without the bson module!");
+                return {
+                  jobId: backendJobId,
+                  success: false,
+                  error: "Cannot load BSON session without bson module",
+                };
+              }
+              const gunzipped = await gunzipAsync(compressedBuffer);
+              const doc = BSON.deserialize(gunzipped);
+              decompressedBuffer = Buffer.from(JSON.stringify(doc), "utf8");
+            } else if (sessionCompression === "gzip") {
+              decompressedBuffer = await gunzipAsync(compressedBuffer);
+            } else {
+              let lzmaNative = null;
+              try { lzmaNative = require("lzma-native"); } catch { }
+              if (!lzmaNative) {
+                sendError("[Bridge] Cannot load xz-compressed session (.pss / .json.xz) without lzma-native support!");
+                return {
+                  jobId: backendJobId,
+                  success: false,
+                  error: "Cannot load xz-compressed session without lzma-native support",
+                };
+              }
+              decompressedBuffer = await lzmaNative.decompress(compressedBuffer);
+            }
+            const tempPath = path.join(systemTempDir, `pss-session-${Date.now()}.json`);
+            fs.writeFileSync(tempPath, decompressedBuffer);
+            sessionJsonPath = tempPath;
+            global.logBackend(`[Bridge] Decompressed session to temp file: ${tempPath}`);
+          } catch (err) {
+            sendError(`[Bridge] Failed to decompress session file: ${err.message}`);
+            return {
+              jobId: backendJobId,
+              success: false,
+              error: err.message,
+            };
+          }
+        }
+        sendJsonPathPayload({
+          jobId: backendJobId,
+          path: sessionJsonPath,
+          processedPackets: 0,
+          totalPackets: 0,
+          complete: true,
+          chunkSize: hostChunkSize,
         });
-        return;
       }
-      if (stdoutBuffer.includes("Ollama")) {
-        sendError("[Bridge] Backend LLM generation error!");
+      return {
+        jobId: backendJobId,
+        success: true,
+        stdout: "",
+        pcapSource: null,
+      };
+    }
+
+    let pcapSourcePayload = providedPcapSourcePayload;
+    if (!pcapSourcePayload) {
+      try {
+        pcapSourcePayload = emitPcapSourceFromFile(filename, backendJobId);
+      } catch (error) {
+        global.logBackend(`[Bridge] Failed to prepare source PCAP payload: ${error.message}`);
       }
-      if (stderrBuffer.includes("Disk quota exceeded")) {
-        sendError("[Bridge] Backend execution error! Disk quota exceeded.  Apparently PacketSnitch does not scale as well as we thought.  Killingg bckend process to avoid further issues.");
-        resolve({
+    }
+
+    const canUseHttpForThisRun = !normalizedTransport.forceLegacySpawn && !concurrentRunDetected;
+    if (canUseHttpForThisRun) {
+      const httpResult = await runBackendCommandViaHttp(filename, {
+        hostChunkSize,
+        workerThreads,
+        pcapSourcePayload,
+        useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
+        jobId: backendJobId,
+      });
+      if (httpResult?.success) {
+        global.logBackend("[Bridge] Backend completed using HTTP service mode");
+        return {
+          ...httpResult,
+          jobId: normalizeBackendJobId(httpResult?.jobId) || backendJobId,
+        };
+      }
+      if (!httpResult?.fallbackRecommended) {
+        return {
+          jobId: normalizeBackendJobId(httpResult?.jobId) || backendJobId,
           success: false,
-          stdout: stdoutBuffer,
-          error: "Backend execution error: Disk quota exceeded!",
+          stdout: httpResult?.stdout || "",
+          error: httpResult?.error || "HTTP backend processing failed",
           pcapSource: pcapSourcePayload,
-        });
-        return;
+        };
       }
-      if (code !== 0) {
-        if (stderrBuffer.includes("No module named 'cryptography'")) {
-          sendError(
-            "[Bridge] Backend is missing Python module 'cryptography'. Rebuild backend artifacts (npm run build-backend) or install backend requirements before launching.",
+      global.logBackend(
+        `[Bridge] HTTP backend unavailable (${httpResult?.error || "unknown error"}); using legacy spawn mode`,
+      );
+    } else {
+      if (concurrentRunDetected && !normalizedTransport.forceLegacySpawn) {
+        global.logBackend("[Bridge] Concurrent backend run detected; using legacy backend spawn mode for job isolation");
+      } else {
+        global.logBackend("[Bridge] Force-legacy setting enabled; using legacy backend spawn mode");
+      }
+    }
+
+    const jobOutputDir = path.join(testcaseOutputDir, backendJobId);
+    const backendArgs = usePythonBackend
+      ? [backendScriptPath, filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)]
+      : [filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)];
+    // Always start with a clean output directory so snitch never hits the
+    // interactive overwrite prompt on second (and later) runs.
+    if (fs.existsSync(jobOutputDir)) {
+      fs.rmSync(jobOutputDir, { recursive: true, force: true });
+    }
+
+    global.logBackend("[Bridge]", `${backendCommandPath} ${backendArgs.join(" ")}`);
+
+    return new Promise((resolve) => {
+      const sentSnapshotPaths = new Set();
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      let parsedTotalPackets = 0;
+      let latestProcessedPackets = 0;
+      const backendProc = spawn(backendCommandPath, backendArgs, {
+        windowsHide: true,
+        env: buildBackendProcessEnv(),
+      });
+
+      const snapshotScanTimer = setInterval(() => {
+        const snapshotPayloads = scanChunkSnapshots(jobOutputDir, sentSnapshotPaths, hostChunkSize);
+        // thisis to avoid exceeding our disk inode limit on large captures
+        // we remove the oldest snapshot file after sending the latest one to the renderer
+        // first we check if it has been used (sent) already
+        // we should then give it some time to make sure the frontend has caught up before
+        // removing it.
+        if (entries[0] && sentSnapshotPaths.has(path.join(jobOutputDir, entries[0]))) {
+          // give some time for the frontend to catch up before removing
+          setTimeout(() => {
+            removePacketsChunkFromFS(path.join(jobOutputDir, entries[0]));
+          }, 10000);
+        }
+        snapshotPayloads.forEach((payload) => {
+          latestProcessedPackets = Math.max(
+            latestProcessedPackets,
+            payload.processedPackets,
           );
+          payload.totalPackets = parsedTotalPackets;
+          payload.jobId = backendJobId;
+          sendJsonPathPayload(payload);
+        });
+      }, 600);
+
+      const handleProgressText = (text) => {
+        if (!text) return;
+        const progressPayload = parseBridgeProgressLine(text, hostChunkSize);
+        if (progressPayload) {
+          if (!normalizeBackendJobId(progressPayload.jobId)) {
+            progressPayload.jobId = backendJobId;
+          }
+          parsedTotalPackets = Math.max(
+            parsedTotalPackets,
+            progressPayload.totalPackets || 0,
+          );
+          latestProcessedPackets = Math.max(
+            latestProcessedPackets,
+            progressPayload.processedPackets || 0,
+          );
+          sentSnapshotPaths.add(progressPayload.path);
+          sendJsonPathPayload(progressPayload);
+          return;
+        }
+
+        const totalMatch = text.match(/Preparing to process\s+(\d+)/);
+        if (totalMatch) {
+          parsedTotalPackets = Number(totalMatch[1]);
+        }
+      };
+
+      backendProc.stdout.on("data", (chunk) => {
+        const text = chunk.toString();
+        stdoutBuffer += text;
+        global.logBackend("", text);
+        text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach(handleProgressText);
+      });
+
+      backendProc.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        stderrBuffer += text;
+        global.logBackend("", text);
+        text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .forEach(handleProgressText);
+      });
+
+      backendProc.on("error", (error) => {
+        clearInterval(snapshotScanTimer);
+        sendError("[Bridge] Backend execution error! " + error);
+        resolve({
+          jobId: backendJobId,
+          success: false,
+          stdout: stdoutBuffer,
+          error: error?.message || "Backend execution error",
+          pcapSource: pcapSourcePayload,
+        });
+      });
+
+      backendProc.on("close", (code) => {
+        clearInterval(snapshotScanTimer);
+
+        const trailingSnapshots = scanChunkSnapshots(jobOutputDir, sentSnapshotPaths, hostChunkSize);
+        // thisis to avoid exceeding our disk inode limit on large captures
+        // we remove the oldest snapshot file after sending the latest one to the renderer
+        // first we check if it has been used (sent) already
+        // we should then give it some time to make sure the frontend has caught up before
+        // removing it.
+        if (entries[0] && sentSnapshotPaths.has(path.join(jobOutputDir, entries[0]))) {
+          // give some time for the frontend to catch up before removing
+          setTimeout(() => {
+            removePacketsChunkFromFS(path.join(jobOutputDir, entries[0]));
+          }, 10000);
+        }
+        trailingSnapshots.forEach((payload) => {
+          latestProcessedPackets = Math.max(
+            latestProcessedPackets,
+            payload.processedPackets,
+          );
+          payload.totalPackets = parsedTotalPackets;
+          payload.jobId = backendJobId;
+          sendJsonPathPayload(payload);
+        });
+        if (stderrBuffer.includes("No such file or directory")) {
+          sendError("[Bridge] Backend execution error! File not found.  Please be sure the last pcap is not still being processed.");
           resolve({
+            jobId: backendJobId,
             success: false,
             stdout: stdoutBuffer,
-            error: "Backend dependency missing: cryptography",
+            error: "Backend execution error: PCAP not found! Wait for processing to complete before requesting a reprocess.",
             pcapSource: pcapSourcePayload,
           });
           return;
         }
-        if (stderrBuffer.includes("supported capture file")) {
-          sendError("[Bridge] Unsupported file format!");
-        } else {
-          sendError(`[Bridge] Backend execution error! Exit code ${code}`);
+        if (stdoutBuffer.includes("Ollama")) {
+          sendError("[Bridge] Backend LLM generation error!");
         }
+        if (stderrBuffer.includes("Disk quota exceeded")) {
+          sendError("[Bridge] Backend execution error! Disk quota exceeded.  Apparently PacketSnitch does not scale as well as we thought.  Killingg bckend process to avoid further issues.");
+          resolve({
+            jobId: backendJobId,
+            success: false,
+            stdout: stdoutBuffer,
+            error: "Backend execution error: Disk quota exceeded!",
+            pcapSource: pcapSourcePayload,
+          });
+          return;
+        }
+        if (code !== 0) {
+          if (stderrBuffer.includes("No module named 'cryptography'")) {
+            sendError(
+              "[Bridge] Backend is missing Python module 'cryptography'. Rebuild backend artifacts (npm run build-backend) or install backend requirements before launching.",
+            );
+            resolve({
+              jobId: backendJobId,
+              success: false,
+              stdout: stdoutBuffer,
+              error: "Backend dependency missing: cryptography",
+              pcapSource: pcapSourcePayload,
+            });
+            return;
+          }
+          if (stderrBuffer.includes("supported capture file")) {
+            sendError("[Bridge] Unsupported file format!");
+          } else {
+            sendError(`[Bridge] Backend execution error! Exit code ${code}`);
+          }
+          resolve({
+            jobId: backendJobId,
+            success: false,
+            stdout: stdoutBuffer,
+            error: `Backend exited with code ${code}`,
+            pcapSource: pcapSourcePayload,
+          });
+          return;
+        }
+
+        const finalHostsPath = path.join(jobOutputDir, "hosts.json");
+        if (fs.existsSync(finalHostsPath)) {
+          sendJsonPathPayload({
+            jobId: backendJobId,
+            path: finalHostsPath,
+            processedPackets: Math.max(latestProcessedPackets, parsedTotalPackets),
+            totalPackets: parsedTotalPackets,
+            complete: true,
+            chunkSize: hostChunkSize,
+          });
+        } else {
+          sendError("[Bridge] hosts.json not found after backend execution!");
+        }
+
         resolve({
-          success: false,
+          jobId: backendJobId,
+          success: true,
           stdout: stdoutBuffer,
-          error: `Backend exited with code ${code}`,
           pcapSource: pcapSourcePayload,
         });
-        return;
-      }
-
-      const finalHostsPath = path.join(testcaseOutputDir, "hosts.json");
-      if (fs.existsSync(finalHostsPath)) {
-        sendJsonPathPayload({
-          path: finalHostsPath,
-          processedPackets: Math.max(latestProcessedPackets, parsedTotalPackets),
-          totalPackets: parsedTotalPackets,
-          complete: true,
-          chunkSize: hostChunkSize,
-        });
-      } else {
-        sendError("[Bridge] hosts.json not found after backend execution!");
-      }
-
-      resolve({
-        success: true,
-        stdout: stdoutBuffer,
-        pcapSource: pcapSourcePayload,
       });
-    });
 
-    global.logBackend("[Bridge] Backend started");
-  });
+      global.logBackend("[Bridge] Backend started");
+    });
+  } finally {
+    activeBackendRunCount = Math.max(0, activeBackendRunCount - 1);
+  }
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions) => {
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions, jobId) => {
   return runBackendCommandInternal(filename, useLLM, {
     hostChunkSize,
     workerThreads,
     backendOptions,
+    jobId,
   });
 });
 
@@ -1876,24 +1977,30 @@ ipcMain.handle("init-backend-service", async (_event, backendOptions) => {
   };
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions) => {
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions, jobId) => {
+  const backendJobId = normalizeBackendJobId(jobId) || createBackendJobId("backend");
   let tempPathForCleanup = "";
   try {
     const prepared = writeSessionPcapTempFile(sessionPcap);
     tempPathForCleanup = prepared.tempPath;
     if (prepared.payload) {
-      sendBackendPcapSource(prepared.payload);
+      sendBackendPcapSource({
+        ...prepared.payload,
+        jobId: backendJobId,
+      });
     }
     const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
       pcapSourcePayload: prepared.payload,
       hostChunkSize,
       workerThreads,
       backendOptions,
+      jobId: backendJobId,
     });
     return result;
   } catch (error) {
     sendError("[Bridge] Unable to run backend from session PCAP data");
     return {
+      jobId: backendJobId,
       success: false,
       error: error?.message || "Unable to run backend from session PCAP",
     };

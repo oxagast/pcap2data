@@ -362,6 +362,7 @@ const backendProgressState = {
   etaLastSampleProcessedPackets: 0,
   etaPacketsPerSecond: 0,
 };
+let activeBackendJobId = "";
 let sessionPcapSource = null;
 
 // ============================================================================
@@ -2705,6 +2706,7 @@ function normalizeBackendJsonPathPayload(rawPayload) {
   if (typeof rawPayload === "string") {
     return {
       path: rawPayload,
+      jobId: "",
       processedPackets: 0,
       totalPackets: 0,
       complete: true,
@@ -2718,6 +2720,10 @@ function normalizeBackendJsonPathPayload(rawPayload) {
 
   return {
     path: typeof rawPayload.path === "string" ? rawPayload.path : "",
+    jobId:
+      typeof rawPayload.jobId === "string" && rawPayload.jobId.trim()
+        ? rawPayload.jobId.trim()
+        : "",
     processedPackets: Number(rawPayload.processedPackets) || 0,
     totalPackets: Number(rawPayload.totalPackets) || 0,
     complete: Boolean(rawPayload.complete),
@@ -2741,6 +2747,10 @@ function normalizeBackendJsonDataPayload(rawPayload) {
 
   return {
     captureData,
+    jobId:
+      typeof rawPayload.jobId === "string" && rawPayload.jobId.trim()
+        ? rawPayload.jobId.trim()
+        : "",
     processedPackets: Number(rawPayload.processedPackets) || 0,
     totalPackets: Number(rawPayload.totalPackets) || 0,
     complete: Boolean(rawPayload.complete),
@@ -2750,6 +2760,24 @@ function normalizeBackendJsonDataPayload(rawPayload) {
         ? rawPayload.label.trim()
         : "in-memory-snapshot",
   };
+}
+
+// Creates a unique frontend backend-job identifier.
+function createFrontendBackendJobId() {
+  return `frontend-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+// Returns true when backend payload belongs to active job.
+function shouldAcceptBackendPayloadForActiveJob(payload) {
+  const payloadJobId = String(payload?.jobId || "").trim();
+  if (!payloadJobId) {
+    return true;
+  }
+  if (!activeBackendJobId) {
+    activeBackendJobId = payloadJobId;
+    return true;
+  }
+  return payloadJobId === activeBackendJobId;
 }
 
 // Counts capture data packets.
@@ -19816,6 +19844,13 @@ if (reprocessSessionPcapBtn) {
 
 if (window.snitchapi && typeof window.snitchapi.onPcapSource === "function") {
   window.snitchapi.onPcapSource((pcapSource) => {
+    const sourceJobId =
+      typeof pcapSource?.jobId === "string" && pcapSource.jobId.trim()
+        ? pcapSource.jobId.trim()
+        : "";
+    if (sourceJobId && activeBackendJobId && sourceJobId !== activeBackendJobId) {
+      return;
+    }
     setSessionPcapSource(pcapSource, {
       logLabel: "backend-source",
     });
@@ -19970,6 +20005,9 @@ async function processBackendJsonPathPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    if (payload.jobId && payload.jobId === activeBackendJobId) {
+      activeBackendJobId = "";
+    }
     hideLoadingOverlay();
     const loadEndTime = performance.now();
     document.getElementById("load-time").textContent =
@@ -20104,6 +20142,9 @@ async function processBackendJsonDataPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    if (payload.jobId && payload.jobId === activeBackendJobId) {
+      activeBackendJobId = "";
+    }
     clearSummaryContent();
     hideLoadingOverlay();
     const loadEndTime = performance.now();
@@ -20129,18 +20170,22 @@ async function processBackendJsonDataPayload(payload) {
 window.jsonapi.onJsonPath((rawPayload) => {
   const payload = normalizeBackendJsonPathPayload(rawPayload);
   if (!payload || !payload.path) return;
+  if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("path", payload);
 });
 
 window.jsonapi.onJsonData((rawPayload) => {
   const payload = normalizeBackendJsonDataPayload(rawPayload);
   if (!payload || !payload.captureData) return;
+  if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("data", payload);
 });
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file, options = {}) {
   const { fromSessionSource = false } = options;
+  const backendJobId = createFrontendBackendJobId();
+  activeBackendJobId = backendJobId;
   const backendChunkSize = getBackendPacketChunkSize();
   const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
@@ -20166,7 +20211,7 @@ function runSnitch(file, options = {}) {
       ? file
       : file?.name || "unknown";
   writeLogEntry(
-    `Backend analysis started file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} `,
+    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -20176,6 +20221,7 @@ function runSnitch(file, options = {}) {
         backendChunkSize,
         backendWorkerThreads,
         backendTransportOptions,
+        backendJobId,
       )
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
     : window.snitchapi.runBackendCommand(
@@ -20184,9 +20230,13 @@ function runSnitch(file, options = {}) {
       backendChunkSize,
       backendWorkerThreads,
       backendTransportOptions,
+      backendJobId,
     );
   backendPromise
     .then((result) => {
+      if (backendJobId !== activeBackendJobId) {
+        return;
+      }
       if (result && result.pcapSource) {
         setSessionPcapSource(result.pcapSource, {
           logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
@@ -20194,11 +20244,18 @@ function runSnitch(file, options = {}) {
       }
     })
     .catch((error) => {
+      if (backendJobId !== activeBackendJobId) {
+        return;
+      }
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
     })
     .finally(() => {
+      if (backendJobId !== activeBackendJobId) {
+        return;
+      }
       backendProgressState.processing = false;
+      activeBackendJobId = "";
       updateBackendProcessingWarning();
     });
 }
