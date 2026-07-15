@@ -1179,7 +1179,7 @@ strong {
 
 .data-tools-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.6fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
   gap: 10px;
   color: var(--color-5);
   width: 100%;
@@ -1195,6 +1195,14 @@ strong {
   min-height: 0;
   min-width: 0;
   overflow-x: hidden;
+}
+
+#rightside-conv-insights {
+  margin-top: 8px;
+}
+
+#rightside-conv-insights .data-tools-insights-sidebar {
+  margin-top: 0;
 }
 
 .data-tools-title {

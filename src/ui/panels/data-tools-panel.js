@@ -2067,6 +2067,27 @@ function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
   setConvSubtab(tabName);
 }
 
+// Syncs right sidebar visibility for Conv subtabs.
+function syncConvSidebarVisibility(conversionsActive) {
+  const dataToolsBoxEl = document.getElementById("data_tools_box");
+  const isDataToolsVisible = dataToolsBoxEl && dataToolsBoxEl.style.display === "flex";
+  if (!isDataToolsVisible) return;
+
+  const rightsideEl = document.getElementById("rightside");
+  const rightsideDataEl = document.getElementById("rightside-data");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
+
+  if (rightsideEl) {
+    rightsideEl.style.display = conversionsActive ? "block" : "none";
+  }
+  if (rightsideDataEl) rightsideDataEl.hidden = true;
+  if (rightsideNotesEl) rightsideNotesEl.hidden = true;
+  if (rightsideConvInsightsEl) {
+    rightsideConvInsightsEl.hidden = !conversionsActive;
+  }
+}
+
 // Sets conv subtab.
 function setConvSubtab(tabName) {
   activeConvSubtab = tabName;
@@ -2095,6 +2116,7 @@ function setConvSubtab(tabName) {
   document.getElementById("conv-decodes-panel").hidden = !decodesActive;
   document.getElementById("conv-subnet-panel").hidden = !subnetActive;
   document.getElementById("conv-packet-json-panel").hidden = !packetJsonActive;
+  syncConvSidebarVisibility(conversionsActive);
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────

@@ -11494,8 +11494,10 @@ function showNotesWorkspace() {
   document.getElementById("rightside").style.display = "block";
   const rightsideDataEl = document.getElementById("rightside-data");
   const rightsideNotesEl = document.getElementById("rightside-notes");
+  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
   if (rightsideDataEl) rightsideDataEl.hidden = true;
   if (rightsideNotesEl) rightsideNotesEl.hidden = false;
+  if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
   renderNotesList();
 }
 
@@ -20274,6 +20276,12 @@ function showAllData() {
   document.getElementById("timestamp").style.display = "block";
   document.getElementById("rightside").style.display = "block";
   document.getElementById("active-recon").style.display = "block";
+  const rightsideDataEl = document.getElementById("rightside-data");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
+  if (rightsideDataEl) rightsideDataEl.hidden = false;
+  if (rightsideNotesEl) rightsideNotesEl.hidden = true;
+  if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
   document.getElementById("settings_box").style.display = "none";
   document.getElementById("hexg").hidden = false;
   document.getElementById("error-container").style.display = "none";
@@ -20434,8 +20442,10 @@ onload = function () {
   document.getElementById("settings-btn").style.opacity = "1";
   const rightsideDataEl = document.getElementById("rightside-data");
   const rightsideNotesEl = document.getElementById("rightside-notes");
+  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
   if (rightsideDataEl) rightsideDataEl.hidden = false;
   if (rightsideNotesEl) rightsideNotesEl.hidden = true;
+  if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
   updatePcapSizeDisplayFromSource();
   updateReprocessButtonState();
   document.getElementById("leftside").style.display = "block";
