@@ -10,6 +10,7 @@ function createWorkspaceTabController({
     normalizeDataToolsHexInputFormatting,
     runDeferredDataToolsAnalysisForActiveSubtab,
     renderNotesList,
+    ensureNotesWorkspaceMounted,
     setSettingsSubtab,
     syncSettingsFormFromState,
 }) {
@@ -37,10 +38,17 @@ function createWorkspaceTabController({
         runDeferredDataToolsAnalysisForActiveSubtab();
     }
 
-    function showNotesWorkspace() {
+    async function showNotesWorkspace() {
         state.activeMainTab = constants.MAIN_TAB_NOTES;
         statusUpdate("Status: Displaying session notes");
         writeLogEntry(`[${threadName}] User opened notes workspace view`);
+        if (typeof ensureNotesWorkspaceMounted === "function") {
+            try {
+                await ensureNotesWorkspaceMounted();
+            } catch (err) {
+                writeLogEntry(`[${threadName}] Notes workspace fragment load failed: ${err.message}`);
+            }
+        }
         document.getElementById("prev-btn").style.display = "none";
         document.getElementById("next-btn").style.display = "none";
         document.getElementById("packetInfoPane").style.display = "none";

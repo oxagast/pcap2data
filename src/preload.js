@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('templateapi', {
     });
   },
   getNewSessionTemplate: () => ipcRenderer.invoke('get-new-session-template'),
+  getUiFragment: (fragmentName) => ipcRenderer.invoke('get-ui-fragment', fragmentName),
 });
 
 contextBridge.exposeInMainWorld('goodiesapi', {

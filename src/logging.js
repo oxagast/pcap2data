@@ -181,19 +181,25 @@ function initializeLogging({
         logErrorEntry("activity-log-init", error);
       }
     }
-    logBtn.addEventListener("click", () => {
-      if (panelEl.style.display === "block") {
+    if (logBtn && panelEl) {
+      logBtn.addEventListener("click", () => {
+        if (panelEl.style.display === "block") {
+          panelEl.style.display = "none";
+        } else {
+          panelEl.style.display = "block";
+        }
+      });
+    }
+    if (closeBtn && panelEl) {
+      closeBtn.addEventListener("click", () => {
         panelEl.style.display = "none";
-      } else {
-        panelEl.style.display = "block";
-      }
-    });
-    closeBtn.addEventListener("click", () => {
-      panelEl.style.display = "none";
-    });
-    searchEl.addEventListener("input", (event) => {
-      renderActivityLogEntries(event.target.value);
-    });
+      });
+    }
+    if (searchEl) {
+      searchEl.addEventListener("input", (event) => {
+        renderActivityLogEntries(event.target.value);
+      });
+    }
     writeLogEntry("PacketSnitch UI session initialized");
   }
 

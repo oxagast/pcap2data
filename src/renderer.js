@@ -37,6 +37,11 @@ window.addEventListener("unhandledrejection", (event) => {
 // Handles bootstrap renderer.
 async function bootstrapRenderer() {
     try {
+        if (document.readyState === "loading") {
+            await new Promise((resolve) => {
+                window.addEventListener("DOMContentLoaded", resolve, { once: true });
+            });
+        }
         await import('./assets/css/style.css');
         await import('./front.js');
         globalThis.__PACKETSNITCH_RENDERER_BOOTSTRAP_STATE__ = "ready";

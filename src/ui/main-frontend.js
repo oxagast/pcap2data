@@ -12,6 +12,8 @@ const CryptoJS = require("crypto-js");
 const { marked } = require("marked");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
+const { activityLogPanelMarkup } = require("./fragments/activity-log-panel");
+const { convertContextMenuMarkup } = require("./fragments/convert-context-menu");
 const { validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
@@ -100,6 +102,22 @@ const {
   setConvSubtab,
   runDataToolsHashesFromInput,
 } = require("./panels/data-tools-panel");
+
+function mountStartupFragments() {
+  const activityLogPanelEl = document.getElementById("activity-log-panel");
+  if (activityLogPanelEl && !activityLogPanelEl.dataset.fragmentMounted) {
+    activityLogPanelEl.innerHTML = activityLogPanelMarkup;
+    activityLogPanelEl.dataset.fragmentMounted = "true";
+  }
+
+  const convertContextMenuEl = document.getElementById("convert-context-menu");
+  if (convertContextMenuEl && !convertContextMenuEl.dataset.fragmentMounted) {
+    convertContextMenuEl.innerHTML = convertContextMenuMarkup;
+    convertContextMenuEl.dataset.fragmentMounted = "true";
+  }
+}
+
+mountStartupFragments();
 
 const domCache = {};
 function getCachedElement(id) {
@@ -238,6 +256,8 @@ let totalPacketCountCache = null;
 const HYDRATED_PACKET_CACHE_LIMIT = 8;
 const STREAM_PAYLOAD_HEX_CACHE_LIMIT = 64;
 const PACKET_STUB_INDEX_MAX = 200000;
+let notesPanelInitialized = false;
+let notesWorkspaceFragmentPromise = null;
 const filterInputEl = getCachedElement("filterStr");
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
@@ -5858,6 +5878,9 @@ function buildListVisibleDataNoteText(target = activeContextTarget) {
 
 // Initializes notes panel.
 function initializeNotesPanel() {
+  if (notesPanelInitialized) {
+    return;
+  }
   const addButtonEl = document.getElementById("notes-add-btn");
   const removeButtonEl = document.getElementById("notes-remove-btn");
   const saveButtonEl = document.getElementById("notes-save-btn");
@@ -5948,6 +5971,54 @@ function initializeNotesPanel() {
 
   renderNotesList();
   setNotesEditorVisibility(false);
+  notesPanelInitialized = true;
+}
+
+async function ensureNotesWorkspaceMounted() {
+  const notesBoxEl = document.getElementById("notes_box");
+  const rightsideNotesEl = document.getElementById("rightside-notes");
+  if (!notesBoxEl || !rightsideNotesEl) {
+    return false;
+  }
+  if (notesBoxEl.dataset.fragmentMounted === "true") {
+    return true;
+  }
+
+  if (!notesWorkspaceFragmentPromise) {
+    notesWorkspaceFragmentPromise = (async () => {
+      if (typeof window.templateapi?.getUiFragment !== "function") {
+        throw new Error("UI fragment loader is unavailable");
+      }
+
+      const [notesBoxResult, rightsideNotesResult] = await Promise.all([
+        window.templateapi.getUiFragment("notes-box"),
+        window.templateapi.getUiFragment("rightside-notes"),
+      ]);
+
+      if (!notesBoxResult?.success || typeof notesBoxResult.data !== "string") {
+        throw new Error(notesBoxResult?.error || "Failed to load notes workspace");
+      }
+      if (
+        !rightsideNotesResult?.success ||
+        typeof rightsideNotesResult.data !== "string"
+      ) {
+        throw new Error(rightsideNotesResult?.error || "Failed to load notes sidebar");
+      }
+
+      notesBoxEl.innerHTML = notesBoxResult.data;
+      rightsideNotesEl.innerHTML = rightsideNotesResult.data;
+      notesBoxEl.dataset.fragmentMounted = "true";
+      rightsideNotesEl.dataset.fragmentMounted = "true";
+      initializeNotesPanel();
+      renderNotesList();
+      return true;
+    })().catch((err) => {
+      notesWorkspaceFragmentPromise = null;
+      throw err;
+    });
+  }
+
+  return notesWorkspaceFragmentPromise;
 }
 
 // Normalizes loaded session payload.
@@ -11141,6 +11212,7 @@ const { showDataTools, showNotesWorkspace, showSettingsWorkspace } =
     normalizeDataToolsHexInputFormatting,
     runDeferredDataToolsAnalysisForActiveSubtab,
     renderNotesList,
+    ensureNotesWorkspaceMounted,
     setSettingsSubtab,
     syncSettingsFormFromState,
   });
@@ -16899,7 +16971,6 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
   },
 });
 
-initializeNotesPanel();
 document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
 });

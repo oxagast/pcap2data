@@ -3122,6 +3122,37 @@ ipcMain.handle("get-new-session-template", async () => {
   }
 });
 
+ipcMain.handle("get-ui-fragment", async (_event, fragmentName) => {
+  const allowedFragments = new Map([
+    ["notes-box", "notes-box.html"],
+    ["rightside-notes", "rightside-notes.html"],
+  ]);
+
+  try {
+    const fragmentKey = String(fragmentName || "").trim();
+    const fragmentFileName = allowedFragments.get(fragmentKey);
+    if (!fragmentFileName) {
+      return { success: false, error: "Unknown UI fragment" };
+    }
+
+    const fragmentPathCandidates = app.isPackaged
+      ? [
+        path.join(process.resourcesPath, "ui", "fragments", fragmentFileName),
+        path.join(process.resourcesPath, "fragments", fragmentFileName),
+        path.join(process.resourcesPath, fragmentFileName),
+      ]
+      : [path.join(__dirname, "../../src/ui/fragments", fragmentFileName)];
+    const fragmentPath = fragmentPathCandidates.find((candidate) =>
+      fs.existsSync(candidate),
+    ) || fragmentPathCandidates[0];
+    const content = await fs.promises.readFile(fragmentPath, "utf8");
+    return { success: true, data: content };
+  } catch (err) {
+    console.error("get-ui-fragment error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("session-export", async (_event, name, jsonData) => {
   if (typeof jsonData !== "string" || jsonData.trim() === "") {
     return { success: false, error: "No JSON data to export" };
