@@ -363,7 +363,7 @@ The **About** sub-tab provides release-note refresh and direct download actions 
 - Default bundled themes are mirrored there automatically on startup.
 - Theme definitions provide CSS variable overrides and optional custom logo data.
 
-See [themes](themes.md) for complete theme schema, variable reference, logo setup, and opacity tuning.
+See [themes](plugins.md#themes-reference) for complete theme schema, variable reference, logo setup, and opacity tuning.
 
 ---
 

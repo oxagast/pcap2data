@@ -34,6 +34,7 @@ PacketSnitch is a **network packet analysis tool** that combines a Python backen
 - 📊 **Payload analysis** — Shannon entropy visualization, MIME type detection, hex dump with ASCII view
 - 🤖 **LLM summaries** — Generate AI-powered analysis reports using Ollama
 - 📑 **Protocol decoding** — DNS, HTTP, SSL/TLS, DHCP, NTP, SIP, and more
+- 🧩 **Plugin engine** — Install zip plugins, manage runtime safety thresholds, and extend UI workflows from the built-in Plugins manager
 
 ---
 
@@ -59,7 +60,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 
 - 🚀 [Startup Docs](https://packetsnitch.oxasploits.com/)  — Quickstart Documentation
 - 📖 [Frontend Docs](https://packetsnitch.oxasploits.com/frontend/) — UI reference, conversions, encryption, notes
-- 🎨 [Themes Docs](https://packetsnitch.oxasploits.com/themes/) — Theme engine guide: custom theme JSON, colors, logos, and opacity
+- 🎨 [Plugins + Themes Docs](https://packetsnitch.oxasploits.com/plugins/) — Combined themes reference and complete plugin engine tutorial with hello-snitch sample code
 - 🎯 [Context Menu Reference](https://packetsnitch.oxasploits.com/context-menu/) — Right-click options for copying, converting, filtering, and exporting
 - ⚙️ [Backend Docs](https://packetsnitch.oxasploits.com/backend/) — `snitch.py` usage, arguments, output structure
 - 🔎 [Filter Reference](https://packetsnitch.oxasploits.com/filters/) — Complete filter keys, operators, examples

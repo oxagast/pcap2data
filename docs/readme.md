@@ -10,7 +10,7 @@ PacketSnitch is a network packet analysis tool consisting of a Python backend fo
 
 - [**Backend Documentation**](backend.md) — Python backend (`snitch.py`) plus the Electron bridge HTTP service mode: usage, arguments, output structure, transport modes, and searchable attributes.
 - [**Frontend Documentation**](frontend.md) — Electron frontend: UI workspaces, worldmap/heatmap, PGP tooling, settings, LLM flows, and bridge controls.
-- [**Themes Documentation**](themes.md) — Theme engine reference: theme JSON schema, custom logos, color variables, and opacity controls.
+- [**Plugins Documentation**](plugins.md) — Combined Themes + Plugins reference: theme engine schema plus complete plugin engine tutorial and hello-snitch sample code.
 - [**Context Menu Reference**](context-menu.md) — Right-click context menu: copy, convert, filter, keystore, notes, and export options.
 - [**Filter Reference**](filters.md) — Complete guide to the filter bar: all filter keys, search syntax, operators, boolean combinators, and examples.
 

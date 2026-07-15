@@ -87,6 +87,21 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 
 ---
 
+### Plugin Engine
+
+- Dedicated **Settings → Plugins** manager for install, inspect, enable/disable, priority tuning, failure-threshold control, and uninstall.
+- Plugin install flow supports zip inspection and capability review before user confirmation.
+- Plugin registry is persisted to `userData/config/plugins.json` with runtime metadata such as enabled state, priority, install path, and failure counts.
+- Plugin zip packages are copied to `userData/plugins/packages`, extracted to `userData/plugins/installed`, and loaded from the extracted entry.
+- Plugin manifest validation enforces required fields: `pluginName`, `pluginVersion`/`version`, non-empty `capabilities`, and non-empty `compatiblePacketsnitchVersions`.
+- Plugin entry path is safety-checked (rejects path traversal and absolute paths) before runtime load.
+- Runtime loader supports object plugins (`init` + optional `dispose`/`deinit`/`shutdown`) and function exports.
+- Plugin runtime receives host context (`documentRef`, `windowRef`, `statusUpdate`, `writeLogEntry`, PacketSnitch version, plugin metadata).
+- Runtime errors are tracked in the Plugins error panel; critical failures increment per-plugin counters and can auto-disable unstable plugins.
+- `hello-snitch` sample plugin demonstrates tab/panel injection, context-menu extension, file IO, remote fetch, and safe callback wrapping.
+
+---
+
 ### Packet Navigation
 
 - **Prev / Next** buttons to step through packets one at a time.

@@ -4,7 +4,7 @@ Themes are JSON files. Add a new `*.json` file in this folder and restart the ap
 
 For full documentation (schema, all common variables, custom logos, opacity, troubleshooting), see:
 
-- `docs/themes.md`
+- `docs/plugins.md#themes-reference`
 
 Required shape:
 
