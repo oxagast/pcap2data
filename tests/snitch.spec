@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['/home/marshall/Hacks/projects/packetsnitch/src/backend/snitch.py'],
+    ['src/backend/snitch.py'],
     pathex=[],
     binaries=[],
     datas=[],
