@@ -766,6 +766,9 @@ No keystore entries saved.</pre>
             <button id="settings-subtab-debug" class="settings-subtab-btn">
               Debug
             </button>
+            <button id="settings-subtab-plugins" class="settings-subtab-btn">
+              Plugins
+            </button>
             <button id="settings-subtab-about" class="settings-subtab-btn">
               About
             </button>
@@ -995,6 +998,45 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">
                   Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
                   instead of writing hosts-*.json files to disk.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-plugins-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">Plugin Runtime Safety</div>
+                <label for="settings-plugins-auto-disable-failure-threshold">
+                  Auto-disable failure threshold (critical failures)
+                </label>
+                <input id="settings-plugins-auto-disable-failure-threshold" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  When a plugin reaches this many critical runtime failures, PacketSnitch disables it automatically.
+                  You can also set per-plugin overrides below.
+                </div>
+              </div>
+
+              <div class="settings-section">
+                <div class="settings-section-title">Plugin Manager</div>
+                <div class="settings-actions-row">
+                  <button id="settings-plugins-install-btn" type="button">
+                    Install Plugin Zip
+                  </button>
+                  <button id="settings-plugins-refresh-btn" type="button">
+                    Refresh Plugin List
+                  </button>
+                  <button id="settings-plugins-clear-errors-btn" type="button">
+                    Clear Errors
+                  </button>
+                </div>
+                <div class="settings-help-text">
+                  Plugins are addressed by plugin name and version hash.
+                </div>
+                <div id="settings-plugins-list"></div>
+                <div class="settings-section-title" style="margin-top: 0.9rem">Plugin Errors</div>
+                <div id="settings-plugins-error-panel" class="settings-help-text" role="status" aria-live="polite">
+                  No plugin errors.
                 </div>
               </div>
             </div>

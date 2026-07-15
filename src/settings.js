@@ -64,6 +64,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         ollamaRequestTimeoutSeconds: 300,
         retryCount: 2,
     },
+    plugins: {
+        autoDisableFailureThreshold: 3,
+        perPluginFailureThreshold: {},
+    },
 });
 
 const VALID_BACKEND_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000, 8000]);
@@ -136,6 +140,23 @@ function normalizeStringArray(value) {
         .map((entry) => entry.trim());
 }
 
+function normalizeThresholdRecord(value, minimum = 1, maximum = 100) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {};
+    }
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => typeof key === "string" && key.trim())
+            .map(([key, thresholdValue]) => {
+                const normalizedValue = toPositiveInteger(thresholdValue, minimum, minimum);
+                return [
+                    key.trim(),
+                    Math.max(minimum, Math.min(maximum, normalizedValue)),
+                ];
+            }),
+    );
+}
+
 function normalizeSettings(rawSettings = {}) {
     const source = rawSettings && typeof rawSettings === "object" ? rawSettings : {};
     const general = source.general && typeof source.general === "object" ? source.general : {};
@@ -143,11 +164,13 @@ function normalizeSettings(rawSettings = {}) {
     const debug = source.debug && typeof source.debug === "object" ? source.debug : {};
     const list = source.list && typeof source.list === "object" ? source.list : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
+    const plugins = source.plugins && typeof source.plugins === "object" ? source.plugins : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
     const backendDefaults = DEFAULT_SETTINGS.backend;
     const debugDefaults = DEFAULT_SETTINGS.debug;
     const listDefaults = DEFAULT_SETTINGS.list;
     const defaults = DEFAULT_SETTINGS.llm;
+    const pluginDefaults = DEFAULT_SETTINGS.plugins;
 
     const normalizedBackendChunkSize = toPositiveInteger(
         general.backendPacketChunkSize,
@@ -321,6 +344,18 @@ function normalizeSettings(rawSettings = {}) {
                 llm.retryCount,
                 defaults.retryCount,
                 0,
+            ),
+        },
+        plugins: {
+            autoDisableFailureThreshold: toPositiveInteger(
+                plugins.autoDisableFailureThreshold,
+                pluginDefaults.autoDisableFailureThreshold,
+                1,
+            ),
+            perPluginFailureThreshold: normalizeThresholdRecord(
+                plugins.perPluginFailureThreshold,
+                1,
+                100,
             ),
         },
     };

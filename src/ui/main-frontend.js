@@ -313,6 +313,7 @@ const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
+const SETTINGS_SUBTAB_PLUGINS = "plugins";
 const SETTINGS_SUBTAB_ABOUT = "about";
 const PACKETSNITCH_RELEASES_PAGE_URL =
   "https://github.com/oxasploits/PacketSnitch/releases";
@@ -370,6 +371,9 @@ let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
 let settingsAboutTypewriterTimeoutId = null;
 let settingsAboutDownloadButtonUrl = "";
+let cachedPluginRegistry = [];
+let pluginErrorEntries = [];
+const loadedPluginIds = new Set();
 let cachedLinuxReleasePackageFamily = null;
 let cachedRuntimePlatform = "";
 let startupReleaseCheckHandled = false;
@@ -1659,6 +1663,9 @@ function syncSettingsFormFromState() {
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
   const retryCountEl = document.getElementById("settings-llm-retry-count");
+  const pluginFailureThresholdEl = document.getElementById(
+    "settings-plugins-auto-disable-failure-threshold",
+  );
   if (themeSelectEl) {
     renderThemeOptions();
     themeSelectEl.value = sanitizeThemeId(settings.general.themeId, FALLBACK_THEME_ID);
@@ -1772,6 +1779,12 @@ function syncSettingsFormFromState() {
   if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
   if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
   if (retryCountEl) retryCountEl.value = String(settings.llm.retryCount);
+  if (pluginFailureThresholdEl) {
+    pluginFailureThresholdEl.value = String(
+      settings.plugins?.autoDisableFailureThreshold
+      || DEFAULT_SETTINGS.plugins.autoDisableFailureThreshold,
+    );
+  }
   syncLlmDiagnosticsIndicators();
   syncBackendDiagnosticsIndicators();
 }
@@ -1840,6 +1853,9 @@ function readSettingsFormState() {
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
   const retryCountEl = document.getElementById("settings-llm-retry-count");
+  const pluginFailureThresholdEl = document.getElementById(
+    "settings-plugins-auto-disable-failure-threshold",
+  );
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
@@ -1937,6 +1953,16 @@ function readSettingsFormState() {
         : DEFAULT_SETTINGS.llm.ollamaRequestTimeoutSeconds,
       retryCount: retryCountEl ? retryCountEl.value : DEFAULT_SETTINGS.llm.retryCount,
     },
+    plugins: {
+      autoDisableFailureThreshold: pluginFailureThresholdEl
+        ? pluginFailureThresholdEl.value
+        : DEFAULT_SETTINGS.plugins.autoDisableFailureThreshold,
+      perPluginFailureThreshold:
+        currentSettings?.plugins?.perPluginFailureThreshold
+          && typeof currentSettings.plugins.perPluginFailureThreshold === "object"
+          ? currentSettings.plugins.perPluginFailureThreshold
+          : {},
+    },
   });
 }
 
@@ -1982,6 +2008,412 @@ function parseManualConvImportLimitMb(rawValue) {
   return Math.max(1024, Math.round(parsed * 1024 * 1024));
 }
 
+function getPluginManagerListElement() {
+  return document.getElementById("settings-plugins-list");
+}
+
+function getPluginFailureThresholdInputElement() {
+  return document.getElementById("settings-plugins-auto-disable-failure-threshold");
+}
+
+function getPluginErrorPanelElement() {
+  return document.getElementById("settings-plugins-error-panel");
+}
+
+function renderPluginErrorPanel() {
+  const panelEl = getPluginErrorPanelElement();
+  if (!panelEl) return;
+  if (!Array.isArray(pluginErrorEntries) || pluginErrorEntries.length === 0) {
+    panelEl.textContent = "No plugin errors.";
+    return;
+  }
+  const lines = pluginErrorEntries.slice(0, 20).map((entry) => {
+    const when = entry?.at || new Date().toISOString();
+    const message = String(entry?.message || "Unknown plugin error");
+    return `[${when}] ${message}`;
+  });
+  panelEl.textContent = lines.join("\n");
+}
+
+function recordPluginError(message) {
+  const normalized = String(message || "").trim();
+  if (!normalized) return;
+  pluginErrorEntries.unshift({
+    at: new Date().toISOString(),
+    message: normalized,
+  });
+  if (pluginErrorEntries.length > 100) {
+    pluginErrorEntries = pluginErrorEntries.slice(0, 100);
+  }
+  renderPluginErrorPanel();
+}
+
+function clearPluginErrors() {
+  pluginErrorEntries = [];
+  renderPluginErrorPanel();
+}
+
+function setPluginManagerMessage(message) {
+  const listEl = getPluginManagerListElement();
+  if (!listEl) return;
+  listEl.innerHTML = `<div class="settings-help-text">${escapeHtml(String(message || ""))}</div>`;
+}
+
+function resolvePluginEntryPath(pluginEntry) {
+  const installPath = typeof pluginEntry?.installPath === "string"
+    ? pluginEntry.installPath
+    : "";
+  const manifestEntry = typeof pluginEntry?.manifest?.entry === "string"
+    ? pluginEntry.manifest.entry.trim()
+    : "";
+  const entryFile = manifestEntry || "plugin.js";
+  if (!installPath) {
+    throw new Error("Plugin install path is missing");
+  }
+  if (
+    entryFile.includes("..")
+    || entryFile.startsWith("/")
+    || /^[a-zA-Z]:[\\/]/.test(entryFile)
+  ) {
+    throw new Error(`Unsafe plugin entry path: ${entryFile}`);
+  }
+  const normalizedInstallPath = String(installPath).replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalizedEntry = String(entryFile).replace(/\\/g, "/").replace(/^\/+/, "");
+  return `${normalizedInstallPath}/${normalizedEntry}`;
+}
+
+async function reportPluginRuntimeFailure(pluginEntry, error) {
+  const pluginId = String(pluginEntry?.pluginId || "").trim();
+  const errorMessage = error?.message || String(error || "Unknown plugin runtime error");
+  recordPluginError(`Plugin ${pluginId || "unknown"} runtime error: ${errorMessage}`);
+  if (window.pluginapi && typeof window.pluginapi.recordFailure === "function" && pluginId) {
+    try {
+      await window.pluginapi.recordFailure({
+        pluginId,
+        critical: true,
+      });
+    } catch (_reportError) {
+      // Ignore failure-report errors to avoid loops.
+    }
+  }
+}
+
+async function loadInstalledPluginEntry(pluginEntry, { forceReload = false } = {}) {
+  const pluginId = String(pluginEntry?.pluginId || "").trim();
+  if (!pluginId) return;
+  if (!pluginEntry?.enabled) {
+    loadedPluginIds.delete(pluginId);
+    return;
+  }
+  if (!forceReload && loadedPluginIds.has(pluginId)) {
+    return;
+  }
+
+  try {
+    if (!window.pluginapi || typeof window.pluginapi.loadRuntime !== "function") {
+      throw new Error("Plugin runtime bridge is unavailable");
+    }
+
+    const runtimeResult = await window.pluginapi.loadRuntime({
+      plugin: pluginEntry,
+      forceReload,
+      packetsnitchVersion: String(psVer || "").trim() || "unknown",
+    });
+    if (!runtimeResult?.success) {
+      throw new Error(runtimeResult?.error || "Plugin runtime failed to initialize");
+    }
+    const entryPath = runtimeResult?.entryPath || resolvePluginEntryPath(pluginEntry);
+
+    loadedPluginIds.add(pluginId);
+    writeLogEntry(`Plugin loaded id=${JSON.stringify(pluginId)} entry=${JSON.stringify(entryPath)}`);
+  } catch (error) {
+    await reportPluginRuntimeFailure(pluginEntry, error);
+    doError(`Plugin ${pluginId} failed to load: ${error?.message || error}`);
+  }
+}
+
+async function loadEnabledInstalledPlugins(pluginEntries = cachedPluginRegistry) {
+  if (!Array.isArray(pluginEntries) || pluginEntries.length === 0) return;
+  for (const pluginEntry of pluginEntries) {
+    if (!pluginEntry?.enabled) continue;
+    if (pluginEntry?.compatibleWithCurrentPacketsnitch === false) continue;
+    await loadInstalledPluginEntry(pluginEntry);
+  }
+}
+
+function createPluginRowElement(pluginEntry) {
+  const rowEl = document.createElement("div");
+  rowEl.className = "settings-help-text";
+  rowEl.style.borderTop = "1px solid var(--color-3)";
+  rowEl.style.padding = "0.5rem 0";
+
+  const titleEl = document.createElement("div");
+  titleEl.style.fontWeight = "600";
+  titleEl.textContent = `${pluginEntry.pluginName} (${pluginEntry.pluginVersion})`;
+  rowEl.appendChild(titleEl);
+
+  const metaEl = document.createElement("div");
+  metaEl.textContent = `Address: ${pluginEntry.address} | Failures: ${pluginEntry.failureCount || 0}${pluginEntry.disabledReason ? ` | Disabled: ${pluginEntry.disabledReason}` : ""}`;
+  rowEl.appendChild(metaEl);
+
+  const controlsEl = document.createElement("div");
+  controlsEl.className = "settings-actions-row";
+  controlsEl.style.marginTop = "0.35rem";
+
+  const enabledLabel = document.createElement("label");
+  enabledLabel.className = "settings-checkbox-row";
+  enabledLabel.style.marginRight = "0.5rem";
+  const enabledInput = document.createElement("input");
+  enabledInput.type = "checkbox";
+  enabledInput.checked = Boolean(pluginEntry.enabled);
+  enabledInput.addEventListener("change", async () => {
+    if (!window.pluginapi) return;
+    const result = await window.pluginapi.setEnabled({
+      pluginId: pluginEntry.pluginId,
+      enabled: enabledInput.checked,
+    });
+    if (!result?.success) {
+      const errorMessage = result?.error || "Unable to change plugin enabled state";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      enabledInput.checked = Boolean(pluginEntry.enabled);
+      return;
+    }
+    if (!enabledInput.checked) {
+      if (typeof window.pluginapi.unloadRuntime === "function") {
+        await window.pluginapi.unloadRuntime({
+          pluginId: pluginEntry.pluginId,
+          plugin: result?.plugin || pluginEntry,
+        });
+      }
+      loadedPluginIds.delete(pluginEntry.pluginId);
+    } else {
+      await loadInstalledPluginEntry(result?.plugin || pluginEntry, { forceReload: true });
+    }
+    await refreshPluginRegistryView();
+  });
+  enabledLabel.appendChild(enabledInput);
+  enabledLabel.appendChild(document.createTextNode("Enabled"));
+  controlsEl.appendChild(enabledLabel);
+
+  const priorityInput = document.createElement("input");
+  priorityInput.type = "number";
+  priorityInput.min = "0";
+  priorityInput.step = "1";
+  priorityInput.title = "Plugin priority";
+  priorityInput.value = String(Number(pluginEntry.priority) || 100);
+  priorityInput.style.width = "5rem";
+  priorityInput.addEventListener("change", async () => {
+    if (!window.pluginapi) return;
+    const result = await window.pluginapi.setPriority({
+      pluginId: pluginEntry.pluginId,
+      priority: Number(priorityInput.value),
+    });
+    if (!result?.success) {
+      const errorMessage = result?.error || "Unable to update plugin priority";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      return;
+    }
+    await refreshPluginRegistryView();
+  });
+  controlsEl.appendChild(priorityInput);
+
+  const thresholdInput = document.createElement("input");
+  thresholdInput.type = "number";
+  thresholdInput.min = "1";
+  thresholdInput.step = "1";
+  thresholdInput.placeholder = "Threshold";
+  thresholdInput.title = "Per-plugin failure threshold override";
+  thresholdInput.value = pluginEntry.failureThresholdOverride
+    ? String(pluginEntry.failureThresholdOverride)
+    : "";
+  thresholdInput.style.width = "6rem";
+  thresholdInput.addEventListener("change", async () => {
+    if (!window.pluginapi) return;
+    const rawValue = thresholdInput.value.trim();
+    const result = await window.pluginapi.setFailureThreshold({
+      pluginId: pluginEntry.pluginId,
+      failureThresholdOverride: rawValue ? Number(rawValue) : null,
+    });
+    if (!result?.success) {
+      const errorMessage = result?.error || "Unable to update plugin failure threshold";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      return;
+    }
+    await refreshPluginRegistryView();
+  });
+  controlsEl.appendChild(thresholdInput);
+
+  const resetFailuresBtn = document.createElement("button");
+  resetFailuresBtn.type = "button";
+  resetFailuresBtn.textContent = "Reset Failures";
+  resetFailuresBtn.addEventListener("click", async () => {
+    if (!window.pluginapi) return;
+    const result = await window.pluginapi.resetFailures({ pluginId: pluginEntry.pluginId });
+    if (!result?.success) {
+      const errorMessage = result?.error || "Unable to reset plugin failures";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      return;
+    }
+    await refreshPluginRegistryView();
+  });
+  controlsEl.appendChild(resetFailuresBtn);
+
+  const uninstallBtn = document.createElement("button");
+  uninstallBtn.type = "button";
+  uninstallBtn.textContent = "Uninstall";
+  uninstallBtn.addEventListener("click", async () => {
+    if (!window.pluginapi) return;
+    if (typeof window.pluginapi.unloadRuntime === "function") {
+      await window.pluginapi.unloadRuntime({ pluginId: pluginEntry.pluginId, plugin: pluginEntry });
+    }
+    const result = await window.pluginapi.uninstall({ pluginId: pluginEntry.pluginId });
+    if (!result?.success) {
+      const errorMessage = result?.error || "Unable to uninstall plugin";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      return;
+    }
+    loadedPluginIds.delete(pluginEntry.pluginId);
+    await refreshPluginRegistryView();
+  });
+  controlsEl.appendChild(uninstallBtn);
+
+  rowEl.appendChild(controlsEl);
+  return rowEl;
+}
+
+function renderPluginRegistryView(pluginEntries = []) {
+  const listEl = getPluginManagerListElement();
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  if (!Array.isArray(pluginEntries) || pluginEntries.length === 0) {
+    setPluginManagerMessage("No plugins installed.");
+    return;
+  }
+  const sortedEntries = [...pluginEntries].sort((a, b) => {
+    const aPriority = Number(a?.priority) || 0;
+    const bPriority = Number(b?.priority) || 0;
+    if (aPriority !== bPriority) return bPriority - aPriority;
+    return String(a?.pluginName || "").localeCompare(String(b?.pluginName || ""));
+  });
+
+  sortedEntries.forEach((pluginEntry) => {
+    listEl.appendChild(createPluginRowElement(pluginEntry));
+  });
+}
+
+async function refreshPluginRegistryView() {
+  if (!window.pluginapi || typeof window.pluginapi.list !== "function") {
+    const errorMessage = "Plugin API is unavailable in this build.";
+    recordPluginError(errorMessage);
+    setPluginManagerMessage(errorMessage);
+    return;
+  }
+  try {
+    const response = await window.pluginapi.list();
+    if (!response?.success) {
+      const errorMessage = response?.error || "Unable to load plugin list.";
+      recordPluginError(errorMessage);
+      setPluginManagerMessage(errorMessage);
+      return;
+    }
+    cachedPluginRegistry = Array.isArray(response.plugins) ? response.plugins : [];
+    renderPluginRegistryView(cachedPluginRegistry);
+    await loadEnabledInstalledPlugins(cachedPluginRegistry);
+  } catch (error) {
+    const errorMessage = error?.message || "Unable to load plugin list.";
+    recordPluginError(errorMessage);
+    setPluginManagerMessage(errorMessage);
+  }
+}
+
+async function installPluginFromSettingsAction() {
+  if (!window.pluginapi || typeof window.pluginapi.selectZip !== "function") {
+    const errorMessage = "Plugin API is unavailable.";
+    recordPluginError(errorMessage);
+    setSettingsStatus(errorMessage);
+    return;
+  }
+  const selectedZip = await window.pluginapi.selectZip();
+  if (!selectedZip) {
+    return;
+  }
+
+  if (typeof window.pluginapi.inspectZip === "function") {
+    let inspectResult = null;
+    try {
+      inspectResult = await window.pluginapi.inspectZip({ zipPath: selectedZip });
+    } catch (inspectError) {
+      const inspectErrorMessage = inspectError?.message || String(inspectError || "");
+      if (!inspectErrorMessage.includes("No handler registered for 'plugins-inspect-zip'")) {
+        throw inspectError;
+      }
+      // Older main process builds may not have the inspect handler yet.
+      inspectResult = {
+        success: true,
+        plugin: {
+          pluginName: "Plugin",
+          pluginVersion: "",
+          capabilities: ["Permissions unavailable in this app session"],
+        },
+      };
+    }
+    if (!inspectResult?.success) {
+      const errorMessage = inspectResult?.error || "Unable to inspect plugin permissions.";
+      recordPluginError(errorMessage);
+      doError(errorMessage);
+      setSettingsStatus("Plugin install canceled.");
+      return;
+    }
+
+    const inspectedPlugin = inspectResult?.plugin || {};
+    const permissions = Array.isArray(inspectedPlugin.capabilities)
+      ? inspectedPlugin.capabilities
+      : [];
+    const pluginName = String(inspectedPlugin.pluginName || "Plugin").trim() || "Plugin";
+    const pluginVersion = String(inspectedPlugin.pluginVersion || "").trim();
+    const permissionLines = permissions.length
+      ? permissions.map((permission) => `- ${permission}`).join("\n")
+      : "- No declared permissions";
+    const confirmMessage = [
+      `Install ${pluginName}${pluginVersion ? ` v${pluginVersion}` : ""}?`,
+      "",
+      "This plugin requests the following permissions:",
+      permissionLines,
+      "",
+      "Select OK to install and enable this plugin, or Cancel to abort.",
+    ].join("\n");
+
+    const isAllowed = window.confirm(confirmMessage);
+    if (!isAllowed) {
+      setSettingsStatus("Plugin install canceled by user.");
+      return;
+    }
+  }
+
+  setSettingsStatus("Installing plugin...");
+  const installResult = await window.pluginapi.install({ zipPath: selectedZip });
+  if (!installResult?.success) {
+    const errorMessage = installResult?.error || "Plugin install failed";
+    recordPluginError(errorMessage);
+    doError(errorMessage);
+    setSettingsStatus("Plugin install failed.");
+    return;
+  }
+  writeLogEntry(
+    `Plugin installed id=${JSON.stringify(installResult?.plugin?.pluginId || "unknown")} address=${JSON.stringify(installResult?.plugin?.address || "unknown")}`,
+  );
+  setSettingsStatus("Plugin installed.");
+  if (installResult?.plugin?.enabled) {
+    await loadInstalledPluginEntry(installResult.plugin, { forceReload: true });
+  }
+  await refreshPluginRegistryView();
+}
+
 // Builds settings change summaries.
 function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   const changes = [];
@@ -1993,6 +2425,8 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   const nextDebug = nextSettings?.debug || {};
   const previousLlm = previousSettings?.llm || {};
   const nextLlm = nextSettings?.llm || {};
+  const previousPlugins = previousSettings?.plugins || {};
+  const nextPlugins = nextSettings?.plugins || {};
 
   const pushChange = (label, beforeValue, afterValue, { redacted = false } = {}) => {
     if (beforeValue === afterValue) {
@@ -2141,6 +2575,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "retryCount",
     previousLlm.retryCount,
     nextLlm.retryCount,
+  );
+  pushChange(
+    "pluginAutoDisableFailureThreshold",
+    previousPlugins.autoDisableFailureThreshold,
+    nextPlugins.autoDisableFailureThreshold,
   );
 
   return changes;
@@ -2334,19 +2773,23 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
         ? SETTINGS_SUBTAB_BACKEND
         : tabName === SETTINGS_SUBTAB_DEBUG
           ? SETTINGS_SUBTAB_DEBUG
-          : tabName === SETTINGS_SUBTAB_ABOUT
-            ? SETTINGS_SUBTAB_ABOUT
-            : SETTINGS_SUBTAB_GENERAL;
+          : tabName === SETTINGS_SUBTAB_PLUGINS
+            ? SETTINGS_SUBTAB_PLUGINS
+            : tabName === SETTINGS_SUBTAB_ABOUT
+              ? SETTINGS_SUBTAB_ABOUT
+              : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
+  const pluginsBtn = document.getElementById("settings-subtab-plugins");
   const aboutBtn = document.getElementById("settings-subtab-about");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
+  const pluginsPanel = document.getElementById("settings-plugins-panel");
   const aboutPanel = document.getElementById("settings-about-panel");
   if (generalBtn) {
     generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
@@ -2359,6 +2802,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (debugBtn) {
     debugBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_DEBUG);
+  }
+  if (pluginsBtn) {
+    pluginsBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PLUGINS);
   }
   if (aboutBtn) {
     aboutBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_ABOUT);
@@ -2375,6 +2821,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (debugPanel) {
     debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
   }
+  if (pluginsPanel) {
+    pluginsPanel.hidden = nextTab !== SETTINGS_SUBTAB_PLUGINS;
+  }
   if (aboutPanel) {
     aboutPanel.hidden = nextTab !== SETTINGS_SUBTAB_ABOUT;
   }
@@ -2384,6 +2833,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (nextTab === SETTINGS_SUBTAB_BACKEND) {
     syncBackendDiagnosticsIndicators();
     void refreshBackendDiagnostics({ ensureReady: true });
+  }
+  if (nextTab === SETTINGS_SUBTAB_PLUGINS) {
+    void refreshPluginRegistryView();
   }
   if (nextTab === SETTINGS_SUBTAB_ABOUT) {
     void loadSettingsAboutReleaseInfo();
@@ -17193,6 +17645,10 @@ document.getElementById("settings-subtab-debug").addEventListener("click", () =>
   setSettingsSubtab(SETTINGS_SUBTAB_DEBUG);
 });
 
+document.getElementById("settings-subtab-plugins").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_PLUGINS);
+});
+
 document.getElementById("settings-subtab-about").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_ABOUT);
 });
@@ -17230,6 +17686,24 @@ document.getElementById("settings-general-conv-json-indent").addEventListener("c
 
 document.getElementById("settings-general-status-reset-seconds").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated statusResetSeconds=${event?.target?.value}`);
+});
+
+document
+  .getElementById("settings-plugins-auto-disable-failure-threshold")
+  .addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated pluginAutoDisableFailureThreshold=${event?.target?.value}`);
+  });
+
+document.getElementById("settings-plugins-install-btn").addEventListener("click", () => {
+  void installPluginFromSettingsAction();
+});
+
+document.getElementById("settings-plugins-refresh-btn").addEventListener("click", () => {
+  void refreshPluginRegistryView();
+});
+
+document.getElementById("settings-plugins-clear-errors-btn").addEventListener("click", () => {
+  clearPluginErrors();
 });
 
 document.getElementById("settings-backend-chunk-size").addEventListener("change", (event) => {
@@ -19918,6 +20392,7 @@ void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
   .then(() => loadAvailableOllamaModels())
   .then(() => loadPersistedSettings())
+  .then(() => refreshPluginRegistryView())
   .then(() => {
     startupSettingsInitialized = true;
     maybeHideStartupPreload();
@@ -19943,6 +20418,7 @@ onload = function () {
   setConvSubtab(CONV_CONVERSIONS_SUBTAB);
   setSettingsSubtab(SETTINGS_SUBTAB_GENERAL);
   syncSettingsFormFromState();
+  renderPluginErrorPanel();
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(
     "data-tools-input",

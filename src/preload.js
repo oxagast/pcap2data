@@ -1,6 +1,226 @@
 // Exposes the safe preload bridge APIs from Electron to the renderer process.
 
 const { contextBridge, ipcRenderer } = require('electron');
+const loadedPluginRuntimes = new Map();
+
+function resolvePluginEntryPath(pluginEntry = {}) {
+  const installPath = typeof pluginEntry?.installPath === 'string'
+    ? pluginEntry.installPath
+    : '';
+  const manifestEntry = typeof pluginEntry?.manifest?.entry === 'string'
+    ? pluginEntry.manifest.entry.trim()
+    : '';
+  const entryFile = manifestEntry || 'plugin.js';
+
+  if (!installPath) {
+    throw new Error('Plugin install path is missing');
+  }
+  if (
+    entryFile.includes('..')
+    || entryFile.startsWith('/')
+    || /^[a-zA-Z]:[\\/]/.test(entryFile)
+  ) {
+    throw new Error(`Unsafe plugin entry path: ${entryFile}`);
+  }
+
+  const normalizedInstallPath = String(installPath).replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedEntry = String(entryFile).replace(/\\/g, '/').replace(/^\/+/, '');
+  return `${normalizedInstallPath}/${normalizedEntry}`;
+}
+
+function buildPluginEntryCandidates(pluginEntry = {}) {
+  const primaryEntryPath = resolvePluginEntryPath(pluginEntry);
+  const installPath = typeof pluginEntry?.installPath === 'string'
+    ? pluginEntry.installPath
+    : '';
+  const pluginId = String(pluginEntry?.pluginId || '').trim();
+  const pluginName = String(pluginEntry?.pluginName || '').trim();
+  const manifestEntry = typeof pluginEntry?.manifest?.entry === 'string'
+    ? pluginEntry.manifest.entry.trim()
+    : '';
+  const entryFile = manifestEntry || 'plugin.js';
+  const normalizedInstallPath = String(installPath).replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedEntry = String(entryFile).replace(/\\/g, '/').replace(/^\/+/, '');
+  const basename = normalizedEntry.split('/').filter(Boolean).pop() || normalizedEntry;
+  const candidates = [primaryEntryPath];
+
+  [pluginId, pluginName]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .forEach((prefix) => {
+      candidates.push(`${normalizedInstallPath}/${prefix}/${normalizedEntry}`);
+      candidates.push(`${normalizedInstallPath}/${prefix}/${basename}`);
+    });
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function loadPluginRuntime(payload = {}) {
+  const pluginEntry = payload?.plugin && typeof payload.plugin === 'object'
+    ? payload.plugin
+    : {};
+  const pluginId = String(pluginEntry?.pluginId || '').trim();
+  const forceReload = Boolean(payload?.forceReload);
+  const packetsnitchVersion = String(payload?.packetsnitchVersion || '').trim() || 'unknown';
+
+  try {
+    if (!window.installapi || typeof window.installapi.checkFirstRun !== 'function') {
+      window.installapi = {
+        checkFirstRun: async () => ({
+          success: true,
+          version: packetsnitchVersion,
+        }),
+      };
+    }
+
+    const entryCandidates = buildPluginEntryCandidates(pluginEntry);
+    const runtimeRequire =
+      typeof __non_webpack_require__ === 'function' ? __non_webpack_require__ : null;
+    if (!runtimeRequire) {
+      throw new Error('Plugin runtime require is unavailable in preload');
+    }
+
+    let pluginModule = null;
+    let entryPath = '';
+    let lastLoadError = null;
+
+    for (const candidatePath of entryCandidates) {
+      try {
+        if (forceReload) {
+          try {
+            if (runtimeRequire.cache && typeof runtimeRequire.resolve === 'function') {
+              delete runtimeRequire.cache[runtimeRequire.resolve(candidatePath)];
+            }
+          } catch (_cacheError) {
+            // Ignore cache misses.
+          }
+        }
+        pluginModule = runtimeRequire(candidatePath);
+        entryPath = candidatePath;
+        break;
+      } catch (loadError) {
+        lastLoadError = loadError;
+      }
+    }
+
+    if (!pluginModule) {
+      throw lastLoadError || new Error('Unable to load plugin entry module');
+    }
+
+    const pluginRuntime = pluginModule?.default || pluginModule;
+
+    const runtimeContext = {
+      plugin: pluginEntry,
+      packetsnitchVersion,
+      documentRef: document,
+      windowRef: window,
+      statusUpdate: (message) => {
+        try {
+          window.postMessage(
+            {
+              source: 'packetsnitch-plugin-runtime',
+              type: 'status-update',
+              pluginId,
+              message: String(message || ''),
+            },
+            '*',
+          );
+        } catch (_statusError) {
+          // Best-effort status update.
+        }
+      },
+      writeLogEntry: async (message) => {
+        try {
+          await ipcRenderer.invoke('append-activity-log', {
+            source: pluginId || 'plugin-runtime',
+            message: String(message || ''),
+            level: 'info',
+          });
+        } catch (_logError) {
+          // Logging failures should not stop plugin execution.
+        }
+      },
+    };
+
+    let result;
+    if (pluginRuntime && typeof pluginRuntime.init === 'function') {
+      result = await pluginRuntime.init(runtimeContext);
+    } else if (typeof pluginRuntime === 'function') {
+      result = await pluginRuntime(runtimeContext);
+    } else if (
+      window.HelloSnitchPlugin
+      && typeof window.HelloSnitchPlugin.init === 'function'
+      && pluginId === 'hello-snitch'
+    ) {
+      result = await window.HelloSnitchPlugin.init(runtimeContext);
+    } else {
+      throw new Error('Plugin entry does not export an init function');
+    }
+
+    loadedPluginRuntimes.set(pluginId, {
+      pluginRuntime,
+      runtimeContext,
+    });
+
+    return {
+      success: true,
+      pluginId,
+      entryPath,
+      result: result === undefined ? null : result,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      pluginId,
+      error: error?.message || String(error || 'Unknown plugin runtime error'),
+    };
+  }
+}
+
+async function unloadPluginRuntime(payload = {}) {
+  const pluginEntry = payload?.plugin && typeof payload.plugin === 'object'
+    ? payload.plugin
+    : {};
+  const pluginId = String(payload?.pluginId || pluginEntry?.pluginId || '').trim();
+  if (!pluginId) {
+    return {
+      success: false,
+      error: 'Plugin id is required for unload',
+    };
+  }
+
+  const runtimeRecord = loadedPluginRuntimes.get(pluginId);
+  if (!runtimeRecord) {
+    return {
+      success: true,
+      pluginId,
+      unloaded: false,
+    };
+  }
+
+  try {
+    const { pluginRuntime, runtimeContext } = runtimeRecord;
+    if (pluginRuntime && typeof pluginRuntime.dispose === 'function') {
+      await pluginRuntime.dispose(runtimeContext);
+    } else if (pluginRuntime && typeof pluginRuntime.deinit === 'function') {
+      await pluginRuntime.deinit(runtimeContext);
+    } else if (pluginRuntime && typeof pluginRuntime.shutdown === 'function') {
+      await pluginRuntime.shutdown(runtimeContext);
+    }
+    loadedPluginRuntimes.delete(pluginId);
+    return {
+      success: true,
+      pluginId,
+      unloaded: true,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      pluginId,
+      error: error?.message || String(error || 'Unknown plugin unload error'),
+    };
+  }
+}
 
 contextBridge.exposeInMainWorld('jsonapi', {
   onJsonPath: (callback) => {
@@ -187,6 +407,21 @@ contextBridge.exposeInMainWorld('savedfiltersapi', {
   list: () => ipcRenderer.invoke('saved-filters-list'),
   save: (payload) => ipcRenderer.invoke('saved-filters-save', payload),
   remove: (payload) => ipcRenderer.invoke('saved-filters-remove', payload),
+});
+
+contextBridge.exposeInMainWorld('pluginapi', {
+  selectZip: () => ipcRenderer.invoke('select-plugin-zip'),
+  list: () => ipcRenderer.invoke('plugins-list'),
+  inspectZip: (payload) => ipcRenderer.invoke('plugins-inspect-zip', payload),
+  install: (payload) => ipcRenderer.invoke('plugins-install', payload),
+  loadRuntime: (payload) => loadPluginRuntime(payload),
+  unloadRuntime: (payload) => unloadPluginRuntime(payload),
+  setEnabled: (payload) => ipcRenderer.invoke('plugins-set-enabled', payload),
+  setPriority: (payload) => ipcRenderer.invoke('plugins-set-priority', payload),
+  setFailureThreshold: (payload) => ipcRenderer.invoke('plugins-set-failure-threshold', payload),
+  recordFailure: (payload) => ipcRenderer.invoke('plugins-record-failure', payload),
+  resetFailures: (payload) => ipcRenderer.invoke('plugins-reset-failures', payload),
+  uninstall: (payload) => ipcRenderer.invoke('plugins-uninstall', payload),
 });
 
 

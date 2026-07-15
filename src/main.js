@@ -9,10 +9,12 @@ app.on("web-contents-created", (_event, webContents) => {
 });
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { pathToFileURL } = require("url");
 const { exec, execFile } = require("child_process");
 const os = require("os");
 const util = require("util");
+const { pipeline } = require("stream");
 const { gzip, gunzip } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const { Agent, fetch: undiciFetch } = require("undici");
@@ -46,6 +48,14 @@ try {
 const gzipAsync = util.promisify(gzip);
 const gunzipAsync = util.promisify(gunzip);
 const execFileAsync = util.promisify(execFile);
+const streamPipelineAsync = util.promisify(pipeline);
+
+let unzipper = null;
+try {
+  unzipper = require("unzipper");
+} catch (error) {
+  console.warn("unzipper is unavailable, plugin zip install will be disabled", error);
+}
 const platform = os.platform();
 const SESSION_COMPRESSION_XZ = "xz";
 const SESSION_COMPRESSION_GZIP = "gzip";
@@ -441,6 +451,10 @@ const SETTINGS_DIR_NAME = "config";
 const SETTINGS_FILE_NAME = "settings.json";
 const FILTER_LIBRARY_FILE_NAME = "filters.json";
 const MODELS_LIBRARY_FILE_NAME = "models.json";
+const PLUGINS_REGISTRY_FILE_NAME = "plugins.json";
+const PLUGINS_DIR_NAME = "plugins";
+const PLUGINS_PACKAGE_DIR_NAME = "packages";
+const PLUGINS_EXTRACTED_DIR_NAME = "installed";
 const THEMES_DIR_NAME = "themes";
 const THEME_FILE_EXTENSION = ".json";
 const BUNDLED_THEMES_DIR_NAME = "themes";
@@ -842,6 +856,512 @@ function getModelsLibraryFilePath() {
 
 function getBundledModelsLibraryFilePath() {
   return path.join(app.getAppPath(), SETTINGS_DIR_NAME, MODELS_LIBRARY_FILE_NAME);
+}
+
+function getPluginsRegistryFilePath() {
+  return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, PLUGINS_REGISTRY_FILE_NAME);
+}
+
+function getPluginPackagesDir() {
+  return path.join(app.getPath("userData"), PLUGINS_DIR_NAME, PLUGINS_PACKAGE_DIR_NAME);
+}
+
+function getPluginInstallRootDir() {
+  return path.join(app.getPath("userData"), PLUGINS_DIR_NAME, PLUGINS_EXTRACTED_DIR_NAME);
+}
+
+function sanitizePluginToken(value, fallback = "plugin") {
+  if (typeof value !== "string") return fallback;
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || fallback;
+}
+
+function normalizePluginRegistry(rawRegistry = {}) {
+  const source = rawRegistry && typeof rawRegistry === "object" ? rawRegistry : {};
+  const sourcePlugins = Array.isArray(source.plugins) ? source.plugins : [];
+  const plugins = sourcePlugins
+    .map((plugin) => {
+      if (!plugin || typeof plugin !== "object") return null;
+      const pluginId = sanitizePluginToken(
+        String(plugin.pluginId || plugin.pluginName || ""),
+        "plugin",
+      );
+      const pluginName = String(plugin.pluginName || pluginId).trim() || pluginId;
+      const pluginVersion = String(plugin.pluginVersion || "0.0.0").trim() || "0.0.0";
+      const packageHash = String(plugin.packageHash || "").trim().toLowerCase();
+      const contentHash = String(plugin.contentHash || "").trim().toLowerCase();
+      const installPath = typeof plugin.installPath === "string" ? plugin.installPath : "";
+      const packagePath = typeof plugin.packagePath === "string" ? plugin.packagePath : "";
+      const enabled = typeof plugin.enabled === "boolean" ? plugin.enabled : true;
+      const priority = Number.isFinite(Number(plugin.priority))
+        ? Number(plugin.priority)
+        : 100;
+      const failureCount = Number.isFinite(Number(plugin.failureCount))
+        ? Math.max(0, Number(plugin.failureCount))
+        : 0;
+      const disabledReason = typeof plugin.disabledReason === "string"
+        ? plugin.disabledReason
+        : "";
+      const failureThresholdOverride = Number.isFinite(Number(plugin.failureThresholdOverride))
+        ? Math.max(1, Number(plugin.failureThresholdOverride))
+        : null;
+      const address = String(plugin.address || "").trim()
+        || `${pluginName}@${pluginVersion}#${(contentHash || packageHash || "unknown").slice(0, 12)}`;
+      const capabilities = Array.isArray(plugin.capabilities)
+        ? plugin.capabilities
+          .map((entry) => String(entry || "").trim())
+          .filter(Boolean)
+        : [];
+      const author = typeof plugin.author === "string" ? plugin.author : "";
+      const authorHomepage = typeof plugin.authorHomepage === "string" ? plugin.authorHomepage : "";
+      const updateUrl = typeof plugin.updateUrl === "string" ? plugin.updateUrl : "";
+      const compatiblePacketsnitchVersions = Array.isArray(plugin.compatiblePacketsnitchVersions)
+        ? plugin.compatiblePacketsnitchVersions
+          .map((entry) => String(entry || "").trim())
+          .filter(Boolean)
+        : [];
+      const compatibleWithCurrentPacketsnitch =
+        typeof plugin.compatibleWithCurrentPacketsnitch === "boolean"
+          ? plugin.compatibleWithCurrentPacketsnitch
+          : true;
+
+      return {
+        pluginId,
+        pluginName,
+        pluginVersion,
+        address,
+        capabilities,
+        author,
+        authorHomepage,
+        updateUrl,
+        compatiblePacketsnitchVersions,
+        compatibleWithCurrentPacketsnitch,
+        packageHash,
+        contentHash,
+        packagePath,
+        installPath,
+        enabled,
+        priority,
+        failureCount,
+        failureThresholdOverride,
+        disabledReason,
+        manifest: plugin.manifest && typeof plugin.manifest === "object" ? plugin.manifest : {},
+        installedAt:
+          typeof plugin.installedAt === "string" && plugin.installedAt.trim()
+            ? plugin.installedAt
+            : new Date().toISOString(),
+        updatedAt:
+          typeof plugin.updatedAt === "string" && plugin.updatedAt.trim()
+            ? plugin.updatedAt
+            : new Date().toISOString(),
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    version: 1,
+    plugins,
+    updatedAt:
+      typeof source.updatedAt === "string" && source.updatedAt.trim()
+        ? source.updatedAt
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeOptionalHttpUrl(rawValue) {
+  const candidate = String(rawValue || "").trim();
+  if (!candidate) return "";
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.href;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function parseVersionParts(rawVersion) {
+  const normalized = String(rawVersion || "")
+    .trim()
+    .replace(/^v/i, "")
+    .split("-")[0];
+  const parts = normalized
+    .split(".")
+    .map((entry) => Number.parseInt(entry, 10))
+    .filter((entry) => Number.isInteger(entry) && entry >= 0);
+  return parts.length ? parts : [0];
+}
+
+function compareVersionParts(leftVersion, rightVersion) {
+  const leftParts = parseVersionParts(leftVersion);
+  const rightParts = parseVersionParts(rightVersion);
+  const maxLength = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+    if (leftPart > rightPart) return 1;
+    if (leftPart < rightPart) return -1;
+  }
+  return 0;
+}
+
+function isVersionPatternMatch(currentVersion, pattern) {
+  const normalizedPattern = String(pattern || "").trim();
+  if (!normalizedPattern || normalizedPattern === "*") return true;
+  if (normalizedPattern.endsWith(".*")) {
+    const prefix = normalizedPattern.slice(0, -1);
+    return String(currentVersion || "").startsWith(prefix);
+  }
+  return compareVersionParts(currentVersion, normalizedPattern) === 0;
+}
+
+function evaluateVersionConstraint(currentVersion, rawConstraint) {
+  const constraint = String(rawConstraint || "").trim();
+  if (!constraint) return false;
+  if (constraint.startsWith(">=")) {
+    return compareVersionParts(currentVersion, constraint.slice(2).trim()) >= 0;
+  }
+  if (constraint.startsWith("<=")) {
+    return compareVersionParts(currentVersion, constraint.slice(2).trim()) <= 0;
+  }
+  if (constraint.startsWith(">")) {
+    return compareVersionParts(currentVersion, constraint.slice(1).trim()) > 0;
+  }
+  if (constraint.startsWith("<")) {
+    return compareVersionParts(currentVersion, constraint.slice(1).trim()) < 0;
+  }
+  if (constraint.startsWith("=")) {
+    return compareVersionParts(currentVersion, constraint.slice(1).trim()) === 0;
+  }
+  return isVersionPatternMatch(currentVersion, constraint);
+}
+
+function isPacketsnitchVersionCompatible(currentVersion, versionConstraints = []) {
+  const normalizedConstraints = Array.isArray(versionConstraints)
+    ? versionConstraints
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+    : [];
+  if (!normalizedConstraints.length) return false;
+  return normalizedConstraints.some((constraint) =>
+    evaluateVersionConstraint(currentVersion, constraint)
+  );
+}
+
+async function ensurePluginsRegistryFileExists(registry) {
+  const registryPath = getPluginsRegistryFilePath();
+  await fs.promises.mkdir(path.dirname(registryPath), { recursive: true });
+  await fs.promises.writeFile(
+    registryPath,
+    JSON.stringify(normalizePluginRegistry(registry), null, 2) + os.EOL,
+    "utf8",
+  );
+  return registryPath;
+}
+
+async function loadPluginsRegistryFromDisk() {
+  const registryPath = getPluginsRegistryFilePath();
+  try {
+    const rawText = await fs.promises.readFile(registryPath, "utf8");
+    return normalizePluginRegistry(JSON.parse(rawText));
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      console.warn("Failed to load plugin registry, using defaults:", error);
+    }
+    const defaults = normalizePluginRegistry({ plugins: [] });
+    await ensurePluginsRegistryFileExists(defaults);
+    return defaults;
+  }
+}
+
+async function savePluginsRegistryToDisk(nextRegistry) {
+  const normalizedRegistry = normalizePluginRegistry(nextRegistry);
+  normalizedRegistry.updatedAt = new Date().toISOString();
+  await ensurePluginsRegistryFileExists(normalizedRegistry);
+  return normalizedRegistry;
+}
+
+function sha256Hex(bufferLike) {
+  return crypto.createHash("sha256").update(bufferLike).digest("hex");
+}
+
+function isSafeArchiveRelativePath(rawPath) {
+  if (typeof rawPath !== "string" || !rawPath.trim()) return false;
+  const normalized = path.posix.normalize(rawPath.replace(/\\/g, "/"));
+  if (!normalized || normalized === ".") return false;
+  if (normalized.startsWith("../") || normalized === "..") return false;
+  if (path.posix.isAbsolute(normalized)) return false;
+  return true;
+}
+
+function normalizeArchivePath(rawPath) {
+  return path.posix.normalize(String(rawPath || "").replace(/\\/g, "/"));
+}
+
+async function openZipDirectory(zipPath) {
+  if (!unzipper || !unzipper.Open || typeof unzipper.Open.file !== "function") {
+    throw new Error("Plugin zip support is unavailable (missing unzipper dependency)");
+  }
+  return unzipper.Open.file(zipPath);
+}
+
+async function parsePluginManifestFromZipEntries(directoryEntries) {
+  const manifestEntry = directoryEntries.find((entry) => {
+    const normalized = normalizeArchivePath(entry.path).toLowerCase();
+    return normalized === "plugin.json" || normalized.endsWith("/plugin.json");
+  });
+  if (!manifestEntry) {
+    throw new Error("Plugin zip does not contain plugin.json");
+  }
+  const manifestBuffer = await manifestEntry.buffer();
+  let manifest = null;
+  try {
+    manifest = JSON.parse(String(manifestBuffer || ""));
+  } catch (error) {
+    throw new Error(`Invalid plugin.json: ${error?.message || error}`);
+  }
+  if (!manifest || typeof manifest !== "object") {
+    throw new Error("Invalid plugin.json: expected object");
+  }
+  const pluginName = String(manifest.pluginName || manifest.name || "").trim();
+  const pluginVersion = String(manifest.pluginVersion || manifest.version || "").trim();
+  const capabilities = Array.isArray(manifest.capabilities)
+    ? manifest.capabilities
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+    : [];
+  const author = String(manifest.author || "").trim();
+  const authorHomepage = normalizeOptionalHttpUrl(
+    manifest.authorHomepage || manifest.author_homepage || "",
+  );
+  const updateUrl = normalizeOptionalHttpUrl(
+    manifest.updateUrl || manifest.update_url || "",
+  );
+  const compatiblePacketsnitchVersions = Array.isArray(
+    manifest.compatiblePacketsnitchVersions,
+  )
+    ? manifest.compatiblePacketsnitchVersions
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+    : Array.isArray(manifest.compatibleVersions)
+      ? manifest.compatibleVersions
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean)
+      : [];
+
+  const manifestEntryPath = normalizeArchivePath(manifestEntry.path);
+  const manifestDir = path.posix.dirname(manifestEntryPath);
+  const declaredEntry = typeof manifest.entry === "string"
+    ? manifest.entry.trim()
+    : "";
+  const safeDeclaredEntry = declaredEntry && !declaredEntry.includes("..")
+    ? normalizeArchivePath(declaredEntry)
+    : "plugin.js";
+  const effectiveEntry = manifestDir && manifestDir !== "."
+    ? normalizeArchivePath(path.posix.join(manifestDir, safeDeclaredEntry))
+    : safeDeclaredEntry;
+
+  if (!pluginName) {
+    throw new Error("Invalid plugin.json: missing pluginName");
+  }
+  if (!pluginVersion) {
+    throw new Error("Invalid plugin.json: missing version/pluginVersion");
+  }
+  if (!capabilities.length) {
+    throw new Error("Invalid plugin.json: missing capabilities array");
+  }
+  if (!compatiblePacketsnitchVersions.length) {
+    throw new Error("Invalid plugin.json: missing compatiblePacketsnitchVersions array");
+  }
+  return {
+    ...manifest,
+    pluginName,
+    pluginVersion,
+    version: pluginVersion,
+    entry: effectiveEntry,
+    capabilities,
+    author,
+    authorHomepage,
+    updateUrl,
+    compatiblePacketsnitchVersions,
+  };
+}
+
+async function computeContentHashFromZipEntries(directoryEntries) {
+  const hash = crypto.createHash("sha256");
+  const fileEntries = directoryEntries
+    .filter((entry) => entry.type === "File" && isSafeArchiveRelativePath(entry.path))
+    .sort((a, b) => normalizeArchivePath(a.path).localeCompare(normalizeArchivePath(b.path)));
+
+  for (const entry of fileEntries) {
+    const normalizedPath = normalizeArchivePath(entry.path);
+    const entryBuffer = await entry.buffer();
+    hash.update(normalizedPath);
+    hash.update("\n");
+    hash.update(entryBuffer);
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+}
+
+async function extractPluginZipToDirectory(zipPath, destinationDir) {
+  const directory = await openZipDirectory(zipPath);
+  await fs.promises.mkdir(destinationDir, { recursive: true });
+  for (const entry of directory.files) {
+    if (!isSafeArchiveRelativePath(entry.path)) {
+      throw new Error(`Unsafe path in plugin archive: ${entry.path}`);
+    }
+    const normalizedPath = normalizeArchivePath(entry.path);
+    const targetPath = path.resolve(destinationDir, normalizedPath);
+    if (!targetPath.startsWith(path.resolve(destinationDir) + path.sep) && targetPath !== path.resolve(destinationDir)) {
+      throw new Error(`Unsafe extraction path in plugin archive: ${entry.path}`);
+    }
+
+    if (entry.type === "Directory") {
+      await fs.promises.mkdir(targetPath, { recursive: true });
+      continue;
+    }
+
+    await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+    const readStream = entry.stream();
+    const writeStream = fs.createWriteStream(targetPath, { mode: 0o644 });
+    await streamPipelineAsync(readStream, writeStream);
+  }
+}
+
+function resolvePluginFailureThreshold(pluginEntry, settings) {
+  const globalThreshold = Math.max(
+    1,
+    Number(settings?.plugins?.autoDisableFailureThreshold)
+    || DEFAULT_SETTINGS.plugins.autoDisableFailureThreshold,
+  );
+  const perPluginThresholds =
+    settings?.plugins?.perPluginFailureThreshold
+      && typeof settings.plugins.perPluginFailureThreshold === "object"
+      ? settings.plugins.perPluginFailureThreshold
+      : {};
+  const configuredPerPlugin = Number(perPluginThresholds?.[pluginEntry.pluginId]);
+  const localOverride = Number(pluginEntry.failureThresholdOverride);
+  if (Number.isFinite(localOverride) && localOverride > 0) {
+    return Math.max(1, Math.floor(localOverride));
+  }
+  if (Number.isFinite(configuredPerPlugin) && configuredPerPlugin > 0) {
+    return Math.max(1, Math.floor(configuredPerPlugin));
+  }
+  return globalThreshold;
+}
+
+async function installPluginFromZip(zipPath) {
+  const absoluteZipPath = path.resolve(String(zipPath || ""));
+  if (!absoluteZipPath) {
+    throw new Error("Plugin zip path is required");
+  }
+  const zipStats = await fs.promises.stat(absoluteZipPath);
+  if (!zipStats.isFile()) {
+    throw new Error("Plugin zip path is not a file");
+  }
+
+  const zipBuffer = await fs.promises.readFile(absoluteZipPath);
+  const packageHash = sha256Hex(zipBuffer);
+  const zipDirectory = await openZipDirectory(absoluteZipPath);
+  const manifest = await parsePluginManifestFromZipEntries(zipDirectory.files);
+  const contentHash = await computeContentHashFromZipEntries(zipDirectory.files);
+  const pluginId = sanitizePluginToken(manifest.pluginName, "plugin");
+  const pluginVersion = manifest.pluginVersion;
+  const pluginAddress = `${manifest.pluginName}@${pluginVersion}#${contentHash.slice(0, 12)}`;
+  const packetsnitchVersion = String(app.getVersion() || "").trim();
+  const compatibleWithCurrentPacketsnitch = isPacketsnitchVersionCompatible(
+    packetsnitchVersion,
+    manifest.compatiblePacketsnitchVersions,
+  );
+  if (!compatibleWithCurrentPacketsnitch) {
+    throw new Error(
+      `Plugin ${manifest.pluginName}@${pluginVersion} is not compatible with PacketSnitch ${packetsnitchVersion}`,
+    );
+  }
+
+  const packageDir = getPluginPackagesDir();
+  const installRootDir = getPluginInstallRootDir();
+  const packagePath = path.join(
+    packageDir,
+    `${pluginId}-${pluginVersion}-${packageHash.slice(0, 12)}.zip`,
+  );
+  const installPath = path.join(
+    installRootDir,
+    pluginId,
+    `${pluginVersion}-${contentHash.slice(0, 12)}`,
+  );
+
+  await fs.promises.mkdir(packageDir, { recursive: true });
+  await fs.promises.mkdir(path.dirname(installPath), { recursive: true });
+  await fs.promises.copyFile(absoluteZipPath, packagePath);
+  await fs.promises.rm(installPath, { recursive: true, force: true });
+  await extractPluginZipToDirectory(absoluteZipPath, installPath);
+
+  const nowIso = new Date().toISOString();
+  return {
+    pluginId,
+    pluginName: manifest.pluginName,
+    pluginVersion,
+    address: pluginAddress,
+    capabilities: manifest.capabilities,
+    author: manifest.author,
+    authorHomepage: manifest.authorHomepage,
+    updateUrl: manifest.updateUrl,
+    compatiblePacketsnitchVersions: manifest.compatiblePacketsnitchVersions,
+    compatibleWithCurrentPacketsnitch,
+    packageHash,
+    contentHash,
+    packagePath,
+    installPath,
+    enabled: true,
+    priority: Number.isFinite(Number(manifest.priority)) ? Number(manifest.priority) : 100,
+    failureCount: 0,
+    failureThresholdOverride: null,
+    disabledReason: "",
+    manifest,
+    installedAt: nowIso,
+    updatedAt: nowIso,
+  };
+}
+
+async function inspectPluginZip(zipPath) {
+  const absoluteZipPath = path.resolve(String(zipPath || ""));
+  if (!absoluteZipPath) {
+    throw new Error("Plugin zip path is required");
+  }
+  const zipStats = await fs.promises.stat(absoluteZipPath);
+  if (!zipStats.isFile()) {
+    throw new Error("Plugin zip path is not a file");
+  }
+
+  const zipDirectory = await openZipDirectory(absoluteZipPath);
+  const manifest = await parsePluginManifestFromZipEntries(zipDirectory.files);
+  const packetsnitchVersion = String(app.getVersion() || "").trim();
+  const compatibleWithCurrentPacketsnitch = isPacketsnitchVersionCompatible(
+    packetsnitchVersion,
+    manifest.compatiblePacketsnitchVersions,
+  );
+
+  return {
+    pluginName: manifest.pluginName,
+    pluginVersion: manifest.pluginVersion,
+    capabilities: Array.isArray(manifest.capabilities) ? manifest.capabilities : [],
+    author: manifest.author || "",
+    authorHomepage: manifest.authorHomepage || "",
+    updateUrl: manifest.updateUrl || "",
+    compatiblePacketsnitchVersions: Array.isArray(manifest.compatiblePacketsnitchVersions)
+      ? manifest.compatiblePacketsnitchVersions
+      : [],
+    compatibleWithCurrentPacketsnitch,
+  };
 }
 
 function getThemesDir() {
@@ -1756,6 +2276,23 @@ app.whenReady().then(() => {
         base64: fileBuffer.toString("base64"),
       };
     });
+    ipcMain.handle("select-plugin-zip", async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [
+          {
+            name: "Plugin Archives",
+            extensions: ["zip"],
+          },
+          {
+            name: "All Files",
+            extensions: ["*"],
+          },
+        ],
+      });
+      if (canceled || !filePaths?.[0]) return null;
+      return filePaths[0];
+    });
   });
 });
 
@@ -2456,6 +2993,229 @@ ipcMain.handle("saved-filters-save", async (_event, payload = {}) => {
 
 ipcMain.handle("saved-filters-remove", async (_event, payload = {}) => {
   return removeSavedFilterById(payload?.id);
+});
+
+ipcMain.handle("plugins-list", async () => {
+  const registry = await loadPluginsRegistryFromDisk();
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return {
+    success: true,
+    plugins: registry.plugins,
+    settings: {
+      autoDisableFailureThreshold: Math.max(
+        1,
+        Number(getAppSettings()?.plugins?.autoDisableFailureThreshold)
+        || DEFAULT_SETTINGS.plugins.autoDisableFailureThreshold,
+      ),
+      perPluginFailureThreshold:
+        getAppSettings()?.plugins?.perPluginFailureThreshold
+          && typeof getAppSettings().plugins.perPluginFailureThreshold === "object"
+          ? getAppSettings().plugins.perPluginFailureThreshold
+          : {},
+    },
+  };
+});
+
+ipcMain.handle("plugins-install", async (_event, payload = {}) => {
+  try {
+    const zipPath = typeof payload?.zipPath === "string" ? payload.zipPath : "";
+    if (!zipPath) {
+      return { success: false, error: "Plugin zip path is required" };
+    }
+    const installedPlugin = await installPluginFromZip(zipPath);
+    const registry = await loadPluginsRegistryFromDisk();
+    const existingIndex = registry.plugins.findIndex(
+      (entry) => entry.pluginId === installedPlugin.pluginId,
+    );
+    if (existingIndex >= 0) {
+      registry.plugins[existingIndex] = {
+        ...registry.plugins[existingIndex],
+        ...installedPlugin,
+      };
+    } else {
+      registry.plugins.push(installedPlugin);
+    }
+    const savedRegistry = await savePluginsRegistryToDisk(registry);
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Plugin] Installed plugin id=${installedPlugin.pluginId} address=${installedPlugin.address}`,
+    );
+    return {
+      success: true,
+      plugin: installedPlugin,
+      plugins: savedRegistry.plugins,
+    };
+  } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Plugin] Install failed error=${error?.message || error}`,
+    );
+    return {
+      success: false,
+      error: error?.message || "Plugin install failed",
+    };
+  }
+});
+
+ipcMain.handle("plugins-inspect-zip", async (_event, payload = {}) => {
+  try {
+    const zipPath = typeof payload?.zipPath === "string" ? payload.zipPath : "";
+    if (!zipPath) {
+      return { success: false, error: "Plugin zip path is required" };
+    }
+    const details = await inspectPluginZip(zipPath);
+    return {
+      success: true,
+      plugin: details,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || "Unable to inspect plugin zip",
+    };
+  }
+});
+
+ipcMain.handle("plugins-set-enabled", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  const enabled = Boolean(payload?.enabled);
+  if (!pluginId) {
+    return { success: false, error: "pluginId is required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginEntry = registry.plugins.find((entry) => entry.pluginId === pluginId);
+  if (!pluginEntry) {
+    return { success: false, error: "Plugin not found" };
+  }
+  pluginEntry.enabled = enabled;
+  pluginEntry.disabledReason = enabled ? "" : (pluginEntry.disabledReason || "manual-disable");
+  pluginEntry.updatedAt = new Date().toISOString();
+  const savedRegistry = await savePluginsRegistryToDisk(registry);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Plugin] ${enabled ? "Enabled" : "Disabled"} plugin id=${pluginEntry.pluginId}`,
+  );
+  return { success: true, plugin: pluginEntry, plugins: savedRegistry.plugins };
+});
+
+ipcMain.handle("plugins-set-priority", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  const priority = Number.isFinite(Number(payload?.priority)) ? Number(payload.priority) : null;
+  if (!pluginId || priority === null) {
+    return { success: false, error: "pluginId and numeric priority are required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginEntry = registry.plugins.find((entry) => entry.pluginId === pluginId);
+  if (!pluginEntry) {
+    return { success: false, error: "Plugin not found" };
+  }
+  pluginEntry.priority = priority;
+  pluginEntry.updatedAt = new Date().toISOString();
+  const savedRegistry = await savePluginsRegistryToDisk(registry);
+  return { success: true, plugin: pluginEntry, plugins: savedRegistry.plugins };
+});
+
+ipcMain.handle("plugins-set-failure-threshold", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  const override = payload?.failureThresholdOverride;
+  if (!pluginId) {
+    return { success: false, error: "pluginId is required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginEntry = registry.plugins.find((entry) => entry.pluginId === pluginId);
+  if (!pluginEntry) {
+    return { success: false, error: "Plugin not found" };
+  }
+  if (override === null || override === undefined || override === "") {
+    pluginEntry.failureThresholdOverride = null;
+  } else {
+    const parsedOverride = Number(override);
+    if (!Number.isFinite(parsedOverride) || parsedOverride < 1) {
+      return { success: false, error: "failureThresholdOverride must be >= 1 or empty" };
+    }
+    pluginEntry.failureThresholdOverride = Math.floor(parsedOverride);
+  }
+  pluginEntry.updatedAt = new Date().toISOString();
+  const savedRegistry = await savePluginsRegistryToDisk(registry);
+  return { success: true, plugin: pluginEntry, plugins: savedRegistry.plugins };
+});
+
+ipcMain.handle("plugins-record-failure", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  const isCritical = payload?.critical !== false;
+  if (!pluginId) {
+    return { success: false, error: "pluginId is required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginEntry = registry.plugins.find((entry) => entry.pluginId === pluginId);
+  if (!pluginEntry) {
+    return { success: false, error: "Plugin not found" };
+  }
+  if (!isCritical) {
+    return { success: true, plugin: pluginEntry, autoDisabled: false };
+  }
+  pluginEntry.failureCount = Math.max(0, Number(pluginEntry.failureCount) || 0) + 1;
+  const threshold = resolvePluginFailureThreshold(pluginEntry, getAppSettings());
+  let autoDisabled = false;
+  if (pluginEntry.failureCount >= threshold) {
+    pluginEntry.enabled = false;
+    pluginEntry.disabledReason = "failure-threshold";
+    autoDisabled = true;
+  }
+  pluginEntry.updatedAt = new Date().toISOString();
+  await savePluginsRegistryToDisk(registry);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Plugin] Failure plugin=${pluginEntry.pluginId} count=${pluginEntry.failureCount} threshold=${threshold} autoDisabled=${autoDisabled ? "true" : "false"}`,
+  );
+  return {
+    success: true,
+    plugin: pluginEntry,
+    autoDisabled,
+    threshold,
+  };
+});
+
+ipcMain.handle("plugins-reset-failures", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  if (!pluginId) {
+    return { success: false, error: "pluginId is required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginEntry = registry.plugins.find((entry) => entry.pluginId === pluginId);
+  if (!pluginEntry) {
+    return { success: false, error: "Plugin not found" };
+  }
+  pluginEntry.failureCount = 0;
+  if (pluginEntry.disabledReason === "failure-threshold") {
+    pluginEntry.disabledReason = "";
+  }
+  pluginEntry.updatedAt = new Date().toISOString();
+  const savedRegistry = await savePluginsRegistryToDisk(registry);
+  return { success: true, plugin: pluginEntry, plugins: savedRegistry.plugins };
+});
+
+ipcMain.handle("plugins-uninstall", async (_event, payload = {}) => {
+  const pluginId = sanitizePluginToken(payload?.pluginId || "", "");
+  if (!pluginId) {
+    return { success: false, error: "pluginId is required" };
+  }
+  const registry = await loadPluginsRegistryFromDisk();
+  const pluginIndex = registry.plugins.findIndex((entry) => entry.pluginId === pluginId);
+  if (pluginIndex < 0) {
+    return { success: false, error: "Plugin not found" };
+  }
+  const pluginEntry = registry.plugins[pluginIndex];
+  registry.plugins.splice(pluginIndex, 1);
+  await savePluginsRegistryToDisk(registry);
+  if (pluginEntry.packagePath) {
+    await fs.promises.rm(pluginEntry.packagePath, { force: true }).catch(() => { });
+  }
+  if (pluginEntry.installPath) {
+    await fs.promises.rm(pluginEntry.installPath, { recursive: true, force: true }).catch(() => { });
+  }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Plugin] Uninstalled plugin id=${pluginEntry.pluginId}`,
+  );
+  return { success: true, removedPluginId: pluginId, plugins: registry.plugins };
 });
 
 // Session library helpers
