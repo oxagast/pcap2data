@@ -9,12 +9,16 @@
         "version.read",
         "ui.message",
         "ui.tab",
-        "documents.write"
+        "ui.contextmenu",
+        "filesystem.read",
+        "documents.write",
+        "network.fetch",
+        "status.wrap"
     ],
     "compatiblePacketsnitchVersions": [
         ">=2.0.0"
     ],
     "priority": 100,
     "entry": "plugin.js",
-    "description": "Sample plugin that reads PacketSnitch version, displays a hello message, and writes that version to Documents."
+    "description": "Comment-heavy tutorial plugin showing UI tab creation, context menu action wiring, file IO, remote fetch, and safe callback wrapping patterns."
 }
