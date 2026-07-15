@@ -1,3 +1,5 @@
+// Collects and re-exports the protocol detail renderers used by the frontend.
+
 const { createTable } = require("./shared");
 const { renderDnsTable } = require("./dns");
 const { renderIcmpTable } = require("./icmp");

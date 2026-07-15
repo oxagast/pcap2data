@@ -1,3 +1,5 @@
+// Exposes the safe preload bridge APIs from Electron to the renderer process.
+
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('jsonapi', {

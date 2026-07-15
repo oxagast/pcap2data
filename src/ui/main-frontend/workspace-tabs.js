@@ -1,3 +1,5 @@
+// Coordinates main workspace tab switching and tab-specific UI visibility.
+
 function createWorkspaceTabController({
     constants,
     state,

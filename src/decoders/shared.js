@@ -1,3 +1,5 @@
+// Shares table and field helpers used by the protocol detail renderers.
+
 function dotField(data, dotKey, legacyKey, fallback = '—') {
   if (!data) return fallback;
   const value = data[dotKey] ?? (legacyKey ? data[legacyKey] : undefined);

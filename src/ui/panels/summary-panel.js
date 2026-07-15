@@ -1,3 +1,5 @@
+// Controls the Summary workspace UI and capture overview rendering.
+
 const SUMMARY_LOADING_MARKUP =
   '<span id="loaderdots" class="loading" role="status" aria-live="polite">Loading</span>';
 

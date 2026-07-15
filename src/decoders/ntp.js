@@ -1,3 +1,5 @@
+// Renders NTP packet details into the shared sidebar table UI.
+
 const { createTable, dotField } = require("./shared");
 
 function renderNtpTable(transportData) {

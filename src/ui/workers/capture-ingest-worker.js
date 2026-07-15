@@ -1,3 +1,5 @@
+// Stages incremental capture packet references off the main thread during ingest.
+
 function getPacketKey(packet, fallbackHost, fallbackIndex) {
     if (packet && typeof packet.__packetKey === "string" && packet.__packetKey) {
         return packet.__packetKey;

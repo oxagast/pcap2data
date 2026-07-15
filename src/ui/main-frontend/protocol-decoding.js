@@ -1,3 +1,5 @@
+// Handles protocol decoder selection and decoded output helpers in the renderer.
+
 const {
     decodeHttpFromBytes,
     decodeTelnetFromBytes,

@@ -1,3 +1,5 @@
+// Renders HTTP/2 packet details into the shared sidebar table UI.
+
 const { createTable, dotField } = require("./shared");
 
 function renderHttp2Table(transportData) {

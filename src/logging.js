@@ -1,3 +1,5 @@
+// Centralizes renderer activity logging and duplicate-suppression helpers.
+
 let lastViewMode = "";
 const CONSOLE_DUPLICATE_WINDOW_MS = 5000;
 

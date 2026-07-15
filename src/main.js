@@ -1,3 +1,5 @@
+// Runs the Electron main process, app lifecycle, and desktop IPC services.
+
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const appLock = app.requestSingleInstanceLock();
 const userAgent = `Mozilla/5.0 (compatible; PacketSnitch/${app.getVersion()}; +http://packetsnitch.com)`;

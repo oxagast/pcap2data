@@ -1,3 +1,5 @@
+// Formats large Conv output views off the main thread for renderer responsiveness.
+
 self.onmessage = (event) => {
     const payload = event?.data || {};
     const id = Number(payload.id);

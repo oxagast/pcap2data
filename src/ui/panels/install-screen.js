@@ -1,3 +1,5 @@
+// Controls the startup install and environment-check screen shown before the main UI.
+
 // Shows install screen.
 function showInstallScreen(installInfo, documentRef) {
   const screen = documentRef.getElementById("install-screen");

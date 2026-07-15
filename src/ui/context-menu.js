@@ -1,3 +1,5 @@
+// Builds and manages renderer context menu behavior across the application UI.
+
 
 // Initializes context menu.
 function initializeContextMenu({

@@ -1,3 +1,5 @@
+// Controls the Conv subnet workspace UI and network lookup tools.
+
 const IPV4_HOST_BITS = 32;
 const IPV6_HOST_BITS = 128;
 

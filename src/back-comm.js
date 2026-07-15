@@ -1,3 +1,5 @@
+// Talks to the backend service/process and normalizes capture-processing IPC flows.
+
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");

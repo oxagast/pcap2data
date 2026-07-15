@@ -1,3 +1,5 @@
+// Controls the keystore workspace UI and session-secret extraction workflows.
+
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
 const CRYPT_KEYSTORE_DB_VERSION = 1;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";

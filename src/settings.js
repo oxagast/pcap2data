@@ -1,3 +1,5 @@
+// Defines default settings and normalizes persisted configuration values.
+
 const DEFAULT_BACKEND_WORKER_THREADS = Math.max(
     1,
     (

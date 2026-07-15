@@ -1,3 +1,5 @@
+// Orchestrates the main renderer UI, capture workflows, and cross-panel behavior.
+
 const threadName = "MainFrontend";
 window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
 

@@ -1,3 +1,5 @@
+// Parses large Conv input payloads off the main thread before conversion.
+
 function parseDataToolsInputWorker(format, rawInput) {
     if (!rawInput || rawInput.trim() === "") {
         throw new Error("Enter input data first.");

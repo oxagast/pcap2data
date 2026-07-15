@@ -1,3 +1,5 @@
+// Controls the Crypt workspace UI for decryption, TLS, and PGP workflows.
+
 
 const crypto = require("crypto-browserify");
 const openpgp = require("openpgp");

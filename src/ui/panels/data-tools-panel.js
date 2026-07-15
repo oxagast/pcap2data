@@ -1,3 +1,5 @@
+// Controls the Conv workspace UI for conversions, hashes, decoders, and subnet tools.
+
 
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");

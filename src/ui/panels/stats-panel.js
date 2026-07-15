@@ -1,3 +1,5 @@
+// Controls the Stats workspace UI and capture analytics rendering.
+
 const threadName = "Stats";
 const h337 = require("heatmap.js");
 

@@ -1,3 +1,5 @@
+// Stores capture packet stubs and serves windowed packet access for large sessions.
+
 const fs = require("fs");
 const os = require("os");
 const path = require("path");

@@ -1,3 +1,5 @@
+// Provides shared stream assembly and follow-stream helpers for frontend features.
+
 function createStreamHelpers({
     state,
     getPacketKey,

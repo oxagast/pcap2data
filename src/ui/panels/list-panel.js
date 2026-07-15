@@ -1,3 +1,5 @@
+// Controls the packet list workspace, virtualization, sorting, and list rendering.
+
 
 const threadName = "List";
 const LIST_COLUMN_MIN_WIDTH = 48;

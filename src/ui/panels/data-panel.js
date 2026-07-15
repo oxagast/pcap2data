@@ -1,3 +1,5 @@
+// Controls the packet data panel and its packet-detail presentation logic.
+
 
 const threadName = "Data";
 

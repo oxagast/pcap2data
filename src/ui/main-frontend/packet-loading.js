@@ -1,3 +1,5 @@
+// Loads backend packet snapshots into renderer state and incremental ingest flows.
+
 function createPacketLoadingHelpers({
     state,
     backendProgressState,

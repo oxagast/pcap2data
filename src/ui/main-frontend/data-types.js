@@ -1,3 +1,5 @@
+// Provides data-type detection and labeling helpers for packet and conversion views.
+
 function createDataTypeHelpers({
     constants,
     state,

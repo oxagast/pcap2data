@@ -1,3 +1,5 @@
+// Boots common renderer-side helpers shared across frontend modules.
+
 const PANEL_MODULES = [
   "summary-panel",
   "data-panel",

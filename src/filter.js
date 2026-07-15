@@ -1,3 +1,5 @@
+// Evaluates packet filter expressions and resolves frontend query aliases.
+
 
 
 // Core constants and low-level utilities.

@@ -1,3 +1,5 @@
+// Controls the session picker UI used for opening, restoring, and managing sessions.
+
 /**
  * Session Picker panel – shows a library of saved sessions on startup and
  * provides rename / delete / export-to-file management actions.
