@@ -1,0 +1,162 @@
+const {
+    decodeHttpFromBytes,
+    decodeTelnetFromBytes,
+    decodeSshFromBytes,
+    decodePop3FromBytes,
+    decodeImapFromBytes,
+    decodeSmtpFromBytes,
+    decodeFtpFromBytes,
+    decodeBerFromBytes,
+    decodeDerFromBytes,
+    decodeJsonFromBytes,
+    decodeXmlFromBytes,
+    decodeYamlFromBytes,
+    decodeProtobufFromBytes,
+    decodeMessagePackFromBytes,
+    decodeBsonFromBytes,
+    decodeLdapFromBytes,
+    decodeSmbFromBytes,
+    decodeSipFromBytes,
+    autoDetectProtoFromBytes,
+} = require("../panels/data-tools-panel");
+
+function createProtocolDecodingHelpers({
+    getDecodeUseRawConvInputOverride,
+    getCurrentContextPacket,
+    getCurrentPacketForExport,
+    getFollowStreamPackets,
+    buildStreamHex,
+    parseDataToolsInput,
+}) {
+    function resolveDecoderInputBytes(bytes) {
+        if (!(bytes instanceof Uint8Array) || bytes.length === 0) return bytes;
+
+        if (getDecodeUseRawConvInputOverride()) {
+            return bytes;
+        }
+
+        const contextPacket = getCurrentContextPacket() || getCurrentPacketForExport();
+        const streamPackets = getFollowStreamPackets(contextPacket);
+        if (!Array.isArray(streamPackets) || streamPackets.length === 0) return bytes;
+
+        const streamHex = buildStreamHex(streamPackets);
+        if (!streamHex) return bytes;
+
+        try {
+            return parseDataToolsInput("hex", streamHex);
+        } catch {
+            return bytes;
+        }
+    }
+
+    function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
+        const protoOutput = document.getElementById("data-tools-proto-output");
+        if (!protoOutput) return;
+        protoOutput.innerHTML = "";
+        if (!result) {
+            const span = document.createElement("span");
+            span.className = "data-tools-proto-none";
+            span.textContent =
+                selectedProtocol === "auto"
+                    ? "No known protocol detected"
+                    : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
+            protoOutput.appendChild(span);
+            return;
+        }
+        const table = document.createElement("table");
+        table.className = "data-tools-proto-table";
+        const headerRow = document.createElement("tr");
+        const th1 = document.createElement("th");
+        th1.textContent = `${result.protocol} Field`;
+        const th2 = document.createElement("th");
+        th2.textContent = "Value";
+        headerRow.appendChild(th1);
+        headerRow.appendChild(th2);
+        table.appendChild(headerRow);
+        result.fields.forEach((field) => {
+            const tr = document.createElement("tr");
+            const tdName = document.createElement("td");
+            tdName.textContent = field.name;
+            const tdVal = document.createElement("td");
+            tdVal.textContent = field.value;
+            tr.appendChild(tdName);
+            tr.appendChild(tdVal);
+            table.appendChild(tr);
+        });
+        protoOutput.appendChild(table);
+    }
+
+    function decodeProtocolBytes(protocol, bytes) {
+        switch (protocol) {
+            case "http":
+                return decodeHttpFromBytes(bytes);
+            case "telnet":
+                return decodeTelnetFromBytes(bytes);
+            case "ssh":
+                return decodeSshFromBytes(bytes);
+            case "pop3":
+                return decodePop3FromBytes(bytes);
+            case "imap":
+                return decodeImapFromBytes(bytes);
+            case "smtp":
+                return decodeSmtpFromBytes(bytes);
+            case "ftp":
+                return decodeFtpFromBytes(bytes);
+            case "ber":
+                return decodeBerFromBytes(bytes);
+            case "der":
+                return decodeDerFromBytes(bytes);
+            case "json":
+                return decodeJsonFromBytes(bytes);
+            case "xml":
+                return decodeXmlFromBytes(bytes);
+            case "yaml":
+                return decodeYamlFromBytes(bytes);
+            case "protobuf":
+                return decodeProtobufFromBytes(bytes);
+            case "msgpack":
+                return decodeMessagePackFromBytes(bytes);
+            case "bson":
+                return decodeBsonFromBytes(bytes);
+            case "ldap":
+                return decodeLdapFromBytes(bytes);
+            case "smb":
+                return decodeSmbFromBytes(bytes);
+            case "sip":
+                return decodeSipFromBytes(bytes);
+            default:
+                return null;
+        }
+    }
+
+    function runProtoDecoder(bytes) {
+        const decodeBytes = resolveDecoderInputBytes(bytes);
+        const selectEl = document.getElementById("data-tools-proto-select");
+        const selectedProtocol = selectEl ? selectEl.value : "auto";
+        let protocol = selectedProtocol;
+        if (protocol === "auto") {
+            protocol = autoDetectProtoFromBytes(decodeBytes);
+        }
+        const result = protocol ? decodeProtocolBytes(protocol, decodeBytes) : null;
+        renderProtoDecoderOutput(result, selectedProtocol, result ? protocol : null);
+    }
+
+    function clearProtoDecoderOutput() {
+        const protoOutput = document.getElementById("data-tools-proto-output");
+        if (protoOutput) protoOutput.innerHTML = "";
+    }
+
+    return {
+        decodeHttpFromBytes,
+        decodeSmbFromBytes,
+        autoDetectProtoFromBytes,
+        resolveDecoderInputBytes,
+        renderProtoDecoderOutput,
+        runProtoDecoder,
+        clearProtoDecoderOutput,
+    };
+}
+
+module.exports = {
+    createProtocolDecodingHelpers,
+};

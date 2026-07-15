@@ -64,6 +64,15 @@ const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-pane
 const { initializeInstallScreen } = require("./panels/install-screen");
 const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
+const {
+  createPacketLoadingHelpers,
+} = require("./main-frontend/packet-loading");
+const { createStreamHelpers } = require("./main-frontend/stream-helpers");
+const { createDataTypeHelpers } = require("./main-frontend/data-types");
+const { createWorkspaceTabController } = require("./main-frontend/workspace-tabs");
+const {
+  createProtocolDecodingHelpers,
+} = require("./main-frontend/protocol-decoding");
 const psVer = require("../../package.json").version;
 const {
   DEFAULT_SETTINGS,
@@ -90,15 +99,14 @@ const {
   runDataToolsHashesFromInput,
 } = require("./panels/data-tools-panel");
 
-// Cache frequently accessed DOM elements to avoid repeated lookups
 const domCache = {};
-// Returns cached element.
 function getCachedElement(id) {
   if (!domCache[id]) {
     domCache[id] = document.getElementById(id);
   }
   return domCache[id];
 }
+
 const validKeysCache = [];
 if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
   window.validkeysapi.getValidKeys().then((keys) => {
@@ -107,7 +115,6 @@ if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function
 } else {
   console.warn("validkeysapi is unavailable. Key validation helpers will be disabled.");
 }
-
 
 const SESSION_FILE_SCHEMA_VERSION = 1;
 const PACKETSNITCH_VERSION = String(psVer || "").trim() || "unknown";
@@ -193,25 +200,24 @@ const DUMMY_BOOKMARKED_HOST = "__BOOKMARKED__";
 const DUMMY_BOOKMARKED_HOST_ALIAS = "Bookmarked";
 const BOOKMARK_FILTER_QUERY = "bookmark: true";
 
-// Global variables for DOM elements and state
-let capturedPackets = {}; // Stores parsed packet data from JSON
-let jsonCapture = ""; // Stringified JSON capture for pretty display
+let capturedPackets = {};
+let jsonCapture = "";
 let currentIp;
-const status = getCachedElement("status"); // Status bar element
-let hostsList = [DUMMY_ALL_HOST]; // List of hosts found in capture
-const hostFilterEl = getCachedElement("host_filter"); // Host filter dropdown
-let p = []; // Packets for the currently selected host
-let index = 0; // Navigation index for packets
+const status = getCachedElement("status");
+let hostsList = [DUMMY_ALL_HOST];
+const hostFilterEl = getCachedElement("host_filter");
+let p = [];
+let index = 0;
 let activePacketCursor = 0;
-//let bookmarkList = []; // List of bookmarks (host:packet index)
-let retransmissionList = []; // List of packets marked as retransmissions
-let outOfOrderList = []; // List of packets marked as out-of-order
-let activeBookmark = {}; // Current bookmark object
+let retransmissionList = [];
+let outOfOrderList = [];
+let activeBookmark = {};
 let isFileLoaded = false;
 let isCaptureStoreBackedCapture = false;
 let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
+let dataTypesOverridePacketKey = null;
 let summaryFromSavedSession = false;
 let lastFilteredNavigationLogMessage = "";
 let startTime;
@@ -258,7 +264,8 @@ const CONTEXT_IPV4_REGEX =
 const STRICT_IPV4_REGEX =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
-const CONTEXT_MIME_REGEX = /^[\w.+-]+\/[\w.+-]+$/;
+const CONTEXT_MIME_REGEX =
+  /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
@@ -279,14 +286,22 @@ const VALID_CRYPT_SUBTABS = [
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
-let keystorePanel;
+
+const SETTINGS_SUBTAB_GENERAL = "general";
+const SETTINGS_SUBTAB_LLM = "llm";
+const SETTINGS_SUBTAB_BACKEND = "backend";
+const SETTINGS_SUBTAB_DEBUG = "debug";
+const SETTINGS_SUBTAB_ABOUT = "about";
+const PACKETSNITCH_RELEASES_PAGE_URL =
+  "https://github.com/oxasploits/PacketSnitch/releases";
+const PACKETSNITCH_RELEASES_LATEST_API_URL =
+  "https://api.github.com/repos/oxasploits/PacketSnitch/releases/latest";
+let notesEditorVisible = false;
+let currentSessionName = null;
+let sessionPickerPanel = null;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
-let notesEditorVisible = false;
-// Name of the session in the library (userData/sessions/). Null if unsaved.
-let currentSessionName = null;
-let sessionPickerPanel = null;
 const LLM_MAX_CONTENT_LENGTH = 180000;
 const SESSION_AUTOSAVE_INTERVAL_MS = 5 * 60 * 1000;
 let backendCaptureUpdateQueue = Promise.resolve();
@@ -308,17 +323,7 @@ const pendingCaptureIngestWorkerRequests = new Map();
 let sessionAutosaveInFlight = false;
 let appSettings = cloneDefaultSettings();
 let statusResetTimeoutId = null;
-const SETTINGS_SUBTAB_GENERAL = "general";
-const SETTINGS_SUBTAB_LLM = "llm";
-const SETTINGS_SUBTAB_BACKEND = "backend";
-const SETTINGS_SUBTAB_DEBUG = "debug";
-const SETTINGS_SUBTAB_ABOUT = "about";
-const PACKETSNITCH_RELEASES_PAGE_URL =
-  "https://github.com/oxasploits/PacketSnitch/releases";
-const PACKETSNITCH_RELEASES_LATEST_API_URL =
-  "https://api.github.com/repos/oxasploits/PacketSnitch/releases/latest";
-const PACKETSNITCH_RELEASES_API_URL =
-  "https://api.github.com/repos/oxasploits/PacketSnitch/releases?per_page=20";
+let keystorePanel = null;
 const PACKETSNITCH_AUTHOR_NAME = "Marshall Whittaker / oxagast";
 const PACKETSNITCH_TERMINAL_IDENTITY = "marshall@oxasploits";
 let activeSettingsSubtab = SETTINGS_SUBTAB_GENERAL;
@@ -328,7 +333,6 @@ let availableOllamaModels = [];
 let defaultThemeLogoSrc = null;
 let appliedThemeVariableNames = new Set();
 let keystoreAutoPopulateGeneration = 0;
-let dataTypesOverridePacketKey = null;
 let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
@@ -460,22 +464,21 @@ function syncLlmDiagnosticsIndicators() {
     diagnostics?.ollamaServerListening ? "Yes" : "No",
     diagnostics?.ollamaServerListening ? "status-ok" : "status-error",
   );
-  const cloudStatusText = diagnostics?.cloudApiResultCode === null || typeof diagnostics?.cloudApiResultCode === "undefined"
-    ? (diagnostics?.cloudApiError === "No Ollama API key configured" ? "No key" : "—")
-    : diagnostics?.cloudApiReachable
-      ? "Pong"
-      : "No";
-  const cloudStatusClass = diagnostics?.cloudApiResultCode === null || typeof diagnostics?.cloudApiResultCode === "undefined"
-    ? (diagnostics?.cloudApiError === "No Ollama API key configured" ? "status-neutral" : "status-neutral")
-    : diagnostics?.cloudApiReachable
-      ? "status-ok"
-      : "status-error";
+
+  const cloudResultCode = diagnostics?.cloudApiResultCode;
   renderLlmDiagnosticIndicator(
     "settings-llm-cloud-status",
     "Cloud API",
-    cloudStatusText,
-    cloudStatusClass,
+    cloudResultCode === null || typeof cloudResultCode === "undefined"
+      ? "—"
+      : String(cloudResultCode),
+    cloudResultCode === 0
+      ? "status-ok"
+      : cloudResultCode === null || typeof cloudResultCode === "undefined"
+        ? "status-neutral"
+        : "status-warn",
   );
+
   const lastResultCode = diagnostics?.lastCallResultCode;
   renderLlmDiagnosticIndicator(
     "settings-llm-last-result-status",
@@ -2701,338 +2704,81 @@ function maybeHideStartupPreload() {
   }, remainingVisibleMs);
 }
 
-// Normalizes backend json path payload.
-function normalizeBackendJsonPathPayload(rawPayload) {
-  if (typeof rawPayload === "string") {
-    return {
-      path: rawPayload,
-      jobId: "",
-      processedPackets: 0,
-      totalPackets: 0,
-      complete: true,
-      chunkSize: getBackendPacketChunkSize(),
-    };
-  }
-
-  if (!rawPayload || typeof rawPayload !== "object") {
-    return null;
-  }
-
-  return {
-    path: typeof rawPayload.path === "string" ? rawPayload.path : "",
-    jobId:
-      typeof rawPayload.jobId === "string" && rawPayload.jobId.trim()
-        ? rawPayload.jobId.trim()
-        : "",
-    processedPackets: Number(rawPayload.processedPackets) || 0,
-    totalPackets: Number(rawPayload.totalPackets) || 0,
-    complete: Boolean(rawPayload.complete),
-    chunkSize: Number(rawPayload.chunkSize) || getBackendPacketChunkSize(),
-  };
-}
-
-// Normalizes backend json data payload.
-function normalizeBackendJsonDataPayload(rawPayload) {
-  if (!rawPayload || typeof rawPayload !== "object") {
-    return null;
-  }
-
-  const captureData =
-    rawPayload.captureData && typeof rawPayload.captureData === "object"
-      ? rawPayload.captureData
-      : null;
-  if (!captureData) {
-    return null;
-  }
-
-  return {
-    captureData,
-    jobId:
-      typeof rawPayload.jobId === "string" && rawPayload.jobId.trim()
-        ? rawPayload.jobId.trim()
-        : "",
-    processedPackets: Number(rawPayload.processedPackets) || 0,
-    totalPackets: Number(rawPayload.totalPackets) || 0,
-    complete: Boolean(rawPayload.complete),
-    chunkSize: Number(rawPayload.chunkSize) || getBackendPacketChunkSize(),
-    label:
-      typeof rawPayload.label === "string" && rawPayload.label.trim()
-        ? rawPayload.label.trim()
-        : "in-memory-snapshot",
-  };
-}
-
-// Creates a unique frontend backend-job identifier.
-function createFrontendBackendJobId() {
-  return `frontend-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-}
-
-// Returns true when backend payload belongs to active job.
-function shouldAcceptBackendPayloadForActiveJob(payload) {
-  const payloadJobId = String(payload?.jobId || "").trim();
-  if (!payloadJobId) {
-    return true;
-  }
-  if (!activeBackendJobId) {
-    activeBackendJobId = payloadJobId;
-    return true;
-  }
-  return payloadJobId === activeBackendJobId;
-}
-
-// Counts capture data packets.
-function countCaptureDataPackets(captureData) {
-  if (!captureData || typeof captureData !== "object") return 0;
-  const hostMap = captureData["host"];
-  if (!hostMap || typeof hostMap !== "object") return 0;
-  return Object.values(hostMap).reduce((total, hostPackets) => {
-    if (!Array.isArray(hostPackets)) return total;
-    return total + hostPackets.length;
-  }, 0);
-}
-
-// Returns whether capture payload contains at least one packet.
-function hasAnyCaptureDataPackets(captureData) {
-  if (!captureData || typeof captureData !== "object") return false;
-  const hostMap = captureData["host"];
-  if (!hostMap || typeof hostMap !== "object") return false;
-  return Object.values(hostMap).some(
-    (hostPackets) => Array.isArray(hostPackets) && hostPackets.length > 0,
-  );
-}
-
-function createCaptureIngestWorker() {
-  if (typeof Worker !== "function") {
-    return null;
-  }
-
-  try {
-    return new Worker(new URL("./workers/capture-ingest-worker.js", import.meta.url));
-  } catch (error) {
-    console.warn("Failed to initialize capture ingest worker:", error);
-    return null;
-  }
-}
-
-function terminateCaptureIngestWorkers(reason = "disabled") {
-  pendingCaptureIngestWorkerRequests.forEach(({ reject }) => {
-    reject(new Error(`Capture ingest worker stopped: ${reason}`));
-  });
-  pendingCaptureIngestWorkerRequests.clear();
-
-  captureIngestWorkers.forEach((worker) => {
-    try {
-      worker.terminate();
-    } catch {
-      // no-op
-    }
-  });
-  captureIngestWorkers = [];
-  captureIngestWorkerThreadCount = 0;
-  captureIngestWorkerCursor = 0;
-}
-
-function wireCaptureIngestWorker(worker) {
-  worker.onmessage = (event) => {
-    const payload = event?.data || {};
-    const requestId = Number(payload.id);
-    if (!requestId || !pendingCaptureIngestWorkerRequests.has(requestId)) {
-      return;
-    }
-
-    const pendingRequest = pendingCaptureIngestWorkerRequests.get(requestId);
-    pendingCaptureIngestWorkerRequests.delete(requestId);
-
-    if (!pendingRequest) {
-      return;
-    }
-
-    if (payload.ok) {
-      pendingRequest.resolve(payload.result || null);
-      return;
-    }
-
-    pendingRequest.reject(
-      new Error(
-        typeof payload.error === "string" && payload.error
-          ? payload.error
-          : "Capture ingest worker failed",
-      ),
-    );
-  };
-
-  worker.onerror = (error) => {
-    console.warn("Capture ingest worker crashed, switching to fallback path:", error);
-    terminateCaptureIngestWorkers("crash");
-  };
-}
-
-function ensureCaptureIngestWorkers() {
-  if (!isFrontendIngestThreadingEnabled()) {
-    if (captureIngestWorkers.length > 0) {
-      terminateCaptureIngestWorkers("threading-disabled");
-    }
-    return [];
-  }
-
-  const targetThreadCount = getFrontendIngestWorkerThreads();
-  if (
-    captureIngestWorkers.length === targetThreadCount
-    && captureIngestWorkerThreadCount === targetThreadCount
-  ) {
+const packetLoadingState = {
+  get activeBackendJobId() {
+    return activeBackendJobId;
+  },
+  set activeBackendJobId(value) {
+    activeBackendJobId = value;
+  },
+  get backendLastAppliedSnapshotProcessedPackets() {
+    return backendLastAppliedSnapshotProcessedPackets;
+  },
+  set backendLastAppliedSnapshotProcessedPackets(value) {
+    backendLastAppliedSnapshotProcessedPackets = value;
+  },
+  get backendLastAppliedSnapshotAtMs() {
+    return backendLastAppliedSnapshotAtMs;
+  },
+  set backendLastAppliedSnapshotAtMs(value) {
+    backendLastAppliedSnapshotAtMs = value;
+  },
+  get captureIngestWorkers() {
     return captureIngestWorkers;
-  }
+  },
+  set captureIngestWorkers(value) {
+    captureIngestWorkers = value;
+  },
+  get captureIngestWorkerThreadCount() {
+    return captureIngestWorkerThreadCount;
+  },
+  set captureIngestWorkerThreadCount(value) {
+    captureIngestWorkerThreadCount = value;
+  },
+  get captureIngestWorkerCursor() {
+    return captureIngestWorkerCursor;
+  },
+  set captureIngestWorkerCursor(value) {
+    captureIngestWorkerCursor = value;
+  },
+  get captureIngestWorkerRequestId() {
+    return captureIngestWorkerRequestId;
+  },
+  set captureIngestWorkerRequestId(value) {
+    captureIngestWorkerRequestId = value;
+  },
+  pendingCaptureIngestWorkerRequests,
+};
 
-  if (captureIngestWorkers.length > 0) {
-    terminateCaptureIngestWorkers("reconfigure");
-  }
-
-  const nextWorkers = [];
-  for (let i = 0; i < targetThreadCount; i += 1) {
-    const worker = createCaptureIngestWorker();
-    if (!worker) {
-      terminateCaptureIngestWorkers("create-failed");
-      return [];
-    }
-    wireCaptureIngestWorker(worker);
-    nextWorkers.push(worker);
-  }
-
-  captureIngestWorkers = nextWorkers;
-  captureIngestWorkerThreadCount = targetThreadCount;
-  captureIngestWorkerCursor = 0;
-  return captureIngestWorkers;
-}
-
-function syncCaptureIngestWorkersFromSettings() {
-  ensureCaptureIngestWorkers();
-}
-
-function requestCaptureIngestWorker(action, payload) {
-  const workerPool = ensureCaptureIngestWorkers();
-  if (!workerPool.length) {
-    return Promise.resolve(null);
-  }
-
-  captureIngestWorkerCursor = (captureIngestWorkerCursor + 1) % workerPool.length;
-  const worker = workerPool[captureIngestWorkerCursor];
-
-  return new Promise((resolve, reject) => {
-    captureIngestWorkerRequestId += 1;
-    const requestId = captureIngestWorkerRequestId;
-    pendingCaptureIngestWorkerRequests.set(requestId, { resolve, reject });
-
-    try {
-      worker.postMessage({
-        id: requestId,
-        action,
-        payload,
-      });
-    } catch (error) {
-      pendingCaptureIngestWorkerRequests.delete(requestId);
-      reject(error);
-    }
-  });
-}
-
-async function serializeCaptureDataForBackendLoad(captureData) {
-  try {
-    const workerResult = await requestCaptureIngestWorker("serialize-capture-data", {
-      captureData,
-    });
-    if (workerResult && typeof workerResult.serializedCaptureData === "string") {
-      return workerResult.serializedCaptureData;
-    }
-  } catch (error) {
-    console.warn("Falling back to main-thread capture serialization:", error);
-  }
-
-  return JSON.stringify(captureData);
-}
-
-async function stageIncrementalCapturePacketsInWorker(nextHostMap, previousHostMap, previousRealHosts) {
-  const previousHostPacketCounts = {};
-  Object.keys(previousHostMap || {}).forEach((host) => {
-    const previousHostPackets = Array.isArray(previousHostMap[host])
-      ? previousHostMap[host]
-      : [];
-    previousHostPacketCounts[host] = previousHostPackets.length;
-  });
-
-  try {
-    const workerResult = await requestCaptureIngestWorker("stage-incremental-packets", {
-      nextHostMap,
-      previousHostPacketCounts,
-      previousRealHosts: Array.isArray(previousRealHosts) ? previousRealHosts : [],
-    });
-
-    if (!workerResult || typeof workerResult !== "object") {
-      return null;
-    }
-
-    return {
-      nextHosts: Array.isArray(workerResult.nextHosts) ? workerResult.nextHosts : [],
-      hostSetChanged: Boolean(workerResult.hostSetChanged),
-      newPacketRefs: Array.isArray(workerResult.newPacketRefs)
-        ? workerResult.newPacketRefs
-        : [],
-    };
-  } catch (error) {
-    console.warn("Falling back to main-thread incremental packet staging:", error);
-    return null;
-  }
-}
-
-function shouldReplacePendingBackendCaptureUpdate(currentUpdate, nextUpdate) {
-  if (!currentUpdate) return true;
-  if (!nextUpdate) return false;
-
-  const currentComplete = Boolean(currentUpdate.payload?.complete);
-  const nextComplete = Boolean(nextUpdate.payload?.complete);
-  if (currentComplete !== nextComplete) {
-    return nextComplete;
-  }
-
-  const currentProcessed = Number(currentUpdate.payload?.processedPackets) || 0;
-  const nextProcessed = Number(nextUpdate.payload?.processedPackets) || 0;
-  if (currentProcessed !== nextProcessed) {
-    return nextProcessed > currentProcessed;
-  }
-
-  const currentTotal = Number(currentUpdate.payload?.totalPackets) || 0;
-  const nextTotal = Number(nextUpdate.payload?.totalPackets) || 0;
-  if (currentTotal !== nextTotal) {
-    return nextTotal > currentTotal;
-  }
-
-  return true;
-}
-
-function shouldApplyIncrementalBackendSnapshot(payload) {
-  if (!backendProgressState.firstChunkLoaded || payload?.complete) {
-    return true;
-  }
-
-  const processedPackets = Number(payload?.processedPackets) || 0;
-  const packetThreshold = Math.max(
-    (Number(payload?.chunkSize) || getBackendPacketChunkSize()) * 8,
-    getBackendIncrementalRefreshMinPackets(),
-  );
-  const packetDelta = Math.max(
-    0,
-    processedPackets - backendLastAppliedSnapshotProcessedPackets,
-  );
-  const elapsedMs = Math.max(0, performance.now() - backendLastAppliedSnapshotAtMs);
-
-  return (
-    packetDelta >= packetThreshold || elapsedMs >= getBackendIncrementalRefreshMinIntervalMs()
-  );
-}
-
-function markAppliedBackendSnapshot(payload) {
-  backendLastAppliedSnapshotProcessedPackets = Number(payload?.processedPackets) || 0;
-  backendLastAppliedSnapshotAtMs = performance.now();
-}
+const {
+  normalizeBackendJsonPathPayload,
+  normalizeBackendJsonDataPayload,
+  createFrontendBackendJobId,
+  shouldAcceptBackendPayloadForActiveJob,
+  countCaptureDataPackets,
+  hasAnyCaptureDataPackets,
+  createCaptureIngestWorker,
+  terminateCaptureIngestWorkers,
+  wireCaptureIngestWorker,
+  ensureCaptureIngestWorkers,
+  syncCaptureIngestWorkersFromSettings,
+  requestCaptureIngestWorker,
+  serializeCaptureDataForBackendLoad,
+  stageIncrementalCapturePacketsInWorker,
+  shouldReplacePendingBackendCaptureUpdate,
+  shouldApplyIncrementalBackendSnapshot,
+  markAppliedBackendSnapshot,
+} = createPacketLoadingHelpers({
+  state: packetLoadingState,
+  backendProgressState,
+  getBackendPacketChunkSize,
+  isFrontendIngestThreadingEnabled,
+  getFrontendIngestWorkerThreads,
+  getBackendIncrementalRefreshMinPackets,
+  getBackendIncrementalRefreshMinIntervalMs,
+  createWorker: () =>
+    new Worker(new URL("./workers/capture-ingest-worker.js", import.meta.url)),
+});
 
 initializeInstallScreen({
   installapi: window.installapi,
@@ -3145,7 +2891,7 @@ const { bindDataPanelEvents, logCurrentPacketDisplay } =
     syncBookmarkDropdown,
     infoPanel,
     popHexGrid,
-    populateDataTypes,
+    populateDataTypes: (...args) => populateDataTypes(...args),
   });
 bindDataPanelEvents();
 
@@ -4038,141 +3784,30 @@ function cacheHydratedPacket(packetKey, packet) {
   }
 }
 
-// Clears stream packet hydration cache.
-function clearStreamPacketHydrationCache() {
-  streamPacketHydrationCache.clear();
-  streamPayloadHexCache.clear();
-}
-
-function buildStreamPayloadHexCacheKey(streamPackets) {
-  if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
-    return "";
-  }
-  const firstPacket = streamPackets[0];
-  const lastPacket = streamPackets[streamPackets.length - 1];
-  const firstPacketKey = getPacketKey(firstPacket, "", 0);
-  const lastPacketKey = getPacketKey(lastPacket, "", streamPackets.length - 1);
-  const packetInfo = firstPacket?.["packet.info"] || {};
-  const streamKey = buildBidirectionalStreamKey(packetInfo) || "unknown-stream";
-  return `${streamKey}|${streamPackets.length}|${firstPacketKey}|${lastPacketKey}`;
-}
-
-function setStreamPayloadHexCache(cacheKey, payloadHex) {
-  if (!cacheKey || typeof payloadHex !== "string") {
-    return;
-  }
-  if (streamPayloadHexCache.has(cacheKey)) {
-    streamPayloadHexCache.delete(cacheKey);
-  }
-  streamPayloadHexCache.set(cacheKey, payloadHex);
-  while (streamPayloadHexCache.size > STREAM_PAYLOAD_HEX_CACHE_LIMIT) {
-    const oldestKey = streamPayloadHexCache.keys().next().value;
-    if (!oldestKey) break;
-    streamPayloadHexCache.delete(oldestKey);
-  }
-}
-
-async function warmStreamPacketHydrationCache(streamKey, streamPacketRefs) {
-  if (!streamKey || !Array.isArray(streamPacketRefs) || streamPacketRefs.length === 0) {
-    return [];
-  }
-
-  const cachedStreamPackets = streamPacketHydrationCache.get(streamKey);
-  if (Array.isArray(cachedStreamPackets)) {
-    return cachedStreamPackets;
-  }
-  if (cachedStreamPackets) {
-    return cachedStreamPackets;
-  }
-
-  const hydrationPromise = (async () => {
-    await yieldToRenderer();
-    const hydratedPackets = await Promise.all(
-      streamPacketRefs.map(({ packet, host, packetIndex }) =>
-        ensurePacketHydrated(packet, host, packetIndex),
-      ),
-    );
-    const resolvedPackets = hydratedPackets.filter(Boolean);
-    streamPacketHydrationCache.set(streamKey, resolvedPackets);
-    return resolvedPackets;
-  })().catch((error) => {
-    logErrorEntry("stream-packet-hydration", error);
-    streamPacketHydrationCache.delete(streamKey);
-    return [];
-  });
-
-  streamPacketHydrationCache.set(streamKey, hydrationPromise);
-  return hydrationPromise;
-}
-
-// Handles update packet in collections.
-function updatePacketInCollections(packetKey, packet) {
-  if (!packetKey || !packet) return;
-  const hosts = capturedPackets?.Host || {};
-  for (const host of Object.keys(hosts)) {
-    const packetList = hosts[host];
-    if (!Array.isArray(packetList)) continue;
-    const packetIndex = packetList.findIndex(
-      (entry) => getPacketKey(entry, host) === packetKey,
-    );
-    if (packetIndex >= 0) {
-      packetList[packetIndex] = packet;
-      break;
-    }
-  }
-
-  if (Array.isArray(filteredPackets)) {
-    const filteredIndex = filteredPackets.findIndex(
-      (entry) => getPacketKey(entry) === packetKey,
-    );
-    if (filteredIndex >= 0) {
-      filteredPackets[filteredIndex] = packet;
-    }
-  }
-
-  if (Array.isArray(p)) {
-    const packetIndex = p.findIndex((entry) => getPacketKey(entry) === packetKey);
-    if (packetIndex >= 0) {
-      p[packetIndex] = packet;
-    }
-  }
-}
-
-async function ensurePacketHydrated(packet, fallbackHost = "", fallbackIndex = 0) {
-  if (!packet) return null;
-  const packetKey = getPacketKey(packet, fallbackHost, fallbackIndex);
-  if (!packetKey) return packet;
-
-  const payloadHex =
-    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
-    packet?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"];
-  if (typeof payloadHex === "string" && payloadHex.length > 0) {
-    cacheHydratedPacket(packetKey, packet);
-    return packet;
-  }
-
-  if (hydratedPacketCache.has(packetKey)) {
-    return hydratedPacketCache.get(packetKey);
-  }
-
-  if (!window.captureapi) {
-    return packet;
-  }
-
-  const result = await window.captureapi.getPacket(packetKey);
-  if (!result?.success || !result.packet) {
-    return packet;
-  }
-
-  const hydrated = {
-    ...result.packet,
-    __packetKey: packetKey,
-    __packetStub: false,
-  };
-  cacheHydratedPacket(packetKey, hydrated);
-  updatePacketInCollections(packetKey, hydrated);
-  return hydrated;
-}
+const {
+  clearStreamPacketHydrationCache,
+  buildStreamPayloadHexCacheKey,
+  setStreamPayloadHexCache,
+  warmStreamPacketHydrationCache,
+  updatePacketInCollections,
+  ensurePacketHydrated,
+} = createStreamHelpers({
+  state: {
+    streamPacketHydrationCache,
+    streamPayloadHexCache,
+    hydratedPacketCache,
+    streamPayloadHexCacheLimit: STREAM_PAYLOAD_HEX_CACHE_LIMIT,
+  },
+  getPacketKey,
+  buildBidirectionalStreamKey,
+  yieldToRenderer,
+  ensureHydratedPacketCached: cacheHydratedPacket,
+  logErrorEntry,
+  getCapturedPackets: () => capturedPackets,
+  getFilteredPackets: () => filteredPackets,
+  getPacketsForHost: () => p,
+  getCaptureApi: () => window.captureapi,
+});
 
 // Returns whether location filter query.
 function isLocationFilterQuery(filterQuery) {
@@ -11478,79 +11113,35 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
 // Data tools and workspace display toggles
 // ============================================================================
 
-function showDataTools(tabName = CONV_CONVERSIONS_SUBTAB) {
-  activeMainTab = MAIN_TAB_DATA_TOOLS;
-  statusUpdate("Status: Displaying data conversion tools");
-  writeLogEntry(`[${threadName}] User opened data conversion tools view`);
-  document.getElementById("prev-btn").style.display = "none";
-  document.getElementById("next-btn").style.display = "none";
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "none";
-  document.getElementById("list_box").style.display = "none";
-  document.getElementById("notes_box").style.display = "none";
-  document.getElementById("settings_box").style.display = "none";
-  document.getElementById("crypt_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("rightside").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "flex";
-  setConvSubtab(tabName);
-  if (tabName === CONV_CONVERSIONS_SUBTAB) {
-    normalizeDataToolsHexInputFormatting();
-  }
-  runDeferredDataToolsAnalysisForActiveSubtab();
-}
-
-// Shows notes workspace.
-function showNotesWorkspace() {
-  activeMainTab = MAIN_TAB_NOTES;
-  statusUpdate("Status: Displaying session notes");
-  writeLogEntry(`[${threadName}] User opened notes workspace view`);
-  document.getElementById("prev-btn").style.display = "none";
-  document.getElementById("next-btn").style.display = "none";
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "none";
-  document.getElementById("list_box").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "none";
-  document.getElementById("settings_box").style.display = "none";
-  document.getElementById("crypt_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("notes_box").style.display = "flex";
-  document.getElementById("rightside").style.display = "block";
-  const rightsideDataEl = document.getElementById("rightside-data");
-  const rightsideNotesEl = document.getElementById("rightside-notes");
-  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
-  if (rightsideDataEl) rightsideDataEl.hidden = true;
-  if (rightsideNotesEl) rightsideNotesEl.hidden = false;
-  if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
-  renderNotesList();
-}
-
-// Shows settings workspace.
-function showSettingsWorkspace() {
-  activeMainTab = MAIN_TAB_SETTINGS;
-  statusUpdate("Status: Displaying settings");
-  writeLogEntry(`[${threadName}] User opened settings workspace view`);
-  document.getElementById("prev-btn").style.display = "none";
-  document.getElementById("next-btn").style.display = "none";
-  document.getElementById("packetInfoPane").style.display = "none";
-  document.getElementById("packetPayloadPane").style.display = "none";
-  document.getElementById("summary_box").style.display = "none";
-  document.getElementById("stats_box").style.display = "none";
-  document.getElementById("list_box").style.display = "none";
-  document.getElementById("notes_box").style.display = "none";
-  document.getElementById("data_tools_box").style.display = "none";
-  document.getElementById("settings_box").style.display = "none";
-  document.getElementById("crypt_box").style.display = "none";
-  document.getElementById("keystore_box").style.display = "none";
-  document.getElementById("settings_box").style.display = "flex";
-  document.getElementById("rightside").style.display = "none";
-  setSettingsSubtab(activeSettingsSubtab);
-  syncSettingsFormFromState();
-}
+const { showDataTools, showNotesWorkspace, showSettingsWorkspace } =
+  createWorkspaceTabController({
+    constants: {
+      MAIN_TAB_DATA_TOOLS,
+      MAIN_TAB_NOTES,
+      MAIN_TAB_SETTINGS,
+      CONV_CONVERSIONS_SUBTAB,
+    },
+    state: {
+      get activeMainTab() {
+        return activeMainTab;
+      },
+      set activeMainTab(value) {
+        activeMainTab = value;
+      },
+      get activeSettingsSubtab() {
+        return activeSettingsSubtab;
+      },
+    },
+    statusUpdate,
+    writeLogEntry,
+    threadName,
+    setConvSubtab,
+    normalizeDataToolsHexInputFormatting,
+    runDeferredDataToolsAnalysisForActiveSubtab,
+    renderNotesList,
+    setSettingsSubtab,
+    syncSettingsFormFromState,
+  });
 
 // Returns first line or fallback.
 function getFirstLineOrFallback(elementId, fallback = "") {
@@ -11668,7 +11259,7 @@ const listPanel = createListPanel({
   showAllData,
   infoPanel,
   popHexGrid,
-  populateDataTypes,
+  populateDataTypes: (...args) => populateDataTypes(...args),
   isCaptureStoreBackedCapture: () => isCaptureStoreBackedCapture,
   getCurrentSettings,
   setCurrentSettings,
@@ -18918,240 +18509,38 @@ async function handlePacketNavigation(navAction, navBookmark) {
   }
 }
 
-// Returns packet data type items.
-function getPacketDataTypeItems(packetEntry) {
-  const extraInfo = packetEntry?.["extra.info"] || {};
-  const traits = extraInfo["Traits"] || {};
-  const serverInfo = traits["Server Info"] || {};
-  const networkData = traits["Network Data"] || {};
-  let dataItems = Array.isArray(extraInfo["Data Types"])
-    ? [...extraInfo["Data Types"]]
-    : [];
-
-  if (
-    serverInfo["Encryption Data"] != "N/A" &&
-    serverInfo["Encryption Data"] != undefined
-  ) {
-    const sslDetails = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Unknown";
-    const protoName =
-      networkData["Port Protocol"] ?? networkData["Port Protcol"] ?? "Unknown";
-    dataItems = [];
-    dataItems.push(sslDetails + " encrypted stream");
-    dataItems.push(protoName + " protocol data");
-  }
-
-  return dataItems;
-}
-
-// Normalizes protocol token.
-function normalizeProtocolToken(value) {
-  return String(value ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-}
-
-// Collects packet protocol tokens.
-function collectPacketProtocolTokens(packetEntry) {
-  const packetInfo = packetEntry?.["packet.info"] || {};
-  const extraInfo = packetEntry?.["extra.info"] || {};
-  const traits = extraInfo["Traits"] || {};
-  const networkData = traits["Network Data"] || {};
-  const tokens = new Set();
-
-  const pushToken = (value) => {
-    if (value == null) return;
-    if (Array.isArray(value)) {
-      value.forEach((item) => pushToken(item));
-      return;
-    }
-    const text = String(value).trim();
-    if (!text) return;
-    const normalizedWhole = normalizeProtocolToken(text);
-    if (normalizedWhole) tokens.add(normalizedWhole);
-    text.split(/[^A-Za-z0-9]+/).forEach((segment) => {
-      const normalized = normalizeProtocolToken(segment);
-      if (normalized) tokens.add(normalized);
-    });
-  };
-
-  pushToken(packetInfo["packet.proto"] ?? packetInfo["Protocol"]);
-  pushToken(packetInfo["packet.decoded_protocols"] ?? packetInfo["Decoded Protocols"]);
-  pushToken(packetInfo["Link Control"]);
-  pushToken(networkData["Port Protocol"]);
-  pushToken(networkData["Port Protcol"]);
-  pushToken(networkData["Port Description"]);
-
-  return [...tokens];
-}
-
-// Returns matched hidden data type protocol.
-function getMatchedHiddenDataTypeProtocol(packetEntry) {
-  const protocolTokens = collectPacketProtocolTokens(packetEntry);
-  for (const token of protocolTokens) {
-    if (DATA_TYPES_DEFAULT_HIDDEN_PROTOCOLS.has(token)) {
-      return token;
-    }
-    if (
-      DATA_TYPES_DEFAULT_HIDDEN_PROTOCOL_PREFIXES.some((prefix) =>
-        token.startsWith(prefix),
-      )
-    ) {
-      return token;
-    }
-  }
-  return "";
-}
-
-// Returns whether likely file like data types.
-function hasLikelyFileLikeDataTypes(packetEntry, dataItems) {
-  const extraInfo = packetEntry?.["extra.info"] || {};
-  const traits = extraInfo["Traits"] || {};
-  const characters = traits["Characters"] || {};
-  const packetInfo = packetEntry?.["packet.info"] || {};
-  const payloadLength = getPacketInfoPayloadLength(packetInfo);
-
-  if (Number.isFinite(payloadLength) && payloadLength <= 0) {
-    return false;
-  }
-
-  const charset = String(characters["Charset"] ?? "").trim().toLowerCase();
-  if (charset && charset !== "unknown" && charset !== "n/a") {
-    return true;
-  }
-
-  const mimeType = String(extraInfo["MIME Type"] ?? "")
-    .trim()
-    .toLowerCase();
-  const usefulMimeHints = [
-    "text/",
-    "image/",
-    "audio/",
-    "video/",
-    "application/json",
-    "application/xml",
-    "application/pdf",
-    "application/zip",
-    "application/gzip",
-    "application/x-",
-  ];
-  if (usefulMimeHints.some((hint) => mimeType.startsWith(hint))) {
-    return true;
-  }
-
-  const nonUsefulDataTypePatterns = [
-    /^unknown\s*data\s*type$/i,
-    /encrypted\s+stream/i,
-    /protocol\s+data/i,
-    /^unknown$/i,
-    /^n\/a$/i,
-  ];
-  const hasUsefulDataType = dataItems.some((item) => {
-    const normalized = String(item ?? "").trim();
-    if (!normalized) return false;
-    return !nonUsefulDataTypePatterns.some((pattern) => pattern.test(normalized));
-  });
-
-  return hasUsefulDataType;
-}
-
-// Returns data types visibility state.
-function getDataTypesVisibilityState(packetEntry) {
-  const dataItems = getPacketDataTypeItems(packetEntry);
-  const hiddenProtocolToken = getMatchedHiddenDataTypeProtocol(packetEntry);
-  const hiddenByProtocol = hiddenProtocolToken !== "";
-  const likelyFileLikeData = hasLikelyFileLikeDataTypes(packetEntry, dataItems);
-  const hiddenByHeuristic = !hiddenByProtocol && !likelyFileLikeData;
-  const isOverridden = currentPacketKey != null && dataTypesOverridePacketKey === currentPacketKey;
-
-  return {
-    showPane: isOverridden || (!hiddenByProtocol && !hiddenByHeuristic ? true : false),
-    reason: hiddenByProtocol
-      ? `Hidden by default for ${hiddenProtocolToken} control / management traffic.Show it anyway to inspect encapsulated or tunneled payload guesses.`
-      : hiddenByHeuristic
-        ? "Hidden by default because this packet has no strong file-like payload indicators. Show it anyway to inspect encapsulated or tunneled payload guesses."
-        : "",
-  };
-}
-
-// Applies data types visibility.
-function applyDataTypesVisibility(visibilityState) {
-  const dataTypesEl = document.getElementById("data-types");
-  const dataTypesPaneEl = document.getElementById("dataTypesPane");
-  const overrideWrapEl = document.getElementById("data-types-override-wrap");
-  const overrideTextEl = document.getElementById("data-types-override-text");
-  const overrideButtonEl = document.getElementById("data-types-override-btn");
-
-  if (
-    !dataTypesEl ||
-    !dataTypesPaneEl ||
-    !overrideWrapEl ||
-    !overrideTextEl ||
-    !overrideButtonEl
-  ) {
-    return;
-  }
-
-  dataTypesPaneEl.hidden = !visibilityState.showPane;
-  overrideWrapEl.hidden = visibilityState.showPane;
-  overrideButtonEl.hidden = visibilityState.showPane;
-  overrideTextEl.textContent = visibilityState.reason;
-  dataTypesEl.classList.toggle("data-types-collapsed", !visibilityState.showPane);
-}
+const {
+  getPacketDataTypeItems,
+  normalizeProtocolToken,
+  collectPacketProtocolTokens,
+  getMatchedHiddenDataTypeProtocol,
+  hasLikelyFileLikeDataTypes,
+  getDataTypesVisibilityState,
+  applyDataTypesVisibility,
+  populateDataTypes,
+} = createDataTypeHelpers({
+  constants: {
+    hiddenProtocols: DATA_TYPES_DEFAULT_HIDDEN_PROTOCOLS,
+    hiddenProtocolPrefixes: DATA_TYPES_DEFAULT_HIDDEN_PROTOCOL_PREFIXES,
+  },
+  state: {
+    get index() {
+      return index;
+    },
+    get currentPacketKey() {
+      return currentPacketKey;
+    },
+    get dataTypesOverridePacketKey() {
+      return dataTypesOverridePacketKey;
+    },
+  },
+  getPacketInfoPayloadLength,
+  setPrevNextButtonVisibility,
+});
 
 // ============================================================================
 // Packet detail rendering and hex/ASCII visualization
 // ============================================================================
-
-// Populates data types.
-function populateDataTypes(p) {
-  setPrevNextButtonVisibility(p, index);
-  const typesListEl = document.getElementById("types-list");
-  typesListEl.textContent = "";
-  const mimeTypeEl = document.getElementById("mime-type");
-  const encodingEl = document.getElementById("encoding");
-  const languageEl = document.getElementById("language");
-  encodingEl.textContent = "";
-  languageEl.textContent = "";
-  let encodingText = "";
-  let languageText = "";
-  const packetEntry = p?.[index] || {};
-  const visibilityState = getDataTypesVisibilityState(packetEntry);
-  applyDataTypesVisibility(visibilityState);
-  const extraInfo = packetEntry["extra.info"] || {};
-  const traits = extraInfo["Traits"] || {};
-  const characters = traits["Characters"] || {};
-
-  const encodingData = characters["Encoding"];
-  if (encodingData === "Unavailable for high entropy data") {
-    encodingText = "Unavailable for high entropy data";
-  } else if (encodingData && typeof encodingData === "object") {
-    encodingText = JSON.stringify(encodingData["encoding"] ?? "Unknown");
-    languageText = JSON.stringify(encodingData["language"] ?? "Unknown");
-  } else {
-    encodingText = "Unknown";
-    languageText = "Unknown";
-  }
-
-  const mimeTypeText = String(extraInfo["MIME Type"] ?? "Unknown");
-  const dataItems = getPacketDataTypeItems(packetEntry);
-
-  mimeTypeEl.textContent = "MIME type: " + mimeTypeText;
-  encodingText = encodingText == "" ? "Unknown" : encodingText;
-  if (encodingText !== undefined) {
-    encodingEl.textContent =
-      "Payload Encoding: " + encodingText.replace(/"/g, "");
-  }
-  if (languageText !== undefined) {
-    languageEl.textContent =
-      "Payload Language: " + languageText.replace(/"/g, "");
-  }
-  dataItems.forEach((item) => {
-    const listItem = document.createElement("li");
-    listItem.textContent = String(item ?? "Unknown");
-    typesListEl.appendChild(listItem);
-  });
-}
 
 const dataTypesOverrideButtonEl = document.getElementById("data-types-override-btn");
 if (dataTypesOverrideButtonEl) {

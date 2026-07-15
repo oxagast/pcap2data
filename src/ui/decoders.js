@@ -1,1 +1,1 @@
-module.exports = require("../decoders");
+module.exports = require("../decoders/index");
