@@ -153,7 +153,7 @@
     // --- Network fetch example ------------------------------------------------------------------
     // Uses browser fetch() so it follows app CSP/connect-src rules.
     async function fetchRemoteExample() {
-        const response = await fetch("https://api.github.com/repos/microsoft/vscode", {
+        const response = await fetch("https://api.github.com/repos/oxasploits/PacketSnitch", {
             headers: {
                 Accept: "application/vnd.github+json",
             },

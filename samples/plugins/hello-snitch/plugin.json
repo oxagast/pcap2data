@@ -2,7 +2,7 @@
     "pluginName": "hello-snitch",
     "version": "1.0.0",
     "pluginVersion": "1.0.0",
-    "author": "PacketSnitch Sample",
+    "author": "oxagast",
     "authorHomepage": "https://packetsnitch.com",
     "updateUrl": "https://packetsnitch.com/plugins/hello-snitch",
     "capabilities": [
