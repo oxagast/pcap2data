@@ -5,11 +5,12 @@ This sample plugin demonstrates three behaviors:
 1. Reads current PacketSnitch version via `window.installapi.checkFirstRun()`.
 2. Displays `Hello, from PacketSnitch version: x.y.z`.
 3. Writes that message to `~/Documents/hello-snitch-version.txt`.
+4. Demonstrates capability enforcement with an intentionally unauthorized chmod action.
 
 ## Files
 
 - `plugin.json`: plugin manifest (compatible with current PacketSnitch plugin installer checks).
-- `plugin.js`: plugin runtime script exposing `window.HelloSnitchPlugin.run()`.
+- `hello.js`: plugin runtime script exposing `window.HelloSnitchPlugin.run()`.
 
 ## Expected host behavior
 

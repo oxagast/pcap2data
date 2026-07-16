@@ -24,6 +24,6 @@
         ">=2.0.0"
     ],
     "priority": 100,
-    "entry": "plugin.js",
+    "entry": "hello.js",
     "description": "Comment-heavy tutorial plugin showing UI tab creation, context menu action wiring, file IO, remote fetch, and safe callback wrapping patterns."
 }

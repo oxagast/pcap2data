@@ -358,6 +358,8 @@ Archive safety and validation behavior:
 - Optional metadata:
   - `author`, `authorHomepage`, `updateUrl`, `priority`, `entry`
 - Version compatibility is checked before install; incompatible plugins are rejected.
+- Declared capabilities are shown to the user during install review before confirmation.
+- Capability tokens are normalized to lowercase and de-duplicated at runtime.
 
 ---
 
@@ -389,7 +391,7 @@ The runtime context includes:
 
 ### Capability Catalog (Dot Notation)
 
-Canonical source file: `config/plugin-capabilities.json`
+Canonical source file: `src/preload.js` (`PLUGIN_CAPABILITY_CATALOG`)
 
 - `version.read`
 - `ui.dialog.add`
@@ -413,10 +415,22 @@ Canonical source file: `config/plugin-capabilities.json`
 
 Runtime policy behavior:
 
-- Plugin runtime code is evaluated in a sandboxed VM.
-- Sensitive operations are denied unless their capability is declared.
+- Capabilities are enforced for guarded host bridges (`context.api.*`, `context.permissions.*`, guarded `documentRef`/`windowRef`, `context.fetch`, `statusUpdate`, `writeLogEntry`).
+- Sensitive operations on guarded APIs are denied unless the required capability is declared.
 - Denied operations are logged to Activity Log with plugin ID and reason.
-- Legacy capability names are normalized to current dot-notation aliases.
+- Exact tokens, `*`, and namespace wildcards (for example `network.*`) are supported by capability matching.
+- This is not an OS/container sandbox; plugins should use guarded APIs to remain compatible with policy enforcement.
+
+Legacy alias normalization:
+
+- `ui.message` -> `ui.statusbar.modify`
+- `ui.tab` -> `ui.tabs.create`
+- `ui.contextmenu` -> `ui.contextmenu.create`
+- `filesystem.read` -> `fs.read`
+- `filesystem.write` -> `fs.write`
+- `documents.write` -> `ui.dom.write`
+- `network.fetch` -> `network.fetch.http`
+- `status.wrap` -> `packetsnitch.functions.overwrite`
 
 Failure handling and safety:
 
@@ -477,12 +491,12 @@ Use this complete sample manifest:
     ">=2.0.0"
   ],
   "priority": 100,
-  "entry": "plugin.js",
+  "entry": "hello.js",
   "description": "Comment-heavy tutorial plugin showing UI tab creation, context menu action wiring, file IO, remote fetch, and safe callback wrapping patterns."
 }
 ```
 
-### Step 3: Create runtime (`plugin.js`)
+### Step 3: Create runtime (`hello.js`)
 
 Use this complete `hello-snitch` runtime script:
 
@@ -812,7 +826,7 @@ Create a zip where `plugin.json` is included in the archive content (root or sub
 Example from inside your plugin folder:
 
 ```bash
-zip -r hello-snitch.zip plugin.json plugin.js
+zip -r hello-snitch.zip plugin.json hello.js
 ```
 
 ### Step 5: Install and run in PacketSnitch
@@ -833,6 +847,7 @@ After install, PacketSnitch loads enabled plugins and calls `init(context)`.
 - A context-menu action `Open Hello` appears.
 - A file is written to `~/Documents/hello-snitch-version.txt`.
 - Clicking **Fetch Example Data** requests repository metadata from GitHub.
+- Clicking **Try Unauthorized chmod** demonstrates capability denial unless `fs.chmod` is granted.
 
 ---
 
