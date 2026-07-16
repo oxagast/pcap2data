@@ -1,6 +1,6 @@
 # Plugins
 
-This page includes both the PacketSnitch [Themes](#Themes) reference and a complete [Plugins](#Plugins) reference/tutorial.
+This page includes both the PacketSnitch [Themes](#themes-reference) reference and a complete [Plugins](#plugins-reference) reference/tutorial.
 
 ## Themes Reference
 
