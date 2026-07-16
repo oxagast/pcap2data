@@ -205,6 +205,7 @@ if backendDir not in sys.path:
     sys.path.insert(0, backendDir)
 
 import decoders.address_resolution as dec_address_resolution
+import decoders.bittorrent as dec_bittorrent
 import decoders.bgp as dec_bgp
 import decoders.dhcp as dec_dhcp
 import decoders.ftp as dec_ftp
@@ -228,8 +229,10 @@ import decoders.rtsp as dec_rtsp
 import decoders.sctp as dec_sctp
 import decoders.sip as dec_sip
 import decoders.smb as dec_smb
+import decoders.smpp as dec_smpp
 import decoders.smtp as dec_smtp
 import decoders.snmp as dec_snmp
+import decoders.soulseek as dec_soulseek
 import decoders.ssh as dec_ssh
 import decoders.telnet as dec_telnet
 import decoders.tftp as dec_tftp
@@ -2448,7 +2451,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     IMAP/IMAP4 (143/993), Telnet (23), IRC (6667-6669), MTP (1755), LDAP (389/636),
     MySQL (3306), PostgreSQL (5432), XMPP (5222/5223), SMB (139/445), MQTT (1883/8883),
     RTSP (554), TFTP (UDP 69), BGP (179), NNTP (119), RADIUS (1812/1813/1645/1646),
-    WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), Kerberos (88), and
+    WebSocket (80/443/8080/8443/8765), NFS/RPC (2049/111), Kerberos (88), SMPP (2775),
+    Soulseek (2234/2240/2242), BitTorrent (6881-6889/6969 + signature detection), and
     WAN/link-control protocols (ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP,
     PPP, LCP, LAP, NCP), IGMP, and ARP/RARP address-resolution frames are also
     decoded when layer data is available. ICMP packets are fully supported as a
@@ -2891,6 +2895,26 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     smbSection = dec_smb.decodeSMB(rawPayload)
                     if smbSection is not None:
                         transportSection["SMB"] = smbSection
+                # Decode SMPP on TCP ports 2775/3550
+                if streamLabelPort in (2775, 3550) or srcPort in (2775, 3550):
+                    smppSection = dec_smpp.decodeSMPP(rawPayload)
+                    if smppSection is not None:
+                        transportSection["SMPP"] = smppSection
+                # Decode Soulseek message envelopes on common TCP ports
+                if streamLabelPort in (2234, 2240, 2242) or srcPort in (2234, 2240, 2242):
+                    soulseekSection = dec_soulseek.decodeSoulseek(rawPayload)
+                    if soulseekSection is not None:
+                        transportSection["Soulseek"] = soulseekSection
+                # Decode BitTorrent peer-wire/handshake patterns (with common-port assist)
+                btCommonPorts = {6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889, 6969}
+                if (
+                    streamLabelPort in btCommonPorts
+                    or srcPort in btCommonPorts
+                    or rawPayload.startswith(b"\x13BitTorrent protocol")
+                ):
+                    bittorrentSection = dec_bittorrent.decodeBitTorrent(rawPayload)
+                    if bittorrentSection is not None:
+                        transportSection["BitTorrent"] = bittorrentSection
                 # Decode MQTT on TCP ports 1883/8883
                 if streamLabelPort in (1883, 8883) or srcPort in (1883, 8883):
                     mqttSection = dec_mqtt.decodeMQTT(rawPayload)
@@ -3070,6 +3094,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     kerberosSection = dec_kerberos.decodeKerberos(rawPayload)
                     if kerberosSection is not None:
                         transportSection["Kerberos"] = kerberosSection
+                # Decode BitTorrent DHT/KRPC patterns on common UDP ports/signatures
+                btCommonUdpPorts = {6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889, 6969}
+                if (
+                    dstPort in btCommonUdpPorts
+                    or srcPort in btCommonUdpPorts
+                    or (len(rawPayload) >= 3 and rawPayload[:1] == b"d")
+                ):
+                    bittorrentSection = dec_bittorrent.decodeBitTorrent(rawPayload)
+                    if bittorrentSection is not None:
+                        transportSection["BitTorrent"] = bittorrentSection
                 protocolKey = "UDP"
             elif isSctp:
                 sctpSection = dec_sctp.decodeSctpPacket(p)

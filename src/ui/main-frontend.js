@@ -41,6 +41,9 @@ const {
   renderPostgresqlTable,
   renderXmppTable,
   renderSmbTable,
+  renderSmppTable,
+  renderSoulseekTable,
+  renderBitTorrentTable,
   renderMqttTable,
   renderRtspTable,
   renderTftpTable,
@@ -11578,6 +11581,163 @@ function decodeSipFromBytes(bytes) {
   return fields.length ? { protocol: "SIP", fields } : null;
 }
 
+function decodeSmppFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 16) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const commandLength = view.getUint32(0, false);
+  const commandId = view.getUint32(4, false);
+  const commandStatus = view.getUint32(8, false);
+  const sequenceNumber = view.getUint32(12, false);
+
+  if (commandLength < 16 || commandLength > bytes.length) return null;
+
+  const commandMap = {
+    0x00000001: "bind_receiver",
+    0x00000002: "bind_transmitter",
+    0x00000003: "query_sm",
+    0x00000004: "submit_sm",
+    0x00000005: "deliver_sm",
+    0x00000006: "unbind",
+    0x00000009: "bind_transceiver",
+    0x00000015: "enquire_link",
+    0x00000021: "submit_multi",
+    0x00000103: "data_sm",
+  };
+  const baseCommandId = commandId & 0x7fffffff;
+  const command = commandMap[baseCommandId];
+  if (!command) return null;
+
+  return {
+    protocol: "SMPP",
+    fields: [
+      { name: "Command", value: command },
+      { name: "Command ID", value: `0x${commandId.toString(16).padStart(8, "0")}` },
+      { name: "Is Response", value: (commandId & 0x80000000) !== 0 ? "Yes" : "No" },
+      { name: "Command Status", value: String(commandStatus) },
+      { name: "Sequence Number", value: String(sequenceNumber) },
+      { name: "Body Length", value: String(commandLength - 16) },
+    ],
+  };
+}
+
+function decodeSoulseekFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 8) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const messageLength = view.getUint32(0, true);
+  const messageCode = view.getUint32(4, true);
+  const totalLength = messageLength + 4;
+
+  if (messageLength < 4 || totalLength > bytes.length || messageCode > 0xffff) {
+    return null;
+  }
+
+  const body = bytes.slice(8, totalLength);
+  const preview = new TextDecoder("utf-8", { fatal: false })
+    .decode(body)
+    .replace(/\u0000+/g, "")
+    .trim();
+
+  const fields = [
+    { name: "Message Code", value: String(messageCode) },
+    { name: "Message Code Hex", value: `0x${messageCode.toString(16).padStart(4, "0")}` },
+    { name: "Message Length", value: String(messageLength) },
+    { name: "Body Length", value: String(body.length) },
+  ];
+  if (preview) {
+    fields.push({
+      name: "Payload Preview",
+      value: preview.length > 120 ? `${preview.slice(0, 120)}...` : preview,
+    });
+  }
+
+  return { protocol: "Soulseek", fields };
+}
+
+function decodeBittorrentFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+
+  try {
+
+    if (bytes.length >= 68 && bytes[0] === 19) {
+      const protocol = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(1, 20));
+      if (protocol === "BitTorrent protocol") {
+        const infoHash = bytesToHexLower(bytes.slice(28, 48));
+        const peerIdBytes = bytes.slice(48, 68);
+        const peerIdHex = bytesToHexLower(peerIdBytes);
+        const peerId = Array.from(peerIdBytes, (value) =>
+          value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : ".",
+        )
+          .join("")
+          .replace(/^\.+|\.+$/g, "");
+        const fields = [
+          { name: "Type", value: "Handshake" },
+          { name: "Protocol", value: "BitTorrent protocol" },
+          { name: "Info Hash", value: infoHash },
+          { name: "Peer ID Hex", value: peerIdHex },
+        ];
+        if (peerId) fields.push({ name: "Peer ID", value: peerId });
+        return { protocol: "BitTorrent", fields };
+      }
+    }
+
+    if (bytes.length >= 4) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const messageLength = view.getUint32(0, false);
+      if (messageLength === 0) {
+        return {
+          protocol: "BitTorrent",
+          fields: [
+            { name: "Type", value: "Peer Wire" },
+            { name: "Message", value: "keepalive" },
+            { name: "Message Length", value: "0" },
+          ],
+        };
+      }
+      if (messageLength >= 1 && messageLength <= bytes.length - 4) {
+        const messageId = bytes[4];
+        const messageMap = {
+          0: "choke",
+          1: "unchoke",
+          2: "interested",
+          3: "not interested",
+          4: "have",
+          5: "bitfield",
+          6: "request",
+          7: "piece",
+          8: "cancel",
+          9: "port",
+          20: "extended",
+        };
+        return {
+          protocol: "BitTorrent",
+          fields: [
+            { name: "Type", value: "Peer Wire" },
+            { name: "Message", value: messageMap[messageId] || `id_${messageId}` },
+            { name: "Message ID", value: String(messageId) },
+            { name: "Message Length", value: String(messageLength) },
+          ],
+        };
+      }
+    }
+
+    const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 256));
+    if (text.startsWith("d") && text.includes("1:y1:") && (text.includes("1:q") || text.includes("1:r"))) {
+      const txMatch = text.match(/1:y1:([qre])/);
+      const queryMatch = text.match(/1:q(\d+):([a-z_]+)/i);
+      const fields = [
+        { name: "Type", value: "DHT KRPC" },
+        { name: "Transaction Type", value: txMatch?.[1] || "unknown" },
+      ];
+      if (queryMatch?.[2]) fields.push({ name: "Query", value: queryMatch[2] });
+      return { protocol: "BitTorrent", fields };
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Handles auto detect proto from bytes.
 function autoDetectProtoFromBytes(bytes) {
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
@@ -11635,6 +11795,19 @@ function autoDetectProtoFromBytes(bytes) {
   )
     return "imap";
   if (decodeLdapFromBytes(bytes)) return "ldap";
+  try {
+    if (typeof decodeSmppFromBytes === "function" && decodeSmppFromBytes(bytes)) {
+      return "smpp";
+    }
+    if (typeof decodeSoulseekFromBytes === "function" && decodeSoulseekFromBytes(bytes)) {
+      return "soulseek";
+    }
+    if (typeof decodeBittorrentFromBytes === "function" && decodeBittorrentFromBytes(bytes)) {
+      return "bittorrent";
+    }
+  } catch {
+    // Keep auto-detect resilient; one decoder failure must not abort the whole chain.
+  }
   if (
     /^(INVITE|ACK|BYE|CANCEL|REGISTER|OPTIONS|SUBSCRIBE|NOTIFY|REFER|INFO|UPDATE|PRACK|MESSAGE|PUBLISH)\s+\S+\s+SIP\/[\d.]+/i.test(
       trimmedText,
@@ -11755,6 +11928,15 @@ function runProtoDecoder(bytes) {
       break;
     case "sip":
       result = decodeSipFromBytes(decodeBytes);
+      break;
+    case "smpp":
+      result = decodeSmppFromBytes(decodeBytes);
+      break;
+    case "soulseek":
+      result = decodeSoulseekFromBytes(decodeBytes);
+      break;
+    case "bittorrent":
+      result = decodeBittorrentFromBytes(decodeBytes);
       break;
     default:
       protocol = null;
@@ -19790,6 +19972,15 @@ function infoPanel(pk) {
 
   // SMB info table (shown for SMB packets on port 139/445)
   renderSmbTable(transportData);
+
+  // SMPP info table (shown for SMPP packets on port 2775/3550)
+  renderSmppTable(transportData);
+
+  // Soulseek info table (shown for Soulseek packets on common ports)
+  renderSoulseekTable(transportData);
+
+  // BitTorrent info table (shown for peer-wire, handshake, and DHT/KRPC packets)
+  renderBitTorrentTable(transportData);
 
   // MQTT info table (shown for MQTT packets on port 1883/8883)
   renderMqttTable(transportData);

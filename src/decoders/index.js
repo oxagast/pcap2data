@@ -23,6 +23,9 @@ const { renderMysqlTable } = require("./mysql");
 const { renderPostgresqlTable } = require("./postgresql");
 const { renderXmppTable } = require("./xmpp");
 const { renderSmbTable } = require("./smb");
+const { renderSmppTable } = require("./smpp");
+const { renderSoulseekTable } = require("./soulseek");
+const { renderBitTorrentTable } = require("./bittorrent");
 const { renderMqttTable } = require("./mqtt");
 const { renderRtspTable } = require("./rtsp");
 const { renderTftpTable } = require("./tftp");
@@ -60,6 +63,9 @@ module.exports = {
   renderPostgresqlTable,
   renderXmppTable,
   renderSmbTable,
+  renderSmppTable,
+  renderSoulseekTable,
+  renderBitTorrentTable,
   renderMqttTable,
   renderRtspTable,
   renderTftpTable,
