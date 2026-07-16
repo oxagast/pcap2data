@@ -6,6 +6,8 @@ const openpgp = require("openpgp");
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
 const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
+const TLS_HANDSHAKE_TYPE_FINISHED = 20;
+const TLS_RECORD_TYPE_HANDSHAKE = 22;
 const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
 const MAX_ASCII_PREVIEW_LENGTH = 1024;
 const PGP_ARMOR_BLOCK_REGEX =
@@ -47,6 +49,7 @@ function createCryptPanel({
   } = constants;
 
   let cryptEncounteredEntries = [];
+  let cryptSessionEncounteredEntries = [];
   let cryptActiveEntryIndex = -1;
   let cryptLastDecryptedPayload = null;
   let pgpEncounteredEntries = [];
@@ -54,6 +57,58 @@ function createCryptPanel({
   let pgpLastOutputPayload = null;
   let pgpPrivateKeyCandidates = [];
   let pgpPassphraseCandidates = [];
+
+  function getHostPacketMap(capturedPackets) {
+    if (!capturedPackets || typeof capturedPackets !== "object") return null;
+    const map = capturedPackets["host"] || capturedPackets["Host"];
+    return map && typeof map === "object" ? map : null;
+  }
+
+  function getPacketInfo(packet) {
+    const info = packet?.["packet.info"] || packet?.["Packet Info"];
+    return info && typeof info === "object" ? info : {};
+  }
+
+  function getExtraInfo(packet) {
+    const info = packet?.["extra.info"] || packet?.["Extra Info"];
+    return info && typeof info === "object" ? info : {};
+  }
+
+  function getTransportData(packetInfo, protocol) {
+    if (!packetInfo || typeof packetInfo !== "object") return {};
+    const protocolName = String(protocol || "").trim();
+    if (!protocolName) return {};
+    const direct = packetInfo[protocolName];
+    if (direct && typeof direct === "object") return direct;
+    const lower = packetInfo[protocolName.toLowerCase()];
+    if (lower && typeof lower === "object") return lower;
+    const upper = packetInfo[protocolName.toUpperCase()];
+    if (upper && typeof upper === "object") return upper;
+    return {};
+  }
+
+  function getServerInfo(extraInfo) {
+    const traits =
+      extraInfo?.["Traits"] ||
+      extraInfo?.["traits"] ||
+      extraInfo?.["traits.server.info"] ||
+      {};
+    return (
+      traits?.["Server Info"] ||
+      traits?.["server.info"] ||
+      extraInfo?.["server.info"] ||
+      {}
+    );
+  }
+
+  function getEncryptionData(serverInfo) {
+    return (
+      serverInfo?.["Encryption Data"] ||
+      serverInfo?.["encryption.data"] ||
+      serverInfo?.["encryption"] ||
+      null
+    );
+  }
 
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
     const normalized = (rawText || "").trim();
@@ -85,34 +140,35 @@ function createCryptPanel({
   function getCryptEncounteredEntries() {
     const entries = [];
     const capturedPackets = getCapturedPackets();
-    if (
-      !capturedPackets ||
-      typeof capturedPackets !== "object" ||
-      !capturedPackets["Host"]
-    ) {
+    const hostMap = getHostPacketMap(capturedPackets);
+    if (!hostMap) {
       return entries;
     }
 
-    for (const host of Object.keys(capturedPackets["Host"])) {
-      const packets = capturedPackets["Host"][host];
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
       if (!Array.isArray(packets)) continue;
 
       packets.forEach((packet) => {
-        const packetInfo = packet?.["Packet Info"];
-        const extraInfo = packet?.["Extra Info"];
-        const serverInfo = extraInfo?.["Traits"]?.["Server Info"];
-        const encryptionData = serverInfo?.["Encryption Data"];
+        const packetInfo = getPacketInfo(packet);
+        const extraInfo = getExtraInfo(packet);
+        const serverInfo = getServerInfo(extraInfo);
+        const encryptionData = getEncryptionData(serverInfo);
         if (
-          !packetInfo ||
-          !serverInfo ||
+          Object.keys(packetInfo).length === 0 ||
+          Object.keys(serverInfo).length === 0 ||
           !encryptionData ||
           encryptionData === "N/A"
         )
           return;
 
-        const protocol = packetInfo["Protocol"] || "Unknown";
-        const transportData = packetInfo[protocol] || {};
-        const encryptedWithRaw = encryptionData["Encrypted With"];
+        const protocol =
+          packetInfo["Protocol"] ||
+          packetInfo["packet.proto"] ||
+          "Unknown";
+        const transportData = getTransportData(packetInfo, protocol);
+        const encryptedWithRaw =
+          encryptionData["Encrypted With"] || encryptionData["encrypted.with"];
         const encryptedWith = Array.isArray(encryptedWithRaw)
           ? encryptedWithRaw.filter(Boolean)
           : encryptedWithRaw
@@ -120,15 +176,15 @@ function createCryptPanel({
             : [];
         entries.push({
           host,
-          packetIndex: packetInfo["Index"] ?? "?",
+          packetIndex: packetInfo["Index"] ?? packetInfo["packet.processed"] ?? "?",
           protocol,
           srcIp: packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
           dstIp: packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
-          srcPort: transportData?.["Source port"] ?? "N/A",
-          dstPort: transportData?.["Destination port"] ?? "N/A",
-          encrypted: serverInfo["Encrypted"] ?? "Unknown",
-          sslVersion: encryptionData["SSL Version"] ?? "Unknown",
-          sslCert: encryptionData["SSL Cert"] ?? "",
+          srcPort: transportData?.["Source port"] ?? transportData?.["source.port"] ?? "N/A",
+          dstPort: transportData?.["Destination port"] ?? transportData?.["destination.port"] ?? "N/A",
+          encrypted: serverInfo["Encrypted"] ?? serverInfo["encrypted"] ?? "Unknown",
+          sslVersion: encryptionData["SSL Version"] ?? encryptionData["ssl.version"] ?? "Unknown",
+          sslCert: encryptionData["SSL Cert"] ?? encryptionData["ssl.cert"] ?? "",
           encryptedWith,
         });
       });
@@ -159,12 +215,13 @@ function createCryptPanel({
       `Encrypted: ${entry.encrypted}`,
       `SSL/TLS Version: ${entry.sslVersion}`,
       `Algorithms: ${algoText}`,
+      entry.streamHeaderSummary ? `Stream header: ${entry.streamHeaderSummary}` : null,
+      entry.streamConnectSummary ? `Proxy tunnel: ${entry.streamConnectSummary}` : null,
     ].join("\n");
   }
 
-  function refreshCryptEncounteredEntries() {
+  function renderCurrentCryptEncounteredEntries() {
     const listEl = document.getElementById("crypt-encountered-list");
-    cryptEncounteredEntries = getCryptEncounteredEntries();
     listEl.replaceChildren();
     cryptActiveEntryIndex = -1;
 
@@ -193,6 +250,47 @@ function createCryptPanel({
     cryptActiveEntryIndex = 0;
     renderCryptEncounteredDetails(cryptEncounteredEntries[0]);
     clearCryptDecryptionOutput();
+  }
+
+  function mergeWithSessionCryptEntries(baseEntries) {
+    const merged = [];
+    const seenKeys = new Set();
+
+    const pushUnique = (entry) => {
+      if (!entry || typeof entry !== "object") return;
+      const uniqueKey =
+        entry.sessionEntryId ||
+        [
+          String(entry.host || ""),
+          String(entry.packetIndex || ""),
+          String(entry.srcIp || ""),
+          String(entry.srcPort || ""),
+          String(entry.dstIp || ""),
+          String(entry.dstPort || ""),
+          String(entry.payloadHex || "").slice(0, 64),
+        ].join("|");
+      if (seenKeys.has(uniqueKey)) return;
+      seenKeys.add(uniqueKey);
+      merged.push(entry);
+    };
+
+    (Array.isArray(baseEntries) ? baseEntries : []).forEach(pushUnique);
+    cryptSessionEncounteredEntries.forEach(pushUnique);
+
+    return merged.sort((a, b) => {
+      const aIdx = Number.parseInt(String(a.packetIndex || ""), 10);
+      const bIdx = Number.parseInt(String(b.packetIndex || ""), 10);
+      if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+      return String(a.packetIndex || "").localeCompare(
+        String(b.packetIndex || ""),
+      );
+    });
+  }
+
+  function refreshCryptEncounteredEntries() {
+    const detectedEntries = getCryptEncounteredEntries();
+    cryptEncounteredEntries = mergeWithSessionCryptEntries(detectedEntries);
+    renderCurrentCryptEncounteredEntries();
   }
 
   function setDecryptSendEnabled(isEnabled) {
@@ -463,21 +561,237 @@ function createCryptPanel({
   }
 
   function getPacketPayloadHex(packet) {
+    const packetInfo = getPacketInfo(packet);
     return String(
-      (packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
-        packet?.["Packet Info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"]) ||
+      (packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"] ??
+        packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"] ??
+        packetInfo?.["raw.data"]?.["payload"]?.["payload.hex"] ??
+        packetInfo?.["raw.data"]?.["payload"]?.["hex.encoded"]) ||
       "",
     );
   }
 
   function findPayloadHexForEncounteredEntry(entry) {
-    const packets = getCapturedPackets()?.["Host"]?.[entry.host];
+    if (entry?.payloadHex) {
+      return String(entry.payloadHex || "");
+    }
+    const packets = getHostPacketMap(getCapturedPackets())?.[entry.host];
     if (!Array.isArray(packets)) return "";
     const matchedPacket = packets.find((packet) => {
-      const packetIndex = packet?.["Packet Info"]?.["Index"];
+      const packetInfo = getPacketInfo(packet);
+      const packetIndex =
+        packetInfo?.["Index"] ?? packetInfo?.["packet.processed"];
       return String(packetIndex) === String(entry.packetIndex);
     });
     return getPacketPayloadHex(matchedPacket);
+  }
+
+  function findTlsRecordOffsetBytes(payloadBytes) {
+    if (!payloadBytes || payloadBytes.length < 5) return -1;
+    for (let offset = 0; offset <= payloadBytes.length - 5; offset += 1) {
+      const contentType = payloadBytes[offset];
+      if (contentType < TLS_CONTENT_TYPE_MIN || contentType > TLS_CONTENT_TYPE_MAX) {
+        continue;
+      }
+      const major = payloadBytes[offset + 1];
+      const minor = payloadBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) continue;
+      const recordLength = (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+      if (recordLength <= 0) continue;
+      const recordEnd = offset + 5 + recordLength;
+      if (recordEnd <= payloadBytes.length) {
+        return offset;
+      }
+    }
+    return -1;
+  }
+
+  function getTlsStreamHexParts(combinedHex) {
+    const normalizedHex = normalizeHexString(combinedHex);
+    if (!normalizedHex || normalizedHex.length % 2 !== 0) {
+      return {
+        payloadHex: normalizedHex,
+        decryptPayloadHex: normalizedHex,
+        headerSummary: "none",
+      };
+    }
+    const payloadBytes = Buffer.from(normalizedHex, "hex");
+    const tlsOffset = findTlsRecordOffsetBytes(payloadBytes);
+    if (tlsOffset <= 0) {
+      return {
+        payloadHex: normalizedHex,
+        decryptPayloadHex: normalizedHex,
+        headerSummary: tlsOffset === 0 ? "none" : "unrecognized",
+      };
+    }
+    const headerBytes = payloadBytes.subarray(0, tlsOffset);
+    const decryptBytes = payloadBytes.subarray(tlsOffset);
+    return {
+      payloadHex: normalizedHex,
+      decryptPayloadHex: decryptBytes.toString("hex"),
+      headerSummary: `${headerBytes.length} bytes skipped`,
+    };
+  }
+
+  function parseSquidConnectHeaderSummary(combinedHex, skippedHeaderBytes = 0) {
+    const normalizedHex = normalizeHexString(combinedHex);
+    if (!normalizedHex || normalizedHex.length % 2 !== 0 || skippedHeaderBytes <= 0) {
+      return "";
+    }
+    const payloadBytes = Buffer.from(normalizedHex, "hex");
+    const headerBytes = payloadBytes.subarray(0, Math.min(skippedHeaderBytes, payloadBytes.length));
+    const headerText = headerBytes.toString("utf8");
+    const lines = headerText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) return "";
+
+    const connectLine = lines.find((line) => /^CONNECT\s+/i.test(line));
+    if (!connectLine) return "";
+    const connectMatch = connectLine.match(/^CONNECT\s+([^\s]+)\s+HTTP\//i);
+    const target = connectMatch?.[1] || "unknown-target";
+    const proxyStatusLine = lines.find((line) => /^HTTP\/\d\.\d\s+200\b/i.test(line));
+    return proxyStatusLine
+      ? `Squid CONNECT tunnel ${target} (${proxyStatusLine})`
+      : `Squid CONNECT tunnel ${target}`;
+  }
+
+  function loadStreamIntoCryptEncountered(streamPackets, combinedHex) {
+    const packets = Array.isArray(streamPackets) ? streamPackets : [];
+    if (!packets.length) {
+      refreshCryptEncounteredEntries();
+      return;
+    }
+
+    const firstPacketInfo = getPacketInfo(packets[0]);
+    const lastPacketInfo = getPacketInfo(packets[packets.length - 1]);
+    const protocol =
+      firstPacketInfo["Protocol"] ||
+      firstPacketInfo["packet.proto"] ||
+      "Unknown";
+    const transportData = getTransportData(firstPacketInfo, protocol);
+    const firstExtraInfo = getExtraInfo(packets[0]);
+    const firstServerInfo = getServerInfo(firstExtraInfo);
+    const firstEncryptionData = getEncryptionData(firstServerInfo) || {};
+    const encryptedWithRaw =
+      firstEncryptionData["Encrypted With"] || firstEncryptionData["encrypted.with"];
+    const encryptedWith = Array.isArray(encryptedWithRaw)
+      ? encryptedWithRaw.filter(Boolean)
+      : encryptedWithRaw
+        ? [String(encryptedWithRaw)]
+        : [];
+    const streamHexParts = getTlsStreamHexParts(combinedHex);
+    const skippedMatch = String(streamHexParts.headerSummary || "").match(/^(\d+)\s+bytes skipped$/i);
+    const skippedHeaderBytes = skippedMatch
+      ? Number.parseInt(skippedMatch[1], 10)
+      : 0;
+    const squidConnectSummary = parseSquidConnectHeaderSummary(
+      streamHexParts.payloadHex,
+      Number.isFinite(skippedHeaderBytes) ? skippedHeaderBytes : 0,
+    );
+    const sourceStart = firstPacketInfo["Index"] ?? firstPacketInfo["packet.processed"] ?? "?";
+    const sourceEnd = lastPacketInfo["Index"] ?? lastPacketInfo["packet.processed"] ?? sourceStart;
+
+    const newSessionEntries = [];
+    packets.forEach((packet, packetOffset) => {
+      const packetInfo = getPacketInfo(packet);
+      if (Object.keys(packetInfo).length === 0) return;
+      const packetProtocol =
+        packetInfo["Protocol"] || packetInfo["packet.proto"] || protocol;
+      const packetTransport = getTransportData(packetInfo, packetProtocol);
+      const packetExtraInfo = getExtraInfo(packet);
+      const packetServerInfo = getServerInfo(packetExtraInfo);
+      const packetEncryptionData = getEncryptionData(packetServerInfo) || {};
+      const packetEncryptedWithRaw =
+        packetEncryptionData["Encrypted With"] ||
+        packetEncryptionData["encrypted.with"] ||
+        encryptedWithRaw;
+      const packetEncryptedWith = Array.isArray(packetEncryptedWithRaw)
+        ? packetEncryptedWithRaw.filter(Boolean)
+        : packetEncryptedWithRaw
+          ? [String(packetEncryptedWithRaw)]
+          : [];
+
+      const packetPayloadHex = normalizeHexString(getPacketPayloadHex(packet));
+      const packetHexParts = getTlsStreamHexParts(packetPayloadHex);
+      const packetIndexValue =
+        packetInfo["Index"] ??
+        packetInfo["packet.processed"] ??
+        `${sourceStart}-${packetOffset + 1}`;
+      const sessionEntryId = [
+        "stream",
+        String(packetIndexValue),
+        String(
+          packetInfo?.["IP"]?.["ip.src.addr"] ??
+          packetInfo?.["IP"]?.["Source IP"] ??
+          "N/A",
+        ),
+        String(
+          packetInfo?.["IP"]?.["ip.dst.addr"] ??
+          packetInfo?.["IP"]?.["Destination IP"] ??
+          "N/A",
+        ),
+      ].join("|");
+
+      newSessionEntries.push({
+        sessionEntryId,
+        host: "stream",
+        packetIndex: packetIndexValue,
+        protocol: packetProtocol,
+        srcIp:
+          packetInfo?.["IP"]?.["ip.src.addr"] ??
+          packetInfo?.["IP"]?.["Source IP"] ??
+          "N/A",
+        dstIp:
+          packetInfo?.["IP"]?.["ip.dst.addr"] ??
+          packetInfo?.["IP"]?.["Destination IP"] ??
+          "N/A",
+        srcPort:
+          packetTransport?.["Source port"] ??
+          packetTransport?.["source.port"] ??
+          transportData?.["Source port"] ??
+          transportData?.["source.port"] ??
+          "N/A",
+        dstPort:
+          packetTransport?.["Destination port"] ??
+          packetTransport?.["destination.port"] ??
+          transportData?.["Destination port"] ??
+          transportData?.["destination.port"] ??
+          "N/A",
+        encrypted:
+          packetServerInfo["Encrypted"] ||
+          packetServerInfo["encrypted"] ||
+          firstServerInfo["Encrypted"] ||
+          firstServerInfo["encrypted"] ||
+          "Unknown",
+        sslVersion:
+          packetEncryptionData["SSL Version"] ||
+          packetEncryptionData["ssl.version"] ||
+          firstEncryptionData["SSL Version"] ||
+          firstEncryptionData["ssl.version"] ||
+          "Unknown",
+        sslCert:
+          packetEncryptionData["SSL Cert"] ||
+          packetEncryptionData["ssl.cert"] ||
+          firstEncryptionData["SSL Cert"] ||
+          firstEncryptionData["ssl.cert"] ||
+          "",
+        encryptedWith: packetEncryptedWith,
+        payloadHex: packetHexParts.payloadHex,
+        decryptPayloadHex: packetHexParts.decryptPayloadHex,
+        streamHeaderSummary:
+          packetOffset === 0
+            ? `${streamHexParts.headerSummary} across stream ${sourceStart}-${sourceEnd}`
+            : packetHexParts.headerSummary,
+        streamConnectSummary: packetOffset === 0 ? squidConnectSummary : "",
+      });
+    });
+
+    cryptSessionEncounteredEntries = mergeWithSessionCryptEntries(
+      newSessionEntries,
+    );
+    refreshCryptEncounteredEntries();
   }
 
   function extractPgpArmorBlocksFromText(textValue) {
@@ -490,20 +804,17 @@ function createCryptPanel({
   function getPgpEncounteredEntries() {
     const entries = [];
     const capturedPackets = getCapturedPackets();
-    if (
-      !capturedPackets ||
-      typeof capturedPackets !== "object" ||
-      !capturedPackets["Host"]
-    ) {
+    const hostMap = getHostPacketMap(capturedPackets);
+    if (!hostMap) {
       return entries;
     }
 
-    for (const host of Object.keys(capturedPackets["Host"])) {
-      const packets = capturedPackets["Host"][host];
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
       if (!Array.isArray(packets)) continue;
       packets.forEach((packet) => {
-        const packetInfo = packet?.["Packet Info"];
-        if (!packetInfo) return;
+        const packetInfo = getPacketInfo(packet);
+        if (Object.keys(packetInfo).length === 0) return;
         const payloadHex = normalizeHexString(getPacketPayloadHex(packet));
         if (!payloadHex) return;
         const payloadBytes = Buffer.from(payloadHex, "hex");
@@ -511,20 +822,23 @@ function createCryptPanel({
         const armoredBlocks = extractPgpArmorBlocksFromText(payloadText);
         if (armoredBlocks.length === 0) return;
 
-        const protocol = packetInfo["Protocol"] || "Unknown";
-        const transportData = packetInfo[protocol] || {};
+        const protocol =
+          packetInfo["Protocol"] ||
+          packetInfo["packet.proto"] ||
+          "Unknown";
+        const transportData = getTransportData(packetInfo, protocol);
         armoredBlocks.forEach((blockText, blockIndex) => {
           const beginMatch = blockText.match(PGP_BEGIN_LINE_REGEX);
           const endMatch = blockText.match(PGP_END_LINE_REGEX);
           const blockType = beginMatch?.[1] || "PGP data";
           entries.push({
             host,
-            packetIndex: packetInfo["Index"] ?? "?",
+            packetIndex: packetInfo["Index"] ?? packetInfo["packet.processed"] ?? "?",
             protocol,
             srcIp: packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "N/A",
             dstIp: packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "N/A",
-            srcPort: transportData?.["Source port"] ?? "N/A",
-            dstPort: transportData?.["Destination port"] ?? "N/A",
+            srcPort: transportData?.["Source port"] ?? transportData?.["source.port"] ?? "N/A",
+            dstPort: transportData?.["Destination port"] ?? transportData?.["destination.port"] ?? "N/A",
             blockType,
             blockIndex,
             armoredText: String(blockText || "").trim(),
@@ -1072,32 +1386,82 @@ function createCryptPanel({
   }
 
   function extractDecryptCandidates(cipherBytes) {
-    const candidates = [cipherBytes];
-    if (
-      cipherBytes.length > 5 &&
-      cipherBytes[0] >= TLS_CONTENT_TYPE_MIN &&
-      cipherBytes[0] <= TLS_CONTENT_TYPE_MAX
-    ) {
-      const recordLength = (cipherBytes[3] << 8) | cipherBytes[4];
-      const recordEnd = 5 + recordLength;
-      if (recordLength > 0 && recordEnd <= cipherBytes.length) {
-        const recordPayload = cipherBytes.subarray(5, recordEnd);
-        candidates.push(recordPayload);
-        if (
-          recordPayload.length > 6 &&
-          recordPayload[0] === TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE
-        ) {
-          const handshakeBody = recordPayload.subarray(4);
-          candidates.push(handshakeBody);
+    const candidates = [];
+    const seenHex = new Set();
+
+    const addCandidate = (value) => {
+      if (!value || value.length === 0) return;
+      const key = Buffer.from(value).toString("hex");
+      if (seenHex.has(key)) return;
+      seenHex.add(key);
+      candidates.push(value);
+    };
+
+    const collectClientKeyExchangeCandidates = (handshakeBytes) => {
+      if (!handshakeBytes || handshakeBytes.length < 4) return;
+      let offset = 0;
+      while (offset + 4 <= handshakeBytes.length) {
+        const handshakeType = handshakeBytes[offset];
+        const bodyLength =
+          (handshakeBytes[offset + 1] << 16) |
+          (handshakeBytes[offset + 2] << 8) |
+          handshakeBytes[offset + 3];
+        const bodyStart = offset + 4;
+        const bodyEnd = bodyStart + bodyLength;
+        if (bodyLength <= 0 || bodyEnd > handshakeBytes.length) break;
+        if (handshakeType === TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE) {
+          const handshakeBody = handshakeBytes.subarray(bodyStart, bodyEnd);
+          addCandidate(handshakeBody);
           if (handshakeBody.length > 2) {
             const encryptedLen = (handshakeBody[0] << 8) | handshakeBody[1];
             if (encryptedLen > 0 && encryptedLen + 2 <= handshakeBody.length) {
-              candidates.push(handshakeBody.subarray(2, 2 + encryptedLen));
+              addCandidate(handshakeBody.subarray(2, 2 + encryptedLen));
             }
           }
         }
+        offset = bodyEnd;
+        if (handshakeType === TLS_HANDSHAKE_TYPE_FINISHED) {
+          break;
+        }
       }
+    };
+
+    addCandidate(cipherBytes);
+
+    if (cipherBytes.length < 5) {
+      return candidates;
     }
+
+    let offset = 0;
+    let recordCount = 0;
+    while (offset + 5 <= cipherBytes.length && recordCount < 256) {
+      const contentType = cipherBytes[offset];
+      if (contentType < TLS_CONTENT_TYPE_MIN || contentType > TLS_CONTENT_TYPE_MAX) {
+        break;
+      }
+      const major = cipherBytes[offset + 1];
+      const minor = cipherBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) {
+        break;
+      }
+
+      const recordLength = (cipherBytes[offset + 3] << 8) | cipherBytes[offset + 4];
+      const recordStart = offset + 5;
+      const recordEnd = recordStart + recordLength;
+      if (recordLength <= 0 || recordEnd > cipherBytes.length) {
+        break;
+      }
+
+      const recordPayload = cipherBytes.subarray(recordStart, recordEnd);
+      addCandidate(recordPayload);
+      if (contentType === TLS_RECORD_TYPE_HANDSHAKE) {
+        collectClientKeyExchangeCandidates(recordPayload);
+      }
+
+      offset = recordEnd;
+      recordCount += 1;
+    }
+
     return candidates;
   }
 
@@ -1394,10 +1758,9 @@ function createCryptPanel({
       writeLogEntry(`Crypt cert/key check skipped: ${certKeyCheck.reason}`);
     }
     const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
-    const payloadHex = findPayloadHexForEncounteredEntry(activeEntry).replace(
-      /[^0-9A-Fa-f]/g,
-      "",
-    );
+    const payloadHex = String(
+      activeEntry?.decryptPayloadHex || findPayloadHexForEncounteredEntry(activeEntry),
+    ).replace(/[^0-9A-Fa-f]/g, "");
     if (!payloadHex) {
       statusUpdate("Status: Selected packet has no payload to decrypt");
       return;
@@ -1412,6 +1775,16 @@ function createCryptPanel({
         privateKeyPem,
       );
       renderDecryptedPayload(activeEntry, decryptedBytes);
+      addSessionKeystoreEntry({
+        type: "private-key",
+        label: getFirstLineOrFallback(
+          "crypt-key-preview",
+          `TLS-Private-Key-${new Date().toISOString()}`,
+        ),
+        source: "tls-decrypt-success",
+        content: privateKeyPem,
+        summary: "Validated by successful TLS decrypt",
+      });
       statusUpdate(
         `Status: Decrypted TLS/SSL payload for packet #${activeEntry.packetIndex}`,
       );
@@ -1487,6 +1860,7 @@ function createCryptPanel({
     setCryptSubtab,
     showCryptWorkspace,
     refreshCryptEncounteredEntries,
+    loadStreamIntoCryptEncountered,
     refreshPgpEncounteredEntries,
     refreshPgpPrivateKeyCandidates,
     refreshPgpPassphraseCandidates,

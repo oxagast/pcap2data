@@ -12061,6 +12061,7 @@ const {
   applyCryptFilterForActiveEntry,
   loadEncounteredCertificateIntoCrypt,
   refreshCryptEncounteredEntries,
+  loadStreamIntoCryptEncountered,
   refreshPgpEncounteredEntries,
   showCryptWorkspace,
   decryptActiveEntryWithLoadedKey,
@@ -16641,20 +16642,8 @@ async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) 
     statusUpdate("Status: Stream packets have no payload data");
     return;
   }
-  let asciiContent;
-  try {
-    asciiContent = hexToAscii(combinedHex);
-  } catch {
-    statusUpdate("Status: Could not convert stream payload to ASCII");
-    return;
-  }
-  const certInputEl = document.getElementById("crypt-cert-input");
-  const certPreviewEl = document.getElementById("crypt-cert-preview");
-  if (certInputEl) certInputEl.value = asciiContent;
-  if (certPreviewEl) {
-    certPreviewEl.textContent = `Stream data: ${streamPackets.length} packets, ${Math.round(combinedHex.length / 2)} bytes`;
-  }
   showCryptWorkspace();
+  loadStreamIntoCryptEncountered(hydratedStreamPackets, combinedHex);
   writeLogEntry(
     `Follow stream loaded ${streamPackets.length} packets into Crypt tab`,
   );
