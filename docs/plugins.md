@@ -419,19 +419,96 @@ Canonical source file: `src/preload.js` (`PLUGIN_CAPABILITY_CATALOG`)
 - `filter.query`
 - `plugin.log.write`
 
-### New Data Access and Filter APIs
+### Capability Endpoints and Hook Usage
 
-The following APIs were added for plugin data access and querying:
+Plugins interact with the runtime through the `context` object passed to `init(context)` and the matching teardown hook (`dispose(context)`, `deinit(context)`, or `shutdown(context)`). The safest pattern is:
 
-- `context.api.capture.getCurrentPacketKey()` (requires `packet.metadata.read`)
-- `context.api.capture.getCurrentPacketMetadata()` (requires `packet.metadata.read`)
-- `context.api.capture.getCurrentStreamTuple()` (requires `packet.metadata.read`)
-- `context.api.capture.getSessionPcapSource()` (requires `session.pcap.read`)
-- `context.api.stats.getJson()` (requires `stats.json.read`)
-- `context.api.keystore.getSessionEntries()` (requires `keystore.read`)
-- `context.api.keystore.addSessionEntry(entry)` (requires `keystore.write`)
-- `context.api.keystore.addSessionEntries(entries)` (requires `keystore.write`)
-- `context.api.filter.query(expression, options)` (requires `filter.query`)
+- Check grants first with `context.permissions.has(capability)`.
+- Fail fast with `context.permissions.assert(capability, reason)` when a capability is required.
+- Use `context.permissions.list` or `context.permissions.catalog` to inspect what the plugin received.
+- Use `context.documentRef` and `context.windowRef` when you need DOM access; writes on those guarded handles require `ui.dom.write`.
+
+Example:
+
+```js
+export async function init(context) {
+  if (!context.permissions.has("filter.query")) {
+    return;
+  }
+
+  const result = await context.api.filter.query("ip.src.addr: 10.0.0.1", {
+    mode: "background",
+  });
+
+  context.statusUpdate(`Matched ${result.packetKeys.length} packets`);
+}
+```
+
+The following capabilities map to the following hook endpoints:
+
+- `version.read` -> `context.api.version.read()` returns the current PacketSnitch version string.
+- `ui.dialog.add` -> `context.api.ui.dialog.alert(message)`, `confirm(message)`, and `prompt(message, defaultValue)`.
+- `ui.dom.write` -> `context.api.ui.dom.query(selector)` and `setText(selector, text)`; guarded DOM writes also apply to `context.documentRef` and `context.windowRef`.
+- `ui.tabs.create` -> `context.api.ui.tabs.create({ id, label })`.
+- `ui.tabs.modify` -> `context.api.ui.tabs.modify({ id, label, hidden })`.
+- `ui.contextmenu.create` -> `context.api.ui.contextMenu.create({ id, text, onClick })`.
+- `ui.contextmenu.modify` -> `context.api.ui.contextMenu.modify({ id, text, hidden })`.
+- `ui.statusbar.modify` -> `context.api.ui.statusBar.setText(message)` or the direct `context.statusUpdate(message)` hook.
+- `fs.read` -> `context.api.fs.readText(filePath, encoding)` and `context.api.fs.homeDirectory()`.
+- `fs.write` -> `context.api.fs.writeText(filePath, content, encoding)`.
+- `fs.execute` -> `context.api.fs.execute(command, options)`.
+- `fs.chmod` -> `context.api.fs.chmod(filePath, mode)`.
+- `network.fetch.http` -> `context.api.network.fetch(url, init)` or the direct `context.fetch(url, init)` hook; only `http:` and `https:` URLs are allowed.
+- `network.socket.listen` -> `context.api.network.socketListen({ host, port })`.
+- `network.socket.connect` -> `context.api.network.socketConnect({ host, port, timeoutMs })`.
+- `packetsnitch.functions.use` -> `context.api.packetsnitch.useFunction(name, ...args)` calls an exposed host function by name.
+- `packetsnitch.functions.overwrite` -> `context.api.packetsnitch.overwriteFunction(name, wrapperFactory)` wraps a host function and returns a restore callback.
+- `backend.talk` -> `context.api.backend.invoke(channel, ...args)` calls one of the allowlisted backend channels: `lookup-backend-geoip`, `lookup-backend-whois`, `lookup-backend-ipsum`, `lookup-backend-tor`, `lookup-backend-shodan`, `get-backend-diagnostics`, or `control-backend-service`.
+- `packet.metadata.read` -> `context.api.capture.getCurrentPacketKey()`, `getCurrentPacketMetadata()`, and `getCurrentStreamTuple()`.
+- `session.pcap.read` -> `context.api.capture.getSessionPcapSource()`.
+- `stats.json.read` -> `context.api.stats.getJson()`.
+- `keystore.read` -> `context.api.keystore.getSessionEntries()`.
+- `keystore.write` -> `context.api.keystore.addSessionEntry(entry)` and `addSessionEntries(entries)`.
+- `filter.query` -> `context.api.filter.query(expression, options)`.
+- `plugin.log.write` -> `context.writeLogEntry(message)` writes to the activity log.
+
+### `context.api` Return Types
+
+The API is grouped into namespaces. These are the concrete return types exposed by each method:
+
+- `context.api.version.read()` -> `string`
+- `context.api.ui.dialog.alert(message)` -> `void`
+- `context.api.ui.dialog.confirm(message)` -> `boolean`
+- `context.api.ui.dialog.prompt(message, defaultValue)` -> `string | null`
+- `context.api.ui.statusBar.setText(message)` -> `void`
+- `context.api.ui.tabs.create({ id, label })` -> `{ id: string, label: string }`
+- `context.api.ui.tabs.modify({ id, label, hidden })` -> `{ id: string, label: string, hidden: boolean }`
+- `context.api.ui.contextMenu.create({ id, text, onClick })` -> `{ id: string, text: string }`
+- `context.api.ui.contextMenu.modify({ id, text, hidden })` -> `{ id: string, text: string, hidden: boolean }`
+- `context.api.ui.dom.query(selector)` -> `Element | null`
+- `context.api.ui.dom.setText(selector, text)` -> `{ updated: boolean }`
+- `context.api.fs.readText(filePath, encoding)` -> `Promise<string>`
+- `context.api.fs.writeText(filePath, content, encoding)` -> `Promise<{ success: true, path: string }>`
+- `context.api.fs.chmod(filePath, mode)` -> `Promise<{ success: true, path: string, mode: number }>`
+- `context.api.fs.execute(command, options)` -> `Promise<{ stdout: string, stderr: string }>`
+- `context.api.fs.homeDirectory()` -> `string`
+- `context.api.fs.joinPath(...segments)` -> `string`
+- `context.api.network.fetch(url, init)` -> `Promise<Response>`
+- `context.api.network.socketConnect({ host, port, timeoutMs })` -> `Promise<{ success: true, host: string, port: number }>`
+- `context.api.network.socketListen({ host, port })` -> `Promise<{ success: true, host: string, port: number }>`
+- `context.api.packetsnitch.useFunction(name, ...args)` -> return value of the host function you called
+- `context.api.packetsnitch.overwriteFunction(name, wrapperFactory)` -> `() => void` restore callback
+- `context.api.backend.invoke(channel, ...args)` -> `Promise<any>`
+- `context.api.capture.getCurrentPacketKey()` -> `string | null`
+- `context.api.capture.getCurrentPacketMetadata()` -> `object | null`
+- `context.api.capture.getCurrentStreamTuple()` -> `object | null`
+- `context.api.capture.getSessionPcapSource()` -> `Promise<object | null>`
+- `context.api.stats.getJson()` -> `object | null`
+- `context.api.keystore.getSessionEntries()` -> `object[]`
+- `context.api.keystore.addSessionEntry(entry)` -> `object` with `success`, `added`, and `entry`
+- `context.api.keystore.addSessionEntries(entries)` -> `object` with `success`, `addedCount`, and `entries`
+- `context.api.filter.query(expression, options)` -> `Promise<object>`; background mode returns `{ success, mode, expression, packetKeys }` and UI mode returns `{ success, mode, expression, ...uiResult }`
+- `context.writeLogEntry(message)` -> `Promise<{ success: boolean, denied?: boolean, capability?: string }>`
 
 `context.api.filter.query(...)` supports two modes:
 
