@@ -30,4 +30,4 @@ jobs:
           # IMPORTANT: match exact repository casing.
           repository: oxasploits/PacketSnitch
           # Token must be able to read traffic API + push to this repo.
-          ghtoken: ${{ secrets.REPO_STATS_TOKEN }}
+          ghtoken: ${{ secrets.REPO_STATS_PS }}
