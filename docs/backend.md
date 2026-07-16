@@ -18,7 +18,7 @@ In the desktop app, this parser is wrapped by an Electron bridge that can either
   - GeoIP lookup for source/destination IPs
   - Port descriptions (ICANN database)
   - MAC vendor lookup
-  - Protocol-specific fields for DNS, HTTP, SNMP, DHCP, NTP, SIP, and ICMP
+  - Protocol-specific fields for link/WAN (ARP/RARP/PPP families), network (ICMP/IGMP), transport (TCP/UDP/SCTP), and application protocols including DNS, HTTP/HTTP2, SNMP, DHCP, NTP, SIP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH, SMPP, Soulseek, and BitTorrent
   - Active recon: server banners, SSL certificate info, web page titles (optional)
 - Consolidates all testcase info into `hosts.json`.
 - Supports incremental chunk snapshots (`hosts-<N>.json`) for progressive frontend loading.

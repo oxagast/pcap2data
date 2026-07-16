@@ -214,7 +214,7 @@ The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`)
 
 ##### Decodes Sub-tab
 
-The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, SIP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
 > The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu.md](context-menu.md) for details.
 
@@ -380,7 +380,7 @@ The **Stats** tab shows aggregate statistics computed across the entire loaded c
 | **Capture Overview**       | Total packet count, unique hosts targeted, encrypted vs. unencrypted packet counts, unique protocol count, unique GeoIP location count, total traffic bytes, and current credentials-found count. |
 | **Top Talkers**            | Top IP addresses by packet participation (source + destination). Clicking a talker applies an IP src/dst filter query.                                     |
 | **Application Protocols**  | All distinct application-layer protocol names identified by port (e.g. HTTP, DNS, SMTP).                                                                    |
-| **Transport Protocols**    | Transport layer protocols seen (TCP, UDP, ICMP).                                                                                                            |
+| **Transport Protocols**    | Transport layer protocols seen (TCP, UDP, ICMP, SCTP).                                                                                                      |
 | **All Hosts Addressed**    | All unique source and destination IP addresses and target host values.                                                                                      |
 | **Hostnames (DNS)**        | Resolved hostnames from DNS or reverse-lookup data.                                                                                                         |
 | **Physical Locations**     | City/country pairs from GeoIP with occurrence counts, sorted by frequency. Unlike other sections, location tags are display-only and do not generate a filter query when clicked. |

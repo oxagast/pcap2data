@@ -148,12 +148,19 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 
 The backend extracts rich, queryable metadata for the following protocols:
 
+Concise decoder list:
+
+- Link/WAN: Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP
+- Network: IPv4, ICMP, IGMP
+- Transport: TCP, UDP, SCTP
+- Application: HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent
+
 | Layer | Protocols |
 |---|---|
 | **Link / WAN** | Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP |
 | **Network** | IPv4, ICMP, IGMP |
-| **Transport** | TCP (with flags, sequence/ack numbers, retransmission tracking), UDP |
-| **Application** | HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB (v1 & v2/v3), MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS |
+| **Transport** | TCP (with flags, sequence/ack numbers, retransmission tracking), UDP, SCTP |
+| **Application** | HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB (v1 & v2/v3), MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent |
 
 Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
@@ -202,7 +209,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **Capture Overview** now also includes `Total Traffic` (sum of payload bytes) and `Credentials Found` (current active keychain entry count).
 - **Top Talkers**: top IPs by packet participation (source + destination); clicking an entry applies an IP src/dst filter.
 - **Application Protocols**: all distinct application-layer protocols.
-- **Transport Protocols**: TCP, UDP, ICMP breakdown.
+- **Transport Protocols**: TCP, UDP, ICMP, SCTP breakdown.
 - **All Hosts Addressed**: unique source and destination IP addresses.
 - **Hostnames (DNS)**: resolved hostnames from DNS or reverse lookup.
 - **Physical Locations**: city/country pairs with occurrence counts (sorted by frequency).
@@ -261,7 +268,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### Decodes Sub-tab
 
 - Protocol decoder with auto-detect and manual protocol selection.
-- Supported protocols: HTTP, FTP, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, SIP.
+- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent.
 - Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.).
 - **Follow stream to Conv**: assembles a full bidirectional TCP stream into Conv with async chunked scanning and loading overlay to prevent UI freezes on large streams.
 
