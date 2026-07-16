@@ -758,8 +758,8 @@ strong {
 }
 
 .settings-subtab-panel {
-  min-height: 0;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -780,6 +780,7 @@ strong {
   flex-direction: column;
   gap: 8px;
   max-width: 700px;
+  height: 110%;
 }
 
 .settings-about-section {

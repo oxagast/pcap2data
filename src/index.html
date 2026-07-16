@@ -919,6 +919,15 @@ No keystore entries saved.</pre>
                   Higher values reduce UI overhead but delay partial data updates.
                 </div>
 
+                <label for="settings-plugins-auto-disable-failure-threshold">
+                  Plugin Auto-Disable failure threshold (critical failures).
+                </label>
+                <input id="settings-plugins-auto-disable-failure-threshold" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  When a plugin reaches this many critical runtime failures, PacketSnitch disables it automatically.
+                  You can also set per-plugin overrides in the Plugins manager.
+                </div>
+
                 <label for="settings-debug-backend-json-data-emit-interval-ms">Bridge JSON-data emit interval
                   (ms)</label>
                 <input id="settings-debug-backend-json-data-emit-interval-ms" type="number" min="250" step="50" />
@@ -941,6 +950,7 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">Heatmap map calibration controls. X shifts west/east, Y shifts
                   north/south.</div>
               </div>
+
             </div>
           </div>
 
@@ -1006,19 +1016,7 @@ No keystore entries saved.</pre>
           <div id="settings-plugins-panel" class="settings-subtab-panel" hidden>
             <div class="settings-grid">
               <div class="settings-section">
-                <div class="settings-section-title">Plugin Runtime Safety</div>
-                <label for="settings-plugins-auto-disable-failure-threshold">
-                  Auto-disable failure threshold (critical failures)
-                </label>
-                <input id="settings-plugins-auto-disable-failure-threshold" type="number" min="1" step="1" />
-                <div class="settings-help-text">
-                  When a plugin reaches this many critical runtime failures, PacketSnitch disables it automatically.
-                  You can also set per-plugin overrides below.
-                </div>
-              </div>
-
-              <div class="settings-section">
-                <div class="settings-section-title">Plugin Manager</div>
+                <div class="settings-section-title">Plugin Loading</div>
                 <div class="settings-actions-row">
                   <button id="settings-plugins-install-btn" type="button">
                     Install Plugin Zip

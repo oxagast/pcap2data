@@ -1,0 +1,81 @@
+{
+    "version": 1,
+    "capabilities": [
+        {
+            "id": "version.read",
+            "description": "Read PacketSnitch runtime version"
+        },
+        {
+            "id": "ui.dialog.add",
+            "description": "Open plugin-owned UI dialogs"
+        },
+        {
+            "id": "ui.dom.write",
+            "description": "Modify renderer DOM nodes"
+        },
+        {
+            "id": "ui.tabs.create",
+            "description": "Create plugin tabs"
+        },
+        {
+            "id": "ui.tabs.modify",
+            "description": "Modify plugin tabs"
+        },
+        {
+            "id": "ui.contextmenu.create",
+            "description": "Create context menu entries"
+        },
+        {
+            "id": "ui.contextmenu.modify",
+            "description": "Modify context menu entries"
+        },
+        {
+            "id": "ui.statusbar.modify",
+            "description": "Change status bar messages"
+        },
+        {
+            "id": "fs.read",
+            "description": "Read files from disk"
+        },
+        {
+            "id": "fs.write",
+            "description": "Write files to disk"
+        },
+        {
+            "id": "fs.execute",
+            "description": "Execute filesystem commands/programs"
+        },
+        {
+            "id": "fs.chmod",
+            "description": "Modify filesystem mode/permissions"
+        },
+        {
+            "id": "network.fetch.http",
+            "description": "Perform HTTP/HTTPS fetch requests"
+        },
+        {
+            "id": "network.socket.listen",
+            "description": "Listen for inbound socket connections"
+        },
+        {
+            "id": "network.socket.connect",
+            "description": "Open outbound socket connections"
+        },
+        {
+            "id": "packetsnitch.functions.use",
+            "description": "Use exposed PacketSnitch host functions"
+        },
+        {
+            "id": "packetsnitch.functions.overwrite",
+            "description": "Temporarily wrap/override exposed host functions"
+        },
+        {
+            "id": "backend.talk",
+            "description": "Invoke backend IPC bridge endpoints"
+        },
+        {
+            "id": "plugin.log.write",
+            "description": "Write plugin log entries to activity log"
+        }
+    ]
+}

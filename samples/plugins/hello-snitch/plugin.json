@@ -7,13 +7,18 @@
     "updateUrl": "https://packetsnitch.com/plugins/hello-snitch",
     "capabilities": [
         "version.read",
-        "ui.message",
-        "ui.tab",
-        "ui.contextmenu",
-        "filesystem.read",
-        "documents.write",
-        "network.fetch",
-        "status.wrap"
+        "ui.dialog.add",
+        "ui.dom.write",
+        "ui.tabs.create",
+        "ui.tabs.modify",
+        "ui.contextmenu.create",
+        "ui.contextmenu.modify",
+        "ui.statusbar.modify",
+        "fs.read",
+        "fs.write",
+        "network.fetch.http",
+        "packetsnitch.functions.use",
+        "plugin.log.write"
     ],
     "compatiblePacketsnitchVersions": [
         ">=2.0.0"

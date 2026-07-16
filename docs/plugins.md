@@ -380,10 +380,43 @@ The runtime context includes:
 
 - `plugin`: normalized plugin registry entry
 - `packetsnitchVersion`: current app version
-- `documentRef`: DOM document handle
-- `windowRef`: browser window handle
-- `statusUpdate(message)`: status message bridge
-- `writeLogEntry(message)`: app activity log bridge
+- `permissions`: permission helpers (`list`, `has`, `assert`, `catalog`)
+- `api`: capability-gated helper namespaces (`version`, `ui`, `fs`, `network`, `packetsnitch`, `backend`)
+- `documentRef`: guarded DOM handle (writes require `ui.dom.write`)
+- `windowRef`: guarded window handle (writes require `ui.dom.write`)
+- `statusUpdate(message)`: status bridge (requires `ui.statusbar.modify`)
+- `writeLogEntry(message)`: app activity log bridge (requires `plugin.log.write`)
+
+### Capability Catalog (Dot Notation)
+
+Canonical source file: `config/plugin-capabilities.json`
+
+- `version.read`
+- `ui.dialog.add`
+- `ui.dom.write`
+- `ui.tabs.create`
+- `ui.tabs.modify`
+- `ui.contextmenu.create`
+- `ui.contextmenu.modify`
+- `ui.statusbar.modify`
+- `fs.read`
+- `fs.write`
+- `fs.execute`
+- `fs.chmod`
+- `network.fetch.http`
+- `network.socket.listen`
+- `network.socket.connect`
+- `packetsnitch.functions.use`
+- `packetsnitch.functions.overwrite`
+- `backend.talk`
+- `plugin.log.write`
+
+Runtime policy behavior:
+
+- Plugin runtime code is evaluated in a sandboxed VM.
+- Sensitive operations are denied unless their capability is declared.
+- Denied operations are logged to Activity Log with plugin ID and reason.
+- Legacy capability names are normalized to current dot-notation aliases.
 
 Failure handling and safety:
 
@@ -427,13 +460,18 @@ Use this complete sample manifest:
   "updateUrl": "https://packetsnitch.com/plugins/hello-snitch",
   "capabilities": [
     "version.read",
-    "ui.message",
-    "ui.tab",
-    "ui.contextmenu",
-    "filesystem.read",
-    "documents.write",
-    "network.fetch",
-    "status.wrap"
+    "ui.dialog.add",
+    "ui.dom.write",
+    "ui.tabs.create",
+    "ui.tabs.modify",
+    "ui.contextmenu.create",
+    "ui.contextmenu.modify",
+    "ui.statusbar.modify",
+    "fs.read",
+    "fs.write",
+    "network.fetch.http",
+    "packetsnitch.functions.use",
+    "plugin.log.write"
   ],
   "compatiblePacketsnitchVersions": [
     ">=2.0.0"

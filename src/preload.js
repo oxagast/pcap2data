@@ -1,7 +1,544 @@
 // Exposes the safe preload bridge APIs from Electron to the renderer process.
 
 const { contextBridge, ipcRenderer } = require('electron');
+const runtimeRequire =
+  typeof __non_webpack_require__ === 'function' ? __non_webpack_require__ : null;
+
+if (!runtimeRequire) {
+  throw new Error('Plugin runtime require is unavailable in preload');
+}
+
+const childProcess = runtimeRequire('child_process');
+const fs = runtimeRequire('fs');
+const net = runtimeRequire('net');
+const os = runtimeRequire('os');
+const path = runtimeRequire('path');
 const loadedPluginRuntimes = new Map();
+
+const PLUGIN_CAPABILITY_CATALOG = [
+  {
+    capability: 'version.read',
+    description: 'Read PacketSnitch runtime version',
+  },
+  {
+    capability: 'ui.dialog.add',
+    description: 'Open plugin-owned UI dialogs',
+  },
+  {
+    capability: 'ui.dom.write',
+    description: 'Modify renderer DOM nodes',
+  },
+  {
+    capability: 'ui.tabs.create',
+    description: 'Create plugin tabs',
+  },
+  {
+    capability: 'ui.tabs.modify',
+    description: 'Modify plugin tabs',
+  },
+  {
+    capability: 'ui.contextmenu.create',
+    description: 'Create context menu entries',
+  },
+  {
+    capability: 'ui.contextmenu.modify',
+    description: 'Modify context menu entries',
+  },
+  {
+    capability: 'ui.statusbar.modify',
+    description: 'Change status bar messages',
+  },
+  {
+    capability: 'fs.read',
+    description: 'Read files from disk',
+  },
+  {
+    capability: 'fs.write',
+    description: 'Write files to disk',
+  },
+  {
+    capability: 'fs.execute',
+    description: 'Execute filesystem commands/programs',
+  },
+  {
+    capability: 'fs.chmod',
+    description: 'Modify filesystem mode/permissions',
+  },
+  {
+    capability: 'network.fetch.http',
+    description: 'Perform HTTP/HTTPS fetch requests',
+  },
+  {
+    capability: 'network.socket.listen',
+    description: 'Listen for inbound socket connections',
+  },
+  {
+    capability: 'network.socket.connect',
+    description: 'Open outbound socket connections',
+  },
+  {
+    capability: 'packetsnitch.functions.use',
+    description: 'Use exposed PacketSnitch host functions',
+  },
+  {
+    capability: 'packetsnitch.functions.overwrite',
+    description: 'Temporarily wrap/override exposed host functions',
+  },
+  {
+    capability: 'backend.talk',
+    description: 'Invoke backend IPC bridge endpoints',
+  },
+  {
+    capability: 'plugin.log.write',
+    description: 'Write plugin log entries to activity log',
+  },
+];
+
+const LEGACY_CAPABILITY_ALIASES = {
+  'ui.message': 'ui.statusbar.modify',
+  'ui.tab': 'ui.tabs.create',
+  'ui.contextmenu': 'ui.contextmenu.create',
+  'filesystem.read': 'fs.read',
+  'filesystem.write': 'fs.write',
+  'documents.write': 'ui.dom.write',
+  'network.fetch': 'network.fetch.http',
+  'status.wrap': 'packetsnitch.functions.overwrite',
+};
+
+const DOM_MUTATION_METHODS = new Set([
+  'append',
+  'appendChild',
+  'after',
+  'before',
+  'insertAdjacentHTML',
+  'insertAdjacentText',
+  'insertBefore',
+  'prepend',
+  'remove',
+  'removeAttribute',
+  'removeChild',
+  'replaceChild',
+  'replaceWith',
+  'setAttribute',
+  'setAttributeNS',
+  'toggleAttribute',
+]);
+
+const DOM_MUTATION_PROPERTIES = new Set([
+  'className',
+  'hidden',
+  'id',
+  'innerHTML',
+  'innerText',
+  'onclick',
+  'onchange',
+  'oninput',
+  'outerHTML',
+  'style',
+  'textContent',
+  'value',
+]);
+
+const PLUGIN_BACKEND_CHANNEL_ALLOWLIST = new Set([
+  'lookup-backend-geoip',
+  'lookup-backend-whois',
+  'lookup-backend-ipsum',
+  'lookup-backend-tor',
+  'lookup-backend-shodan',
+  'get-backend-diagnostics',
+  'control-backend-service',
+]);
+
+function normalizeCapabilityToken(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePluginCapabilities(capabilities) {
+  const normalized = new Set();
+  const capabilityList = Array.isArray(capabilities) ? capabilities : [];
+  for (const entry of capabilityList) {
+    const token = normalizeCapabilityToken(entry);
+    if (!token) continue;
+    normalized.add(token);
+    const alias = LEGACY_CAPABILITY_ALIASES[token];
+    if (alias) {
+      normalized.add(alias);
+    }
+  }
+  return normalized;
+}
+
+function capabilityIsGranted(grantedCapabilities, requiredCapability) {
+  if (!(grantedCapabilities instanceof Set)) {
+    return false;
+  }
+  const required = normalizeCapabilityToken(requiredCapability);
+  if (!required) {
+    return true;
+  }
+  if (grantedCapabilities.has('*') || grantedCapabilities.has(required)) {
+    return true;
+  }
+  const segments = required.split('.');
+  for (let index = segments.length - 1; index > 0; index -= 1) {
+    const wildcard = `${segments.slice(0, index).join('.')}.*`;
+    if (grantedCapabilities.has(wildcard)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function appendPluginActivityLog(pluginId, message, level = 'info') {
+  const safePluginId = String(pluginId || 'plugin-runtime').trim() || 'plugin-runtime';
+  const safeMessage = String(message || '').trim();
+  if (!safeMessage) {
+    return;
+  }
+  const entry = `[${new Date().toISOString()}] [GUI][Plugin][${safePluginId}] ${safeMessage}`;
+  try {
+    await ipcRenderer.invoke('append-activity-log', entry);
+  } catch (_error) {
+    // Log writes are best-effort.
+  }
+}
+
+async function logPluginDeniedCapability(pluginState, requiredCapability, reason) {
+  const pluginId = pluginState?.pluginId || 'plugin-runtime';
+  const deniedCapability = String(requiredCapability || 'unknown').trim() || 'unknown';
+  const deniedReason = String(reason || '').trim();
+  const deniedMessage = deniedReason
+    ? `Plugin permission denied capability=${JSON.stringify(deniedCapability)} reason=${JSON.stringify(deniedReason)}`
+    : `Plugin permission denied capability=${JSON.stringify(deniedCapability)}`;
+  await appendPluginActivityLog(pluginId, deniedMessage, 'warn');
+}
+
+function assertPluginCapability(pluginState, requiredCapability, reason = '') {
+  if (capabilityIsGranted(pluginState?.capabilities, requiredCapability)) {
+    return;
+  }
+  logPluginDeniedCapability(pluginState, requiredCapability, reason);
+  const detail = String(reason || '').trim();
+  throw new Error(
+    detail
+      ? `Plugin permission denied: ${requiredCapability} (${detail})`
+      : `Plugin permission denied: ${requiredCapability}`,
+  );
+}
+
+function createPluginSecurityState(pluginEntry = {}) {
+  const pluginId = String(pluginEntry?.pluginId || '').trim();
+  return {
+    pluginId,
+    capabilities: normalizePluginCapabilities(pluginEntry?.capabilities),
+  };
+}
+
+function createGuardedFetch(pluginState) {
+  return async (input, init) => {
+    assertPluginCapability(pluginState, 'network.fetch.http', 'fetch');
+    const requestUrl =
+      typeof input === 'string'
+        ? input
+        : typeof input?.url === 'string'
+          ? input.url
+          : '';
+    const parsedUrl = (() => {
+      try {
+        return new URL(String(requestUrl || ''));
+      } catch (_error) {
+        return null;
+      }
+    })();
+    const protocol = String(parsedUrl?.protocol || '').toLowerCase();
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      await logPluginDeniedCapability(
+        pluginState,
+        'network.fetch.http',
+        `unsupported URL protocol ${protocol || 'unknown'}`,
+      );
+      throw new Error('Plugin permission denied: network.fetch.http requires http/https URL');
+    }
+    return fetch(input, init);
+  };
+}
+
+function createPluginFsApi(pluginState) {
+  return {
+    readText: async (filePath, encoding = 'utf8') => {
+      assertPluginCapability(pluginState, 'fs.read', 'fs.readText');
+      return fs.promises.readFile(String(filePath || ''), String(encoding || 'utf8'));
+    },
+    writeText: async (filePath, content, encoding = 'utf8') => {
+      assertPluginCapability(pluginState, 'fs.write', 'fs.writeText');
+      await fs.promises.writeFile(
+        String(filePath || ''),
+        String(content || ''),
+        String(encoding || 'utf8'),
+      );
+      return { success: true, path: String(filePath || '') };
+    },
+    chmod: async (filePath, mode) => {
+      assertPluginCapability(pluginState, 'fs.chmod', 'fs.chmod');
+      await fs.promises.chmod(String(filePath || ''), mode);
+      return { success: true, path: String(filePath || ''), mode };
+    },
+    execute: async (command, options = {}) => {
+      assertPluginCapability(pluginState, 'fs.execute', 'fs.execute');
+      return new Promise((resolve, reject) => {
+        childProcess.exec(String(command || ''), options, (error, stdout, stderr) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve({ stdout, stderr });
+        });
+      });
+    },
+    homeDirectory: () => {
+      assertPluginCapability(pluginState, 'fs.read', 'fs.homeDirectory');
+      return os.homedir();
+    },
+    joinPath: (...segments) => path.join(...segments.map((entry) => String(entry || ''))),
+  };
+}
+
+function createPluginNetworkApi(pluginState, guardedFetch) {
+  return {
+    fetch: guardedFetch,
+    socketConnect: ({ host, port, timeoutMs = 5000 } = {}) => {
+      assertPluginCapability(pluginState, 'network.socket.connect', 'network.socket.connect');
+      return new Promise((resolve, reject) => {
+        const socket = net.createConnection({ host, port: Number(port) }, () => {
+          socket.end();
+          resolve({ success: true, host, port: Number(port) });
+        });
+        socket.setTimeout(Math.max(1, Number(timeoutMs) || 5000));
+        socket.on('timeout', () => {
+          socket.destroy(new Error('Socket connect timed out'));
+        });
+        socket.on('error', (error) => {
+          reject(error);
+        });
+      });
+    },
+    socketListen: ({ host = '127.0.0.1', port = 0 } = {}) => {
+      assertPluginCapability(pluginState, 'network.socket.listen', 'network.socket.listen');
+      return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.once('error', (error) => {
+          reject(error);
+        });
+        server.listen(Number(port), host, () => {
+          const addressInfo = server.address();
+          server.close(() => {
+            resolve({
+              success: true,
+              host,
+              port: typeof addressInfo === 'object' && addressInfo ? addressInfo.port : Number(port),
+            });
+          });
+        });
+      });
+    },
+  };
+}
+
+function createGuardedDomProxy(targetValue, pluginState, cache = new WeakMap()) {
+  if (!targetValue || (typeof targetValue !== 'object' && typeof targetValue !== 'function')) {
+    return targetValue;
+  }
+  if (cache.has(targetValue)) {
+    return cache.get(targetValue);
+  }
+
+  const proxiedValue = new Proxy(targetValue, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value === 'function') {
+        return (...args) => {
+          const name = String(property || '');
+          if (DOM_MUTATION_METHODS.has(name)) {
+            assertPluginCapability(pluginState, 'ui.dom.write', `dom.${name}`);
+          }
+          const callResult = value.apply(target, args);
+          return createGuardedDomProxy(callResult, pluginState, cache);
+        };
+      }
+      return createGuardedDomProxy(value, pluginState, cache);
+    },
+    set(target, property, value, receiver) {
+      if (DOM_MUTATION_PROPERTIES.has(String(property || ''))) {
+        assertPluginCapability(pluginState, 'ui.dom.write', `dom.set.${String(property || '')}`);
+      }
+      return Reflect.set(target, property, value, receiver);
+    },
+    deleteProperty(target, property) {
+      assertPluginCapability(pluginState, 'ui.dom.write', `dom.delete.${String(property || '')}`);
+      return Reflect.deleteProperty(target, property);
+    },
+  });
+
+  cache.set(targetValue, proxiedValue);
+  return proxiedValue;
+}
+
+function createPluginHostFunctions(baseFunctions = {}) {
+  const functionMap = new Map();
+  Object.keys(baseFunctions).forEach((name) => {
+    if (typeof baseFunctions[name] === 'function') {
+      functionMap.set(name, baseFunctions[name]);
+    }
+  });
+  return {
+    call(name, ...args) {
+      const handler = functionMap.get(String(name || ''));
+      if (!handler) {
+        throw new Error(`Unknown PacketSnitch function: ${name}`);
+      }
+      return handler(...args);
+    },
+    overwrite(name, wrapperFactory) {
+      const functionName = String(name || '');
+      const original = functionMap.get(functionName);
+      if (!original) {
+        throw new Error(`Unknown PacketSnitch function: ${name}`);
+      }
+      if (typeof wrapperFactory !== 'function') {
+        throw new Error('Function wrapper must be a function');
+      }
+      const wrapped = wrapperFactory(original);
+      if (typeof wrapped !== 'function') {
+        throw new Error('Function wrapper must return a function');
+      }
+      functionMap.set(functionName, wrapped);
+      return () => {
+        functionMap.set(functionName, original);
+      };
+    },
+  };
+}
+
+function createPluginUiApi(pluginState, hostFunctions) {
+  return {
+    dialog: {
+      alert: (message) => {
+        assertPluginCapability(pluginState, 'ui.dialog.add', 'ui.dialog.alert');
+        window.alert(String(message || ''));
+      },
+      confirm: (message) => {
+        assertPluginCapability(pluginState, 'ui.dialog.add', 'ui.dialog.confirm');
+        return window.confirm(String(message || ''));
+      },
+      prompt: (message, defaultValue = '') => {
+        assertPluginCapability(pluginState, 'ui.dialog.add', 'ui.dialog.prompt');
+        return window.prompt(String(message || ''), String(defaultValue || ''));
+      },
+    },
+    statusBar: {
+      setText: (message) => {
+        assertPluginCapability(pluginState, 'ui.statusbar.modify', 'ui.statusbar.modify');
+        hostFunctions.call('statusUpdate', String(message || ''));
+      },
+    },
+    tabs: {
+      create: ({ id, label }) => {
+        assertPluginCapability(pluginState, 'ui.tabs.create', 'ui.tabs.create');
+        const tabRow = document.getElementById('tab-btns');
+        if (!tabRow) throw new Error('Unable to resolve tab button row');
+        const tabId = String(id || '').trim();
+        if (!tabId) throw new Error('Tab id is required');
+        let tabButton = document.getElementById(tabId);
+        if (!tabButton) {
+          tabButton = document.createElement('input');
+          tabButton.type = 'button';
+          tabButton.id = tabId;
+          tabButton.className = 'custom-btns';
+          tabRow.appendChild(tabButton);
+        }
+        tabButton.value = String(label || tabButton.value || tabId);
+        return { id: tabId, label: tabButton.value };
+      },
+      modify: ({ id, label, hidden } = {}) => {
+        assertPluginCapability(pluginState, 'ui.tabs.modify', 'ui.tabs.modify');
+        const tabButton = document.getElementById(String(id || '').trim());
+        if (!tabButton) throw new Error('Tab not found');
+        if (label !== undefined) tabButton.value = String(label || '');
+        if (hidden !== undefined) tabButton.hidden = Boolean(hidden);
+        return { id: tabButton.id, label: tabButton.value, hidden: tabButton.hidden };
+      },
+    },
+    contextMenu: {
+      create: ({ id, text, onClick } = {}) => {
+        assertPluginCapability(pluginState, 'ui.contextmenu.create', 'ui.contextmenu.create');
+        const contextMenu = document.getElementById('convert-context-menu');
+        if (!contextMenu) {
+          throw new Error('Context menu root was not found');
+        }
+        const itemId = String(id || '').trim();
+        if (!itemId) {
+          throw new Error('Context menu item id is required');
+        }
+        let button = document.getElementById(itemId);
+        if (!button) {
+          button = document.createElement('button');
+          button.type = 'button';
+          button.id = itemId;
+          button.setAttribute('role', 'menuitem');
+          contextMenu.appendChild(button);
+        }
+        button.textContent = String(text || button.textContent || itemId);
+        if (typeof onClick === 'function') {
+          button.onclick = () => {
+            onClick();
+          };
+        }
+        return { id: itemId, text: button.textContent };
+      },
+      modify: ({ id, text, hidden } = {}) => {
+        assertPluginCapability(pluginState, 'ui.contextmenu.modify', 'ui.contextmenu.modify');
+        const button = document.getElementById(String(id || '').trim());
+        if (!button) throw new Error('Context menu entry not found');
+        if (text !== undefined) button.textContent = String(text || '');
+        if (hidden !== undefined) button.hidden = Boolean(hidden);
+        return { id: button.id, text: button.textContent, hidden: button.hidden };
+      },
+    },
+    dom: {
+      query: (selector) => {
+        assertPluginCapability(pluginState, 'ui.dom.write', 'ui.dom.query');
+        return document.querySelector(String(selector || ''));
+      },
+      setText: (selector, text) => {
+        assertPluginCapability(pluginState, 'ui.dom.write', 'ui.dom.setText');
+        const element = document.querySelector(String(selector || ''));
+        if (!element) {
+          return { updated: false };
+        }
+        element.textContent = String(text || '');
+        return { updated: true };
+      },
+    },
+  };
+}
+
+function createPluginBackendApi(pluginState) {
+  return {
+    invoke: async (channel, ...args) => {
+      assertPluginCapability(pluginState, 'backend.talk', 'backend.talk');
+      const channelName = String(channel || '').trim();
+      if (!PLUGIN_BACKEND_CHANNEL_ALLOWLIST.has(channelName)) {
+        await logPluginDeniedCapability(
+          pluginState,
+          'backend.talk',
+          `backend channel ${JSON.stringify(channelName)} is not allowlisted`,
+        );
+        throw new Error(`Plugin backend channel is not allowed: ${channelName}`);
+      }
+      return ipcRenderer.invoke(channelName, ...args);
+    },
+  };
+}
 
 function resolvePluginEntryPath(pluginEntry = {}) {
   const installPath = typeof pluginEntry?.installPath === 'string'
@@ -62,6 +599,7 @@ async function loadPluginRuntime(payload = {}) {
   const pluginId = String(pluginEntry?.pluginId || '').trim();
   const forceReload = Boolean(payload?.forceReload);
   const packetsnitchVersion = String(payload?.packetsnitchVersion || '').trim() || 'unknown';
+  const pluginSecurityState = createPluginSecurityState(pluginEntry);
 
   try {
     if (!window.installapi || typeof window.installapi.checkFirstRun !== 'function') {
@@ -74,25 +612,22 @@ async function loadPluginRuntime(payload = {}) {
     }
 
     const entryCandidates = buildPluginEntryCandidates(pluginEntry);
-    const runtimeRequire =
-      typeof __non_webpack_require__ === 'function' ? __non_webpack_require__ : null;
-    if (!runtimeRequire) {
-      throw new Error('Plugin runtime require is unavailable in preload');
-    }
-
     let pluginModule = null;
     let entryPath = '';
     let lastLoadError = null;
 
     for (const candidatePath of entryCandidates) {
       try {
+        if (!fs.existsSync(candidatePath)) {
+          continue;
+        }
         if (forceReload) {
           try {
             if (runtimeRequire.cache && typeof runtimeRequire.resolve === 'function') {
               delete runtimeRequire.cache[runtimeRequire.resolve(candidatePath)];
             }
           } catch (_cacheError) {
-            // Ignore cache misses.
+            // Ignore cache misses and continue load.
           }
         }
         pluginModule = runtimeRequire(candidatePath);
@@ -109,11 +644,7 @@ async function loadPluginRuntime(payload = {}) {
 
     const pluginRuntime = pluginModule?.default || pluginModule;
 
-    const runtimeContext = {
-      plugin: pluginEntry,
-      packetsnitchVersion,
-      documentRef: document,
-      windowRef: window,
+    const hostFunctions = createPluginHostFunctions({
       statusUpdate: (message) => {
         try {
           window.postMessage(
@@ -130,15 +661,75 @@ async function loadPluginRuntime(payload = {}) {
         }
       },
       writeLogEntry: async (message) => {
-        try {
-          await ipcRenderer.invoke('append-activity-log', {
-            source: pluginId || 'plugin-runtime',
-            message: String(message || ''),
-            level: 'info',
-          });
-        } catch (_logError) {
-          // Logging failures should not stop plugin execution.
+        await appendPluginActivityLog(pluginId || 'plugin-runtime', message, 'info');
+      },
+    });
+
+    const guardedFetch = createGuardedFetch(pluginSecurityState);
+    const pluginUiApi = createPluginUiApi(pluginSecurityState, hostFunctions);
+
+    const runtimeContext = {
+      plugin: pluginEntry,
+      packetsnitchVersion,
+      permissions: {
+        list: Array.from(pluginSecurityState.capabilities),
+        has: (capability) => capabilityIsGranted(pluginSecurityState.capabilities, capability),
+        assert: (capability, reason = '') =>
+          assertPluginCapability(pluginSecurityState, capability, reason),
+        catalog: PLUGIN_CAPABILITY_CATALOG,
+      },
+      api: {
+        version: {
+          read: () => {
+            assertPluginCapability(pluginSecurityState, 'version.read', 'version.read');
+            return packetsnitchVersion;
+          },
+        },
+        ui: pluginUiApi,
+        fs: createPluginFsApi(pluginSecurityState),
+        network: createPluginNetworkApi(pluginSecurityState, guardedFetch),
+        packetsnitch: {
+          useFunction: (name, ...args) => {
+            assertPluginCapability(
+              pluginSecurityState,
+              'packetsnitch.functions.use',
+              `packetsnitch.functions.use:${String(name || '')}`,
+            );
+            return hostFunctions.call(name, ...args);
+          },
+          overwriteFunction: (name, wrapperFactory) => {
+            assertPluginCapability(
+              pluginSecurityState,
+              'packetsnitch.functions.overwrite',
+              `packetsnitch.functions.overwrite:${String(name || '')}`,
+            );
+            return hostFunctions.overwrite(name, wrapperFactory);
+          },
+        },
+        backend: createPluginBackendApi(pluginSecurityState),
+      },
+      documentRef: capabilityIsGranted(pluginSecurityState.capabilities, 'ui.dom.write')
+        ? document
+        : createGuardedDomProxy(document, pluginSecurityState),
+      windowRef: capabilityIsGranted(pluginSecurityState.capabilities, 'ui.dom.write')
+        ? window
+        : createGuardedDomProxy(window, pluginSecurityState),
+      fetch: guardedFetch,
+      statusUpdate: (message) => {
+        assertPluginCapability(pluginSecurityState, 'ui.statusbar.modify', 'statusUpdate');
+        hostFunctions.call('statusUpdate', message);
+      },
+      writeLogEntry: async (message) => {
+        if (!capabilityIsGranted(pluginSecurityState.capabilities, 'plugin.log.write')) {
+          await logPluginDeniedCapability(pluginSecurityState, 'plugin.log.write', 'writeLogEntry');
+          return {
+            success: false,
+            denied: true,
+            capability: 'plugin.log.write',
+          };
         }
+        await hostFunctions.call('writeLogEntry', String(message || ''));
+        return { success: true };
       },
     };
 
@@ -166,13 +757,22 @@ async function loadPluginRuntime(payload = {}) {
       success: true,
       pluginId,
       entryPath,
+      capabilities: Array.from(pluginSecurityState.capabilities),
       result: result === undefined ? null : result,
     };
   } catch (error) {
+    const runtimeErrorMessage = error?.message || String(error || 'Unknown plugin runtime error');
+    if (runtimeErrorMessage.includes('Plugin permission denied')) {
+      await appendPluginActivityLog(
+        pluginId || 'plugin-runtime',
+        `Plugin runtime blocked by security: ${runtimeErrorMessage}`,
+        'warn',
+      );
+    }
     return {
       success: false,
       pluginId,
-      error: error?.message || String(error || 'Unknown plugin runtime error'),
+      error: runtimeErrorMessage,
     };
   }
 }
@@ -214,10 +814,18 @@ async function unloadPluginRuntime(payload = {}) {
       unloaded: true,
     };
   } catch (error) {
+    const unloadErrorMessage = error?.message || String(error || 'Unknown plugin unload error');
+    if (unloadErrorMessage.includes('Plugin permission denied')) {
+      await appendPluginActivityLog(
+        pluginId || 'plugin-runtime',
+        `Plugin unload blocked by security: ${unloadErrorMessage}`,
+        'warn',
+      );
+    }
     return {
       success: false,
       pluginId,
-      error: error?.message || String(error || 'Unknown plugin unload error'),
+      error: unloadErrorMessage,
     };
   }
 }
@@ -422,6 +1030,7 @@ contextBridge.exposeInMainWorld('pluginapi', {
   recordFailure: (payload) => ipcRenderer.invoke('plugins-record-failure', payload),
   resetFailures: (payload) => ipcRenderer.invoke('plugins-reset-failures', payload),
   uninstall: (payload) => ipcRenderer.invoke('plugins-uninstall', payload),
+  getCapabilityCatalog: () => PLUGIN_CAPABILITY_CATALOG,
 });
 
 

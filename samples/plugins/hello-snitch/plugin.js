@@ -10,16 +10,14 @@
  */
 
 (function helloSnitchPluginBootstrap() {
-    // --- Stable IDs used by this plugin ---------------------------------------------------------
-    // Keep these in constants so we can cleanly remove UI in dispose().
     const HELLO_TAB_BTN_ID = "hello-snitch-tab-btn";
     const HELLO_TAB_BOX_ID = "hello-snitch-box";
     const HELLO_TEXT_ID = "hello-snitch-version-text";
     const HELLO_FETCH_BTN_ID = "hello-snitch-fetch-btn";
     const HELLO_FETCH_RESULT_ID = "hello-snitch-fetch-result";
+    const HELLO_DENY_BTN_ID = "hello-snitch-deny-btn";
     const HELLO_CONTEXT_MENU_BTN_ID = "ctx-hello-open";
 
-    // PacketSnitch has several main content panes. This mirrors app behavior when switching tabs.
     const MAIN_BOX_IDS = [
         "summary_box",
         "stats_box",
@@ -33,13 +31,11 @@
         "packetPayloadPane",
     ];
 
-    // Small runtime state holder so init()/dispose() can coordinate cleanup.
     const runtimeState = {
-        wrappedStatusUpdateRestore: null,
-        lastOutputPath: "",
+        outputPath: "",
+        restoreWrappedStatus: null,
     };
 
-    // --- Utility: hide default panes and show our panel -----------------------------------------
     function hideDefaultBoxes(documentRef) {
         MAIN_BOX_IDS.forEach((id) => {
             const el = documentRef.getElementById(id);
@@ -57,107 +53,33 @@
         }
     }
 
-    // --- UI creation ----------------------------------------------------------------------------
-    // Pattern: create elements only once, and make sure IDs are unique.
-    function ensureHelloUi(documentRef) {
-        const tabBar = documentRef.getElementById("tab-btns");
-        const mainPanel = documentRef.getElementById("main");
-        if (!tabBar || !mainPanel) {
-            throw new Error("HelloSnitch could not find tab bar/main panel in DOM");
+    async function writeVersionFileExample(context, message) {
+        const fsApi = context?.api?.fs;
+        if (!fsApi) {
+            throw new Error("Plugin fs api is unavailable");
         }
-
-        // Add a top-level tab button.
-        let helloBtn = documentRef.getElementById(HELLO_TAB_BTN_ID);
-        if (!helloBtn) {
-            helloBtn = documentRef.createElement("input");
-            helloBtn.type = "button";
-            helloBtn.id = HELLO_TAB_BTN_ID;
-            helloBtn.value = "hello";
-            helloBtn.className = "custom-btns";
-            tabBar.appendChild(helloBtn);
-        }
-
-        // Add our panel into the main container.
-        let helloBox = documentRef.getElementById(HELLO_TAB_BOX_ID);
-        if (!helloBox) {
-            helloBox = documentRef.createElement("div");
-            helloBox.id = HELLO_TAB_BOX_ID;
-            helloBox.style.display = "none";
-            helloBox.innerHTML = `
-                <div class="settings-workspace-header">Hello</div>
-                <div class="settings-help-text">
-                    This panel is created by a plugin. Use it as a starter template for custom views.
-                </div>
-                <div id="${HELLO_TEXT_ID}" class="settings-help-text"></div>
-                <div class="settings-actions-row" style="margin-top: 0.6rem; gap: 0.5rem; display: flex; flex-wrap: wrap;">
-                    <button type="button" id="${HELLO_FETCH_BTN_ID}">Fetch Example Data</button>
-                </div>
-                <pre id="${HELLO_FETCH_RESULT_ID}" class="settings-help-text" style="margin-top: 0.6rem; white-space: pre-wrap;"></pre>
-            `;
-            mainPanel.appendChild(helloBox);
-        }
-
-        helloBtn.onclick = () => showHelloPanel(documentRef);
+        const documentsDir = fsApi.joinPath(fsApi.homeDirectory(), "Documents");
+        runtimeState.outputPath = fsApi.joinPath(documentsDir, "hello-snitch-version.txt");
+        await fsApi.writeText(runtimeState.outputPath, `${message}\n`, "utf8");
+        return runtimeState.outputPath;
     }
 
-    // --- Context-menu contribution ---------------------------------------------------------------
-    // This app has a global context menu container (#convert-context-menu).
-    // We append one extra action that simply opens the Hello panel.
-    function ensureContextMenuEntry(documentRef) {
-        const contextMenu = documentRef.getElementById("convert-context-menu");
-        if (!contextMenu) {
-            return;
-        }
-
-        let openHelloButton = documentRef.getElementById(HELLO_CONTEXT_MENU_BTN_ID);
-        if (!openHelloButton) {
-            openHelloButton = documentRef.createElement("button");
-            openHelloButton.type = "button";
-            openHelloButton.id = HELLO_CONTEXT_MENU_BTN_ID;
-            openHelloButton.setAttribute("role", "menuitem");
-            openHelloButton.textContent = "Open Hello";
-            contextMenu.appendChild(openHelloButton);
-        }
-
-        openHelloButton.onclick = () => {
-            showHelloPanel(documentRef);
-            // Hide context menu after click if visible.
-            contextMenu.hidden = true;
-        };
-    }
-
-    // --- File IO examples -----------------------------------------------------------------------
-    // This demonstrates write + read operations from a plugin.
-    // NOTE: This requires Node access in the plugin runtime bridge.
-    function writeVersionFileExample(message) {
-        const path = require("path");
-        const os = require("os");
-        const fs = require("fs");
-
-        const documentsDir = path.join(os.homedir(), "Documents");
-        const outputPath = path.join(documentsDir, "hello-snitch-version.txt");
-        fs.mkdirSync(documentsDir, { recursive: true });
-        fs.writeFileSync(outputPath, `${message}\n`, "utf8");
-        runtimeState.lastOutputPath = outputPath;
-        return outputPath;
-    }
-
-    function readVersionFileExample() {
-        const fs = require("fs");
-        if (!runtimeState.lastOutputPath || !fs.existsSync(runtimeState.lastOutputPath)) {
+    async function readVersionFileExample(context) {
+        if (!runtimeState.outputPath) {
             return "(no output file has been written yet)";
         }
-        return fs.readFileSync(runtimeState.lastOutputPath, "utf8").trim();
+        return String(await context.api.fs.readText(runtimeState.outputPath, "utf8")).trim();
     }
 
-    // --- Network fetch example ------------------------------------------------------------------
-    // Uses browser fetch() so it follows app CSP/connect-src rules.
-    async function fetchRemoteExample() {
-        const response = await fetch("https://api.github.com/repos/oxasploits/PacketSnitch", {
-            headers: {
-                Accept: "application/vnd.github+json",
+    async function fetchRemoteExample(context) {
+        const response = await context.api.network.fetch(
+            "https://api.github.com/repos/oxasploits/PacketSnitch",
+            {
+                headers: {
+                    Accept: "application/vnd.github+json",
+                },
             },
-        });
+        );
         if (!response.ok) {
             throw new Error(`Fetch failed with HTTP ${response.status}`);
         }
@@ -169,76 +91,89 @@
         };
     }
 
-    // --- Safe function override (wrapping) example ----------------------------------------------
-    // "Overwriting a function" is risky. Prefer wrapping with cleanup:
-    // 1) keep original reference
-    // 2) replace with wrapper
-    // 3) restore original in dispose()
     function installSafeStatusWrapperExample(context = {}) {
-        if (runtimeState.wrappedStatusUpdateRestore) {
+        if (runtimeState.restoreWrappedStatus) {
             return;
         }
-        const originalStatusUpdate =
-            typeof context.statusUpdate === "function" ? context.statusUpdate : null;
-        if (!originalStatusUpdate) {
+        const overwriteFn = context?.api?.packetsnitch?.overwriteFunction;
+        if (typeof overwriteFn !== "function") {
             return;
         }
-
-        context.statusUpdate = (message) => {
-            originalStatusUpdate(`[hello-snitch] ${String(message || "")}`);
-        };
-
-        runtimeState.wrappedStatusUpdateRestore = () => {
-            context.statusUpdate = originalStatusUpdate;
-            runtimeState.wrappedStatusUpdateRestore = null;
-        };
+        runtimeState.restoreWrappedStatus = overwriteFn("statusUpdate", (originalFn) => {
+            return (message) => originalFn(`[hello-snitch] ${String(message || "")}`);
+        });
     }
 
-    // --- Disposal -------------------------------------------------------------------------------
-    function disposeHelloUi(documentRef) {
+    function ensureHelloUi(context = {}) {
+        const documentRef = context?.documentRef || document;
+        const tabBar = documentRef.getElementById("tab-btns");
+        const mainPanel = documentRef.getElementById("main");
+        if (!tabBar || !mainPanel) {
+            throw new Error("HelloSnitch could not find tab bar/main panel in DOM");
+        }
+
+        context.api.ui.tabs.create({ id: HELLO_TAB_BTN_ID, label: "hello" });
+
+        let helloBox = documentRef.getElementById(HELLO_TAB_BOX_ID);
+        if (!helloBox) {
+            helloBox = documentRef.createElement("div");
+            helloBox.id = HELLO_TAB_BOX_ID;
+            helloBox.style.display = "none";
+            helloBox.innerHTML = `
+                <div class="settings-workspace-header">Hello</div>
+                <div class="settings-help-text">
+                    This panel is created by a plugin using guarded APIs.
+                </div>
+                <div id="${HELLO_TEXT_ID}" class="settings-help-text"></div>
+                <div class="settings-actions-row" style="margin-top: 0.6rem; gap: 0.5rem; display: flex; flex-wrap: wrap;">
+                    <button type="button" id="${HELLO_FETCH_BTN_ID}">Fetch Example Data</button>
+                    <button type="button" id="${HELLO_DENY_BTN_ID}">Try Unauthorized chmod</button>
+                </div>
+                <pre id="${HELLO_FETCH_RESULT_ID}" class="settings-help-text" style="margin-top: 0.6rem; white-space: pre-wrap;"></pre>
+            `;
+            mainPanel.appendChild(helloBox);
+        }
+
         const helloBtn = documentRef.getElementById(HELLO_TAB_BTN_ID);
-        if (helloBtn && helloBtn.parentNode) {
-            helloBtn.parentNode.removeChild(helloBtn);
-        }
-
-        const helloBox = documentRef.getElementById(HELLO_TAB_BOX_ID);
-        if (helloBox && helloBox.parentNode) {
-            helloBox.parentNode.removeChild(helloBox);
-        }
-
-        const contextMenuBtn = documentRef.getElementById(HELLO_CONTEXT_MENU_BTN_ID);
-        if (contextMenuBtn && contextMenuBtn.parentNode) {
-            contextMenuBtn.parentNode.removeChild(contextMenuBtn);
+        if (helloBtn) {
+            helloBtn.onclick = () => showHelloPanel(documentRef);
         }
     }
 
-    // --- Runtime entrypoints --------------------------------------------------------------------
-    function resolvePacketsnitchVersion(context = {}) {
-        let version = String(context?.packetsnitchVersion || "").trim();
-        if (version) return version;
+    function ensureContextMenuEntry(context = {}) {
+        const documentRef = context?.documentRef || document;
+        context.api.ui.contextMenu.create({
+            id: HELLO_CONTEXT_MENU_BTN_ID,
+            text: "Open Hello",
+            onClick: () => {
+                showHelloPanel(documentRef);
+                const contextMenu = documentRef.getElementById("convert-context-menu");
+                if (contextMenu) {
+                    contextMenu.hidden = true;
+                }
+            },
+        });
+    }
 
-        // Backward-compat fallback if runtime bridge does not provide version.
-        const installApi = window.installapi;
-        if (installApi && typeof installApi.checkFirstRun === "function") {
-            return installApi
-                .checkFirstRun()
-                .then((firstRunInfo) => String(firstRunInfo?.version || "unknown").trim() || "unknown")
-                .catch(() => "unknown");
-        }
-        return "unknown";
+    function disposeHelloUi(documentRef) {
+        [HELLO_TAB_BTN_ID, HELLO_TAB_BOX_ID, HELLO_CONTEXT_MENU_BTN_ID].forEach((id) => {
+            const el = documentRef.getElementById(id);
+            if (el && el.parentNode) {
+                el.parentNode.removeChild(el);
+            }
+        });
     }
 
     async function runHelloSnitch(context = {}) {
         const documentRef = context?.documentRef || document;
-        ensureHelloUi(documentRef);
-        ensureContextMenuEntry(documentRef);
+        ensureHelloUi(context);
+        ensureContextMenuEntry(context);
 
-        const resolvedVersion = await resolvePacketsnitchVersion(context);
-        const version = typeof resolvedVersion === "string" ? resolvedVersion : "unknown";
+        const version = context.api.version.read();
         const message = `Hello, from PacketSnitch version: ${version}`;
 
-        const outputPath = writeVersionFileExample(message);
-        const outputFilePreview = readVersionFileExample();
+        const outputPath = await writeVersionFileExample(context, message);
+        const outputFilePreview = await readVersionFileExample(context);
 
         const textEl = documentRef.getElementById(HELLO_TEXT_ID);
         if (textEl) {
@@ -246,15 +181,28 @@
         }
 
         const fetchBtn = documentRef.getElementById(HELLO_FETCH_BTN_ID);
+        const denyBtn = documentRef.getElementById(HELLO_DENY_BTN_ID);
         const fetchResultEl = documentRef.getElementById(HELLO_FETCH_RESULT_ID);
+
         if (fetchBtn && fetchResultEl) {
             fetchBtn.onclick = async () => {
                 fetchResultEl.textContent = "Fetching...";
                 try {
-                    const remote = await fetchRemoteExample();
+                    const remote = await fetchRemoteExample(context);
                     fetchResultEl.textContent = JSON.stringify(remote, null, 2);
                 } catch (error) {
                     fetchResultEl.textContent = `Fetch error: ${error?.message || error}`;
+                }
+            };
+        }
+
+        if (denyBtn && fetchResultEl) {
+            denyBtn.onclick = async () => {
+                try {
+                    await context.api.fs.chmod(outputPath, 0o600);
+                    fetchResultEl.textContent = "chmod succeeded";
+                } catch (error) {
+                    fetchResultEl.textContent = `Denied as expected: ${error?.message || error}`;
                 }
             };
         }
@@ -265,17 +213,15 @@
 
     async function initHelloSnitch(context = {}) {
         const result = await runHelloSnitch(context);
-
-        // Uncomment to see safe status wrapping in action. Leave disabled by default.
-        // installSafeStatusWrapperExample(context);
-
         if (typeof context.writeLogEntry === "function") {
-            context.writeLogEntry(
+            await context.writeLogEntry(
                 `hello-snitch initialized version=${JSON.stringify(result.version)} output=${JSON.stringify(result.outputPath)}`,
             );
         }
-        if (typeof context.statusUpdate === "function") {
-            context.statusUpdate(`Status: ${result.message}`);
+        context.api.ui.statusBar.setText(`Status: ${result.message}`);
+
+        if (context.permissions?.has?.("packetsnitch.functions.overwrite")) {
+            installSafeStatusWrapperExample(context);
         }
         return result;
     }
@@ -284,23 +230,21 @@
         const documentRef = context?.documentRef || document;
         disposeHelloUi(documentRef);
 
-        if (typeof runtimeState.wrappedStatusUpdateRestore === "function") {
-            runtimeState.wrappedStatusUpdateRestore();
+        if (typeof runtimeState.restoreWrappedStatus === "function") {
+            runtimeState.restoreWrappedStatus();
+            runtimeState.restoreWrappedStatus = null;
         }
 
         if (typeof context.writeLogEntry === "function") {
-            context.writeLogEntry("hello-snitch disposed and UI removed");
+            await context.writeLogEntry("hello-snitch disposed and UI removed");
         }
         return { disposed: true };
     }
 
-    // Export shape supports both direct function plugins and object plugins.
     const runtime = {
         init: initHelloSnitch,
         run: runHelloSnitch,
         dispose: disposeHelloSnitch,
-
-        // Expose examples so plugin developers can experiment in DevTools if desired.
         examples: {
             fetchRemoteExample,
             writeVersionFileExample,
