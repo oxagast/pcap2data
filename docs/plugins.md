@@ -1,6 +1,8 @@
-## Themes Reference
+# Plugins
 
 This page includes both the PacketSnitch Themes reference and a complete Plugins reference/tutorial.
+
+## Themes Reference
 
 PacketSnitch uses a file-driven theming engine. A theme is a JSON file that overrides CSS variables and can optionally replace the app logo, apply a backdrop wallpaper, and tune panel transparency.
 
