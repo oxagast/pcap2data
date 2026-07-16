@@ -1,0 +1,86 @@
+Protocols that I'll probably add, or are already in implementation but need work.
+
+Legend: `*` supported now, `~` partial or rough support, `?` no support or unknown.
+
+- ? AMQP – RabbitMQ and enterprise messaging.
+- * ARP
+- * ASN.1 BER (generic Conv decoder)
+- * ASN.1 DER (generic Conv decoder)
+- * ATM
+- ? BFD – Fast routing failure detection.
+- * BitTorrent
+- * BGP
+- * BSON (generic Conv decoder)
+- ? CDP – Cisco device discovery.
+- * DHCP
+- ? DHCPv6 – Completes IPv6 support alongside DHCP.
+- ? DNP3 – SCADA environments.
+- * DNS
+- * EAPOL / 802.1X – Enterprise Wi-Fi authentication.
+- * Ethernet
+- * FTP
+- * Frame Relay
+- * HDLC
+- ? HSRP – Cisco gateway redundancy.
+- * HTTP/1.x
+- * HTTP/2
+- * HTTPS
+- * ICMP
+- * IGMP
+- ? IGMP / MLD – Multicast troubleshooting.
+- * IMAP
+- * IRC
+- * IPv4
+- * JSON (generic Conv decoder)
+- * Kerberos
+- ? LACP – Link aggregation analysis.
+- * LDAP
+- ~ LLDP (802.1AB) – useful metadata, but not a full decoder yet
+- ? mDNS / Bonjour – Discover Apple devices, printers, IoT devices.
+- * MessagePack (generic Conv decoder)
+- ? MikroTik MNDP – Useful in enterprise/home labs.
+- ? Modbus/TCP – Industrial control systems.
+- * MQTT
+- * MTP / MMS
+- * MySQL
+- ? NBNS (NetBIOS Name Service) – Resolve Windows hostnames on LANs.
+- * NFS
+- * NNTP
+- * NTP
+- ? OSPF – Interior routing.
+- * PPP (LCP/NCP/LAP)
+- ~ PPPoE – link/control metadata exists, but coverage is still rough
+- * POP3
+- * PostgreSQL
+- * Protobuf (generic Conv decoder)
+- ? QUIC – Foundation for HTTP/3.
+- * RADIUS
+- * RARP
+- ? RTP – Voice/video stream analysis.
+- * RTSP
+- ? S7comm – Siemens PLC analysis.
+- * SCTP
+- * SDLC
+- * SIP
+- * SLIP
+- * SMB / Samba
+- * SMTP
+- * SMPP
+- * SNMP
+- * Soulseek
+- ~ SSH / OpenSSH
+- ? SSH handshake parser – Algorithms, versions, host keys.
+- ? SSDP / UPnP – Enumerate smart TVs, IoT, game consoles, routers.
+- ? Syslog – Parse structured log messages carried over UDP/TCP.
+- * TCP
+- * Telnet
+- * TFTP
+- ? TLS handshake parser – Certificates, JA3/JA4 fingerprints, SNI, ALPN, cipher suites (without decryption).
+- * Token Ring
+- * UDP
+- ? VRRP – Detect redundant routers.
+- * WebSocket
+- ? WireGuard handshake detection – Even without decrypting payloads, identify peers and sessions.
+- * XML (generic Conv decoder)
+- * XMPP
+- * YAML (generic Conv decoder)
