@@ -6135,6 +6135,22 @@ function escapeMarkdownTableCell(text) {
 
 // Returns conv decoded result from dom table.
 function getConvDecodedResultFromDomTable() {
+  const protoOutputEl = document.getElementById("data-tools-proto-output");
+  const serializedResult = protoOutputEl?.dataset?.decodedResult;
+  if (serializedResult) {
+    try {
+      const parsed = JSON.parse(serializedResult);
+      if (parsed && Array.isArray(parsed.fields)) {
+        return {
+          protocol: parsed.protocol || null,
+          fields: parsed.fields,
+        };
+      }
+    } catch {
+      // Fall back to parsing table DOM.
+    }
+  }
+
   const tableEl = document.querySelector(
     "#data-tools-proto-output table.data-tools-proto-table",
   );
@@ -11237,6 +11253,319 @@ function decodeDerFromBytes(bytes) {
   return decodeAsn1GenericFromBytes(bytes, { encodingLabel: "DER", enforceDer: true });
 }
 
+function parseSimpleYamlScalar(valueText) {
+  const text = String(valueText || "").trim();
+  if (text === "") return "";
+  if (/^(true|false)$/i.test(text)) return /^true$/i.test(text);
+  if (/^(null|~)$/i.test(text)) return null;
+  if (/^[+-]?\d+$/.test(text)) {
+    const parsedInt = Number.parseInt(text, 10);
+    if (Number.isFinite(parsedInt)) return parsedInt;
+  }
+  if (/^[+-]?(?:\d+\.\d+|\d+\.\d*|\.\d+)$/.test(text)) {
+    const parsedFloat = Number.parseFloat(text);
+    if (Number.isFinite(parsedFloat)) return parsedFloat;
+  }
+  if (
+    (text.startsWith('"') && text.endsWith('"')) ||
+    (text.startsWith("'") && text.endsWith("'"))
+  ) {
+    return text.slice(1, -1);
+  }
+  return text;
+}
+
+function parseSimpleYamlKeyValue(content) {
+  const separatorIndex = content.indexOf(":");
+  if (separatorIndex <= 0) return null;
+  const key = content.slice(0, separatorIndex).trim().replace(/^['"]|['"]$/g, "");
+  if (!key) return null;
+  const rawValue = content.slice(separatorIndex + 1);
+  const hasInlineValue = rawValue.trim().length > 0;
+  return {
+    key,
+    hasInlineValue,
+    value: hasInlineValue ? parseSimpleYamlScalar(rawValue) : null,
+  };
+}
+
+function parseSimpleYamlToObject(rawText) {
+  if (typeof rawText !== "string") return null;
+  const sourceLines = rawText.split(/\r?\n/);
+  const lines = sourceLines
+    .map((line) => line.replace(/\t/g, "  "))
+    .filter((line) => {
+      const trimmed = line.trim();
+      return (
+        trimmed &&
+        !trimmed.startsWith("#") &&
+        trimmed !== "---" &&
+        trimmed !== "..."
+      );
+    })
+    .map((line) => ({
+      indent: (line.match(/^\s*/) || [""])[0].length,
+      content: line.trim(),
+    }));
+  if (!lines.length) return null;
+
+  function parseBlock(startIndex, expectedIndent) {
+    if (startIndex >= lines.length) return { value: null, nextIndex: startIndex };
+
+    const startsWithList = lines[startIndex].content.startsWith("-");
+    if (startsWithList) {
+      const resultList = [];
+      let index = startIndex;
+      while (index < lines.length) {
+        const line = lines[index];
+        if (line.indent < expectedIndent || !line.content.startsWith("-")) break;
+        if (line.indent > expectedIndent) {
+          index += 1;
+          continue;
+        }
+
+        const itemText = line.content.replace(/^-\s?/, "").trim();
+        if (!itemText) {
+          const nextLine = lines[index + 1];
+          if (nextLine && nextLine.indent > line.indent) {
+            const nested = parseBlock(index + 1, nextLine.indent);
+            resultList.push(nested.value);
+            index = nested.nextIndex;
+            continue;
+          }
+          resultList.push(null);
+          index += 1;
+          continue;
+        }
+
+        const maybeKv = parseSimpleYamlKeyValue(itemText);
+        if (maybeKv) {
+          const itemObject = { [maybeKv.key]: maybeKv.value };
+          if (!maybeKv.hasInlineValue) {
+            const nextLine = lines[index + 1];
+            if (nextLine && nextLine.indent > line.indent) {
+              const nested = parseBlock(index + 1, nextLine.indent);
+              itemObject[maybeKv.key] = nested.value;
+              index = nested.nextIndex;
+            } else {
+              index += 1;
+            }
+          } else {
+            index += 1;
+          }
+
+          while (index < lines.length && lines[index].indent > line.indent) {
+            const siblingLine = lines[index];
+            if (siblingLine.content.startsWith("-")) break;
+            const siblingKv = parseSimpleYamlKeyValue(siblingLine.content);
+            if (!siblingKv) break;
+            if (!siblingKv.hasInlineValue) {
+              const nestedLine = lines[index + 1];
+              if (nestedLine && nestedLine.indent > siblingLine.indent) {
+                const nested = parseBlock(index + 1, nestedLine.indent);
+                itemObject[siblingKv.key] = nested.value;
+                index = nested.nextIndex;
+              } else {
+                itemObject[siblingKv.key] = null;
+                index += 1;
+              }
+            } else {
+              itemObject[siblingKv.key] = siblingKv.value;
+              index += 1;
+            }
+          }
+
+          resultList.push(itemObject);
+          continue;
+        }
+
+        resultList.push(parseSimpleYamlScalar(itemText));
+        index += 1;
+      }
+
+      return {
+        value: resultList,
+        nextIndex: index,
+      };
+    }
+
+    const resultObject = {};
+    let index = startIndex;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (line.indent < expectedIndent) break;
+      if (line.indent > expectedIndent) {
+        index += 1;
+        continue;
+      }
+      if (line.content.startsWith("-")) break;
+
+      const maybeKv = parseSimpleYamlKeyValue(line.content);
+      if (!maybeKv) {
+        index += 1;
+        continue;
+      }
+
+      if (maybeKv.hasInlineValue) {
+        resultObject[maybeKv.key] = maybeKv.value;
+        index += 1;
+        continue;
+      }
+
+      const nextLine = lines[index + 1];
+      if (nextLine && nextLine.indent > line.indent) {
+        const nested = parseBlock(index + 1, nextLine.indent);
+        resultObject[maybeKv.key] = nested.value;
+        index = nested.nextIndex;
+      } else {
+        resultObject[maybeKv.key] = null;
+        index += 1;
+      }
+    }
+
+    return {
+      value: resultObject,
+      nextIndex: index,
+    };
+  }
+
+  const parsed = parseBlock(0, lines[0].indent).value;
+  return parsed;
+}
+
+function parseXmlElementToTreeObject(element, depth = 0) {
+  if (!(element instanceof Element)) return null;
+  if (depth > 40) return "[max-depth]";
+
+  const nodeObject = {};
+  const attributes = Array.from(element.attributes || []);
+  if (attributes.length) {
+    nodeObject["@attributes"] = {};
+    attributes.forEach((attr) => {
+      nodeObject["@attributes"][attr.name] = attr.value;
+    });
+  }
+
+  const textNodes = Array.from(element.childNodes || [])
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => (node.textContent || "").trim())
+    .filter(Boolean);
+  if (textNodes.length) {
+    nodeObject["#text"] = textNodes.join(" ");
+  }
+
+  const childElements = Array.from(element.children || []);
+  childElements.forEach((child) => {
+    const childValue = parseXmlElementToTreeObject(child, depth + 1);
+    if (nodeObject[child.tagName] === undefined) {
+      nodeObject[child.tagName] = childValue;
+      return;
+    }
+    if (!Array.isArray(nodeObject[child.tagName])) {
+      nodeObject[child.tagName] = [nodeObject[child.tagName]];
+    }
+    nodeObject[child.tagName].push(childValue);
+  });
+
+  if (!Object.keys(nodeObject).length) return "";
+  return nodeObject;
+}
+
+function formatDataTreeLeafValue(value) {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function getDataTreeBranchSummary(value) {
+  if (Array.isArray(value)) return `[${value.length}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).length}}`;
+  return "";
+}
+
+function createDataTreeNode(label, value, depth = 0) {
+  const isBranch =
+    Array.isArray(value) || (value !== null && typeof value === "object");
+
+  if (!isBranch) {
+    const leaf = document.createElement("div");
+    leaf.className = "data-tools-tree-leaf";
+
+    const keySpan = document.createElement("span");
+    keySpan.className = "data-tools-tree-key";
+    keySpan.textContent = `${label}: `;
+
+    const valueSpan = document.createElement("span");
+    valueSpan.className = "data-tools-tree-value";
+    valueSpan.textContent = formatDataTreeLeafValue(value);
+
+    leaf.appendChild(keySpan);
+    leaf.appendChild(valueSpan);
+    return leaf;
+  }
+
+  const details = document.createElement("details");
+  details.className = "data-tools-tree-branch";
+  details.open = depth < 2;
+
+  const summary = document.createElement("summary");
+  summary.className = "data-tools-tree-summary";
+
+  const keySpan = document.createElement("span");
+  keySpan.className = "data-tools-tree-key";
+  keySpan.textContent = label;
+
+  const metaSpan = document.createElement("span");
+  metaSpan.className = "data-tools-tree-meta";
+  metaSpan.textContent = ` ${getDataTreeBranchSummary(value)}`;
+
+  summary.appendChild(keySpan);
+  summary.appendChild(metaSpan);
+  details.appendChild(summary);
+
+  const children = document.createElement("div");
+  children.className = "data-tools-tree-children";
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      children.appendChild(createDataTreeNode(`[${index}]`, item, depth + 1));
+    });
+    if (!value.length) {
+      children.appendChild(createDataTreeNode("(empty)", "", depth + 1));
+    }
+  } else {
+    const keys = Object.keys(value);
+    keys.forEach((key) => {
+      children.appendChild(createDataTreeNode(key, value[key], depth + 1));
+    });
+    if (!keys.length) {
+      children.appendChild(createDataTreeNode("(empty)", "", depth + 1));
+    }
+  }
+  details.appendChild(children);
+  return details;
+}
+
+function renderStructuredDecoderTree(protoOutput, result) {
+  if (!protoOutput || !result || !result.treeData) return false;
+  const treeFormats = new Set(["JSON", "XML", "YAML"]);
+  if (!treeFormats.has(result.protocol)) return false;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "data-tools-structured-tree";
+
+  const title = document.createElement("div");
+  title.className = "data-tools-tree-title";
+  title.textContent = `${result.protocol} Data Tree`;
+  wrapper.appendChild(title);
+
+  const treeRoot = createDataTreeNode("root", result.treeData, 0);
+  wrapper.appendChild(treeRoot);
+  protoOutput.appendChild(wrapper);
+  return true;
+}
+
 function decodeJsonFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
   const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes).trim();
@@ -11261,7 +11590,7 @@ function decodeJsonFromBytes(bytes) {
       name: "Pretty JSON",
       value: pretty.length > 2000 ? `${pretty.slice(0, 2000)}…` : pretty,
     });
-    return { protocol: "JSON", fields };
+    return { protocol: "JSON", fields, treeData: parsed };
   } catch {
     return null;
   }
@@ -11282,6 +11611,9 @@ function decodeXmlFromBytes(bytes) {
     const rootTag = xmlDoc.documentElement?.tagName || "(none)";
     const childCount = xmlDoc.documentElement?.childElementCount || 0;
     const attrs = Array.from(xmlDoc.documentElement?.attributes || []).map((attr) => `${attr.name}=${JSON.stringify(attr.value)}`);
+    const treeData = {
+      [rootTag]: parseXmlElementToTreeObject(xmlDoc.documentElement, 0),
+    };
     const fields = [
       { name: "Root Element", value: rootTag },
       { name: "Child Elements", value: String(childCount) },
@@ -11291,7 +11623,7 @@ function decodeXmlFromBytes(bytes) {
         value: rawText.length > 2000 ? `${rawText.slice(0, 2000)}…` : rawText,
       },
     ];
-    return { protocol: "XML", fields };
+    return { protocol: "XML", fields, treeData };
   } catch {
     return null;
   }
@@ -11322,6 +11654,7 @@ function decodeYamlFromBytes(bytes) {
     }
   });
 
+  const treeData = parseSimpleYamlToObject(rawText);
   return {
     protocol: "YAML",
     fields: [
@@ -11332,6 +11665,7 @@ function decodeYamlFromBytes(bytes) {
         value: trimmed.length > 2000 ? `${trimmed.slice(0, 2000)}…` : trimmed,
       },
     ],
+    treeData,
   };
 }
 
@@ -12078,6 +12412,7 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   const protoOutput = document.getElementById("data-tools-proto-output");
   if (!protoOutput) return;
   protoOutput.innerHTML = "";
+  delete protoOutput.dataset.decodedResult;
   if (!result) {
     const span = document.createElement("span");
     span.className = "data-tools-proto-none";
@@ -12086,6 +12421,13 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
         ? "No known protocol detected"
         : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
     protoOutput.appendChild(span);
+    return;
+  }
+  protoOutput.dataset.decodedResult = JSON.stringify({
+    protocol: result.protocol,
+    fields: Array.isArray(result.fields) ? result.fields : [],
+  });
+  if (renderStructuredDecoderTree(protoOutput, result)) {
     return;
   }
   const table = document.createElement("table");
@@ -12194,7 +12536,10 @@ function runProtoDecoder(bytes) {
 // Clears proto decoder output.
 function clearProtoDecoderOutput() {
   const protoOutput = document.getElementById("data-tools-proto-output");
-  if (protoOutput) protoOutput.innerHTML = "";
+  if (protoOutput) {
+    protoOutput.innerHTML = "";
+    delete protoOutput.dataset.decodedResult;
+  }
 }
 
 // Runs deferred data tools analysis for active subtab.

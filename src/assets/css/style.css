@@ -1970,6 +1970,66 @@ strong {
   font-style: italic;
 }
 
+.data-tools-structured-tree {
+  border: 1px solid var(--color-3);
+  background-color: rgba(0, 0, 0, 0.2);
+  padding: 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.data-tools-tree-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--color-1);
+}
+
+.data-tools-tree-branch,
+.data-tools-tree-leaf {
+  margin-left: 12px;
+}
+
+.data-tools-tree-summary {
+  cursor: pointer;
+  user-select: text;
+  list-style: none;
+}
+
+.data-tools-tree-summary::-webkit-details-marker {
+  display: none;
+}
+
+.data-tools-tree-summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--color-2);
+}
+
+.data-tools-tree-branch[open]>.data-tools-tree-summary::before {
+  content: "▾";
+}
+
+.data-tools-tree-children {
+  margin-left: 14px;
+  border-left: 1px dashed color-mix(in srgb, var(--color-3) 65%, transparent);
+  padding-left: 8px;
+}
+
+.data-tools-tree-key {
+  color: var(--color-5);
+  font-weight: 600;
+}
+
+.data-tools-tree-meta {
+  color: var(--color-3);
+}
+
+.data-tools-tree-value {
+  color: color-mix(in srgb, var(--color-5) 88%, white);
+  word-break: break-word;
+}
+
 .data-tools-hashes-section {
   margin-top: 10px;
 }
