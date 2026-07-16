@@ -64,7 +64,7 @@ const {
   CRYPT_KEYSTORE_MODE_PERSISTENT,
   SESSION_KEYCHAIN_LABEL,
 } = require("./panels/keystore-panel");
-const { createStatsPanel } = require("./panels/stats-panel");
+const { createStatsPanel, buildCaptureStats } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
@@ -3006,6 +3006,7 @@ function scheduleSessionKeychainAutoPopulate(reason = "startup") {
         `Session keychain auto-populated entries=${keystoreEntryCount} reason=${reason}`,
       );
       statusUpdate("Status: Session keychain auto-populated");
+      syncPluginRuntimeData();
     } catch (error) {
       if (generation !== keystoreAutoPopulateGeneration) return;
       logErrorEntry("session-keystore-autopopulate", error);
@@ -3139,6 +3140,7 @@ function setSessionPcapSource(source, options = {}) {
   sessionPcapSource = normalizeSessionPcapSource(source);
   updatePcapSizeDisplayFromSource();
   updateReprocessButtonState();
+  syncPluginRuntimeData();
   if (!skipLog && sessionPcapSource) {
     writeLogEntry(
       `PCAP source cached label=${logLabel} name=${sessionPcapSource.fileName} bytes=${sessionPcapSource.byteLength}`,
@@ -5243,12 +5245,255 @@ function clearFilterQuery() {
   void runFilterQuery("");
 }
 
+function packetKeyForFilterResult(packet, fallbackIndex = 0) {
+  const packetInfo = packet?.["packet.info"];
+  if (!packetInfo) return null;
+  const sourceIp =
+    packetInfo?.["IP"]?.["ip.src.addr"] ??
+    packetInfo?.["IP"]?.["Source IP"] ??
+    "Unknown";
+  const packetIndex =
+    packetInfo?.["index"] ?? packetInfo?.["Index"] ?? fallbackIndex;
+  return `${sourceIp}:${packetIndex}`;
+}
+
+function collectPacketKeysForFilterResult(packetList) {
+  if (!Array.isArray(packetList)) return [];
+  return packetList
+    .map((packet, index) => packetKeyForFilterResult(packet, index))
+    .filter((packetKey) => typeof packetKey === "string" && packetKey.trim());
+}
+
+window.addEventListener("message", (event) => {
+  const data = event?.data;
+  if (!data || typeof data !== "object") return;
+  if (data.source !== "packetsnitch-plugin-runtime") return;
+  if (data.type !== "plugin-keystore-write") return;
+
+  const requestPayload =
+    data.payload && typeof data.payload === "object" ? data.payload : {};
+  const action = String(requestPayload.action || "").trim();
+
+  const respond = (resultPayload) => {
+    window.postMessage(
+      {
+        source: "packetsnitch-renderer",
+        type: "plugin-keystore-write-result",
+        ...resultPayload,
+      },
+      "*",
+    );
+  };
+
+  try {
+    if (!keystorePanel || typeof keystorePanel.addSessionKeystoreEntry !== "function") {
+      throw new Error("Keystore panel is unavailable");
+    }
+
+    const pushEntry = (entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const beforeCount =
+        typeof keystorePanel.getSessionKeychainEntries === "function"
+          ? keystorePanel.getSessionKeychainEntries().length
+          : 0;
+      keystorePanel.addSessionKeystoreEntry({
+        type: entry.type,
+        label: entry.label,
+        source: entry.source,
+        content: entry.content,
+        summary: entry.summary,
+        packetIndex: entry.packetIndex,
+      });
+      const afterCount =
+        typeof keystorePanel.getSessionKeychainEntries === "function"
+          ? keystorePanel.getSessionKeychainEntries().length
+          : beforeCount;
+      return afterCount > beforeCount;
+    };
+
+    let addedCount = 0;
+    if (action === "addSessionEntries") {
+      const entries = Array.isArray(requestPayload.entries)
+        ? requestPayload.entries
+        : [];
+      entries.forEach((entry) => {
+        if (pushEntry(entry)) {
+          addedCount += 1;
+        }
+      });
+    } else {
+      if (pushEntry(requestPayload.entry)) {
+        addedCount = 1;
+      }
+    }
+
+    syncPluginRuntimeData();
+    respond({ success: true, addedCount });
+  } catch (error) {
+    respond({
+      success: false,
+      error: error?.message || String(error || "Plugin keystore write failed"),
+    });
+  }
+});
+
+window.addEventListener("message", async (event) => {
+  const data = event?.data;
+  if (!data || typeof data !== "object") return;
+  if (data.source !== "packetsnitch-plugin-runtime") return;
+  if (data.type !== "plugin-filter-query") return;
+
+  const requestId = String(data.requestId || "").trim();
+  if (!requestId) return;
+
+  const requestPayload =
+    data.payload && typeof data.payload === "object" ? data.payload : {};
+  const expression = String(requestPayload.expression || "").trim();
+  const mode =
+    String(requestPayload.mode || "").trim().toLowerCase() === "ui"
+      ? "ui"
+      : "background";
+
+  const respond = (resultPayload) => {
+    window.postMessage(
+      {
+        source: "packetsnitch-renderer",
+        type: "plugin-filter-query-result",
+        requestId,
+        ...resultPayload,
+      },
+      "*",
+    );
+  };
+
+  try {
+    if (!expression) {
+      throw new Error("Filter expression is required");
+    }
+
+    if (mode === "ui") {
+      filterInputEl.value = expression;
+      syncFilterHighlight();
+      await runFilterQuery(expression, {
+        trackHistory: Boolean(requestPayload.trackHistory),
+        updateUi: true,
+        logQueryOutcome: false,
+      });
+      const packetKeys = collectPacketKeysForFilterResult(filteredPackets);
+      respond({
+        success: true,
+        result: {
+          mode: "ui",
+          packetKeys,
+          packetCount: packetKeys.length,
+        },
+      });
+      return;
+    }
+
+    if (window.captureapi && typeof window.captureapi.filter === "function") {
+      const filterResult = await window.captureapi.filter(expression);
+      if (!filterResult?.success) {
+        throw new Error(filterResult?.error || "Background filter query failed");
+      }
+      const packetKeys = Array.isArray(filterResult.packetKeys)
+        ? filterResult.packetKeys
+        : [];
+      respond({
+        success: true,
+        result: {
+          mode: "background",
+          packetKeys,
+          packetCount: packetKeys.length,
+        },
+      });
+      return;
+    }
+
+    await runFilterQuery(expression, {
+      trackHistory: false,
+      updateUi: false,
+      logQueryOutcome: false,
+    });
+    const packetKeys = collectPacketKeysForFilterResult(filteredPackets);
+    respond({
+      success: true,
+      result: {
+        mode: "background",
+        packetKeys,
+        packetCount: packetKeys.length,
+      },
+    });
+  } catch (error) {
+    respond({
+      success: false,
+      error: error?.message || String(error || "Plugin filter query failed"),
+    });
+  }
+});
+
 // Handles deep clone session data.
 function deepCloneSessionData(value, fallback) {
   try {
     return JSON.parse(JSON.stringify(value));
   } catch {
     return fallback;
+  }
+}
+
+function syncPluginRuntimeData(options = {}) {
+  if (!window.pluginapi || typeof window.pluginapi.updateRuntimeData !== "function") {
+    return;
+  }
+
+  const includeStats = Boolean(options.includeStats);
+  const contextPacket = getCurrentPacketForExport();
+  const contextPacketInfo =
+    contextPacket && typeof contextPacket === "object" ? contextPacket["packet.info"] : null;
+
+  const payload = {
+    currentPacketKey:
+      typeof currentPacketKey === "string" && currentPacketKey.trim()
+        ? currentPacketKey.trim()
+        : null,
+    currentPacketMetadata: contextPacketInfo
+      ? {
+        packetKey:
+          typeof currentPacketKey === "string" && currentPacketKey.trim()
+            ? currentPacketKey.trim()
+            : null,
+        packetInfo: deepCloneSessionData(contextPacketInfo, {}),
+        activePacketCursor: getActivePacketCursor(),
+      }
+      : null,
+    currentStreamTuple: deepCloneSessionData(getCurrentStreamTuple(), null),
+    sessionPcapSource: sessionPcapSource
+      ? {
+        fileName: sessionPcapSource.fileName,
+        encoding: sessionPcapSource.encoding,
+        data: sessionPcapSource.data,
+        byteLength: sessionPcapSource.byteLength,
+      }
+      : null,
+    keystoreEntries: deepCloneSessionData(
+      typeof keystorePanel?.getSessionKeychainEntries === "function"
+        ? keystorePanel.getSessionKeychainEntries()
+        : [],
+      [],
+    ),
+  };
+
+  if (includeStats) {
+    payload.statsJson = buildCaptureStats(
+      capturedPackets,
+      Array.isArray(bookmarkList) ? bookmarkList.length : 0,
+    );
+  }
+
+  try {
+    window.pluginapi.updateRuntimeData(payload);
+  } catch (error) {
+    logErrorEntry("plugin-runtime-sync", error);
   }
 }
 
@@ -6739,6 +6984,7 @@ async function finalizeLoadedCapture(sessionState) {
   }
   document.getElementById("loading-screen").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
+  syncPluginRuntimeData({ includeStats: true });
 }
 
 // Handles rebuild bookmark dropdown.
@@ -7288,6 +7534,7 @@ function restoreSessionState(sessionState) {
   }
   writeLogEntry("Session state restored from JSON");
   statusUpdate("Status: Session restored");
+  syncPluginRuntimeData({ includeStats: true });
 }
 
 async function processCapturePath(capturePath, options = {}) {
@@ -19089,6 +19336,7 @@ document.getElementById("setBookmark").addEventListener("click", function () {
         .getElementById("selectBookmark")
         .appendChild(new Option(currentPacketKey, currentPacketKey));
       writeLogEntry(`Bookmark added key = ${currentPacketKey}`);
+      syncPluginRuntimeData({ includeStats: true });
     }
   }
 });
@@ -19344,6 +19592,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
     updateCurrentPacketCounters([], {
       isFilteredView: navAction === "filtered",
     });
+    syncPluginRuntimeData();
     return;
   }
   if (
@@ -19391,6 +19640,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
     popHexGrid(hexPayload);
     populateDataTypes(packetSet);
     logCurrentPacketDisplay(navAction || "first-load");
+    syncPluginRuntimeData();
   }
 }
 

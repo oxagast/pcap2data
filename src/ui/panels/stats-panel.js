@@ -3788,4 +3788,5 @@ function createStatsPanel(options) {
 module.exports = {
   id: "stats",
   createStatsPanel,
+  buildCaptureStats,
 };

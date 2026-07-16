@@ -157,6 +157,48 @@ describe('plugin capability enforcement', () => {
 
     beforeEach(() => {
         global.document = createFakeDom();
+        if (global.pluginapi && typeof global.pluginapi.updateRuntimeData === 'function') {
+            global.pluginapi.updateRuntimeData({
+                currentPacketKey: '10.0.0.1:7',
+                currentPacketMetadata: {
+                    packetKey: '10.0.0.1:7',
+                    packetInfo: {
+                        index: 7,
+                        IP: {
+                            'ip.src.addr': '10.0.0.1',
+                            'ip.dst.addr': '10.0.0.2',
+                        },
+                    },
+                    activePacketCursor: 3,
+                },
+                currentStreamTuple: {
+                    srcIp: '10.0.0.1',
+                    srcPort: 443,
+                    dstIp: '10.0.0.2',
+                    dstPort: 51515,
+                    protocol: 'TCP',
+                },
+                sessionPcapSource: {
+                    fileName: 'fixture.pcap',
+                    encoding: 'base64',
+                    data: 'AAECAwQ=',
+                    byteLength: 5,
+                },
+                statsJson: {
+                    totalPackets: 5,
+                    totalStreams: 2,
+                    bookmarkCount: 1,
+                },
+                keystoreEntries: [
+                    {
+                        id: 'fixture-entry',
+                        label: 'fixture',
+                        type: 'token',
+                        content: 'abc123',
+                    },
+                ],
+            });
+        }
     });
 
     const capabilityCases = [
@@ -248,6 +290,72 @@ describe('plugin capability enforcement', () => {
         {
             capability: 'backend.talk',
             code: `await context.api.backend.invoke('get-backend-diagnostics');`,
+        },
+        {
+            capability: 'packet.metadata.read',
+            code: `
+                const metadata = context.api.capture.getCurrentPacketMetadata();
+                if (!metadata || !metadata.packetInfo) {
+                    throw new Error('packet metadata missing');
+                }
+            `,
+        },
+        {
+            capability: 'session.pcap.read',
+            code: `
+                const source = await context.api.capture.getSessionPcapSource();
+                if (!source || !source.data) {
+                    throw new Error('session pcap source missing');
+                }
+            `,
+        },
+        {
+            capability: 'stats.json.read',
+            code: `
+                const stats = context.api.stats.getJson();
+                if (!stats || typeof stats.totalPackets !== 'number') {
+                    throw new Error('stats json missing');
+                }
+            `,
+        },
+        {
+            capability: 'keystore.read',
+            code: `
+                const entries = context.api.keystore.getSessionEntries();
+                if (!Array.isArray(entries) || entries.length < 1) {
+                    throw new Error('keystore entries missing');
+                }
+            `,
+        },
+        {
+            capability: 'keystore.write',
+            allowedCapabilities: ['keystore.write', 'keystore.read'],
+            code: `
+                const outcome = context.api.keystore.addSessionEntry({
+                    type: 'secret',
+                    label: 'plugin-token',
+                    source: 'plugin-test',
+                    content: 'token-xyz',
+                    summary: 'added from test',
+                    packetIndex: 7,
+                });
+                if (!outcome || outcome.success !== true) {
+                    throw new Error('keystore write failed');
+                }
+                const entries = context.api.keystore.getSessionEntries();
+                if (!Array.isArray(entries) || entries.length < 1) {
+                    throw new Error('keystore entries missing after write');
+                }
+            `,
+        },
+        {
+            capability: 'filter.query',
+            code: `
+                const result = await context.api.filter.query('ip.src.addr: 10.0.0.1', { mode: 'background' });
+                if (!result || result.success !== true) {
+                    throw new Error('filter query failed');
+                }
+            `,
         },
         {
             capability: 'plugin.log.write',

@@ -74,6 +74,30 @@
             "description": "Invoke backend IPC bridge endpoints"
         },
         {
+            "id": "packet.metadata.read",
+            "description": "Read current packet metadata exposed by the renderer"
+        },
+        {
+            "id": "session.pcap.read",
+            "description": "Read the raw session source PCAP payload"
+        },
+        {
+            "id": "stats.json.read",
+            "description": "Read Stats workspace JSON snapshot data"
+        },
+        {
+            "id": "keystore.read",
+            "description": "Read session keystore entries"
+        },
+        {
+            "id": "keystore.write",
+            "description": "Write session keystore entries"
+        },
+        {
+            "id": "filter.query",
+            "description": "Query capture filter expressions in background or UI mode"
+        },
+        {
             "id": "plugin.log.write",
             "description": "Write plugin log entries to activity log"
         }

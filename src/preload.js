@@ -14,6 +14,17 @@ const net = runtimeRequire('net');
 const os = runtimeRequire('os');
 const path = runtimeRequire('path');
 const loadedPluginRuntimes = new Map();
+const pendingPluginFilterUiRequests = new Map();
+let pluginFilterUiRequestCounter = 0;
+let pluginFilterUiResponseListenerAttached = false;
+const pluginRuntimeDataState = {
+  currentPacketKey: null,
+  currentPacketMetadata: null,
+  currentStreamTuple: null,
+  sessionPcapSource: null,
+  statsJson: null,
+  keystoreEntries: [],
+};
 
 const PLUGIN_CAPABILITY_CATALOG = [
   {
@@ -87,6 +98,30 @@ const PLUGIN_CAPABILITY_CATALOG = [
   {
     capability: 'backend.talk',
     description: 'Invoke backend IPC bridge endpoints',
+  },
+  {
+    capability: 'packet.metadata.read',
+    description: 'Read current packet metadata exposed by the renderer',
+  },
+  {
+    capability: 'session.pcap.read',
+    description: 'Read the raw session source PCAP payload',
+  },
+  {
+    capability: 'stats.json.read',
+    description: 'Read Stats workspace JSON snapshot data',
+  },
+  {
+    capability: 'keystore.read',
+    description: 'Read session keystore entries',
+  },
+  {
+    capability: 'keystore.write',
+    description: 'Write session keystore entries',
+  },
+  {
+    capability: 'filter.query',
+    description: 'Query capture filter expressions in background or UI mode',
   },
   {
     capability: 'plugin.log.write',
@@ -540,6 +575,365 @@ function createPluginBackendApi(pluginState) {
   };
 }
 
+function cloneJsonValue(value, fallback = null) {
+  try {
+    if (value === undefined) {
+      return fallback;
+    }
+    return JSON.parse(JSON.stringify(value));
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function estimateBase64DecodedByteLength(base64Data) {
+  const normalized = typeof base64Data === 'string'
+    ? base64Data.replace(/\s+/g, '')
+    : '';
+  if (!normalized) return 0;
+  const paddingMatch = normalized.match(/=+$/);
+  const paddingLength = paddingMatch ? paddingMatch[0].length : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - paddingLength);
+}
+
+function normalizeSessionPcapSource(source) {
+  if (!source || typeof source !== 'object') return null;
+  const normalizedBase64 =
+    typeof source.data === 'string' ? source.data.replace(/\s+/g, '').trim() : '';
+  if (!normalizedBase64) return null;
+  const explicitByteLength = Number(source.byteLength);
+  const byteLength =
+    Number.isFinite(explicitByteLength) && explicitByteLength > 0
+      ? Math.floor(explicitByteLength)
+      : estimateBase64DecodedByteLength(normalizedBase64);
+  const fileName =
+    typeof source.fileName === 'string' && source.fileName.trim()
+      ? source.fileName.trim()
+      : 'capture.pcap';
+  return {
+    fileName,
+    encoding: 'base64',
+    data: normalizedBase64,
+    byteLength,
+  };
+}
+
+function updatePluginRuntimeDataState(payload = {}) {
+  if (!payload || typeof payload !== 'object') {
+    return { success: false, error: 'Invalid plugin runtime data payload' };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'currentPacketKey')) {
+    const key =
+      typeof payload.currentPacketKey === 'string' && payload.currentPacketKey.trim()
+        ? payload.currentPacketKey.trim()
+        : null;
+    pluginRuntimeDataState.currentPacketKey = key;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'currentPacketMetadata')) {
+    pluginRuntimeDataState.currentPacketMetadata =
+      payload.currentPacketMetadata && typeof payload.currentPacketMetadata === 'object'
+        ? cloneJsonValue(payload.currentPacketMetadata, null)
+        : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'currentStreamTuple')) {
+    pluginRuntimeDataState.currentStreamTuple =
+      payload.currentStreamTuple && typeof payload.currentStreamTuple === 'object'
+        ? cloneJsonValue(payload.currentStreamTuple, null)
+        : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'sessionPcapSource')) {
+    pluginRuntimeDataState.sessionPcapSource = normalizeSessionPcapSource(payload.sessionPcapSource);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'statsJson')) {
+    pluginRuntimeDataState.statsJson =
+      payload.statsJson && typeof payload.statsJson === 'object'
+        ? cloneJsonValue(payload.statsJson, null)
+        : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'keystoreEntries')) {
+    pluginRuntimeDataState.keystoreEntries = Array.isArray(payload.keystoreEntries)
+      ? cloneJsonValue(payload.keystoreEntries, [])
+      : [];
+  }
+
+  return { success: true };
+}
+
+function createPluginCaptureApi(pluginState) {
+  return {
+    getCurrentPacketKey: () => {
+      assertPluginCapability(pluginState, 'packet.metadata.read', 'capture.getCurrentPacketKey');
+      return pluginRuntimeDataState.currentPacketKey;
+    },
+    getCurrentPacketMetadata: () => {
+      assertPluginCapability(
+        pluginState,
+        'packet.metadata.read',
+        'capture.getCurrentPacketMetadata',
+      );
+      return cloneJsonValue(pluginRuntimeDataState.currentPacketMetadata, null);
+    },
+    getCurrentStreamTuple: () => {
+      assertPluginCapability(pluginState, 'packet.metadata.read', 'capture.getCurrentStreamTuple');
+      return cloneJsonValue(pluginRuntimeDataState.currentStreamTuple, null);
+    },
+    getSessionPcapSource: async () => {
+      assertPluginCapability(pluginState, 'session.pcap.read', 'capture.getSessionPcapSource');
+      if (pluginRuntimeDataState.sessionPcapSource) {
+        return cloneJsonValue(pluginRuntimeDataState.sessionPcapSource, null);
+      }
+      try {
+        const exportResult = await ipcRenderer.invoke('capture-store-export-session-data');
+        const sourcePcap = exportResult?.sessionState?.sourcePcap;
+        return normalizeSessionPcapSource(sourcePcap);
+      } catch (_error) {
+        return null;
+      }
+    },
+  };
+}
+
+function createPluginStatsApi(pluginState) {
+  return {
+    getJson: () => {
+      assertPluginCapability(pluginState, 'stats.json.read', 'stats.getJson');
+      return cloneJsonValue(pluginRuntimeDataState.statsJson, null);
+    },
+  };
+}
+
+function createPluginKeystoreApi(pluginState) {
+  const normalizeKeystoreEntry = (entry = {}) => {
+    if (!entry || typeof entry !== 'object') {
+      return null;
+    }
+    const normalizedContent = String(entry.content || '').trim();
+    if (!normalizedContent) {
+      return null;
+    }
+    const normalizedType = String(entry.type || '').trim() || 'secret';
+    return {
+      id:
+        typeof entry.id === 'string' && entry.id.trim()
+          ? entry.id.trim()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      type: normalizedType,
+      label:
+        typeof entry.label === 'string' && entry.label.trim()
+          ? entry.label.trim()
+          : `${normalizedType}-${new Date().toISOString()}`,
+      source:
+        typeof entry.source === 'string' && entry.source.trim()
+          ? entry.source.trim()
+          : 'plugin-runtime',
+      content: normalizedContent,
+      summary: typeof entry.summary === 'string' ? entry.summary : '',
+      packetIndex:
+        Number.isFinite(Number(entry.packetIndex)) || typeof entry.packetIndex === 'string'
+          ? entry.packetIndex
+          : '?',
+      createdAt:
+        typeof entry.createdAt === 'string' && entry.createdAt.trim()
+          ? entry.createdAt.trim()
+          : new Date().toISOString(),
+    };
+  };
+
+  const sendKeystoreWriteRequestToRenderer = (payload = {}) => {
+    if (!window || typeof window.postMessage !== 'function') {
+      return;
+    }
+    window.postMessage(
+      {
+        source: 'packetsnitch-plugin-runtime',
+        type: 'plugin-keystore-write',
+        payload,
+      },
+      '*',
+    );
+  };
+
+  return {
+    getSessionEntries: () => {
+      assertPluginCapability(pluginState, 'keystore.read', 'keystore.getSessionEntries');
+      return cloneJsonValue(pluginRuntimeDataState.keystoreEntries, []);
+    },
+    addSessionEntry: (entry = {}) => {
+      assertPluginCapability(pluginState, 'keystore.write', 'keystore.addSessionEntry');
+      const normalizedEntry = normalizeKeystoreEntry(entry);
+      if (!normalizedEntry) {
+        throw new Error('Invalid keystore entry content');
+      }
+
+      const exists = pluginRuntimeDataState.keystoreEntries.some(
+        (existingEntry) =>
+          String(existingEntry?.type || '') === normalizedEntry.type
+          && String(existingEntry?.label || '') === normalizedEntry.label
+          && String(existingEntry?.content || '').trim() === normalizedEntry.content,
+      );
+
+      if (!exists) {
+        pluginRuntimeDataState.keystoreEntries.unshift(normalizedEntry);
+      }
+
+      sendKeystoreWriteRequestToRenderer({
+        action: 'addSessionEntry',
+        entry: normalizedEntry,
+      });
+
+      return {
+        success: true,
+        added: !exists,
+        entry: cloneJsonValue(normalizedEntry, null),
+      };
+    },
+    addSessionEntries: (entries = []) => {
+      assertPluginCapability(pluginState, 'keystore.write', 'keystore.addSessionEntries');
+      const entryList = Array.isArray(entries) ? entries : [];
+      const normalizedEntries = entryList
+        .map((entry) => normalizeKeystoreEntry(entry))
+        .filter(Boolean);
+      let addedCount = 0;
+
+      normalizedEntries.forEach((normalizedEntry) => {
+        const exists = pluginRuntimeDataState.keystoreEntries.some(
+          (existingEntry) =>
+            String(existingEntry?.type || '') === normalizedEntry.type
+            && String(existingEntry?.label || '') === normalizedEntry.label
+            && String(existingEntry?.content || '').trim() === normalizedEntry.content,
+        );
+        if (exists) {
+          return;
+        }
+        pluginRuntimeDataState.keystoreEntries.unshift(normalizedEntry);
+        addedCount += 1;
+      });
+
+      if (normalizedEntries.length > 0) {
+        sendKeystoreWriteRequestToRenderer({
+          action: 'addSessionEntries',
+          entries: normalizedEntries,
+        });
+      }
+
+      return {
+        success: true,
+        addedCount,
+        entries: cloneJsonValue(normalizedEntries, []),
+      };
+    },
+  };
+}
+
+function attachPluginFilterUiResponseListener() {
+  if (pluginFilterUiResponseListenerAttached) {
+    return;
+  }
+  window.addEventListener('message', (event) => {
+    const data = event?.data;
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+    if (data.source !== 'packetsnitch-renderer' || data.type !== 'plugin-filter-query-result') {
+      return;
+    }
+    const requestId = String(data.requestId || '').trim();
+    if (!requestId || !pendingPluginFilterUiRequests.has(requestId)) {
+      return;
+    }
+
+    const requestRecord = pendingPluginFilterUiRequests.get(requestId);
+    pendingPluginFilterUiRequests.delete(requestId);
+    clearTimeout(requestRecord.timeoutId);
+
+    if (data.success) {
+      requestRecord.resolve(cloneJsonValue(data.result, null));
+      return;
+    }
+
+    const errorMessage = String(data.error || 'Renderer filter request failed');
+    requestRecord.reject(new Error(errorMessage));
+  });
+  pluginFilterUiResponseListenerAttached = true;
+}
+
+function invokePluginFilterUiQuery(requestPayload = {}, timeoutMs = 30000) {
+  attachPluginFilterUiResponseListener();
+  return new Promise((resolve, reject) => {
+    pluginFilterUiRequestCounter += 1;
+    const requestId = `plugin-filter-${Date.now()}-${pluginFilterUiRequestCounter}`;
+    const timeoutId = setTimeout(() => {
+      if (!pendingPluginFilterUiRequests.has(requestId)) {
+        return;
+      }
+      pendingPluginFilterUiRequests.delete(requestId);
+      reject(new Error('Renderer UI filter query timed out'));
+    }, timeoutMs);
+
+    pendingPluginFilterUiRequests.set(requestId, {
+      resolve,
+      reject,
+      timeoutId,
+    });
+
+    window.postMessage(
+      {
+        source: 'packetsnitch-plugin-runtime',
+        type: 'plugin-filter-query',
+        requestId,
+        payload: requestPayload,
+      },
+      '*',
+    );
+  });
+}
+
+function createPluginFilterApi(pluginState) {
+  return {
+    query: async (expression, options = {}) => {
+      assertPluginCapability(pluginState, 'filter.query', 'filter.query');
+      const filterExpression = String(expression || '').trim();
+      if (!filterExpression) {
+        throw new Error('Filter expression is required');
+      }
+
+      const mode =
+        String(options?.mode || '').trim().toLowerCase() === 'ui' ? 'ui' : 'background';
+
+      if (mode === 'ui') {
+        const uiResult = await invokePluginFilterUiQuery({
+          expression: filterExpression,
+          mode: 'ui',
+          trackHistory: Boolean(options?.trackHistory),
+        });
+        return {
+          success: true,
+          mode: 'ui',
+          expression: filterExpression,
+          ...(uiResult && typeof uiResult === 'object' ? uiResult : {}),
+        };
+      }
+
+      const backgroundResult = await ipcRenderer.invoke('capture-store-filter', filterExpression);
+      if (!backgroundResult?.success) {
+        throw new Error(backgroundResult?.error || 'Background filter query failed');
+      }
+      return {
+        success: true,
+        mode: 'background',
+        expression: filterExpression,
+        packetKeys: Array.isArray(backgroundResult.packetKeys) ? backgroundResult.packetKeys : [],
+      };
+    },
+  };
+}
+
 function resolvePluginEntryPath(pluginEntry = {}) {
   const installPath = typeof pluginEntry?.installPath === 'string'
     ? pluginEntry.installPath
@@ -688,6 +1082,10 @@ async function loadPluginRuntime(payload = {}) {
         ui: pluginUiApi,
         fs: createPluginFsApi(pluginSecurityState),
         network: createPluginNetworkApi(pluginSecurityState, guardedFetch),
+        capture: createPluginCaptureApi(pluginSecurityState),
+        stats: createPluginStatsApi(pluginSecurityState),
+        keystore: createPluginKeystoreApi(pluginSecurityState),
+        filter: createPluginFilterApi(pluginSecurityState),
         packetsnitch: {
           useFunction: (name, ...args) => {
             assertPluginCapability(
@@ -1030,6 +1428,7 @@ contextBridge.exposeInMainWorld('pluginapi', {
   recordFailure: (payload) => ipcRenderer.invoke('plugins-record-failure', payload),
   resetFailures: (payload) => ipcRenderer.invoke('plugins-reset-failures', payload),
   uninstall: (payload) => ipcRenderer.invoke('plugins-uninstall', payload),
+  updateRuntimeData: (payload) => updatePluginRuntimeDataState(payload),
   getCapabilityCatalog: () => PLUGIN_CAPABILITY_CATALOG,
 });
 

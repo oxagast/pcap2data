@@ -383,7 +383,7 @@ The runtime context includes:
 - `plugin`: normalized plugin registry entry
 - `packetsnitchVersion`: current app version
 - `permissions`: permission helpers (`list`, `has`, `assert`, `catalog`)
-- `api`: capability-gated helper namespaces (`version`, `ui`, `fs`, `network`, `packetsnitch`, `backend`)
+- `api`: capability-gated helper namespaces (`version`, `ui`, `fs`, `network`, `packetsnitch`, `backend`, `capture`, `stats`, `keystore`, `filter`)
 - `documentRef`: guarded DOM handle (writes require `ui.dom.write`)
 - `windowRef`: guarded window handle (writes require `ui.dom.write`)
 - `statusUpdate(message)`: status bridge (requires `ui.statusbar.modify`)
@@ -411,7 +411,52 @@ Canonical source file: `src/preload.js` (`PLUGIN_CAPABILITY_CATALOG`)
 - `packetsnitch.functions.use`
 - `packetsnitch.functions.overwrite`
 - `backend.talk`
+- `packet.metadata.read`
+- `session.pcap.read`
+- `stats.json.read`
+- `keystore.read`
+- `keystore.write`
+- `filter.query`
 - `plugin.log.write`
+
+### New Data Access and Filter APIs
+
+The following APIs were added for plugin data access and querying:
+
+- `context.api.capture.getCurrentPacketKey()` (requires `packet.metadata.read`)
+- `context.api.capture.getCurrentPacketMetadata()` (requires `packet.metadata.read`)
+- `context.api.capture.getCurrentStreamTuple()` (requires `packet.metadata.read`)
+- `context.api.capture.getSessionPcapSource()` (requires `session.pcap.read`)
+- `context.api.stats.getJson()` (requires `stats.json.read`)
+- `context.api.keystore.getSessionEntries()` (requires `keystore.read`)
+- `context.api.keystore.addSessionEntry(entry)` (requires `keystore.write`)
+- `context.api.keystore.addSessionEntries(entries)` (requires `keystore.write`)
+- `context.api.filter.query(expression, options)` (requires `filter.query`)
+
+`context.api.filter.query(...)` supports two modes:
+
+- Background mode (`{ mode: "background" }`): executes filter matching via capture-store without applying the filter in the visible UI.
+- UI mode (`{ mode: "ui", trackHistory?: boolean }`): applies the filter through the renderer UI path and returns matched packet keys.
+
+Example:
+
+```js
+const packetMeta = context.api.capture.getCurrentPacketMetadata();
+const statsJson = context.api.stats.getJson();
+const writeResult = context.api.keystore.addSessionEntry({
+  type: "secret",
+  label: "Plugin Generated Token",
+  content: "example-token",
+  source: "plugin-manual",
+});
+const keysBg = await context.api.filter.query("ip.src.addr: 10.0.0.1", {
+  mode: "background",
+});
+const keysUi = await context.api.filter.query("tcp.dst.port: 443", {
+  mode: "ui",
+  trackHistory: true,
+});
+```
 
 Runtime policy behavior:
 
@@ -485,6 +530,12 @@ Use this complete sample manifest:
     "fs.write",
     "network.fetch.http",
     "packetsnitch.functions.use",
+    "packet.metadata.read",
+    "session.pcap.read",
+    "stats.json.read",
+    "keystore.read",
+    "keystore.write",
+    "filter.query",
     "plugin.log.write"
   ],
   "compatiblePacketsnitchVersions": [

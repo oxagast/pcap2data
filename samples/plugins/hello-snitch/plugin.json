@@ -18,6 +18,12 @@
         "fs.write",
         "network.fetch.http",
         "packetsnitch.functions.use",
+        "packet.metadata.read",
+        "session.pcap.read",
+        "stats.json.read",
+        "keystore.read",
+        "keystore.write",
+        "filter.query",
         "plugin.log.write"
     ],
     "compatiblePacketsnitchVersions": [
