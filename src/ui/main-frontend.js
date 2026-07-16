@@ -325,6 +325,7 @@ const PACKETSNITCH_RELEASES_LATEST_API_URL =
 let notesEditorVisible = false;
 let currentSessionName = null;
 let sessionPickerPanel = null;
+let lastBackendLoadRequest = null;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
@@ -3693,6 +3694,10 @@ document
         writeLogEntry(`User selected capture/session file path=${filePath}`);
         // Clear library session name – this is a manual file load, not from the library
         currentSessionName = null;
+        lastBackendLoadRequest = {
+          kind: "file",
+          filePath,
+        };
         runSnitch(filePath);
       })
       .catch((error) => {
@@ -21061,7 +21066,7 @@ window.jsonapi.onJsonData((rawPayload) => {
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file, options = {}) {
-  const { fromSessionSource = false } = options;
+  const { fromSessionSource = false, forceUnknownMagicLoad = false } = options;
   const backendJobId = createFrontendBackendJobId();
   activeBackendJobId = backendJobId;
   const backendChunkSize = getBackendPacketChunkSize();
@@ -21088,8 +21093,12 @@ function runSnitch(file, options = {}) {
     : typeof file === "string"
       ? file
       : file?.name || "unknown";
+  const backendOptions = {
+    ...backendTransportOptions,
+    allowUnknownMagicLoad: forceUnknownMagicLoad,
+  };
   writeLogEntry(
-    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} `,
+    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} force_unknown_magic = ${forceUnknownMagicLoad} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -21098,7 +21107,7 @@ function runSnitch(file, options = {}) {
         useLLM,
         backendChunkSize,
         backendWorkerThreads,
-        backendTransportOptions,
+        backendOptions,
         backendJobId,
       )
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
@@ -21107,7 +21116,7 @@ function runSnitch(file, options = {}) {
       useLLM,
       backendChunkSize,
       backendWorkerThreads,
-      backendTransportOptions,
+      backendOptions,
       backendJobId,
     );
   backendPromise
@@ -21149,15 +21158,67 @@ function doError(message, { backend = false } = {}) {
   const loadingContainerEl = document.getElementById("loading-container");
   const loadingScreenEl = document.getElementById("loading-screen");
   const errorContainerEl = document.getElementById("error-container");
+  const wantsMagicRetry = backend && /unknown file type based on magic/i.test(String(message || ""));
   clearSummaryContent();
   loadingContainerEl.style.display = "none";
   loadingScreenEl.style.display = "none";
   errorContainerEl.style.display = "block";
-  errorContainerEl.textContent = message;
-  errorContainerEl.addEventListener("click", () => {
+  errorContainerEl.innerHTML = "";
+
+  const titleEl = document.createElement("h2");
+  titleEl.textContent = "Error!";
+  const spacerEl = document.createElement("br");
+  const messageEl = document.createElement("p");
+  messageEl.id = "error-message";
+  messageEl.textContent = message;
+
+  errorContainerEl.appendChild(titleEl);
+  errorContainerEl.appendChild(spacerEl);
+  errorContainerEl.appendChild(messageEl);
+
+  if (wantsMagicRetry) {
+    const actionRow = document.createElement("div");
+    actionRow.id = "error-actions";
+    actionRow.style.display = "flex";
+    actionRow.style.gap = "0.5rem";
+    actionRow.style.justifyContent = "center";
+    actionRow.style.marginTop = "1rem";
+
+    const retryButton = document.createElement("button");
+    retryButton.className = "custom-btns";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const retryTarget = lastBackendLoadRequest;
+      if (!retryTarget || retryTarget.kind !== "file" || !retryTarget.filePath) {
+        doError("No file is available to retry.");
+        return;
+      }
+      runSnitch(retryTarget.filePath, { forceUnknownMagicLoad: true });
+    });
+
+    const pickerButton = document.createElement("button");
+    pickerButton.className = "custom-btns";
+    pickerButton.textContent = "Return to Session Picker";
+    pickerButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      errorContainerEl.style.display = "none";
+      loadingContainerEl.style.display = "none";
+      loadingScreenEl.style.display = "none";
+      if (sessionPickerPanel && typeof sessionPickerPanel.show === "function") {
+        sessionPickerPanel.show();
+      }
+    });
+
+    actionRow.appendChild(retryButton);
+    actionRow.appendChild(pickerButton);
+    errorContainerEl.appendChild(actionRow);
+  }
+
+  errorContainerEl.onclick = () => {
     errorContainerEl.style.display = "none";
     loadingContainerEl.style.display = "none";
-  });
+  };
 }
 
 // Hides all data.

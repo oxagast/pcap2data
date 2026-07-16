@@ -1530,6 +1530,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     workerThreads: requestedWorkerThreads = 0,
     backendOptions = {},
     jobId: requestedJobId = "",
+    allowUnknownMagicLoad = false,
   } = options;
   const backendJobId = normalizeBackendJobId(requestedJobId) || createBackendJobId("backend");
   const concurrentRunDetected = activeBackendRunCount > 0;
@@ -1616,11 +1617,21 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
       global.logBackend("[Bridge] File looks like PCAP file with reversed byte order and nanosecond resolution");
       isPCAP = true;
     } else {
-      global.logBackend("[Bridge] File type is unknown based on magic (we will try to parse it anyway, but may fail!");
+      if (!allowUnknownMagicLoad) {
+        const unknownMagicMessage =
+          "[Bridge] File type is unknown based on magic. Please try again or return to the session picker.";
+        global.logBackend(unknownMagicMessage);
+        sendError(unknownMagicMessage);
+        return {
+          jobId: backendJobId,
+          success: false,
+          error: "Unknown file type based on magic",
+        };
+      }
+      global.logBackend(
+        "[Bridge] File type is unknown based on magic, but the retry path requested a forced load.",
+      );
       isPCAP = true;
-      // we can still try to parse it and see if snitch can make sense of it
-      // , but it likely will fail and that's ok since snitch will report 
-      // the error back to us and we can show that to the user
     }
     if (!isPCAP) {
       if (!isSession) {
