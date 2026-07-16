@@ -374,6 +374,8 @@ let settingsAboutDownloadButtonUrl = "";
 let cachedPluginRegistry = [];
 let pluginErrorEntries = [];
 const loadedPluginIds = new Set();
+let selectedPluginId = "";
+let activePluginInstallCapabilityDialogResolver = null;
 let cachedLinuxReleasePackageFamily = null;
 let cachedRuntimePlatform = "";
 let startupReleaseCheckHandled = false;
@@ -2012,12 +2014,149 @@ function getPluginManagerListElement() {
   return document.getElementById("settings-plugins-list");
 }
 
+function getPluginCapabilityPanelMetaElement() {
+  return document.getElementById("settings-plugins-selected-meta");
+}
+
+function getPluginCapabilityPanelListElement() {
+  return document.getElementById("settings-plugins-selected-capabilities");
+}
+
 function getPluginFailureThresholdInputElement() {
   return document.getElementById("settings-plugins-auto-disable-failure-threshold");
 }
 
 function getPluginErrorPanelElement() {
   return document.getElementById("settings-plugins-error-panel");
+}
+
+function normalizePluginCapabilityList(capabilities) {
+  if (!Array.isArray(capabilities)) return [];
+  const seen = new Set();
+  return capabilities
+    .map((entry) => String(entry || "").trim())
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    });
+}
+
+function getPluginCapabilityCatalogMap() {
+  const map = new Map();
+  if (!window.pluginapi || typeof window.pluginapi.getCapabilityCatalog !== "function") {
+    return map;
+  }
+  const catalog = window.pluginapi.getCapabilityCatalog();
+  if (!Array.isArray(catalog)) {
+    return map;
+  }
+  catalog.forEach((entry) => {
+    const id = String(entry?.capability || "").trim();
+    const description = String(entry?.description || "").trim();
+    if (!id || !description) return;
+    map.set(id, description);
+  });
+  return map;
+}
+
+function createPluginCapabilityListItem(capabilityId, capabilityDescription = "") {
+  const itemEl = document.createElement("li");
+  const idEl = document.createElement("div");
+  idEl.className = "plugin-capability-item-id";
+  idEl.textContent = capabilityId;
+  itemEl.appendChild(idEl);
+  if (capabilityDescription) {
+    const descEl = document.createElement("div");
+    descEl.className = "plugin-capability-item-desc";
+    descEl.textContent = capabilityDescription;
+    itemEl.appendChild(descEl);
+  }
+  return itemEl;
+}
+
+function renderSelectedPluginCapabilities(pluginEntry) {
+  const metaEl = getPluginCapabilityPanelMetaElement();
+  const listEl = getPluginCapabilityPanelListElement();
+  if (!metaEl || !listEl) return;
+  listEl.innerHTML = "";
+  if (!pluginEntry) {
+    metaEl.textContent = "Select a plugin to view capabilities.";
+    return;
+  }
+
+  const pluginName = String(pluginEntry.pluginName || "Plugin").trim() || "Plugin";
+  const pluginVersion = String(pluginEntry.pluginVersion || "").trim();
+  metaEl.textContent = `${pluginName}${pluginVersion ? ` v${pluginVersion}` : ""}`;
+
+  const normalizedCapabilities = normalizePluginCapabilityList(pluginEntry.capabilities);
+  if (!normalizedCapabilities.length) {
+    const emptyEl = document.createElement("li");
+    emptyEl.textContent = "No declared capabilities";
+    listEl.appendChild(emptyEl);
+    return;
+  }
+
+  const capabilityDescriptions = getPluginCapabilityCatalogMap();
+  normalizedCapabilities.forEach((capabilityId) => {
+    const capabilityDescription = capabilityDescriptions.get(capabilityId) || "";
+    listEl.appendChild(createPluginCapabilityListItem(capabilityId, capabilityDescription));
+  });
+}
+
+function requestPluginInstallCapabilityDialog(inspectedPlugin = {}) {
+  const dialogEl = document.getElementById("plugin-install-capability-dialog");
+  const titleEl = document.getElementById("plugin-install-capability-dialog-title");
+  const descriptionEl = document.getElementById("plugin-install-capability-dialog-description");
+  const listEl = document.getElementById("plugin-install-capability-dialog-list");
+  const confirmBtn = document.getElementById("plugin-install-capability-confirm-btn");
+  if (!dialogEl || !titleEl || !descriptionEl || !listEl || !confirmBtn) {
+    return Promise.resolve(false);
+  }
+
+  if (activePluginInstallCapabilityDialogResolver) {
+    const resolve = activePluginInstallCapabilityDialogResolver;
+    activePluginInstallCapabilityDialogResolver = null;
+    resolve(false);
+  }
+
+  const pluginName = String(inspectedPlugin.pluginName || "Plugin").trim() || "Plugin";
+  const pluginVersion = String(inspectedPlugin.pluginVersion || "").trim();
+  const normalizedCapabilities = normalizePluginCapabilityList(inspectedPlugin.capabilities);
+  const capabilityDescriptions = getPluginCapabilityCatalogMap();
+
+  titleEl.textContent = `Install ${pluginName}${pluginVersion ? ` v${pluginVersion}` : ""}`;
+  descriptionEl.textContent = "Review requested plugin capabilities before install. Select Install and Enable to continue.";
+  listEl.innerHTML = "";
+  if (!normalizedCapabilities.length) {
+    listEl.appendChild(createPluginCapabilityListItem("No declared capabilities", ""));
+  } else {
+    normalizedCapabilities.forEach((capabilityId) => {
+      const capabilityDescription = capabilityDescriptions.get(capabilityId) || "";
+      listEl.appendChild(createPluginCapabilityListItem(capabilityId, capabilityDescription));
+    });
+  }
+
+  dialogEl.hidden = false;
+  confirmBtn.focus();
+  return new Promise((resolve) => {
+    activePluginInstallCapabilityDialogResolver = resolve;
+  });
+}
+
+function resolvePluginInstallCapabilityDialog(isAllowed) {
+  const dialogEl = document.getElementById("plugin-install-capability-dialog");
+  if (dialogEl) {
+    dialogEl.hidden = true;
+  }
+  if (!activePluginInstallCapabilityDialogResolver) {
+    return;
+  }
+  const resolve = activePluginInstallCapabilityDialogResolver;
+  activePluginInstallCapabilityDialogResolver = null;
+  resolve(Boolean(isAllowed));
 }
 
 function renderPluginErrorPanel() {
@@ -2056,6 +2195,7 @@ function clearPluginErrors() {
 function setPluginManagerMessage(message) {
   const listEl = getPluginManagerListElement();
   if (!listEl) return;
+  renderSelectedPluginCapabilities(null);
   listEl.innerHTML = `<div class="settings-help-text">${escapeHtml(String(message || ""))}</div>`;
 }
 
@@ -2143,9 +2283,21 @@ async function loadEnabledInstalledPlugins(pluginEntries = cachedPluginRegistry)
 
 function createPluginRowElement(pluginEntry) {
   const rowEl = document.createElement("div");
-  rowEl.className = "settings-help-text";
-  rowEl.style.borderTop = "1px solid var(--color-3)";
-  rowEl.style.padding = "0.5rem 0";
+  const isSelected = pluginEntry.pluginId === selectedPluginId;
+  rowEl.className = `settings-help-text settings-plugin-row${isSelected ? " selected" : ""}`;
+  rowEl.tabIndex = 0;
+  rowEl.setAttribute("role", "button");
+  rowEl.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  rowEl.addEventListener("click", () => {
+    selectedPluginId = String(pluginEntry.pluginId || "");
+    renderPluginRegistryView(cachedPluginRegistry);
+  });
+  rowEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectedPluginId = String(pluginEntry.pluginId || "");
+    renderPluginRegistryView(cachedPluginRegistry);
+  });
 
   const titleEl = document.createElement("div");
   titleEl.style.fontWeight = "600";
@@ -2159,6 +2311,12 @@ function createPluginRowElement(pluginEntry) {
   const controlsEl = document.createElement("div");
   controlsEl.className = "settings-actions-row";
   controlsEl.style.marginTop = "0.35rem";
+  controlsEl.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  controlsEl.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+  });
 
   const enabledLabel = document.createElement("label");
   enabledLabel.className = "settings-checkbox-row";
@@ -2291,6 +2449,8 @@ function renderPluginRegistryView(pluginEntries = []) {
   if (!listEl) return;
   listEl.innerHTML = "";
   if (!Array.isArray(pluginEntries) || pluginEntries.length === 0) {
+    selectedPluginId = "";
+    renderSelectedPluginCapabilities(null);
     setPluginManagerMessage("No plugins installed.");
     return;
   }
@@ -2301,9 +2461,15 @@ function renderPluginRegistryView(pluginEntries = []) {
     return String(a?.pluginName || "").localeCompare(String(b?.pluginName || ""));
   });
 
+  const selectedEntry = sortedEntries.find((pluginEntry) => pluginEntry.pluginId === selectedPluginId)
+    || sortedEntries[0];
+  selectedPluginId = String(selectedEntry?.pluginId || "");
+
   sortedEntries.forEach((pluginEntry) => {
     listEl.appendChild(createPluginRowElement(pluginEntry));
   });
+
+  renderSelectedPluginCapabilities(selectedEntry || null);
 }
 
 async function refreshPluginRegistryView() {
@@ -2371,24 +2537,7 @@ async function installPluginFromSettingsAction() {
     }
 
     const inspectedPlugin = inspectResult?.plugin || {};
-    const permissions = Array.isArray(inspectedPlugin.capabilities)
-      ? inspectedPlugin.capabilities
-      : [];
-    const pluginName = String(inspectedPlugin.pluginName || "Plugin").trim() || "Plugin";
-    const pluginVersion = String(inspectedPlugin.pluginVersion || "").trim();
-    const permissionLines = permissions.length
-      ? permissions.map((permission) => `- ${permission}`).join("\n")
-      : "- No declared permissions";
-    const confirmMessage = [
-      `Install ${pluginName}${pluginVersion ? ` v${pluginVersion}` : ""}?`,
-      "",
-      "This plugin requests the following permissions:",
-      permissionLines,
-      "",
-      "Select OK to install and enable this plugin, or Cancel to abort.",
-    ].join("\n");
-
-    const isAllowed = window.confirm(confirmMessage);
+    const isAllowed = await requestPluginInstallCapabilityDialog(inspectedPlugin);
     if (!isAllowed) {
       setSettingsStatus("Plugin install canceled by user.");
       return;
@@ -17594,6 +17743,24 @@ document
     }
     if (event.key === "Escape") {
       resolveManualConvImportWarningLoad(false);
+    }
+  });
+
+document
+  .getElementById("plugin-install-capability-confirm-btn")
+  .addEventListener("click", () => resolvePluginInstallCapabilityDialog(true));
+document
+  .getElementById("plugin-install-capability-cancel-btn")
+  .addEventListener("click", () => resolvePluginInstallCapabilityDialog(false));
+document
+  .getElementById("plugin-install-capability-dialog")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      resolvePluginInstallCapabilityDialog(true);
+      return;
+    }
+    if (event.key === "Escape") {
+      resolvePluginInstallCapabilityDialog(false);
     }
   });
 

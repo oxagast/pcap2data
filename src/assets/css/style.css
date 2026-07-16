@@ -779,8 +779,9 @@ strong {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 700px;
+  max-width: 1200px;
   height: 110%;
+  width: 1100px;
 }
 
 .settings-about-section {
@@ -908,6 +909,91 @@ strong {
   color: var(--color-1);
 }
 
+#settings-plugins-manager-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 1fr);
+  gap: 12px;
+  margin-top: 8px;
+}
+
+#settings-plugins-list,
+#settings-plugins-capability-panel {
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  min-height: 200px;
+}
+
+#settings-plugins-list {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.settings-plugin-row {
+  border-top: 1px solid var(--color-3);
+  padding: 0.55rem 0.6rem;
+  cursor: pointer;
+}
+
+.settings-plugin-row:first-child {
+  border-top: 0;
+}
+
+.settings-plugin-row:hover {
+  background-color: var(--color-2-hover);
+}
+
+.settings-plugin-row.selected {
+  background-color: color-mix(in srgb, var(--color-2) 68%, transparent);
+  outline: 1px solid var(--color-1);
+  outline-offset: -1px;
+}
+
+#settings-plugins-capability-panel {
+  padding: 0.55rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+#settings-plugins-selected-meta {
+  font-size: 12px;
+  color: var(--color-5);
+}
+
+#settings-plugins-selected-capabilities,
+#plugin-install-capability-dialog-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+#settings-plugins-selected-capabilities {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.plugin-capability-item-id {
+  font-weight: 700;
+  color: var(--color-5);
+}
+
+.plugin-capability-item-desc {
+  font-size: 11px;
+  color: var(--color-6);
+}
+
+@media (max-width: 1160px) {
+  #settings-plugins-manager-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #settings-plugins-list {
+    max-height: 280px;
+  }
+}
+
 #settings-status {
   font-size: 12px;
   color: var(--color-6);
@@ -1033,6 +1119,7 @@ strong {
 #saved-filter-label-description,
 #follow-stream-confirm-description,
 #manual-conv-import-warning-description,
+#plugin-install-capability-dialog-description,
 #session-delete-dialog-description {
   font-size: 12px;
   color: var(--color-6);
@@ -1048,6 +1135,7 @@ strong {
 #saved-filter-label-dialog,
 #follow-stream-confirm-dialog,
 #manual-conv-import-warning-dialog,
+#plugin-install-capability-dialog,
 #session-delete-dialog {
   position: fixed;
   inset: 0;
@@ -1067,8 +1155,21 @@ strong {
 #saved-filter-label-dialog[hidden],
 #follow-stream-confirm-dialog[hidden],
 #manual-conv-import-warning-dialog[hidden],
+#plugin-install-capability-dialog[hidden],
 #session-delete-dialog[hidden] {
   display: none !important;
+}
+
+.plugin-install-dialog-content {
+  width: min(520px, 94vw);
+}
+
+.plugin-install-capability-list-wrap {
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--surface-1) 88%, transparent);
+  padding: 0.5rem;
+  max-height: 280px;
+  overflow-y: auto;
 }
 
 #save-session-dialog-description {

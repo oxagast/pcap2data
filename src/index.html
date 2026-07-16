@@ -721,6 +721,21 @@ No keystore entries saved.</pre>
             </div>
           </div>
         </div>
+        <div id="plugin-install-capability-dialog" hidden>
+          <div class="crypt-keystore-unlock-content plugin-install-dialog-content">
+            <div class="crypt-section-title" id="plugin-install-capability-dialog-title">Install Plugin</div>
+            <div id="plugin-install-capability-dialog-description">
+              Review requested plugin capabilities before install.
+            </div>
+            <div class="plugin-install-capability-list-wrap">
+              <ul id="plugin-install-capability-dialog-list"></ul>
+            </div>
+            <div class="crypt-actions-row">
+              <button id="plugin-install-capability-confirm-btn">Install and Enable</button>
+              <button id="plugin-install-capability-cancel-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
         <div id="list_box">
           <div class="list-workspace-header">Packets List</div>
           <div id="list_search_bar">
@@ -1031,7 +1046,14 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">
                   Plugins are addressed by plugin name and version hash.
                 </div>
-                <div id="settings-plugins-list"></div>
+                <div id="settings-plugins-manager-layout">
+                  <div id="settings-plugins-list" aria-label="Installed plugins"></div>
+                  <div id="settings-plugins-capability-panel" class="settings-help-text" aria-live="polite">
+                    <div class="settings-section-title">Selected Plugin Capabilities</div>
+                    <div id="settings-plugins-selected-meta">Select a plugin to view capabilities.</div>
+                    <ul id="settings-plugins-selected-capabilities"></ul>
+                  </div>
+                </div>
                 <div class="settings-section-title" style="margin-top: 0.9rem">Plugin Errors</div>
                 <div id="settings-plugins-error-panel" class="settings-help-text" role="status" aria-live="polite">
                   No plugin errors.
