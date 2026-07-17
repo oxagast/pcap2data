@@ -890,10 +890,10 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
     hostKey = "0.0.0.0"
     transportSection = None
     ipSection = "N/A"
+    networkLayer = getPacketNetworkLayer(p)
 
-    if p.haslayer("TCP") and p.haslayer("IP"):
+    if p.haslayer("TCP") and networkLayer is not None:
         tcpLayer = p["TCP"]
-        ipLayer = p["IP"]
         rawPayload = bytes(tcpLayer.payload) if bytes(tcpLayer.payload) else b""
         tcpFlags = []
         if tcpLayer.flags.S:
@@ -914,7 +914,7 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
             tcpFlags.append("CWR")
         protocolKey = "TCP"
         dstPortStr = str(int(getattr(tcpLayer, "dport", 0) or 0))
-        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        hostKey = str(getattr(networkLayer, "dst", "0.0.0.0") or "0.0.0.0")
         transportSection = {
             "tcp.src.port": int(getattr(tcpLayer, "sport", 0) or 0),
             "transport.tcp.src.port": int(getattr(tcpLayer, "sport", 0) or 0),
@@ -931,18 +931,22 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
             "transport.proto": "TCP",
         }
         ipSection = {
-            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
-            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "network.ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "ip.len": getPacketNetworkLength(networkLayer),
+            "network.ip.len": getPacketNetworkLength(networkLayer),
+            "network.proto": getPacketNetworkProtocolLabel(networkLayer),
         }
-    elif p.haslayer("UDP") and p.haslayer("IP"):
+    elif p.haslayer("UDP") and networkLayer is not None:
         udpLayer = p["UDP"]
-        ipLayer = p["IP"]
         rawPayload = bytes(udpLayer.payload) if bytes(udpLayer.payload) else b""
         protocolKey = "UDP"
         dstPortStr = str(int(getattr(udpLayer, "dport", 0) or 0))
-        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        hostKey = str(getattr(networkLayer, "dst", "0.0.0.0") or "0.0.0.0")
         transportSection = {
             "udp.src.port": int(getattr(udpLayer, "sport", 0) or 0),
             "transport.udp.src.port": int(getattr(udpLayer, "sport", 0) or 0),
@@ -953,18 +957,22 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
             "transport.proto": "UDP",
         }
         ipSection = {
-            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
-            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "network.ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "ip.len": getPacketNetworkLength(networkLayer),
+            "network.ip.len": getPacketNetworkLength(networkLayer),
+            "network.proto": getPacketNetworkProtocolLabel(networkLayer),
         }
-    elif p.haslayer("ICMP") and p.haslayer("IP"):
-        icmpLayer = p["ICMP"]
-        ipLayer = p["IP"]
+    elif (p.haslayer("ICMP") or getPacketNetworkProtocolNumber(networkLayer) == 58) and networkLayer is not None:
+        icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
         rawPayload = bytes(icmpLayer)
         protocolKey = "ICMP"
         dstPortStr = "icmp"
-        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        hostKey = str(getattr(networkLayer, "dst", "0.0.0.0") or "0.0.0.0")
         transportSection = {
             "Type": int(getattr(icmpLayer, "type", 0) or 0),
             "icmp.type": int(getattr(icmpLayer, "type", 0) or 0),
@@ -973,27 +981,36 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
             "transport.proto": "ICMP",
         }
         ipSection = {
-            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
-            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "network.ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "ip.len": getPacketNetworkLength(networkLayer),
+            "network.ip.len": getPacketNetworkLength(networkLayer),
+            "network.proto": getPacketNetworkProtocolLabel(networkLayer),
         }
-    elif p.haslayer("IP"):
-        ipLayer = p["IP"]
-        rawPayload = bytes(ipLayer.payload) if bytes(ipLayer.payload) else bytes(ipLayer)
+    elif networkLayer is not None:
+        rawPayload = bytes(networkLayer.payload) if bytes(networkLayer.payload) else bytes(networkLayer)
         protocolKey = "Undecodable"
         dstPortStr = "undecodable"
-        hostKey = str(getattr(ipLayer, "dst", "0.0.0.0") or "0.0.0.0")
+        hostKey = str(getattr(networkLayer, "dst", "0.0.0.0") or "0.0.0.0")
         transportSection = {
-            "IP Protocol Number": int(getattr(ipLayer, "proto", 0) or 0),
-            "ip.proto.num": int(getattr(ipLayer, "proto", 0) or 0),
+            "IP Protocol Number": getPacketNetworkProtocolNumber(networkLayer),
+            "ip.proto.num": getPacketNetworkProtocolNumber(networkLayer),
             "transport.proto": "Unknown protocol",
         }
         ipSection = {
-            "ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "network.ip.src.addr": str(getattr(ipLayer, "src", "N/A")),
-            "ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
-            "network.ip.dst.addr": str(getattr(ipLayer, "dst", "N/A")),
+            "ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "network.ip.src.addr": str(getattr(networkLayer, "src", "N/A")),
+            "ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "network.ip.dst.addr": str(getattr(networkLayer, "dst", "N/A")),
+            "ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "network.ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+            "ip.len": getPacketNetworkLength(networkLayer),
+            "network.ip.len": getPacketNetworkLength(networkLayer),
+            "network.proto": getPacketNetworkProtocolLabel(networkLayer),
         }
     else:
         rawPayload = bytes(p.payload) if bytes(p.payload) else bytes(p)
@@ -2043,6 +2060,65 @@ def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
     return tuple(sorted((endpointA, endpointB)))
 
 
+def getPacketNetworkLayer(packet):
+    if packet is None:
+        return None
+    if packet.haslayer("IP"):
+        return packet["IP"]
+    if packet.haslayer("IPv6"):
+        return packet["IPv6"]
+    return None
+
+
+def getPacketNetworkProtocolNumber(networkLayer):
+    if networkLayer is None:
+        return -1
+    if hasattr(networkLayer, "proto"):
+        return int(getattr(networkLayer, "proto", -1) or -1)
+    if hasattr(networkLayer, "nh"):
+        return int(getattr(networkLayer, "nh", -1) or -1)
+    return -1
+
+
+def getPacketNetworkChecksumHex(networkLayer):
+    if networkLayer is None:
+        return "N/A"
+    try:
+        return hex(int(getattr(networkLayer, "chksum")))
+    except Exception:
+        return "N/A"
+
+
+def getPacketNetworkLength(networkLayer):
+    if networkLayer is None:
+        return 0
+    try:
+        return int(getattr(networkLayer, "len"))
+    except Exception:
+        try:
+            return len(networkLayer)
+        except Exception:
+            return len(bytes(networkLayer))
+
+
+def getPacketNetworkProtocolLabel(networkLayer):
+    if networkLayer is None:
+        return "IP"
+    try:
+        if int(getattr(networkLayer, "version", 4) or 4) == 6:
+            return "IPv6"
+    except Exception:
+        pass
+    return "IP"
+
+
+def getOptionalHexInt(value, default="N/A"):
+    try:
+        return hex(int(value))
+    except Exception:
+        return default
+
+
 def buildTcpStreamInitialDstPortMap(packetList):
     """
     Build a map of TCP stream key -> destination port from the stream's first packet
@@ -2050,10 +2126,11 @@ def buildTcpStreamInitialDstPortMap(packetList):
     """
     streamMap = {}
     for p in packetList:
-        if not (p.haslayer("IP") and p.haslayer("TCP")):
+        networkLayer = getPacketNetworkLayer(p)
+        if networkLayer is None or not p.haslayer("TCP"):
             continue
         streamKey = getTcpStreamKey(
-            p["IP"].src, p["TCP"].sport, p["IP"].dst, p["TCP"].dport
+            networkLayer.src, p["TCP"].sport, networkLayer.dst, p["TCP"].dport
         )
         if streamKey not in streamMap:
             streamMap[streamKey] = p["TCP"].dport
@@ -2475,9 +2552,10 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     dstMacVendor = macAddrToVendor(dstMacAddr) if dstMacAddr != "N/A" else "N/A"
     isSSH = False
     wanLinkSection = dec_wan_link.decodeWanLinkProtocols(p)
+    networkLayer = getPacketNetworkLayer(p)
 
     # Decode ARP/RARP packets that do not carry an IP layer.
-    if not p.haslayer("IP"):
+    if networkLayer is None:
         arpDecoded = dec_address_resolution.decodeAddressResolutionPacket(p)
         if arpDecoded is not None:
             protocolName, arpSection, srcIp, dstIp = arpDecoded
@@ -2639,9 +2717,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     isTcp = p.haslayer("TCP")
     isUdp = p.haslayer("UDP")
     isSctp = isSctpPacket(p)
-    ipProtocolNumber = int(getattr(p["IP"], "proto", -1))
+    ipProtocolNumber = getPacketNetworkProtocolNumber(networkLayer)
     isIgmp = p.haslayer("IGMP") or ipProtocolNumber == 2
-    isIcmp = p.haslayer("ICMP")
+    isIcmp = p.haslayer("ICMP") or ipProtocolNumber == 58
 
     if isTcp:
         rawPayload = p["TCP"].payload.original
@@ -2649,7 +2727,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPort = p["TCP"].dport
         transportProtocol = "tcp"
         initialDstPort = dstPort
-        streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
+        streamKey = getTcpStreamKey(networkLayer.src, srcPort, networkLayer.dst, dstPort)
         # check if we are the first packet in stream, and if so, store the initial destination port for this stream
         if p["TCP"].flags.S and not p["TCP"].flags.A:
             tcpStreamInitialDstPortMap[streamKey] = initialDstPort
@@ -2670,28 +2748,29 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPortStr = str(dstPort)
     elif isSctp:
         sctpLayer = p["SCTP"] if p.haslayer("SCTP") else None
-        rawPayload = bytes(p["IP"].payload)
+        rawPayload = bytes(networkLayer.payload)
         srcPort = int(getattr(sctpLayer, "sport", int.from_bytes(rawPayload[0:2], "big")) or 0)
         dstPort = int(getattr(sctpLayer, "dport", int.from_bytes(rawPayload[2:4], "big")) or 0)
         transportProtocol = "sctp"
         dstPortStr = str(dstPort)
     elif isIgmp:
-        rawPayload = bytes(p["IP"].payload)
+        rawPayload = bytes(networkLayer.payload)
         srcPort = 0
         dstPort = 0
         transportProtocol = "igmp"
         dstPortStr = "igmp"
     elif isIcmp:
         # ICMP: use the full ICMP layer bytes as the payload
-        rawPayload = bytes(p["ICMP"])
+        icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
+        rawPayload = bytes(icmpLayer)
         srcPort = 0
         dstPort = 0
         transportProtocol = "icmp"
         dstPortStr = "icmp"
     else:
         # Catch-all fallback for packets we can see but do not have a decoder for yet.
-        ipPayload = bytes(p["IP"].payload)
-        rawPayload = ipPayload if len(ipPayload) > 0 else bytes(p["IP"])
+        ipPayload = bytes(networkLayer.payload)
+        rawPayload = ipPayload if len(ipPayload) > 0 else bytes(networkLayer)
         srcPort = 0
         dstPort = 0
         transportProtocol = "ip"
@@ -2703,7 +2782,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         if rawPayload is not None:
             streamLabelPort = dstPort
             if isTcp:
-                streamKey = getTcpStreamKey(p["IP"].src, srcPort, p["IP"].dst, dstPort)
+                streamKey = getTcpStreamKey(networkLayer.src, srcPort, networkLayer.dst, dstPort)
                 streamLabelPort = tcpStreamInitialDstPortMap.get(streamKey, dstPort)
             #writeTestcase(rawPayload, outputDir, dstPortStr, packetIndex)
             if len(rawPayload) == 0:
@@ -2723,8 +2802,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     rawPayload,
                     srcPort,
                     streamLabelPort,
-                    p["IP"].src,
-                    p["IP"].dst,
+                    networkLayer.src,
+                    networkLayer.dst,
                     timeout,
                     transportProtocol,
                     initialDstPort,
@@ -2736,8 +2815,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
             # Resolve geoip once per packet so we don't hit the cache (or DB) twice
             # for the same IP within a single packet.
-            srcGeoInfo = getGeoipInfo(p["IP"].src, "src")
-            dstGeoInfo = getGeoipInfo(p["IP"].dst, "dst")
+            srcGeoInfo = getGeoipInfo(networkLayer.src, "src")
+            dstGeoInfo = getGeoipInfo(networkLayer.dst, "dst")
             isLocalNetwork = (
                 srcGeoInfo.get("Location") == "Localnet"
                 and dstGeoInfo.get("Location") == "Localnet"
@@ -2745,6 +2824,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
             if isTcp:
                 # Build TCP flag string once
+                tcpHeaderWords = int(getattr(p["TCP"], "dataofs", 0) or 0)
                 tcpFlags = ""
                 if p["TCP"].flags.S:
                     tcpFlags += "SYN|"
@@ -2774,8 +2854,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.tcp.seq": int(p["TCP"].seq),
                     "tcp.ack": int(p["TCP"].ack),
                     "transport.tcp.ack": int(p["TCP"].ack),
-                    "tcp.chksum": hex(int(p["TCP"].chksum)),
-                    "transport.tcp.chksum": hex(int(p["TCP"].chksum)),
+                    "tcp.chksum": getOptionalHexInt(getattr(p["TCP"], "chksum", None)),
+                    "transport.tcp.chksum": getOptionalHexInt(getattr(p["TCP"], "chksum", None)),
                     "Urgent flag": bool(p["TCP"].urgptr),
                     "tcp.urgptr": bool(p["TCP"].urgptr),
                     "transport.tcp.urgptr": bool(p["TCP"].urgptr),
@@ -2790,8 +2870,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "TCP Payload Length": int(len(rawPayload)),
                     "tcp.payload.len": int(len(rawPayload)),
                     "transport.tcp.payload.len": int(len(rawPayload)),
-                    "tcp.len": int(p["TCP"].dataofs * 4),
-                    "transport.tcp.len": int(p["TCP"].dataofs * 4),
+                    "tcp.len": int(tcpHeaderWords * 4),
+                    "transport.tcp.len": int(tcpHeaderWords * 4),
                     "Wire length": len(p["TCP"]),
                     "wire.len": len(p["TCP"]),
                     "wire.proto": "TCP",
@@ -3024,7 +3104,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 transportSection = {
                     "udp.src.port": int(srcPort),
                     "udp.dst.port": int(dstPort),
-                    "udp.chksum": hex(int(p["UDP"].chksum)),
+                    "udp.chksum": getOptionalHexInt(getattr(p["UDP"], "chksum", None)),
                     "UDP length": int(p["UDP"].len),
                     "udp.len": int(p["UDP"].len),
                     "Wire length": len(p["UDP"]),
@@ -3033,7 +3113,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.proto": "UDP",
                     "transport.udp.src.port": int(srcPort),
                     "transport.udp.dst.port": int(dstPort),
-                    "transport.udp.chksum": hex(int(p["UDP"].chksum)),
+                    "transport.udp.chksum": getOptionalHexInt(getattr(p["UDP"], "chksum", None)),
                     "transport.udp.len": int(p["UDP"].len),
                     "transport.len": len(p["UDP"]),
                 }
@@ -3122,7 +3202,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 protocolKey = "SCTP"
             elif isIcmp:
                 # ICMP transport section
-                icmpLayer = p["ICMP"]
+                icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
                 icmpTypeMap = {
                     0: "Echo Reply",
                     3: "Destination Unreachable",
@@ -3182,17 +3262,17 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 transportSection = dec_igmp.decodeIGMP(p, rawPayload)
                 protocolKey = "IGMP"
             else:
-                ipProtoNum = int(getattr(p["IP"], "proto", 0))
+                ipProtoNum = getPacketNetworkProtocolNumber(networkLayer)
                 transportSection = {
                     "transport.src.port": int(srcPort),
                     "transport.dst.port": int(dstPort),
                     "IP Protocol Number": ipProtoNum,
                     "ip.proto.num": ipProtoNum,
                     "network.ip.proto.num": ipProtoNum,
-                    "Wire length": len(p["IP"]),
-                    "wire.len": len(p["IP"]),
-                    "network.len": len(p["IP"]),
-                    "network.proto": "IP",
+                    "Wire length": len(networkLayer),
+                    "wire.len": len(networkLayer),
+                    "network.len": len(networkLayer),
+                    "network.proto": getPacketNetworkProtocolLabel(networkLayer),
                     "transport.proto": "Unknown protocol",
                 }
                 protocolKey = "Undecodable"
@@ -3217,15 +3297,15 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 )
                 else "N/A",
                 "IP": {
-                    "ip.src.addr": str(p["IP"].src),
-                    "network.ip.src.addr": str(p["IP"].src),
-                    "ip.dst.addr": str(p["IP"].dst),
-                    "network.ip.dst.addr": str(p["IP"].dst),
-                    "ip.chksum": hex(int(p["IP"].chksum)),
-                    "network.ip.chksum": hex(int(p["IP"].chksum)),
-                    "ip.len": int(p["IP"].len),
-                    "network.ip.len": int(p["IP"].len),
-                    "network.proto": "IP",
+                    "ip.src.addr": str(networkLayer.src),
+                    "network.ip.src.addr": str(networkLayer.src),
+                    "ip.dst.addr": str(networkLayer.dst),
+                    "network.ip.dst.addr": str(networkLayer.dst),
+                    "ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+                    "network.ip.chksum": getPacketNetworkChecksumHex(networkLayer),
+                    "ip.len": getPacketNetworkLength(networkLayer),
+                    "network.ip.len": getPacketNetworkLength(networkLayer),
+                    "network.proto": getPacketNetworkProtocolLabel(networkLayer),
                 },
 
                 protocolKey: transportSection,
@@ -3244,8 +3324,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             if linuxCookedSection is not None:
                 packetInfo["Linux Cooked"] = linuxCookedSection
             if checkTor:
-                if p["IP"].dst in torNetworkIps:
-                    torInfo = torNetworkIps[p["IP"].dst]
+                if networkLayer.dst in torNetworkIps:
+                    torInfo = torNetworkIps[networkLayer.dst]
                     packetInfo["Tor Info"] = {
                         "tor.nickname": torInfo["nickname"],
                         "tor.platform": torInfo["platform"],
@@ -3270,7 +3350,7 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 )
             # Use the non-local IP as the host key; fall back to src for LAN captures
             hostKey = (
-                p["IP"].dst if dstGeoInfo.get("Location") != "Localnet" else p["IP"].src
+                networkLayer.dst if dstGeoInfo.get("Location") != "Localnet" else networkLayer.src
             )
 
             mergedInfo = joinInfo(

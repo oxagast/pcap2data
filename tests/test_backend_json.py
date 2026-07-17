@@ -5,7 +5,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from scapy.all import CookedLinux, Ether, IP, TCP, UDP, Raw, wrpcap
+from scapy.all import CookedLinux, Ether, IP, IPv6, TCP, UDP, Raw, wrpcap
 
 
 def _project_root() -> Path:
@@ -510,6 +510,64 @@ def test_backend_falls_back_when_packet_decoder_raises(monkeypatch, tmp_path: Pa
     assert packet_info.get("Raw data", {}).get("payload.len") == 0
     assert packet_info.get("TCP", {}).get("TCP Flag Data", {}).get("Flags") == "ACK"
     assert "fallback after decoder error" in str(extra_info.get("processing.error", ""))
+
+
+def test_packet_loop_decodes_ipv6_tcp_packet(monkeypatch, tmp_path: Path):
+    backend = _load_backend_module()
+
+    packet = (
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IPv6(src="2001:db8::10", dst="2001:db8::20")
+        / TCP(sport=12345, dport=443, flags="PA", seq=10, ack=20)
+        / Raw(load=b"GET / HTTP/1.1\r\n\r\n")
+    )
+
+    monkeypatch.setattr(backend, "outputDir", str(tmp_path), raising=False)
+    monkeypatch.setattr(backend, "activeRecon", False, raising=False)
+    monkeypatch.setattr(backend, "checkTor", False, raising=False)
+    monkeypatch.setattr(backend, "tcpStreamInitialDstPortMap", {}, raising=False)
+    monkeypatch.setattr(backend, "torNetworkIps", {}, raising=False)
+
+    result = backend.packetLoop(packet, 0, None, None, 1)
+
+    assert isinstance(result, dict)
+    packet_info = result.get("packet.info", {})
+    ip_section = packet_info.get("IP", {})
+    tcp_section = packet_info.get("TCP", {})
+
+    assert packet_info.get("packet.proto") == "TCP"
+    assert ip_section.get("ip.src.addr") == "2001:db8::10"
+    assert ip_section.get("ip.dst.addr") == "2001:db8::20"
+    assert ip_section.get("network.proto") == "IPv6"
+    assert tcp_section.get("tcp.src.port") == 12345
+    assert tcp_section.get("tcp.dst.port") == 443
+
+
+def test_backend_fallback_preserves_ipv6_packet_protocol(monkeypatch, tmp_path: Path):
+    backend = _load_backend_module()
+
+    packet = (
+        Ether(src="00:11:22:33:44:55", dst="66:77:88:99:aa:bb")
+        / IPv6(src="2001:db8::10", dst="2001:db8::20")
+        / TCP(sport=12345, dport=443, flags="PA")
+        / Raw(load=b"hello")
+    )
+
+    monkeypatch.setattr(backend, "outputDir", str(tmp_path), raising=False)
+
+    result = backend.buildFallbackPacketEntry(packet, 7, "forced fallback")
+
+    packet_info = result.get("packet.info", {})
+    ip_section = packet_info.get("IP", {})
+    tcp_section = packet_info.get("TCP", {})
+    extra_info = result.get("extra.info", {})
+
+    assert packet_info.get("packet.proto") == "TCP"
+    assert ip_section.get("ip.src.addr") == "2001:db8::10"
+    assert ip_section.get("ip.dst.addr") == "2001:db8::20"
+    assert ip_section.get("network.proto") == "IPv6"
+    assert tcp_section.get("transport.proto") == "TCP"
+    assert "forced fallback" in str(extra_info.get("processing.error", ""))
 
 
 def test_backend_real_pcap_stream_app_protocol_labels_are_consistent(tmp_path: Path):

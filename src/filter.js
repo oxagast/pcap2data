@@ -433,7 +433,9 @@ function filterChunk(data, filter) {
 
   // Pre-parse filter once outside the loop
   if (!filter || !filter.includes(':')) return matchedPackets;
-  const [filterKey, filterValRaw] = filter.split(':').map((s) => s.trim());
+  const separatorIndex = filter.indexOf(':');
+  const filterKey = filter.slice(0, separatorIndex).trim();
+  const filterValRaw = filter.slice(separatorIndex + 1).trim();
   const normalizedFilterKey = normalizeFilterKey(filterKey);
   const filterModifier = comparisonOps.find((m) => filterValRaw.includes(m));
   const filterValue = filterValRaw.replace(filterModifier, '').trim();

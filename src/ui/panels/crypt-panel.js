@@ -45,7 +45,7 @@ function createCryptPanel({
     CRYPT_PGP_SUBTAB,
     CRYPT_OPENSSH_SUBTAB,
     SESSION_KEYCHAIN_LABEL,
-    STRICT_IPV4_REGEX,
+    isLikelyIpAddress,
   } = constants;
 
   let cryptEncounteredEntries = [];
@@ -1680,11 +1680,11 @@ function createCryptPanel({
     }
     const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
     if (
-      !STRICT_IPV4_REGEX.test(String(activeEntry.srcIp || "")) ||
-      !STRICT_IPV4_REGEX.test(String(activeEntry.dstIp || ""))
+      !isLikelyIpAddress(String(activeEntry.srcIp || "")) ||
+      !isLikelyIpAddress(String(activeEntry.dstIp || ""))
     ) {
       statusUpdate(
-        "Status: Cannot build filter query for non-IPv4 packet endpoints",
+        "Status: Cannot build filter query for non-IP packet endpoints",
       );
       return;
     }

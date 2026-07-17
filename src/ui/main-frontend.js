@@ -312,6 +312,15 @@ const VALID_CRYPT_SUBTABS = [
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
 
+function isLikelyIpAddress(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return false;
+  if (rawValue.includes(":")) {
+    return /^[0-9a-fA-F:]+$/.test(rawValue);
+  }
+  return STRICT_IPV4_REGEX.test(rawValue);
+}
+
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_BACKEND = "backend";
@@ -4485,7 +4494,7 @@ function chooseTargetHostFromPacketMatches(matches) {
       if (typeof ipValue !== "string") return;
       const normalizedIp = ipValue.trim();
       if (!normalizedIp) return;
-      if (!STRICT_IPV4_REGEX.test(normalizedIp)) return;
+      if (!isLikelyIpAddress(normalizedIp)) return;
       if (availableHosts.size > 0 && !availableHosts.has(normalizedIp)) return;
       ipHitCounts.set(normalizedIp, (ipHitCounts.get(normalizedIp) || 0) + 1);
     });
@@ -12628,6 +12637,7 @@ const cryptPanel = createCryptPanel({
     CRYPT_OPENSSH_SUBTAB,
     SESSION_KEYCHAIN_LABEL,
     STRICT_IPV4_REGEX,
+    isLikelyIpAddress,
   },
   getCapturedPackets: () => capturedPackets,
   getJsonCapture: () => jsonCapture,

@@ -1,4 +1,4 @@
-const { filterPackets } = require('../src/filter');
+const { filterPackets, validateFilterSyntax } = require('../src/filter');
 
 function makePacket({
     protocol = 'TCP',
@@ -35,6 +35,23 @@ function buildHostData(packets) {
 }
 
 describe('filter alias regression tests', () => {
+    test('IPv6 filter values are parsed without truncation', () => {
+        const data = buildHostData([
+            {
+                'Packet Info': {
+                    Protocol: 'TCP',
+                    IP: {
+                        'ip.src.addr': '2001:db8::10',
+                        'ip.dst.addr': '2001:db8::20',
+                    },
+                },
+            },
+        ]);
+
+        expect(() => validateFilterSyntax('ip.src.addr: 2001:db8::10')).not.toThrow();
+        expect(filterPackets(data, 'ip.src.addr: 2001:db8::10')).toHaveLength(1);
+    });
+
     test('application.proto alias matches SSH packet', () => {
         const data = buildHostData([
             makePacket(),
