@@ -349,6 +349,16 @@ function extractIpv6EndpointParts(value) {
   return null;
 }
 
+function formatNetworkEndpointDisplay(ip, port) {
+  const normalizedIp = String(ip || "").trim();
+  const normalizedPort = String(port ?? "").trim();
+  if (!normalizedPort) return normalizedIp;
+  if (normalizedIp.includes(":") && !/^\[[^\]]+\]$/.test(normalizedIp)) {
+    return `[${normalizedIp}]:${normalizedPort}`;
+  }
+  return `${normalizedIp}:${normalizedPort}`;
+}
+
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_BACKEND = "backend";
@@ -12710,6 +12720,7 @@ const cryptPanel = createCryptPanel({
     STRICT_IPV4_REGEX,
     isLikelyIpAddress,
     extractIpv6EndpointParts,
+    formatNetworkEndpointDisplay,
   },
   getCapturedPackets: () => capturedPackets,
   getJsonCapture: () => jsonCapture,
@@ -16751,12 +16762,14 @@ function buildPacketContextSummary(packet) {
   if (proto) parts.push(`Protocol: ${proto}`);
   const src = info["ip.src.addr"] || info["Source IP"] || info["Source"];
   const dst = info["ip.dst.addr"] || info["Destination IP"] || info["Destination"];
-  if (src) parts.push(`Source: ${src}`);
-  if (dst) parts.push(`Destination: ${dst}`);
   const srcPort = info["Source Port"];
   const dstPort = info["Destination Port"];
-  if (srcPort !== undefined) parts.push(`Source Port: ${srcPort}`);
-  if (dstPort !== undefined) parts.push(`Destination Port: ${dstPort}`);
+  if (src) {
+    parts.push(`Source: ${formatNetworkEndpointDisplay(src, srcPort ?? "")}`);
+  }
+  if (dst) {
+    parts.push(`Destination: ${formatNetworkEndpointDisplay(dst, dstPort ?? "")}`);
+  }
   const ts = info["Timestamp"] || info["timestamp"];
   if (ts) parts.push(`Timestamp: ${ts}`);
   const decodedProtos = info["packet.decoded_protocols"] ?? info["Decoded Protocols"];
@@ -20375,14 +20388,14 @@ function infoPanel(pk) {
       ? transportData["TCP Flag Data"]["Flags"]
       : "N/A";
 
-  const sourceIpPort =
-    (ipData["ip.src.addr"] ?? ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown") +
-    ":" +
-    (transportData["tcp.src.port"] ?? transportData["udp.src.port"] ?? transportData["sctp.src.port"] ?? transportData["Source port"] ?? "?");
-  const destIpPort =
-    (ipData["ip.dst.addr"] ?? ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown") +
-    ":" +
-    (transportData["tcp.dst.port"] ?? transportData["udp.dst.port"] ?? transportData["sctp.dst.port"] ?? transportData["Destination port"] ?? "?");
+  const sourceIpPort = formatNetworkEndpointDisplay(
+    ipData["ip.src.addr"] ?? ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown",
+    transportData["tcp.src.port"] ?? transportData["udp.src.port"] ?? transportData["sctp.src.port"] ?? transportData["Source port"] ?? "?",
+  );
+  const destIpPort = formatNetworkEndpointDisplay(
+    ipData["ip.dst.addr"] ?? ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown",
+    transportData["tcp.dst.port"] ?? transportData["udp.dst.port"] ?? transportData["sctp.dst.port"] ?? transportData["Destination port"] ?? "?",
+  );
   const etherFrame =
     typeof packetInfoData["Ethernet Frame"] === "object" &&
       packetInfoData["Ethernet Frame"] !== null

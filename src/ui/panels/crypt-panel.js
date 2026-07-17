@@ -47,6 +47,7 @@ function createCryptPanel({
     SESSION_KEYCHAIN_LABEL,
     isLikelyIpAddress,
     extractIpv6EndpointParts,
+    formatNetworkEndpointDisplay,
   } = constants;
 
   function normalizeCryptEndpointIp(value) {
@@ -55,6 +56,19 @@ function createCryptPanel({
         ? extractIpv6EndpointParts(value)
         : null;
     return String(endpoint?.host || value || "").trim();
+  }
+
+  function formatCryptEndpoint(ip, port) {
+    if (typeof formatNetworkEndpointDisplay === "function") {
+      return formatNetworkEndpointDisplay(ip, port);
+    }
+    const normalizedIp = String(ip || "").trim();
+    const normalizedPort = String(port ?? "").trim();
+    if (!normalizedPort) return normalizedIp;
+    if (normalizedIp.includes(":") && !/^\[[^\]]+\]$/.test(normalizedIp)) {
+      return `[${normalizedIp}]:${normalizedPort}`;
+    }
+    return `${normalizedIp}:${normalizedPort}`;
   }
 
   let cryptEncounteredEntries = [];
@@ -216,11 +230,13 @@ function createCryptPanel({
     const algoText = entry.encryptedWith.length
       ? entry.encryptedWith.join(", ")
       : "Unavailable";
+    const sourceEndpoint = formatCryptEndpoint(entry.srcIp, entry.srcPort);
+    const destinationEndpoint = formatCryptEndpoint(entry.dstIp, entry.dstPort);
     detailsEl.textContent = [
       `Host: ${entry.host}`,
       `Packet: ${entry.packetIndex}`,
       `Protocol: ${entry.protocol}`,
-      `Path: ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`,
+      `Path: ${sourceEndpoint} -> ${destinationEndpoint}`,
       `Encrypted: ${entry.encrypted}`,
       `SSL/TLS Version: ${entry.sslVersion}`,
       `Algorithms: ${algoText}`,
@@ -251,7 +267,9 @@ function createCryptPanel({
       const algoPreview = entry.encryptedWith.length
         ? entry.encryptedWith[0]
         : "Unknown cipher";
-      option.textContent = `#${entry.packetIndex} ${entry.sslVersion} ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort} (${algoPreview})`;
+      const sourceEndpoint = formatCryptEndpoint(entry.srcIp, entry.srcPort);
+      const destinationEndpoint = formatCryptEndpoint(entry.dstIp, entry.dstPort);
+      option.textContent = `#${entry.packetIndex} ${entry.sslVersion} ${sourceEndpoint} -> ${destinationEndpoint} (${algoPreview})`;
       listEl.appendChild(option);
     });
 
@@ -875,10 +893,12 @@ function createCryptPanel({
     const preview = String(entry.armoredText || "")
       .replace(/\r?\n/g, " ")
       .slice(0, MAX_PGP_PREVIEW_LENGTH);
+    const sourceEndpoint = formatCryptEndpoint(entry.srcIp, entry.srcPort);
+    const destinationEndpoint = formatCryptEndpoint(entry.dstIp, entry.dstPort);
     detailsEl.textContent = [
       `Packet: ${entry.packetIndex}`,
       `Host: ${entry.host}`,
-      `Path: ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`,
+      `Path: ${sourceEndpoint} -> ${destinationEndpoint}`,
       `Protocol: ${entry.protocol}`,
       `Armor type: ${entry.blockType}`,
       `Armor boundaries: ${entry.boundariesDetected ? "detected" : "not detected"}`,
@@ -908,7 +928,9 @@ function createCryptPanel({
     pgpEncounteredEntries.forEach((entry, entryIndex) => {
       const option = document.createElement("option");
       option.value = String(entryIndex);
-      option.textContent = `#${entry.packetIndex} ${entry.blockType} ${entry.srcIp}:${entry.srcPort} -> ${entry.dstIp}:${entry.dstPort}`;
+      const sourceEndpoint = formatCryptEndpoint(entry.srcIp, entry.srcPort);
+      const destinationEndpoint = formatCryptEndpoint(entry.dstIp, entry.dstPort);
+      option.textContent = `#${entry.packetIndex} ${entry.blockType} ${sourceEndpoint} -> ${destinationEndpoint}`;
       listEl.appendChild(option);
     });
 

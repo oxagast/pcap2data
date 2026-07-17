@@ -31,6 +31,8 @@ describe('bookmark packet key helpers', () => {
         extractFunctionSource(sourceText, 'getPacketKey'),
         extractFunctionSource(sourceText, 'parsePacketKey'),
         extractFunctionSource(sourceText, 'normalizePacketKey'),
+        extractFunctionSource(sourceText, 'formatNetworkEndpointDisplay'),
+        extractFunctionSource(sourceText, 'buildPacketContextSummary'),
     ].join('\n\n');
 
     const context = { Number };
@@ -73,6 +75,30 @@ describe('bookmark packet key helpers', () => {
         expect(context.normalizePacketKey('10.0.0.1:7')).toBe('10.0.0.1$7');
         expect(context.normalizePacketKey('2001:db8::10:11')).toBe('2001:db8::10$11');
         expect(context.normalizePacketKey('2001:db8::10$11')).toBe('2001:db8::10$11');
+    });
+
+    test('formatNetworkEndpointDisplay brackets IPv6 endpoints with ports', () => {
+        expect(context.formatNetworkEndpointDisplay('10.0.0.1', 443)).toBe('10.0.0.1:443');
+        expect(context.formatNetworkEndpointDisplay('2001:db8::10', 443)).toBe('[2001:db8::10]:443');
+        expect(context.formatNetworkEndpointDisplay('[2001:db8::10]', 443)).toBe('[2001:db8::10]:443');
+        expect(context.formatNetworkEndpointDisplay('2001:db8::10', '')).toBe('2001:db8::10');
+    });
+
+    test('buildPacketContextSummary brackets IPv6 endpoints in summary text', () => {
+        const summary = context.buildPacketContextSummary({
+            'packet.info': {
+                Protocol: 'TCP',
+                'Source IP': '2001:db8::10',
+                'Destination IP': '2001:db8::20',
+                'Source Port': 443,
+                'Destination Port': 51515,
+            },
+        });
+
+        expect(summary).toContain('Source: [2001:db8::10]:443');
+        expect(summary).toContain('Destination: [2001:db8::20]:51515');
+        expect(summary).not.toContain('Source Port:');
+        expect(summary).not.toContain('Destination Port:');
     });
 
     test('capture store derives $ packet keys for list-window rows', () => {
