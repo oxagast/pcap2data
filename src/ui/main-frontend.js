@@ -3629,6 +3629,22 @@ async function clearCurrentSession() {
       );
       return;
     }
+
+    if (window.settingsapi && typeof window.settingsapi.update === "function") {
+      const updatedSettings = await window.settingsapi.update({
+        list: {
+          columnVisibility: {
+            idx: false,
+            host: false,
+            payloadLength: false,
+          },
+        },
+      });
+      if (updatedSettings) {
+        setCurrentSettings(updatedSettings);
+      }
+    }
+
     processFile(
       new File([templateResult.data], "new_session.json", {
         type: "application/json",

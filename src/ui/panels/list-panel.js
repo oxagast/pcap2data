@@ -742,18 +742,18 @@ function createListPanel({
     const columnsMenuEl = document.getElementById("list-columns-menu");
     const columnsControlEl = document.getElementById("list-columns-control");
     const columnDefinitions = [
-      { label: "#", key: "idx", defaultWidth: 64, getValue: (row) => row.idx },
+      { label: "#", key: "idx", defaultVisible: false, defaultWidth: 64, getValue: (row) => row.idx },
       { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
       { label: "★", key: "isBookmarked", defaultWidth: 46, getValue: (row) => row.isBookmarked ? "★" : "" },
       { label: "Stream", key: "streamOrder", defaultWidth: 78, getValue: (row) => row.streamLabel },
-      { label: "Host", key: "host", defaultWidth: 180, getValue: (row) => row.host },
+      { label: "Host", key: "host", defaultVisible: false, defaultWidth: 180, getValue: (row) => row.host },
       { label: "Src IP", key: "srcIp", defaultWidth: 150, getValue: (row) => row.srcIp },
       { label: "Dst IP", key: "dstIp", defaultWidth: 150, getValue: (row) => row.dstIp },
       { label: "Src Port", key: "srcPort", defaultWidth: 96, getValue: (row) => row.srcPort },
       { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
       { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
       { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
-      { label: "Payload Len", key: "payloadLength", defaultWidth: 110, getValue: (row) => row.payloadLength },
+      { label: "Payload Len", key: "payloadLength", defaultVisible: false, defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
     const sortState = { key: "pcapOrder", direction: "asc" };
     const loadedPreferences = loadListPreferences(columnDefinitions);
@@ -1390,7 +1390,7 @@ function createListPanel({
         renderVirtualRows();
       }
     }
-    if (getCapturedPackets() && Object.keys(getCapturedPackets()["host"]).length > 1) {
+    if (getCapturedPackets() && Object.keys(getCapturedPackets()["host"] || {}).length > 0) {
       buildTable(searchEl.value);
     }
 

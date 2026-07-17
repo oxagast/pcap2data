@@ -1602,19 +1602,22 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         sessionCompression = "gzip";
       }
     } else if (fileForMagic.startsWith("\xd4\xc3\xb2\xa1")) {
-      global.logBackend("[Bridge] File looks like PCAP file with microsecond resolution");
+      global.logBackend("[Bridge] File looks like PCAP file (microsecond resolution)");
       isPCAP = true;
     } else if (fileForMagic.startsWith("\x0a\x0d\x0d\x0a")) {
-      global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block in little-endian byte order");
+      global.logBackend("[Bridge] File looks like PCAPNG file (little-endian byte order)");
+      isPCAP = true;
+    } else if (fileForMagic.startsWith("\xa1\xb2\xc3\xd4")) {
+      global.logBackend("[Bridge] File looks like PCAP file (big-endian with nanosecond resolution)");
       isPCAP = true;
     } else if (fileForMagic.startsWith("\x50\x41\x43\x45\x54\x43\x4f\x4e\x46")) {
-      global.logBackend("[Bridge] File looks like PCAPNG file with a Section Header Block");
+      global.logBackend("[Bridge] File looks like PCAPNG file (with a Section Header Block)");
       isPCAP = true;
     } else if (fileForMagic.startsWith("\x4d\x3c\x2b\x1a")) {
-      global.logBackend("[Bridge] File looks like PCAP file with reversed byte order");
+      global.logBackend("[Bridge] File looks like PCAP file (reversed byte order)");
       isPCAP = true;
     } else if (fileForMagic.startsWith("\xc3\xd4\xa1\xb2")) {
-      global.logBackend("[Bridge] File looks like PCAP file with reversed byte order and nanosecond resolution");
+      global.logBackend("[Bridge] File looks like PCAP file (reversed byte order and nanosecond resolution)");
       isPCAP = true;
     } else {
       if (!allowUnknownMagicLoad) {
