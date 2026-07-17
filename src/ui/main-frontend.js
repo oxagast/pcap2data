@@ -222,6 +222,7 @@ const DUMMY_ALL_HOST_ALIAS = "All Hosts";
 const DUMMY_BOOKMARKED_HOST = "__BOOKMARKED__";
 const DUMMY_BOOKMARKED_HOST_ALIAS = "Bookmarked";
 const BOOKMARK_FILTER_QUERY = "bookmark: true";
+const PACKET_KEY_SEPARATOR = "$";
 
 let capturedPackets = {};
 let jsonCapture = "";
@@ -319,6 +320,33 @@ function isLikelyIpAddress(value) {
     return /^[0-9a-fA-F:]+$/.test(rawValue);
   }
   return STRICT_IPV4_REGEX.test(rawValue);
+}
+
+function extractIpv6EndpointParts(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return null;
+
+  const bracketedMatch = rawValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+  if (bracketedMatch && isLikelyIpAddress(bracketedMatch[1])) {
+    return {
+      host: bracketedMatch[1],
+      port: bracketedMatch[2],
+    };
+  }
+
+  const compressedMatch = rawValue.match(/^(.*::[0-9A-Fa-f]+):(\d{1,5})$/);
+  if (
+    compressedMatch &&
+    !compressedMatch[1].endsWith(":") &&
+    isLikelyIpAddress(compressedMatch[1])
+  ) {
+    return {
+      host: compressedMatch[1],
+      port: compressedMatch[2],
+    };
+  }
+
+  return null;
 }
 
 const SETTINGS_SUBTAB_GENERAL = "general";
@@ -4411,7 +4439,50 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
   const sourceIp =
     (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || fallbackHost || "Unknown";
   const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? fallbackIndex;
-  return sourceIp + ":" + packetIndex;
+  return `${sourceIp}${PACKET_KEY_SEPARATOR}${packetIndex}`;
+}
+
+function parsePacketKey(packetKey) {
+  const normalizedKey = typeof packetKey === "string" ? packetKey.trim() : "";
+  if (!normalizedKey) {
+    return { host: "", packetIndex: null };
+  }
+
+  const preferredSeparatorIndex = normalizedKey.lastIndexOf(PACKET_KEY_SEPARATOR);
+  if (preferredSeparatorIndex > 0) {
+    const host = normalizedKey.slice(0, preferredSeparatorIndex).trim();
+    const packetIndex = Number.parseInt(
+      normalizedKey.slice(preferredSeparatorIndex + 1).trim(),
+      10,
+    );
+    return {
+      host,
+      packetIndex: Number.isInteger(packetIndex) ? packetIndex : null,
+    };
+  }
+
+  const legacySeparatorIndex = normalizedKey.lastIndexOf(":");
+  if (legacySeparatorIndex > 0) {
+    const host = normalizedKey.slice(0, legacySeparatorIndex).trim();
+    const packetIndex = Number.parseInt(
+      normalizedKey.slice(legacySeparatorIndex + 1).trim(),
+      10,
+    );
+    return {
+      host,
+      packetIndex: Number.isInteger(packetIndex) ? packetIndex : null,
+    };
+  }
+
+  return { host: normalizedKey, packetIndex: null };
+}
+
+function normalizePacketKey(packetKey) {
+  const parsed = parsePacketKey(packetKey);
+  if (!parsed.host || !Number.isInteger(parsed.packetIndex)) {
+    return typeof packetKey === "string" ? packetKey.trim() : "";
+  }
+  return `${parsed.host}${PACKET_KEY_SEPARATOR}${parsed.packetIndex}`;
 }
 
 // Handles cache packet stub.
@@ -7387,7 +7458,7 @@ function restoreSessionState(sessionState) {
   const loadedBookmarks = Array.isArray(sessionState.bookmarkList)
     ? sessionState.bookmarkList.filter(
       (bookmark) => typeof bookmark === "string" && bookmark.trim() !== "",
-    )
+    ).map((bookmark) => normalizePacketKey(bookmark)).filter(Boolean)
     : [];
   bookmarkList.splice(0, bookmarkList.length, ...loadedBookmarks);
   rebuildBookmarkDropdown();
@@ -7494,7 +7565,7 @@ function restoreSessionState(sessionState) {
 
   currentPacketKey =
     typeof sessionState.currentPacketKey === "string"
-      ? sessionState.currentPacketKey
+      ? normalizePacketKey(sessionState.currentPacketKey)
       : null;
   setActivePacketCursor(sessionState.activePacketCursor);
 
@@ -12638,6 +12709,7 @@ const cryptPanel = createCryptPanel({
     SESSION_KEYCHAIN_LABEL,
     STRICT_IPV4_REGEX,
     isLikelyIpAddress,
+    extractIpv6EndpointParts,
   },
   getCapturedPackets: () => capturedPackets,
   getJsonCapture: () => jsonCapture,
@@ -13035,6 +13107,23 @@ function normalizeContextToken(value) {
 // Extracts context ip.
 function extractContextIp(value) {
   const normalized = normalizeContextToken(value);
+  if (!normalized) return "";
+
+  const ipv6Endpoint = extractIpv6EndpointParts(normalized);
+  if (ipv6Endpoint?.host) {
+    return ipv6Endpoint.host;
+  }
+
+  const unwrapped = normalized.replace(/^\[([^\]]+)\]$/, "$1");
+  if (isLikelyIpAddress(unwrapped)) {
+    return unwrapped;
+  }
+
+  const bracketedIpv6Match = normalized.match(/\[([^\]]+)\]:(\d{1,5})\b/);
+  if (bracketedIpv6Match && isLikelyIpAddress(bracketedIpv6Match[1])) {
+    return bracketedIpv6Match[1];
+  }
+
   const match = normalized.match(CONTEXT_IPV4_REGEX);
   return match ? match[0] : "";
 }
@@ -13042,6 +13131,11 @@ function extractContextIp(value) {
 // Extracts context port.
 function extractContextPort(value, allowStandaloneNumber = false) {
   const normalized = normalizeContextToken(value);
+  const ipv6Endpoint = extractIpv6EndpointParts(normalized);
+  if (ipv6Endpoint?.port) {
+    const ipv6PortValue = Number.parseInt(ipv6Endpoint.port, 10);
+    return ipv6PortValue >= 0 && ipv6PortValue <= 65535 ? String(ipv6PortValue) : "";
+  }
   const ipPortMatch = normalized.match(
     /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}:(\d{1,5})\b/,
   );
@@ -13101,11 +13195,12 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
     const cells = row.querySelectorAll("td");
     rowName = normalizeContextToken(cells[0]?.textContent);
     const rowValue = normalizeContextToken(cells[1]?.textContent);
-    addCandidate(rowValue);
     rowPortEligible = /\bport\b/i.test(rowName);
     if (/^ip\s*:?\s*port$/i.test(rowName) && rowValue) {
+      let parsedIpPort = false;
       const bracketedIpv6Match = rowValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
       if (bracketedIpv6Match) {
+        parsedIpPort = true;
         addCandidate(bracketedIpv6Match[1]);
         addCandidate(bracketedIpv6Match[2]);
       } else {
@@ -13113,18 +13208,29 @@ function buildContextFilterQueries(target, selectedText, conversionText) {
           /^((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}):(\d{1,5})$/,
         );
         if (ipv4PortMatch) {
+          parsedIpPort = true;
           addCandidate(ipv4PortMatch[1]);
           addCandidate(ipv4PortMatch[2]);
         } else {
           const lastColonIndex = rowValue.lastIndexOf(":");
           if (lastColonIndex > 0) {
+            const maybeHost = rowValue.slice(0, lastColonIndex).trim();
             const maybePort = rowValue.slice(lastColonIndex + 1).trim();
             if (/^\d{1,5}$/.test(maybePort)) {
+              if (isLikelyIpAddress(maybeHost)) {
+                parsedIpPort = true;
+                addCandidate(maybeHost);
+              }
               addCandidate(maybePort);
             }
           }
         }
       }
+      if (!parsedIpPort) {
+        addCandidate(rowValue);
+      }
+    } else {
+      addCandidate(rowValue);
     }
   }
 
@@ -19676,13 +19782,8 @@ convertContextButtons.llmSubnetHostSummary.addEventListener("click", () => {
 document
   .getElementById("selectBookmark")
   .addEventListener("change", function () {
-    const bookmarkHost = document
-      .getElementById("selectBookmark")
-      .value.split(":")[0];
-    const bookmarkPacketIndex = Number.parseInt(
-      document.getElementById("selectBookmark").value.split(":")[1],
-      10,
-    );
+    const selectedBookmarkKey = document.getElementById("selectBookmark").value;
+    const { host: bookmarkHost, packetIndex: bookmarkPacketIndex } = parsePacketKey(selectedBookmarkKey);
     if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
       statusUpdate("Invalid bookmark selection, missing host or packet index");
       doError("Invalid bookmark selection, missing host or packet index!");
@@ -20003,8 +20104,7 @@ async function handlePacketNavigation(navAction, navBookmark) {
       return;
     }
     currentIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || hostFilterEl.value || "Unknown";
-    currentPacketKey =
-      currentIp + ":" + (packetInfo?.["index"] ?? packetInfo?.["Index"] ?? index);
+    currentPacketKey = `${currentIp}${PACKET_KEY_SEPARATOR}${packetInfo?.["index"] ?? packetInfo?.["Index"] ?? index}`;
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",

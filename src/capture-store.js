@@ -9,6 +9,7 @@ const { filterPackets, validateFilterSyntax } = require("./filter");
 
 const CAPTURE_STORE_DIR = path.join(os.tmpdir(), "packetsnitch-capture-store");
 const PACKET_CACHE_LIMIT = 64;
+const PACKET_KEY_SEPARATOR = "$";
 
 let activeStore = null;
 
@@ -119,7 +120,7 @@ function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
     const packetInfo = packet?.["packet.info"] || {};
     const sourceIp = extractPacketIpAddress(packetInfo, "src") || host || "Unknown";
     const packetIndex = packetInfo?.["index"] ?? hostPacketIndex;
-    let candidate = `${sourceIp}:${packetIndex}`;
+    let candidate = `${sourceIp}${PACKET_KEY_SEPARATOR}${packetIndex}`;
     if (!existingKeys.has(candidate)) return candidate;
 
     let dedupCounter = 1;

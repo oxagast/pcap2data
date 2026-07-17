@@ -46,7 +46,16 @@ function createCryptPanel({
     CRYPT_OPENSSH_SUBTAB,
     SESSION_KEYCHAIN_LABEL,
     isLikelyIpAddress,
+    extractIpv6EndpointParts,
   } = constants;
+
+  function normalizeCryptEndpointIp(value) {
+    const endpoint =
+      typeof extractIpv6EndpointParts === "function"
+        ? extractIpv6EndpointParts(value)
+        : null;
+    return String(endpoint?.host || value || "").trim();
+  }
 
   let cryptEncounteredEntries = [];
   let cryptSessionEncounteredEntries = [];
@@ -1679,16 +1688,18 @@ function createCryptPanel({
       return;
     }
     const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
+    const sourceIp = normalizeCryptEndpointIp(activeEntry.srcIp);
+    const destinationIp = normalizeCryptEndpointIp(activeEntry.dstIp);
     if (
-      !isLikelyIpAddress(String(activeEntry.srcIp || "")) ||
-      !isLikelyIpAddress(String(activeEntry.dstIp || ""))
+      !isLikelyIpAddress(sourceIp) ||
+      !isLikelyIpAddress(destinationIp)
     ) {
       statusUpdate(
         "Status: Cannot build filter query for non-IP packet endpoints",
       );
       return;
     }
-    const query = `ip.src.addr: ${activeEntry.srcIp} && ip.dst.addr: ${activeEntry.dstIp}`;
+    const query = `ip.src.addr: ${sourceIp} && ip.dst.addr: ${destinationIp}`;
     filterInputEl.value = query;
     syncFilterHighlight();
     runFilterQuery(query);

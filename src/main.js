@@ -164,12 +164,40 @@ function isLikelyIpAddress(value) {
   });
 }
 
+function extractIpv6EndpointParts(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return null;
+
+  const bracketedMatch = rawValue.match(/^\[([^\]]+)\]:(\d{1,5})$/);
+  if (bracketedMatch && isLikelyIpAddress(bracketedMatch[1])) {
+    return {
+      host: bracketedMatch[1],
+      port: bracketedMatch[2],
+    };
+  }
+
+  const compressedMatch = rawValue.match(/^(.*::[0-9A-Fa-f]+):(\d{1,5})$/);
+  if (
+    compressedMatch &&
+    !compressedMatch[1].endsWith(":") &&
+    isLikelyIpAddress(compressedMatch[1])
+  ) {
+    return {
+      host: compressedMatch[1],
+      port: compressedMatch[2],
+    };
+  }
+
+  return null;
+}
+
 function normalizeNmapTargets(rawTargets) {
   if (!Array.isArray(rawTargets)) return [];
   const byIp = new Map();
   for (const candidate of rawTargets) {
     if (!candidate || typeof candidate !== "object") continue;
-    const ip = String(candidate.ip || "").trim();
+    const rawIp = String(candidate.ip || "").trim();
+    const ip = String(extractIpv6EndpointParts(rawIp)?.host || rawIp).trim();
     if (!isLikelyIpAddress(ip)) continue;
     const ports = Array.isArray(candidate.ports)
       ? candidate.ports

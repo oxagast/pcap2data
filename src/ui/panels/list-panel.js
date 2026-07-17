@@ -4,6 +4,32 @@
 const threadName = "List";
 const LIST_COLUMN_MIN_WIDTH = 48;
 const LIST_COLUMN_MAX_WIDTH = 640;
+const PACKET_KEY_SEPARATOR = "$";
+
+function buildPacketKey(sourceIp, packetIndex) {
+  return `${String(sourceIp ?? "")}${PACKET_KEY_SEPARATOR}${String(packetIndex ?? "")}`;
+}
+
+function normalizePacketKey(packetKey) {
+  const normalizedKey = String(packetKey ?? "").trim();
+  if (!normalizedKey) return "";
+
+  const preferredSeparatorIndex = normalizedKey.lastIndexOf(PACKET_KEY_SEPARATOR);
+  if (preferredSeparatorIndex > 0) {
+    return normalizedKey;
+  }
+
+  const legacySeparatorIndex = normalizedKey.lastIndexOf(":");
+  if (legacySeparatorIndex > 0) {
+    const host = normalizedKey.slice(0, legacySeparatorIndex).trim();
+    const packetIndex = normalizedKey.slice(legacySeparatorIndex + 1).trim();
+    if (host && /^\d+$/.test(packetIndex)) {
+      return buildPacketKey(host, packetIndex);
+    }
+  }
+
+  return normalizedKey;
+}
 
 // Returns whether unknown like protocol.
 function isUnknownLikeProtocol(value) {
@@ -691,12 +717,13 @@ function createListPanel({
     });
     if (!response?.success || !virtualListState) return;
 
-    const bookmarkSet = new Set(getBookmarkList());
+    const bookmarkSet = new Set(getBookmarkList().map((packetKey) => normalizePacketKey(packetKey)));
     const normalizedRows = (Array.isArray(response.rows) ? response.rows : []).map((row) => ({
       ...row,
+      packetKey: normalizePacketKey(row?.packetKey || ""),
       pktIdx: Number.isFinite(Number(row?.pktIdx)) ? Number(row.pktIdx) : 0,
       pcapOrder: Number.isFinite(Number(row?.pcapOrder)) ? Number(row.pcapOrder) : 0,
-      isBookmarked: bookmarkSet.has(String(row?.packetKey || "")),
+      isBookmarked: bookmarkSet.has(normalizePacketKey(row?.packetKey || "")),
       streamLabel:
         typeof row?.streamLabel === "string" && row.streamLabel.trim()
           ? row.streamLabel
@@ -1125,7 +1152,10 @@ function createListPanel({
             "";
           const appProto = inferApplicationProtocol(pi, ei);
           const payloadLength = getPacketPayloadLength(pi);
-          const packetKey = srcIp + ":" + (pi["index"] ?? pi["Index"] ?? pktIdx + 1);
+          const packetKey = buildPacketKey(
+            srcIp,
+            pi["index"] ?? pi["Index"] ?? pktIdx + 1,
+          );
           const isBookmarked = getBookmarkList().includes(packetKey);
           const streamKey = getStreamKey(pi);
 
@@ -1160,7 +1190,7 @@ function createListPanel({
             pktIdx,
             streamKey,
             isBookmarked,
-            packetKey: srcIp + ":" + (pi["index"] ?? pi["Index"] ?? pktIdx + 1),
+            packetKey,
           });
         });
       }
