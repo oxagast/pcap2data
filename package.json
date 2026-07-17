@@ -3,7 +3,7 @@
   "executableName": "packetsnitch",
   "productName": "packetsnitch",
   "version": "2.1.1606",
-  "description": "A High Level Network Analysis Tool",
+  "description": "PacketSnitch is a network analysis platform that transforms PCAP/PCAPNG captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, protocols, anomalies, and other actionable insights.",
   "homepage": "https://packetsnitch.com",
   "main": ".webpack/main",
   "private": false,

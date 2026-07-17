@@ -19,7 +19,8 @@
 
 ## What is PacketSnitch?
 
-PacketSnitch is a **network packet analysis tool** that combines a Python backend with an Electron frontend to help you explore and filter captured network traffic — no command line required after initial setup.
+PacketSnitch is a network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, and other actionable insights.
+
 
 | Component | Description |
 | --------- | ----------- |
