@@ -9,7 +9,7 @@
         text-align: center;
         margin-top: 1rem;
         margin-bottom: 1rem;
-        height: 300px;
+        height: 200px;
     }
 
     .wrapper {
@@ -152,7 +152,7 @@
                     const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
                     container.innerHTML = `
-            <h5><i>Latest Release:</i> ${release.tag_name}</h5><br>
+            <h5><i>Latest Release:</i> ${release.tag_name}</h5>
             ${links}`;
 
                 } catch (err) {
