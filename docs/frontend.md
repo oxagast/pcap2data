@@ -2,6 +2,8 @@
 
 ## Frontend Documentation
 
+## Table of Contents
+
 - [Overview](#overview)
 - [Requirements](#requirements)
 - [Loading Data](#loading-data)

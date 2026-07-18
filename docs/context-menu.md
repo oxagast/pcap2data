@@ -2,6 +2,8 @@
 
 ## Context Menu Documentation
 
+## Table of Contents
+
 - [Overview](#overview)
 - [Copy](#copy)
 - [Paste](#paste)

@@ -2,6 +2,8 @@
 
 ## Backend Documentation
 
+## Table of Contents
+
 - [Overview](#overview)
 - [Features](#features)
 - [Requirements](#requirements)

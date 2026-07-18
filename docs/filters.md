@@ -2,6 +2,8 @@
 
 ## Filter Reference
 
+## Table of Contents
+
 - [Overview](#overview)
 - [Syntax](#syntax)
 - [How Keys Work](#how-keys-work)
