@@ -13,7 +13,7 @@
     "patch-rpm-build": "patch -Np0 < patches/spec.ejs.patch",
     "make": "npm run build:backend && npm run build:frontend",
     "build:frontend": "cross-env NODE_ENV=production QA_SKIP_RPATHS=1 electron-forge make",
-    "build:backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && python3 -m PyInstaller --icon src/backend/snitch.ico -y --distpath src/backend snitch.spec",
+    "build:backend": "pip3 install -r src/backend/requirements.txt --break-system-packages && python3 -m PyInstaller -y --distpath src/backend snitch.spec",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish",
     "test:backend": "pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
     "test:frontend": "jest --runInBand",
