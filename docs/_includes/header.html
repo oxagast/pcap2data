@@ -108,8 +108,7 @@
     <div class="header">
         <a href="https://packetsnitch.com/"><img width="360" height="60" alt="PacketSnitch by oxasploits"
                 src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
-        <br>
-        <h5>Documentation for the PacketSnitch project</h5>
+        <h4>Documentation for the PacketSnitch Project</h4>
         {% include nav.html %}
 
         <div id="downloads">Loading latest release...</div>
@@ -155,12 +154,12 @@
                     const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
                     container.innerHTML = `
-            <h5><i>Latest Release:</i> ${release.tag_name}</h5>
+            <i>Latest Release:</i> ${release.tag_name}<br>
             ${links}`;
 
                 } catch (err) {
                     console.error(err);
-                    container.innerHTML = "<h5>Unable to load latest release.</h5>";
+                    container.innerHTML = "Unable to load latest release.";
                 }
             }
 
