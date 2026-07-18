@@ -2208,6 +2208,10 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
             "undetected": undetectedCount,
             "timeout": int(stats.get("timeout") or 0),
         },
+        "attributes": {
+            "meaningful_name": attributes.get("meaningful_name"),
+            "names": attributes.get("names") if isinstance(attributes.get("names"), list) else None,
+        },
         "reputation": attributes.get("reputation"),
         "lastAnalysisDate": attributes.get("last_analysis_date"),
         "sourceUrl": VIRUSTOTAL_API_BASE_URL,

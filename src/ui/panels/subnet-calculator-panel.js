@@ -226,7 +226,7 @@ function createSubnetCalculatorPanel({
         const titleEl = document.createElement("div");
         titleEl.className = "data-tools-output-label subnet-calc-section-title";
         titleEl.textContent = title;
-        container.appendChild(titleEl);
+        //container.appendChild(titleEl);
 
         if (!Array.isArray(rows) || rows.length === 0) {
             setPlaceholder(container, "No data available.");
@@ -1356,6 +1356,14 @@ function createSubnetCalculatorPanel({
                     container.appendChild(section);
                 },
             );
+        } else {
+            renderThreatIntelCard(
+                reputationIpsumEl,
+                "IPSum",
+                "Open IPSum project",
+                "https://github.com/stamparm/ipsum",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
+            );
         }
 
         if (virustotalResult) {
@@ -1372,6 +1380,28 @@ function createSubnetCalculatorPanel({
                         const vtAnalysis = virustotalResult.analysis && typeof virustotalResult.analysis === "object"
                             ? virustotalResult.analysis
                             : {};
+                        const makeCountBadge = (count, kind) => {
+                            const value = Number.isFinite(Number(count)) ? Number(count) : 0;
+                            const badge = document.createElement("span");
+                            badge.className = `subnet-calc-grade-badge subnet-calc-vt-${kind}-${value > 0 ? "positive" : "zero"}`;
+                            badge.textContent = String(value);
+                            return badge;
+                        };
+
+                        const makeReputationBadge = (reputation) => {
+                            const value = Number.isFinite(Number(reputation)) ? Number(reputation) : 0;
+                            const badge = document.createElement("span");
+                            if (value > 0) {
+                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-positive";
+                            } else if (value < 0) {
+                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-negative";
+                            } else {
+                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-zero";
+                            }
+                            badge.textContent = String(value);
+                            return badge;
+                        };
+
                         const rows = [
                             { name: "Query Type", value: String(virustotalResult.lookupType || "Unknown") },
                             {
@@ -1384,17 +1414,56 @@ function createSubnetCalculatorPanel({
                                 ),
                             },
                             { name: "Record ID", value: String(virustotalResult.recordId || "Unknown") },
-                            { name: "Malicious", value: String(vtAnalysis.malicious ?? 0) },
-                            { name: "Suspicious", value: String(vtAnalysis.suspicious ?? 0) },
-                            { name: "Harmless", value: String(vtAnalysis.harmless ?? 0) },
+                            { name: "Malicious", valueElement: makeCountBadge(vtAnalysis.malicious, "malicious") },
+                            { name: "Suspicious", valueElement: makeCountBadge(vtAnalysis.suspicious, "suspicious") },
+                            {
+                                name: "Harmless",
+                                valueElement: makeCountBadge(
+                                    vtAnalysis.harmless,
+                                    typeof vtAnalysis.harmless === "number" && vtAnalysis.harmless === 0
+                                        ? "harmless-zero"
+                                        : "harmless",
+                                ),
+                            },
                             { name: "Undetected", value: String(vtAnalysis.undetected ?? 0) },
                         ];
 
                         if (Number.isFinite(Number(virustotalResult.reputation))) {
-                            rows.push({ name: "Reputation", value: String(virustotalResult.reputation) });
+                            rows.push({
+                                name: "Reputation",
+                                valueElement: makeReputationBadge(virustotalResult.reputation),
+                            });
                         }
+
+                        const vtAttributes = virustotalResult.attributes && typeof virustotalResult.attributes === "object"
+                            ? virustotalResult.attributes
+                            : {};
+                        const recordName = virustotalResult.recordName
+                            || vtAttributes.meaningful_name
+                            || vtAnalysis.meaningful_name;
+                        const recordDescription = virustotalResult.recordDescription
+                            || (Array.isArray(vtAttributes.names) && vtAttributes.names.length > 0
+                                ? vtAttributes.names.join(", ")
+                                : "")
+                            || (Array.isArray(vtAnalysis.names) && vtAnalysis.names.length > 0
+                                ? vtAnalysis.names.join(", ")
+                                : "");
+                        if (recordName) {
+                            rows.push({ name: "Record Name", value: String(recordName) });
+                        }
+                        if (recordDescription) {
+                            rows.push({ name: "Record Description", value: String(recordDescription) });
+                        }
+
                         if (virustotalResult.lastAnalysisDate) {
-                            rows.push({ name: "Last Analysis Date", value: String(virustotalResult.lastAnalysisDate) });
+                            let analysisDate = virustotalResult.lastAnalysisDate;
+                            if (typeof analysisDate === "number" || /^\d+$/.test(String(analysisDate))) {
+                                const epoch = Number(analysisDate);
+                                // VirusTotal returns epoch seconds; epoch ms would be > year 50000
+                                const dateObj = epoch > 1e12 ? new Date(epoch) : new Date(epoch * 1000);
+                                analysisDate = dateObj.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+                            }
+                            rows.push({ name: "Last Analysis Date", value: String(analysisDate) });
                         }
 
                         renderKeyValueTable(section, "VirusTotal", rows);
@@ -1417,6 +1486,14 @@ function createSubnetCalculatorPanel({
                     }
                     container.appendChild(section);
                 },
+            );
+        } else {
+            renderThreatIntelCard(
+                reputationVirustotalEl,
+                "VirusTotal",
+                "Open VirusTotal",
+                "https://www.virustotal.com/",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
             );
         }
 
@@ -1456,6 +1533,14 @@ function createSubnetCalculatorPanel({
                     }
                     container.appendChild(section);
                 },
+            );
+        } else {
+            renderThreatIntelCard(
+                reputationTorEl,
+                "Tor",
+                "Open Tor Project",
+                "https://www.torproject.org/",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
             );
         }
     }
