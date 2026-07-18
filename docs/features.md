@@ -64,6 +64,7 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - **Backend** settings:
   - **TCP host** (`backend.tcpHost`) and **TCP port** (`backend.tcpPort`) for the bridge HTTP service.
   - **Force legacy backend spawn mode** (`backend.forceLegacySpawn`) to disable service mode and launch the backend per run.
+  - **VirusTotal API key** (`backend.virusTotalApiKey`) stored locally in settings and required for Conv Threat Intel VirusTotal lookups.
   - **Enable backend HTTP data mode** (`debug.backendHttpDataModeEnabled`) for in-memory incremental snapshots over HTTP payloads.
 - **About** settings panel:
   - Release note refresh and update download actions when newer versions are detected.
@@ -265,6 +266,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - Algorithms: MD5, SHA-1, SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-512, RIPEMD-160, Whirlpool.
 - Supports escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`) for exact byte hashing without raw binary paste.
 - **Convert** in Conversions sub-tab automatically propagates input bytes to the Hashed Input field.
+- **Cross Reference Hash** button sends the focused or selected hash (defaulting to SHA-256) to the Threat Intel sub-tab for a VirusTotal lookup.
 
 #### Decodes Sub-tab
 
@@ -281,6 +283,16 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - Uses backend HTTP lookup endpoints (`/geoip`, `/whois`, `/ipsum`, `/tor`, `/shodan`).
 - Includes capture-derived internet target listing and optional Nmap `-sV` service enumeration.
 - Nmap enumeration is controlled by `general.nmapServiceScanEnabled` and is disabled by default.
+
+#### Threat Intel Sub-tab
+
+- Query type selector for `auto`, `ip`, `url`, or `hash` lookups.
+- IP reputation lookup via the IPSum blocklist (backend endpoint `/ipsum`).
+- Tor exit-node lookup using the local Tor dataset (backend endpoint `/tor`).
+- VirusTotal IP, URL, and hash reputation lookups via backend endpoint `/virustotal`.
+- **Cross Reference Hash** button on the Hashes sub-tab sends the current SHA-256 (or focused hash output) to the Threat Intel sub-tab and runs a hash lookup.
+- VirusTotal lookups require a VirusTotal API key stored in `backend.virusTotalApiKey` in **Settings → Backend**.
+- **Use analyzed IP** button seeds the query from the address currently analyzed in the Analyze Subnet sub-tab.
 
 ---
 

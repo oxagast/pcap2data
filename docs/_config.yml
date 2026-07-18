@@ -1,12 +1,10 @@
 title: "PacketSnitch"
 name: "PacketSnitch"
-keywords: ["network analysis", "security", "packet sniffer", "traffic monitoring", "pcap analysis", "network security", "intrusion detection", "network forensics"]
+keywords: ["network analysis", "security", "packet sniffer", "traffic monitoring", "pcap analysis", "network security", "intrusion detection", "network forensics", "threat intelligence", "protocol analysis", "network monitoring", "packet capture", "network troubleshooting", "cybersecurity", "network diagnostics", "traffic analysis", "malware analysis", "network investigation", "network traffic analysis", "network performance monitoring", "network security monitoring", "network packet analysis", "network protocol analysis", "network traffic inspection", "network traffic monitoring tools", "network traffic analysis software"]
 author: "Marshall W."
 email: "marshall@oxasploits.com"
 description: >-
-  PacketSnitch is a network traffic analysis tool designed for security professionals and enthusiasts. It provides real-time insights into network activity, helping users identify potential threats and analyze traffic patterns effectively.
-#remote_theme: "hemangsk/DevJournal"
-#remote_theme: "abhinavs/moonwalk"
+  PacketSnitch is a network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, threat intelligence, and other actionable insights.
 remote_theme: "tajacks/lightspeed"
 # -----------------------------------------------------------------------------
 # URL and Path Configurations (Crucial for GitHub Pages)

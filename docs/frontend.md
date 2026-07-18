@@ -157,7 +157,7 @@ An interactive hex dump of the full raw payload. Clicking a cell in the hex grid
 <img alt="packetsnitch works!" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/conv-tab.png">
 </p>
 
-The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar. It has five sub-tabs: **Conversions**, **Hashes**, **Decodes**, **Analyze Subnet**, and **Packet JSON**.
+The **Conv** tab is a self-contained data conversion workspace accessible at any time by clicking **Conv** in the toolbar. It has six sub-tabs: **Conversions**, **Hashes**, **Decodes**, **Analyze Subnet**, **Threat Intel**, and **Packet JSON**.
 
 ##### Conversions Sub-tab
 
@@ -212,6 +212,8 @@ The **Hashes** sub-tab computes cryptographic hash digests of any input text. Ty
 
 The Hashed Input field accepts escape sequences (`\n`, `\r`, `\t`, `\\`, `\xNN`) so exact byte sequences can be hashed without pasting raw binary data. Clicking **Convert** on the Conversions sub-tab also populates the Hashed Input field automatically from the current conversion input bytes.
 
+The Hashes sub-tab also provides a **Cross Reference Hash** button. When a hash output is focused or has a text selection, the button cross-references that hash; otherwise it sends the current SHA-256 output to the **Threat Intel** sub-tab, sets the query type to `hash`, and runs a VirusTotal lookup.
+
 ##### Decodes Sub-tab
 
 The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
@@ -233,6 +235,22 @@ The **Analyze Subnet** sub-tab is a host and subnet enrichment workspace for IPv
 | **Enumerate Services** | Runs `nmap -sV` against capture-derived internet targets and renders parsed service/version results. |
 
 Nmap service enumeration is gated by **Settings -> Frontend -> Enable Conv Subnet internet-host Nmap service scans** and is disabled by default.
+
+##### Threat Intel Sub-tab
+
+The **Threat Intel** sub-tab performs IP, URL, and hash reputation lookups using the backend HTTP service. It is also the destination for the **Hashes** sub-tab **Cross Reference Hash** action.
+
+| Control | Description |
+| ------- | ----------- |
+| **Query type** | Choose the indicator type to look up: `auto` (let the backend infer), `ip`, `url`, or `hash`. |
+| **Threat Intel input** | The IP address, URL, or hash value to query. |
+| **Use analyzed IP** | Seeds the input from the address currently being analyzed in the **Analyze Subnet** sub-tab. |
+| **Lookup Threat Intel** | Runs the configured lookups for the selected indicator type. |
+| **IPsum reputation card** | Shows whether the queried IP appears in the IPSum blocklist, the number of hits, and the list version/date. |
+| **VirusTotal card** | Shows VirusTotal reputation data (detection ratio, last analysis date, community score, etc.) for IPs, URLs, and hashes. Requires a VirusTotal API key configured in **Settings → Backend**. |
+| **Tor exit node card** | Shows whether the queried IP is a known Tor exit node, including nickname/platform information. |
+
+When the **Analyze Subnet** sub-tab runs an analysis, the threat-intel input is automatically seeded with the inspected IP, the query type is set to `ip`, and IPsum, Tor, and VirusTotal results are fetched alongside the subnet cards. Those results are then displayed in the Threat Intel sub-tab. The dedicated subtab replaces the previous inline reputation card in Analyze Subnet.
 
 ##### Packet JSON Sub-tab
 
@@ -344,6 +362,7 @@ The LLM panel also exposes runtime diagnostics for local install status, daemon 
 | **Backend worker threads** | `general.backendWorkerThreads` | Worker-thread count passed to the backend parser. |
 | **TCP host** | `backend.tcpHost` | Hostname/IP used for backend HTTP service mode. |
 | **TCP port** | `backend.tcpPort` | Port used for backend HTTP service mode. |
+| **VirusTotal API key** | `backend.virusTotalApiKey` | API key used by the Conv **Threat Intel** sub-tab for VirusTotal IP, URL, and hash lookups. Stored locally in the settings file. |
 | **Force legacy backend spawn** | `backend.forceLegacySpawn` | Disables HTTP service mode and launches the backend process per capture run. |
 | **Enable backend HTTP data mode** | `debug.backendHttpDataModeEnabled` | Streams incremental capture snapshots over backend HTTP response payloads instead of relying on temporary `hosts-*.json` files. |
 
@@ -633,7 +652,7 @@ The filter history dropdown merges session filter history with user-saved named 
 #### Filter Examples
 
 | Expression                                | Description                                               |
-| ----------------------------------------- | --------------------------------------------------------- | ------------------------------------------ | ------------------------------------- |
+| ----------------------------------------- | --------------------------------------------------------- |
 | `ip.src.addr:10.0.0.1`                    | Packets from source IP `10.0.0.1`                         |
 | `tcp.dst.port:443`                        | TCP packets to port 443                                   |
 | `ip.dst.addr:10.0.2.*` && transport.proto:tcp | TCP Packets destined for the subnet 10.0.2.0/24       |
@@ -645,7 +664,7 @@ The filter history dropdown merges session filter history with user-saved named 
 | `tcp.flags:SYN`                           | Packets with the SYN flag set                             |
 | `snmp.community:public`                   | SNMP packets using the `public` community                 |
 | `ip.src.addr:10.0.0.1 && tcp.dst.port:80` | Source `10.0.0.1` to destination port 80                  |
-| `(tcp.dst.port:80                         |                                                           | tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
+| `(tcp.dst.port:80 \|\| tcp.dst.port:443) && payload.entropy>=6.0` | HTTP/HTTPS with high-entropy payloads |
 
 ### License
 
