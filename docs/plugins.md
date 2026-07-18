@@ -43,24 +43,24 @@ This guide covers:
 
 <p align="center">
 Screenshot of the "Matrix" theme.
-
+<br>
 <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
 <img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">
 </a>
-
+<br>
 Also a cobalt/black "Sub7" inspired theme.
-
+<br>
 <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
 <img alt="The Sub7 Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-sub7-theme.png">
 </a>
-
+<br>
 A lighter, airy pastels theme, "Nilla Horizon".
-
+<br>
 <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">
 <img alt="The Matrix Theme on PacketSnitch 1.8" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">
 </a>
 </p>
-
+<br>
 
 
 ---
