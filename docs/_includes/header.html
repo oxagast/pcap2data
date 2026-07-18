@@ -107,7 +107,6 @@
                 src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
         <br>
         <h5><i>Documentation for the PacketSnitch project</i></h5>
-        <br>
         {% include nav.html %}
 
         <div id="downloads">Loading latest release...</div>
@@ -158,7 +157,7 @@
 
                 } catch (err) {
                     console.error(err);
-                    container.innerHTML = "Unable to load latest release.";
+                    container.innerHTML = "<h5>Unable to load latest release.</h5>";
                 }
             }
 
