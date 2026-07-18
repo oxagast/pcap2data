@@ -2053,9 +2053,32 @@ def buildShodanInternetDbLookupResponse(ip):
     }
 
 
+def _detectVirusTotalLookupType(lookupValue):
+    value = str(lookupValue or "").strip()
+    if not value:
+        return None
+
+    try:
+        ipaddress.ip_address(value)
+        return "ip"
+    except ValueError:
+        pass
+
+    if re.fullmatch(r"[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}", value, re.IGNORECASE):
+        return "hash"
+
+    # Loose URL detection: scheme://host or host.tld/path. Reject plain IPs/hex hashes already handled.
+    if re.match(r"^[a-z][a-z0-9+.-]*://", value, re.IGNORECASE):
+        return "url"
+    if re.match(r"^[^\s/]+\.[a-z]{2,}(?:[/:].*)?$", value, re.IGNORECASE):
+        return "url"
+
+    return None
+
+
 def _normalizeVirusTotalLookupType(rawLookupType):
-    lookupType = str(rawLookupType or "ip").strip().lower()
-    if lookupType in {"ip", "ip-address", "ip_address", "ipaddress"}:
+    lookupType = str(rawLookupType or "").strip().lower()
+    if lookupType in {"auto", "autodetect", "detect", "", "ip", "ip-address", "ip_address", "ipaddress"}:
         return "ip"
     if lookupType in {"url", "uri"}:
         return "url"
@@ -2090,6 +2113,18 @@ def _buildVirusTotalTargetPath(lookupType, lookupValue):
 
 def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnly=False):
     normalizedApiKey = str(apiKey or "").strip()
+
+    # Normalize lookup type; fall back to value-based auto-detection if not explicitly provided.
+    try:
+        normalizedType = _normalizeVirusTotalLookupType(lookupType)
+    except ValueError:
+        normalizedType = None
+    if normalizedType in {None, "ip"}:
+        detectedType = _detectVirusTotalLookupType(lookupValue)
+        if detectedType:
+            normalizedType = detectedType
+    if not normalizedType:
+        normalizedType = "ip"
 
     if diagnosticOnly:
         endpointUrl = f"{VIRUSTOTAL_API_BASE_URL}/ip_addresses/8.8.8.8"
@@ -2134,8 +2169,7 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
             "sourceUrl": VIRUSTOTAL_API_BASE_URL,
         }
 
-    targetPath, normalizedValue = _buildVirusTotalTargetPath(lookupType, lookupValue)
-    normalizedType = _normalizeVirusTotalLookupType(lookupType)
+    targetPath, normalizedValue = _buildVirusTotalTargetPath(normalizedType, lookupValue)
 
     headers = packetSnitchRequestHeaders("application/json")
     headers["x-apikey"] = normalizedApiKey
@@ -4337,7 +4371,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
             self.sendJson(200, response)
             return
         if parsedUrl.path == "/virustotal":
-            lookupType = str((queryParams.get("type") or ["ip"])[0] or "ip").strip()
+            lookupType = str((queryParams.get("type") or ["auto"])[0] or "auto").strip()
             lookupValue = str((queryParams.get("value") or [""])[0] or "").strip()
             diagnosticOnly = str((queryParams.get("diagnostic") or ["0"])[0] or "0").strip().lower() in {"1", "true", "yes"}
             apiKey = str(self.headers.get("x-apikey") or (queryParams.get("apikey") or [""])[0] or "").strip()

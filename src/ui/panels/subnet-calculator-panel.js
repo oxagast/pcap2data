@@ -68,7 +68,8 @@ function createSubnetCalculatorPanel({
     }
 
     function normalizeThreatIntelQueryType(value) {
-        const normalized = String(value || "ip").trim().toLowerCase();
+        const normalized = String(value || "auto").trim().toLowerCase();
+        if (normalized === "auto") return "auto";
         if (normalized === "url") return "url";
         if (normalized === "hash") return "hash";
         return "ip";

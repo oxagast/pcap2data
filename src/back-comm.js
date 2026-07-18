@@ -754,7 +754,7 @@ function requestSnitchHttpBackendVirusTotal(
   } = {},
 ) {
   return new Promise((resolve) => {
-    const normalizedType = String(lookupType || "ip").trim().toLowerCase() || "ip";
+    const normalizedType = String(lookupType || "auto").trim().toLowerCase() || "auto";
     const normalizedValue = String(lookupValue || "").trim();
     const normalizedApiKey = String(apiKey || "").trim();
 
