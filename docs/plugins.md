@@ -2,6 +2,27 @@
 
 This page includes both the PacketSnitch [Themes](#themes-reference) reference and a complete [Plugins](#plugins-reference) reference/tutorial.
 
+## Table of Contents
+
+- [Themes Reference](#themes-reference)
+- [Screenshots](#screenshots)
+- [Theme File Locations](#theme-file-locations)
+- [Theme JSON Schema](#theme-json-schema)
+- [Setting App Colors](#setting-app-colors)
+- [Full Variable Reference](#full-variable-reference)
+- [Custom Logo](#custom-logo)
+- [Optional Backdrop Wallpaper](#optional-backdrop-wallpaper)
+- [Opacity Controls](#opacity-controls)
+- [Build and Test Workflow](#build-and-test-workflow)
+- [Troubleshooting](#troubleshooting)
+- [Plugins Reference](#plugins-reference)
+- [Plugin Runtime Locations](#plugin-runtime-locations)
+- [Plugin Package Format](#plugin-package-format)
+- [Plugin Lifecycle and Runtime Contract](#plugin-lifecycle-and-runtime-contract)
+- [hello-snitch Complete Tutorial](#hello-snitch-complete-tutorial)
+- [Plugin Authoring Checklist](#plugin-authoring-checklist)
+- [Plugin Troubleshooting](#plugin-troubleshooting)
+
 ## Themes Reference
 
 PacketSnitch uses a file-driven theming engine. A theme is a JSON file that overrides CSS variables and can optionally replace the app logo, apply a backdrop wallpaper, and tune panel transparency.

@@ -2,6 +2,14 @@
 
 ## Frontend Documentation
 
+- [Overview](#overview)
+- [Requirements](#requirements)
+- [Loading Data](#loading-data)
+- [Output Frames](#output-frames)
+- [Filtering](#filtering)
+- [License](#license)
+- [Author](#author)
+
 ### Overview
 
 The PacketSnitch frontend is an Electron-based desktop application that provides an interactive interface for loading, browsing, and filtering the JSON output produced by the backend (`snitch.py`). It visualizes packet metadata, payloads, protocol details, and GeoIP information, and supports frontend-driven LLM summaries and packet-context questions through the Electron main process. The frontend also includes a data conversion workspace (Conv), an encryption workspace (Crypt), an aggregate statistics view (Stats), an Internet Heatmap worldmap, a sortable packet list (List), an encrypted local key and credential store (Keystore), a session notes workspace (Notes), and a persistent activity log (Log).

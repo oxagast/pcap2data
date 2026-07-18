@@ -4,6 +4,154 @@
 
 PacketSnitch is a full-featured network packet analysis tool with a Python backend for deep protocol parsing and an Electron desktop frontend for interactive browsing, filtering, and forensic investigation. This document lists all available features.
 
+## Table of Contents
+
+- [Protocol Decoders (Backend)](#protocol-decoders-backend)
+- [Host Data View](#host-data-view)
+- [Payload Analysis](#payload-analysis)
+- [TCP Stream Analysis](#tcp-stream-analysis)
+- [Link-Layer & Non-IP Protocol Support](#link-layer--non-ip-protocol-support)
+- [Filter Engine](#filter-engine)
+- [Capture Loading](#capture-loading)
+- [Packet Navigation](#packet-navigation)
+- [Session Management](#session-management)
+- [Settings Workspace](#settings-workspace)
+- [Theme Engine](#theme-engine)
+- [Plugin Engine](#plugin-engine)
+- [Statistics Tab](#statistics-tab)
+- [List Tab](#list-tab)
+- [Conv Tab (Data Conversion Workspace)](#conv-tab-data-conversion-workspace)
+- [Crypt Tab (Encryption Workspace)](#crypt-tab-encryption-workspace)
+- [Keystore Tab (Local Credential Store)](#keystore-tab-local-credential-store)
+- [Notes Tab (Session Notes)](#notes-tab-session-notes)
+- [Activity Log Tab](#activity-log-tab)
+- [Context Menu (Right-Click)](#context-menu-right-click)
+- [LLM-Powered Analysis (Ollama)](#llm-powered-analysis-ollama)
+- [Backend HTTP Service / Bridge](#backend-http-service--bridge)
+- [GeoIP Enrichment](#geoip-enrichment)
+- [Active Reconnaissance (Optional)](#active-reconnaissance-optional)
+- [Backend CLI](#backend-cli)
+- [Backend Output](#backend-output)
+- [Session Keystore Export](#session-keystore-export)
+- [Packaging & Distribution](#packaging--distribution)
+
+---
+
+### Protocol Decoders (Backend)
+
+The backend extracts rich, queryable metadata for the following protocols:
+
+Concise decoder list:
+
+- Link/WAN: Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP
+- Network: IPv4, ICMP, IGMP
+- Transport: TCP, UDP, SCTP
+- Application: HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent
+
+| Layer | Protocols |
+|---|---|
+| **Link / WAN** | Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP |
+| **Network** | IPv4, ICMP, IGMP |
+| **Transport** | TCP (with flags, sequence/ack numbers, retransmission tracking), UDP, SCTP |
+| **Application** | HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB (v1 & v2/v3), MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent |
+
+Each protocol contributes dot-notation metadata keys usable in the filter bar.
+
+---
+
+### Host Data View
+
+#### Packet Info Pane
+
+- **IP-to-IP Routing**: source → destination address display for quick flow identification.
+- **Network Information**: source/destination port, IANA service name, and ICANN port description.
+- **Data Type List**: detected MIME type, character set, content encoding, and magic-identified type (hidden by default for ARP/RARP/IGMP with an inline reveal toggle).
+- **Active Recon** section (when backend was run with `-a`):
+  - Identified application-layer protocols.
+  - Payload compression method.
+  - SSL/TLS version and cipher suite.
+  - Fetched website title.
+  - Reverse DNS hostnames.
+- **Protocols Used** panel with deduped, layered protocol entries (Link / Network / Transport / Application / Encryption / Decoded).
+- TCP stream arrival status labels: In-order, Out-of-order arrival, Retransmission, Retransmission (out-of-order arrival).
+
+#### Packet Payload Pane
+
+- **ASCII View**: consecutive runs of printable characters extracted from raw payload bytes.
+- **Hex Grid**: interactive hex dump of the full raw payload with click-to-highlight cells; clicking a byte highlights it and shows the printable ASCII sequence starting at that offset.
+
+#### Right Sidebar
+
+- **Datagram Frame**: protocol-specific lower-layer field tables (DNS, HTTP, SNMP, DHCP, NTP, SIP, checksums, etc.) that update per packet.
+- **Location Panel**: GeoIP table showing country, city, postal code, and time zone for source and destination IPs; `Localnet` label for private addresses.
+- **Payload Entropy**: Shannon entropy value with graphical indicator (Low / Medium / High labels).
+
+---
+
+### Payload Analysis
+
+- MIME type detection via `python-magic` (magic byte inspection).
+- Shannon entropy calculation using NumPy/SciPy.
+- Character set detection via `chardet`.
+- Distinct byte value count (`payload.chars.used`).
+- Automatic decompression of gzip/zlib compressed payloads; decompressed hex and ASCII stored separately.
+- Data-type guesser with confidence scoring (JWT, bcrypt, base64, etc.) in the Conv tab.
+
+---
+
+### TCP Stream Analysis
+
+- Retransmission detection and classification per packet (in-order, out-of-order, retransmission, retransmission out-of-order).
+- Sequence and acknowledgment number tracking (`tcp.seq`, `tcp.ack`, `tcp.payload.len`).
+- Bidirectional stream grouping by canonical 5-tuple in the List tab.
+- Follow-stream: async chunked assembly of full TCP streams into the Conv tab with renderer yields and loading overlay.
+- `tcp.stream.retransmission` and `tcp.stream.badorder` filter keys.
+
+---
+
+### Link-Layer & Non-IP Protocol Support
+
+- ARP/RARP decoding: operation type, source/destination IP and MAC, filterable via `arp.*` and `rarp.*` keys.
+- IGMP decoding: type, version, group, checksum, max-response time; filterable via `decoded-proto`.
+- WAN/link-control protocols: ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP, LCP, LAP, NCP; stored as `Protocol: LINK` with `wan.proto.*` keys.
+- Non-IP link packets are processed rather than dropped; the backend exits only when the capture has zero packets.
+- `decoded-proto` alias aggregates all transport, decoded, and link-control protocol names for unified filtering.
+
+---
+
+### Filter Engine
+
+- Real-time filter bar supporting a rich expression language.
+- **Key:value** equality: `ip.src.addr:10.0.0.1`
+- **Comparison operators**: `==`, `!=`, `>`, `>=`, `<`, `<=` (e.g. `payload.entropy:>=7.0`).
+- **Boolean combinators**: `&&` (AND) and `||` (OR) with AND taking higher precedence.
+- **Parentheses** for explicit grouping: `(tcp.dst.port:80 || tcp.dst.port:443) && payload.entropy:>=6.0`.
+- **Inversion** with `!`: `!tcp.dst.port:443`, `!(tcp.dst.port:80 || tcp.dst.port:443)`.
+- **Bookmark filter**: `bookmark:true` / `bookmark:false` (client-side, composable with backend expressions).
+- **`decoded-proto` alias**: aggregates transport + decoded protocol names including link-control for queries like `decoded-proto:ppp`.
+- Case-insensitive key normalization: spaces and hyphens are interchangeable (e.g. `wire-length` = `wire.len`).
+- Wildcard glob matching.
+- Filter history tracked per session and accessible from the filter bar.
+- Saved-filter library persisted in user config (`config/filters.json`) with labeled entries merged into the filter history dropdown.
+- Right-click save/remove flow for the current filter query via in-app modal dialog (no native `window.prompt` dependency).
+- Context menu shortcuts to build filter clauses from current packet attributes (IP, port, MAC, protocol, MIME type).
+- Context menu parenthesis helpers: **Append (**, **Append )**, **Wrap with (...)**.
+- Filter results update the **Filtered Packets** counter in the left sidebar.
+- Clicking a Stats tag pre-fills the filter bar with the matching filter expression.
+
+#### Filterable Packet Attributes (highlights)
+
+- Core: timestamp, transport proto, raw hex.
+- Ethernet: MAC addresses, MAC vendor.
+- IP: source/destination address, checksum, length, network class.
+- TCP: ports, checksum, flags, urgent pointer, length, service name, sequence/ack numbers, payload length, retransmission/out-of-order flags.
+- UDP: ports, checksum, length, service name.
+- ICMP: type, code, id, sequence, checksum.
+- Payload: hex, ASCII, length, MIME type, Shannon entropy, charset, encoding, distinct byte count, decompressed hex/ASCII.
+- GeoIP: country, city, postal code, timezone for source and destination.
+- Active recon: server banner.
+- All protocol-specific keys listed in [Filter Reference](filters.md).
+
 ---
 
 ### Capture Loading
@@ -17,6 +165,19 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - Lazy packet hydration: packet stubs are built immediately and full payloads are fetched on demand, keeping the UI responsive for large captures.
 - Left-panel partial-data warning shown while incremental backend processing is in progress.
 - Backend preprocessing blocks session save/export until complete, preventing persistence of incomplete data.
+
+---
+
+### Packet Navigation
+
+- **Prev / Next** buttons to step through packets one at a time.
+- **Target Host** dropdown to scope navigation to a specific source/destination IP pair.
+- **All Hosts** (`0.0.0.0`) virtual option routes navigation across every packet in the capture.
+- Navigation follows the active filtered packet set when a filter is applied.
+- Packets are ordered strictly by capture timestamp, then `Packet Processed`, then index.
+- Packet bookmarks: mark any packet with a star; bookmarked state is saved in the session.
+- **★** bookmark indicator in the List tab and filter support via `bookmark:true`.
+- Click any row in the List tab to jump directly to that packet in the Host Data view.
 
 ---
 
@@ -101,105 +262,6 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - Plugin runtime receives host context (`documentRef`, `windowRef`, `statusUpdate`, `writeLogEntry`, PacketSnitch version, plugin metadata).
 - Runtime errors are tracked in the Plugins error panel; critical failures increment per-plugin counters and can auto-disable unstable plugins.
 - `hello-snitch` sample plugin demonstrates tab/panel injection, context-menu extension, file IO, remote fetch, and safe callback wrapping.
-
----
-
-### Packet Navigation
-
-- **Prev / Next** buttons to step through packets one at a time.
-- **Target Host** dropdown to scope navigation to a specific source/destination IP pair.
-- **All Hosts** (`0.0.0.0`) virtual option routes navigation across every packet in the capture.
-- Navigation follows the active filtered packet set when a filter is applied.
-- Packets are ordered strictly by capture timestamp, then `Packet Processed`, then index.
-- Packet bookmarks: mark any packet with a star; bookmarked state is saved in the session.
-- **★** bookmark indicator in the List tab and filter support via `bookmark:true`.
-- Click any row in the List tab to jump directly to that packet in the Host Data view.
-
----
-
-### Host Data View
-
-#### Packet Info Pane
-
-- **IP-to-IP Routing**: source → destination address display for quick flow identification.
-- **Network Information**: source/destination port, IANA service name, and ICANN port description.
-- **Data Type List**: detected MIME type, character set, content encoding, and magic-identified type (hidden by default for ARP/RARP/IGMP with an inline reveal toggle).
-- **Active Recon** section (when backend was run with `-a`):
-  - Identified application-layer protocols.
-  - Payload compression method.
-  - SSL/TLS version and cipher suite.
-  - Fetched website title.
-  - Reverse DNS hostnames.
-- **Protocols Used** panel with deduped, layered protocol entries (Link / Network / Transport / Application / Encryption / Decoded).
-- TCP stream arrival status labels: In-order, Out-of-order arrival, Retransmission, Retransmission (out-of-order arrival).
-
-#### Packet Payload Pane
-
-- **ASCII View**: consecutive runs of printable characters extracted from raw payload bytes.
-- **Hex Grid**: interactive hex dump of the full raw payload with click-to-highlight cells; clicking a byte highlights it and shows the printable ASCII sequence starting at that offset.
-
-#### Right Sidebar
-
-- **Datagram Frame**: protocol-specific lower-layer field tables (DNS, HTTP, SNMP, DHCP, NTP, SIP, checksums, etc.) that update per packet.
-- **Location Panel**: GeoIP table showing country, city, postal code, and time zone for source and destination IPs; `Localnet` label for private addresses.
-- **Payload Entropy**: Shannon entropy value with graphical indicator (Low / Medium / High labels).
-
----
-
-### Protocol Decoders (Backend)
-
-The backend extracts rich, queryable metadata for the following protocols:
-
-Concise decoder list:
-
-- Link/WAN: Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP
-- Network: IPv4, ICMP, IGMP
-- Transport: TCP, UDP, SCTP
-- Application: HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent
-
-| Layer | Protocols |
-|---|---|
-| **Link / WAN** | Ethernet, ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP (LCP/NCP/LAP), ARP, RARP |
-| **Network** | IPv4, ICMP, IGMP |
-| **Transport** | TCP (with flags, sequence/ack numbers, retransmission tracking), UDP, SCTP |
-| **Application** | HTTP/1.x, HTTP/2, HTTPS, DNS, SNMP, DHCP, NTP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SIP, SMB (v1 & v2/v3), MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH/OpenSSH, SMPP, Soulseek, BitTorrent |
-
-Each protocol contributes dot-notation metadata keys usable in the filter bar.
-
----
-
-### Filter Engine
-
-- Real-time filter bar supporting a rich expression language.
-- **Key:value** equality: `ip.src.addr:10.0.0.1`
-- **Comparison operators**: `==`, `!=`, `>`, `>=`, `<`, `<=` (e.g. `payload.entropy:>=7.0`).
-- **Boolean combinators**: `&&` (AND) and `||` (OR) with AND taking higher precedence.
-- **Parentheses** for explicit grouping: `(tcp.dst.port:80 || tcp.dst.port:443) && payload.entropy:>=6.0`.
-- **Inversion** with `!`: `!tcp.dst.port:443`, `!(tcp.dst.port:80 || tcp.dst.port:443)`.
-- **Bookmark filter**: `bookmark:true` / `bookmark:false` (client-side, composable with backend expressions).
-- **`decoded-proto` alias**: aggregates transport + decoded protocol names including link-control for queries like `decoded-proto:ppp`.
-- Case-insensitive key normalization: spaces and hyphens are interchangeable (e.g. `wire-length` = `wire.len`).
-- Wildcard glob matching.
-- Filter history tracked per session and accessible from the filter bar.
-- Saved-filter library persisted in user config (`config/filters.json`) with labeled entries merged into the filter history dropdown.
-- Right-click save/remove flow for the current filter query via in-app modal dialog (no native `window.prompt` dependency).
-- Context menu shortcuts to build filter clauses from current packet attributes (IP, port, MAC, protocol, MIME type).
-- Context menu parenthesis helpers: **Append (**, **Append )**, **Wrap with (...)**.
-- Filter results update the **Filtered Packets** counter in the left sidebar.
-- Clicking a Stats tag pre-fills the filter bar with the matching filter expression.
-
-#### Filterable Packet Attributes (highlights)
-
-- Core: timestamp, transport proto, raw hex.
-- Ethernet: MAC addresses, MAC vendor.
-- IP: source/destination address, checksum, length, network class.
-- TCP: ports, checksum, flags, urgent pointer, length, service name, sequence/ack numbers, payload length, retransmission/out-of-order flags.
-- UDP: ports, checksum, length, service name.
-- ICMP: type, code, id, sequence, checksum.
-- Payload: hex, ASCII, length, MIME type, Shannon entropy, charset, encoding, distinct byte count, decompressed hex/ASCII.
-- GeoIP: country, city, postal code, timezone for source and destination.
-- Active recon: server banner.
-- All protocol-specific keys listed in [Filter Reference](filters.md).
 
 ---
 
@@ -549,37 +611,6 @@ python3 snitch.py traffic.pcap -o output_dir [-s SRC_PORT] [-d DST_PORT] [-T TIM
 - Per-packet JSON metadata: `output_dir/<dst_port>/pcap.info_packet.<index>.json`
 - Consolidated output: `hosts.json` (all packets/hosts in one file)
 - Progressive NDJSON snapshots (`hosts-<N>.json`) emitted every 500 packets for streaming to the frontend.
-
----
-
-### Payload Analysis
-
-- MIME type detection via `python-magic` (magic byte inspection).
-- Shannon entropy calculation using NumPy/SciPy.
-- Character set detection via `chardet`.
-- Distinct byte value count (`payload.chars.used`).
-- Automatic decompression of gzip/zlib compressed payloads; decompressed hex and ASCII stored separately.
-- Data-type guesser with confidence scoring (JWT, bcrypt, base64, etc.) in the Conv tab.
-
----
-
-### Link-Layer & Non-IP Protocol Support
-
-- ARP/RARP decoding: operation type, source/destination IP and MAC, filterable via `arp.*` and `rarp.*` keys.
-- IGMP decoding: type, version, group, checksum, max-response time; filterable via `decoded-proto`.
-- WAN/link-control protocols: ATM, Token Ring, Frame Relay, SDLC, HDLC, SLIP, PPP, LCP, LAP, NCP; stored as `Protocol: LINK` with `wan.proto.*` keys.
-- Non-IP link packets are processed rather than dropped; the backend exits only when the capture has zero packets.
-- `decoded-proto` alias aggregates all transport, decoded, and link-control protocol names for unified filtering.
-
----
-
-### TCP Stream Analysis
-
-- Retransmission detection and classification per packet (in-order, out-of-order, retransmission, retransmission out-of-order).
-- Sequence and acknowledgment number tracking (`tcp.seq`, `tcp.ack`, `tcp.payload.len`).
-- Bidirectional stream grouping by canonical 5-tuple in the List tab.
-- Follow-stream: async chunked assembly of full TCP streams into the Conv tab with renderer yields and loading overlay.
-- `tcp.stream.retransmission` and `tcp.stream.badorder` filter keys.
 
 ---
 
