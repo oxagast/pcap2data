@@ -2278,6 +2278,25 @@ function createSubnetCalculatorPanel({
         );
     }
 
+    function runThreatIntelHashLookup(hashValue) {
+        const trimmedValue = String(hashValue || "").trim();
+        if (!trimmedValue) {
+            setPanelStatus("Enter a hash value to cross-reference.", true);
+            return;
+        }
+        if (threatIntelTypeEl) {
+            threatIntelTypeEl.value = "hash";
+        }
+        if (threatIntelInputEl) {
+            threatIntelInputEl.value = trimmedValue;
+        }
+        const requestToken = ++lookupRequestToken;
+        const analysis = {
+            lookupTargetIp: trimmedValue,
+        };
+        void lookupVirusTotalForInput(analysis, requestToken, trimmedValue, "hash");
+    }
+
     function renderEmptyState() {
         updateNmapScanButtonState();
         setPlaceholder(summaryEl, "Enter an IP address, host/prefix, or subnet to inspect.");
@@ -2352,6 +2371,7 @@ function createSubnetCalculatorPanel({
         resetSessionCacheState,
         resetCaptureNmapState,
         restoreSessionState,
+        runThreatIntelHashLookup,
     };
 }
 

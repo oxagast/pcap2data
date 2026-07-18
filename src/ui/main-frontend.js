@@ -105,6 +105,7 @@ const {
   formatHexInputBytes,
   setConvSubtab,
   runDataToolsHashesFromInput,
+  crossReferenceCurrentHash,
 } = require("./panels/data-tools-panel");
 
 function mountStartupFragments() {
@@ -19846,6 +19847,11 @@ for (const fieldId of DATA_TOOLS_SELECTION_FIELD_IDS) {
 document
   .getElementById("data-tools-hash-input-reading")
   .addEventListener("input", runDataToolsHashesFromInput);
+document
+  .getElementById("data-tools-cross-ref-hash-btn")
+  .addEventListener("click", () => {
+    crossReferenceCurrentHash(subnetCalculatorPanel?.runThreatIntelHashLookup);
+  });
 document
   .getElementById("data-tools-clear-btn")
   .addEventListener("click", () => {

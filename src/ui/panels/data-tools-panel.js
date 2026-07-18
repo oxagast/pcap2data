@@ -485,6 +485,29 @@ function runDataToolsHashesFromInput() {
   computeDataToolsHashes(bytes);
 }
 
+function getSelectedHashValue() {
+  const activeEl = document.activeElement;
+  if (activeEl && HASH_IDS.includes(activeEl.id)) {
+    return activeEl.value.trim() || "";
+  }
+  return "";
+}
+
+function crossReferenceCurrentHash(runThreatIntelHashLookup) {
+  const selectedHash = getSelectedHashValue();
+  const hashValue = selectedHash
+    || document.getElementById("data-tools-sha256-output")?.value.trim();
+  if (!hashValue) {
+    _statusUpdate("Status: Generate a hash first to cross-reference it.");
+    return;
+  }
+  _writeLogEntry(`[${threadName}] Cross-referencing hash in Threat Intel: ${hashValue}`);
+  setConvSubtab(CONV_THREAT_INTEL_SUBTAB);
+  if (typeof runThreatIntelHashLookup === "function") {
+    runThreatIntelHashLookup(hashValue);
+  }
+}
+
 // Parses hash input reading bytes.
 function parseHashInputReadingBytes(input) {
   const bytes = [];
@@ -2687,6 +2710,7 @@ module.exports = {
   formatHexInputBytes,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
+  crossReferenceCurrentHash,
   showDataTools,
   setConvSubtab,
 };

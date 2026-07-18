@@ -2130,6 +2130,25 @@ strong {
   padding: 4px 6px;
 }
 
+.data-tools-hashes-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.data-tools-hashes-actions button {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.data-tools-hashes-actions button:hover {
+  background-color: var(--color-2-hover);
+}
+
 #convert-context-menu {
   position: fixed;
   z-index: 99999;
