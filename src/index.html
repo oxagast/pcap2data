@@ -46,8 +46,9 @@
         <label style="color: white">Filter</label>
         <div id="filterStr-wrap">
           <div id="filterStr-highlight" aria-hidden="true"></div>
-          <input id="filterStr" type="text" disabled
+          <input id="filterStr" type="text" list="filterStr-autocomplete" autocomplete="off" disabled
             placeholder="wire.len: >100 && tcp.proto: https || dns.qname: example.com" />
+          <datalist id="filterStr-autocomplete"></datalist>
           <button id="filterStr-clear" type="button" disabled aria-label="Clear filter" title="Clear filter">
             Clear
           </button>

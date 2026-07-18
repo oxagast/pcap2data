@@ -3595,6 +3595,18 @@ strong {
   font: inherit;
 }
 
+#filterStr:-webkit-autofill,
+#filterStr:-webkit-autofill:hover,
+#filterStr:-webkit-autofill:focus,
+#filterStr:-webkit-autofill:active,
+#filterStr:autofill {
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-0) inset !important;
+  box-shadow: 0 0 0 1000px var(--surface-0) inset !important;
+  -webkit-text-fill-color: transparent !important;
+  caret-color: white !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
 #filterStr-clear {
   position: absolute;
   top: 1px;

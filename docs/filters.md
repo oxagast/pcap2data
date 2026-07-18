@@ -291,6 +291,8 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `sip.from`        | string | `From` header                                                  |
 | `sip.to`          | string | `To` header                                                    |
 | `sip.call_id`     | string | `Call-ID` header                                               |
+| `sip.authorization` | string | `Authorization` header (e.g. Digest/Basic auth data)         |
+| `sip.proxy_authorization` | string | `Proxy-Authorization` header                           |
 | `sip.status_code` | string | SIP status code (e.g. `200`) — responses only                  |
 | `sip.status_msg`  | string | SIP status message (e.g. `OK`) — responses only                |
 
@@ -431,6 +433,14 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `smb.command`     | string  | SMB command name (e.g. `SMB_COM_NEGOTIATE`, `Create`)     |
 | `smb.status`      | string  | NT status code as a hex string (e.g. `0x00000000`)        |
 | `smb.is_response` | boolean | `true` if this is a server response, `false` if a request |
+| `smb.ntlm.type`   | string  | NTLM signature detected in Session Setup payload (`NTLMSSP`) |
+| `smb.ntlm.message_type` | integer | NTLM message type (1=Negotiate, 2=Challenge, 3=Authenticate) |
+| `smb.ntlm.target_name` | string | NTLM target/workgroup name (when present)              |
+| `smb.auth.domain` | string  | Parsed NTLM authenticate domain name                       |
+| `smb.auth.username` | string | Parsed NTLM authenticate username                         |
+| `smb.auth.workstation` | string | Parsed NTLM authenticate workstation                    |
+| `smb.auth.lm_response` | string | LM response bytes (hex) from NTLM authenticate         |
+| `smb.auth.ntlm_response` | string | NTLM response bytes (hex) from NTLM authenticate    |
 
 #### MQTT Fields
 
@@ -527,6 +537,181 @@ Protocol-specific keys (e.g., `dns.*`, `http.*`) are only present in packets whe
 | `radius.id`     | integer | Packet identifier                                                                 |
 | `radius.length` | integer | Total packet length in bytes                                                      |
 | `radius.attrs`  | array   | List of decoded RADIUS attributes (`{Type, Value}` objects)                       |
+
+#### SMPP Fields
+
+> Only present on packets captured on TCP port 2775 or 3550.
+
+| Filter Key             | Type    | Description                                                           |
+| ---------------------- | ------- | --------------------------------------------------------------------- |
+| `smpp.command_length`  | integer | Declared SMPP PDU length in bytes                                     |
+| `smpp.command_id`      | string  | SMPP command ID as hex (e.g. `0x00000004`)                            |
+| `smpp.command`         | string  | SMPP command name (e.g. `submit_sm`, `deliver_sm`, `bind_transmitter`) |
+| `smpp.is_response`     | boolean | `true` when response bit (`0x80000000`) is set in `command_id`        |
+| `smpp.command_status`  | integer | SMPP command status code                                               |
+| `smpp.sequence`        | integer | SMPP sequence number                                                   |
+| `smpp.body_length`     | integer | Payload bytes after the 16-byte SMPP header                           |
+
+#### Soulseek Fields
+
+> Only present on packets captured on common Soulseek TCP ports (2234, 2240, 2242).
+
+| Filter Key            | Type    | Description                                            |
+| --------------------- | ------- | ------------------------------------------------------ |
+| `soulseek.length`     | integer | Soulseek envelope message length (little-endian value) |
+| `soulseek.code`       | integer | Soulseek message code                                  |
+| `soulseek.code_hex`   | string  | Soulseek message code in hex (e.g. `0x0010`)          |
+| `soulseek.body_length` | integer | Soulseek body length in bytes                         |
+| `soulseek.preview`    | string  | Text preview extracted from message body               |
+
+#### BitTorrent Fields
+
+> Present when a BitTorrent handshake, peer-wire frame, or DHT KRPC payload is detected.
+
+| Filter Key                 | Type    | Description                                                    |
+| -------------------------- | ------- | -------------------------------------------------------------- |
+| `bittorrent.type`          | string  | Decoder subtype: `handshake`, `peer_wire`, or `dht`           |
+| `bittorrent.protocol`      | string  | Handshake protocol name (typically `BitTorrent protocol`)      |
+| `bittorrent.reserved`      | string  | Handshake reserved bytes (hex)                                 |
+| `bittorrent.info_hash`     | string  | Torrent info hash (hex)                                        |
+| `bittorrent.peer_id`       | string  | Decoded peer ID (printable form, when available)               |
+| `bittorrent.peer_id_hex`   | string  | Raw peer ID bytes (hex)                                        |
+| `bittorrent.message`       | string  | Peer-wire message name (e.g. `have`, `piece`, `keepalive`)     |
+| `bittorrent.message_id`    | integer | Peer-wire message numeric ID                                   |
+| `bittorrent.length`        | integer | Peer-wire message length                                       |
+| `bittorrent.transaction_type` | string | DHT KRPC transaction type (`q`, `r`, etc.)                   |
+| `bittorrent.query`         | string  | DHT KRPC query method name                                     |
+| `bittorrent.signature`     | string  | Detection signature (`handshake`, `peer_wire`, `dht`)          |
+
+#### SSH Fields
+
+> Present on packets captured on TCP port 22/2222 or payloads matching SSH framing.
+
+| Filter Key              | Type    | Description                                                      |
+| ----------------------- | ------- | ---------------------------------------------------------------- |
+| `ssh.type`              | string  | SSH decoder subtype: `Identification` or `Binary Packet`         |
+| `ssh.banner`            | string  | SSH identification banner line (e.g. `SSH-2.0-OpenSSH_9.8`)      |
+| `ssh.protocol_version`  | string  | Parsed SSH protocol version from banner                          |
+| `ssh.software_version`  | string  | Parsed SSH software identifier from banner                       |
+| `ssh.comments`          | string  | Optional trailing banner comment                                 |
+| `ssh.direction`         | string  | Heuristic packet direction (`Client Identification`/`Server Identification`) |
+| `ssh.packet_length`     | integer | SSH binary packet declared length                                |
+| `ssh.padding_length`    | integer | SSH binary packet padding length                                 |
+| `ssh.msg_type`          | string  | SSH message type name (e.g. `KEXINIT`, `USERAUTH_REQUEST`)       |
+| `ssh.msg_type_num`      | integer | SSH message type number                                          |
+| `ssh.likely_encrypted`  | boolean | `true` if payload likely post-key-exchange encrypted data         |
+
+#### WebSocket Fields
+
+> Present on TCP traffic where an HTTP WebSocket upgrade or frame format is detected.
+
+| Filter Key       | Type    | Description                                                   |
+| ---------------- | ------- | ------------------------------------------------------------- |
+| `ws.type`        | string  | `Upgrade` for handshake headers, or `Frame` for data frames  |
+| `ws.upgrade`     | string  | `Upgrade` header value from WebSocket handshake              |
+| `ws.host`        | string  | `Host` header from WebSocket handshake                       |
+| `ws.key`         | string  | `Sec-WebSocket-Key` header value                             |
+| `ws.version`     | string  | `Sec-WebSocket-Version` header value                         |
+| `ws.opcode`      | string  | Decoded frame opcode name (`Text`, `Binary`, `Ping`, etc.)  |
+| `ws.fin`         | boolean | WebSocket FIN flag                                             |
+| `ws.masked`      | boolean | Whether the frame is masked                                   |
+| `ws.payload_len` | integer | WebSocket frame payload length                                |
+
+#### Kerberos Fields
+
+> Only present on packets captured on TCP/UDP port 88 where Kerberos framing is detected.
+
+| Filter Key       | Type    | Description                                                  |
+| ---------------- | ------- | ------------------------------------------------------------ |
+| `krb5.msg_type`  | string  | Kerberos message type (e.g. `AS-REQ`, `AS-REP`, `TGS-REQ`)  |
+| `krb5.pvno`      | integer | Kerberos protocol version number (when parsable)            |
+
+#### NFS / RPC Fields
+
+> Present on packets captured on NFS/RPC ports (commonly TCP 2049 or 111).
+
+| Filter Key          | Type    | Description                                                    |
+| ------------------- | ------- | -------------------------------------------------------------- |
+| `rpc.xid`           | string  | RPC transaction ID as hex (e.g. `0x5A2C0011`)                 |
+| `rpc.msg_type`      | string  | RPC message type (`Call` or `Reply`)                          |
+| `rpc.version`       | integer | RPC version (calls only)                                       |
+| `rpc.program`       | string  | RPC program name (e.g. `NFS`, `Portmapper`)                   |
+| `rpc.prog_version`  | integer | RPC program version                                            |
+| `rpc.procedure`     | string  | RPC/NFS procedure name                                         |
+| `rpc.reply_status`  | string  | RPC reply status (`Accepted` or `Denied`)                     |
+
+#### SCTP / SIGTRAN Fields
+
+> Present on SCTP traffic (IP protocol 132), including SIGTRAN/M3UA metadata when detected.
+
+| Filter Key                   | Type    | Description                                                      |
+| ---------------------------- | ------- | ---------------------------------------------------------------- |
+| `sctp.src.port`              | integer | SCTP source port                                                 |
+| `sctp.dst.port`              | integer | SCTP destination port                                            |
+| `sctp.vtag`                  | integer | SCTP verification tag                                            |
+| `sctp.chksum`                | string  | SCTP checksum (hex)                                              |
+| `sctp.chunk.count`           | integer | Number of parsed SCTP chunks                                     |
+| `sctp.chunks`                | array   | List of parsed SCTP chunk type names                             |
+| `sctp.chunk.details`         | array   | Per-chunk detail objects with type/flags/length/payload metadata |
+| `sctp.chunk.type`            | integer | Chunk type number (within `sctp.chunk.details`)                 |
+| `sctp.chunk.type_name`       | string  | Chunk type name (within `sctp.chunk.details`)                   |
+| `sctp.chunk.flags`           | integer | Chunk flags bitfield (within `sctp.chunk.details`)              |
+| `sctp.chunk.length`          | integer | Chunk length in bytes (within `sctp.chunk.details`)             |
+| `sctp.chunk.payload.len`     | integer | Chunk payload length (within `sctp.chunk.details`)              |
+| `sctp.chunk.payload.preview` | string  | First payload bytes (hex preview)                                |
+| `transport.sctp.src.port`    | integer | SCTP source port alias under transport namespace                 |
+| `transport.sctp.dst.port`    | integer | SCTP destination port alias under transport namespace            |
+| `sigtran.proto`              | string  | SIGTRAN adaptation protocol (e.g. `M3UA`, `SUA`)                |
+| `sigtran.signaling`          | string  | High-level signaling family description                          |
+| `sigtran.version`            | integer | SIGTRAN message version (M3UA)                                   |
+| `sigtran.reserved`           | integer | SIGTRAN reserved byte (M3UA)                                     |
+| `sigtran.message.class`      | integer | SIGTRAN message class code (M3UA)                                |
+| `sigtran.message.class_name` | string  | SIGTRAN message class name (M3UA)                                |
+| `sigtran.message.type`       | integer | SIGTRAN message type code (M3UA)                                 |
+| `sigtran.length`             | integer | SIGTRAN message length                                            |
+| `sigtran.payload.len`        | integer | SIGTRAN payload length (post-header)                              |
+| `sigtran.payload.preview`    | string  | SIGTRAN payload preview (hex)                                     |
+
+#### WAN / Link-Control Fields
+
+> Present when WAN/link-control protocols are decoded (PPP/PPPoE/LLDP/ATM/HDLC/etc.).
+
+| Filter Key          | Type   | Description                                                        |
+| ------------------- | ------ | ------------------------------------------------------------------ |
+| `wan.detected`      | array  | List of detected WAN/link-control protocol names                   |
+| `wan.layers`        | array  | Raw layer names detected in the packet                             |
+| `wan.primary`       | string | Primary inferred WAN/link-control protocol                         |
+| `ppp.proto_field`   | string | PPP protocol field (hex + mapped protocol name)                    |
+| `pppoe.code`        | string | PPPoE code (hex + semantic label)                                  |
+| `pppoe.session_id`  | string | PPPoE session ID (hex)                                              |
+| `pppoe.stage`       | string | PPPoE stage (`Discovery` or `Session`)                              |
+| `lldp.chassis_id`   | string | LLDP chassis identifier                                              |
+| `lldp.port_id`      | string | LLDP port identifier                                                 |
+| `lldp.ttl`          | integer | LLDP time-to-live value                                            |
+| `atm.encapsulation` | string | ATM encapsulation type (e.g. CLIP, PPPoA, AAL5)                    |
+| `ether.type`        | string | Ethernet EtherType observed while decoding link-control layers      |
+| `wan.proto.ppp`     | string | Convenience presence key for PPP detection                           |
+| `wan.proto.pppoe`   | string | Convenience presence key for PPPoE detection                         |
+| `wan.proto.lcp`     | string | Convenience presence key for LCP detection                           |
+| `wan.proto.ncp`     | string | Convenience presence key for NCP detection                           |
+| `wan.proto.lldp`    | string | Convenience presence key for LLDP detection                          |
+| `wan.proto.atm`     | string | Convenience presence key for ATM detection                           |
+| `wan.proto.frame_relay` | string | Convenience presence key for Frame Relay detection             |
+| `wan.proto.hdlc`    | string | Convenience presence key for HDLC detection                          |
+| `wan.proto.sdlc`    | string | Convenience presence key for SDLC detection                          |
+| `wan.proto.slip`    | string | Convenience presence key for SLIP detection                          |
+| `wan.proto.lap`     | string | Convenience presence key for LAP detection                           |
+| `wan.proto.token_ring` | string | Convenience presence key for Token Ring detection               |
+
+#### Tor Enrichment Fields
+
+> Present when Tor exit-node enrichment is enabled during backend processing.
+
+| Filter Key       | Type    | Description                                           |
+| ---------------- | ------- | ----------------------------------------------------- |
+| `tor.exit.node`  | boolean | `true` when destination IP matched known Tor exit node |
+| `tor.nickname`   | string  | Tor relay nickname for matched exit node               |
+| `tor.platform`   | string  | Tor relay platform string for matched exit node        |
 
 #### Stream related Fields
 

@@ -131,12 +131,418 @@ function getCachedElement(id) {
 }
 
 const validKeysCache = [];
+const validKeyByLower = new Map();
+const filterKeyUsageCounts = new Map();
+const filterValueUsageCacheByKey = new Map();
+const filterValueUsageInFlightByKey = new Map();
+const FILTER_AUTOCOMPLETE_MAX_SUGGESTIONS = 8;
+let filterAutocompleteCacheVersion = -1;
 if (window.validkeysapi && typeof window.validkeysapi.getValidKeys === "function") {
   window.validkeysapi.getValidKeys().then((keys) => {
-    validKeysCache.push(...keys);
+    const normalizedKeys = Array.isArray(keys)
+      ? keys
+        .map((key) => String(key || "").trim())
+        .filter(Boolean)
+      : [];
+    normalizedKeys.sort((a, b) => a.localeCompare(b));
+    validKeysCache.splice(0, validKeysCache.length, ...new Set(normalizedKeys));
+    validKeyByLower.clear();
+    validKeysCache.forEach((key) => {
+      validKeyByLower.set(key.toLowerCase(), key);
+    });
+    void refreshFilterAutocompleteOptions();
   });
 } else {
   console.warn("validkeysapi is unavailable. Key validation helpers will be disabled.");
+}
+
+function ensureFilterAutocompleteCachesFresh() {
+  if (filterAutocompleteCacheVersion === packetNavigationCacheVersion) {
+    return;
+  }
+  filterValueUsageCacheByKey.clear();
+  filterValueUsageInFlightByKey.clear();
+  filterAutocompleteCacheVersion = packetNavigationCacheVersion;
+}
+
+function canonicalFilterKey(filterKey) {
+  const normalized = String(filterKey || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return validKeyByLower.get(normalized) || null;
+}
+
+function extractFilterKeysFromQuery(rawQuery) {
+  const query = String(rawQuery || "");
+  const filterKeys = [];
+  const keyPattern = /(^|[\s!()&|])([a-zA-Z0-9._-]+)\s*:/g;
+  let match;
+  while ((match = keyPattern.exec(query)) !== null) {
+    const key = canonicalFilterKey(match[2]);
+    if (key) {
+      filterKeys.push(key);
+    }
+  }
+  return filterKeys;
+}
+
+function trackFilterKeyUsage(rawQuery) {
+  const keys = extractFilterKeysFromQuery(rawQuery);
+  keys.forEach((key) => {
+    const nextCount = (filterKeyUsageCounts.get(key) || 0) + 1;
+    filterKeyUsageCounts.set(key, nextCount);
+  });
+}
+
+function collectDotKeyValuesFromObject(value, dotKey, outValues, visited) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (visited.has(value)) {
+    return;
+  }
+  visited.add(value);
+
+  if (Object.prototype.hasOwnProperty.call(value, dotKey)) {
+    outValues.push(value[dotKey]);
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => {
+      if (item && typeof item === "object") {
+        collectDotKeyValuesFromObject(item, dotKey, outValues, visited);
+      }
+    });
+    return;
+  }
+
+  Object.values(value).forEach((child) => {
+    if (child && typeof child === "object") {
+      collectDotKeyValuesFromObject(child, dotKey, outValues, visited);
+    }
+  });
+}
+
+function normalizeAutocompleteValue(rawValue) {
+  if (rawValue === null || rawValue === undefined) {
+    return "";
+  }
+  if (typeof rawValue === "string") {
+    const normalized = rawValue.trim();
+    if (!normalized) return "";
+    return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+  }
+  if (typeof rawValue === "number" || typeof rawValue === "boolean") {
+    return String(rawValue);
+  }
+  return "";
+}
+
+async function buildValueUsageCacheForFilterKey(canonicalKey) {
+  const valueCounts = new Map();
+  const hydratedAutocompletePackets = new Map();
+
+  try {
+    if (window.captureapi && typeof window.captureapi.filter === "function") {
+      let matchedPacketKeys = [];
+      try {
+        const filterResult = await window.captureapi.filter(`${canonicalKey}:*`);
+        matchedPacketKeys = Array.isArray(filterResult)
+          ? filterResult
+            .map((packetKey) => normalizePacketKey(packetKey))
+            .filter((packetKey) => typeof packetKey === "string" && packetKey.trim())
+          : [];
+      } catch (error) {
+        matchedPacketKeys = [];
+      }
+
+      const matchedPackets = await resolvePacketStubsByKeys(matchedPacketKeys);
+      for (let packetIndex = 0; packetIndex < matchedPackets.length; packetIndex += 1) {
+        const packetStub = matchedPackets[packetIndex];
+        const packetKey = getPacketKey(packetStub, "", packetIndex);
+        const hadPayloadHex = Boolean(
+          packetStub?.["packet.info"]?.["Raw data"]?.["Payload"]?.["payload.hex"]
+          ?? packetStub?.["packet.info"]?.["Raw data"]?.["Payload"]?.["Hex Encoded"],
+        );
+        const hydratedPacket = await ensurePacketHydrated(packetStub);
+        if (!hadPayloadHex && hydratedPacket && hydratedPacket !== packetStub && packetKey) {
+          hydratedAutocompletePackets.set(packetKey, packetStub);
+        }
+        const packetInfo = hydratedPacket?.["packet.info"];
+        if (!packetInfo || typeof packetInfo !== "object") {
+          continue;
+        }
+        const rawValues = [];
+        collectDotKeyValuesFromObject(packetInfo, canonicalKey, rawValues, new WeakSet());
+        rawValues.forEach((rawValue) => {
+          const normalized = normalizeAutocompleteValue(rawValue);
+          if (!normalized) return;
+          valueCounts.set(normalized, (valueCounts.get(normalized) || 0) + 1);
+        });
+      }
+    }
+
+    // Fallback path for non-captureapi contexts.
+    if (!valueCounts.size) {
+      const allPackets = getAllPacketsForHostNavigation();
+      allPackets.forEach((packet) => {
+        const packetInfo = packet?.["packet.info"];
+        if (!packetInfo || typeof packetInfo !== "object") {
+          return;
+        }
+        const rawValues = [];
+        collectDotKeyValuesFromObject(packetInfo, canonicalKey, rawValues, new WeakSet());
+        rawValues.forEach((rawValue) => {
+          const normalized = normalizeAutocompleteValue(rawValue);
+          if (!normalized) return;
+          valueCounts.set(normalized, (valueCounts.get(normalized) || 0) + 1);
+        });
+      });
+    }
+
+    return Array.from(valueCounts.entries())
+      .sort((a, b) => {
+        if (b[1] !== a[1]) {
+          return b[1] - a[1];
+        }
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([value]) => value);
+  } finally {
+    hydratedAutocompletePackets.forEach((packetStub, packetKey) => {
+      dehydratePacket(packetKey, packetStub);
+    });
+  }
+}
+
+function dehydratePacket(packetKey, packetStub) {
+  if (!packetKey || !packetStub) return;
+  if (typeof packetStub === "object") {
+    packetStub.__packetKey = packetKey;
+    packetStub.__packetStub = true;
+  }
+  hydratedPacketCache.delete(packetKey);
+  updatePacketInCollections(packetKey, packetStub);
+}
+
+async function getTopValueSuggestionsForFilterKey(filterKey, valuePrefix = "") {
+  ensureFilterAutocompleteCachesFresh();
+
+  const canonicalKey = canonicalFilterKey(filterKey);
+  if (!canonicalKey) {
+    return [];
+  }
+
+  if (!filterValueUsageCacheByKey.has(canonicalKey)) {
+    if (!filterValueUsageInFlightByKey.has(canonicalKey)) {
+      filterValueUsageInFlightByKey.set(
+        canonicalKey,
+        buildValueUsageCacheForFilterKey(canonicalKey),
+      );
+    }
+    try {
+      const rankedValues = await filterValueUsageInFlightByKey.get(canonicalKey);
+      filterValueUsageCacheByKey.set(canonicalKey, rankedValues);
+    } finally {
+      filterValueUsageInFlightByKey.delete(canonicalKey);
+    }
+  }
+
+  const normalizedPrefix = String(valuePrefix || "").trim().toLowerCase();
+  const ranked = filterValueUsageCacheByKey.get(canonicalKey) || [];
+  const filtered = normalizedPrefix
+    ? ranked.filter((value) => value.toLowerCase().startsWith(normalizedPrefix))
+    : ranked;
+  return filtered.slice(0, FILTER_AUTOCOMPLETE_MAX_SUGGESTIONS);
+}
+
+function getFilterAutocompleteContext(rawQuery, cursorIndex) {
+  const query = String(rawQuery || "");
+  const cursor = Number.isInteger(cursorIndex)
+    ? Math.max(0, Math.min(cursorIndex, query.length))
+    : query.length;
+  const separators = new Set([" ", "\t", "\n", "\r", "&", "|", "(", ")"]);
+  const valueStopCharacters = new Set(["&", "|", "(", ")", "\n", "\r"]);
+
+  let tokenStart = cursor;
+  while (tokenStart > 0 && !separators.has(query[tokenStart - 1])) {
+    tokenStart -= 1;
+  }
+
+  const token = query.slice(tokenStart, cursor);
+  const separatorIndex = token.indexOf(":");
+  if (separatorIndex >= 0) {
+    const colonIndex = tokenStart + separatorIndex;
+    const rawKey = token.slice(0, separatorIndex).replace(/^!+/, "").trim();
+    if (!rawKey || /[^a-zA-Z0-9._-]/.test(rawKey)) {
+      return null;
+    }
+
+    let valueStart = colonIndex + 1;
+    while (valueStart < query.length && /\s/.test(query[valueStart])) {
+      valueStart += 1;
+    }
+
+    let valueEnd = valueStart;
+    while (valueEnd < query.length && !valueStopCharacters.has(query[valueEnd])) {
+      valueEnd += 1;
+    }
+
+    const typedPrefix = query.slice(valueStart, cursor).trim();
+    return {
+      mode: "value",
+      query,
+      filterKey: rawKey,
+      canonicalKey: canonicalFilterKey(rawKey),
+      valueStart,
+      valueEnd,
+      typedPrefix,
+      typedPrefixLower: typedPrefix.toLowerCase(),
+    };
+  }
+
+  let keyStart = tokenStart;
+  while (query[keyStart] === "!") {
+    keyStart += 1;
+  }
+  if (keyStart >= cursor) {
+    return null;
+  }
+
+  let keyEnd = keyStart;
+  while (keyEnd < query.length) {
+    const char = query[keyEnd];
+    if (char === ":" || separators.has(char)) {
+      break;
+    }
+    keyEnd += 1;
+  }
+
+  const typedPrefix = query.slice(keyStart, cursor).trim();
+  if (!typedPrefix || /[^a-zA-Z0-9._-]/.test(typedPrefix)) {
+    return null;
+  }
+
+  return {
+    mode: "key",
+    query,
+    keyStart,
+    keyEnd,
+    typedPrefix,
+    typedPrefixLower: typedPrefix.toLowerCase(),
+    hasColon: query[keyEnd] === ":",
+  };
+}
+
+function rankFilterKeysByUsage(candidateKeys) {
+  const keys = Array.isArray(candidateKeys) ? candidateKeys : [];
+  return [...keys].sort((left, right) => {
+    const rightCount = filterKeyUsageCounts.get(right) || 0;
+    const leftCount = filterKeyUsageCounts.get(left) || 0;
+    if (rightCount !== leftCount) {
+      return rightCount - leftCount;
+    }
+    return left.localeCompare(right);
+  });
+}
+
+async function refreshFilterAutocompleteOptions() {
+  const autocompleteListEl = getCachedElement("filterStr-autocomplete");
+  if (!autocompleteListEl) return;
+
+  autocompleteListEl.replaceChildren();
+  if (!validKeysCache.length) return;
+
+  const cursor = typeof filterInputEl.selectionStart === "number"
+    ? filterInputEl.selectionStart
+    : filterInputEl.value.length;
+  const autocompleteContext = getFilterAutocompleteContext(filterInputEl.value, cursor);
+  if (!autocompleteContext) {
+    return;
+  }
+
+  if (autocompleteContext.mode === "key") {
+    const matchingKeys = autocompleteContext.typedPrefixLower
+      ? validKeysCache.filter((key) =>
+        key.toLowerCase().startsWith(autocompleteContext.typedPrefixLower),
+      )
+      : [...validKeysCache];
+    const candidates = rankFilterKeysByUsage(matchingKeys)
+      .slice(0, FILTER_AUTOCOMPLETE_MAX_SUGGESTIONS);
+
+    candidates.forEach((key) => {
+      const optionEl = document.createElement("option");
+      optionEl.value = `${key}:`;
+      autocompleteListEl.appendChild(optionEl);
+    });
+    return;
+  }
+
+  const valueCandidates = await getTopValueSuggestionsForFilterKey(
+    autocompleteContext.filterKey,
+    autocompleteContext.typedPrefix,
+  );
+  const prefix = autocompleteContext.query.slice(0, autocompleteContext.valueStart);
+  const suffix = autocompleteContext.query.slice(autocompleteContext.valueEnd);
+  valueCandidates.forEach((value) => {
+    const optionEl = document.createElement("option");
+    optionEl.value = `${prefix}${value}${suffix}`;
+    autocompleteListEl.appendChild(optionEl);
+  });
+}
+
+async function applyTabFilterKeyAutocomplete() {
+  if (!validKeysCache.length) return false;
+
+  const cursor = typeof filterInputEl.selectionStart === "number"
+    ? filterInputEl.selectionStart
+    : filterInputEl.value.length;
+  const autocompleteContext = getFilterAutocompleteContext(filterInputEl.value, cursor);
+  if (!autocompleteContext) return false;
+
+  let updatedQuery = filterInputEl.value;
+  let caretPosition = cursor;
+
+  if (autocompleteContext.mode === "key") {
+    const matchingKeys = rankFilterKeysByUsage(
+      validKeysCache.filter((key) =>
+        key.toLowerCase().startsWith(autocompleteContext.typedPrefixLower),
+      ),
+    );
+    if (!matchingKeys.length) return false;
+
+    const exactMatch = matchingKeys.find(
+      (key) => key.toLowerCase() === autocompleteContext.typedPrefixLower,
+    );
+    const selectedKey = exactMatch || matchingKeys[0];
+    const replacement = autocompleteContext.hasColon ? selectedKey : `${selectedKey}:`;
+    updatedQuery =
+      autocompleteContext.query.slice(0, autocompleteContext.keyStart) +
+      replacement +
+      autocompleteContext.query.slice(autocompleteContext.keyEnd);
+    caretPosition = autocompleteContext.keyStart + replacement.length;
+  } else {
+    const valueCandidates = await getTopValueSuggestionsForFilterKey(
+      autocompleteContext.filterKey,
+      autocompleteContext.typedPrefix,
+    );
+    if (!valueCandidates.length) return false;
+
+    const exactValue = valueCandidates.find(
+      (value) => value.toLowerCase() === autocompleteContext.typedPrefixLower,
+    );
+    const selectedValue = exactValue || valueCandidates[0];
+    updatedQuery =
+      autocompleteContext.query.slice(0, autocompleteContext.valueStart) +
+      selectedValue +
+      autocompleteContext.query.slice(autocompleteContext.valueEnd);
+    caretPosition = autocompleteContext.valueStart + selectedValue.length;
+  }
+
+  filterInputEl.value = updatedQuery;
+  filterInputEl.setSelectionRange(caretPosition, caretPosition);
+  syncFilterHighlight();
+  void refreshFilterAutocompleteOptions();
+  return true;
 }
 
 const SESSION_FILE_SCHEMA_VERSION = 1;
@@ -4541,6 +4947,11 @@ const {
   buildBidirectionalStreamKey,
   yieldToRenderer,
   ensureHydratedPacketCached: cacheHydratedPacket,
+  resolvePacketStubByKey: async (packetKey) => {
+    const [packetStub] = await resolvePacketStubsByKeys([packetKey]);
+    return packetStub || null;
+  },
+  dehydratePacket,
   logErrorEntry,
   getCapturedPackets: () => capturedPackets,
   getFilteredPackets: () => filteredPackets,
@@ -5292,6 +5703,8 @@ async function runFilterQuery(filterQuery, options = {}) {
     statusUpdate("Status: Invalid filter syntax");
     return;
   }
+
+  trackFilterKeyUsage(filterQuery);
 
   if (trackHistory) {
     addFilterHistory(filterQuery);
@@ -21428,7 +21841,13 @@ function showAllData() {
 
 document
   .getElementById("filterStr")
-  .addEventListener("keydown", function (event) {
+  .addEventListener("keydown", async function (event) {
+    if (event.key === "Tab") {
+      if (await applyTabFilterKeyAutocomplete()) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (event.key === "Enter") {
       const filterQuery = filterInputEl.value;
       void runFilterQuery(filterQuery);
@@ -21461,10 +21880,13 @@ initializeContextMenu({
 
 filterInputEl.addEventListener("input", () => {
   syncFilterHighlight();
+  void refreshFilterAutocompleteOptions();
   if (filterInputEl.value.trim() === "") {
     syncTargetHostSelection(DUMMY_ALL_HOST);
   }
 });
+filterInputEl.addEventListener("click", refreshFilterAutocompleteOptions);
+filterInputEl.addEventListener("focus", refreshFilterAutocompleteOptions);
 filterInputEl.addEventListener("scroll", syncFilterHighlightScroll);
 
 filterHistorySelectEl.addEventListener("change", () => {

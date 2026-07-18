@@ -6,6 +6,8 @@ function createStreamHelpers({
     buildBidirectionalStreamKey,
     yieldToRenderer,
     ensureHydratedPacketCached,
+    resolvePacketStubByKey,
+    dehydratePacket,
     logErrorEntry,
     getCapturedPackets,
     getFilteredPackets,
@@ -45,10 +47,50 @@ function createStreamHelpers({
         }
     }
 
+    function deleteStreamPayloadHexCacheEntries(streamKey) {
+        if (!streamKey) return;
+        const cacheKeyPrefix = `${streamKey}|`;
+        for (const cacheKey of state.streamPayloadHexCache.keys()) {
+            if (typeof cacheKey === "string" && cacheKey.startsWith(cacheKeyPrefix)) {
+                state.streamPayloadHexCache.delete(cacheKey);
+            }
+        }
+    }
+
+    async function dehydratePacketKeys(packetKeys) {
+        if (!Array.isArray(packetKeys) || packetKeys.length === 0) {
+            return;
+        }
+
+        for (const packetKey of packetKeys) {
+            if (!packetKey) continue;
+            const packetStub = await resolvePacketStubByKey(packetKey);
+            if (packetStub) {
+                dehydratePacket(packetKey, packetStub);
+            }
+        }
+    }
+
+    async function deactivateHydratedStream(nextStreamKey) {
+        const activeStream = state.activeHydratedStream;
+        if (!activeStream?.streamKey || activeStream.streamKey === nextStreamKey) {
+            return;
+        }
+
+        state.activeHydratedStream = null;
+        state.streamPacketHydrationCache.delete(activeStream.streamKey);
+        deleteStreamPayloadHexCacheEntries(activeStream.streamKey);
+        await dehydratePacketKeys(activeStream.packetKeys);
+    }
+
     async function warmStreamPacketHydrationCache(streamKey, streamPacketRefs) {
         if (!streamKey || !Array.isArray(streamPacketRefs) || streamPacketRefs.length === 0) {
             return [];
         }
+
+        const packetKeys = streamPacketRefs
+            .map(({ packet, host, packetIndex }) => getPacketKey(packet, host, packetIndex))
+            .filter(Boolean);
 
         const cachedStreamPackets = state.streamPacketHydrationCache.get(streamKey);
         if (Array.isArray(cachedStreamPackets)) {
@@ -58,6 +100,12 @@ function createStreamHelpers({
             return cachedStreamPackets;
         }
 
+        await deactivateHydratedStream(streamKey);
+        state.activeHydratedStream = {
+            streamKey,
+            packetKeys,
+        };
+
         const hydrationPromise = (async () => {
             await yieldToRenderer();
             const hydratedPackets = await Promise.all(
@@ -66,6 +114,12 @@ function createStreamHelpers({
                 ),
             );
             const resolvedPackets = hydratedPackets.filter(Boolean);
+            if (state.activeHydratedStream?.streamKey !== streamKey) {
+                state.streamPacketHydrationCache.delete(streamKey);
+                deleteStreamPayloadHexCacheEntries(streamKey);
+                await dehydratePacketKeys(packetKeys);
+                return [];
+            }
             state.streamPacketHydrationCache.set(streamKey, resolvedPackets);
             return resolvedPackets;
         })().catch((error) => {
