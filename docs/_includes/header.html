@@ -140,13 +140,13 @@
                         const name = asset.name.toLowerCase();
 
                         if (name.endsWith(".deb")) {
-                            deb = `<a href="${asset.browser_download_url}">Debian (.deb)</a>`;
+                            deb = ` [ <a href="${asset.browser_download_url}">Debian (.deb)</a> ] `;
                         }
                         else if (name.endsWith(".rpm")) {
-                            rpm = `<a href="${asset.browser_download_url}">Fedora (.rpm)</a>`;
+                            rpm = ` [ <a href="${asset.browser_download_url}">Fedora (.rpm)</a> ] `;
                         }
                         else if (name.endsWith(".exe")) {
-                            exe = `<a href="${asset.browser_download_url}">Windows (.exe)</a>`;
+                            exe = ` [ <a href="${asset.browser_download_url}">Windows (.exe)</a> ] `;
                         }
                     }
 
