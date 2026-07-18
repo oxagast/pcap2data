@@ -209,73 +209,91 @@ function initializeSessionPicker({
     });
   }
 
-  async function loadSessions() {
+  async function loadSessions(options = {}) {
     if (!listEl) return;
-    listEl.innerHTML = '<tr><td colspan="4" class="session-picker-loading">Loading sessions…</td></tr>';
+    const { fromCache } = options;
+    if (fromCache !== false) {
+      listEl.innerHTML = '<tr><td colspan="4" class="session-picker-loading">Loading sessions…</td></tr>';
+    }
+    setRefreshIndicator(true);
     clearStatus();
     try {
       const result = await sessionsapi.list();
-      listEl.innerHTML = "";
-      if (!result.success || !result.sessions || result.sessions.length === 0) {
-        listEl.innerHTML = '<tr><td colspan="4" class="session-picker-empty">No saved sessions found. Start by loading a PCAP or JSON file.</td></tr>';
-        return;
-      }
-      result.sessions.forEach((session) => {
-        const tr = documentRef.createElement("tr");
-        tr.className = "session-picker-row";
-
-        const nameTd = documentRef.createElement("td");
-        nameTd.className = "session-picker-name";
-        nameTd.textContent = session.name;
-        nameTd.title = session.name;
-
-        const dateTd = documentRef.createElement("td");
-        dateTd.className = "session-picker-date";
-        dateTd.textContent = formatSavedAt(session.savedAt);
-
-        const infoTd = documentRef.createElement("td");
-        infoTd.className = "session-picker-info";
-        const infoText = formatSessionInfo(session);
-        infoTd.textContent = infoText;
-        infoTd.title = infoText;
-
-        const actionsTd = documentRef.createElement("td");
-        actionsTd.className = "session-picker-actions";
-
-        const openBtn = documentRef.createElement("button");
-        openBtn.textContent = "Open";
-        openBtn.className = "session-picker-action-btn session-open-btn";
-        openBtn.addEventListener("click", () => handleOpen(session.name));
-
-        const renameBtn = documentRef.createElement("button");
-        renameBtn.textContent = "Rename";
-        renameBtn.className = "session-picker-action-btn session-rename-btn";
-        renameBtn.addEventListener("click", () => handleRename(session.name));
-
-        const deleteBtn = documentRef.createElement("button");
-        deleteBtn.textContent = "Delete";
-        deleteBtn.className = "session-picker-action-btn session-delete-btn";
-        deleteBtn.addEventListener("click", () => handleDelete(session.name));
-
-        const exportBtn = documentRef.createElement("button");
-        exportBtn.textContent = "Export";
-        exportBtn.className = "session-picker-action-btn session-export-btn";
-        exportBtn.addEventListener("click", () => handleExport(session.name));
-
-        actionsTd.appendChild(openBtn);
-        actionsTd.appendChild(renameBtn);
-        actionsTd.appendChild(deleteBtn);
-        actionsTd.appendChild(exportBtn);
-
-        tr.appendChild(nameTd);
-        tr.appendChild(dateTd);
-        tr.appendChild(infoTd);
-        tr.appendChild(actionsTd);
-        listEl.appendChild(tr);
-      });
+      renderSessionList(result.sessions || [], { fromCache: result.fromCache });
     } catch (err) {
       showStatus("Failed to load sessions: " + (err && err.message ? err.message : String(err)), true);
+    } finally {
+      setRefreshIndicator(false);
     }
+  }
+
+  function setRefreshIndicator(active) {
+    if (!refreshBtn) return;
+    refreshBtn.disabled = active;
+    refreshBtn.setAttribute("aria-busy", active ? "true" : "false");
+    refreshBtn.title = active ? "Refreshing session list…" : "Refresh session list";
+  }
+
+  function renderSessionList(sessions, options = {}) {
+    if (!listEl) return;
+    listEl.innerHTML = "";
+    if (!sessions || sessions.length === 0) {
+      listEl.innerHTML = '<tr><td colspan="4" class="session-picker-empty">No saved sessions found. Start by loading a PCAP or JSON file.</td></tr>';
+      return;
+    }
+    sessions.forEach((session) => {
+      const tr = documentRef.createElement("tr");
+      tr.className = "session-picker-row";
+
+      const nameTd = documentRef.createElement("td");
+      nameTd.className = "session-picker-name";
+      nameTd.textContent = session.name;
+      nameTd.title = session.name;
+
+      const dateTd = documentRef.createElement("td");
+      dateTd.className = "session-picker-date";
+      dateTd.textContent = formatSavedAt(session.savedAt);
+
+      const infoTd = documentRef.createElement("td");
+      infoTd.className = "session-picker-info";
+      const infoText = formatSessionInfo(session);
+      infoTd.textContent = infoText;
+      infoTd.title = infoText;
+
+      const actionsTd = documentRef.createElement("td");
+      actionsTd.className = "session-picker-actions";
+
+      const openBtn = documentRef.createElement("button");
+      openBtn.textContent = "Open";
+      openBtn.className = "session-picker-action-btn session-open-btn";
+      openBtn.addEventListener("click", () => handleOpen(session.name));
+
+      const renameBtn = documentRef.createElement("button");
+      renameBtn.textContent = "Rename";
+      renameBtn.className = "session-picker-action-btn session-rename-btn";
+      renameBtn.addEventListener("click", () => handleRename(session.name));
+
+      const deleteBtn = documentRef.createElement("button");
+      deleteBtn.textContent = "Delete";
+      deleteBtn.className = "session-picker-action-btn session-delete-btn";
+      deleteBtn.addEventListener("click", () => handleDelete(session.name));
+
+      const exportBtn = documentRef.createElement("button");
+      exportBtn.textContent = "Export";
+      exportBtn.className = "session-picker-action-btn session-export-btn";
+      exportBtn.addEventListener("click", () => handleExport(session.name));
+
+      actionsTd.appendChild(openBtn);
+      actionsTd.appendChild(renameBtn);
+      actionsTd.appendChild(deleteBtn);
+      actionsTd.appendChild(exportBtn);
+
+      tr.appendChild(nameTd);
+      tr.appendChild(dateTd);
+      tr.appendChild(infoTd);
+      tr.appendChild(actionsTd);
+      listEl.appendChild(tr);
+    });
   }
 
   async function handleOpen(name) {
@@ -378,6 +396,17 @@ function initializeSessionPicker({
 
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => loadSessions());
+  }
+
+  // Listen for authoritative re-scans from the main process. If the cached list
+  // is stale or missing entries, the renderer will be updated automatically.
+  if (typeof sessionsapi.onRefreshed === "function") {
+    sessionsapi.onRefreshed((result) => {
+      if (result && result.sessions) {
+        renderSessionList(result.sessions, { fromCache: false });
+        setRefreshIndicator(false);
+      }
+    });
   }
 
   // Check for saved sessions and show picker if any exist

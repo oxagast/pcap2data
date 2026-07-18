@@ -1366,6 +1366,12 @@ contextBridge.exposeInMainWorld('sessionsapi', {
   rename: (oldName, newName) => ipcRenderer.invoke('session-rename', oldName, newName),
   remove: (name) => ipcRenderer.invoke('session-delete', name),
   exportToFile: (name, jsonData) => ipcRenderer.invoke('session-export', name, jsonData),
+  onRefreshed: (callback) => {
+    ipcRenderer.on('sessions-list-refreshed', (_event, result) => {
+      callback(result);
+    });
+  },
+  refresh: () => ipcRenderer.invoke('sessions-list-refresh'),
 });
 
 contextBridge.exposeInMainWorld('templateapi', {

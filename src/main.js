@@ -480,6 +480,7 @@ const SETTINGS_FILE_NAME = "settings.json";
 const FILTER_LIBRARY_FILE_NAME = "filters.json";
 const MODELS_LIBRARY_FILE_NAME = "models.json";
 const PLUGINS_REGISTRY_FILE_NAME = "plugins.json";
+const SESSION_LIBRARY_CACHE_FILE_NAME = "session-library-cache.json";
 const PLUGINS_DIR_NAME = "plugins";
 const PLUGINS_PACKAGE_DIR_NAME = "packages";
 const PLUGINS_EXTRACTED_DIR_NAME = "installed";
@@ -3251,6 +3252,47 @@ function getSessionsDir() {
   return path.join(app.getPath("userData"), "sessions");
 }
 
+function getSessionLibraryCacheFilePath() {
+  return path.join(app.getPath("userData"), SETTINGS_DIR_NAME, SESSION_LIBRARY_CACHE_FILE_NAME);
+}
+
+async function readSessionLibraryCache() {
+  const filePath = getSessionLibraryCacheFilePath();
+  try {
+    const rawText = await fs.promises.readFile(filePath, "utf8");
+    const parsed = JSON.parse(rawText);
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.sessions)) {
+      return null;
+    }
+    const sessions = parsed.sessions.filter(
+      (s) => s && typeof s === "object" && typeof s.name === "string" && s.name.trim(),
+    );
+    return {
+      sessions,
+      writtenAt: typeof parsed.writtenAt === "string" ? parsed.writtenAt : null,
+    };
+  } catch (error) {
+    if (error && error.code !== "ENOENT") {
+      console.warn("Failed to read session library cache:", error);
+    }
+    return null;
+  }
+}
+
+async function writeSessionLibraryCache(sessions) {
+  const filePath = getSessionLibraryCacheFilePath();
+  try {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(
+      filePath,
+      JSON.stringify({ writtenAt: new Date().toISOString(), sessions }, null, 2) + os.EOL,
+      "utf8",
+    );
+  } catch (error) {
+    console.warn("Failed to write session library cache:", error);
+  }
+}
+
 function sanitizeSessionName(name) {
   // Replace characters that are unsafe in filenames, collapse spaces
   return name
@@ -3619,113 +3661,153 @@ function inferSessionSaveType(filePath, compression) {
   return "Unknown";
 }
 
+async function buildSessionList() {
+  const dir = await ensureSessionsDir();
+  const files = await fs.promises.readdir(dir);
+  const sessions = [];
+  const names = new Set();
+
+  for (const file of files) {
+    if (file.endsWith(".json")) {
+      names.add(file.slice(0, -5));
+    } else if (file.endsWith(".json.xz")) {
+      names.add(file.slice(0, -8));
+    } else if (file.endsWith(".json.gz")) {
+      names.add(file.slice(0, -8));
+    } else if (file.endsWith(".pss.gz")) {
+      names.add(file.slice(0, -7));
+    } else if (file.endsWith(".psb")) {
+      names.add(file.slice(0, -4));
+    } else if (file.endsWith(".pss")) {
+      names.add(file.slice(0, -4));
+    }
+  }
+
+  for (const name of names) {
+    const jsonPath = path.join(dir, name + ".json");
+    const bsonGzipPath = path.join(dir, name + ".psb");
+    const compressedPath = path.join(dir, name + ".pss");
+    const gzipPath = path.join(dir, name + ".pss.gz");
+    const legacyXzPath = path.join(dir, name + ".json.xz");
+    const legacyGzipPath = path.join(dir, name + ".json.gz");
+    try {
+      let savedAt = null;
+      let filePath = compressedPath;
+      let compression = SESSION_COMPRESSION_XZ;
+      if (await fileExists(jsonPath)) {
+        filePath = jsonPath;
+        compression = null;
+      } else if (await fileExists(bsonGzipPath)) {
+        filePath = bsonGzipPath;
+        compression = SESSION_FORMAT_BSON_GZIP;
+      } else if (await fileExists(compressedPath)) {
+        compression = SESSION_COMPRESSION_XZ;
+      } else if (await fileExists(gzipPath)) {
+        filePath = gzipPath;
+        compression = SESSION_COMPRESSION_GZIP;
+      } else if (await fileExists(legacyXzPath)) {
+        filePath = legacyXzPath;
+        compression = SESSION_COMPRESSION_XZ;
+      } else if (await fileExists(legacyGzipPath)) {
+        filePath = legacyGzipPath;
+        compression = SESSION_COMPRESSION_GZIP;
+      } else {
+        continue;
+      }
+
+      const stats = await fs.promises.stat(filePath);
+      if (stats?.mtime) {
+        savedAt = stats.mtime.toISOString();
+      }
+
+      let packetsnitchVersion = null;
+      let pcapSizeBytes = null;
+      try {
+        const content = await readSessionFileContent(filePath, compression);
+        const parsedPayload = JSON.parse(content);
+        const sessionState =
+          parsedPayload && typeof parsedPayload === "object"
+            && parsedPayload["session.state"]
+            && typeof parsedPayload["session.state"] === "object"
+            ? parsedPayload["session.state"]
+            : null;
+
+        const stateSavedAt =
+          typeof sessionState?.savedAt === "string" ? sessionState.savedAt.trim() : "";
+        if (stateSavedAt) {
+          savedAt = stateSavedAt;
+        }
+
+        packetsnitchVersion = readSessionGeneratedByVersion(
+          parsedPayload,
+          sessionState,
+        );
+        pcapSizeBytes = readSessionPcapSizeBytes(sessionState);
+      } catch (_metadataErr) {
+        // Keep listing robust for older/corrupted saves that still have a file timestamp.
+      }
+
+      sessions.push({
+        name,
+        savedAt,
+        filePath,
+        saveType: inferSessionSaveType(filePath, compression),
+        totalSizeBytes: Number.isFinite(stats?.size) ? stats.size : null,
+        pcapSizeBytes,
+        packetsnitchVersion,
+      });
+    } catch (_err) {
+      // Skip files that cannot be read or parsed – they may be corrupted
+    }
+  }
+  sessions.sort((a, b) => {
+    if (!a.savedAt && !b.savedAt) return a.name.localeCompare(b.name);
+    if (!a.savedAt) return 1;
+    if (!b.savedAt) return -1;
+    return b.savedAt.localeCompare(a.savedAt);
+  });
+  return sessions;
+}
+
+async function refreshSessionLibraryCacheAndNotify() {
+  try {
+    const sessions = await buildSessionList();
+    await writeSessionLibraryCache(sessions);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("sessions-list-refreshed", {
+        success: true,
+        sessions,
+      });
+    }
+    return { success: true, sessions };
+  } catch (err) {
+    console.error("refresh session library cache error:", err);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("sessions-list-refreshed", {
+        success: false,
+        error: err.message,
+        sessions: [],
+      });
+    }
+    return { success: false, error: err.message, sessions: [] };
+  }
+}
+
 ipcMain.handle("sessions-list", async () => {
   try {
-    const dir = await ensureSessionsDir();
-    const files = await fs.promises.readdir(dir);
-    const sessions = [];
-    const names = new Set();
-
-    for (const file of files) {
-      if (file.endsWith(".json")) {
-        names.add(file.slice(0, -5));
-      } else if (file.endsWith(".json.xz")) {
-        names.add(file.slice(0, -8));
-      } else if (file.endsWith(".json.gz")) {
-        names.add(file.slice(0, -8));
-      } else if (file.endsWith(".pss.gz")) {
-        names.add(file.slice(0, -7));
-      } else if (file.endsWith(".psb")) {
-        names.add(file.slice(0, -4));
-      } else if (file.endsWith(".pss")) {
-        names.add(file.slice(0, -4));
-      }
+    const cache = await readSessionLibraryCache();
+    // Kick off the authoritative scan asynchronously. The front end will
+    // receive the refreshed list via "sessions-list-refreshed" and re-render.
+    if (cache?.sessions?.length > 0) {
+      refreshSessionLibraryCacheAndNotify();
+      return { success: true, sessions: cache.sessions, fromCache: true };
     }
 
-    for (const name of names) {
-      const jsonPath = path.join(dir, name + ".json");
-      const bsonGzipPath = path.join(dir, name + ".psb");
-      const compressedPath = path.join(dir, name + ".pss");
-      const gzipPath = path.join(dir, name + ".pss.gz");
-      const legacyXzPath = path.join(dir, name + ".json.xz");
-      const legacyGzipPath = path.join(dir, name + ".json.gz");
-      try {
-        let savedAt = null;
-        let filePath = compressedPath;
-        let compression = SESSION_COMPRESSION_XZ;
-        if (await fileExists(jsonPath)) {
-          filePath = jsonPath;
-          compression = null;
-        } else if (await fileExists(bsonGzipPath)) {
-          filePath = bsonGzipPath;
-          compression = SESSION_FORMAT_BSON_GZIP;
-        } else if (await fileExists(compressedPath)) {
-          compression = SESSION_COMPRESSION_XZ;
-        } else if (await fileExists(gzipPath)) {
-          filePath = gzipPath;
-          compression = SESSION_COMPRESSION_GZIP;
-        } else if (await fileExists(legacyXzPath)) {
-          filePath = legacyXzPath;
-          compression = SESSION_COMPRESSION_XZ;
-        } else if (await fileExists(legacyGzipPath)) {
-          filePath = legacyGzipPath;
-          compression = SESSION_COMPRESSION_GZIP;
-        } else {
-          continue;
-        }
-
-        const stats = await fs.promises.stat(filePath);
-        if (stats?.mtime) {
-          savedAt = stats.mtime.toISOString();
-        }
-
-        let packetsnitchVersion = null;
-        let pcapSizeBytes = null;
-        try {
-          const content = await readSessionFileContent(filePath, compression);
-          const parsedPayload = JSON.parse(content);
-          const sessionState =
-            parsedPayload && typeof parsedPayload === "object"
-              && parsedPayload["session.state"]
-              && typeof parsedPayload["session.state"] === "object"
-              ? parsedPayload["session.state"]
-              : null;
-
-          const stateSavedAt =
-            typeof sessionState?.savedAt === "string" ? sessionState.savedAt.trim() : "";
-          if (stateSavedAt) {
-            savedAt = stateSavedAt;
-          }
-
-          packetsnitchVersion = readSessionGeneratedByVersion(
-            parsedPayload,
-            sessionState,
-          );
-          pcapSizeBytes = readSessionPcapSizeBytes(sessionState);
-        } catch (_metadataErr) {
-          // Keep listing robust for older/corrupted saves that still have a file timestamp.
-        }
-
-        sessions.push({
-          name,
-          savedAt,
-          filePath,
-          saveType: inferSessionSaveType(filePath, compression),
-          totalSizeBytes: Number.isFinite(stats?.size) ? stats.size : null,
-          pcapSizeBytes,
-          packetsnitchVersion,
-        });
-      } catch (_err) {
-        // Skip files that cannot be read or parsed – they may be corrupted
-      }
-    }
-    sessions.sort((a, b) => {
-      if (!a.savedAt && !b.savedAt) return a.name.localeCompare(b.name);
-      if (!a.savedAt) return 1;
-      if (!b.savedAt) return -1;
-      return b.savedAt.localeCompare(a.savedAt);
-    });
-    return { success: true, sessions };
+    // No cache available yet: fall back to a blocking full scan and write the
+    // cache for the next startup.
+    const sessions = await buildSessionList();
+    await writeSessionLibraryCache(sessions);
+    return { success: true, sessions, fromCache: false };
   } catch (err) {
     console.error("sessions-list error:", err);
     return { success: false, error: err.message, sessions: [] };
@@ -3781,6 +3863,7 @@ ipcMain.handle("session-save", async (_event, name, jsonData) => {
       await fs.promises.writeFile(filePath, jsonData, "utf8");
       await compressSessionJson(name, format);
     }
+    writeSessionLibraryCache(await buildSessionList());
     return { success: true, name: sanitizeSessionName(name) };
   } catch (err) {
     if (err && err.code === "COMPRESSION_FALLBACK_DECLINED") {
@@ -3848,6 +3931,7 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
       await fs.promises.rename(oldGzipPath, newGzipPath);
     }
 
+    writeSessionLibraryCache(await buildSessionList());
     return { success: true, name: sanitizedNew };
   } catch (err) {
     console.error("session-rename error:", err);
@@ -3886,6 +3970,7 @@ ipcMain.handle("session-delete", async (_event, name) => {
       await fs.promises.unlink(gzipPath);
     }
 
+    writeSessionLibraryCache(await buildSessionList());
     return { success: true };
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -4070,6 +4155,10 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
   }
 });
 
+ipcMain.handle("sessions-list-refresh", async () => {
+  return refreshSessionLibraryCacheAndNotify();
+});
+
 app.on("before-quit", (event) => {
   if (!hasLoggedProgramShutdown) {
     appendActivityLogLine(
@@ -4093,7 +4182,11 @@ app.on("before-quit", (event) => {
   }
 
   backendShutdownOnQuitInProgress = true;
-  void shutdownBackendGracefullyForExit().finally(() => {
+  const refreshPromise = refreshSessionLibraryCacheAndNotify().catch((err) =>
+    console.error("Failed to refresh session library cache before quit:", err),
+  );
+  void shutdownBackendGracefullyForExit().finally(async () => {
+    await refreshPromise;
     backendShutdownOnQuitInProgress = false;
     backendShutdownOnQuitComplete = true;
     app.quit();

@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['src/backend/snitch.py'],
+    ['/home/marshall/Hacks/projects/packetsnitch/src/backend/snitch.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -35,5 +35,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/backend/snitch.ico',
 )
