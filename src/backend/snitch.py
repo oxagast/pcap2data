@@ -69,7 +69,7 @@ import ipaddress
 from bs4 import BeautifulSoup
 from scipy.stats import entropy
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from datetime import datetime
 from decimal import Decimal
 from functools import lru_cache
@@ -286,6 +286,8 @@ TOR_ONIONOO_URL = "https://onionoo.torproject.org/details?running=true&flag=Exit
 TOR_PROJECT_URL = "https://www.torproject.org/"
 SHODAN_INTERNETDB_URL = "https://internetdb.shodan.io"
 SHODAN_INTERNETDB_DOCS_URL = "https://internetdb.shodan.io"
+VIRUSTOTAL_API_BASE_URL = "https://www.virustotal.com/api/v3"
+VIRUSTOTAL_GUI_BASE_URL = "https://www.virustotal.com/gui"
 torNetworkCacheLock = threading.Lock()
 torNetworkNodesByIp: dict = {}
 torNetworkIps: dict = {}
@@ -2048,6 +2050,168 @@ def buildShodanInternetDbLookupResponse(ip):
         "vulns": payload.get("vulns") if isinstance(payload.get("vulns"), list) else [],
         "sourceUrl": SHODAN_INTERNETDB_URL,
         "projectUrl": SHODAN_INTERNETDB_DOCS_URL,
+    }
+
+
+def _normalizeVirusTotalLookupType(rawLookupType):
+    lookupType = str(rawLookupType or "ip").strip().lower()
+    if lookupType in {"ip", "ip-address", "ip_address", "ipaddress"}:
+        return "ip"
+    if lookupType in {"url", "uri"}:
+        return "url"
+    if lookupType in {"hash", "file", "file-hash", "file_hash"}:
+        return "hash"
+    raise ValueError("Unsupported VirusTotal lookup type. Use ip, url, or hash.")
+
+
+def _buildVirusTotalTargetPath(lookupType, lookupValue):
+    normalizedValue = str(lookupValue or "").strip()
+    if not normalizedValue:
+        raise ValueError("Missing lookup value")
+
+    normalizedType = _normalizeVirusTotalLookupType(lookupType)
+
+    if normalizedType == "ip":
+        normalizedIp = str(ipaddress.ip_address(normalizedValue))
+        return f"/ip_addresses/{quote(normalizedIp)}", normalizedIp
+
+    if normalizedType == "url":
+        # VirusTotal URL lookups use URL-safe base64 without trailing '=' padding.
+        urlId = base64.urlsafe_b64encode(normalizedValue.encode("utf-8")).decode("ascii").rstrip("=")
+        if not urlId:
+            raise ValueError("Invalid URL value")
+        return f"/urls/{quote(urlId)}", normalizedValue
+
+    normalizedHash = normalizedValue.lower()
+    if not re.fullmatch(r"[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}", normalizedHash):
+        raise ValueError("Hash lookup must be a valid MD5, SHA-1, or SHA-256 hex digest.")
+    return f"/files/{quote(normalizedHash)}", normalizedHash
+
+
+def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnly=False):
+    normalizedApiKey = str(apiKey or "").strip()
+
+    if diagnosticOnly:
+        endpointUrl = f"{VIRUSTOTAL_API_BASE_URL}/ip_addresses/8.8.8.8"
+        headers = packetSnitchRequestHeaders("application/json")
+        if normalizedApiKey:
+            headers["x-apikey"] = normalizedApiKey
+
+        try:
+            response = requests.get(
+                endpointUrl,
+                timeout=10,
+                verify=False,
+                headers=headers,
+            )
+        except Exception as diagnosticError:
+            return {
+                "success": False,
+                "endpointReachable": False,
+                "keyConfigured": bool(normalizedApiKey),
+                "keyValid": False if normalizedApiKey else None,
+                "error": str(diagnosticError),
+                "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+            }
+
+        keyValid = None
+        if normalizedApiKey:
+            keyValid = response.status_code not in {401, 403}
+
+        return {
+            "success": True,
+            "endpointReachable": True,
+            "keyConfigured": bool(normalizedApiKey),
+            "keyValid": keyValid,
+            "httpStatus": int(response.status_code),
+            "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        }
+
+    if not normalizedApiKey:
+        return {
+            "success": False,
+            "error": "Missing VirusTotal API key",
+            "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        }
+
+    targetPath, normalizedValue = _buildVirusTotalTargetPath(lookupType, lookupValue)
+    normalizedType = _normalizeVirusTotalLookupType(lookupType)
+
+    headers = packetSnitchRequestHeaders("application/json")
+    headers["x-apikey"] = normalizedApiKey
+
+    response = requests.get(
+        f"{VIRUSTOTAL_API_BASE_URL}{targetPath}",
+        timeout=12,
+        verify=False,
+        headers=headers,
+    )
+
+    if response.status_code in {401, 403}:
+        return {
+            "success": False,
+            "lookupType": normalizedType,
+            "lookupValue": normalizedValue,
+            "error": "VirusTotal API key is invalid or unauthorized.",
+            "httpStatus": int(response.status_code),
+            "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        }
+
+    if response.status_code == 404:
+        return {
+            "success": False,
+            "lookupType": normalizedType,
+            "lookupValue": normalizedValue,
+            "error": "No VirusTotal record found for this query.",
+            "httpStatus": int(response.status_code),
+            "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        }
+
+    if response.status_code >= 400:
+        return {
+            "success": False,
+            "lookupType": normalizedType,
+            "lookupValue": normalizedValue,
+            "error": f"VirusTotal request failed with HTTP {response.status_code}.",
+            "httpStatus": int(response.status_code),
+            "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        }
+
+    payload = response.json() if response.content else {}
+    dataSection = payload.get("data") if isinstance(payload, dict) else {}
+    if not isinstance(dataSection, dict):
+        dataSection = {}
+    attributes = dataSection.get("attributes") if isinstance(dataSection.get("attributes"), dict) else {}
+    stats = attributes.get("last_analysis_stats") if isinstance(attributes.get("last_analysis_stats"), dict) else {}
+    maliciousCount = int(stats.get("malicious") or 0)
+    suspiciousCount = int(stats.get("suspicious") or 0)
+    harmlessCount = int(stats.get("harmless") or 0)
+    undetectedCount = int(stats.get("undetected") or 0)
+
+    guiPath = (
+        f"/ip-address/{quote(normalizedValue)}"
+        if normalizedType == "ip"
+        else f"/url/{quote(str(dataSection.get('id') or ''))}"
+        if normalizedType == "url"
+        else f"/file/{quote(normalizedValue)}"
+    )
+
+    return {
+        "success": True,
+        "lookupType": normalizedType,
+        "lookupValue": normalizedValue,
+        "recordId": str(dataSection.get("id") or ""),
+        "analysis": {
+            "malicious": maliciousCount,
+            "suspicious": suspiciousCount,
+            "harmless": harmlessCount,
+            "undetected": undetectedCount,
+            "timeout": int(stats.get("timeout") or 0),
+        },
+        "reputation": attributes.get("reputation"),
+        "lastAnalysisDate": attributes.get("last_analysis_date"),
+        "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        "guiUrl": f"{VIRUSTOTAL_GUI_BASE_URL}{guiPath}",
     }
 
 
@@ -4162,6 +4326,50 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     {
                         "success": False,
                         "error": str(shodanLookupError),
+                    },
+                )
+                return
+
+            self.sendJson(200, response)
+            return
+        if parsedUrl.path == "/virustotal":
+            lookupType = str((queryParams.get("type") or ["ip"])[0] or "ip").strip()
+            lookupValue = str((queryParams.get("value") or [""])[0] or "").strip()
+            diagnosticOnly = str((queryParams.get("diagnostic") or ["0"])[0] or "0").strip().lower() in {"1", "true", "yes"}
+            apiKey = str(self.headers.get("x-apikey") or (queryParams.get("apikey") or [""])[0] or "").strip()
+
+            if not diagnosticOnly and not lookupValue:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing value query parameter",
+                    },
+                )
+                return
+
+            try:
+                response = buildVirusTotalLookupResponse(
+                    lookupType,
+                    lookupValue,
+                    apiKey,
+                    diagnosticOnly=diagnosticOnly,
+                )
+            except ValueError as validationError:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": str(validationError),
+                    },
+                )
+                return
+            except Exception as lookupError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(lookupError),
                     },
                 )
                 return

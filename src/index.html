@@ -165,9 +165,13 @@
             </button>
             <button id="conv-subtab-subnet" class="crypt-subtab-btn">
               Analyze Subnet
-              <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
-                Packet JSON
-              </button>
+            </button>
+            <button id="conv-subtab-threat-intel" class="crypt-subtab-btn">
+              Threat Intel
+            </button>
+            <button id="conv-subtab-packet-json" class="crypt-subtab-btn">
+              Packet JSON
+            </button>
           </div>
 
           <div id="conv-conversions-panel" class="crypt-subtab-panel">
@@ -404,22 +408,50 @@
                 <div id="subnet-calc-whois"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-reputation"></div>
+                <div id="subnet-calc-geo"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-geo"></div>
+                <div id="subnet-calc-shodan"></div>
               </div>
               <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
                 <div id="subnet-calc-capture-targets"></div>
-              </div>
-              <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
-                <div id="subnet-calc-shodan"></div>
               </div>
               <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
                 <div id="subnet-calc-status" class="subnet-calc-status" aria-live="polite">
                   Enter an IPv4 or IPv6 address/network to analyze.
                 </div>
                 <div id="subnet-calc-nmap"></div>
+              </div>
+            </div>
+          </div>
+          <div id="conv-threat-intel-panel" class="crypt-subtab-panel" hidden>
+            <div class="subnet-calc-grid">
+              <div class="data-tools-section subnet-calc-controls">
+                <div class="data-tools-title">Threat Intelligence Lookup</div>
+                <div class="subnet-calc-note">
+                  Query IP reputation, Tor exit nodes, and VirusTotal for IPs, URLs, or hashes.
+                </div>
+                <label for="subnet-ti-input">Threat Intel Query (IP / URL / hash)</label>
+                <div class="data-tools-actions subnet-calc-actions-row">
+                  <select id="subnet-ti-type" aria-label="Threat Intel query type">
+                    <option value="ip">IP</option>
+                    <option value="url">URL</option>
+                    <option value="hash">Hash</option>
+                  </select>
+                  <input id="subnet-ti-input" type="text" placeholder="1.1.1.1, https://example.com, or file hash"
+                    spellcheck="false" />
+                  <button id="subnet-ti-use-analyzed-ip-btn" type="button">Use analyzed IP</button>
+                  <button id="subnet-ti-lookup-btn" type="button">Lookup Threat Intel</button>
+                </div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-reputation-ipsum"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-reputation-virustotal"></div>
+              </div>
+              <div class="data-tools-section subnet-calc-card">
+                <div id="subnet-calc-reputation-tor"></div>
               </div>
             </div>
           </div>
@@ -987,6 +1019,12 @@ No keystore entries saved.</pre>
                     —</span>
                   <span id="settings-backend-mode-status" class="settings-status-pill status-neutral">Mode:
                     —</span>
+                  <span id="settings-backend-virustotal-endpoint-status"
+                    class="settings-status-pill status-neutral">VirusTotal Endpoint:
+                    —</span>
+                  <span id="settings-backend-virustotal-key-status"
+                    class="settings-status-pill status-neutral">VirusTotal Key:
+                    —</span>
                 </div>
 
                 <label for="settings-backend-chunk-size">Default backend packet chunk size</label>
@@ -1011,6 +1049,12 @@ No keystore entries saved.</pre>
 
                 <label for="settings-backend-tcp-port">TCP port</label>
                 <input id="settings-backend-tcp-port" type="number" min="1" step="1" />
+
+                <label for="settings-backend-virustotal-api-key">VirusTotal API key</label>
+                <input id="settings-backend-virustotal-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Used by Conv Threat Intel lookups against VirusTotal endpoints.
+                  Stored locally in the settings file.</div>
 
                 <label class="settings-checkbox-row" for="settings-backend-force-legacy-spawn">
                   <input id="settings-backend-force-legacy-spawn" type="checkbox" />

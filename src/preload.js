@@ -180,6 +180,7 @@ const PLUGIN_BACKEND_CHANNEL_ALLOWLIST = new Set([
   'lookup-backend-ipsum',
   'lookup-backend-tor',
   'lookup-backend-shodan',
+  'lookup-backend-virustotal',
   'get-backend-diagnostics',
   'control-backend-service',
 ]);
@@ -1267,6 +1268,8 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('lookup-backend-tor', ipAddress, options),
   lookupShodan: (ipAddress, options = {}) =>
     ipcRenderer.invoke('lookup-backend-shodan', ipAddress, options),
+  lookupVirusTotal: (lookupValue, options = {}) =>
+    ipcRenderer.invoke('lookup-backend-virustotal', lookupValue, options),
   checkNmapInstalled: () =>
     ipcRenderer.invoke('check-nmap-installed'),
   getNmapScanStatus: () =>

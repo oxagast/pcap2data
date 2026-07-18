@@ -31,6 +31,7 @@ Legend: `*` supported now, `~` partial or rough support, `?` no support or unkno
 - * IMAP
 - * IRC
 - * IPv4
+` * IPv6
 - * JSON (generic Conv decoder)
 - * Kerberos
 - ? LACP – Link aggregation analysis.

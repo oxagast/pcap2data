@@ -22,6 +22,7 @@ const CONV_CONVERSIONS_SUBTAB = "conversions";
 const CONV_HASHES_SUBTAB = "hashes";
 const CONV_DECODES_SUBTAB = "decodes";
 const CONV_SUBNET_SUBTAB = "subnet";
+const CONV_THREAT_INTEL_SUBTAB = "threat-intel";
 const CONV_PACKET_JSON_SUBTAB = "packet-json";
 
 const VALID_CONV_SUBTABS = [
@@ -29,6 +30,7 @@ const VALID_CONV_SUBTABS = [
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
+  CONV_THREAT_INTEL_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
 ];
 
@@ -2605,6 +2607,7 @@ function setConvSubtab(tabName) {
   const hashesActive = tabName === CONV_HASHES_SUBTAB;
   const decodesActive = tabName === CONV_DECODES_SUBTAB;
   const subnetActive = tabName === CONV_SUBNET_SUBTAB;
+  const threatIntelActive = tabName === CONV_THREAT_INTEL_SUBTAB;
   const packetJsonActive = tabName === CONV_PACKET_JSON_SUBTAB;
   document
     .getElementById("conv-subtab-conversions")
@@ -2619,12 +2622,16 @@ function setConvSubtab(tabName) {
     .getElementById("conv-subtab-subnet")
     .classList.toggle("active", subnetActive);
   document
+    .getElementById("conv-subtab-threat-intel")
+    .classList.toggle("active", threatIntelActive);
+  document
     .getElementById("conv-subtab-packet-json")
     .classList.toggle("active", packetJsonActive);
   document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
   document.getElementById("conv-hashes-panel").hidden = !hashesActive;
   document.getElementById("conv-decodes-panel").hidden = !decodesActive;
   document.getElementById("conv-subnet-panel").hidden = !subnetActive;
+  document.getElementById("conv-threat-intel-panel").hidden = !threatIntelActive;
   document.getElementById("conv-packet-json-panel").hidden = !packetJsonActive;
   syncConvSidebarVisibility(conversionsActive);
 }
@@ -2639,6 +2646,7 @@ module.exports = {
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
+  CONV_THREAT_INTEL_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,

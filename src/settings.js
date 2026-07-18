@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         tcpHost: "127.0.0.1",
         tcpPort: 9020,
         forceLegacySpawn: false,
+        virusTotalApiKey: "",
     },
     debug: {
         bsonGzipSessionEnabled: true,
@@ -232,6 +233,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof backend.forceLegacySpawn === "boolean"
                     ? backend.forceLegacySpawn
                     : backendDefaults.forceLegacySpawn,
+            virusTotalApiKey:
+                typeof backend.virusTotalApiKey === "string" && backend.virusTotalApiKey.trim()
+                    ? backend.virusTotalApiKey.trim()
+                    : backendDefaults.virusTotalApiKey,
         },
         debug: {
             bsonGzipSessionEnabled:

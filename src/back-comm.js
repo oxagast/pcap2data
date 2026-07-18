@@ -742,6 +742,84 @@ function requestSnitchHttpBackendShodan(
   });
 }
 
+function requestSnitchHttpBackendVirusTotal(
+  lookupValue,
+  {
+    lookupType = "ip",
+    apiKey = "",
+    diagnosticOnly = false,
+    host = currentBackendHttpHost,
+    port = currentBackendHttpPort,
+    timeoutMs = 12000,
+  } = {},
+) {
+  return new Promise((resolve) => {
+    const normalizedType = String(lookupType || "ip").trim().toLowerCase() || "ip";
+    const normalizedValue = String(lookupValue || "").trim();
+    const normalizedApiKey = String(apiKey || "").trim();
+
+    if (!diagnosticOnly && !normalizedValue) {
+      resolve({
+        success: false,
+        error: "Missing lookup value",
+      });
+      return;
+    }
+
+    const queryParts = [
+      `type=${encodeURIComponent(normalizedType)}`,
+      `diagnostic=${diagnosticOnly ? "1" : "0"}`,
+    ];
+    if (normalizedValue) {
+      queryParts.push(`value=${encodeURIComponent(normalizedValue)}`);
+    }
+    const requestPath = `/virustotal?${queryParts.join("&")}`;
+
+    const req = http.request(
+      {
+        host,
+        port,
+        path: requestPath,
+        method: "GET",
+        timeout: timeoutMs,
+        headers: buildSnitchHttpHeaders({
+          Accept: "application/json",
+          ...(normalizedApiKey ? { "x-apikey": normalizedApiKey } : {}),
+        }),
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          let payload = {};
+          try {
+            payload = JSON.parse(body || "{}");
+          } catch (_err) {
+            payload = {};
+          }
+          resolve({
+            success: res.statusCode === 200 && payload?.success !== false,
+            ...payload,
+          });
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP VirusTotal request timed out"));
+    });
+    req.on("error", (error) => {
+      resolve({
+        success: false,
+        error: error?.message || "HTTP VirusTotal request failed",
+      });
+    });
+    req.end();
+  });
+}
+
 function normalizeBackendTransportOptions(rawOptions = {}) {
   const source = rawOptions && typeof rawOptions === "object" ? rawOptions : {};
   const host =
@@ -2200,6 +2278,40 @@ ipcMain.handle("lookup-backend-shodan", async (_event, ipAddress, options = {}) 
   });
 });
 
+ipcMain.handle("lookup-backend-virustotal", async (_event, lookupValue, options = {}) => {
+  const optionsSource = options && typeof options === "object" ? options : {};
+  const normalizedTransport = applyBackendTransportOptions(
+    optionsSource.backendOptions,
+  );
+  if (normalizedTransport.forceLegacySpawn) {
+    return {
+      success: false,
+      error: "Backend VirusTotal lookup requires HTTP backend mode",
+      mode: "legacy",
+    };
+  }
+
+  const ready = await ensureBackendHttpServerReady();
+  if (!ready) {
+    return {
+      success: false,
+      error: "Backend HTTP service unavailable",
+      mode: "http",
+    };
+  }
+
+  return requestSnitchHttpBackendVirusTotal(lookupValue, {
+    lookupType: optionsSource.lookupType,
+    apiKey: optionsSource.apiKey,
+    diagnosticOnly: Boolean(optionsSource.diagnosticOnly),
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+    timeoutMs: Number(optionsSource.timeoutMs) > 0
+      ? Number(optionsSource.timeoutMs)
+      : 12000,
+  });
+});
+
 module.exports = {
   shutdownHttpBackendService,
   ensureBackendHttpServerReady,
@@ -2211,6 +2323,7 @@ module.exports = {
   requestSnitchHttpBackendWhois,
   requestSnitchHttpBackendIpsum,
   requestSnitchHttpBackendTor,
+  requestSnitchHttpBackendVirusTotal,
   // Backward-compatible aliases for existing imports in main process code.
   shutdownTcpBackendService: shutdownHttpBackendService,
   ensureBackendTcpServerReady: ensureBackendHttpServerReady,

@@ -20,16 +20,23 @@ function createSubnetCalculatorPanel({
     const nmapScanBtnEl = document.getElementById("subnet-calc-nmap-scan-btn");
     const captureTargetsEl = document.getElementById("subnet-calc-capture-targets");
     const nmapEl = document.getElementById("subnet-calc-nmap");
+    const threatIntelTypeEl = document.getElementById("subnet-ti-type");
+    const threatIntelInputEl = document.getElementById("subnet-ti-input");
+    const threatIntelLookupBtnEl = document.getElementById("subnet-ti-lookup-btn");
+    const threatIntelUseAnalyzedIpBtnEl = document.getElementById("subnet-ti-use-analyzed-ip-btn");
     const summaryEl = document.getElementById("subnet-calc-summary");
     const rangeEl = document.getElementById("subnet-calc-range");
     const binaryEl = document.getElementById("subnet-calc-binary");
     const whoisEl = document.getElementById("subnet-calc-whois");
-    const reputationEl = document.getElementById("subnet-calc-reputation");
+    const reputationIpsumEl = document.getElementById("subnet-calc-reputation-ipsum");
+    const reputationVirustotalEl = document.getElementById("subnet-calc-reputation-virustotal");
+    const reputationTorEl = document.getElementById("subnet-calc-reputation-tor");
     const geoEl = document.getElementById("subnet-calc-geo");
     const shodanEl = document.getElementById("subnet-calc-shodan");
     let threatIntelState = {
         ipsum: null,
         tor: null,
+        virustotal: null,
     };
     let whoisCacheByIp = Object.create(null);
     let shodanCacheByIp = Object.create(null);
@@ -60,6 +67,25 @@ function createSubnetCalculatorPanel({
         return String(value || "").trim();
     }
 
+    function normalizeThreatIntelQueryType(value) {
+        const normalized = String(value || "ip").trim().toLowerCase();
+        if (normalized === "url") return "url";
+        if (normalized === "hash") return "hash";
+        return "ip";
+    }
+
+    function getVirusTotalApiKey() {
+        return String(getCurrentSettings()?.backend?.virusTotalApiKey || "").trim();
+    }
+
+    function getThreatIntelQueryInputValue() {
+        return String(threatIntelInputEl?.value || "").trim();
+    }
+
+    function getThreatIntelQueryTypeValue() {
+        return normalizeThreatIntelQueryType(threatIntelTypeEl?.value || "ip");
+    }
+
     function setCachedWhoisResult(ipAddress, result) {
         const normalizedIp = normalizeLookupIp(ipAddress);
         if (!normalizedIp) return;
@@ -86,12 +112,18 @@ function createSubnetCalculatorPanel({
 
     function getSessionState() {
         return {
+            analyzedIp: String(nmapScanState.currentInspectedIp || "").trim(),
             whoisByIp: clonePlainData(whoisCacheByIp, {}),
             shodanByIp: clonePlainData(shodanCacheByIp, {}),
             nmap: {
                 currentInspectedIp: String(nmapScanState.currentInspectedIp || "").trim(),
                 lastCompletedTargetsKey: String(nmapScanState.lastCompletedTargetsKey || "").trim(),
                 latestScanResponse: clonePlainData(nmapScanState.latestScanResponse, null),
+            },
+            threatIntel: {
+                input: getThreatIntelQueryInputValue(),
+                type: getThreatIntelQueryTypeValue(),
+                state: clonePlainData(threatIntelState, null),
             },
         };
     }
@@ -103,6 +135,18 @@ function createSubnetCalculatorPanel({
 
         whoisCacheByIp = clonePlainData(normalizedState.whoisByIp, {}) || {};
         shodanCacheByIp = clonePlainData(normalizedState.shodanByIp, {}) || {};
+        const restoredTiState = normalizedState.threatIntel && typeof normalizedState.threatIntel === "object"
+            ? normalizedState.threatIntel
+            : {};
+        if (restoredTiState.state) {
+            threatIntelState = clonePlainData(restoredTiState.state, null) || { ipsum: null, tor: null, virustotal: null };
+        }
+        if (restoredTiState.type && threatIntelTypeEl) {
+            threatIntelTypeEl.value = normalizeThreatIntelQueryType(String(restoredTiState.type));
+        }
+        if (restoredTiState.input && threatIntelInputEl) {
+            threatIntelInputEl.value = String(restoredTiState.input);
+        }
 
         const restoredNmap = normalizedState.nmap && typeof normalizedState.nmap === "object"
             ? normalizedState.nmap
@@ -1146,9 +1190,11 @@ function createSubnetCalculatorPanel({
         renderKeyValueTable(rangeEl, "Range", rangeRows);
         renderBinaryTable(binaryEl, "Binary Notation", binaryRows);
         setPlaceholder(whoisEl, "Looking up WHOIS / RDAP data...");
-        setPlaceholder(reputationEl, "Looking up Threat Intelligence data...");
         setPlaceholder(geoEl, "Looking up GeoIP data...");
         setPlaceholder(shodanEl, "Looking up Shodan InternetDB data...");
+        // Threat intelligence results now live in a dedicated subtab, so the
+        // Analyze Subnet panel no longer renders them here.  The Threat Intel
+        // subtab renders them via renderThreatIntelResult when it is shown.
     }
 
     function renderShodanResult(analysis, shodanResult) {
@@ -1196,115 +1242,222 @@ function createSubnetCalculatorPanel({
         shodanEl.appendChild(actionRow);
     }
 
-    function renderThreatIntelResult(analysis) {
-        if (!reputationEl) return;
-        reputationEl.innerHTML = "";
+    function clearThreatIntelCards() {
+        [reputationIpsumEl, reputationVirustotalEl, reputationTorEl].forEach((el) => {
+            if (el) {
+                el.innerHTML = "";
+            }
+        });
+    }
+
+    function renderThreatIntelCard(container, title, projectLabel, projectUrl, renderFn) {
+        if (!container) return;
+        container.innerHTML = "";
         const titleEl = document.createElement("div");
         titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "Threat Intelligence";
-        reputationEl.appendChild(titleEl);
+        titleEl.textContent = title;
+        container.appendChild(titleEl);
+        renderFn(container);
+        const actionRow = document.createElement("div");
+        actionRow.className = "data-tools-actions subnet-calc-map-actions";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = projectLabel;
+        button.addEventListener("click", async () => {
+            if (typeof window.browserapi?.openExternalUrl !== "function") {
+                return;
+            }
+            await window.browserapi.openExternalUrl(String(projectUrl));
+        });
+        actionRow.appendChild(button);
+        container.appendChild(actionRow);
+    }
+
+    function renderThreatIntelResult(analysis) {
+        clearThreatIntelCards();
 
         const ipsumResult = threatIntelState.ipsum;
         const torResult = threatIntelState.tor;
-        if (!ipsumResult && !torResult) {
-            setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
+        const virustotalResult = threatIntelState.virustotal;
+        if (!ipsumResult && !torResult && !virustotalResult) {
+            renderThreatIntelCard(
+                reputationIpsumEl,
+                "IPSum",
+                "Open IPSum project",
+                "https://github.com/stamparm/ipsum",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
+            );
+            renderThreatIntelCard(
+                reputationVirustotalEl,
+                "VirusTotal",
+                "Open VirusTotal",
+                "https://www.virustotal.com/",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
+            );
+            renderThreatIntelCard(
+                reputationTorEl,
+                "Tor",
+                "Open Tor Project",
+                "https://www.torproject.org/",
+                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
+            );
             return;
         }
 
         if (ipsumResult) {
-            const ipsumSection = document.createElement("div");
-            if (ipsumResult.success === false) {
-                setPlaceholder(ipsumSection, ipsumResult.error || "IP reputation lookup failed.");
-            } else {
-                const gradeBadge = document.createElement("span");
-                const normalizedGrade = String(ipsumResult.grade || "Unknown").trim().toUpperCase();
-                gradeBadge.className = `subnet-calc-grade-badge subnet-calc-grade-${normalizedGrade.toLowerCase()}`;
-                gradeBadge.textContent = ipsumResult.grade && ipsumResult.gradeLabel
-                    ? `${ipsumResult.grade} ${ipsumResult.gradeLabel}`
-                    : String(ipsumResult.gradeLabel || "Unknown");
+            renderThreatIntelCard(
+                reputationIpsumEl,
+                "IPSum",
+                "Open IPSum project",
+                "https://github.com/stamparm/ipsum",
+                (container) => {
+                    const section = document.createElement("div");
+                    if (ipsumResult.success === false) {
+                        setPlaceholder(section, ipsumResult.error || "IP reputation lookup failed.");
+                    } else {
+                        const gradeBadge = document.createElement("span");
+                        const normalizedGrade = String(ipsumResult.grade || "Unknown").trim().toUpperCase();
+                        gradeBadge.className = `subnet-calc-grade-badge subnet-calc-grade-${normalizedGrade.toLowerCase()}`;
+                        gradeBadge.textContent = ipsumResult.grade && ipsumResult.gradeLabel
+                            ? `${ipsumResult.grade} ${ipsumResult.gradeLabel}`
+                            : String(ipsumResult.gradeLabel || "Unknown");
 
-                const rows = [
-                    { name: "Lookup Target", value: ipsumResult.ip || analysis.lookupTargetIp },
-                    {
-                        name: "Grade",
-                        valueElement: gradeBadge,
-                    },
-                    {
-                        name: "Threat Intelligence Hits",
-                        value: Number.isFinite(Number(ipsumResult.hitCount))
-                            ? String(ipsumResult.hitCount)
-                            : "Unknown",
-                    },
-                    { name: "Listed", value: ipsumResult.listed ? "Yes" : "No" },
-                    { name: "Dataset Fetch Date", value: String(ipsumResult.fetchedDate || "Unknown") },
-                ];
+                        const rows = [
+                            { name: "Lookup Target", value: ipsumResult.ip || analysis.lookupTargetIp },
+                            {
+                                name: "Grade",
+                                valueElement: gradeBadge,
+                            },
+                            {
+                                name: "Threat Intelligence Hits",
+                                value: Number.isFinite(Number(ipsumResult.hitCount))
+                                    ? String(ipsumResult.hitCount)
+                                    : "Unknown",
+                            },
+                            { name: "Listed", value: ipsumResult.listed ? "Yes" : "No" },
+                            { name: "Dataset Fetch Date", value: String(ipsumResult.fetchedDate || "Unknown") },
+                        ];
 
-                if (ipsumResult.supported === false) {
-                    rows.push({
-                        name: "Status",
-                        value: String(ipsumResult.message || "Unsupported"),
-                    });
-                }
-                if (ipsumResult.isLocalnet) {
-                    rows.push({
-                        name: "Status",
-                        value: "Local / special-use IPs are not part of internet threat lists.",
-                    });
-                }
+                        if (ipsumResult.supported === false) {
+                            rows.push({
+                                name: "Status",
+                                value: String(ipsumResult.message || "Unsupported"),
+                            });
+                        }
+                        if (ipsumResult.isLocalnet) {
+                            rows.push({
+                                name: "Status",
+                                value: "Local / special-use IPs are not part of internet threat lists.",
+                            });
+                        }
 
-                renderKeyValueTable(ipsumSection, "IPSum", rows);
-            }
-            reputationEl.appendChild(ipsumSection);
+                        renderKeyValueTable(section, "IPSum", rows);
+                    }
+                    container.appendChild(section);
+                },
+            );
+        }
+
+        if (virustotalResult) {
+            renderThreatIntelCard(
+                reputationVirustotalEl,
+                "VirusTotal",
+                "Open VirusTotal",
+                "https://www.virustotal.com/",
+                (container) => {
+                    const section = document.createElement("div");
+                    if (virustotalResult.success === false) {
+                        setPlaceholder(section, virustotalResult.error || "VirusTotal lookup failed.");
+                    } else {
+                        const vtAnalysis = virustotalResult.analysis && typeof virustotalResult.analysis === "object"
+                            ? virustotalResult.analysis
+                            : {};
+                        const rows = [
+                            { name: "Query Type", value: String(virustotalResult.lookupType || "Unknown") },
+                            {
+                                name: "Lookup Target",
+                                value: String(
+                                    virustotalResult.lookupValue
+                                    || analysis.lookupTargetIp
+                                    || getThreatIntelQueryInputValue()
+                                    || "Unknown",
+                                ),
+                            },
+                            { name: "Record ID", value: String(virustotalResult.recordId || "Unknown") },
+                            { name: "Malicious", value: String(vtAnalysis.malicious ?? 0) },
+                            { name: "Suspicious", value: String(vtAnalysis.suspicious ?? 0) },
+                            { name: "Harmless", value: String(vtAnalysis.harmless ?? 0) },
+                            { name: "Undetected", value: String(vtAnalysis.undetected ?? 0) },
+                        ];
+
+                        if (Number.isFinite(Number(virustotalResult.reputation))) {
+                            rows.push({ name: "Reputation", value: String(virustotalResult.reputation) });
+                        }
+                        if (virustotalResult.lastAnalysisDate) {
+                            rows.push({ name: "Last Analysis Date", value: String(virustotalResult.lastAnalysisDate) });
+                        }
+
+                        renderKeyValueTable(section, "VirusTotal", rows);
+
+                        if (virustotalResult.guiUrl) {
+                            const virustotalActionRow = document.createElement("div");
+                            virustotalActionRow.className = "data-tools-actions subnet-calc-map-actions";
+                            const guiButton = document.createElement("button");
+                            guiButton.type = "button";
+                            guiButton.textContent = "Open VirusTotal Record";
+                            guiButton.addEventListener("click", async () => {
+                                if (typeof window.browserapi?.openExternalUrl !== "function") {
+                                    return;
+                                }
+                                await window.browserapi.openExternalUrl(String(virustotalResult.guiUrl));
+                            });
+                            virustotalActionRow.appendChild(guiButton);
+                            section.appendChild(virustotalActionRow);
+                        }
+                    }
+                    container.appendChild(section);
+                },
+            );
         }
 
         if (torResult) {
-            const torSection = document.createElement("div");
-            if (torResult.success === false) {
-                setPlaceholder(torSection, torResult.error || "Tor lookup failed.");
-            } else {
-                const exitNodeBadge = document.createElement("span");
-                exitNodeBadge.className = torResult.isExitNode
-                    ? "subnet-calc-grade-badge subnet-calc-bool-yes"
-                    : "subnet-calc-grade-badge subnet-calc-bool-no";
-                exitNodeBadge.textContent = torResult.isExitNode ? "Yes" : "No";
+            renderThreatIntelCard(
+                reputationTorEl,
+                "Tor",
+                "Open Tor Project",
+                "https://www.torproject.org/",
+                (container) => {
+                    const section = document.createElement("div");
+                    if (torResult.success === false) {
+                        setPlaceholder(section, torResult.error || "Tor lookup failed.");
+                    } else {
+                        const exitNodeBadge = document.createElement("span");
+                        exitNodeBadge.className = torResult.isExitNode
+                            ? "subnet-calc-grade-badge subnet-calc-bool-yes"
+                            : "subnet-calc-grade-badge subnet-calc-bool-no";
+                        exitNodeBadge.textContent = torResult.isExitNode ? "Yes" : "No";
 
-                const rows = [
-                    { name: "Lookup Target", value: torResult.ip || analysis.lookupTargetIp },
-                    { name: "Exit Node", valueElement: exitNodeBadge },
-                    { name: "Total Node Match", value: String(torResult.nodeCount || 0) },
-                    { name: "Dataset Fetch Date", value: String(torResult.fetchedDate || "Unknown") },
-                ];
+                        const rows = [
+                            { name: "Lookup Target", value: torResult.ip || analysis.lookupTargetIp },
+                            { name: "Exit Node", valueElement: exitNodeBadge },
+                            { name: "Total Node Match", value: String(torResult.nodeCount || 0) },
+                            { name: "Dataset Fetch Date", value: String(torResult.fetchedDate || "Unknown") },
+                        ];
 
-                if (Array.isArray(torResult.nodes) && torResult.nodes.length > 0) {
-                    // now just use the first node, because the others will be dupes
-                    // the same node with different exit ports
-                    const firstNode = torResult.nodes[0];
-                    rows.push({ name: "Node Nickname", value: String(firstNode.nickname || "Unknown") });
-                    rows.push({ name: "Node Platform", value: String(firstNode.platform || "Unknown") });
-                }
+                        if (Array.isArray(torResult.nodes) && torResult.nodes.length > 0) {
+                            // now just use the first node, because the others will be dupes
+                            // the same node with different exit ports
+                            const firstNode = torResult.nodes[0];
+                            rows.push({ name: "Node Nickname", value: String(firstNode.nickname || "Unknown") });
+                            rows.push({ name: "Node Platform", value: String(firstNode.platform || "Unknown") });
+                        }
 
-                renderKeyValueTable(torSection, "Tor", rows);
-            }
-            reputationEl.appendChild(torSection);
+                        renderKeyValueTable(section, "Tor", rows);
+                    }
+                    container.appendChild(section);
+                },
+            );
         }
-
-        const actionRow = document.createElement("div");
-        actionRow.className = "data-tools-actions subnet-calc-map-actions";
-        const addLinkButton = (label, url) => {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.textContent = label;
-            button.addEventListener("click", async () => {
-                if (typeof window.browserapi?.openExternalUrl !== "function") {
-                    return;
-                }
-                await window.browserapi.openExternalUrl(String(url));
-            });
-            actionRow.appendChild(button);
-        };
-        addLinkButton("Open IPSum project", "https://github.com/stamparm/ipsum");
-        addLinkButton("Open Tor Project", "https://www.torproject.org/");
-        reputationEl.appendChild(actionRow);
     }
 
     function renderIpsumResult(analysis, reputationResult) {
@@ -1314,6 +1467,11 @@ function createSubnetCalculatorPanel({
 
     function renderTorResult(analysis, torResult) {
         threatIntelState.tor = torResult;
+        renderThreatIntelResult(analysis);
+    }
+
+    function renderVirusTotalResult(analysis, virustotalResult) {
+        threatIntelState.virustotal = virustotalResult;
         renderThreatIntelResult(analysis);
     }
 
@@ -1527,6 +1685,56 @@ function createSubnetCalculatorPanel({
                 error: error?.message || "Tor lookup failed.",
             });
             setPanelStatus(error?.message || "Tor lookup failed.", true);
+        }
+    }
+
+    async function lookupVirusTotalForInput(analysis, requestToken, explicitInput = "", explicitType = "") {
+        const currentToken = requestToken;
+        if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
+            renderVirusTotalResult(analysis, {
+                success: false,
+                error: "Backend VirusTotal lookup API is unavailable.",
+            });
+            return;
+        }
+
+        const lookupType = normalizeThreatIntelQueryType(explicitType || getThreatIntelQueryTypeValue());
+        const lookupValue = String(explicitInput || getThreatIntelQueryInputValue()).trim();
+        if (!lookupValue) {
+            renderVirusTotalResult(analysis, {
+                success: false,
+                error: "Enter an IP, URL, or hash for VirusTotal lookup.",
+            });
+            return;
+        }
+
+        const apiKey = getVirusTotalApiKey();
+        if (!apiKey) {
+            renderVirusTotalResult(analysis, {
+                success: false,
+                error: "VirusTotal API key is missing. Add it in Settings > Backend.",
+            });
+            return;
+        }
+
+        try {
+            const response = await window.snitchapi.lookupVirusTotal(lookupValue, {
+                lookupType,
+                apiKey,
+                backendOptions: getBackendTransportOptions(),
+            });
+            if (currentToken !== lookupRequestToken) return;
+            renderVirusTotalResult(analysis, response);
+            if (response?.success === false) {
+                setPanelStatus(response.error || "VirusTotal lookup failed.", true);
+            }
+        } catch (error) {
+            if (currentToken !== lookupRequestToken) return;
+            renderVirusTotalResult(analysis, {
+                success: false,
+                error: error?.message || "VirusTotal lookup failed.",
+            });
+            setPanelStatus(error?.message || "VirusTotal lookup failed.", true);
         }
     }
 
@@ -1844,6 +2052,28 @@ function createSubnetCalculatorPanel({
         });
     }
 
+    function maybeKickoffThreatIntelOnTabOpen() {
+        const saved = getSessionState();
+        const inspectedIp = String(nmapScanState.currentInspectedIp || saved?.analyzedIp || "").trim();
+        const cachedInput = String(threatIntelInputEl?.value || saved?.threatIntel?.input || "").trim();
+
+        if (cachedInput) {
+            // A prior query is available: refresh the display with cached results.
+            renderThreatIntelResult({ lookupTargetIp: nmapScanState.currentInspectedIp });
+            return;
+        }
+
+        if (inspectedIp && !threatIntelInputEl?.value) {
+            // No explicit TI query yet, but an analyzed IP exists; seed the input.
+            if (threatIntelTypeEl) threatIntelTypeEl.value = "ip";
+            if (threatIntelInputEl) threatIntelInputEl.value = inspectedIp;
+            return;
+        }
+
+        // Fall back to rendering whatever cached state we have (may be empty placeholder).
+        renderThreatIntelResult({ lookupTargetIp: nmapScanState.currentInspectedIp });
+    }
+
     function resetCaptureNmapState() {
         nmapScanToken += 1;
         nmapScanState.inFlight = false;
@@ -1865,7 +2095,13 @@ function createSubnetCalculatorPanel({
             const analysis = analyzeSubnetInput(inputEl?.value || "");
             nmapScanState.currentInspectedIp = String(analysis.lookupTargetIp || analysis.address || "").trim();
             const requestToken = ++lookupRequestToken;
-            threatIntelState = { ipsum: null, tor: null };
+            threatIntelState = { ipsum: null, tor: null, virustotal: null };
+            if (threatIntelTypeEl) {
+                threatIntelTypeEl.value = "ip";
+            }
+            if (threatIntelInputEl) {
+                threatIntelInputEl.value = String(analysis.lookupTargetIp || analysis.address || "");
+            }
             renderAnalysisResults(analysis);
             renderCaptureTargets(getCaptureInternetTargets(), nmapScanState.currentInspectedIp);
             if (nmapScanState.latestScanResponse) {
@@ -1881,6 +2117,12 @@ function createSubnetCalculatorPanel({
                 lookupWhois(analysis, requestToken),
                 lookupIpsum(analysis, requestToken),
                 lookupTor(analysis, requestToken),
+                lookupVirusTotalForInput(
+                    analysis,
+                    requestToken,
+                    String(analysis.lookupTargetIp || analysis.address || ""),
+                    "ip",
+                ),
                 lookupShodanInternetDb(analysis, requestToken),
             ]);
             if (requestToken !== lookupRequestToken) return;
@@ -1917,12 +2159,37 @@ function createSubnetCalculatorPanel({
     function clear() {
         lookupRequestToken += 1;
         nmapScanToken += 1;
+        threatIntelState = { ipsum: null, tor: null, virustotal: null };
         nmapScanState.currentInspectedIp = "";
         if (inputEl) {
             inputEl.value = "";
         }
+        if (threatIntelInputEl) {
+            threatIntelInputEl.value = "";
+        }
+        if (threatIntelTypeEl) {
+            threatIntelTypeEl.value = "ip";
+        }
         renderEmptyState();
         setPanelStatus("Enter an IPv4 or IPv6 address/network to analyze.");
+    }
+
+    function lookupThreatIntelFromManualInput() {
+        const lookupValue = getThreatIntelQueryInputValue();
+        if (!lookupValue) {
+            setPanelStatus("Enter an IP, URL, or hash for Threat Intel lookup.", true);
+            return;
+        }
+        const requestToken = ++lookupRequestToken;
+        const analysis = {
+            lookupTargetIp: String(nmapScanState.currentInspectedIp || "").trim() || lookupValue,
+        };
+        void lookupVirusTotalForInput(
+            analysis,
+            requestToken,
+            lookupValue,
+            getThreatIntelQueryTypeValue(),
+        );
     }
 
     function renderEmptyState() {
@@ -1931,7 +2198,6 @@ function createSubnetCalculatorPanel({
         setPlaceholder(rangeEl, "Range details will appear here.");
         setPlaceholder(binaryEl, "Binary notation will appear here.");
         setPlaceholder(whoisEl, "WHOIS / RDAP data will appear here.");
-        setPlaceholder(reputationEl, "Threat intelligence data will appear here.");
         setPlaceholder(geoEl, "GeoIP data will appear here.");
         setPlaceholder(shodanEl, "Shodan InternetDB data will appear here.");
         renderCaptureTargets(getCaptureInternetTargets(), getCurrentInspectedIp());
@@ -1952,6 +2218,24 @@ function createSubnetCalculatorPanel({
     document.getElementById("subnet-calc-use-dst-btn")?.addEventListener("click", () => {
         loadCurrentPacketAddress("dst");
     });
+    threatIntelUseAnalyzedIpBtnEl?.addEventListener("click", () => {
+        const inspectedIp = String(nmapScanState.currentInspectedIp || "").trim()
+            || String(inputEl?.value || "").trim();
+        if (!inspectedIp) {
+            setPanelStatus("Analyze an IP first to use analyzed target.", true);
+            return;
+        }
+        if (threatIntelTypeEl) {
+            threatIntelTypeEl.value = "ip";
+        }
+        if (threatIntelInputEl) {
+            threatIntelInputEl.value = inspectedIp;
+        }
+        setPanelStatus(`Threat Intel query target set to ${inspectedIp}`);
+    });
+    threatIntelLookupBtnEl?.addEventListener("click", () => {
+        lookupThreatIntelFromManualInput();
+    });
     nmapScanBtnEl?.addEventListener("click", () => {
         void runCaptureNmapScan({ auto: false, reason: "manual-button", force: true });
     });
@@ -1959,6 +2243,12 @@ function createSubnetCalculatorPanel({
         if (event.key === "Enter") {
             event.preventDefault();
             void analyzeCurrentInput();
+        }
+    });
+    threatIntelInputEl?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            lookupThreatIntelFromManualInput();
         }
     });
 
@@ -1972,6 +2262,7 @@ function createSubnetCalculatorPanel({
         loadCurrentPacketAddress,
         maybeAutoStartCaptureNmapScan,
         maybeKickoffNmapOnTabOpen,
+        maybeKickoffThreatIntelOnTabOpen,
         resetSessionCacheState,
         resetCaptureNmapState,
         restoreSessionState,

@@ -92,6 +92,7 @@ const {
   CONV_HASHES_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
+  CONV_THREAT_INTEL_SUBTAB,
   CONV_PACKET_JSON_SUBTAB,
   VALID_CONV_SUBTABS,
   DATA_TOOLS_CONTEXT_BASE64_MIN_LENGTH,
@@ -823,6 +824,7 @@ let startupPreloadHidden = false;
 let startupPreloadShownAtMs = Date.now();
 let startupPreloadHideStartTimeoutId = null;
 let cachedBackendDiagnostics = null;
+let cachedVirusTotalDiagnostics = null;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
@@ -986,6 +988,57 @@ function renderBackendDiagnosticIndicator(elementId, label, value, stateClass) {
   element.className = `settings-status-pill ${stateClass}`;
 }
 
+function getBackendVirusTotalApiKey(settings = getCurrentSettings()) {
+  return String(settings?.backend?.virusTotalApiKey || "").trim();
+}
+
+function syncVirusTotalDiagnosticsIndicators() {
+  const diagnostics = cachedVirusTotalDiagnostics;
+  const hasStoredKey = Boolean(getBackendVirusTotalApiKey());
+  const endpointReachable = diagnostics?.endpointReachable;
+  const keyConfigured = hasStoredKey || Boolean(diagnostics?.keyConfigured);
+  const keyValid = diagnostics?.keyValid;
+
+  const endpointValue =
+    endpointReachable === true ? "Up" : endpointReachable === false ? "Down" : "—";
+  const endpointClass =
+    endpointReachable === true
+      ? "status-ok"
+      : endpointReachable === false
+        ? "status-error"
+        : "status-neutral";
+
+  const keyValue =
+    !keyConfigured
+      ? "Missing"
+      : keyValid === true
+        ? "Valid"
+        : keyValid === false
+          ? "Invalid"
+          : "Configured";
+  const keyClass =
+    !keyConfigured
+      ? "status-warn"
+      : keyValid === true
+        ? "status-ok"
+        : keyValid === false
+          ? "status-error"
+          : "status-neutral";
+
+  renderBackendDiagnosticIndicator(
+    "settings-backend-virustotal-endpoint-status",
+    "VirusTotal Endpoint",
+    endpointValue,
+    endpointClass,
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-virustotal-key-status",
+    "VirusTotal Key",
+    keyValue,
+    keyClass,
+  );
+}
+
 // Syncs backend diagnostics indicators.
 function syncBackendDiagnosticsIndicators() {
   const diagnostics = cachedBackendDiagnostics;
@@ -1021,6 +1074,37 @@ function syncBackendDiagnosticsIndicators() {
     forceLegacySpawn ? "Legacy spawn" : "HTTP service",
     forceLegacySpawn ? "status-warn" : "status-ok",
   );
+  syncVirusTotalDiagnosticsIndicators();
+}
+
+async function refreshVirusTotalDiagnostics() {
+  if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
+    cachedVirusTotalDiagnostics = null;
+    syncVirusTotalDiagnosticsIndicators();
+    return null;
+  }
+
+  const apiKey = getBackendVirusTotalApiKey();
+  try {
+    const diagnostics = await window.snitchapi.lookupVirusTotal("8.8.8.8", {
+      lookupType: "ip",
+      apiKey,
+      diagnosticOnly: true,
+      backendOptions: getBackendTransportOptionsFromSettings(),
+    });
+    cachedVirusTotalDiagnostics = diagnostics || null;
+  } catch (error) {
+    console.warn("Unable to resolve VirusTotal diagnostics:", error);
+    cachedVirusTotalDiagnostics = {
+      endpointReachable: false,
+      keyConfigured: Boolean(apiKey),
+      keyValid: false,
+      error: error?.message || String(error),
+    };
+  }
+
+  syncVirusTotalDiagnosticsIndicators();
+  return cachedVirusTotalDiagnostics;
 }
 
 async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
@@ -1041,6 +1125,7 @@ async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
     cachedBackendDiagnostics = null;
   }
   syncBackendDiagnosticsIndicators();
+  await refreshVirusTotalDiagnostics();
   return cachedBackendDiagnostics;
 }
 
@@ -2081,6 +2166,9 @@ function syncSettingsFormFromState() {
   );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
+  const backendVirusTotalApiKeyEl = document.getElementById(
+    "settings-backend-virustotal-api-key",
+  );
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
@@ -2162,6 +2250,12 @@ function syncSettingsFormFromState() {
   }
   if (backendTcpPortEl) {
     backendTcpPortEl.value = String(settings.backend.tcpPort || DEFAULT_SETTINGS.backend.tcpPort);
+  }
+  if (backendVirusTotalApiKeyEl) {
+    backendVirusTotalApiKeyEl.value = "";
+    backendVirusTotalApiKeyEl.placeholder = settings.backend.virusTotalApiKey
+      ? "Stored key present; leave blank to keep it"
+      : "Leave blank to keep the stored key";
   }
   if (backendForceLegacySpawnEl) {
     backendForceLegacySpawnEl.checked = Boolean(settings.backend.forceLegacySpawn);
@@ -2271,6 +2365,9 @@ function readSettingsFormState() {
   );
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
+  const backendVirusTotalApiKeyEl = document.getElementById(
+    "settings-backend-virustotal-api-key",
+  );
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
@@ -2315,6 +2412,9 @@ function readSettingsFormState() {
   const pluginFailureThresholdEl = document.getElementById(
     "settings-plugins-auto-disable-failure-threshold",
   );
+  const trimmedVirusTotalApiKey = backendVirusTotalApiKeyEl
+    ? backendVirusTotalApiKeyEl.value.trim()
+    : "";
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
@@ -2354,6 +2454,8 @@ function readSettingsFormState() {
       tcpPort: backendTcpPortEl
         ? backendTcpPortEl.value
         : DEFAULT_SETTINGS.backend.tcpPort,
+      virusTotalApiKey:
+        trimmedVirusTotalApiKey || currentSettings.backend.virusTotalApiKey || "",
       forceLegacySpawn: backendForceLegacySpawnEl
         ? backendForceLegacySpawnEl.checked
         : DEFAULT_SETTINGS.backend.forceLegacySpawn,
@@ -3085,6 +3187,12 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
   );
   pushChange("backendTcpHost", previousBackend.tcpHost, nextBackend.tcpHost);
   pushChange("backendTcpPort", previousBackend.tcpPort, nextBackend.tcpPort);
+  pushChange(
+    "backendVirusTotalApiKey",
+    previousBackend.virusTotalApiKey,
+    nextBackend.virusTotalApiKey,
+    { redacted: true },
+  );
   pushChange(
     "backendForceLegacySpawn",
     previousBackend.forceLegacySpawn,
@@ -8039,6 +8147,8 @@ function restoreSessionState(sessionState) {
     showDataTools(savedConvTab);
     if (savedConvTab === CONV_SUBNET_SUBTAB) {
       subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
+    } else if (savedConvTab === CONV_THREAT_INTEL_SUBTAB) {
+      subnetCalculatorPanel.maybeKickoffThreatIntelOnTabOpen();
     }
   } else if (savedMainTab === MAIN_TAB_CRYPT) {
     showCryptWorkspace(savedCryptTab);
@@ -17263,7 +17373,6 @@ function collectSubnetHostSummaryContext(hostIp) {
     ["subnet-calc-range", "Range"],
     ["subnet-calc-binary", "Binary Notation"],
     ["subnet-calc-whois", "WHOIS / RDAP"],
-    ["subnet-calc-reputation", "Threat Intelligence"],
     ["subnet-calc-geo", "GeoIP"],
     ["subnet-calc-capture-targets", "Capture Internet Targets"],
     ["subnet-calc-shodan", "Shodan InternetDB"],
@@ -19391,6 +19500,13 @@ document
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_SUBNET_SUBTAB);
     subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
+  });
+document
+  .getElementById("conv-subtab-threat-intel")
+  .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
+    setConvSubtab(CONV_THREAT_INTEL_SUBTAB);
+    subnetCalculatorPanel.maybeKickoffThreatIntelOnTabOpen();
   });
 document
   .getElementById("conv-subtab-packet-json")

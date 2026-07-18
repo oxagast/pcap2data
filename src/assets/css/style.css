@@ -4446,3 +4446,28 @@ strong {
   color: var(--color-5);
   width: 1ch;
 }
+
+#conv-threat-intel-panel .subnet-calc-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+#conv-threat-intel-panel .subnet-calc-card {
+  display: flex;
+  flex-direction: column;
+}
+
+#conv-threat-intel-panel .subnet-calc-card .data-tools-proto-table {
+  flex: 1 1 auto;
+}
+
+@media (max-width: 1200px) {
+  #conv-threat-intel-panel .subnet-calc-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  #conv-threat-intel-panel .subnet-calc-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

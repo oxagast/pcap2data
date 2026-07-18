@@ -2,17 +2,17 @@
 
 
 a = Analysis(
-    ['src/backend/snitch.py'],
+    ['/home/marshall/Hacks/projects/packetsnitch/src/backend/snitch.py'],
     pathex=[],
     binaries=[],
-    datas=[('src/backend/common', 'common')],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=1,
+    optimize=0,
 )
 pyz = PYZ(a.pure)
 
@@ -25,8 +25,8 @@ exe = EXE(
     name='snitch',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=True,
-    upx=False,
+    strip=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,
