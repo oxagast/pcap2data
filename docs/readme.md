@@ -6,9 +6,9 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 
 
 
-<a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
+<p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
 <img alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png" width="1000" >
-</a>
+</a></p>
 
 ## Documentation
 
