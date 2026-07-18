@@ -99,7 +99,7 @@
         text-decoration: none;
         font-family: 'Rubik Glitch', cursive;
         color: #ffffff;
-        font-size: 1.3rem;
+        font-size: 1.15rem;
     }
 
     hr {
@@ -162,7 +162,7 @@
                     const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
                     container.innerHTML = `
-            <i>Latest Release:</i> ${release.tag_name}<br>
+            Latest Release: ${release.tag_name}<br>
             ${links}`;
 
                 } catch (err) {
