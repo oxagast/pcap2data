@@ -8739,8 +8739,9 @@ function classifyDataToolsHexByte(byteValue) {
 // Builds input selection map.
 function buildInputSelectionMap(rawInput, format, bytes) {
   const text = String(rawInput || "");
+  const safeBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array();
   const charToByte = new Array(text.length).fill(null);
-  const byteRanges = Array.from({ length: bytes.length }, () => ({
+  const byteRanges = Array.from({ length: safeBytes.length }, () => ({
     start: null,
     end: null,
   }));
@@ -8843,8 +8844,9 @@ function buildInputSelectionMap(rawInput, format, bytes) {
 
 // Builds rendered selection map.
 function buildRenderedSelectionMap(values, { valuesPerLine = 0 } = {}) {
+  const safeValues = Array.isArray(values) ? values : [];
   const parts = [];
-  values.forEach((value, byteIndex) => {
+  safeValues.forEach((value, byteIndex) => {
     if (byteIndex > 0) {
       parts.push(
         valuesPerLine > 0 && byteIndex % valuesPerLine === 0 ? "\n" : " ",
@@ -8854,12 +8856,12 @@ function buildRenderedSelectionMap(values, { valuesPerLine = 0 } = {}) {
   });
   const text = parts.join("");
   const charToByte = [];
-  const byteRanges = Array.from({ length: values.length }, () => ({
+  const byteRanges = Array.from({ length: safeValues.length }, () => ({
     start: null,
     end: null,
   }));
   let cursor = 0;
-  values.forEach((value, byteIndex) => {
+  safeValues.forEach((value, byteIndex) => {
     if (byteIndex > 0) {
       const separator =
         valuesPerLine > 0 && byteIndex % valuesPerLine === 0 ? "\n" : " ";
@@ -9100,9 +9102,9 @@ function updateDataToolsSelectionMaps(format, rawInput, bytes, outputs) {
       outputs.decimalValues,
     ),
     "data-tools-ascii-output": {
-      text: outputs.asciiText,
+      text: typeof outputs.asciiText === "string" ? outputs.asciiText : "",
       charToByte: Array.from(
-        { length: outputs.asciiText.length },
+        { length: typeof outputs.asciiText === "string" ? outputs.asciiText.length : 0 },
         (_, idx) => idx,
       ),
       byteRanges: Array.from({ length: bytes.length }, (_, idx) => ({
@@ -9111,7 +9113,7 @@ function updateDataToolsSelectionMaps(format, rawInput, bytes, outputs) {
       })),
     },
     "data-tools-base64-output": buildBase64SelectionMap(
-      outputs.base64Text,
+      typeof outputs.base64Text === "string" ? outputs.base64Text : "",
       bytes,
     ),
   };
