@@ -592,14 +592,6 @@ const DATA_TYPES_DEFAULT_HIDDEN_PROTOCOL_PREFIXES = [
   "BGP",
 ];
 const DEFAULT_DATA_TOOLS_FORMAT = "hex";
-const DATA_TOOLS_CONVERTED_OUTPUT_IDS = [
-  "data-tools-hex-output",
-  "data-tools-binary-output",
-  "data-tools-decimal-output",
-  "data-tools-decimal-integer-output",
-  "data-tools-ascii-output",
-  "data-tools-base64-output",
-];
 const DATA_TOOLS_OUTPUT_FORMAT_DETAILS = {
   hex: {
     labelSelector: ".data-tools-output-label-hex",
@@ -682,18 +674,31 @@ const savedFilterLibrary = [];
 const dataToolsHistorySelectEl = getCachedElement("data-tools-history-select");
 const dataToolsInputHistory = [];
 const DATA_TOOLS_INPUT_HISTORY_LIMIT = 10;
-const DATA_TOOLS_OUTPUT_PAGE_BYTES = 16384;
+const DATA_TOOLS_OUTPUT_PAGE_BYTES = 8192;
+const DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES = 8192;
 const DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES = 262144;
 const DATA_TOOLS_TEXT_INSPECTION_MAX_BYTES = 65536;
 const DATA_TOOLS_INPUT_TEXT_SAMPLE_MAX_CHARS = 65536;
+const DATA_TOOLS_CONVERTED_OUTPUT_IDS = [
+  "data-tools-hex-output",
+  "data-tools-binary-output",
+  "data-tools-decimal-output",
+  "data-tools-decimal-integer-output",
+  "data-tools-ascii-output",
+  "data-tools-base64-output",
+];
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
 let dataToolsLastConversionBytes = new Uint8Array();
+let dataToolsOriginalInputBytes = null;
+let dataToolsInputEditedFlag = false;
 let dataToolsDecodeUseRawConvInputOverride = false;
 let dataToolsLastRenderedOutputBytes = 0;
 let dataToolsLastConversionDisplay = {
   decimalInteger: "",
 };
+// Tracks which converted output panes have already had their expensive text built.
+const dataToolsRenderedOutputPanes = new Set();
 const CONTEXT_IPV4_REGEX =
   /\b(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b/;
 const STRICT_IPV4_REGEX =
@@ -4895,22 +4900,50 @@ function updateDataToolsInputEditedState() {
 }
 
 // Normalizes hex input formatting (AA BB ... with 16-byte line wraps).
+// The full parsed bytes are kept in memory, but display is capped to keep the UI responsive.
 function normalizeDataToolsHexInputFormatting() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  if (!inputEl || !formatEl || formatEl.value !== "hex") return;
+  console.log("[ConvDebug] normalizeDataToolsHexInputFormatting entered; format=", formatEl?.value, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
+  if (!inputEl || !formatEl || formatEl.value !== "hex") {
+    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting early exit: not hex or missing element");
+    return;
+  }
   if (!inputEl.value.trim()) {
+    updateDataToolsHexHighlights();
+    syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+    return;
+  }
+  // When the full source bytes are still available and unedited, the input
+  // is already correctly capped/formatted. Re-parsing the truncated display
+  // and reformatting it can change whitespace/line wrapping and risk making
+  // the input look edited, which would cause downstream operations to parse
+  // only the 8 KB visible in the textarea.
+  if (
+    !dataToolsInputEditedFlag &&
+    dataToolsOriginalInputBytes instanceof Uint8Array &&
+    dataToolsOriginalInputBytes.length > 0
+  ) {
+    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting early exit: unedited original bytes available");
     updateDataToolsHexHighlights();
     syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
     return;
   }
   try {
     const bytes = parseDataToolsInput("hex", inputEl.value);
-    const normalized = formatHexInputBytes(bytes);
+    const displayBytes = bytes.slice(0, DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES);
+    let normalized = formatHexInputBytes(displayBytes);
+    if (bytes.length > DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES) {
+      normalized +=
+        `\n\n[Input truncated for display. ${bytes.length.toLocaleString()} bytes total; only ${DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES.toLocaleString()} bytes shown.]`;
+    }
+    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting before rewrite; textarea length=", inputEl.value.length, "normalized length=", normalized.length);
     if (inputEl.value !== normalized) {
       inputEl.value = normalized;
+      console.log("[ConvDebug] normalizeDataToolsHexInputFormatting rewrote textarea");
     }
-  } catch {
+  } catch (error) {
+    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting parse error", error?.message);
     // Keep user's input untouched when partially invalid.
   }
   updateDataToolsHexHighlights();
@@ -7623,7 +7656,7 @@ async function finalizeLoadedCapture(sessionState) {
   syncFilterHighlight();
   isFileLoaded = true;
   if (sessionState) {
-    restoreSessionState(sessionState);
+    await restoreSessionState(sessionState);
   } else {
     scheduleSessionKeychainAutoPopulate("file-load");
     statusUpdate("Status: File loaded successfully");
@@ -7705,6 +7738,11 @@ function buildSessionStateSnapshot() {
       conv: getActiveConvSubtab(),
       convCurrentInput: document.getElementById("data-tools-input")?.value || "",
       convCurrentFormat: document.getElementById("data-tools-format")?.value || "",
+      convCurrentInputBytesBase64:
+        dataToolsOriginalInputBytes instanceof Uint8Array &&
+          dataToolsOriginalInputBytes.length > 0
+          ? uint8ArrayToBase64(dataToolsOriginalInputBytes)
+          : null,
       crypt: activeCryptSubtab,
       listSearch: listSearchEl ? listSearchEl.value : "",
       listGroupStreams: listGroupStreamsEl
@@ -7966,7 +8004,7 @@ async function requestApplicationClose() {
 }
 
 // Handles restore session state.
-function restoreSessionState(sessionState) {
+async function restoreSessionState(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return;
 
   if (typeof subnetCalculatorPanel?.restoreSessionState === "function") {
@@ -8174,7 +8212,17 @@ function restoreSessionState(sessionState) {
     if (dataToolsInputEl && dataToolsFormatEl) {
       dataToolsInputEl.value = savedConvCurrentInput;
       dataToolsFormatEl.value = savedConvCurrentFormat;
-      runDataToolsConversion();
+      const restoredBase64 = typeof tabState.convCurrentInputBytesBase64 === "string"
+        ? tabState.convCurrentInputBytesBase64
+        : null;
+      dataToolsOriginalInputBytes = restoredBase64
+        ? base64ToUint8Array(restoredBase64)
+        : null;
+      dataToolsInputEditedFlag = false;
+      console.log("[ConvDebug] session restore originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "originalLength=", dataToolsOriginalInputBytes?.length, "editedFlag=", dataToolsInputEditedFlag);
+      dataToolsLastConversionBytes = dataToolsOriginalInputBytes || new Uint8Array();
+      markDataToolsInputCommitted();
+      await runDataToolsConversion();
     }
   }
 
@@ -10020,13 +10068,32 @@ function setDataToolsFileNameGuess(fileNameGuess) {
     : "Filename Guess: Unknown";
 }
 
+// Returns placeholder text shown when a converted output pane is collapsed.
+function getDataToolsOutputPlaceholder(outputId, shownBytes, totalBytes) {
+  const label = DATA_TOOLS_OUTPUT_FORMAT_DETAILS[outputIdToFormat(outputId)]?.label || "output";
+  const extra = totalBytes > shownBytes ? ` (${totalBytes.toLocaleString()} bytes total)` : "";
+  return `Click to expand ${label}${extra}.`;
+}
+
+// Maps an output textarea id back to its format key.
+function outputIdToFormat(outputId) {
+  for (const [format, details] of Object.entries(DATA_TOOLS_OUTPUT_FORMAT_DETAILS)) {
+    if (details.outputSelector === `#${outputId}`) return format;
+  }
+  return null;
+}
+
 // Resets data tools outputs.
 function resetDataToolsOutputs() {
+  console.log("[ConvDebug] resetDataToolsOutputs clearing original bytes");
   dataToolsLastConversionBytes = new Uint8Array();
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = false;
   dataToolsLastRenderedOutputBytes = 0;
   dataToolsLastConversionDisplay = {
     decimalInteger: "",
   };
+  dataToolsRenderedOutputPanes.clear();
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
   document.getElementById("data-tools-decimal-output").value = "";
@@ -10131,6 +10198,7 @@ function renderDataToolsOutputPage({ reset = false } = {}) {
 
   if (reset) {
     dataToolsLastRenderedOutputBytes = Math.min(DATA_TOOLS_OUTPUT_PAGE_BYTES, totalBytes);
+    dataToolsRenderedOutputPanes.clear();
   } else {
     dataToolsLastRenderedOutputBytes = Math.min(
       totalBytes,
@@ -10139,29 +10207,80 @@ function renderDataToolsOutputPage({ reset = false } = {}) {
   }
 
   const renderedBytes = dataToolsLastConversionBytes.slice(0, dataToolsLastRenderedOutputBytes);
-  const hexValues = Array.from(renderedBytes, (byte) =>
-    byte.toString(16).padStart(2, "0").toUpperCase(),
-  );
-  const binaryValues = Array.from(renderedBytes, (byte) =>
-    byte.toString(2).padStart(8, "0"),
-  );
-  const decimalValues = Array.from(renderedBytes, (byte) => String(byte));
-  const asciiText = bytesToPrintableAscii(renderedBytes);
-  const base64Text = bytesToBase64(renderedBytes);
-  const hexOutputText = buildRenderedSelectionMap(hexValues, {
-    valuesPerLine: 16,
-  }).text;
 
-  document.getElementById("data-tools-hex-output").value = hexOutputText;
-  document.getElementById("data-tools-binary-output").value = binaryValues.join(" ");
-  document.getElementById("data-tools-decimal-output").value = decimalValues.join(" ");
+  // Always render decimal-integer because it is already computed and cheap to assign.
   document.getElementById("data-tools-decimal-integer-output").value =
     dataToolsLastConversionDisplay.decimalInteger;
-  document.getElementById("data-tools-ascii-output").value = asciiText;
-  document.getElementById("data-tools-base64-output").value = base64Text;
+  dataToolsRenderedOutputPanes.add("data-tools-decimal-integer-output");
+
+  const activeFormat =
+    document.getElementById("data-tools-format")?.value || DEFAULT_DATA_TOOLS_FORMAT;
+  const formatOutputId =
+    DATA_TOOLS_OUTPUT_FORMAT_DETAILS[activeFormat]?.outputSelector?.slice(1) || null;
+
+  let hexValues = null;
+  let binaryValues = null;
+  let decimalValues = null;
+  let asciiText = null;
+  let base64Text = null;
+  let hexOutputText = null;
+
+  for (const outputId of DATA_TOOLS_CONVERTED_OUTPUT_IDS) {
+    if (outputId === "data-tools-decimal-integer-output") continue;
+
+    const outputEl = document.getElementById(outputId);
+    if (!outputEl) continue;
+
+    const isExpanded = outputEl.classList.contains("data-tools-output-expanded");
+    const shouldRender = isExpanded || dataToolsRenderedOutputPanes.has(outputId);
+
+    // Hide the output pane matching the active input format unless it has been expanded.
+    if (outputId === formatOutputId && !shouldRender) {
+      outputEl.value = "";
+      continue;
+    }
+
+    if (!shouldRender) {
+      outputEl.value = getDataToolsOutputPlaceholder(outputId, renderedBytes.length, totalBytes);
+      continue;
+    }
+
+    if (hexValues == null) {
+      hexValues = Array.from(renderedBytes, (byte) =>
+        byte.toString(16).padStart(2, "0").toUpperCase(),
+      );
+      binaryValues = Array.from(renderedBytes, (byte) =>
+        byte.toString(2).padStart(8, "0"),
+      );
+      decimalValues = Array.from(renderedBytes, (byte) => String(byte));
+      asciiText = bytesToPrintableAscii(renderedBytes);
+      base64Text = bytesToBase64(renderedBytes);
+      hexOutputText = buildRenderedSelectionMap(hexValues, {
+        valuesPerLine: 16,
+      }).text;
+    }
+
+    switch (outputId) {
+      case "data-tools-hex-output":
+        outputEl.value = hexOutputText;
+        break;
+      case "data-tools-binary-output":
+        outputEl.value = binaryValues.join(" ");
+        break;
+      case "data-tools-decimal-output":
+        outputEl.value = decimalValues.join(" ");
+        break;
+      case "data-tools-ascii-output":
+        outputEl.value = asciiText;
+        break;
+      case "data-tools-base64-output":
+        outputEl.value = base64Text;
+        break;
+    }
+  }
 
   updateDataToolsSelectionMaps(
-    document.getElementById("data-tools-format")?.value || DEFAULT_DATA_TOOLS_FORMAT,
+    activeFormat,
     document.getElementById("data-tools-input")?.value || "",
     renderedBytes,
     {
@@ -10198,6 +10317,18 @@ function setExpandedConvertedOutput(expandedOutputId) {
       Boolean(expandedOutputId) && !isExpanded,
     );
   });
+
+  if (expandedOutputId) {
+    dataToolsRenderedOutputPanes.add(expandedOutputId);
+    renderDataToolsOutputPage({ reset: false });
+    const expandedEl = document.getElementById(expandedOutputId);
+    if (expandedEl) {
+      requestAnimationFrame(() => {
+        expandedEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        expandedEl.focus({ preventScroll: true });
+      });
+    }
+  }
 }
 
 // Handles bind converted output expand handlers.
@@ -10789,6 +10920,8 @@ function updateDataToolsInputAfterSearchReplace(nextValue, selectionStart, selec
   const inputEl = document.getElementById("data-tools-input");
   if (!inputEl) return;
   inputEl.value = nextValue;
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
   if (
     Number.isInteger(selectionStart) &&
     Number.isInteger(selectionEnd) &&
@@ -11110,6 +11243,31 @@ function runDataToolsPcreReplaceAll() {
   }
 }
 
+// Parses the current Conv input into bytes, preferring the untracked full
+// source bytes when the displayed input has not been edited.
+function getCurrentDataToolsInputBytes() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) return null;
+  const canUseOriginal =
+    !dataToolsInputEditedFlag &&
+    dataToolsOriginalInputBytes instanceof Uint8Array &&
+    dataToolsOriginalInputBytes.length > 0;
+  if (canUseOriginal) {
+    console.log("[ConvDebug] getCurrentDataToolsInputBytes using original", dataToolsOriginalInputBytes.length);
+    return dataToolsOriginalInputBytes;
+  }
+  console.log("[ConvDebug] getCurrentDataToolsInputBytes cannot use original; editedFlag=", dataToolsInputEditedFlag, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "originalLength=", dataToolsOriginalInputBytes?.length);
+  try {
+    const parsed = parseDataToolsInput(formatEl.value, inputEl.value);
+    console.log("[ConvDebug] getCurrentDataToolsInputBytes parsed from textarea", parsed.length);
+    return parsed;
+  } catch (error) {
+    console.log("[ConvDebug] getCurrentDataToolsInputBytes parse error", error?.message);
+    return null;
+  }
+}
+
 // Runs data tools conversion.
 async function runDataToolsConversion(options = {}) {
   const suppressHistory = Boolean(options?.suppressHistory);
@@ -11121,7 +11279,14 @@ async function runDataToolsConversion(options = {}) {
   await yieldToRenderer();
 
   try {
-    const bytes = parseDataToolsInput(formatEl.value, inputEl.value);
+    const canUseOriginal =
+      !dataToolsInputEditedFlag &&
+      dataToolsOriginalInputBytes instanceof Uint8Array &&
+      dataToolsOriginalInputBytes.length > 0;
+    const bytes = canUseOriginal
+      ? dataToolsOriginalInputBytes
+      : parseDataToolsInput(formatEl.value, inputEl.value);
+    console.log("[ConvDebug] runDataToolsConversion canUseOriginal=", canUseOriginal, "bytes.length=", bytes.length, "editedFlag=", dataToolsInputEditedFlag, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array);
     const isLargePayload = bytes.length > DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES;
     if (isLargePayload) {
       await yieldToRenderer();
@@ -11196,11 +11361,18 @@ async function runDataToolsConversion(options = {}) {
     }
     if (!suppressCommit) {
       markDataToolsInputCommitted();
+      if (canUseOriginal && dataToolsOriginalInputBytes instanceof Uint8Array) {
+        console.log("[ConvDebug] runDataToolsConversion preserving original bytes length=", bytes.length);
+        dataToolsOriginalInputBytes = bytes;
+        dataToolsInputEditedFlag = false;
+      } else {
+        console.log("[ConvDebug] runDataToolsConversion NOT preserving original; canUseOriginal=", canUseOriginal, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array);
+      }
     }
 
 
   } catch (error) {
-    resetDataToolsOutputs();
+    console.error("[ConvDebug] runDataToolsConversion error:", error);
     errorEl.textContent =
       error && typeof error === "object" && "message" in error
         ? error.message
@@ -13185,7 +13357,7 @@ function clearProtoDecoderOutput() {
 
 // Runs deferred data tools analysis for active subtab.
 function runDeferredDataToolsAnalysisForActiveSubtab() {
-  const bytes = dataToolsLastConversionBytes;
+  const bytes = getCurrentDataToolsInputBytes();
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
   const activeSubtab = getActiveConvSubtab();
   if (activeSubtab === CONV_HASHES_SUBTAB) {
@@ -13301,11 +13473,7 @@ function refreshExtractionPanelForCurrentConvInput() {
   extractionPanelSelectedEntry = null;
   clearExtractionResultsForStats();
 
-  try {
-    extractionPanelCurrentBytes = parseDataToolsInput(formatEl.value, inputEl.value);
-  } catch {
-    extractionPanelCurrentBytes = new Uint8Array();
-  }
+  extractionPanelCurrentBytes = getCurrentDataToolsInputBytes() || new Uint8Array();
 
   const fmt = inferExtractionFormatName(extractionPanelCurrentBytes);
   extractionPanelCurrentFormat = fmt;
@@ -13483,9 +13651,14 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
     statusUpdate("Status: Conv input fields are unavailable");
     return false;
   }
-  inputEl.value = bytesToHexString(bytes);
+  console.log("[ConvDebug] loadExtractionResultIntoConv bytes.length=", bytes.length);
+  dataToolsOriginalInputBytes = bytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = bytes;
+  inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(fileNameHint || "");
+  markDataToolsInputCommitted();
   showDataTools(CONV_CONVERSIONS_SUBTAB);
   runDataToolsConversion();
   statusUpdate(`Status: Loaded extracted/decompressed data into Conv (${bytes.length} bytes)`);
@@ -13528,9 +13701,13 @@ function loadExtractionResultIntoHashesSubtab(bytes, fileNameHint) {
     statusUpdate("Status: Conv input fields are unavailable");
     return false;
   }
-  inputEl.value = bytesToHexString(bytes);
+  dataToolsOriginalInputBytes = bytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = bytes;
+  inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(fileNameHint || "");
+  markDataToolsInputCommitted();
   showDataTools(CONV_HASHES_SUBTAB);
   runDeferredDataToolsAnalysisForActiveSubtab();
   statusUpdate(`Status: Loaded extracted file into Hashes (${bytes.length} bytes)`);
@@ -13789,13 +13966,19 @@ const cryptPanel = createCryptPanel({
     const normalizedHex = String(hexValue || "").trim();
     const normalizedUtf8 = String(utf8Value || "");
     if (normalizedHex) {
-      inputEl.value = normalizedHex;
+      dataToolsOriginalInputBytes = hexStringToUint8Array(normalizedHex);
+      dataToolsInputEditedFlag = false;
+      dataToolsLastConversionBytes = dataToolsOriginalInputBytes;
+      inputEl.value = formatHexInputBytesWithCap(dataToolsOriginalInputBytes);
       formatEl.value = "hex";
     } else {
+      dataToolsOriginalInputBytes = null;
+      dataToolsInputEditedFlag = true;
       inputEl.value = normalizedUtf8;
       formatEl.value = "ascii";
     }
     setDataToolsFileNameGuess("");
+    markDataToolsInputCommitted();
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
   },
@@ -15211,6 +15394,8 @@ function loadContextValueIntoDataTools(format) {
   if (!activeContextConversionText) return;
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
   setDataToolsFileNameGuess("");
@@ -15249,9 +15434,14 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = payloadHex;
+  const payloadBytes = hexStringToUint8Array(payloadHex);
+  dataToolsOriginalInputBytes = payloadBytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = payloadBytes;
+  inputEl.value = formatHexInputBytesWithCap(payloadBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess("");
+  markDataToolsInputCommitted();
   showDataTools();
   runDataToolsConversion();
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
@@ -15276,9 +15466,13 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
 
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = bytesToHexString(decompressedCandidate.bytes);
+  dataToolsOriginalInputBytes = decompressedCandidate.bytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = decompressedCandidate.bytes;
+  inputEl.value = formatHexInputBytesWithCap(decompressedCandidate.bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess("");
+  markDataToolsInputCommitted();
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -15323,9 +15517,12 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
   }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
   inputEl.value = cursorAsciiLoadData.value;
   formatEl.value = cursorAsciiLoadData.format;
   setDataToolsFileNameGuess("");
+  markDataToolsInputCommitted();
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -15915,6 +16112,18 @@ function bytesToHexString(bytes) {
   return Array.from(bytes || [])
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+// Formats bytes for the Conv input textarea, capping display at 8 KB to
+// keep large payloads responsive. The full Uint8Array remains in memory.
+function formatHexInputBytesWithCap(bytes) {
+  const displayBytes = (bytes || []).slice(0, DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES);
+  let normalized = formatHexInputBytes(displayBytes);
+  if ((bytes || []).length > DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES) {
+    normalized +=
+      `\n\n[Input truncated for display. ${(bytes || []).length.toLocaleString()} bytes total; only ${DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES.toLocaleString()} bytes shown.]`;
+  }
+  return normalized;
 }
 
 // Handles hex string to Uint8Array.
@@ -17577,9 +17786,13 @@ function loadCarvedFileCandidateIntoConvTab(candidate) {
     return false;
   }
 
-  inputEl.value = bytesToHexString(candidateBytes);
+  dataToolsOriginalInputBytes = candidateBytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = candidateBytes;
+  inputEl.value = formatHexInputBytesWithCap(candidateBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(candidate.fileName || "");
+  markDataToolsInputCommitted();
   showDataTools(CONV_CONVERSIONS_SUBTAB);
   runDataToolsConversion();
 
@@ -17650,9 +17863,13 @@ async function loadManualFileIntoConvTabFromContextMenu() {
       return;
     }
 
-    inputEl.value = bytesToHexString(bytes);
+    dataToolsOriginalInputBytes = bytes;
+    dataToolsInputEditedFlag = false;
+    dataToolsLastConversionBytes = bytes;
+    inputEl.value = formatHexInputBytesWithCap(bytes);
     formatEl.value = "hex";
     setDataToolsFileNameGuess(selectedFile.fileName || "");
+    markDataToolsInputCommitted();
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
 
@@ -18565,8 +18782,14 @@ async function _doFollowStreamToConv(
 
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = outputHex;
+  const streamBytes = hexStringToUint8Array(outputHex);
+  console.log("[ConvDebug] followStream bytes.length=", streamBytes.length);
+  dataToolsOriginalInputBytes = streamBytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = streamBytes;
+  inputEl.value = formatHexInputBytesWithCap(streamBytes);
   formatEl.value = "hex";
+  markDataToolsInputCommitted();
   showDataTools();
   await yieldToRenderer();
   runDataToolsConversion();
@@ -19531,7 +19754,11 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   }
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  inputEl.value = outputHex;
+  const httpBytes = hexStringToUint8Array(outputHex);
+  dataToolsOriginalInputBytes = httpBytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = httpBytes;
+  inputEl.value = formatHexInputBytesWithCap(httpBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(
     guessHttpBodyFilenameFromPacket(
@@ -19539,6 +19766,7 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
       decompress ? "http-body-decompressed" : "http-body",
     ),
   );
+  markDataToolsInputCommitted();
   showDataTools();
   runDataToolsConversion();
   writeLogEntry(
@@ -20198,6 +20426,7 @@ document.getElementById("settings-llm-retry-count").addEventListener("change", (
 document
   .getElementById("conv-subtab-conversions")
   .addEventListener("click", () => {
+    console.log("[ConvDebug] subtab click: conversions; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_CONVERSIONS_SUBTAB);
     normalizeDataToolsHexInputFormatting();
@@ -20206,6 +20435,7 @@ document
 document
   .getElementById("conv-subtab-hashes")
   .addEventListener("click", () => {
+    console.log("[ConvDebug] subtab click: hashes; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_HASHES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -20213,6 +20443,7 @@ document
 document
   .getElementById("conv-subtab-extraction")
   .addEventListener("click", () => {
+    console.log("[ConvDebug] subtab click: extraction; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_EXTRACTION_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -20220,6 +20451,7 @@ document
 document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => {
+    console.log("[ConvDebug] subtab click: decodes; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     // Manual Decodes tab open keeps the default stream-based decoder behavior.
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_DECODES_SUBTAB);
@@ -20466,11 +20698,13 @@ document
 document
   .getElementById("data-tools-send-to-decodes-btn")
   .addEventListener("click", async () => {
-    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
-    const hasConvertedBytes =
-      dataToolsLastConversionBytes instanceof Uint8Array &&
-      dataToolsLastConversionBytes.length > 0;
-    if (!hasConvertedBytes) return;
+    console.log("[ConvDebug] action click: send-to-decodes");
+    const bytes = getCurrentDataToolsInputBytes();
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      statusUpdate("Status: No valid data to send to Decodes.");
+      return;
+    }
+    dataToolsLastConversionBytes = bytes;
     dataToolsDecodeUseRawConvInputOverride = true;
     setConvSubtab(CONV_DECODES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -20478,11 +20712,10 @@ document
 document
   .getElementById("data-tools-save-btn")
   .addEventListener("click", async () => {
-    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
-    const bytes = dataToolsLastConversionBytes;
-    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
-    if (!hasConvertedBytes) {
-      statusUpdate("Status: Convert data before saving.");
+    console.log("[ConvDebug] action click: save");
+    const bytes = getCurrentDataToolsInputBytes();
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      statusUpdate("Status: No valid data to save.");
       return;
     }
     const hexString = Array.from(bytes, (byte) =>
@@ -20500,24 +20733,23 @@ document
 document
   .getElementById("data-tools-hash-btn")
   .addEventListener("click", async () => {
-    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
-    const bytes = dataToolsLastConversionBytes;
-    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
-    if (!hasConvertedBytes) {
-      statusUpdate("Status: Convert data before hashing.");
+    console.log("[ConvDebug] action click: hash");
+    const bytes = getCurrentDataToolsInputBytes();
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      statusUpdate("Status: No valid data to hash.");
       return;
     }
+    dataToolsLastConversionBytes = bytes;
     computeDataToolsHashes(bytes);
     setConvSubtab(CONV_HASHES_SUBTAB);
   });
 document
   .getElementById("data-tools-threat-intel-btn")
   .addEventListener("click", async () => {
-    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
-    const bytes = dataToolsLastConversionBytes;
-    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
-    if (!hasConvertedBytes) {
-      statusUpdate("Status: Convert data before looking up threat intel.");
+    console.log("[ConvDebug] action click: threat-intel");
+    const bytes = getCurrentDataToolsInputBytes();
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+      statusUpdate("Status: No valid data for threat intel lookup.");
       return;
     }
     if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
@@ -20573,6 +20805,10 @@ document
 bindConvertedOutputExpandHandlers();
 updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
+  console.log("[ConvDebug] input event fired; clearing original bytes");
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
+  console.log("[ConvDebug] state after input event: originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
   dataToolsHistorySelectEl.value = "";
   setDataToolsFileNameGuess("");
   updateDataToolsHexHighlights();
@@ -20585,15 +20821,11 @@ document.getElementById("data-tools-input").addEventListener("input", () => {
 document.getElementById("data-tools-input").addEventListener("paste", () => {
   const formatEl = document.getElementById("data-tools-format");
   if (formatEl?.value !== "hex") return;
+  console.log("[ConvDebug] paste event fired; clearing original bytes");
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
   requestAnimationFrame(() => {
-    const inputEl = document.getElementById("data-tools-input");
-    try {
-      const bytes = parseDataToolsInput("hex", inputEl.value);
-      inputEl.value = formatHexInputBytes(bytes);
-      updateDataToolsHexHighlights();
-      syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
-      updateDataToolsInputEditedState();
-    } catch { /* leave as-is if not yet valid */ }
+    normalizeDataToolsHexInputFormatting();
   });
 });
 document.getElementById("data-tools-input").addEventListener("blur", () => {
@@ -20601,25 +20833,19 @@ document.getElementById("data-tools-input").addEventListener("blur", () => {
   if (formatEl?.value !== "hex") return;
   requestAnimationFrame(() => {
     const nextFocusedId = document.activeElement?.id || "";
+    console.log("[ConvDebug] blur handler nextFocusedId=", nextFocusedId, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     if (
       DATA_TOOLS_SELECTION_FIELD_IDS.includes(nextFocusedId) &&
       nextFocusedId !== "data-tools-input"
     ) {
       return;
     }
-    const inputEl = document.getElementById("data-tools-input");
-    if (!inputEl.value.trim()) return;
-    try {
-      const bytes = parseDataToolsInput("hex", inputEl.value);
-      inputEl.value = formatHexInputBytes(bytes);
-      updateDataToolsHexHighlights();
-      syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
-      updateDataToolsInputEditedState();
-    } catch { /* leave as-is if invalid */ }
+    normalizeDataToolsHexInputFormatting();
   });
 });
 document.getElementById("data-tools-format").addEventListener("change", () => {
   dataToolsHistorySelectEl.value = "";
+  console.log("[ConvDebug] format change handler; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
   if (document.getElementById("data-tools-format")?.value === "hex") {
     normalizeDataToolsHexInputFormatting();
     return;
@@ -20748,6 +20974,9 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
   if (!Number.isInteger(selectedIndex) || selectedIndex < 0) return;
   const selectedEntry = dataToolsInputHistory[selectedIndex];
   if (!selectedEntry) return;
+  console.log("[ConvDebug] history select change clearing original bytes");
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = true;
   document.getElementById("data-tools-format").value = selectedEntry.format;
   document.getElementById("data-tools-input").value = selectedEntry.input;
   updateDataToolsHexHighlights();
