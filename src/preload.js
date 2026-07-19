@@ -1404,6 +1404,7 @@ contextBridge.exposeInMainWorld('validkeysapi', {
 
 contextBridge.exposeInMainWorld('modelsapi', {
   getOllamaModels: () => ipcRenderer.invoke('get-ollama-models'),
+  invalidateOllamaModelsCache: () => ipcRenderer.invoke('invalidate-ollama-models-cache'),
 });
 
 contextBridge.exposeInMainWorld('settingsapi', {

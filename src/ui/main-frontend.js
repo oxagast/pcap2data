@@ -15409,6 +15409,22 @@ function bytesToHexString(bytes) {
     .join("");
 }
 
+// Handles hex string to Uint8Array.
+function hexStringToUint8Array(hexString) {
+  const normalized = String(hexString || "").replace(/\s+/g, "");
+  if (normalized.length === 0 || normalized.length % 2 !== 0) {
+    return new Uint8Array();
+  }
+  if (!/^[\da-fA-F]+$/.test(normalized)) {
+    return new Uint8Array();
+  }
+  const bytes = new Uint8Array(normalized.length / 2);
+  for (let i = 0; i < normalized.length; i += 2) {
+    bytes[i / 2] = parseInt(normalized.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
 // Returns packet payload hex.
 function getPacketPayloadHex(packet) {
   return getPacketInfoPayloadHex(packet?.["packet.info"]);
@@ -16861,6 +16877,122 @@ function getHttpBodyFilenameExtension(contentTypeValue) {
   return HTTP_FILENAME_EXT_BY_MIME[normalizedType] || "bin";
 }
 
+// Extracts the multipart boundary token from a Content-Type header value.
+function extractMultipartBoundaryFromContentType(contentTypeValue) {
+  const rawValue = String(contentTypeValue || "").trim();
+  if (!rawValue) return "";
+  if (!rawValue.toLowerCase().includes("multipart")) return "";
+  const boundaryMatch = rawValue.match(
+    /\bboundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i,
+  );
+  return boundaryMatch?.[1] || boundaryMatch?.[2] || "";
+}
+
+// Extracts a filename from the first Content-Disposition header inside a
+// multipart boundary block. The boundary parameter must include the leading
+// "--" per RFC 2046.
+function extractMultipartFilenameFromBodyBytes(bodyBytes, boundaryToken) {
+  if (!bodyBytes || !(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) {
+    return "";
+  }
+  if (!boundaryToken || typeof boundaryToken !== "string") return "";
+
+  const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
+  const searchLimit = Math.min(bodyBytes.length, 8192);
+  let boundaryIndex = -1;
+  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < boundaryBytes.length; j += 1) {
+      if (bodyBytes[i + j] !== boundaryBytes[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      boundaryIndex = i;
+      break;
+    }
+  }
+  if (boundaryIndex === -1) return "";
+
+  const headerEndLimit = Math.min(
+    bodyBytes.length,
+    boundaryIndex + 4096,
+  );
+  const headerBytes = bodyBytes.slice(boundaryIndex, headerEndLimit);
+  const headerText = new TextDecoder("utf-8", { fatal: false }).decode(
+    headerBytes,
+  );
+  const firstCrlfCrlf = headerText.indexOf("\r\n\r\n");
+  const dispositionText =
+    firstCrlfCrlf !== -1 ? headerText.slice(0, firstCrlfCrlf) : headerText;
+
+  const dispositionMatch = dispositionText.match(
+    /Content-Disposition\s*:([^\r\n]*)/i,
+  );
+  if (!dispositionMatch?.[1]) return "";
+
+  return extractFilenameFromContentDisposition(dispositionMatch[1].trim());
+}
+
+// Returns the byte range of the first multipart file payload inside a
+// multipart body. The returned range is [start, end) where end points to the
+// byte before the closing boundary marker.
+function findMultipartFileByteRange(bodyBytes, boundaryToken) {
+  if (!bodyBytes || !(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) {
+    return null;
+  }
+  if (!boundaryToken || typeof boundaryToken !== "string") return null;
+
+  const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
+  const searchLimit = Math.min(bodyBytes.length, 8192);
+  let boundaryIndex = -1;
+  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < boundaryBytes.length; j += 1) {
+      if (bodyBytes[i + j] !== boundaryBytes[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      boundaryIndex = i;
+      break;
+    }
+  }
+  if (boundaryIndex === -1) return null;
+
+  const headerEndLimit = Math.min(bodyBytes.length, boundaryIndex + 4096);
+  const headerBytes = bodyBytes.slice(boundaryIndex, headerEndLimit);
+  const headerText = new TextDecoder("utf-8", { fatal: false }).decode(
+    headerBytes,
+  );
+  const firstCrlfCrlf = headerText.indexOf("\r\n\r\n");
+  if (firstCrlfCrlf === -1) return null;
+
+  const payloadStart = boundaryIndex + firstCrlfCrlf + 4;
+  if (payloadStart >= bodyBytes.length) return null;
+
+  const closeBoundaryBytes = new TextEncoder().encode(`\r\n--${boundaryToken}`);
+  let endBoundaryIndex = -1;
+  for (let i = payloadStart; i <= bodyBytes.length - closeBoundaryBytes.length; i += 1) {
+    let match = true;
+    for (let j = 0; j < closeBoundaryBytes.length; j += 1) {
+      if (bodyBytes[i + j] !== closeBoundaryBytes[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      endBoundaryIndex = i;
+      break;
+    }
+  }
+
+  const payloadEnd = endBoundaryIndex !== -1 ? endBoundaryIndex : bodyBytes.length;
+  return { start: payloadStart, end: payloadEnd };
+}
+
 // Extracts path filename from http data.
 function extractPathFilenameFromHttpData(httpData) {
   const requestTarget = String(
@@ -16890,19 +17022,34 @@ function extractPathFilenameFromHttpData(httpData) {
 // Handles guess http body filename from packet.
 function guessHttpBodyFilenameFromPacket(packet, fallbackName = "http-body") {
   const httpData = getCurrentHttpData(packet) || {};
+  const contentType = httpData["Content-Type"];
+  const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
 
   const dispositionName = extractFilenameFromContentDisposition(
     httpData["Content-Disposition"],
   );
   if (dispositionName) return dispositionName;
 
+  if (multipartBoundary) {
+    const rawPayloadHex = getCurrentRawPayloadHex(packet);
+    const bodyHex = extractHttpBodyHex(rawPayloadHex);
+    const bodyBytes = hexStringToUint8Array(bodyHex);
+    const multipartName = extractMultipartFilenameFromBodyBytes(
+      bodyBytes,
+      multipartBoundary,
+    );
+    if (multipartName) return multipartName;
+  }
+
   const pathName = extractPathFilenameFromHttpData(httpData);
   if (pathName && pathName.includes(".")) return pathName;
 
-  const extension = getHttpBodyFilenameExtension(httpData["Content-Type"]);
+  const extension = getHttpBodyFilenameExtension(contentType);
   const fallbackBase = sanitizeCarveFilename(fallbackName) || "http-body";
   if (pathName) {
-    return pathName.includes(".") ? pathName : `${pathName}.${extension}`;
+    if (pathName.includes(".")) return pathName;
+    if (extension === "html") return `${pathName}.html`;
+    return `${pathName}.${extension}`;
   }
   return `${fallbackBase}.${extension}`;
 }
@@ -17125,11 +17272,28 @@ async function listCarvableFilesForStats() {
       }
       if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
 
+      const currentHttpData = getCurrentHttpData(packet) || {};
+      const contentType = currentHttpData["Content-Type"];
+      const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
+      let candidateFileName;
+      let candidateBytes = bodyBytes;
+      if (multipartBoundary) {
+        const fileRange = findMultipartFileByteRange(bodyBytes, multipartBoundary);
+        const multipartName = extractMultipartFilenameFromBodyBytes(
+          bodyBytes,
+          multipartBoundary,
+        );
+        candidateFileName = multipartName || "";
+        if (fileRange) {
+          candidateBytes = bodyBytes.slice(fileRange.start, fileRange.end);
+        }
+      }
+
       const packetIndex =
         packet?.["packet.info"]?.["index"] ??
         packet?.["packet.info"]?.["Index"] ??
         "stream";
-      const guessedName = guessHttpBodyFilenameFromPacket(
+      const guessedName = candidateFileName || guessHttpBodyFilenameFromPacket(
         packet,
         `http-body-${packetIndex}`,
       );
@@ -17139,7 +17303,7 @@ async function listCarvableFilesForStats() {
         packetHint: packet,
         candidate: {
           fileName: guessedName,
-          bytes: bodyBytes,
+          bytes: candidateBytes,
         },
       });
     });
@@ -19438,6 +19602,11 @@ document.getElementById("settings-llm-model").addEventListener("change", (event)
 
 document.getElementById("settings-llm-api-key").addEventListener("change", () => {
   writeLogEntry("Settings updated ollamaApiKey=updated");
+  if (window.modelsapi && typeof window.modelsapi.invalidateOllamaModelsCache === "function") {
+    window.modelsapi.invalidateOllamaModelsCache().then(() => loadAvailableOllamaModels());
+  } else {
+    void loadAvailableOllamaModels();
+  }
 });
 
 document.getElementById("settings-llm-active-by-default").addEventListener("change", (event) => {

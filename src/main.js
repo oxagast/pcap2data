@@ -101,6 +101,47 @@ function isOllamaClientModuleAvailable() {
   return typeof Ollama === "function";
 }
 
+function isOllamaCloudModel(modelName) {
+  const normalized = String(modelName || "").trim().toLowerCase();
+  return normalized.endsWith(":cloud");
+}
+
+async function fetchLocalOllamaModels() {
+  if (!isOllamaClientModuleAvailable()) {
+    return [];
+  }
+
+  try {
+    const client = new Ollama();
+    const response = await client.list();
+    const modelEntries = Array.isArray(response?.models)
+      ? response.models
+      : [];
+
+    return modelEntries
+      .map((entry) => {
+        const value =
+          typeof entry?.model === "string" && entry.model.trim()
+            ? entry.model.trim()
+            : typeof entry?.name === "string" && entry.name.trim()
+              ? entry.name.trim()
+              : "";
+        if (!value) return null;
+
+        const label =
+          typeof entry?.details?.family === "string" && entry.details.family.trim()
+            ? `${entry.details.family.trim()}:${value.split(":").pop() || value}`
+            : value;
+
+        return { value, label };
+      })
+      .filter(Boolean);
+  } catch (error) {
+    console.warn("Unable to fetch local Ollama model list:", error?.message || String(error));
+    return [];
+  }
+}
+
 const OLLAMA_CLOUD_PING_URL = "https://ollama.com/api/generate";
 const OLLAMA_CLOUD_PING_MODEL = "gpt-oss:120b";
 const RENDERER_CSP = [
@@ -1699,6 +1740,7 @@ async function loadSettingsFromDisk() {
 async function saveSettingsToDisk(nextSettings) {
   const normalizedSettings = normalizeSettings(nextSettings);
   appSettings = normalizedSettings;
+  ollamaModelsCache = null;
   await ensureSettingsFileExists(normalizedSettings);
   return normalizedSettings;
 }
@@ -2727,12 +2769,54 @@ ipcMain.handle("get-valid-keys", async () => {
   return validKeys;
 });
 
+ipcMain.handle("invalidate-ollama-models-cache", () => {
+  ollamaModelsCache = null;
+  return true;
+});
+
 ipcMain.handle("get-ollama-models", async () => {
   if (ollamaModelsCache) {
     return ollamaModelsCache;
   }
 
-  const models = await loadOllamaModelsFromDisk();
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const settings = getAppSettings();
+  const apiKey = settings?.llm?.ollamaApiKey;
+  const hasApiKey = typeof apiKey === "string" && apiKey.trim();
+
+  // 1. Try live ollama models first (returns [] if ollama is unavailable).
+  const liveModels = await fetchLocalOllamaModels();
+
+  // 2. Load JSON-backed models as a fallback / supplement.
+  const diskModels = await loadOllamaModelsFromDisk();
+
+  // 3. Merge: live models take priority; disk models fill gaps.
+  const mergedByValue = new Map();
+  for (const entry of liveModels) {
+    mergedByValue.set(entry.value, entry);
+  }
+  for (const entry of diskModels) {
+    if (!mergedByValue.has(entry.value)) {
+      mergedByValue.set(entry.value, entry);
+    }
+  }
+
+  let mergedModels = Array.from(mergedByValue.values());
+
+  // 4. Filter out cloud models when no API key is configured.
+  if (!hasApiKey) {
+    mergedModels = mergedModels.filter((entry) => !isOllamaCloudModel(entry.value));
+  }
+
+  // 5. Ensure at least the default model is present.
+  const models = mergedModels.length > 0
+    ? mergedModels
+    : normalizeOllamaModelsLibrary([
+      { name: DEFAULT_SETTINGS.llm.ollamaModel, label: DEFAULT_SETTINGS.llm.ollamaModel },
+    ]);
+
   ollamaModelsCache = models;
   return models;
 });
