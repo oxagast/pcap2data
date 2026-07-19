@@ -15,7 +15,7 @@ const { exec, execFile } = require("child_process");
 const os = require("os");
 const util = require("util");
 const { pipeline } = require("stream");
-const { gzip, gunzip } = require("zlib");
+const { gzip, gunzip, brotliDecompress } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const { Agent, fetch: undiciFetch } = require("undici");
 const {
@@ -47,6 +47,7 @@ try {
 }
 const gzipAsync = util.promisify(gzip);
 const gunzipAsync = util.promisify(gunzip);
+const brotliDecompressAsync = util.promisify(brotliDecompress);
 const execFileAsync = util.promisify(execFile);
 const streamPipelineAsync = util.promisify(pipeline);
 
@@ -61,6 +62,9 @@ const SESSION_COMPRESSION_XZ = "xz";
 const SESSION_COMPRESSION_GZIP = "gzip";
 const SESSION_FORMAT_BSON_GZIP = "bson-gzip";
 const testcaseTempDir = path.join(os.tmpdir(), "testcases");
+const EXTRACTION_MAX_INPUT_BYTES = 256 * 1024 * 1024;
+const EXTRACTION_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+const EXTRACTION_SYSTEM_TIMEOUT_MS = 30_000;
 const CONSOLE_INSPECT_DEPTH = 6;
 const CONSOLE_MAX_ARRAY_LENGTH = 50;
 const ollamaDispatcherCache = new Map();
@@ -1175,6 +1179,14 @@ function normalizeArchivePath(rawPath) {
   return path.posix.normalize(String(rawPath || "").replace(/\\/g, "/"));
 }
 
+function sanitizeArchiveRelativePath(rawPath) {
+  if (typeof rawPath !== "string" || !rawPath.trim()) return null;
+  const normalized = path.posix.normalize(String(rawPath).replace(/\\/g, "/"));
+  if (!normalized || normalized === ".") return null;
+  const parts = normalized.split("/").filter((part) => part && part !== "..");
+  return parts.pop() || null;
+}
+
 async function openZipDirectory(zipPath) {
   if (!unzipper || !unzipper.Open || typeof unzipper.Open.file !== "function") {
     throw new Error("Plugin zip support is unavailable (missing unzipper dependency)");
@@ -1303,6 +1315,289 @@ async function extractPluginZipToDirectory(zipPath, destinationDir) {
     const readStream = entry.stream();
     const writeStream = fs.createWriteStream(targetPath, { mode: 0o644 });
     await streamPipelineAsync(readStream, writeStream);
+  }
+}
+
+// ── Extraction / decompression service ──────────────────────────────────────
+
+function inferExtractionFormatFromBytes(bytes) {
+  if (!bytes || bytes.length < 2) return null;
+  const b = bytes;
+  if (b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b) return "gzip";
+  if (b.length >= 4 && b[0] === 0x42 && b[1] === 0x5a && b[2] === 0x68) return "bz2";
+  if (b.length >= 6 && b[0] === 0xfd && b[1] === 0x37 && b[2] === 0x7a && b[3] === 0x58 && b[4] === 0x5a && b[5] === 0x00) return "lzma";
+  if (b.length >= 3 && b[0] === 0x4c && b[1] === 0x5a && b[2] === 0x4f) return "lzo";
+  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "zip";
+  if (b.length >= 4 && (b[0] === 0x28 || b[0] === 0x29) && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd) return "brotli";
+  return null;
+}
+
+async function decompressWithSystemTool(inputPath, algorithm) {
+  const commandMap = {
+    gzip: ["gzip", ["-dc", inputPath]],
+    brotli: ["brotli", ["--decompress", "--output", "-", inputPath]],
+    bz2: ["bzip2", ["-dc", inputPath]],
+    lzma: ["xz", ["-dc", inputPath]],
+    lzo: ["lzop", ["-dc", inputPath]],
+  };
+  const spec = commandMap[algorithm];
+  if (!spec) throw new Error(`No system decompression tool configured for ${algorithm}`);
+  const [cmd, args] = spec;
+  const result = await execFileAsync(cmd, args, {
+    maxBuffer: EXTRACTION_MAX_OUTPUT_BYTES + 1024 * 1024,
+    timeout: EXTRACTION_SYSTEM_TIMEOUT_MS,
+  });
+  return Buffer.from(result.stdout, "binary");
+}
+
+async function decompressBytesMain(bytes, algorithm) {
+  if (!bytes || bytes.length === 0) {
+    throw new Error("No input bytes to decompress");
+  }
+  if (bytes.length > EXTRACTION_MAX_INPUT_BYTES) {
+    throw new Error(`Input too large for decompression (${formatByteCount(bytes.length)} > ${formatByteCount(EXTRACTION_MAX_INPUT_BYTES)})`);
+  }
+
+  const normalizedAlgorithm = String(algorithm || "").toLowerCase().replace(/^(x-)?/, "");
+  const safeAlgorithm = normalizedAlgorithm === "gz" ? "gzip" : normalizedAlgorithm;
+
+  // Internal support first.
+  if (safeAlgorithm === "gzip") {
+    return await gunzipAsync(bytes);
+  }
+  if (safeAlgorithm === "brotli") {
+    return await brotliDecompressAsync(bytes);
+  }
+  if (safeAlgorithm === "lzma" && lzmaNative) {
+    return await lzmaNative.decompress(bytes);
+  }
+  if (safeAlgorithm === "zip") {
+    throw new Error("For PKZIP archives use 'list-archive' and 'extract-archive-entry'");
+  }
+
+  // Fall back to system tools for everything else.
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ps-extract-"));
+  try {
+    const ext = safeAlgorithm === "bz2" ? "bz2" : safeAlgorithm;
+    const inputPath = path.join(tmpDir, `input.${ext}`);
+    await fs.promises.writeFile(inputPath, bytes);
+    return await decompressWithSystemTool(inputPath, safeAlgorithm === "xz" ? "lzma" : safeAlgorithm);
+  } finally {
+    fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
+  }
+}
+
+async function listArchiveEntriesMain(bytes) {
+  if (!bytes || bytes.length === 0) throw new Error("No archive bytes to inspect");
+  if (bytes.length > EXTRACTION_MAX_INPUT_BYTES) {
+    throw new Error(`Archive too large (${formatByteCount(bytes.length)} > ${formatByteCount(EXTRACTION_MAX_INPUT_BYTES)})`);
+  }
+  const detected = inferExtractionFormatFromBytes(bytes);
+  if (detected !== "zip") {
+    throw new Error("Archive browsing is only supported for PKZIP (.zip) files");
+  }
+  if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
+    throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+  }
+  const directory = await unzipper.Open.buffer(bytes);
+  return directory.files.map((entry) => {
+    const type = entry.type === "Directory" ? "directory" : "file";
+    const isSafe = isSafeArchiveRelativePath(entry.path);
+    const safePath = isSafe
+      ? normalizeArchivePath(entry.path)
+      : sanitizeArchiveRelativePath(entry.path);
+    return {
+      path: entry.path,
+      safePath,
+      type,
+      compressedSize: Number.isFinite(Number(entry.compressedSize)) ? Number(entry.compressedSize) : 0,
+      uncompressedSize: Number.isFinite(Number(entry.vars?.uncompressedSize)) ? Number(entry.vars.uncompressedSize) : 0,
+      isSafe: isSafe && type !== "directory",
+      unsafeReason: isSafe ? null : "Path contains traversal or absolute components",
+    };
+  });
+}
+
+async function extractArchiveEntryMain(bytes, entryPath, safePath) {
+  if (!bytes || bytes.length === 0) throw new Error("No archive bytes to extract from");
+  if (!entryPath) throw new Error("No archive entry path specified");
+  const detected = inferExtractionFormatFromBytes(bytes);
+  if (detected !== "zip") {
+    throw new Error("Single-entry extraction is only supported for PKZIP (.zip) files");
+  }
+  if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
+    throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+  }
+  const normalizedTarget = normalizeArchivePath(entryPath);
+  const normalizedSafe = safePath ? normalizeArchivePath(safePath) : null;
+  if (!isSafeArchiveRelativePath(normalizedTarget) && !normalizedSafe) {
+    throw new Error(`Unsafe archive entry path: ${entryPath}`);
+  }
+  const directory = await unzipper.Open.buffer(bytes);
+  const entry = directory.files.find((e) => {
+    const n = normalizeArchivePath(e.path);
+    return n === normalizedTarget || (normalizedSafe && n === normalizedSafe);
+  });
+  if (!entry) throw new Error(`Archive entry not found: ${entryPath}`);
+  if (entry.type === "Directory") throw new Error("Cannot extract a directory entry");
+  const extractedBuffer = await entry.buffer();
+  if (extractedBuffer.length > EXTRACTION_MAX_OUTPUT_BYTES) {
+    throw new Error(`Extracted entry too large (${formatByteCount(extractedBuffer.length)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`);
+  }
+  return extractedBuffer;
+}
+
+function formatByteCount(n) {
+  const num = Number.isFinite(Number(n)) ? Number(n) : 0;
+  if (num >= 1024 * 1024) return `${(num / (1024 * 1024)).toFixed(2)} MiB`;
+  if (num >= 1024) return `${(num / 1024).toFixed(1)} KiB`;
+  return `${num} bytes`;
+}
+
+function installExtractionHandlers() {
+  ipcMain.handle("decompress-bytes", async (_event, { bytesBase64, algorithm } = {}) => {
+    try {
+      const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      if (input.length === 0) throw new Error("Empty input");
+      const result = await decompressBytesMain(input, algorithm);
+      return { success: true, algorithm, bytesBase64: result.toString("base64"), byteLength: result.length };
+    } catch (err) {
+      console.error("decompress-bytes error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle("list-archive", async (_event, { bytesBase64 } = {}) => {
+    try {
+      const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      const entries = await listArchiveEntriesMain(input);
+      return { success: true, format: "zip", entries };
+    } catch (err) {
+      console.error("list-archive error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle("extract-archive-entry", async (_event, { bytesBase64, entryPath, safePath } = {}) => {
+    try {
+      const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      const result = await extractArchiveEntryMain(input, entryPath, safePath);
+      return { success: true, entryPath, safePath, bytesBase64: result.toString("base64"), byteLength: result.length };
+    } catch (err) {
+      console.error("extract-archive-entry error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle("sha256-bytes", async (_event, { bytesBase64 } = {}) => {
+    try {
+      const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      if (input.length === 0) throw new Error("Empty input");
+      const hash = crypto.createHash("sha256").update(input).digest("hex");
+      return { success: true, sha256: hash };
+    } catch (err) {
+      console.error("sha256-bytes error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle("upload-virustotal", async (_event, { bytesBase64, fileName, apiKey } = {}) => {
+    try {
+      const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      if (input.length === 0) throw new Error("Empty input");
+      if (input.length > 32 * 1024 * 1024) throw new Error("VirusTotal upload limited to 32 MiB");
+      const key = String(apiKey || getBackendVirusTotalApiKeyFromSettings() || "").trim();
+      if (!key) throw new Error("VirusTotal API key is required");
+      const result = await uploadFileToVirusTotal(input, String(fileName || "sample.bin"), key);
+      return { success: true, ...result };
+    } catch (err) {
+      console.error("upload-virustotal error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+}
+
+async function uploadFileToVirusTotal(fileBuffer, fileName, apiKey) {
+  const boundary = `----PacketSnitchFormBoundary${crypto.randomBytes(8).toString("hex")}`;
+  const disposition = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${String(fileName).replace(/"/g, "")}"\r\n` +
+    `Content-Type: application/octet-stream\r\n\r\n`,
+    "utf-8",
+  );
+  const closing = Buffer.from(`\r\n--${boundary}--\r\n`, "utf-8");
+  const body = Buffer.concat([disposition, fileBuffer, closing]);
+
+  const response = await undiciFetch("https://www.virustotal.com/api/v3/files", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "x-apikey": apiKey,
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(body.length),
+    },
+    body,
+  });
+
+  const responseText = await response.text().catch(() => "");
+  const responseData = (() => {
+    try {
+      return JSON.parse(responseText);
+    } catch (_err) {
+      return {};
+    }
+  })();
+
+  if (response.status === 409) {
+    const analysisId = responseData?.data?.id || responseData?.data?.attributes?.analysis_id || null;
+    return {
+      analysisId,
+      lookupType: "hash",
+      lookupValue: responseData?.meta?.file_info?.sha256 || null,
+      sourceUrl: analysisId ? `https://www.virustotal.com/gui/file-analysis/${analysisId}` : null,
+      analysis: buildVirusTotalAnalysisSummary(responseData),
+      raw: responseData,
+      alreadySubmitted: true,
+    };
+  }
+
+  if (!response.ok && response.status !== 200 && response.status !== 201) {
+    throw new Error(`VirusTotal upload failed: ${response.status} ${response.statusText} ${responseText}`);
+  }
+  const data = responseData;
+  const analysisId = data?.data?.id || data?.data?.attributes?.analysis_id || null;
+  const sha256 = data?.meta?.file_info?.sha256 || null;
+  return {
+    analysisId,
+    lookupType: "hash",
+    lookupValue: sha256,
+    sourceUrl: analysisId ? `https://www.virustotal.com/gui/file-analysis/${analysisId}` : null,
+    analysis: buildVirusTotalAnalysisSummary(data),
+    raw: data,
+  };
+}
+
+function buildVirusTotalAnalysisSummary(vtData) {
+  const stats = vtData?.data?.attributes?.stats || vtData?.data?.attributes?.last_analysis_stats || {};
+  return {
+    malicious: Number(stats.malicious || 0),
+    suspicious: Number(stats.suspicious || 0),
+    harmless: Number(stats.harmless || 0),
+    undetected: Number(stats.undetected || 0),
+    timeout: Number(stats.timeout || 0),
+    confirmedTimeout: Number(stats["confirmed-timeout"] || 0),
+    failure: Number(stats.failure || 0),
+    typeUnsupported: Number(stats["type-unsupported"] || 0),
+  };
+}
+
+function getBackendVirusTotalApiKeyFromSettings() {
+  try {
+    const settings = getAppSettings();
+    return String(settings?.backend?.virusTotalApiKey || settings?.backend?.virustotal_api_key || "").trim();
+  } catch (err) {
+    console.error("getBackendVirusTotalApiKeyFromSettings error:", err);
+    return "";
   }
 }
 
@@ -2117,9 +2412,10 @@ function createWindow() {
       const hostname = new URL(url).hostname;
       const isPacketSnitchHost = hostname === 'packetsnitch.com' || hostname.endsWith('.packetsnitch.com');
       const isBuyMeACoffeeHost = hostname === 'buymeacoffee.com' || hostname.endsWith('.buymeacoffee.com');
+      const isVirusTotalHost = hostname === 'virustotal.com' || hostname.endsWith('.virustotal.com');
 
-      if ((hostname !== 'github.com' && !isPacketSnitchHost && !isBuyMeACoffeeHost)) {
-        if (!url.startsWith('https://github.com/oxasploits/packetsnitch/') && !url.startsWith('https://packetsnitch.com/') && !url.startsWith('https://www.packetsnitch.com/') && !url.startsWith('https://buymeacoffee.com/') && !url.startsWith('https://www.buymeacoffee.com/')) {
+      if ((hostname !== 'github.com' && !isPacketSnitchHost && !isBuyMeACoffeeHost && !isVirusTotalHost)) {
+        if (!url.startsWith('https://github.com/oxasploits/packetsnitch/') && !url.startsWith('https://packetsnitch.com/') && !url.startsWith('https://www.packetsnitch.com/') && !url.startsWith('https://buymeacoffee.com/') && !url.startsWith('https://www.buymeacoffee.com/') && !url.startsWith('https://www.virustotal.com/')) {
           console.log(`Blocked navigation to external domain: ${url}`);
           event.preventDefault();
         }
@@ -2305,6 +2601,7 @@ app.whenReady().then(() => {
     });
     console.log("App ready, waiting for file selection...");
     registerCaptureStoreHandlers(ipcMain);
+    installExtractionHandlers();
     // start the process that listens for the file selection and runs the backend command
     backCommModule = require("./back-comm");
     ipcMain.handle("select-file", async () => {

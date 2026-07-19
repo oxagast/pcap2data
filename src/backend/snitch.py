@@ -2253,6 +2253,64 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
     }
 
 
+def buildVirusTotalUploadResponseSummary(payload):
+    dataSection = payload.get("data") if isinstance(payload, dict) else {}
+    if not isinstance(dataSection, dict):
+        dataSection = {}
+    attributes = dataSection.get("attributes") if isinstance(dataSection.get("attributes"), dict) else {}
+    stats = attributes.get("stats") or attributes.get("last_analysis_stats") or {}
+    fileInfo = payload.get("meta", {}).get("file_info", {}) if isinstance(payload, dict) else {}
+    analysisId = str(dataSection.get("id") or "")
+    sha256 = str(fileInfo.get("sha256") or "")
+    return {
+        "success": True,
+        "lookupType": "hash",
+        "lookupValue": sha256,
+        "analysisId": analysisId,
+        "analysis": {
+            "malicious": int(stats.get("malicious") or 0),
+            "suspicious": int(stats.get("suspicious") or 0),
+            "harmless": int(stats.get("harmless") or 0),
+            "undetected": int(stats.get("undetected") or 0),
+            "timeout": int(stats.get("timeout") or 0),
+        },
+        "sourceUrl": VIRUSTOTAL_API_BASE_URL,
+        "guiUrl": f"{VIRUSTOTAL_GUI_BASE_URL}/file-analysis/{quote(analysisId)}" if analysisId else None,
+        "raw": payload,
+    }
+
+
+def uploadFileToVirusTotal(fileBuffer, fileName, apiKey):
+    import hashlib
+    import io
+
+    headers = packetSnitchRequestHeaders("application/json")
+    headers["x-apikey"] = str(apiKey or "").strip()
+    files = {
+        "file": (str(fileName), io.BytesIO(fileBuffer), "application/octet-stream"),
+    }
+    response = requests.post(
+        f"{VIRUSTOTAL_API_BASE_URL}/files",
+        files=files,
+        headers=headers,
+        timeout=30,
+        verify=False,
+    )
+    if response.status_code in {401, 403}:
+        raise Exception("VirusTotal API key is invalid or unauthorized.")
+    if response.status_code == 429:
+        raise Exception("VirusTotal rate limit exceeded. Wait before uploading again.")
+    if response.status_code == 409:
+        payload = response.json() if response.content else {}
+        summary = buildVirusTotalUploadResponseSummary(payload)
+        summary["alreadySubmitted"] = True
+        return summary
+    if response.status_code not in {200, 201}:
+        raise Exception(f"VirusTotal upload failed with HTTP {response.status_code}: {response.text[:500]}")
+    payload = response.json() if response.content else {}
+    return buildVirusTotalUploadResponseSummary(payload)
+
+
 def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
     """
     Return a direction-agnostic key for a TCP stream.
@@ -4158,6 +4216,64 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
             return None
         return json.loads(rawBody.decode("utf-8"))
 
+    def parseMultipartBody(self):
+        try:
+            contentLen = int(self.headers.get("Content-Length", "0"))
+        except Exception:
+            contentLen = 0
+        if contentLen <= 0:
+            return None
+        rawBody = self.rfile.read(contentLen)
+        if not rawBody:
+            return None
+        contentType = str(self.headers.get("Content-Type", "") or "").strip()
+        boundary = None
+        for part in contentType.split(";"):
+            part = part.strip()
+            if part.lower().startswith("boundary="):
+                boundary = part.split("=", 1)[1].strip().strip('"')
+                break
+        if not boundary:
+            return None
+        delimiter = ("--" + boundary).encode("utf-8")
+        closing = ("--" + boundary + "--").encode("utf-8")
+        parts = []
+        start = rawBody.find(delimiter)
+        if start == -1:
+            return parts
+        cursor = start + len(delimiter)
+        while True:
+            nextDelim = rawBody.find(delimiter, cursor)
+            if nextDelim == -1:
+                break
+            part = rawBody[cursor:nextDelim]
+            if part.startswith(b"\r\n"):
+                part = part[2:]
+            if part.endswith(b"\r\n"):
+                part = part[:-2]
+            headerEnd = part.find(b"\r\n\r\n")
+            if headerEnd != -1:
+                headers = part[:headerEnd].decode("utf-8", errors="ignore")
+                body = part[headerEnd + 4:]
+                name = None
+                filename = None
+                for line in headers.split("\r\n"):
+                    if line.lower().startswith("content-disposition:"):
+                        for kv in line.split(";"):
+                            kv = kv.strip()
+                            if kv.lower().startswith("name="):
+                                name = kv.split("=", 1)[1].strip().strip('"')
+                            if kv.lower().startswith("filename="):
+                                filename = kv.split("=", 1)[1].strip().strip('"')
+                if name:
+                    parts.append({"name": name, "filename": filename, "body": body})
+            cursor = nextDelim + len(delimiter)
+            if rawBody[cursor:cursor + 2] == b"--":
+                break
+            if rawBody[cursor:cursor + 2] == b"\r\n":
+                cursor += 2
+        return parts
+
     def do_GET(self):
         parsedUrl = urlparse(self.path)
         queryParams = parse_qs(parsedUrl.query or "", keep_blank_values=False)
@@ -4414,6 +4530,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
             self.sendJson(200, response)
             return
+
         self.sendJson(
             404,
             {
@@ -4485,6 +4602,57 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                     {
                         "success": False,
                         "error": str(controlError),
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+                return
+
+        if self.path == "/virustotal/upload":
+            apiKey = str(self.headers.get("x-apikey") or "").strip()
+            if not apiKey:
+                self.sendJson(
+                    400,
+                    {
+                        "success": False,
+                        "error": "Missing VirusTotal API key",
+                    },
+                )
+                return
+            try:
+                parts = self.parseMultipartBody() or []
+                filePart = next(
+                    (part for part in parts if part.get("name") == "file" and part.get("body")),
+                    None,
+                )
+                if not filePart:
+                    self.sendJson(
+                        400,
+                        {
+                            "success": False,
+                            "error": "Missing file upload body",
+                        },
+                    )
+                    return
+                fileBuffer = filePart["body"]
+                fileName = str(filePart.get("filename") or "sample.bin").strip() or "sample.bin"
+                if len(fileBuffer) == 0:
+                    self.sendJson(
+                        400,
+                        {
+                            "success": False,
+                            "error": "Empty file upload body",
+                        },
+                    )
+                    return
+                uploadResponse = uploadFileToVirusTotal(fileBuffer, fileName, apiKey)
+                self.sendJson(200, uploadResponse)
+                return
+            except Exception as uploadError:
+                self.sendJson(
+                    500,
+                    {
+                        "success": False,
+                        "error": str(uploadError),
                         "traceback": traceback.format_exc(),
                     },
                 )

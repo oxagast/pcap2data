@@ -160,6 +160,9 @@
             <button id="conv-subtab-hashes" class="crypt-subtab-btn">
               Hashes
             </button>
+            <button id="conv-subtab-extraction" class="crypt-subtab-btn">
+              Extraction
+            </button>
             <button id="conv-subtab-decodes" class="crypt-subtab-btn">
               Decodes
             </button>
@@ -215,6 +218,10 @@
                 <div class="data-tools-actions">
                   <button id="data-tools-convert-btn">Convert</button>
                   <button id="data-tools-send-to-decodes-btn">Send to Decodes</button>
+                  <button id="data-tools-save-btn" title="Save converted bytes">Save this data</button>
+                  <button id="data-tools-hash-btn" title="Convert and view hashes">Hash this data</button>
+                  <button id="data-tools-threat-intel-btn" title="Convert and look up SHA256 in Threat Intel">Get threat
+                    intel</button>
                   <button id="data-tools-clear-btn">Clear</button>
                 </div>
                 <div id="data-tools-simple-find-replace-section" class="data-tools-find-replace-section">
@@ -303,6 +310,54 @@
                 <div id="data-tools-output-pagination-row" class="data-tools-pagination-row" hidden>
                   <button id="data-tools-load-more-output-btn" type="button">Load more output</button>
                   <span id="data-tools-output-pagination-status"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="conv-extraction-panel" class="crypt-subtab-panel" hidden>
+            <div class="data-tools-section data-tools-extraction-section">
+              <div class="data-tools-title">Extraction</div>
+              <div class="data-tools-extraction-note">
+                Detect compression and archives from the current Conv input. Decompression and extraction run on
+                explicit click only. Archives show a browsable file tree; select a single entry to extract safely.
+              </div>
+              <div class="data-tools-extraction-detect">
+                <span id="data-tools-extraction-detect-label">Detected:</span>
+                <span id="data-tools-extraction-detect-value">—</span>
+                <button id="data-tools-extraction-decompress-btn" type="button" disabled>
+                  Decompress
+                </button>
+                <button id="data-tools-extraction-list-archive-btn" type="button" disabled>
+                  Browse Archive
+                </button>
+              </div>
+              <div id="data-tools-extraction-progress" class="data-tools-extraction-progress" hidden>
+                <span class="loading"></span>
+                <span id="data-tools-extraction-progress-text">Working…</span>
+              </div>
+              <div id="data-tools-extraction-error" class="data-tools-extraction-error" role="alert"></div>
+              <div id="data-tools-extraction-tree" class="data-tools-extraction-tree"></div>
+              <div id="data-tools-extraction-preview" class="data-tools-extraction-preview" hidden>
+                <div class="data-tools-title">Selected Entry</div>
+                <div id="data-tools-extraction-preview-meta"></div>
+                <div class="data-tools-extraction-preview-actions">
+                  <button id="data-tools-extraction-load-conv-btn" type="button">Load into Conv</button>
+                  <button id="data-tools-extraction-save-btn" type="button">Save to File</button>
+                  <button id="data-tools-extraction-hash-btn" type="button">Hash this file</button>
+                  <button id="data-tools-extraction-vt-btn" type="button">Get Threat Intel</button>
+                </div>
+              </div>
+              <div id="data-tools-extraction-output" class="data-tools-extraction-output" hidden>
+                <div class="data-tools-title">Decompressed Output</div>
+                <div class="data-tools-extraction-output-actions">
+                  <button id="data-tools-extraction-output-load-btn" type="button">Load into Conv</button>
+                  <button id="data-tools-extraction-output-save-btn" type="button">Save to File</button>
+                </div>
+                <div class="data-tools-highlight-wrap">
+                  <pre id="data-tools-extraction-output-hex" class="data-tools-highlight-layer"
+                    aria-hidden="true"></pre>
+                  <textarea id="data-tools-extraction-output-text" readonly></textarea>
                 </div>
               </div>
             </div>
@@ -1767,6 +1822,17 @@ No keystore entries saved.</pre>
       <div class="crypt-actions-row">
         <button id="session-delete-confirm-btn">Delete</button>
         <button id="session-delete-cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="info-message-dialog" hidden>
+    <div class="crypt-keystore-unlock-content info-message-dialog-content">
+      <div class="crypt-section-title" id="info-message-dialog-title">Information</div>
+      <div id="info-message-dialog-body"></div>
+      <a id="info-message-dialog-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open report</a>
+      <div class="crypt-actions-row">
+        <button id="info-message-dialog-ok-btn">OK</button>
       </div>
     </div>
   </div>

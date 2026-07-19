@@ -90,6 +90,7 @@ const {
   initConvPanel,
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
+  CONV_EXTRACTION_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
   CONV_THREAT_INTEL_SUBTAB,
@@ -11188,6 +11189,11 @@ async function runDataToolsConversion(options = {}) {
     } else {
       clearProtoDecoderOutput();
     }
+    if (!isLargePayload || getActiveConvSubtab() === CONV_EXTRACTION_SUBTAB) {
+      refreshExtractionPanelForCurrentConvInput();
+    } else {
+      resetExtractionOutputs();
+    }
     if (!suppressCommit) {
       markDataToolsInputCommitted();
     }
@@ -13185,8 +13191,520 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
   if (activeSubtab === CONV_HASHES_SUBTAB) {
     computeDataToolsHashes(bytes);
   }
+  if (activeSubtab === CONV_EXTRACTION_SUBTAB) {
+    refreshExtractionPanelForCurrentConvInput();
+  }
   if (activeSubtab === CONV_DECODES_SUBTAB) {
     runProtoDecoder(bytes);
+  }
+}
+
+// ── Extraction subtab renderer logic ────────────────────────────────────────
+
+let extractionPanelCurrentBytes = new Uint8Array();
+let extractionPanelCurrentFormat = null; // detected format label
+let extractionPanelLastResult = null;    // decompressed or extracted bytes
+let extractionPanelArchiveEntries = [];
+let extractionPanelSelectedEntry = null;
+let extractionPanelActiveOperation = null;
+
+function base64ToUint8Array(base64) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function uint8ArrayToBase64(bytes) {
+  const binaryString = Array.from(bytes)
+    .map((b) => String.fromCharCode(b))
+    .join("");
+  return btoa(binaryString);
+}
+
+function inferExtractionFormatName(bytes) {
+  if (!bytes || bytes.length < 2) return null;
+  const b = bytes;
+  if (b.length >= 2 && b[0] === 0x1f && b[1] === 0x8b) return "gzip";
+  if (b.length >= 4 && b[0] === 0x42 && b[1] === 0x5a && b[2] === 0x68) return "bz2";
+  if (b.length >= 6 && b[0] === 0xfd && b[1] === 0x37 && b[2] === 0x7a && b[3] === 0x58 && b[4] === 0x5a && b[5] === 0x00) return "lzma";
+  if (b.length >= 3 && b[0] === 0x4c && b[1] === 0x5a && b[2] === 0x4f) return "lzo";
+  if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "zip";
+  if (b.length >= 4 && (b[0] === 0x28 || b[0] === 0x29) && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd) return "brotli";
+  return null;
+}
+
+function getExtractionPanelElements() {
+  return {
+    detectValue: document.getElementById("data-tools-extraction-detect-value"),
+    decompressBtn: document.getElementById("data-tools-extraction-decompress-btn"),
+    listArchiveBtn: document.getElementById("data-tools-extraction-list-archive-btn"),
+    progress: document.getElementById("data-tools-extraction-progress"),
+    progressText: document.getElementById("data-tools-extraction-progress-text"),
+    error: document.getElementById("data-tools-extraction-error"),
+    tree: document.getElementById("data-tools-extraction-tree"),
+    preview: document.getElementById("data-tools-extraction-preview"),
+    previewMeta: document.getElementById("data-tools-extraction-preview-meta"),
+    loadConvBtn: document.getElementById("data-tools-extraction-load-conv-btn"),
+    saveBtn: document.getElementById("data-tools-extraction-save-btn"),
+    hashBtn: document.getElementById("data-tools-extraction-hash-btn"),
+    vtBtn: document.getElementById("data-tools-extraction-vt-btn"),
+    output: document.getElementById("data-tools-extraction-output"),
+    outputText: document.getElementById("data-tools-extraction-output-text"),
+    outputHex: document.getElementById("data-tools-extraction-output-hex"),
+    outputLoadBtn: document.getElementById("data-tools-extraction-output-load-btn"),
+    outputSaveBtn: document.getElementById("data-tools-extraction-output-save-btn"),
+  };
+}
+
+function showExtractionProgress(message) {
+  const { progress, progressText, error } = getExtractionPanelElements();
+  if (progress) {
+    progress.hidden = false;
+    progress.classList.add("loading");
+  }
+  if (progressText) progressText.textContent = message || "Working…";
+  if (error) error.textContent = "";
+}
+
+function hideExtractionProgress() {
+  const { progress } = getExtractionPanelElements();
+  if (progress) {
+    progress.hidden = true;
+    progress.classList.remove("loading");
+  }
+}
+
+function setExtractionError(message) {
+  const { error } = getExtractionPanelElements();
+  if (error) error.textContent = message || "";
+  hideExtractionProgress();
+}
+
+function clearExtractionError() {
+  setExtractionError("");
+}
+
+function refreshExtractionPanelForCurrentConvInput() {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const els = getExtractionPanelElements();
+  if (!inputEl || !formatEl || !els.detectValue) return;
+
+  extractionPanelCurrentBytes = new Uint8Array();
+  extractionPanelCurrentFormat = null;
+  extractionPanelLastResult = null;
+  extractionPanelArchiveEntries = [];
+  extractionPanelSelectedEntry = null;
+  clearExtractionResultsForStats();
+
+  try {
+    extractionPanelCurrentBytes = parseDataToolsInput(formatEl.value, inputEl.value);
+  } catch {
+    extractionPanelCurrentBytes = new Uint8Array();
+  }
+
+  const fmt = inferExtractionFormatName(extractionPanelCurrentBytes);
+  extractionPanelCurrentFormat = fmt;
+
+  els.detectValue.textContent = fmt ? fmt.toUpperCase() : "None / unknown";
+  els.decompressBtn.disabled = !fmt || fmt === "zip";
+  els.listArchiveBtn.disabled = fmt !== "zip";
+  if (els.tree) els.tree.innerHTML = "";
+  if (els.preview) els.preview.hidden = true;
+  if (els.output) els.output.hidden = true;
+  clearExtractionError();
+}
+
+function setExtractionOutputText(bytes) {
+  const { output, outputText, outputHex } = getExtractionPanelElements();
+  if (!outputText || !outputHex || !output) return;
+  output.hidden = false;
+  const hexString = bytesToHexString(bytes);
+  outputHex.textContent = hexString;
+  outputText.value = hexString;
+}
+
+async function handleExtractionDecompress() {
+  const fmt = extractionPanelCurrentFormat;
+  if (!fmt || fmt === "zip") return;
+  if (!window.extractapi || typeof window.extractapi.decompress !== "function") {
+    setExtractionError("Extraction API is unavailable.");
+    return;
+  }
+  showExtractionProgress(`Decompressing ${fmt.toUpperCase()}…`);
+  try {
+    const response = await window.extractapi.decompress({
+      bytesBase64: uint8ArrayToBase64(extractionPanelCurrentBytes),
+      algorithm: fmt,
+    });
+    if (!response?.success) {
+      setExtractionError(response?.error || "Decompression failed.");
+      return;
+    }
+    const bytes = base64ToUint8Array(response.bytesBase64);
+    extractionPanelLastResult = bytes;
+    registerExtractionResultForStats(
+      extractionPanelCurrentFormat || "decompressed.bin",
+      bytes,
+    );
+    setExtractionOutputText(bytes);
+    statusUpdate(
+      `Status: Decompressed ${fmt.toUpperCase()} into ${bytes.length} bytes`,
+    );
+  } catch (err) {
+    setExtractionError(err?.message || String(err));
+  } finally {
+    hideExtractionProgress();
+  }
+}
+
+async function handleExtractionListArchive() {
+  if (extractionPanelCurrentFormat !== "zip") return;
+  if (!window.extractapi || typeof window.extractapi.listArchive !== "function") {
+    setExtractionError("Extraction API is unavailable.");
+    return;
+  }
+  showExtractionProgress("Reading archive contents…");
+  try {
+    const response = await window.extractapi.listArchive({
+      bytesBase64: uint8ArrayToBase64(extractionPanelCurrentBytes),
+    });
+    if (!response?.success) {
+      setExtractionError(response?.error || "Archive listing failed.");
+      return;
+    }
+    extractionPanelArchiveEntries = Array.isArray(response.entries) ? response.entries : [];
+    renderExtractionArchiveTree(extractionPanelArchiveEntries);
+    statusUpdate(
+      `Status: Listed ${extractionPanelArchiveEntries.length} archive entries`,
+    );
+  } catch (err) {
+    setExtractionError(err?.message || String(err));
+  } finally {
+    hideExtractionProgress();
+  }
+}
+
+function renderExtractionArchiveTree(entries) {
+  const { tree } = getExtractionPanelElements();
+  if (!tree) return;
+  tree.innerHTML = "";
+  if (!entries.length) {
+    tree.textContent = "No entries found.";
+    return;
+  }
+
+  const list = document.createElement("ul");
+  list.className = "data-tools-extraction-tree-list";
+  entries.forEach((entry) => {
+    const item = document.createElement("li");
+    item.className = "data-tools-extraction-tree-item";
+    const isDir = entry.type === "directory";
+    const isExtractable = !isDir && !!entry.safePath;
+    const safeBadge = entry.isSafe && !isDir
+      ? `<span class="data-tools-extraction-safe" title="Safe relative path">✓</span>`
+      : `<span class="data-tools-extraction-unsafe" title="${escapeHtml(entry.unsafeReason || "Unsafe or non-extractable")}">⚠</span>`;
+    const sizeText = isDir
+      ? "dir"
+      : `${entry.uncompressedSize || entry.compressedSize || 0} bytes`;
+    item.innerHTML = `${safeBadge} <span class="data-tools-extraction-path">${escapeHtml(entry.path)}</span> <span class="data-tools-extraction-size">(${escapeHtml(String(sizeText))})</span>`;
+    if (isExtractable) {
+      const extractBtn = document.createElement("button");
+      extractBtn.type = "button";
+      extractBtn.textContent = entry.isSafe ? "Extract" : "Extract (safe)";
+      extractBtn.className = "data-tools-extraction-extract-entry-btn";
+      extractBtn.addEventListener("click", () => handleExtractionExtractEntry(entry));
+      item.appendChild(extractBtn);
+    }
+    list.appendChild(item);
+  });
+  tree.appendChild(list);
+}
+
+async function handleExtractionExtractEntry(entry) {
+  if (!entry?.safePath || entry.type === "directory") return;
+  if (!window.extractapi || typeof window.extractapi.extractArchiveEntry !== "function") {
+    setExtractionError("Extraction API is unavailable.");
+    return;
+  }
+  showExtractionProgress(`Extracting ${entry.safePath || entry.path}…`);
+  try {
+    const response = await window.extractapi.extractArchiveEntry({
+      bytesBase64: uint8ArrayToBase64(extractionPanelCurrentBytes),
+      entryPath: entry.path,
+      safePath: entry.safePath,
+    });
+    if (!response?.success) {
+      setExtractionError(response?.error || "Extraction failed.");
+      return;
+    }
+    const bytes = base64ToUint8Array(response.bytesBase64);
+    extractionPanelLastResult = bytes;
+    extractionPanelSelectedEntry = entry;
+    registerExtractionResultForStats(getBareFilename(entry.safePath) || "extracted.bin", bytes);
+    showExtractionPreview(entry, bytes);
+    statusUpdate(
+      `Status: Extracted ${entry.safePath || entry.path} (${bytes.length} bytes)`,
+    );
+  } catch (err) {
+    setExtractionError(err?.message || String(err));
+  } finally {
+    hideExtractionProgress();
+  }
+}
+
+// Returns the bare filename from a path, dropping all directories.
+function getBareFilename(filePath) {
+  if (!filePath || typeof filePath !== "string") return "";
+  return filePath.replace(/\\/g, "/").split("/").pop() || "";
+}
+
+function showExtractionPreview(entry, bytes) {
+  const { preview, previewMeta } = getExtractionPanelElements();
+  if (!preview || !previewMeta) return;
+  preview.hidden = false;
+  const displayPath = entry.safePath || entry.path;
+  const safeText = entry.isSafe
+    ? `Safe relative path (${entry.safePath})`
+    : `Path sanitized from traversal; extracted as "${displayPath}"`;
+  previewMeta.innerHTML = `<div class="data-tools-extraction-preview-name"><strong>${escapeHtml(displayPath)}</strong></div>
+    <div class="data-tools-extraction-preview-size">${bytes.length} bytes</div>
+    <div class="data-tools-extraction-preview-safety">${escapeHtml(safeText)}</div>`;
+}
+
+function loadExtractionResultIntoConv(bytes, fileNameHint) {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) {
+    statusUpdate("Status: Conv input fields are unavailable");
+    return false;
+  }
+  inputEl.value = bytesToHexString(bytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(fileNameHint || "");
+  showDataTools(CONV_CONVERSIONS_SUBTAB);
+  runDataToolsConversion();
+  statusUpdate(`Status: Loaded extracted/decompressed data into Conv (${bytes.length} bytes)`);
+  return true;
+}
+
+async function saveExtractionResultToFile(bytes, defaultName) {
+  if (!window.saveapi || typeof window.saveapi.saveText !== "function") {
+    setExtractionError("Save API is unavailable.");
+    return;
+  }
+  const safeDefaultName = String(defaultName || "extracted.bin").replace(/[\\/:*?"<>|]/g, "_");
+  const hexString = bytesToHexString(bytes);
+  try {
+    await window.saveapi.saveText({
+      text: hexString,
+      title: "Save Extracted Data",
+      defaultName: safeDefaultName,
+      filters: [
+        { name: "Binary Files", extensions: ["bin"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+    statusUpdate(`Status: Saved ${safeDefaultName}`);
+  } catch (err) {
+    setExtractionError(err?.message || String(err));
+  }
+}
+
+function getExtractionResultForSaveOrLoad() {
+  return extractionPanelLastResult instanceof Uint8Array && extractionPanelLastResult.length > 0
+    ? extractionPanelLastResult
+    : null;
+}
+
+function loadExtractionResultIntoHashesSubtab(bytes, fileNameHint) {
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) {
+    statusUpdate("Status: Conv input fields are unavailable");
+    return false;
+  }
+  inputEl.value = bytesToHexString(bytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(fileNameHint || "");
+  showDataTools(CONV_HASHES_SUBTAB);
+  runDeferredDataToolsAnalysisForActiveSubtab();
+  statusUpdate(`Status: Loaded extracted file into Hashes (${bytes.length} bytes)`);
+  return true;
+}
+
+async function uploadExtractionResultToVirusTotal(bytes, fileNameHint) {
+  if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
+    setExtractionError("VirusTotal API is unavailable.");
+    return;
+  }
+  const apiKey = getBackendVirusTotalApiKey();
+  if (!apiKey) {
+    setExtractionError("VirusTotal API key is not configured in Settings > Backend.");
+    return;
+  }
+  showExtractionProgress("Uploading to VirusTotal…");
+  try {
+    const sha256Hex = await window.extractapi.sha256Bytes({ bytesBase64: uint8ArrayToBase64(bytes) });
+    const lookupResponse = await window.snitchapi.lookupVirusTotal(sha256Hex, {
+      lookupType: "hash",
+      apiKey,
+      backendOptions: getBackendTransportOptionsFromSettings(),
+    });
+    if (lookupResponse?.success) {
+      statusUpdate(`Status: VirusTotal report found for ${fileNameHint || "file"}`);
+      showVirusTotalResultModal(lookupResponse, fileNameHint);
+      return;
+    }
+    const uploadResponse = await window.extractapi.uploadVirusTotal({
+      bytesBase64: uint8ArrayToBase64(bytes),
+      fileName: getBareFilename(fileNameHint) || "sample.bin",
+      apiKey,
+    });
+    if (!uploadResponse?.success) {
+      setExtractionError(uploadResponse?.error || "VirusTotal upload failed.");
+      return;
+    }
+    statusUpdate(`Status: Uploaded to VirusTotal; analysis ID ${uploadResponse.analysisId || ""}`);
+    showVirusTotalResultModal(uploadResponse, fileNameHint);
+  } catch (err) {
+    setExtractionError(err?.message || String(err));
+  } finally {
+    hideExtractionProgress();
+  }
+}
+
+function showVirusTotalResultModal(response, fileNameHint) {
+  const analysis = response?.analysis || {};
+  const title = `VirusTotal: ${fileNameHint || "file"}`;
+  const rows = [
+    { label: "Lookup type", value: response?.lookupType || "file" },
+    { label: "Value", value: response?.lookupValue || response?.analysisId || "-" },
+    { label: "Malicious", value: analysis.malicious ?? 0 },
+    { label: "Suspicious", value: analysis.suspicious ?? 0 },
+    { label: "Harmless", value: analysis.harmless ?? 0 },
+    { label: "Undetected", value: analysis.undetected ?? 0 },
+  ];
+  if (response?.error) {
+    rows.push({ label: "Error", value: response.error });
+  }
+  showInfoDialog(title, rows, response?.sourceUrl);
+}
+
+let activeInfoDialogResolver = null;
+
+function showInfoDialog(title, rows, linkUrl) {
+  const dialogEl = document.getElementById("info-message-dialog");
+  const titleEl = document.getElementById("info-message-dialog-title");
+  const bodyEl = document.getElementById("info-message-dialog-body");
+  const linkEl = document.getElementById("info-message-dialog-link");
+  const okBtn = document.getElementById("info-message-dialog-ok-btn");
+  if (!dialogEl || !titleEl || !bodyEl || !okBtn) {
+    window.alert?.(title);
+    return Promise.resolve();
+  }
+  if (activeInfoDialogResolver) {
+    const resolve = activeInfoDialogResolver;
+    activeInfoDialogResolver = null;
+    resolve();
+  }
+  titleEl.textContent = title;
+  bodyEl.innerHTML = "";
+  if (Array.isArray(rows) && rows.length) {
+    rows.forEach(({ label, value }) => {
+      const row = document.createElement("div");
+      row.className = "info-message-dialog-row";
+      const labelEl = document.createElement("span");
+      labelEl.className = "info-message-dialog-label";
+      labelEl.textContent = `${label}: `;
+      const valueEl = document.createElement("span");
+      valueEl.className = "info-message-dialog-value";
+      valueEl.textContent = value === undefined || value === null ? "-" : String(value);
+      row.appendChild(labelEl);
+      row.appendChild(valueEl);
+      bodyEl.appendChild(row);
+    });
+  }
+  if (linkEl) {
+    if (linkUrl) {
+      linkEl.href = linkUrl;
+      linkEl.textContent = "Open VirusTotal report";
+      linkEl.hidden = false;
+    } else {
+      linkEl.href = "#";
+      linkEl.textContent = "";
+      linkEl.hidden = true;
+    }
+  }
+  dialogEl.hidden = false;
+  okBtn.focus();
+  return new Promise((resolve) => {
+    activeInfoDialogResolver = resolve;
+  });
+}
+
+function resolveInfoDialog() {
+  const dialogEl = document.getElementById("info-message-dialog");
+  if (dialogEl) dialogEl.hidden = true;
+  if (!activeInfoDialogResolver) return;
+  const resolve = activeInfoDialogResolver;
+  activeInfoDialogResolver = null;
+  resolve();
+}
+
+function installExtractionPanelListeners() {
+  const els = getExtractionPanelElements();
+  if (els.decompressBtn) {
+    els.decompressBtn.addEventListener("click", handleExtractionDecompress);
+  }
+  if (els.listArchiveBtn) {
+    els.listArchiveBtn.addEventListener("click", handleExtractionListArchive);
+  }
+  if (els.loadConvBtn) {
+    els.loadConvBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = getBareFilename(extractionPanelSelectedEntry?.safePath || extractionPanelSelectedEntry?.path) || extractionPanelCurrentFormat || "extracted";
+      if (bytes) loadExtractionResultIntoConv(bytes, hint);
+    });
+  }
+  if (els.saveBtn) {
+    els.saveBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = getBareFilename(extractionPanelSelectedEntry?.safePath || extractionPanelSelectedEntry?.path) || extractionPanelCurrentFormat || "extracted.bin";
+      if (bytes) saveExtractionResultToFile(bytes, hint);
+    });
+  }
+  if (els.hashBtn) {
+    els.hashBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = getBareFilename(extractionPanelSelectedEntry?.safePath || extractionPanelSelectedEntry?.path) || extractionPanelCurrentFormat || "extracted";
+      if (bytes) loadExtractionResultIntoHashesSubtab(bytes, hint);
+    });
+  }
+  if (els.vtBtn) {
+    els.vtBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = getBareFilename(extractionPanelSelectedEntry?.safePath || extractionPanelSelectedEntry?.path) || extractionPanelCurrentFormat || "extracted.bin";
+      if (bytes) uploadExtractionResultToVirusTotal(bytes, hint);
+    });
+  }
+  if (els.outputLoadBtn) {
+    els.outputLoadBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = extractionPanelCurrentFormat || "decompressed";
+      if (bytes) loadExtractionResultIntoConv(bytes, hint);
+    });
+  }
+  if (els.outputSaveBtn) {
+    els.outputSaveBtn.addEventListener("click", () => {
+      const bytes = getExtractionResultForSaveOrLoad();
+      const hint = extractionPanelCurrentFormat || "decompressed.bin";
+      if (bytes) saveExtractionResultToFile(bytes, hint);
+    });
   }
 }
 
@@ -13840,16 +14358,6 @@ function getTrimmedSelectionText() {
 function getUtf8ByteLength(value) {
   const normalized = typeof value === "string" ? value : String(value || "");
   return DATA_TOOLS_TEXT_ENCODER.encode(normalized).length;
-}
-
-// Handles base64 to uint8 array.
-function base64ToUint8Array(base64Value) {
-  const decoded = window.atob(String(base64Value || ""));
-  const bytes = new Uint8Array(decoded.length);
-  for (let index = 0; index < decoded.length; index++) {
-    bytes[index] = decoded.charCodeAt(index);
-  }
-  return bytes;
 }
 
 // Returns manual conv import max bytes.
@@ -17174,7 +17682,7 @@ async function loadManualFileIntoConvTabFromContextMenu() {
 async function listCarvableFilesForStats() {
   const allPackets = getAllPacketsForHostNavigation();
   if (!Array.isArray(allPackets) || allPackets.length === 0) {
-    return [];
+    return extractionCarvableRegistry.slice();
   }
 
   const streamMap = new Map();
@@ -17310,7 +17818,9 @@ async function listCarvableFilesForStats() {
   }
 
   return carvedEntries
+    .concat(extractionCarvableRegistry.map((entry) => ({ ...entry })))
     .sort((left, right) => {
+      const protocolOrder = ["http", "ftp", "nfs", "smb", "extract"];
       const protocolDelta =
         protocolOrder.indexOf(String(left.protocol || "").toLowerCase()) -
         protocolOrder.indexOf(String(right.protocol || "").toLowerCase());
@@ -17319,6 +17829,40 @@ async function listCarvableFilesForStats() {
       return String(left.fileName || "").localeCompare(String(right.fileName || ""));
     })
     .slice(0, 300);
+}
+
+// Shared registry for extracted/decompressed results surfaced in Stats.
+let extractionCarvableRegistry = [];
+
+// Registers an extraction result so Stats can show it as a carvable file.
+function registerExtractionResultForStats(fileName, bytes) {
+  if (!bytes || !(bytes instanceof Uint8Array) || bytes.length === 0) return;
+  const safeName = sanitizeCarveFilename(fileName) || "extracted.bin";
+  const id = `extract:${safeName}:${bytes.length}:${Date.now()}`;
+  const label = `EXTRACT: ${safeName} (${bytes.length} bytes)`;
+  extractionCarvableRegistry.unshift({
+    id,
+    protocol: "EXTRACT",
+    fileName: safeName,
+    bytes,
+    byteLength: bytes.length,
+    label,
+    sourceDetail: "Conv Extraction",
+  });
+  extractionCarvableRegistry = extractionCarvableRegistry.slice(0, 50);
+}
+
+// Clears extraction carvable registry.
+function clearExtractionResultsForStats() {
+  extractionCarvableRegistry = [];
+}
+
+function resetExtractionOutputs() {
+  const els = getExtractionPanelElements();
+  if (els.tree) els.tree.innerHTML = "";
+  if (els.preview) els.preview.hidden = true;
+  if (els.output) els.output.hidden = true;
+  clearExtractionError();
 }
 
 // Handles call large language model.
@@ -19335,6 +19879,16 @@ document
   .getElementById("manual-conv-import-warning-cancel-btn")
   .addEventListener("click", () => resolveManualConvImportWarningLoad(false));
 document
+  .getElementById("info-message-dialog-ok-btn")
+  .addEventListener("click", resolveInfoDialog);
+document
+  .getElementById("info-message-dialog")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === "Escape") {
+      resolveInfoDialog();
+    }
+  });
+document
   .getElementById("manual-conv-import-warning-dialog")
   .addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -19657,6 +20211,13 @@ document
     runDeferredDataToolsAnalysisForActiveSubtab();
   });
 document
+  .getElementById("conv-subtab-extraction")
+  .addEventListener("click", () => {
+    dataToolsDecodeUseRawConvInputOverride = false;
+    setConvSubtab(CONV_EXTRACTION_SUBTAB);
+    runDeferredDataToolsAnalysisForActiveSubtab();
+  });
+document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => {
     // Manual Decodes tab open keeps the default stream-based decoder behavior.
@@ -19913,6 +20474,98 @@ document
     dataToolsDecodeUseRawConvInputOverride = true;
     setConvSubtab(CONV_DECODES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
+  });
+document
+  .getElementById("data-tools-save-btn")
+  .addEventListener("click", async () => {
+    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
+    const bytes = dataToolsLastConversionBytes;
+    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
+    if (!hasConvertedBytes) {
+      statusUpdate("Status: Convert data before saving.");
+      return;
+    }
+    const hexString = Array.from(bytes, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    window.saveapi.savePayload(hexString).then((result) => {
+      if (!result.success && !result.canceled) {
+        console.error("Save converted data failed:", result.error);
+        statusUpdate(`Status: Save failed — ${result.error || "unknown error"}`);
+      } else if (result.success) {
+        statusUpdate("Status: Converted data saved.");
+      }
+    });
+  });
+document
+  .getElementById("data-tools-hash-btn")
+  .addEventListener("click", async () => {
+    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
+    const bytes = dataToolsLastConversionBytes;
+    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
+    if (!hasConvertedBytes) {
+      statusUpdate("Status: Convert data before hashing.");
+      return;
+    }
+    computeDataToolsHashes(bytes);
+    setConvSubtab(CONV_HASHES_SUBTAB);
+  });
+document
+  .getElementById("data-tools-threat-intel-btn")
+  .addEventListener("click", async () => {
+    await runDataToolsConversion({ suppressHistory: true, suppressCommit: true });
+    const bytes = dataToolsLastConversionBytes;
+    const hasConvertedBytes = bytes instanceof Uint8Array && bytes.length > 0;
+    if (!hasConvertedBytes) {
+      statusUpdate("Status: Convert data before looking up threat intel.");
+      return;
+    }
+    if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
+      statusUpdate("Status: VirusTotal API is unavailable.");
+      return;
+    }
+    const apiKey = getBackendVirusTotalApiKey();
+    if (!apiKey) {
+      statusUpdate("Status: VirusTotal API key is not configured in Settings > Backend.");
+      return;
+    }
+    if (bytes.length > 32 * 1024 * 1024) {
+      statusUpdate("Status: Converted data exceeds VirusTotal 32 MiB upload limit.");
+      return;
+    }
+    const fileNameEl = document.getElementById("data-tools-file-name");
+    const dataToolsFileNameGuess = fileNameEl ? fileNameEl.textContent.replace(/^Filename Guess:\s*/i, "").trim() : "";
+    const fileNameHint = getBareFilename(dataToolsFileNameGuess) || "converted.bin";
+    try {
+      statusUpdate("Status: Looking up SHA256 in VirusTotal…");
+      const sha256Hex = await window.extractapi.sha256Bytes({
+        bytesBase64: uint8ArrayToBase64(bytes),
+      });
+      const lookupResponse = await window.snitchapi.lookupVirusTotal(sha256Hex, {
+        lookupType: "hash",
+        apiKey,
+        backendOptions: getBackendTransportOptionsFromSettings(),
+      });
+      if (lookupResponse?.success) {
+        statusUpdate(`Status: VirusTotal report found for ${fileNameHint}`);
+        showVirusTotalResultModal(lookupResponse, fileNameHint);
+        return;
+      }
+      statusUpdate("Status: Uploading converted data to VirusTotal…");
+      const uploadResponse = await window.extractapi.uploadVirusTotal({
+        bytesBase64: uint8ArrayToBase64(bytes),
+        fileName: fileNameHint,
+        apiKey,
+      });
+      if (!uploadResponse?.success) {
+        statusUpdate(`Status: VirusTotal upload failed — ${uploadResponse?.error || "unknown error"}`);
+        return;
+      }
+      statusUpdate(`Status: Uploaded to VirusTotal; analysis ID ${uploadResponse.analysisId || ""}`);
+      showVirusTotalResultModal(uploadResponse, fileNameHint);
+    } catch (err) {
+      statusUpdate(`Status: VirusTotal lookup/upload failed — ${err?.message || String(err)}`);
+    }
   });
 document
   .getElementById("data-tools-load-more-output-btn")
@@ -22243,6 +22896,26 @@ window.api.onError((msg) => {
   doError(msg, { backend: true });
 });
 
+if (window.snitchapi && typeof window.snitchapi.onBackendServiceState === "function") {
+  window.snitchapi.onBackendServiceState((state) => {
+    const { ready, respawnPending, attempts, error } = state || {};
+    console.log("[Backend service state]", state);
+    if (ready) {
+      refreshBackendDiagnostics({ ensureReady: false });
+      statusUpdate("Backend service connected");
+      return;
+    }
+    if (respawnPending) {
+      statusUpdate(`Backend service disconnected — respawn attempt ${attempts || 1} pending`);
+      return;
+    }
+    if (error) {
+      statusUpdate(`Backend service error: ${error}`);
+    }
+    refreshBackendDiagnostics({ ensureReady: false });
+  });
+}
+
 void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
   .then(() => loadAvailableOllamaModels())
@@ -22286,6 +22959,7 @@ onload = function () {
   markDataToolsInputCommitted();
   document.getElementById("packetInfoPane").style.display = "none";
   document.getElementById("packetPayloadPane").style.display = "none";
+  installExtractionPanelListeners();
   document.getElementById("rightside").style.display = "block";
   document.getElementById("help-btn").style.opacity = "1";
   document.getElementById("log-btn").style.opacity = "1";

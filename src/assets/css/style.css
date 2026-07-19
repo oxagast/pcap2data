@@ -1136,7 +1136,8 @@ strong {
 #follow-stream-confirm-dialog,
 #manual-conv-import-warning-dialog,
 #plugin-install-capability-dialog,
-#session-delete-dialog {
+#session-delete-dialog,
+#info-message-dialog {
   position: fixed;
   inset: 0;
   background-color: rgba(0, 0, 0, 0.65);
@@ -1156,8 +1157,44 @@ strong {
 #follow-stream-confirm-dialog[hidden],
 #manual-conv-import-warning-dialog[hidden],
 #plugin-install-capability-dialog[hidden],
-#session-delete-dialog[hidden] {
+#session-delete-dialog[hidden],
+#info-message-dialog[hidden] {
   display: none !important;
+}
+
+.info-message-dialog-content {
+  width: min(480px, 94vw);
+  max-height: min(80vh, 520px);
+}
+
+#info-message-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(55vh, 360px);
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.info-message-dialog-row {
+  display: flex;
+  gap: 8px;
+}
+
+.info-message-dialog-label {
+  color: var(--color-6);
+  flex: 0 0 100px;
+}
+
+.info-message-dialog-value {
+  color: var(--color-1);
+  word-break: break-all;
+}
+
+#info-message-dialog-link {
+  color: var(--link-color, var(--color-7));
+  font-size: 12px;
+  text-decoration: underline;
 }
 
 .plugin-install-dialog-content {
@@ -2149,6 +2186,217 @@ strong {
   background-color: var(--color-2-hover);
 }
 
+/* ── Extraction subtab ─────────────────────────────────────────────────────── */
+
+.data-tools-extraction-section {
+  margin-top: 10px;
+}
+
+.data-tools-extraction-note {
+  font-size: 12px;
+  color: var(--color-5);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.data-tools-extraction-detect {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.data-tools-extraction-detect #data-tools-extraction-detect-label {
+  font-weight: bold;
+  color: var(--color-1);
+}
+
+.data-tools-extraction-detect #data-tools-extraction-detect-value {
+  font-family: "Courier New", Courier, monospace;
+  color: var(--color-5);
+  text-transform: uppercase;
+}
+
+.data-tools-extraction-detect button {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.data-tools-extraction-detect button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.data-tools-extraction-detect button:not(:disabled):hover {
+  background-color: var(--color-2-hover);
+}
+
+.data-tools-extraction-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-5);
+  margin-bottom: 10px;
+}
+
+.data-tools-extraction-progress .loading {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-3);
+  border-top-color: var(--color-1);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.data-tools-extraction-error {
+  color: #f85149;
+  font-size: 12px;
+  margin-bottom: 10px;
+  white-space: pre-wrap;
+}
+
+.data-tools-extraction-tree {
+  margin-bottom: 10px;
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--color-3);
+  background-color: var(--data-tools-frame-bg);
+  padding: 6px;
+}
+
+.data-tools-extraction-tree-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.data-tools-extraction-tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--color-5);
+  flex-wrap: wrap;
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-safe {
+  color: #3fb950;
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-unsafe {
+  color: #f85149;
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-path {
+  word-break: break-word;
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-size {
+  color: color-mix(in srgb, var(--color-5) 70%, transparent);
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-extract-entry-btn {
+  margin-left: auto;
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.data-tools-extraction-tree-item .data-tools-extraction-extract-entry-btn:hover {
+  background-color: var(--color-2-hover);
+}
+
+.data-tools-extraction-preview {
+  border: 1px solid var(--color-3);
+  background-color: var(--data-tools-frame-bg);
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.data-tools-extraction-preview-name {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  word-break: break-word;
+  color: var(--color-5);
+}
+
+.data-tools-extraction-preview-size,
+.data-tools-extraction-preview-safety {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-5) 80%, transparent);
+}
+
+.data-tools-extraction-preview-actions,
+.data-tools-extraction-output-actions {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.data-tools-extraction-preview-actions button,
+.data-tools-extraction-output-actions button,
+.data-tools-extraction-output-load-btn,
+.data-tools-extraction-output-save-btn {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.data-tools-extraction-preview-actions button:hover,
+.data-tools-extraction-output-actions button:hover {
+  background-color: var(--color-2-hover);
+}
+
+.data-tools-extraction-output {
+  margin-bottom: 10px;
+}
+
+.data-tools-extraction-output textarea {
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 6px;
+  resize: vertical;
+}
+
+.data-tools-extraction-output .data-tools-highlight-wrap {
+  min-height: 120px;
+}
+
+.data-tools-extraction-output .data-tools-highlight-layer,
+.data-tools-extraction-output textarea {
+  position: static;
+  margin: 0;
+  width: 100%;
+  min-height: 120px;
+  box-sizing: border-box;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
 #convert-context-menu {
   position: fixed;
   z-index: 99999;
@@ -2770,6 +3018,21 @@ strong {
   padding: 4px 8px;
   font-size: 12px;
   color: var(--color-6);
+}
+
+.stats-carvable-refresh-btn {
+  float: right;
+  margin-top: -28px;
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stats-carvable-refresh-btn:hover {
+  background-color: var(--color-2-hover);
 }
 
 .stats-kv {

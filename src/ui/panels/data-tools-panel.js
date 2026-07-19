@@ -20,6 +20,7 @@ const DATA_TOOLS_HEX_BYTE_RE = /^[0-9a-fA-F]{2}$/;
 
 const CONV_CONVERSIONS_SUBTAB = "conversions";
 const CONV_HASHES_SUBTAB = "hashes";
+const CONV_EXTRACTION_SUBTAB = "extraction";
 const CONV_DECODES_SUBTAB = "decodes";
 const CONV_SUBNET_SUBTAB = "subnet";
 const CONV_THREAT_INTEL_SUBTAB = "threat-intel";
@@ -28,6 +29,7 @@ const CONV_PACKET_JSON_SUBTAB = "packet-json";
 const VALID_CONV_SUBTABS = [
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
+  CONV_EXTRACTION_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
   CONV_THREAT_INTEL_SUBTAB,
@@ -2628,6 +2630,7 @@ function setConvSubtab(tabName) {
   activeConvSubtab = tabName;
   const conversionsActive = tabName === CONV_CONVERSIONS_SUBTAB;
   const hashesActive = tabName === CONV_HASHES_SUBTAB;
+  const extractionActive = tabName === CONV_EXTRACTION_SUBTAB;
   const decodesActive = tabName === CONV_DECODES_SUBTAB;
   const subnetActive = tabName === CONV_SUBNET_SUBTAB;
   const threatIntelActive = tabName === CONV_THREAT_INTEL_SUBTAB;
@@ -2638,6 +2641,9 @@ function setConvSubtab(tabName) {
   document
     .getElementById("conv-subtab-hashes")
     .classList.toggle("active", hashesActive);
+  document
+    .getElementById("conv-subtab-extraction")
+    .classList.toggle("active", extractionActive);
   document
     .getElementById("conv-subtab-decodes")
     .classList.toggle("active", decodesActive);
@@ -2652,6 +2658,7 @@ function setConvSubtab(tabName) {
     .classList.toggle("active", packetJsonActive);
   document.getElementById("conv-conversions-panel").hidden = !conversionsActive;
   document.getElementById("conv-hashes-panel").hidden = !hashesActive;
+  document.getElementById("conv-extraction-panel").hidden = !extractionActive;
   document.getElementById("conv-decodes-panel").hidden = !decodesActive;
   document.getElementById("conv-subnet-panel").hidden = !subnetActive;
   document.getElementById("conv-threat-intel-panel").hidden = !threatIntelActive;
@@ -2667,6 +2674,7 @@ module.exports = {
   // Constants
   CONV_CONVERSIONS_SUBTAB,
   CONV_HASHES_SUBTAB,
+  CONV_EXTRACTION_SUBTAB,
   CONV_DECODES_SUBTAB,
   CONV_SUBNET_SUBTAB,
   CONV_THREAT_INTEL_SUBTAB,

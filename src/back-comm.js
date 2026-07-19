@@ -39,6 +39,8 @@ let backendHttpReadyPromise = null;
 let currentBackendHttpHost = BACKEND_HTTP_HOST;
 let currentBackendHttpPort = BACKEND_HTTP_PORT;
 let backendHttpShutdownExpected = false;
+let backendHttpRespawnAttempts = 0;
+let backendHttpRespawnTimer = null;
 const pendingJsonDataPayloadByJob = new Map();
 const jsonDataEmitTimerByJob = new Map();
 const lastJsonDataEmitAtMsByJob = new Map();
@@ -939,9 +941,9 @@ function resolveBackendRuntime() {
     snitchExecutableCandidates.find((candidatePath) => fs.existsSync(candidatePath))
     || snitchExecutableCandidates[0];
 
-  const hasBundledBackendExe = fs.existsSync(snitchExePath);
-  const usePythonBackend = isDev && !hasBundledBackendExe && fs.existsSync(backendScriptPath);
-  const canUseServerMode = Boolean(hasBundledBackendExe || hasBackendScript);
+  const hasBundledBackendExe = !isDev && fs.existsSync(snitchExePath);
+  const usePythonBackend = isDev && hasBackendScript;
+  const canUseServerMode = Boolean((!isDev && hasBundledBackendExe) || hasBackendScript);
   const backendCommandPath = usePythonBackend
     ? platform === "win32"
       ? "python"
@@ -1071,12 +1073,28 @@ async function ensureBackendHttpServerReady() {
       );
       if (expectedShutdown) {
         global.logBackend(`[Bridge] HTTP backend stopped (${descriptor})`);
+        cancelBackendHttpRespawn();
+        backendHttpRespawnAttempts = 0;
       } else if (detectedAddressInUse && readyViaExternalListener) {
         global.logBackend(
           `[Bridge] HTTP backend already running on ${currentBackendHttpHost}:${currentBackendHttpPort}; reusing existing service`,
         );
+        cancelBackendHttpRespawn();
+        backendHttpRespawnAttempts = 0;
       } else {
         global.logBackend(`[Bridge] HTTP backend exited unexpectedly (${descriptor})`);
+        backendHttpServerProc = null;
+        backendHttpReadyPromise = null;
+        if (readyViaExternalListener) {
+          global.logBackend("[Bridge] External HTTP backend is reachable; switching to it");
+          cancelBackendHttpRespawn();
+          backendHttpRespawnAttempts = 0;
+          sendBackendServiceState({ ready: true });
+          return;
+        }
+        sendBackendServiceState({ ready: false, exitCode: code, exitSignal: signal });
+        scheduleBackendHttpRespawn();
+        return;
       }
       backendHttpServerProc = null;
       backendHttpReadyPromise = null;
@@ -1085,7 +1103,11 @@ async function ensureBackendHttpServerReady() {
   });
 
   const ready = await backendHttpReadyPromise;
-  if (!ready) {
+  if (ready) {
+    cancelBackendHttpRespawn();
+    backendHttpRespawnAttempts = 0;
+    sendBackendServiceState({ ready: true });
+  } else {
     backendHttpReadyPromise = null;
   }
   return ready;
@@ -1387,6 +1409,57 @@ function removePacketsChunkFromFS(jsonPath) {
 
 function getMainWindow() {
   return BrowserWindow.getAllWindows()[0];
+}
+
+function sendBackendServiceState(state) {
+  const mainWin = getMainWindow();
+  if (!mainWin) return;
+  mainWin.webContents.send("backend-service-state", {
+    mode: "http",
+    host: currentBackendHttpHost,
+    port: currentBackendHttpPort,
+    ready: false,
+    ...state,
+  });
+}
+
+function cancelBackendHttpRespawn() {
+  if (backendHttpRespawnTimer) {
+    clearTimeout(backendHttpRespawnTimer);
+    backendHttpRespawnTimer = null;
+  }
+}
+
+function scheduleBackendHttpRespawn(reason) {
+  cancelBackendHttpRespawn();
+  const attempt = backendHttpRespawnAttempts;
+  const delayMs = Math.min(1000 * 2 ** attempt, 30000);
+  backendHttpRespawnAttempts += 1;
+  global.logBackend(
+    `[Bridge] Scheduling HTTP backend respawn in ${delayMs}ms (attempt ${backendHttpRespawnAttempts})${reason ? `: ${reason}` : ""}`,
+  );
+  sendBackendServiceState({ ready: false, respawnPending: true, attempts: backendHttpRespawnAttempts });
+  backendHttpRespawnTimer = setTimeout(() => {
+    backendHttpRespawnTimer = null;
+    global.logBackend("[Bridge] Respawning HTTP backend after unexpected exit");
+    // Reset the promise guard so ensureBackendHttpServerReady can spawn again.
+    backendHttpReadyPromise = null;
+    ensureBackendHttpServerReady()
+      .then((ready) => {
+        if (ready) {
+          backendHttpRespawnAttempts = 0;
+          global.logBackend("[Bridge] HTTP backend respawned successfully");
+          sendBackendServiceState({ ready: true, respawnPending: false });
+        } else {
+          global.logBackend("[Bridge] HTTP backend respawn failed; will retry");
+          scheduleBackendHttpRespawn("ready probe failed");
+        }
+      })
+      .catch((err) => {
+        global.logBackend("[Bridge] HTTP backend respawn error:", err?.message || String(err));
+        scheduleBackendHttpRespawn(String(err?.message || err));
+      });
+  }, delayMs);
 }
 
 function sendError(message) {

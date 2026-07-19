@@ -3315,6 +3315,13 @@ function createStatsPanel(options) {
     heading.textContent = "Carvable Files";
     section.appendChild(heading);
 
+    const refreshBtn = documentRef.createElement("button");
+    refreshBtn.type = "button";
+    refreshBtn.textContent = "Refresh";
+    refreshBtn.className = "stats-carvable-refresh-btn";
+    refreshBtn.addEventListener("click", () => loadFiles());
+    section.appendChild(refreshBtn);
+
     const noteEl = documentRef.createElement("div");
     noteEl.className = "stats-inline-note";
     noteEl.textContent = "Scanning carve candidates from HTTP/FTP/NFS/SMB streams...";

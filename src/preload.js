@@ -1286,6 +1286,11 @@ contextBridge.exposeInMainWorld('snitchapi', {
     });
   },
   shutdownBackend: () => ipcRenderer.invoke('control-backend-service', 'stop-processing'),
+  onBackendServiceState: (callback) => {
+    ipcRenderer.on('backend-service-state', (_event, payload) => {
+      callback(payload);
+    });
+  },
 });
 
 contextBridge.exposeInMainWorld('getfileapi', {
@@ -1315,6 +1320,19 @@ contextBridge.exposeInMainWorld('saveapi', {
   saveHttpBody: (bodyHex, contentType) =>
     ipcRenderer.invoke('save-http-body', bodyHex, contentType),
   saveNotes: (notesText) => ipcRenderer.invoke('save-notes', notesText),
+});
+
+contextBridge.exposeInMainWorld('extractapi', {
+  decompress: ({ bytesBase64, algorithm }) =>
+    ipcRenderer.invoke('decompress-bytes', { bytesBase64, algorithm }),
+  listArchive: ({ bytesBase64 }) =>
+    ipcRenderer.invoke('list-archive', { bytesBase64 }),
+  extractArchiveEntry: ({ bytesBase64, entryPath, safePath }) =>
+    ipcRenderer.invoke('extract-archive-entry', { bytesBase64, entryPath, safePath }),
+  sha256Bytes: ({ bytesBase64 }) =>
+    ipcRenderer.invoke('sha256-bytes', { bytesBase64 }),
+  uploadVirusTotal: ({ bytesBase64, fileName, apiKey }) =>
+    ipcRenderer.invoke('upload-virustotal', { bytesBase64, fileName, apiKey }),
 });
 
 contextBridge.exposeInMainWorld('previewapi', {
