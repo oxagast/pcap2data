@@ -277,6 +277,21 @@
                   <div id="data-tools-pcre-status" class="data-tools-find-replace-status" aria-live="polite"></div>
                 </div>
                 <div id="data-tools-error" role="alert"></div>
+                <div id="data-tools-manual-carve-row" class="data-tools-manual-carve-row">
+                  <div class="data-tools-manual-carve-title">Manual Carve</div>
+                  <div class="data-tools-manual-carve-fields">
+                    <label for="data-tools-manual-carve-position">Position</label>
+                    <input id="data-tools-manual-carve-position" type="text" inputmode="numeric" placeholder="0x..."
+                      title="Start byte position (decimal or 0x hex)" />
+                    <label for="data-tools-manual-carve-length">Length</label>
+                    <input id="data-tools-manual-carve-length" type="text" inputmode="numeric" placeholder="bytes"
+                      title="Number of bytes to carve (decimal or 0x hex)" />
+                  </div>
+                  <div class="data-tools-manual-carve-actions">
+                    <button id="data-tools-manual-carve-btn" type="button">Carve</button>
+                    <button id="data-tools-manual-carve-load-conv-btn" type="button">Load into Conv</button>
+                  </div>
+                </div>
               </div>
               <div class="data-tools-section">
                 <div class="data-tools-title">Converted Output</div>
@@ -321,17 +336,10 @@
                     1</span>
                   <span id="data-tools-output-cursor-position" class="data-tools-cursor-value"
                     title="Line-agnostic character position">Pos: 0</span>
-                </div>
-                <div id="data-tools-manual-carve-row" class="data-tools-manual-carve-row">
-                  <span class="data-tools-cursor-label">Manual Carve</span>
-                  <label for="data-tools-manual-carve-position">Position</label>
-                  <input id="data-tools-manual-carve-position" type="text" inputmode="numeric" placeholder="0x..."
-                    title="Start byte position (decimal or 0x hex)" />
-                  <label for="data-tools-manual-carve-length">Length</label>
-                  <input id="data-tools-manual-carve-length" type="text" inputmode="numeric" placeholder="bytes"
-                    title="Number of bytes to carve (decimal or 0x hex)" />
-                  <button id="data-tools-manual-carve-btn" type="button">Carve</button>
-                  <button id="data-tools-manual-carve-load-conv-btn" type="button">Load into Conv</button>
+                  <span id="data-tools-output-cursor-sel-len" class="data-tools-cursor-value"
+                    title="Selected byte count">Sel: 0</span>
+                  <span id="data-tools-output-cursor-end-remaining" class="data-tools-cursor-value"
+                    title="Bytes from selection end to stream end">End: 0</span>
                 </div>
               </div>
             </div>

@@ -9163,14 +9163,19 @@ function updateDataToolsCursorReadout(fieldId) {
   const lineEl = document.getElementById("data-tools-output-cursor-line");
   const colEl = document.getElementById("data-tools-output-cursor-column");
   const posEl = document.getElementById("data-tools-output-cursor-position");
-  if (!offsetEl || !lineEl || !colEl || !posEl) return;
+  const selLenEl = document.getElementById("data-tools-output-cursor-sel-len");
+  const endRemainingEl = document.getElementById("data-tools-output-cursor-end-remaining");
+  if (!offsetEl || !lineEl || !colEl || !posEl || !selLenEl || !endRemainingEl) return;
   const el = document.getElementById(fieldId);
   const map = dataToolsSelectionState.maps[fieldId];
+  const streamLen = dataToolsSelectionState.bytes?.length ?? 0;
   if (!el || !map) {
     offsetEl.textContent = "Offset: 0x00000000";
     lineEl.textContent = "Line: 1";
     colEl.textContent = "Col: 1";
     posEl.textContent = "Pos: 0";
+    selLenEl.textContent = "Sel: 0";
+    endRemainingEl.textContent = `End: ${streamLen}`;
     return;
   }
 
@@ -9182,12 +9187,27 @@ function updateDataToolsCursorReadout(fieldId) {
   const lastBreak = Math.max(textBefore.lastIndexOf("\n"), textBefore.lastIndexOf("\r"));
   const columnNumber = charPos - Math.max(0, lastBreak);
 
+  let selectedByteCount = 0;
+  let selectionEndByte = byteOffset;
+  if (el.selectionStart !== el.selectionEnd) {
+    const range = getDataToolsByteRangeForSelection(map, el.selectionStart, el.selectionEnd);
+    if (range) {
+      selectedByteCount = Math.max(0, range.end - range.start);
+      selectionEndByte = range.end;
+    }
+  }
+  const remainingFromEnd = selectionEndByte != null
+    ? Math.max(0, streamLen - selectionEndByte)
+    : Math.max(0, streamLen - (byteOffset ?? 0));
+
   offsetEl.textContent = byteOffset != null
     ? `Offset: 0x${byteOffset.toString(16).padStart(8, "0")}`
     : "Offset: —";
   lineEl.textContent = `Line: ${lineNumber}`;
   colEl.textContent = `Col: ${columnNumber + 1}`;
   posEl.textContent = `Pos: ${charPos}`;
+  selLenEl.textContent = `Sel: ${selectedByteCount}`;
+  endRemainingEl.textContent = `End: ${remainingFromEnd}`;
 }
 
 // Parses a position or length input that may be decimal or prefixed with 0x.

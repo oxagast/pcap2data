@@ -1593,8 +1593,7 @@ strong {
   font-size: 11px;
 }
 
-.data-tools-cursor-row,
-.data-tools-manual-carve-row {
+.data-tools-cursor-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1608,8 +1607,60 @@ strong {
   font-size: 12px;
 }
 
-.data-tools-cursor-row {
-  margin-bottom: 4px;
+.data-tools-manual-carve-row {
+  margin-top: 10px;
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  padding: 8px;
+}
+
+.data-tools-manual-carve-row .data-tools-manual-carve-title {
+  font-size: 12px;
+  color: var(--color-1);
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.data-tools-manual-carve-row .data-tools-manual-carve-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 6px;
+}
+
+.data-tools-manual-carve-row label {
+  color: var(--color-1);
+  font-size: 11px;
+}
+
+.data-tools-manual-carve-row input[type="text"] {
+  width: 80px;
+  padding: 4px 6px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+}
+
+.data-tools-manual-carve-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.data-tools-manual-carve-actions button {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.data-tools-manual-carve-actions button:hover {
+  background-color: var(--color-2-hover);
 }
 
 .data-tools-cursor-label {
@@ -1623,28 +1674,6 @@ strong {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
-}
-
-.data-tools-manual-carve-row label {
-  color: var(--color-1);
-  font-size: 11px;
-  margin-left: 4px;
-}
-
-.data-tools-manual-carve-row input[type="text"] {
-  width: 80px;
-  padding: 3px 5px;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 12px;
-  background-color: var(--data-tools-frame-bg);
-  border: 1px solid var(--color-3);
-  color: var(--color-5);
-}
-
-.data-tools-manual-carve-row button {
-  font-size: 11px;
-  padding: 4px 8px;
-  margin-left: 4px;
 }
 
 #data-tools-load-more-output-btn {
