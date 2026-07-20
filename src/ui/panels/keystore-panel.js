@@ -85,6 +85,7 @@ function createKeystorePanel({
   let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
   let sessionRebuildGeneration = 0;
   const sessionScanHydratedPacketCache = new Map();
+  let cryptRenderedKeystoreEntries = [];
 
   function setBoundedCacheEntry(cacheMap, key, value, limit) {
     if (!cacheMap || !key) return;
@@ -374,6 +375,10 @@ function createKeystorePanel({
       : cryptPersistentKeystoreEntries;
   }
 
+  function getRenderedCryptKeystoreEntries() {
+    return cryptRenderedKeystoreEntries;
+  }
+
   function getActiveKeystoreLabel() {
     return cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION
       ? SESSION_KEYCHAIN_LABEL
@@ -466,6 +471,7 @@ function createKeystorePanel({
   function renderCryptKeystoreList(listEntries = null) {
     const listEl = document.getElementById("crypt-keystore-list");
     const activeEntries = listEntries || getActiveCryptKeystoreEntries();
+    cryptRenderedKeystoreEntries = activeEntries;
     listEl.replaceChildren();
     if (!activeEntries.length) {
       const option = document.createElement("option");
@@ -2680,7 +2686,7 @@ function createKeystorePanel({
   async function loadSelectedCryptKeystoreEntry() {
     const listEl = document.getElementById("crypt-keystore-list");
     const selectedIndex = Number(listEl.value);
-    const activeEntries = getActiveCryptKeystoreEntries();
+    const activeEntries = cryptRenderedKeystoreEntries;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       statusUpdate("Status: Select a keystore entry first");
       return;
@@ -2735,8 +2741,16 @@ function createKeystorePanel({
     const selectedIndex = Number(listEl.value);
     if (
       !Number.isFinite(selectedIndex) ||
-      !cryptPersistentKeystoreEntries[selectedIndex]
+      !cryptRenderedKeystoreEntries[selectedIndex]
     ) {
+      statusUpdate("Status: Select a keystore entry first");
+      return;
+    }
+    const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
+    const persistentIndex = cryptPersistentKeystoreEntries.findIndex(
+      (entry) => entry.id === selectedEntry.id,
+    );
+    if (persistentIndex < 0) {
       statusUpdate("Status: Select a keystore entry first");
       return;
     }
@@ -2745,7 +2759,7 @@ function createKeystorePanel({
       return;
     }
     const [removedEntry] = cryptPersistentKeystoreEntries.splice(
-      selectedIndex,
+      persistentIndex,
       1,
     );
     try {
@@ -2780,13 +2794,13 @@ function createKeystorePanel({
     const selectedIndex = Number(listEl.value);
     if (
       !Number.isFinite(selectedIndex) ||
-      !cryptSessionKeystoreEntries[selectedIndex]
+      !cryptRenderedKeystoreEntries[selectedIndex]
     ) {
       statusUpdate("Status: Select a session keychain entry first");
       return;
     }
 
-    const selectedEntry = cryptSessionKeystoreEntries[selectedIndex];
+    const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
     const normalizedContent = normalizeSessionSecretValue(
       selectedEntry.content,
     );
@@ -3235,7 +3249,7 @@ function createKeystorePanel({
   async function openSelectedKeystoreLinkInBrowser() {
     const listEl = document.getElementById("crypt-keystore-list");
     const selectedIndex = Number(listEl.value);
-    const activeEntries = getActiveCryptKeystoreEntries();
+    const activeEntries = cryptRenderedKeystoreEntries;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       statusUpdate("Status: Select a keystore entry first");
       return;
@@ -3293,6 +3307,7 @@ function createKeystorePanel({
     resolveManualUriFromContextMenuDialog,
     importManualDataIntoSessionKeystore,
     getActiveCryptKeystoreEntries,
+    getRenderedCryptKeystoreEntries,
     setActiveMode(mode) {
       cryptActiveKeystoreMode = mode;
       renderCryptKeystoreList();

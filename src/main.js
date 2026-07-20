@@ -1738,10 +1738,14 @@ function getBundledThemesDir() {
 }
 
 function getBundledThemeDirs() {
-  const candidateDirs = [
-    getBundledThemesDir(),
-    path.join(process.resourcesPath, BUNDLED_THEMES_DIR_NAME),
-  ];
+  const appBundledDir = getBundledThemesDir();
+  const candidateDirs = [appBundledDir];
+  if (
+    process.resourcesPath &&
+    path.basename(process.resourcesPath) !== "resources"
+  ) {
+    candidateDirs.push(path.join(process.resourcesPath, BUNDLED_THEMES_DIR_NAME));
+  }
   return Array.from(new Set(candidateDirs.filter((entry) => typeof entry === "string" && entry.trim())));
 }
 
@@ -2924,7 +2928,7 @@ ipcMain.handle("save-packet", async (_event, packetData) => {
   }
 });
 
-ipcMain.handle("save-payload", async (_event, payloadHex) => {
+ipcMain.handle("save-payload", async (_event, payloadHex, options = {}) => {
   if (typeof payloadHex !== "string") {
     return { success: false, error: "No payload data to save" };
   }
@@ -2940,13 +2944,34 @@ ipcMain.handle("save-payload", async (_event, payloadHex) => {
     };
   }
 
+  const defaultNameRaw =
+    typeof options?.defaultName === "string" && options.defaultName.trim()
+      ? options.defaultName.trim()
+      : "packet-payload.bin";
+  const baseName = path
+    .basename(defaultNameRaw)
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\.$/, "");
+  const guessedExtensionMatch = baseName.match(/\.([^.]+)$/);
+  const guessedExtension = guessedExtensionMatch ? guessedExtensionMatch[1] : "";
+  const defaultName = guessedExtension
+    ? baseName
+    : `${baseName || "packet-payload"}.bin`;
+  const defaultExtension = guessedExtension || "bin";
+
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: "Export Packet Payload",
-    defaultPath: path.join(app.getPath("documents"), "packet-payload.bin"),
+    defaultPath: path.join(app.getPath("documents"), defaultName),
     filters: [
-      { name: "Binary Files", extensions: ["bin"] },
+      {
+        name: guessedExtension
+          ? `${guessedExtension.toUpperCase()} Files`
+          : "Binary Files",
+        extensions: [guessedExtension || "bin", "*"],
+      },
       { name: "All Files", extensions: ["*"] },
     ],
+    defaultExtension,
   });
   if (canceled || !filePath) return { success: false, canceled: true };
 

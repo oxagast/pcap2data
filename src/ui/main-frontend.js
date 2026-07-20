@@ -4904,9 +4904,7 @@ function updateDataToolsInputEditedState() {
 function normalizeDataToolsHexInputFormatting() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
-  console.log("[ConvDebug] normalizeDataToolsHexInputFormatting entered; format=", formatEl?.value, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
   if (!inputEl || !formatEl || formatEl.value !== "hex") {
-    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting early exit: not hex or missing element");
     return;
   }
   if (!inputEl.value.trim()) {
@@ -4924,7 +4922,6 @@ function normalizeDataToolsHexInputFormatting() {
     dataToolsOriginalInputBytes instanceof Uint8Array &&
     dataToolsOriginalInputBytes.length > 0
   ) {
-    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting early exit: unedited original bytes available");
     updateDataToolsHexHighlights();
     syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
     return;
@@ -4937,13 +4934,10 @@ function normalizeDataToolsHexInputFormatting() {
       normalized +=
         `\n\n[Input truncated for display. ${bytes.length.toLocaleString()} bytes total; only ${DATA_TOOLS_INPUT_DISPLAY_MAX_BYTES.toLocaleString()} bytes shown.]`;
     }
-    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting before rewrite; textarea length=", inputEl.value.length, "normalized length=", normalized.length);
     if (inputEl.value !== normalized) {
       inputEl.value = normalized;
-      console.log("[ConvDebug] normalizeDataToolsHexInputFormatting rewrote textarea");
     }
   } catch (error) {
-    console.log("[ConvDebug] normalizeDataToolsHexInputFormatting parse error", error?.message);
     // Keep user's input untouched when partially invalid.
   }
   updateDataToolsHexHighlights();
@@ -8219,7 +8213,6 @@ async function restoreSessionState(sessionState) {
         ? base64ToUint8Array(restoredBase64)
         : null;
       dataToolsInputEditedFlag = false;
-      console.log("[ConvDebug] session restore originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "originalLength=", dataToolsOriginalInputBytes?.length, "editedFlag=", dataToolsInputEditedFlag);
       dataToolsLastConversionBytes = dataToolsOriginalInputBytes || new Uint8Array();
       markDataToolsInputCommitted();
       await runDataToolsConversion();
@@ -10087,7 +10080,6 @@ function outputIdToFormat(outputId) {
 
 // Resets data tools outputs.
 function resetDataToolsOutputs() {
-  console.log("[ConvDebug] resetDataToolsOutputs clearing original bytes");
   dataToolsLastConversionBytes = new Uint8Array();
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = false;
@@ -11256,16 +11248,12 @@ function getCurrentDataToolsInputBytes() {
     dataToolsOriginalInputBytes instanceof Uint8Array &&
     dataToolsOriginalInputBytes.length > 0;
   if (canUseOriginal) {
-    console.log("[ConvDebug] getCurrentDataToolsInputBytes using original", dataToolsOriginalInputBytes.length);
     return dataToolsOriginalInputBytes;
   }
-  console.log("[ConvDebug] getCurrentDataToolsInputBytes cannot use original; editedFlag=", dataToolsInputEditedFlag, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "originalLength=", dataToolsOriginalInputBytes?.length);
   try {
     const parsed = parseDataToolsInput(formatEl.value, inputEl.value);
-    console.log("[ConvDebug] getCurrentDataToolsInputBytes parsed from textarea", parsed.length);
     return parsed;
   } catch (error) {
-    console.log("[ConvDebug] getCurrentDataToolsInputBytes parse error", error?.message);
     return null;
   }
 }
@@ -11288,7 +11276,6 @@ async function runDataToolsConversion(options = {}) {
     const bytes = canUseOriginal
       ? dataToolsOriginalInputBytes
       : parseDataToolsInput(formatEl.value, inputEl.value);
-    console.log("[ConvDebug] runDataToolsConversion canUseOriginal=", canUseOriginal, "bytes.length=", bytes.length, "editedFlag=", dataToolsInputEditedFlag, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array);
     const isLargePayload = bytes.length > DATA_TOOLS_HEAVY_ANALYSIS_DEFER_BYTES;
     if (isLargePayload) {
       await yieldToRenderer();
@@ -11364,17 +11351,16 @@ async function runDataToolsConversion(options = {}) {
     if (!suppressCommit) {
       markDataToolsInputCommitted();
       if (canUseOriginal && dataToolsOriginalInputBytes instanceof Uint8Array) {
-        console.log("[ConvDebug] runDataToolsConversion preserving original bytes length=", bytes.length);
         dataToolsOriginalInputBytes = bytes;
         dataToolsInputEditedFlag = false;
       } else {
-        console.log("[ConvDebug] runDataToolsConversion NOT preserving original; canUseOriginal=", canUseOriginal, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array);
+        dataToolsOriginalInputBytes = null;
+        dataToolsInputEditedFlag = false;
       }
     }
 
 
   } catch (error) {
-    console.error("[ConvDebug] runDataToolsConversion error:", error);
     errorEl.textContent =
       error && typeof error === "object" && "message" in error
         ? error.message
@@ -13653,7 +13639,6 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
     statusUpdate("Status: Conv input fields are unavailable");
     return false;
   }
-  console.log("[ConvDebug] loadExtractionResultIntoConv bytes.length=", bytes.length);
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = bytes;
@@ -13781,6 +13766,7 @@ function showInfoDialog(title, rows, linkUrl) {
   const titleEl = document.getElementById("info-message-dialog-title");
   const bodyEl = document.getElementById("info-message-dialog-body");
   const linkEl = document.getElementById("info-message-dialog-link");
+  const sendToNotesBtn = document.getElementById("info-message-dialog-send-to-notes-btn");
   const okBtn = document.getElementById("info-message-dialog-ok-btn");
   if (!dialogEl || !titleEl || !bodyEl || !okBtn) {
     window.alert?.(title);
@@ -13818,6 +13804,28 @@ function showInfoDialog(title, rows, linkUrl) {
       linkEl.textContent = "";
       linkEl.hidden = true;
     }
+  }
+  if (sendToNotesBtn) {
+    const existingHandler = sendToNotesBtn.dataset.hasNotesHandler;
+    if (!existingHandler) {
+      sendToNotesBtn.addEventListener("click", () => {
+        const currentLinkUrl = document.getElementById("info-message-dialog-link")?.href;
+        if (!currentLinkUrl || currentLinkUrl === "#") {
+          statusUpdate("Status: No report link available to add");
+          return;
+        }
+        const noteText = `VirusTotal record: ${currentLinkUrl}`;
+        const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "virustotal-link", false);
+        if (didAdd) {
+          showNotesWorkspace();
+          statusUpdate("Status: VirusTotal link added to Notes");
+          writeLogEntry(`VirusTotal link added to notes link=${JSON.stringify(currentLinkUrl)}`);
+          resolveInfoDialog();
+        }
+      });
+      sendToNotesBtn.dataset.hasNotesHandler = "true";
+    }
+    sendToNotesBtn.hidden = !linkUrl;
   }
   dialogEl.hidden = false;
   okBtn.focus();
@@ -18785,7 +18793,6 @@ async function _doFollowStreamToConv(
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
   const streamBytes = hexStringToUint8Array(outputHex);
-  console.log("[ConvDebug] followStream bytes.length=", streamBytes.length);
   dataToolsOriginalInputBytes = streamBytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = streamBytes;
@@ -19929,6 +19936,8 @@ initConvPanel({
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
   statusUpdate,
   writeLogEntry,
+  addNote,
+  showNotesWorkspace,
   getBackendTransportOptions: () => getBackendTransportOptionsFromSettings(),
   getCurrentSettings: () => getCurrentSettings(),
   getCapturePackets: () => capturedPackets,
@@ -20111,6 +20120,23 @@ document
 document
   .getElementById("info-message-dialog-ok-btn")
   .addEventListener("click", resolveInfoDialog);
+document
+  .getElementById("info-message-dialog-send-to-notes-btn")
+  ?.addEventListener("click", () => {
+    const currentLinkUrl = document.getElementById("info-message-dialog-link")?.href;
+    if (!currentLinkUrl || currentLinkUrl === "#") {
+      statusUpdate("Status: No report link available to add");
+      return;
+    }
+    const noteText = `VirusTotal record: ${currentLinkUrl}`;
+    const didAdd = addNote(noteText, NOTE_DEFAULT_COLOR, "virustotal-link", false);
+    if (didAdd) {
+      showNotesWorkspace();
+      statusUpdate("Status: VirusTotal link added to Notes");
+      writeLogEntry(`VirusTotal link added to notes link=${JSON.stringify(currentLinkUrl)}`);
+      resolveInfoDialog();
+    }
+  });
 document
   .getElementById("info-message-dialog")
   .addEventListener("keydown", (event) => {
@@ -20428,7 +20454,6 @@ document.getElementById("settings-llm-retry-count").addEventListener("change", (
 document
   .getElementById("conv-subtab-conversions")
   .addEventListener("click", () => {
-    console.log("[ConvDebug] subtab click: conversions; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_CONVERSIONS_SUBTAB);
     normalizeDataToolsHexInputFormatting();
@@ -20437,7 +20462,6 @@ document
 document
   .getElementById("conv-subtab-hashes")
   .addEventListener("click", () => {
-    console.log("[ConvDebug] subtab click: hashes; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_HASHES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -20445,7 +20469,6 @@ document
 document
   .getElementById("conv-subtab-extraction")
   .addEventListener("click", () => {
-    console.log("[ConvDebug] subtab click: extraction; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_EXTRACTION_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
@@ -20453,7 +20476,6 @@ document
 document
   .getElementById("conv-subtab-decodes")
   .addEventListener("click", () => {
-    console.log("[ConvDebug] subtab click: decodes; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     // Manual Decodes tab open keeps the default stream-based decoder behavior.
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_DECODES_SUBTAB);
@@ -20663,7 +20685,7 @@ document
 document
   .getElementById("crypt-keystore-list")
   .addEventListener("change", function () {
-    const activeEntries = keystorePanel.getActiveCryptKeystoreEntries();
+    const activeEntries = keystorePanel.getRenderedCryptKeystoreEntries();
     const selectedIndex = Number(this.value);
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       return;
@@ -20700,7 +20722,6 @@ document
 document
   .getElementById("data-tools-send-to-decodes-btn")
   .addEventListener("click", async () => {
-    console.log("[ConvDebug] action click: send-to-decodes");
     const bytes = getCurrentDataToolsInputBytes();
     if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
       statusUpdate("Status: No valid data to send to Decodes.");
@@ -20714,7 +20735,6 @@ document
 document
   .getElementById("data-tools-save-btn")
   .addEventListener("click", async () => {
-    console.log("[ConvDebug] action click: save");
     const bytes = getCurrentDataToolsInputBytes();
     if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
       statusUpdate("Status: No valid data to save.");
@@ -20723,7 +20743,12 @@ document
     const hexString = Array.from(bytes, (byte) =>
       byte.toString(16).padStart(2, "0"),
     ).join("");
-    window.saveapi.savePayload(hexString).then((result) => {
+    const fileNameEl = document.getElementById("data-tools-file-name");
+    const dataToolsFileNameGuess = fileNameEl
+      ? fileNameEl.textContent.replace(/^Filename Guess:\s*/i, "").trim()
+      : "";
+    const defaultName = getBareFilename(dataToolsFileNameGuess) || "converted.bin";
+    window.saveapi.savePayload(hexString, { defaultName }).then((result) => {
       if (!result.success && !result.canceled) {
         console.error("Save converted data failed:", result.error);
         statusUpdate(`Status: Save failed — ${result.error || "unknown error"}`);
@@ -20735,7 +20760,6 @@ document
 document
   .getElementById("data-tools-hash-btn")
   .addEventListener("click", async () => {
-    console.log("[ConvDebug] action click: hash");
     const bytes = getCurrentDataToolsInputBytes();
     if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
       statusUpdate("Status: No valid data to hash.");
@@ -20748,7 +20772,6 @@ document
 document
   .getElementById("data-tools-threat-intel-btn")
   .addEventListener("click", async () => {
-    console.log("[ConvDebug] action click: threat-intel");
     const bytes = getCurrentDataToolsInputBytes();
     if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
       statusUpdate("Status: No valid data for threat intel lookup.");
@@ -20807,10 +20830,8 @@ document
 bindConvertedOutputExpandHandlers();
 updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
-  console.log("[ConvDebug] input event fired; clearing original bytes");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
-  console.log("[ConvDebug] state after input event: originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
   dataToolsHistorySelectEl.value = "";
   setDataToolsFileNameGuess("");
   updateDataToolsHexHighlights();
@@ -20823,7 +20844,6 @@ document.getElementById("data-tools-input").addEventListener("input", () => {
 document.getElementById("data-tools-input").addEventListener("paste", () => {
   const formatEl = document.getElementById("data-tools-format");
   if (formatEl?.value !== "hex") return;
-  console.log("[ConvDebug] paste event fired; clearing original bytes");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
   requestAnimationFrame(() => {
@@ -20835,7 +20855,6 @@ document.getElementById("data-tools-input").addEventListener("blur", () => {
   if (formatEl?.value !== "hex") return;
   requestAnimationFrame(() => {
     const nextFocusedId = document.activeElement?.id || "";
-    console.log("[ConvDebug] blur handler nextFocusedId=", nextFocusedId, "originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
     if (
       DATA_TOOLS_SELECTION_FIELD_IDS.includes(nextFocusedId) &&
       nextFocusedId !== "data-tools-input"
@@ -20847,7 +20866,6 @@ document.getElementById("data-tools-input").addEventListener("blur", () => {
 });
 document.getElementById("data-tools-format").addEventListener("change", () => {
   dataToolsHistorySelectEl.value = "";
-  console.log("[ConvDebug] format change handler; originalSet=", dataToolsOriginalInputBytes instanceof Uint8Array, "editedFlag=", dataToolsInputEditedFlag);
   if (document.getElementById("data-tools-format")?.value === "hex") {
     normalizeDataToolsHexInputFormatting();
     return;
@@ -20976,7 +20994,6 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
   if (!Number.isInteger(selectedIndex) || selectedIndex < 0) return;
   const selectedEntry = dataToolsInputHistory[selectedIndex];
   if (!selectedEntry) return;
-  console.log("[ConvDebug] history select change clearing original bytes");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
   document.getElementById("data-tools-format").value = selectedEntry.format;

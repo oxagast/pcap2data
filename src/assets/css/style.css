@@ -1197,6 +1197,25 @@ strong {
   text-decoration: underline;
 }
 
+#info-message-dialog-send-to-notes-btn {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-1);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+#info-message-dialog-send-to-notes-btn:hover {
+  background-color: var(--color-2-hover);
+}
+
+#info-message-dialog-send-to-notes-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .plugin-install-dialog-content {
   width: min(520px, 94vw);
 }
@@ -1670,6 +1689,17 @@ strong {
 
 .subnet-calc-section-title {
   margin-bottom: 8px;
+}
+
+.subnet-calc-card-label {
+  color: var(--color-1);
+  font-size: 12px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.subnet-calc-card-content:empty {
+  display: none;
 }
 
 .subnet-calc-table-badge-row {

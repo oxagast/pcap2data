@@ -206,9 +206,11 @@
                     aria-atomic="true">
                     Ready
                   </span>
+                  <button id="data-tools-clear-btn" type="button">Clear</button>
                   <button id="data-tools-input-reset-btn" type="button" disabled>
                     Reset input
                   </button>
+                  <button id="data-tools-convert-btn" type="button">Convert</button>
                   <button id="data-tools-load-more-stream-btn" type="button" hidden>
                     Load next stream chunk
                   </button>
@@ -216,13 +218,11 @@
                     aria-atomic="true"></span>
                 </div>
                 <div class="data-tools-actions">
-                  <button id="data-tools-convert-btn">Convert</button>
                   <button id="data-tools-send-to-decodes-btn">Send to Decodes</button>
                   <button id="data-tools-save-btn" title="Save converted bytes">Save this data</button>
                   <button id="data-tools-hash-btn" title="Convert and view hashes">Hash this data</button>
                   <button id="data-tools-threat-intel-btn" title="Convert and look up SHA256 in Threat Intel">Get threat
                     intel</button>
-                  <button id="data-tools-clear-btn">Clear</button>
                 </div>
                 <div id="data-tools-simple-find-replace-section" class="data-tools-find-replace-section">
                   <div class="data-tools-find-replace-title">Search + Replace</div>
@@ -457,31 +457,39 @@
                 </div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-summary"></div>
+                <div class="subnet-calc-card-label">Summary</div>
+                <div id="subnet-calc-summary" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-range"></div>
+                <div class="subnet-calc-card-label">Range</div>
+                <div id="subnet-calc-range" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-binary"></div>
+                <div class="subnet-calc-card-label">Binary Notation</div>
+                <div id="subnet-calc-binary" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-whois"></div>
+                <div class="subnet-calc-card-label">WHOIS / RDAP</div>
+                <div id="subnet-calc-whois" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-geo"></div>
+                <div class="subnet-calc-card-label">GeoIP</div>
+                <div id="subnet-calc-geo" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-shodan"></div>
+                <div class="subnet-calc-card-label">Shodan InternetDB</div>
+                <div id="subnet-calc-shodan" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
-                <div id="subnet-calc-capture-targets"></div>
+                <div class="subnet-calc-card-label">Capture Internet Targets (TCP)</div>
+                <div id="subnet-calc-capture-targets" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card subnet-calc-card-wide">
+                <div class="subnet-calc-card-label">Status / Nmap Scan</div>
                 <div id="subnet-calc-status" class="subnet-calc-status" aria-live="polite">
                   Enter an IPv4 or IPv6 address/network to analyze.
                 </div>
-                <div id="subnet-calc-nmap"></div>
+                <div id="subnet-calc-nmap" class="subnet-calc-card-content"></div>
               </div>
             </div>
           </div>
@@ -507,13 +515,16 @@
                 </div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-reputation-ipsum"></div>
+                <div class="subnet-calc-card-label">IPSum</div>
+                <div id="subnet-calc-reputation-ipsum" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-reputation-virustotal"></div>
+                <div class="subnet-calc-card-label">VirusTotal</div>
+                <div id="subnet-calc-reputation-virustotal" class="subnet-calc-card-content"></div>
               </div>
               <div class="data-tools-section subnet-calc-card">
-                <div id="subnet-calc-reputation-tor"></div>
+                <div class="subnet-calc-card-label">Tor Exit Nodes</div>
+                <div id="subnet-calc-reputation-tor" class="subnet-calc-card-content"></div>
               </div>
             </div>
           </div>
@@ -1831,6 +1842,7 @@ No keystore entries saved.</pre>
       <div class="crypt-section-title" id="info-message-dialog-title">Information</div>
       <div id="info-message-dialog-body"></div>
       <a id="info-message-dialog-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open report</a>
+      <button id="info-message-dialog-send-to-notes-btn" type="button" hidden>Send Link to Notes</button>
       <div class="crypt-actions-row">
         <button id="info-message-dialog-ok-btn">OK</button>
       </div>

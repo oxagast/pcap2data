@@ -6,6 +6,8 @@ const IPV6_HOST_BITS = 128;
 function createSubnetCalculatorPanel({
     statusUpdate = () => { },
     writeLogEntry = () => { },
+    addNote = () => { },
+    showNotesWorkspace = () => { },
     getBackendTransportOptions = () => ({}),
     getCurrentSettings = () => ({}),
     getCapturePackets = () => ({}),
@@ -224,10 +226,6 @@ function createSubnetCalculatorPanel({
     function renderKeyValueTable(container, title, rows) {
         if (!container) return;
         container.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = title;
-        //container.appendChild(titleEl);
 
         if (!Array.isArray(rows) || rows.length === 0) {
             setPlaceholder(container, "No data available.");
@@ -263,10 +261,6 @@ function createSubnetCalculatorPanel({
     function renderBinaryTable(container, title, rows) {
         if (!container) return;
         container.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = title;
-        container.appendChild(titleEl);
 
         if (!Array.isArray(rows) || rows.length === 0) {
             setPlaceholder(container, "No binary output available.");
@@ -466,10 +460,6 @@ function createSubnetCalculatorPanel({
     function renderCaptureTargets(targets, inspectedIp = "") {
         if (!captureTargetsEl) return;
         captureTargetsEl.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "Capture Internet Targets (TCP)";
-        captureTargetsEl.appendChild(titleEl);
 
         const latestScanResponse = nmapScanState.latestScanResponse;
 
@@ -637,10 +627,6 @@ function createSubnetCalculatorPanel({
     function renderNmapResults(scanResponse, inspectedIp = "") {
         if (!nmapEl) return;
         nmapEl.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "Nmap Scan Status";
-        nmapEl.appendChild(titleEl);
 
         renderCaptureTargets(getCaptureInternetTargets(), inspectedIp);
 
@@ -1201,10 +1187,6 @@ function createSubnetCalculatorPanel({
     function renderShodanResult(analysis, shodanResult) {
         if (!shodanEl) return;
         shodanEl.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "Shodan InternetDB";
-        shodanEl.appendChild(titleEl);
 
         if (!shodanResult || shodanResult.success === false) {
             const message = shodanResult?.error || "Shodan InternetDB lookup failed.";
@@ -1254,10 +1236,6 @@ function createSubnetCalculatorPanel({
     function renderThreatIntelCard(container, title, projectLabel, projectUrl, renderFn) {
         if (!container) return;
         container.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = title;
-        container.appendChild(titleEl);
         renderFn(container);
         const actionRow = document.createElement("div");
         actionRow.className = "data-tools-actions subnet-calc-map-actions";
@@ -1482,6 +1460,25 @@ function createSubnetCalculatorPanel({
                                 await window.browserapi.openExternalUrl(String(virustotalResult.guiUrl));
                             });
                             virustotalActionRow.appendChild(guiButton);
+
+                            const sendToNotesButton = document.createElement("button");
+                            sendToNotesButton.type = "button";
+                            sendToNotesButton.textContent = "Send Link to Notes";
+                            sendToNotesButton.addEventListener("click", async () => {
+                                const linkText = String(virustotalResult.guiUrl).trim();
+                                if (!linkText) {
+                                    statusUpdate("Status: No VirusTotal link available to add");
+                                    return;
+                                }
+                                const noteText = `VirusTotal record: ${linkText}`;
+                                const didAdd = addNote(noteText, "#4caf50", "virustotal-link", false);
+                                if (didAdd) {
+                                    showNotesWorkspace();
+                                    statusUpdate("Status: VirusTotal link added to Notes");
+                                    writeLogEntry(`VirusTotal link added to notes link=${JSON.stringify(linkText)}`);
+                                }
+                            });
+                            virustotalActionRow.appendChild(sendToNotesButton);
                             section.appendChild(virustotalActionRow);
                         }
                     }
@@ -1564,10 +1561,6 @@ function createSubnetCalculatorPanel({
     function renderWhoisResult(analysis, whoisResult) {
         if (!whoisEl) return;
         whoisEl.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "WHOIS / RDAP";
-        whoisEl.appendChild(titleEl);
 
         if (!whoisResult || whoisResult.success === false) {
             const message = whoisResult?.error || "WHOIS lookup failed.";
@@ -1597,10 +1590,6 @@ function createSubnetCalculatorPanel({
     function renderGeoipResult(analysis, geoResult) {
         if (!geoEl) return;
         geoEl.innerHTML = "";
-        const titleEl = document.createElement("div");
-        titleEl.className = "data-tools-output-label subnet-calc-section-title";
-        titleEl.textContent = "GeoIP";
-        geoEl.appendChild(titleEl);
 
         if (!geoResult || geoResult.success === false) {
             const message = geoResult?.error || "GeoIP lookup failed.";
@@ -2266,15 +2255,25 @@ function createSubnetCalculatorPanel({
             setPanelStatus("Enter an IP, URL, or hash for Threat Intel lookup.", true);
             return;
         }
+        const queryType = getThreatIntelQueryTypeValue();
         const requestToken = ++lookupRequestToken;
+        threatIntelState = { ipsum: null, tor: null, virustotal: null };
         const analysis = {
             lookupTargetIp: String(nmapScanState.currentInspectedIp || "").trim() || lookupValue,
         };
+        if (queryType === "ip") {
+            void Promise.all([
+                lookupIpsum(analysis, requestToken),
+                lookupTor(analysis, requestToken),
+                lookupVirusTotalForInput(analysis, requestToken, lookupValue, "ip"),
+            ]);
+            return;
+        }
         void lookupVirusTotalForInput(
             analysis,
             requestToken,
             lookupValue,
-            getThreatIntelQueryTypeValue(),
+            queryType,
         );
     }
 
@@ -2291,6 +2290,7 @@ function createSubnetCalculatorPanel({
             threatIntelInputEl.value = trimmedValue;
         }
         const requestToken = ++lookupRequestToken;
+        threatIntelState = { ipsum: null, tor: null, virustotal: null };
         const analysis = {
             lookupTargetIp: trimmedValue,
         };
