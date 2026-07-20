@@ -311,55 +311,55 @@
                   <button id="data-tools-load-more-output-btn" type="button">Load more output</button>
                   <span id="data-tools-output-pagination-status"></span>
                 </div>
-                <div id="data-tools-output-cursor-row" class="data-tools-cursor-row">
-                  <span class="data-tools-cursor-label">Cursor</span>
-                  <span id="data-tools-output-cursor-offset" class="data-tools-cursor-value"
-                    data-carve-target="position" title="Byte offset (hex) — click to set Manual Carve position">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Offset:</span><span
-                        class="data-tools-cursor-chip-value">0x00000000</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
-                  </span>
-                  <span id="data-tools-output-cursor-line" class="data-tools-cursor-value" data-carve-target="position"
-                    title="Line number — click to set Manual Carve position">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Line:</span><span
-                        class="data-tools-cursor-chip-value">1</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
-                  </span>
-                  <span id="data-tools-output-cursor-column" class="data-tools-cursor-value"
-                    data-carve-target="position" title="Column number — click to set Manual Carve position">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Col:</span><span
-                        class="data-tools-cursor-chip-value">1</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
-                  </span>
-                  <span id="data-tools-output-cursor-position" class="data-tools-cursor-value"
-                    data-carve-target="position"
-                    title="Line-agnostic character position — click to set Manual Carve position">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Pos:</span><span
-                        class="data-tools-cursor-chip-value">0</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
-                  </span>
-                  <span id="data-tools-output-cursor-sel-len" class="data-tools-cursor-value" data-carve-target="length"
-                    title="Selected byte count — click to set Manual Carve length">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Sel:</span><span
-                        class="data-tools-cursor-chip-value">0</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase length">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease length">▼</span>
-                  </span>
-                  <span id="data-tools-output-cursor-end-remaining" class="data-tools-cursor-value"
-                    data-carve-target="length"
-                    title="Bytes from selection end to stream end — click to set Manual Carve length">
-                    <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">End:</span><span
-                        class="data-tools-cursor-chip-value">0</span></span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase length">▲</span>
-                    <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease length">▼</span>
-                  </span>
-                </div>
                 <div id="data-tools-manual-carve-row" class="data-tools-manual-carve-row">
                   <div class="data-tools-manual-carve-title">Manual Carve</div>
+                  <div id="data-tools-output-cursor-row" class="data-tools-cursor-row">
+                    <span id="data-tools-output-cursor-offset" class="data-tools-cursor-value"
+                      data-carve-target="position" title="Byte offset (hex) — click to set Manual Carve position">
+                      <span class="data-tools-cursor-chip"><span
+                          class="data-tools-cursor-chip-label">Offset:</span><span
+                          class="data-tools-cursor-chip-value">0x00000000</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
+                    </span>
+                    <span id="data-tools-output-cursor-line" class="data-tools-cursor-value"
+                      data-carve-target="position" title="Line number — click to set Manual Carve position">
+                      <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Line:</span><span
+                          class="data-tools-cursor-chip-value">1</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
+                    </span>
+                    <span id="data-tools-output-cursor-column" class="data-tools-cursor-value"
+                      data-carve-target="position" title="Column number — click to set Manual Carve position">
+                      <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Col:</span><span
+                          class="data-tools-cursor-chip-value">1</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
+                    </span>
+                    <span id="data-tools-output-cursor-position" class="data-tools-cursor-value"
+                      data-carve-target="position"
+                      title="Line-agnostic character position — click to set Manual Carve position">
+                      <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Pos:</span><span
+                          class="data-tools-cursor-chip-value">0</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase position">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease position">▼</span>
+                    </span>
+                    <span id="data-tools-output-cursor-sel-len" class="data-tools-cursor-value"
+                      data-carve-target="length" title="Selected byte count — click to set Manual Carve length">
+                      <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">Sel:</span><span
+                          class="data-tools-cursor-chip-value">0</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase length">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease length">▼</span>
+                    </span>
+                    <span id="data-tools-output-cursor-end-remaining" class="data-tools-cursor-value"
+                      data-carve-target="length"
+                      title="Bytes from selection end to stream end — click to set Manual Carve length">
+                      <span class="data-tools-cursor-chip"><span class="data-tools-cursor-chip-label">End:</span><span
+                          class="data-tools-cursor-chip-value">0</span></span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="+1" title="Increase length">▲</span>
+                      <span class="data-tools-cursor-arrow" data-carve-delta="-1" title="Decrease length">▼</span>
+                    </span>
+                  </div>
                   <div class="data-tools-manual-carve-fields">
                     <label for="data-tools-manual-carve-position">Position</label>
                     <input id="data-tools-manual-carve-position" type="text" inputmode="numeric" placeholder="0x..."

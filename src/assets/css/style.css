@@ -1598,17 +1598,17 @@ strong {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 12px;
-  margin: 6px 0 10px;
+  margin: 0 0 8px;
   padding: 6px 8px;
   border: 1px solid var(--color-3);
-  background-color: var(--color-8, var(--color-7));
+  background-color: transparent;
   color: var(--color-6);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
 }
 
 .data-tools-manual-carve-row {
-  margin-top: 10px;
+  margin-top: 13px;
   border: 1px solid var(--color-3);
   background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
   padding: 8px;
@@ -2022,7 +2022,7 @@ strong {
 }
 
 .data-tools-find-replace-section {
-  margin-top: 10px;
+  margin-top: 26px;
   border: 1px solid var(--color-3);
   background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
   padding: 8px;
