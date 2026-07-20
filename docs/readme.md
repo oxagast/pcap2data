@@ -24,9 +24,11 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 <iframe width="1000" src="https://www.youtube.com/embed/WCEZkubllg8?si=3GnLIt4y4CxvIjmK" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 </p>
 
+### If you would like to follow along with the video here are the necessary links to set up your own environment!
 
-
-
+* The [pcap with the captured exploitation](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap).
+* Also here is the [source code](https://github.com/rapid7/metasploit-framework/blob/master/modules/exploits/linux/http/hustoj_problem_import_rce.rb) to the exploit.
+* Here is the [vulnerable software](https://github.com/zhblue/hustoj/releases/tag/25.12.10)
 
 
 ## Quick Start
@@ -84,7 +86,7 @@ Some captures you can test the code with:
 * [FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/ftp.pcap)
 * [Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/bgp.pcapng)
 * [Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
-* [An exploit working against HUSTOJ](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/exploit.pcap)
+
 
 If you want to test anything else, a great resource is the [Wireshark Sample Captures Page](https://wiki.wireshark.org/SampleCaptures), I would get started there.
 
