@@ -4958,6 +4958,62 @@ function markDataToolsInputCommitted() {
 }
 
 // Resets data tools input to committed.
+// Resets all Conv / data-tools state to freshly-opened defaults.
+function resetConvToFreshDefaults() {
+  const dataToolsInputEl = document.getElementById("data-tools-input");
+  const dataToolsFormatEl = document.getElementById("data-tools-format");
+  const dataToolsProtoSelectEl = document.getElementById("data-tools-proto-select");
+  const dataToolsErrorEl = document.getElementById("data-tools-error");
+  if (dataToolsInputEl) dataToolsInputEl.value = "";
+  if (dataToolsFormatEl) dataToolsFormatEl.value = DEFAULT_DATA_TOOLS_FORMAT;
+  if (dataToolsProtoSelectEl) dataToolsProtoSelectEl.value = "auto";
+  if (dataToolsErrorEl) dataToolsErrorEl.textContent = "";
+
+  // Hash input area and hash output panes.
+  const hashInputEl = document.getElementById("data-tools-hash-input-reading");
+  if (hashInputEl) hashInputEl.value = "";
+  resetHashOutputs();
+
+  // Packet JSON viewer.
+  const packetJsonCurrentEl = document.getElementById("data-tools-packet-json-current-packet");
+  const packetJsonOutputEl = document.getElementById("data-tools-packet-json-output");
+  if (packetJsonCurrentEl) packetJsonCurrentEl.textContent = "Current Packet:";
+  if (packetJsonOutputEl) packetJsonOutputEl.innerHTML = "";
+
+  // Conv-related right sidebar insights are hidden by default; nothing to
+  // persist here, but ensure its placeholder state is consistent.
+  const rightsideConvInsightsEl = document.getElementById("rightside-conv-insights");
+  if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
+
+  dataToolsContextPacket = null;
+  dataToolsOriginalInputBytes = null;
+  dataToolsInputEditedFlag = false;
+  dataToolsCommittedInputValue = "";
+  dataToolsCommittedInputFormat = DEFAULT_DATA_TOOLS_FORMAT;
+  dataToolsLastConversionBytes = new Uint8Array();
+  dataToolsHistorySelectEl.value = "";
+  resetDataToolsOutputs();
+  clearDataToolsSelectionState();
+  setDataToolsFindReplaceMode("none");
+  updateDataToolsHexHighlights();
+  syncDataToolsHighlightScroll("data-tools-input", "data-tools-input-highlight");
+  updateDataToolsInputEditedState();
+  updateDataToolsCursorReadout("data-tools-input");
+
+  // Reset Extraction panel state as part of the clean-slate Conv reset.
+  extractionPanelCurrentBytes = new Uint8Array();
+  extractionPanelCurrentFormat = null;
+  extractionPanelLastResult = null;
+  extractionPanelArchiveEntries = [];
+  extractionPanelSelectedEntry = null;
+  resetExtractionOutputs();
+
+  // Reset subnet / threat-intel Conv subtabs.
+  if (typeof subnetCalculatorPanel?.clear === "function") {
+    subnetCalculatorPanel.clear();
+  }
+}
+
 function resetDataToolsInputToCommitted() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
@@ -7653,6 +7709,11 @@ async function finalizeLoadedCapture(sessionState) {
   clearFilterQuery();
   syncFilterHighlight();
   isFileLoaded = true;
+
+  // Always reset Conv to freshly-opened defaults before restoring or starting
+  // a new session so data from a previous capture/session does not carry over.
+  resetConvToFreshDefaults();
+
   if (sessionState) {
     await restoreSessionState(sessionState);
   } else {
@@ -8198,31 +8259,7 @@ async function restoreSessionState(sessionState) {
     setConvSubtab(savedConvTab);
   }
 
-  const savedConvCurrentInput = typeof tabState.convCurrentInput === "string"
-    ? tabState.convCurrentInput
-    : "";
-  const savedConvCurrentFormat = typeof tabState.convCurrentFormat === "string"
-    ? tabState.convCurrentFormat
-    : "";
-  if (savedConvCurrentInput.trim()) {
-    const dataToolsInputEl = document.getElementById("data-tools-input");
-    const dataToolsFormatEl = document.getElementById("data-tools-format");
-    if (dataToolsInputEl && dataToolsFormatEl) {
-      dataToolsInputEl.value = savedConvCurrentInput;
-      dataToolsFormatEl.value = savedConvCurrentFormat;
-      const restoredBase64 = typeof tabState.convCurrentInputBytesBase64 === "string"
-        ? tabState.convCurrentInputBytesBase64
-        : null;
-      dataToolsContextPacket = null;
-      dataToolsOriginalInputBytes = restoredBase64
-        ? base64ToUint8Array(restoredBase64)
-        : null;
-      dataToolsInputEditedFlag = false;
-      dataToolsLastConversionBytes = dataToolsOriginalInputBytes || new Uint8Array();
-      markDataToolsInputCommitted();
-      await runDataToolsConversion();
-    }
-  }
+  resetConvToFreshDefaults();
 
   if (savedMainTab !== MAIN_TAB_CRYPT) {
     setCryptSubtab(savedCryptTab);
