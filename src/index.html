@@ -311,6 +311,28 @@
                   <button id="data-tools-load-more-output-btn" type="button">Load more output</button>
                   <span id="data-tools-output-pagination-status"></span>
                 </div>
+                <div id="data-tools-output-cursor-row" class="data-tools-cursor-row">
+                  <span class="data-tools-cursor-label">Cursor</span>
+                  <span id="data-tools-output-cursor-offset" class="data-tools-cursor-value"
+                    title="Byte offset (hex)">Offset: 0x00000000</span>
+                  <span id="data-tools-output-cursor-line" class="data-tools-cursor-value" title="Line number">Line:
+                    1</span>
+                  <span id="data-tools-output-cursor-column" class="data-tools-cursor-value" title="Column number">Col:
+                    1</span>
+                  <span id="data-tools-output-cursor-position" class="data-tools-cursor-value"
+                    title="Line-agnostic character position">Pos: 0</span>
+                </div>
+                <div id="data-tools-manual-carve-row" class="data-tools-manual-carve-row">
+                  <span class="data-tools-cursor-label">Manual Carve</span>
+                  <label for="data-tools-manual-carve-position">Position</label>
+                  <input id="data-tools-manual-carve-position" type="text" inputmode="numeric" placeholder="0x..."
+                    title="Start byte position (decimal or 0x hex)" />
+                  <label for="data-tools-manual-carve-length">Length</label>
+                  <input id="data-tools-manual-carve-length" type="text" inputmode="numeric" placeholder="bytes"
+                    title="Number of bytes to carve (decimal or 0x hex)" />
+                  <button id="data-tools-manual-carve-btn" type="button">Carve</button>
+                  <button id="data-tools-manual-carve-load-conv-btn" type="button">Load into Conv</button>
+                </div>
               </div>
             </div>
           </div>

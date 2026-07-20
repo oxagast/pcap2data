@@ -697,6 +697,7 @@ let dataToolsLastRenderedOutputBytes = 0;
 let dataToolsLastConversionDisplay = {
   decimalInteger: "",
 };
+let dataToolsManualCarveResult = null;
 // Tracks which converted output panes have already had their expensive text built.
 const dataToolsRenderedOutputPanes = new Set();
 const CONTEXT_IPV4_REGEX =
@@ -9150,6 +9151,114 @@ function syncDataToolsSelectionFromField(sourceFieldId) {
     dataToolsSelectionState.syncingSelection = false;
   }
   updateDataToolsHexHighlights();
+  updateDataToolsCursorReadout(sourceFieldId);
+}
+
+// Updates the cursor readout under the converted outputs based on the active
+// field's current selection. Reports byte offset (hex), line/column, and the
+// absolute character position, using the existing selection map to translate
+// character index into byte offset.
+function updateDataToolsCursorReadout(fieldId) {
+  const offsetEl = document.getElementById("data-tools-output-cursor-offset");
+  const lineEl = document.getElementById("data-tools-output-cursor-line");
+  const colEl = document.getElementById("data-tools-output-cursor-column");
+  const posEl = document.getElementById("data-tools-output-cursor-position");
+  if (!offsetEl || !lineEl || !colEl || !posEl) return;
+  const el = document.getElementById(fieldId);
+  const map = dataToolsSelectionState.maps[fieldId];
+  if (!el || !map) {
+    offsetEl.textContent = "Offset: 0x00000000";
+    lineEl.textContent = "Line: 1";
+    colEl.textContent = "Col: 1";
+    posEl.textContent = "Pos: 0";
+    return;
+  }
+
+  const charPos = Math.max(0, Math.min(el.selectionStart ?? 0, map.text?.length ?? el.value.length));
+  const byteIndex = map.charToByte?.[charPos] ?? null;
+  const byteOffset = byteIndex != null ? byteIndex : null;
+  const textBefore = String(map.text || el.value || "").slice(0, charPos);
+  const lineNumber = (textBefore.match(/\r\n|\n/g)?.length ?? 0) + 1;
+  const lastBreak = Math.max(textBefore.lastIndexOf("\n"), textBefore.lastIndexOf("\r"));
+  const columnNumber = charPos - Math.max(0, lastBreak);
+
+  offsetEl.textContent = byteOffset != null
+    ? `Offset: 0x${byteOffset.toString(16).padStart(8, "0")}`
+    : "Offset: —";
+  lineEl.textContent = `Line: ${lineNumber}`;
+  colEl.textContent = `Col: ${columnNumber + 1}`;
+  posEl.textContent = `Pos: ${charPos}`;
+}
+
+// Parses a position or length input that may be decimal or prefixed with 0x.
+function parseDataToolsManualCarveNumber(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) return null;
+  if (/^0x[\da-fA-F]+$/i.test(value)) {
+    return parseInt(value, 16);
+  }
+  if (/^-?\d+$/.test(value)) {
+    return parseInt(value, 10);
+  }
+  return null;
+}
+
+// Performs a manual carve from the current conversion bytes using the position
+// and length inputs. The result is surfaced in the Manual Carve row and also
+// registered in the Stats carvable files registry so it can be reloaded later.
+function performDataToolsManualCarve() {
+  const positionEl = document.getElementById("data-tools-manual-carve-position");
+  const lengthEl = document.getElementById("data-tools-manual-carve-length");
+  const position = parseDataToolsManualCarveNumber(positionEl?.value);
+  const length = parseDataToolsManualCarveNumber(lengthEl?.value);
+
+  const bytes = dataToolsLastConversionBytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    statusUpdate("Status: No converted bytes available to carve");
+    return;
+  }
+  if (!Number.isInteger(position) || position < 0) {
+    statusUpdate("Status: Manual carve position must be a non-negative integer");
+    return;
+  }
+  if (!Number.isInteger(length) || length <= 0) {
+    statusUpdate("Status: Manual carve length must be a positive integer");
+    return;
+  }
+  if (position >= bytes.length) {
+    statusUpdate("Status: Manual carve position is past the end of the data");
+    return;
+  }
+  const start = position;
+  const end = Math.min(position + length, bytes.length);
+  const carvedBytes = bytes.slice(start, end);
+  const actualLength = carvedBytes.length;
+
+  const fileName = `manual-carve-0x${start.toString(16)}-${actualLength}-bytes.bin`;
+  dataToolsManualCarveResult = {
+    fileName,
+    bytes: carvedBytes,
+    start,
+    length: actualLength,
+  };
+
+  registerExtractionResultForStats(fileName, carvedBytes);
+  statusUpdate(
+    `Status: Manual carved ${actualLength} bytes at offset 0x${start.toString(16)}`,
+  );
+  writeLogEntry(
+    `Manual carve performed offset=0x${start.toString(16)} requested_length=${length} actual_length=${actualLength}`,
+  );
+}
+
+// Loads the most recent manual carve result into the Conv input.
+function loadDataToolsManualCarveIntoConv() {
+  const result = dataToolsManualCarveResult;
+  if (!result || !(result.bytes instanceof Uint8Array) || result.bytes.length === 0) {
+    statusUpdate("Status: No manual carve result to load");
+    return;
+  }
+  loadExtractionResultIntoConv(result.bytes, result.fileName);
 }
 
 // Handles bytes to base64.
@@ -10087,6 +10196,7 @@ function resetDataToolsOutputs() {
   dataToolsLastConversionDisplay = {
     decimalInteger: "",
   };
+  dataToolsManualCarveResult = null;
   dataToolsRenderedOutputPanes.clear();
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
@@ -10292,6 +10402,11 @@ function renderDataToolsOutputPage({ reset = false } = {}) {
   );
   updateDataToolsHexHighlights();
   updateDataToolsOutputPaginationControls();
+  updateDataToolsCursorReadout(
+    document.activeElement && DATA_TOOLS_SELECTION_FIELD_IDS.includes(document.activeElement.id)
+      ? document.activeElement.id
+      : "data-tools-input",
+  );
 }
 
 // Loads more data tools output page.
@@ -10331,7 +10446,7 @@ function bindConvertedOutputExpandHandlers() {
     const outputEl = document.getElementById(outputId);
     if (!outputEl || outputEl.dataset.expandBinding === "1") return;
     outputEl.dataset.expandBinding = "1";
-    outputEl.addEventListener("click", () => {
+    outputEl.addEventListener("dblclick", () => {
       setExpandedConvertedOutput(outputId);
     });
   });
@@ -20718,7 +20833,10 @@ document
 
 document
   .getElementById("data-tools-convert-btn")
-  .addEventListener("click", runDataToolsConversion);
+  .addEventListener("click", () => {
+    runDataToolsConversion();
+    updateDataToolsCursorReadout("data-tools-input");
+  });
 document
   .getElementById("data-tools-send-to-decodes-btn")
   .addEventListener("click", async () => {
@@ -20907,11 +21025,21 @@ document
 for (const fieldId of DATA_TOOLS_SELECTION_FIELD_IDS) {
   const el = document.getElementById(fieldId);
   if (!el) continue;
-  const syncFromField = () => syncDataToolsSelectionFromField(fieldId);
-  el.addEventListener("select", syncFromField);
-  el.addEventListener("mouseup", syncFromField);
-  el.addEventListener("keyup", syncFromField);
+  el.addEventListener("focus", () => updateDataToolsCursorReadout(fieldId));
+  el.addEventListener("click", () => updateDataToolsCursorReadout(fieldId));
 }
+document.addEventListener("selectionchange", () => {
+  if (dataToolsSelectionState.syncingSelection) return;
+  const active = document.activeElement;
+  if (!active || !DATA_TOOLS_SELECTION_FIELD_IDS.includes(active.id)) return;
+  syncDataToolsSelectionFromField(active.id);
+});
+document
+  .getElementById("data-tools-manual-carve-btn")
+  ?.addEventListener("click", performDataToolsManualCarve);
+document
+  .getElementById("data-tools-manual-carve-load-conv-btn")
+  ?.addEventListener("click", loadDataToolsManualCarveIntoConv);
 document
   .getElementById("data-tools-hash-input-reading")
   .addEventListener("input", runDataToolsHashesFromInput);
@@ -20931,6 +21059,7 @@ document
     updateDataToolsHexHighlights();
     updateDataToolsInputEditedState();
     setDataToolsFindReplaceMode("none");
+    updateDataToolsCursorReadout("data-tools-input");
   });
 document
   .getElementById("data-tools-input-reset-btn")
