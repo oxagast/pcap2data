@@ -20,7 +20,13 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 
 ## Demo
 
-<p align="center"><iframe width="1000" height="520" src="https://www.youtube.com/watch?v=WCEZkubllg8" title="" frameBorder="0"   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"  allowFullScreen></iframe></p>
+<p align="center">
+<iframe width="1000" src="https://www.youtube.com/embed/WCEZkubllg8?si=3GnLIt4y4CxvIjmK" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</p>
+
+
+
+
 
 
 ## Quick Start
