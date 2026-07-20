@@ -205,10 +205,11 @@ describe('SMPP/Soulseek/BitTorrent Conv decoder wiring', () => {
         expect(getFieldValue(decoded, 'Protocol')).toBe('BitTorrent protocol');
     });
 
-    test('Conv protocol dropdown includes SMPP, Soulseek, and BitTorrent options', () => {
+    test('Conv protocol dropdown includes SMPP, Soulseek, BitTorrent, and Plain text options', () => {
         const indexHtml = fs.readFileSync(path.join(projectRoot, 'src/index.html'), 'utf8');
         expect(indexHtml).toContain('<option value="smpp">SMPP</option>');
         expect(indexHtml).toContain('<option value="soulseek">Soulseek</option>');
         expect(indexHtml).toContain('<option value="bittorrent">BitTorrent</option>');
+        expect(indexHtml).toContain('<option value="plaintext">Plain text</option>');
     });
 });

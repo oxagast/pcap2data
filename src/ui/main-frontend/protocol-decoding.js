@@ -19,7 +19,9 @@ const {
     decodeLdapFromBytes,
     decodeSmbFromBytes,
     decodeSipFromBytes,
+    decodePlainTextFromBytes,
     autoDetectProtoFromBytes,
+    getPacketProtocolDecoderHint,
 } = require("../panels/data-tools-panel");
 
 function createProtocolDecodingHelpers({
@@ -126,6 +128,8 @@ function createProtocolDecodingHelpers({
                 return decodeSmbFromBytes(bytes);
             case "sip":
                 return decodeSipFromBytes(bytes);
+            case "plaintext":
+                return decodePlainTextFromBytes(bytes);
             default:
                 return null;
         }
@@ -137,7 +141,15 @@ function createProtocolDecodingHelpers({
         const selectedProtocol = selectEl ? selectEl.value : "auto";
         let protocol = selectedProtocol;
         if (protocol === "auto") {
-            protocol = autoDetectProtoFromBytes(decodeBytes);
+            const contextPacket = getCurrentContextPacket() || getCurrentPacketForExport();
+            const { protocolHint, portHint } = getPacketProtocolDecoderHint(contextPacket);
+            protocol = autoDetectProtoFromBytes(decodeBytes, {
+                protocolHint,
+                portHint,
+            });
+            if (selectEl && protocol && selectEl.value !== protocol) {
+                selectEl.value = protocol;
+            }
         }
         const result = protocol ? decodeProtocolBytes(protocol, decodeBytes) : null;
         renderProtoDecoderOutput(result, selectedProtocol, result ? protocol : null);
@@ -156,6 +168,7 @@ function createProtocolDecodingHelpers({
         renderProtoDecoderOutput,
         runProtoDecoder,
         clearProtoDecoderOutput,
+        getPacketProtocolDecoderHint,
     };
 }
 

@@ -58,12 +58,14 @@ let activeDataToolsProtoResult = null;
 let _writeLogEntry = () => { };
 let _statusUpdate = () => { };
 let _setActiveMainTab = () => { };
+let _getCurrentContextPacket = () => null;
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
+  _getCurrentContextPacket = getCurrentContextPacket || (() => null);
 }
 
 // ── State accessors ───────────────────────────────────────────────────────────
@@ -2354,8 +2356,156 @@ function decodeBittorrentFromBytes(bytes) {
   }
 }
 
+// Decodes bytes as plain text.
+function decodePlainTextFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return {
+    protocol: "Plain text",
+    fields: [
+      { name: "Text", value: rawText },
+      { name: "Byte Length", value: String(bytes.length) },
+      { name: "Printable ASCII", value: bytesToPrintableAscii(bytes) },
+    ],
+  };
+}
+
+// Known application-protocol / well-known-port to decoder key mappings.
+// These are used as hints so the Conv Decoders subtab can prefer the
+// packet's metadata before falling back to byte-heuristic detection.
+const PROTOCOL_DECODER_HINTS = new Map([
+  ["http", "http"],
+  ["http2", "http"],
+  ["https", "http"],
+  ["ssh", "ssh"],
+  ["telnet", "telnet"],
+  ["smtp", "smtp"],
+  ["ftp", "ftp"],
+  ["pop3", "pop3"],
+  ["imap", "imap"],
+  ["ldap", "ldap"],
+  ["smb", "smb"],
+  ["sip", "sip"],
+  ["smpp", "smpp"],
+  ["soulseek", "soulseek"],
+  ["bittorrent", "bittorrent"],
+  ["plaintext", "plaintext"],
+]);
+
+const PORT_DECODER_HINTS = new Map([
+  [21, "ftp"],
+  [22, "ssh"],
+  [23, "telnet"],
+  [25, "smtp"],
+  [80, "http"],
+  [110, "pop3"],
+  [143, "imap"],
+  [389, "ldap"],
+  [443, "http"],
+  [445, "smb"],
+  [587, "smtp"],
+  [8080, "http"],
+  [5060, "sip"],
+  [5061, "sip"],
+  [2775, "smpp"],
+  [2234, "soulseek"],
+  [2242, "soulseek"],
+  [6881, "bittorrent"],
+  [6882, "bittorrent"],
+  [6883, "bittorrent"],
+  [6884, "bittorrent"],
+  [6885, "bittorrent"],
+  [6886, "bittorrent"],
+  [6887, "bittorrent"],
+  [6888, "bittorrent"],
+  [6889, "bittorrent"],
+]);
+
+// Extracts a decoder hint for a packet from its application protocol and
+// transport ports. The result can be passed to autoDetectProtoFromBytes as
+// { protocolHint, portHint } to prefer packet metadata over byte heuristics.
+function getPacketProtocolDecoderHint(packet) {
+  if (!packet || typeof packet !== "object") {
+    return { protocolHint: null, portHint: null };
+  }
+
+  const packetInfo = packet["packet.info"] || packet.packetInfo || {};
+  const extraInfo = packet["extra.info"] || packet.extraInfo || {};
+
+  const appProtoCandidates = [
+    extraInfo?.["application.proto"],
+    extraInfo?.["app.proto"],
+    extraInfo?.["Traits"]?.["Network Data"]?.["Port Protocol"],
+    extraInfo?.["Traits"]?.["Network Data"]?.["Port Protcol"],
+    extraInfo?.["traits"]?.["network.data"]?.["port.protocol"],
+    packetInfo?.["application.proto"],
+    packetInfo?.["app.proto"],
+  ];
+
+  let protocolHint = null;
+  for (const candidate of appProtoCandidates) {
+    const raw = typeof candidate === "string" ? candidate.trim() : "";
+    if (!raw) continue;
+    const normalized = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (PROTOCOL_DECODER_HINTS.has(normalized)) {
+      protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
+      break;
+    }
+  }
+
+  const transportName = String(
+    packetInfo?.["packet.proto"] ??
+    packetInfo?.["protocol"] ??
+    packetInfo?.["Protocol"] ??
+    "",
+  ).toUpperCase();
+  const transportData =
+    typeof packetInfo[transportName] === "object"
+      ? packetInfo[transportName]
+      : typeof packetInfo[transportName.toLowerCase()] === "object"
+        ? packetInfo[transportName.toLowerCase()]
+        : {};
+
+  const portCandidates = [
+    transportData?.["tcp.dst.port"],
+    transportData?.["udp.dst.port"],
+    transportData?.["sctp.dst.port"],
+    transportData?.["destination.port"],
+    packetInfo?.["tcp.dst.port"],
+    packetInfo?.["udp.dst.port"],
+    packetInfo?.["sctp.dst.port"],
+    packetInfo?.["destination.port"],
+  ];
+
+  let firstPort = null;
+  for (const candidate of portCandidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      firstPort = value;
+      break;
+    }
+  }
+
+  const portHint = firstPort && PORT_DECODER_HINTS.has(firstPort)
+    ? PORT_DECODER_HINTS.get(firstPort)
+    : null;
+
+  return { protocolHint, portHint };
+}
+
 // Handles auto detect proto from bytes.
-function autoDetectProtoFromBytes(bytes) {
+// Accepts an optional { protocolHint, portHint } object so callers can ask
+// the decoder to try a packet's known application protocol, then its port,
+// before falling back to byte-heuristic detection.
+function autoDetectProtoFromBytes(bytes, options) {
+  const { protocolHint = null, portHint = null } = options || {};
+  if (protocolHint && typeof protocolHint === "string") {
+    return protocolHint;
+  }
+  if (portHint && typeof portHint === "string") {
+    return portHint;
+  }
+
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
   if (
     normalizedSmbBytes instanceof Uint8Array &&
@@ -2495,7 +2645,15 @@ function runProtoDecoder(bytes) {
   const selectedProtocol = selectEl ? selectEl.value : "auto";
   let protocol = selectedProtocol;
   if (protocol === "auto") {
-    protocol = autoDetectProtoFromBytes(bytes);
+    const contextPacket = _getCurrentContextPacket();
+    const { protocolHint, portHint } = getPacketProtocolDecoderHint(contextPacket);
+    protocol = autoDetectProtoFromBytes(bytes, {
+      protocolHint,
+      portHint,
+    });
+    if (selectEl && protocol && selectEl.value !== protocol) {
+      selectEl.value = protocol;
+    }
   }
   let result = null;
   switch (protocol) {
@@ -2561,6 +2719,9 @@ function runProtoDecoder(bytes) {
       break;
     case "bittorrent":
       result = decodeBittorrentFromBytes(bytes);
+      break;
+    case "plaintext":
+      result = decodePlainTextFromBytes(bytes);
       break;
     default:
       protocol = null;
@@ -2712,6 +2873,7 @@ module.exports = {
   decodeSmppFromBytes,
   decodeSoulseekFromBytes,
   decodeBittorrentFromBytes,
+  decodePlainTextFromBytes,
   autoDetectProtoFromBytes,
   resetDataToolsOutputs,
   runProtoDecoder,
@@ -2721,4 +2883,5 @@ module.exports = {
   crossReferenceCurrentHash,
   showDataTools,
   setConvSubtab,
+  getPacketProtocolDecoderHint,
 };

@@ -199,8 +199,9 @@ describe('SIP Conv decoder wiring', () => {
         expect(getFieldValue(decoded, 'Reason Phrase')).toBe('Unauthorized Challenge');
     });
 
-    test('Conv protocol dropdown includes SIP option', () => {
+    test('Conv protocol dropdown includes SIP and Plain text options', () => {
         const indexHtml = fs.readFileSync(path.join(projectRoot, 'src/index.html'), 'utf8');
         expect(indexHtml).toContain('<option value="sip">SIP</option>');
+        expect(indexHtml).toContain('<option value="plaintext">Plain text</option>');
     });
 });

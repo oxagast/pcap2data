@@ -228,8 +228,9 @@ describe('SMB Conv decoder wiring', () => {
         );
     });
 
-    test('Conv protocol dropdown includes SMB option', () => {
+    test('Conv protocol dropdown includes SMB and Plain text options', () => {
         const indexHtml = fs.readFileSync(path.join(projectRoot, 'src/index.html'), 'utf8');
         expect(indexHtml).toContain('<option value="smb">SMB / Samba</option>');
+        expect(indexHtml).toContain('<option value="plaintext">Plain text</option>');
     });
 });

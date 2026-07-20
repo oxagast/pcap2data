@@ -692,6 +692,7 @@ let dataToolsCommittedInputFormat = "hex";
 let dataToolsLastConversionBytes = new Uint8Array();
 let dataToolsOriginalInputBytes = null;
 let dataToolsInputEditedFlag = false;
+let dataToolsContextPacket = null;
 let dataToolsDecodeUseRawConvInputOverride = false;
 let dataToolsLastRenderedOutputBytes = 0;
 let dataToolsLastConversionDisplay = {
@@ -8212,6 +8213,7 @@ async function restoreSessionState(sessionState) {
       const restoredBase64 = typeof tabState.convCurrentInputBytesBase64 === "string"
         ? tabState.convCurrentInputBytesBase64
         : null;
+      dataToolsContextPacket = null;
       dataToolsOriginalInputBytes = restoredBase64
         ? base64ToUint8Array(restoredBase64)
         : null;
@@ -11488,6 +11490,7 @@ async function runDataToolsConversion(options = {}) {
     }
     if (!suppressCommit) {
       markDataToolsInputCommitted();
+      dataToolsContextPacket = null;
       if (canUseOriginal && dataToolsOriginalInputBytes instanceof Uint8Array) {
         dataToolsOriginalInputBytes = bytes;
         dataToolsInputEditedFlag = false;
@@ -12781,7 +12784,12 @@ function resolveDecoderInputBytes(bytes) {
     return bytes;
   }
 
-  const contextPacket = getCurrentContextPacket() || getCurrentPacketForExport();
+  const contextPacket =
+    (dataToolsContextPacket && !dataToolsInputEditedFlag
+      ? dataToolsContextPacket
+      : null) ||
+    getCurrentContextPacket() ||
+    getCurrentPacketForExport();
   const streamPackets = getFollowStreamPackets(contextPacket);
   if (!Array.isArray(streamPackets) || streamPackets.length === 0) return bytes;
 
@@ -13258,8 +13266,156 @@ function decodeBittorrentFromBytes(bytes) {
   }
 }
 
+// Decodes bytes as plain text.
+function decodePlainTextFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return {
+    protocol: "Plain text",
+    fields: [
+      { name: "Text", value: rawText },
+      { name: "Byte Length", value: String(bytes.length) },
+      { name: "Printable ASCII", value: bytesToPrintableAscii(bytes) },
+    ],
+  };
+}
+
+// Known application-protocol / well-known-port to decoder key mappings.
+// These are used as hints so the Conv Decoders subtab can prefer the
+// packet's metadata before falling back to byte-heuristic detection.
+const PROTOCOL_DECODER_HINTS = new Map([
+  ["http", "http"],
+  ["http2", "http"],
+  ["https", "http"],
+  ["ssh", "ssh"],
+  ["telnet", "telnet"],
+  ["smtp", "smtp"],
+  ["ftp", "ftp"],
+  ["pop3", "pop3"],
+  ["imap", "imap"],
+  ["ldap", "ldap"],
+  ["smb", "smb"],
+  ["sip", "sip"],
+  ["smpp", "smpp"],
+  ["soulseek", "soulseek"],
+  ["bittorrent", "bittorrent"],
+  ["plaintext", "plaintext"],
+]);
+
+const PORT_DECODER_HINTS = new Map([
+  [21, "ftp"],
+  [22, "ssh"],
+  [23, "telnet"],
+  [25, "smtp"],
+  [80, "http"],
+  [110, "pop3"],
+  [143, "imap"],
+  [389, "ldap"],
+  [443, "http"],
+  [445, "smb"],
+  [587, "smtp"],
+  [8080, "http"],
+  [5060, "sip"],
+  [5061, "sip"],
+  [2775, "smpp"],
+  [2234, "soulseek"],
+  [2242, "soulseek"],
+  [6881, "bittorrent"],
+  [6882, "bittorrent"],
+  [6883, "bittorrent"],
+  [6884, "bittorrent"],
+  [6885, "bittorrent"],
+  [6886, "bittorrent"],
+  [6887, "bittorrent"],
+  [6888, "bittorrent"],
+  [6889, "bittorrent"],
+]);
+
+// Extracts a decoder hint for a packet from its application protocol and
+// transport ports. The result can be passed to autoDetectProtoFromBytes as
+// { protocolHint, portHint } to prefer packet metadata over byte heuristics.
+function getPacketProtocolDecoderHint(packet) {
+  if (!packet || typeof packet !== "object") {
+    return { protocolHint: null, portHint: null };
+  }
+
+  const packetInfo = packet["packet.info"] || packet.packetInfo || {};
+  const extraInfo = packet["extra.info"] || packet.extraInfo || {};
+
+  const appProtoCandidates = [
+    extraInfo?.["application.proto"],
+    extraInfo?.["app.proto"],
+    extraInfo?.["Traits"]?.["Network Data"]?.["Port Protocol"],
+    extraInfo?.["Traits"]?.["Network Data"]?.["Port Protcol"],
+    extraInfo?.["traits"]?.["network.data"]?.["port.protocol"],
+    packetInfo?.["application.proto"],
+    packetInfo?.["app.proto"],
+  ];
+
+  let protocolHint = null;
+  for (const candidate of appProtoCandidates) {
+    const raw = typeof candidate === "string" ? candidate.trim() : "";
+    if (!raw) continue;
+    const normalized = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (PROTOCOL_DECODER_HINTS.has(normalized)) {
+      protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
+      break;
+    }
+  }
+
+  const transportName = String(
+    packetInfo?.["packet.proto"] ??
+    packetInfo?.["protocol"] ??
+    packetInfo?.["Protocol"] ??
+    "",
+  ).toUpperCase();
+  const transportData =
+    typeof packetInfo[transportName] === "object"
+      ? packetInfo[transportName]
+      : typeof packetInfo[transportName.toLowerCase()] === "object"
+        ? packetInfo[transportName.toLowerCase()]
+        : {};
+
+  const portCandidates = [
+    transportData?.["tcp.dst.port"],
+    transportData?.["udp.dst.port"],
+    transportData?.["sctp.dst.port"],
+    transportData?.["destination.port"],
+    packetInfo?.["tcp.dst.port"],
+    packetInfo?.["udp.dst.port"],
+    packetInfo?.["sctp.dst.port"],
+    packetInfo?.["destination.port"],
+  ];
+
+  let firstPort = null;
+  for (const candidate of portCandidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) {
+      firstPort = value;
+      break;
+    }
+  }
+
+  const portHint = firstPort && PORT_DECODER_HINTS.has(firstPort)
+    ? PORT_DECODER_HINTS.get(firstPort)
+    : null;
+
+  return { protocolHint, portHint };
+}
+
 // Handles auto detect proto from bytes.
-function autoDetectProtoFromBytes(bytes) {
+// Accepts an optional { protocolHint, portHint } object so callers can ask
+// the decoder to try a packet's known application protocol, then its port,
+// before falling back to byte-heuristic detection.
+function autoDetectProtoFromBytes(bytes, options) {
+  const { protocolHint = null, portHint = null } = options || {};
+  if (protocolHint && typeof protocolHint === "string") {
+    return protocolHint;
+  }
+  if (portHint && typeof portHint === "string") {
+    return portHint;
+  }
+
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
   if (
     normalizedSmbBytes instanceof Uint8Array &&
@@ -13399,7 +13555,20 @@ function runProtoDecoder(bytes) {
   const selectedProtocol = selectEl ? selectEl.value : "auto";
   let protocol = selectedProtocol;
   if (protocol === "auto") {
-    protocol = autoDetectProtoFromBytes(decodeBytes);
+    const contextPacket =
+      (dataToolsContextPacket && !dataToolsInputEditedFlag
+        ? dataToolsContextPacket
+        : null) ||
+      getCurrentContextPacket() ||
+      getCurrentPacketForExport();
+    const { protocolHint, portHint } = getPacketProtocolDecoderHint(contextPacket);
+    protocol = autoDetectProtoFromBytes(decodeBytes, {
+      protocolHint,
+      portHint,
+    });
+    if (selectEl && protocol && selectEl.value !== protocol) {
+      selectEl.value = protocol;
+    }
   }
   let result = null;
   switch (protocol) {
@@ -13466,6 +13635,9 @@ function runProtoDecoder(bytes) {
     case "bittorrent":
       result = decodeBittorrentFromBytes(decodeBytes);
       break;
+    case "plaintext":
+      result = decodePlainTextFromBytes(decodeBytes);
+      break;
     default:
       protocol = null;
   }
@@ -13495,6 +13667,18 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
   if (activeSubtab === CONV_DECODES_SUBTAB) {
     runProtoDecoder(bytes);
   }
+}
+
+// Returns the decoder hint for the current context packet so other panels or
+// context actions can ask what the Conv Decodes subtab would use first.
+function getCurrentPacketProtocolDecoderHint() {
+  const packet =
+    (dataToolsContextPacket && !dataToolsInputEditedFlag
+      ? dataToolsContextPacket
+      : null) ||
+    getCurrentContextPacket() ||
+    getCurrentPacketForExport();
+  return getPacketProtocolDecoderHint(packet);
 }
 
 // ── Extraction subtab renderer logic ────────────────────────────────────────
@@ -13780,6 +13964,7 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
     statusUpdate("Status: Conv input fields are unavailable");
     return false;
   }
+  dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = bytes;
@@ -14117,12 +14302,14 @@ const cryptPanel = createCryptPanel({
     const normalizedHex = String(hexValue || "").trim();
     const normalizedUtf8 = String(utf8Value || "");
     if (normalizedHex) {
+      dataToolsContextPacket = null;
       dataToolsOriginalInputBytes = hexStringToUint8Array(normalizedHex);
       dataToolsInputEditedFlag = false;
       dataToolsLastConversionBytes = dataToolsOriginalInputBytes;
       inputEl.value = formatHexInputBytesWithCap(dataToolsOriginalInputBytes);
       formatEl.value = "hex";
     } else {
+      dataToolsContextPacket = null;
       dataToolsOriginalInputBytes = null;
       dataToolsInputEditedFlag = true;
       inputEl.value = normalizedUtf8;
@@ -15547,6 +15734,7 @@ function loadContextValueIntoDataTools(format) {
   const formatEl = document.getElementById("data-tools-format");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  dataToolsContextPacket = null;
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
   setDataToolsFileNameGuess("");
@@ -15577,6 +15765,7 @@ function deriveContextSelectionGuessFromContextMenu() {
 
 // Loads raw payload into data tools from context menu.
 function loadRawPayloadIntoDataToolsFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
   const payloadHex = getCurrentRawPayloadHex();
   hideConvertContextMenu();
   if (!payloadHex) {
@@ -15586,6 +15775,7 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
   const payloadBytes = hexStringToUint8Array(payloadHex);
+  dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = payloadBytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = payloadBytes;
@@ -15599,6 +15789,7 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
 }
 
 async function loadActiveConvInputDecompressedFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
   const decompressionCandidate = activeContextConvDecompression;
   hideConvertContextMenu();
   if (!decompressionCandidate?.bytes) {
@@ -15617,6 +15808,7 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
 
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
+  dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = decompressedCandidate.bytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = decompressedCandidate.bytes;
@@ -17937,6 +18129,7 @@ function loadCarvedFileCandidateIntoConvTab(candidate) {
     return false;
   }
 
+  dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = candidateBytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = candidateBytes;
@@ -18014,6 +18207,7 @@ async function loadManualFileIntoConvTabFromContextMenu() {
       return;
     }
 
+    dataToolsContextPacket = null;
     dataToolsOriginalInputBytes = bytes;
     dataToolsInputEditedFlag = false;
     dataToolsLastConversionBytes = bytes;
@@ -18900,6 +19094,7 @@ async function _doFollowStreamToConv(
     statusUpdate("Status: No stream packets found for current packet");
     return;
   }
+  dataToolsContextPacket = streamPackets[0] || null;
   const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
   const combinedHex = await buildStreamHexAsync(hydratedStreamPackets);
   if (!combinedHex) {
@@ -19905,6 +20100,7 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   const inputEl = document.getElementById("data-tools-input");
   const formatEl = document.getElementById("data-tools-format");
   const httpBytes = hexStringToUint8Array(outputHex);
+  dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = httpBytes;
   dataToolsInputEditedFlag = false;
   dataToolsLastConversionBytes = httpBytes;
@@ -20072,6 +20268,7 @@ initConvPanel({
   setActiveMainTab: (tab) => {
     activeMainTab = tab;
   },
+  getCurrentContextPacket,
 });
 
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
@@ -20976,6 +21173,7 @@ updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  dataToolsContextPacket = null;
   dataToolsHistorySelectEl.value = "";
   setDataToolsFileNameGuess("");
   updateDataToolsHexHighlights();
@@ -20990,6 +21188,7 @@ document.getElementById("data-tools-input").addEventListener("paste", () => {
   if (formatEl?.value !== "hex") return;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  dataToolsContextPacket = null;
   requestAnimationFrame(() => {
     normalizeDataToolsHexInputFormatting();
   });
@@ -21078,6 +21277,7 @@ document
   .getElementById("data-tools-clear-btn")
   .addEventListener("click", () => {
     dataToolsHistorySelectEl.value = "";
+    dataToolsContextPacket = null;
     document.getElementById("data-tools-input").value = "";
     document.getElementById("data-tools-error").textContent = "";
     resetDataToolsOutputs();
@@ -21151,6 +21351,7 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
   if (!selectedEntry) return;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  dataToolsContextPacket = null;
   document.getElementById("data-tools-format").value = selectedEntry.format;
   document.getElementById("data-tools-input").value = selectedEntry.input;
   updateDataToolsHexHighlights();
