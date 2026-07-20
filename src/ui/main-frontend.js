@@ -4359,6 +4359,8 @@ function parseJsonChunked(jsonString, chunkSize = 65536) {
 function fileLoaded(isLoaded) {
   isFileLoaded = isLoaded;
   if (isLoaded) {
+    clearExtractionResultsForStats();
+
     const loadEndTime = performance.now();
     document.getElementById("load-time").textContent =
       "Load time: " +
@@ -10218,6 +10220,7 @@ function resetDataToolsOutputs() {
   };
   dataToolsManualCarveResult = null;
   dataToolsRenderedOutputPanes.clear();
+  clearExtractionResultsForStats();
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
   document.getElementById("data-tools-decimal-output").value = "";
@@ -13594,7 +13597,10 @@ function refreshExtractionPanelForCurrentConvInput() {
   extractionPanelLastResult = null;
   extractionPanelArchiveEntries = [];
   extractionPanelSelectedEntry = null;
-  clearExtractionResultsForStats();
+  // Do NOT clear extractionCarvableRegistry here. Manual carves and archive
+  // extractions are intentionally registered in Stats and should survive
+  // routine Conv/Extraction panel refreshes. The registry is still cleared on
+  // explicit output reset and on file load via resetDataToolsOutputs/fileLoaded.
 
   extractionPanelCurrentBytes = getCurrentDataToolsInputBytes() || new Uint8Array();
 

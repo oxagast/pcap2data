@@ -7,5 +7,8 @@
     "jest.jestCommandLine": "npx jest --runInBand",
     "jest.rootPath": ".",
     "jest.autoRun": "true",
-    "jest.testExplorer": true
+    "jest.testExplorer": true,
+    "editor.emptySelectionClipboard": false,
+    "editor.selectionClipboard": false,
+    "editor.copyWithSyntaxHighlighting": false
 }
