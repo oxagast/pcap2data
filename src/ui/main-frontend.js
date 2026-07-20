@@ -9199,6 +9199,17 @@ function syncDataToolsSelectionFromField(sourceFieldId) {
 // field's current selection. Reports byte offset (hex), line/column, and the
 // absolute character position, using the existing selection map to translate
 // character index into byte offset.
+function setDataToolsCursorValue(el, rawValue, displayValue) {
+  if (!el) return;
+  el.dataset.rawValue = rawValue ?? "";
+  const chipValue = el.querySelector(".data-tools-cursor-chip-value");
+  if (chipValue) {
+    chipValue.textContent = displayValue;
+  } else {
+    el.textContent = displayValue;
+  }
+}
+
 function updateDataToolsCursorReadout(fieldId) {
   const offsetEl = document.getElementById("data-tools-output-cursor-offset");
   const lineEl = document.getElementById("data-tools-output-cursor-line");
@@ -9211,12 +9222,12 @@ function updateDataToolsCursorReadout(fieldId) {
   const map = dataToolsSelectionState.maps[fieldId];
   const streamLen = dataToolsSelectionState.bytes?.length ?? 0;
   if (!el || !map) {
-    offsetEl.textContent = "Offset: 0x00000000";
-    lineEl.textContent = "Line: 1";
-    colEl.textContent = "Col: 1";
-    posEl.textContent = "Pos: 0";
-    selLenEl.textContent = "Sel: 0";
-    endRemainingEl.textContent = `End: ${streamLen}`;
+    setDataToolsCursorValue(offsetEl, 0, "0x00000000");
+    setDataToolsCursorValue(lineEl, 1, "1");
+    setDataToolsCursorValue(colEl, 1, "1");
+    setDataToolsCursorValue(posEl, 0, "0");
+    setDataToolsCursorValue(selLenEl, 0, "0");
+    setDataToolsCursorValue(endRemainingEl, streamLen, String(streamLen));
     return;
   }
 
@@ -9241,14 +9252,14 @@ function updateDataToolsCursorReadout(fieldId) {
     ? Math.max(0, streamLen - selectionEndByte)
     : Math.max(0, streamLen - (byteOffset ?? 0));
 
-  offsetEl.textContent = byteOffset != null
-    ? `Offset: 0x${byteOffset.toString(16).padStart(8, "0")}`
-    : "Offset: —";
-  lineEl.textContent = `Line: ${lineNumber}`;
-  colEl.textContent = `Col: ${columnNumber + 1}`;
-  posEl.textContent = `Pos: ${charPos}`;
-  selLenEl.textContent = `Sel: ${selectedByteCount}`;
-  endRemainingEl.textContent = `End: ${remainingFromEnd}`;
+  setDataToolsCursorValue(offsetEl, byteOffset ?? "", byteOffset != null
+    ? `0x${byteOffset.toString(16).padStart(8, "0")}`
+    : "—");
+  setDataToolsCursorValue(lineEl, lineNumber, `${lineNumber}`);
+  setDataToolsCursorValue(colEl, columnNumber + 1, `${columnNumber + 1}`);
+  setDataToolsCursorValue(posEl, charPos, `${charPos}`);
+  setDataToolsCursorValue(selLenEl, selectedByteCount, `${selectedByteCount}`);
+  setDataToolsCursorValue(endRemainingEl, remainingFromEnd, `${remainingFromEnd}`);
 }
 
 // Parses a position or length input that may be decimal or prefixed with 0x.
@@ -9310,6 +9321,33 @@ function performDataToolsManualCarve() {
   writeLogEntry(
     `Manual carve performed offset=0x${start.toString(16)} requested_length=${length} actual_length=${actualLength}`,
   );
+}
+
+// Handles clicks on the cursor readout chips/arrows to populate or nudge the
+// Manual Carve position/length inputs.
+function handleDataToolsCursorCarveClick(event) {
+  const arrow = event.target.closest(".data-tools-cursor-arrow");
+  const chip = event.target.closest(".data-tools-cursor-chip");
+  const valueEl = event.target.closest(".data-tools-cursor-value");
+  if ((!arrow && !chip) || !valueEl) return;
+
+  const target = valueEl.dataset.carveTarget;
+  if (!target || !["position", "length"].includes(target)) return;
+  const inputId = target === "position"
+    ? "data-tools-manual-carve-position"
+    : "data-tools-manual-carve-length";
+  const inputEl = document.getElementById(inputId);
+  if (!inputEl) return;
+
+  if (arrow) {
+    const delta = Number(arrow.dataset.carveDelta || 0);
+    const current = parseDataToolsManualCarveNumber(inputEl.value) ?? 0;
+    inputEl.value = String(Math.max(0, current + delta));
+  } else {
+    const parsed = parseDataToolsManualCarveNumber(valueEl.dataset.rawValue);
+    if (parsed == null) return;
+    inputEl.value = String(parsed);
+  }
 }
 
 // Loads the most recent manual carve result into the Conv input.
@@ -21302,6 +21340,9 @@ document
 document
   .getElementById("data-tools-manual-carve-load-conv-btn")
   ?.addEventListener("click", loadDataToolsManualCarveIntoConv);
+document
+  .getElementById("data-tools-output-cursor-row")
+  ?.addEventListener("click", handleDataToolsCursorCarveClick);
 document
   .getElementById("data-tools-hash-input-reading")
   .addEventListener("input", runDataToolsHashesFromInput);

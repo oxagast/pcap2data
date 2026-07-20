@@ -1672,8 +1672,43 @@ strong {
 .data-tools-cursor-value {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   white-space: nowrap;
+}
+
+.data-tools-cursor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.data-tools-cursor-chip:hover {
+  background-color: var(--color-3);
+}
+
+.data-tools-cursor-chip-label {
+  font-weight: bold;
+  color: var(--color-1);
+}
+
+.data-tools-cursor-chip-value {
+  color: var(--color-6);
+}
+
+.data-tools-cursor-arrow {
+  cursor: pointer;
+  user-select: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px;
+  color: var(--color-6);
+}
+
+.data-tools-cursor-arrow:hover {
+  color: var(--color-1);
 }
 
 #data-tools-load-more-output-btn {
@@ -1726,6 +1761,14 @@ strong {
 
 .data-tools-actions button:hover {
   background-color: var(--color-2-hover);
+}
+
+#subnet-ti-type,
+#subnet-ti-input {
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 6px;
 }
 
 #subnet-calc-input {
@@ -2066,6 +2109,18 @@ strong {
   justify-content: space-between;
   gap: 8px;
   margin-top: 2px;
+}
+
+.data-tools-input-meta button {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.data-tools-input-meta button:hover {
+  background-color: var(--color-2-hover);
 }
 
 .data-tools-input-edited {
