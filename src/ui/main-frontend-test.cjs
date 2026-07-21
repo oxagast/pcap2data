@@ -1,3 +1,49 @@
+
+if (typeof window === 'undefined') {
+  global.window = { __PACKETSNITCH_MAIN_FRONTEND_LOADED__: false, addEventListener: ()=>{}, removeEventListener: ()=>{}, setInterval: ()=>0, clearInterval: ()=>{}, setTimeout: ()=>0, clearTimeout: ()=>{}, location: { hash: '', pathname: '/', search: '' }, fetch: ()=>Promise.resolve({}), localStorage: { getItem: ()=>null, setItem: ()=>{}, removeItem: ()=>{} } };
+  function mkEl(tag) {
+  const el = {
+    tagName: tag,
+    children: [],
+    childNodes: [],
+    style: {},
+    dataset: {},
+    classList: { add: ()=>{}, remove: ()=>{}, toggle: ()=>{}, contains: ()=>false },
+    querySelector: ()=>mkEl('div'),
+    querySelectorAll: ()=>[],
+    addEventListener: ()=>{},
+    removeEventListener: ()=>{},
+    appendChild: function(c){ this.children.push(c); this.childNodes.push(c); return c; },
+    removeChild: function(c){ const i=this.children.indexOf(c); if(i>-1){this.children.splice(i,1);this.childNodes.splice(i,1);} return c; },
+    insertBefore: function(c){ this.children.unshift(c); this.childNodes.unshift(c); return c; },
+    setAttribute: ()=>{},
+    removeAttribute: ()=>{},
+    getAttribute: ()=>null,
+    getBoundingClientRect: ()=>({ width:0, height:0, top:0, left:0 }),
+    focus: ()=>{},
+    click: ()=>{},
+    innerHTML: '',
+    textContent: '',
+    className: '',
+    value: '',
+    checked: false,
+    selectedIndex: 0,
+  };
+  return el;
+}
+global.document = {
+  createElement: mkEl,
+  createTextNode: (t)=>({ nodeType:3, textContent:t }),
+  createDocumentFragment: ()=>(mkEl('fragment')),
+  getElementById: ()=>mkEl('div'),
+  querySelector: ()=>mkEl('div'),
+  querySelectorAll: ()=>[],
+  addEventListener: ()=>{},
+  body: mkEl('body'),
+  documentElement: mkEl('html'),
+};
+  global.navigator = { userAgent: 'node' };
+}
 // Orchestrates the main renderer UI, capture workflows, and cross-panel behavior.
 
 const threadName = "MainFrontend";
@@ -6,8 +52,8 @@ window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
 // ============================================================================
 // Imports and module dependencies
 // ============================================================================
-import { bookmarkList } from '../state';
-import "../assets/css/style.css";
+const { bookmarkList } = require('../state');
+
 const CryptoJS = require("crypto-js");
 const { marked } = require("marked");
 const { sha3_256, sha3_512 } = require("js-sha3");
@@ -3976,7 +4022,7 @@ const {
   getBackendIncrementalRefreshMinPackets,
   getBackendIncrementalRefreshMinIntervalMs,
   createWorker: () =>
-    new Worker(new URL("./workers/capture-ingest-worker.js", import.meta.url)),
+    new Worker(new URL("./workers/capture-ingest-worker.js", "file:///tmp/dummy.js")),
 });
 
 initializeInstallScreen({

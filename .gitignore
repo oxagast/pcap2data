@@ -7,6 +7,12 @@ backend/snitch.exe
 testcases
 .VSCodeCounter
 
+
+# Keys
+*.key
+*.privkey
+*.pem
+
 # Logs
 logs
 *.log
