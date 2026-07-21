@@ -3,11 +3,88 @@
 
 const crypto = require("crypto-browserify");
 const openpgp = require("openpgp");
+
+// Use Node's native crypto in Electron renderer contexts so that TLS
+// certificate validation, RSA-OAEP-SHA256 decryption, and key-log-based
+// symmetric decryption work correctly. crypto-browserify (via public-encrypt)
+// hard-codes OAEP to SHA-1 and lacks X509Certificate/createPublicKey, so it
+// cannot perform any of these operations.
+function getNativeCryptoApi() {
+  return window.cryptoapi && typeof window.cryptoapi.privateDecrypt === "function"
+    ? window.cryptoapi
+    : null;
+}
+
+function logCryptoApiVersion() {
+  const api = getNativeCryptoApi();
+  if (api && api.__version) {
+    writeLogEntry(`[Crypt] native crypto bridge version="${api.__version}"`);
+  }
+}
+
+// Expose a safe key-object type probe to help diagnose mismatched PEMs.
+function getKeyObjectKind(pem) {
+  const api = getNativeCryptoApi();
+  if (!api) return "unknown";
+  try {
+    api.getPublicKeyFromCertificatePem(pem);
+    return "certificate";
+  } catch (_) { }
+  try {
+    api.getPublicKeyFromPrivateKeyPem(pem);
+    return "key";
+  } catch (err) {
+    return `unparseable (${err.message})`;
+  }
+}
+
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
+const TLS_RECORD_TYPE_HANDSHAKE = 22;
+const TLS_RECORD_TYPE_ALERT = 21;
+const TLS_RECORD_TYPE_APPLICATION_DATA = 23;
+const TLS_RECORD_TYPE_CHANGE_CIPHER_SPEC = 20;
+const TLS_HANDSHAKE_TYPE_CLIENT_HELLO = 1;
+const TLS_HANDSHAKE_TYPE_SERVER_HELLO = 2;
 const TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE = 16;
 const TLS_HANDSHAKE_TYPE_FINISHED = 20;
-const TLS_RECORD_TYPE_HANDSHAKE = 22;
+const TLS_HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS = 8;
+const TLS_HANDSHAKE_TYPE_CERTIFICATE = 11;
+const TLS_HANDSHAKE_TYPE_CERTIFICATE_VERIFY = 15;
+const TLS_HANDSHAKE_TYPE_NEW_SESSION_TICKET = 4;
+const TLS_VERSION_1_2 = 0x0303;
+const TLS_VERSION_1_3 = 0x0304;
+const TLS_CIPHER_SUITES = {
+  // TLS 1.3 suites (key length 32, iv length 12)
+  'TLS_AES_128_GCM_SHA256': { keyLen: 16, ivLen: 12, aead: 'aes-128-gcm', hash: 'sha256', isTls13: true },
+  'TLS_AES_256_GCM_SHA384': { keyLen: 32, ivLen: 12, aead: 'aes-256-gcm', hash: 'sha384', isTls13: true },
+  'TLS_CHACHA20_POLY1305_SHA256': { keyLen: 32, ivLen: 12, aead: 'chacha20-poly1305', hash: 'sha256', isTls13: true },
+  // TLS 1.2 suites
+  'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256': { keyLen: 16, ivLen: 4, aead: 'aes-128-gcm', hash: 'sha256', isTls13: false },
+  'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256': { keyLen: 16, ivLen: 4, aead: 'aes-128-gcm', hash: 'sha256', isTls13: false },
+  'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384': { keyLen: 32, ivLen: 4, aead: 'aes-256-gcm', hash: 'sha384', isTls13: false },
+  'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384': { keyLen: 32, ivLen: 4, aead: 'aes-256-gcm', hash: 'sha384', isTls13: false },
+  'TLS_RSA_WITH_AES_128_CBC_SHA256': { keyLen: 16, ivLen: 16, aead: 'aes-128-cbc-hmac-sha256', hash: 'sha256', isTls13: false },
+  'TLS_RSA_WITH_AES_256_CBC_SHA256': { keyLen: 32, ivLen: 16, aead: 'aes-256-cbc-hmac-sha256', hash: 'sha256', isTls13: false },
+  'TLS_RSA_WITH_AES_128_CBC_SHA': { keyLen: 16, ivLen: 16, aead: 'aes-128-cbc-hmac-sha1', hash: 'sha1', isTls13: false },
+  'TLS_RSA_WITH_AES_256_CBC_SHA': { keyLen: 32, ivLen: 16, aead: 'aes-256-cbc-hmac-sha1', hash: 'sha1', isTls13: false },
+};
+const NSS_KEY_LOG_LABEL_CLIENT_RANDOM = 'CLIENT_RANDOM';
+const NSS_KEY_LOG_LABELS_TLS13 = [
+  'CLIENT_EARLY_TRAFFIC_SECRET',
+  'CLIENT_HANDSHAKE_TRAFFIC_SECRET',
+  'SERVER_HANDSHAKE_TRAFFIC_SECRET',
+  'CLIENT_TRAFFIC_SECRET_0',
+  'SERVER_TRAFFIC_SECRET_0',
+  'CLIENT_TRAFFIC_SECRET_1',
+  'SERVER_TRAFFIC_SECRET_1',
+  'CLIENT_TRAFFIC_SECRET_2',
+  'SERVER_TRAFFIC_SECRET_2',
+  'CLIENT_TRAFFIC_SECRET_3',
+  'SERVER_TRAFFIC_SECRET_3',
+  'EARLY_EXPORTER_SECRET',
+  'EXPORTER_SECRET',
+];
 const PRINTABLE_UTF8_PREVIEW_REGEX = /^[\x09\x0A\x0D\x20-\x7E]*$/;
 const MAX_ASCII_PREVIEW_LENGTH = 1024;
 const PGP_ARMOR_BLOCK_REGEX =
@@ -75,6 +152,7 @@ function createCryptPanel({
   let cryptSessionEncounteredEntries = [];
   let cryptActiveEntryIndex = -1;
   let cryptLastDecryptedPayload = null;
+  let cryptKeyLogEntries = [];
   let pgpEncounteredEntries = [];
   let pgpActiveEntryIndex = -1;
   let pgpLastOutputPayload = null;
@@ -1416,9 +1494,46 @@ function createCryptPanel({
     );
   }
 
-  function extractDecryptCandidates(cipherBytes) {
+  function getPrivateKeyModulusByteLength(privateKeyPem) {
+    try {
+      const nativeCryptoApi = getNativeCryptoApi();
+      return nativeCryptoApi
+        ? nativeCryptoApi.getPrivateKeyModulusByteLength(privateKeyPem)
+        : 0;
+    } catch (error) {
+      logErrorEntry("crypt-key-modulus", error);
+      return 0;
+    }
+  }
+
+  function summarizeHandshakeTypes(payloadBytes) {
+    const types = [];
+    if (!payloadBytes || payloadBytes.length < 4) return types;
+    // Walk the raw payload looking for plausible handshake headers.
+    for (let offset = 0; offset + 4 <= payloadBytes.length; offset += 1) {
+      const msgType = payloadBytes[offset];
+      const msgLength =
+        (payloadBytes[offset + 1] << 16) |
+        (payloadBytes[offset + 2] << 8) |
+        payloadBytes[offset + 3];
+      if (msgLength > 0 && msgLength <= payloadBytes.length - offset - 4) {
+        if (msgType >= 1 && msgType <= 24) {
+          types.push(`${msgType}(${msgLength})`);
+          offset += 3 + msgLength;
+        }
+      }
+    }
+    return types;
+  }
+
+  function extractDecryptCandidates(cipherBytes, privateKeyPem) {
     const candidates = [];
     const seenHex = new Set();
+    const modulusLen = getPrivateKeyModulusByteLength(privateKeyPem);
+    const knownRsaSizes = [64, 128, 256, 384, 512];
+    const rsaSizeCandidates = modulusLen > 0
+      ? [...new Set([modulusLen, ...knownRsaSizes])].sort((a, b) => a - b)
+      : [...knownRsaSizes];
 
     const addCandidate = (value) => {
       if (!value || value.length === 0) return;
@@ -1426,6 +1541,32 @@ function createCryptPanel({
       if (seenHex.has(key)) return;
       seenHex.add(key);
       candidates.push(value);
+    };
+
+    // Add exact-modulus slices from a larger buffer. For each known RSA key size,
+    // try both the leading block (TLS 1.0/1.1 CKX layout) and trailing block.
+    const addModulusAlignedSlices = (buffer) => {
+      if (!buffer || buffer.length === 0) return;
+      for (const size of rsaSizeCandidates) {
+        if (buffer.length < size) continue;
+        addCandidate(buffer.subarray(0, size));
+        addCandidate(buffer.subarray(buffer.length - size));
+      }
+    };
+
+    // Scan the whole byte stream for any contiguous block that looks like a
+    // PKCS#1 v1.5 or OAEP ciphertext: exactly modulusLen bytes and leading with 0x00.
+    const scanRsaBlocks = (buffer) => {
+      if (!buffer || buffer.length === 0) return;
+      for (const size of rsaSizeCandidates) {
+        if (buffer.length < size) continue;
+        for (let i = 0; i <= buffer.length - size; i += 1) {
+          const block = buffer.subarray(i, i + size);
+          if (block[0] === 0x00) {
+            addCandidate(block);
+          }
+        }
+      }
     };
 
     const collectClientKeyExchangeCandidates = (handshakeBytes) => {
@@ -1442,12 +1583,18 @@ function createCryptPanel({
         if (bodyLength <= 0 || bodyEnd > handshakeBytes.length) break;
         if (handshakeType === TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE) {
           const handshakeBody = handshakeBytes.subarray(bodyStart, bodyEnd);
-          addCandidate(handshakeBody);
+          addModulusAlignedSlices(handshakeBody);
+          // Some captures include a 1- or 2-byte length prefix before the RSA block.
           if (handshakeBody.length > 2) {
             const encryptedLen = (handshakeBody[0] << 8) | handshakeBody[1];
             if (encryptedLen > 0 && encryptedLen + 2 <= handshakeBody.length) {
               addCandidate(handshakeBody.subarray(2, 2 + encryptedLen));
+              addModulusAlignedSlices(handshakeBody.subarray(2, 2 + encryptedLen));
             }
+          }
+          if (handshakeBody.length > 0) {
+            addCandidate(handshakeBody.subarray(1));
+            addModulusAlignedSlices(handshakeBody.subarray(1));
           }
         }
         offset = bodyEnd;
@@ -1458,6 +1605,37 @@ function createCryptPanel({
     };
 
     addCandidate(cipherBytes);
+    addModulusAlignedSlices(cipherBytes);
+    scanRsaBlocks(cipherBytes);
+
+    // Walk raw handshake message framing in the full payload in case the TLS
+    // record layer is missing or fragmented.
+    if (cipherBytes.length >= 4) {
+      let offset = 0;
+      while (offset + 4 <= cipherBytes.length) {
+        const msgType = cipherBytes[offset];
+        const msgLength =
+          (cipherBytes[offset + 1] << 16) |
+          (cipherBytes[offset + 2] << 8) |
+          cipherBytes[offset + 3];
+        const msgEnd = offset + 4 + msgLength;
+        if (
+          msgLength > 0 &&
+          msgEnd <= cipherBytes.length &&
+          msgType === TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE
+        ) {
+          const body = cipherBytes.subarray(offset + 4, msgEnd);
+          addCandidate(body);
+          addModulusAlignedSlices(body);
+          scanRsaBlocks(body);
+        }
+        if (msgEnd <= cipherBytes.length) {
+          offset = msgEnd;
+        } else {
+          break;
+        }
+      }
+    }
 
     if (cipherBytes.length < 5) {
       return candidates;
@@ -1485,6 +1663,8 @@ function createCryptPanel({
 
       const recordPayload = cipherBytes.subarray(recordStart, recordEnd);
       addCandidate(recordPayload);
+      addModulusAlignedSlices(recordPayload);
+      scanRsaBlocks(recordPayload);
       if (contentType === TLS_RECORD_TYPE_HANDSHAKE) {
         collectClientKeyExchangeCandidates(recordPayload);
       }
@@ -1496,8 +1676,750 @@ function createCryptPanel({
     return candidates;
   }
 
-  function decryptTlsCipherBytes(cipherBytes, privateKeyPem) {
-    const candidates = extractDecryptCandidates(cipherBytes);
+  function getNativeCryptoApi() {
+    if (
+      typeof window === "undefined" ||
+      !window.cryptoapi ||
+      typeof window.cryptoapi.privateDecrypt !== "function"
+    ) {
+      return null;
+    }
+    return window.cryptoapi;
+  }
+
+  function getNativeCryptoApiOrThrow(operation) {
+    const api = getNativeCryptoApi();
+    if (!api) {
+      throw new Error(
+        `Native crypto bridge required for ${operation} but unavailable.`,
+      );
+    }
+    return api;
+  }
+
+  function extractClientRandomFromPayloadBytes(payloadBytes) {
+    if (!payloadBytes || payloadBytes.length < 43) return null;
+
+    // First try to locate the start of actual TLS record framing, skipping
+    // non-TLS prefixes such as Squid CONNECT headers or other transport bytes.
+    const tlsOffset = findTlsRecordOffsetBytes(payloadBytes);
+    const scanStart = tlsOffset >= 0 ? tlsOffset : 0;
+
+    // Walk raw handshake framing (no record layer) from the TLS offset.
+    let offset = scanStart;
+    while (offset + 4 <= payloadBytes.length) {
+      const msgType = payloadBytes[offset];
+      const msgLength =
+        (payloadBytes[offset + 1] << 16) |
+        (payloadBytes[offset + 2] << 8) |
+        payloadBytes[offset + 3];
+      const msgEnd = offset + 4 + msgLength;
+      if (
+        msgLength > 0 &&
+        msgEnd <= payloadBytes.length &&
+        msgType === TLS_HANDSHAKE_TYPE_CLIENT_HELLO
+      ) {
+        const body = payloadBytes.subarray(offset + 4, msgEnd);
+        if (body.length >= 39) {
+          // client_version(2) + random(32) + session_id_len(1)...
+          return body.subarray(2, 34).toString("hex");
+        }
+      }
+      if (msgEnd <= payloadBytes.length) {
+        offset = msgEnd;
+      } else {
+        break;
+      }
+    }
+
+    // Walk TLS record layer from the located TLS offset.
+    offset = scanStart;
+    let recordCount = 0;
+    while (offset + 5 <= payloadBytes.length && recordCount < 256) {
+      const contentType = payloadBytes[offset];
+      if (
+        contentType < TLS_CONTENT_TYPE_MIN ||
+        contentType > TLS_CONTENT_TYPE_MAX
+      ) {
+        break;
+      }
+      const major = payloadBytes[offset + 1];
+      const minor = payloadBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) {
+        break;
+      }
+      const recordLength =
+        (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+      const recordEnd = offset + 5 + recordLength;
+      if (recordLength <= 0 || recordEnd > payloadBytes.length) break;
+      const recordPayload = payloadBytes.subarray(offset + 5, recordEnd);
+      if (contentType === TLS_RECORD_TYPE_HANDSHAKE) {
+        // A handshake record can contain multiple handshake messages.
+        let innerOffset = 0;
+        while (innerOffset + 4 <= recordPayload.length) {
+          const innerType = recordPayload[innerOffset];
+          const innerLength =
+            (recordPayload[innerOffset + 1] << 16) |
+            (recordPayload[innerOffset + 2] << 8) |
+            recordPayload[innerOffset + 3];
+          const innerEnd = innerOffset + 4 + innerLength;
+          if (
+            innerLength > 0 &&
+            innerEnd <= recordPayload.length &&
+            innerType === TLS_HANDSHAKE_TYPE_CLIENT_HELLO
+          ) {
+            const body = recordPayload.subarray(innerOffset + 4, innerEnd);
+            if (body.length >= 38) {
+              return body.subarray(2, 34).toString("hex");
+            }
+          }
+          if (innerEnd <= recordPayload.length) {
+            innerOffset = innerEnd;
+          } else {
+            break;
+          }
+        }
+      }
+      offset = recordEnd;
+      recordCount += 1;
+    }
+
+    return null;
+  }
+
+  function findCipherSuiteNameFromClientHello(payloadBytes) {
+    // Heuristic scan: search ClientHello bytes for a TLS cipher suite
+    // then look up its name by known 2-byte identifiers. Returns the
+    // first supported suite we recognize, or null.
+    if (!payloadBytes || payloadBytes.length < 64) return null;
+    const wellKnown = {
+      '0x1301': 'TLS_AES_128_GCM_SHA256',
+      '0x1302': 'TLS_AES_256_GCM_SHA384',
+      '0x1303': 'TLS_CHACHA20_POLY1305_SHA256',
+      '0x002f': 'TLS_RSA_WITH_AES_128_CBC_SHA',
+      '0x0035': 'TLS_RSA_WITH_AES_256_CBC_SHA',
+      '0x003c': 'TLS_RSA_WITH_AES_128_CBC_SHA256',
+      '0x003d': 'TLS_RSA_WITH_AES_256_CBC_SHA256',
+      '0xc02f': 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+      '0xc02b': 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+      '0xc030': 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+      '0xc02c': 'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+    };
+    for (let i = 0; i + 1 < payloadBytes.length; i += 1) {
+      const key = `0x${payloadBytes[i].toString(16).padStart(2, '0')}${payloadBytes[i + 1].toString(16).padStart(2, '0')}`;
+      const name = wellKnown[key.toLowerCase()];
+      if (name) return name;
+    }
+    return null;
+  }
+
+  function findFirstServerHelloRecordBytes(payloadBytes) {
+    if (!payloadBytes || payloadBytes.length < 5) return null;
+    let offset = 0;
+    let recordCount = 0;
+    while (offset + 5 <= payloadBytes.length && recordCount < 256) {
+      const contentType = payloadBytes[offset];
+      if (contentType < TLS_CONTENT_TYPE_MIN || contentType > TLS_CONTENT_TYPE_MAX) {
+        break;
+      }
+      const major = payloadBytes[offset + 1];
+      const minor = payloadBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) break;
+      const recordLength = (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+      const recordEnd = offset + 5 + recordLength;
+      if (recordLength <= 0 || recordEnd > payloadBytes.length) break;
+      const recordPayload = payloadBytes.subarray(offset + 5, recordEnd);
+      if (contentType === TLS_RECORD_TYPE_HANDSHAKE &&
+        recordPayload.length > 0 &&
+        recordPayload[0] === TLS_HANDSHAKE_TYPE_SERVER_HELLO) {
+        return { recordPayload, offset };
+      }
+      offset = recordEnd;
+      recordCount += 1;
+    }
+    return null;
+  }
+
+  function parseServerHelloCipherSuite(serverHelloBytes) {
+    if (!serverHelloBytes || serverHelloBytes.length < 38) return null;
+    let offset = 0; // handshake_type already stripped by caller
+    if (serverHelloBytes[offset] === TLS_HANDSHAKE_TYPE_SERVER_HELLO) {
+      offset += 1; // skip handshake type
+    }
+    offset += 3; // skip handshake length
+    offset += 2; // server_version
+    offset += 32; // server_random
+    const sessionIdLen = serverHelloBytes[offset] ?? 0;
+    offset += 1 + sessionIdLen;
+    if (offset + 2 > serverHelloBytes.length) return null;
+    const suiteId = serverHelloBytes.subarray(offset, offset + 2);
+    const key = `0x${suiteId[0].toString(16).padStart(2, '0')}${suiteId[1].toString(16).padStart(2, '0')}`;
+    const wellKnown = {
+      '0x1301': 'TLS_AES_128_GCM_SHA256',
+      '0x1302': 'TLS_AES_256_GCM_SHA384',
+      '0x1303': 'TLS_CHACHA20_POLY1305_SHA256',
+      '0x002f': 'TLS_RSA_WITH_AES_128_CBC_SHA',
+      '0x0035': 'TLS_RSA_WITH_AES_256_CBC_SHA',
+      '0x003c': 'TLS_RSA_WITH_AES_128_CBC_SHA256',
+      '0x003d': 'TLS_RSA_WITH_AES_256_CBC_SHA256',
+      '0xc02f': 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+      '0xc02b': 'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+      '0xc030': 'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+      '0xc02c': 'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+    };
+    return wellKnown[key.toLowerCase()] || null;
+  }
+
+  function deriveKeysTls12(
+    masterSecretHex,
+    cipherSuite,
+    serverRandomHex,
+    clientRandomHex,
+  ) {
+    const api = getNativeCryptoApiOrThrow("TLS 1.2 key derivation");
+    const suite = TLS_CIPHER_SUITES[cipherSuite];
+    if (!suite) {
+      throw new Error(`Unsupported TLS 1.2 cipher suite: ${cipherSuite}`);
+    }
+    if (cipherSuite.includes("_EXPORT")) {
+      throw new Error(
+        `Export TLS 1.2 cipher suites are not supported: ${cipherSuite}`,
+      );
+    }
+    const macLen =
+      suite.hash === "sha384" ? 48 : suite.hash === "sha256" ? 32 : 20;
+    const seed = `${clientRandomHex}${serverRandomHex}`;
+    const keyBlockLen = 2 * macLen + 2 * suite.keyLen + 2 * suite.ivLen;
+    const prfHash = suite.hash === "sha384" ? "sha384" : "sha256";
+    const keyBlockHex = api.tlsPrf(masterSecretHex, "key expansion", seed, keyBlockLen);
+    const keyBlock = Buffer.from(keyBlockHex, "hex");
+    let pos = 0;
+    const clientMacKey = keyBlock.subarray(pos, pos + macLen).toString("hex");
+    pos += macLen;
+    const serverMacKey = keyBlock.subarray(pos, pos + macLen).toString("hex");
+    pos += macLen;
+    const clientKey = keyBlock
+      .subarray(pos, pos + suite.keyLen)
+      .toString("hex");
+    pos += suite.keyLen;
+    const serverKey = keyBlock.subarray(pos, pos + suite.keyLen).toString("hex");
+    pos += suite.keyLen;
+    const clientIv = keyBlock.subarray(pos, pos + suite.ivLen).toString("hex");
+    pos += suite.ivLen;
+    const serverIv = keyBlock.subarray(pos, pos + suite.ivLen).toString("hex");
+    return {
+      clientMacKey,
+      serverMacKey,
+      clientKey,
+      serverKey,
+      clientIv,
+      serverIv,
+      aead: suite.aead,
+      keyLen: suite.keyLen,
+      ivLen: suite.ivLen,
+      macLen,
+      hash: suite.hash,
+    };
+  }
+
+  function deriveKeysTls13(secretHex, cipherSuite, isServer) {
+    const api = getNativeCryptoApiOrThrow("TLS 1.3 key derivation");
+    const suite = TLS_CIPHER_SUITES[cipherSuite];
+    if (!suite || !suite.isTls13) {
+      throw new Error(`Unsupported TLS 1.3 cipher suite: ${cipherSuite}`);
+    }
+    const hkdf =
+      suite.hash === "sha384"
+        ? (secret, salt, info, len) =>
+          api.hkdfSha384(
+            secret,
+            salt,
+            buildTls13HkdfInfo(info, len),
+            len,
+          )
+        : (secret, salt, info, len) =>
+          api.hkdfSha256(
+            secret,
+            salt,
+            buildTls13HkdfInfo(info, len),
+            len,
+          );
+    const key = hkdf(secretHex, "", "tls13 key", suite.keyLen);
+    const iv = hkdf(secretHex, "", "tls13 iv", suite.ivLen);
+    return { key, iv, aead: suite.aead, keyLen: suite.keyLen, ivLen: suite.ivLen };
+  }
+
+  function buildTls13HkdfInfo(label, length) {
+    const labelBytes = Buffer.from(label, "ascii");
+    const info = Buffer.alloc(2 + 1 + labelBytes.length + 1);
+    info.writeUInt16BE(length, 0);
+    info[2] = labelBytes.length;
+    labelBytes.copy(info, 3);
+    info[3 + labelBytes.length] = 0;
+    return info.toString("hex");
+  }
+
+  function decryptTls12ApplicationDataRecord(payloadBytes, offset, keys) {
+    const api = getNativeCryptoApiOrThrow("TLS 1.2 record decryption");
+    const contentType = payloadBytes[offset];
+    const recordLength = (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+    const recordStart = offset + 5;
+    const recordEnd = recordStart + recordLength;
+    if (recordEnd > payloadBytes.length) {
+      throw new Error("TLS 1.2 record extends past payload");
+    }
+    const ivLen = keys.aead.includes('gcm') ? 0 : (keys.ivLen || 16);
+    const explicitNonceLength = keys.aead.includes('gcm') ? 8 : 0;
+    const iv = keys.aead.includes('gcm')
+      ? Buffer.concat([
+        Buffer.from(keys.serverIv, 'hex'),
+        payloadBytes.subarray(recordStart, recordStart + explicitNonceLength),
+      ]).toString('hex')
+      : payloadBytes.subarray(recordStart, recordStart + ivLen).toString('hex');
+    const cipherStart = recordStart + explicitNonceLength + ivLen;
+    const authTagLength = keys.aead.includes('gcm') ? 16 : 0;
+    if (keys.aead.includes('gcm') && recordEnd - cipherStart < authTagLength) {
+      throw new Error("TLS 1.2 AEAD record too short for auth tag");
+    }
+    const cipherEnd = keys.aead.includes('gcm')
+      ? recordEnd - authTagLength
+      : recordEnd;
+    const aadHex = payloadBytes.subarray(offset, recordStart).toString('hex');
+    const cipherHex = payloadBytes.subarray(cipherStart, cipherEnd).toString('hex');
+    const tagHex = keys.aead.includes('gcm')
+      ? payloadBytes.subarray(cipherEnd, recordEnd).toString('hex')
+      : '';
+    if (keys.aead.includes('gcm')) {
+      const plaintextHex = api.decryptAesGcm(
+        keys.serverKey,
+        iv,
+        aadHex,
+        cipherHex,
+        tagHex,
+      );
+      const plaintext = Buffer.from(plaintextHex, 'hex');
+      // TLS 1.2 AEAD plaintext is content || content_type || padding.
+      let padIndex = plaintext.length - 1;
+      while (padIndex >= 0 && plaintext[padIndex] === 0) {
+        padIndex -= 1;
+      }
+      const data = padIndex > 0 ? plaintext.subarray(0, padIndex) : Buffer.alloc(0);
+      return { plaintext: data, offset: recordEnd, contentType };
+    }
+    // CBC: remove both MAC and padding; MAC verification is skipped for offline preview.
+    const plaintextHex = api.decryptAesCbc(keys.serverKey, iv, cipherHex);
+    const plaintext = Buffer.from(plaintextHex, 'hex');
+    const macLen = keys.macLen || (keys.hash === 'sha256' ? 32 : keys.hash === 'sha384' ? 48 : 20);
+    let padLen = 0;
+    if (plaintext.length > 0) {
+      padLen = plaintext[plaintext.length - 1];
+    }
+    const contentEnd =
+      padLen > 0 && padLen <= plaintext.length
+        ? plaintext.length - 1 - padLen - macLen
+        : plaintext.length - macLen;
+    const inner =
+      contentEnd > 0 ? plaintext.subarray(0, contentEnd) : Buffer.alloc(0);
+    return { plaintext: inner, offset: recordEnd, contentType };
+  }
+
+  function tryDecryptTlsWithKeyLog(payloadBytes, privateKeyPem, activeEntry) {
+    const api = getNativeCryptoApiOrThrow("TLS key-log decryption");
+    if (!cryptKeyLogEntries.length) {
+      return null;
+    }
+
+    const tlsOffset = findTlsRecordOffsetBytes(payloadBytes);
+    const scanBytes = tlsOffset > 0 ? payloadBytes.subarray(tlsOffset) : payloadBytes;
+    let clientRandom = extractClientRandomFromPayloadBytes(scanBytes);
+    writeLogEntry(
+      `[Crypt] key-log scan tlsOffset=${tlsOffset} payloadLen=${payloadBytes.length} scanLen=${scanBytes.length} clientRandom=${clientRandom ? `${clientRandom.slice(0, 16)}...` : "not-found"}`,
+    );
+
+    // If the selected packet is just Application Data, try to find the
+    // ClientHello in other packets for the same host and infer client_random.
+    if (!clientRandom && activeEntry?.host) {
+      clientRandom = findClientRandomFromHostPackets(activeEntry);
+      if (clientRandom) {
+        writeLogEntry(
+          `[Crypt] Resolved client_random=${clientRandom.slice(0, 16)}... from another packet on the same host.`,
+        );
+      }
+    }
+
+    if (!clientRandom) {
+      writeLogEntry(
+        "[Crypt] Could not locate ClientHello client_random in selected payload; key-log decryption cannot proceed.",
+      );
+      return null;
+    }
+    writeLogEntry(
+      `[Crypt] Extracted client_random=${clientRandom.slice(0, 16)}... from payload; searching key log.`,
+    );
+
+    // For TLS 1.3, try traffic secrets first.
+    const tls13TrafficLabels = [
+      'SERVER_TRAFFIC_SECRET_0',
+      'CLIENT_TRAFFIC_SECRET_0',
+      'SERVER_HANDSHAKE_TRAFFIC_SECRET',
+      'CLIENT_HANDSHAKE_TRAFFIC_SECRET',
+    ];
+    for (const label of tls13TrafficLabels) {
+      const match = cryptKeyLogEntries.find(
+        (e) => e.label === label && e.clientRandom === clientRandom,
+      );
+      if (!match) continue;
+      let cipherSuite = parseServerHelloCipherSuite(
+        findFirstServerHelloRecordBytes(scanBytes)?.recordPayload,
+      );
+      if (!cipherSuite) {
+        cipherSuite = findCipherSuiteNameFromClientHello(scanBytes);
+      }
+      if (!cipherSuite || !TLS_CIPHER_SUITES[cipherSuite]?.isTls13) {
+        writeLogEntry(`[Crypt] TLS 1.3 traffic secret found but cipher suite not recognized; skipped ${label}.`);
+        continue;
+      }
+      const isServer = label.startsWith('SERVER_');
+      const keys = deriveKeysTls13(match.secretHex, cipherSuite, isServer);
+      const decrypted = tryDecryptApplicationRecordsTls13(scanBytes, keys);
+      if (decrypted && decrypted.length) {
+        writeLogEntry(`[Crypt] Decrypted TLS 1.3 application data with ${label} (${cipherSuite}).`);
+        return decrypted;
+      }
+    }
+
+    // TLS 1.2: look up CLIENT_RANDOM master secret.
+    const clientRandomMatch = cryptKeyLogEntries.find(
+      (e) => e.label === NSS_KEY_LOG_LABEL_CLIENT_RANDOM && e.clientRandom === clientRandom,
+    );
+    if (!clientRandomMatch) {
+      writeLogEntry(`[Crypt] No CLIENT_RANDOM master secret found in key log for this session.`);
+      return null;
+    }
+    const serverHelloInfo = findFirstServerHelloRecordBytes(scanBytes);
+    let cipherSuite = parseServerHelloCipherSuite(serverHelloInfo?.recordPayload);
+    if (!cipherSuite) {
+      cipherSuite = findCipherSuiteNameFromClientHello(scanBytes);
+    }
+    if (!cipherSuite) {
+      writeLogEntry('[Crypt] Could not determine cipher suite for TLS 1.2 key-log decryption.');
+      return null;
+    }
+    if (TLS_CIPHER_SUITES[cipherSuite]?.isTls13) {
+      writeLogEntry('[Crypt] Selected cipher suite appears to be TLS 1.3, but no TLS 1.3 traffic secret found for this session.');
+      return null;
+    }
+    const serverRandom = serverHelloInfo?.recordPayload
+      ? extractServerRandomFromServerHello(serverHelloInfo.recordPayload)
+      : null;
+    const clientRandomHex = clientRandom;
+    const serverRandomHex = serverRandom || '';
+    const keys = deriveKeysTls12(
+      clientRandomMatch.secretHex,
+      cipherSuite,
+      serverRandomHex,
+      clientRandomHex,
+    );
+    const decrypted = tryDecryptApplicationRecordsTls12(scanBytes, keys);
+    if (decrypted && decrypted.length) {
+      writeLogEntry(`[Crypt] Decrypted TLS 1.2 application data with CLIENT_RANDOM (${cipherSuite}).`);
+      return decrypted;
+    }
+    return null;
+  }
+
+  function findClientRandomFromHostPackets(entry) {
+    const hostMap = getHostPacketMap(getCapturedPackets());
+    if (!hostMap || typeof hostMap !== "object") return null;
+
+    // The selected packet may not carry the ClientHello (e.g. a tiny TLS
+    // alert/ACK). Build a list of candidate packet arrays to search, starting
+    // with the same host, then any host that shares this endpoint IP.
+    const candidateArrays = [];
+    const hostsTried = [];
+    if (entry?.host && Array.isArray(hostMap[entry.host])) {
+      candidateArrays.push(hostMap[entry.host]);
+      hostsTried.push(entry.host);
+    }
+    const endpointIps = new Set([
+      entry?.srcIp,
+      entry?.dstIp,
+    ].filter(Boolean));
+    for (const host of Object.keys(hostMap)) {
+      if (hostsTried.includes(host)) continue;
+      if (endpointIps.has(host) || host.split(/[:\s]/).some((part) => endpointIps.has(part))) {
+        candidateArrays.push(hostMap[host]);
+        hostsTried.push(host);
+      }
+    }
+    if (candidateArrays.length === 0) return null;
+
+    const normalizeIp = (ip) => String(ip || "").trim().toLowerCase();
+    const normalizePort = (port) => String(port || "").trim();
+    const entrySrcIp = normalizeIp(entry?.srcIp);
+    const entryDstIp = normalizeIp(entry?.dstIp);
+    const entrySrcPort = normalizePort(entry?.srcPort);
+    const entryDstPort = normalizePort(entry?.dstPort);
+
+    // First pass: only consider packets on the exact same 5-tuple stream.
+    let scanned = 0;
+    for (const packets of candidateArrays) {
+      for (const packet of packets) {
+        const packetInfo = getPacketInfo(packet);
+        if (!packetInfo) continue;
+        const protocol = packetInfo["Protocol"] || packetInfo["packet.proto"] || "Unknown";
+        const transportData = getTransportData(packetInfo, protocol);
+        const srcPort = normalizePort(transportData?.["Source port"] ?? transportData?.["source.port"]);
+        const dstPort = normalizePort(transportData?.["Destination port"] ?? transportData?.["destination.port"]);
+        const srcIp = normalizeIp(packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]);
+        const dstIp = normalizeIp(packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]);
+        const sameStream =
+          (srcIp === entrySrcIp && dstIp === entryDstIp && srcPort === entrySrcPort && dstPort === entryDstPort) ||
+          (srcIp === entryDstIp && dstIp === entrySrcIp && srcPort === entryDstPort && dstPort === entrySrcPort);
+        if (!sameStream) continue;
+        const payloadHex = getPacketPayloadHex(packet);
+        if (!payloadHex) continue;
+        const payloadBytes = Buffer.from(normalizeHexString(payloadHex), "hex");
+        scanned += 1;
+        const tlsOffset = findTlsRecordOffsetBytes(payloadBytes);
+        const scanBytes = tlsOffset > 0 ? payloadBytes.subarray(tlsOffset) : payloadBytes;
+        const clientRandom = extractClientRandomFromPayloadBytes(scanBytes);
+        if (clientRandom) {
+          writeLogEntry(`[Crypt] Resolved client_random=${clientRandom.slice(0, 16)}... from same-stream packet #${packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? "?"} (scanned ${scanned}).`);
+          return clientRandom;
+        }
+      }
+    }
+
+    // Second pass: relax stream matching and search every packet on the
+    // candidate hosts for any ClientHello. This handles captures where the
+    // host map key or endpoint metadata differs from the selected entry.
+    scanned = 0;
+    for (const packets of candidateArrays) {
+      for (const packet of packets) {
+        const packetInfo = getPacketInfo(packet);
+        if (!packetInfo) continue;
+        const payloadHex = getPacketPayloadHex(packet);
+        if (!payloadHex) continue;
+        const payloadBytes = Buffer.from(normalizeHexString(payloadHex), "hex");
+        scanned += 1;
+        const tlsOffset = findTlsRecordOffsetBytes(payloadBytes);
+        const scanBytes = tlsOffset > 0 ? payloadBytes.subarray(tlsOffset) : payloadBytes;
+        const clientRandom = extractClientRandomFromPayloadBytes(scanBytes);
+        if (clientRandom) {
+          writeLogEntry(`[Crypt] Resolved client_random=${clientRandom.slice(0, 16)}... from relaxed host search packet #${packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? "?"} (scanned ${scanned}).`);
+          return clientRandom;
+        }
+      }
+    }
+
+    writeLogEntry(`[Crypt] ClientHello not found in ${scanned} candidate packets across ${candidateArrays.length} host(s).`);
+    return null;
+  }
+
+  function extractServerRandomFromServerHello(serverHelloBytes) {
+    if (!serverHelloBytes || serverHelloBytes.length < 38) return null;
+    let offset = 0;
+    if (serverHelloBytes[offset] === TLS_HANDSHAKE_TYPE_SERVER_HELLO) offset += 1;
+    offset += 3; // handshake length
+    offset += 2; // server_version
+    if (serverHelloBytes.length < offset + 32) return null;
+    return serverHelloBytes.subarray(offset, offset + 32).toString('hex');
+  }
+
+  function tryDecryptApplicationRecordsTls12(payloadBytes, keys) {
+    const records = [];
+    let offset = 0;
+    let recordCount = 0;
+    while (offset + 5 <= payloadBytes.length && recordCount < 512) {
+      const contentType = payloadBytes[offset];
+      if (contentType < TLS_CONTENT_TYPE_MIN || contentType > TLS_CONTENT_TYPE_MAX) {
+        break;
+      }
+      const major = payloadBytes[offset + 1];
+      const minor = payloadBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) break;
+      const recordLength = (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+      const recordEnd = offset + 5 + recordLength;
+      if (recordLength <= 0 || recordEnd > payloadBytes.length) break;
+      if (contentType === TLS_RECORD_TYPE_APPLICATION_DATA) {
+        try {
+          const result = decryptTls12ApplicationDataRecord(payloadBytes, offset, keys);
+          if (result.plaintext && result.plaintext.length) {
+            records.push(result.plaintext);
+          }
+        } catch (_) {
+          // ignore record failures and keep scanning
+        }
+      }
+      offset = recordEnd;
+      recordCount += 1;
+    }
+    if (records.length === 0) return null;
+    return Buffer.concat(records);
+  }
+
+  function tryDecryptApplicationRecordsTls13(payloadBytes, keys) {
+    const api = getNativeCryptoApiOrThrow("TLS 1.3 record decryption");
+    const records = [];
+    let offset = 0;
+    let recordCount = 0;
+    let seq = 0;
+    const MAX_SEQ_TRIES = 64;
+    while (offset + 5 <= payloadBytes.length && recordCount < 512) {
+      const contentType = payloadBytes[offset];
+      if (contentType < TLS_CONTENT_TYPE_MIN || contentType > TLS_CONTENT_TYPE_MAX) {
+        break;
+      }
+      const major = payloadBytes[offset + 1];
+      const minor = payloadBytes[offset + 2];
+      if (major !== 0x03 || minor > 0x04) {
+        break;
+      }
+      const recordLength = (payloadBytes[offset + 3] << 8) | payloadBytes[offset + 4];
+      const recordEnd = offset + 5 + recordLength;
+      if (recordLength <= 0 || recordEnd > payloadBytes.length) break;
+      if (contentType === TLS_RECORD_TYPE_APPLICATION_DATA) {
+        let decryptedRecord = null;
+        let successSeq = null;
+        const tagLen = 16;
+        if (recordEnd - (offset + 5) >= tagLen) {
+          const cipherStart = offset + 5;
+          const cipherEnd = recordEnd - tagLen;
+          const aadHex = payloadBytes.subarray(offset, cipherStart).toString('hex');
+          const cipherHex = payloadBytes.subarray(cipherStart, cipherEnd).toString('hex');
+          const tagHex = payloadBytes.subarray(cipherEnd, recordEnd).toString('hex');
+          for (let seqTry = seq; seqTry < seq + MAX_SEQ_TRIES; seqTry += 1) {
+            try {
+              const nonce = Buffer.from(keys.iv, 'hex');
+              const seqBytes = Buffer.alloc(8);
+              seqBytes.writeBigUInt64BE(BigInt(seqTry), 0);
+              for (let i = 0; i < 8; i += 1) {
+                nonce[nonce.length - 8 + i] ^= seqBytes[i];
+              }
+              const plaintextHex = api.decryptAesGcm(
+                keys.key,
+                nonce.toString('hex'),
+                aadHex,
+                cipherHex,
+                tagHex,
+              );
+              const inner = Buffer.from(plaintextHex, 'hex');
+              let padIndex = inner.length - 1;
+              while (padIndex >= 0 && inner[padIndex] === 0) {
+                padIndex -= 1;
+              }
+              const innerType = padIndex >= 0 ? inner[padIndex] : 0;
+              const data = padIndex > 0 ? inner.subarray(0, padIndex) : Buffer.alloc(0);
+              if (
+                (innerType === TLS_RECORD_TYPE_APPLICATION_DATA ||
+                  innerType === TLS_RECORD_TYPE_HANDSHAKE) &&
+                data.length > 0
+              ) {
+                decryptedRecord = data;
+                successSeq = seqTry;
+                break;
+              }
+            } catch (_) {
+              // try next sequence number
+            }
+          }
+        }
+        if (decryptedRecord) {
+          records.push(decryptedRecord);
+          seq = successSeq + 1;
+        } else {
+          seq += 1;
+        }
+        offset = recordEnd;
+        recordCount += 1;
+        continue;
+      }
+      offset = recordEnd;
+      recordCount += 1;
+    }
+    if (records.length === 0) return null;
+    return Buffer.concat(records);
+  }
+
+  function decryptTlsCipherBytes(cipherBytes, privateKeyPem, activeEntry) {
+    // Prefer NSS/SSL key log decryption whenever a key log has been loaded.
+    const keyLogResult = tryDecryptTlsWithKeyLog(
+      cipherBytes,
+      privateKeyPem,
+      activeEntry,
+    );
+    if (keyLogResult) {
+      return keyLogResult;
+    }
+
+    const normalizedKey = String(privateKeyPem || "").trim();
+    if (!normalizedKey) {
+      // No private key loaded; if a key log was loaded we already tried it above.
+      if (cryptKeyLogEntries.length) {
+        throw new Error(
+          "No TLS decrypt attempt succeeded with the loaded key log for this session.",
+        );
+      }
+      throw new Error("No private key or TLS key log loaded.");
+    }
+
+    const candidates = extractDecryptCandidates(cipherBytes, normalizedKey);
+    const modulusLen = getPrivateKeyModulusByteLength(privateKeyPem);
+    const candidateLengths = candidates.map((c) => c.length);
+    const handshakeTypes = summarizeHandshakeTypes(cipherBytes);
+    const hasClientKeyExchange = handshakeTypes.some((s) =>
+      s.startsWith(`${TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE}(`),
+    );
+    writeLogEntry(
+      `[Crypt] decryptTlsCipherBytes keyLogTried modulusLen=${modulusLen} candidates=${candidates.length} lengths=${candidateLengths.slice(0, 20).join(",")}${candidateLengths.length > 20 ? "..." : ""} handshakes=${handshakeTypes.slice(0, 10).join(",")} clientKeyExchange=${hasClientKeyExchange ? "yes" : "no"}`,
+    );
+    if (!hasClientKeyExchange && handshakeTypes.length > 0) {
+      writeLogEntry(
+        `[Crypt] No ClientKeyExchange (type ${TLS_HANDSHAKE_TYPE_CLIENT_KEY_EXCHANGE}) found in selected payload; this handshake likely uses ECDHE/DHE, which cannot be decrypted with an RSA private key.`,
+      );
+    }
+    const nativeCryptoApi = getNativeCryptoApi();
+
+    if (nativeCryptoApi) {
+      const constants = nativeCryptoApi.getRsaConstants();
+      const decryptVariants = [
+        {
+          name: "RSA-OAEP-SHA256",
+          options: {
+            padding: constants.RSA_PKCS1_OAEP_PADDING,
+            oaepHash: "sha256",
+          },
+        },
+        {
+          name: "RSA-PKCS1-v1_5",
+          options: { padding: constants.RSA_PKCS1_PADDING },
+        },
+      ];
+      const failures = [];
+      for (const candidate of candidates) {
+        for (const variant of decryptVariants) {
+          try {
+            const decryptedHex = nativeCryptoApi.privateDecrypt(
+              normalizedKey,
+              candidate.toString("hex"),
+              variant.options,
+            );
+            return Buffer.from(decryptedHex, "hex");
+          } catch (error) {
+            failures.push(`${variant.name} (${candidate.length} bytes): ${error.message}`);
+          }
+        }
+      }
+      const failurePreview = [...new Set(failures)]
+        .slice(0, MAX_DECRYPT_FAILURE_MESSAGES)
+        .join("; ");
+      throw new Error(
+        `No TLS decrypt attempt succeeded with the loaded key (${failurePreview})`,
+      );
+    }
+
+    // Fallback for non-Electron browser contexts where the native bridge is unavailable.
     const decryptVariants = [
       {
         name: "RSA-OAEP-SHA256",
@@ -1517,7 +2439,7 @@ function createCryptPanel({
         try {
           const decrypted = crypto.privateDecrypt(
             {
-              key: privateKeyPem,
+              key: normalizedKey,
               ...variant.options,
             },
             candidate,
@@ -1539,6 +2461,46 @@ function createCryptPanel({
   function certMatchesPrivateKey(certificatePem, privateKeyPem) {
     const normalizedCert = String(certificatePem || "").trim();
     if (!normalizedCert) return { matched: true };
+
+    const certKind = getKeyObjectKind(normalizedCert);
+    const keyKind = getKeyObjectKind(privateKeyPem);
+    writeLogEntry(
+      `[Crypt] cert/key kind check certKind="${certKind}" keyKind="${keyKind}"`,
+    );
+
+    const nativeCryptoApi = getNativeCryptoApi();
+    if (nativeCryptoApi) {
+      try {
+        const certPublicKeyPem =
+          nativeCryptoApi.getPublicKeyFromCertificatePem(normalizedCert);
+        let privateKeyPublicPem = null;
+        try {
+          privateKeyPublicPem =
+            nativeCryptoApi.getPublicKeyFromPrivateKeyPem(privateKeyPem);
+        } catch (keyError) {
+          // If the loaded key cannot yield a public key (e.g. encrypted/malformed),
+          // skip the comparison rather than failing decryption later.
+          logErrorEntry(
+            "crypt-cert-key-check",
+            new Error(
+              `Private key parse failed; PEM kind=${keyKind}, original=${keyError.message}`,
+            ),
+          );
+          return {
+            matched: null,
+            reason: `Key parse failed (kind=${keyKind}); certificate/key validation skipped.`,
+          };
+        }
+        return { matched: certPublicKeyPem === privateKeyPublicPem };
+      } catch (error) {
+        logErrorEntry("crypt-cert-key-check", error);
+        return {
+          matched: null,
+          reason: "Certificate/key pair validation failed and was skipped.",
+        };
+      }
+    }
+
     if (
       typeof crypto.X509Certificate !== "function" ||
       typeof crypto.createPublicKey !== "function"
@@ -1688,6 +2650,83 @@ function createCryptPanel({
     }
   }
 
+  function parseNssKeyLog(text) {
+    const normalized = String(text || "").trim();
+    const entries = [];
+    if (!normalized) return entries;
+    const lines = normalized.split(/\r?\n/);
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const [label, clientRandomHex, secretHex, ...rest] = parts;
+      if (
+        !/^(CLIENT_RANDOM|CLIENT_EARLY_TRAFFIC_SECRET|CLIENT_HANDSHAKE_TRAFFIC_SECRET|SERVER_HANDSHAKE_TRAFFIC_SECRET|CLIENT_TRAFFIC_SECRET_\d+|SERVER_TRAFFIC_SECRET_\d+|EARLY_EXPORTER_SECRET|EXPORTER_SECRET)$/.test(
+          label,
+        )
+      ) {
+        continue;
+      }
+      const clientRandom = normalizeHexString(clientRandomHex).toLowerCase();
+      if (!clientRandom || clientRandom.length !== 64) continue;
+      const normalizedSecret = normalizeHexString(secretHex).toLowerCase();
+      if (!normalizedSecret) continue;
+      entries.push({
+        label,
+        clientRandom,
+        secretHex: normalizedSecret,
+        originalLine: line.trim(),
+      });
+    }
+    return entries;
+  }
+
+  function applyCryptKeyLogText(rawText, sourceLabel) {
+    const keyLogInputEl = document.getElementById("crypt-key-log-input");
+    const keyLogPreviewEl = document.getElementById("crypt-key-log-preview");
+    const normalized = String(rawText || "").trim();
+    keyLogInputEl.value = normalized;
+    if (normalized) {
+      const entries = parseNssKeyLog(normalized);
+      cryptKeyLogEntries = entries;
+      const clientRandoms = entries
+        .filter((e) => e.label === NSS_KEY_LOG_LABEL_CLIENT_RANDOM)
+        .map((e) => e.clientRandom.slice(0, 16))
+        .filter((v, i, a) => a.indexOf(v) === i);
+      const tls13Secrets = entries.some((e) =>
+        NSS_KEY_LOG_LABELS_TLS13.includes(e.label),
+      );
+      keyLogPreviewEl.textContent = [
+        `Loaded ${entries.length} key log line(s) from ${sourceLabel}.`,
+        clientRandoms.length
+          ? `CLIENT_RANDOM entries: ${clientRandoms.length} session(s) preview ${clientRandoms.join(", ")}`
+          : null,
+        tls13Secrets ? "TLS 1.3 traffic secrets present." : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      statusUpdate(`Status: TLS key log loaded from ${sourceLabel}`);
+      writeLogEntry(
+        `[${threadName}] Crypt key log loaded source="${sourceLabel}" entries=${entries.length} clientRandomSessions=${clientRandoms.length} tls13=${tls13Secrets}`,
+      );
+      if (sourceLabel !== SESSION_KEYCHAIN_LABEL) {
+        addSessionKeystoreEntry({
+          type: "tls-session-secret",
+          label: getFirstLineOrFallback(
+            "crypt-key-log-preview",
+            `TLS-Key-Log-${new Date().toISOString()}`,
+          ),
+          source: `key-log-tab ${sourceLabel}`,
+          content: normalized,
+          summary: `Imported ${entries.length} NSS key log line(s)`,
+        });
+      }
+    } else {
+      cryptKeyLogEntries = [];
+      keyLogPreviewEl.textContent = "No TLS key log loaded.";
+      statusUpdate("Status: TLS key log cleared");
+    }
+  }
+
   function readCryptTextFile(fileInputEl, onLoad) {
     const file = fileInputEl.files?.[0];
     if (!file) return;
@@ -1770,25 +2809,28 @@ function createCryptPanel({
     const privateKeyPem = String(
       document.getElementById("crypt-key-input")?.value || "",
     ).trim();
-    if (!privateKeyPem) {
-      statusUpdate("Status: Load a private key from keychain or file first");
-      return;
-    }
     const certificatePem = String(
       document.getElementById("crypt-cert-input")?.value || "",
     ).trim();
-    const certKeyCheck = certMatchesPrivateKey(certificatePem, privateKeyPem);
-    if (certificatePem && certKeyCheck.matched === false) {
+    const keyLogText = String(
+      document.getElementById("crypt-key-log-input")?.value || "",
+    ).trim();
+    if (!privateKeyPem && !keyLogText) {
       statusUpdate(
-        "Status: Loaded certificate does not match private key (continuing with key)",
+        "Status: Load a private key or an SSL key log from keychain/file first",
       );
+      return;
     }
-    if (
-      certificatePem &&
-      certKeyCheck.matched === null &&
-      certKeyCheck.reason
-    ) {
-      writeLogEntry(`Crypt cert/key check skipped: ${certKeyCheck.reason}`);
+    if (certificatePem && privateKeyPem) {
+      const certKeyCheck = certMatchesPrivateKey(certificatePem, privateKeyPem);
+      if (certKeyCheck.matched === false) {
+        statusUpdate(
+          "Status: Loaded certificate does not match private key (continuing with key)",
+        );
+      }
+      if (certKeyCheck.matched === null && certKeyCheck.reason) {
+        writeLogEntry(`Crypt cert/key check skipped: ${certKeyCheck.reason}`);
+      }
     }
     const activeEntry = cryptEncounteredEntries[cryptActiveEntryIndex];
     const payloadHex = String(
@@ -1806,18 +2848,33 @@ function createCryptPanel({
       const decryptedBytes = decryptTlsCipherBytes(
         Buffer.from(payloadHex, "hex"),
         privateKeyPem,
+        activeEntry,
       );
       renderDecryptedPayload(activeEntry, decryptedBytes);
-      addSessionKeystoreEntry({
-        type: "private-key",
-        label: getFirstLineOrFallback(
-          "crypt-key-preview",
-          `TLS-Private-Key-${new Date().toISOString()}`,
-        ),
-        source: "tls-decrypt-success",
-        content: privateKeyPem,
-        summary: "Validated by successful TLS decrypt",
-      });
+      if (keyLogText) {
+        addSessionKeystoreEntry({
+          type: "tls-session-secret",
+          label: getFirstLineOrFallback(
+            "crypt-key-log-preview",
+            `TLS-Key-Log-Success-${new Date().toISOString()}`,
+          ),
+          source: "tls-decrypt-success",
+          content: keyLogText,
+          summary: `Decrypted packet #${activeEntry.packetIndex} with key log`,
+        });
+      }
+      if (privateKeyPem) {
+        addSessionKeystoreEntry({
+          type: "private-key",
+          label: getFirstLineOrFallback(
+            "crypt-key-preview",
+            `TLS-Private-Key-${new Date().toISOString()}`,
+          ),
+          source: "tls-decrypt-success",
+          content: privateKeyPem,
+          summary: "Validated by successful TLS decrypt",
+        });
+      }
       statusUpdate(
         `Status: Decrypted TLS/SSL payload for packet #${activeEntry.packetIndex}`,
       );
@@ -1828,7 +2885,7 @@ function createCryptPanel({
       clearCryptDecryptionOutput();
       logErrorEntry(`[${threadName}] crypt-tls-decrypt`, error);
       doError(
-        "Could not decrypt selected TLS/SSL payload with the loaded private key.",
+        "Could not decrypt selected TLS/SSL payload with the loaded key or key log.",
       );
     }
   }
@@ -1900,6 +2957,7 @@ function createCryptPanel({
     readCryptTextFile,
     applyCryptCertificateText,
     applyCryptPrivateKeyText,
+    applyCryptKeyLogText,
     applyCryptFilterForActiveEntry,
     loadEncounteredCertificateIntoCrypt,
     selectEncounteredEntry,

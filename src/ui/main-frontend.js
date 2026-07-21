@@ -14401,6 +14401,7 @@ const {
   setCryptSubtab,
   applyCryptCertificateText,
   applyCryptPrivateKeyText,
+  applyCryptKeyLogText,
   readCryptTextFile,
   applyCryptFilterForActiveEntry,
   loadEncounteredCertificateIntoCrypt,
@@ -20988,6 +20989,31 @@ document
 document.getElementById("crypt-clear-key-btn").addEventListener("click", () => {
   applyCryptPrivateKeyText("", "cleared");
 });
+
+// TLS/SSL session key log (NSS key log format) loader
+document
+  .getElementById("crypt-load-key-log-file-btn")
+  .addEventListener("click", () =>
+    document.getElementById("crypt-key-log-file-input").click(),
+  );
+document
+  .getElementById("crypt-key-log-file-input")
+  .addEventListener("change", function () {
+    readCryptTextFile(this, applyCryptKeyLogText);
+    this.value = "";
+  });
+document
+  .getElementById("crypt-use-key-log-input-btn")
+  .addEventListener("click", () =>
+    applyCryptKeyLogText(
+      document.getElementById("crypt-key-log-input").value,
+      "pasted text",
+    ),
+  );
+document.getElementById("crypt-clear-key-log-btn").addEventListener("click", () => {
+  applyCryptKeyLogText("", "cleared");
+});
+
 document
   .getElementById("crypt-decrypt-entry-btn")
   .addEventListener("click", decryptActiveEntryWithLoadedKey);

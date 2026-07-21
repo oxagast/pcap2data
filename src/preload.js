@@ -1347,6 +1347,132 @@ contextBridge.exposeInMainWorld('browserapi', {
   getRuntimePlatform: () => ipcRenderer.invoke('get-runtime-platform'),
 });
 
+contextBridge.exposeInMainWorld('cryptoapi', {
+  __version: '2026-07-21-a',
+  getRsaConstants: () => {
+    const crypto = runtimeRequire('crypto');
+    return {
+      RSA_PKCS1_OAEP_PADDING: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      RSA_PKCS1_PADDING: crypto.constants.RSA_PKCS1_PADDING,
+    };
+  },
+  getPrivateKeyModulusByteLength: (privateKeyPem) => {
+    const crypto = runtimeRequire('crypto');
+    try {
+      // Try to derive the modulus length from the public components of the key
+      // without decrypting/processing the private key material.
+      const key = crypto.createPublicKey(privateKeyPem);
+      const modulusLength = key.asymmetricKeyDetails?.modulusLength || key.asymmetricKeySize;
+      return typeof modulusLength === 'number' ? modulusLength / 8 : 0;
+    } catch (_) {
+      // Fall back to private key parsing if the PEM is not a public key/cert.
+      try {
+        const key = crypto.createPrivateKey(privateKeyPem);
+        const modulusLength = key.asymmetricKeyDetails?.modulusLength || key.asymmetricKeySize;
+        return typeof modulusLength === 'number' ? modulusLength / 8 : 0;
+      } catch (_) {
+        return 0;
+      }
+    }
+  },
+  privateDecrypt: (keyPem, encryptedHex, options) => {
+    const crypto = runtimeRequire('crypto');
+    const encryptedBuffer = Buffer.from(encryptedHex, 'hex');
+    const decrypted = crypto.privateDecrypt(
+      { key: keyPem, ...options },
+      encryptedBuffer,
+    );
+    return decrypted.toString('hex');
+  },
+  getPublicKeyFromPrivateKeyPem: (privateKeyPem) => {
+    const crypto = runtimeRequire('crypto');
+    return crypto
+      .createPublicKey(privateKeyPem)
+      .export({ type: 'spki', format: 'pem' });
+  },
+  getPublicKeyFromCertificatePem: (certificatePem) => {
+    const crypto = runtimeRequire('crypto');
+    const cert = new crypto.X509Certificate(certificatePem);
+    return crypto
+      .createPublicKey(cert.publicKey)
+      .export({ type: 'spki', format: 'pem' });
+  },
+  // TLS 1.2 PRF (P_SHA256) and symmetric decryption helpers for NSS key log decryption.
+  hmac: (hash, keyHex, dataHex) => {
+    const crypto = runtimeRequire('crypto');
+    const hmac = crypto.createHmac(hash, Buffer.from(keyHex, 'hex'));
+    hmac.update(Buffer.from(dataHex, 'hex'));
+    return hmac.digest('hex');
+  },
+  tlsPrf: (secretHex, label, seedHex, length, hash = 'sha256') => {
+    const crypto = runtimeRequire('crypto');
+    const secret = Buffer.from(secretHex, 'hex');
+    const seed = Buffer.concat([
+      Buffer.from(label, 'ascii'),
+      Buffer.from(seedHex, 'hex'),
+    ]);
+    function pHash(prfHash, secret, seed, targetLength) {
+      let result = Buffer.alloc(0);
+      let a = seed;
+      while (result.length < targetLength) {
+        a = crypto.createHmac(prfHash, secret).update(a).digest();
+        result = Buffer.concat([
+          result,
+          crypto.createHmac(prfHash, secret).update(a).update(seed).digest(),
+        ]);
+      }
+      return result.subarray(0, targetLength);
+    }
+    return pHash(hash, secret, seed, length).toString('hex');
+  },
+  hkdfSha256: (ikmHex, saltHex, infoHex, length) => {
+    const crypto = runtimeRequire('crypto');
+    return crypto
+      .hkdfSync(
+        'sha256',
+        Buffer.from(ikmHex, 'hex'),
+        Buffer.from(saltHex, 'hex'),
+        Buffer.from(infoHex, 'hex'),
+        length,
+      )
+      .toString('hex');
+  },
+  hkdfSha384: (ikmHex, saltHex, infoHex, length) => {
+    const crypto = runtimeRequire('crypto');
+    return crypto
+      .hkdfSync(
+        'sha384',
+        Buffer.from(ikmHex, 'hex'),
+        Buffer.from(saltHex, 'hex'),
+        Buffer.from(infoHex, 'hex'),
+        length,
+      )
+      .toString('hex');
+  },
+  decryptAesCbc: (keyHex, ivHex, cipherHex) => {
+    const crypto = runtimeRequire('crypto');
+    const key = Buffer.from(keyHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const algorithm = key.length === 32 ? 'aes-256-cbc' : 'aes-128-cbc';
+    const decipher = crypto.createDecipheriv(algorithm, key, iv);
+    const r1 = decipher.update(Buffer.from(cipherHex, 'hex'));
+    const r2 = decipher.final();
+    return Buffer.concat([r1, r2]).toString('hex');
+  },
+  decryptAesGcm: (keyHex, ivHex, aadHex, cipherHex, tagHex) => {
+    const crypto = runtimeRequire('crypto');
+    const key = Buffer.from(keyHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const algorithm = key.length === 32 ? 'aes-256-gcm' : 'aes-128-gcm';
+    const decipher = crypto.createDecipheriv(algorithm, key, iv);
+    decipher.setAAD(Buffer.from(aadHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    const r1 = decipher.update(Buffer.from(cipherHex, 'hex'));
+    const r2 = decipher.final();
+    return Buffer.concat([r1, r2]).toString('hex');
+  },
+});
+
 contextBridge.exposeInMainWorld('quitapi', {
   quitApp: () => ipcRenderer.invoke('quit-app'),
   promptSaveOnExit: () => ipcRenderer.invoke('prompt-save-session-on-exit'),

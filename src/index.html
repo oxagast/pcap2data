@@ -661,6 +661,23 @@
               </div>
 
               <div class="crypt-section">
+                <div class="crypt-section-title">TLS Key Log Loader</div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-load-key-log-file-btn">
+                    Load SSL key log file
+                  </button>
+                  <button id="crypt-use-key-log-input-btn">
+                    Use pasted key log
+                  </button>
+                  <button id="crypt-clear-key-log-btn">Clear</button>
+                </div>
+                <input type="file" id="crypt-key-log-file-input" accept=".log,.txt,.keys,.keylog" hidden />
+                <textarea id="crypt-key-log-input"
+                  placeholder="Paste NSS key log lines here (CLIENT_RANDOM <client_random> <master_secret>)..."></textarea>
+                <pre id="crypt-key-log-preview">No TLS key log loaded.</pre>
+              </div>
+
+              <div class="crypt-section">
                 <div class="crypt-section-title">TLS/SSL Decrypt</div>
                 <div class="crypt-actions-row">
                   <button id="crypt-decrypt-entry-btn">
