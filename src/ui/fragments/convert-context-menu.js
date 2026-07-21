@@ -201,6 +201,8 @@ const convertContextMenuMarkup = `
       <button id="ctx-llm-subnet-host-summary" role="menuitem">Summarize this subnet host...</button>
     </div>
   </div>
+  <hr id="convert-context-save-divider" class="ctx-divider" />
+  <button id="ctx-open-heatmap-location" role="menuitem">Open in Heatmap</button>
   <hr id="convert-context-bottom-divider" class="ctx-divider" />
   <button id="ctx-save-json" role="menuitem">Save Session</button>
 `;

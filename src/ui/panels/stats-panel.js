@@ -3196,6 +3196,7 @@ function makeStatsSection({
   onQuery,
   onItemClick,
   itemTitle,
+  locationPoints,
 }) {
   if (!items || items.length === 0) return null;
   const normalizedItems = Array.from(
@@ -3208,6 +3209,14 @@ function makeStatsSection({
     ),
   );
   if (normalizedItems.length === 0) return null;
+
+  const pointByItem = new Map();
+  if (Array.isArray(locationPoints)) {
+    locationPoints.forEach((point) => {
+      if (!point || typeof point.label !== "string") return;
+      pointByItem.set(point.label, point);
+    });
+  }
 
   const section = documentRef.createElement("div");
   section.className = "stats-section";
@@ -3233,6 +3242,17 @@ function makeStatsSection({
       if (resolvedTitle) tag.title = resolvedTitle;
     } else if (typeof itemTitle === "string" && itemTitle.trim()) {
       tag.title = itemTitle;
+    }
+
+    const locationPoint = pointByItem.get(item);
+    if (locationPoint) {
+      const lat = Number(locationPoint.latitude);
+      const lon = Number(locationPoint.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        tag.dataset.latitude = String(lat);
+        tag.dataset.longitude = String(lon);
+        tag.dataset.locationLabel = String(locationPoint.label || item);
+      }
     }
 
     if (queryBuilder) {
@@ -3717,10 +3737,22 @@ function createStatsPanel(options) {
 
       if (stats.locations.length > 0) {
         const locItems = stats.locations.map(([place, count]) => `${place} (${count})`);
+        const locationPoints = stats.heatmapPoints
+          ? stats.heatmapPoints
+            .filter((point) =>
+              stats.locations.some(([place]) => point.label === place),
+            )
+            .map((point) => ({
+              ...point,
+              label: `${point.label} (${stats.locations.find(([place]) => place === point.label)?.[1] ?? 0
+                })`,
+            }))
+          : [];
         const locSec = makeStatsSection({
           documentRef,
           title: "Physical Locations",
           items: locItems,
+          locationPoints,
           queryBuilder: (v) => {
             // we should search by the city, which comes before a comma
             const city = v.split(" (")[0].split(",")[0].trim();

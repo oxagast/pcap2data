@@ -14598,6 +14598,7 @@ const convertContextButtons = {
   followStreamCrypt: getCachedElement("ctx-follow-stream-crypt"),
   llmExplain: getCachedElement("ctx-llm-explain"),
   llmSummarize: getCachedElement("ctx-llm-summarize"),
+  openHeatmapLocation: getCachedElement("ctx-open-heatmap-location"),
 };
 const convertContextSubmenus = {
   copy: getCachedElement("ctx-copy-submenu"),
@@ -14623,6 +14624,9 @@ const convertContextSubmenus = {
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
+  "convert-context-save-divider",
+);
+const convertContextBottomDividerEl = getCachedElement(
   "convert-context-bottom-divider",
 );
 const convertContextSubmenuEls = Array.from(
@@ -15598,6 +15602,13 @@ function showConvertContextMenu(
     activeMainTab === MAIN_TAB_CRYPT ||
     activeMainTab === MAIN_TAB_KEYSTORE;
   const hasCookieActions = Boolean(cookieJarText);
+  const statsLocationTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-latitude]")
+    : null;
+  const hasStatsLocationHeatmapAction = Boolean(statsLocationTag);
+  convertContextButtons.openHeatmapLocation.style.display = hasStatsLocationHeatmapAction
+    ? "block"
+    : "none";
   const hasContextDataForNotes =
     allowNotesDataFromContext &&
     (hasContextSourceText || hasSelectionContext);
@@ -15764,7 +15775,8 @@ function showConvertContextMenu(
     !hasHttpBody &&
     !hasFileCarveActions &&
     !hasFollowStreamActions &&
-    !hasLlmActions
+    !hasLlmActions &&
+    !hasStatsLocationHeatmapAction
   ) {
     hideConvertContextMenu();
     return;
@@ -15789,6 +15801,9 @@ function showConvertContextMenu(
         hasKeystoreActions)
       ? "block"
       : "none";
+  convertContextBottomDividerEl.style.display = hasStatsLocationHeatmapAction
+    ? "block"
+    : "none";
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -21746,6 +21761,17 @@ convertContextButtons.saveJson.addEventListener(
   "click",
   saveJsonFromContextMenu,
 );
+convertContextButtons.openHeatmapLocation.addEventListener("click", () => {
+  const tag = activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-latitude]");
+  if (!tag) return;
+  const latitude = parseFloat(tag.dataset.latitude);
+  const longitude = parseFloat(tag.dataset.longitude);
+  const label = tag.dataset.locationLabel || "";
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    showStatsHeatmapLocation({ latitude, longitude, label });
+  }
+  hideConvertContextMenu();
+});
 convertContextButtons.exportPacket.addEventListener(
   "click",
   exportCurrentPacketFromContextMenu,
