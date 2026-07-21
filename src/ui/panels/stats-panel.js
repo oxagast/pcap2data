@@ -3363,12 +3363,13 @@ function createStatsPanel(options) {
         return;
       }
 
-      noteEl.textContent = "Click a carved file candidate to load it into Conv.";
+      noteEl.textContent = "Click a carved file candidate to load it into Conv, or right-click for options.";
       items.forEach((item) => {
         const tag = documentRef.createElement("span");
         tag.className = "stats-tag";
         tag.textContent = String(item?.label || "Unknown carved file");
         tag.title = `Load into Conv (${String(item?.sourceDetail || "stream context")})`;
+        tag.dataset.carvableId = String(item?.id || "");
         tag.addEventListener("click", async () => {
           if (typeof openCarvedFileInConv !== "function") return;
           try {

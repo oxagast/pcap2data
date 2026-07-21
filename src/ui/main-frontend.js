@@ -14599,6 +14599,8 @@ const convertContextButtons = {
   llmExplain: getCachedElement("ctx-llm-explain"),
   llmSummarize: getCachedElement("ctx-llm-summarize"),
   openHeatmapLocation: getCachedElement("ctx-open-heatmap-location"),
+  loadCarvableExtraction: getCachedElement("ctx-load-carvable-extraction"),
+  loadCarvableVirusTotal: getCachedElement("ctx-load-carvable-virustotal"),
 };
 const convertContextSubmenus = {
   copy: getCachedElement("ctx-copy-submenu"),
@@ -15606,7 +15608,20 @@ function showConvertContextMenu(
     ? target?.closest?.("#stats_box .stats-section .stats-tag[data-latitude]")
     : null;
   const hasStatsLocationHeatmapAction = Boolean(statsLocationTag);
+  const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
+    : null;
+  const statsCarvableCandidate = statsCarvableTag
+    ? getCarvableCandidateById(statsCarvableTag.dataset.carvableId)
+    : null;
+  const hasStatsCarvableAction = Boolean(statsCarvableCandidate);
   convertContextButtons.openHeatmapLocation.style.display = hasStatsLocationHeatmapAction
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
     ? "block"
     : "none";
   const hasContextDataForNotes =
@@ -15776,7 +15791,8 @@ function showConvertContextMenu(
     !hasFileCarveActions &&
     !hasFollowStreamActions &&
     !hasLlmActions &&
-    !hasStatsLocationHeatmapAction
+    !hasStatsLocationHeatmapAction &&
+    !hasStatsCarvableAction
   ) {
     hideConvertContextMenu();
     return;
@@ -15801,9 +15817,8 @@ function showConvertContextMenu(
         hasKeystoreActions)
       ? "block"
       : "none";
-  convertContextBottomDividerEl.style.display = hasStatsLocationHeatmapAction
-    ? "block"
-    : "none";
+  convertContextBottomDividerEl.style.display =
+    hasStatsLocationHeatmapAction || hasStatsCarvableAction ? "block" : "none";
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -18486,6 +18501,20 @@ async function listCarvableFilesForStats() {
 
 // Shared registry for extracted/decompressed results surfaced in Stats.
 let extractionCarvableRegistry = [];
+
+// Looks up a carvable candidate by its id from the cached Stats carvable list.
+async function getCarvableCandidateById(candidateId) {
+  if (!candidateId) return null;
+  try {
+    const candidates = await listCarvableFilesForStats();
+    const match = candidates.find((candidate) => candidate?.id === candidateId);
+    return match || null;
+  } catch (error) {
+    const message = error?.message || String(error || "unknown");
+    statusUpdate(`Status: Failed to look up carved file candidate - ${message}`);
+    return null;
+  }
+}
 
 // Registers an extraction result so Stats can show it as a carvable file.
 function registerExtractionResultForStats(fileName, bytes) {
@@ -21771,6 +21800,62 @@ convertContextButtons.openHeatmapLocation.addEventListener("click", () => {
     showStatsHeatmapLocation({ latitude, longitude, label });
   }
   hideConvertContextMenu();
+});
+
+convertContextButtons.loadCarvableExtraction.addEventListener("click", async () => {
+  const tag = activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]");
+  if (!tag) return;
+  const candidate = await getCarvableCandidateById(tag.dataset.carvableId);
+  hideConvertContextMenu();
+  if (!candidate) {
+    statusUpdate("Status: Carved file candidate not found");
+    return;
+  }
+  const bytes = candidate.bytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    statusUpdate("Status: Carved file content is unavailable");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  if (!inputEl || !formatEl) {
+    statusUpdate("Status: Conv input fields are unavailable");
+    return;
+  }
+  dataToolsContextPacket = null;
+  dataToolsOriginalInputBytes = bytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = bytes;
+  inputEl.value = formatHexInputBytesWithCap(bytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(candidate.fileName || "");
+  markDataToolsInputCommitted();
+  showDataTools(CONV_EXTRACTION_SUBTAB);
+  statusUpdate(`Status: Loaded ${candidate.fileName || "carved file"} into Extraction (${bytes.length} bytes)`);
+  writeLogEntry(
+    `Stats carve loaded into Extraction file="${candidate.fileName || "unknown"}" bytes=${bytes.length}`,
+  );
+});
+
+convertContextButtons.loadCarvableVirusTotal.addEventListener("click", async () => {
+  const tag = activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]");
+  if (!tag) return;
+  const candidate = await getCarvableCandidateById(tag.dataset.carvableId);
+  hideConvertContextMenu();
+  if (!candidate) {
+    statusUpdate("Status: Carved file candidate not found");
+    return;
+  }
+  const bytes = candidate.bytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    statusUpdate("Status: Carved file content is unavailable");
+    return;
+  }
+  await uploadExtractionResultToVirusTotal(bytes, candidate.fileName || "carved-file.bin");
+  statusUpdate(`Status: Sent ${candidate.fileName || "carved file"} to VirusTotal (${bytes.length} bytes)`);
+  writeLogEntry(
+    `Stats carve sent to VirusTotal file="${candidate.fileName || "unknown"}" bytes=${bytes.length}`,
+  );
 });
 convertContextButtons.exportPacket.addEventListener(
   "click",

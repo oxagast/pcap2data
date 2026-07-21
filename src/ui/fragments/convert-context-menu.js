@@ -203,6 +203,8 @@ const convertContextMenuMarkup = `
   </div>
   <hr id="convert-context-save-divider" class="ctx-divider" />
   <button id="ctx-open-heatmap-location" role="menuitem">Open in Heatmap</button>
+  <button id="ctx-load-carvable-extraction" role="menuitem">Load carved file into Extraction</button>
+  <button id="ctx-load-carvable-virustotal" role="menuitem">Send carved file to VirusTotal</button>
   <hr id="convert-context-bottom-divider" class="ctx-divider" />
   <button id="ctx-save-json" role="menuitem">Save Session</button>
 `;
