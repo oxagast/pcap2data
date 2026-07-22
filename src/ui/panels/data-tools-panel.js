@@ -5,6 +5,11 @@ const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
 const ExifReader = require('exifreader');
+const {
+  initDataToolsLlmSummarizer,
+  requestDataToolsBackgroundSummary,
+  clearDataToolsSummary,
+} = require("./data-tools-llm-summarizer");
 
 const threadName = "DataTools";
 
@@ -60,13 +65,26 @@ let _writeLogEntry = () => { };
 let _statusUpdate = () => { };
 let _setActiveMainTab = () => { };
 let _getCurrentContextPacket = () => null;
+let _callLargeLanguageModel = null;
+let _isLlmRuntimeEnabled = () => false;
+let _isBackgroundSummaryGenerationEnabled = () => false;
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
   _getCurrentContextPacket = getCurrentContextPacket || (() => null);
+  _callLargeLanguageModel = callLargeLanguageModel || null;
+  _isLlmRuntimeEnabled = isLlmRuntimeEnabled || (() => false);
+  _isBackgroundSummaryGenerationEnabled = isBackgroundSummaryGenerationEnabled || (() => false);
+  initDataToolsLlmSummarizer({
+    callLargeLanguageModel: _callLargeLanguageModel,
+    isLlmRuntimeEnabled: _isLlmRuntimeEnabled,
+    isBackgroundSummaryGenerationEnabled: _isBackgroundSummaryGenerationEnabled,
+    statusUpdate: _statusUpdate,
+    writeLogEntry: _writeLogEntry,
+  });
 }
 
 // ── State accessors ───────────────────────────────────────────────────────────
@@ -488,6 +506,9 @@ function runDataToolsHashesFromInput() {
   const hashInput = document.getElementById("data-tools-hash-input-reading").value;
   const bytes = parseHashInputReadingBytes(hashInput);
   computeDataToolsHashes(bytes);
+  if (activeConvSubtab === CONV_HASHES_SUBTAB) {
+    requestDataToolsBackgroundSummary(CONV_HASHES_SUBTAB);
+  }
 }
 
 function getSelectedHashValue() {
@@ -618,6 +639,7 @@ function runDataToolsConversion() {
     setHashInputReadingFromBytes(bytes);
     computeDataToolsHashes(bytes);
     runProtoDecoder(bytes);
+    requestDataToolsBackgroundSummary(activeConvSubtab);
   } catch (error) {
     resetDataToolsOutputs();
     errorEl.textContent =
@@ -2927,6 +2949,9 @@ function runProtoDecoder(bytes) {
       protocol = null;
   }
   renderProtoDecoderOutput(result, selectedProtocol, protocol);
+  if (activeConvSubtab === CONV_DECODES_SUBTAB) {
+    requestDataToolsBackgroundSummary(CONV_DECODES_SUBTAB);
+  }
 }
 
 // Clears proto decoder output.
@@ -3092,4 +3117,6 @@ module.exports = {
   getPacketProtocolDecoderHint,
   EXIF_FILE_TYPE_TO_PROTO,
   getImageTypeFromExifReader,
+  clearDataToolsSummary,
+  requestDataToolsBackgroundSummary,
 };

@@ -142,6 +142,10 @@
         </div>
         <div id="summary_box">
           <div class="summary-workspace-header">Analysis Summary</div>
+          <div id="summary-compaction-status" class="summary-compaction-status" aria-live="polite" hidden>
+            <span class="loading"></span>
+            <span id="summary-compaction-status-text">Compacting analysis…</span>
+          </div>
           <div id="summary_content" class="notes-markdown-preview">
             Load a file to get started!
             <!--            <span id="loaderdots" class="loading">Loading</span>  -->
@@ -1090,6 +1094,12 @@ No keystore entries saved.</pre>
 
                 <label for="settings-llm-retry-count">LLM retries</label>
                 <input id="settings-llm-retry-count" type="number" min="0" step="1" />
+
+                <label for="settings-llm-analysis-compaction-threshold-blubs">Analysis compaction threshold
+                  (blubs)</label>
+                <input id="settings-llm-analysis-compaction-threshold-blubs" type="number" min="1" step="1" />
+                <div class="settings-help-text">After this many new analysis blurbs are appended, the LLM will compact
+                  the recent history into a summary at the top of the Analysis panel.</div>
               </div>
             </div>
           </div>
@@ -1380,6 +1390,15 @@ No keystore entries saved.</pre>
               </div>
               <div id="data-tools-entropy" class="data-tools-kv">
                 Shannon Entropy: 0.00 (Low)
+              </div>
+            </div>
+            <div id="data-tools-llm-insights" class="data-tools-section data-tools-insights-sidebar" hidden>
+              <div class="data-tools-title">LLM Insights</div>
+              <div id="data-tools-llm-status" class="data-tools-kv">
+                Status: idle
+              </div>
+              <div id="data-tools-llm-summary" class="data-tools-kv data-tools-llm-summary">
+                No summary yet.
               </div>
             </div>
           </div>

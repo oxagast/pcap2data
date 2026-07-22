@@ -64,6 +64,9 @@ const {
   CRYPT_KEYSTORE_MODE_PERSISTENT,
   SESSION_KEYCHAIN_LABEL,
 } = require("./panels/keystore-panel");
+const {
+  getLatestKeystoreSummary,
+} = require("./panels/keystore-llm-summarizer");
 const { createStatsPanel, buildCaptureStats } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
@@ -115,6 +118,8 @@ const {
   clearProtoDecoderOutput,
   EXIF_FILE_TYPE_TO_PROTO,
   getImageTypeFromExifReader,
+  clearDataToolsSummary,
+  requestDataToolsBackgroundSummary,
 } = require("./panels/data-tools-panel");
 
 function mountStartupFragments() {
@@ -657,6 +662,9 @@ let startTime;
 let helpWin = null;
 let llmSummaryTimeout = null;
 let summary = "";
+let analysisBlubHistory = [];
+let compactedAnalysisSummary = "";
+let analysisCompactionInProgress = false;
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
 const streamPacketHydrationCache = new Map();
@@ -911,6 +919,16 @@ function isLlmEnabledInSettings() {
 function isBackgroundSummaryGenerationEnabled() {
   const llmSettings = getCurrentSettings()?.llm || {};
   return llmSettings.backgroundSummaryGenerationEnabled !== false;
+}
+
+// Returns the configured number of analysis blurbs before the LLM compacts them.
+function getAnalysisCompactionThresholdBlubs() {
+  const llmSettings = getCurrentSettings()?.llm || {};
+  const threshold = Number(llmSettings.analysisCompactionThresholdBlubs);
+  if (!Number.isFinite(threshold) || threshold < 1) {
+    return DEFAULT_SETTINGS.llm.analysisCompactionThresholdBlubs;
+  }
+  return Math.floor(threshold);
 }
 
 // Returns whether llm runtime enabled.
@@ -2227,6 +2245,9 @@ function syncSettingsFormFromState() {
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
   const retryCountEl = document.getElementById("settings-llm-retry-count");
+  const analysisCompactionThresholdBlubsEl = document.getElementById(
+    "settings-llm-analysis-compaction-threshold-blubs",
+  );
   const pluginFailureThresholdEl = document.getElementById(
     "settings-plugins-auto-disable-failure-threshold",
   );
@@ -2349,6 +2370,11 @@ function syncSettingsFormFromState() {
   if (maxTokensEl) maxTokensEl.value = String(settings.llm.maxSummaryTokens);
   if (timeoutSecondsEl) timeoutSecondsEl.value = String(settings.llm.ollamaRequestTimeoutSeconds);
   if (retryCountEl) retryCountEl.value = String(settings.llm.retryCount);
+  if (analysisCompactionThresholdBlubsEl) {
+    analysisCompactionThresholdBlubsEl.value = String(
+      settings.llm.analysisCompactionThresholdBlubs,
+    );
+  }
   if (pluginFailureThresholdEl) {
     pluginFailureThresholdEl.value = String(
       settings.plugins?.autoDisableFailureThreshold
@@ -2426,6 +2452,9 @@ function readSettingsFormState() {
   const maxTokensEl = document.getElementById("settings-llm-max-tokens");
   const timeoutSecondsEl = document.getElementById("settings-llm-timeout-seconds");
   const retryCountEl = document.getElementById("settings-llm-retry-count");
+  const analysisCompactionThresholdBlubsEl = document.getElementById(
+    "settings-llm-analysis-compaction-threshold-blubs",
+  );
   const pluginFailureThresholdEl = document.getElementById(
     "settings-plugins-auto-disable-failure-threshold",
   );
@@ -2530,6 +2559,9 @@ function readSettingsFormState() {
         ? timeoutSecondsEl.value
         : DEFAULT_SETTINGS.llm.ollamaRequestTimeoutSeconds,
       retryCount: retryCountEl ? retryCountEl.value : DEFAULT_SETTINGS.llm.retryCount,
+      analysisCompactionThresholdBlubs: analysisCompactionThresholdBlubsEl
+        ? analysisCompactionThresholdBlubsEl.value
+        : DEFAULT_SETTINGS.llm.analysisCompactionThresholdBlubs,
     },
     plugins: {
       autoDisableFailureThreshold: pluginFailureThresholdEl
@@ -4181,6 +4213,9 @@ async function clearCurrentSession() {
   currentPacketKey = null;
   jsonCapture = "";
   summary = "";
+  compactedAnalysisSummary = "";
+  analysisBlubHistory.length = 0;
+  analysisCompactionInProgress = false;
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
   hostFilterEl.value = "";
@@ -6417,9 +6452,20 @@ function renderSummaryMarkdownPreview(summaryText) {
   );
 }
 
+// Renders the combined compacted analysis summary + new analysis blurbs.
+function renderCombinedAnalysisSummary() {
+  const combined = compactedAnalysisSummary
+    ? compactedAnalysisSummary + "\n\n" + summary
+    : summary;
+  renderSummaryMarkdownPreview(combined);
+}
+
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
-  return normalizeSummaryMarkdownHeadings(summary);
+  const combined = compactedAnalysisSummary
+    ? compactedAnalysisSummary + "\n\n" + summary
+    : summary;
+  return normalizeSummaryMarkdownHeadings(combined);
 }
 
 // Normalizes plain-text export segment.
@@ -7784,6 +7830,8 @@ function buildSessionStateSnapshot() {
       [],
     ),
     currentSummary: summary,
+    compactedAnalysisSummary: compactedAnalysisSummary || "",
+    analysisBlubHistory: [...analysisBlubHistory],
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
@@ -8067,8 +8115,33 @@ async function requestApplicationClose() {
       }
     }
   }
+
+  // Lock/close the keystore before exiting so decrypted key material is cleared.
+  try {
+    if (keystorePanel && typeof keystorePanel.resetKeystoreState === "function") {
+      keystorePanel.resetKeystoreState();
+      statusUpdate("Status: Keychain locked for exit");
+      writeLogEntry(`[${threadName}] Application exit requested; keychain locked`);
+    }
+  } catch (error) {
+    logErrorEntry("keystore-lock-on-exit", error);
+  }
+
   window.quitapi.quitApp();
 }
+
+// Fallback: ensure the keystore is cleared whenever the renderer window is torn
+// down (OS close, Cmd+Q, page reload, etc.), even if the close button path above
+// is not the trigger.
+window.addEventListener("beforeunload", () => {
+  try {
+    if (keystorePanel && typeof keystorePanel.resetKeystoreState === "function") {
+      keystorePanel.resetKeystoreState();
+    }
+  } catch (error) {
+    logErrorEntry("keystore-lock-on-beforeunload", error);
+  }
+});
 
 // Handles restore session state.
 async function restoreSessionState(sessionState) {
@@ -8144,7 +8217,19 @@ async function restoreSessionState(sessionState) {
     summary = sessionState.currentSummary;
     summaryFromSavedSession = true;
   }
-  renderSummaryMarkdownPreview(summary);
+  if (Array.isArray(sessionState.analysisBlubHistory)) {
+    analysisBlubHistory.splice(
+      0,
+      analysisBlubHistory.length,
+      ...sessionState.analysisBlubHistory.filter(
+        (item) => item && typeof item === "string",
+      ),
+    );
+  }
+  if (sessionState.compactedAnalysisSummary && typeof sessionState.compactedAnalysisSummary === "string") {
+    compactedAnalysisSummary = sessionState.compactedAnalysisSummary;
+  }
+  renderCombinedAnalysisSummary();
 
   const loadedNotes = Array.isArray(sessionState.notes)
     ? sessionState.notes
@@ -9120,6 +9205,7 @@ function clearDataToolsSelectionState() {
   dataToolsSelectionState.maps = {};
   dataToolsSelectionState.selectedByteRange = null;
   dataToolsSelectionState.lastSelectionSignature = "";
+  clearDataToolsSummary();
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(
     "data-tools-input",
@@ -15198,6 +15284,9 @@ keystorePanel = createKeystorePanel({
     activeMainTab = tabName;
   },
   MAIN_TAB_KEYSTORE,
+  callLargeLanguageModel,
+  isLlmRuntimeEnabled,
+  isBackgroundSummaryGenerationEnabled,
   parseDataToolsInput,
   decodeHttpFromBytes,
   extractCookieJarEntriesFromHttpFields,
@@ -19470,15 +19559,107 @@ function writeSummaryFromLLM() {
       const llmResponse = await callLargeLanguageModel(prompt);
       const summPart = llmResponse?.response || "";
       summary = summary + "\n\n" + summPart;
+      if (summPart.length > 0) {
+        appendAnalysisBlub(summPart);
+      }
       if (summPart.length > 800) {
         renderSummaryMarkdownPreview(summary);
         writeLogEntry(`LLM summary generated for ${streamPackets.length} packets`);
         statusUpdate("Status: LLM summary available for current stream!");
+      } else {
+        renderSummaryMarkdownPreview(summary);
       }
     } catch (error) {
       writeLogEntry(`LLM summary generation failed: ${error?.message || error}`);
     }
   }, getLLMSummaryDelayMs());  // wait before calling the LLM to avoid too many calls when scrolling rapidly
+}
+
+// Records an Analysis "blub" in chronological order and, when the threshold is
+// reached, compacts the accumulated blurbs via the LLM. `blubText` should be the
+// new content that is being appended to the live summary, not the compacted
+// summary itself.
+function appendAnalysisBlub(blubText) {
+  if (!blubText || typeof blubText !== "string") return;
+  const trimmed = blubText.trim();
+  if (!trimmed) return;
+  analysisBlubHistory.push(trimmed);
+  const threshold = getAnalysisCompactionThresholdBlubs();
+  if (
+    !analysisCompactionInProgress &&
+    analysisBlubHistory.length >= threshold
+  ) {
+    void runAnalysisCompaction();
+  }
+}
+
+// Compacts the accumulated Analysis blurbs by asking the LLM to produce a
+// concise summary that explicitly repeats the most important data points.
+// The compacted summary is displayed at the top of the Analysis tab and the
+// live "new analysis" buffer is reset to start accumulating below it.
+async function runAnalysisCompaction() {
+  if (analysisCompactionInProgress) return;
+  analysisCompactionInProgress = true;
+  statusUpdate(`Status: Compacting ${analysisBlubHistory.length} Analysis blurbs...`);
+  writeLogEntry(`Analysis compaction started for ${analysisBlubHistory.length} blurbs`);
+  const blurbs = analysisBlubHistory.splice(0, analysisBlubHistory.length);
+  if (!blurbs.length) {
+    analysisCompactionInProgress = false;
+    statusUpdate("Status: Analysis compaction skipped (no blurbs).");
+    return;
+  }
+
+  // Build context from existing compacted summary (if any) plus the new blurbs.
+  const previousCompacted = compactedAnalysisSummary.trim();
+  let contextIntro = "";
+  if (previousCompacted) {
+    contextIntro = `The following is the previously compacted summary of earlier analysis. Preserve and merge its important facts into the new compacted summary.\n\n${previousCompacted}\n\n---\n\n`;
+  }
+  const chronologicalBlurbs = blurbs
+    .map((blurb, idx) => `ANALYSIS ENTRY ${idx + 1}:\n${blurb}`)
+    .join("\n\n---\n\n");
+  const combinedInput = `${contextIntro}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single compact summary that:
+- Repeats the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
+- Preserves the chronological order of significant events where it matters.
+- Drops redundant or low-value observations.
+- Is concise but complete; aim for roughly 2-4 paragraphs.
+
+${chronologicalBlurbs}`;
+
+  let prompt = `You are PacketSnitch, a network analysis assistant. ${buildMarkdownResponseInstruction()}\n\n${combinedInput}`;
+  if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Analysis history too long for LLM input]";
+  }
+
+  let compacted = "";
+  try {
+    if (isLlmRuntimeEnabled()) {
+      const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+      compacted = llmResponse?.response || "";
+    }
+  } catch (error) {
+    writeLogEntry(`[AnalysisCompact] Compaction failed: ${error?.message || error}`);
+    statusUpdate("Status: Analysis compaction failed.");
+  }
+
+  if (!compacted.trim()) {
+    // Fallback: keep the raw blurbs in chronological order so no data is lost.
+    compacted = chronologicalBlurbs.replace(/ANALYSIS ENTRY \d+:\n/g, "- ").replace(/\n---\n/g, "\n\n");
+  }
+
+  // Merge the new compacted summary with the previous compacted summary so the
+  // top of the Analysis tab always holds the running compacted reference.
+  if (previousCompacted) {
+    compactedAnalysisSummary = `${previousCompacted}\n\n${compacted.trim()}`;
+  } else {
+    compactedAnalysisSummary = compacted.trim();
+  }
+
+  summary = "";
+  renderCombinedAnalysisSummary();
+  statusUpdate(`Status: Analysis compacted ${blurbs.length} blurbs into running summary.`);
+  writeLogEntry(`[AnalysisCompact] Compacted ${blurbs.length} blurbs into running summary`);
+  analysisCompactionInProgress = false;
 }
 
 // Sets active packet cursor.
@@ -20471,6 +20652,9 @@ initConvPanel({
     activeMainTab = tab;
   },
   getCurrentContextPacket,
+  callLargeLanguageModel,
+  isLlmRuntimeEnabled,
+  isBackgroundSummaryGenerationEnabled,
 });
 
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
@@ -20553,8 +20737,13 @@ document
       doError("Please upload a JSON file before accessing the keystore.");
       return;
     }
-    const unlocked = await keystorePanel.unlockPersistentKeystoreAndLoad();
-    if (!unlocked) return;
+    if (
+      keystorePanel.getKeystoreMode() === CRYPT_KEYSTORE_MODE_PERSISTENT &&
+      !keystorePanel.isUnlocked()
+    ) {
+      const unlocked = await keystorePanel.unlockPersistentKeystoreAndLoad();
+      if (!unlocked) return;
+    }
     keystorePanel.showKeystoreWorkspace();
   });
 document
@@ -20990,6 +21179,12 @@ document.getElementById("settings-llm-timeout-seconds").addEventListener("change
 document.getElementById("settings-llm-retry-count").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated retryCount=${event?.target?.value}`);
 });
+
+document
+  .getElementById("settings-llm-analysis-compaction-threshold-blubs")
+  .addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated analysisCompactionThresholdBlubs=${event?.target?.value}`);
+  });
 
 document
   .getElementById("conv-subtab-conversions")
