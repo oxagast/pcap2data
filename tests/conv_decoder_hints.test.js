@@ -179,6 +179,7 @@ function loadHintFunctions(filePath) {
         DataView,
         TextDecoder,
         normalizeSmbDecoderBytes: alwaysNull,
+        getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
         decodeBsonFromBytes: alwaysNull,

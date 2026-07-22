@@ -2430,6 +2430,51 @@ function decodeWebpFromBytes(bytes) {
   return result;
 }
 
+// Maps ExifReader's fileType.ext / fileType.mime / expanded file.FileType.value
+// to the Conv decoder key.
+const EXIF_FILE_TYPE_TO_PROTO = {
+  "jpg": "jpeg",
+  "jpeg": "jpeg",
+  "png": "png",
+  "gif": "gif",
+  "webp": "webp",
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+// Asks ExifReader what image format these bytes are. Returns a decoder key
+// ("jpeg", "png", "gif", "webp") or null if ExifReader cannot identify them.
+function getImageTypeFromExifReader(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  try {
+    // ExifReader has two shapes:
+    //   - tags.fileType { ext, mime } in default mode
+    //   - tags.file['FileType'].value in expanded mode
+    const tagsDefault = ExifReader.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    if (tagsDefault) {
+      const fileType = tagsDefault.fileType;
+      if (fileType) {
+        const ext = String(fileType.ext || "").toLowerCase().trim();
+        const mime = String(fileType.mime || "").toLowerCase().split(";")[0].trim();
+        const mapped = EXIF_FILE_TYPE_TO_PROTO[ext] || EXIF_FILE_TYPE_TO_PROTO[mime];
+        if (mapped) return mapped;
+      }
+    }
+    const tagsExpanded = ExifReader.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), { expanded: true });
+    const expandedFileType = tagsExpanded?.file?.['FileType'];
+    if (expandedFileType && expandedFileType.value !== undefined) {
+      const val = String(expandedFileType.value).toLowerCase().trim();
+      if (EXIF_FILE_TYPE_TO_PROTO[val]) return EXIF_FILE_TYPE_TO_PROTO[val];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Known application-protocol / well-known-port to decoder key mappings.
 // These are used as hints so the Conv Decoders subtab can prefer the
 // packet's metadata before falling back to byte-heuristic detection.
@@ -2519,9 +2564,9 @@ function getPacketProtocolDecoderHint(packet) {
       protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
       break;
     }
-    const mimeKey = raw.toLowerCase().trim();
-    if (MIME_TO_PROTO[mimeKey]) {
-      protocolHint = MIME_TO_PROTO[mimeKey];
+    const baseMime = raw.toLowerCase().trim().split(";")[0].trim();
+    if (MIME_TO_PROTO[baseMime]) {
+      protocolHint = MIME_TO_PROTO[baseMime];
       break;
     }
   }
@@ -2587,8 +2632,8 @@ const MIME_TO_PROTO = {
 function autoDetectProtoFromBytes(bytes, options) {
   const { protocolHint = null, portHint = null } = options || {};
   if (protocolHint && typeof protocolHint === "string") {
-    const normalized = protocolHint.toLowerCase().trim();
-    return MIME_TO_PROTO[normalized] || protocolHint;
+    const baseMime = protocolHint.toLowerCase().trim().split(";")[0].trim();
+    return MIME_TO_PROTO[baseMime] || protocolHint;
   }
   if (portHint && typeof portHint === "string") {
     return portHint;
@@ -2608,6 +2653,13 @@ function autoDetectProtoFromBytes(bytes, options) {
   if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return "png";
   if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "gif";
   if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "webp";
+
+  // ExifReader's fileType tag is authoritative for image payloads.
+  const exifImageType = getImageTypeFromExifReader(bytes);
+  if (exifImageType) {
+    return exifImageType;
+  }
+
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
   );
@@ -2783,6 +2835,15 @@ function runProtoDecoder(bytes) {
     }
   }
   let result = null;
+  const actualImageType = getImageTypeFromExifReader(bytes);
+  const isImageProtocolSelected = ["jpeg", "png", "gif", "webp"].includes(protocol);
+  // If the user explicitly selected an image decoder and the bytes are not
+  // actually that image type (per ExifReader), bail out so we don't render a
+  // broken preview / wrong metadata.
+  if (isImageProtocolSelected && actualImageType && actualImageType !== protocol) {
+    renderProtoDecoderOutput(null, selectedProtocol, protocol);
+    return;
+  }
   switch (protocol) {
     case "http":
       result = decodeHttpFromBytes(bytes);
@@ -3029,4 +3090,6 @@ module.exports = {
   showDataTools,
   setConvSubtab,
   getPacketProtocolDecoderHint,
+  EXIF_FILE_TYPE_TO_PROTO,
+  getImageTypeFromExifReader,
 };

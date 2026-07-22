@@ -113,6 +113,8 @@ const {
   decodeWebpFromBytes,
   renderProtoDecoderOutput,
   clearProtoDecoderOutput,
+  EXIF_FILE_TYPE_TO_PROTO,
+  getImageTypeFromExifReader,
 } = require("./panels/data-tools-panel");
 
 function mountStartupFragments() {
@@ -9540,6 +9542,19 @@ function inferMimeType(bytes) {
   if (startsWith([0x89, 0x50, 0x4e, 0x47])) return "image/png";
   if (startsWith([0xff, 0xd8, 0xff])) return "image/jpeg";
   if (startsWith([0x47, 0x49, 0x46, 0x38])) return "image/gif";
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp";
+  }
   if (startsWith([0x25, 0x50, 0x44, 0x46])) return "application/pdf";
   if (startsWith([0x50, 0x4b, 0x03, 0x04])) return "application/zip";
   if (startsWith([0x1f, 0x8b])) return "application/gzip";
@@ -13470,9 +13485,9 @@ function getPacketProtocolDecoderHint(packet) {
       protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
       break;
     }
-    const mimeLower = raw.toLowerCase().trim();
-    if (MIME_TO_PROTO[mimeLower]) {
-      protocolHint = MIME_TO_PROTO[mimeLower];
+    const baseMime = raw.toLowerCase().trim().split(";")[0].trim();
+    if (MIME_TO_PROTO[baseMime]) {
+      protocolHint = MIME_TO_PROTO[baseMime];
       break;
     }
   }
@@ -13524,7 +13539,8 @@ function getPacketProtocolDecoderHint(packet) {
 function autoDetectProtoFromBytes(bytes, options) {
   const { protocolHint = null, portHint = null } = options || {};
   if (protocolHint && typeof protocolHint === "string") {
-    const mapped = MIME_TO_PROTO[protocolHint.toLowerCase().trim()] || protocolHint;
+    const baseMime = protocolHint.toLowerCase().trim().split(";")[0].trim();
+    const mapped = MIME_TO_PROTO[baseMime] || protocolHint;
     if (PROTOCOL_DECODER_HINTS.has(mapped)) {
       return mapped;
     }
@@ -13566,6 +13582,13 @@ function autoDetectProtoFromBytes(bytes, options) {
     bytes[11] === 0x50
   ) {
     return "webp";
+  }
+
+  // ExifReader knows image fileType for jpeg/png/gif/webp; use it as a reliable
+  // fallback when no protocol/port hint or magic bytes identify the payload.
+  const exifImageType = getImageTypeFromExifReader(bytes);
+  if (exifImageType) {
+    return exifImageType;
   }
 
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
@@ -13668,8 +13691,24 @@ function runProtoDecoder(bytes) {
       getCurrentContextPacket() ||
       getCurrentPacketForExport();
     const { protocolHint, portHint } = getPacketProtocolDecoderHint(contextPacket);
+    let effectiveProtocolHint = protocolHint;
+    if (!effectiveProtocolHint) {
+      const mimeType = inferMimeType(decodeBytes);
+      const baseMime = mimeType.toLowerCase().trim().split(";")[0].trim();
+      if (MIME_TO_PROTO[baseMime]) {
+        effectiveProtocolHint = baseMime;
+      }
+    }
+    // ExifReader fileType detection is more reliable than inferMimeType for
+    // actual image payloads, so prefer it when inferMimeType yields nothing.
+    if (!effectiveProtocolHint) {
+      const exifImageType = getImageTypeFromExifReader(decodeBytes);
+      if (exifImageType) {
+        effectiveProtocolHint = exifImageType;
+      }
+    }
     protocol = autoDetectProtoFromBytes(decodeBytes, {
-      protocolHint,
+      protocolHint: effectiveProtocolHint,
       portHint,
     });
     if (selectEl && protocol && selectEl.value !== protocol) {
@@ -13677,6 +13716,12 @@ function runProtoDecoder(bytes) {
     }
   }
   let result = null;
+  const actualImageType = getImageTypeFromExifReader(decodeBytes);
+  const isImageProtocolSelected = ["jpeg", "png", "gif", "webp"].includes(protocol);
+  if (isImageProtocolSelected && actualImageType && actualImageType !== protocol) {
+    renderProtoDecoderOutput(null, selectedProtocol, protocol);
+    return;
+  }
   switch (protocol) {
     case "http":
       result = decodeHttpFromBytes(decodeBytes);
@@ -21252,6 +21297,10 @@ document
     }
     dataToolsLastConversionBytes = bytes;
     dataToolsDecodeUseRawConvInputOverride = true;
+    const selectEl = document.getElementById("data-tools-proto-select");
+    if (selectEl) {
+      selectEl.value = "auto";
+    }
     setConvSubtab(CONV_DECODES_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
   });

@@ -119,11 +119,13 @@ function loadDecoderFunctions(filePath) {
     const extractedSource = functionNames
         .map((functionName) => extractFunctionSource(sourceText, functionName))
         .join('\n\n');
+    const alwaysNull = () => null;
     const context = {
         Uint8Array,
         DataView,
         TextDecoder,
         Buffer,
+        getImageTypeFromExifReader: alwaysNull,
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

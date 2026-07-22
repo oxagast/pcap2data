@@ -124,6 +124,7 @@ function loadDecoderFunctions(filePath) {
         Uint8Array,
         DataView,
         TextDecoder,
+        getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
         decodeBsonFromBytes: alwaysNull,
