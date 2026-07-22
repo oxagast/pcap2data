@@ -11,6 +11,7 @@ let _isLlmRuntimeEnabledFn = null;
 let _isBackgroundEnabledFn = null;
 let _statusUpdateFn = null;
 let _writeLogEntryFn = null;
+let _appendAnalysisBlubFn = null;
 
 let lastSummaryInputHash = "";
 let lastSummaryText = "";
@@ -29,12 +30,14 @@ function initDataToolsLlmSummarizer({
     isBackgroundSummaryGenerationEnabled,
     statusUpdate,
     writeLogEntry,
+    appendAnalysisBlub,
 }) {
     _callLlmFn = callLargeLanguageModel;
     _isLlmRuntimeEnabledFn = isLlmRuntimeEnabled;
     _isBackgroundEnabledFn = isBackgroundSummaryGenerationEnabled;
     _statusUpdateFn = statusUpdate;
     _writeLogEntryFn = writeLogEntry;
+    _appendAnalysisBlubFn = appendAnalysisBlub || null;
 }
 
 function _isEnabled() {
@@ -310,6 +313,9 @@ async function _runSummaryRequest(activeSubtab, sequence, signal) {
             _writeLogEntryFn(
                 `[DataToolsLLM] Summary complete subtab=${activeSubtab} seq=${sequence} chars=${lastSummaryText.length}`,
             );
+        }
+        if (typeof _appendAnalysisBlubFn === "function" && lastSummaryText) {
+            _appendAnalysisBlubFn(lastSummaryText);
         }
     } catch (error) {
         if (signal?.aborted) return;

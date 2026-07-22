@@ -68,9 +68,10 @@ let _getCurrentContextPacket = () => null;
 let _callLargeLanguageModel = null;
 let _isLlmRuntimeEnabled = () => false;
 let _isBackgroundSummaryGenerationEnabled = () => false;
+let _appendAnalysisBlub = null;
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
@@ -78,12 +79,14 @@ function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurre
   _callLargeLanguageModel = callLargeLanguageModel || null;
   _isLlmRuntimeEnabled = isLlmRuntimeEnabled || (() => false);
   _isBackgroundSummaryGenerationEnabled = isBackgroundSummaryGenerationEnabled || (() => false);
+  _appendAnalysisBlub = appendAnalysisBlub || null;
   initDataToolsLlmSummarizer({
     callLargeLanguageModel: _callLargeLanguageModel,
     isLlmRuntimeEnabled: _isLlmRuntimeEnabled,
     isBackgroundSummaryGenerationEnabled: _isBackgroundSummaryGenerationEnabled,
     statusUpdate: _statusUpdate,
     writeLogEntry: _writeLogEntry,
+    appendAnalysisBlub: _appendAnalysisBlub,
   });
 }
 

@@ -6452,10 +6452,12 @@ function renderSummaryMarkdownPreview(summaryText) {
   );
 }
 
-// Renders the combined compacted analysis summary + new analysis blurbs.
+// Renders the running compacted analysis summary in the Summary panel.
+// Individual analysis blurbs are kept internal and are only visible after
+// compaction, so the user always sees a single, growing, in-depth summary.
 function renderCombinedAnalysisSummary() {
   const combined = compactedAnalysisSummary
-    ? compactedAnalysisSummary + "\n\n" + summary
+    ? compactedAnalysisSummary
     : summary;
   renderSummaryMarkdownPreview(combined);
 }
@@ -6463,7 +6465,7 @@ function renderCombinedAnalysisSummary() {
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
   const combined = compactedAnalysisSummary
-    ? compactedAnalysisSummary + "\n\n" + summary
+    ? compactedAnalysisSummary
     : summary;
   return normalizeSummaryMarkdownHeadings(combined);
 }
@@ -19618,16 +19620,17 @@ async function runAnalysisCompaction() {
   const previousCompacted = compactedAnalysisSummary.trim();
   let contextIntro = "";
   if (previousCompacted) {
-    contextIntro = `The following is the previously compacted summary of earlier analysis. Preserve and merge its important facts into the new compacted summary.\n\n${previousCompacted}\n\n---\n\n`;
+    contextIntro = `The following is the previously compacted summary of earlier analysis. Preserve and merge its important facts into the new compacted summary, and keep the new summary as detailed and reference-quality as the source below.\n\n${previousCompacted}\n\n---\n\n`;
   }
   const chronologicalBlurbs = blurbs
     .map((blurb, idx) => `ANALYSIS ENTRY ${idx + 1}:\n${blurb}`)
     .join("\n\n---\n\n");
-  const combinedInput = `${contextIntro}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single compact summary that:
-- Repeats the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
+  const combinedInput = `${contextIntro}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
+- Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
 - Preserves the chronological order of significant events where it matters.
-- Drops redundant or low-value observations.
-- Is concise but complete; aim for roughly 2-4 paragraphs.
+- Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
+- Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
+- Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
 
 ${chronologicalBlurbs}`;
 
@@ -19652,15 +19655,11 @@ ${chronologicalBlurbs}`;
     compacted = chronologicalBlurbs.replace(/ANALYSIS ENTRY \d+:\n/g, "- ").replace(/\n---\n/g, "\n\n");
   }
 
-  // Merge the new compacted summary with the previous compacted summary so the
-  // top of the Analysis tab always holds the running compacted reference.
-  if (previousCompacted) {
-    compactedAnalysisSummary = `${previousCompacted}\n\n${compacted.trim()}`;
-  } else {
-    compactedAnalysisSummary = compacted.trim();
-  }
+  // The new compacted summary replaces the previous display summary so the
+  // Summary panel always shows a single, growing, in-depth analysis. The raw
+  // blurbs have already been consumed and are kept out of the visible panel.
+  compactedAnalysisSummary = compacted.trim();
 
-  summary = "";
   renderCombinedAnalysisSummary();
   statusUpdate(`Status: Analysis compacted ${blurbs.length} blurbs into running summary.`);
   writeLogEntry(`[AnalysisCompact] Compacted ${blurbs.length} blurbs into running summary`);
@@ -20660,6 +20659,7 @@ initConvPanel({
   callLargeLanguageModel,
   isLlmRuntimeEnabled,
   isBackgroundSummaryGenerationEnabled,
+  appendAnalysisBlub,
 });
 
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
