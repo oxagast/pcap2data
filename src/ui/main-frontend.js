@@ -11681,6 +11681,7 @@ async function runDataToolsConversion(options = {}) {
         dataToolsInputEditedFlag = false;
       }
     }
+    requestDataToolsBackgroundSummary(getActiveConvSubtab());
 
 
   } catch (error) {
@@ -13907,6 +13908,7 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
   if (activeSubtab === CONV_DECODES_SUBTAB) {
     runProtoDecoder(bytes);
   }
+  requestDataToolsBackgroundSummary(activeSubtab);
 }
 
 // Returns the decoder hint for the current context packet so other panels or
@@ -14073,6 +14075,7 @@ async function handleExtractionDecompress() {
       bytes,
     );
     setExtractionOutputText(bytes);
+    requestDataToolsBackgroundSummary(CONV_EXTRACTION_SUBTAB);
     statusUpdate(
       `Status: Decompressed ${fmt.toUpperCase()} into ${bytes.length} bytes`,
     );
@@ -14100,6 +14103,7 @@ async function handleExtractionListArchive() {
     }
     extractionPanelArchiveEntries = Array.isArray(response.entries) ? response.entries : [];
     renderExtractionArchiveTree(extractionPanelArchiveEntries);
+    requestDataToolsBackgroundSummary(CONV_EXTRACTION_SUBTAB);
     statusUpdate(
       `Status: Listed ${extractionPanelArchiveEntries.length} archive entries`,
     );
@@ -14168,6 +14172,7 @@ async function handleExtractionExtractEntry(entry) {
     extractionPanelSelectedEntry = entry;
     registerExtractionResultForStats(getBareFilename(entry.safePath) || "extracted.bin", bytes);
     showExtractionPreview(entry, bytes);
+    requestDataToolsBackgroundSummary(CONV_EXTRACTION_SUBTAB);
     statusUpdate(
       `Status: Extracted ${entry.safePath || entry.path} (${bytes.length} bytes)`,
     );
@@ -20677,6 +20682,7 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
       dst: String(ipInfo["ip.dst.addr"] ?? ipInfo["Destination IP"] ?? "").trim(),
     };
   },
+  onSummaryRequested: () => requestDataToolsBackgroundSummary(CONV_SUBNET_SUBTAB),
 });
 
 document.getElementById("close-btn").addEventListener("click", () => {
@@ -21222,6 +21228,7 @@ document
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_SUBNET_SUBTAB);
     subnetCalculatorPanel.maybeKickoffNmapOnTabOpen();
+    requestDataToolsBackgroundSummary(CONV_SUBNET_SUBTAB);
   });
 document
   .getElementById("conv-subtab-threat-intel")
@@ -21229,6 +21236,7 @@ document
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_THREAT_INTEL_SUBTAB);
     subnetCalculatorPanel.maybeKickoffThreatIntelOnTabOpen();
+    requestDataToolsBackgroundSummary(CONV_THREAT_INTEL_SUBTAB);
   });
 document
   .getElementById("conv-subtab-packet-json")
@@ -21236,6 +21244,7 @@ document
     dataToolsDecodeUseRawConvInputOverride = false;
     setConvSubtab(CONV_PACKET_JSON_SUBTAB);
     runDeferredDataToolsAnalysisForActiveSubtab();
+    requestDataToolsBackgroundSummary(CONV_PACKET_JSON_SUBTAB);
   });
 
 document

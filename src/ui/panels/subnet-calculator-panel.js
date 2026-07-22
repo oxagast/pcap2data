@@ -13,6 +13,7 @@ function createSubnetCalculatorPanel({
     getCapturePackets = () => ({}),
     openHeatmapLocation = () => { },
     getCurrentPacketIps = () => ({ src: "", dst: "" }),
+    onSummaryRequested = null,
 } = {}) {
     let lookupRequestToken = 0;
     let nmapScanToken = 0;
@@ -654,6 +655,9 @@ function createSubnetCalculatorPanel({
         const successful = filteredResults.filter((entry) => entry?.success).length;
         summary.textContent = `Inspected IP ${normalizedInspectedIp}: ${successful}/${filteredResults.length} nmap job(s) succeeded. Service/version output is shown in the table above.`;
         nmapEl.appendChild(summary);
+        if (typeof onSummaryRequested === "function") {
+            onSummaryRequested();
+        }
     }
 
     async function ensureNmapInstalledCached() {
@@ -1179,6 +1183,9 @@ function createSubnetCalculatorPanel({
         setPlaceholder(whoisEl, "Looking up WHOIS / RDAP data...");
         setPlaceholder(geoEl, "Looking up GeoIP data...");
         setPlaceholder(shodanEl, "Looking up Shodan InternetDB data...");
+        if (typeof onSummaryRequested === "function") {
+            onSummaryRequested();
+        }
         // Threat intelligence results now live in a dedicated subtab, so the
         // Analyze Subnet panel no longer renders them here.  The Threat Intel
         // subtab renders them via renderThreatIntelResult when it is shown.
@@ -1209,6 +1216,9 @@ function createSubnetCalculatorPanel({
             { name: "Vulns", value: arrayToText(shodanResult.vulns) },
         ];
         renderKeyValueTable(shodanEl, "Shodan InternetDB", rows);
+        if (typeof onSummaryRequested === "function") {
+            onSummaryRequested();
+        }
 
         const actionRow = document.createElement("div");
         actionRow.className = "data-tools-actions subnet-calc-map-actions";
@@ -1333,6 +1343,9 @@ function createSubnetCalculatorPanel({
                         renderKeyValueTable(section, "IPSum", rows);
                     }
                     container.appendChild(section);
+                    if (typeof onSummaryRequested === "function") {
+                        onSummaryRequested();
+                    }
                 },
             );
         } else {
@@ -1483,6 +1496,9 @@ function createSubnetCalculatorPanel({
                         }
                     }
                     container.appendChild(section);
+                    if (typeof onSummaryRequested === "function") {
+                        onSummaryRequested();
+                    }
                 },
             );
         } else {
@@ -1530,6 +1546,9 @@ function createSubnetCalculatorPanel({
                         renderKeyValueTable(section, "Tor", rows);
                     }
                     container.appendChild(section);
+                    if (typeof onSummaryRequested === "function") {
+                        onSummaryRequested();
+                    }
                 },
             );
         } else {
@@ -1585,6 +1604,9 @@ function createSubnetCalculatorPanel({
             { name: "RIR", value: String(whois.rirHost || "Unknown") },
         ];
         renderKeyValueTable(whoisEl, "WHOIS / RDAP", rows);
+        if (typeof onSummaryRequested === "function") {
+            onSummaryRequested();
+        }
     }
 
     function renderGeoipResult(analysis, geoResult) {
@@ -1615,6 +1637,9 @@ function createSubnetCalculatorPanel({
             },
         ];
         renderKeyValueTable(geoEl, "GeoIP", rows);
+        if (typeof onSummaryRequested === "function") {
+            onSummaryRequested();
+        }
 
         if (geoResult.mapPoint && typeof geoResult.mapPoint.latitude === "number" && typeof geoResult.mapPoint.longitude === "number") {
             const actionRow = document.createElement("div");

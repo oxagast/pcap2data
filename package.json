@@ -75,6 +75,7 @@
     "@electron-forge/plugin-webpack": "^7.11.1",
     "@electron/fuses": "^1.8.0",
     "@vercel/webpack-asset-relocator-loader": "^1.7.3",
+    "abort-controller": "^3.0.0",
     "copy-webpack-plugin": "^13.0.1",
     "cross-env": "^10.1.0",
     "css-loader": "^6.11.0",
@@ -82,6 +83,7 @@
     "electron-icon-maker": "^0.0.5",
     "globals": "^17.5.0",
     "jest": "^30.4.2",
+    "jsdom": "^22.0.0",
     "node-loader": "^2.1.0",
     "style-loader": "^3.3.4",
     "webpack-cli": "^7.0.2"
