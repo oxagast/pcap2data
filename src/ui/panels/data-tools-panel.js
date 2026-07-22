@@ -4,6 +4,7 @@
 const CryptoJS = require("crypto-js");
 const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
+const ExifReader = require('exifreader');
 
 const threadName = "DataTools";
 
@@ -2370,6 +2371,65 @@ function decodePlainTextFromBytes(bytes) {
   };
 }
 
+function decodeJpegFromBytes(bytes) {
+  const result = { protocol: "JPEG", fields: [], imageDataUrl: "" };
+  try {
+    const tags = ExifReader.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const exifFields = [];
+    for (const [name, tag] of Object.entries(tags)) {
+      if (name === "Thumbnail" || name.startsWith("Thumbnail")) continue;
+      if (tag.value !== undefined) {
+        exifFields.push({ name, value: Array.isArray(tag.value) ? tag.value.join(", ") : String(tag.value) });
+      }
+    }
+    result.fields = exifFields;
+  } catch (e) { /* no EXIF data, that's OK */ }
+  result.imageDataUrl = "data:image/jpeg;base64," + Buffer.from(bytes).toString('base64');
+  return result;
+}
+
+function decodePngFromBytes(bytes) {
+  const result = { protocol: "PNG", fields: [], imageDataUrl: "" };
+  try {
+    const tags = ExifReader.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const exifFields = [];
+    for (const [name, tag] of Object.entries(tags)) {
+      if (name === "Thumbnail" || name.startsWith("Thumbnail")) continue;
+      if (tag.value !== undefined) {
+        exifFields.push({ name, value: Array.isArray(tag.value) ? tag.value.join(", ") : String(tag.value) });
+      }
+    }
+    result.fields = exifFields;
+  } catch (e) { /* no EXIF data, that's OK */ }
+  result.imageDataUrl = "data:image/png;base64," + Buffer.from(bytes).toString('base64');
+  return result;
+}
+
+function decodeGifFromBytes(bytes) {
+  const result = { protocol: "GIF", fields: [], imageDataUrl: "" };
+  result.imageDataUrl = "data:image/gif;base64," + Buffer.from(bytes).toString('base64');
+  result.fields = [{ name: "Format", value: "Graphics Interchange Format" }, { name: "Byte Length", value: String(bytes.length) }];
+  return result;
+}
+
+function decodeWebpFromBytes(bytes) {
+  const result = { protocol: "WebP", fields: [], imageDataUrl: "" };
+  try {
+    const tags = ExifReader.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const exifFields = [];
+    for (const [name, tag] of Object.entries(tags)) {
+      if (name === "Thumbnail" || name.startsWith("Thumbnail")) continue;
+      if (tag.value !== undefined) {
+        exifFields.push({ name, value: Array.isArray(tag.value) ? tag.value.join(", ") : String(tag.value) });
+      }
+    }
+    result.fields = exifFields;
+  } catch (e) { /* no EXIF data, that's OK */ }
+  const mime = "image/webp";
+  result.imageDataUrl = "data:" + mime + ";base64," + Buffer.from(bytes).toString('base64');
+  return result;
+}
+
 // Known application-protocol / well-known-port to decoder key mappings.
 // These are used as hints so the Conv Decoders subtab can prefer the
 // packet's metadata before falling back to byte-heuristic detection.
@@ -2389,6 +2449,14 @@ const PROTOCOL_DECODER_HINTS = new Map([
   ["smpp", "smpp"],
   ["soulseek", "soulseek"],
   ["bittorrent", "bittorrent"],
+  ["jpeg", "jpeg"],
+  ["png", "png"],
+  ["gif", "gif"],
+  ["webp", "webp"],
+  ["imagejpeg", "jpeg"],
+  ["imagepng", "png"],
+  ["imagegif", "gif"],
+  ["imagewebp", "webp"],
   ["plaintext", "plaintext"],
 ]);
 
@@ -2451,6 +2519,11 @@ function getPacketProtocolDecoderHint(packet) {
       protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
       break;
     }
+    const mimeKey = raw.toLowerCase().trim();
+    if (MIME_TO_PROTO[mimeKey]) {
+      protocolHint = MIME_TO_PROTO[mimeKey];
+      break;
+    }
   }
 
   const transportName = String(
@@ -2493,6 +2566,20 @@ function getPacketProtocolDecoderHint(packet) {
   return { protocolHint, portHint };
 }
 
+// Maps raw MIME type strings to their corresponding decoder protocol names.
+const MIME_TO_PROTO = {
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "jpeg": "jpeg",
+  "jpg": "jpeg",
+  "image/png": "png",
+  "png": "png",
+  "image/gif": "gif",
+  "gif": "gif",
+  "image/webp": "webp",
+  "webp": "webp",
+};
+
 // Handles auto detect proto from bytes.
 // Accepts an optional { protocolHint, portHint } object so callers can ask
 // the decoder to try a packet's known application protocol, then its port,
@@ -2500,7 +2587,8 @@ function getPacketProtocolDecoderHint(packet) {
 function autoDetectProtoFromBytes(bytes, options) {
   const { protocolHint = null, portHint = null } = options || {};
   if (protocolHint && typeof protocolHint === "string") {
-    return protocolHint;
+    const normalized = protocolHint.toLowerCase().trim();
+    return MIME_TO_PROTO[normalized] || protocolHint;
   }
   if (portHint && typeof portHint === "string") {
     return portHint;
@@ -2515,6 +2603,11 @@ function autoDetectProtoFromBytes(bytes, options) {
   ) {
     return "smb";
   }
+  // Image format detection
+  if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return "jpeg";
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return "png";
+  if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "gif";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "webp";
   const text = new TextDecoder("utf-8", { fatal: false }).decode(
     bytes.slice(0, 256),
   );
@@ -2613,6 +2706,40 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     protocol: result.protocol,
     fields: Array.isArray(result.fields) ? result.fields : [],
   });
+  if (result.imageDataUrl) {
+    const img = document.createElement("img");
+    img.src = result.imageDataUrl;
+    img.style.maxWidth = "100%";
+    img.style.maxHeight = "400px";
+    img.style.objectFit = "contain";
+    img.style.display = "block";
+    img.style.margin = "0 auto 12px auto";
+    protoOutput.appendChild(img);
+    if (result.fields && result.fields.length > 0) {
+      const table = document.createElement("table");
+      table.className = "data-tools-proto-table";
+      const headerRow = document.createElement("tr");
+      const th1 = document.createElement("th");
+      th1.textContent = `${result.protocol} Field`;
+      const th2 = document.createElement("th");
+      th2.textContent = "Value";
+      headerRow.appendChild(th1);
+      headerRow.appendChild(th2);
+      table.appendChild(headerRow);
+      result.fields.forEach((field) => {
+        const tr = document.createElement("tr");
+        const tdName = document.createElement("td");
+        tdName.textContent = field.name;
+        const tdVal = document.createElement("td");
+        tdVal.textContent = field.value;
+        tr.appendChild(tdName);
+        tr.appendChild(tdVal);
+        table.appendChild(tr);
+      });
+      protoOutput.appendChild(table);
+    }
+    return;
+  }
   if (renderStructuredDecoderTree(protoOutput, result)) {
     return;
   }
@@ -2722,6 +2849,18 @@ function runProtoDecoder(bytes) {
       break;
     case "plaintext":
       result = decodePlainTextFromBytes(bytes);
+      break;
+    case "jpeg":
+      result = decodeJpegFromBytes(bytes);
+      break;
+    case "png":
+      result = decodePngFromBytes(bytes);
+      break;
+    case "gif":
+      result = decodeGifFromBytes(bytes);
+      break;
+    case "webp":
+      result = decodeWebpFromBytes(bytes);
       break;
     default:
       protocol = null;
@@ -2873,11 +3012,17 @@ module.exports = {
   decodeSmppFromBytes,
   decodeSoulseekFromBytes,
   decodeBittorrentFromBytes,
+  decodeJpegFromBytes,
+  decodePngFromBytes,
+  decodeGifFromBytes,
+  decodeWebpFromBytes,
   decodePlainTextFromBytes,
   autoDetectProtoFromBytes,
   resetDataToolsOutputs,
+  renderProtoDecoderOutput,
   runProtoDecoder,
   formatHexInputBytes,
+  clearProtoDecoderOutput,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
   crossReferenceCurrentHash,

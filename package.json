@@ -94,6 +94,7 @@
     "crypto-js": "^4.2.0",
     "electron-log": "^5.4.4",
     "electron-squirrel-startup": "^1.0.1",
+    "exifreader": "^4.41.3",
     "fs": "^0.0.1-security",
     "heatmap.js": "^2.0.5",
     "js-sha3": "^0.9.3",

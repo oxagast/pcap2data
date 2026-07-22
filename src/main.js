@@ -153,6 +153,7 @@ const RENDERER_CSP = [
   "script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:",
   "worker-src 'self' blob: data:",
   "connect-src 'self' https://api.github.com https://github.com",
+  "img-src 'self' data: blob:"
 ].join("; ");
 
 let isRendererCspHookInstalled = false;

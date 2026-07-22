@@ -107,6 +107,12 @@ const {
   setConvSubtab,
   runDataToolsHashesFromInput,
   crossReferenceCurrentHash,
+  decodeJpegFromBytes,
+  decodePngFromBytes,
+  decodeGifFromBytes,
+  decodeWebpFromBytes,
+  renderProtoDecoderOutput,
+  clearProtoDecoderOutput,
 } = require("./panels/data-tools-panel");
 
 function mountStartupFragments() {
@@ -13375,7 +13381,35 @@ const PROTOCOL_DECODER_HINTS = new Map([
   ["soulseek", "soulseek"],
   ["bittorrent", "bittorrent"],
   ["plaintext", "plaintext"],
+  ["jpeg", "jpeg"],
+  ["jpg", "jpeg"],
+  ["imagejpeg", "jpeg"],
+  ["image/jpeg", "jpeg"],
+  ["png", "png"],
+  ["imagepng", "png"],
+  ["image/png", "png"],
+  ["gif", "gif"],
+  ["imagegif", "gif"],
+  ["image/gif", "gif"],
+  ["webp", "webp"],
+  ["imagewebp", "webp"],
+  ["image/webp", "webp"],
 ]);
+
+// Maps common MIME types and variant spellings to the proto-decoder key used
+// by the data-tools protocol switch.
+const MIME_TO_PROTO = {
+  "image/jpeg": "jpeg",
+  "image/jpg": "jpeg",
+  "jpeg": "jpeg",
+  "jpg": "jpeg",
+  "image/png": "png",
+  "png": "png",
+  "image/gif": "gif",
+  "gif": "gif",
+  "image/webp": "webp",
+  "webp": "webp",
+};
 
 const PORT_DECODER_HINTS = new Map([
   [21, "ftp"],
@@ -13436,6 +13470,11 @@ function getPacketProtocolDecoderHint(packet) {
       protocolHint = PROTOCOL_DECODER_HINTS.get(normalized);
       break;
     }
+    const mimeLower = raw.toLowerCase().trim();
+    if (MIME_TO_PROTO[mimeLower]) {
+      protocolHint = MIME_TO_PROTO[mimeLower];
+      break;
+    }
   }
 
   const transportName = String(
@@ -13485,10 +13524,48 @@ function getPacketProtocolDecoderHint(packet) {
 function autoDetectProtoFromBytes(bytes, options) {
   const { protocolHint = null, portHint = null } = options || {};
   if (protocolHint && typeof protocolHint === "string") {
+    const mapped = MIME_TO_PROTO[protocolHint.toLowerCase().trim()] || protocolHint;
+    if (PROTOCOL_DECODER_HINTS.has(mapped)) {
+      return mapped;
+    }
     return protocolHint;
   }
   if (portHint && typeof portHint === "string") {
     return portHint;
+  }
+
+  // Image format detection via magic bytes.
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "jpeg";
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "png";
+  }
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return "gif";
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "webp";
   }
 
   const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
@@ -13575,52 +13652,6 @@ function autoDetectProtoFromBytes(bytes, options) {
     if (bytes[i] === 0xff && TELNET_COMMANDS.has(bytes[i + 1])) return "telnet";
   }
   return null;
-}
-
-// Renders proto decoder output.
-function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
-  const protoOutput = document.getElementById("data-tools-proto-output");
-  if (!protoOutput) return;
-  protoOutput.innerHTML = "";
-  delete protoOutput.dataset.decodedResult;
-  if (!result) {
-    const span = document.createElement("span");
-    span.className = "data-tools-proto-none";
-    span.textContent =
-      selectedProtocol === "auto"
-        ? "No known protocol detected"
-        : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
-    protoOutput.appendChild(span);
-    return;
-  }
-  protoOutput.dataset.decodedResult = JSON.stringify({
-    protocol: result.protocol,
-    fields: Array.isArray(result.fields) ? result.fields : [],
-  });
-  if (renderStructuredDecoderTree(protoOutput, result)) {
-    return;
-  }
-  const table = document.createElement("table");
-  table.className = "data-tools-proto-table";
-  const headerRow = document.createElement("tr");
-  const th1 = document.createElement("th");
-  th1.textContent = `${result.protocol} Field`;
-  const th2 = document.createElement("th");
-  th2.textContent = "Value";
-  headerRow.appendChild(th1);
-  headerRow.appendChild(th2);
-  table.appendChild(headerRow);
-  result.fields.forEach((field) => {
-    const tr = document.createElement("tr");
-    const tdName = document.createElement("td");
-    tdName.textContent = field.name;
-    const tdVal = document.createElement("td");
-    tdVal.textContent = field.value;
-    tr.appendChild(tdName);
-    tr.appendChild(tdVal);
-    table.appendChild(tr);
-  });
-  protoOutput.appendChild(table);
 }
 
 // Runs proto decoder.
@@ -13710,6 +13741,18 @@ function runProtoDecoder(bytes) {
     case "bittorrent":
       result = decodeBittorrentFromBytes(decodeBytes);
       break;
+    case "jpeg":
+      result = decodeJpegFromBytes(decodeBytes);
+      break;
+    case "png":
+      result = decodePngFromBytes(decodeBytes);
+      break;
+    case "gif":
+      result = decodeGifFromBytes(decodeBytes);
+      break;
+    case "webp":
+      result = decodeWebpFromBytes(decodeBytes);
+      break;
     case "plaintext":
       result = decodePlainTextFromBytes(decodeBytes);
       break;
@@ -13717,15 +13760,6 @@ function runProtoDecoder(bytes) {
       protocol = null;
   }
   renderProtoDecoderOutput(result, selectedProtocol, protocol);
-}
-
-// Clears proto decoder output.
-function clearProtoDecoderOutput() {
-  const protoOutput = document.getElementById("data-tools-proto-output");
-  if (protoOutput) {
-    protoOutput.innerHTML = "";
-    delete protoOutput.dataset.decodedResult;
-  }
 }
 
 // Runs deferred data tools analysis for active subtab.

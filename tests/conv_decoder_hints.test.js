@@ -111,7 +111,30 @@ function extractConstantSource(sourceText, constantName) {
     if (startIndex === -1) {
         throw new Error(`Could not find constant ${constantName}`);
     }
-    const bodyStart = sourceText.indexOf("[", startIndex);
+    const bracketStart = sourceText.indexOf("[", startIndex);
+    const braceStart = sourceText.indexOf("{", startIndex);
+    let bodyStart = -1;
+    let openChar = "";
+    let closeChar = "";
+    if (bracketStart !== -1 && braceStart !== -1) {
+        if (bracketStart < braceStart) {
+            bodyStart = bracketStart;
+            openChar = "[";
+            closeChar = "]";
+        } else {
+            bodyStart = braceStart;
+            openChar = "{";
+            closeChar = "}";
+        }
+    } else if (bracketStart !== -1) {
+        bodyStart = bracketStart;
+        openChar = "[";
+        closeChar = "]";
+    } else if (braceStart !== -1) {
+        bodyStart = braceStart;
+        openChar = "{";
+        closeChar = "}";
+    }
     if (bodyStart === -1) {
         throw new Error(`Could not find body for ${constantName}`);
     }
@@ -119,11 +142,15 @@ function extractConstantSource(sourceText, constantName) {
     let cursor = bodyStart;
     while (cursor < sourceText.length) {
         const char = sourceText[cursor];
-        if (char === "[") depth += 1;
-        if (char === "]") {
+        if (char === openChar) depth += 1;
+        if (char === closeChar) {
             depth -= 1;
             if (depth === 0) {
-                return sourceText.slice(startIndex, cursor + 2);
+                let end = cursor + 1;
+                while (sourceText[end] === ")") {
+                    end += 1;
+                }
+                return sourceText.slice(startIndex, end);
             }
         }
         cursor += 1;
@@ -140,6 +167,7 @@ function loadHintFunctions(filePath) {
     const extractedSource = [
         extractConstantSource(sourceText, "PROTOCOL_DECODER_HINTS"),
         extractConstantSource(sourceText, "PORT_DECODER_HINTS"),
+        extractConstantSource(sourceText, "MIME_TO_PROTO"),
         ...functionNames.map((functionName) =>
             extractFunctionSource(sourceText, functionName),
         ),
