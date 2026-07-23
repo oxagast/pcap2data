@@ -121,6 +121,10 @@ const {
   clearDataToolsSummary,
   requestDataToolsBackgroundSummary,
 } = require("./panels/data-tools-panel");
+const {
+  getCurrentSummaryContext,
+  getCurrentSummaryContextHash,
+} = require("./panels/data-tools-llm-summarizer");
 
 function mountStartupFragments() {
   const activityLogPanelEl = document.getElementById("activity-log-panel");
@@ -663,7 +667,10 @@ let helpWin = null;
 let llmSummaryTimeout = null;
 let summary = "";
 let analysisBlubHistory = [];
-let compactedAnalysisSummary = "";
+// Context-scoped compacted analysis summaries. Each entry represents a distinct
+// analysis context (e.g. a packet stream or Data Tools workspace) so the summary
+// panel can show multiple, additive, in-depth summaries in chronological order.
+let compactedAnalysisSummaries = [];
 let analysisCompactionInProgress = false;
 const packetStubByKey = new Map();
 const hydratedPacketCache = new Map();
@@ -4213,7 +4220,7 @@ async function clearCurrentSession() {
   currentPacketKey = null;
   jsonCapture = "";
   summary = "";
-  compactedAnalysisSummary = "";
+  compactedAnalysisSummaries = [];
   analysisBlubHistory.length = 0;
   analysisCompactionInProgress = false;
   setSessionPcapSource(null, { skipLog: true });
@@ -6453,21 +6460,78 @@ function renderSummaryMarkdownPreview(summaryText) {
 }
 
 // Renders the running compacted analysis summary in the Summary panel.
+// Renders the running compacted analysis summaries in the Summary panel.
 // Individual analysis blurbs are kept internal and are only visible after
-// compaction, so the user always sees a single, growing, in-depth summary.
+// compaction. Multiple context-scoped summaries are shown in sequence.
 function renderCombinedAnalysisSummary() {
-  const combined = compactedAnalysisSummary
-    ? compactedAnalysisSummary
-    : summary;
-  renderSummaryMarkdownPreview(combined);
+  renderSummaryMarkdownPreview(getCurrentCompactedAnalysisSummary());
 }
 
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
-  const combined = compactedAnalysisSummary
-    ? compactedAnalysisSummary
-    : summary;
-  return normalizeSummaryMarkdownHeadings(combined);
+  return normalizeSummaryMarkdownHeadings(getCurrentCompactedAnalysisSummary());
+}
+
+// Returns the concatenated compacted analysis summaries for the current view.
+// If no compacted summaries exist yet, falls back to the live stream summary.
+function getCurrentCompactedAnalysisSummary() {
+  const summaries = Array.isArray(compactedAnalysisSummaries)
+    ? compactedAnalysisSummaries
+    : [];
+  if (summaries.length === 0) {
+    return summary;
+  }
+  return summaries
+    .map((entry) => entry?.summary || "")
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
+
+// Builds a stable signature string that identifies the current analysis context.
+// Context changes when the main tab, current packet/stream, or Data Tools
+// workspace changes meaningfully.
+function buildAnalysisContextSignature() {
+  const parts = [];
+  parts.push(`tab:${activeMainTab || "none"}`);
+
+  const packet = getCurrentContextPacket();
+  const packetKey = packet?.__packetKey || "";
+  const streamTuple = getStreamTupleForPacket(packet);
+  parts.push(`pkt:${packetKey}`);
+  if (streamTuple && streamTuple.srcIp && streamTuple.dstIp) {
+    parts.push(
+      `stream:${streamTuple.srcIp}:${streamTuple.srcPort ?? "-"}:${streamTuple.dstIp}:${streamTuple.dstPort ?? "-"}:${streamTuple.protocol || "none"}`,
+    );
+  }
+
+  const convSubtab = getActiveConvSubtab() || "";
+  if (activeMainTab === MAIN_TAB_DATA_TOOLS) {
+    const dtHash = getCurrentSummaryContextHash(convSubtab) || "";
+    parts.push(`dt:${convSubtab}:${dtHash}`);
+  }
+
+  return parts.join("|");
+}
+
+// Returns true when the two context signatures are different enough to be
+// considered a major context change. Within the same packet stream and Data
+// Tools workspace we keep adding to the same summary; changing tabs, packet
+// keys, stream tuples, or Data Tools content creates a new context scope.
+function isMajorContextShift(newSignature, existingSignature) {
+  if (!existingSignature) return true;
+  return newSignature !== existingSignature;
+}
+
+// Finds an existing compacted summary entry whose context signature exactly
+// matches the provided signature.
+function findAnalysisSummaryBySignature(signature) {
+  if (!signature || !Array.isArray(compactedAnalysisSummaries)) return null;
+  for (let i = 0; i < compactedAnalysisSummaries.length; i += 1) {
+    if (compactedAnalysisSummaries[i]?.signature === signature) {
+      return { entry: compactedAnalysisSummaries[i], index: i };
+    }
+  }
+  return null;
 }
 
 // Normalizes plain-text export segment.
@@ -7832,7 +7896,15 @@ function buildSessionStateSnapshot() {
       [],
     ),
     currentSummary: summary,
-    compactedAnalysisSummary: compactedAnalysisSummary || "",
+    compactedAnalysisSummaries: Array.isArray(compactedAnalysisSummaries)
+      ? compactedAnalysisSummaries.map((entry) => ({
+        signature: typeof entry?.signature === "string" ? entry.signature : "",
+        summary: typeof entry?.summary === "string" ? entry.summary : "",
+        lastUpdatedAt: Number.isFinite(entry?.lastUpdatedAt)
+          ? entry.lastUpdatedAt
+          : Date.now(),
+      }))
+      : [],
     analysisBlubHistory: [...analysisBlubHistory],
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
@@ -8228,8 +8300,32 @@ async function restoreSessionState(sessionState) {
       ),
     );
   }
-  if (sessionState.compactedAnalysisSummary && typeof sessionState.compactedAnalysisSummary === "string") {
-    compactedAnalysisSummary = sessionState.compactedAnalysisSummary;
+
+  // Load context-scoped compacted analysis summaries. Older sessions only saved
+  // a single string; convert those to a single-entry list for compatibility.
+  if (Array.isArray(sessionState.compactedAnalysisSummaries)) {
+    compactedAnalysisSummaries = sessionState.compactedAnalysisSummaries
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        signature: typeof entry.signature === "string" ? entry.signature : "",
+        summary: typeof entry.summary === "string" ? entry.summary : "",
+        lastUpdatedAt: Number.isFinite(entry.lastUpdatedAt)
+          ? entry.lastUpdatedAt
+          : Date.now(),
+      }));
+  } else if (
+    sessionState.compactedAnalysisSummary &&
+    typeof sessionState.compactedAnalysisSummary === "string"
+  ) {
+    compactedAnalysisSummaries = [
+      {
+        signature: "",
+        summary: sessionState.compactedAnalysisSummary,
+        lastUpdatedAt: Date.now(),
+      },
+    ];
+  } else {
+    compactedAnalysisSummaries.length = 0;
   }
   renderCombinedAnalysisSummary();
 
@@ -19600,10 +19696,11 @@ function appendAnalysisBlub(blubText) {
   }
 }
 
-// Compacts the accumulated Analysis blurbs by asking the LLM to produce a
-// concise summary that explicitly repeats the most important data points.
-// The compacted summary is displayed at the top of the Analysis tab and the
-// live "new analysis" buffer is reset to start accumulating below it.
+// Compacts the accumulated Analysis blurbs by asking the LLM to merge them
+// into the in-depth summary for the current analysis context. If the context
+// has changed significantly a new context-scoped summary entry is created. If
+// the context returns to a previously seen scope, the new blurbs are merged
+// back into that existing summary.
 async function runAnalysisCompaction() {
   if (analysisCompactionInProgress) return;
   analysisCompactionInProgress = true;
@@ -19616,11 +19713,42 @@ async function runAnalysisCompaction() {
     return;
   }
 
-  // Build context from existing compacted summary (if any) plus the new blurbs.
-  const previousCompacted = compactedAnalysisSummary.trim();
+  const currentSignature = buildAnalysisContextSignature();
+  let match = findAnalysisSummaryBySignature(currentSignature);
+  let targetEntry = match?.entry || null;
+
+  // If no exact signature match exists, decide whether this batch of blurbs
+  // represents a major context shift versus the most recent entry. A major
+  // shift creates a new context-scoped summary; otherwise we merge into the
+  // latest entry to keep the summary additive and growing.
+  if (!targetEntry) {
+    const lastEntry = compactedAnalysisSummaries.length
+      ? compactedAnalysisSummaries[compactedAnalysisSummaries.length - 1]
+      : null;
+    if (
+      !lastEntry ||
+      isMajorContextShift(currentSignature, lastEntry.signature)
+    ) {
+      targetEntry = {
+        signature: currentSignature,
+        summary: "",
+        lastUpdatedAt: Date.now(),
+      };
+      compactedAnalysisSummaries.push(targetEntry);
+      writeLogEntry(`[AnalysisCompact] New context scope detected: ${currentSignature}`);
+    } else {
+      targetEntry = lastEntry;
+      writeLogEntry(`[AnalysisCompact] Continuing latest context scope: ${currentSignature}`);
+    }
+  } else {
+    writeLogEntry(`[AnalysisCompact] Resuming context scope: ${currentSignature}`);
+  }
+
+  // Build prompt from the target entry's existing summary plus the new blurbs.
+  const previousCompacted = (targetEntry.summary || "").trim();
   let contextIntro = "";
   if (previousCompacted) {
-    contextIntro = `The following is the previously compacted summary of earlier analysis. Preserve and merge its important facts into the new compacted summary, and keep the new summary as detailed and reference-quality as the source below.\n\n${previousCompacted}\n\n---\n\n`;
+    contextIntro = `The following is the previously compacted summary of earlier analysis for this context. Preserve and merge its important facts into the new compacted summary. Do not remove key data points; only add new information or refine existing details. Keep the result detailed and reference-quality.\n\n${previousCompacted}\n\n---\n\n`;
   }
   const chronologicalBlurbs = blurbs
     .map((blurb, idx) => `ANALYSIS ENTRY ${idx + 1}:\n${blurb}`)
@@ -19629,6 +19757,7 @@ async function runAnalysisCompaction() {
 - Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
 - Preserves the chronological order of significant events where it matters.
 - Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
+- Adds new blurbs to the existing analysis rather than replacing it. Keep prior key analysis points and extend them with the new data.
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
 - Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
 
@@ -19655,14 +19784,14 @@ ${chronologicalBlurbs}`;
     compacted = chronologicalBlurbs.replace(/ANALYSIS ENTRY \d+:\n/g, "- ").replace(/\n---\n/g, "\n\n");
   }
 
-  // The new compacted summary replaces the previous display summary so the
-  // Summary panel always shows a single, growing, in-depth analysis. The raw
+  // Store the merged summary back into its context-scoped entry. The raw
   // blurbs have already been consumed and are kept out of the visible panel.
-  compactedAnalysisSummary = compacted.trim();
+  targetEntry.summary = compacted.trim();
+  targetEntry.lastUpdatedAt = Date.now();
 
   renderCombinedAnalysisSummary();
   statusUpdate(`Status: Analysis compacted ${blurbs.length} blurbs into running summary.`);
-  writeLogEntry(`[AnalysisCompact] Compacted ${blurbs.length} blurbs into running summary`);
+  writeLogEntry(`[AnalysisCompact] Compacted ${blurbs.length} blurbs into context-scoped summary`);
   analysisCompactionInProgress = false;
 }
 

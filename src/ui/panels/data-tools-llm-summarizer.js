@@ -59,6 +59,18 @@ function _hashInput(input) {
     return String(h);
 }
 
+function _hashSummaryContext(context) {
+    return _hashInput(JSON.stringify(context || {}));
+}
+
+function getCurrentSummaryContext(activeSubtab) {
+    return _collectSummaryContext(activeSubtab);
+}
+
+function getCurrentSummaryContextHash(activeSubtab) {
+    return _hashSummaryContext(_collectSummaryContext(activeSubtab));
+}
+
 function _truncate(str, maxLength) {
     if (str.length <= maxLength) return str;
     return str.slice(0, maxLength) + "\n\n[TRUNCATED]";
@@ -389,4 +401,6 @@ module.exports = {
     initDataToolsLlmSummarizer,
     requestDataToolsBackgroundSummary,
     clearDataToolsSummary,
+    getCurrentSummaryContext,
+    getCurrentSummaryContextHash,
 };
