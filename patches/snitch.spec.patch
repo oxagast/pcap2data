@@ -1,0 +1,20 @@
+--- snitch.spec	2026-07-22 02:51:07.036576499 -0400
++++ snitch.spec.corr	2026-07-23 09:22:21.315089063 -0400
+@@ -2,7 +2,7 @@
+ 
+ 
+ a = Analysis(
+-    ['/home/marshall/Hacks/projects/packetsnitch/src/backend/snitch.py'],
++    ['src/backend/snitch.py'],
+     pathex=[],
+     binaries=[],
+     datas=[],
+@@ -12,7 +12,7 @@
+     runtime_hooks=[],
+     excludes=[],
+     noarchive=False,
+-    optimize=0,
++    optimize=1,
+ )
+ pyz = PYZ(a.pure)
+ 
