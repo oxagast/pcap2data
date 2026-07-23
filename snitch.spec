@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['src/backend/snitch.py'],
+    ['/home/marshall/Hacks/projects/packetsnitch/src/backend/snitch.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -12,7 +12,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=1,
+    optimize=0,
 )
 pyz = PYZ(a.pure)
 

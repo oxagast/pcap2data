@@ -14774,6 +14774,7 @@ const convertContextButtons = {
   exportDecrypted: getCachedElement("ctx-export-decrypted"),
   exportSummaryMarkdown: getCachedElement("ctx-export-summary-md"),
   exportSummaryText: getCachedElement("ctx-export-summary-txt"),
+  exportSummaryHtml: getCachedElement("ctx-export-summary-html"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -15566,9 +15567,14 @@ function showConvertContextMenu(
   convertContextButtons.saveJson.style.display = showSaveJson
     ? "block"
     : "none";
-  const hasPacketToExport = Boolean(getCurrentPacketForExport());
+  const isSummaryTabContext =
+    activeMainTab === MAIN_TAB_SUMMARY &&
+    Boolean(target?.closest?.("#summary_box"));
+  const hasPacketToExport =
+    !isSummaryTabContext && Boolean(getCurrentPacketForExport());
   const currentPayloadHex = getCurrentRawPayloadHex();
-  const hasPayloadToExport = Boolean(currentPayloadHex);
+  const hasPayloadToExport =
+    !isSummaryTabContext && Boolean(currentPayloadHex);
   const isConvTabActive = activeMainTab === MAIN_TAB_DATA_TOOLS;
   const hasConvInputToExport =
     isConvTabActive && Boolean(getConvContextExportText("input"));
@@ -15593,12 +15599,10 @@ function showConvertContextMenu(
   const hasDecryptedDataToExport = Boolean(
     getCryptDecryptedExportCandidate(target),
   );
-  const isSummaryTabContext =
-    activeMainTab === MAIN_TAB_SUMMARY &&
-    Boolean(target?.closest?.("#summary_box"));
   const hasSummaryMarkdownToExport =
     isSummaryTabContext && Boolean(getSummaryMarkdownForExport().trim());
   const hasSummaryTextToExport = hasSummaryMarkdownToExport;
+  const hasSummaryHtmlToExport = hasSummaryMarkdownToExport;
   const hasConvExportActions =
     hasConvInputToExport ||
     hasConvRawToExport ||
@@ -15666,6 +15670,9 @@ function showConvertContextMenu(
   convertContextButtons.exportSummaryMarkdown.style.display =
     hasSummaryMarkdownToExport ? "block" : "none";
   convertContextButtons.exportSummaryText.style.display = hasSummaryTextToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportSummaryHtml.style.display = hasSummaryHtmlToExport
     ? "block"
     : "none";
   convertContextButtons.httpFileSave.style.display = hasHttpBody
@@ -15963,7 +15970,8 @@ function showConvertContextMenu(
     hasConvExportActions ||
     hasDecryptedDataToExport ||
     hasSummaryMarkdownToExport ||
-    hasSummaryTextToExport;
+    hasSummaryTextToExport ||
+    hasSummaryHtmlToExport;
   convertContextSubmenus.copy.style.display = hasCopyActions ? "block" : "none";
   convertContextSubmenus.convert.style.display = hasDataTypeActions
     ? "block"
@@ -20171,57 +20179,205 @@ function saveJsonFromContextMenu() {
   void persistSessionToDisk("context-menu");
 }
 
+function sanitizeFileNameForExport(name) {
+  return String(name || "")
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 100);
+}
+
+function formatDateTimeForFileName(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(
+    date.getSeconds(),
+  )}`;
+}
+
+function getSummaryExportBaseName() {
+  if (typeof currentSessionName === "string" && currentSessionName.trim()) {
+    const sanitized = sanitizeFileNameForExport(currentSessionName.trim());
+    if (sanitized) return sanitized;
+  }
+  const pcapFileName = sessionPcapSource?.fileName;
+  if (typeof pcapFileName === "string" && pcapFileName.trim()) {
+    const withoutExt = pcapFileName.replace(/\.[^./]+$/, "").trim();
+    const sanitized = sanitizeFileNameForExport(withoutExt);
+    if (sanitized) return sanitized;
+  }
+  return "packetsnitch-summary";
+}
+
+function resizeAndCompressImageToJpegBase64(
+  dataUrl,
+  { maxWidth = 280, maxHeight = 350, quality = 0.78 } = {},
+) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+      if (scale < 1) {
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Could not get 2d canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => reject(new Error("Failed to load image for resizing"));
+    img.src = dataUrl;
+  });
+}
+
+async function getDecodedImageHtmlForSummary() {
+  const decodedResult = getActiveDataToolsProtoResult?.();
+  const imageDataUrl = decodedResult?.imageDataUrl;
+  if (!imageDataUrl) return "";
+  try {
+    const compressedDataUrl = await resizeAndCompressImageToJpegBase64(
+      imageDataUrl,
+    );
+    return `<div class="summary-decoded-image">
+  <p><strong>Decoded ${escapeHtml(String(decodedResult.protocol || "image"))}:</strong></p>
+  <img src="${compressedDataUrl}" alt="Decoded ${escapeHtml(String(decodedResult.protocol || "image"))}" class="summary-image">
+</div>`;
+  } catch (err) {
+    console.warn("Failed to embed decoded image in HTML summary:", err);
+    return "";
+  }
+}
+
 // Saves summary output from context menu.
-function saveSummaryFromContextMenu(format = "markdown") {
-  const normalizedFormat = format === "text" ? "text" : "markdown";
+async function saveSummaryFromContextMenu(format = "markdown") {
+  const normalizedFormat =
+    format === "text" ? "text" : format === "html" ? "html" : "markdown";
   const summaryMarkdown = getSummaryMarkdownForExport();
+  const summaryBaseName = getSummaryExportBaseName();
+  const summaryTimestamp = formatDateTimeForFileName(new Date());
   hideConvertContextMenu();
   if (!summaryMarkdown.trim()) {
     statusUpdate("Status: No summary available to export");
     return;
   }
 
-  const exportText =
-    normalizedFormat === "text"
-      ? convertSummaryMarkdownToPlainText(summaryMarkdown)
-      : summaryMarkdown;
-  const title =
-    normalizedFormat === "text"
-      ? "Export Summary (Text)"
-      : "Export Summary (Markdown)";
-  const defaultName =
-    normalizedFormat === "text"
-      ? "packetsnitch-summary.txt"
-      : "packetsnitch-summary.md";
-  const filters =
-    normalizedFormat === "text"
-      ? [
-        { name: "Text Files", extensions: ["txt"] },
-        { name: "All Files", extensions: ["*"] },
-      ]
-      : [
-        { name: "Markdown Files", extensions: ["md"] },
-        { name: "Text Files", extensions: ["txt"] },
-        { name: "All Files", extensions: ["*"] },
-      ];
+  let exportText;
+  let title;
+  let defaultName;
+  let defaultExtension;
+  let filters;
+  let statusLabel;
+
+  if (normalizedFormat === "text") {
+    exportText = convertSummaryMarkdownToPlainText(summaryMarkdown);
+    title = "Export Summary (Text)";
+    defaultName = `${summaryBaseName}-${summaryTimestamp}.txt`;
+    defaultExtension = "txt";
+    filters = [
+      { name: "Text Files", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+    statusLabel = "text";
+  } else if (normalizedFormat === "html") {
+    let logoSrc = "";
+    if (
+      window.saveapi &&
+      typeof window.saveapi.getAssetBase64 === "function"
+    ) {
+      try {
+        const logoResult = await window.saveapi.getAssetBase64(
+          "logo/packet-snitch-tag-transp.png",
+        );
+        if (logoResult?.success && logoResult.data && logoResult.mime) {
+          logoSrc = `data:${logoResult.mime};base64,${logoResult.data}`;
+        }
+      } catch (err) {
+        console.warn("Failed to load logo for HTML summary export:", err);
+      }
+    }
+    const bodyHtml = renderMarkdownToHtml(summaryMarkdown, {
+      emptyPlaceholder: "No summary available",
+    });
+    const decodedImageHtml = await getDecodedImageHtmlForSummary();
+    const logoHtml = logoSrc
+      ? `<img src="${logoSrc}" alt="PacketSnitch logo" class="summary-logo">`
+      : "";
+    const generatedDate = new Date().toLocaleString();
+    exportText = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PacketSnitch Summary</title>
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+h1, h2, h3, h4 { font-weight: 600; }
+pre { background: #f5f5f5; padding: 0.75rem; overflow-x: auto; }
+code { background: #f0f0f0; padding: 0.15rem 0.3rem; border-radius: 3px; }
+blockquote { border-left: 4px solid #ccc; margin-left: 0; padding-left: 1rem; color: #555; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+th { background: #f5f5f5; }
+.summary-header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 1rem; }
+.summary-logo { max-width: 280px; height: auto; margin-bottom: 0.75rem; }
+.summary-meta { color: #666; font-size: 0.9rem; margin: 0; }
+.summary-meta a { color: #007acc; text-decoration: none; }
+.summary-meta a:hover { text-decoration: underline; }
+.summary-decoded-image { text-align: center; margin: 1.5rem 0; }
+.summary-decoded-image p { margin: 0 0 0.5rem; color: #444; }
+.summary-image { max-width: 280px; max-height: 350px; width: auto; height: auto; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="summary-header">
+  ${logoHtml}
+  <p class="summary-meta">Generated by PacketSnitch ${PACKETSNITCH_VERSION} on ${generatedDate} — <a href="https://packetsnitch.com" target="_blank" rel="noopener noreferrer">packetsnitch.com</a></p>
+</div>
+${decodedImageHtml}
+${bodyHtml}
+</body>
+</html>`;
+    title = "Export Summary (HTML)";
+    defaultName = `${summaryBaseName}-${summaryTimestamp}.html`;
+    defaultExtension = "html";
+    filters = [
+      { name: "HTML Files", extensions: ["html", "htm"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+    statusLabel = "HTML";
+  } else {
+    exportText = summaryMarkdown;
+    title = "Export Summary (Markdown)";
+    defaultName = `${summaryBaseName}-${summaryTimestamp}.md`;
+    defaultExtension = "md";
+    filters = [
+      { name: "Markdown Files", extensions: ["md"] },
+      { name: "Text Files", extensions: ["txt"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+    statusLabel = "markdown";
+  }
 
   window.saveapi
     .saveText({
       text: exportText,
       title,
       defaultName,
-      defaultExtension: normalizedFormat === "text" ? "txt" : "md",
+      defaultExtension,
       filters,
     })
     .then((result) => {
       if (result.canceled) {
         statusUpdate("Status: Export cancelled");
       } else if (result.success) {
-        statusUpdate(
-          normalizedFormat === "text"
-            ? "Status: Summary exported as text"
-            : "Status: Summary exported as markdown",
-        );
+        statusUpdate(`Status: Summary exported as ${statusLabel}`);
         writeLogEntry(
           `Context menu summary export completed format=${normalizedFormat}`,
         );
@@ -22324,6 +22480,9 @@ convertContextButtons.exportSummaryMarkdown.addEventListener("click", () => {
 });
 convertContextButtons.exportSummaryText.addEventListener("click", () => {
   saveSummaryFromContextMenu("text");
+});
+convertContextButtons.exportSummaryHtml.addEventListener("click", () => {
+  saveSummaryFromContextMenu("html");
 });
 convertContextButtons.saveCookieJar.addEventListener(
   "click",

@@ -3048,6 +3048,35 @@ ipcMain.handle("save-text", async (_event, options = {}) => {
   }
 });
 
+ipcMain.handle("get-asset-base64", async (_event, relativePath) => {
+  const rel = typeof relativePath === "string" ? relativePath.trim() : "";
+  if (!rel) {
+    return { success: false, error: "Missing asset path" };
+  }
+  const appRoot = path.resolve(app.getAppPath());
+  const assetPath = path.resolve(path.join(appRoot, rel));
+  if (!assetPath.startsWith(appRoot + path.sep)) {
+    return { success: false, error: "Invalid asset path" };
+  }
+  try {
+    const buffer = await fs.promises.readFile(assetPath);
+    const ext = path.extname(assetPath).toLowerCase();
+    const mimeTypeMap = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".svg": "image/svg+xml",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+    };
+    const mime = mimeTypeMap[ext] || "application/octet-stream";
+    return { success: true, data: buffer.toString("base64"), mime };
+  } catch (err) {
+    console.error("Asset read error:", err);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle("save-cookie-jar", async (_event, cookieJarText) => {
   if (typeof cookieJarText !== "string" || cookieJarText.trim() === "") {
     return { success: false, error: "No cookie jar data to save" };
