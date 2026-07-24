@@ -3,6 +3,10 @@
         {
             "name": "minimax-m2.5:cloud",
             "label": "Minimax M2.5 (Cloud)"
+        },
+        {
+            "name": "Qwen 3",
+            "label": "qwen3"
         }
     ]
 }
