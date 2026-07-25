@@ -107,42 +107,25 @@ function extractFunctionSource(sourceText, functionName) {
 
 function loadDecoderFunctions(filePath) {
     const sourceText = fs.readFileSync(filePath, 'utf8');
-    // decodeSmppFromBytes / decodeSoulseekFromBytes / decodeBittorrentFromBytes
-    // and the SMB helpers now live under src/ui/decoders/conv/ (refactor:
-    // moved out of data-tools-panel.js). The same is true for the pure
-    // orchestrator helpers getPacketProtocolDecoderHint and
-    // autoDetectProtoFromBytes — those now live under
-    // src/ui/decoders/conv/auto-detect.js, which is what the panel aliases.
-    //
-    // To test the auto-detect in its real shape (not the alias), we extract
-    // its `function` declaration from auto-detect.js (the new home) when
-    // working with data-tools-panel.js, and from main-frontend.js (the
-    // parallel copy that still has inline definitions) otherwise.
-    const convDecoders = require(path.join(path.resolve(__dirname, '..'), 'src/ui/decoders/conv'));
-    let extractedSource = '';
-    if (sourceText.includes('function autoDetectProtoFromBytes')) {
-        // Inline definition (e.g. main-frontend.js).
-        extractedSource = extractFunctionSource(sourceText, 'autoDetectProtoFromBytes');
-    } else {
-        // Alias (e.g. data-tools-panel.js). Pull the function body from the
-        // auto-detect module so we can stub out dependencies via the vm
-        // context the same way we do for the inline case.
-        const autoDetectSource = fs.readFileSync(
-            path.join(path.resolve(__dirname, '..'), 'src/ui/decoders/conv/auto-detect.js'),
-            'utf8',
-        );
-        extractedSource = extractFunctionSource(autoDetectSource, 'autoDetectProtoFromBytes');
-    }
+    const functionNames = [
+        'normalizeSmbDecoderBytes',
+        'bytesToHexLower',
+        'decodeSmppFromBytes',
+        'decodeSoulseekFromBytes',
+        'decodeBittorrentFromBytes',
+        'autoDetectProtoFromBytes',
+    ];
+    const extractedSource = functionNames
+        .map((functionName) => extractFunctionSource(sourceText, functionName))
+        .join('\n\n');
 
     const alwaysNull = () => null;
     const context = {
         Uint8Array,
         DataView,
         TextDecoder,
-        getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
-        decodeHtmlFromBytes: alwaysNull,
         decodeBsonFromBytes: alwaysNull,
         decodeMessagePackFromBytes: alwaysNull,
         decodeProtobufFromBytes: alwaysNull,
@@ -150,12 +133,6 @@ function loadDecoderFunctions(filePath) {
         decodeDerFromBytes: alwaysNull,
         decodeYamlFromBytes: alwaysNull,
         decodeLdapFromBytes: alwaysNull,
-        normalizeSmbDecoderBytes: convDecoders.normalizeSmbDecoderBytes,
-        bytesToHexLower: convDecoders.bytesToHexLower,
-        decodeSmppFromBytes: convDecoders.decodeSmppFromBytes,
-        decodeSoulseekFromBytes: convDecoders.decodeSoulseekFromBytes,
-        decodeBittorrentFromBytes: convDecoders.decodeBittorrentFromBytes,
-        autoDetectProtoFromBytes: convDecoders.autoDetectProtoFromBytes,
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

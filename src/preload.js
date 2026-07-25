@@ -1316,8 +1316,6 @@ contextBridge.exposeInMainWorld('saveapi', {
   savePayload: (payloadHex, options) =>
     ipcRenderer.invoke('save-payload', payloadHex, options),
   saveText: (options) => ipcRenderer.invoke('save-text', options),
-  getAssetBase64: (relativePath) =>
-    ipcRenderer.invoke('get-asset-base64', relativePath),
   saveCookieJar: (cookieJarText) =>
     ipcRenderer.invoke('save-cookie-jar', cookieJarText),
   saveHttpBody: (bodyHex, contentType) =>

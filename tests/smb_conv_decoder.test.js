@@ -107,40 +107,23 @@ function extractFunctionSource(sourceText, functionName) {
 
 function loadDecoderFunctions(filePath) {
     const sourceText = fs.readFileSync(filePath, 'utf8');
-    // decodeSmbFromBytes and the SMB helpers now live under
-    // src/ui/decoders/conv/ (refactor: moved out of data-tools-panel.js).
-    // The same is true for the pure orchestrator helper
-    // autoDetectProtoFromBytes — it now lives under
-    // src/ui/decoders/conv/auto-detect.js, which is what the panel aliases.
-    // We extract from auto-detect.js for the panel path, and from the
-    // parallel main-frontend.js copy (which still has the inline
-    // declaration) otherwise.
-    const convDecoders = require(path.join(path.resolve(__dirname, '..'), 'src/ui/decoders/conv'));
-    let extractedSource = '';
-    if (sourceText.includes('function autoDetectProtoFromBytes')) {
-        extractedSource = extractFunctionSource(sourceText, 'autoDetectProtoFromBytes');
-    } else {
-        const autoDetectSource = fs.readFileSync(
-            path.join(path.resolve(__dirname, '..'), 'src/ui/decoders/conv/auto-detect.js'),
-            'utf8',
-        );
-        extractedSource = extractFunctionSource(autoDetectSource, 'autoDetectProtoFromBytes');
-    }
-    const alwaysNull = () => null;
+    const functionNames = [
+        'normalizeSmbDecoderBytes',
+        'findBytesSubsequence',
+        'parseSmbNtlmSecurityBuffer',
+        'decodeSmbTextBytes',
+        'bytesToHexLower',
+        'decodeSmbFromBytes',
+        'autoDetectProtoFromBytes',
+    ];
+    const extractedSource = functionNames
+        .map((functionName) => extractFunctionSource(sourceText, functionName))
+        .join('\n\n');
     const context = {
         Uint8Array,
         DataView,
         TextDecoder,
         Buffer,
-        getImageTypeFromExifReader: alwaysNull,
-        decodeHtmlFromBytes: alwaysNull,
-        normalizeSmbDecoderBytes: convDecoders.normalizeSmbDecoderBytes,
-        findBytesSubsequence: convDecoders.findBytesSubsequence,
-        parseSmbNtlmSecurityBuffer: convDecoders.parseSmbNtlmSecurityBuffer,
-        decodeSmbTextBytes: convDecoders.decodeSmbTextBytes,
-        bytesToHexLower: convDecoders.bytesToHexLower,
-        decodeSmbFromBytes: convDecoders.decodeSmbFromBytes,
-        autoDetectProtoFromBytes: convDecoders.autoDetectProtoFromBytes,
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

@@ -170,7 +170,6 @@ const convertContextMenuMarkup = `
       <button id="ctx-export-decrypted" role="menuitem">Decrypted data</button>
       <button id="ctx-export-summary-md" role="menuitem">Summary (Markdown)</button>
       <button id="ctx-export-summary-txt" role="menuitem">Summary (Text)</button>
-      <button id="ctx-export-summary-html" role="menuitem">Summary (HTML)</button>
       <button id="ctx-save-cookie-jar" role="menuitem">Cookie Jar</button>
     </div>
   </div>

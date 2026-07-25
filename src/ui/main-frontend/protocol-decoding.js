@@ -12,7 +12,6 @@ const {
     decodeDerFromBytes,
     decodeJsonFromBytes,
     decodeXmlFromBytes,
-    decodeHtmlFromBytes,
     decodeYamlFromBytes,
     decodeProtobufFromBytes,
     decodeMessagePackFromBytes,
@@ -20,17 +19,9 @@ const {
     decodeLdapFromBytes,
     decodeSmbFromBytes,
     decodeSipFromBytes,
-    decodeSmppFromBytes,
-    decodeSoulseekFromBytes,
-    decodeBittorrentFromBytes,
-    decodeJpegFromBytes,
-    decodePngFromBytes,
-    decodeGifFromBytes,
-    decodeWebpFromBytes,
     decodePlainTextFromBytes,
     autoDetectProtoFromBytes,
     getPacketProtocolDecoderHint,
-    getImageTypeFromExifReader,
 } = require("../panels/data-tools-panel");
 
 function createProtocolDecodingHelpers({
@@ -123,8 +114,6 @@ function createProtocolDecodingHelpers({
                 return decodeJsonFromBytes(bytes);
             case "xml":
                 return decodeXmlFromBytes(bytes);
-            case "html":
-                return decodeHtmlFromBytes(bytes);
             case "yaml":
                 return decodeYamlFromBytes(bytes);
             case "protobuf":
@@ -139,20 +128,6 @@ function createProtocolDecodingHelpers({
                 return decodeSmbFromBytes(bytes);
             case "sip":
                 return decodeSipFromBytes(bytes);
-            case "smpp":
-                return decodeSmppFromBytes(bytes);
-            case "soulseek":
-                return decodeSoulseekFromBytes(bytes);
-            case "bittorrent":
-                return decodeBittorrentFromBytes(bytes);
-            case "jpeg":
-                return decodeJpegFromBytes(bytes);
-            case "png":
-                return decodePngFromBytes(bytes);
-            case "gif":
-                return decodeGifFromBytes(bytes);
-            case "webp":
-                return decodeWebpFromBytes(bytes);
             case "plaintext":
                 return decodePlainTextFromBytes(bytes);
             default:
@@ -176,16 +151,7 @@ function createProtocolDecodingHelpers({
                 selectEl.value = protocol;
             }
         }
-
-        let result = null;
-        const actualImageType = getImageTypeFromExifReader(decodeBytes);
-        const isImageProtocolSelected = ["jpeg", "png", "gif", "webp"].includes(protocol);
-        if (isImageProtocolSelected && actualImageType && actualImageType !== protocol) {
-            renderProtoDecoderOutput(null, selectedProtocol, protocol);
-            return;
-        }
-
-        result = protocol ? decodeProtocolBytes(protocol, decodeBytes) : null;
+        const result = protocol ? decodeProtocolBytes(protocol, decodeBytes) : null;
         renderProtoDecoderOutput(result, selectedProtocol, result ? protocol : null);
     }
 

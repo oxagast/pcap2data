@@ -2,34 +2,17 @@
 
 ## Overview
 
-A network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, files, locations, protocols, anomalies, threat intel, and other actionable insights.
+<<<<<<< HEAD
+PacketSnitch is a network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, threat intelligence, and other actionable insights.
+=======
+A network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, threat intelligence, and other actionable insights.
+>>>>>>> parent of 2affeb2c (Update readme.md)
+
+
 
 <p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
 <img alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png" width="1000" >
 </a></p>
-
-## What's New in v2.3
-
-- **Manual file carving** in Conv with a clickable offset picker; carved files are surfaced in Stats.
-- **Stream / archive extraction** — extract files from compressed or archive payloads directly into the carved files list.
-- **Threat Intel sub-tab** in Conv with a **VirusTotal** card (auto-select, detection ratio, last analysis, community score) plus **IPSum** and **Tor** reputation lookups. **Cross Reference Hash** on the Hashes sub-tab sends any focused / selected hash straight to Threat Intel.
-- **Filter autocomplete** in the filter bar.
-- **Better IPv6 support** with bracketed endpoints and queries that work with raw IPv6 literals.
-- **Big-endian nanosecond-resolution pcap** support and a fix for the single-host blank List panel.
-- **Analyze Subnet (Conv)** for IPv4/IPv6 subnet math with WHOIS, GeoIP, Shodan, IPSum, and Tor lookups, plus optional **Nmap `-sV`** service enumeration (off by default).
-- **Backend HTTP service** (`/process`, `/control`, `/version`, `/status`, `/geoip`, `/whois`, `/ipsum`, `/tor`, `/shodan`) replacing per-run spawn.
-- **Worldmap / Internet heatmap** in Stats (Entire Capture / Filtered scope, Packets / Bytes intensity).
-- **PGP workspace** in the Crypt tab with armor / binary conversions, OpenPGP decrypt/verify, packet-derived passphrase candidates, and keystore promotion of validated private keys.
-- **Plugin engine** with sandboxed VM runtime and dot-notation capabilities (`fs`, `net`, `backend`, `ui.dom`, `notes`, `settings`, `themes`, etc.).
-- **Settings workspace** with General, Backend, LLM, Debug, and About sub-tabs, persisted to `userData/config/settings.json`.
-- **LLM moved to the frontend** (gated by `llm.activeByDefault` and Ollama startup checks), with **Export Summary as HTML** including inline carved images.
-- **Keystore auto-build** for HTTP Basic/form/cookies, FTP, SMTP, IMAP, RDP, and SIP credentials, plus hostnames, IPv4s, emails, and URLs from packet text.
-- **Saved-filter library** with labeled entries, in-app modal dialogs, and right-click save/remove on the filter bar.
-- **Filter bookmark expressions** (`bookmark:true` / `bookmark:false`) with a **Bookmarked** virtual option in Target Host.
-- **Lazy / progressive capture loading** with packet stub index, hydration on demand, and a partial-data warning until completion.
-- **Notes workspace** with `marked` Markdown preview (GFM tables) and LLM-generated notes added collapsed by default.
-
-See [RELEASE_NOTES.md](https://github.com/oxasploits/PacketSnitch/blob/main/RELEASE_NOTES.md) for the full changelog.
 
 ## Documentation
 
@@ -102,11 +85,11 @@ compatibility goes inside PacketSnitch.  Some may even crash PacketSnitch or any
 
 Some captures you can test the code with:
 
-* [HTTP with compression](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/pcaps/http_gzip.pcap)
-* [HTTP with images to carve](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/pcaps/http_with_jpegs.pcap)
-* [FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/pcaps/ftp.pcap)
-* [Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/pcaps/bgp.pcapng)
-* [Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/pcaps/atm.pcap)
+* [HTTP with compression](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_compressions.pcap)
+* [HTTP with images to carve](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/http_with_jpegs.pcap)
+* [FTP with some tranferred files and creds](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/ftp.pcap)
+* [Some BGP packets](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/bgp.pcapng)
+* [Some ATM packets from an DSL modem](https://github.com/oxasploits/PacketSnitch/raw/refs/heads/main/samples/atm.pcap)
 
 
 If you want to test anything else, a great resource is the [Wireshark Sample Captures Page](https://wiki.wireshark.org/SampleCaptures), I would get started there.

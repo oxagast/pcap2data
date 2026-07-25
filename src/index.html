@@ -142,10 +142,6 @@
         </div>
         <div id="summary_box">
           <div class="summary-workspace-header">Analysis Summary</div>
-          <div id="summary-compaction-status" class="summary-compaction-status" aria-live="polite" hidden>
-            <span class="loading"></span>
-            <span id="summary-compaction-status-text">Compacting analysis…</span>
-          </div>
           <div id="summary_content" class="notes-markdown-preview">
             Load a file to get started!
             <!--            <span id="loaderdots" class="loading">Loading</span>  -->
@@ -487,27 +483,19 @@
                 <option value="pop3">POP3</option>
                 <option value="imap">IMAP</option>
                 <option value="smtp">SMTP</option>
-                <option value="json">JSON</option>
-                <option value="xml">XML</option>
-<<<<<<< HEAD
-                <option value="html">HTML</option>
-=======
->>>>>>> 5862f29a91399490b9ba99449b672af01a186670
-                <option value="yaml">YAML</option>
-                <option value="protobuf">Protobuf</option>
-                <option value="msgpack">MessagePack</option>
-                <option value="bson">BSON</option>
-                <option value="ber">ASN.1 BER</option>
-                <option value="der">ASN.1 DER</option>
+                <option value="json">JSON (Generic)</option>
+                <option value="xml">XML (Generic)</option>
+                <option value="yaml">YAML (Generic)</option>
+                <option value="protobuf">Protobuf (Generic)</option>
+                <option value="msgpack">MessagePack (Generic)</option>
+                <option value="bson">BSON (Generic)</option>
+                <option value="ber">ASN.1 BER (Generic)</option>
+                <option value="der">ASN.1 DER (Generic)</option>
                 <option value="ldap">LDAP</option>
                 <option value="sip">SIP</option>
                 <option value="smpp">SMPP</option>
                 <option value="soulseek">Soulseek</option>
                 <option value="bittorrent">BitTorrent</option>
-                <option value="jpeg">JPEG</option>
-                <option value="png">PNG</option>
-                <option value="gif">GIF</option>
-                <option value="webp">WebP</option>
               </select>
               <div id="data-tools-proto-output"></div>
             </div>
@@ -1098,12 +1086,6 @@ No keystore entries saved.</pre>
 
                 <label for="settings-llm-retry-count">LLM retries</label>
                 <input id="settings-llm-retry-count" type="number" min="0" step="1" />
-
-                <label for="settings-llm-analysis-compaction-threshold-blubs">Analysis compaction threshold
-                  (blubs)</label>
-                <input id="settings-llm-analysis-compaction-threshold-blubs" type="number" min="1" step="1" />
-                <div class="settings-help-text">After this many new analysis blurbs are appended, the LLM will compact
-                  the recent history into a summary at the top of the Analysis panel.</div>
               </div>
             </div>
           </div>
@@ -1394,15 +1376,6 @@ No keystore entries saved.</pre>
               </div>
               <div id="data-tools-entropy" class="data-tools-kv">
                 Shannon Entropy: 0.00 (Low)
-              </div>
-            </div>
-            <div id="data-tools-llm-insights" class="data-tools-section data-tools-insights-sidebar" hidden>
-              <div class="data-tools-title">LLM Insights</div>
-              <div id="data-tools-llm-status" class="data-tools-kv">
-                Status: idle
-              </div>
-              <div id="data-tools-llm-summary" class="data-tools-kv data-tools-llm-summary">
-                No summary yet.
               </div>
             </div>
           </div>

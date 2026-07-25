@@ -596,23 +596,6 @@ strong {
   font-family: "Tahoma", "Courier New", Courier, monospace;
 }
 
-.summary-compaction-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 10px 0 10px;
-  padding: 6px 10px;
-  border: 1px dashed var(--color-3);
-  background-color: var(--color-7);
-  font-family: "Tahoma", "Courier New", Courier, monospace;
-  font-size: 13px;
-  color: var(--text-color);
-}
-
-.summary-compaction-status[hidden] {
-  display: none;
-}
-
 #tab-btns {
   width: 980px;
 }

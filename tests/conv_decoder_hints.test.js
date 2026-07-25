@@ -111,30 +111,7 @@ function extractConstantSource(sourceText, constantName) {
     if (startIndex === -1) {
         throw new Error(`Could not find constant ${constantName}`);
     }
-    const bracketStart = sourceText.indexOf("[", startIndex);
-    const braceStart = sourceText.indexOf("{", startIndex);
-    let bodyStart = -1;
-    let openChar = "";
-    let closeChar = "";
-    if (bracketStart !== -1 && braceStart !== -1) {
-        if (bracketStart < braceStart) {
-            bodyStart = bracketStart;
-            openChar = "[";
-            closeChar = "]";
-        } else {
-            bodyStart = braceStart;
-            openChar = "{";
-            closeChar = "}";
-        }
-    } else if (bracketStart !== -1) {
-        bodyStart = bracketStart;
-        openChar = "[";
-        closeChar = "]";
-    } else if (braceStart !== -1) {
-        bodyStart = braceStart;
-        openChar = "{";
-        closeChar = "}";
-    }
+    const bodyStart = sourceText.indexOf("[", startIndex);
     if (bodyStart === -1) {
         throw new Error(`Could not find body for ${constantName}`);
     }
@@ -142,15 +119,11 @@ function extractConstantSource(sourceText, constantName) {
     let cursor = bodyStart;
     while (cursor < sourceText.length) {
         const char = sourceText[cursor];
-        if (char === openChar) depth += 1;
-        if (char === closeChar) {
+        if (char === "[") depth += 1;
+        if (char === "]") {
             depth -= 1;
             if (depth === 0) {
-                let end = cursor + 1;
-                while (sourceText[end] === ")") {
-                    end += 1;
-                }
-                return sourceText.slice(startIndex, end);
+                return sourceText.slice(startIndex, cursor + 2);
             }
         }
         cursor += 1;
@@ -164,64 +137,11 @@ function loadHintFunctions(filePath) {
         "getPacketProtocolDecoderHint",
         "autoDetectProtoFromBytes",
     ];
-    // The function bodies reference PROTOCOL_DECODER_HINTS, PORT_DECODER_HINTS,
-    // and MIME_TO_PROTO. After the Conv decoders refactor, those are now
-    // re-export aliases in data-tools-panel.js (loading from
-    // src/ui/decoders/conv/protocol-hints.js and mime-maps.js), and the
-    // original inline Map/object definitions still exist in the parallel
-    // main-frontend.js copy. To keep this test honest about both shapes, we
-    // detect inline definitions vs. aliases and load the constants
-    // accordingly, then inject them into the vm context for the function
-    // bodies to consume.
-    const hintModule = require(path.resolve(
-        __dirname,
-        "..",
-        "src/ui/decoders/conv/protocol-hints.js",
-    ));
-    const mimeModule = require(path.resolve(
-        __dirname,
-        "..",
-        "src/ui/decoders/conv/mime-maps.js",
-    ));
-    const hasInline = (constantName, opener) => {
-        const startToken = `const ${constantName}`;
-        const idx = sourceText.indexOf(startToken);
-        if (idx === -1) return false;
-        const tail = sourceText.slice(idx, idx + 200);
-        return tail.includes(opener);
-    };
-    const constantsSource = [
-        hasInline("PROTOCOL_DECODER_HINTS", "new Map")
-            ? extractConstantSource(sourceText, "PROTOCOL_DECODER_HINTS")
-            : "",
-        hasInline("PORT_DECODER_HINTS", "new Map")
-            ? extractConstantSource(sourceText, "PORT_DECODER_HINTS")
-            : "",
-        hasInline("MIME_TO_PROTO", "{")
-            ? extractConstantSource(sourceText, "MIME_TO_PROTO")
-            : "",
-    ].filter(Boolean);
-    // After the refactor, data-tools-panel.js exposes
-    // getPacketProtocolDecoderHint and autoDetectProtoFromBytes as
-    // `const` aliases to the conv decoders. The actual `function`
-    // declarations live under src/ui/decoders/conv/auto-detect.js. The
-    // parallel main-frontend.js copy still has inline `function`
-    // declarations. To test both shapes, we extract the function body
-    // from auto-detect.js for the panel and from main-frontend.js for
-    // itself.
-    const usesAutoDetectModule =
-        !sourceText.includes("function getPacketProtocolDecoderHint") &&
-        !sourceText.includes("function autoDetectProtoFromBytes");
-    const functionSourcePath = usesAutoDetectModule
-        ? path.resolve(__dirname, "..", "src/ui/decoders/conv/auto-detect.js")
-        : filePath;
-    const functionSourceText = usesAutoDetectModule
-        ? fs.readFileSync(functionSourcePath, "utf8")
-        : sourceText;
     const extractedSource = [
-        ...constantsSource,
+        extractConstantSource(sourceText, "PROTOCOL_DECODER_HINTS"),
+        extractConstantSource(sourceText, "PORT_DECODER_HINTS"),
         ...functionNames.map((functionName) =>
-            extractFunctionSource(functionSourceText, functionName),
+            extractFunctionSource(sourceText, functionName),
         ),
     ].join("\n\n");
 
@@ -231,10 +151,8 @@ function loadHintFunctions(filePath) {
         DataView,
         TextDecoder,
         normalizeSmbDecoderBytes: alwaysNull,
-        getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
-        decodeHtmlFromBytes: alwaysNull,
         decodeBsonFromBytes: alwaysNull,
         decodeMessagePackFromBytes: alwaysNull,
         decodeProtobufFromBytes: alwaysNull,
@@ -245,9 +163,6 @@ function loadHintFunctions(filePath) {
         decodeSmppFromBytes: alwaysNull,
         decodeSoulseekFromBytes: alwaysNull,
         decodeBittorrentFromBytes: alwaysNull,
-        PROTOCOL_DECODER_HINTS: hintModule.PROTOCOL_DECODER_HINTS,
-        PORT_DECODER_HINTS: hintModule.PORT_DECODER_HINTS,
-        MIME_TO_PROTO: mimeModule.MIME_TO_PROTO,
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

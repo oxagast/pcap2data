@@ -55,14 +55,6 @@ const SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT = 4096;
 
 let goodiesStash = null;
 
-const {
-  initKeystoreLlmSummarizer,
-  requestKeystoreReviewNow,
-  clearKeystoreSummary,
-  stopKeystoreReview,
-  stopKeystoreReviewTimer,
-} = require("./keystore-llm-summarizer");
-
 // Creates keystore panel.
 function createKeystorePanel({
   statusUpdate,
@@ -82,9 +74,6 @@ function createKeystorePanel({
   getApplyCryptCertificateText,
   getApplyCryptPrivateKeyText,
   openExternalUrl,
-  callLargeLanguageModel,
-  isLlmRuntimeEnabled,
-  isBackgroundSummaryGenerationEnabled,
 }) {
   let cryptPersistentKeystoreEntries = [];
   let cryptSessionKeystoreEntries = [];
@@ -97,20 +86,6 @@ function createKeystorePanel({
   let sessionRebuildGeneration = 0;
   const sessionScanHydratedPacketCache = new Map();
   let cryptRenderedKeystoreEntries = [];
-
-  initKeystoreLlmSummarizer({
-    callLargeLanguageModel,
-    isLlmRuntimeEnabled,
-    isBackgroundSummaryGenerationEnabled,
-    statusUpdate,
-    writeLogEntry,
-    getKeystorePanelApi: () => ({
-      getKeystoreMode,
-      isUnlocked,
-      getActiveCryptKeystoreEntries,
-      getSessionKeychainEntries,
-    }),
-  });
 
   function setBoundedCacheEntry(cacheMap, key, value, limit) {
     if (!cacheMap || !key) return;
@@ -2657,7 +2632,6 @@ function createKeystorePanel({
     if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
       renderCryptKeystoreList();
     }
-    requestKeystoreReviewNow();
   }
 
   async function addCryptKeystoreEntry(
@@ -2707,7 +2681,6 @@ function createKeystorePanel({
     writeLogEntry(
       `[${threadName}] Crypt keystore entry added type=${type} label="${entry.label}"`,
     );
-    requestKeystoreReviewNow();
   }
 
   async function loadSelectedCryptKeystoreEntry() {
@@ -2872,7 +2845,6 @@ function createKeystorePanel({
     writeLogEntry(
       `[${threadName}] Session keychain entry persisted label="${selectedEntry.label}"`,
     );
-    requestKeystoreReviewNow();
   }
 
   function grepSessionKeystoreEntriesByContent(content) {
@@ -3155,7 +3127,6 @@ function createKeystorePanel({
         writeLogEntry(`[${threadName}] Persistent keychain unlocked`);
       }
       cryptKeystoreUnlockKeyMaterial = keyMaterial;
-      requestKeystoreReviewNow();
       return true;
     } catch (error) {
       logErrorEntry("crypt-keystore-unlock", error);
@@ -3385,8 +3356,6 @@ function createKeystorePanel({
       cryptManualUriDialogResolver = null;
       cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
       renderCryptKeystoreList();
-      clearKeystoreSummary();
-      stopKeystoreReviewTimer();
     },
     clearSessionScanCaches,
   };
