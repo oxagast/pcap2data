@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         maxSummaryTokens: 1024,
         ollamaRequestTimeoutSeconds: 300,
         retryCount: 2,
+        analysisCompactionThresholdBlubs: 6,
     },
     plugins: {
         autoDisableFailureThreshold: 3,
@@ -349,6 +350,11 @@ function normalizeSettings(rawSettings = {}) {
                 llm.retryCount,
                 defaults.retryCount,
                 0,
+            ),
+            analysisCompactionThresholdBlubs: toPositiveInteger(
+                llm.analysisCompactionThresholdBlubs,
+                defaults.analysisCompactionThresholdBlubs,
+                1,
             ),
         },
         plugins: {
