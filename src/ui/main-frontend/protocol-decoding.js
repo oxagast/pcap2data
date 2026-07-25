@@ -12,6 +12,7 @@ const {
     decodeDerFromBytes,
     decodeJsonFromBytes,
     decodeXmlFromBytes,
+    decodeHtmlFromBytes,
     decodeYamlFromBytes,
     decodeProtobufFromBytes,
     decodeMessagePackFromBytes,
@@ -122,6 +123,8 @@ function createProtocolDecodingHelpers({
                 return decodeJsonFromBytes(bytes);
             case "xml":
                 return decodeXmlFromBytes(bytes);
+            case "html":
+                return decodeHtmlFromBytes(bytes);
             case "yaml":
                 return decodeYamlFromBytes(bytes);
             case "protobuf":
