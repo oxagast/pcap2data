@@ -1,7 +1,7 @@
 // Loads the renderer-side frontend modules into the webpack entrypoint.
 
 import "./ui/common-frontend";
-import "./ui/decoders";
+import "./ui/decoders/main";
 import "./ui/panels/summary-panel";
 import "./ui/panels/data-panel";
 import "./ui/panels/stats-panel";
