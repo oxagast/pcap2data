@@ -56,7 +56,7 @@ const {
   renderKerberosTable,
   renderSshTable,
   renderSctpTable,
-} = require("./decoders");
+} = require("./decoders/main");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
   createKeystorePanel,
