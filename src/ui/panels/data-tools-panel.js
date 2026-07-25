@@ -58,6 +58,8 @@ const HASH_IDS = [
 
 let activeConvSubtab = CONV_CONVERSIONS_SUBTAB;
 let activeDataToolsProtoResult = null;
+let decodedImageRegistry = [];
+const MAX_DECODED_IMAGE_REGISTRY_SIZE = 50;
 
 // ── Injected dependencies (set via initConvPanel) ─────────────────────────────
 
@@ -65,17 +67,19 @@ let _writeLogEntry = () => { };
 let _statusUpdate = () => { };
 let _setActiveMainTab = () => { };
 let _getCurrentContextPacket = () => null;
+let _getActiveMainTab = () => "data-tools";
 let _callLargeLanguageModel = null;
 let _isLlmRuntimeEnabled = () => false;
 let _isBackgroundSummaryGenerationEnabled = () => false;
 let _appendAnalysisBlub = null;
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
   _getCurrentContextPacket = getCurrentContextPacket || (() => null);
+  _getActiveMainTab = getActiveMainTab || (() => "data-tools");
   _callLargeLanguageModel = callLargeLanguageModel || null;
   _isLlmRuntimeEnabled = isLlmRuntimeEnabled || (() => false);
   _isBackgroundSummaryGenerationEnabled = isBackgroundSummaryGenerationEnabled || (() => false);
@@ -597,6 +601,7 @@ function resetDataToolsOutputs() {
     "Shannon Entropy: 0.00 (Low)";
   resetHashOutputs();
   clearProtoDecoderOutput();
+  clearDecodedImageRegistry();
 }
 
 // Runs data tools conversion.
@@ -2784,6 +2789,7 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     fields: Array.isArray(result.fields) ? result.fields : [],
   });
   if (result.imageDataUrl) {
+    registerDecodedImage(result);
     const img = document.createElement("img");
     img.src = result.imageDataUrl;
     img.style.maxWidth = "100%";
@@ -2965,6 +2971,46 @@ function clearProtoDecoderOutput() {
     delete protoOutput.dataset.decodedResult;
   }
 }
+
+// Registers a decoded image in the registry so it can be embedded in the
+// HTML summary export near the context where it was decoded.
+function registerDecodedImage(result) {
+  if (!result || !result.imageDataUrl) return;
+  const packet = _getCurrentContextPacket();
+  const packetKey = packet?.__packetKey || "";
+  const activeMainTab = _getActiveMainTab();
+  const id = `img-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+  const mimeMatch = String(result.imageDataUrl).match(
+    /^data:([^;]+);base64,/i,
+  );
+  const mime = mimeMatch ? mimeMatch[1] : "image/octet-stream";
+  decodedImageRegistry.push({
+    id,
+    protocol: result.protocol || "image",
+    mime,
+    imageDataUrl: result.imageDataUrl,
+    packetKey,
+    convSubtab: activeConvSubtab,
+    activeMainTab,
+    decodedAt: Date.now(),
+  });
+  if (decodedImageRegistry.length > MAX_DECODED_IMAGE_REGISTRY_SIZE) {
+    decodedImageRegistry.splice(
+      0,
+      decodedImageRegistry.length - MAX_DECODED_IMAGE_REGISTRY_SIZE,
+    );
+  }
+}
+
+function getDecodedImageRegistry() {
+  return decodedImageRegistry.slice();
+}
+
+function clearDecodedImageRegistry() {
+  decodedImageRegistry = [];
+}
 //    Packet JSON decoder setup
 document.getElementById("conv-subtab-packet-json").addEventListener("click", () => {
   setConvSubtab(CONV_PACKET_JSON_SUBTAB);
@@ -3077,6 +3123,8 @@ module.exports = {
   // State accessors
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
+  getDecodedImageRegistry,
+  clearDecodedImageRegistry,
   // Functions
   parseDataToolsInput,
   bytesToPrintableAscii,

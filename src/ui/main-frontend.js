@@ -106,6 +106,8 @@ const {
   DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES,
   getActiveConvSubtab,
   getActiveDataToolsProtoResult,
+  getDecodedImageRegistry,
+  clearDecodedImageRegistry,
   formatHexInputBytes,
   setConvSubtab,
   runDataToolsHashesFromInput,
@@ -20238,22 +20240,102 @@ function resizeAndCompressImageToJpegBase64(
   });
 }
 
-async function getDecodedImageHtmlForSummary() {
-  const decodedResult = getActiveDataToolsProtoResult?.();
-  const imageDataUrl = decodedResult?.imageDataUrl;
-  if (!imageDataUrl) return "";
+// Returns true when the given summary entry signature matches the decoded
+// image's context. We match on packet key and Conv subtab prefix because the
+// summary entry signature includes a data-content hash that may differ between
+// the decode time and the compaction time.
+function summarySignatureMatchesImage(entrySignature, image) {
+  if (!entrySignature || !image) return false;
+  const pktToken = image.packetKey ? `pkt:${image.packetKey}` : "";
+  const dtToken = `dt:${image.convSubtab}:`;
+  const mainTabToken = image.activeMainTab
+    ? `tab:${image.activeMainTab}`
+    : "";
+  let matches = 0;
+  if (pktToken && entrySignature.includes(pktToken)) matches += 1;
+  if (entrySignature.includes(dtToken)) matches += 1;
+  if (mainTabToken && entrySignature.includes(mainTabToken)) matches += 1;
+  // Require at least the data-tools subtab match. If a packet key is known
+  // it must also match; otherwise we still associate by subtab alone.
+  if (matches >= 1 && entrySignature.includes(dtToken)) {
+    if (pktToken) return matches >= 2;
+    return true;
+  }
+  return false;
+}
+
+async function buildDecodedImageBlockHtml(image) {
   try {
-    const compressedDataUrl = await resizeAndCompressImageToJpegBase64(
-      imageDataUrl,
+    const compressed = await resizeAndCompressImageToJpegBase64(
+      image.imageDataUrl,
     );
+    const protocol = escapeHtml(String(image.protocol || "image"));
+    const packetLabel = image.packetKey
+      ? escapeHtml(String(image.packetKey))
+      : "unspecified packet";
     return `<div class="summary-decoded-image">
-  <p><strong>Decoded ${escapeHtml(String(decodedResult.protocol || "image"))}:</strong></p>
-  <img src="${compressedDataUrl}" alt="Decoded ${escapeHtml(String(decodedResult.protocol || "image"))}" class="summary-image">
+  <p><strong>Decoded ${protocol}</strong> <span class="summary-image-meta">(${escapeHtml(
+      String(image.mime || "image"),
+    )}, packet ${packetLabel})</span></p>
+  <img src="${compressed}" alt="Decoded ${protocol} from packet ${packetLabel}" class="summary-image">
 </div>`;
   } catch (err) {
     console.warn("Failed to embed decoded image in HTML summary:", err);
     return "";
   }
+}
+
+// Builds the HTML body for the summary export by rendering each compacted
+// summary entry separately and attaching any decoded images whose context
+// matches that entry's signature. Falls back to a single section when no
+// compacted summaries exist yet.
+async function buildSummaryBodyHtmlForHtmlExport(summaryMarkdown) {
+  const entries = Array.isArray(compactedAnalysisSummaries)
+    ? compactedAnalysisSummaries
+    : [];
+  const registry =
+    typeof getDecodedImageRegistry === "function"
+      ? getDecodedImageRegistry()
+      : [];
+
+  // Pre-compress all registry images concurrently and remember which entries
+  // each image is associated with.
+  const imageBlocks = await Promise.all(registry.map(buildDecodedImageBlockHtml));
+  const imagesWithBlock = registry
+    .map((image, idx) => ({ image, block: imageBlocks[idx] }))
+    .filter((entry) => Boolean(entry.block));
+
+  if (entries.length === 0) {
+    const bodyHtml = renderMarkdownToHtml(summaryMarkdown, {
+      emptyPlaceholder: "No summary available",
+    });
+    const trailingImages = imagesWithBlock
+      .map((entry) => entry.block)
+      .join("\n");
+    return `${bodyHtml}\n${trailingImages}`;
+  }
+
+  const sectionParts = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i] || {};
+    const entryMarkdown = normalizeSummaryMarkdownHeadings(
+      String(entry.summary || "").trim(),
+    );
+    const bodyHtml = renderMarkdownToHtml(
+      entryMarkdown || "_No summary available._",
+      { emptyPlaceholder: "No summary available" },
+    );
+    const entryImages = imagesWithBlock
+      .filter((rec) => summarySignatureMatchesImage(entry.signature, rec.image))
+      .map((rec) => rec.block)
+      .join("\n");
+    sectionParts.push(
+      `<section class="summary-section" data-signature="${escapeHtml(
+        String(entry.signature || ""),
+      )}">\n${bodyHtml}\n${entryImages}\n</section>`,
+    );
+  }
+  return sectionParts.join('\n<hr class="summary-section-divider">\n');
 }
 
 // Saves summary output from context menu.
@@ -20303,10 +20385,7 @@ async function saveSummaryFromContextMenu(format = "markdown") {
         console.warn("Failed to load logo for HTML summary export:", err);
       }
     }
-    const bodyHtml = renderMarkdownToHtml(summaryMarkdown, {
-      emptyPlaceholder: "No summary available",
-    });
-    const decodedImageHtml = await getDecodedImageHtmlForSummary();
+    const bodyHtml = await buildSummaryBodyHtmlForHtmlExport(summaryMarkdown);
     const logoHtml = logoSrc
       ? `<img src="${logoSrc}" alt="PacketSnitch logo" class="summary-logo">`
       : "";
@@ -20333,6 +20412,9 @@ th { background: #f5f5f5; }
 .summary-decoded-image { text-align: center; margin: 1.5rem 0; }
 .summary-decoded-image p { margin: 0 0 0.5rem; color: #444; }
 .summary-image { max-width: 280px; max-height: 350px; width: auto; height: auto; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; }
+.summary-image-meta { color: #888; font-size: 0.85rem; }
+.summary-section { margin-bottom: 1.5rem; }
+.summary-section-divider { border: none; border-top: 1px solid #ddd; margin: 2rem 0; }
 </style>
 </head>
 <body>
@@ -20340,7 +20422,6 @@ th { background: #f5f5f5; }
   ${logoHtml}
   <p class="summary-meta">Generated by PacketSnitch ${PACKETSNITCH_VERSION} on ${generatedDate} — <a href="https://packetsnitch.com" target="_blank" rel="noopener noreferrer">packetsnitch.com</a></p>
 </div>
-${decodedImageHtml}
 ${bodyHtml}
 </body>
 </html>`;
@@ -20941,6 +21022,7 @@ initConvPanel({
     activeMainTab = tab;
   },
   getCurrentContextPacket,
+  getActiveMainTab: () => activeMainTab,
   callLargeLanguageModel,
   isLlmRuntimeEnabled,
   isBackgroundSummaryGenerationEnabled,
