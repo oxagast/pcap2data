@@ -12,10 +12,7 @@ const {
     decodeDerFromBytes,
     decodeJsonFromBytes,
     decodeXmlFromBytes,
-<<<<<<< HEAD
     decodeHtmlFromBytes,
-=======
->>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     decodeYamlFromBytes,
     decodeProtobufFromBytes,
     decodeMessagePackFromBytes,
@@ -126,11 +123,8 @@ function createProtocolDecodingHelpers({
                 return decodeJsonFromBytes(bytes);
             case "xml":
                 return decodeXmlFromBytes(bytes);
-<<<<<<< HEAD
             case "html":
                 return decodeHtmlFromBytes(bytes);
-=======
->>>>>>> 5862f29a91399490b9ba99449b672af01a186670
             case "yaml":
                 return decodeYamlFromBytes(bytes);
             case "protobuf":
