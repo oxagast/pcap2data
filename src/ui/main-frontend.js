@@ -130,7 +130,7 @@ const {
   getCurrentSummaryContext,
   getCurrentSummaryContextHash,
 } = require("./panels/data-tools-llm-summarizer");
-
+const { normalizeSmbDecoderBytes } = require('./decoders/conv/smb-helpers');
 function mountStartupFragments() {
   const activityLogPanelEl = document.getElementById("activity-log-panel");
   if (activityLogPanelEl && !activityLogPanelEl.dataset.fragmentMounted) {
