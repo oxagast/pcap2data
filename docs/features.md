@@ -21,6 +21,12 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - [Statistics Tab](#statistics-tab)
 - [List Tab](#list-tab)
 - [Conv Tab (Data Conversion Workspace)](#conv-tab-data-conversion-workspace)
+  - [Conversions Sub-tab](#conversions-sub-tab)
+  - [Manual Carve Sub-tab](#manual-carve-sub-tab)
+  - [Hashes Sub-tab](#hashes-sub-tab)
+  - [Decodes Sub-tab](#decodes-sub-tab)
+  - [Analyze Subnet Sub-tab](#analyze-subnet-sub-tab)
+  - [Threat Intel Sub-tab](#threat-intel-sub-tab)
 - [Crypt Tab (Encryption Workspace)](#crypt-tab-encryption-workspace)
 - [Keystore Tab (Local Credential Store)](#keystore-tab-local-credential-store)
 - [Notes Tab (Session Notes)](#notes-tab-session-notes)
@@ -122,6 +128,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 ### Filter Engine
 
 - Real-time filter bar supporting a rich expression language.
+- **Filter autocomplete** suggests keys and recent values as you type.
 - **Key:value** equality: `ip.src.addr:10.0.0.1`
 - **Comparison operators**: `==`, `!=`, `>`, `>=`, `<`, `<=` (e.g. `payload.entropy:>=7.0`).
 - **Boolean combinators**: `&&` (AND) and `||` (OR) with AND taking higher precedence.
@@ -131,6 +138,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - **`decoded-proto` alias**: aggregates transport + decoded protocol names including link-control for queries like `decoded-proto:ppp`.
 - Case-insensitive key normalization: spaces and hyphens are interchangeable (e.g. `wire-length` = `wire.len`).
 - Wildcard glob matching.
+- IPv6-friendly tokenizer: queries split only on the first `:` so raw IPv6 literals (e.g. `ip.src.addr:2001:db8::1`) work.
 - Filter history tracked per session and accessible from the filter bar.
 - Saved-filter library persisted in user config (`config/filters.json`) with labeled entries merged into the filter history dropdown.
 - Right-click save/remove flow for the current filter query via in-app modal dialog (no native `window.prompt` dependency).
@@ -158,12 +166,14 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
 - Load `.pcap` and `.pcapng` capture files directly from within the app (**Load PCAP** button).
 - Load pre-processed `hosts.json` backend output (**Load JSON** button).
-- Load previously saved PacketSnitch session files (compressed `.json.xz` or `.json.gz`).
+- Load previously saved PacketSnitch session files (compressed `.json.xz`, `.json.gz`, or `.psb` BSON+gzip).
 - Session-backed PCAP reprocessing: saved sessions retain the source capture as base64 so the backend can be re-run later without manually re-selecting the file.
+- Big-endian nanosecond-resolution pcap support (high-resolution nanosecond timestamps in big-endian format decode correctly).
 - Progressive capture loading: backend emits chunked host snapshots every 500 packets; the UI becomes interactive after the first chunk arrives while processing continues in the background.
 - Optional backend HTTP data mode: the bridge can stream incremental JSON snapshots directly over the backend HTTP response instead of waiting on `hosts-*.json` files on disk.
-- Lazy packet hydration: packet stubs are built immediately and full payloads are fetched on demand, keeping the UI responsive for large captures.
-- Left-panel partial-data warning shown while incremental backend processing is in progress.
+- Lazy packet hydration: packet stubs are built immediately and full payloads are fetched on demand, keeping the UI responsive for large captures. The packet stub index is bounded and evicts old stubs; evicted stubs are re-hydrated on demand via `captureapi.getPacketStub`.
+- Frontend ingest threading: large captures can be ingested through a configurable worker pool (`debug.frontendIngestThreadingEnabled` / `debug.frontendIngestWorkerThreads`) with round-robin dispatch and dynamic reconfigure, falling back to the main thread if workers fail.
+- Left-panel partial-data warning shown while incremental backend processing is in progress, with live percentage + estimated-time-remaining ETA.
 - Backend preprocessing blocks session save/export until complete, preventing persistence of incomplete data.
 
 ---
@@ -185,17 +195,18 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
 - Save full sessions with all UI state: packet cursor position, filter history, active tab, bookmarks, notes, and session keychain.
 - Autosave on a 5-minute timer to prevent data loss.
-- Session files are compressed with LZMA (`lzma-native`) or gzip as a fallback, keeping saved session sizes small.
-- Session library picker (`session-picker`) for browsing and restoring previously saved sessions.
+- Session files are compressed with LZMA (`lzma-native`) or gzip as a fallback, keeping saved session sizes small. Optional **PacketSnitch 2.0 BSON+gzip session format** (`.psb`) is available behind `debug.bsonGzipSessionEnabled` and removes the xz/lzma dependency.
+- Session library picker (`session-picker`) for browsing and restoring previously saved sessions. The list of recent sessions is pulled from a disk cache so the picker opens almost instantly even with a large library.
 - Session restore skips eager keychain rebuild (deferred to idle time) so the UI opens quickly.
+- Session save/export is blocked while the backend is still preprocessing a capture, preventing persistence of incomplete data.
 
 ---
 
 ### Settings Workspace
 
-- Dedicated **Settings** tab with five sub-tabs: **Frontend**, **Backend**, **LLM**, **Debug**, and **About**.
+- Dedicated **Settings** tab with sub-tabs: **General**, **Backend**, **LLM**, **Debug**, **Plugins**, and **About**.
 - Settings are persisted to `userData/config/settings.json` via main-process IPC (`settings-get`, `settings-save`, `settings-update`).
-- **Frontend** settings:
+- **General** settings:
   - **Theme** selector (`general.themeId`) using discovered theme JSON files.
   - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
   - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
@@ -294,6 +305,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **Intensity By** toggle: packet hits vs. payload bytes.
 - Interactive controls for map zoom, intensity, point size, tightness, and blur.
 - Clickable location dots highlight individual geolocated points; selection zoom helps inspect dense regions.
+- **Two-click location filter**: first click zooms a location, second click of the same location runs a host-traffic filter for all contributing IPs at that coordinate.
 - Heatmap summary text reports geolocated host count and current metric total for the active scope.
 - Private/local addresses are excluded; only routable addresses with GeoIP coordinates are plotted.
 
@@ -321,6 +333,16 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **Data Insights**: byte length, MIME type (magic detection), detected text language, up to three ranked data-type guesses (JWT, bcrypt hash, Base64, etc.) with High/Medium/Low confidence, Shannon entropy with Low/Medium/High label.
 - **Filename Guess** in Data Insights, including carved/loaded filename context when available.
 - Entropy range: 0.0–8.0 bits/byte; Low < 4.5, Medium 4.5–6.8, High > 6.8.
+
+#### Manual Carve Sub-tab
+
+The Manual Carve sub-tab merges the hex-grid byte cursor and a manual file-carve workflow into a single panel.
+
+- Click any byte in the hex grid to place a cursor; click a second byte to define the start/end of a manual carve range.
+- Picked byte ranges can be exported as a binary file (MIME-aware extension) or fed back into the Conversions input.
+- Selected byte ranges can be opened in the system browser for HTML / SVG / image previews.
+- Files extracted from compressed payloads (gzip, zlib, zip, tar, etc.) are added to the **Stats → Carvable Files** list so they can be reloaded later.
+- Manual Carve and the byte cursor share one panel; Conv panes now also clear themselves when a new session is opened.
 
 #### Hashes Sub-tab
 
@@ -381,9 +403,10 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **Key Material** inputs:
   - Optional private key input for decryption
   - Optional public key input for signature verification
-  - Passphrase input plus auto-discovered passphrase candidates recovered from packet text and metadata
+  - Passphrase input plus auto-discovered passphrase candidates recovered from packet text and metadata (selectable via "Use selected password")
 - **Decrypt / Verify** handles encrypted messages and cleartext signed messages using `openpgp` in the renderer.
-- Successful decrypt/verify output can be **Sent to Conv** and validated private key/passphrase material can be promoted into the session keystore.
+- Successful decrypt/verify output can be **Sent to Conv** and validated private key / passphrase material can be promoted into the session keystore (`PGP Private Key` / `PGP Password` entry types).
+- Decrypted Crypt output can be exported from the context menu (text for printable output, raw hex for binary TLS-style data).
 
 #### OpenSSH Sub-tab
 
@@ -432,7 +455,9 @@ Automatically extracts and adds entries to the Session keychain when a capture i
 - Remove individual notes.
 - Export all notes to a plain-text file with `---` dividers.
 - Notes are saved as part of the session file.
+- **Markdown preview**: selected notes render a sanitized live preview (headings, lists, blockquote, code, links, GFM-style pipe tables) in a side panel using the `marked` parser.
 - **Send to Notes** context menu submenu: send selected/context text, List row visible data, Conv output, or Conv hashes to a new note.
+- LLM-generated notes are added collapsed by default; manually-added notes still open the editor.
 
 ---
 
@@ -503,6 +528,16 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 - **Conv input** / **Conv Raw** / **Conv output** (hex, binary, decimal, integer, ASCII, base64).
 - **Conv hashes** and **Conv decode output** exports.
 - **Cookie Jar**: save extracted cookies to disk.
+- **Export Summary as HTML**: save the current Summary (Analysis) tab content as a self-contained HTML document. Carved images are embedded as data URIs so the export is portable.
+
+#### Threat Intel Actions
+
+- **Load file into VirusTotal**: hash the current Conv input (or manually picked file bytes) and open the VirusTotal file/lookup page for the resulting hash. Requires a VirusTotal API key in **Settings → Backend**.
+- **Load file into Extractor**: open the picked file in the system tool registered for the detected file type (archive / image / document viewers).
+
+#### Stats Actions
+
+- **Open on Heatmap**: from the **Stats** tab context menu, jump to the **Worldmap** view pre-centered on the GeoIP location of the currently selected address.
 
 #### HTTP Body...
 
@@ -523,6 +558,8 @@ Shown when a carve target is available:
 - **SMB file to disk**: detect and pick a file from the current SMB stream, then save as binary.
 - **NFS file to disk**: detect and pick a file from the current NFS stream, then save as binary.
 - **FTP file to disk**: carve FTP data-channel bytes (direct streams or inferred from PORT/EPRT/PASV/EPSV + RETR/STOR/APPE/LIST/NLST control-channel hints), then save as binary.
+- **Carve selection as file** (Manual Carve sub-tab): save a manually picked byte range from the Conv hex grid as a binary file. The MIME type is auto-detected to suggest the file extension. Manually carved files also appear in **Stats → Carvable Files**.
+- **Extract files from archives / compressed payloads** (Manual Carve sub-tab): extract files embedded in gzip, zlib, zip, tar, and similar payloads directly from the active Conv input, and add them to the carved files list for later reloading.
 
 #### LLM Actions
 
@@ -541,10 +578,12 @@ Shown when a carve target is available:
 - LLM calls are initiated from the frontend/main-process bridge (`window.llmapi -> ipcMain('ollama:generate')`), not from the Python backend parser.
 - **Use LLM** toggle in the load dialog mirrors the persisted `llm.activeByDefault` runtime preference.
 - Generated report is displayed in the **Summary** tab and extended by stream-context follow-up summaries while navigating.
+- **Stream-context follow-up summaries**: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane. Already-summarized stream keys are tracked to reduce repeat calls. Conv subtab tracking prevents redundant summary calls.
+- **Compaction**: long stream context is compacted into shorter chunks before LLM calls to keep prompts within model context limits.
+- **Export Summary as HTML** in the context menu writes the current Summary content as a self-contained HTML document. Carved images are embedded as data URIs so the export is portable.
 - LLM defaults are configured in the **Settings → LLM** sub-tab and persisted in app settings.
 - LLM diagnostics are surfaced in Settings: install status, local daemon reachability, cloud API reachability, and last call result code.
 - LLM context-menu actions are gated by the same runtime LLM setting and are hidden when LLM is disabled.
-- Stream-context summary generation: while navigating packets, the frontend summarizes the active conversation stream after a short idle delay and appends new findings to the Summary pane.
 - Summary deduping/persistence: already-summarized stream keys are tracked to reduce repeat calls, and `currentSummary` is saved/restored with session files.
 
 ---
@@ -552,13 +591,14 @@ Shown when a carve target is available:
 ### Backend HTTP Service / Bridge
 
 - The Electron bridge can initialize the Python backend in long-lived HTTP service mode instead of spawning a fresh parser process per run.
-- Service status/stats endpoint: `GET /status` (also `GET /`).
+- Service status/stats endpoint: `GET /status` (also `GET /`) — returns statusLine, runtime config (workerThreads/hostChunkSize), version, versionSource, uptime, and active processing job metadata.
 - Service health check endpoint: `GET /ping`.
-- Service version endpoint: `GET /version`.
-- Capture-processing endpoint: `POST /process`.
-- Control endpoint: `POST /control` for stop/shutdown requests and runtime updates (`set-runtime-config`).
-- Lookup endpoints used by Analyze Subnet and host enrichment: `GET /geoip`, `GET /whois`, `GET /ipsum`, `GET /tor`, `GET /shodan`.
-- When the backend advertises NDJSON (`application/x-ndjson`), the bridge forwards incremental progress and capture snapshots to the renderer as they arrive.
+- Service version endpoint: `GET /version` (resolves dynamically from `PACKETSNITCH_VERSION` env override or the nearest `package.json`).
+- Capture-processing endpoint: `POST /process` (returns NDJSON `application/x-ndjson` so progress events and incremental snapshots stream to the renderer as they arrive).
+- Control endpoint: `POST /control` for `stop-processing` / `shutdown` and live `set-runtime-config` updates (worker threads + host chunk size).
+- Lookup endpoints used by Analyze Subnet and host enrichment: `GET /geoip`, `GET /whois`, `GET /ipsum`, `GET /tor`, `GET /shodan`, plus the VirusTotal helper used by Threat Intel.
+- Backend startup emits a `[Main] Backend startup mode=<...> version=<...> version_source=<...>` line that is mirrored to the Activity Log.
+- Backend lifecycle is API-driven: session switches call `stop-processing` over the bridge and app exit calls `shutdown` over `/control` (no `pkill`/`taskkill` fallback).
 - If HTTP service mode is unavailable, the bridge automatically falls back to legacy per-run spawn mode unless disabled by settings.
 - Backend host/port and force-legacy behavior are configurable in **Settings → Backend**.
 

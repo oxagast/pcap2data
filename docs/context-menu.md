@@ -15,6 +15,8 @@
 - [Export...](#export)
 - [HTTP Body...](#http-body)
 - [File Carving...](#file-carving)
+- [Manual Carve...](#manual-carve)
+- [Threat Intel...](#threat-intel)
 - [LLM Actions](#llm-actions)
 - [Save Session](#save-session)
 
@@ -166,6 +168,7 @@ Save and export packet and session data.
 | **Conv hashes**           | Export all hash outputs shown in Conv Hashes.                   |
 | **Conv decode output**    | Export current decoded protocol output from Conv Decodes.       |
 | **Cookie Jar**            | Save all extracted cookies to disk.                             |
+| **Export Summary as HTML**| Save the current Summary (Analysis) tab content as a self-contained HTML document. Carved images are embedded as data URIs so the export is portable. |
 
 ---
 
@@ -195,6 +198,32 @@ Shown when at least one carve target is available for the current packet or stre
 | **SMB file to disk**    | Detect files transferred in the current SMB stream, let you pick one, then save it as binary.  |
 | **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
 | **FTP file to disk**    | Detect file transfer bytes in FTP streams, then save the carved result as binary.              |
+
+---
+
+### Manual Carve
+
+Shown in the **Conv** tab when a byte range has been picked with the cursor / offset picker.
+
+| Item                    | Description                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| **Carve selection as file** | Save the currently picked byte range (manual cursor / Manual Carve panel) as a binary file. The MIME type is detected automatically and used to suggest an extension. |
+| **Carve selection into Conv input** | Replace the Conv input with the picked byte range so it can be re-decoded or hashed. |
+| **Open selected bytes in browser** | Write the picked byte range to a temp file and open it in the system browser (useful for HTML / SVG / image previews). |
+
+Manually carved files are also surfaced in **Stats → Carvable Files** so they can be reloaded later.
+
+---
+
+### Threat Intel
+
+Shown in the **Conv** tab and other data panels when threat-intel context is available.
+
+| Item                          | Description                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Load file into VirusTotal** | Hash the current Conv input (or picked file bytes), open the VirusTotal file/lookup page for the resulting hash. Requires a VirusTotal API key in **Settings → Backend**. |
+| **Load file into Extractor**  | Open the picked file in the system tool registered for the detected file type (archive / image / document viewers).  |
+| **Open on Heatmap**           | From the **Stats** tab context menu, jump to the **Worldmap** view pre-centered on the GeoIP location of the currently selected address. |
 
 ---
 
