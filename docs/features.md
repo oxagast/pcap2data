@@ -22,7 +22,6 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - [List Tab](#list-tab)
 - [Conv Tab (Data Conversion Workspace)](#conv-tab-data-conversion-workspace)
   - [Conversions Sub-tab](#conversions-sub-tab)
-  - [Manual Carve Sub-tab](#manual-carve-sub-tab)
   - [Hashes Sub-tab](#hashes-sub-tab)
   - [Decodes Sub-tab](#decodes-sub-tab)
   - [Analyze Subnet Sub-tab](#analyze-subnet-sub-tab)
@@ -334,9 +333,9 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **Filename Guess** in Data Insights, including carved/loaded filename context when available.
 - Entropy range: 0.0–8.0 bits/byte; Low < 4.5, Medium 4.5–6.8, High > 6.8.
 
-#### Manual Carve Sub-tab
+#### Manual Carve
 
-The Manual Carve sub-tab merges the hex-grid byte cursor and a manual file-carve workflow into a single panel.
+Manual carve merges the hex-grid byte cursor and a manual file-carve workflow into a single panel.
 
 - Click any byte in the hex grid to place a cursor; click a second byte to define the start/end of a manual carve range.
 - Picked byte ranges can be exported as a binary file (MIME-aware extension) or fed back into the Conversions input.

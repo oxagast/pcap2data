@@ -20208,7 +20208,7 @@ function getSummaryExportBaseName() {
     const sanitized = sanitizeFileNameForExport(withoutExt);
     if (sanitized) return sanitized;
   }
-  return "packetsnitch-summary";
+  return "summary";
 }
 
 function resizeAndCompressImageToJpegBase64(
@@ -20361,7 +20361,7 @@ async function saveSummaryFromContextMenu(format = "markdown") {
   if (normalizedFormat === "text") {
     exportText = convertSummaryMarkdownToPlainText(summaryMarkdown);
     title = "Export Summary (Text)";
-    defaultName = `${summaryBaseName}-${summaryTimestamp}.txt`;
+    defaultName = `packetsnitch-${summaryBaseName}-${summaryTimestamp}.txt`;
     defaultExtension = "txt";
     filters = [
       { name: "Text Files", extensions: ["txt"] },
@@ -20426,7 +20426,7 @@ ${bodyHtml}
 </body>
 </html>`;
     title = "Export Summary (HTML)";
-    defaultName = `${summaryBaseName}-${summaryTimestamp}.html`;
+    defaultName = `packetsnitch-${summaryBaseName}-${summaryTimestamp}.html`;
     defaultExtension = "html";
     filters = [
       { name: "HTML Files", extensions: ["html", "htm"] },
@@ -20436,7 +20436,7 @@ ${bodyHtml}
   } else {
     exportText = summaryMarkdown;
     title = "Export Summary (Markdown)";
-    defaultName = `${summaryBaseName}-${summaryTimestamp}.md`;
+    defaultName = `packetsnitch-${summaryBaseName}-${summaryTimestamp}.md`;
     defaultExtension = "md";
     filters = [
       { name: "Markdown Files", extensions: ["md"] },
