@@ -4,6 +4,8 @@
 //   - getImageTypeFromExifReader: asks ExifReader what format these bytes are.
 //     Returns a decoder key or null if ExifReader cannot identify them.
 
+const ExifReader = require("exifreader");
+
 const EXIF_FILE_TYPE_TO_PROTO = {
     jpg: "jpeg",
     jpeg: "jpeg",

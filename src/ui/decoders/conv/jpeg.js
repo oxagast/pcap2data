@@ -1,7 +1,7 @@
 // JPEG Conv decoder: extracts EXIF metadata via ExifReader and renders the
 // JPEG bytes as an inline data URL for the panel's image preview.
 
-const { getImageTypeFromExifReader } = require("./exif-helpers");
+const ExifReader = require("exifreader");
 
 const MIME = "image/jpeg";
 const PROTOCOL_LABEL = "JPEG";
@@ -29,7 +29,6 @@ function loadExifFields(bytes) {
 }
 
 function decodeJpegFromBytes(bytes) {
-    void getImageTypeFromExifReader;
     return {
         protocol: PROTOCOL_LABEL,
         fields: loadExifFields(bytes),

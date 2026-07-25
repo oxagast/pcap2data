@@ -1,6 +1,8 @@
 // WebP Conv decoder: extracts EXIF metadata via ExifReader and renders the
 // WebP bytes as an inline data URL for the panel's image preview.
 
+const ExifReader = require("exifreader");
+
 const MIME = "image/webp";
 const PROTOCOL_LABEL = "WebP";
 
