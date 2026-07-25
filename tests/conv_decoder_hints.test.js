@@ -164,6 +164,7 @@ function loadHintFunctions(filePath) {
         "getPacketProtocolDecoderHint",
         "autoDetectProtoFromBytes",
     ];
+<<<<<<< HEAD
     // The function bodies reference PROTOCOL_DECODER_HINTS, PORT_DECODER_HINTS,
     // and MIME_TO_PROTO. After the Conv decoders refactor, those are now
     // re-export aliases in data-tools-panel.js (loading from
@@ -222,6 +223,14 @@ function loadHintFunctions(filePath) {
         ...constantsSource,
         ...functionNames.map((functionName) =>
             extractFunctionSource(functionSourceText, functionName),
+=======
+    const extractedSource = [
+        extractConstantSource(sourceText, "PROTOCOL_DECODER_HINTS"),
+        extractConstantSource(sourceText, "PORT_DECODER_HINTS"),
+        extractConstantSource(sourceText, "MIME_TO_PROTO"),
+        ...functionNames.map((functionName) =>
+            extractFunctionSource(sourceText, functionName),
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
         ),
     ].join("\n\n");
 
@@ -234,7 +243,10 @@ function loadHintFunctions(filePath) {
         getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
+<<<<<<< HEAD
         decodeHtmlFromBytes: alwaysNull,
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
         decodeBsonFromBytes: alwaysNull,
         decodeMessagePackFromBytes: alwaysNull,
         decodeProtobufFromBytes: alwaysNull,
@@ -245,9 +257,12 @@ function loadHintFunctions(filePath) {
         decodeSmppFromBytes: alwaysNull,
         decodeSoulseekFromBytes: alwaysNull,
         decodeBittorrentFromBytes: alwaysNull,
+<<<<<<< HEAD
         PROTOCOL_DECODER_HINTS: hintModule.PROTOCOL_DECODER_HINTS,
         PORT_DECODER_HINTS: hintModule.PORT_DECODER_HINTS,
         MIME_TO_PROTO: mimeModule.MIME_TO_PROTO,
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

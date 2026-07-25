@@ -107,6 +107,7 @@ function extractFunctionSource(sourceText, functionName) {
 
 function loadDecoderFunctions(filePath) {
     const sourceText = fs.readFileSync(filePath, 'utf8');
+<<<<<<< HEAD
     // decodeSmbFromBytes and the SMB helpers now live under
     // src/ui/decoders/conv/ (refactor: moved out of data-tools-panel.js).
     // The same is true for the pure orchestrator helper
@@ -126,6 +127,20 @@ function loadDecoderFunctions(filePath) {
         );
         extractedSource = extractFunctionSource(autoDetectSource, 'autoDetectProtoFromBytes');
     }
+=======
+    const functionNames = [
+        'normalizeSmbDecoderBytes',
+        'findBytesSubsequence',
+        'parseSmbNtlmSecurityBuffer',
+        'decodeSmbTextBytes',
+        'bytesToHexLower',
+        'decodeSmbFromBytes',
+        'autoDetectProtoFromBytes',
+    ];
+    const extractedSource = functionNames
+        .map((functionName) => extractFunctionSource(sourceText, functionName))
+        .join('\n\n');
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     const alwaysNull = () => null;
     const context = {
         Uint8Array,
@@ -133,6 +148,7 @@ function loadDecoderFunctions(filePath) {
         TextDecoder,
         Buffer,
         getImageTypeFromExifReader: alwaysNull,
+<<<<<<< HEAD
         decodeHtmlFromBytes: alwaysNull,
         normalizeSmbDecoderBytes: convDecoders.normalizeSmbDecoderBytes,
         findBytesSubsequence: convDecoders.findBytesSubsequence,
@@ -141,6 +157,8 @@ function loadDecoderFunctions(filePath) {
         bytesToHexLower: convDecoders.bytesToHexLower,
         decodeSmbFromBytes: convDecoders.decodeSmbFromBytes,
         autoDetectProtoFromBytes: convDecoders.autoDetectProtoFromBytes,
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);

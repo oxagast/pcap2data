@@ -12774,7 +12774,11 @@ function createDataTreeNode(label, value, depth = 0) {
 
 function renderStructuredDecoderTree(protoOutput, result) {
   if (!protoOutput || !result || !result.treeData) return false;
+<<<<<<< HEAD
   const treeFormats = new Set(["JSON", "XML", "HTML", "YAML"]);
+=======
+  const treeFormats = new Set(["JSON", "XML", "YAML"]);
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
   if (!treeFormats.has(result.protocol)) return false;
 
   const wrapper = document.createElement("div");
@@ -12854,6 +12858,7 @@ function decodeXmlFromBytes(bytes) {
   }
 }
 
+<<<<<<< HEAD
 function decodeHtmlFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
   const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes).trim();
@@ -12929,6 +12934,8 @@ function decodeHtmlFromBytes(bytes) {
   }
 }
 
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
 function decodeYamlFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
   const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -13686,8 +13693,11 @@ const MIME_TO_PROTO = {
   "gif": "gif",
   "image/webp": "webp",
   "webp": "webp",
+<<<<<<< HEAD
   "text/html": "html",
   "html": "html",
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
 };
 
 const PORT_DECODER_HINTS = new Map([
@@ -13873,7 +13883,10 @@ function autoDetectProtoFromBytes(bytes, options) {
     return "json";
   }
   if (trimmedText.startsWith("<") && decodeXmlFromBytes(bytes)) return "xml";
+<<<<<<< HEAD
   if (decodeHtmlFromBytes(bytes)) return "html";
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
   if (decodeBsonFromBytes(bytes)) return "bson";
   if (decodeMessagePackFromBytes(bytes)) return "msgpack";
   if (decodeProtobufFromBytes(bytes)) return "protobuf";
@@ -14021,9 +14034,12 @@ function runProtoDecoder(bytes) {
     case "xml":
       result = decodeXmlFromBytes(decodeBytes);
       break;
+<<<<<<< HEAD
     case "html":
       result = decodeHtmlFromBytes(decodeBytes);
       break;
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     case "yaml":
       result = decodeYamlFromBytes(decodeBytes);
       break;

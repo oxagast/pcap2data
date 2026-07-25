@@ -107,6 +107,7 @@ function extractFunctionSource(sourceText, functionName) {
 
 function loadSipDecoderFunctions(filePath) {
     const sourceText = fs.readFileSync(filePath, 'utf8');
+<<<<<<< HEAD
     // decodeSipFromBytes now lives under src/ui/decoders/conv/ (refactor:
     // moved out of data-tools-panel.js). The same is true for the pure
     // orchestrator helper autoDetectProtoFromBytes — it now lives under
@@ -122,6 +123,16 @@ function loadSipDecoderFunctions(filePath) {
         );
         extractedSource = extractFunctionSource(autoDetectSource, 'autoDetectProtoFromBytes');
     }
+=======
+    const functionNames = [
+        'normalizeSmbDecoderBytes',
+        'decodeSipFromBytes',
+        'autoDetectProtoFromBytes',
+    ];
+    const extractedSource = functionNames
+        .map((functionName) => extractFunctionSource(sourceText, functionName))
+        .join('\n\n');
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
 
     const alwaysNull = () => null;
     const context = {
@@ -131,7 +142,10 @@ function loadSipDecoderFunctions(filePath) {
         getImageTypeFromExifReader: alwaysNull,
         decodeJsonFromBytes: alwaysNull,
         decodeXmlFromBytes: alwaysNull,
+<<<<<<< HEAD
         decodeHtmlFromBytes: alwaysNull,
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
         decodeBsonFromBytes: alwaysNull,
         decodeMessagePackFromBytes: alwaysNull,
         decodeProtobufFromBytes: alwaysNull,
@@ -139,9 +153,12 @@ function loadSipDecoderFunctions(filePath) {
         decodeDerFromBytes: alwaysNull,
         decodeYamlFromBytes: alwaysNull,
         decodeLdapFromBytes: alwaysNull,
+<<<<<<< HEAD
         normalizeSmbDecoderBytes: convDecoders.normalizeSmbDecoderBytes,
         decodeSipFromBytes: convDecoders.decodeSipFromBytes,
         autoDetectProtoFromBytes: convDecoders.autoDetectProtoFromBytes,
+=======
+>>>>>>> 5862f29a91399490b9ba99449b672af01a186670
     };
     vm.createContext(context);
     vm.runInContext(extractedSource, context);
