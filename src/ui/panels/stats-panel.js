@@ -1098,15 +1098,47 @@ function renderStatsHeatmapPoints(pointsMountEl, points, width, height, themeRgb
   pointsMountEl.appendChild(fragment);
 }
 
-// Returns packet payload length.
+// Returns packet payload length with hex-derived fallback.
 function getPacketPayloadLength(packetInfo) {
-  const payloadLength = Number(
+  const payloadLengthRaw = Number(
     packetInfo?.["raw.data"]?.["payload.len"] ??
     packetInfo?.["Raw data"]?.["payload.len"] ??
     packetInfo?.["Raw data"]?.["Payload Length"]
   );
-  if (!Number.isFinite(payloadLength) || payloadLength <= 0) return 0;
-  return payloadLength;
+  if (Number.isFinite(payloadLengthRaw) && payloadLengthRaw > 0) {
+    return Math.floor(payloadLengthRaw);
+  }
+
+  const payloadHex = getPacketInfoPayloadHex(packetInfo);
+  if (payloadHex) {
+    return Math.floor(payloadHex.replace(/\s+/g, "").length / 2);
+  }
+
+  return 0;
+}
+
+// Returns packet.info payload hex across supported schema variants.
+function getPacketInfoPayloadHex(packetInfo) {
+  const candidates = [
+    packetInfo?.["raw.data"]?.["payload"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload"]?.["hex.encoded"],
+    packetInfo?.["raw.data"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["Payload"]?.["payload.hex"],
+    packetInfo?.["raw.data"]?.["payload.hex.encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["Hex Encoded"],
+    packetInfo?.["Raw data"]?.["Payload"]?.["hex.encoded"],
+    packetInfo?.["Raw data"]?.["payload.hex"],
+    packetInfo?.["Raw data"]?.["payload.hex.encoded"],
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+
+  return "";
 }
 
 // Returns capture packet list.
@@ -3277,7 +3309,8 @@ function makeStatsSection({
 // Handles total traffic bytes.
 function totalTrafficBytes(capturedPackets) {
   let totalBytes = 0;
-  for (const host of Object.keys(capturedPackets["host"] || {})) {
+  if (!capturedPackets || !capturedPackets["host"]) return totalBytes;
+  for (const host of Object.keys(capturedPackets["host"])) {
     const packets = capturedPackets["host"][host];
     if (!Array.isArray(packets)) continue;
 
@@ -3285,9 +3318,8 @@ function totalTrafficBytes(capturedPackets) {
       const pi = pkt?.["packet.info"];
       if (!pi) continue;
 
-      const rawData = pi?.["raw.data"] ?? pi?.["Raw data"];
-      const payloadLength = Number(rawData?.["payload.len"] ?? rawData?.["Payload Length"]);
-      if (Number.isFinite(payloadLength) && payloadLength > 0) {
+      const payloadLength = getPacketPayloadLength(pi);
+      if (payloadLength > 0) {
         totalBytes += payloadLength;
       }
     }
