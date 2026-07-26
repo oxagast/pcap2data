@@ -297,9 +297,9 @@
        release version text and the page below it stay in place
        regardless of when the GitHub API responds. */
     #downloads {
-        height: 50px;
-        min-height: 50px;
-        max-height: 50px;
+        height: 60px;
+        min-height: 60px;
+        max-height: 60px;
         overflow: hidden;
         text-align: center;
         margin-top: 1rem;
@@ -314,9 +314,9 @@
        other: the "Latest Release" line and the download row
        each occupy their own reserved vertical space. */
     #download-links {
-        height: 50px;
-        min-height: 50px;
-        max-height: 50px;
+        height: 60px;
+        min-height: 60px;
+        max-height: 60px;
         overflow: hidden;
         text-align: center;
         margin-top: 0;
@@ -535,6 +535,7 @@
                 const repo = "PacketSnitch";
 
                 const releaseContainer = document.getElementById("downloads");
+                releaseContainer.textContent = "Loading latest release...";
                 const linksContainer = document.getElementById("download-links");
 
                 try {
