@@ -17796,11 +17796,34 @@ function writeSummaryFromLLM() {
     // add the current packet key to the set of already summarized packets
     alreadySummarizedPacketKeys.add(contextPacket?.__packetKey);
     writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
+    // Build the capture-level overview that will be woven into the prompt
+    // *initially* (at the top) so the LLM has the full pcap picture before
+    // answering about this specific stream. This ensures the per-stream
+    // summary can reference the overall traffic shape, top talkers, protocol
+    // distribution, and other capture-wide facts.
+    const captureOverviewParts = [];
     const statsContextMarkdown = buildStatsMarkdownSection();
-    const statsContextBlock = statsContextMarkdown
-      ? `\n\nFor context, here is the current capture-level statistics summary (weave any of these facts that are relevant to this stream into your answer so the analyst has a complete view of the pcap):\n\n${statsContextMarkdown}\n`
+    if (statsContextMarkdown) {
+      captureOverviewParts.push(
+        `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your answer so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, masked credentials, etc.).\n\n${statsContextMarkdown}`,
+      );
+    }
+    const keystoreSummary =
+      typeof getLatestKeystoreSummary === "function"
+        ? getLatestKeystoreSummary()
+        : null;
+    if (keystoreSummary && keystoreSummary.text) {
+      const timestampLine = keystoreSummary.timestamp
+        ? ` (generated ${keystoreSummary.timestamp})`
+        : "";
+      captureOverviewParts.push(
+        `## Keychain Overview (from the Keystore panel)${timestampLine}\n\nThe following is the latest LLM-generated review of the active keystore entries. Surface any noteworthy credential patterns, sources, or categories that are relevant to this stream.\n\n${keystoreSummary.text}`,
+      );
+    }
+    const captureOverviewBlock = captureOverviewParts.length
+      ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.${statsContextBlock}  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -17892,18 +17915,44 @@ async function runAnalysisCompaction() {
 
   // Build prompt from the target entry's existing summary plus the new blurbs.
   const previousCompacted = (targetEntry.summary || "").trim();
-  let contextIntro = "";
-  if (previousCompacted) {
-    contextIntro = `The following is the previously compacted summary of earlier analysis for this context. Preserve and merge its important facts into the new compacted summary. Do not remove key data points; only add new information or refine existing details. Keep the result detailed and reference-quality.\n\n${previousCompacted}\n\n---\n\n`;
-  }
   const chronologicalBlurbs = blurbs
     .map((blurb, idx) => `ANALYSIS ENTRY ${idx + 1}:\n${blurb}`)
     .join("\n\n---\n\n");
+
+  // Build the capture-level overview that will be woven into the recompaction
+  // input *initially* (at the top of the prompt) so the LLM has the full
+  // pcap picture before merging the new blurbs. The Stats panel data and
+  // (if available) the keystore summary provide the context that the
+  // per-stream blurbs alone cannot give the model.
+  const captureOverviewParts = [];
   const statsContextMarkdown = buildStatsMarkdownSection();
-  const statsContextSection = statsContextMarkdown
-    ? `\n\n---\n\nThe following is the current capture-level statistics summary (weave any of these facts that are relevant into your compacted summary so the analyst has a complete view of the pcap):\n\n${statsContextMarkdown}`
+  if (statsContextMarkdown) {
+    captureOverviewParts.push(
+      `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your compacted summary so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, masked credentials, etc.).\n\n${statsContextMarkdown}`,
+    );
+  }
+  const keystoreSummary =
+    typeof getLatestKeystoreSummary === "function"
+      ? getLatestKeystoreSummary()
+      : null;
+  if (keystoreSummary && keystoreSummary.text) {
+    const timestampLine = keystoreSummary.timestamp
+      ? ` (generated ${keystoreSummary.timestamp})`
+      : "";
+    captureOverviewParts.push(
+      `## Keychain Overview (from the Keystore panel)${timestampLine}\n\nThe following is the latest LLM-generated review of the active keystore entries. Surface any noteworthy credential patterns, sources, or categories that are relevant to the analysis.\n\n${keystoreSummary.text}`,
+    );
+  }
+  const captureOverview = captureOverviewParts.length
+    ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
     : "";
-  const combinedInput = `${contextIntro}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
+
+  const previousCompactedBlock = previousCompacted
+    ? `The following is the previously compacted summary of earlier analysis for this context. Preserve and merge its important facts into the new compacted summary. Do not remove key data points; only add new information or refine existing details. Keep the result detailed and reference-quality.\n\n${previousCompacted}\n\n---\n\n`
+    : "";
+
+  const combinedInput = `${captureOverview}${previousCompactedBlock}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
+- Treats the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into the output so the compacted summary covers both the LLM blurbs AND the capture-level picture.
 - Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
 - Preserves the chronological order of significant events where it matters.
 - Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
@@ -17911,7 +17960,7 @@ async function runAnalysisCompaction() {
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
 - Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
 
-${chronologicalBlurbs}${statsContextSection}`;
+${chronologicalBlurbs}`;
 
   let prompt = `You are PacketSnitch, a network analysis assistant. ${buildMarkdownResponseInstruction()}\n\n${combinedInput}`;
   if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
@@ -18478,17 +18527,292 @@ async function buildSummaryBodyHtmlForHtmlExport(summaryMarkdown) {
   return sectionParts.join('\n<hr class="summary-section-divider">\n');
 }
 
+// Returns the minimum summary length (in characters) before the export-time
+// LLM distillation pass is even attempted. Reports shorter than this are
+// already concise enough that running the LLM over them would be wasteful.
+const SUMMARY_DISTILL_MIN_LENGTH = 400;
+
+// Returns the maximum number of characters of the source report that are
+// fed into the export-time LLM distillation prompt. Anything beyond this is
+// truncated from the tail to keep the prompt under the LLM context cap.
+const SUMMARY_DISTILL_INPUT_MAX_CHARS = 60000;
+
+// Returns the maximum number of characters of the LLM response that the
+// distiller will keep. The truncated tail is dropped (with a marker) so
+// runaway LLM output does not bloat the exported file.
+const SUMMARY_DISTILL_OUTPUT_MAX_CHARS = 60000;
+
+// Builds the prompt that asks the LLM to distil the final exported report.
+// The LLM is told to:
+//   1. Minimise repeated/redundant information across all sections.
+//   2. Sort the entire report chronologically, anchoring each entry by the
+//      earliest signal in the source data (protocol timestamp, packet index,
+//      or session order).
+//   3. Inside every main section, list the most security-relevant items
+//      first so the analyst can see what stands out at a glance.
+//   4. Keep the capture-level Stats section intact (it's the high-level
+//      picture) but trim the LLM blurbs so they don't repeat it.
+//   5. Return valid Markdown so downstream text/HTML export still works.
+function buildSummaryDistillPrompt(reportMarkdown) {
+  return [
+    "You are PacketSnitch, a network forensics assistant.",
+    "You are about to receive the full export report for a captured pcap.",
+    "Your job is to produce the FINAL, distilled version of this report that the analyst will save to disk and read later.",
+    "It is critical that you do not invent any facts — only reorganise and condense what is already present in the source report.",
+    "",
+    "Distillation rules — apply ALL of them:",
+    "1. DEDUPLICATE: if the same fact, IP, port, credential, or finding appears more than once across any section, keep it ONCE in the most appropriate section. The Capture Statistics section often restates things the LLM blurbs also mention — make sure those facts live in only one place.",
+    "2. CHRONOLOGICAL ORDER: re-sort the ENTIRE report in chronological order, using timestamps from the source data, packet indices, or session order as the anchor. When an event has no explicit timestamp, fall back to its position in the source. The Capture Statistics section stays at the top as the high-level overview, but everything below it should be in chronological order.",
+    "3. SECTION HIGHLIGHTS: inside every main section, list the items that stand out as most important (security-relevant, anomalous, credential-bearing, or otherwise noteworthy) FIRST. Lesser findings follow.",
+    "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, masked credential values, etc.). Drop only redundant or low-value observations.",
+    "5. STRUCTURE: keep valid Markdown headings, lists, and tables. Do not switch to HTML. Do not wrap the entire response in a single code fence.",
+    "6. LENGTH: aim for a more compact report than the input. If the source is already concise, return it largely unchanged.",
+    "",
+    "Here is the source report to distil:",
+    "",
+    "<<<SOURCE_REPORT_START>>>",
+    reportMarkdown,
+    "<<<SOURCE_REPORT_END>>>",
+    "",
+    "Now return the distilled report as Markdown. No preamble, no explanation, no closing remarks — just the report itself.",
+  ].join("\n");
+}
+
+// Reasons the distiller may skip the LLM pass. Returned alongside the
+// (unchanged) input so the caller can surface a meaningful status update.
+const SUMMARY_DISTILL_SKIP_EMPTY = "empty";
+const SUMMARY_DISTILL_SKIP_TOO_SHORT = "too_short";
+const SUMMARY_DISTILL_SKIP_RUNTIME_DISABLED = "runtime_disabled";
+const SUMMARY_DISTILL_SKIP_SETTINGS_DISABLED = "settings_disabled";
+const SUMMARY_DISTILL_SKIP_PROMPT_TOO_LONG = "prompt_too_long";
+const SUMMARY_DISTILL_SKIP_LLM_EMPTY = "llm_empty";
+const SUMMARY_DISTILL_OK = "ok";
+const SUMMARY_DISTILL_ERROR = "error";
+
+// Distils the final export report through the LLM. This is a single-pass
+// dedupe / chronological-sort / re-rank operation that runs after the LLM
+// has already produced the per-stream and compaction summaries and after
+// the Stats panel data has been appended. Returns an object describing
+// the outcome so the caller can surface a useful status message:
+//   { status: <reason>, text: <distilled-or-original markdown>, reason?: <string> }
+// The `text` field is always a non-empty string the caller can use as the
+// final export content (either the LLM's distilled report or the original
+// input if the distiller was skipped or failed).
+async function distillSummaryMarkdownWithLLM(summaryMarkdown) {
+  const reportResult = (text, status, reason) => ({
+    text,
+    status,
+    ...(reason ? { reason } : {}),
+  });
+  if (!summaryMarkdown || typeof summaryMarkdown !== "string") {
+    return reportResult(summaryMarkdown, SUMMARY_DISTILL_SKIP_EMPTY);
+  }
+  const trimmed = summaryMarkdown.trim();
+  if (trimmed.length < SUMMARY_DISTILL_MIN_LENGTH) {
+    const reason = `report length ${trimmed.length} below threshold ${SUMMARY_DISTILL_MIN_LENGTH}`;
+    writeLogEntry(`Summary distill skipped: ${reason}`);
+    return reportResult(
+      summaryMarkdown,
+      SUMMARY_DISTILL_SKIP_TOO_SHORT,
+      reason,
+    );
+  }
+  if (typeof isLlmRuntimeEnabled === "function" && !isLlmRuntimeEnabled()) {
+    const reason = "isLlmRuntimeEnabled() returned false";
+    writeLogEntry(`Summary distill skipped: ${reason}`);
+    return reportResult(
+      summaryMarkdown,
+      SUMMARY_DISTILL_SKIP_RUNTIME_DISABLED,
+      reason,
+    );
+  }
+  if (
+    typeof isLlmEnabledInSettings === "function" &&
+    !isLlmEnabledInSettings()
+  ) {
+    const reason = "LLM is not enabled in settings";
+    writeLogEntry(`Summary distill skipped: ${reason}`);
+    return reportResult(
+      summaryMarkdown,
+      SUMMARY_DISTILL_SKIP_SETTINGS_DISABLED,
+      reason,
+    );
+  }
+  let truncatedInput = trimmed;
+  if (truncatedInput.length > SUMMARY_DISTILL_INPUT_MAX_CHARS) {
+    truncatedInput =
+      truncatedInput.slice(0, SUMMARY_DISTILL_INPUT_MAX_CHARS) +
+      "\n\n[INPUT TRUNCATED: source report too long for distillation prompt]";
+  }
+  const prompt = buildSummaryDistillPrompt(truncatedInput);
+  if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    const reason = `prompt length ${prompt.length} exceeds LLM_MAX_CONTENT_LENGTH ${LLM_MAX_CONTENT_LENGTH}`;
+    writeLogEntry(`Summary distill skipped: ${reason}`);
+    return reportResult(
+      summaryMarkdown,
+      SUMMARY_DISTILL_SKIP_PROMPT_TOO_LONG,
+      reason,
+    );
+  }
+  writeLogEntry(
+    `Summary distill: invoking LLM with prompt length ${prompt.length} chars for report of ${trimmed.length} chars`,
+  );
+  try {
+    const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+    const distilled = String(llmResponse?.response || "").trim();
+    if (!distilled) {
+      const reason = "LLM returned an empty response";
+      writeLogEntry(`Summary distill skipped: ${reason}`);
+      return reportResult(
+        summaryMarkdown,
+        SUMMARY_DISTILL_SKIP_LLM_EMPTY,
+        reason,
+      );
+    }
+    let finalDistilled = distilled;
+    if (finalDistilled.length > SUMMARY_DISTILL_OUTPUT_MAX_CHARS) {
+      finalDistilled =
+        finalDistilled.slice(0, SUMMARY_DISTILL_OUTPUT_MAX_CHARS) +
+        "\n\n[OUTPUT TRUNCATED: distilled report exceeded output cap]";
+    }
+    writeLogEntry(
+      `Summary distill completed: input=${trimmed.length} chars output=${finalDistilled.length} chars`,
+    );
+    return reportResult(finalDistilled, SUMMARY_DISTILL_OK);
+  } catch (error) {
+    const reason = error?.message || String(error);
+    writeLogEntry(`Summary distill failed: ${reason}`);
+    return reportResult(
+      summaryMarkdown,
+      SUMMARY_DISTILL_ERROR,
+      reason,
+    );
+  }
+}
+
+// Signature used to mark distilled summaries in `compactedAnalysisSummaries`.
+// The presence of this prefix lets the export code identify and replace
+// previous distilled entries so a subsequent export doesn't keep stacking
+// distilled versions on top of older distilled versions.
+const SUMMARY_DISTILL_ENTRY_SIGNATURE = "__distilled__";
+
+// Pushes the distilled report into the running Summary tab so the analyst
+// can see the cleaned-up version of their pcap analysis in the UI before
+// (or after) the file is saved. The distilled entry replaces any prior
+// distilled entry so repeated exports don't keep stacking distilled
+// versions. Non-distilled context-scoped entries are kept untouched.
+function pushDistilledSummaryIntoSummaryTab(distilledText) {
+  if (
+    !distilledText ||
+    typeof distilledText !== "string" ||
+    !distilledText.trim()
+  ) {
+    return false;
+  }
+  if (!Array.isArray(compactedAnalysisSummaries)) {
+    compactedAnalysisSummaries = [];
+  }
+  // Drop any prior distilled entry — we only ever keep the most recent
+  // distilled snapshot in the running summary. Context-scoped entries
+  // (the ones produced by runAnalysisCompaction) are preserved so the
+  // analyst can still see how the LLM derived its findings.
+  compactedAnalysisSummaries = compactedAnalysisSummaries.filter(
+    (entry) =>
+      entry &&
+      typeof entry === "object" &&
+      entry.signature !== SUMMARY_DISTILL_ENTRY_SIGNATURE,
+  );
+  compactedAnalysisSummaries.push({
+    signature: SUMMARY_DISTILL_ENTRY_SIGNATURE,
+    summary: distilledText.trim(),
+    lastUpdatedAt: Date.now(),
+  });
+  try {
+    renderCombinedAnalysisSummary();
+  } catch (err) {
+    writeLogEntry(
+      `pushDistilledSummaryIntoSummaryTab: render failed: ${err?.message || err}`,
+    );
+  }
+  return true;
+}
+
 // Saves summary output from context menu.
 async function saveSummaryFromContextMenu(format = "markdown") {
   const normalizedFormat =
     format === "text" ? "text" : format === "html" ? "html" : "markdown";
-  const summaryMarkdown = getSummaryMarkdownForExport();
+  const rawSummaryMarkdown = getSummaryMarkdownForExport();
   const summaryBaseName = getSummaryExportBaseName();
   const summaryTimestamp = formatDateTimeForFileName(new Date());
   hideConvertContextMenu();
-  if (!summaryMarkdown.trim()) {
+  if (!rawSummaryMarkdown.trim()) {
     statusUpdate("Status: No summary available to export");
     return;
+  }
+
+  // Run one more LLM pass over the entire assembled report to dedupe,
+  // sort chronologically, and re-rank items by importance. The save dialog
+  // is only opened AFTER the LLM returns so the file the user sees in the
+  // dialog is the distilled version. If the LLM is disabled, fails, or
+  // the report is too short to warrant a pass, the distiller returns the
+  // original markdown unchanged.
+  const canDistill =
+    typeof isLlmRuntimeEnabled === "function"
+      ? isLlmRuntimeEnabled()
+      : false;
+  let summaryMarkdown = rawSummaryMarkdown;
+  if (canDistill) {
+    statusUpdate("Status: Distilling export report via LLM...");
+  }
+  let distillOutcome = {
+    text: rawSummaryMarkdown,
+    status: SUMMARY_DISTILL_SKIP_EMPTY,
+  };
+  try {
+    distillOutcome = await distillSummaryMarkdownWithLLM(rawSummaryMarkdown);
+  } catch (error) {
+    // Defensive fallback: if the distiller itself throws (e.g. an
+    // unexpected runtime error), fall back to the un-distilled report so
+    // the user can still save their work.
+    writeLogEntry(
+      `Summary distill threw, using original report: ${error?.message || error}`,
+    );
+    distillOutcome = {
+      text: rawSummaryMarkdown,
+      status: SUMMARY_DISTILL_ERROR,
+      reason: error?.message || String(error),
+    };
+  }
+  summaryMarkdown = distillOutcome.text;
+  // If the distiller produced a real distilled report, push it into the
+  // Summary tab so the analyst can see the cleaned-up version in the UI
+  // before the file is saved. We then re-pull the export markdown from
+  // the Summary tab so the save dialog matches what the user just saw
+  // on screen (this also makes the Stats section show the most recent
+  // captured-packets view, in case anything has changed since the
+  // initial pull).
+  if (distillOutcome.status === SUMMARY_DISTILL_OK) {
+    const pushed = pushDistilledSummaryIntoSummaryTab(summaryMarkdown);
+    if (pushed) {
+      summaryMarkdown = getSummaryMarkdownForExport();
+    }
+  }
+  // Surface a clear status message so the user knows whether the LLM
+  // actually distilled the report or whether the export is the raw
+  // summary. Silent fallbacks were confusing in practice.
+  if (distillOutcome.status === SUMMARY_DISTILL_OK) {
+    const inputChars = rawSummaryMarkdown.trim().length;
+    const outputChars = summaryMarkdown.trim().length;
+    const delta = inputChars - outputChars;
+    const deltaLabel = delta > 0 ? `−${delta}` : `+${Math.abs(delta)}`;
+    statusUpdate(
+      `Status: LLM distilled report (${inputChars} → ${outputChars} chars, ${deltaLabel}). Summary tab updated.`,
+    );
+  } else if (canDistill) {
+    // LLM runtime is enabled but the distiller returned the original —
+    // tell the user why so they know it wasn't actually distilled.
+    const reason = distillOutcome.reason || distillOutcome.status;
+    statusUpdate(`Status: Export not distilled (${reason}).`);
   }
 
   let exportText;
