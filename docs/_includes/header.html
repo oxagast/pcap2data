@@ -241,16 +241,24 @@
         font-display: swap;
     }
 
-    /* Fallback face for Quicksand: tuned so Verdana occupies roughly the
-       same horizontal/vertical space, eliminating visible layout shift on
-       font swap. Values approximate Quicksand's metrics relative to
-       Verdana's units-per-em. */
+    /* Fallback face for Quicksand: calibrated against Verdana so the
+       fallback occupies the same horizontal/vertical metrics as the
+       real Quicksand font. Values derived from the OS/2 Win metrics:
+
+         Quicksand: upm=1000, winAscent=1183, winDescent=303
+         Verdana:   upm=2048, winAscent=1855, winDescent=403
+
+       size-adjust: 134.8% (Verdana glyphs must be scaled up to match
+       Quicksand's narrower advance widths)
+       ascent-override: 87.8% (places the top of Verdana's em-box
+       where Quicksand's ink-top is)
+       descent-override: 22.5% (matches Quicksand's descender depth) */
     @font-face {
         font-family: 'Quicksand-Fallback';
         src: local('Verdana');
-        size-adjust: 112%;
-        ascent-override: 95%;
-        descent-override: 28%;
+        size-adjust: 134.8%;
+        ascent-override: 87.8%;
+        descent-override: 22.5%;
         line-gap-override: 0%;
     }
 
@@ -260,15 +268,24 @@
         font-display: swap;
     }
 
-    /* Fallback face for Geo: Geo is unusually wide and tall; calibate a
-       sans-serif fallback so download-link rows don't jump on swap. */
+    /* Fallback face for Geo: Geo's typo metrics are unusually large
+       relative to its upm, so a system Arial must be scaled up
+       significantly to match the line box.
+
+         Geo: upm=1024, sTypoAscender=819, sTypoDescender=205, sTypoLineGap=92
+         Arial: upm=2048, sTypoAscender=728, sTypoDescender=224
+
+       size-adjust: 215.1% (Geo is much wider/taller per-em than Arial)
+       ascent-override: 37.2%
+       descent-override: 9.3%
+       line-gap-override: 4.2% */
     @font-face {
         font-family: 'Geo-Fallback';
         src: local('Arial');
-        size-adjust: 118%;
-        ascent-override: 90%;
-        descent-override: 30%;
-        line-gap-override: 0%;
+        size-adjust: 215.1%;
+        ascent-override: 37.2%;
+        descent-override: 9.3%;
+        line-gap-override: 4.2%;
     }
 
     body {
@@ -401,6 +418,70 @@
     /* Right align the github link */
     .github-link {
         text-align: right;
+    }
+
+    /* -------------------------------------------------------------
+       Layout-shift prevention for images and iframes.
+
+       The theme reset sets `max-width: 100%` on images, but does NOT
+       preserve aspect-ratio when the parent is narrower than the
+       image's natural size. This causes the page to reflow when:
+         1. A remote image (logo GIF, GitHub-hosted WebP) finally
+            loads and the browser recalculates the image box.
+         2. The YouTube iframe swaps in for its 1000x562 default box.
+
+       The rules below reserve vertical space proportional to each
+       element's intrinsic width/height so the page never jumps.
+       ------------------------------------------------------------- */
+
+    /* Make every image and embedded media a block, scale to its
+       container, and keep aspect ratio using the width/height
+       attributes the markup already provides. */
+    img,
+    picture,
+    video,
+    embed,
+    object {
+        max-width: 100%;
+        height: auto;
+        display: block;
+    }
+
+    /* The header logo: explicit aspect ratio so the row reserves
+       360x60 of space before the GIF arrives from raw.githubusercontent.com. */
+    .header img {
+        width: 360px;
+        max-width: 100%;
+        aspect-ratio: 360 / 60;
+        height: auto;
+        margin: 0 auto;
+    }
+
+    /* The PacketSnitch preview screenshot is 1000x544; if the wrapper
+       is narrower than 1000px the browser scales it down, but we still
+       need to reserve 544/1000 = 0.544 of the width as height. */
+    .main-content img {
+        aspect-ratio: 1000 / 544;
+    }
+
+    /* YouTube embeds: 1000x562 default. Wrap in a 16:9 container via
+       aspect-ratio so the iframe never expands the page. */
+    iframe[src*="youtube.com"],
+    iframe[src*="youtube-nocookie.com"],
+    iframe[src*="vimeo.com"] {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        height: auto;
+    }
+
+    /* If the iframe carries explicit width/height attributes, let the
+       aspect-ratio fall back to the attribute ratio. Browsers will
+       honor width/height when aspect-ratio is not specified. */
+
+    /* Force the GitHub-themed YouTube placeholder thumbnail row to
+       not reflow when the iframe finishes loading. */
+    .main-content iframe {
+        max-width: 100%;
     }
 </style>
 
