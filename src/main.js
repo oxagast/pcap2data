@@ -814,6 +814,48 @@ async function shutdownBackendGracefullyForExit() {
   }
 }
 
+// Looks for a snitch HTTP backend that may already be running on the
+// configured port (e.g. left over from a previous GUI session) and tries to
+// shut it down gracefully, falling back to a forced kill if it won't
+// release the port. The user's configured backend mode (forceLegacySpawn,
+// host, port) is honored — the reclaim is a no-op for legacy-spawn mode.
+async function reclaimPreExistingBackendAtStartup() {
+  if (!backCommModule) {
+    return;
+  }
+  // Force-legacy mode runs a one-shot per-pcap spawn and does not use the
+  // long-lived HTTP service, so there is no persistent listener to reclaim.
+  if (appSettings?.backend?.forceLegacySpawn) {
+    return;
+  }
+  const reclaim = backCommModule.reclaimExistingBackendService;
+  if (typeof reclaim !== "function") {
+    return;
+  }
+  // Sync the bridge module's host/port to whatever the user has configured
+  // before probing so we reclaim the right port.
+  if (typeof backCommModule.applyBackendTransportOptions === "function") {
+    try {
+      backCommModule.applyBackendTransportOptions(appSettings?.backend || {});
+    } catch (error) {
+      console.warn("Failed to apply backend transport options before reclaim:", error);
+    }
+  }
+  try {
+    const result = await reclaim({
+      host: appSettings?.backend?.tcpHost,
+      port: appSettings?.backend?.tcpPort,
+    });
+    if (result?.detected) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] Startup backend reclaim action=${result.action} host=${result.host || "n/a"} port=${result.port || "n/a"}`,
+      );
+    }
+  } catch (error) {
+    console.warn("Startup backend reclaim failed:", error);
+  }
+}
+
 function checkOllama() {
   return new Promise((resolve) => {
     if (!isOllamaClientModuleAvailable()) {
@@ -2609,6 +2651,12 @@ app.whenReady().then(() => {
     installExtractionHandlers();
     // start the process that listens for the file selection and runs the backend command
     backCommModule = require("./back-comm");
+    // Reclaim the configured HTTP backend port before any IPC traffic is
+    // exchanged. If a previous GUI session exited without cleanly shutting
+    // down its backend, the orphan is asked to stop gracefully and only
+    // force-killed as a last resort. This runs before the window's
+    // did-finish-load handler primes the backend for normal operation.
+    void reclaimPreExistingBackendAtStartup();
     ipcMain.handle("select-file", async () => {
       const { canceled, filePaths } = await dialog.showOpenDialog({
         properties: ["openFile"],

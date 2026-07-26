@@ -1,13 +1,14 @@
 // Talks to the backend service/process and normalizes capture-processing IPC flows.
 
 const { app, BrowserWindow, ipcMain } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 const http = require("http");
 const os = require("os");
 const platform = os.platform();
 const path = require("path");
 const fs = require("fs");
 const { promisify } = require("util");
+const execFileAsync = promisify(execFile);
 const zlib = require("zlib");
 const gunzipAsync = promisify(zlib.gunzip);
 const systemTempDir = os.tmpdir();
@@ -24,6 +25,12 @@ const BACKEND_HTTP_HOST = "127.0.0.1";
 const BACKEND_HTTP_PORT = 9020;
 const BACKEND_HTTP_READY_TIMEOUT_MS = 4000;
 const BACKEND_HTTP_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+// Startup reclaim: when the GUI launches, look for an already-running backend
+// on the configured HTTP port and try to shut it down gracefully before falling
+// back to a hard kill.
+const STARTUP_RECLAIM_GRACEFUL_TIMEOUT_MS = 5000;
+const STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS = 150;
+const STARTUP_RECLAIM_KILL_TIMEOUT_MS = 4000;
 const PACKETSNITCH_USER_AGENT =
   `Mozilla/5.0 (compatible; PacketSnitch/${app.getVersion()}; +http://packetsnitch.com)`;
 
@@ -310,6 +317,357 @@ async function requestBackendShutdown() {
     backendHttpShutdownExpected = false;
   }
   return result;
+}
+
+// ── Startup port reclaim ────────────────────────────────────────────────────
+// When the GUI starts up, look for an already-running snitch backend on the
+// configured HTTP port. If found, ask it to shut down gracefully via the
+// /control endpoint, then fall back to an OS-level kill if the port stays
+// bound. This protects against stale or orphaned backend processes left over
+// from a previous GUI session that exited without cleanup.
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function parseListeningPidsFromLsofOutput(stdout) {
+  if (typeof stdout !== "string" || !stdout.trim()) return [];
+  const pids = new Set();
+  const lines = stdout.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    // When lsof is invoked with `-t` the output is a bare list of PIDs,
+    // one per line. Otherwise the standard header row is "COMMAND PID ..."
+    // and PID is the second whitespace-separated column.
+    const headerLine = line.toLowerCase().startsWith("command") && /\bpid\b/.test(line.toLowerCase());
+    if (headerLine) continue;
+    const parts = line.split(/\s+/);
+    let pidCandidate = null;
+    if (parts.length === 1) {
+      pidCandidate = Number.parseInt(parts[0], 10);
+    } else if (parts.length >= 2) {
+      // Standard format: the PID column follows the COMMAND column.
+      pidCandidate = Number.parseInt(parts[1], 10);
+    }
+    if (Number.isInteger(pidCandidate) && pidCandidate > 0) {
+      pids.add(pidCandidate);
+    }
+  }
+  return Array.from(pids);
+}
+
+function parseListeningPidsFromNetstatOutput(stdout) {
+  if (typeof stdout !== "string" || !stdout.trim()) return [];
+  const pids = new Set();
+  const lines = stdout.split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/proto/i.test(line.split(/\s+/)[0] || "")) continue;
+    const tokens = line.split(/\s+/);
+    if (tokens.length < 4) continue;
+    // Look for the LISTENING state token and capture the PID (last column on
+    // Windows netstat -ano output, or one of the trailing columns on Linux).
+    let listeningIndex = -1;
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (/^listening$/i.test(tokens[index])) {
+        listeningIndex = index;
+        break;
+      }
+    }
+    if (listeningIndex < 0) continue;
+    for (let index = listeningIndex + 1; index < tokens.length; index += 1) {
+      const candidate = Number.parseInt(tokens[index], 10);
+      if (Number.isInteger(candidate) && candidate > 0) {
+        pids.add(candidate);
+        break;
+      }
+    }
+  }
+  return Array.from(pids);
+}
+
+async function findListeningProcessIdsForPort(port) {
+  const normalizedPort = Number.parseInt(String(port), 10);
+  if (!Number.isInteger(normalizedPort) || normalizedPort <= 0) return [];
+  if (platform === "win32") {
+    try {
+      const { stdout } = await execFileAsync("netstat", ["-ano", "-p", "TCP"], {
+        timeout: 3000,
+        windowsHide: true,
+        maxBuffer: 256 * 1024,
+      });
+      const lines = String(stdout || "").split(/\r?\n/);
+      const matches = [];
+      const portToken = `:${normalizedPort}`;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (!line.includes(portToken)) continue;
+        if (!/\bLISTENING\b/i.test(line)) continue;
+        const tokens = line.split(/\s+/);
+        const pid = Number.parseInt(tokens[tokens.length - 1], 10);
+        if (Number.isInteger(pid) && pid > 0) {
+          matches.push(pid);
+        }
+      }
+      return Array.from(new Set(matches));
+    } catch (error) {
+      global.logBackend?.(
+        "[Bridge] Unable to look up listening PIDs via netstat:",
+        error?.message || String(error),
+      );
+      return [];
+    }
+  }
+  // macOS ships lsof; Linux usually has lsof as well but fuser is a backup.
+  try {
+    const { stdout } = await execFileAsync("lsof", ["-nP", `-iTCP:${normalizedPort}`, "-sTCP:LISTEN", "-t"], {
+      timeout: 3000,
+      windowsHide: true,
+      maxBuffer: 64 * 1024,
+    });
+    return parseListeningPidsFromLsofOutput(String(stdout || ""));
+  } catch (lsofError) {
+    // Fall through to fuser for Linux systems without lsof.
+  }
+  if (platform === "linux") {
+    try {
+      const { stdout } = await execFileAsync("fuser", [`${normalizedPort}/tcp`], {
+        timeout: 3000,
+        windowsHide: true,
+        maxBuffer: 64 * 1024,
+      });
+      // fuser prints "<pid> <pid> ..." on stdout.
+      const tokens = String(stdout || "").split(/\s+/);
+      const pids = tokens
+        .map((token) => Number.parseInt(token, 10))
+        .filter((value) => Number.isInteger(value) && value > 0);
+      return Array.from(new Set(pids));
+    } catch (fuserError) {
+      global.logBackend?.(
+        "[Bridge] Unable to look up listening PIDs for port:",
+        normalizedPort,
+        fuserError?.message || String(fuserError),
+      );
+      return [];
+    }
+  }
+  return [];
+}
+
+async function killProcessById(pid) {
+  const numericPid = Number.parseInt(String(pid), 10);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return { killed: false, reason: "invalid-pid" };
+  }
+  if (numericPid === process.pid) {
+    return { killed: false, reason: "self" };
+  }
+  try {
+    if (platform === "win32") {
+      await execFileAsync("taskkill", ["/F", "/T", "/PID", String(numericPid)], {
+        timeout: 4000,
+        windowsHide: true,
+      });
+    } else {
+      process.kill(numericPid, "SIGTERM");
+    }
+    return { killed: true, signal: platform === "win32" ? "taskkill" : "SIGTERM" };
+  } catch (error) {
+    if (platform !== "win32" && (error?.code === "ESRCH" || /No such process/i.test(error?.message || ""))) {
+      return { killed: false, reason: "already-gone" };
+    }
+    if (platform === "win32" && /not found/i.test(error?.message || "")) {
+      return { killed: false, reason: "already-gone" };
+    }
+    return {
+      killed: false,
+      reason: "error",
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function forceKillProcessById(pid) {
+  const numericPid = Number.parseInt(String(pid), 10);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return { killed: false, reason: "invalid-pid" };
+  }
+  if (numericPid === process.pid) {
+    return { killed: false, reason: "self" };
+  }
+  try {
+    if (platform === "win32") {
+      await execFileAsync("taskkill", ["/F", "/T", "/PID", String(numericPid)], {
+        timeout: 4000,
+        windowsHide: true,
+      });
+    } else {
+      process.kill(numericPid, "SIGKILL");
+    }
+    return { killed: true, signal: platform === "win32" ? "taskkill" : "SIGKILL" };
+  } catch (error) {
+    if (error?.code === "ESRCH" || /No such process/i.test(error?.message || "")) {
+      return { killed: false, reason: "already-gone" };
+    }
+    return {
+      killed: false,
+      reason: "error",
+      error: error?.message || String(error),
+    };
+  }
+}
+
+async function waitForBackendPortFree(host, port, timeoutMs, pollIntervalMs) {
+  const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+  const interval = Math.max(50, Number(pollIntervalMs) || STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS);
+  while (Date.now() < deadline) {
+    const stillReady = await probeSnitchHttpBackendReady(host, port, 600);
+    if (!stillReady) {
+      return { released: true };
+    }
+    await sleepMs(interval);
+  }
+  return { released: false, reason: "timeout" };
+}
+
+async function reclaimExistingBackendService(options = {}) {
+  const source = options && typeof options === "object" ? options : {};
+  const host = typeof source.host === "string" && source.host.trim()
+    ? source.host.trim()
+    : currentBackendHttpHost;
+  const port = Number.parseInt(String(source.port ?? currentBackendHttpPort), 10);
+  if (!Number.isInteger(port) || port <= 0) {
+    return { detected: false, action: "skipped", reason: "invalid-port" };
+  }
+  const gracefulTimeoutMs = Number.isFinite(Number(source.gracefulTimeoutMs))
+    ? Number(source.gracefulTimeoutMs)
+    : STARTUP_RECLAIM_GRACEFUL_TIMEOUT_MS;
+  const killTimeoutMs = Number.isFinite(Number(source.killTimeoutMs))
+    ? Number(source.killTimeoutMs)
+    : STARTUP_RECLAIM_KILL_TIMEOUT_MS;
+
+  // The /ping probe only matches a real snitch-http service. If nothing is
+  // listening, or the port is held by something that isn't our backend,
+  // there's nothing to reclaim.
+  const detected = await probeSnitchHttpBackendReady(host, port, 800);
+  if (!detected) {
+    return { detected: false, action: "none", host, port };
+  }
+  global.logBackend?.(
+    `[Bridge] Startup reclaim: detected existing snitch HTTP backend on ${host}:${port}`,
+  );
+
+  // 1) Try graceful shutdown via the /control endpoint.
+  const shutdownResult = await sendBackendControlCommand("shutdown", Math.max(1500, Math.min(gracefulTimeoutMs, 4000)));
+  const shutdownAccepted = Boolean(shutdownResult?.success || shutdownResult?.noop);
+  if (!shutdownAccepted) {
+    global.logBackend?.(
+      "[Bridge] Startup reclaim: graceful shutdown was not accepted; proceeding to hard kill",
+      shutdownResult?.error || "",
+    );
+  }
+
+  // 2) Wait for the port to be released.
+  const release = await waitForBackendPortFree(
+    host,
+    port,
+    Math.max(500, gracefulTimeoutMs),
+    STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+  );
+  if (release.released) {
+    global.logBackend?.(
+      `[Bridge] Startup reclaim: existing backend on ${host}:${port} stopped gracefully`,
+    );
+    return {
+      detected: true,
+      action: shutdownAccepted ? "graceful-shutdown" : "graceful-shutdown-fallback",
+      host,
+      port,
+    };
+  }
+
+  // 3) Port still bound — fall back to OS-level kill of whatever process is
+  //    listening on the port. This handles orphans from a previous GUI crash
+  //    as well as the case where the graceful shutdown did not run cleanly.
+  const listeningPids = await findListeningProcessIdsForPort(port);
+  if (!listeningPids.length) {
+    global.logBackend?.(
+      `[Bridge] Startup reclaim: port ${port} still reports busy but no listening PID could be resolved; will rely on spawn-time re-probe`,
+    );
+    return {
+      detected: true,
+      action: "no-pid-found",
+      host,
+      port,
+      gracefulShutdownAccepted: shutdownAccepted,
+    };
+  }
+
+  global.logBackend?.(
+    `[Bridge] Startup reclaim: forcing kill of process(es) bound to ${host}:${port}: ${listeningPids.join(", ")}`,
+  );
+
+  const killResults = [];
+  for (const pid of listeningPids) {
+    const result = await killProcessById(pid);
+    killResults.push({ pid, ...result });
+  }
+
+  const recheck = await waitForBackendPortFree(
+    host,
+    port,
+    Math.max(500, killTimeoutMs),
+    STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+  );
+
+  // 4) If the port is STILL bound after SIGTERM, escalate to SIGKILL.
+  if (!recheck.released) {
+    for (const pid of listeningPids) {
+      const prior = killResults.find((entry) => entry.pid === pid);
+      if (prior && (prior.killed || prior.reason === "already-gone")) continue;
+      // eslint-disable-next-line no-await-in-loop
+      const escalated = await forceKillProcessById(pid);
+      killResults.push({ pid, ...escalated, escalated: true });
+    }
+    const finalRecheck = await waitForBackendPortFree(
+      host,
+      port,
+      Math.max(500, killTimeoutMs / 2),
+      STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+    );
+    if (!finalRecheck.released) {
+      global.logBackend?.(
+        `[Bridge] Startup reclaim: failed to free port ${host}:${port} after kill; subsequent spawn may report address-in-use`,
+      );
+    } else {
+      global.logBackend?.(
+        `[Bridge] Startup reclaim: forced kill cleared port ${host}:${port}`,
+      );
+    }
+    return {
+      detected: true,
+      action: "force-kill",
+      host,
+      port,
+      gracefulShutdownAccepted: shutdownAccepted,
+      killedPids: killResults,
+    };
+  }
+
+  global.logBackend?.(
+    `[Bridge] Startup reclaim: killed process(es) on ${host}:${port}; port is now free`,
+  );
+  return {
+    detected: true,
+    action: "kill",
+    host,
+    port,
+    gracefulShutdownAccepted: shutdownAccepted,
+    killedPids: killResults,
+  };
 }
 
 function probeSnitchHttpBackendReady(host = BACKEND_HTTP_HOST, port = BACKEND_HTTP_PORT, timeoutMs = 1200) {
@@ -2389,6 +2747,8 @@ module.exports = {
   shutdownHttpBackendService,
   ensureBackendHttpServerReady,
   primeBackendHttpServer,
+  applyBackendTransportOptions,
+  reclaimExistingBackendService,
   requestBackendStopProcessing,
   requestBackendShutdown,
   getBackendServiceDiagnostics,
