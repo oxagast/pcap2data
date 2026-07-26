@@ -234,11 +234,63 @@
 </style>
 
 <style>
+    /* 1. Define your custom web font */
+    @font-face {
+        font-family: 'RubikGlitch';
+        src: url('https://fonts.googleapis.com/css2?family=Anta&family=Dosis:wght@200..800&family=Rubik+Glitch&display=swap') format('woff2');
+        font-display: swap;
+    }
+
+    /* 2. Create a modified system fallback font face */
+    @font-face {
+        font-family: 'RubikGlitch-Fallback';
+        src: local('Arial');
+        /* Pulls the system font locally */
+        size-adjust: 95%;
+        /* Adjusts the fallback size to match the web font */
+        ascent-override: 90%;
+        descent-override: 20%;
+    }
+
+
+    @font-face {
+        font-family: 'Dosis';
+        src: url('https://fonts.googleapis.com/css2?family=Dosis:wght@200..800&display=swap') format('woff2');
+        font-display: swap;
+    }
+
+    @font-face {
+        font-family: 'Dosis-Fallback';
+        src: local('Arial');
+        /* Pulls the system font locally */
+        size-adjust: 95%;
+        /* Adjusts the fallback size to match the web font */
+        ascent-override: 90%;
+        descent-override: 20%;
+    }
+
+
+    @font-face {
+        font-family: 'Anta';
+        src: url('https://fonts.googleapis.com/css2?family=Anta&display=swap') format('woff2');
+        font-display: swap;
+    }
+
+    @font-face {
+        font-family: 'Anta-Fallback';
+        src: local('Arial');
+        /* Pulls the system font locally */
+        size-adjust: 95%;
+        /* Adjusts the fallback size to match the web font */
+        ascent-override: 90%;
+        descent-override: 20%;
+    }
+
     body {
         background-color: #343359;
         color: #e0e0e0;
         line-height: 1.75;
-        font-family: 'Dosis', sans-serif;
+        font-family: 'Dosis', 'Dosis-Fallback', Verdana, sans-serif;
         font-size: 15px;
     }
 
@@ -247,7 +299,7 @@
         margin-top: 1rem;
         margin-bottom: 1rem;
         height: 200px;
-        font-family: 'Anta', sans-serif;
+        font-family: 'Anta', 'Anta-Fallback', sans-serif;
     }
 
     .wrapper {
@@ -343,14 +395,14 @@
 
     .no_underline_header_links {
         text-decoration: none;
-        font-family: 'Rubik Glitch', cursive;
+        font-family: 'RubikGlitch', 'RubikGlitch-Fallback', cursive;
         color: #ffffff;
         font-size: 1.15rem;
     }
 
     .no_underline_dl_links {
         text-decoration: none;
-        font-family: 'Anta', sans-serif;
+        font-family: 'Anta', 'Anta-Fallback', sans-serif;
         color: #ffffff;
         font-size: 1.15rem;
     }
