@@ -293,19 +293,35 @@
         font-size: 15px;
     }
 
-    /* Downloads box: locked to exactly 100px tall so the content
-       below it (which uses a matching margin-top) sits in a fixed
-       position regardless of what the GitHub-API script injects
-       into the box. Overflow is hidden so the injected text
-       cannot push the page content downward. */
+    /* "Latest Release" line: locked to a static height so the
+       release version text and the page below it stay in place
+       regardless of when the GitHub API responds. */
     #downloads {
-        height: 100px;
-        min-height: 100px;
-        max-height: 100px;
+        height: 50px;
+        min-height: 50px;
+        max-height: 50px;
         overflow: hidden;
         text-align: center;
         margin-top: 1rem;
         margin-bottom: 0;
+        line-height: 50px;
+        font-family: 'Geo', 'Geo-Fallback', sans-serif;
+    }
+
+    /* Download-links row: separate static-sized div that the
+       script populates with .deb / .rpm / .exe links. It is
+       decoupled from #downloads so the two never reflow each
+       other: the "Latest Release" line and the download row
+       each occupy their own reserved vertical space. */
+    #download-links {
+        height: 50px;
+        min-height: 50px;
+        max-height: 50px;
+        overflow: hidden;
+        text-align: center;
+        margin-top: 0;
+        margin-bottom: 0;
+        line-height: 50px;
         font-family: 'Geo', 'Geo-Fallback', sans-serif;
     }
 
@@ -325,11 +341,11 @@
 
     .wrapper-main {
         position: relative;
-        /* The downloads box is locked to 100px above; reserve that
-           plus the box's own 1rem top margin so the page content
-           starts at a fixed offset below the downloads slot. The
-           content's top edge will not move when the script inside
-           #downloads updates the release version / links. */
+        /* Reserve a fixed offset for the static downloads area:
+           1rem (top margin) + 50px (#downloads) + 50px (#download-links)
+           = the total vertical space the script-controlled blocks
+           occupy. The page content below sits at this exact offset
+           regardless of when the script fills in either row. */
         margin-top: calc(100px + 1rem);
     }
 
@@ -511,13 +527,15 @@
         {% include nav.html %}
 
         <div id="downloads">Loading latest release...</div>
+        <div id="download-links"></div>
 
         <script>
             async function loadLatestRelease() {
                 const owner = "oxasploits";
                 const repo = "PacketSnitch";
 
-                const container = document.getElementById("downloads");
+                const releaseContainer = document.getElementById("downloads");
+                const linksContainer = document.getElementById("download-links");
 
                 try {
                     const response = await fetch(
@@ -539,26 +557,32 @@
                         const name = asset.name.toLowerCase();
 
                         if (name.endsWith(".deb")) {
-                            deb = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Debian (.deb)</a>&nbsp;`;
+                            deb = `<a class="no_underline_dl_links" href="${asset.browser_download_url}">Debian (.deb)</a>`;
                         }
                         else if (name.endsWith(".rpm")) {
-                            rpm = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Fedora (.rpm)</a>&nbsp;`;
+                            rpm = `<a class="no_underline_dl_links" href="${asset.browser_download_url}">Fedora (.rpm)</a>`;
                         }
                         else if (name.endsWith(".exe")) {
-                            exe = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a>&nbsp;`;
+                            exe = `<a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a>`;
                         }
                     }
 
-                    // Only include links that actually exist
+                    // Only include links that actually exist, with a
+                    // small gap between them.
                     const links = [deb, rpm, exe].filter(Boolean).join(" ");
 
-                    container.innerHTML = `
-            Latest Release: ${release.tag_name}<br>
-            ${links}`;
+                    // Inject the release label into its own static
+                    // div and the download links into their own
+                    // separate static div. The two boxes are sized
+                    // and clipped independently so neither can
+                    // reflow the other or the page below.
+                    releaseContainer.textContent = `Latest Release: ${release.tag_name}`;
+                    linksContainer.innerHTML = links || "No downloads available.";
 
                 } catch (err) {
                     console.error(err);
-                    container.innerHTML = "Unable to load latest release.";
+                    releaseContainer.textContent = "Unable to load latest release.";
+                    linksContainer.textContent = "";
                 }
             }
 
