@@ -114,6 +114,7 @@ Project Head: Marshall Whittaker <marshall@oxasploits.com>
 - tiamo64 (Performance optimizations)
 - aestetix (inspiration on how this documentation page should be formatted)
 - 2600net staff (hosting the irc server where our dev channel resides)
+- Anupam Mediratta (backend path traversal bugfix)
 - Everyone else who has tested or contributed in some way, big or small, thank you!
 
 ## Sponsors
