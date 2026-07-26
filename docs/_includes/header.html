@@ -113,6 +113,13 @@
         font-size: 1.15rem;
     }
 
+    .no_underline_dl_links {
+        text-decoration: none;
+        font-family: 'Anta', sans-serif;
+        color: #ffffff;
+        font-size: 1.15rem;
+    }
+
     hr {
         margin: 0.5rem 0;
         border: 0;
@@ -160,13 +167,13 @@
                         const name = asset.name.toLowerCase();
 
                         if (name.endsWith(".deb")) {
-                            deb = ` <a href="${asset.browser_download_url}">[Debian (.deb)]</a>  `;
+                            deb = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Debian (.deb)</a> | `;
                         }
                         else if (name.endsWith(".rpm")) {
-                            rpm = ` <a href="${asset.browser_download_url}">[Fedora (.rpm)]</a> `;
+                            rpm = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Fedora (.rpm)</a> | `;
                         }
                         else if (name.endsWith(".exe")) {
-                            exe = ` <a href="${asset.browser_download_url}">[Windows (.exe)]</a> `;
+                            exe = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a> | `;
                         }
                     }
 
