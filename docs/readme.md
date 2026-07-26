@@ -7,7 +7,7 @@ A network analysis platform that transforms packet captures into searchable, pro
 
 
 <p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
-<img fetchpriority="high" alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.webp" width="1000" >
+<img fetchpriority="high" alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.webp" width="1000" height="562" >
 </a></p>
 
 ## Documentation
