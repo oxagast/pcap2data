@@ -263,3 +263,141 @@ describe('Conv Extraction helpers', () => {
         expect(panelSource).toContain('"extraction"');
     });
 });
+
+describe('Manual Conv file import behavior', () => {
+    const projectRoot = path.resolve(__dirname, '..');
+    const targetFile = path.join(projectRoot, 'src/ui/main-frontend.js');
+    const mirrorFile = path.join(projectRoot, 'src/ui/main-frontend-test.cjs');
+
+    function extractFunctionBody(sourceText, functionName) {
+        const startToken = `async function ${functionName}`;
+        const startIndex = sourceText.indexOf(startToken);
+        if (startIndex === -1) {
+            throw new Error(`Could not find function ${functionName}`);
+        }
+        const bodyStart = sourceText.indexOf('{', startIndex);
+        if (bodyStart === -1) {
+            throw new Error(`Could not find body for ${functionName}`);
+        }
+
+        let depth = 0;
+        let cursor = bodyStart;
+        let inSingleQuote = false;
+        let inDoubleQuote = false;
+        let inTemplate = false;
+        let inLineComment = false;
+        let inBlockComment = false;
+        let inRegex = false;
+        let inRegexCharClass = false;
+        let escaped = false;
+
+        while (cursor < sourceText.length) {
+            const char = sourceText[cursor];
+            const next = sourceText[cursor + 1];
+
+            if (inLineComment) {
+                if (char === '\n') inLineComment = false;
+                cursor += 1;
+                continue;
+            }
+            if (inBlockComment) {
+                if (char === '*' && next === '/') {
+                    inBlockComment = false;
+                    cursor += 2;
+                    continue;
+                }
+                cursor += 1;
+                continue;
+            }
+            if (inRegex) {
+                if (escaped) {
+                    escaped = false;
+                    cursor += 1;
+                    continue;
+                }
+                if (char === '\\') {
+                    escaped = true;
+                    cursor += 1;
+                    continue;
+                }
+                if (char === '[' && !inRegexCharClass) inRegexCharClass = true;
+                if (char === ']' && inRegexCharClass) inRegexCharClass = false;
+                if (char === '/' && !inRegexCharClass) {
+                    inRegex = false;
+                    cursor += 1;
+                    while (cursor < sourceText.length && /[dgimsuvy]/i.test(sourceText[cursor])) cursor += 1;
+                    continue;
+                }
+                cursor += 1;
+                continue;
+            }
+            if (inSingleQuote || inDoubleQuote || inTemplate) {
+                if (escaped) {
+                    escaped = false;
+                    cursor += 1;
+                    continue;
+                }
+                if (char === '\\') {
+                    escaped = true;
+                    cursor += 1;
+                    continue;
+                }
+                if (inSingleQuote && char === "'") inSingleQuote = false;
+                else if (inDoubleQuote && char === '"') inDoubleQuote = false;
+                else if (inTemplate && char === '`') inTemplate = false;
+                cursor += 1;
+                continue;
+            }
+            if (char === '/' && next === '/') {
+                inLineComment = true;
+                cursor += 2;
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                inBlockComment = true;
+                cursor += 2;
+                continue;
+            }
+            if (char === "'") { inSingleQuote = true; cursor += 1; continue; }
+            if (char === '"') { inDoubleQuote = true; cursor += 1; continue; }
+            if (char === '`') { inTemplate = true; cursor += 1; continue; }
+            if (char === '/') {
+                // Heuristic: assume it is a regex when it appears to be at the
+                // start of an expression position. We don't need full accuracy
+                // for these structural tests.
+                inRegex = true;
+                cursor += 1;
+                continue;
+            }
+            if (char === '{') depth += 1;
+            if (char === '}') {
+                depth -= 1;
+                if (depth === 0) {
+                    return sourceText.slice(startIndex, cursor + 1);
+                }
+            }
+            cursor += 1;
+        }
+        throw new Error(`Could not parse function ${functionName}`);
+    }
+
+    test('main-frontend.js registers manual import in the Stats registry', () => {
+        const source = fs.readFileSync(targetFile, 'utf8');
+        const body = extractFunctionBody(source, 'loadManualFileIntoConvTabFromContextMenu');
+        // The fix: call registerExtractionResultForStats so the file shows up
+        // in the Stats tab "Files" list.
+        expect(body).toMatch(/registerExtractionResultForStats\s*\(/);
+        // Keystore scan must be in its own try/catch so its failures do not
+        // get reported as a manual Conv import failure.
+        expect(body).toMatch(/importManualDataIntoSessionKeystore\s*\(/);
+        expect(body).toMatch(/manual-conv-file-import-keystore/);
+        expect(body).not.toMatch(/doError\("Manual Conv file import failed\."\);[\s\S]*importManualDataIntoSessionKeystore/);
+    });
+
+    test('main-frontend-test.cjs mirrors the manual import fix', () => {
+        const source = fs.readFileSync(mirrorFile, 'utf8');
+        const body = extractFunctionBody(source, 'loadManualFileIntoConvTabFromContextMenu');
+        expect(body).toMatch(/registerExtractionResultForStats\s*\(/);
+        expect(body).toMatch(/manual-conv-file-import-keystore/);
+    });
+});

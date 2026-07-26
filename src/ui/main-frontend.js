@@ -16411,23 +16411,42 @@ async function loadManualFileIntoConvTabFromContextMenu() {
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
 
-    const decodedText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-    const keystoreImportCount = keystorePanel.importManualDataIntoSessionKeystore({
+    // Register the file in the Stats carvable registry so it appears under
+    // the Stats "Files" list alongside other carvable candidates. This must
+    // happen here because the manual context-menu import bypasses the
+    // packet-driven carvers (http/ftp/nfs/smb) that normally populate the
+    // registry.
+    registerExtractionResultForStats(
+      selectedFile.fileName || "manual-import.bin",
       bytes,
-      text: decodedText,
-      fileName: selectedFile.fileName || "",
-      source: "manual-conv-import",
-    });
+    );
 
-    statusUpdate(
-      `Status: Loaded manual file into Conv (${fileSize} bytes)` +
-      (keystoreImportCount > 0
-        ? ` and added ${keystoreImportCount} keystore entr${keystoreImportCount === 1 ? "y" : "ies"}`
-        : ""),
-    );
-    writeLogEntry(
-      `Manual Conv import loaded file="${selectedFile.fileName || "unknown"}" bytes=${fileSize} keystore_entries=${keystoreImportCount}`,
-    );
+    const statusParts = [
+      `Status: Loaded manual file into Conv (${fileSize} bytes)`,
+    ];
+    try {
+      const decodedText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      const keystoreImportCount = keystorePanel.importManualDataIntoSessionKeystore({
+        bytes,
+        text: decodedText,
+        fileName: selectedFile.fileName || "",
+        source: "manual-conv-import",
+      });
+      if (keystoreImportCount > 0) {
+        statusParts.push(
+          `and added ${keystoreImportCount} keystore entr${keystoreImportCount === 1 ? "y" : "ies"}`,
+        );
+      }
+      writeLogEntry(
+        `Manual Conv import loaded file="${selectedFile.fileName || "unknown"}" bytes=${fileSize} keystore_entries=${keystoreImportCount}`,
+      );
+    } catch (keystoreError) {
+      // Keystore scan is a best-effort side effect; a failure here must not
+      // be reported as a manual Conv import failure because the Conv tab
+      // load itself already succeeded above.
+      logErrorEntry("manual-conv-file-import-keystore", keystoreError);
+    }
+    statusUpdate(statusParts.join(" "));
   } catch (error) {
     doError("Manual Conv file import failed.");
     logErrorEntry("manual-conv-file-import", error);
