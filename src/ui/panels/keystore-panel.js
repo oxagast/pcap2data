@@ -97,6 +97,11 @@ function createKeystorePanel({
   let sessionRebuildGeneration = 0;
   const sessionScanHydratedPacketCache = new Map();
   let cryptRenderedKeystoreEntries = [];
+  // The public API surface of this panel. It must be assigned before the
+  // panel returns so that the keystore-llm-summarizer callback (registered
+  // above) can resolve the panel methods lazily without triggering a
+  // ReferenceError when the methods are still being defined.
+  let panelApi = null;
 
   initKeystoreLlmSummarizer({
     callLargeLanguageModel,
@@ -104,12 +109,7 @@ function createKeystorePanel({
     isBackgroundSummaryGenerationEnabled,
     statusUpdate,
     writeLogEntry,
-    getKeystorePanelApi: () => ({
-      getKeystoreMode,
-      isUnlocked,
-      getActiveCryptKeystoreEntries,
-      getSessionKeychainEntries,
-    }),
+    getKeystorePanelApi: () => panelApi,
   });
 
   function setBoundedCacheEntry(cacheMap, key, value, limit) {
@@ -3315,7 +3315,7 @@ function createKeystorePanel({
     );
   }
 
-  return {
+  panelApi = {
     addSessionKeystoreEntry,
     addCryptKeystoreEntry,
     loadSelectedCryptKeystoreEntry,
@@ -3390,6 +3390,8 @@ function createKeystorePanel({
     },
     clearSessionScanCaches,
   };
+
+  return panelApi;
 }
 
 

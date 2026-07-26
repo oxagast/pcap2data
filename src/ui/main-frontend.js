@@ -6474,7 +6474,317 @@ function renderCombinedAnalysisSummary() {
 
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
-  return normalizeSummaryMarkdownHeadings(getCurrentCompactedAnalysisSummary());
+  const compacted = normalizeSummaryMarkdownHeadings(
+    getCurrentCompactedAnalysisSummary(),
+  );
+  const statsSection = buildStatsMarkdownSection();
+  if (!statsSection) return compacted;
+  return `${compacted}\n\n---\n\n${statsSection}`;
+}
+
+// Formats a human-readable byte count (e.g. 1.5 KB, 12.34 MB) for the stats
+// summary section. Returns "0 B" for non-positive values.
+function formatStatsByteCount(bytesValue) {
+  const bytes = Number(bytesValue);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const decimals = unitIndex === 0 ? 0 : 2;
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+// Joins a list of strings/values as a comma-separated string, falling back to
+// a placeholder when the list is empty. Non-string entries are coerced.
+function joinStatsListValues(values, emptyLabel = "None") {
+  if (!Array.isArray(values) || values.length === 0) return emptyLabel;
+  return values
+    .map((value) => (value === null || value === undefined ? "" : String(value)))
+    .filter((value) => value.length > 0)
+    .join(", ") || emptyLabel;
+}
+
+// Truncates a list to at most `maxItems` items and appends an indicator when
+// the original list was longer. Returns the truncated array and the original
+// length for the caller to format the indicator.
+function truncateStatsList(values, maxItems) {
+  if (!Array.isArray(values) || values.length <= maxItems) {
+    return { values: Array.isArray(values) ? values : [], truncated: 0 };
+  }
+  return {
+    values: values.slice(0, maxItems),
+    truncated: values.length - maxItems,
+  };
+}
+
+// Renders a markdown table from a header row and body rows. Returns an empty
+// string when the body is empty so the caller can skip the section gracefully.
+function buildStatsMarkdownTable(headers, rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return "";
+  const headerLine = `| ${headers.join(" | ")} |`;
+  const separatorLine = `| ${headers.map(() => "---").join(" | ")} |`;
+  const bodyLines = rows
+    .map((row) => {
+      const cells = headers.map((_, index) => {
+        const cell = row[index];
+        if (cell === null || cell === undefined) return "";
+        return String(cell).replace(/\|/g, "\\|").replace(/\n/g, " ");
+      });
+      return `| ${cells.join(" | ")} |`;
+    })
+    .join("\n");
+  return `${headerLine}\n${separatorLine}\n${bodyLines}`;
+}
+
+// Builds a markdown section summarising the captured packet statistics. This
+// is the same data shown on the Stats tab and is woven into the exported
+// summary so the analyst has a complete snapshot of the pcap alongside the
+// LLM's narrative. Returns an empty string when no capture data is available.
+function buildStatsMarkdownSection() {
+  if (!capturedPackets || typeof capturedPackets !== "object") return "";
+  const hostBuckets = capturedPackets["host"];
+  if (!hostBuckets || typeof hostBuckets !== "object") return "";
+
+  const stats = (() => {
+    try {
+      return buildCaptureStats(
+        capturedPackets,
+        Array.isArray(bookmarkList) ? bookmarkList.length : 0,
+      );
+    } catch (err) {
+      writeLogEntry(
+        `buildStatsMarkdownSection: failed to compute stats: ${err?.message || err}`,
+      );
+      return null;
+    }
+  })();
+  if (!stats) return "";
+
+  const parts = [];
+  parts.push("## Capture Statistics");
+  parts.push("");
+
+  // Overview table: top-line packet, stream, and traffic counts.
+  const totalTraffic = formatStatsByteCount(stats.totalTraffic);
+  const overviewRows = [
+    ["Total packets", String(stats.totalPackets ?? 0)],
+    ["Total streams", String(stats.totalStreams ?? 0)],
+    ["Total traffic", totalTraffic],
+    ["Internet hosts", String(stats.internetHostCount ?? 0)],
+    ["Encrypted packets", String(stats.encryptedCount ?? 0)],
+    ["Unencrypted packets", String(stats.unencryptedCount ?? 0)],
+    ["Undecodable packets", String(stats.undecodableCount ?? 0)],
+    ["Bookmarks", String(stats.bookmarkCount ?? 0)],
+  ];
+  if (stats.totalStreams > 1) {
+    overviewRows.push(
+      [
+        "Stream length (avg / min / max)",
+        `${stats.avgStreamLength} / ${stats.minStreamLength} / ${stats.maxStreamLength} packets`,
+      ],
+      [
+        "TCP retransmissions",
+        String(stats.retransmissionCount ?? 0),
+      ],
+      [
+        "Out-of-order segments",
+        String(stats.outOfOrderCount ?? 0),
+      ],
+    );
+  }
+  parts.push(buildStatsMarkdownTable(["Metric", "Value"], overviewRows));
+  parts.push("");
+
+  // Protocol summary. Network/link/transport stack plus decoded protocols.
+  if (Array.isArray(stats.protocols) && stats.protocols.length > 0) {
+    parts.push("### Protocols");
+    parts.push("");
+    if (
+      Array.isArray(stats.networkProtocols) &&
+      stats.networkProtocols.length > 0
+    ) {
+      parts.push(
+        `- **Network layer:** ${joinStatsListValues(stats.networkProtocols)}`,
+      );
+    }
+    if (
+      Array.isArray(stats.linkProtocols) &&
+      stats.linkProtocols.length > 0
+    ) {
+      parts.push(
+        `- **Link layer:** ${joinStatsListValues(stats.linkProtocols)}`,
+      );
+    }
+    if (
+      Array.isArray(stats.transportProtocols) &&
+      stats.transportProtocols.length > 0
+    ) {
+      parts.push(
+        `- **Transport layer:** ${joinStatsListValues(stats.transportProtocols)}`,
+      );
+    }
+    if (
+      Array.isArray(stats.decodedProtocols) &&
+      stats.decodedProtocols.length > 0
+    ) {
+      const decoded = truncateStatsList(stats.decodedProtocols, 25);
+      const decodedLine = joinStatsListValues(decoded.values);
+      const decodedSuffix =
+        decoded.truncated > 0 ? ` (+${decoded.truncated} more)` : "";
+      parts.push(`- **Decoded protocols:** ${decodedLine}${decodedSuffix}`);
+    }
+    if (
+      Array.isArray(stats.arpOperations) &&
+      stats.arpOperations.length > 0
+    ) {
+      parts.push(
+        `- **ARP operations:** ${joinStatsListValues(stats.arpOperations)}`,
+      );
+    }
+    if (
+      Array.isArray(stats.igmpMessageTypes) &&
+      stats.igmpMessageTypes.length > 0
+    ) {
+      parts.push(
+        `- **IGMP message types:** ${joinStatsListValues(stats.igmpMessageTypes)}`,
+      );
+    }
+    if (Array.isArray(stats.dataTypes) && stats.dataTypes.length > 0) {
+      const dataTypes = truncateStatsList(stats.dataTypes, 25);
+      const dataTypeLine = joinStatsListValues(dataTypes.values);
+      const dataTypeSuffix =
+        dataTypes.truncated > 0 ? ` (+${dataTypes.truncated} more)` : "";
+      parts.push(
+        `- **Data classifications:** ${dataTypeLine}${dataTypeSuffix}`,
+      );
+    }
+    parts.push("");
+  }
+
+  // Hosts, ports, and MAC vendors.
+  const hasHosts =
+    Array.isArray(stats.hosts) && stats.hosts.length > 0;
+  const hasPorts =
+    Array.isArray(stats.ports) && stats.ports.length > 0;
+  const hasMacVendors =
+    Array.isArray(stats.macVendors) && stats.macVendors.length > 0;
+  if (hasHosts || hasPorts || hasMacVendors) {
+    parts.push("### Hosts, Ports, and Vendors");
+    parts.push("");
+    if (hasHosts) {
+      const hosts = truncateStatsList(stats.hosts, 25);
+      const hostLine = joinStatsListValues(hosts.values);
+      const hostSuffix =
+        hosts.truncated > 0 ? ` (+${hosts.truncated} more)` : "";
+      parts.push(`- **Hosts (${stats.hosts.length}):** ${hostLine}${hostSuffix}`);
+    }
+    if (hasPorts) {
+      const ports = truncateStatsList(stats.ports, 25);
+      const portLine = joinStatsListValues(ports.values);
+      const portSuffix =
+        ports.truncated > 0 ? ` (+${ports.truncated} more)` : "";
+      parts.push(`- **Ports (${stats.ports.length}):** ${portLine}${portSuffix}`);
+    }
+    if (hasMacVendors) {
+      const vendors = truncateStatsList(stats.macVendors, 25);
+      const vendorLine = joinStatsListValues(vendors.values);
+      const vendorSuffix =
+        vendors.truncated > 0 ? ` (+${vendors.truncated} more)` : "";
+      parts.push(
+        `- **MAC vendors (${stats.macVendors.length}):** ${vendorLine}${vendorSuffix}`,
+      );
+    }
+    if (
+      Array.isArray(stats.hostnames) &&
+      stats.hostnames.length > 0
+    ) {
+      const hostnames = truncateStatsList(stats.hostnames, 15);
+      const hostnameLine = joinStatsListValues(hostnames.values);
+      const hostnameSuffix =
+        hostnames.truncated > 0 ? ` (+${hostnames.truncated} more)` : "";
+      parts.push(
+        `- **Hostnames (${stats.hostnames.length}):** ${hostnameLine}${hostnameSuffix}`,
+      );
+    }
+    parts.push("");
+  }
+
+  // Top talkers by packet count.
+  if (Array.isArray(stats.topTalkers) && stats.topTalkers.length > 0) {
+    parts.push("### Top Talkers");
+    parts.push("");
+    const talkerRows = stats.topTalkers.map((talker) => [
+      talker?.ip ?? "unknown",
+      String(talker?.count ?? 0),
+    ]);
+    parts.push(
+      buildStatsMarkdownTable(["Host", "Packets"], talkerRows),
+    );
+    parts.push("");
+  }
+
+  // Geographic footprint, if any resolved locations are present.
+  if (Array.isArray(stats.locations) && stats.locations.length > 0) {
+    const locationRows = stats.locations
+      .slice(0, 15)
+      .map((locationEntry) => {
+        const label = Array.isArray(locationEntry)
+          ? String(locationEntry[0] ?? "Unknown")
+          : "Unknown";
+        const count = Array.isArray(locationEntry)
+          ? String(locationEntry[1] ?? 0)
+          : "0";
+        return [label, count];
+      });
+    parts.push("### Geographic Footprint");
+    parts.push("");
+    parts.push(buildStatsMarkdownTable(["Location", "Hits"], locationRows));
+    parts.push("");
+  }
+
+  // MIME types observed in payload streams.
+  if (Array.isArray(stats.mimeTypes) && stats.mimeTypes.length > 0) {
+    const mimes = truncateStatsList(stats.mimeTypes, 20);
+    const mimeLine = joinStatsListValues(mimes.values);
+    const mimeSuffix = mimes.truncated > 0 ? ` (+${mimes.truncated} more)` : "";
+    parts.push(
+      `### MIME Types\n\n- **MIME types (${stats.mimeTypes.length}):** ${mimeLine}${mimeSuffix}\n`,
+    );
+  }
+
+  // Heatmap hits summary.
+  if (stats.heatmapPacketHits && stats.heatmapPacketHits > 0) {
+    parts.push(
+      `### Heatmap\n\n- **Heatmap packet hits:** ${stats.heatmapPacketHits}\n`,
+    );
+  }
+
+  // Credentials summary (uses masked values, same as the Stats tab).
+  const creds = Array.isArray(stats.uniqueCredentials)
+    ? stats.uniqueCredentials
+    : [];
+  if (creds.length > 0 || (stats.uniqueCredentialCount ?? 0) > 0) {
+    const uniqueCount = stats.uniqueCredentialCount ?? creds.length;
+    const previewLimit = 15;
+    const previewList = creds.slice(0, previewLimit);
+    const previewSuffix =
+      creds.length > previewLimit ? ` (+${creds.length - previewLimit} more)` : "";
+    parts.push(
+      `### Credentials\n\n- **Unique credentials (${uniqueCount}):** ${joinStatsListValues(
+        previewList,
+      )}${previewSuffix}\n`,
+    );
+  }
+
+  // Drop trailing blank line so the section joins cleanly with surrounding text.
+  while (parts.length && parts[parts.length - 1] === "") {
+    parts.pop();
+  }
+  return parts.join("\n");
 }
 
 // Returns the concatenated compacted analysis summaries for the current view.
@@ -17486,7 +17796,11 @@ function writeSummaryFromLLM() {
     // add the current packet key to the set of already summarized packets
     alreadySummarizedPacketKeys.add(contextPacket?.__packetKey);
     writeLogEntry(`Follow stream loaded ${streamPackets.length} packets into LLM summary`);
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    const statsContextMarkdown = buildStatsMarkdownSection();
+    const statsContextBlock = statsContextMarkdown
+      ? `\n\nFor context, here is the current capture-level statistics summary (weave any of these facts that are relevant to this stream into your answer so the analyst has a complete view of the pcap):\n\n${statsContextMarkdown}\n`
+      : "";
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. ${buildMarkdownResponseInstruction()} Here is the stream data:\n\n${jsonOfPacketStream}.${statsContextBlock}  Note that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -17585,6 +17899,10 @@ async function runAnalysisCompaction() {
   const chronologicalBlurbs = blurbs
     .map((blurb, idx) => `ANALYSIS ENTRY ${idx + 1}:\n${blurb}`)
     .join("\n\n---\n\n");
+  const statsContextMarkdown = buildStatsMarkdownSection();
+  const statsContextSection = statsContextMarkdown
+    ? `\n\n---\n\nThe following is the current capture-level statistics summary (weave any of these facts that are relevant into your compacted summary so the analyst has a complete view of the pcap):\n\n${statsContextMarkdown}`
+    : "";
   const combinedInput = `${contextIntro}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
 - Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
 - Preserves the chronological order of significant events where it matters.
@@ -17593,7 +17911,7 @@ async function runAnalysisCompaction() {
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
 - Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
 
-${chronologicalBlurbs}`;
+${chronologicalBlurbs}${statsContextSection}`;
 
   let prompt = `You are PacketSnitch, a network analysis assistant. ${buildMarkdownResponseInstruction()}\n\n${combinedInput}`;
   if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
