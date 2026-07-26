@@ -167,13 +167,13 @@
                         const name = asset.name.toLowerCase();
 
                         if (name.endsWith(".deb")) {
-                            deb = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Debian (.deb)</a> | `;
+                            deb = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Debian (.deb)</a>&nbsp;`;
                         }
                         else if (name.endsWith(".rpm")) {
-                            rpm = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Fedora (.rpm)</a> | `;
+                            rpm = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Fedora (.rpm)</a>&nbsp;`;
                         }
                         else if (name.endsWith(".exe")) {
-                            exe = `| <a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a> | `;
+                            exe = `&nbsp;<a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a>&nbsp;`;
                         }
                     }
 
