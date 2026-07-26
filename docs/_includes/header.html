@@ -293,11 +293,19 @@
         font-size: 15px;
     }
 
+    /* Downloads box: locked to exactly 100px tall so the content
+       below it (which uses a matching margin-top) sits in a fixed
+       position regardless of what the GitHub-API script injects
+       into the box. Overflow is hidden so the injected text
+       cannot push the page content downward. */
     #downloads {
-        min-height: 180px;
+        height: 100px;
+        min-height: 100px;
+        max-height: 100px;
+        overflow: hidden;
         text-align: center;
         margin-top: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 0;
         font-family: 'Geo', 'Geo-Fallback', sans-serif;
     }
 
@@ -317,6 +325,12 @@
 
     .wrapper-main {
         position: relative;
+        /* The downloads box is locked to 100px above; reserve that
+           plus the box's own 1rem top margin so the page content
+           starts at a fixed offset below the downloads slot. The
+           content's top edge will not move when the script inside
+           #downloads updates the release version / links. */
+        margin-top: calc(100px + 1rem);
     }
 
 
