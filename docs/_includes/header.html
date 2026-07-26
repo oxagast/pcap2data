@@ -514,6 +514,10 @@
     .main-content iframe {
         max-width: 100%;
     }
+
+    .loading-dls {
+        visibility: hidden;
+    }
 </style>
 
 
@@ -526,8 +530,8 @@
                 src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
         {% include nav.html %}
 
-        <div id="downloads">Loading latest release...</div>
-        <div id="download-links">&nbsp;</div>
+        <div id="downloads" class="loading-dls">Loading latest release...</div>
+        <div id="download-links" class="loading-dls">&nbsp;</div>
 
         <script>
             async function loadLatestRelease() {
@@ -548,6 +552,8 @@
 
                     const release = await response.json();
 
+
+
                     // Build download links
                     let deb = "";
                     let rpm = "";
@@ -566,7 +572,9 @@
                             exe = `<a class="no_underline_dl_links" href="${asset.browser_download_url}">Windows (.exe)</a>`;
                         }
                     }
-
+                    // Make the download sections visible now that we have data
+                    releaseContainer.classList.remove("loading-dls");
+                    linksContainer.classList.remove("loading-dls");
                     // Only include links that actually exist, with a
                     // small gap between them.
                     const links = [deb, rpm, exe].filter(Boolean).join(" ");
