@@ -7,7 +7,7 @@ A network analysis platform that transforms packet captures into searchable, pro
 
 
 <p align="center"><a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
-<img fetchpriority="high" alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.webp" width="1000" height="562" >
+<img fetchpriority="high" alt="PacketSnitch Stats Workspace" src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.webp" width="1000" height="544" >
 </a></p>
 
 ## Documentation
@@ -20,9 +20,17 @@ A network analysis platform that transforms packet captures into searchable, pro
 
 ## Demo
 
+<!--
 <p align="center">
 <iframe loading="lazy" width="1000" height="562" src="https://www.youtube.com/embed/WCEZkubllg8?si=3GnLIt4y4CxvIjmK" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 </p>
+-->
+
+<div class="youtube-player" data-id="WCEZkubllg8">
+    <!-- The preview image will be injected here -->
+    <div class="play-button"></div>
+</div>
+
 
 ### If you would like to follow along with the video here are the necessary links to set up your own environment!
 
@@ -118,3 +126,40 @@ Project Head: Marshall Whittaker <marshall@oxasploits.com>
 - <a href="https://buymeacoffee.com/oxagast">Sponsor PacketSnitch!</a>
 
 _If you sponsor PacketSnitch, your name and a link of your choice will be added here!_
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var div, n,
+        v = document.getElementsByClassName("youtube-player");
+    for (n = 0; n < v.length; n++) {
+        div = document.createElement("div");
+        div.setAttribute("data-id", v[n].dataset.id);
+        
+        // Grab the high-quality YouTube video thumbnail background
+        var img = document.createElement("img");
+        img.src = "https://youtube.com" + v[n].dataset.id + "/hqdefault.jpg";
+        div.appendChild(img);
+        
+        // Add fake play button
+        var play = document.createElement("div");
+        play.setAttribute("class", "play-button");
+        div.appendChild(play);
+        
+        div.onclick = function() {
+            var iframe = document.createElement("iframe");
+            var embed = "https://youtube.com";
+            iframe.setAttribute("src", embed.replace("ID", this.dataset.id));
+            iframe.setAttribute("frameborder", "0");
+            iframe.setAttribute("allowfullscreen", "1");
+            iframe.setAttribute("allow", "accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture");
+            iframe.setAttribute("width", "100%");
+            iframe.setAttribute("height", "100%");
+            iframe.style.position = "absolute";
+            iframe.style.top = "0";
+            iframe.style.left = "0";
+            this.parentNode.replaceChild(iframe, this);
+        };
+        v[n].appendChild(div);
+    }
+});
+</script>
