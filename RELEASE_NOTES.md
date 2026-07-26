@@ -1,6 +1,274 @@
 # Release Notes
 
-## v1.8.1442 - 2026-07-05
+## v2.4.2115 - 2026-07-26 (unreleased)
+**Type:** minor
+
+### ✨ Features
+- Threat Intel sub-tab under Conv (VirusTotal lookup, hash cross-reference button, auto-select in VirusTotal)
+- Subnet calculator panel in Conv (queries backend HTTP server for GeoIP and IP reputation data)
+- Nmap scan support and IP/Subnet analyzer rearrangements
+- Shodan support in IP information
+- High-resolution raster worldmap image for Heatmap view
+- More sample pcaps
+- Better plugin capabilities enforcement
+- Sample plugin `hello-snitch.zip`
+- Backend ico of the snitch
+- Distiller for the summary report generator
+- Bugfixer added to website
+- More info for LLM
+
+### 🐛 Fixes
+- File importing no longer errors on successful load, now also shows in Stats panel
+- Stats tab Total Traffic indicator
+- Path validation fix in `snitch.py` (security fix for path traversal)
+- HTML/content layout shift on docs site
+- Conv tab hex input scrolling
+- Filter bleed bug
+- Filter autocomplete
+
+### 🗑️ Removed
+- Lots of old dead code removed during major code cleanup
+
+### 🔧 Improvements
+- Major code cleanup; lots of old dead code removed, function organization improved
+- Streamlined the frontend with stream payload caches
+- Frontend processing optimizations
+- Fixed HTTP body and file carving
+- Subnet Calc subtab UI cleanups
+- Heatmap zoom support
+- Backend scheduler optimizations
+- Better stream hydration/dehydration logic
+- Code organization: parted out backend's individual protocol decoders to their own files
+- Code organization: moved sidebar protocol renderers to `src/ui/decoders/main/`
+- More backend test coverage
+- Better font shipping/fallbacks for docs site
+- Markdown supported in Summary tab
+- Better filter bar logic with saving/labeling filters
+- Search and replace in Conv tab
+- File Carving section added to Stats tab
+- Better Conv to Notes
+- Conv tab "load more" button for large data
+- Setting to disable Summary auto-generation
+
+---
+
+## v2.3.1694 - 2026-07-23
+**Type:** patch
+
+### 🗑️ Removed
+- `patchall` from `make` (under Windows)
+
+### 🐛 Fixes
+- Removed `patchall` from `make` for Windows so it completes under Windows
+- Quieted noisy backend HTTP error on stop
+
+### 🔧 Improvements
+- Took out `--icon` from PyInstaller and added to `.spec` for backend icon
+- Backend ICO of the snitch
+
+---
+
+## v2.2.1638 - 2026-07-18
+**Type:** minor
+
+### ✨ Features
+- IPv6 support improvements (brackets on port usage, fixed delimiter issues)
+- Threat Intel sub-tab under Conv (VirusTotal)
+- Backend HTTP server (refined)
+- More sample pcaps
+- Table of contents in docs
+- Better stream hydration/dehydration logic
+- Filter autocomplete
+
+### 🐛 Fixes
+- List panel blank bug
+- Big-endian nanosecond resolution pcap support
+- `ports.json` removal from samples (no longer needed)
+
+### 🗑️ Removed
+- `ports.json` from samples (no longer needed)
+- Screenshots from frontend docs
+
+### 🔧 Improvements
+- Removed screenshots from frontend docs
+- Backend pushes packets in chunks for more responsive frontend
+- Lazyload packets; call everything from drive instead of loading entire capture into memory
+- More decoders added
+- Keystore autoadd objects added
+- Backend existence check before run
+- Filter query status updates
+- Explicit logging of filter clear
+- Stream statistics in Host Data view and Stats tab
+- Conv tab data saved with session data
+- Context menu reference in docs
+- Differentiation between `tcp.proto` and `udp.proto`, new `app.proto` catchall
+- Locations listing queryable on click via `loc.src.city || loc.dst.city`
+- Globbing-style regex support in filter (now supports `?` and `*`)
+- Brotli detection
+- Help button + new window to docs
+
+---
+
+## v2.1.1606 - 2026-07-16
+**Type:** minor
+
+### ✨ Features
+- Soulseek, Bittorrent, and SMPP support
+- Better PPP, PPPoE, and LLDP support
+- Improved plugin capabilities with new internal interaction APIs
+- Better crypt support for ambiguous data
+- Improved XML, JSON, YAML support
+- Generic decoders renamed
+- Updated build config
+- Backend now fails on unknown filetype magic
+- GitHub workflow fixes (repo stats)
+
+### 🐛 Fixes
+- List panel blank bug
+- Big-endian nanosecond resolution pcaps
+
+### 🗑️ Removed
+- Non-clickable password badge from UI
+
+### 🔧 Improvements
+- Plugin enforcement tests
+- Widened settings panels
+- Improved plugin UI handler
+- Some plugin support groundwork
+- Parted out backend protocol decoders to their own files for better organization
+- Widened sidebars for both OSs
+- Backend chunk size now arbitrary
+- Streamlined frontend with stream payload caches
+- Fixed creds uniqing bug in Stats panel
+- Fixed HTTP body and file carving
+- Cleaned up UI, removed non-clickable password badge, fixed subnet calc title
+
+---
+
+## v2.0.1573 - 2026-07-15
+**Type:** major
+
+### ⚠️ Breaking Changes
+- Version 2.0 represents a major version bump with substantial architecture changes
+- New session save file format (gzipped BSON) replaces the previous format; old session saves are not compatible
+
+### ✨ Features
+- `.psb` is on by default in debug mode
+- New session save file format based on gzipped BSON (binary JSON)
+- Multi-job processing on backend and frontend with job IDs
+- Backend's common/ library fixed
+- Conv tab retooled for better use of screen real estate
+- List tab columns hidden by default
+- LDAP decoder support improved
+- Updated Samba code
+- Markdown compatibility for LLM and send-to-Notes data shapes
+- Startup splash screen
+- `/status` endpoint on backend's API
+- Major serialization bug fix on backend
+- Streamlined packet ingestion on the frontend
+- List tab support for zero-length payloads
+- Frontend logging tunables to reduce UI main thread load
+- New defaults for UI main thread logging backlog
+- List tab column rearranging support
+- Settings tab improvements
+- Backend version line in packetsnitch exe gen
+- Themes bundled
+- Updated Python spec file for snitch.py
+
+### 🐛 Fixes
+- SIP handling under Conv tab decoders
+- Better pagination for large streams loaded into Conv
+- Better formatting in Conv tab
+- Filter bleed bug
+- Word wrapping touchups
+- Settings overlap bug
+- List tab scrolling bug on virtualized lists
+- Host Data view content hidden bug
+- List tab zero payload length bug
+- Dropdown colors now follow themes
+- Backend bug finding common/
+
+### 🗑️ Removed
+- Unnecessary testcases dir creation in HTTP mode
+
+### 🔧 Improvements
+- Version bump
+- Updated python spec file for snitch.py
+- Increased fade out sec
+- Longer startup time
+- One-shot override for the decodes subtab on Conv
+- Session picker updates
+- Better LDAP decoder support
+- Updated Samba code
+- Removed unnecessary testcases dir creation in HTTP mode
+- Updated User-Agent string globally
+- Updated Help tab to allow new domain
+- Updated settings tab
+- New Release check
+- Download new release button
+- SnitchBitch theme updated
+- Fav icon added
+- More backend test coverage
+- Better plugin capabilities enforcement
+
+---
+
+## v2.0.1566 - 2026-07-14
+**Type:** minor
+
+### ✨ Features
+- `.psb` is on by default in debug mode
+- Backend's `common/` library bug fix
+- Multi-job processing on backend and frontend with job IDs
+- New session save file format (gzipped bson)
+- Major serialization bug fix on backend
+- SIP handling improvements in Conv tab
+- LDAP decoder improvements
+- Updated Samba code
+
+---
+
+## v1.9.1518 - 2026-07-11
+**Type:** minor
+
+### 🗑️ Removed
+- References to `models.txt` from code
+- Test automatic run (left tests manual)
+- Map crosshair
+
+### 🐛 Fixes
+- Removed references to `models.txt` in code, left `modes.json` support
+- MAC address pulling IP into field bug on backend
+- Backend kickoff improvements
+- Map updated, crosshair removed
+- Map animations smoother
+
+### 🔧 Improvements
+- Updated map animations for smoother zoom
+- Streamlined the frontend
+- Stream payload caches
+- Frontend processing optimizations
+- Fixed creds uniqing in Stats panel
+- Backend chunk size now arbitrary
+- Widened sidebars for both OSs
+- Removed test automatic run, left tests manual
+- Updated SnitchBitch theme
+- Favicon added
+- Updated Sponsorship stuff
+- Thanks to IRC network admins where dev chan is hosted
+- New Release check added
+- Download new release button added
+- Pulling data from runtime main process
+- Updated download link generation handler
+- Now detect Windows/RedHat/Debian flavors
+- Better Nmap scan support
+- Shodan support in IP/Subnet analyzer
+- Threat Intelligence under IP information in Subnet Calc subtab
+- Better documentation
+
+---
+
+## v1.9.1442 - 2026-07-05
 **Type:** minor
 
 ### ✨ Features
@@ -9,10 +277,1003 @@
 - PGP workspace in the Crypt tab
 - Settings tab
 - LLM now in frontend
+- Heatmap with Wikipedia images
+- Layer fix; statusbar brought forward
+- Better default zoom/offset options on map calibration
+- Heatmap zoom support
+- Heatmap, "Worldmap" view
+- Subtab for Threat Intelligence under IP info
+- Credential count and creds readout in Stats tab
+- Rudimentary protocol support for SIGTRAN packets for SS7 network captures
+- Anime theme (animated background, demo purposes)
+- New light soft pastels theme
+- Better theme engine (backdrop images support)
+- PGP tab (basic implementation; decrypt and verify messages)
+- Backend API over JSON HTTP
+- Better Filter history (filter history saves/labeled)
+- Better filter bar logic
 
 ### 🐛 Fixes
-- Removed duplicates in the backend json
+- Removed duplicates in the backend JSON
+- Preprocessor's legacy keys cleaned up; removed all non dot-notation keys
+- This can be a breaking change on session saves; you may need to remove old saves or use them with the previous version of PacketSnitch
+- Conv tab hex input scrolling
+- Filter validation strips `!`, `(`, `)`
+- Initial check on Group by Stream in List tab
+- Some small aesthetic changes
+- Removed need for `threads` var in backend config
+- Backend now pulls the number of available CPU cores dynamically
 
 ### ⚠️ Breaking Changes
-- Saved sessions need to be discarded and rebuilt from their pcap.
+- Saved sessions need to be discarded and rebuilt from their pcap
+- Old session saves may not work due to legacy key removal
+
+### 🗑️ Removed
+- All non dot-notation (legacy) keys from the preprocessor output
+- Need for `threads` var in backend config (now pulled dynamically from available CPU cores)
+- Duplicates in the backend JSON
+
+### 🔧 Improvements
+- New themes: pastels and Sub7
+- Tweaked the light theme
+- New ico location
+- Encodings as a hidden import for the python backend .deb builds
+- Forge config converted to conditional builds based on building OS
+- Windows installer icons fixed
+- Added things to make deb build correctly under Kali
+- Template for .desktop so the icon works properly under Linux
+- UPX packing option (not default)
+- Installer splash
+- Backend scheduling optimizations
+- Resize and show/hide columns in List tab
+- Backend version string; version can be queried via /version
+- Version check for the packetsnitch backend api
+- PGP autoloads its secrets into the keystore
+- Heatmap scales better
+- Backend now has a proper version string
+- Hardened FRAME and unknown behavior fallback
+- Normalized key format
+- Added src/dst port aliases
+- Retooled the map zoom algorithm
+- Map calibration edits
+- Backend scheduler optimizations
+- Repositioned Prev/Next
+- LLM diagnostics in activity log
+- Backend now works correctly with the server
+
+---
+
+## v1.8.1384 - 2026-07-01
+**Type:** patch
+
+### 🗑️ Removed
+- Unneeded reqs in `requirements.txt`
+- Ollama dep from backend (LLM moved to frontend)
+- LLM references and calls from backend
+- `_dirname` and `_filename` patches (replaced with DefinePlugin and fallback)
+
+### 🐛 Fixes
+- Removed unneeded reqs in `requirements.txt`; let pip handle that
+- Windows cPyInstaller should be able to use Linux forward slashes in spec file for snitch.py
+- Pushing startup hardening to the backend loader
+- Pushed `_dirname` and `_filename` patches
+- DefinePlugin and a fallback for dirname
+- Tried to fix Windows no style/js runtime bug
+- Tried to fix ollama compile issue
+
+### 🔧 Improvements
+- Ver bump and removed ollama dep in backend
+- Does a check to see if LLM Ollama backend is running before exposing it in UI
+- Updated LLM with a longer default timeout for slow models
+- LLM calls are now handled on a per-stream basis in the frontend
+- LLM references and calls removed from backend for performance and stability
+- PacketSnitch now scales better for larger capture files
+- Notes markdown dep "marked" added so tables are properly generated
+- Markdown and note edit mode now works properly
+- Setting for the stream size warning threshold
+- New Settings tab
+- Theme engine: select quit button icon and color
+- Two new themes: pastels and Sub7
+- Theme engine: light theme tweaks
+- Fixed pretty JSON screen in Conv
+- Updated `snitch.py` to take a chunk size var from frontend's user config
+- Credentials counter in Stats section
+- Some context-aware LLM stuff
+- More stream/packet targeted ollama support on frontend
+- Improved filter grepping to include label/content/type hint of keystore entries
+- Fixed keystore filtering; only visible when session keychain is in use
+- User can filter keystore list if many entries
+- Touchups to logging code
+- Theme engine: old theme carryover fixed; resets all themable colors on new theme selection
+- Updated docs and themes guide
+- Theme engine: support for logo replacement
+- Some logging and status updates on settings changes
+- Settings logging to activity log on changes
+- Theme selection decision matrix
+
+---
+
+## v1.8.1332 - 2026-06-28
+**Type:** minor
+
+### 🐛 Fixes
+- Try checking the type and returning if not an arr
+- Fixed for zero packets warning
+- Correction so it doesn't return before clearing the old packet data
+- Added check to see if a key is valid if zero packets are returned by the filter
+- Added link to license
+
+### 🔧 Improvements
+- Initial test of LLM in frontend
+- Per-packet/key filtering and grouping
+- Stats tab Total Traffic indicator fixed
+- Began adding heatmap functionality
+
+---
+
+## v1.7.969 - 2026-06-24
+**Type:** minor
+
+### ✨ Features
+- Globbing-style regex support in filter (now supports `?` and `*`)
+- Brotli detection
+- Help button tied to new window that loads the documentation from the internet
+- Access controls to help page browser
+- Extensive features list section in documentation
+- Two more sample captures
+- New compression sample
+- New filter keys added to docs
+
+### 🐛 Fixes
+- Backend clobbering bug when a new session was loaded before the backend was done
+- Some corrections in backend to what layer a proto returns as
+- Sets user agent to PacketSnitch and version for web reqs
+- Made demo gif a link to YouTube vid of better resolution
+- Some more guards on the URL the Help center can browse to
+- Some guards on hideAllData() so hex grid no longer has lingering null
+- Now hides data types list on BGP packets too by default
+- Repositioned the Overview in the Stats tab form one to three columns
+
+### 🔧 Improvements
+- Added `link.proto` context menu filter options
+- Relabeled transport and application filters in context menu
+- Added some proper protocol keys to backend for more descriptive filtering (e.g., `transport.proto: tcp`, or `link.proto: ethernet`)
+- Added some new examples for globbing feature
+
+---
+
+## v1.7.935 - 2026-06-21
+**Type:** minor
+
+### ✨ Features
+- Decoders: SIP and FTP (with keychain credential autopopulation)
+- New filter keys: `tcp.retransmission`, retransmission/out-of-order packet keys
+- Statistics to Stats tab for retransmission
+- Data type guesses for network endpoints and MAC addresses
+- Date and time format type identifiers
+- Single byte data type guessing
+- Save Raw Conv tab data via context menu
+- Streamlined protocol matching logic
+- HTTP following: whole body gets copied to Conv tab and exported to files (not just initial packet)
+- Decompression-aware context menu items for handling HTTP data
+- Some specific sample data for demos
+- Preliminary IGMP backend support
+- Properly handles non-TCP formed packets (ARP, FRAME, etc.)
+- Some lower-level protocol identifiers for the Stats tab
+- Improved protocols used readout in Host Data view
+- Some protocol auth extractors
+- Filter for bookmarked hosts
+- Warning if the stream they try to load is large
+- Keystore autoadd to work with packet lazyload on metadata
+- Table coloring
+
+### 🐛 Fixes
+- Data types frame auto hides if it doesn't make sense to have it there
+- Renamed exploit pcap
+
+### 🔧 Improvements
+- Better and more targeted context menu
+- Uppercased application layer protocols in Stats tab for congruence
+
+---
+
+## v1.7.848 - 2026-06-17
+**Type:** minor
+
+### ✨ Features
+- Backend now pushes packets into frontend in chunks for more responsive frontend
+- Code can lazyload packets and call everything from drive instead of loading entire capture into memory
+- Increased the number of seconds status update stays on to 10
+- JSON/pcap/pcapng constraint on session picker's new session dialog
+- Added support for some more decoders
+- Some keystore autoadd objects
+- Added check to see if the selected file is a session or pcap; code paths for each
+- Backend existence check before trying to run
+- Filter query status updates
+- Explicit logging of filter clear
+- Updated some stream stats on the left hand side for each packet
+- Stream statistics in Host Data view and Stats tab
+- Conv tab data saved with session data
+- Context menu reference in docs
+- Differentiation between `tcp.proto` and `udp.proto`, new `app.proto` catchall
+- Locations listing queryable on click via `loc.src.city || loc.dst.city`
+- Removed stray IP addresses from `dns.qname` in Stats page
+
+### 🗑️ Removed
+- Stray IP addresses from `dns.qname` in Stats page
+- Divider above Exports submenu
+
+### 🐛 Fixes
+- Backend handles packet array sync up properly with guards
+- Now only runs autosave if a real session is opened, discards a dummy session (<5000 bytes)
+- Autosave function triggers on exit and on log write
+- Added check to see if a session is even open before asking to save it on quit
+- New session button properly clears out the old session before reloading
+- Now from Stats tab, if a Ports Seen port is clicked, it searches for both TCP and UDP ports
+- `back-comm.js` loader handles loading new compressed format session files
+- Now while data is being pushed from backend incrementally, the tab doesn't keep jumping back to Host Data view
+- The same message about switching to List view doesn't come up in the log repeatedly on startup
+- [Snitch] entries in log no longer have unary space near beginning
+
+### 🔧 Improvements
+- Moved save button to the very bottom
+- Removed divider above Exports submenu
+- Edited some context menu items to shorten them
+- Some changes to the way protocols from application and transport layer protos are added to the filter
+- Added gif demo of packetsnitch
+- Added a static width to the gif
+- Renamed workflow and schedule daily runs
+- Added repo stats GitHub action
+- Quits without removing the darkening from session picker, for aesthetics
+- Recall the `persistSessionToDisk` function with null session name if autosave session is being manually saved
+- Fixed autosave behavior
+- Exit button on session picker screen just exits picker, not packetsnitch
+- Some guards so user can't save/export the session or reprocess the pcap while being preprocessed
+- Fixed session restoring not reloading packet payload data
+- Log now notes which Renderer thread a log update is coming from
+- Error message corrected for reprocess button
+- Catch if reprocess button is hit too soon
+- Added some screenshots to the documentation on the frontend
+- Made correction to docs
+- Stream order and filter context in Host Data tab
+- Auto host targeted filtering from the Stats tab
+- Session manager now saves the pcap itself to the session file, allows for reprocessing from session file
+
+---
+
+## v1.6.807 - 2026-06-14
+**Type:** minor
+
+### ✨ Features
+- Autosave function that triggers on exit and on log write
+- New session file format (compressed)
+
+### 🗑️ Removed
+- Dependency on manually saving session on exit (now handled by autosave)
+
+### 🐛 Fixes
+- Now only runs autosave if a real session is opened
+- Discards a dummy session (any session less than 5000 bytes)
+- Added check to see if a session is even open before asking to save it on quit
+- Fixed new session button so it now properly clears out the old session before reloading
+- Loading screen dims PS behind it while active
+- Undims when processing is complete
+- Added blank hosts list on list panel if only packet is by host 0.0.0.0
+- Packet array now syncs up properly with guards
+
+---
+
+## v1.5.731 - 2026-06-07
+**Type:** minor
+
+### ✨ Features
+- Encodings as a hidden import for the python backend .deb builds
+- Swapped snitch binary location due to earlier breaking change in forge config
+- Conditional forge config builds based on building OS
+- .desktop template so icon works properly under Linux
+- UPX packing option (not default)
+- Installer splash
+
+### 🐛 Fixes
+- Windows installer icons fixed
+- Stripped some unnecessary stuff out of backend package
+- Added things to make deb build correctly under Kali
+- Redid way data is imported into .desktop metadata file, dynamically generated
+- Updated that compression block with a notice
+
+### 🔧 Improvements
+- Updated metadata for the builds
+- Updated description and uninstaller ico
+- Added installer loop gif with installer written on it
+- Updated some docs
+- New ico location
+- Added documentation ai redo
+- Some keywords and the terminal explicit false to the .desktop metadata
+
+### 🗑️ Removed
+- Unnecessary stuff from backend package
+
+---
+
+## v1.5.705 - 2026-06-03
+**Type:** minor
+
+### ✨ Features
+- New width/height config so it better fits smaller screens
+- Removed need for `threads` var in backend config
+- Now pulls the number of available CPU cores dynamically
+- Adjusted colors in the Conv color coding for better visibility
+- Conv input history UI
+- Conv output visibility mapping made explicit
+- Hide redundant conv output pane
+- Clamp conversion panel overflow
+- Constrain conversion panel columns
+- Fix Conv output expansion toggle and align output color coding
+- Fixed background color in color coded conv boxes
+- Prevent drag-and-drop text editing in Conv tab input only
+- Prevent drag-and-drop text editing in filter/host inputs
+- Fix Conv hex output mouse-drag behavior and dark blue frame backgrounds
+- Refine Conv highlight map fallbacks
+- Harden Conv selection sync handling
+- Add Conv hex color coding and cross-frame selection sync
+- Guard conv output expand handlers against duplicate binding
+- Add conv output expand and collapse interaction
+- Conv text type heuristics
+- Refine Conv guess scan behavior and context-menu derive flow
+- Add chunked Conv guess scanning and context derive action
+- Sanitize host target filter query terms
+- Refactor guessDataType: extract UUID/JWT regex constants, name base64 score constants
+- Sync target host selection with filter bar
+- Fix guessDataType: tighten JWT regex
+- Add data type guessing (hashes, base64, PGP, JWT, UUID) below MIME type in Conv tab
+- Restrict keystore reset action to unlock mode
+- Guard nested keystore reset action
+- Polish keystore dialog wipe button
+- Refine keystore dialog reset flow
+- Add keychain wipe action to unlock dialog
+- Log renderer console.error to activity log
+- Tidy keystore password confirm check
+- Fix keystore reset function scope
+- Centralize keystore reset warning text
+- Centralize keystore minimum password length constant
+- Add keystore password reset with wipe warning
+- Keep loading screen visible until packets render
+- Modified Python requirements.txt setup slightly so it doesn't bork on linux
+
+### 🗑️ Removed
+- Need for `threads` var in backend config (now pulled from available CPU cores dynamically)
+
+### 🔧 Improvements
+- Normalizing and removing some duplicated things
+- Got most of the logging stuff congruent
+- Add build from source instructions to README
+- Added proper patching for the node_modules rpm builder bug
+- Updated some logging code
+- Added the frontend to the installed screen
+- Fixed path for installed files locator
+- Removed compiled backend dir, added tagline logo
+- Updated ps views gif
+- Fixed paths for installer screen checks
+- Removed the patchup build from regular npm run make so it completes under Windows
+- Updated version
+
+---
+
+## v1.5.618 - 2026-05-30
+**Type:** patch
+
+### ✨ Features
+- Added the frontend to the installed screen
+- Fixed path for installed files locator
+
+---
+
+## v1.5.610 - 2026-05-29
+**Type:** minor
+
+### 🗑️ Removed
+- Compiled backend dir
+- Patchup build from regular `npm run make` (so it completes under Windows)
+
+### 🔧 Improvements
+- Updated `ps_views.gif`
+- Removed compiled backend dir, added tagline logo
+- Added tagline purple
+- Fixed paths for installer screen checks
+- Removed the patchup build from regular `npm run make` so it completes under Windows
+- Updated README
+
+---
+
+## v1.4.508 - 2026-05-26
+**Type:** minor
+
+### ✨ Features
+- Stream filter to when selecting packet from List or Stats screens
+- Hash algorithm outputs (MD5, SHA-1, SHA-256/384/512, SHA3-256/512, RIPEMD-160, Whirlpool) to Conv tab
+- `@noble/hashes` and `whirlpool-js` for Conv tab hash outputs
+- Refactor: switch Conv hash functions to pure JS crypto implementations
+- Reorganize context menu copy and export cookie actions
+- Improved auto cookie entry labels and naming clarity
+- HTTP File context menu branch for dumping HTTP uploads/downloads
+- Auto-add HTTP cookie jar entries to session keystore
+- Cookie jar context menu branch
+- Add to Keystore context menu for highlighted text
+- Context-menu action to load raw payload into Conv tab
+- Multi-level submenu viewport positioning via ancestor panel revelation
+- Extract cookies and generic POST body credentials into session keystore
+- Auto-detect credentials in HTTP, SMTP, POP3, IMAP, Telnet and add to session keystore
+- Session key bookmarking to persistent keychain
+- Password-gated keychain manager with session/persistent modes
+- First-time keychain password setup flow
+- Persist keystore in IndexedDB with encrypted entry payloads
+- Split keystore panel and harden keystore/filter handling
+- Move keystore UI to standalone panel and add Keystore menu tab
+- Tighten Telnet auto-detection to require IAC + valid command byte
+- Add HTTP, Telnet, SSH, POP3, IMAP, SMTP decoders to Conv tab
+- Implement Crypt tab with SSL workspace and persistent local keystore
+- Filter syntax validation and error reporting
+- Context-menu actions for explicit filter parentheses
+- Avoid double wrapping negated context filter clauses
+- Add unary `!` filter inversion and context-menu is-not actions
+- Add explicit `&&` and `||` filter-append context options
+- Add Clear and... submenu under Add to filter context menu
+- Remove double `[Console]` label on renderer console.log entries
+- Label all backend process logs as `[Console][Backend]` in activity log
+- Label backend errors as `[Console][Backend]` in activity log
+- Prefix all UI log entries with `[GUI][UI]`
+- Log console output to activity log
+- Adjust tab bar width and Prev/Next placement
+- Move Prev/Next buttons to far right of tab bar
+- Swap Stats/Data tab positions and rename Data tab to Conv
+- Tighten context menu active cursor guards
+- Normalize context menu active packet cursor handling
+- Sync active packet cursor for context menu helpers
+- Use active packet accessor in context menu export
+- Flip context submenus inside viewport
+- Restructure context menu into convert/filter/export branches
+- TLSv1.2 context to satisfy backend security scan
+- Allow TLS protocol negotiation with min TLS1.2
+- Improve TLS probe reliability with SNI fallback
+- Use explicit TLSv1.2 context for banner SSL probe
+- Refine HTTPS service checks and SNI hostname selection
+- Harden TLS context and tidy HTTPS service detection
+- Fix TLS encryption details for HTTPS-like services
+- Replace filter history popup with standard select dropdown
+- Add tooltip to Conv tab button
+- Hex-view copy actions to right-click context menu
+- Unify right-click context menus and conditional copy visibility
+- Right-click context menu with copy, paste, and save JSON
+- Blank right panel when list or stats tab is active
+- Darken selected packet row on hover in list tab
+- Use Unknown fallback for stream grouping when protocol is missing
+- Sortable packet-list columns via clickable headers
+- Enhance list tab with hover highlight, bookmark column, and stream grouping
+- Add List tab between Stats and Log for packet browsing by host
+- Filter aliases and text matching for `wire.proto`, `eth.src.vendor`, `mime.type`, `dns.qname`
+- Capture stats page with protocols, hosts, locations, and more
+- Polish query-highlight loop and dropdown event guards
+- Refine query-history empty-state styling and toggle handling
+- Improve query syntax UI accessibility and keyboard behavior
+- Allow empty query-history dropdown to open with empty-state message
+- Add syntax highlighting for filter query input and history dropdown
+- Packet query history dropdown for reruns
+- Use cached host value in packet display logging
+- Normalize error log helpers and host iteration
+- Log all remaining frontend error paths
+- Harden activity timeframe parsing and normalize log entry format
+- Fix IPC placement and harden activity log capture entries
+- Add activity log UI and persistence plumbing
+- Filter to stream when selecting packet from List or Stats screens
+- Refactor: simplify packetsForHost fallback in stream filter path
+- Preserve active filter and packet on Host Data reopen
+
+### 🐛 Fixes
+- Fixed Prev Next positioning to something sane
+- Some UI tweaks with more error messages
+- Fixed tabs opacity
+- Resized data tools input box (taller)
+- Fixed port and Network Class context menu filter detection
+- Adjust port handling in context filter parser
+- Tighten context filter query sanitization
+- Harden context filter value handling
+- Append context-menu filters to existing query
+- Fix context filter parsing edge cases
+- Tighten editable target checks for context-menu paste
+- Avoid deprecated execCommand in context-menu paste flow
+- Fix context-menu paste targeting and reorder save option
+- Harden save-json handling and rename action visibility flag
+- Add success status feedback for context menu copy
+- Apply review nit in unified context menu rendering
+- Clean up catch blocks and byteIndex naming
+- Rename hex grid iterator variable for clarity
+- Fix context menu closing and startup hidden state
+- Address review nits for catches and docs labels
+- Refine context conversion validation and comments
+- Fixed some box sizing stuff
+- Fixed log search box positioning
+- Enforce fixed column widths in packet list table
+- Normalize and sanitize stats entries on Stats page
+- Simplify hex grid cell wrapping rule
+- Keep hex payload grid cells square at all zoom levels
+
+### 🔧 Improvements
+- Edit author line
+- Removed eslint backup
+- Added chardet to backend's requirements.txt
+- Some minor changes to themes
+- Updated documentation for new codebase changes
+- Added screenshot of the list screen
+
+---
+
+## v1.3.353 - 2026-05-24
+**Type:** minor
+
+### ✨ Features
+- Updated some electron forge stuff
+- Updated python requirements.txt
+- Fixed log search box positioning
+- List tab between Stats and Log for packet browsing by host
+- Enforce fixed column widths in packet list table
+- Remove unused `.packet-list-host-header` CSS class
+- Add screenshot of the stats tab
+- Normalize and sanitize stats entries on Stats page
+- Filter aliases and text matching for `wire.proto`, `eth.src.vendor`, `mime.type`, `dns.qname`
+- Capture stats page with protocols, hosts, locations, and more
+- Polish query-highlight loop and dropdown event guards
+- Refine query-history empty-state styling and toggle handling
+- Improve query syntax UI accessibility and keyboard behavior
+- Allow empty query-history dropdown to open with empty-state message
+- Add syntax highlighting for filter query input and history dropdown
+- Packet query history dropdown for reruns
+- Use cached host value in packet display logging
+- Normalize error log helpers and host iteration
+- Log all remaining frontend error paths
+- Harden activity timeframe parsing and normalize log entry format
+- Fix IPC placement and harden activity log capture entries
+- Add activity log UI and persistence plumbing
+- Simplify hex grid cell wrapping rule
+- Keep hex payload grid cells square at all zoom levels
+- Added chardet to backend's requirements.txt
+
+### 🔧 Improvements
+- Removed eslint backup
+- Some minor changes to themes
+- Update screenshot in README for main view
+- Added screenshot 24
+
+### 🗑️ Removed
+- `eslint` backup
+
+---
+
+## v1.2.310 - 2026-04-23
+**Type:** minor
+
+### ✨ Features
+- Fix frontend to safely read MAC fields when Ethernet Frame may be N/A
+- Show MAC address info when one IP is private and other is internet
+- Save JSON from in-memory data instead of copying backend temp file
+- Update image source in README.md
+- Fix off-by-one so first packet in each host list is reachable and bookmarkable
+- Sync bookmark dropdown when target host changes
+- Extract `syncBookmarkDropdown` helper to remove duplication
+- Sync bookmark dropdown with current packet navigation
+- Add eslint fixes
+- Resolve all JavaScript errors in src/ files
+- Updated linting config
+- Remove `.progress-ps.html` page
+- Load hosts.json directly after backend finishes with 1s delay
+- Clarify RADIUS TCP support is per RFC 6614
+- Wire new protocol decoders into frontend render pipeline
+- Add decoders for FTP, SMTP, POP3, IMAP, Telnet, IRC, MTP, LDAP, MySQL, PostgreSQL, XMPP, SMB, MQTT, RTSP, TFTP, BGP, HTTP/2, NNTP, RADIUS
+- Extract protocol decoders into decoders.js
+- Wire CopyPlugin to copy `src/assets` into webpack output so images load
+- Replace inline base64 PNG images with file references in index.html
+- Backend changed to onedir instead of onefile (shaves 4 seconds off backend time, no package unpack)
+- Status shows PS version number
+- Add `SOFTWARE_VERSION` const to frontend scripts.js
+- Add installation complete screen shown on first run after new version install
+- Rewrite README.md to focus on frontend and full tool overview
+
+### 🔧 Improvements
+- Hide menu bar
+- Fix images so they load from files
+- Update reference to Filters documentation
+- Update Filters.md with new protocol filter keys
+
+---
+
+## v1.2.254 - 2026-04-16
+**Type:** minor
+
+### ✨ Features
+- Add Filters.md link to main README
+- Add comprehensive Filters.md documentation page
+- Update README with donation options and installation steps
+- Update donation section with QR codes
+- Organize docs section
+- Update Frontend.md with installation instructions
+- Set `numWorkerThreads` to twice the available CPU cores
+- Make top bar draggable; exclude close button from drag region
+- Add aria-label to close button and enable top bar window dragging
+- Removed frame
+- Revise README with new version and documentation links
+- Backed zoom out a bit
+- Made error go away automatically on correct filter
+- Update README.md
+- Reorganize into Backend.md and Frontend.md with all new searchable attributes and output frames
+- Add HTTP protocol decoder to backend and frontend
+- Changed `packet.protocol` to `packet.proto` for uniformity
+- Add SNMP, ICMP, SIP, DHCP, and NTP protocol support
+- Add UDP and DNS packet support on backend and frontend
+- Default save dialog to user's Documents folder cross-platform
+- Fix pointer to the filesave worker
+- Copy temp `hosts.json` to dest instead of passing data through IPC
+- Add threaded save-JSON function
+- Remove save functions
+- Backend exits silently when output dir exists (remove `input()` prompt, clean dir before each run)
+- Reset state on subsequent file loads after saving
+- Rename all snake_case function names to camelCase in snitch.py and scripts.js
+- Fix code review issues: JSON key literals, string comparisons, comment typos, and filename
+- Rename variables to camelCase with descriptive names across frontend and backend
+- Now filter with target host selection keeps in track with filter readout
+- Add Save JSON button with save-as functionality
+- Reloading with optimized backend
+- Removed .exe
+- Removed useless icons
+- Fixed nollm call
+- Add LLM enable/disable checkbox to frontend; add `--no-llm` backend flag
+- Added dev install instructions
+- Improve README with images and usage sections
+- Updated version
+- Fixed part of bookmark code that isn't available if host pointer is incorrect
+- Fixed off by one in bookmark code
+- Fixed bookmark code
+- Fixed horizontal scroll on packet payload pane (disabled)
+- Fix note to remove `dns.hostnames` (non-leaf) reference
+- Add Searchable Attributes section with all dot-notation leaf nodes
+- Update README with new version and screenshot
+- Added new screenshot
+- Updated version
+- Fixed timestamp and recon positioning
+- Fix payloadascii tooltip not showing on hexg mouseover
+- Removed a few old unworking samples
+- Added some new properly formatted search parameters
+- Added a timer for how long it took to load the file read
+- Fixed a few things, added a packet size and filter ret size readout
+- Added some new functionality with counting packets on the sidebar
+- Fixed some positioning and zindex stuff
+- Fixed zoom bug
+- Bringing up ver
+- Fixed some initial display bugs
+- Now properly handles when no packets are returned from filter
+- New screenshot, a couple updates to comparison
+- Added better filtering mechanism
+- Now index should work right (it was adding twice to the array)
+- Filter works better now
+- Added some filter code
+- Filter code is mostly working
+- Filtered is almost working right
+- Starting to build filter functions
+- Better compression logic
+- Better DNS host logic, also added catchall error handling
+- Better error handling, loading dots blink now
+- Made some small changes to the summary box
+- Fixed bug if encryption stuff is undefined
+- Added an error message function
+- Updated some stuff for squirrel install
+- Added some failsafes
+- Updated screenshot
+- Version update
+- Fixed a bug in the data box, added a few more data points
+- Added a new pane for more extra infos
+- Added a nice loading screen
+- Cleaned up code a bit, now makes sure backend is dead on quit
+- Added icons for the installers and exe
+- Building first working bins
+- Windows version builds and works!
+- Updated for os detection
+- Adjustments for build
+- Should work better calling the backend now when installed
+- Initial commit
+
+### 🐛 Fixes
+- Make all boxes resize relative to window size using flexbox and CSS variables
+- Add parenthesis grouping support to packet filter query parser
+- Use Unix-style path for non-Windows platforms in back-comm.js
+- Resolve all JavaScript errors in src/ files
+- Fix payloadascii tooltip not showing on hexg mouseover
+- Updated linting config
+- Fix some things with eslint
+
+### 🗑️ Removed
+- Window frame (frameless window)
+- A few old unworking samples
+
+### 🔧 Improvements
+- Various UI improvements
+- Updated version number
+- Updated screenshot
+- Removed .exe
+- Removed useless icons
+- Fixed bookmark code
+
+---
+
+## v1.2.227 - 2026-04-15
+**Type:** minor
+
+### ✨ Features
+- Add HTTP protocol decoder to backend and frontend
+- Changed `packet.protocol` to `packet.proto` for uniformity
+- Add SNMP, ICMP, SIP, DHCP, and NTP protocol support
+- Add UDP and DNS packet support on backend and frontend
+- Default save dialog to user's Documents folder cross-platform
+- Fix pointer to the filesave worker
+- Copy temp `hosts.json` to dest instead of passing data through IPC
+- Add threaded save-JSON function
+- Rename all snake_case function names to camelCase in snitch.py and scripts.js
+- Reset state on subsequent file loads after saving
+- Add Save JSON button with save-as functionality
+- Add LLM enable/disable checkbox to frontend; add `--no-llm` backend flag
+- Improve README with images and usage sections
+- Updated version
+- Fixed part of bookmark code that isn't available if host pointer is incorrect
+- Fixed off by one in bookmark code
+- Fixed bookmark code
+- Fixed horizontal scroll on packet payload pane (disabled)
+- Removed a few old unworking samples
+- Added some new properly formatted search parameters
+- Added a timer for how long it took to load the file read
+- Fixed a few things, added a packet size and filter ret size readout
+- Added some new functionality with counting packets on the sidebar
+- Fixed some positioning and zindex stuff
+- Fixed zoom bug
+- Better compression logic
+- Better DNS host logic, also added catchall error handling
+- Better error handling, loading dots blink now
+- Made some small changes to the summary box
+- Fixed bug if encryption stuff is undefined
+- Added an error message function
+- Updated some stuff for squirrel install
+- Added some failsafes
+- Fixed a bug in the data box, added a few more data points
+- Added a new pane for more extra infos
+- Added a nice loading screen
+- Cleaned up code a bit, now makes sure backend is dead on quit
+- Added icons for the installers and exe
+- Building first working bins
+- Windows version builds and works!
+- Updated for os detection
+- Adjustments for build
+- Should work better calling the backend now when installed
+- Initial commit
+
+### 🐛 Fixes
+- Make all boxes resize relative to window size using flexbox and CSS variables
+- Add parenthesis grouping support to packet filter query parser
+- Various UI fixes
+
+### 🗑️ Removed
+- Window frame (frameless window)
+- A few old unworking samples
+
+---
+
+## v1.1.195 - 2026-04-13
+**Type:** minor
+
+### 🗑️ Removed
+- Useless icons
+
+### ✨ Features
+- Removed useless icons
+- Added new ver
+- Add LLM enable/disable checkbox to frontend; add `--no-llm` backend flag
+- Fixed nollm call
+- Added dev install instructions
+- Improve README with images and usage sections
+- Fixed part of bookmark code that isn't available if host pointer is incorrect
+- Fixed off by one in bookmark code
+- Fixed bookmark code
+- Fixed horizontal scroll on packet payload pane (disabled)
+
+### 🔧 Improvements
+- Optimized snitch.py backend - O(1) lookups, GeoIP cache, thread safety, fix bugs
+- Backed off threads again
+
+---
+
+## v1.1.184 - 2026-04-12
+**Type:** minor
+
+### ✨ Features
+- Updated version
+- Fixed part of bookmark code that isn't available if host pointer is incorrect
+- Fixed off by one in bookmark code
+- Fixed bookmark code
+- Fixed horizontal scroll on packet payload pane (disabled)
+- Add Searchable Attributes section with all dot-notation leaf nodes
+- Update README with new version and screenshot
+- Added new screenshot
+- Updated version #
+- Fixed timestamp and recon positioning
+- Fix payloadascii tooltip not showing on hexg mouseover
+- Removed a few old unworking samples
+- Added some new properly formatted search parameters
+- Added a timer for how long it took to load the file read
+- Fixed a few things, added a packet size and filter ret size readout
+- Added some new functionality with counting packets on the sidebar
+- Fixed some positioning and zindex stuff
+- Fixed zoom bug
+- Bringing up ver
+- Fixed some initial display bugs
+- Now properly handles when no packets are returned from filter
+- Added better filtering mechanism
+- Better compression logic
+- Better DNS host logic
+- Better error handling
+- Added a nice loading screen
+- Cleaned up code a bit
+- Initial commit
+
+### 🗑️ Removed
+- A few old unworking samples
+
+### 🔧 Improvements
+- Made all boxes resize relative to window size using flexbox and CSS variables
+- Add parenthesis grouping support to packet filter query parser
+- Various UI improvements
+
+---
+
+## v1.0.175 - 2026-04-13
+**Type:** patch
+
+### 🗑️ Removed
+- Useless icons
+
+### 🔧 Improvements
+- Removed useless icons
+- Version bump
+- Updated version
+
+---
+
+## v1.0.158 - 2026-04-01
+**Type:** major
+
+### 🗑️ Removed
+- Window frame (frameless window)
+
+### ✨ Features
+- First stable 1.0 release
+- Initial application framework
+- Backend Python service integration
+- Frontend Electron UI
+- Filter system
+- Bookmark system
+- Hex grid payload viewer
+- Info panel and packet details
+- Data box with packet information
+- Loading screen
+- Window frame removed
+- Cross-platform installers (Windows, Linux, macOS)
+- Auto-update functionality
+- Statistics tab
+- Stream statistics
+- Compression and encoding detection
+- Network class detection
+- GeoIP location data
+- Hostname resolution
+- LLM integration in backend
+
+### 🐛 Fixes
+- Fixed many initial display bugs
+- Filter improvements
+- Bookmark logic improvements
+- Backend process management on quit
+- Various UI bugs
+
+---
+
+## v0.9.130alpha - 2026-03-24
+**Type:** major (alpha)
+
+### ✨ Features
+- Alpha release
+- Initial working binaries (Windows, Linux, macOS)
+- Application framework
+- Backend Python service (snitch.py)
+- Frontend Electron UI
+- Filter system
+- Bookmark system
+- Hex grid payload viewer
+- Info panel
+- Statistics
+- GeoIP integration
+- Hostname resolution
+- Squirrel installer integration
+- OS detection
+- Icons and branding
+- Build configuration
+
+---
+
+## Initial Development - 2026-02-17 to 2026-03-24
+**Type:** pre-alpha
+
+### ✨ Features
+- Initial project commit
+- Project scaffolding
+- Basic Electron + Python backend architecture
+- Working on bookmark dropdown and its relative functions
+- Now full packet data works in JSON and Prev/Next works properly
+- Added next/prev buttons to walk through packets
+- Some logo stuff for the real logo (not the placeholder)
+- Fixed some things and changed color scheme
+- Worked on getting divs and fonts right on frontend
+- Consolidated some ideas and mockups to one folder
+- Add screenshot section to README
+- Added a screenshot for the docs page
+- Add image to README for PacketSnitch
+- Created a grid for the hex payload, and timestamp in info panel
+- Updated screenshot
+- Updated screenshot
+- Added two pane system, now pulling the Hex encoded payload works
+- Trying out new layout scheme
+- Added an info pane and payload pane, ontop of each other
+- Bookmarks work now
+- Bookmark function needs rewrite, but layout should be right
+- Now we have a dedicated right pane
+- Working on bookmark dropdown and its relative functions
+- Now full packet data works in json and Prev/Next works properly
+- Added next/prev buttons to walk through packets
+- Added some logo stuff for the real logo (not the placeholder
+- Fixed some things and changed color scheme
+- worked on getting divs and fonts right on frontend
+- Updated logo stuff
+- updated screenshot in docs
+- Populated some of the panels, needs some work on spacing and stuff
+- Got next page thing working without doubling up
+- Added a checksum table, and table creation routine
+- Fixex box repeating itself
+- Trying to make things congruent
+- GNU GPLv3 reference in readme
+- Rename LICENSE to LICENSE.md
+- Updated readme for new ss
+- Uploaded screenshot 14 (windows)
+- Matched up some alignment stuff better in the CSS
+- updated docs for some deps
+- updated screenshot
+- Now grid highlights and dehighlights properly
+- Now a hover box with offset and ascii text representation of the hexgrid fades into view on mouseover
+- Updating screenshot and readme
+- Added better location logic, now can run the backend from frontend on packet capture load
+- Trying to get backend hook working
+- Polling now works right
+- Got the IPC from renderer to call the bridge handler on preload.js which accepts our json packet[4~ data pulled in main.js
+- Fixed some things like the incorrect network class, and added a default config from a stash
+- Lining it up
+- Entropy box works now
+- Got tables the right width
+- Added some things to sidebar (location)
+- Small tweaks to alignment
+- now doesn't barf if you click data without selecting a host, also has sort of help menu
+- Some tuning to the interface
+- Trying to add binary to run
+- Some documentation/comments on the scripts
+- Added logo on readme
+- Added image to README for PacketSnitch
+- Trying out new layout scheme
+- Add image to README for PacketSnitch
+- Change logo image link in README.md
+- Update image links in README.md
+- Added the xcf of hte byline
+- Updated screenshot
+- Modified colorscheme, added transparent byline and logo
+- Fixed bookmark logic so it doesn't get stuck on undefined host. Changed some icons
+- Update funding usernames in FUNDING.yml
 
