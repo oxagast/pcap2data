@@ -527,7 +527,7 @@
         {% include nav.html %}
 
         <div id="downloads">Loading latest release...</div>
-        <div id="download-links"></div>
+        <div id="download-links">&nbsp;</div>
 
         <script>
             async function loadLatestRelease() {
@@ -535,7 +535,6 @@
                 const repo = "PacketSnitch";
 
                 const releaseContainer = document.getElementById("downloads");
-                releaseContainer.textContent = "Loading latest release...";
                 const linksContainer = document.getElementById("download-links");
 
                 try {
