@@ -736,13 +736,15 @@ def writeTestcase(data, outputDirPath, portDir, index):
     Creates the per-port sub-directory on first use; errors there are non-fatal.
     Uses a context manager so the file descriptor is always released.
     """
-    destDir = outputDirPath + "/" + portDir
-    if not os.path.exists(destDir):
-        try:
-            os.mkdir(destDir)
-        except Exception:
-            print("[Worker] Could not create minor dir.")
-    with open(destDir + "/pcap.data_packet." + str(index) + ".dat", "wb") as out:
+    import pathlib
+    safePortDir = os.path.basename(portDir)
+    basePath = pathlib.Path(outputDirPath).resolve()
+    destPath = (basePath / safePortDir).resolve()
+    if not str(destPath).startswith(str(basePath) + os.sep):
+        raise ValueError("Path traversal detected in portDir")
+    destPath.mkdir(exist_ok=True)
+    filePath = destPath / ("pcap.data_packet." + str(int(index)) + ".dat")
+    with open(filePath, "wb") as out:
         out.write(data)
 
 
