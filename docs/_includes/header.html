@@ -247,17 +247,41 @@
         font-display: swap;
     }
 
+    /* Fallback face for Quicksand: tuned so Verdana occupies roughly the
+       same horizontal/vertical space, eliminating visible layout shift on
+       font swap. Values approximate Quicksand's metrics relative to
+       Verdana's units-per-em. */
+    @font-face {
+        font-family: 'Quicksand-Fallback';
+        src: local('Verdana');
+        size-adjust: 112%;
+        ascent-override: 95%;
+        descent-override: 28%;
+        line-gap-override: 0%;
+    }
+
     @font-face {
         font-family: 'Geo';
         src: url('/assets/fonts/Geo-Regular.ttf') format('truetype');
         font-display: swap;
     }
 
+    /* Fallback face for Geo: Geo is unusually wide and tall; calibate a
+       sans-serif fallback so download-link rows don't jump on swap. */
+    @font-face {
+        font-family: 'Geo-Fallback';
+        src: local('Arial');
+        size-adjust: 118%;
+        ascent-override: 90%;
+        descent-override: 30%;
+        line-gap-override: 0%;
+    }
+
     body {
         background-color: #343359;
         color: #e0e0e0;
         line-height: 1.75;
-        font-family: 'Quicksand', Verdana, sans-serif;
+        font-family: 'Quicksand', 'Quicksand-Fallback', Verdana, sans-serif;
         font-size: 15px;
     }
 
@@ -266,7 +290,7 @@
         margin-top: 1rem;
         margin-bottom: 1rem;
         height: 200px;
-        font-family: 'Geo', sans-serif;
+        font-family: 'Geo', 'Geo-Fallback', sans-serif;
     }
 
     .wrapper {
