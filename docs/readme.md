@@ -2,11 +2,7 @@
 
 ## Overview
 
-<<<<<<< HEAD
-PacketSnitch is a network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, threat intelligence, and other actionable insights.
-=======
 A network analysis platform that transforms packet captures into searchable, protocol-aware intelligence, helping security professionals, developers, and researchers rapidly uncover hosts, credentials, certificates, files, locations, protocols, anomalies, threat intelligence, and other actionable insights.
->>>>>>> parent of 2affeb2c (Update readme.md)
 
 
 
@@ -113,6 +109,7 @@ Project Head: Marshall Whittaker <marshall@oxasploits.com>
 - Martin Ollivere (Rat on wheel spinning gif)
 - tiamo64 (Performance optimizations)
 - aestetix (inspiration on how this documentation page should be formatted)
+- Anupam Mediratta (path traversal bugfix)
 - 2600net staff (hosting the irc server where our dev channel resides)
 - Everyone else who has tested or contributed in some way, big or small, thank you!
 
