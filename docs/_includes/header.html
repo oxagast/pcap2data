@@ -234,11 +234,22 @@
 </style>
 
 <style>
-    /* Define the locally hosted Rubik Glitch web font.
-       Dosis and Anta are loaded via the Google Fonts <link> in head.html. */
+    /* Define locally hosted web fonts. */
     @font-face {
         font-family: 'Rubik Glitch';
         src: url('/assets/fonts/RubikGlitch.woff2') format('woff2');
+        font-display: swap;
+    }
+
+    @font-face {
+        font-family: 'Quicksand';
+        src: url('/assets/fonts/Quicksand-Regular.ttf') format('truetype');
+        font-display: swap;
+    }
+
+    @font-face {
+        font-family: 'Geo';
+        src: url('/assets/fonts/Geo-Regular.ttf') format('truetype');
         font-display: swap;
     }
 
@@ -246,7 +257,7 @@
         background-color: #343359;
         color: #e0e0e0;
         line-height: 1.75;
-        font-family: 'Dosis', Verdana, sans-serif;
+        font-family: 'Quicksand', Verdana, sans-serif;
         font-size: 15px;
     }
 
@@ -255,7 +266,7 @@
         margin-top: 1rem;
         margin-bottom: 1rem;
         height: 200px;
-        font-family: 'Anta', sans-serif;
+        font-family: 'Geo', sans-serif;
     }
 
     .wrapper {
