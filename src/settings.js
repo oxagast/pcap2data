@@ -82,7 +82,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     privacy: {
         metricsEnabled: false,
-        metricsEndpointUrl: "http://oxasploits.com:8088/mhook",
+        metricsEndpointUrl: "http://47.37.209.29:8088/mhook",
         metricsFlushIntervalSeconds: 60,
         metricsMaxQueueSize: 500,
         metricsInstallId: "",
