@@ -7,7 +7,7 @@ src/metrics/var
 backend/snitch.exe
 testcases
 .VSCodeCounter
-
+memories
 
 # Keys
 *.key

@@ -35,6 +35,7 @@ const path = require("path");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(PROJECT_ROOT, "src", "backend");
+const ICON_PATH = path.join(PROJECT_ROOT, "src", "backend", "snitch.ico");
 const ENTRY_SCRIPT = path.join(BACKEND_DIR, "snitch.py");
 const BUILD_WORK_DIR = path.join(PROJECT_ROOT, "build", "pyinstaller");
 
@@ -85,6 +86,8 @@ function buildArgs(target) {
         "PyInstaller",
         "--noconfirm",
         "--clean",
+        "--icon",
+        ICON_PATH,
         "--onefile",
         "--name",
         targetConfig.exeName,
