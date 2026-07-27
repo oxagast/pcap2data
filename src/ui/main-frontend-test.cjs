@@ -880,6 +880,9 @@ let startupPreloadShownAtMs = Date.now();
 let startupPreloadHideStartTimeoutId = null;
 let cachedBackendDiagnostics = null;
 let cachedVirusTotalDiagnostics = null;
+let virusTotalDiagnosticsInFlight = null;
+let virusTotalDiagnosticsLastSuccessAt = 0;
+const VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS = 30_000;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
@@ -1132,34 +1135,67 @@ function syncBackendDiagnosticsIndicators() {
   syncVirusTotalDiagnosticsIndicators();
 }
 
-async function refreshVirusTotalDiagnostics() {
+async function refreshVirusTotalDiagnostics({ force = false } = {}) {
   if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
     cachedVirusTotalDiagnostics = null;
     syncVirusTotalDiagnosticsIndicators();
     return null;
   }
 
-  const apiKey = getBackendVirusTotalApiKey();
-  try {
-    const diagnostics = await window.snitchapi.lookupVirusTotal("8.8.8.8", {
-      lookupType: "ip",
-      apiKey,
-      diagnosticOnly: true,
-      backendOptions: getBackendTransportOptionsFromSettings(),
-    });
-    cachedVirusTotalDiagnostics = diagnostics || null;
-  } catch (error) {
-    console.warn("Unable to resolve VirusTotal diagnostics:", error);
-    cachedVirusTotalDiagnostics = {
-      endpointReachable: false,
-      keyConfigured: Boolean(apiKey),
-      keyValid: false,
-      error: error?.message || String(error),
-    };
+  // Coalesce concurrent callers so a startup burst (eager + loadPersistedSettings
+  // + backend-service-ready) only hits the VirusTotal API once. Also skip the
+  // probe entirely when a recent successful diagnostic is still fresh.
+  if (!force) {
+    if (virusTotalDiagnosticsInFlight) {
+      return virusTotalDiagnosticsInFlight;
+    }
+    if (
+      cachedVirusTotalDiagnostics &&
+      cachedVirusTotalDiagnostics.endpointReachable !== false &&
+      Date.now() - virusTotalDiagnosticsLastSuccessAt < VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS
+    ) {
+      return cachedVirusTotalDiagnostics;
+    }
   }
 
+  const apiKey = getBackendVirusTotalApiKey();
+  virusTotalDiagnosticsInFlight = (async () => {
+    try {
+      const diagnostics = await window.snitchapi.lookupVirusTotal("8.8.8.8", {
+        lookupType: "ip",
+        apiKey,
+        diagnosticOnly: true,
+        backendOptions: getBackendTransportOptionsFromSettings(),
+      });
+      cachedVirusTotalDiagnostics = diagnostics || null;
+      if (cachedVirusTotalDiagnostics) {
+        virusTotalDiagnosticsLastSuccessAt = Date.now();
+      }
+    } catch (error) {
+      console.warn("Unable to resolve VirusTotal diagnostics:", error);
+      cachedVirusTotalDiagnostics = {
+        endpointReachable: false,
+        keyConfigured: Boolean(apiKey),
+        keyValid: false,
+        error: error?.message || String(error),
+      };
+    } finally {
+      virusTotalDiagnosticsInFlight = null;
+    }
+    syncVirusTotalDiagnosticsIndicators();
+    return cachedVirusTotalDiagnostics;
+  })();
+
+  return virusTotalDiagnosticsInFlight;
+}
+
+// Clears the cached VirusTotal diagnostics so the next refresh re-probes the
+// API. Used when settings (e.g. API key) change and a stale result must not
+// mask the new configuration.
+function invalidateVirusTotalDiagnosticsCache() {
+  virusTotalDiagnosticsLastSuccessAt = 0;
+  cachedVirusTotalDiagnostics = null;
   syncVirusTotalDiagnosticsIndicators();
-  return cachedVirusTotalDiagnostics;
 }
 
 async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
@@ -3371,6 +3407,14 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   }
   const previousSettings = getCurrentSettings();
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
+  // Invalidate the VirusTotal diagnostics cache so a saved/cleared API key
+  // is verified immediately rather than masked by a recent successful fetch.
+  if (
+    previousSettings?.backend?.virusTotalApiKey !==
+    nextSettings?.backend?.virusTotalApiKey
+  ) {
+    invalidateVirusTotalDiagnosticsCache();
+  }
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
   syncCaptureIngestWorkersFromSettings();
@@ -14674,9 +14718,6 @@ const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
   "convert-context-save-divider",
 );
-const convertContextBottomDividerEl = getCachedElement(
-  "convert-context-bottom-divider",
-);
 const convertContextSubmenuEls = Array.from(
   convertContextMenuEl.querySelectorAll(".ctx-submenu"),
 );
@@ -15398,8 +15439,16 @@ function showConvertContextMenu(
     "ftp",
     activeContextPacket,
   );
+  const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
+    : null;
+  const hasStatsCarvableAction = Boolean(statsCarvableTag);
   const hasFileCarveActions =
-    hasHttpBody || canCarveSmbStream || canCarveNfsStream || canCarveFtpStream;
+    hasHttpBody ||
+    canCarveSmbStream ||
+    canCarveNfsStream ||
+    canCarveFtpStream ||
+    hasStatsCarvableAction;
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
     : "none";
@@ -15471,6 +15520,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.fileCarveFtp.style.display = canCarveFtpStream
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
     ? "block"
     : "none";
 
@@ -15654,20 +15709,7 @@ function showConvertContextMenu(
     ? target?.closest?.("#stats_box .stats-section .stats-tag[data-latitude]")
     : null;
   const hasStatsLocationHeatmapAction = Boolean(statsLocationTag);
-  const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
-    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
-    : null;
-  const statsCarvableCandidate = statsCarvableTag
-    ? getCarvableCandidateById(statsCarvableTag.dataset.carvableId)
-    : null;
-  const hasStatsCarvableAction = Boolean(statsCarvableCandidate);
   convertContextButtons.openHeatmapLocation.style.display = hasStatsLocationHeatmapAction
-    ? "block"
-    : "none";
-  convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
-    ? "block"
-    : "none";
-  convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
     ? "block"
     : "none";
   const hasContextDataForNotes =
@@ -15863,8 +15905,6 @@ function showConvertContextMenu(
         hasKeystoreActions)
       ? "block"
       : "none";
-  convertContextBottomDividerEl.style.display =
-    hasStatsLocationHeatmapAction || hasStatsCarvableAction ? "block" : "none";
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;

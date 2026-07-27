@@ -16,6 +16,7 @@
 - [HTTP Body...](#http-body)
 - [File Carving...](#file-carving)
 - [LLM Actions](#llm-actions)
+- [Analyze IP...](#analyze-ip)
 - [Save Session](#save-session)
 
 ### Overview
@@ -186,7 +187,7 @@ HTTP body actions use stream reassembly and honor `Content-Length` / chunked fra
 
 ### File Carving...
 
-Shown when at least one carve target is available for the current packet or stream.
+Shown when at least one carve target is available for the current packet or stream, or when right-clicking a carved-file candidate in the **Stats → Carvable Files** list.
 
 | Item                    | Description                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------ |
@@ -195,6 +196,10 @@ Shown when at least one carve target is available for the current packet or stre
 | **SMB file to disk**    | Detect files transferred in the current SMB stream, let you pick one, then save it as binary.  |
 | **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
 | **FTP file to disk**    | Detect file transfer bytes in FTP streams, then save the carved result as binary.              |
+| **Load carved file into Extraction** | Stats-only. Load the right-clicked carved file's bytes into the **Conv → Extraction** subtab. |
+| **Send carved file to VirusTotal**   | Stats-only. Send the right-clicked carved file's bytes to the configured VirusTotal lookup.    |
+
+The last two entries appear only when right-clicking a carved-file candidate tag in the **Stats** tab.
 
 ---
 
@@ -212,6 +217,19 @@ Shown only when runtime LLM is available (enabled in Settings and Ollama runtime
 `Explain this data...` is shown only when the selected/context text passes significance checks (for example, minimum length and not purely numeric/hex noise).
 
 All three LLM actions write Markdown output into a new note and switch to the Notes workspace.
+
+---
+
+### Analyze IP...
+
+Shown when right-clicking an IP address (or a row/cell containing one) in Host Data, Stats, or List view. The IP is detected from the current text selection, the right-clicked cell, the enclosing row, or the panel's contents.
+
+| Item                              | Description                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Run in Subnet Calculator**      | Switches to **Conv → Analyze Subnet**, loads the IP into the Subnet Calculator input, and runs the analysis.             |
+| **Run Threat Intel lookup**       | Switches to **Conv → Threat Intel**, sets the query type to `ip`, loads the IP, and runs IPSUM, Tor exit list, and VirusTotal lookups. |
+
+Both actions navigate to the matching Conv subtab and stream the lookups in the background. The status bar reports the IP and target action.
 
 ---
 

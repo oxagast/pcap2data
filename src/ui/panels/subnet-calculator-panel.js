@@ -2322,6 +2322,40 @@ function createSubnetCalculatorPanel({
         void lookupVirusTotalForInput(analysis, requestToken, trimmedValue, "hash");
     }
 
+    function runThreatIntelIpLookup(ipAddress) {
+        const trimmedValue = String(ipAddress || "").trim();
+        if (!trimmedValue) {
+            setPanelStatus("Enter an IP address for Threat Intel lookup.", true);
+            return;
+        }
+        if (threatIntelTypeEl) {
+            threatIntelTypeEl.value = "ip";
+        }
+        if (threatIntelInputEl) {
+            threatIntelInputEl.value = trimmedValue;
+        }
+        const requestToken = ++lookupRequestToken;
+        threatIntelState = { ipsum: null, tor: null, virustotal: null };
+        const analysis = {
+            lookupTargetIp: trimmedValue,
+        };
+        void Promise.all([
+            lookupIpsum(analysis, requestToken),
+            lookupTor(analysis, requestToken),
+            lookupVirusTotalForInput(analysis, requestToken, trimmedValue, "ip"),
+        ]);
+    }
+
+    function setAnalysisInput(ipAddress) {
+        const trimmedValue = String(ipAddress || "").trim();
+        if (!trimmedValue) return;
+        if (inputEl) {
+            inputEl.value = trimmedValue;
+            inputEl.focus();
+        }
+        nmapScanState.currentInspectedIp = trimmedValue;
+    }
+
     function renderEmptyState() {
         updateNmapScanButtonState();
         setPlaceholder(summaryEl, "Enter an IP address, host/prefix, or subnet to inspect.");
@@ -2397,6 +2431,8 @@ function createSubnetCalculatorPanel({
         resetCaptureNmapState,
         restoreSessionState,
         runThreatIntelHashLookup,
+        runThreatIntelIpLookup,
+        setAnalysisInput,
     };
 }
 

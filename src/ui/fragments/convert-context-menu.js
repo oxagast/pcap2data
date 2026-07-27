@@ -191,6 +191,8 @@ const convertContextMenuMarkup = `
       <button id="ctx-file-carve-smb" type="button">SMB file to disk</button>
       <button id="ctx-file-carve-nfs" type="button">NFS file to disk</button>
       <button id="ctx-file-carve-ftp" type="button">FTP file to disk</button>
+      <button id="ctx-load-carvable-extraction" role="menuitem">Load carved file into Extraction</button>
+      <button id="ctx-load-carvable-virustotal" role="menuitem">Send carved file to VirusTotal</button>
     </div>
   </div>
   <div id="ctx-llm-submenu" class="ctx-submenu">
@@ -202,11 +204,15 @@ const convertContextMenuMarkup = `
       <button id="ctx-llm-subnet-host-summary" role="menuitem">Summarize this subnet host...</button>
     </div>
   </div>
-  <hr id="convert-context-save-divider" class="ctx-divider" />
   <button id="ctx-open-heatmap-location" role="menuitem">Open in Heatmap</button>
-  <button id="ctx-load-carvable-extraction" role="menuitem">Load carved file into Extraction</button>
-  <button id="ctx-load-carvable-virustotal" role="menuitem">Send carved file to VirusTotal</button>
-  <hr id="convert-context-bottom-divider" class="ctx-divider" />
+  <div id="ctx-analyze-ip-submenu" class="ctx-submenu">
+    <button id="ctx-analyze-ip-branch" class="ctx-branch" type="button">Analyze IP...</button>
+    <div class="ctx-submenu-panel">
+      <button id="ctx-analyze-ip-subnet" type="button">Run in Subnet Calculator</button>
+      <button id="ctx-analyze-ip-threat-intel" type="button">Run Threat Intel lookup</button>
+    </div>
+  </div>
+  <hr id="convert-context-save-divider" class="ctx-divider" />
   <button id="ctx-save-json" role="menuitem">Save Session</button>
 `;
 

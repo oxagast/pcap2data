@@ -904,6 +904,9 @@ let startupPreloadShownAtMs = Date.now();
 let startupPreloadHideStartTimeoutId = null;
 let cachedBackendDiagnostics = null;
 let cachedVirusTotalDiagnostics = null;
+let virusTotalDiagnosticsInFlight = null;
+let virusTotalDiagnosticsLastSuccessAt = 0;
+const VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS = 30_000;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
@@ -1179,34 +1182,67 @@ function syncBackendDiagnosticsIndicators() {
   syncVirusTotalDiagnosticsIndicators();
 }
 
-async function refreshVirusTotalDiagnostics() {
+async function refreshVirusTotalDiagnostics({ force = false } = {}) {
   if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
     cachedVirusTotalDiagnostics = null;
     syncVirusTotalDiagnosticsIndicators();
     return null;
   }
 
-  const apiKey = getBackendVirusTotalApiKey();
-  try {
-    const diagnostics = await window.snitchapi.lookupVirusTotal("8.8.8.8", {
-      lookupType: "ip",
-      apiKey,
-      diagnosticOnly: true,
-      backendOptions: getBackendTransportOptionsFromSettings(),
-    });
-    cachedVirusTotalDiagnostics = diagnostics || null;
-  } catch (error) {
-    console.warn("Unable to resolve VirusTotal diagnostics:", error);
-    cachedVirusTotalDiagnostics = {
-      endpointReachable: false,
-      keyConfigured: Boolean(apiKey),
-      keyValid: false,
-      error: error?.message || String(error),
-    };
+  // Coalesce concurrent callers so a startup burst (eager + loadPersistedSettings
+  // + backend-service-ready) only hits the VirusTotal API once. Also skip the
+  // probe entirely when a recent successful diagnostic is still fresh.
+  if (!force) {
+    if (virusTotalDiagnosticsInFlight) {
+      return virusTotalDiagnosticsInFlight;
+    }
+    if (
+      cachedVirusTotalDiagnostics &&
+      cachedVirusTotalDiagnostics.endpointReachable !== false &&
+      Date.now() - virusTotalDiagnosticsLastSuccessAt < VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS
+    ) {
+      return cachedVirusTotalDiagnostics;
+    }
   }
 
+  const apiKey = getBackendVirusTotalApiKey();
+  virusTotalDiagnosticsInFlight = (async () => {
+    try {
+      const diagnostics = await window.snitchapi.lookupVirusTotal("8.8.8.8", {
+        lookupType: "ip",
+        apiKey,
+        diagnosticOnly: true,
+        backendOptions: getBackendTransportOptionsFromSettings(),
+      });
+      cachedVirusTotalDiagnostics = diagnostics || null;
+      if (cachedVirusTotalDiagnostics) {
+        virusTotalDiagnosticsLastSuccessAt = Date.now();
+      }
+    } catch (error) {
+      console.warn("Unable to resolve VirusTotal diagnostics:", error);
+      cachedVirusTotalDiagnostics = {
+        endpointReachable: false,
+        keyConfigured: Boolean(apiKey),
+        keyValid: false,
+        error: error?.message || String(error),
+      };
+    } finally {
+      virusTotalDiagnosticsInFlight = null;
+    }
+    syncVirusTotalDiagnosticsIndicators();
+    return cachedVirusTotalDiagnostics;
+  })();
+
+  return virusTotalDiagnosticsInFlight;
+}
+
+// Clears the cached VirusTotal diagnostics so the next refresh re-probes the
+// API. Used when settings (e.g. API key) change and a stale result must not
+// mask the new configuration.
+function invalidateVirusTotalDiagnosticsCache() {
+  virusTotalDiagnosticsLastSuccessAt = 0;
+  cachedVirusTotalDiagnostics = null;
   syncVirusTotalDiagnosticsIndicators();
-  return cachedVirusTotalDiagnostics;
 }
 
 async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
@@ -3512,6 +3548,14 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   }
   const previousSettings = getCurrentSettings();
   const nextSettings = resetToDefaults ? cloneDefaultSettings() : readSettingsFormState();
+  // Invalidate the VirusTotal diagnostics cache so a saved/cleared API key
+  // is verified immediately rather than masked by a recent successful fetch.
+  if (
+    previousSettings?.backend?.virusTotalApiKey !==
+    nextSettings?.backend?.virusTotalApiKey
+  ) {
+    invalidateVirusTotalDiagnosticsCache();
+  }
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
   syncCaptureIngestWorkersFromSettings();
@@ -13131,6 +13175,9 @@ const convertContextButtons = {
   openHeatmapLocation: getCachedElement("ctx-open-heatmap-location"),
   loadCarvableExtraction: getCachedElement("ctx-load-carvable-extraction"),
   loadCarvableVirusTotal: getCachedElement("ctx-load-carvable-virustotal"),
+  analyzeIp: getCachedElement("ctx-analyze-ip-submenu"),
+  analyzeIpSubnet: getCachedElement("ctx-analyze-ip-subnet"),
+  analyzeIpThreatIntel: getCachedElement("ctx-analyze-ip-threat-intel"),
 };
 const convertContextSubmenus = {
   copy: getCachedElement("ctx-copy-submenu"),
@@ -13153,13 +13200,11 @@ const convertContextSubmenus = {
   fileCarve: getCachedElement("ctx-file-carve-submenu"),
   followStream: getCachedElement("ctx-follow-stream-submenu"),
   llm: getCachedElement("ctx-llm-submenu"),
+  analyzeIp: getCachedElement("ctx-analyze-ip-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
   "convert-context-save-divider",
-);
-const convertContextBottomDividerEl = getCachedElement(
-  "convert-context-bottom-divider",
 );
 const convertContextSubmenuEls = Array.from(
   convertContextMenuEl.querySelectorAll(".ctx-submenu"),
@@ -13312,6 +13357,71 @@ function extractContextIp(value) {
 
   const match = normalized.match(CONTEXT_IPV4_REGEX);
   return match ? match[0] : "";
+}
+
+// Extracts an IP from the right-clicked element so the Analyze IP submenu
+// only appears when the user is actually hovering over (or has selected) an
+// IPv4 or IPv6 address. We deliberately do NOT walk the entire panel/router
+// table text: an IP anywhere in the panel would also expose the menu on
+// nearby labels, protocol names, or unrelated cells, which is too permissive.
+//
+// Considered candidates (first hit wins):
+//   1. The live text selection (highest signal: user explicitly highlighted).
+//   2. The right-clicked element's own textContent.
+//   3. The closest containing <td>/<th> cell.
+//   4. The closest containing <tr> row (e.g. row-only IP columns).
+//
+// For each candidate we require the IP to be the dominant content of the
+// text — i.e. there must be no other non-whitespace, non-IP token competing
+// for the cell — so the menu never appears when right-clicking on a protocol
+// name, label, or other non-IP row despite an IP happening to live elsewhere
+// in the same row.
+function extractContextIpFromContextTarget(target, {
+  selectedText = "",
+  conversionText = "",
+} = {}) {
+  const fromSelection = extractContextIp(selectedText);
+  if (fromSelection) return fromSelection;
+
+  const fromConversion = extractContextIp(conversionText);
+  if (fromConversion) return fromConversion;
+
+  const isOnlyIpToken = (value) => {
+    const normalized = normalizeContextToken(value);
+    if (!normalized) return "";
+    const ip = extractContextIp(normalized);
+    if (!ip) return "";
+    // Strip the IP and any surrounding space/colon/comma/bracket characters
+    // that commonly wrap it (e.g. "[10.0.0.1]:443") and check that what is
+    // left is empty or whitespace only. This rejects cells that contain
+    // mixed content like "TCP / 10.0.0.1" or "10.0.0.1 (gateway)".
+    const stripped = normalized
+      .replace(ip, " ")
+      .replace(/[\s\[\]<>,;:()"']/g, " ")
+      .trim();
+    return stripped === "" ? ip : "";
+  };
+
+  const targetText = target?.textContent || "";
+  const fromTarget = isOnlyIpToken(targetText);
+  if (fromTarget) return fromTarget;
+
+  const closestCell = target?.closest?.("td, th");
+  if (closestCell) {
+    const fromCell = isOnlyIpToken(closestCell.textContent || "");
+    if (fromCell) return fromCell;
+  }
+
+  const closestRow = target?.closest?.("tr");
+  if (closestRow) {
+    const cells = closestRow.querySelectorAll("td, th");
+    for (const cell of cells) {
+      const fromRowCell = isOnlyIpToken(cell?.textContent || "");
+      if (fromRowCell) return fromRowCell;
+    }
+  }
+
+  return "";
 }
 
 // Extracts context port.
@@ -13888,8 +13998,16 @@ function showConvertContextMenu(
     "ftp",
     activeContextPacket,
   );
+  const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
+    : null;
+  const hasStatsCarvableAction = Boolean(statsCarvableTag);
   const hasFileCarveActions =
-    hasHttpBody || canCarveSmbStream || canCarveNfsStream || canCarveFtpStream;
+    hasHttpBody ||
+    canCarveSmbStream ||
+    canCarveNfsStream ||
+    canCarveFtpStream ||
+    hasStatsCarvableAction;
   convertContextButtons.exportPacket.style.display = hasPacketToExport
     ? "block"
     : "none";
@@ -13964,6 +14082,12 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.fileCarveFtp.style.display = canCarveFtpStream
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
     ? "block"
     : "none";
 
@@ -14147,20 +14271,25 @@ function showConvertContextMenu(
     ? target?.closest?.("#stats_box .stats-section .stats-tag[data-latitude]")
     : null;
   const hasStatsLocationHeatmapAction = Boolean(statsLocationTag);
-  const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
-    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
-    : null;
-  const statsCarvableCandidate = statsCarvableTag
-    ? getCarvableCandidateById(statsCarvableTag.dataset.carvableId)
-    : null;
-  const hasStatsCarvableAction = Boolean(statsCarvableCandidate);
   convertContextButtons.openHeatmapLocation.style.display = hasStatsLocationHeatmapAction
     ? "block"
     : "none";
-  convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
+  const allowAnalyzeIpContext =
+    activeMainTab === MAIN_TAB_DATA ||
+    activeMainTab === MAIN_TAB_STATS ||
+    activeMainTab === MAIN_TAB_LIST;
+  const contextIpForAnalyze = allowAnalyzeIpContext
+    ? extractContextIpFromContextTarget(target, {
+      selectedText: getTrimmedSelectionText(),
+      conversionText: sourceText,
+    })
+    : "";
+  const hasAnalyzeIpActions = allowAnalyzeIpContext && Boolean(contextIpForAnalyze);
+  convertContextSubmenus.analyzeIp.style.display = hasAnalyzeIpActions ? "block" : "none";
+  convertContextButtons.analyzeIpSubnet.style.display = hasAnalyzeIpActions
     ? "block"
     : "none";
-  convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
+  convertContextButtons.analyzeIpThreatIntel.style.display = hasAnalyzeIpActions
     ? "block"
     : "none";
   const hasContextDataForNotes =
@@ -14332,12 +14461,12 @@ function showConvertContextMenu(
     !hasFollowStreamActions &&
     !hasLlmActions &&
     !hasStatsLocationHeatmapAction &&
-    !hasStatsCarvableAction
+    !hasStatsCarvableAction &&
+    !hasAnalyzeIpActions
   ) {
     hideConvertContextMenu();
     return;
-  }
-  convertContextDividerEl.style.display =
+  } convertContextDividerEl.style.display =
     hasClipboardActions &&
       (hasDataTypeActions ||
         isHexViewTarget ||
@@ -14357,8 +14486,6 @@ function showConvertContextMenu(
         hasKeystoreActions)
       ? "block"
       : "none";
-  convertContextBottomDividerEl.style.display =
-    hasStatsLocationHeatmapAction || hasStatsCarvableAction ? "block" : "none";
 
   convertContextMenuEl.hidden = false;
   const menuWidth = convertContextMenuEl.offsetWidth;
@@ -21128,6 +21255,65 @@ convertContextButtons.loadCarvableVirusTotal.addEventListener("click", async () 
     `Stats carve sent to VirusTotal file="${candidate.fileName || "unknown"}" bytes=${bytes.length}`,
   );
 });
+
+function resolveContextIpForAnalyzeAction() {
+  const target = activeContextTarget;
+  if (!target) return "";
+  const selectedText = getTrimmedSelectionText();
+  const conversionText = getConversionTextFromTarget(target);
+  return extractContextIpFromContextTarget(target, {
+    selectedText,
+    conversionText,
+  });
+}
+
+function runIpInSubnetCalculatorFromContextMenu() {
+  const ipAddress = resolveContextIpForAnalyzeAction();
+  if (!ipAddress) {
+    statusUpdate("Status: No IP address detected for Subnet Calculator.");
+    hideConvertContextMenu();
+    return;
+  }
+  hideConvertContextMenu();
+  if (typeof subnetCalculatorPanel?.setAnalysisInput !== "function") {
+    statusUpdate("Status: Subnet Calculator panel is unavailable.");
+    return;
+  }
+  showDataTools(CONV_SUBNET_SUBTAB);
+  subnetCalculatorPanel.setAnalysisInput(ipAddress);
+  if (typeof subnetCalculatorPanel.analyzeCurrentInput === "function") {
+    void subnetCalculatorPanel.analyzeCurrentInput();
+  }
+  statusUpdate(`Status: Loaded ${ipAddress} into Subnet Calculator.`);
+  writeLogEntry(`Context menu analyzed IP in subnet calculator ip=${JSON.stringify(ipAddress)}`);
+}
+
+function runIpThreatIntelLookupFromContextMenu() {
+  const ipAddress = resolveContextIpForAnalyzeAction();
+  if (!ipAddress) {
+    statusUpdate("Status: No IP address detected for Threat Intel lookup.");
+    hideConvertContextMenu();
+    return;
+  }
+  hideConvertContextMenu();
+  if (typeof subnetCalculatorPanel?.runThreatIntelIpLookup !== "function") {
+    statusUpdate("Status: Threat Intel lookup is unavailable.");
+    return;
+  }
+  showDataTools(CONV_THREAT_INTEL_SUBTAB);
+  subnetCalculatorPanel.runThreatIntelIpLookup(ipAddress);
+  statusUpdate(`Status: Threat Intel lookup started for ${ipAddress}.`);
+  writeLogEntry(`Context menu analyzed IP via threat intel ip=${JSON.stringify(ipAddress)}`);
+}
+
+convertContextButtons.analyzeIpSubnet.addEventListener(
+  "click",
+  runIpInSubnetCalculatorFromContextMenu,
+);
+convertContextButtons.analyzeIpThreatIntel.addEventListener(
+  "click",
+  runIpThreatIntelLookupFromContextMenu,
+);
 convertContextButtons.exportPacket.addEventListener(
   "click",
   exportCurrentPacketFromContextMenu,
