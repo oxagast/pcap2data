@@ -48,14 +48,55 @@ function hideConsentOverlay(documentRef) {
   }
 }
 
+// True only when the metrics module has been seeded with a settings
+// snapshot. Until the renderer has finished its initial
+// ``loadPersistedSettings()`` call this is false and we must NOT
+// prompt the user: the persisted ``privacy.metricsConsentAsked`` flag
+// has not been read yet and the overlay would re-appear on every
+// launch even after the user answered.
+function isMetricsSnapshotReady(metrics) {
+  return Boolean(
+    metrics && typeof metrics.hasSettingsSnapshot === "function"
+      ? metrics.hasSettingsSnapshot()
+      : (metrics && metrics.settingsSnapshot && typeof metrics.settingsSnapshot === "object"),
+  );
+}
+
 // Shows the consent overlay if the user has not been asked yet and we
-// are not in a test environment. Safe to call multiple times.
+// are not in a test environment. Safe to call multiple times. The
+// overlay is only un-hidden when the metrics snapshot has been pushed,
+// so we never prompt a user who has already answered the question on a
+// previous run (the persisted ``metricsConsentAsked`` flag is the
+// canonical signal).
 function maybeShowConsentOverlay({ documentRef, metrics }) {
   if (!documentRef) return false;
   const overlay = documentRef.getElementById("metrics-consent-overlay");
   if (!overlay) return false;
   if (isConsentOverlayVisible(documentRef)) return true;
   if (!metrics || typeof metrics.getConsentStatus !== "function") {
+    return false;
+  }
+  if (!isMetricsSnapshotReady(metrics)) {
+    // The renderer's persisted settings haven't been pushed into the
+    // metrics module yet. Re-evaluate as soon as they arrive so we do
+    // not pester users who already answered the question.
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      const retry = () => {
+        try {
+          maybeShowConsentOverlay({ documentRef, metrics });
+        } catch (_error) {
+          // ignore: best-effort retry
+        }
+      };
+      window.addEventListener(
+        "packetsnitch:settings-updated",
+        () => {
+          window.removeEventListener("packetsnitch:settings-updated", retry);
+          retry();
+        },
+        { once: true },
+      );
+    }
     return false;
   }
   if (metrics.getConsentStatus() !== "first-run") {
@@ -143,4 +184,5 @@ function initializeInstallScreen({ installapi, documentRef, metrics }) {
 
 module.exports = {
   initializeInstallScreen,
+  maybeShowConsentOverlay,
 };

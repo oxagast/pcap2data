@@ -84,6 +84,18 @@ function setSettingsSnapshot(snapshot) {
     }
 }
 
+// True when the metrics module has been seeded with a settings
+// snapshot. The first-run consent overlay must wait for this before
+// asking the user: ``getConsentStatus()`` returns "first-run" while
+// the snapshot is null, so without a guard the overlay would re-appear
+// on every launch even after the user has previously answered.
+function hasSettingsSnapshot() {
+    return Boolean(
+        metrics.settingsSnapshot
+        && typeof metrics.settingsSnapshot === "object",
+    );
+}
+
 function getSettings() {
     if (metrics.settingsSnapshot && typeof metrics.settingsSnapshot === "object") {
         return metrics.settingsSnapshot;
@@ -449,6 +461,7 @@ const metricsApi = {
     flush,
     getConsentStatus,
     hasBeenAsked,
+    hasSettingsSnapshot,
     recordConsent,
     setEnabled,
     setEndpointUrl,
@@ -465,6 +478,7 @@ module.exports.trackTabSwitch = trackTabSwitch;
 module.exports.flush = flush;
 module.exports.getConsentStatus = getConsentStatus;
 module.exports.hasBeenAsked = hasBeenAsked;
+module.exports.hasSettingsSnapshot = hasSettingsSnapshot;
 module.exports.recordConsent = recordConsent;
 module.exports.setEnabled = setEnabled;
 module.exports.setEndpointUrl = setEndpointUrl;

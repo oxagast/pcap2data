@@ -4,6 +4,8 @@
 **Type:** minor
 
 ### ✨ Features
+- Halfed exe/rpm/deb installer sizes
+                releaseContainer.textContent = "Loading latest release...";
 - Anonymous, opt-in usage metrics: new `src/metrics.js` module + `metricsapi` IPC bridge ship tab/subtab usage, action timing, and error reports to a user-configurable HTTP endpoint (default `http://143.198.179.97:8088/mhook`)
 - First-run consent overlay: clean installs now show a dedicated Yes/No dialog before any metrics can be collected; decision is recorded via `settings.privacy.metricsConsentAsked` and can be changed any time in Settings → Privacy
 - New `Privacy` subtab under Settings: enable/disable metrics, set the endpoint URL, tune flush interval and in-memory queue size, and view the auto-generated install UUID
