@@ -10,7 +10,7 @@
 - New `Privacy` subtab under Settings: enable/disable metrics, set the endpoint URL, tune flush interval and in-memory queue size, and view the auto-generated install UUID
 - Self-hostable metrics endpoint (`src/metrics/server.py`) with NDJSON-on-disk sink for log aggregators (ElasticSearch/Graylog/Loki/Splunk/Vector) plus a `/healthz` liveness probe
 - "Analyze IP..." submenu in the context menu: route the right-clicked IP straight into the Subnet Calculator or the Threat Intel lookup
-- Carved-file context-menu entries in Stats: "Load carved file into Extraction" and "Send carved file to VirusTotal" for entries in the new Carvable Files list
+- Carved-file context-menu entries in Stats: "Load carved file into Extraction", "Load carved file into Decoders" (with auto-extension hinting: `.jpg`→`jpeg`, `.json`→`json`, `.xml`→`xml`, `.html`→`html`, `.yaml`/`.yml`→`yaml`, etc.) and "Send carved file to VirusTotal" for entries in the new Carvable Files list
 - `runThreatIntelIpLookup` / `setAnalysisInput` exposed on the Subnet Calculator panel for cross-panel IP drill-down
 - Backend port reclaim: on GUI startup we look for a stale snitch HTTP backend on the configured port and shut it down gracefully (with OS-level kill fallback) before launching our own
 

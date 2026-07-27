@@ -1031,19 +1031,42 @@ function createCryptPanel({
     renderPgpEncounteredDetails(pgpEncounteredEntries[selectedIndex]);
   }
 
+  function resolvePgpEncounteredLoadTarget(blockType) {
+    const normalized = String(blockType || "").trim().toUpperCase();
+    if (normalized === "PGP PRIVATE KEY BLOCK") {
+      return {
+        elementId: "crypt-pgp-private-key-input",
+        destination: "PGP private key input",
+      };
+    }
+    if (normalized === "PGP PUBLIC KEY BLOCK") {
+      return {
+        elementId: "crypt-pgp-public-key-input",
+        destination: "PGP public key input",
+      };
+    }
+    return {
+      elementId: "crypt-pgp-input",
+      destination: "PGP input",
+    };
+  }
+
   function loadSelectedPgpEncounteredInput() {
     if (pgpActiveEntryIndex < 0 || !pgpEncounteredEntries[pgpActiveEntryIndex]) {
       statusUpdate("Status: Select an encountered PGP entry first");
       return;
     }
     const entry = pgpEncounteredEntries[pgpActiveEntryIndex];
-    const inputEl = document.getElementById("crypt-pgp-input");
+    const target = resolvePgpEncounteredLoadTarget(entry.blockType);
+    const inputEl = document.getElementById(target.elementId);
     if (inputEl) {
       inputEl.value = entry.armoredText;
     }
-    statusUpdate(`Status: Loaded PGP block from packet #${entry.packetIndex}`);
+    statusUpdate(
+      `Status: Loaded PGP ${entry.blockType} block from packet #${entry.packetIndex} into ${target.destination}`,
+    );
     writeLogEntry(
-      `[${threadName}] PGP encountered payload loaded packet_index=${entry.packetIndex} block_index=${entry.blockIndex}`,
+      `[${threadName}] PGP encountered payload loaded packet_index=${entry.packetIndex} block_index=${entry.blockIndex} block_type="${entry.blockType}" destination="${target.elementId}"`,
     );
   }
 

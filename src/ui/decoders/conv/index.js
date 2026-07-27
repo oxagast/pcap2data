@@ -66,6 +66,12 @@ const {
 } = require("./yaml-parser");
 
 const { MIME_TO_PROTO } = require("./mime-maps");
+const {
+    FILE_EXTENSION_TO_PROTO,
+    SUPPORTED_DECODER_PROTOS,
+    extractFileExtension,
+    getProtoDecoderHintForFileName,
+} = require("./mime-maps");
 
 const { PROTOCOL_DECODER_HINTS, PORT_DECODER_HINTS } = require("./protocol-hints");
 
@@ -121,6 +127,10 @@ module.exports = {
     parseSimpleYamlKeyValue,
     parseSimpleYamlToObject,
     MIME_TO_PROTO,
+    FILE_EXTENSION_TO_PROTO,
+    SUPPORTED_DECODER_PROTOS,
+    extractFileExtension,
+    getProtoDecoderHintForFileName,
     PROTOCOL_DECODER_HINTS,
     PORT_DECODER_HINTS,
     getPacketProtocolDecoderHint,

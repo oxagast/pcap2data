@@ -197,9 +197,10 @@ Shown when at least one carve target is available for the current packet or stre
 | **NFS file to disk**    | Detect files transferred in the current NFS stream, let you pick one, then save it as binary.  |
 | **FTP file to disk**    | Detect file transfer bytes in FTP streams, then save the carved result as binary.              |
 | **Load carved file into Extraction** | Stats-only. Load the right-clicked carved file's bytes into the **Conv → Extraction** subtab. |
+| **Load carved file into Decoders**  | Stats-only. Load the right-clicked carved file's bytes into the **Conv → Decoders** subtab. The decoder dropdown is auto-hinted from the file's extension (e.g. `.jpg` → `jpeg`, `.json` → `json`, `.xml` → `xml`, `.html` → `html`, `.yaml`/`.yml` → `yaml`); when no extension matches the dropdown stays on `auto`. |
 | **Send carved file to VirusTotal**   | Stats-only. Send the right-clicked carved file's bytes to the configured VirusTotal lookup.    |
 
-The last two entries appear only when right-clicking a carved-file candidate tag in the **Stats** tab.
+The last three entries appear only when right-clicking a carved-file candidate tag in the **Stats** tab.
 
 ---
 

@@ -192,6 +192,7 @@ const convertContextMenuMarkup = `
       <button id="ctx-file-carve-nfs" type="button">NFS file to disk</button>
       <button id="ctx-file-carve-ftp" type="button">FTP file to disk</button>
       <button id="ctx-load-carvable-extraction" role="menuitem">Load carved file into Extraction</button>
+      <button id="ctx-load-carvable-decoders" role="menuitem">Load carved file into Decoders</button>
       <button id="ctx-load-carvable-virustotal" role="menuitem">Send carved file to VirusTotal</button>
     </div>
   </div>

@@ -274,6 +274,10 @@ const {
   getCurrentSummaryContextHash,
 } = require("./panels/data-tools-llm-summarizer");
 const { normalizeSmbDecoderBytes } = require('./decoders/conv/smb-helpers');
+const {
+  getProtoDecoderHintForFileName,
+  SUPPORTED_DECODER_PROTOS,
+} = require('./decoders/conv/mime-maps');
 function mountStartupFragments() {
   const activityLogPanelEl = document.getElementById("activity-log-panel");
   if (activityLogPanelEl && !activityLogPanelEl.dataset.fragmentMounted) {
@@ -13289,6 +13293,7 @@ const convertContextButtons = {
   llmSummarize: getCachedElement("ctx-llm-summarize"),
   openHeatmapLocation: getCachedElement("ctx-open-heatmap-location"),
   loadCarvableExtraction: getCachedElement("ctx-load-carvable-extraction"),
+  loadCarvableDecoders: getCachedElement("ctx-load-carvable-decoders"),
   loadCarvableVirusTotal: getCachedElement("ctx-load-carvable-virustotal"),
   analyzeIp: getCachedElement("ctx-analyze-ip-submenu"),
   analyzeIpSubnet: getCachedElement("ctx-analyze-ip-subnet"),
@@ -14200,6 +14205,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
+    ? "block"
+    : "none";
+  convertContextButtons.loadCarvableDecoders.style.display = hasStatsCarvableAction
     ? "block"
     : "none";
   convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
@@ -21347,6 +21355,64 @@ convertContextButtons.loadCarvableExtraction.addEventListener("click", async () 
   statusUpdate(`Status: Loaded ${candidate.fileName || "carved file"} into Extraction (${bytes.length} bytes)`);
   writeLogEntry(
     `Stats carve loaded into Extraction file="${candidate.fileName || "unknown"}" bytes=${bytes.length}`,
+  );
+});
+
+convertContextButtons.loadCarvableDecoders.addEventListener("click", async () => {
+  const tag = activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]");
+  if (!tag) return;
+  const candidate = await getCarvableCandidateById(tag.dataset.carvableId);
+  hideConvertContextMenu();
+  if (!candidate) {
+    statusUpdate("Status: Carved file candidate not found");
+    return;
+  }
+  const bytes = candidate.bytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    statusUpdate("Status: Carved file content is unavailable");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const selectEl = document.getElementById("data-tools-proto-select");
+  if (!inputEl || !formatEl || !selectEl) {
+    statusUpdate("Status: Conv decoders controls are unavailable");
+    return;
+  }
+  dataToolsContextPacket = null;
+  dataToolsOriginalInputBytes = bytes;
+  dataToolsInputEditedFlag = false;
+  dataToolsLastConversionBytes = bytes;
+  inputEl.value = formatHexInputBytesWithCap(bytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(candidate.fileName || "");
+
+  // Hint the decoder by file extension when possible. We deliberately leave
+  // the dropdown on "auto" when the extension is unknown so the existing
+  // auto-detection still runs and the user can override the pick.
+  const extensionHint = getProtoDecoderHintForFileName(candidate.fileName || "");
+  const chosenProtocol = extensionHint && SUPPORTED_DECODER_PROTOS.has(extensionHint)
+    ? extensionHint
+    : "auto";
+  selectEl.value = chosenProtocol;
+
+  markDataToolsInputCommitted();
+  showDataTools(CONV_DECODES_SUBTAB);
+  // Force a re-run of the decoder because simply swapping the input value
+  // does not always re-fire the `change` event on the proto-select when the
+  // dropdown was already on the same value.
+  try {
+    runProtoDecoder(bytes);
+  } catch (decoderError) {
+    const errorMessage = decoderError?.message || String(decoderError || "unknown");
+    writeLogEntry(`Stats carve decoder run failed: ${errorMessage}`);
+  }
+  const decoderLabel = chosenProtocol === "auto" ? "auto-detect" : chosenProtocol;
+  statusUpdate(
+    `Status: Loaded ${candidate.fileName || "carved file"} into Decoders (${bytes.length} bytes, decoder=${decoderLabel})`,
+  );
+  writeLogEntry(
+    `Stats carve loaded into Decoders file="${candidate.fileName || "unknown"}" bytes=${bytes.length} extension_hint=${JSON.stringify(extensionHint || "")} decoder=${JSON.stringify(chosenProtocol)}`,
   );
 });
 
