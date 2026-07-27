@@ -36,7 +36,9 @@ def _run_compiled_version(binary_path: Path) -> subprocess.CompletedProcess:
         check=False,
     )
 
-# python3 -m PyInstaller --onefile -y --distpath src/backend snitch.spec src/backend/snitch.py
+# Build the backend with PyInstaller using the script directly (no .spec)
+# so the test always uses the freshest entry point and never has to know
+# about OS-specific spec files committed by previous builds.
 def _compile_backend(timeout_seconds: int = 300) -> Path:
     compile_dir = Path(tempfile.mkdtemp(prefix="snitch_", dir=_get_os_temp_folder()))
 
