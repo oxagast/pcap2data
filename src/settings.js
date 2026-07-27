@@ -66,7 +66,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         columnOrder: [],
     },
     llm: {
-        ollamaModel: "minimax-m2.5:cloud",
+        ollamaModel: "minimax-m3:cloud",
         ollamaApiKey: "",
         activeByDefault: false,
         backgroundSummaryGenerationEnabled: true,
@@ -82,7 +82,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     privacy: {
         metricsEnabled: false,
-        metricsEndpointUrl: "http://47.37.209.29:8088/mhook",
+        metricsConsentAsked: false,
+        metricsEndpointUrl: "http://143.198.179.97:8088/mhook",
         metricsFlushIntervalSeconds: 60,
         metricsMaxQueueSize: 500,
         metricsInstallId: "",
@@ -393,6 +394,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof privacy.metricsEnabled === "boolean"
                     ? privacy.metricsEnabled
                     : privacyDefaults.metricsEnabled,
+            metricsConsentAsked:
+                typeof privacy.metricsConsentAsked === "boolean"
+                    ? privacy.metricsConsentAsked
+                    : privacyDefaults.metricsConsentAsked,
             metricsEndpointUrl: normalizeEndpointUrl(
                 privacy.metricsEndpointUrl,
                 privacyDefaults.metricsEndpointUrl,

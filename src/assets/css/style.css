@@ -38,6 +38,7 @@ body {
 input[type="text"],
 input[type="number"],
 input[type="password"],
+input[type="url"],
 textarea,
 select {
   background-color: var(--input-bg-color);
@@ -883,6 +884,7 @@ strong {
 .settings-section input[type="text"],
 .settings-section input[type="number"],
 .settings-section input[type="password"],
+.settings-section input[type="url"],
 .settings-section select {
   width: 100%;
   box-sizing: border-box;
@@ -4998,4 +5000,110 @@ strong {
   #conv-threat-intel-panel .subnet-calc-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* First-run metrics consent overlay.
+   Shown after the install screen on a clean ~/.config directory
+   (i.e. the user has never been asked whether to opt in to
+   anonymous diagnostic data). The overlay uses the same theme
+   tokens as the install screen so the chrome stays consistent
+   across first-run flows. The z-index sits below the install
+   screen so the install screen can paint first when both apply. */
+#metrics-consent-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.82);
+  z-index: 9998;
+}
+
+#metrics-consent-overlay[hidden] {
+  display: none;
+}
+
+#metrics-consent-card {
+  background-color: var(--color-4);
+  border: 2px solid var(--color-1);
+  border-radius: 10px;
+  padding: 28px 36px;
+  max-width: 640px;
+  width: 92%;
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+
+#metrics-consent-title {
+  font-size: 22px;
+  color: var(--color-1);
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+#metrics-consent-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-5);
+}
+
+#metrics-consent-body p {
+  margin: 0 0 10px 0;
+}
+
+#metrics-consent-body code {
+  background-color: color-mix(in srgb, var(--color-7) 60%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+#metrics-consent-list {
+  margin: 8px 0 0 0;
+  padding-left: 22px;
+  font-size: 12px;
+  color: var(--color-6);
+}
+
+#metrics-consent-list li {
+  margin-bottom: 3px;
+}
+
+#metrics-consent-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.metrics-consent-btn {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+  font-weight: bold;
+  padding: 8px 16px;
+  border: 1px solid var(--color-1);
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 220px;
+}
+
+.metrics-consent-btn-primary {
+  background-color: var(--color-1);
+  color: var(--color-4);
+}
+
+.metrics-consent-btn-primary:hover {
+  background-color: var(--color-2);
+}
+
+.metrics-consent-btn-secondary {
+  background-color: var(--color-7);
+  color: var(--color-5);
+}
+
+.metrics-consent-btn-secondary:hover {
+  background-color: var(--color-2);
 }

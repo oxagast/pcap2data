@@ -18,6 +18,11 @@ const { validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
 const metrics = require("../metrics");
+// Expose the metrics module on the window so first-run UI (the
+// consent overlay) and other panels can call into it without having
+// to thread the require through every call site. The metrics object
+// is the same singleton the rest of the renderer uses.
+window.__PACKETSNITCH_METRICS__ = metrics;
 // Metrics is always loaded so that call sites can use it unconditionally.
 // The queue is a no-op until the user opts in via the Privacy settings subtab.
 if (metrics && typeof metrics.init === "function") {
@@ -55,6 +60,36 @@ if (
       void metrics.flush();
     } catch (_error) {
       // ignore: we are tearing down
+    }
+  });
+}
+
+// Settings changes that originate outside the privacy tab form
+// (e.g. the first-run consent overlay, the metrics service writing
+// back a fresh install id) only round-trip to the renderer's
+// in-memory ``appSettings`` and the privacy form if the renderer is
+// told about them. ``metrics.js`` dispatches a
+// ``packetsnitch:settings-updated`` CustomEvent whenever it calls
+// ``settingsapi.update``; we listen for it here and re-sync the
+// in-memory state and the visible form.  Without this listener the
+// privacy tab checkbox would stay unselected after the user clicks
+// "Yes" on the consent overlay because the renderer's
+// ``appSettings`` is not refreshed by the IPC call alone.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("packetsnitch:settings-updated", (event) => {
+    const detail = event && event.detail;
+    if (!detail || typeof detail !== "object") {
+      return;
+    }
+    try {
+      setCurrentSettings(detail);
+    } catch (_error) {
+      // ignore: setCurrentSettings is best-effort
+    }
+    try {
+      syncSettingsFormFromState();
+    } catch (_error) {
+      // ignore: re-syncing the form is best-effort
     }
   });
 }
@@ -2529,9 +2564,21 @@ function syncSettingsFormFromState() {
     );
   }
   if (privacyConsentStatusEl) {
-    privacyConsentStatusEl.textContent = settings.privacy?.metricsEnabled
-      ? "Metrics are enabled. Only anonymous, allow-listed events are sent."
-      : "Metrics are disabled. PacketSnitch does not phone home.";
+    const consentStatus = window.__PACKETSNITCH_METRICS__
+      && typeof window.__PACKETSNITCH_METRICS__.getConsentStatus === "function"
+      ? window.__PACKETSNITCH_METRICS__.getConsentStatus()
+      : null;
+    if (consentStatus === "first-run") {
+      privacyConsentStatusEl.textContent =
+        "PacketSnitch has not yet asked whether to send anonymous diagnostics. "
+        + "You can decide at any time from this panel.";
+    } else if (settings.privacy?.metricsEnabled) {
+      privacyConsentStatusEl.textContent =
+        "Metrics are enabled. Only anonymous, allow-listed events are sent.";
+    } else {
+      privacyConsentStatusEl.textContent =
+        "Metrics are disabled. PacketSnitch does not phone home.";
+    }
   }
   syncLlmDiagnosticsIndicators();
   syncBackendDiagnosticsIndicators();
@@ -4224,6 +4271,7 @@ const {
 initializeInstallScreen({
   installapi: window.installapi,
   documentRef: document,
+  metrics,
 });
 
 void refreshOllamaStartupAvailability();

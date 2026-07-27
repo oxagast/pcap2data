@@ -1945,6 +1945,49 @@ No keystore entries saved.</pre>
     </div>
   </div>
 
+  <!-- First-run consent prompt – shown after the install screen on a
+       clean ~/.config directory (i.e. the user has never been asked
+       whether to send anonymous diagnostic data to oxasploits.com).
+       Once the user has decided (either way) the overlay is hidden
+       and never shown again on this install. -->
+  <div id="metrics-consent-overlay" hidden>
+    <div id="metrics-consent-card">
+      <div id="metrics-consent-title">Help improve PacketSnitch?</div>
+      <div id="metrics-consent-body">
+        <p>
+          PacketSnitch can send <strong>anonymous, opt-in diagnostic data</strong>
+          to a public endpoint at <code>oxasploits.com</code> (the
+          open-source receiver lives in
+          <code>src/metrics/server.py</code> if you would rather
+          self-host). This helps the maintainers understand which tabs
+          and subtabs are used, how long features take, and whether any
+          uncaught errors occur.
+        </p>
+        <p>
+          <strong>Nothing personal is ever collected.</strong> No
+          packet contents, file paths, IP addresses, PCAP filenames, or
+          LLM prompts are sent. The only identifier is a random UUID
+          generated the moment you opt in. You can change this decision
+          at any time from <em>Settings &rarr; Privacy</em>.
+        </p>
+        <ul id="metrics-consent-list">
+          <li>Which tab or subtab you opened</li>
+          <li>How long a feature took to run</li>
+          <li>Whether an action succeeded or failed</li>
+          <li>Uncaught error messages (text only)</li>
+        </ul>
+      </div>
+      <div id="metrics-consent-actions">
+        <button id="metrics-consent-decline" class="metrics-consent-btn metrics-consent-btn-secondary">
+          No, don't send data
+        </button>
+        <button id="metrics-consent-accept" class="metrics-consent-btn metrics-consent-btn-primary">
+          Yes, send anonymous diagnostics
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Session picker – shown on startup when saved sessions exist -->
   <div id="session-picker">
     <div id="session-picker-inner">

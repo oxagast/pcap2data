@@ -47,6 +47,7 @@ describe('privacy settings round-trip', () => {
             privacy: {
                 ...DEFAULT_SETTINGS.privacy,
                 metricsEnabled: true,
+                metricsConsentAsked: true,
                 metricsEndpointUrl: 'http://127.0.0.1:8088/mhook',
                 metricsInstallId: '01234567-89ab-cdef-0123-456789abcdef',
             },
@@ -64,10 +65,67 @@ describe('privacy settings round-trip', () => {
             privacy: {
                 ...DEFAULT_SETTINGS.privacy,
                 metricsEnabled: false,
+                metricsConsentAsked: true,
                 metricsInstallId: '01234567-89ab-cdef-0123-456789abcdef',
             },
         });
         metrics.setSettingsSnapshot(snapshot);
+        expect(metrics.getConsentStatus()).toBe('disabled');
+    });
+
+    test('a clean ~/.config with no metricsConsentAsked reads as first-run', () => {
+        // This is the regression guard for the missing consent
+        // prompt: if the user has never been asked, the consent
+        // status must be 'first-run' so the renderer can surface
+        // the first-run overlay.
+        const { metrics, settings } = freshRequire();
+        const { normalizeSettings, DEFAULT_SETTINGS } = settings;
+
+        const snapshot = normalizeSettings({
+            ...DEFAULT_SETTINGS,
+            privacy: {
+                ...DEFAULT_SETTINGS.privacy,
+                metricsEnabled: false,
+                metricsConsentAsked: false,
+                metricsEndpointUrl: '',
+                metricsInstallId: '',
+            },
+        });
+        metrics.setSettingsSnapshot(snapshot);
+        expect(metrics.getConsentStatus()).toBe('first-run');
+        expect(metrics.hasBeenAsked()).toBe(false);
+    });
+
+    test('legacy installs with metricsEnabled set are treated as already asked', () => {
+        // Backwards compatibility: users who opted in (or out) on
+        // an older build only have ``metricsEnabled`` and possibly
+        // ``metricsInstallId`` in their settings.json. They must not
+        // be re-prompted on every launch.
+        const { metrics, settings } = freshRequire();
+        const { normalizeSettings, DEFAULT_SETTINGS } = settings;
+
+        const optInSnapshot = normalizeSettings({
+            ...DEFAULT_SETTINGS,
+            privacy: {
+                ...DEFAULT_SETTINGS.privacy,
+                metricsEnabled: true,
+                metricsInstallId: '01234567-89ab-cdef-0123-456789abcdef',
+            },
+        });
+        metrics.setSettingsSnapshot(optInSnapshot);
+        expect(metrics.hasBeenAsked()).toBe(true);
+        expect(metrics.getConsentStatus()).toBe('enabled');
+
+        const optOutSnapshot = normalizeSettings({
+            ...DEFAULT_SETTINGS,
+            privacy: {
+                ...DEFAULT_SETTINGS.privacy,
+                metricsEnabled: false,
+                metricsInstallId: '01234567-89ab-cdef-0123-456789abcdef',
+            },
+        });
+        metrics.setSettingsSnapshot(optOutSnapshot);
+        expect(metrics.hasBeenAsked()).toBe(true);
         expect(metrics.getConsentStatus()).toBe('disabled');
     });
 
@@ -79,6 +137,7 @@ describe('privacy settings round-trip', () => {
             ...DEFAULT_SETTINGS,
             privacy: {
                 ...DEFAULT_SETTINGS.privacy,
+                metricsConsentAsked: true,
                 metricsInstallId: '01234567-89ab-cdef-0123-456789abcdef',
             },
         });
@@ -96,6 +155,36 @@ describe('privacy settings round-trip', () => {
         // install id (no longer "first-run") and the metricsEnabled
         // value as-is.
         expect(metrics.getConsentStatus()).toBe('disabled');
+    });
+
+    test('init() never generates an install id on a clean install', () => {
+        // Regression guard: the previous behaviour generated an
+        // install id on first run and persisted it via a partial
+        // ``settingsapi.update`` that risked clobbering other
+        // privacy fields. The new flow waits for explicit consent
+        // before stamping any identifying info to settings.json.
+        const { metrics, settings } = freshRequire();
+        const { normalizeSettings, DEFAULT_SETTINGS } = settings;
+
+        const snapshot = normalizeSettings({
+            ...DEFAULT_SETTINGS,
+            privacy: {
+                ...DEFAULT_SETTINGS.privacy,
+                metricsConsentAsked: false,
+                metricsInstallId: '',
+            },
+        });
+        metrics.setSettingsSnapshot(snapshot);
+        // No ``window.settingsapi`` is available in this test
+        // environment, so ``init`` cannot persist anything. Even
+        // if it tried, the privacy block above has
+        // ``metricsEnabled`` left at the default (``false``), so
+        // the legacy "backfill" branch must not fire.
+        expect(() => metrics.init()).not.toThrow();
+        // The visible side-effect of ``init`` on a clean install
+        // is that ``getConsentStatus`` still reads as
+        // ``first-run`` (no install id was stamped).
+        expect(metrics.getConsentStatus()).toBe('first-run');
     });
 
     test('settings-update deep-merges the privacy block', () => {

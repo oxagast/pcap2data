@@ -13,6 +13,13 @@
 //     send raw user content (PCAP paths, IPs, LLM prompts, etc.).
 //   - The first time `init()` runs we generate a UUIDv4 install id and write
 //     it back to `settings.privacy.metricsInstallId`.
+//   - Every `settingsapi.update` (consent, setEnabled, setEndpointUrl,
+//     persistInstallId) dispatches a `packetsnitch:settings-updated`
+//     CustomEvent on `window` with the new settings in `detail`, so the
+//     renderer can refresh its in-memory snapshot and re-sync the
+//     privacy tab form. Without this the consent overlay's Yes button
+//     would write the new state to disk but the privacy tab would
+//     still show the old value.
 
 const SAFE_PROP_KEYS = new Set([
     "tab",
@@ -170,13 +177,50 @@ function generateInstallId() {
 
 function persistInstallId(id) {
     if (typeof window === "undefined" || !window.settingsapi || typeof window.settingsapi.update !== "function") {
-        return;
+        return Promise.resolve(null);
     }
     try {
-        window.settingsapi.update({ privacy: { metricsInstallId: id } });
+        const savedSettings = window.settingsapi.update({ privacy: { metricsInstallId: id } });
+        return broadcastSettingsUpdated(savedSettings);
     } catch (_error) {
         // Best-effort: the id is also kept in memory for the rest of this run.
+        return Promise.resolve(null);
     }
+}
+
+// Settings changes made through the metrics module (consent, toggling
+// the privacy switch, updating the endpoint URL, etc.) only round-trip
+// to the renderer's in-memory ``appSettings`` and the privacy form if
+// the renderer is told about them. ``settingsapi.update`` returns the
+// post-merge settings from the main process, so we forward them as a
+// ``packetsnitch:settings-updated`` CustomEvent.  Anything else in
+// the renderer that needs to stay in sync (e.g. the privacy tab
+// checkbox, the consent status text) can listen for it.
+function broadcastSettingsUpdated(updatePromise) {
+    if (typeof window === "undefined" || !updatePromise || typeof updatePromise.then !== "function") {
+        return Promise.resolve(null);
+    }
+    return Promise.resolve(updatePromise)
+        .then((savedSettings) => {
+            if (
+                savedSettings
+                && typeof savedSettings === "object"
+                && typeof window.dispatchEvent === "function"
+                && typeof window.CustomEvent === "function"
+            ) {
+                try {
+                    window.dispatchEvent(
+                        new window.CustomEvent("packetsnitch:settings-updated", {
+                            detail: savedSettings,
+                        }),
+                    );
+                } catch (_error) {
+                    // ignore: best-effort notification
+                }
+            }
+            return savedSettings || null;
+        })
+        .catch(() => null);
 }
 
 function init({ appVersion = "" } = {}) {
@@ -184,45 +228,119 @@ function init({ appVersion = "" } = {}) {
         return metrics;
     }
     const privacy = getPrivacy();
+    // On first run we deliberately do NOT generate an install id. The
+    // user must opt in (or out) via the consent prompt before any
+    // identifying information is written to ``settings.json``. This
+    // also avoids the previous behaviour where a partial update to
+    // set the install id would clobber the user's other privacy
+    // settings.
     let id = String(privacy.metricsInstallId || "").trim();
-    if (!id) {
+    if (!id && privacy.metricsEnabled === true) {
+        // The user previously opted in (legacy install) and we just
+        // haven't stamped the id yet. Backfill it on the next
+        // settings save.
         id = generateInstallId();
         persistInstallId(id);
     }
+    // Always overwrite the install id so a previous test run
+    // (or a previous main-frontend session) cannot leak through
+    // into a clean-install test path. A clean install keeps the
+    // empty string here until ``recordConsent(true)`` stamps a
+    // real id.
     metrics.installId = id;
     metrics.appVersion = String(appVersion || "");
     metrics.initialized = true;
     return metrics;
 }
 
-function getConsentStatus() {
+function hasBeenAsked() {
     const privacy = getPrivacy();
-    const hasId = Boolean(String(privacy.metricsInstallId || "").trim());
-    if (!hasId) {
+    // An explicit ``true`` from the user is the canonical signal
+    // that they have been prompted. ``false`` (or a missing key on
+    // a fresh install) is treated as "not yet asked".
+    if (privacy.metricsConsentAsked === true) {
+        return true;
+    }
+    // Backwards-compatibility: legacy installs only set
+    // ``metricsEnabled`` (and possibly ``metricsInstallId``). The
+    // install id is the stronger signal here because it can only
+    // be produced after an explicit opt-in (the consent flow is
+    // what generates it). If a user has a non-empty install id
+    // they must have answered the prompt at some point.
+    if (Boolean(String(privacy.metricsInstallId || "").trim())) {
+        return true;
+    }
+    if (typeof privacy.metricsEnabled === "boolean") {
+        // Without an install id and without ``metricsConsentAsked``
+        // we cannot tell an explicit opt-out from the default
+        // state. Stay safe and prompt the user; if they really
+        // did mean to opt out, they'll just click "No" again.
+        return false;
+    }
+    return false;
+}
+
+function getConsentStatus() {
+    if (!hasBeenAsked()) {
         return "first-run";
     }
+    const privacy = getPrivacy();
     return privacy.metricsEnabled ? "enabled" : "disabled";
 }
 
 function setEnabled(enabled) {
     if (typeof window === "undefined" || !window.settingsapi || typeof window.settingsapi.update !== "function") {
-        return;
+        return Promise.resolve(null);
     }
     try {
-        window.settingsapi.update({ privacy: { metricsEnabled: Boolean(enabled) } });
+        return broadcastSettingsUpdated(
+            window.settingsapi.update({ privacy: { metricsEnabled: Boolean(enabled) } }),
+        );
     } catch (_error) {
-        // ignore
+        return Promise.resolve(null);
     }
+}
+
+function recordConsent(enabled) {
+    // Persist the user's first-run decision. On an opt-in we also
+    // stamp the install id at the same time so we never have a window
+    // where ``metricsConsentAsked`` is true but no install id has
+    // been generated. On an opt-out we still mark the prompt as
+    // answered so we don't pester the user on every launch.
+    const decided = Boolean(enabled);
+    if (!hasBeenAsked()) {
+        if (typeof window === "undefined" || !window.settingsapi || typeof window.settingsapi.update !== "function") {
+            return Promise.resolve(false);
+        }
+        try {
+            const installId = decided ? generateInstallId() : "";
+            const savedPromise = window.settingsapi.update({
+                privacy: {
+                    metricsConsentAsked: true,
+                    metricsEnabled: decided,
+                    metricsInstallId: installId,
+                },
+            });
+            return broadcastSettingsUpdated(savedPromise).then(() => true);
+        } catch (_error) {
+            return Promise.resolve(false);
+        }
+    }
+    // Already asked: just toggle the flag. The install id (if any) is
+    // preserved on the main process side.
+    return setEnabled(decided).then(() => true);
 }
 
 function setEndpointUrl(url) {
     if (typeof window === "undefined" || !window.settingsapi || typeof window.settingsapi.update !== "function") {
-        return;
+        return Promise.resolve(null);
     }
     try {
-        window.settingsapi.update({ privacy: { metricsEndpointUrl: String(url || "").trim() } });
+        return broadcastSettingsUpdated(
+            window.settingsapi.update({ privacy: { metricsEndpointUrl: String(url || "").trim() } }),
+        );
     } catch (_error) {
-        // ignore
+        return Promise.resolve(null);
     }
 }
 
@@ -307,6 +425,8 @@ const metricsApi = {
     track,
     flush,
     getConsentStatus,
+    hasBeenAsked,
+    recordConsent,
     setEnabled,
     setEndpointUrl,
     getQueue,
@@ -320,6 +440,8 @@ module.exports.init = init;
 module.exports.track = track;
 module.exports.flush = flush;
 module.exports.getConsentStatus = getConsentStatus;
+module.exports.hasBeenAsked = hasBeenAsked;
+module.exports.recordConsent = recordConsent;
 module.exports.setEnabled = setEnabled;
 module.exports.setEndpointUrl = setEndpointUrl;
 module.exports.getQueue = getQueue;
