@@ -364,6 +364,28 @@ function track(name, props = {}) {
     pruneOldest(metrics.pending, getMaxQueueSize());
 }
 
+// Records a tab or subtab switch.  ``tab`` is the high-level tab
+// (summary, data, stats, list, notes, settings, data-tools,
+// crypt, keystore); ``subtab`` is the optional subtab inside it
+// (e.g. a settings subtab, a conv subtab, a crypt subtab).  When
+// only ``tab`` is set, this fires ``tab.switch`` so the dashboard
+// can answer questions like "which main tab is opened most?".  When
+// both are set, this fires ``subtab.switch`` so the same dashboard
+// can answer "which subtab inside data-tools is most used?".
+// Both are no-ops if the user has not opted in to diagnostics.
+function trackTabSwitch({ tab, subtab } = {}) {
+    const safeTab = typeof tab === "string" && tab.trim() ? tab.trim().slice(0, 64) : "";
+    const safeSubtab = typeof subtab === "string" && subtab.trim() ? subtab.trim().slice(0, 64) : "";
+    if (!safeTab && !safeSubtab) {
+        return;
+    }
+    if (safeSubtab) {
+        track("subtab.switch", { tab: safeTab, subtab: safeSubtab });
+    } else {
+        track("tab.switch", { tab: safeTab });
+    }
+}
+
 function getQueue() {
     return metrics.pending.slice();
 }
@@ -423,6 +445,7 @@ async function flush() {
 const metricsApi = {
     init,
     track,
+    trackTabSwitch,
     flush,
     getConsentStatus,
     hasBeenAsked,
@@ -438,6 +461,7 @@ module.exports = metricsApi;
 module.exports.default = metricsApi;
 module.exports.init = init;
 module.exports.track = track;
+module.exports.trackTabSwitch = trackTabSwitch;
 module.exports.flush = flush;
 module.exports.getConsentStatus = getConsentStatus;
 module.exports.hasBeenAsked = hasBeenAsked;

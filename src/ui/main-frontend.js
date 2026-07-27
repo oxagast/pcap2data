@@ -93,6 +93,73 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
     }
   });
 }
+
+// One-shot tab and subtab tracking.
+//
+// Each main tab (Analysis, Host Data, Conv, Crypt, Keystore, Stats,
+// List, Notes, Settings) and every subtab inside those workspaces
+// is wired to its own click handler in a different file.  Rather
+// than touch every panel we listen for clicks here at the document
+// level and look up the right tab/subtab names by the button's
+// ``id``.  This keeps the metrics tracking completely decoupled
+// from the per-panel wiring (a new tab added to the toolbar will
+// only need an entry in the lookup tables below to be tracked).
+//
+// ``tab.switch`` fires for top-level tabs; ``subtab.switch`` fires
+// when a subtab is opened inside a known parent tab.  Both events
+// are no-ops when the user has not opted in to diagnostics.
+const MAIN_TAB_BUTTON_TO_TAB = {
+  "summary-btn": "summary",
+  "data-btn": "data",
+  "data-tools-btn": "data-tools",
+  "crypt-btn": "crypt",
+  "keystore-btn": "keystore",
+  "stats-btn": "stats",
+  "list-btn": "list",
+  "notes-btn": "notes",
+  "settings-btn": "settings",
+};
+// ``conv-subtab-*`` and ``crypt-subtab-*`` buttons live inside
+// the Conv and Crypt workspaces respectively; we tag the event
+// with the parent tab so the dashboard can answer questions like
+// "which Conv subtab is most used?".
+const CONV_SUBTAB_PREFIX = "conv-subtab-";
+const CRYPT_SUBTAB_PREFIX = "crypt-subtab-";
+
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("click", (event) => {
+    if (!metrics || typeof metrics.trackTabSwitch !== "function") {
+      return;
+    }
+    const target = event.target;
+    if (!target || typeof target !== "object" || typeof target.id !== "string") {
+      return;
+    }
+    const buttonId = target.id;
+    if (!buttonId) {
+      return;
+    }
+    const mainTab = MAIN_TAB_BUTTON_TO_TAB[buttonId];
+    if (mainTab) {
+      metrics.trackTabSwitch({ tab: mainTab });
+      return;
+    }
+    if (buttonId.startsWith(CONV_SUBTAB_PREFIX)) {
+      metrics.trackTabSwitch({
+        tab: "data-tools",
+        subtab: buttonId.slice(CONV_SUBTAB_PREFIX.length),
+      });
+      return;
+    }
+    if (buttonId.startsWith(CRYPT_SUBTAB_PREFIX)) {
+      metrics.trackTabSwitch({
+        tab: "crypt",
+        subtab: buttonId.slice(CRYPT_SUBTAB_PREFIX.length),
+      });
+      return;
+    }
+  });
+}
 const {
   createTable,
   renderDnsTable,
@@ -3782,7 +3849,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
                 ? SETTINGS_SUBTAB_ABOUT
                 : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
-  metrics.track("subtab.switch", { tab: "settings", subtab: nextTab });
+  metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
   const backendBtn = document.getElementById("settings-subtab-backend");
