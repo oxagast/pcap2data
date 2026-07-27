@@ -797,6 +797,141 @@ ipcMain.handle("file-size", async () => {
   }
 });
 
+// ── Anonymous usage metrics transport ──────────────────────────────────────
+//
+// All network I/O for telemetry lives in the main process. The renderer holds
+// the in-memory queue (src/metrics.js) and forwards a batch via
+// `metrics:flush` whenever the main process asks for one (every flush
+// interval) or when the user explicitly requests it. The endpoint URL is
+// stored in settings.json under `privacy.metricsEndpointUrl` and is fully
+// user-configurable; if the user has not opted in (`privacy.metricsEnabled`
+// is false), the renderer never asks us to flush, and this code path is a
+// no-op.
+const METRICS_FLUSH_REQUEST = "metrics:flush-request";
+const METRICS_MAX_EVENT_BATCH = 1000;
+let metricsFlushTimer = null;
+
+function getMetricsPrivacy() {
+  try {
+    const settings = getAppSettings();
+    return settings?.privacy && typeof settings.privacy === "object"
+      ? settings.privacy
+      : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+async function flushMetricsQueue(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, error: "invalid-payload" };
+  }
+  const privacy = getMetricsPrivacy();
+  if (!privacy.metricsEnabled) {
+    return { ok: false, error: "disabled" };
+  }
+  const endpoint = String(privacy.metricsEndpointUrl || "").trim();
+  if (!endpoint) {
+    return { ok: false, error: "no-endpoint" };
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(endpoint);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return { ok: false, error: "endpoint-protocol" };
+    }
+  } catch (_error) {
+    return { ok: false, error: "endpoint-invalid" };
+  }
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  if (events.length === 0) {
+    return { ok: true, status: 204, sent: 0 };
+  }
+  if (events.length > METRICS_MAX_EVENT_BATCH) {
+    return { ok: false, error: "batch-too-large" };
+  }
+  const body = {
+    installId: String(payload.installId || privacy.metricsInstallId || "").trim(),
+    appVersion: String(payload.appVersion || app.getVersion() || "").trim(),
+    platform: String(platform || process.platform || "").trim(),
+    sentAt: String(payload.sentAt || new Date().toISOString()).trim(),
+    events,
+  };
+  try {
+    const response = await undiciFetch(parsedUrl.href, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": userAgent,
+        "X-PacketSnitch-Client": "electron",
+      },
+      body: JSON.stringify(body),
+      headersTimeout: 5000,
+      bodyTimeout: 5000,
+    });
+    const status = response.status;
+    const ok = status >= 200 && status < 300;
+    return {
+      ok,
+      status,
+      sent: events.length,
+      error: ok ? undefined : `http-${status}`,
+    };
+  } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush failed endpoint=${parsedUrl.host} message=${JSON.stringify(error?.message || String(error))}`,
+    );
+    return {
+      ok: false,
+      error: error?.message || "exception",
+    };
+  }
+}
+
+ipcMain.handle("metrics:track", async (_event, payload) => {
+  // The renderer's metrics service owns the queue. This handler exists so
+  // the renderer can sanity-check that the bridge is alive; we don't store
+  // anything here.
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, error: "invalid-payload" };
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("metrics:flush", async (_event, payload) => {
+  return flushMetricsQueue(payload || {});
+});
+
+ipcMain.handle("metrics:status", async () => {
+  const privacy = getMetricsPrivacy();
+  return {
+    enabled: Boolean(privacy.metricsEnabled),
+    endpoint: String(privacy.metricsEndpointUrl || "").trim(),
+    hasInstallId: Boolean(String(privacy.metricsInstallId || "").trim()),
+    appVersion: String(app.getVersion() || "").trim(),
+  };
+});
+
+function requestMetricsFlushFromRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send(METRICS_FLUSH_REQUEST, { at: new Date().toISOString() });
+  } catch (_error) {
+    // ignore: renderer is gone
+  }
+}
+
+function installMetricsFlushTimer() {
+  if (metricsFlushTimer) return;
+  const intervalSeconds = Math.max(5, Number(getMetricsPrivacy().metricsFlushIntervalSeconds) || 60);
+  metricsFlushTimer = setInterval(() => {
+    requestMetricsFlushFromRenderer();
+  }, intervalSeconds * 1000);
+  if (typeof metricsFlushTimer.unref === "function") {
+    metricsFlushTimer.unref();
+  }
+}
+
 // make sure we have a fresh temp dir
 fs.rmSync(testcaseTempDir, { recursive: true, force: true });
 
@@ -2445,6 +2580,11 @@ function createWindow() {
         }
       });
     }
+    // Start the metrics flush loop now that the renderer is ready to
+    // accept `metrics:flush-request` messages. The timer is unref()'d so
+    // it never blocks process exit.
+    installMetricsFlushTimer();
+    requestMetricsFlushFromRenderer();
   });
   mainWindow.once("close", () => {
     appendActivityLogLine(
@@ -3470,12 +3610,27 @@ ipcMain.handle("settings-update", async (_event, partialSettings) => {
     partialSettings && typeof partialSettings === "object" && partialSettings.llm && typeof partialSettings.llm === "object"
       ? partialSettings.llm
       : {};
+  const partialPrivacySettings =
+    partialSettings && typeof partialSettings === "object" && partialSettings.privacy && typeof partialSettings.privacy === "object"
+      ? partialSettings.privacy
+      : {};
+  // Deep-merge the privacy block too: a partial update that only
+  // carries ``metricsInstallId`` (e.g. the metrics service writing
+  // back its generated UUID) must not blow away the user's
+  // ``metricsEnabled`` toggle or the custom ``metricsEndpointUrl``.
+  const currentPrivacy = currentSettings?.privacy && typeof currentSettings.privacy === "object"
+    ? currentSettings.privacy
+    : {};
   const savedSettings = await saveSettingsToDisk({
     ...currentSettings,
     ...partialSettings,
     llm: {
       ...currentSettings.llm,
       ...partialLlmSettings,
+    },
+    privacy: {
+      ...currentPrivacy,
+      ...partialPrivacySettings,
     },
   });
   void refreshOllamaCloudApiDiagnostics().then((cloudDiagnostics) => {

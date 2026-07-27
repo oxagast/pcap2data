@@ -489,10 +489,7 @@
                 <option value="smtp">SMTP</option>
                 <option value="json">JSON</option>
                 <option value="xml">XML</option>
-<<<<<<< HEAD
                 <option value="html">HTML</option>
-=======
->>>>>>> 5862f29a91399490b9ba99449b672af01a186670
                 <option value="yaml">YAML</option>
                 <option value="protobuf">Protobuf</option>
                 <option value="msgpack">MessagePack</option>
@@ -985,6 +982,9 @@ No keystore entries saved.</pre>
             <button id="settings-subtab-plugins" class="settings-subtab-btn">
               Plugins
             </button>
+            <button id="settings-subtab-privacy" class="settings-subtab-btn">
+              Privacy
+            </button>
             <button id="settings-subtab-about" class="settings-subtab-btn">
               About
             </button>
@@ -1276,6 +1276,63 @@ No keystore entries saved.</pre>
                 <div class="settings-section-title" style="margin-top: 0.9rem">Plugin Errors</div>
                 <div id="settings-plugins-error-panel" class="settings-help-text" role="status" aria-live="polite">
                   No plugin errors.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-privacy-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">Anonymous Usage Metrics</div>
+
+                <label for="settings-privacy-metrics-enabled">
+                  <input id="settings-privacy-metrics-enabled" type="checkbox" />
+                  Send anonymous usage metrics
+                </label>
+                <div class="settings-help-text" id="settings-privacy-consent-status">
+                  Metrics are disabled. PacketSnitch does not phone home.
+                </div>
+                <div class="settings-help-text">
+                  When enabled, PacketSnitch sends opt-in, anonymous telemetry (which tabs
+                  and subtabs you use, how long features take, and uncaught errors) to a
+                  public metrics endpoint. No packet contents, file paths, or personally
+                  identifiable information are ever collected. You can disable this at any
+                  time from this panel.
+                </div>
+
+                <label for="settings-privacy-metrics-endpoint-url">Endpoint URL</label>
+                <input id="settings-privacy-metrics-endpoint-url" type="url"
+                  placeholder="http://oxasploits.com:8088/mhook" />
+                <div class="settings-help-text">
+                  The HTTP(S) endpoint that receives the metrics batches. Defaults to
+                  <code>http://oxasploits.com:8088/mhook</code>. You can point this at your
+                  own server (the open-source endpoint lives in
+                  <code>src/metrics/server.py</code>) for self-hosting.
+                </div>
+
+                <label for="settings-privacy-metrics-flush-interval-seconds">
+                  Flush interval (seconds)
+                </label>
+                <input id="settings-privacy-metrics-flush-interval-seconds" type="number" min="1" step="1" />
+
+                <label for="settings-privacy-metrics-max-queue-size">
+                  In-memory queue size
+                </label>
+                <input id="settings-privacy-metrics-max-queue-size" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  Events are buffered in memory and shipped in batches. If the queue
+                  fills (e.g. the endpoint is down) older events are dropped and the
+                  counter surfaces in the status line.
+                </div>
+
+                <label for="settings-privacy-metrics-install-id">
+                  Install ID (read-only)
+                </label>
+                <input id="settings-privacy-metrics-install-id" type="text" readonly />
+                <div class="settings-help-text">
+                  A random, opaque identifier generated the first time you opt in. It is
+                  used to count distinct installs without ever identifying you.
                 </div>
               </div>
             </div>

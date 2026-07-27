@@ -1593,3 +1593,21 @@ contextBridge.exposeInMainWorld('pluginapi', {
 contextBridge.exposeInMainWorld("llmapi", {
   generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),
 });
+
+contextBridge.exposeInMainWorld("metricsapi", {
+  track: (payload) => ipcRenderer.invoke("metrics:track", payload),
+  flush: (payload) => ipcRenderer.invoke("metrics:flush", payload),
+  getStatus: () => ipcRenderer.invoke("metrics:status"),
+  onFlushRequest: (handler) => {
+    if (typeof handler !== "function") return () => { };
+    const listener = (_event, payload) => {
+      try {
+        handler(payload);
+      } catch (_error) {
+        // ignore listener errors
+      }
+    };
+    ipcRenderer.on("metrics:flush-request", listener);
+    return () => ipcRenderer.removeListener("metrics:flush-request", listener);
+  },
+});

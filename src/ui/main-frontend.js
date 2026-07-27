@@ -17,6 +17,47 @@ const { convertContextMenuMarkup } = require("./fragments/convert-context-menu")
 const { validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
+const metrics = require("../metrics");
+// Metrics is always loaded so that call sites can use it unconditionally.
+// The queue is a no-op until the user opts in via the Privacy settings subtab.
+if (metrics && typeof metrics.init === "function") {
+  metrics.init();
+}
+// Wire the main process's flush-request signal to the renderer's queue
+// drain. Without this listener the timer in main.js fires
+// ``metrics:flush-request`` every interval but no one ever reads it,
+// so events pile up in the renderer queue and never reach the network.
+// We also kick a flush on window unload so a graceful shutdown ships
+// the last few events.
+if (
+  typeof window !== "undefined"
+  && window.metricsapi
+  && typeof window.metricsapi.onFlushRequest === "function"
+  && typeof metrics.flush === "function"
+) {
+  window.metricsapi.onFlushRequest(() => {
+    metrics.flush().catch((error) => {
+      // The flush promise itself never throws (errors land in
+      // ``metrics.retryQueue``) but be defensive in case a future
+      // refactor does. ``logErrorEntry`` is declared further down
+      // in this file (inside the panel-composition section), so
+      // we go through ``writeLogEntry`` here to avoid a temporal
+      // dead zone on first call.
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? error.message
+          : String(error);
+      writeLogEntry(`Error context=metrics-flush details="${message}"`);
+    });
+  });
+  window.addEventListener("beforeunload", () => {
+    try {
+      void metrics.flush();
+    } catch (_error) {
+      // ignore: we are tearing down
+    }
+  });
+}
 const {
   createTable,
   renderDnsTable,
@@ -808,6 +849,7 @@ const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
+const SETTINGS_SUBTAB_PRIVACY = "privacy";
 const SETTINGS_SUBTAB_ABOUT = "about";
 const PACKETSNITCH_RELEASES_PAGE_URL =
   "https://github.com/oxasploits/PacketSnitch/releases";
@@ -919,6 +961,19 @@ function bumpPacketNavigationCacheVersion() {
 // Sets current settings.
 function setCurrentSettings(nextSettings) {
   appSettings = normalizeSettings(nextSettings);
+  // Push a synchronous snapshot of the settings into the metrics
+  // service. ``window.settingsapi.get`` is async, but ``metrics.track``
+  // and friends have to gate on the privacy block synchronously,
+  // so we keep a local copy. Centralising the push here means
+  // every code path that mutates the in-memory state also keeps
+  // the metrics layer in lockstep.
+  if (metrics && typeof metrics.setSettingsSnapshot === "function") {
+    try {
+      metrics.setSettingsSnapshot(appSettings);
+    } catch (_error) {
+      // ignore: metrics is a best-effort, non-essential service
+    }
+  }
   return appSettings;
 }
 
@@ -2263,6 +2318,24 @@ function syncSettingsFormFromState() {
   const pluginFailureThresholdEl = document.getElementById(
     "settings-plugins-auto-disable-failure-threshold",
   );
+  const privacyMetricsEnabledEl = document.getElementById(
+    "settings-privacy-metrics-enabled",
+  );
+  const privacyEndpointUrlEl = document.getElementById(
+    "settings-privacy-metrics-endpoint-url",
+  );
+  const privacyFlushIntervalEl = document.getElementById(
+    "settings-privacy-metrics-flush-interval-seconds",
+  );
+  const privacyMaxQueueSizeEl = document.getElementById(
+    "settings-privacy-metrics-max-queue-size",
+  );
+  const privacyInstallIdEl = document.getElementById(
+    "settings-privacy-metrics-install-id",
+  );
+  const privacyConsentStatusEl = document.getElementById(
+    "settings-privacy-consent-status",
+  );
   if (themeSelectEl) {
     renderThemeOptions();
     themeSelectEl.value = sanitizeThemeId(settings.general.themeId, FALLBACK_THEME_ID);
@@ -2393,6 +2466,37 @@ function syncSettingsFormFromState() {
       || DEFAULT_SETTINGS.plugins.autoDisableFailureThreshold,
     );
   }
+  if (privacyMetricsEnabledEl) {
+    privacyMetricsEnabledEl.checked = Boolean(settings.privacy?.metricsEnabled);
+  }
+  if (privacyEndpointUrlEl) {
+    privacyEndpointUrlEl.value = String(
+      settings.privacy?.metricsEndpointUrl
+      || DEFAULT_SETTINGS.privacy.metricsEndpointUrl,
+    );
+  }
+  if (privacyFlushIntervalEl) {
+    privacyFlushIntervalEl.value = String(
+      settings.privacy?.metricsFlushIntervalSeconds
+      || DEFAULT_SETTINGS.privacy.metricsFlushIntervalSeconds,
+    );
+  }
+  if (privacyMaxQueueSizeEl) {
+    privacyMaxQueueSizeEl.value = String(
+      settings.privacy?.metricsMaxQueueSize
+      || DEFAULT_SETTINGS.privacy.metricsMaxQueueSize,
+    );
+  }
+  if (privacyInstallIdEl) {
+    privacyInstallIdEl.value = String(
+      settings.privacy?.metricsInstallId || "",
+    );
+  }
+  if (privacyConsentStatusEl) {
+    privacyConsentStatusEl.textContent = settings.privacy?.metricsEnabled
+      ? "Metrics are enabled. Only anonymous, allow-listed events are sent."
+      : "Metrics are disabled. PacketSnitch does not phone home.";
+  }
   syncLlmDiagnosticsIndicators();
   syncBackendDiagnosticsIndicators();
 }
@@ -2469,6 +2573,18 @@ function readSettingsFormState() {
   );
   const pluginFailureThresholdEl = document.getElementById(
     "settings-plugins-auto-disable-failure-threshold",
+  );
+  const privacyMetricsEnabledEl = document.getElementById(
+    "settings-privacy-metrics-enabled",
+  );
+  const privacyEndpointUrlEl = document.getElementById(
+    "settings-privacy-metrics-endpoint-url",
+  );
+  const privacyFlushIntervalEl = document.getElementById(
+    "settings-privacy-metrics-flush-interval-seconds",
+  );
+  const privacyMaxQueueSizeEl = document.getElementById(
+    "settings-privacy-metrics-max-queue-size",
   );
   const trimmedVirusTotalApiKey = backendVirusTotalApiKeyEl
     ? backendVirusTotalApiKeyEl.value.trim()
@@ -2584,6 +2700,25 @@ function readSettingsFormState() {
           && typeof currentSettings.plugins.perPluginFailureThreshold === "object"
           ? currentSettings.plugins.perPluginFailureThreshold
           : {},
+    },
+    privacy: {
+      metricsEnabled: privacyMetricsEnabledEl
+        ? privacyMetricsEnabledEl.checked
+        : DEFAULT_SETTINGS.privacy.metricsEnabled,
+      metricsEndpointUrl: privacyEndpointUrlEl
+        ? privacyEndpointUrlEl.value.trim()
+        : DEFAULT_SETTINGS.privacy.metricsEndpointUrl,
+      metricsFlushIntervalSeconds: privacyFlushIntervalEl
+        ? privacyFlushIntervalEl.value
+        : DEFAULT_SETTINGS.privacy.metricsFlushIntervalSeconds,
+      metricsMaxQueueSize: privacyMaxQueueSizeEl
+        ? privacyMaxQueueSizeEl.value
+        : DEFAULT_SETTINGS.privacy.metricsMaxQueueSize,
+      // Install ID is generated on first opt-in and never edited by
+      // the user; preserve whatever the loaded settings had.
+      metricsInstallId:
+        currentSettings?.privacy?.metricsInstallId
+        || DEFAULT_SETTINGS.privacy.metricsInstallId,
     },
   });
 }
@@ -3550,21 +3685,26 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
           ? SETTINGS_SUBTAB_DEBUG
           : tabName === SETTINGS_SUBTAB_PLUGINS
             ? SETTINGS_SUBTAB_PLUGINS
-            : tabName === SETTINGS_SUBTAB_ABOUT
-              ? SETTINGS_SUBTAB_ABOUT
-              : SETTINGS_SUBTAB_GENERAL;
+            : tabName === SETTINGS_SUBTAB_PRIVACY
+              ? SETTINGS_SUBTAB_PRIVACY
+              : tabName === SETTINGS_SUBTAB_ABOUT
+                ? SETTINGS_SUBTAB_ABOUT
+                : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
+  metrics.track("subtab.switch", { tab: "settings", subtab: nextTab });
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
   const pluginsBtn = document.getElementById("settings-subtab-plugins");
+  const privacyBtn = document.getElementById("settings-subtab-privacy");
   const aboutBtn = document.getElementById("settings-subtab-about");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
   const pluginsPanel = document.getElementById("settings-plugins-panel");
+  const privacyPanel = document.getElementById("settings-privacy-panel");
   const aboutPanel = document.getElementById("settings-about-panel");
   if (generalBtn) {
     generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
@@ -3580,6 +3720,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (pluginsBtn) {
     pluginsBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PLUGINS);
+  }
+  if (privacyBtn) {
+    privacyBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PRIVACY);
   }
   if (aboutBtn) {
     aboutBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_ABOUT);
@@ -3598,6 +3741,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (pluginsPanel) {
     pluginsPanel.hidden = nextTab !== SETTINGS_SUBTAB_PLUGINS;
+  }
+  if (privacyPanel) {
+    privacyPanel.hidden = nextTab !== SETTINGS_SUBTAB_PRIVACY;
   }
   if (aboutPanel) {
     aboutPanel.hidden = nextTab !== SETTINGS_SUBTAB_ABOUT;
@@ -19790,6 +19936,10 @@ document.getElementById("settings-subtab-debug").addEventListener("click", () =>
 
 document.getElementById("settings-subtab-plugins").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_PLUGINS);
+});
+
+document.getElementById("settings-subtab-privacy").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_PRIVACY);
 });
 
 document.getElementById("settings-subtab-about").addEventListener("click", () => {

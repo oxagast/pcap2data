@@ -3,6 +3,7 @@ build
 out
 .npmrc
 src/backend/snitch
+src/metrics/var
 backend/snitch.exe
 testcases
 .VSCodeCounter

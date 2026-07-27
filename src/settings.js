@@ -70,6 +70,13 @@ const DEFAULT_SETTINGS = Object.freeze({
         autoDisableFailureThreshold: 3,
         perPluginFailureThreshold: {},
     },
+    privacy: {
+        metricsEnabled: false,
+        metricsEndpointUrl: "http://oxasploits.com:8088/mhook",
+        metricsFlushIntervalSeconds: 60,
+        metricsMaxQueueSize: 500,
+        metricsInstallId: "",
+    },
 });
 
 const VALID_BACKEND_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000, 8000]);
@@ -167,12 +174,14 @@ function normalizeSettings(rawSettings = {}) {
     const list = source.list && typeof source.list === "object" ? source.list : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
     const plugins = source.plugins && typeof source.plugins === "object" ? source.plugins : {};
+    const privacy = source.privacy && typeof source.privacy === "object" ? source.privacy : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
     const backendDefaults = DEFAULT_SETTINGS.backend;
     const debugDefaults = DEFAULT_SETTINGS.debug;
     const listDefaults = DEFAULT_SETTINGS.list;
     const defaults = DEFAULT_SETTINGS.llm;
     const pluginDefaults = DEFAULT_SETTINGS.plugins;
+    const privacyDefaults = DEFAULT_SETTINGS.privacy;
 
     const normalizedBackendChunkSize = toPositiveInteger(
         general.backendPacketChunkSize,
@@ -369,11 +378,55 @@ function normalizeSettings(rawSettings = {}) {
                 100,
             ),
         },
+        privacy: {
+            metricsEnabled:
+                typeof privacy.metricsEnabled === "boolean"
+                    ? privacy.metricsEnabled
+                    : privacyDefaults.metricsEnabled,
+            metricsEndpointUrl: normalizeEndpointUrl(
+                privacy.metricsEndpointUrl,
+                privacyDefaults.metricsEndpointUrl,
+            ),
+            metricsFlushIntervalSeconds: toPositiveInteger(
+                privacy.metricsFlushIntervalSeconds,
+                privacyDefaults.metricsFlushIntervalSeconds,
+                5,
+            ),
+            metricsMaxQueueSize: toPositiveInteger(
+                privacy.metricsMaxQueueSize,
+                privacyDefaults.metricsMaxQueueSize,
+                10,
+            ),
+            metricsInstallId:
+                typeof privacy.metricsInstallId === "string"
+                    ? privacy.metricsInstallId.trim()
+                    : privacyDefaults.metricsInstallId,
+        },
     };
+}
+
+function normalizeEndpointUrl(value, fallback) {
+    if (typeof value !== "string") {
+        return fallback;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return fallback;
+    }
+    try {
+        const parsed = new URL(trimmed);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return fallback;
+        }
+        return parsed.toString();
+    } catch (_error) {
+        return fallback;
+    }
 }
 
 module.exports = {
     DEFAULT_SETTINGS,
     cloneDefaultSettings,
     normalizeSettings,
+    normalizeEndpointUrl,
 };
