@@ -17,6 +17,16 @@ const DEFAULT_FRONTEND_INGEST_WORKER_THREADS = Math.max(
     ),
 );
 
+// Single source of truth for heatmap map projection calibration defaults.
+// Both the renderer (stats-panel.js) and the persisted debug settings
+// reference this object so the two cannot drift apart.
+const MAP_PROJECTION_CALIBRATION = Object.freeze({
+    zoomX: 0.29,
+    zoomY: 0.83,
+    offsetX: -1.30,
+    offsetY: 0.39,
+});
+
 const DEFAULT_SETTINGS = Object.freeze({
     general: {
         themeId: "snitchbitch",
@@ -44,10 +54,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendIncrementalRefreshMinPackets: 4000,
         frontendIngestThreadingEnabled: true,
         frontendIngestWorkerThreads: DEFAULT_FRONTEND_INGEST_WORKER_THREADS,
-        mapProjectionZoomX: 0.55,
-        mapProjectionZoomY: 0.95,
-        mapProjectionOffsetX: -0.53,
-        mapProjectionOffsetY: 0,
+        mapProjectionZoomX: MAP_PROJECTION_CALIBRATION.zoomX,
+        mapProjectionZoomY: MAP_PROJECTION_CALIBRATION.zoomY,
+        mapProjectionOffsetX: MAP_PROJECTION_CALIBRATION.offsetX,
+        mapProjectionOffsetY: MAP_PROJECTION_CALIBRATION.offsetY,
         mapProjectionCalibrationLocked: true,
     },
     list: {
@@ -426,6 +436,7 @@ function normalizeEndpointUrl(value, fallback) {
 
 module.exports = {
     DEFAULT_SETTINGS,
+    MAP_PROJECTION_CALIBRATION,
     cloneDefaultSettings,
     normalizeSettings,
     normalizeEndpointUrl,
