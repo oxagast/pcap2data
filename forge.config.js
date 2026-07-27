@@ -123,7 +123,22 @@ module.exports = {
   packagerConfig: {
     icon: path.join(__dirname, "logo", "ps-icon"),
     asar: true,
-    extraResource: ["src/backend/snitch", "src/backend/common/", "src/data/new_session.json", "src/data/goodies.txt", "src/data/valid-keys.txt", "config/models.json", "themes", "src/ui/fragments"],
+    extraResource: [
+      // PyInstaller produces `snitch` on Linux/macOS and `snitch.exe` on Windows,
+      // placed directly in src/backend/ (not in a subdirectory). Reference the
+      // correct binary for the current platform so forge doesn't try to lstat
+      // a non-existent directory on Windows.
+      process.platform === "win32"
+        ? "src/backend/snitch.exe"
+        : "src/backend/snitch",
+      "src/backend/common/",
+      "src/data/new_session.json",
+      "src/data/goodies.txt",
+      "src/data/valid-keys.txt",
+      "config/models.json",
+      "themes",
+      "src/ui/fragments",
+    ],
   },
   rebuildConfig: {},
   makers,
