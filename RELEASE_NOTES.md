@@ -1,6 +1,43 @@
 # Release Notes
 
-## v2.4.2115 - 2026-07-26 (unreleased)
+## v2.4.2169 - 2026-07-27 (unreleased)
+**Type:** minor
+
+### ✨ Features
+- Anonymous, opt-in usage metrics: new `src/metrics.js` module + `metricsapi` IPC bridge ship tab/subtab usage, action timing, and error reports to a user-configurable HTTP endpoint (default `http://143.198.179.97:8088/mhook`)
+- First-run consent overlay: clean installs now show a dedicated Yes/No dialog before any metrics can be collected; decision is recorded via `settings.privacy.metricsConsentAsked` and can be changed any time in Settings → Privacy
+- New `Privacy` subtab under Settings: enable/disable metrics, set the endpoint URL, tune flush interval and in-memory queue size, and view the auto-generated install UUID
+- Self-hostable metrics endpoint (`src/metrics/server.py`) with NDJSON-on-disk sink for log aggregators (ElasticSearch/Graylog/Loki/Splunk/Vector) plus a `/healthz` liveness probe
+- "Analyze IP..." submenu in the context menu: route the right-clicked IP straight into the Subnet Calculator or the Threat Intel lookup
+- Carved-file context-menu entries in Stats: "Load carved file into Extraction" and "Send carved file to VirusTotal" for entries in the new Carvable Files list
+- `runThreatIntelIpLookup` / `setAnalysisInput` exposed on the Subnet Calculator panel for cross-panel IP drill-down
+- Backend port reclaim: on GUI startup we look for a stale snitch HTTP backend on the configured port and shut it down gracefully (with OS-level kill fallback) before launching our own
+
+### 🐛 Fixes
+- Heatmap map projection calibration is now sourced from a single `MAP_PROJECTION_CALIBRATION` constant in `src/settings.js`; the previously hard-coded values in `stats-panel.js` (and persisted debug settings defaults) now agree
+- VirusTotal startup diagnostic is coalesced: eager + persisted-settings + backend-ready callers share a single in-flight probe with a 30s "last successful fetch" dedupe window, and a new `invalidateVirusTotalDiagnosticsCache()` hook refreshes immediately when the API key changes
+- Privacy block in `settings-update` IPC is now deep-merged so a partial write (e.g. the metrics service writing back a fresh install UUID) can no longer wipe the user's `metricsEnabled` toggle or custom endpoint URL
+- Metrics flush loop now actually fires: `mainWindow.webContents.send("metrics:flush-request", ...)` is paired with a renderer `metricsapi.onFlushRequest` listener and a `beforeunload` final-flush, so events ship instead of piling up in the queue
+- `install-screen` only auto-shows the consent overlay on a clean install (not on every launch where the install screen is suppressed) and records the choice before un-hiding
+- Resolved a stale `<<<<<<< HEAD` merge marker in the Conv Decodes protocol dropdown (`src/index.html`)
+- Context menu layout: "Open in Heatmap" and the new carvable/extraction entries are no longer orphaned by misplaced `<hr>` dividers
+
+### 🗑️ Removed
+- Duplicated `0.55 / 0.95 / -0.53 / 0` heatmap calibration constants in `src/settings.js` and `src/ui/panels/stats-panel.js` (consolidated into `MAP_PROJECTION_CALIBRATION`)
+
+### 🔧 Improvements
+- New `tests/consent_overlay.test.js`, `tests/metrics_privacy.test.js`, `tests/metrics_tab_tracking.test.js`, and `tests/test_metrics_server.py` cover the new consent overlay, privacy settings, tab-tracking path, and the Python metrics server end-to-end
+- New `tests/heatmap_projection_calibration.test.js` locks the shared calibration constants so future tweaks do not silently regress the heatmap alignment
+- Settings schema expanded with a normalized `privacy` block (`metricsEnabled`, `metricsConsentAsked`, `metricsEndpointUrl`, `metricsFlushIntervalSeconds`, `metricsMaxQueueSize`, `metricsInstallId`)
+- `src/ui/main-frontend.js` now listens for the `packetsnitch:settings-updated` CustomEvent so out-of-band writes (consent overlay, metrics install-id generation) re-sync the in-memory settings and the Privacy tab form
+- All metrics tracking respects a strict `SAFE_PROP_KEYS` allowlist and per-key length caps — no PCAP paths, IPs, prompts, or other user content ever leave the renderer
+- Docs (`docs/context-menu.md`) updated to describe the new Analyze IP submenu and the carvable-file context actions
+- Default Ollama model updated to `minimax-m3:cloud` to match the current model line
+- Metrics endpoint URL is user-configurable; the bundled `src/metrics/server.py` is documented and ready to deploy behind any reverse proxy for self-hosted setups
+
+---
+
+## v2.4.2115 - 2026-07-26
 **Type:** minor
 
 ### ✨ Features
