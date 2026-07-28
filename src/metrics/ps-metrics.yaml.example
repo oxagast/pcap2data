@@ -21,7 +21,11 @@ storage:
   data_dir: /var/log/packetsnitch-metrics   # where NDJSON files are written.
   max_body: 1048576          # max accepted POST body in bytes (1 MiB).
   max_queue: 1024            # max in-flight batches before /mhook returns 503.
-  gzip_after_days: 7         # 0 = compress yesterdays file on every rotation.
+  gzip_after_days: 7         # N (>=0) = compress yesterday's file once it is N days old.
+                             # 0   = compress the previous day's file on every rotation.
+                             # -1  = never compress; let logrotate (or a similar
+                             #      external tool) own rotation and compression.
+                             #      Files stay on disk as plain NDJSON forever.
   ack_timeout_seconds: 5.0   # how long HTTP clients wait for the disk ack.
 
 admin:

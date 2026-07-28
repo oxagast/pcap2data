@@ -625,13 +625,16 @@ class MetricsSink:
     ) -> None:
         self._data_dir = data_dir
         # ``gzip_after_days`` semantics:
-        #   *  0  -> compress the previous day's file on every rotation
-        #   *  N  -> compress once the file is at least N days old
-        # There is no "never compress" mode at the sink level; the
-        # operator who really wants that can stop the server, manually
-        # decompress, and restart — the on-disk file is identical to
-        # what the shipper would read.
-        self._gzip_after_days = max(0, int(gzip_after_days))
+        #   *  < 0  -> never compress; let an external tool (e.g.
+        #              logrotate with the ``copytruncate``/``delaycompress``
+        #              options, Vector, Filebeat) own compression. Files
+        #              are left in place as plain NDJSON on every rotation.
+        #   *  0    -> compress the previous day's file on every rotation
+        #   *  N    -> compress once the file is at least N days old
+        # The default is 7 so the on-disk state stays bounded without
+        # a daily rewrite cycle, but the negative sentinel exists for
+        # operators who prefer to wire up logrotate themselves.
+        self._gzip_after_days = int(gzip_after_days)
         self._lock = threading.Lock()
         self._gzip_lock = gzip_lock or self._lock
         self._current_date: Optional[_dt.date] = None
@@ -760,6 +763,15 @@ class MetricsSink:
     def _gzip_old_files(
         self, old_day: _dt.date, today: _dt.date
     ) -> None:
+        # ``gzip_after_days < 0`` is the explicit "off" sentinel: the
+        # operator wants logrotate (or a similar external tool) to
+        # manage rotation and compression, so we must not touch the
+        # on-disk files ourselves. Skipping here also avoids racing
+        # with a logrotate ``copytruncate`` step, which would see the
+        # half-written copy-truncate target if we tried to gzip on
+        # top of it.
+        if self._gzip_after_days < 0:
+            return
         age = (today - old_day).days
         if age < self._gzip_after_days:
             return

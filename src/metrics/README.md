@@ -355,6 +355,57 @@ The tests are stdlib-only, run in-process, and cover:
 - Dropped-connection teardown (`ConnectionResetError`, broken pipe)
 - YAML config loader, env-var precedence, and `/admin/*` auth gating
 
+### Compression and rotation
+
+The `storage.gzip_after_days` setting controls when yesterday's NDJSON
+files get gzipped in place:
+
+| Value | Behaviour                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------- |
+| `N`   | Compress the previous day's file once it is at least `N` days old (default: `7`).          |
+| `0`   | Compress the previous day's file on every daily rotation.                                   |
+| `-1`  | **Disable in-server compression entirely.** Files stay on disk as plain `.ndjson`. Use this when you want an external tool like `logrotate` to own rotation and compression (see the example snippet below). |
+
+Set it via the YAML key, the `PSN_METRICS_GZIP_AFTER_DAYS` env var, or the
+historical `PSN_METRICS_GZIP_OLD` alias. Negative values other than `-1`
+are clamped to `-1`.
+
+#### Letting `logrotate` handle rotation and compression
+
+Set `gzip_after_days: -1` in `/etc/ps-metrics.yaml` so the server never
+touches yesterday's files. Then point `logrotate` at the data directory
+with the `copytruncate` mode (so the server's append-only file handles
+keep writing to fresh paths) and a daily schedule:
+
+```bash
+# /etc/logrotate.d/packetsnitch-metrics
+/var/log/packetsnitch-metrics/*.ndjson {
+    daily
+    rotate 30
+    missingok
+    notifempty
+    copytruncate
+    compress
+    delaycompress
+    dateext
+    dateformat -%Y-%m-%d
+    extension .ndjson
+    sharedscripts
+    postrotate
+        # Restart the server only if it was gzipping on its own; with
+        # gzip_after_days: -1 the server keeps the file descriptors open
+        # across rotations, so this hook is a no-op safety net.
+        systemctl try-restart packetsnitch-metrics.service >/dev/null 2>&1 || true
+    endscript
+}
+```
+
+The `copytruncate` directive is the critical bit — it tells `logrotate`
+to copy the live file to a rotated sibling and then truncate the
+original in place, which the server handles correctly because it always
+appends. Without it, the server would keep writing to the original inode
+while `logrotate` shipped the rotated file away.
+
 ## Production notes
 
 - The server is `ThreadingHTTPServer`-based. Disk writes are serialised

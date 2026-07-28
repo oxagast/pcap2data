@@ -514,6 +514,65 @@ class GzipRotationTests(unittest.TestCase):
             with contextlib.suppress(OSError):
                 tmp.rmdir()
 
+    def test_disabled_keeps_plain_file(self):
+        # ``gzip_after_days=-1`` is the "off" sentinel: the sink must
+        # leave yesterday's files as plain ``.ndjson`` on disk so an
+        # external tool (typically ``logrotate`` with ``copytruncate``)
+        # can own rotation and compression. The gzip step is
+        # completely skipped — no ``.gz`` file is ever produced and the
+        # plain file is left untouched for the next rotation to keep
+        # appending to.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-metrics-gz-off-"))
+        sink = server.MetricsSink(tmp, gzip_after_days=-1)
+        try:
+            sink.write_batch(
+                _make_batch(),
+                client_ip="127.0.0.1",
+                server_received_at="2026-01-01T00:00:00Z",
+            )
+            # Force a rotation several days forward — without the off
+            # sentinel a sane default (e.g. 7) would have compressed
+            # the old file by now.
+            sink._rotate_if_needed(_dt.date(2026, 1, 30))
+            self.assertTrue((tmp / "events-2026-01-01.ndjson").exists())
+            self.assertFalse((tmp / "events-2026-01-01.ndjson.gz").exists())
+            self.assertTrue((tmp / "installs-2026-01-01.ndjson").exists())
+            self.assertFalse((tmp / "installs-2026-01-01.ndjson.gz").exists())
+            self.assertTrue((tmp / "errors-2026-01-01.ndjson").exists())
+            self.assertFalse((tmp / "errors-2026-01-01.ndjson.gz").exists())
+        finally:
+            with contextlib.suppress(Exception):
+                sink.shutdown()
+            for child in tmp.glob("*"):
+                with contextlib.suppress(OSError):
+                    child.unlink()
+            with contextlib.suppress(OSError):
+                tmp.rmdir()
+
+    def test_any_negative_value_disables_gzip(self):
+        # The docstring promises ``-1`` is the sentinel; defensively
+        # we accept any negative value so a typo (``-7`` instead of
+        # ``7``) does not silently start gzipping on every rotation.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-metrics-gz-neg-"))
+        sink = server.MetricsSink(tmp, gzip_after_days=-365)
+        try:
+            sink.write_batch(
+                _make_batch(),
+                client_ip="127.0.0.1",
+                server_received_at="2026-01-01T00:00:00Z",
+            )
+            sink._rotate_if_needed(_dt.date(2026, 12, 31))
+            self.assertTrue((tmp / "events-2026-01-01.ndjson").exists())
+            self.assertFalse((tmp / "events-2026-01-01.ndjson.gz").exists())
+        finally:
+            with contextlib.suppress(Exception):
+                sink.shutdown()
+            for child in tmp.glob("*"):
+                with contextlib.suppress(OSError):
+                    child.unlink()
+            with contextlib.suppress(OSError):
+                tmp.rmdir()
+
 
 class FutureTests(unittest.TestCase):
     def test_future_returns_result(self):
