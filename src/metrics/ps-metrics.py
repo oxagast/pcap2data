@@ -1080,16 +1080,15 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         """Emit one structured access-log line per request.
 
-        Called both by the dispatchers (``do_GET``/``do_POST``/
-        ``do_HEAD``) so we always get a log line, and indirectly by
-        the stdlib ``BaseHTTPRequestHandler`` at the end of every
-        successful request. The two paths must converge on a single
-        line per request — the stdlib one uses the byte count we
-        accumulate via ``_send_json`` (so it knows the real size),
-        while the dispatcher path is the only signal for failed
-        requests that never reach ``send_response``. We de-dupe with
-        a per-request ``_log_request_emitted`` flag so the operator
-        always sees exactly one line per request.
+        Called by the stdlib ``BaseHTTPRequestHandler.send_response``
+        and ``handle_one_request`` paths. ``send_response`` invokes
+        us with the actual status code; the
+        ``handle_one_request``-driven call (if any) provides the
+        final byte count after ``wfile.flush()``. We rely on the
+        byte counter (``_response_bytes``) we update in
+        ``_send_json`` and ``_require_admin`` so the size we log
+        matches what we put on the wire, regardless of which call
+        path triggers the log line.
 
         Format mirrors the classic combined-log shape:
 
@@ -1100,13 +1099,6 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
         can be greppable for status codes, hot paths, slow handlers
         and clients with their log line alone.
         """
-        # Stdlib calls ``log_request`` once at the end of every
-        # successfully parsed request and the dispatcher ``finally``
-        # block calls it again so failed requests also produce a
-        # line. Drop the second invocation on the floor.
-        if getattr(self, "_log_request_emitted", False):
-            return
-        self._log_request_emitted = True
         if code < 0:
             code = getattr(self, "code", 200) or 200
         if size < 0:
@@ -1170,51 +1162,46 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        try:
-            if path == HEALTH_PATH:
-                self._handle_health()
-                return
-            if path.startswith(ADMIN_PREFIX):
-                self._handle_admin(path)
-                return
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            # Client vanished mid-response. Let the socket layer tear
-            # the connection down; the access log is already going to
-            # say the response was short.
-            LOG.debug("client disconnected during GET %s", path)
-        finally:
-            self.log_request()
+        if path == HEALTH_PATH:
+            self._handle_health()
+            return
+        if path.startswith(ADMIN_PREFIX):
+            self._handle_admin(path)
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        try:
-            if path != INGEST_PATH:
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-                return
-            self._handle_ingest()
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            LOG.debug("client disconnected during POST %s", path)
-        finally:
-            self.log_request()
+        if path != INGEST_PATH:
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+            return
+        self._handle_ingest()
 
     def do_HEAD(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        try:
-            if path in (HEALTH_PATH, INGEST_PATH):
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+        # Set ``code``/``_response_bytes`` BEFORE ``send_response`` so
+        # ``log_request`` (called from inside ``send_response``)
+        # sees the real values. HEAD requests legitimately have a
+        # zero-length body, which is why we set ``_response_bytes``
+        # to 0 here.
+        if path in (HEALTH_PATH, INGEST_PATH):
+            try:
                 self.code = int(HTTPStatus.OK)
-                self._response_bytes = 0
-                return
-            self.send_response(HTTPStatus.NOT_FOUND)
-            self.end_headers()
-            self.code = int(HTTPStatus.NOT_FOUND)
+            except Exception:
+                self.code = 200
             self._response_bytes = 0
-        finally:
-            self.log_request()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        try:
+            self.code = int(HTTPStatus.NOT_FOUND)
+        except Exception:
+            self.code = 404
+        self._response_bytes = 0
+        self.send_response(HTTPStatus.NOT_FOUND)
+        self.end_headers()
 
     # ---- handlers --------------------------------------------------------
 
@@ -1284,17 +1271,22 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
         if not config.admin_enabled():
             return False
         if not config.admin_auth_ok(self._client_admin_key()):
+            body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+            # Track the response byte count and status BEFORE
+            # ``send_response``: ``BaseHTTPRequestHandler.send_response``
+            # invokes ``log_request`` internally and we want the
+            # access log to carry the real numbers, not the defaults.
+            self._response_bytes = len(body)
+            try:
+                self.code = int(HTTPStatus.UNAUTHORIZED)
+            except Exception:
+                self.code = 401
             self.send_response(HTTPStatus.UNAUTHORIZED)
             self.send_header("Content-Type", "application/json")
             self.send_header("WWW-Authenticate", 'Bearer realm="ps-metrics-admin"')
             self.send_header("Cache-Control", "no-store")
-            body = json.dumps({"error": "unauthorized"}).encode("utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            # Mirror what ``_send_json`` does so the access log
-            # captures the response size and status code correctly.
-            self.code = int(HTTPStatus.UNAUTHORIZED)
-            self._response_bytes = len(body)
             if self.command != "HEAD":
                 try:
                     self.wfile.write(body)
@@ -1575,21 +1567,21 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status: HTTPStatus, payload: Dict[str, Any]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        # Track the byte count and the status code BEFORE calling
+        # ``send_response``: ``BaseHTTPRequestHandler.send_response``
+        # invokes ``log_request`` internally, and we want the access
+        # log line to carry the real response size, not the zeroed
+        # default from ``setup``.
+        self._response_bytes = len(body)
+        try:
+            self.code = int(status)
+        except Exception:
+            self.code = 200
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        # Track the byte count so ``log_request`` can echo the
-        # response size in the access log even when the dispatcher
-        # writes the body itself (rather than via ``_send_json``).
-        self._response_bytes = len(body)
-        # ``BaseHTTPRequestHandler`` does not set ``self.code`` for us
-        # by default; the access log reads from it.
-        try:
-            self.code = int(status)
-        except Exception:
-            self.code = 200
         if self.command != "HEAD":
             try:
                 self.wfile.write(body)
@@ -1621,6 +1613,13 @@ class MetricsHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    # ``_socket_bound`` is flipped to ``True`` only when
+    # ``server_bind`` returns without raising, so ``server_close``
+    # can distinguish a clean teardown from a no-op cleanup after a
+    # failed bind and skip its "server socket closed" line in the
+    # latter case.
+    _socket_bound: bool = False
+
     def __init__(
         self,
         address: Tuple[str, int],
@@ -1630,26 +1629,11 @@ class MetricsHTTPServer(ThreadingHTTPServer):
         # Bind happens inside ``super().__init__`` via ``server_bind``
         # and the listening socket is wired up in ``server_activate``.
         # Both are overridden below so the bind and the start of the
-        # ``accept()`` loop each produce one access-log line.
-        try:
-            super().__init__(address, MetricsRequestHandler)
-        except OSError as exc:
-            # ``server_bind`` raises ``OSError(EADDRINUSE)`` (errno 98),
-            # ``OSError(EADDRNOTAVAIL)`` (errno 99) and similar when the
-            # operator picked a port that is already taken or a host
-            # that the kernel cannot bind to. Log the full context so a
-            # misconfigured ``--host`` or ``--port`` shows up as a
-            # single, greppable failure line — and then re-raise so the
-            # caller (the ``main`` entry point) can exit non-zero
-            # instead of pretending the server is healthy.
-            LOG.error(
-                "bind failed host=%s port=%s errno=%s error=%s",
-                address[0],
-                address[1],
-                getattr(exc, "errno", None),
-                exc,
-            )
-            raise
+        # ``accept()`` loop each produce one access-log line. We
+        # don't log here because ``server_bind`` already emits a
+        # ``bind ok``/``bind failed`` line — adding a second one
+        # would duplicate the operator's view.
+        super().__init__(address, MetricsRequestHandler)
         self.sink = sink
         self.config = config
         self.queue: Deque[Tuple[Dict[str, Any], str, str, str]] = deque()
@@ -1685,6 +1669,7 @@ class MetricsHTTPServer(ThreadingHTTPServer):
         host = self.server_address[0]
         port = self.server_address[1]
         LOG.info("bind ok host=%s port=%d", host, port)
+        self._socket_bound = True
 
     def server_activate(self) -> None:
         """Wrap the listen() call so we log the moment the socket is live.
@@ -1722,18 +1707,23 @@ class MetricsHTTPServer(ThreadingHTTPServer):
         Without this override the operator only ever sees a single
         "shutting down" line on SIGTERM and then silence — there is
         no signal that the socket actually closed and the port is
-        free again. Logging here closes that gap.
+        free again. Logging here closes that gap. We skip the log
+        when ``server_bind`` never succeeded (e.g. ``EADDRINUSE``)
+        because there is no socket to talk about — the cleanup is
+        a no-op in that case.
         """
+        bound = bool(getattr(self, "_socket_bound", False))
         try:
             super().server_close()
         except OSError as exc:
             LOG.warning("server_close raised: %s", exc)
             return
-        LOG.info(
-            "server socket closed host=%s port=%d",
-            self.server_address[0],
-            self.server_address[1],
-        )
+        if bound:
+            LOG.info(
+                "server socket closed host=%s port=%d",
+                self.server_address[0],
+                self.server_address[1],
+            )
 
     # ---- public API ------------------------------------------------------
 
