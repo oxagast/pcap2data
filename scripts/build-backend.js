@@ -35,14 +35,14 @@ const path = require("path");
 
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const BACKEND_DIR = path.join(PROJECT_ROOT, "src", "backend");
-const ICON_PATH = path.join(PROJECT_ROOT, "src", "backend", "snitch.ico");
+const ICON_PATH = path.join(BACKEND_DIR, "snitch.ico");
 const ENTRY_SCRIPT = path.join(BACKEND_DIR, "snitch.py");
 const BUILD_WORK_DIR = path.join(PROJECT_ROOT, "build", "pyinstaller");
 
 const TARGETS = {
     linux: { exeName: "snitch", iconFlag: null, consoleFlag: null },
-    macos: { exeName: "snitch", iconFlag: null, consoleFlag: null },
-    windows: { exeName: "snitch.exe", iconFlag: null, consoleFlag: null },
+    macos: { exeName: "snitch", iconFlag: ["--icon", ICON_PATH], consoleFlag: null },
+    windows: { exeName: "snitch.exe", iconFlag: ["--icon", ICON_PATH], consoleFlag: null },
 };
 
 function resolveTarget() {
@@ -76,6 +76,13 @@ function ensureEntryScript() {
 
 function preflightCheck() {
     ensureEntryScript();
+    // The .ico is only consumed by Windows/macOS targets, but we verify it
+    // up-front for every build so a missing icon never silently produces an
+    // unbranded binary.
+    if (!fs.existsSync(ICON_PATH)) {
+        console.error(`Backend icon not found at ${ICON_PATH}`);
+        process.exit(1);
+    }
     fs.mkdirSync(BUILD_WORK_DIR, { recursive: true });
 }
 
@@ -86,8 +93,6 @@ function buildArgs(target) {
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--icon",
-        ICON_PATH,
         "--onefile",
         "--name",
         targetConfig.exeName,
