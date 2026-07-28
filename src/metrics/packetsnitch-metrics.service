@@ -1,0 +1,62 @@
+; =============================================================================
+;   packetsnitch-metrics.service
+;
+;   systemd unit for the PacketSnitch metrics endpoint. This file is
+;   intentionally parameterised so the same unit works for a single-user
+;   install (`systemctl --user`) and a multi-tenant server farm
+;   (`/etc/systemd/system`). Search for "EDIT" below — every change the
+;   operator is expected to make is marked with a comment block of the
+;   same shape.
+;
+;   Install locations:
+;     * Per-user:   ~/.config/systemd/user/packetsnitch-metrics.service
+;                   then  systemctl --user daemon-reload
+;                         systemctl --user enable --now packetsnitch-metrics
+;     * System:     /etc/systemd/system/packetsnitch-metrics.service
+;                   then  sudo systemctl daemon-reload
+;                         sudo systemctl enable --now packetsnitch-metrics
+;
+;   The unit assumes the repo lives at the path you set in ``ExecStart``
+;   and that the data dir referenced by ``PSN_METRICS_DATA_DIR`` exists
+;   and is writable by the user the unit runs as.
+; =============================================================================
+
+[Unit]
+Description=PacketSnitch metrics endpoint
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+[Service]
+Type=simple
+User=packetsnitch
+Group=packetsnitch
+Environment=PSN_METRICS_HOST=0.0.0.0
+Environment=PSN_METRICS_PORT=8088
+Environment=PSN_METRICS_DATA_DIR=/var/log/packetsnitch-metrics
+Environment=PSN_METRICS_LOG_LEVEL=info
+Environment=PSN_METRICS_GZIP_OLD=7
+Environment=PSN_METRICS_MAX_BODY=1048576
+Environment=PSN_METRICS_MAX_QUEUE=1024
+Environment=PSN_METRICS_TRUST_XFF=0
+ExecStart=python3 /usr/local/bin/ps-metrics.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/log/packetsnitch-metrics
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=packetsnitch-metrics
+[Install]
+WantedBy=default.target

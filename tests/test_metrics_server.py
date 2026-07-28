@@ -530,6 +530,90 @@ class FutureTests(unittest.TestCase):
             f.get(timeout=0.05)
 
 
+class ConnectionTeardownTests(unittest.TestCase):
+    """Regression coverage for clients that vanish mid-request.
+
+    Idle keep-alive sockets behind NAT, port scanners, and aborted
+    browsers all generate a stream of TCP connections that close before
+    the request line is fully transmitted. The stdlib's ``serve_forever``
+    loop handles the connection object, but the default ``handle()``
+    raises ``ConnectionResetError`` (errno 104) — which previously
+    dumped a multi-line traceback into the supervisor's stderr for
+    every such probe. The override in ``MetricsRequestHandler.handle``
+    must swallow that family and let the worker thread move on.
+    """
+
+    def _make_handler(self) -> server.MetricsRequestHandler:
+        # The handler's ``__init__`` talks to a real socket, so build a
+        # connected socketpair instead and feed the request side to it.
+        # Using ``socketpair`` avoids needing a bound listener and keeps
+        # the test hermetic and fast.
+        client_sock, server_sock = socket.socketpair(socket.AF_UNIX)
+        self.addCleanup(client_sock.close)
+        self.addCleanup(server_sock.close)
+        # Stub out the constructor so we can populate the few
+        # attributes ``handle()`` touches without performing the real
+        # setup dance (rfile/wfile/client_address).
+        with mock.patch.object(server.MetricsRequestHandler, "__init__", lambda self: None):
+            handler = server.MetricsRequestHandler()
+        handler.client_address = ("127.0.0.1", 0)
+        handler.rfile = io.BytesIO(b"")
+        handler.wfile = io.BytesIO()
+        handler.headers = {}
+        handler.command = "GET"
+        handler.request_version = "HTTP/1.1"
+        handler.raw_requestline = b""
+        handler.close_connection = True
+        return handler
+
+    def test_handle_swallows_connection_reset(self):
+        handler = self._make_handler()
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle",
+            side_effect=ConnectionResetError(104, "Connection reset by peer"),
+        ):
+            # Must not raise — the whole point of the override.
+            handler.handle()
+
+    def test_handle_swallows_connection_aborted(self):
+        handler = self._make_handler()
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle",
+            side_effect=ConnectionAbortedError(103, "Software caused connection abort"),
+        ):
+            handler.handle()
+
+    def test_handle_swallows_broken_pipe(self):
+        handler = self._make_handler()
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle",
+            side_effect=BrokenPipeError(32, "Broken pipe"),
+        ):
+            handler.handle()
+
+    def test_handle_swallows_shutdown_ebadf(self):
+        handler = self._make_handler()
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle",
+            side_effect=OSError(9, "Bad file descriptor"),
+        ):
+            handler.handle()
+
+    def test_handle_still_propagates_unexpected_errors(self):
+        handler = self._make_handler()
+        with mock.patch.object(
+            server.BaseHTTPRequestHandler,
+            "handle",
+            side_effect=RuntimeError("synthetic programming error"),
+        ):
+            with self.assertRaises(RuntimeError):
+                handler.handle()
+
+
 class EndToEndBatchTests(unittest.TestCase):
     def test_full_event_persists_in_elasticsearch_shape(self):
         """Validate that the row we write matches the field names a

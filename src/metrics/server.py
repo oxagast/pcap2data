@@ -571,6 +571,35 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return
 
+    # The stdlib's ``handle()`` raises ``ConnectionResetError`` (errno
+    # 104) and friends when a client opens a TCP connection and then
+    # drops it before sending a request line — which is exactly what
+    # idle keep-alive sockets behind NAT, port scanners, and aborted
+    # browsers do. Without this override every one of those prints a
+    # multi-line traceback to the supervisor's stderr and drowns the
+    # event log. Catch the family, log at debug, and let the worker
+    # thread pick up the next connection.
+    def handle(self) -> None:  # noqa: D401
+        """Serve a single HTTP request, treating client disconnects as a no-op."""
+        try:
+            super().handle()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+            client = getattr(self, "client_address", ("<unknown>", 0))
+            LOG.debug(
+                "client disconnected before request completed: %s from %s:%s",
+                exc,
+                client[0],
+                client[1],
+            )
+        except OSError as exc:
+            # Any other socket-level error (e.g. EBADF during shutdown)
+            # is also a normal teardown symptom and not worth a stack
+            # trace. ``errno`` is the only signal we need.
+            if getattr(exc, "errno", None) in (errno.EBADF, errno.ENOTCONN, errno.ESHUTDOWN):
+                LOG.debug("client socket closed during shutdown: %s", exc)
+                return
+            raise
+
     def do_GET(self) -> None:  # noqa: N802
         if self.path.split("?", 1)[0] == HEALTH_PATH:
             self._handle_health()

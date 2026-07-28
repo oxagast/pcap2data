@@ -197,3 +197,55 @@ The tests are stdlib-only, run in-process, and cover:
   ingestion happens through Filebeat/Vector/your shipper of choice.
 - Set `PSN_METRICS_TRUST_XFF=1` only when behind a reverse proxy that
   strips client-supplied `X-Forwarded-For` from external traffic.
+- Client disconnects (TCP reset, broken pipe, idle NAT timeouts) are
+  swallowed in `MetricsRequestHandler.handle` and logged at debug level
+  so a noisy scanner doesn't fill the supervisor's stderr.
+
+## Running under systemd
+
+The unit file ships next to the server at
+`src/metrics/packetsnitch-metrics.service`. It is intentionally
+parameterised — every value the operator is expected to override is
+flagged with an `; EDIT N —` comment block inside the file. The same
+unit works for both a per-user daemon and a system-wide install.
+
+```bash
+# Per-user install. The unit is parameterised so the defaults can be
+# used as-is once the data dir exists.
+install -d -m 0755 ~/.local/share/packetsnitch/metrics
+mkdir -p ~/.config/systemd/user
+cp src/metrics/packetsnitch-metrics.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now packetsnitch-metrics
+
+# Status + tail the journal.
+systemctl --user status packetsnitch-metrics
+journalctl --user -u packetsnitch-metrics -f
+
+# Health probe.
+curl -s http://127.0.0.1:8088/healthz | jq
+```
+
+To make the service survive logout, enable lingering once:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+For a system-wide install, copy the unit to
+`/etc/systemd/system/packetsnitch-metrics.service`, walk through the
+`EDIT` blocks in the file to switch the paths and user, then reload:
+
+```bash
+sudo cp src/metrics/packetsnitch-metrics.service \
+        /etc/systemd/system/packetsnitch-metrics.service
+# Open the file and update EDIT 2 (running user), EDIT 4 (data dir)
+# and EDIT 6/8 (interpreter + filesystem paths) to point at the
+# service account's home and data dir, e.g. /var/lib/packetsnitch.
+sudo install -d -o packetsnitch -g packetsnitch -m 0750 \
+        /var/lib/packetsnitch/metrics
+sudo install -d -o packetsnitch -g packetsnitch -m 0755 \
+        /var/lib/packetsnitch/app
+sudo systemctl daemon-reload
+sudo systemctl enable --now packetsnitch-metrics
+```
