@@ -4,9 +4,20 @@
 ;   systemd unit for the PacketSnitch metrics endpoint. This file is
 ;   intentionally parameterised so the same unit works for a single-user
 ;   install (`systemctl --user`) and a multi-tenant server farm
-;   (`/etc/systemd/system`). Search for "EDIT" below — every change the
+;   (`/etc/systemd/system`). Search for "EDIT" below -- every change the
 ;   operator is expected to make is marked with a comment block of the
 ;   same shape.
+;
+;   Configuration:
+;     The unit reads its settings from /etc/ps-metrics.yaml. Override
+;     individual keys (without touching the file) by exporting matching
+;     PSN_METRICS_* env vars below, or change the config path entirely
+;     with --config / PSN_METRICS_CONFIG. See `ps-metrics.py
+;     --print-config` for the merged view.
+;
+;     To generate a fresh admin API key:
+;         python3 /usr/local/bin/ps-metrics.py --generate-api-key
+;     then paste it into admin.api_key in /etc/ps-metrics.yaml.
 ;
 ;   Install locations:
 ;     * Per-user:   ~/.config/systemd/user/packetsnitch-metrics.service
@@ -15,10 +26,6 @@
 ;     * System:     /etc/systemd/system/packetsnitch-metrics.service
 ;                   then  sudo systemctl daemon-reload
 ;                         sudo systemctl enable --now packetsnitch-metrics
-;
-;   The unit assumes the repo lives at the path you set in ``ExecStart``
-;   and that the data dir referenced by ``PSN_METRICS_DATA_DIR`` exists
-;   and is writable by the user the unit runs as.
 ; =============================================================================
 
 [Unit]
@@ -27,21 +34,34 @@ After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
+
 [Service]
 Type=simple
+; EDIT -- USER/GROUP. The default is a dedicated service account that
+; owns the data dir but has no shell or home directory.
 User=packetsnitch
 Group=packetsnitch
-Environment=PSN_METRICS_HOST=0.0.0.0
-Environment=PSN_METRICS_PORT=8088
-Environment=PSN_METRICS_DATA_DIR=/var/log/packetsnitch-metrics
-Environment=PSN_METRICS_LOG_LEVEL=info
-Environment=PSN_METRICS_GZIP_OLD=7
-Environment=PSN_METRICS_MAX_BODY=1048576
-Environment=PSN_METRICS_MAX_QUEUE=1024
-Environment=PSN_METRICS_TRUST_XFF=0
-ExecStart=python3 /usr/local/bin/ps-metrics.py
+
+; EDIT -- Load the config file from /etc/ps-metrics.yaml. Change this
+; path (or set the env var to a different value) if you keep your
+; config somewhere else (e.g. /etc/packetsnitch/ps-metrics.yaml).
+Environment=PSN_METRICS_CONFIG=/etc/ps-metrics.yaml
+
+; EDIT -- You can override any individual setting from the YAML file
+; by adding Environment=PSN_METRICS_<KEY>=<value> lines here. Every
+; PSN_METRICS_* env var beats the file. The list below is empty by
+; default; uncomment to override:
+;Environment=PSN_METRICS_PORT=8088
+;Environment=PSN_METRICS_HOST=0.0.0.0
+;Environment=PSN_METRICS_LOG_LEVEL=info
+;Environment=PSN_METRICS_TRUST_XFF=0
+
+ExecStart=/usr/local/bin/python3 /usr/local/bin/ps-metrics.py
 Restart=on-failure
 RestartSec=5
+
+; Sandbox: this unit is intentionally locked down. The data dir is
+; the only place the process can write to.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -54,9 +74,12 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+; EDIT -- Add your data dir here if it's not /var/log/packetsnitch-metrics.
 ReadWritePaths=/var/log/packetsnitch-metrics
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=packetsnitch-metrics
+
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

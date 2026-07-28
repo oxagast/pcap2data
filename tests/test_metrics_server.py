@@ -32,10 +32,13 @@ _PROJECT_ROOT = _HERE.parent
 
 # We import via importlib so we don't have to mutate sys.path and so the
 # test file works whether it's discovered from the project root or from
-# the tests/ directory.
+# the tests/ directory. The shipping module name is ``ps-metrics.py``
+# (the dashed filename keeps systemd + the old README happy), which is
+# not a valid Python identifier, so importlib is the only sane way to
+# load it.
 _spec = importlib.util.spec_from_file_location(
     "metrics_server_test_module",
-    _PROJECT_ROOT / "src" / "metrics" / "server.py",
+    _PROJECT_ROOT / "src" / "metrics" / "ps-metrics.py",
 )
 server = importlib.util.module_from_spec(_spec)  # type: ignore[assignment]
 sys.modules[_spec.name] = server

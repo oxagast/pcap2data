@@ -47,21 +47,20 @@ Filebeat/Vector can pick them up on their own schedule.
 
 Configuration
 -------------
-Everything is environment-driven so the same image runs locally, in a
-container, or on a VM with no code change.
+Settings can come from either a YAML file or environment variables. The
+file is the canonical source; environment variables named
+``PSN_METRICS_*`` override it so systemd overrides and ``--host`` work
+as before.
 
-    PSN_METRICS_PORT      listen port (default 8088)
-    PSN_METRICS_HOST      bind address (default 0.0.0.0)
-    PSN_METRICS_DATA_DIR  NDJSON output directory (default ./var/metrics)
-    PSN_METRICS_MAX_BODY  max accepted body bytes (default 1 MiB)
-    PSN_METRICS_MAX_QUEUE max in-flight batches buffered in memory (default 1024)
-    PSN_METRICS_GZIP_OLD  gzip files older than N days on rotate (default 7, 0 disables)
-    PSN_METRICS_LOG_LEVEL "debug" | "info" | "warn" | "error" (default info)
-    PSN_METRICS_TRUST_XFF honor X-Forwarded-For for client IP (default false)
+    /etc/ps-metrics.yaml        # default location
+    PSN_METRICS_CONFIG          # override the path entirely
+    PSN_METRICS_PORT            # any ``PSN_METRICS_*`` env var overrides
+                                # the matching config-file key
 
 Run with:
 
-    python3 src/metrics/server.py
+    python3 src/metrics/ps-metrics.py
+    python3 src/metrics/ps-metrics.py --print-config   # dump effective config
 
 Or under a process supervisor (systemd, runit, supervisord) bound to a
 reverse proxy of your choice.
@@ -72,9 +71,11 @@ import argparse
 import datetime as _dt
 import errno
 import gzip
+import hmac
 import json
 import logging
 import os
+import secrets
 import shutil
 import signal
 import socket
@@ -132,6 +133,363 @@ _PROP_NUMBER_MAX = 2 ** 53
 
 HEALTH_PATH = "/healthz"
 INGEST_PATH = "/mhook"
+ADMIN_PREFIX = "/admin"
+ADMIN_KEY_HEADER = "X-Admin-Key"
+ADMIN_LIST_LIMIT_DEFAULT = 100
+ADMIN_LIST_LIMIT_MAX = 1000
+
+
+class ConfigError(RuntimeError):
+    """Raised when the YAML config file is malformed or unreadable."""
+
+
+# --- Minimal YAML loader -------------------------------------------------
+#
+# The server is intentionally dependency-free. We only need a small
+# subset of YAML: nested mappings (no flow style), quoted and unquoted
+# scalars, booleans, ints, floats, and ``null``/``~``. Anything exotic
+# (anchors, multi-line scalars, flow style) is rejected with a message
+# that points at the line so the operator can fix it.
+_YAML_BOOL_TRUE = frozenset({"true", "yes", "on", "y"})
+_YAML_BOOL_FALSE = frozenset({"false", "no", "off", "n"})
+_YAML_NULL = frozenset({"null", "none", "~", ""})
+
+
+def _yaml_strip_inline_comment(value: str) -> str:
+    """Drop a trailing ``# comment`` from an unquoted scalar.
+
+    Only fires when the ``#`` is preceded by whitespace or is the first
+    character, so a hash inside a quoted string is left alone. Bracketed
+    scalars (``"foo #bar"``) are never touched here because the lexer
+    already knows whether the value is quoted.
+    """
+    if not value or value[0] in ("'", '"'):
+        return value
+    # Walk character by character so we ignore ``#`` characters inside
+    # obvious shell-like contexts. The mini-DSL we accept is small
+    # enough that this is sufficient.
+    in_single = False
+    in_double = False
+    for index, char in enumerate(value):
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif char == "#" and not in_single and not in_double:
+            if index == 0 or value[index - 1] in (" ", "\t"):
+                return value[:index].rstrip()
+    return value
+
+
+def _yaml_unquote(value: str) -> str:
+    """Strip a matching pair of outer quotes and unescape simple chars."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        body = value[1:-1]
+        if value[0] == '"':
+            return body.encode("utf-8").decode("unicode_escape")
+        return body
+    return value
+
+
+def _yaml_parse_scalar(raw: str) -> Any:
+    """Convert a raw scalar string into the obvious Python type."""
+    candidate = raw.strip()
+    if not candidate or candidate.lower() in _YAML_NULL:
+        return None
+    if candidate.lower() in _YAML_BOOL_TRUE:
+        return True
+    if candidate.lower() in _YAML_BOOL_FALSE:
+        return False
+    # Numbers: integers first, then floats. ``int("3.0")`` raises so
+    # the float branch gets its turn.
+    try:
+        return int(candidate)
+    except ValueError:
+        pass
+    try:
+        return float(candidate)
+    except ValueError:
+        pass
+    return _yaml_unquote(candidate)
+
+
+def _yaml_load_mapping(text: str) -> Dict[str, Any]:
+    """Parse a flat-or-nested YAML mapping into a Python ``dict``.
+
+    The loader is line-oriented and only understands two-space block
+    indentation. Two-space blocks match what every editor defaults to
+    and what the sample config ships with. The function raises
+    ``ConfigError`` with the exact line number on any structural
+    problem so the operator can fix the file in place.
+    """
+    root: Dict[str, Any] = {}
+    # Stack of (indent, container) pairs so we can descend into nested
+    # mappings without a recursive descent parser.
+    stack: List[Tuple[int, Any]] = [(-1, root)]
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        # Strip the trailing newline and any blank/whitespace-only/#
+        # comment-only lines so the rest of the loop is simple.
+        line = raw_line.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        # Tabs are forbidden in YAML block style; refuse them rather
+        # than silently misparse an indented block.
+        if "\t" in line:
+            raise ConfigError(
+                f"line {line_number}: tabs are not allowed in YAML config"
+            )
+        indent = len(line) - len(line.lstrip(" "))
+        body = line.strip()
+        if ":" not in body:
+            raise ConfigError(
+                f"line {line_number}: expected 'key: value' or 'key:', got {body!r}"
+            )
+        key, _, value = body.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            raise ConfigError(f"line {line_number}: empty key")
+        # Pop containers until we find one whose indent is strictly
+        # less than the current line. Closing nested blocks is
+        # implicit in YAML; we model it by walking the stack.
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        if not stack:
+            raise ConfigError(
+                f"line {line_number}: indentation stepped back beyond the root"
+            )
+        parent = stack[-1][1]
+        if not isinstance(parent, dict):
+            raise ConfigError(
+                f"line {line_number}: cannot add a key to a scalar value"
+            )
+        if not value:
+            # ``key:`` with nothing after — start of a nested mapping.
+            nested: Dict[str, Any] = {}
+            parent[key] = nested
+            stack.append((indent, nested))
+        else:
+            value = _yaml_strip_inline_comment(value)
+            if ":" in value and not (
+                value.startswith('"') or value.startswith("'")
+            ):
+                # Split on the first ``:`` so URL-like values
+                # (e.g. ``http://localhost:8088``) survive intact.
+                head, _, tail = value.partition(":")
+                head = head.strip()
+                tail = tail.strip()
+                if ":" not in tail and _yaml_strip_inline_comment(head) == head:
+                    # ``host:port`` style — re-assemble.
+                    value = f"{head}:{tail}"
+            parent[key] = _yaml_parse_scalar(value)
+    return root
+
+
+def _yaml_default_config() -> Dict[str, Any]:
+    """Return the configuration the server uses when no file is present.
+
+    Mirrors the historical environment-variable defaults so the
+    repository's tests and the documentation still match. The sample
+    config file ships with this same shape, but with comments.
+    """
+    return {
+        "server": {
+            "host": "0.0.0.0",
+            "port": 8088,
+            "log_level": "info",
+            "trust_xff": False,
+        },
+        "storage": {
+            "data_dir": "./var/metrics",
+            "max_body": 1 << 20,
+            "max_queue": 1024,
+            "gzip_after_days": 7,
+            "ack_timeout_seconds": 5.0,
+        },
+        "admin": {
+            "api_key": "",
+            "list_limit": ADMIN_LIST_LIMIT_DEFAULT,
+        },
+    }
+
+
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``override`` into ``base`` and return ``base``.
+
+    Lists and scalars in ``override`` replace the corresponding value in
+    ``base``; mappings are merged key-by-key. Used so the file only
+    needs to mention the keys the operator actually wants to change.
+    """
+    for key, value in override.items():
+        if (
+            key in base
+            and isinstance(base[key], dict)
+            and isinstance(value, dict)
+        ):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _coerce_typed(raw: Any, fallback: Any) -> Any:
+    """Coerce a YAML scalar into the type of ``fallback`` when sensible.
+
+    Keeps the rest of the server code path-agnostic — it always deals
+    with the right Python type — without forcing the operator to write
+    ``"true"`` instead of ``Yes`` in the YAML file.
+    """
+    if raw is None:
+        return fallback
+    if isinstance(fallback, bool):
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            return raw.strip().lower() in _YAML_BOOL_TRUE
+        return bool(raw)
+    if isinstance(fallback, int):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return fallback
+    if isinstance(fallback, float):
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return fallback
+    if isinstance(fallback, str):
+        if isinstance(raw, str):
+            return raw
+        return str(raw)
+    return raw
+
+
+def _flat_env_to_dict(env: Dict[str, str]) -> Dict[str, Any]:
+    """Translate ``PSN_METRICS_*`` env vars into a nested dict.
+
+    The mapping is fixed so the historical env-var names continue to
+    land in the correct section of the new YAML config (e.g.
+    ``PSN_METRICS_DATA_DIR`` parks under ``storage.data_dir`` even
+    though the YAML key is the same string). Names that are not in
+    the explicit map fall through to the ``server`` section so
+    operators can add their own keys without forking the loader.
+
+    The first lookup table picks the *section*; the second one
+    rewrites the historical env-var key (e.g. ``ack_timeout``) to
+    the YAML key (e.g. ``ack_timeout_seconds``). Anything not in
+    either table passes through unchanged.
+    """
+    # Section overrides for the legacy names. Anything not listed
+    # here goes to ``server`` (the most common case).
+    _SECTION_OVERRIDES = {
+        "data_dir": "storage",
+        "max_body": "storage",
+        "max_queue": "storage",
+        "gzip_after_days": "storage",
+        "ack_timeout": "storage",
+        "ack_timeout_seconds": "storage",
+        "api_key": "admin",
+        "list_limit": "admin",
+        "config": "_meta",  # PSN_METRICS_CONFIG — handled by the loader.
+    }
+    # Key renames so the legacy env-var name lands on the YAML key
+    # the loader actually consumes.
+    _KEY_RENAMES = {
+        "ack_timeout": "ack_timeout_seconds",
+        "gzip_old": "gzip_after_days",
+    }
+    out: Dict[str, Any] = {}
+    for name, value in env.items():
+        if not name.startswith("PSN_METRICS_"):
+            continue
+        suffix = name[len("PSN_METRICS_") :].lower()
+        if suffix == "config":
+            # ``PSN_METRICS_CONFIG`` is the path to the YAML file,
+            # not a setting to merge. Skip it here so it does not
+            # accidentally override the config-file path.
+            continue
+        if suffix == "trust_xff":
+            # ``trust_xff`` already lives under ``server`` and the
+            # key matches the YAML key, so the default mapping is
+            # correct. Mention it here so the rename table stays
+            # the only place operators need to look.
+            pass
+        parts = suffix.split("__", 1)
+        if len(parts) == 1:
+            section = _SECTION_OVERRIDES.get(parts[0], "server")
+            key = _KEY_RENAMES.get(parts[0], parts[0])
+        else:
+            section, key = parts[0], parts[1]
+        out.setdefault(section, {})[key] = value
+    return out
+
+
+def _env_overrides() -> Dict[str, Any]:
+    """Public wrapper that pulls ``PSN_METRICS_*`` from ``os.environ``."""
+    return _flat_env_to_dict(os.environ)
+
+
+def _resolve_config_path(explicit: Optional[str]) -> Path:
+    """Return the config file path following the documented precedence.
+
+    Precedence (highest first):
+      1. ``--config`` CLI argument
+      2. ``PSN_METRICS_CONFIG`` environment variable
+      3. ``/etc/ps-metrics.yaml`` if it exists
+      4. ``$XDG_CONFIG_HOME/ps-metrics/config.yaml`` for per-user installs
+      5. ``./ps-metrics.yaml`` in the current working directory
+    """
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    env = os.environ.get("PSN_METRICS_CONFIG")
+    if env:
+        return Path(env).expanduser().resolve()
+    for candidate in (
+        Path("/etc/ps-metrics.yaml"),
+        Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser()
+        / "ps-metrics"
+        / "config.yaml",
+        Path.cwd() / "ps-metrics.yaml",
+    ):
+        if candidate.exists():
+            return candidate
+    # No file found — return the canonical /etc/ path so the log
+    # message tells the operator where to put one.
+    return Path("/etc/ps-metrics.yaml")
+
+
+def load_config(
+    explicit_path: Optional[str] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Read the YAML config file, layer env vars on top, return a dict.
+
+    Used by ``ServerConfig`` and by ``--print-config``. The contract is
+    that the returned dict always has the keys
+    ``server``, ``storage``, and ``admin`` populated (with sensible
+    defaults) so callers do not need to deal with missing keys.
+    """
+    env_map = env if env is not None else dict(os.environ)
+    path = _resolve_config_path(explicit_path)
+    merged = _yaml_default_config()
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            raise ConfigError(f"could not read config {path}: {exc}") from exc
+        parsed = _yaml_load_mapping(raw)
+        _deep_merge(merged, parsed)
+        loaded_from = path
+    else:
+        loaded_from = None
+    # Layer env vars on top so a unit file can override the file
+    # without the operator having to duplicate the whole config.
+    overrides = _flat_env_to_dict(env_map)
+    _deep_merge(merged, overrides)
+    # Stash where the config came from so ``--print-config`` can say so.
+    merged["_loaded_from"] = str(loaded_from) if loaded_from else None
+    return merged
 
 
 def _utc_now() -> _dt.datetime:
@@ -601,8 +959,12 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
             raise
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path.split("?", 1)[0] == HEALTH_PATH:
+        path = self.path.split("?", 1)[0]
+        if path == HEALTH_PATH:
             self._handle_health()
+            return
+        if path.startswith(ADMIN_PREFIX):
+            self._handle_admin(path)
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
 
@@ -640,6 +1002,203 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
                     "errors": state["totalErrors"],
                     "installs": state["totalInstalls"],
                 },
+            },
+        )
+
+    # ---- admin endpoints ------------------------------------------------
+    #
+    # The admin surface is intentionally minimal and only useful to
+    # operators: a stats endpoint that mirrors the on-disk totals, a
+    # recent-installs endpoint that reads the last lines of
+    # ``installs-YYYY-MM-DD.ndjson``, and a recent-errors endpoint that
+    # does the same for ``errors-*.ndjson``. All three are gated by a
+    # single config-managed API key and disabled (return 404) when no
+    # key is configured. We deliberately do NOT expose a query that
+    # reveals individual install IDs past heartbeat timestamps — the
+    # on-disk heartbeat file already records those for debuggability,
+    # but the wire response only forwards counts and the moment an
+    # install was last seen so the api operator can confirm the
+    # pipeline is moving without being able to fingerprint users.
+
+    def _client_admin_key(self) -> Optional[str]:
+        """Extract the API key from the request, supporting two header styles.
+
+        Accepts either ``X-Admin-Key: <key>`` (preferred) or
+        ``Authorization: Bearer <key>`` (a common convention for
+        proxies that strip custom headers). Both are honoured so a
+        prometheus/blackbox-exporter-style script can hit the endpoint
+        without a custom header parser.
+        """
+        custom = self.headers.get(ADMIN_KEY_HEADER)
+        if isinstance(custom, str) and custom.strip():
+            return custom.strip()
+        auth = self.headers.get("Authorization")
+        if isinstance(auth, str):
+            scheme, _, token = auth.partition(" ")
+            if scheme.lower() == "bearer" and token.strip():
+                return token.strip()
+        return None
+
+    def _require_admin(self) -> bool:
+        """Return True when the request is authenticated for admin access.
+
+        Sends a 401 with a ``WWW-Authenticate`` header on failure so
+        the client has a hint at the right protocol. 404 is sent when
+        admin is disabled entirely — the endpoint should not exist at
+        all in that case, and the silent 404 keeps scanners from
+        learning that the binary supports admin mode.
+        """
+        config = self.server.config
+        if not config.admin_enabled():
+            return False
+        if not config.admin_auth_ok(self._client_admin_key()):
+            self.send_response(HTTPStatus.UNAUTHORIZED)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("WWW-Authenticate", 'Bearer realm="ps-metrics-admin"')
+            self.send_header("Cache-Control", "no-store")
+            body = json.dumps({"error": "unauthorized"}).encode("utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return False
+        return True
+
+    def _handle_admin(self, path: str) -> None:
+        if not self._require_admin():
+            # ``_require_admin`` either wrote the response or admin
+            # is disabled, in which case we mirror the "endpoint does
+            # not exist" 404 from the rest of the router.
+            if self.server.config.admin_enabled():
+                return
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+            return
+        if path == "/admin/stats":
+            self._handle_admin_stats()
+            return
+        if path == "/admin/installs":
+            self._handle_admin_installs()
+            return
+        if path == "/admin/errors":
+            self._handle_admin_errors()
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+
+    def _handle_admin_stats(self) -> None:
+        state = self._server_state()
+        config = self.server.config
+        sink = self.server.sink
+        health_path = (
+            sink._health_path if hasattr(sink, "_health_path") else None
+        )
+        last_seen = None
+        if health_path is not None and health_path.exists():
+            try:
+                with open(health_path, "r", encoding="utf-8") as handle:
+                    last_seen = json.load(handle)
+            except (OSError, json.JSONDecodeError):
+                last_seen = None
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "service": "packetsnitch-metrics",
+                "hostname": socket.gethostname(),
+                "startedAt": _iso_z(_utc_now()),
+                "queueDepth": self.server.queue_depth(),
+                "queueCapacity": self.server.queue_capacity(),
+                "totals": {
+                    "batches": state["totalBatches"],
+                    "events": state["totalEvents"],
+                    "errors": state["totalErrors"],
+                    "installs": state["totalInstalls"],
+                },
+                "dataDir": str(config.data_dir),
+                "lastSeen": last_seen,
+            },
+        )
+
+    def _tail_ndjson(self, path: Path, limit: int) -> List[Dict[str, Any]]:
+        """Return up to ``limit`` most recent parsed rows from an NDJSON file.
+
+        Reads the file once and trims. The file is small (a single
+        day's worth of heartbeats is well under a megabyte) so an
+        O(N) tail is fine; we are not after streaming.
+        """
+        if not path.exists() or limit <= 0:
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except OSError:
+            return []
+        rows: List[Dict[str, Any]] = []
+        for raw in lines[-limit:]:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rows.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+        return rows
+
+    def _handle_admin_installs(self) -> None:
+        config = self.server.config
+        sink = self.server.sink
+        today = _utc_now().date()
+        # Read both today and yesterday so a query near midnight still
+        # surfaces the most recent heartbeat for an active install.
+        candidates = [sink._installs_path(today), sink._installs_path(today)]
+        yesterday = today - _dt.timedelta(days=1)
+        candidates.append(sink._installs_path(yesterday))
+        rows: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+        for path in candidates:
+            for row in self._tail_ndjson(path, config.admin_list_limit):
+                install_id = row.get("install_id")
+                if isinstance(install_id, str) and install_id in seen_ids:
+                    continue
+                if isinstance(install_id, str):
+                    seen_ids.add(install_id)
+                # Heartbeat privacy: never echo the client IP out of
+                # the wire response. Operators do not need it for
+                # debugging and stripping it makes an accidental log
+                # scrape less damaging.
+                row = {k: v for k, v in row.items() if k != "client_ip"}
+                rows.append(row)
+                if len(rows) >= config.admin_list_limit:
+                    break
+            if len(rows) >= config.admin_list_limit:
+                break
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "count": len(rows),
+                "limit": config.admin_list_limit,
+                "installs": rows,
+            },
+        )
+
+    def _handle_admin_errors(self) -> None:
+        config = self.server.config
+        sink = self.server.sink
+        today = _utc_now().date()
+        yesterday = today - _dt.timedelta(days=1)
+        rows: List[Dict[str, Any]] = []
+        for path in (sink._errors_path(today), sink._errors_path(yesterday)):
+            rows.extend(self._tail_ndjson(path, config.admin_list_limit))
+            if len(rows) >= config.admin_list_limit:
+                rows = rows[-config.admin_list_limit:]
+                break
+        self._send_json(
+            HTTPStatus.OK,
+            {
+                "ok": True,
+                "count": len(rows),
+                "limit": config.admin_list_limit,
+                "errors": rows,
             },
         )
 
@@ -925,23 +1484,71 @@ class AckFuture:
 
 # --- Configuration ---------------------------------------------------------
 class ServerConfig:
-    def __init__(self) -> None:
-        self.host: str = os.environ.get("PSN_METRICS_HOST", "0.0.0.0")
-        self.port: int = int(os.environ.get("PSN_METRICS_PORT", "8088"))
-        self.data_dir: Path = Path(
-            os.environ.get("PSN_METRICS_DATA_DIR", "./var/metrics")
-        ).resolve()
-        self.max_body: int = int(os.environ.get("PSN_METRICS_MAX_BODY", str(1 << 20)))
-        self.max_queue: int = int(os.environ.get("PSN_METRICS_MAX_QUEUE", "1024"))
-        self.gzip_after_days: int = int(os.environ.get("PSN_METRICS_GZIP_OLD", "7"))
+    """Strongly-typed view of the merged YAML + env-var config.
+
+    The single source of truth is the dict returned by ``load_config``;
+    this class just exposes the fields the rest of the server actually
+    uses as plain attributes. Values are coerced so callers do not have
+    to deal with the YAML loader's "everything is a string" version of
+    reality.
+    """
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None) -> None:
+        merged = config if config is not None else load_config()
+        server = merged.get("server", {}) or {}
+        storage = merged.get("storage", {}) or {}
+        admin = merged.get("admin", {}) or {}
+        self.host: str = str(_coerce_typed(server.get("host"), "0.0.0.0"))
+        self.port: int = int(_coerce_typed(server.get("port"), 8088))
+        self.log_level: str = str(_coerce_typed(server.get("log_level"), "info")).lower()
+        self.trust_xff: bool = _coerce_typed(server.get("trust_xff"), False)
+        data_dir = storage.get("data_dir", "./var/metrics")
+        self.data_dir: Path = Path(str(data_dir)).expanduser().resolve()
+        self.max_body: int = int(_coerce_typed(storage.get("max_body"), 1 << 20))
+        self.max_queue: int = int(_coerce_typed(storage.get("max_queue"), 1024))
+        self.gzip_after_days: int = int(
+            _coerce_typed(storage.get("gzip_after_days"), 7)
+        )
         self.ack_timeout_seconds: float = float(
-            os.environ.get("PSN_METRICS_ACK_TIMEOUT", "5")
+            _coerce_typed(storage.get("ack_timeout_seconds"), 5.0)
         )
-        self.trust_xff: bool = (
-            os.environ.get("PSN_METRICS_TRUST_XFF", "0").lower()
-            in ("1", "true", "yes", "on")
+        # ``admin.api_key`` is intentionally a ``str`` so an unset
+        # secret is the empty string — easy to test, easy to log.
+        self.admin_api_key: str = str(_coerce_typed(admin.get("api_key"), ""))
+        self.admin_list_limit: int = max(
+            1,
+            min(
+                int(_coerce_typed(admin.get("list_limit"), ADMIN_LIST_LIMIT_DEFAULT)),
+                ADMIN_LIST_LIMIT_MAX,
+            ),
         )
-        self.log_level: str = os.environ.get("PSN_METRICS_LOG_LEVEL", "info").lower()
+        # Where this config came from — exposed via ``--print-config``
+        # so the operator can verify which file was actually loaded.
+        self.loaded_from: Optional[str] = merged.get("_loaded_from")
+
+    # ---- admin helpers ---------------------------------------------------
+
+    def admin_enabled(self) -> bool:
+        """``True`` when an admin API key is configured.
+
+        Failing closed (no key, no admin endpoints) means a fresh
+        install with an empty config file never accidentally exposes
+        ``/admin/*`` to the network.
+        """
+        return bool(self.admin_api_key)
+
+    def admin_auth_ok(self, presented: Optional[str]) -> bool:
+        """Constant-time compare of the presented key against the configured one.
+
+        Uses ``hmac.compare_digest`` so a request count cannot infer
+        the key through timing differences. ``False`` for an empty
+        config (admin disabled) and for any wrong key.
+        """
+        if not self.admin_enabled():
+            return False
+        if not isinstance(presented, str) or not presented:
+            return False
+        return hmac.compare_digest(presented, self.admin_api_key)
 
 
 # --- Entry point -----------------------------------------------------------
@@ -964,6 +1571,13 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="PacketSnitch metrics endpoint",
     )
+    parser.add_argument(
+        "--config",
+        help=(
+            "path to the YAML config file (default: /etc/ps-metrics.yaml, "
+            "or $PSN_METRICS_CONFIG, or ./ps-metrics.yaml)"
+        ),
+    )
     parser.add_argument("--host", help="bind address (env: PSN_METRICS_HOST)")
     parser.add_argument(
         "--port", type=int, help="listen port (env: PSN_METRICS_PORT)"
@@ -971,6 +1585,21 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument(
         "--data-dir",
         help="output directory for NDJSON files (env: PSN_METRICS_DATA_DIR)",
+    )
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="print the merged config (file + env) as JSON and exit",
+    )
+    parser.add_argument(
+        "--generate-config",
+        metavar="PATH",
+        help="write a documented sample config to PATH and exit",
+    )
+    parser.add_argument(
+        "--generate-api-key",
+        action="store_true",
+        help="print a fresh random admin API key and exit",
     )
     return parser.parse_args(list(argv))
 
@@ -981,12 +1610,97 @@ def apply_args(config: ServerConfig, args: argparse.Namespace) -> None:
     if args.port:
         config.port = args.port
     if args.data_dir:
-        config.data_dir = Path(args.data_dir).resolve()
+        config.data_dir = Path(args.data_dir).expanduser().resolve()
+
+
+def _sample_config_text() -> str:
+    """Return the canonical sample config shipped with the server.
+
+    The block is intentionally inline so the ``--generate-config``
+    flag is self-contained and so the unit tests can assert against
+    the same template.
+    """
+    return (
+        "# PacketSnitch metrics endpoint configuration.\n"
+        "#\n"
+        "# Canonical location is /etc/ps-metrics.yaml. Override via\n"
+        "# PSN_METRICS_CONFIG or the --config CLI flag. Any key here\n"
+        "# can be overridden by a matching PSN_METRICS_* env var (e.g.\n"
+        "# PSN_METRICS_PORT=9000 overrides server.port).\n"
+        "#\n"
+        "# An admin API key is required to query the /admin/* endpoints.\n"
+        "# Generate one with:  python3 src/metrics/ps-metrics.py --generate-api-key\n"
+        "#\n"
+        "# Leave admin.api_key empty (the default) to disable admin\n"
+        "# endpoints entirely — they will return 404 in that mode.\n"
+        "\n"
+        "server:\n"
+        "  host: 0.0.0.0              # bind address. Use 127.0.0.1 for local-only.\n"
+        "  port: 8088                 # listen port.\n"
+        "  log_level: info            # debug | info | warn | error.\n"
+        "  trust_xff: false           # true when behind a reverse proxy that forwards client IPs.\n"
+        "\n"
+        "storage:\n"
+        "  data_dir: /var/log/packetsnitch-metrics   # where NDJSON files are written.\n"
+        "  max_body: 1048576          # max accepted POST body in bytes (1 MiB).\n"
+        "  max_queue: 1024            # max in-flight batches before /mhook returns 503.\n"
+        "  gzip_after_days: 7         # 0 = compress yesterdays file on every rotation.\n"
+        "  ack_timeout_seconds: 5.0   # how long HTTP clients wait for the disk ack.\n"
+        "\n"
+        "admin:\n"
+        "  # A random, high-entropy string. Required for /admin/* endpoints.\n"
+        "  api_key: \"\"\n"
+        "  list_limit: 100            # max rows returned by /admin/installs and /admin/errors.\n"
+    )
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
-    config = ServerConfig()
+    if args.generate_api_key:
+        # 32 url-safe bytes (~43 chars) keyed by the RNG. Print to
+        # stdout so the operator can ``--generate-api-key | pbcopy`` it
+        # into their config file without touching a temporary file.
+        print(secrets.token_urlsafe(32))
+        return 0
+    if args.generate_config:
+        target = Path(args.generate_config).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(_sample_config_text())
+        print(f"wrote sample config to {target}")
+        return 0
+    config = ServerConfig(load_config(args.config))
+    if args.print_config:
+        # Merge the resolved defaults so the operator sees what the
+        # server actually loaded, not just the contents of the file.
+        print(
+            json.dumps(
+                {
+                    "server": {
+                        "host": config.host,
+                        "port": config.port,
+                        "log_level": config.log_level,
+                        "trust_xff": config.trust_xff,
+                    },
+                    "storage": {
+                        "data_dir": str(config.data_dir),
+                        "max_body": config.max_body,
+                        "max_queue": config.max_queue,
+                        "gzip_after_days": config.gzip_after_days,
+                        "ack_timeout_seconds": config.ack_timeout_seconds,
+                    },
+                    "admin": {
+                        # Never echo the secret. Just show whether it is set.
+                        "api_key_set": config.admin_enabled(),
+                        "list_limit": config.admin_list_limit,
+                    },
+                    "_loaded_from": config.loaded_from,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     apply_args(config, args)
     configure_logging(config.log_level)
 
@@ -1004,10 +1718,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     signal.signal(signal.SIGTERM, _shutdown)
 
     LOG.info(
-        "metrics endpoint listening host=%s port=%d data_dir=%s",
+        "metrics endpoint listening host=%s port=%d data_dir=%s admin=%s config=%s",
         config.host,
         config.port,
         config.data_dir,
+        "enabled" if config.admin_enabled() else "disabled",
+        config.loaded_from or "(none)",
     )
     try:
         server.serve_forever()

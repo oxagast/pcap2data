@@ -1,0 +1,30 @@
+# PacketSnitch metrics endpoint configuration.
+#
+# Canonical location is /etc/ps-metrics.yaml. Override via
+# PSN_METRICS_CONFIG or the --config CLI flag. Any key here
+# can be overridden by a matching PSN_METRICS_* env var (e.g.
+# PSN_METRICS_PORT=9000 overrides server.port).
+#
+# An admin API key is required to query the /admin/* endpoints.
+# Generate one with:  python3 src/metrics/ps-metrics.py --generate-api-key
+#
+# Leave admin.api_key empty (the default) to disable admin
+# endpoints entirely — they will return 404 in that mode.
+
+server:
+  host: 0.0.0.0              # bind address. Use 127.0.0.1 for local-only.
+  port: 8088                 # listen port.
+  log_level: info            # debug | info | warn | error.
+  trust_xff: false           # true when behind a reverse proxy that forwards client IPs.
+
+storage:
+  data_dir: /var/log/packetsnitch-metrics   # where NDJSON files are written.
+  max_body: 1048576          # max accepted POST body in bytes (1 MiB).
+  max_queue: 1024            # max in-flight batches before /mhook returns 503.
+  gzip_after_days: 7         # 0 = compress yesterdays file on every rotation.
+  ack_timeout_seconds: 5.0   # how long HTTP clients wait for the disk ack.
+
+admin:
+  # A random, high-entropy string. Required for /admin/* endpoints.
+  api_key: ""
+  list_limit: 100            # max rows returned by /admin/installs and /admin/errors.
