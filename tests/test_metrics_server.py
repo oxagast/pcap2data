@@ -13,6 +13,7 @@ import datetime as _dt
 import importlib.util
 import io
 import json
+import logging
 import os
 import socket
 import sys
@@ -707,6 +708,415 @@ class EndToEndBatchTests(unittest.TestCase):
             self.assertEqual(payload["install_id"], _make_batch()["installId"])
             self.assertEqual(payload["props"]["tab"], "summary")
             self.assertEqual(payload["props"]["durationMs"], 12.5)
+
+
+class ServerLoggingTests(unittest.TestCase):
+    """Coverage for the line-by-line server log.
+
+    Every request the server accepts produces exactly one access-log
+    line on the ``packetsnitch.metrics`` logger. Operators rely on
+    these lines to grep for status codes, hot paths, slow handlers
+    and the bind/listen lifecycle, so the tests pin the format and
+    the field set the operator asked for: startup, shutdown, bind,
+    listen, config (with the API key redacted), disk errors, and
+    per-request status codes.
+    """
+
+    def setUp(self) -> None:
+        # Capture log records on the metrics logger so we can assert
+        # that ``log_request``, ``server_bind``, ``server_activate``,
+        # the startup line, and the disk-error paths each emit one
+        # well-formed log record per event.
+        self._records: List[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.setLevel(logging.DEBUG)
+        handler.emit = self._records.append  # type: ignore[assignment]
+        self._handler = handler
+        self._logger = logging.getLogger("packetsnitch.metrics")
+        self._logger.addHandler(handler)
+        self._logger.setLevel(logging.DEBUG)
+
+    def tearDown(self) -> None:
+        self._logger.removeHandler(self._handler)
+
+    def _access_records(self) -> List[logging.LogRecord]:
+        return [r for r in self._records if r.getMessage().startswith("access ")]
+
+    def _access_lines(self) -> List[str]:
+        return [self._format(record) for record in self._access_records()]
+
+    def _status_from_access_line(self, line: str) -> str:
+        # Format:
+        #   access <iso8601> <client_ip:port> "<method> <path> <proto>" <status> <bytes> <duration>ms
+        # ``rsplit`` from the right with ``maxsplit=4`` peels off the
+        # trailing ``<duration>ms`` and ``<bytes>`` fields and lands
+        # on the status. The quoted request line before it is the
+        # field we want intact.
+        tail = line.rsplit(" ", 4)
+        return tail[-3]
+
+    @staticmethod
+    def _format(record: logging.LogRecord) -> str:
+        # Mirror the production formatter (``logging.basicConfig``
+        # uses ``%(asctime)s %(levelname)s %(name)s %(message)s``).
+        return f"{record.levelname} {record.name} {record.getMessage()}"
+
+    # ---- request-side access log --------------------------------------
+
+    def test_get_health_emits_access_line_with_status_and_bytes(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            conn = HTTPConnection(host, port, timeout=5)
+            conn.request("GET", server.HEALTH_PATH)
+            response = conn.getresponse()
+            response.read()
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        line = access[0]
+        self.assertIn("GET /healthz HTTP/1.1", line)
+        self.assertIn(" 200 ", line)
+        # Bytes should be a non-negative integer.
+        parts = line.rsplit(" ", 2)
+        self.assertTrue(parts[-2].isdigit())
+        # Duration like "0.50ms" is always present.
+        self.assertRegex(parts[-1], r"^\d+\.\d{2}ms$")
+
+    def test_post_ingest_accepted_logs_202(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            body = json.dumps(_make_batch()).encode("utf-8")
+            status, _, _ = _raw_http_post(host, port, body)
+            self.assertEqual(status, 202)
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        self.assertIn(f"POST {server.INGEST_PATH}", access[0])
+        self.assertIn(" 202 ", access[0])
+
+    def test_404_unknown_route_logs_404(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            conn = HTTPConnection(host, port, timeout=5)
+            conn.request("GET", "/nope")
+            self.assertEqual(conn.getresponse().status, 404)
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        self.assertIn("GET /nope", access[0])
+        self.assertIn(" 404 ", access[0])
+
+    def test_400_invalid_payload_logs_400(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            status, _, _ = _raw_http_post(host, port, b"not-json")
+            self.assertEqual(status, 400)
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        self.assertIn(f"POST {server.INGEST_PATH}", access[0])
+        self.assertIn(" 400 ", access[0])
+
+    def test_413_payload_too_large_logs_413(self):
+        config = server.ServerConfig()
+        config.max_body = 256
+        with _running_server(config) as runner:
+            host, port = runner.address
+            huge = _make_batch(events=[
+                {"ts": "2026-01-01T00:00:00Z", "name": "tab.open", "props": {"tab": "x" * 1024}}
+            ])
+            body = json.dumps(huge).encode("utf-8")
+            status, _, _ = _raw_http_post(host, port, body)
+            self.assertEqual(status, 413)
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        self.assertIn(" 413 ", access[0])
+
+    def test_503_queue_full_logs_503(self):
+        config = server.ServerConfig()
+        config.max_queue = 1
+        with _running_server(config) as runner:
+            host, port = runner.address
+            with mock.patch.object(runner.sink, "write_batch", side_effect=lambda *a, **k: time.sleep(0.5)):
+                body = json.dumps(_make_batch()).encode("utf-8")
+                results: list = []
+                def _post() -> None:
+                    results.append(_raw_http_post(host, port, body))
+                first = threading.Thread(target=_post)
+                first.start()
+                time.sleep(0.05)
+                second = threading.Thread(target=_post)
+                second.start()
+                first.join(timeout=5)
+                second.join(timeout=5)
+                statuses = sorted(r[0] for r in results)
+                self.assertEqual(statuses, [202, 503])
+        access = self._access_lines()
+        self.assertEqual(len(access), 2)
+        seen = sorted(self._status_from_access_line(line) for line in access)
+        self.assertEqual(seen, ["202", "503"])
+
+    def test_query_string_is_stripped_from_path(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            conn = HTTPConnection(host, port, timeout=5)
+            conn.request("GET", "/healthz?token=hunter2")
+            self.assertEqual(conn.getresponse().status, 200)
+        access = self._access_lines()
+        self.assertEqual(len(access), 1)
+        self.assertIn("GET /healthz HTTP/1.1", access[0])
+        self.assertNotIn("hunter2", access[0])
+
+    def test_client_ip_and_port_present_in_access_line(self):
+        with _running_server() as runner:
+            host, port = runner.address
+            conn = HTTPConnection(host, port, timeout=5)
+            conn.request("GET", server.HEALTH_PATH)
+            conn.getresponse().read()
+        records = self._access_records()
+        self.assertEqual(len(records), 1)
+        # The ``LOG.info(...)`` call uses positional args, so the
+        # access line's structured fields land in ``record.args``.
+        # Index layout matches the production call:
+        #   0: iso8601 timestamp
+        #   1: client_ip
+        #   2: client_port
+        #   3: method
+        #   4: path
+        #   5: protocol
+        #   6: status
+        #   7: bytes
+        #   8: duration_ms
+        record = records[0]
+        args = record.args
+        self.assertEqual(args[0][-1], "Z")
+        self.assertEqual(args[1], "127.0.0.1")
+        self.assertIsInstance(args[2], int)
+        self.assertGreater(args[2], 0)
+        self.assertEqual(args[3], "GET")
+        self.assertEqual(args[4], "/healthz")
+        self.assertEqual(args[5], "HTTP/1.1")
+        self.assertEqual(args[6], 200)
+        self.assertIsInstance(args[7], int)
+        self.assertGreaterEqual(args[7], 0)
+        self.assertIsInstance(args[8], float)
+        self.assertGreaterEqual(args[8], 0.0)
+        # And the rendered message is still recognisable as an access line.
+        self.assertIn('"GET /healthz HTTP/1.1" 200', record.getMessage())
+
+    # ---- bind / listen / config ---------------------------------------
+
+    def test_bind_and_listen_lines_are_emitted_on_startup(self):
+        # The simplest possible signal that bind+listen logging works
+        # at all: a freshly built server emits both lines.
+        config = server.ServerConfig()
+        config.data_dir = Path(tempfile.mkdtemp(prefix="psn-metrics-bind-"))
+        sink = server.MetricsSink(config.data_dir)
+        try:
+            with server.MetricsHTTPServer(
+                ("127.0.0.1", _find_free_port()), sink, config
+            ) as httpd:
+                host, port = httpd.server_address
+                messages = [r.getMessage() for r in self._records]
+                bind_lines = [m for m in messages if m.startswith("bind ok ")]
+                listen_lines = [
+                    m for m in messages if m.startswith("listen ok ")
+                ]
+                self.assertTrue(bind_lines, msg=f"messages: {messages}")
+                self.assertTrue(listen_lines, msg=f"messages: {messages}")
+                self.assertIn(f"host={host}", bind_lines[0])
+                self.assertIn(f"port={port}", bind_lines[0])
+                self.assertIn(f"host={host}", listen_lines[0])
+                self.assertIn(f"port={port}", listen_lines[0])
+        finally:
+            sink.shutdown()
+
+    def test_config_summary_redacts_api_key(self):
+        # Build a config with a real key and check the redacted view
+        # actually replaces it with ``<redacted>``. This is the line
+        # the operator sees in ``journalctl`` so a leaked key would
+        # be a serious bug — pin the redaction.
+        config = server.ServerConfig()
+        config.admin_api_key = "this-must-not-leak-please"
+        safe = server._redactConfigForLog(config)
+        dumped = json.dumps(safe)
+        self.assertIn("<redacted>", dumped)
+        self.assertNotIn("this-must-not-leak-please", dumped)
+        self.assertTrue(safe["admin"]["api_key_set"])
+
+    def test_config_summary_keeps_empty_api_key_visible(self):
+        # An empty key (admin disabled) should stay visible as the
+        # empty string so the operator can confirm the disable was
+        # intentional rather than mysterious.
+        config = server.ServerConfig()
+        config.admin_api_key = ""
+        safe = server._redactConfigForLog(config)
+        self.assertEqual(safe["admin"]["api_key"], "")
+        self.assertFalse(safe["admin"]["api_key_set"])
+
+    def test_log_startup_config_writes_one_line(self):
+        # ``_logStartupConfig`` must always emit exactly one INFO
+        # record so a `journalctl -u packetsnitch-metrics` always
+        # contains the operator-visible config snapshot. Pin both the
+        # level and the message shape.
+        config = server.ServerConfig()
+        config.admin_api_key = "secret-value"
+        before = len(self._records)
+        server._logStartupConfig(config)
+        added = self._records[before:]
+        self.assertEqual(len(added), 1)
+        record = added[0]
+        self.assertEqual(record.levelname, "INFO")
+        self.assertTrue(record.getMessage().startswith("config "))
+        self.assertIn("host=", record.getMessage())
+        self.assertIn("port=", record.getMessage())
+        self.assertIn("data_dir=", record.getMessage())
+        # The redacted marker must be in the line, the secret must not.
+        self.assertIn("<redacted>", record.getMessage())
+        self.assertNotIn("secret-value", record.getMessage())
+
+    # ---- disk read/write error paths ----------------------------------
+
+    def test_write_error_logs_path_and_raises(self):
+        # ``_atomic_write_json`` must log the failure path with the
+        # underlying ``errno`` and re-raise so the caller (sink
+        # writer thread) can decide what to do with the batch.
+        captured: List[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = captured.append  # type: ignore[assignment]
+        logger = logging.getLogger("packetsnitch.metrics")
+        logger.addHandler(handler)
+        try:
+            with mock.patch(
+                "builtins.open",
+                side_effect=OSError(28, "No space left on device"),
+            ):
+                with self.assertRaises(OSError):
+                    server.MetricsSink._atomic_write_json(
+                        Path("/tmp/no-such-path.json"), {"x": 1}
+                    )
+            self.assertTrue(captured)
+            messages = [r.getMessage() for r in captured]
+            self.assertTrue(
+                any("write failed" in m for m in messages),
+                msg=f"messages: {messages}",
+            )
+            # The log line should include the tmp path and the errno
+            # so the operator can grep for the broken disk.
+            joined = "\n".join(messages)
+            self.assertIn("errno=28", joined)
+            self.assertIn("No space left on device", joined)
+        finally:
+            logger.removeHandler(handler)
+
+    def test_gzip_failure_logs_path_and_continues(self):
+        # A failed gzip should not abort the rotation; the plain file
+        # is left in place and a warning is logged with the path so
+        # the operator can repair permissions.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-metrics-gzerr-"))
+        sink = server.MetricsSink(tmp, gzip_after_days=0)
+        try:
+            sink.write_batch(
+                _make_batch(),
+                client_ip="127.0.0.1",
+                server_received_at="2026-01-01T00:00:00Z",
+            )
+            captured: List[logging.LogRecord] = []
+            handler = logging.Handler()
+            handler.emit = captured.append  # type: ignore[assignment]
+            logger = logging.getLogger("packetsnitch.metrics")
+            logger.addHandler(handler)
+            try:
+                with mock.patch(
+                    "gzip.open",
+                    side_effect=OSError(13, "Permission denied"),
+                ):
+                    sink._rotate_if_needed(_dt.date(2026, 1, 2))
+            finally:
+                logger.removeHandler(handler)
+            self.assertTrue(captured)
+            messages = [r.getMessage() for r in captured]
+            self.assertTrue(
+                any("gzip failed" in m for m in messages),
+                msg=f"messages: {messages}",
+            )
+            joined = "\n".join(messages)
+            self.assertIn("errno=13", joined)
+            self.assertIn("Permission denied", joined)
+            # The plain file is preserved so a manual rotation can
+            # still pick it up.
+            self.assertTrue((tmp / "events-2026-01-01.ndjson").exists())
+        finally:
+            with contextlib.suppress(Exception):
+                sink.shutdown()
+
+    def test_state_json_read_failure_logs_warning(self):
+        # ``_last_load_state`` swallows read/parse errors and logs a
+        # warning; pin both paths so a regression that raises instead
+        # of warning fails the test.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-metrics-state-"))
+        sink = server.MetricsSink.__new__(server.MetricsSink)
+        sink._state = {
+            "totalBatches": 0,
+            "totalEvents": 0,
+            "totalErrors": 0,
+            "totalInstalls": 0,
+        }
+        sink._data_dir = tmp
+        sink._state_path = tmp / "state.json"
+        sink._health_path = tmp / "health.json"
+        sink._known_installs = {}
+        sink._gzip_after_days = 7
+        sink._lock = threading.Lock()
+        sink._gzip_lock = sink._lock
+        sink._current_date = None
+        sink._events_handle = None
+        sink._installs_handle = None
+        sink._errors_handle = None
+        captured: List[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = captured.append  # type: ignore[assignment]
+        logger = logging.getLogger("packetsnitch.metrics")
+        logger.addHandler(handler)
+        try:
+            sink._state_path.write_text("{not valid json")
+            sink._last_load_state()
+            messages = [r.getMessage() for r in captured]
+            self.assertTrue(
+                any("state.json" in m for m in messages),
+                msg=f"messages: {messages}",
+            )
+        finally:
+            logger.removeHandler(handler)
+
+    # ---- bind failure path -------------------------------------------
+
+    def test_bind_failure_is_logged_and_raises(self):
+        # The bind hook must log the failed address and re-raise so
+        # the operator's startup script can detect EADDRINUSE cleanly.
+        captured: List[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = captured.append  # type: ignore[assignment]
+        logger = logging.getLogger("packetsnitch.metrics")
+        logger.addHandler(handler)
+        try:
+            config = server.ServerConfig()
+            config.data_dir = Path(tempfile.mkdtemp(prefix="psn-metrics-bindfail-"))
+            sink = server.MetricsSink(config.data_dir)
+            try:
+                # An obviously invalid host forces the kernel to
+                # reject the bind with EADDRNOTAVAIL.
+                with self.assertRaises(OSError):
+                    server.MetricsHTTPServer(
+                        ("300.300.300.300", _find_free_port()),
+                        sink,
+                        config,
+                    )
+                messages = [r.getMessage() for r in captured]
+                self.assertTrue(
+                    any("bind failed" in m for m in messages),
+                    msg=f"messages: {messages}",
+                )
+            finally:
+                sink.shutdown()
+        finally:
+            logger.removeHandler(handler)
 
 
 if __name__ == "__main__":

@@ -56,7 +56,7 @@ Environment=PSN_METRICS_CONFIG=/etc/ps-metrics.yaml
 ;Environment=PSN_METRICS_LOG_LEVEL=info
 ;Environment=PSN_METRICS_TRUST_XFF=0
 
-ExecStart=/usr/local/bin/python3 /usr/local/bin/ps-metrics.py
+ExecStart=python3 /usr/local/bin/ps-metrics.py
 Restart=on-failure
 RestartSec=5
 

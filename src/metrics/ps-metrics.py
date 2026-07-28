@@ -91,6 +91,13 @@ from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple
 
 LOG = logging.getLogger("packetsnitch.metrics")
 
+# ``main`` records the wall-clock moment it was called so the final
+# ``shutdown complete`` log line can report a real uptime. Lives at
+# module scope because the helper functions don't have it passed
+# in. Defaulting to ``0.0`` keeps the formatter usable from any
+# other entry point (e.g. tests that import ``main`` indirectly).
+_startup_monotonic: float = 0.0
+
 # --- Event name validation -------------------------------------------------
 #
 # Event names mirror the renderer-side regex
@@ -651,7 +658,19 @@ class MetricsSink:
         self._health_path = data_dir / "health.json"
         self._known_installs: Dict[str, str] = {}  # installId -> last seen ISO
         self._last_load_state()
-        data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # The sink cannot function without a writable directory,
+            # so log the failure with the full path and let the
+            # caller (``main``) convert it into a clean exit.
+            LOG.error(
+                "data_dir mkdir failed path=%s errno=%s error=%s",
+                data_dir,
+                getattr(exc, "errno", None),
+                exc,
+            )
+            raise
 
     # ---- public API ------------------------------------------------------
 
@@ -730,19 +749,47 @@ class MetricsSink:
         if self._current_date is not None:
             self._gzip_old_files(self._current_date, today)
         self._current_date = today
-        self._events_handle = self._open_for_append(self._events_path(today))
-        self._installs_handle = self._open_for_append(self._installs_path(today))
-        self._errors_handle = self._open_for_append(self._errors_path(today))
+        # Open each handle one at a time so an EACCES/ENOENT on one
+        # file logs the exact path that failed — instead of a stack
+        # trace that just says "open() failed somewhere".
+        for attr, pathGetter in (
+            ("_events_handle", lambda: self._events_path(today)),
+            ("_installs_handle", lambda: self._installs_path(today)),
+            ("_errors_handle", lambda: self._errors_path(today)),
+        ):
+            path = pathGetter()
+            try:
+                setattr(self, attr, self._open_for_append(path))
+            except OSError as exc:
+                LOG.error(
+                    "open failed path=%s errno=%s error=%s",
+                    path,
+                    getattr(exc, "errno", None),
+                    exc,
+                )
+                raise
 
     def _close_handles(self) -> None:
         for attr in ("_events_handle", "_installs_handle", "_errors_handle"):
             handle = getattr(self, attr)
             if handle is not None:
+                path = getattr(handle, "name", None)
                 try:
                     handle.flush()
-                except Exception:  # pragma: no cover - best effort
-                    pass
-                handle.close()
+                except Exception as exc:  # pragma: no cover - best effort
+                    LOG.warning(
+                        "close flush failed path=%s error=%s",
+                        path or "<unknown>",
+                        exc,
+                    )
+                try:
+                    handle.close()
+                except Exception as exc:  # pragma: no cover - best effort
+                    LOG.warning(
+                        "close handle failed path=%s error=%s",
+                        path or "<unknown>",
+                        exc,
+                    )
                 setattr(self, attr, None)
 
     def _flush_all(self) -> None:
@@ -753,12 +800,22 @@ class MetricsSink:
         ):
             if handle is None:
                 continue
+            path = getattr(handle, "name", None)
             try:
                 handle.flush()
                 os.fsync(handle.fileno())
             except OSError as exc:
-                if exc.errno not in (errno.EBADF, errno.EINVAL):
-                    raise
+                if exc.errno in (errno.EBADF, errno.EINVAL):
+                    # EBADF/EINVAL during shutdown are not worth a
+                    # warning — they happen on every clean close.
+                    continue
+                LOG.error(
+                    "fsync failed path=%s errno=%s error=%s",
+                    path or "<unknown>",
+                    getattr(exc, "errno", None),
+                    exc,
+                )
+                raise
 
     def _gzip_old_files(
         self, old_day: _dt.date, today: _dt.date
@@ -786,11 +843,23 @@ class MetricsSink:
                 gz_path = path.with_suffix(path.suffix + ".gz")
                 if gz_path.exists():
                     continue
-                with open(path, "rb") as src, gzip.open(
-                    gz_path, "wb", compresslevel=6
-                ) as dst:
-                    shutil.copyfileobj(src, dst)
-                path.unlink()
+                try:
+                    with open(path, "rb") as src, gzip.open(
+                        gz_path, "wb", compresslevel=6
+                    ) as dst:
+                        shutil.copyfileobj(src, dst)
+                    path.unlink()
+                except OSError as exc:
+                    # A failed gzip should not silently break the
+                    # daily rotation. The plain file is left in place
+                    # and we log a single warning with the path so the
+                    # operator can see which day's file failed.
+                    LOG.warning(
+                        "gzip failed path=%s errno=%s error=%s",
+                        path,
+                        getattr(exc, "errno", None),
+                        exc,
+                    )
 
     def _write_event_lines(
         self,
@@ -909,11 +978,42 @@ class MetricsSink:
     def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            # Full-disk, permission denied, the parent directory
+            # disappearing mid-write — every one of those should land
+            # in the operator's journal with the path so they can
+            # correlate with whatever broke underneath the server.
+            LOG.error(
+                "write failed path=%s errno=%s error=%s",
+                tmp,
+                getattr(exc, "errno", None),
+                exc,
+            )
+            # Try to clean up the half-written temp file so a
+            # subsequent retry does not see a stale ``.tmp`` left
+            # behind by a crashed writer.
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            raise
+        try:
+            os.replace(tmp, path)
+        except OSError as exc:
+            LOG.error(
+                "rename failed src=%s dst=%s errno=%s error=%s",
+                tmp,
+                path,
+                getattr(exc, "errno", None),
+                exc,
+            )
+            raise
 
     def _last_load_state(self) -> None:
         if not self._state_path.exists():
@@ -921,7 +1021,23 @@ class MetricsSink:
         try:
             with open(self._state_path, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-        except (OSError, json.JSONDecodeError):
+        except OSError as exc:
+            # ``state.json`` is best-effort durability — log the
+            # failure but do not abort startup. The server can
+            # recreate a fresh state file on the first batch.
+            LOG.warning(
+                "state.json read failed path=%s errno=%s error=%s",
+                self._state_path,
+                getattr(exc, "errno", None),
+                exc,
+            )
+            return
+        except json.JSONDecodeError as exc:
+            LOG.warning(
+                "state.json parse failed path=%s error=%s",
+                self._state_path,
+                exc,
+            )
             return
         if isinstance(payload, dict):
             for key in ("totalBatches", "totalEvents", "totalErrors", "totalInstalls"):
@@ -937,9 +1053,91 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     # Suppress the default per-request stderr access log; we have our
-    # own structured logger with proper rate limiting.
+    # own structured access logger (see ``log_request`` below) that
+    # records one line per request with method/path/status/bytes.
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return
+
+    def setup(self) -> None:  # noqa: D401
+        """Capture the wall-clock moment we accepted the connection.
+
+        Used by ``log_request`` to compute the elapsed time we
+        report in the access-log line. The default ``setup`` is a
+        no-op so we have to call ``super().setup()`` ourselves.
+        """
+        try:
+            super().setup()
+        except Exception:  # pragma: no cover - never expected
+            pass
+        self._request_started_at = time.monotonic()
+        self._response_bytes = 0
+
+    def log_request(
+        self,
+        code: int = -1,
+        size: int = -1,
+        duration_ms: Optional[float] = None,
+    ) -> None:
+        """Emit one structured access-log line per request.
+
+        Called both by the dispatchers (``do_GET``/``do_POST``/
+        ``do_HEAD``) so we always get a log line, and indirectly by
+        the stdlib ``BaseHTTPRequestHandler`` at the end of every
+        successful request. The two paths must converge on a single
+        line per request — the stdlib one uses the byte count we
+        accumulate via ``_send_json`` (so it knows the real size),
+        while the dispatcher path is the only signal for failed
+        requests that never reach ``send_response``. We de-dupe with
+        a per-request ``_log_request_emitted`` flag so the operator
+        always sees exactly one line per request.
+
+        Format mirrors the classic combined-log shape:
+
+            <iso8601-utc> <client_ip>:<port> "<method> <path> <proto>" <status> <bytes> <duration_ms>ms
+
+        with the ``method``, ``path``, ``status``, ``bytes`` and
+        ``duration`` fields the operator asked for so every request
+        can be greppable for status codes, hot paths, slow handlers
+        and clients with their log line alone.
+        """
+        # Stdlib calls ``log_request`` once at the end of every
+        # successfully parsed request and the dispatcher ``finally``
+        # block calls it again so failed requests also produce a
+        # line. Drop the second invocation on the floor.
+        if getattr(self, "_log_request_emitted", False):
+            return
+        self._log_request_emitted = True
+        if code < 0:
+            code = getattr(self, "code", 200) or 200
+        if size < 0:
+            size = getattr(self, "_response_bytes", 0) or 0
+        if duration_ms is None:
+            started = getattr(self, "_request_started_at", None)
+            if started is not None:
+                duration_ms = (time.monotonic() - started) * 1000.0
+            else:
+                duration_ms = 0.0
+        client = getattr(self, "client_address", None) or ("unknown", 0)
+        client_ip = str(client[0] if len(client) > 0 else "unknown")
+        client_port = int(client[1] if len(client) > 1 else 0)
+        method = str(getattr(self, "command", "-") or "-")
+        full_path = str(getattr(self, "path", "-") or "-")
+        # Strip query string for the access log; query params land in
+        # their own debug-level line if the operator needs them.
+        path_only = full_path.split("?", 1)[0]
+        protocol = str(getattr(self, "request_version", "HTTP/1.1") or "HTTP/1.1")
+        LOG.info(
+            'access %s %s:%d "%s %s %s" %d %d %.2fms',
+            _iso_z(_utc_now()),
+            client_ip,
+            client_port,
+            method,
+            path_only,
+            protocol,
+            int(code),
+            int(size),
+            float(duration_ms),
+        )
 
     # The stdlib's ``handle()`` raises ``ConnectionResetError`` (errno
     # 104) and friends when a client opens a TCP connection and then
@@ -972,29 +1170,51 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path == HEALTH_PATH:
-            self._handle_health()
-            return
-        if path.startswith(ADMIN_PREFIX):
-            self._handle_admin(path)
-            return
-        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+        try:
+            if path == HEALTH_PATH:
+                self._handle_health()
+                return
+            if path.startswith(ADMIN_PREFIX):
+                self._handle_admin(path)
+                return
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Client vanished mid-response. Let the socket layer tear
+            # the connection down; the access log is already going to
+            # say the response was short.
+            LOG.debug("client disconnected during GET %s", path)
+        finally:
+            self.log_request()
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path.split("?", 1)[0] != INGEST_PATH:
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
-            return
-        self._handle_ingest()
+        path = self.path.split("?", 1)[0]
+        try:
+            if path != INGEST_PATH:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+                return
+            self._handle_ingest()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            LOG.debug("client disconnected during POST %s", path)
+        finally:
+            self.log_request()
 
     def do_HEAD(self) -> None:  # noqa: N802
-        if self.path.split("?", 1)[0] in (HEALTH_PATH, INGEST_PATH):
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
+        path = self.path.split("?", 1)[0]
+        try:
+            if path in (HEALTH_PATH, INGEST_PATH):
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.code = int(HTTPStatus.OK)
+                self._response_bytes = 0
+                return
+            self.send_response(HTTPStatus.NOT_FOUND)
             self.end_headers()
-            return
-        self.send_response(HTTPStatus.NOT_FOUND)
-        self.end_headers()
+            self.code = int(HTTPStatus.NOT_FOUND)
+            self._response_bytes = 0
+        finally:
+            self.log_request()
 
     # ---- handlers --------------------------------------------------------
 
@@ -1071,8 +1291,17 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
             body = json.dumps({"error": "unauthorized"}).encode("utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
+            # Mirror what ``_send_json`` does so the access log
+            # captures the response size and status code correctly.
+            self.code = int(HTTPStatus.UNAUTHORIZED)
+            self._response_bytes = len(body)
             if self.command != "HEAD":
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    LOG.debug(
+                        "client disconnected before 401 body was sent"
+                    )
             return False
         return True
 
@@ -1351,8 +1580,29 @@ class MetricsRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        # Track the byte count so ``log_request`` can echo the
+        # response size in the access log even when the dispatcher
+        # writes the body itself (rather than via ``_send_json``).
+        self._response_bytes = len(body)
+        # ``BaseHTTPRequestHandler`` does not set ``self.code`` for us
+        # by default; the access log reads from it.
+        try:
+            self.code = int(status)
+        except Exception:
+            self.code = 200
         if self.command != "HEAD":
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The client vanished before they could read the
+                # body. Surface a debug-level line so the operator
+                # can see it without a stack trace in the log; the
+                # access log already records the response size, so
+                # they can correlate.
+                LOG.debug(
+                    "client disconnected before response body was sent: %d bytes",
+                    len(body),
+                )
 
 
 # --- HTTP server with bounded queue + worker thread ------------------------
@@ -1377,7 +1627,29 @@ class MetricsHTTPServer(ThreadingHTTPServer):
         sink: MetricsSink,
         config: "ServerConfig",
     ) -> None:
-        super().__init__(address, MetricsRequestHandler)
+        # Bind happens inside ``super().__init__`` via ``server_bind``
+        # and the listening socket is wired up in ``server_activate``.
+        # Both are overridden below so the bind and the start of the
+        # ``accept()`` loop each produce one access-log line.
+        try:
+            super().__init__(address, MetricsRequestHandler)
+        except OSError as exc:
+            # ``server_bind`` raises ``OSError(EADDRINUSE)`` (errno 98),
+            # ``OSError(EADDRNOTAVAIL)`` (errno 99) and similar when the
+            # operator picked a port that is already taken or a host
+            # that the kernel cannot bind to. Log the full context so a
+            # misconfigured ``--host`` or ``--port`` shows up as a
+            # single, greppable failure line — and then re-raise so the
+            # caller (the ``main`` entry point) can exit non-zero
+            # instead of pretending the server is healthy.
+            LOG.error(
+                "bind failed host=%s port=%s errno=%s error=%s",
+                address[0],
+                address[1],
+                getattr(exc, "errno", None),
+                exc,
+            )
+            raise
         self.sink = sink
         self.config = config
         self.queue: Deque[Tuple[Dict[str, Any], str, str, str]] = deque()
@@ -1389,6 +1661,79 @@ class MetricsHTTPServer(ThreadingHTTPServer):
             target=self._run_worker, name="metrics-writer", daemon=True
         )
         self._worker.start()
+
+    def server_bind(self) -> None:
+        """Wrap the bind() call so we log success/failure with context.
+
+        ``HTTPServer.server_bind`` resolves a ``0`` port (the kernel
+        picks) into the real port number before returning. Logging
+        after the call captures that resolved port so the operator
+        knows which port to point a load balancer at even when the
+        config asks for an ephemeral one.
+        """
+        try:
+            super().server_bind()
+        except OSError as exc:
+            LOG.error(
+                "bind failed host=%s port=%s errno=%s error=%s",
+                self.server_address[0],
+                self.server_address[1],
+                getattr(exc, "errno", None),
+                exc,
+            )
+            raise
+        host = self.server_address[0]
+        port = self.server_address[1]
+        LOG.info("bind ok host=%s port=%d", host, port)
+
+    def server_activate(self) -> None:
+        """Wrap the listen() call so we log the moment the socket is live.
+
+        Without this override the only signal an operator has that the
+        server is ready to accept connections is the implicit "no
+        errors so far" absence. Logging here turns the silent step
+        between ``bind()`` and the first ``accept()`` into a
+        greppable "ready" line.
+        """
+        try:
+            super().server_activate()
+        except OSError as exc:
+            LOG.error(
+                "listen failed host=%s port=%d errno=%s error=%s",
+                self.server_address[0],
+                self.server_address[1],
+                getattr(exc, "errno", None),
+                exc,
+            )
+            raise
+        host = self.server_address[0]
+        port = self.server_address[1]
+        LOG.info(
+            "listen ok host=%s port=%d socket_family=%s backlog=%d",
+            host,
+            port,
+            self.address_family,
+            self.request_queue_size,
+        )
+
+    def server_close(self) -> None:
+        """Log the socket teardown so the lifecycle is symmetric.
+
+        Without this override the operator only ever sees a single
+        "shutting down" line on SIGTERM and then silence — there is
+        no signal that the socket actually closed and the port is
+        free again. Logging here closes that gap.
+        """
+        try:
+            super().server_close()
+        except OSError as exc:
+            LOG.warning("server_close raised: %s", exc)
+            return
+        LOG.info(
+            "server socket closed host=%s port=%d",
+            self.server_address[0],
+            self.server_address[1],
+        )
 
     # ---- public API ------------------------------------------------------
 
@@ -1417,9 +1762,12 @@ class MetricsHTTPServer(ThreadingHTTPServer):
 
     def _run_worker(self) -> None:
         LOG.info(
-            "metrics writer started data_dir=%s gzip_after_days=%d",
+            "metrics writer started data_dir=%s gzip_after_days=%d "
+            "max_queue=%d ack_timeout_seconds=%.2f",
             self.config.data_dir,
             self.config.gzip_after_days,
+            self.config.max_queue,
+            self.config.ack_timeout_seconds,
         )
         while True:
             self.queue_event.wait()
@@ -1625,6 +1973,73 @@ def apply_args(config: ServerConfig, args: argparse.Namespace) -> None:
         config.data_dir = Path(args.data_dir).expanduser().resolve()
 
 
+def _redactConfigForLog(config: ServerConfig) -> Dict[str, Any]:
+    """Return a safe-to-log view of the resolved config.
+
+    The admin API key is replaced with a constant redaction marker
+    so a multi-tenant operator who shares ``journalctl -u
+    packetsnitch-metrics`` output with the rest of the team does not
+    accidentally leak the secret. Every other field is preserved
+    verbatim so the startup line is genuinely useful when debugging
+    bind/listen/storage issues — the redaction only kicks in for
+    fields that contain operator secrets.
+
+    Returned as a dict so the caller can pass it directly into
+    ``logging.info("config %s", payload)`` without quoting worries.
+    """
+    api_key_set = config.admin_enabled()
+    return {
+        "server": {
+            "host": config.host,
+            "port": config.port,
+            "log_level": config.log_level,
+            "trust_xff": config.trust_xff,
+        },
+        "storage": {
+            "data_dir": str(config.data_dir),
+            "max_body": config.max_body,
+            "max_queue": config.max_queue,
+            "gzip_after_days": config.gzip_after_days,
+            "ack_timeout_seconds": config.ack_timeout_seconds,
+        },
+        "admin": {
+            "api_key": "<redacted>" if api_key_set else "",
+            "api_key_set": api_key_set,
+            "list_limit": config.admin_list_limit,
+        },
+        "_loaded_from": config.loaded_from,
+    }
+
+
+def _logStartupConfig(config: ServerConfig) -> None:
+    """Emit one structured ``config`` line with redacted secrets.
+
+    Called once during ``main`` so the operator's journal already
+    shows the resolved bind/storage/admin settings before the first
+    request lands. The shape mirrors ``--print-config`` so the
+    operator can correlate the two with a diff.
+    """
+    safe = _redactConfigForLog(config)
+    LOG.info(
+        "config host=%s port=%d log_level=%s trust_xff=%s "
+        "data_dir=%s max_body=%d max_queue=%d gzip_after_days=%d "
+        "ack_timeout_seconds=%.2f admin_api_key=%s admin_key_set=%s "
+        "loaded_from=%s",
+        safe["server"]["host"],
+        safe["server"]["port"],
+        safe["server"]["log_level"],
+        safe["server"]["trust_xff"],
+        safe["storage"]["data_dir"],
+        safe["storage"]["max_body"],
+        safe["storage"]["max_queue"],
+        safe["storage"]["gzip_after_days"],
+        safe["storage"]["ack_timeout_seconds"],
+        safe["admin"]["api_key"],
+        safe["admin"]["api_key_set"],
+        safe["_loaded_from"] or "(none)",
+    )
+
+
 def _sample_config_text() -> str:
     """Return the canonical sample config shipped with the server.
 
@@ -1667,6 +2082,12 @@ def _sample_config_text() -> str:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Wall-clock anchor so the final ``shutdown complete`` line can
+    # report a real uptime without having to plumb the start time
+    # through every helper along the way. ``time.monotonic`` is the
+    # right tool here because it ignores NTP slews.
+    global _startup_monotonic
+    _startup_monotonic = time.monotonic()
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if args.generate_api_key:
         # 32 url-safe bytes (~43 chars) keyed by the RNG. Print to
@@ -1715,10 +2136,46 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     apply_args(config, args)
     configure_logging(config.log_level)
+    # Operator-visible "I am starting up" line. Captures PID, the
+    # Python version, and the on-disk executable path so the journal
+    # can answer "what version is actually running on this host?"
+    # without an operator having to attach to the process. The
+    # resolved config follows on the next line with secrets redacted.
+    LOG.info(
+        "startup pid=%d python=%s exe=%s",
+        os.getpid(),
+        ".".join(str(part) for part in sys.version_info[:3]),
+        sys.executable,
+    )
+    _logStartupConfig(config)
 
-    config.data_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # ``data_dir`` is where every event lands. A bind failure
+        # here is fatal: log it loudly and bail so the operator does
+        # not chase "where are my events?" symptoms later.
+        LOG.error(
+            "data_dir create failed path=%s errno=%s error=%s",
+            config.data_dir,
+            getattr(exc, "errno", None),
+            exc,
+        )
+        return 1
     sink = MetricsSink(config.data_dir, gzip_after_days=config.gzip_after_days)
-    server = MetricsHTTPServer((config.host, config.port), sink, config)
+    try:
+        server = MetricsHTTPServer((config.host, config.port), sink, config)
+    except OSError as exc:
+        # ``MetricsHTTPServer.__init__`` already logs the bind
+        # failure with full context. We only need to convert the
+        # raised ``OSError`` into a clean exit code so systemd does
+        # not treat the failure as a crash loop.
+        LOG.error(
+            "server init failed errno=%s error=%s",
+            getattr(exc, "errno", None),
+            exc,
+        )
+        return 1
 
     def _shutdown(signum: int, _frame: Any) -> None:
         LOG.info("received signal=%d, shutting down", signum)
@@ -1740,7 +2197,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         server.serve_forever()
     finally:
+        LOG.info("server loop exited, closing socket")
         sink.shutdown()
+    LOG.info(
+        "shutdown complete pid=%d uptime_s=%.3f",
+        os.getpid(),
+        time.monotonic() - _startup_monotonic,
+    )
     return 0
 
 
