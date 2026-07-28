@@ -18,6 +18,7 @@
     "build:backend:linux": "node scripts/build-backend.js linux",
     "build:backend:macos": "node scripts/build-backend.js macos",
     "build:backend:windows": "node scripts/build-backend.js windows",
+    "install:metrics-server": "bash scripts/install-metrics.sh",
     "publish": "cross-env QA_SKIP_RPATHS=1 electron-forge publish",
     "test:backend": "pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
     "test:frontend": "jest --runInBand",
