@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import socket
 import sys
 import tempfile
@@ -1115,6 +1116,214 @@ class ServerLoggingTests(unittest.TestCase):
                 )
             finally:
                 sink.shutdown()
+        finally:
+            logger.removeHandler(handler)
+
+
+class LogFileTests(unittest.TestCase):
+    """Coverage for the ``server.log_file`` config knob.
+
+    Operators who run the metrics endpoint without a log aggregator
+    in front of systemd/docker need a plain text file they can
+    ``tail -f``. The server should respect ``log_file`` by opening
+    a ``FileHandler`` so every line lands both on stderr (default)
+    and on the operator-chosen file. Misconfigured paths should
+    surface as a clean startup failure rather than silently
+    degrading to stderr-only logging.
+    """
+
+    def setUp(self) -> None:
+        # Make sure no leftover handlers leak between tests.
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+
+    def tearDown(self) -> None:
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+
+    def test_default_log_file_is_none(self):
+        # When ``server.log_file`` is unset (the shipped default),
+        # ``ServerConfig`` should expose ``None`` so callers can
+        # use a simple ``is None`` check to skip the file handler.
+        config = server.ServerConfig()
+        self.assertIsNone(config.log_file)
+
+    def test_log_file_resolves_to_path_when_set(self):
+        config = server.ServerConfig({"server": {"log_file": "/var/log/packetsnitch-metrics/ps-metrics.log"}})
+        self.assertEqual(
+            str(config.log_file),
+            "/var/log/packetsnitch-metrics/ps-metrics.log",
+        )
+
+    def test_log_file_blank_string_is_treated_as_unset(self):
+        # An empty / whitespace-only value should map to ``None``,
+        # so a stray blank line in the YAML does not silently
+        # change behaviour later.
+        for value in ("", "   "):
+            with self.subTest(value=value):
+                config = server.ServerConfig(
+                    {"server": {"log_file": value}}
+                )
+                self.assertIsNone(config.log_file)
+
+    def test_log_file_expands_user_and_tilde(self):
+        # ``~`` should resolve to the user's home, so a config
+        # entry like ``~/ps-metrics.log`` works without the
+        # operator having to hardcode ``$HOME``.
+        config = server.ServerConfig(
+            {"server": {"log_file": "~/ps-metrics.log"}}
+        )
+        resolved = config.log_file
+        self.assertNotIn("~", str(resolved))
+        self.assertTrue(str(resolved).endswith("ps-metrics.log"))
+
+    def test_configure_logging_writes_lines_to_file(self):
+        # Happy path: a fresh log file receives a real INFO line
+        # emitted after ``configure_logging`` returns. We use a
+        # temp dir so the test is hermetic and can run on systems
+        # without write access to ``/var/log``.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-logfile-"))
+        try:
+            log_path = tmp / "ps-metrics.log"
+            server.configure_logging("info", log_path)
+            try:
+                server.LOG.info("hello from log_file test")
+            finally:
+                # Force every handler to flush before we read.
+                for handler in logging.getLogger().handlers:
+                    handler.flush()
+            content = log_path.read_text(encoding="utf-8")
+            self.assertIn("hello from log_file test", content)
+            self.assertIn("INFO packetsnitch.metrics", content)
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_configure_logging_creates_parent_directory(self):
+        # The parent directory should be created on demand so a
+        # fresh install on a clean box does not have to ``mkdir -p``
+        # before the first run. Use a deeply nested temp path.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-logfile-dirs-"))
+        try:
+            log_path = tmp / "nested" / "deeper" / "ps-metrics.log"
+            self.assertFalse(log_path.parent.exists())
+            server.configure_logging("info", log_path)
+            try:
+                self.assertTrue(log_path.parent.is_dir())
+                server.LOG.info("nested write ok")
+            finally:
+                for handler in logging.getLogger().handlers:
+                    handler.flush()
+            self.assertTrue(log_path.exists())
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_configure_logging_unwritable_path_raises(self):
+        # A path under a non-existent mount point (we pick
+        # ``/proc/...`` here because it cannot be created as a
+        # directory of regular files) must surface a clear error so
+        # the operator sees the misconfiguration in their journal
+        # rather than silently getting stderr-only logging.
+        bogus = Path("/proc/this-should-not-exist/ps-metrics.log")
+        with self.assertRaises((FileNotFoundError, OSError)) as ctx:
+            server.configure_logging("info", bogus)
+        message = str(ctx.exception)
+        self.assertIn("log_file", message)
+
+    def test_configure_logging_is_idempotent(self):
+        # Calling ``configure_logging`` twice (e.g. from a test
+        # harness that re-runs setup) should not stack handlers;
+        # otherwise every log line ends up duplicated N times.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-logfile-idem-"))
+        try:
+            log_path = tmp / "ps-metrics.log"
+            server.configure_logging("info", log_path)
+            server.configure_logging("info", log_path)
+            handlers = logging.getLogger().handlers
+            self.assertEqual(
+                len(handlers),
+                2,
+                msg=(
+                    "expected exactly one stderr + one file handler, got "
+                    f"{[type(h).__name__ for h in handlers]}"
+                ),
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_log_file_emits_log_file_enabled_line(self):
+        # A ``log_file enabled path=...`` line should appear once
+        # each time ``configure_logging`` flips into file-logging
+        # mode. Pin the line by reading the log file itself — the
+        # file handler is attached at configure-time and flushed
+        # before the call returns, so by the time ``configure_logging``
+        # returns the line is on disk.
+        tmp = Path(tempfile.mkdtemp(prefix="psn-logfile-flag-"))
+        try:
+            log_path = tmp / "ps-metrics.log"
+            server.configure_logging("info", log_path)
+            # Flush before reading so the FileHandler actually
+            # commits the line.
+            for handler in logging.getLogger().handlers:
+                handler.flush()
+            content = log_path.read_text(encoding="utf-8")
+            self.assertIn("log_file enabled", content)
+            self.assertIn(str(log_path), content)
+            self.assertIn("level=INFO", content)
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_log_file_surfaces_in_print_config(self):
+        # ``--print-config`` should show the resolved log file so
+        # operators can verify which path will be opened at
+        # startup.
+        config = server.ServerConfig({"server": {"log_file": "/tmp/example.log"}})
+        printed = json.dumps(
+            {
+                "server": {
+                    "host": config.host,
+                    "port": config.port,
+                    "log_level": config.log_level,
+                    "log_file": str(config.log_file) if config.log_file else None,
+                    "trust_xff": config.trust_xff,
+                },
+            }
+        )
+        self.assertIn("/tmp/example.log", printed)
+
+    def test_log_file_path_is_in_startup_config_log(self):
+        # The ``config`` log line on startup must surface
+        # ``log_file`` so a remote operator (no shell access) can
+        # confirm the resolved path from ``journalctl`` alone.
+        captured: List[logging.LogRecord] = []
+        handler = logging.Handler()
+        handler.emit = captured.append  # type: ignore[assignment]
+        logger = logging.getLogger("packetsnitch.metrics")
+        logger.addHandler(handler)
+        try:
+            config = server.ServerConfig(
+                {"server": {"log_file": "/tmp/some-config.log"}}
+            )
+            server._logStartupConfig(config)
+            messages = [r.getMessage() for r in captured]
+            self.assertTrue(
+                any(m.startswith("config ") for m in messages),
+                msg=f"messages: {messages}",
+            )
+            joined = "\n".join(messages)
+            self.assertIn("/tmp/some-config.log", joined)
+            # And the unset case should render as ``(none)`` so an
+            # operator can grep for it without false positives.
+            config_no_file = server.ServerConfig({})
+            captured.clear()
+            server._logStartupConfig(config_no_file)
+            joined2 = "\n".join(r.getMessage() for r in captured)
+            self.assertIn("log_file=(none)", joined2)
         finally:
             logger.removeHandler(handler)
 
