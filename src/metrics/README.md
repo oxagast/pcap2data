@@ -53,13 +53,21 @@ key. The three top-level sections are:
 
 | Section   | Keys                                                            |
 | --------- | --------------------------------------------------------------- |
-| `server`  | `host`, `port`, `log_level`, `trust_xff`                        |
+| `server`  | `host`, `port`, `log_level`, `log_file`, `trust_xff`            |
 | `storage` | `data_dir`, `max_body`, `max_queue`, `gzip_after_days`, `ack_timeout_seconds` |
 | `admin`   | `api_key`, `list_limit`                                         |
 
 The `admin.api_key` value is a high-entropy shared secret. Leave it
 empty to disable the admin endpoints entirely (they will return 404 in
 that mode). Generate one with `ps-metrics.py --generate-api-key`.
+
+The `server.log_file` value is an optional path that, when set, opens
+a `FileHandler` in addition to the default stderr handler so every
+log line lands on both stderr (for `journalctl`/Docker) and on disk
+(for `tail -f`/Filebeat/Vector). Leave it empty (the default) for
+stderr-only logging. A failure to open the file is fatal so a
+misconfigured path is visible in the systemd journal instead of
+silently degrading back to stderr.
 
 ### Legacy env vars
 

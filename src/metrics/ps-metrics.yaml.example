@@ -15,6 +15,14 @@ server:
   host: 0.0.0.0              # bind address. Use 127.0.0.1 for local-only.
   port: 8088                 # listen port.
   log_level: info            # debug | info | warn | error.
+  log_file: ""               # Optional path to also write log lines to a file.
+                             # When set, every log line lands on both stderr
+                             # (for journald / docker logs) AND on this file
+                             # (for tail -f / Filebeat / Vector). Leave empty
+                             # (the default) for stderr-only logging. The parent
+                             # directory is created if it does not exist. A
+                             # failure to open the file is fatal so misconfig is
+                             # visible instead of silently degrading.
   trust_xff: false           # true when behind a reverse proxy that forwards client IPs.
 
 storage:

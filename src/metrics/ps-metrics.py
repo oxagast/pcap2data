@@ -304,6 +304,7 @@ def _yaml_default_config() -> Dict[str, Any]:
             "host": "0.0.0.0",
             "port": 8088,
             "log_level": "info",
+            "log_file": "",
             "trust_xff": False,
         },
         "storage": {
@@ -397,8 +398,13 @@ def _flat_env_to_dict(env: Dict[str, str]) -> Dict[str, Any]:
         "ack_timeout_seconds": "storage",
         "api_key": "admin",
         "list_limit": "admin",
+        "log_file": "server",
         "config": "_meta",  # PSN_METRICS_CONFIG — handled by the loader.
     }
+    # ``trust_xff`` already lives under ``server`` and the key
+    # matches the YAML key, so the default ``server`` mapping is
+    # correct. Mention it here so the rename table stays the only
+    # place operators need to look.
     # Key renames so the legacy env-var name lands on the YAML key
     # the loader actually consumes.
     _KEY_RENAMES = {
@@ -1851,6 +1857,21 @@ class ServerConfig:
         self.host: str = str(_coerce_typed(server.get("host"), "0.0.0.0"))
         self.port: int = int(_coerce_typed(server.get("port"), 8088))
         self.log_level: str = str(_coerce_typed(server.get("log_level"), "info")).lower()
+        # ``server.log_file`` is the path to an additional log
+        # destination on top of stderr. The empty string (the
+        # default) means "stderr only", which matches the historic
+        # behaviour where the supervisor (systemd / docker / a
+        # reverse proxy) owns log routing. A non-empty value
+        # triggers a ``FileHandler`` in ``configure_logging`` so the
+        # operator gets a single-file view of every line without
+        # having to scrape journald. ``None`` here means "not set",
+        # so the call sites can use ``is None`` to decide whether
+        # to attach the file handler.
+        log_file_raw = _coerce_typed(server.get("log_file"), "")
+        if isinstance(log_file_raw, str) and log_file_raw.strip():
+            self.log_file: Optional[Path] = Path(log_file_raw.strip()).expanduser()
+        else:
+            self.log_file: Optional[Path] = None
         self.trust_xff: bool = _coerce_typed(server.get("trust_xff"), False)
         data_dir = storage.get("data_dir", "./var/metrics")
         self.data_dir: Path = Path(str(data_dir)).expanduser().resolve()
@@ -1902,7 +1923,38 @@ class ServerConfig:
 
 
 # --- Entry point -----------------------------------------------------------
-def configure_logging(level: str) -> None:
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+def configure_logging(
+    level: str,
+    log_file: Optional[Path] = None,
+) -> None:
+    """Configure root logging so every line goes to stderr + (optionally) a file.
+
+    ``level`` is the textual level name (``debug`` / ``info`` /
+    ``warn`` / ``error``) as it appears in the YAML config. Unknown
+    values fall back to ``INFO`` to match the historical behaviour
+    where typos in the config never silently disabled the log.
+
+    ``log_file`` is an optional path; when set, an additional
+    ``FileHandler`` with the same format and level is attached so
+    every log line lands both on stderr (for journald/docker logs)
+    and on disk (for ``tail -f`` / Filebeat / Vector). The parent
+    directory is created if it does not yet exist so the operator
+    does not have to ``mkdir -p`` before each fresh install.
+
+    The function is idempotent: a second call with the same
+    arguments replaces the prior handlers instead of stacking new
+    ones, so a unit-test harness that calls it twice does not see
+    duplicate lines.
+
+    Raises ``OSError`` if ``log_file`` cannot be opened — the
+    operator picked the path deliberately, so silently falling back
+    to stderr would hide a real misconfiguration. The caller
+    (``main``) catches and exits non-zero with a clear message.
+    """
     numeric = {
         "debug": logging.DEBUG,
         "info": logging.INFO,
@@ -1910,11 +1962,56 @@ def configure_logging(level: str) -> None:
         "warning": logging.WARNING,
         "error": logging.ERROR,
     }.get(level, logging.INFO)
+
+    # ``basicConfig`` is a no-op if any handler is already attached
+    # on the root logger, so on second-and-later calls we have to
+    # reach in and re-shape the handler list ourselves. Walk every
+    # existing handler and either replace its level (for the
+    # stderr one) or drop it (we always re-add the file handler
+    # below).
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
     logging.basicConfig(
         level=numeric,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S%z",
+        format=_LOG_FORMAT,
+        datefmt=_LOG_DATEFMT,
     )
+
+    if log_file is not None:
+        # ``Path`` objects from ``Path(...)`` already normalise
+        # through ``expanduser`` in ``ServerConfig``; we still
+        # ``resolve`` here so a relative path passed via the CLI is
+        # pinned to the operator's cwd rather than the server's
+        # later cwd (which would change if systemd restarts us).
+        target = Path(log_file).expanduser()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # A failure to create the parent directory is fatal:
+            # the operator asked for a file and we cannot honour it,
+            # so surface the error and let ``main`` decide whether
+            # to continue with stderr-only logging or bail.
+            raise FileNotFoundError(
+                f"could not create log_file parent directory {target.parent}: {exc}"
+            ) from exc
+        try:
+            file_handler = logging.FileHandler(target, encoding="utf-8")
+        except OSError as exc:
+            raise FileNotFoundError(
+                f"could not open log_file {target}: {exc}"
+            ) from exc
+        file_handler.setLevel(numeric)
+        file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+        root.addHandler(file_handler)
+        # Surface the resolved path through the package logger so
+        # the operator can grep for it in their existing log feed
+        # even if the file handler itself silently fails later.
+        LOG.info(
+            "log_file enabled path=%s level=%s",
+            target,
+            logging.getLevelName(numeric),
+        )
 
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
@@ -1983,6 +2080,11 @@ def _redactConfigForLog(config: ServerConfig) -> Dict[str, Any]:
             "host": config.host,
             "port": config.port,
             "log_level": config.log_level,
+            # ``log_file`` is an operator-chosen path, not a secret,
+            # so we surface it verbatim. ``None`` (no file
+            # configured) renders as the string ``"(none)"`` in the
+            # log so the operator can grep for it.
+            "log_file": str(config.log_file) if config.log_file else "(none)",
             "trust_xff": config.trust_xff,
         },
         "storage": {
@@ -2011,13 +2113,14 @@ def _logStartupConfig(config: ServerConfig) -> None:
     """
     safe = _redactConfigForLog(config)
     LOG.info(
-        "config host=%s port=%d log_level=%s trust_xff=%s "
+        "config host=%s port=%d log_level=%s log_file=%s trust_xff=%s "
         "data_dir=%s max_body=%d max_queue=%d gzip_after_days=%d "
         "ack_timeout_seconds=%.2f admin_api_key=%s admin_key_set=%s "
         "loaded_from=%s",
         safe["server"]["host"],
         safe["server"]["port"],
         safe["server"]["log_level"],
+        safe["server"]["log_file"],
         safe["server"]["trust_xff"],
         safe["storage"]["data_dir"],
         safe["storage"]["max_body"],
@@ -2055,6 +2158,10 @@ def _sample_config_text() -> str:
         "  host: 0.0.0.0              # bind address. Use 127.0.0.1 for local-only.\n"
         "  port: 8088                 # listen port.\n"
         "  log_level: info            # debug | info | warn | error.\n"
+        "  log_file: \"\"               # Optional path to also write log lines to a file.\n"
+        "                             # Empty = stderr only. A non-empty path also\n"
+        "                             # opens a FileHandler so journalctl-equivalent\n"
+        "                             # lines land on disk for tail -f / Vector.\n"
         "  trust_xff: false           # true when behind a reverse proxy that forwards client IPs.\n"
         "\n"
         "storage:\n"
@@ -2103,6 +2210,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "host": config.host,
                         "port": config.port,
                         "log_level": config.log_level,
+                        # ``None`` (no file) prints as ``null`` so
+                        # the operator can tell at a glance whether
+                        # stderr-only logging is active.
+                        "log_file": str(config.log_file) if config.log_file else None,
                         "trust_xff": config.trust_xff,
                     },
                     "storage": {
@@ -2125,7 +2236,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
     apply_args(config, args)
-    configure_logging(config.log_level)
+    try:
+        configure_logging(config.log_level, config.log_file)
+    except (FileNotFoundError, OSError) as exc:
+        # ``configure_logging`` raises ``FileNotFoundError`` when the
+        # configured ``log_file`` cannot be opened. The operator
+        # picked the path deliberately, so we surface the failure
+        # and exit non-zero instead of silently degrading to
+        # stderr-only logging — that would hide a real
+        # misconfiguration from the very person who asked for the
+        # feature.
+        print(f"ps-metrics: failed to configure log_file: {exc}", file=sys.stderr)
+        return 1
     # Operator-visible "I am starting up" line. Captures PID, the
     # Python version, and the on-disk executable path so the journal
     # can answer "what version is actually running on this host?"
