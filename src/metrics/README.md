@@ -17,33 +17,64 @@ feed any of these backends with zero glue code.
 ## Quick start
 
 ```bash
-# Default port 8088, data dir ./var/metrics
-python3 src/metrics/server.py
+# Default port 8088, data dir ./var/metrics, config /etc/ps-metrics.yaml
+# (or ./ps-metrics.yaml if no /etc file is present).
+python3 src/metrics/ps-metrics.py
 
-# Production-style override
-PSN_METRICS_PORT=8088 \
-PSN_METRICS_DATA_DIR=/var/lib/packetsnitch/metrics \
-PSN_METRICS_GZIP_OLD=7 \
-PSN_METRICS_MAX_BODY=1048576 \
-python3 src/metrics/server.py
+# See the merged config (secrets redacted; safe to share).
+python3 src/metrics/ps-metrics.py --print-config
+
+# Write a fully-commented starter config and exit.
+python3 src/metrics/ps-metrics.py --generate-config /etc/ps-metrics.yaml
+
+# Generate a high-entropy admin API key.
+python3 src/metrics/ps-metrics.py --generate-api-key
 ```
 
 The server is a normal stdlib `http.server` — run it under systemd, runit,
 supervisord, Docker, or behind any reverse proxy (nginx, Caddy, Traefik).
 
-## Configuration (env vars)
+## Configuration
 
-| Variable                    | Default               | Description                                       |
-| --------------------------- | --------------------- | ------------------------------------------------- |
-| `PSN_METRICS_PORT`          | `8088`                | TCP listen port                                   |
-| `PSN_METRICS_HOST`          | `0.0.0.0`             | Bind address                                      |
-| `PSN_METRICS_DATA_DIR`      | `./var/metrics`       | Where NDJSON files are written                    |
-| `PSN_METRICS_MAX_BODY`      | `1048576` (1 MiB)     | Max POST body size in bytes                       |
-| `PSN_METRICS_MAX_QUEUE`     | `1024`                | Max in-flight batches buffered in memory          |
-| `PSN_METRICS_GZIP_OLD`      | `7`                   | Compress files older than N days on rotate (`0` = always, no way to disable) |
-| `PSN_METRICS_ACK_TIMEOUT`   | `5`                   | Seconds the HTTP client waits for disk ack        |
-| `PSN_METRICS_TRUST_XFF`     | `0`                   | Honor `X-Forwarded-For` from a trusted proxy      |
-| `PSN_METRICS_LOG_LEVEL`     | `info`                | `debug`, `info`, `warn`, `error`                  |
+The canonical config file is `/etc/ps-metrics.yaml`. Any key there can be
+overridden by a `PSN_METRICS_<KEY>` environment variable (e.g.
+`PSN_METRICS_PORT=9000` overrides `server.port`). The precedence is, from
+highest to lowest:
+
+1. `PSN_METRICS_*` environment variables
+2. `--config <path>` CLI flag (or `PSN_METRICS_CONFIG`)
+3. `/etc/ps-metrics.yaml`
+4. `$XDG_CONFIG_HOME/ps-metrics.yaml` (or `~/.config/ps-metrics.yaml`)
+5. `./ps-metrics.yaml` in the current working directory
+6. Built-in defaults
+
+The shipped example (`src/metrics/ps-metrics.yaml.example`) documents every
+key. The three top-level sections are:
+
+| Section   | Keys                                                            |
+| --------- | --------------------------------------------------------------- |
+| `server`  | `host`, `port`, `log_level`, `trust_xff`                        |
+| `storage` | `data_dir`, `max_body`, `max_queue`, `gzip_after_days`, `ack_timeout_seconds` |
+| `admin`   | `api_key`, `list_limit`                                         |
+
+The `admin.api_key` value is a high-entropy shared secret. Leave it
+empty to disable the admin endpoints entirely (they will return 404 in
+that mode). Generate one with `ps-metrics.py --generate-api-key`.
+
+### Legacy env vars
+
+A few settings retain their old single-name env vars for backwards
+compatibility. They map to the YAML keys below:
+
+| Env var                       | YAML key                       |
+| ----------------------------- | ------------------------------ |
+| `PSN_METRICS_DATA_DIR`        | `storage.data_dir`             |
+| `PSN_METRICS_MAX_BODY`        | `storage.max_body`             |
+| `PSN_METRICS_MAX_QUEUE`       | `storage.max_queue`            |
+| `PSN_METRICS_GZIP_OLD`        | `storage.gzip_after_days`      |
+| `PSN_METRICS_ACK_TIMEOUT`     | `storage.ack_timeout_seconds`  |
+| `PSN_METRICS_API_KEY`         | `admin.api_key`                |
+| `PSN_METRICS_LIST_LIMIT`      | `admin.list_limit`             |
 
 ## Wire protocol
 
@@ -72,6 +103,142 @@ codes: `400` (bad payload), `413` (too big), `503` (queue full), `504`
 
 `GET /healthz` returns the current queue depth, totals, and the last
 client seen — useful for liveness probes and Grafana dashboards.
+
+## Talking to the endpoint with curl
+
+The server is a plain HTTP/1.1 socket, so any HTTP client works. The
+recipes below assume the server is running locally on `127.0.0.1:8088`
+and that an admin API key has been written into `/etc/ps-metrics.yaml`
+as `admin.api_key`. Replace the host/port/key to match your install.
+
+### Submit a batch
+
+```bash
+curl -sS -X POST http://127.0.0.1:8088/mhook \
+    -H 'Content-Type: application/json' \
+    --data-binary '{
+  "installId": "01234567-89ab-cdef-0123-456789abcdef",
+  "appVersion": "1.4.0",
+  "platform": "linux",
+  "sentAt": "2026-07-28T12:00:00Z",
+  "events": [
+    { "ts": "2026-07-28T12:00:00Z", "name": "tab.open",
+      "props": { "tab": "summary" } },
+    { "ts": "2026-07-28T12:00:01Z", "name": "filter.apply",
+      "props": { "ok": true, "durationMs": 12.5 } }
+  ]
+}'
+# {"status":"accepted","events":2}
+```
+
+A successful response is `202 Accepted`:
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST \
+    http://127.0.0.1:8088/mhook \
+    -H 'Content-Type: application/json' \
+    --data-binary '{"installId":"01234567-89ab-cdef-0123-456789abcdef","appVersion":"1.4.0","platform":"linux","sentAt":"2026-07-28T12:00:00Z","events":[]}'
+# 202
+```
+
+### Healthz (no auth required)
+
+```bash
+curl -sS http://127.0.0.1:8088/healthz | jq
+# {
+#   "uptime_s": 1234,
+#   "queue_depth": 0,
+#   "totals": {
+#     "events": 42,
+#     "installs": 7,
+#     "errors": 1,
+#     "batches": 5,
+#     "rejected": 0
+#   },
+#   "unique_installs": 7,
+#   "last_client_at": "2026-07-28T12:00:00Z",
+#   "last_client_ip": "203.0.113.42"
+# }
+```
+
+Use it as a Kubernetes / systemd liveness probe:
+
+```yaml
+# pod spec
+livenessProbe:
+  httpGet: { path: /healthz, port: 8088 }
+  periodSeconds: 30
+```
+
+### Admin endpoints (behind the API key)
+
+The three `/admin/*` routes are gated by `X-Admin-Key` (or
+`Authorization: Bearer ...`). All three return JSON. Send the key via
+either header — neither is preferred, pick whichever fits your tooling.
+
+```bash
+ADMIN_KEY='KEYGOESHERE'  # from --generate-api-key
+
+# Aggregated counters + queue depth + uptime.
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" \
+    http://127.0.0.1:8088/admin/stats | jq
+
+# Last 100 install heartbeats (cap with ?limit=N up to 1000).
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" \
+    'http://127.0.0.1:8088/admin/installs?limit=20' | jq
+
+# Last 100 error.* events. Same limit parameter.
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" \
+    'http://127.0.0.1:8088/admin/errors?limit=50' | jq
+
+# Bearer form is equivalent.
+curl -sS -H "Authorization: Bearer $ADMIN_KEY" \
+    http://127.0.0.1:8088/admin/stats | jq
+```
+
+Without a key you get a 401:
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" \
+    http://127.0.0.1:8088/admin/stats
+# 401
+```
+
+If `admin.api_key` is empty in the config, the endpoints are turned off
+entirely and return 404 — so a typo will never silently expose admin
+data:
+
+```bash
+curl -sS -o /dev/null -w "%{http_code}\n" \
+    -H "X-Admin-Key: $ADMIN_KEY" \
+    http://127.0.0.1:8088/admin/stats
+# 404
+```
+
+### One-liner smoke test
+
+After a fresh install, run the whole loop in one shell:
+
+```bash
+ADMIN_KEY="$(python3 src/metrics/ps-metrics.py --generate-api-key)"
+echo "admin.api_key: \"$ADMIN_KEY\"" >> /etc/ps-metrics.yaml
+sudo systemctl restart packetsnitch-metrics
+
+curl -sS http://127.0.0.1:8088/healthz | jq
+curl -sS -X POST http://127.0.0.1:8088/mhook \
+    -H 'Content-Type: application/json' \
+    -d '{"installId":"01234567-89ab-cdef-0123-456789abcdef","appVersion":"1.4.0","platform":"linux","sentAt":"2026-07-28T12:00:00Z","events":[]}'
+curl -sS -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:8088/admin/stats | jq
+```
+
+### curl flags worth knowing
+
+| Flag                       | Why                                                      |
+| -------------------------- | -------------------------------------------------------- |
+| `--data-binary @file.json` | Send a batch from disk without shell quoting headaches.  |
+| `-w "\n%{http_code}\n"`    | Print the status code after the body for quick checks.   |
+| `--max-time 5`             | Cap the request so a stuck server can't hang your script. |
+| `-H 'X-Forwarded-For: ...'`| Test `trust_xff: true` behaviour without a real proxy.   |
 
 ## On-disk layout
 
@@ -174,7 +341,7 @@ against `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$`.
 ## Testing
 
 ```bash
-python3 -m unittest tests/test_metrics_server.py -v
+.venv/bin/python -m pytest tests/test_metrics_server.py -v
 ```
 
 The tests are stdlib-only, run in-process, and cover:
@@ -185,6 +352,8 @@ The tests are stdlib-only, run in-process, and cover:
 - HTTP edge cases (400/404/413/503/504)
 - Concurrent client writes
 - X-Forwarded-For trust when behind a proxy
+- Dropped-connection teardown (`ConnectionResetError`, broken pipe)
+- YAML config loader, env-var precedence, and `/admin/*` auth gating
 
 ## Production notes
 
@@ -206,7 +375,7 @@ The tests are stdlib-only, run in-process, and cover:
 The unit file ships next to the server at
 `src/metrics/packetsnitch-metrics.service`. It is intentionally
 parameterised — every value the operator is expected to override is
-flagged with an `; EDIT N —` comment block inside the file. The same
+flagged with an `; EDIT` comment block inside the file. The same
 unit works for both a per-user daemon and a system-wide install.
 
 ```bash
@@ -232,16 +401,26 @@ To make the service survive logout, enable lingering once:
 sudo loginctl enable-linger "$USER"
 ```
 
-For a system-wide install, copy the unit to
+For a system-wide install, use the helper script — it lays down the
+binary, the unit, the `/etc/ps-metrics.yaml` starter config, and an
+admin API key in one shot:
+
+```bash
+sudo scripts/install-metrics.sh
+sudo journalctl -u packetsnitch-metrics -f
+curl -s http://127.0.0.1:8088/healthz | jq
+```
+
+If you'd rather drive the install by hand, copy the unit to
 `/etc/systemd/system/packetsnitch-metrics.service`, walk through the
 `EDIT` blocks in the file to switch the paths and user, then reload:
 
 ```bash
 sudo cp src/metrics/packetsnitch-metrics.service \
         /etc/systemd/system/packetsnitch-metrics.service
-# Open the file and update EDIT 2 (running user), EDIT 4 (data dir)
-# and EDIT 6/8 (interpreter + filesystem paths) to point at the
-# service account's home and data dir, e.g. /var/lib/packetsnitch.
+# Open the file and update EDIT 1 (running user), EDIT 2 (config
+# path) and EDIT 3 (data dir) to point at the service account's
+# home and data dir, e.g. /var/lib/packetsnitch.
 sudo install -d -o packetsnitch -g packetsnitch -m 0750 \
         /var/lib/packetsnitch/metrics
 sudo install -d -o packetsnitch -g packetsnitch -m 0755 \
@@ -249,3 +428,9 @@ sudo install -d -o packetsnitch -g packetsnitch -m 0755 \
 sudo systemctl daemon-reload
 sudo systemctl enable --now packetsnitch-metrics
 ```
+
+The unit reads its settings from `/etc/ps-metrics.yaml`. Override any
+single key by exporting a matching `PSN_METRICS_*` env var inside the
+unit, or by passing `--config /path/to/other.yaml` to `ExecStart`.
+See [Configuration](#configuration) above for the full precedence
+list.
