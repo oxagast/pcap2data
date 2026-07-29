@@ -240,25 +240,26 @@ function init({ appVersion = "" } = {}) {
         return metrics;
     }
     const privacy = getPrivacy();
-    // On first run we deliberately do NOT generate an install id. The
-    // user must opt in (or out) via the consent prompt before any
-    // identifying information is written to ``settings.json``. This
-    // also avoids the previous behaviour where a partial update to
-    // set the install id would clobber the user's other privacy
-    // settings.
+    // The install id is a stable per-install marker, not a tracking
+    // payload. Generate it on first run regardless of metrics consent
+    // so the catalog server (and other non-tracking features like
+    // license reconciliation) can personalize responses for this
+    // install. The id is *only* sent to the metrics endpoint when the
+    // user has opted in to metrics — see ``flushMetricsQueue`` /
+    // ``buildMetricsFlushBody``. For opted-out installs the id stays
+    // on disk and is reused for catalog / license calls but never
+    // accompanies a metrics POST.
     let id = String(privacy.metricsInstallId || "").trim();
-    if (!id && privacy.metricsEnabled === true) {
-        // The user previously opted in (legacy install) and we just
-        // haven't stamped the id yet. Backfill it on the next
-        // settings save.
+    if (!id) {
         id = generateInstallId();
-        persistInstallId(id);
+        // Best-effort persist; the in-memory copy is what matters for
+        // the rest of this run even if the IPC write fails.
+        try {
+            persistInstallId(id);
+        } catch (_error) {
+            // ignore: we still have the id in memory
+        }
     }
-    // Always overwrite the install id so a previous test run
-    // (or a previous main-frontend session) cannot leak through
-    // into a clean-install test path. A clean install keeps the
-    // empty string here until ``recordConsent(true)`` stamps a
-    // real id.
     metrics.installId = id;
     metrics.appVersion = String(appVersion || "");
     metrics.initialized = true;

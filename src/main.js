@@ -858,6 +858,9 @@ async function flushMetricsQueue(payload) {
     events,
   };
   try {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush begin endpoint=${parsedUrl.host} events=${events.length} installIdPresent=${Boolean(body.installId)}`,
+    );
     const response = await undiciFetch(parsedUrl.href, {
       method: "POST",
       headers: {
@@ -871,6 +874,9 @@ async function flushMetricsQueue(payload) {
     });
     const status = response.status;
     const ok = status >= 200 && status < 300;
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush ok endpoint=${parsedUrl.host} status=${status} sent=${events.length}`,
+    );
     return {
       ok,
       status,
@@ -2303,8 +2309,31 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = THEME_SERVER_HTTP_TI
   if (typeof timeoutId.unref === "function") {
     timeoutId.unref();
   }
+  const startMs = Date.now();
+  const method = String(init && init.method ? init.method : "GET").toUpperCase();
+  if (typeof appendActivityLogLine === "function") {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] fetchWithTimeout begin method=${method} url=${url} timeoutMs=${effectiveTimeoutMs}`,
+    );
+  }
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const elapsedMs = Date.now() - startMs;
+    if (typeof appendActivityLogLine === "function") {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] fetchWithTimeout ok method=${method} url=${url} status=${response.status} elapsedMs=${elapsedMs}`,
+      );
+    }
+    return response;
+  } catch (error) {
+    const elapsedMs = Date.now() - startMs;
+    const isAbort = error && (error.name === "AbortError" || /aborted/i.test(String(error.message || "")));
+    if (typeof appendActivityLogLine === "function") {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] fetchWithTimeout fail method=${method} url=${url} elapsedMs=${elapsedMs} aborted=${isAbort} name=${error && error.name ? error.name : "?"} message=${JSON.stringify((error && error.message) || String(error))} code=${error && error.code ? error.code : "?"} cause=${JSON.stringify((error && error.cause) || null)}`,
+      );
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -2430,9 +2459,16 @@ async function fetchAndCacheTheme(themeId) {
   if (!isThemeServerConfigured()) return null;
   const normalizedId = sanitizeThemeId(themeId, "");
   if (!normalizedId) return null;
+  const downloadUrl = buildThemeServerUrl(`/themes/${encodeURIComponent(normalizedId)}/download`);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] fetchAndCacheTheme begin themeId=${normalizedId} url=${downloadUrl}`,
+  );
   const rawBuffer = await fetchThemeServerBuffer(`/themes/${encodeURIComponent(normalizedId)}/download`);
   const rawText = rawBuffer.toString("utf8");
   const filePath = await writeThemeToCache(normalizedId, rawText);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] fetchAndCacheTheme ok themeId=${normalizedId} bytes=${rawBuffer.length} filePath=${filePath}`,
+  );
   return filePath;
 }
 
@@ -2443,19 +2479,31 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   if (!force) {
     const since = Date.now() - lastThemeLicenseCheckAtMs;
     if (since < 60 * 1000) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses cached since=${since}ms`,
+      );
       return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, cached: true };
     }
   }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses begin force=${force} installUuid=${getThemeServerInstallUuid() ? "present" : "empty"}`,
+  );
   let payload;
   try {
     payload = await fetchThemeServerJson("/licenses", { params: { force: force ? "1" : "0" } });
   } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses failed message=${JSON.stringify(error?.message || String(error))}`,
+    );
     return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, error: error.message };
   }
   const ownedIds = Array.isArray(payload?.ownedThemeIds) ? payload.ownedThemeIds : [];
   const sanitizedOwned = ownedIds
     .map((entry) => sanitizeThemeId(entry, ""))
     .filter((entry) => entry);
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses ok ownedCount=${sanitizedOwned.length} payloadKeys=${payload && typeof payload === "object" ? Object.keys(payload).join(",") : "n/a"}`,
+  );
   const previouslyOwned = new Set(cachedPurchasedThemeIds);
   const newlyUnlocked = sanitizedOwned.filter((id) => !previouslyOwned.has(id));
   for (const themeId of sanitizedOwned) {
@@ -2891,6 +2939,16 @@ function createWindow() {
     // Start the metrics flush loop now that the renderer is ready to
     // accept `metrics:flush-request` messages. The timer is unref()'d so
     // it never blocks process exit.
+    {
+      const startupSettings = getAppSettings();
+      const startupInstallId = String(startupSettings?.privacy?.metricsInstallId || "").trim();
+      const startupMetricsEnabled = Boolean(startupSettings?.privacy?.metricsEnabled);
+      const startupThemeUrl = String(startupSettings?.general?.themeServerBaseUrl || "").trim();
+      const startupMetricsUrl = String(startupSettings?.privacy?.metricsEndpointUrl || "").trim();
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] Startup connections summary installUuidPresent=${Boolean(startupInstallId)} installUuidPrefix=${startupInstallId ? startupInstallId.slice(0, 8) : "n/a"} metricsEnabled=${startupMetricsEnabled} themeServerConfigured=${Boolean(startupThemeUrl)} themeServerUrl=${startupThemeUrl || "<empty>"} metricsEndpointConfigured=${Boolean(startupMetricsUrl)} metricsEndpointUrl=${startupMetricsUrl || "<empty>"}`,
+      );
+    }
     installMetricsFlushTimer();
     requestMetricsFlushFromRenderer();
     installThemeRecacheTimer();
@@ -3961,13 +4019,26 @@ ipcMain.handle("themes-directory", async () => {
 });
 
 ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
+  const configuredBaseUrl = getThemeServerBaseUrl();
   if (!isThemeServerConfigured()) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] themes-catalog skipped: themeServerBaseUrl is empty`,
+    );
     return { success: false, error: "Theme server URL is not configured", entries: [] };
   }
   try {
+    const catalogUrl = buildThemeServerUrl("/catalog", {
+      force: payload?.force ? "1" : "0",
+    });
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] themes-catalog fetching url=${catalogUrl} base=${configuredBaseUrl}`,
+    );
     const catalog = await fetchThemeServerJson("/catalog", {
       params: { force: payload?.force ? "1" : "0" },
     });
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] themes-catalog response keys=${catalog && typeof catalog === "object" ? Object.keys(catalog).join(",") : "<non-object>"} rawEntries=${Array.isArray(catalog?.entries) ? catalog.entries.length : "n/a"}`,
+    );
     const rawEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
     const cachedIds = new Set(await readCachedThemeIds());
     const ownedIds = new Set(cachedPurchasedThemeIds);
@@ -3995,7 +4066,29 @@ ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
       .filter(Boolean);
     return { success: true, entries };
   } catch (error) {
-    return { success: false, error: error?.message || String(error || "Unknown error"), entries: [] };
+    const rawMessage = error?.message || String(error || "Unknown error");
+    const causeCode = error?.cause?.code || error?.code || "";
+    // Translate undici's generic "fetch failed" into an actionable hint.
+    // The most common cause is a plain-http:// URL pointing at an
+    // HTTPS-only catalog server (ECONNREFUSED in ~80ms). Surfacing the
+    // scheme mismatch in the UI saves a debug session.
+    let friendlyMessage = rawMessage;
+    if (/^fetch failed$/i.test(rawMessage) || causeCode === "ECONNREFUSED") {
+      const configuredScheme = (() => {
+        try {
+          return new URL(configuredBaseUrl).protocol;
+        } catch (_e) {
+          return "";
+        }
+      })();
+      friendlyMessage = configuredScheme === "http:"
+        ? `Could not reach theme server (${configuredBaseUrl}). The catalog server only accepts HTTPS — change the theme server URL to https://${(function () { try { return new URL(configuredBaseUrl).host; } catch (_e) { return ""; } })()} and try again.`
+        : `Could not reach theme server (${configuredBaseUrl || "unknown host"}). Verify the URL, your network connection, and that the server is online.`;
+    }
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] themes-catalog failed base=${configuredBaseUrl} causeCode=${causeCode || "?"} friendlyMessage=${JSON.stringify(friendlyMessage)}`,
+    );
+    return { success: false, error: friendlyMessage, entries: [] };
   }
 });
 

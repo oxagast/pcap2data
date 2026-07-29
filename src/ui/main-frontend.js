@@ -2859,11 +2859,24 @@ async function refreshThemesCatalog({ force = false } = {}) {
   try {
     const result = await window.themeapi.listCatalog({ force });
     themesCatalogEntries = Array.isArray(result?.entries) ? result.entries : [];
-    setThemesCatalogStatus(
-      themesCatalogEntries.length === 0
-        ? "No themes are available for purchase right now."
-        : `Loaded ${themesCatalogEntries.length} theme(s).`,
-    );
+    if (result && result.success === false) {
+      // The main process already produced a human-readable error
+      // message (e.g. "Could not reach theme server… change to https://…
+      // and try again"). Surface it verbatim instead of the generic
+      // "no themes" line, which was hiding protocol-mismatch bugs.
+      setThemesCatalogStatus(
+        result.error
+          ? `Unable to load theme catalog: ${result.error}`
+          : "Unable to load theme catalog.",
+        { isError: true },
+      );
+    } else {
+      setThemesCatalogStatus(
+        themesCatalogEntries.length === 0
+          ? "No themes are available for purchase right now."
+          : `Loaded ${themesCatalogEntries.length} theme(s).`,
+      );
+    }
     renderThemesCatalog();
   } catch (error) {
     console.warn("Unable to load theme catalog:", error);
