@@ -10,5 +10,7 @@
     "jest.testExplorer": true,
     "editor.emptySelectionClipboard": false,
     "editor.selectionClipboard": false,
-    "editor.copyWithSyntaxHighlighting": false
+    "editor.copyWithSyntaxHighlighting": false,
+    "ollama-autopilot.general.autopilotEnabled": true,
+    "ollama-autopilot.model.modelName": "minimax-m3:cloud"
 }
