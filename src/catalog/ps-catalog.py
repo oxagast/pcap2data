@@ -999,24 +999,44 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
     else:
         preview_image = str(preview_image)
 
+    paddle = raw.get("paddle") or {}
+    paddle_product_id = str(
+        args.paddle_product_id
+        if getattr(args, "paddle_product_id", None)
+        else paddle.get("productId") or ""
+    )
+    paddle_price_id = str(
+        args.paddle_price_id
+        if getattr(args, "paddle_price_id", None)
+        else paddle.get("priceId") or ""
+    )
+    checkout_url = str(
+        args.checkout_url
+        if getattr(args, "checkout_url", None)
+        else raw.get("checkoutUrl") or ""
+    )
+
     db.upsert_theme(
         theme_id=theme_id,
         name=name,
         description=description,
         price_cents=_safe_int(raw.get("priceCents")),
         price_label=str(raw.get("priceLabel") or ""),
-        paddle_product_id=str(
-            (raw.get("paddle") or {}).get("productId") or ""
-        ),
-        paddle_price_id=str(
-            (raw.get("paddle") or {}).get("priceId") or ""
-        ),
+        paddle_product_id=paddle_product_id,
+        paddle_price_id=paddle_price_id,
         preview_image=preview_image,
         preview_filename=str(args.preview_filename or ""),
-        checkout_url=str(raw.get("checkoutUrl") or ""),
+        checkout_url=checkout_url,
         license_url=str(raw.get("licenseUrl") or ""),
     )
-    LOG.info("Registered theme %s (file=%s)", theme_id, target)
+    LOG.info(
+        "Registered theme %s (file=%s, paddle_product=%s, paddle_price=%s, checkout=%s)",
+        theme_id,
+        target,
+        paddle_product_id or "-",
+        paddle_price_id or "-",
+        checkout_url or "(auto)",
+    )
     db.close()
     return 0
 
@@ -1140,6 +1160,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--preview-filename",
         default=None,
         help="Optional preview filename in the previews dir",
+    )
+    p_add_theme.add_argument(
+        "--paddle-product-id",
+        dest="paddle_product_id",
+        default=None,
+        help="Paddle product ID (e.g. pro_01hxxx). Overrides JSON's paddle.productId.",
+    )
+    p_add_theme.add_argument(
+        "--paddle-price-id",
+        dest="paddle_price_id",
+        default=None,
+        help="Paddle price ID (e.g. pri_01hxxx). Overrides JSON's paddle.priceId.",
+    )
+    p_add_theme.add_argument(
+        "--checkout-url",
+        dest="checkout_url",
+        default=None,
+        help="Pre-built Paddle checkout URL to redirect buyers to.",
     )
     p_add_theme.set_defaults(func=cmd_add_theme)
 
