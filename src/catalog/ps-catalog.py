@@ -52,6 +52,10 @@ Environment variables (all optional; CLI flags override):
                                                  Paddle webhook signatures)
     PS_CATALOG_PADDLE_PUBLIC_KEY      default unset (recommended; used for
                                                  webhook signature verification)
+    PS_CATALOG_PADDLE_API_KEY         default unset (required to create
+                                                 dynamic Hosted Checkout
+                                                 sessions per click)
+    PS_CATALOG_PADDLE_ENV             "live" or "sandbox" (default "live")
     PS_CATALOG_BASE_URL   default http://127.0.0.1:9021   (used to build
                                                           absolute checkout
                                                           URLs)
@@ -102,6 +106,14 @@ DEFAULT_DB = "catalog.sqlite3"
 DEFAULT_THEMES_DIR = "themes"
 DEFAULT_PREVIEWS_DIR = "previews"
 
+# Paddle API base URLs. Sandbox is used when PADDLE_ENV=sandbox; otherwise live.
+# https://developer.paddle.com/api-reference/overview
+PADDLE_API_BASE_LIVE = "https://api.paddle.com"
+PADDLE_API_BASE_SANDBOX = "https://sandbox-api.paddle.com"
+# Hosted-checkout URLs returned by the transactions API begin with one of these.
+PADDLE_CHECKOUT_HOST_LIVE = "https://pay.paddle.com"
+PADDLE_CHECKOUT_HOST_SANDBOX = "https://sandbox-pay.paddle.io"
+
 THEME_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 INSTALL_UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -143,7 +155,25 @@ class Config:
     previews_dir: Path
     paddle_webhook_secret: Optional[str]
     paddle_public_key: Optional[str]
+    paddle_api_key: Optional[str]
+    paddle_env: str  # "live" or "sandbox"
     base_url: str
+
+    @property
+    def paddle_api_base(self) -> str:
+        return (
+            PADDLE_API_BASE_SANDBOX
+            if self.paddle_env == "sandbox"
+            else PADDLE_API_BASE_LIVE
+        )
+
+    @property
+    def paddle_checkout_host(self) -> str:
+        return (
+            PADDLE_CHECKOUT_HOST_SANDBOX
+            if self.paddle_env == "sandbox"
+            else PADDLE_CHECKOUT_HOST_LIVE
+        )
 
     @classmethod
     def from_env_and_args(cls, args: argparse.Namespace) -> "Config":
@@ -169,6 +199,18 @@ class Config:
             or os.environ.get("PS_CATALOG_PADDLE_PUBLIC_KEY")
             or None
         )
+        paddle_api_key = (
+            args.paddle_api_key
+            or os.environ.get("PS_CATALOG_PADDLE_API_KEY")
+            or None
+        )
+        paddle_env = (
+            args.paddle_env
+            or os.environ.get("PS_CATALOG_PADDLE_ENV")
+            or "live"
+        ).strip().lower()
+        if paddle_env not in ("live", "sandbox"):
+            paddle_env = "live"
         base_url = (
             args.base_url
             or os.environ.get("PS_CATALOG_BASE_URL")
@@ -182,6 +224,8 @@ class Config:
             previews_dir=previews_dir,
             paddle_webhook_secret=paddle_webhook_secret,
             paddle_public_key=paddle_public_key,
+            paddle_api_key=paddle_api_key,
+            paddle_env=paddle_env,
             base_url=base_url.rstrip("/"),
         )
 
@@ -189,6 +233,125 @@ class Config:
 # ---------------------------------------------------------------------------
 # Database layer
 # ---------------------------------------------------------------------------
+
+
+class PaddleError(Exception):
+    """Raised when Paddle returns an error or the call cannot complete."""
+
+    def __init__(self, message: str, status: int = 0, body: str = ""):
+        super().__init__(message)
+        self.status = status
+        self.body = body
+
+
+def create_paddle_transaction(
+    config: "Config",
+    *,
+    price_id: str,
+    install_uuid: str,
+    theme_id: str,
+    success_url: Optional[str] = None,
+    cancel_url: Optional[str] = None,
+    timeout_s: float = 10.0,
+) -> str:
+    """Create a new Paddle transaction and return the hosted-checkout URL.
+
+    Paddle returns a unique `https://.../hsc_<token>` URL per call, which
+    can be opened in the user's default browser. The transaction is bound
+    to ``price_id`` plus a ``custom_data`` payload carrying our ``installUuid``
+    and ``themeId`` so the webhook handler knows which license to grant.
+
+    Requires ``config.paddle_api_key``. Raises ``PaddleError`` on any HTTP
+    or parse error.
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    if not config.paddle_api_key:
+        raise PaddleError(
+            "Paddle API key is not configured (set --paddle-api-key or "
+            "PS_CATALOG_PADDLE_API_KEY)"
+        )
+    if not price_id:
+        raise PaddleError("price_id is required")
+
+    payload = {
+        "items": [{"price_id": price_id, "quantity": 1}],
+        "custom_data": {
+            "installUuid": install_uuid,
+            "themeId": theme_id,
+        },
+    }
+    if success_url or cancel_url:
+        # Paddle accepts return URLs on the transaction so the buyer lands
+        # somewhere sensible after a successful/cancelled checkout. We send
+        # them only when the operator has configured a base_url, since
+        # otherwise we'd be sending an http://127.0.0.1 link that Paddle
+        # would refuse to redirect to.
+        if success_url:
+            payload["checkout"] = payload.get("checkout", {})
+            payload["checkout"]["success_url"] = success_url
+        if cancel_url:
+            payload["checkout"] = payload.get("checkout", {})
+            payload["checkout"]["cancel_url"] = cancel_url
+
+    body = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url=f"{config.paddle_api_base}/transactions",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.paddle_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            response_body = resp.read().decode("utf-8", errors="replace")
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        response_body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        raise PaddleError(
+            f"Paddle responded with HTTP {exc.code}: {exc.reason}",
+            status=exc.code,
+            body=response_body,
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise PaddleError(
+            f"Could not reach Paddle API: {exc.reason}"
+        ) from exc
+
+    if status >= 400:
+        raise PaddleError(
+            f"Paddle responded with HTTP {status}",
+            status=status,
+            body=response_body,
+        )
+
+    try:
+        parsed = _json.loads(response_body)
+    except _json.JSONDecodeError as exc:
+        raise PaddleError(
+            "Paddle response was not valid JSON",
+            status=status,
+            body=response_body,
+        ) from exc
+
+    checkout_url = (
+        parsed.get("data", {}).get("checkout", {}).get("url")
+        or parsed.get("data", {}).get("checkout_url")
+        or ""
+    )
+    if not checkout_url:
+        raise PaddleError(
+            "Paddle response did not include a checkout URL",
+            status=status,
+            body=response_body,
+        )
+    return checkout_url
 
 
 SCHEMA = """
@@ -318,8 +481,24 @@ class CatalogDB:
             )
 
     def delete_theme(self, theme_id: str) -> None:
+        """Remove a theme row but keep any existing license rows.
+
+        SQLite enforces `FOREIGN KEY (theme_id) REFERENCES themes(id)` and
+        `PRAGMA foreign_keys=ON` is set, so a plain DELETE would fail when
+        licenses still reference the theme. We temporarily disable FK
+        enforcement inside this transaction so the theme row can be
+        removed without revoking anyone's license.
+
+        Use `delete_theme_cascade` instead if you also want to drop the
+        license rows.
+        """
         with self._lock:
-            self.conn.execute("DELETE FROM themes WHERE id = ?", (theme_id,))
+            old = self.conn.execute("PRAGMA foreign_keys").fetchone()[0]
+            try:
+                self.conn.execute("PRAGMA foreign_keys = OFF")
+                self.conn.execute("DELETE FROM themes WHERE id = ?", (theme_id,))
+            finally:
+                self.conn.execute(f"PRAGMA foreign_keys = {old}")
 
     def delete_theme_cascade(self, theme_id: str) -> int:
         """Remove a theme and every license row that references it.
@@ -579,8 +758,15 @@ class CatalogHandler(BaseHTTPRequestHandler):
         if path.startswith("/previews/"):
             return self._handle_preview_file(path)
 
+        if path == "/checkout-success" or path == "/checkout-cancel":
+            return self._handle_checkout_return(path, parsed)
+
+        # /checkout/<id>  (exactly two path segments)
         if path.startswith("/checkout/"):
-            return self._handle_checkout_get(path)
+            segments = path.split("/")
+            if len(segments) == 3 and segments[0] == "" and segments[1] == "checkout":
+                return self._handle_checkout_get(path)
+            return self._write_json(404, {"error": "Not found"})
 
         if path == "/licenses":
             return self._handle_licenses(first("installUuid"))
@@ -589,6 +775,44 @@ class CatalogHandler(BaseHTTPRequestHandler):
             return self._handle_plugin_get(path)
 
         return self._write_json(404, {"error": "Not found"})
+
+    def _handle_checkout_return(
+        self, path: str, parsed: urllib.parse.ParseResult
+    ) -> None:
+        """Render a simple HTML thank-you / cancelled page after Paddle redirects the
+        buyer back to us. Paddle will append ``installUuid`` and ``themeId`` query
+        params to whichever URL we passed as ``success_url`` / ``cancel_url``."""
+        install_uuid = urllib.parse.parse_qs(parsed.query).get("installUuid", [""])[0]
+        theme_id = urllib.parse.parse_qs(parsed.query).get("themeId", [""])[0]
+        is_success = path == "/checkout-success"
+        title = "Purchase complete" if is_success else "Checkout cancelled"
+        body = (
+            "Your license will be granted automatically when Paddle finishes "
+            "processing the transaction. You can close this tab and return to "
+            "PacketSnitch."
+            if is_success
+            else
+            "No charges were made. You can close this tab and try again from "
+            "the PacketSnitch Themes subtab."
+        )
+        html = (
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+            f"<title>{title}</title>"
+            "<style>body{font-family:sans-serif;max-width:520px;margin:48px "
+            "auto;padding:0 16px;color:#222}h1{font-size:22px}a{color:#3a6df0}"
+            "</style></head><body>"
+            f"<h1>{title}</h1>"
+            f"<p>{body}</p>"
+            f"<p>installUuid: <code>{install_uuid}</code></p>"
+            f"<p>themeId: <code>{theme_id}</code></p>"
+            "</body></html>"
+        )
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html.encode("utf-8"))))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
 
     def _handle_catalog(self, install_uuid: str) -> None:
         themes = self.db.list_themes()
@@ -715,7 +939,7 @@ class CatalogHandler(BaseHTTPRequestHandler):
         )
 
     def _handle_checkout_get(self, path: str) -> None:
-        # /checkout/<id>
+        # /checkout/<id>?installUuid=<uuid>
         parts = path.split("/")
         if len(parts) != 3 or parts[0] != "" or parts[1] != "checkout":
             return self._write_json(404, {"error": "Not found"})
@@ -727,24 +951,83 @@ class CatalogHandler(BaseHTTPRequestHandler):
         if theme is None:
             return self._write_json(404, {"error": "Theme not found"})
 
-        # The theme row stores a Paddle "buy URL" if the operator pre-built one;
-        # otherwise we build a simple hosted-checkout URL ourselves. Paddle's
-        # hosted checkout URL format is documented at:
-        #   https://developer.paddle.com/concepts/sell/buy-links
-        # The operator can override this by setting `checkout_url` on the theme.
+        # If the operator pre-stored a static checkout URL, just redirect to
+        # it. Useful for sandbox testing with a single-use hsc_... token.
         if theme["checkout_url"]:
             return self._write_redirect(theme["checkout_url"])
 
-        # Build a buy-link-style URL. If we have a paddle_price_id, embed it;
-        # otherwise just link to the paddle checkout for the theme by id.
-        params = {"theme": theme_id}
-        if theme["paddle_price_id"]:
-            params["price"] = theme["paddle_price_id"]
-        url = (
-            f"https://buy.paddle.com/product/{urllib.parse.quote(theme_id)}"
-            f"?{urllib.parse.urlencode(params)}"
+        # No static URL: create a fresh Paddle Hosted Checkout session per
+        # click so each buyer gets a unique token (HSC tokens are one-shot).
+        install_uuid = self._query_param("installUuid")
+        if not install_uuid:
+            return self._write_json(
+                400,
+                {"error": "installUuid query parameter is required"},
+            )
+        if not INSTALL_UUID_RE.match(install_uuid):
+            return self._write_json(400, {"error": "Invalid installUuid"})
+
+        if not theme["paddle_price_id"]:
+            return self._write_json(
+                400,
+                {
+                    "error": (
+                        "Theme has no paddlePriceId and no static "
+                        "checkoutUrl; cannot start checkout"
+                    )
+                },
+            )
+        if not self.config.paddle_api_key:
+            return self._write_json(
+                503,
+                {
+                    "error": (
+                        "Paddle API key is not configured on the catalog "
+                        "server (set --paddle-api-key or "
+                        "PS_CATALOG_PADDLE_API_KEY)"
+                    )
+                },
+            )
+
+        try:
+            checkout_url = create_paddle_transaction(
+                self.config,
+                price_id=theme["paddle_price_id"],
+                install_uuid=install_uuid,
+                theme_id=theme_id,
+                success_url=f"{self.config.base_url}/checkout-success?installUuid={install_uuid}&themeId={theme_id}",
+                cancel_url=f"{self.config.base_url}/checkout-cancel?installUuid={install_uuid}&themeId={theme_id}",
+            )
+        except PaddleError as exc:
+            LOG.warning(
+                "Failed to create Paddle transaction theme=%s installUuid=%s: %s",
+                theme_id,
+                install_uuid,
+                exc,
+            )
+            return self._write_json(
+                502,
+                {
+                    "error": f"Failed to create checkout session: {exc}",
+                    "paddleStatus": exc.status,
+                },
+            )
+
+        LOG.info(
+            "Created Paddle transaction theme=%s installUuid=%s url=%s",
+            theme_id,
+            install_uuid,
+            checkout_url,
         )
-        return self._write_redirect(url)
+        return self._write_redirect(checkout_url)
+
+    def _query_param(self, key: str) -> str:
+        """Return the first value of `?key=…` from the current request path."""
+        parsed = urllib.parse.urlparse(self.path)
+        values = urllib.parse.parse_qs(parsed.query)
+        if key not in values or not values[key]:
+            return ""
+        return values[key][0]
 
     def _handle_licenses(self, install_uuid: str) -> None:
         if not install_uuid:
@@ -1269,6 +1552,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--previews-dir", default=None)
     parser.add_argument("--paddle-webhook-secret", default=None)
     parser.add_argument("--paddle-public-key", default=None)
+    parser.add_argument(
+        "--paddle-api-key",
+        default=None,
+        help=(
+            "Paddle API key used to create hosted-checkout sessions per click. "
+            "Env: PS_CATALOG_PADDLE_API_KEY. Without this, dynamic checkout is "
+            "disabled and only themes with a pre-stored checkoutUrl will work."
+        ),
+    )
+    parser.add_argument(
+        "--paddle-env",
+        choices=("live", "sandbox"),
+        default=None,
+        help=(
+            "Which Paddle environment to talk to. 'sandbox' uses "
+            "sandbox-api.paddle.com + sandbox-pay.paddle.io; 'live' uses "
+            "api.paddle.com + pay.paddle.com. Env: PS_CATALOG_PADDLE_ENV."
+        ),
+    )
     parser.add_argument("--base-url", default=None)
     parser.add_argument(
         "--log-level",
