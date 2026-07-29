@@ -3123,6 +3123,14 @@ function syncSettingsFormFromState() {
       || DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
     );
   }
+  const themeAllowInsecureTlsEl = document.getElementById(
+    "settings-themes-allow-insecure-tls",
+  );
+  if (themeAllowInsecureTlsEl) {
+    themeAllowInsecureTlsEl.checked = Boolean(
+      settings?.general?.allowInsecureTlsEndpoints,
+    );
+  }
   if (backendTcpHostEl) {
     backendTcpHostEl.value = String(settings.backend.tcpHost || DEFAULT_SETTINGS.backend.tcpHost);
   }
@@ -3403,6 +3411,10 @@ function readSettingsFormState() {
       themeRefreshIntervalHours: themeRefreshIntervalHoursEl
         ? Math.max(1, Number(themeRefreshIntervalHoursEl.value) || DEFAULT_SETTINGS.general.themeRefreshIntervalHours)
         : DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
+      allowInsecureTlsEndpoints: (() => {
+        const el = document.getElementById("settings-themes-allow-insecure-tls");
+        return el ? el.checked : DEFAULT_SETTINGS.general.allowInsecureTlsEndpoints;
+      })(),
     },
     backend: {
       tcpHost: backendTcpHostEl

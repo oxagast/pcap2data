@@ -43,6 +43,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         // or local-file themes.
         themeServerBaseUrl: "",
         themeRefreshIntervalHours: 24 * 7,
+        // Allow self-signed / private-CA TLS certificates for the theme
+        // server. Useful when running a personal catalog server with a
+        // self-signed cert during development. Off by default because
+        // skipping cert verification weakens transport security.
+        allowInsecureTlsEndpoints: false,
     },
     backend: {
         tcpHost: "127.0.0.1",
@@ -250,13 +255,16 @@ function normalizeSettings(rawSettings = {}) {
                     : generalDefaults.checkForNewReleasesOnStartup,
             themeServerBaseUrl:
                 typeof general.themeServerBaseUrl === "string"
-                    ? general.themeServerBaseUrl.trim()
+                    ? normalizeEndpointUrl(general.themeServerBaseUrl, general.themeServerBaseUrl.trim())
                     : generalDefaults.themeServerBaseUrl,
             themeRefreshIntervalHours: toPositiveInteger(
                 general.themeRefreshIntervalHours,
                 generalDefaults.themeRefreshIntervalHours,
                 1,
             ),
+            allowInsecureTlsEndpoints: typeof general.allowInsecureTlsEndpoints === "boolean"
+                ? general.allowInsecureTlsEndpoints
+                : generalDefaults.allowInsecureTlsEndpoints,
         },
         backend: {
             tcpHost:

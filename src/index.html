@@ -1427,6 +1427,16 @@ No keystore entries saved.</pre>
                   and local-file themes still work.
                 </div>
 
+                <label class="settings-checkbox-row" for="settings-themes-allow-insecure-tls">
+                  <input id="settings-themes-allow-insecure-tls" type="checkbox" />
+                  <span>Allow self-signed certificates for the theme server</span>
+                </label>
+                <div class="settings-help-text">
+                  Enable if your theme server uses a self-signed or private-CA
+                  certificate (typical for personal / development servers).
+                  Disabling is recommended for production traffic.
+                </div>
+
                 <label for="settings-themes-refresh-interval-hours">Recache purchased themes every (hours)</label>
                 <input id="settings-themes-refresh-interval-hours" type="number" min="1" step="1" />
                 <div class="settings-help-text">

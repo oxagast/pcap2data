@@ -2299,6 +2299,37 @@ function isThemeServerConfigured() {
   return Boolean(getThemeServerBaseUrl());
 }
 
+// Cache insecure-TLS undici dispatchers by their effective timeout. We
+// only construct them when the user has explicitly opted in to allowing
+// self-signed / private-CA certificates for the theme server, so the
+// secure path stays the default and there's no perf cost.
+const insecureThemeServerDispatcherCache = new Map();
+
+function getInsecureThemeServerDispatcher(timeoutMs) {
+  const normalized = Math.max(1000, Math.floor(Number(timeoutMs) || THEME_SERVER_HTTP_TIMEOUT_MS));
+  const cacheKey = String(normalized);
+  let dispatcher = insecureThemeServerDispatcherCache.get(cacheKey);
+  if (!dispatcher) {
+    dispatcher = new Agent({
+      headersTimeout: normalized,
+      bodyTimeout: normalized,
+      connect: {
+        rejectUnauthorized: false,
+      },
+    });
+    insecureThemeServerDispatcherCache.set(cacheKey, dispatcher);
+  }
+  return dispatcher;
+}
+
+function isThemeServerAllowInsecureTls() {
+  try {
+    return Boolean(getAppSettings()?.general?.allowInsecureTlsEndpoints);
+  } catch (_e) {
+    return false;
+  }
+}
+
 async function fetchWithTimeout(url, init = {}, timeoutMs = THEME_SERVER_HTTP_TIMEOUT_MS) {
   if (typeof fetch !== "function") {
     throw new Error("fetch is not available in this Node runtime");
@@ -2311,13 +2342,30 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = THEME_SERVER_HTTP_TI
   }
   const startMs = Date.now();
   const method = String(init && init.method ? init.method : "GET").toUpperCase();
+  // For HTTPS URLs, optionally attach an undici dispatcher that skips
+  // certificate verification. Only honored when the user has explicitly
+  // enabled ``allowInsecureTlsEndpoints`` so transport security stays
+  // the default.
+  let dispatcher;
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol === "https:" && isThemeServerAllowInsecureTls()) {
+      dispatcher = getInsecureThemeServerDispatcher(effectiveTimeoutMs);
+    }
+  } catch (_e) {
+    // ignore — fall back to global fetch
+  }
   if (typeof appendActivityLogLine === "function") {
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] fetchWithTimeout begin method=${method} url=${url} timeoutMs=${effectiveTimeoutMs}`,
+      `[${new Date().toISOString()}] [GUI][Main] fetchWithTimeout begin method=${method} url=${url} timeoutMs=${effectiveTimeoutMs} insecureTls=${Boolean(dispatcher)}`,
     );
   }
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const fetchInit = { ...init, signal: controller.signal };
+    if (dispatcher) {
+      fetchInit.dispatcher = dispatcher;
+    }
+    const response = await fetch(url, fetchInit);
     const elapsedMs = Date.now() - startMs;
     if (typeof appendActivityLogLine === "function") {
       appendActivityLogLine(
@@ -4068,25 +4116,59 @@ ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
   } catch (error) {
     const rawMessage = error?.message || String(error || "Unknown error");
     const causeCode = error?.cause?.code || error?.code || "";
+    // undici's "fetch failed" sometimes swallows the underlying TLS /
+    // network error. Look at the cause message too so we can recognize
+    // self-signed certificate failures even when ``error.cause.code``
+    // is empty.
+    const causeMessage = String(error?.cause?.message || error?.cause || "");
+    const combinedMessage = `${rawMessage} ${causeMessage}`.toLowerCase();
+    const looksLikeTlsError =
+      causeCode === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
+      || causeCode === "SELF_SIGNED_CERT_IN_CHAIN"
+      || causeCode === "DEPTH_ZERO_SELF_SIGNED_CERT"
+      || causeCode === "ERR_TLS_CERT_ALTNAME_INVALID"
+      || /self.?signed|unable to verify|depth_zero|certificate|ssl|tls/i.test(combinedMessage);
+    const configuredScheme = (() => {
+      try {
+        return new URL(configuredBaseUrl).protocol;
+      } catch (_e) {
+        return "";
+      }
+    })();
+    const insecureFlag = (() => {
+      try {
+        return Boolean(getAppSettings()?.general?.allowInsecureTlsEndpoints);
+      } catch (_e) {
+        return false;
+      }
+    })();
     // Translate undici's generic "fetch failed" into an actionable hint.
-    // The most common cause is a plain-http:// URL pointing at an
-    // HTTPS-only catalog server (ECONNREFUSED in ~80ms). Surfacing the
-    // scheme mismatch in the UI saves a debug session.
+    // Three frequent cases:
+    //   - plain-http:// URL pointing at an HTTPS-only catalog server
+    //     (ECONNREFUSED in ~80ms).
+    //   - https:// URL with a self-signed / private-CA cert
+    //     (UNABLE_TO_VERIFY_LEAF_SIGNATURE / SELF_SIGNED_CERT_IN_CHAIN).
+    //   - any other unreachable-host case (DNS failure, refused,
+    //     timeout, etc.).
+    // Surface the scheme mismatch and the new "allow self-signed"
+    // toggle in the UI so the user knows what to flip.
     let friendlyMessage = rawMessage;
     if (/^fetch failed$/i.test(rawMessage) || causeCode === "ECONNREFUSED") {
-      const configuredScheme = (() => {
-        try {
-          return new URL(configuredBaseUrl).protocol;
-        } catch (_e) {
-          return "";
-        }
-      })();
-      friendlyMessage = configuredScheme === "http:"
-        ? `Could not reach theme server (${configuredBaseUrl}). The catalog server only accepts HTTPS — change the theme server URL to https://${(function () { try { return new URL(configuredBaseUrl).host; } catch (_e) { return ""; } })()} and try again.`
-        : `Could not reach theme server (${configuredBaseUrl || "unknown host"}). Verify the URL, your network connection, and that the server is online.`;
+      if (configuredScheme === "http:") {
+        const hostPart = (() => { try { return new URL(configuredBaseUrl).host; } catch (_e) { return ""; } })();
+        friendlyMessage = `Could not reach theme server (${configuredBaseUrl}). The catalog server only accepts HTTPS — change the theme server URL to https://${hostPart} and try again.`;
+      } else if (configuredScheme === "https:" && looksLikeTlsError && !insecureFlag) {
+        friendlyMessage = `Theme server certificate at ${configuredBaseUrl} could not be verified. If you are using a self-signed or private-CA certificate, enable "Allow self-signed certificates for the theme server" in the Themes settings and retry.`;
+      } else if (configuredScheme === "https:" && looksLikeTlsError && insecureFlag) {
+        friendlyMessage = `Theme server at ${configuredBaseUrl} rejected the request despite TLS verification being disabled (${causeCode || "TLS error"}). Verify the server is online and reachable.`;
+      } else {
+        friendlyMessage = `Could not reach theme server (${configuredBaseUrl || "unknown host"}). Verify the URL, your network connection, and that the server is online.`;
+      }
+    } else if (looksLikeTlsError) {
+      friendlyMessage = `Theme server certificate at ${configuredBaseUrl} could not be verified (${causeCode || "TLS error"}). If you are using a self-signed or private-CA certificate, enable "Allow self-signed certificates for the theme server" in the Themes settings and retry.`;
     }
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] themes-catalog failed base=${configuredBaseUrl} causeCode=${causeCode || "?"} friendlyMessage=${JSON.stringify(friendlyMessage)}`,
+      `[${new Date().toISOString()}] [GUI][Main] themes-catalog failed base=${configuredBaseUrl} causeCode=${causeCode || "?"} causeMessage=${JSON.stringify(causeMessage)} insecureTlsEnabled=${insecureFlag} friendlyMessage=${JSON.stringify(friendlyMessage)}`,
     );
     return { success: false, error: friendlyMessage, entries: [] };
   }
