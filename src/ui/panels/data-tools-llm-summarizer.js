@@ -106,6 +106,8 @@ function _buildDataToolsSummaryPrompt(context) {
         "Use only the provided input and outputs. Do not invent values.",
         "Return clean Markdown. Keep the response concise (2-4 short paragraphs or bullet lists).",
         "",
+        "SQUELCH NO-OP DATA: do NOT report entries that produced no usable output. If a decoder was opened but failed, returned an error, decoded to nothing, or only produced placeholder/empty content, omit it entirely instead of describing what it did not find. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip lookups. Only describe operations that actually surfaced data. Silence is preferable to a paragraph that just says 'nothing was found'.",
+        "",
         "Workspace context (JSON):",
         JSON.stringify({ ...context, timestamp: new Date().toISOString() }, null, 2),
     ].join("\n");

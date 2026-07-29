@@ -35,6 +35,31 @@ function loadFunction(functionName) {
     return extractFunctionSource(sourceText, functionName);
 }
 
+function loadConstant(constantName) {
+    const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+    const sourceText = fs.readFileSync(sourcePath, 'utf8');
+    const startToken = `const ${constantName} = `;
+    const startIndex = sourceText.indexOf(startToken);
+    if (startIndex === -1) {
+        throw new Error(`Could not find constant ${constantName}`);
+    }
+    // Walk forward to find the end of the value (terminating semicolon
+    // outside of any string literal).
+    let inSingle = false;
+    let inDouble = false;
+    let inBack = false;
+    for (let cursor = startIndex + startToken.length; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === "'" && !inDouble && !inBack) inSingle = !inSingle;
+        else if (char === '"' && !inSingle && !inBack) inDouble = !inDouble;
+        else if (char === '`' && !inSingle && !inDouble) inBack = !inBack;
+        else if (char === ';' && !inSingle && !inDouble && !inBack) {
+            return sourceText.slice(startIndex, cursor + 1);
+        }
+    }
+    throw new Error(`Could not parse constant ${constantName}`);
+}
+
 // Build a minimal but realistic capturedPackets payload.
 function makeCapturedPacketsStub() {
     return {
@@ -92,6 +117,8 @@ function makeStatsStub(overrides = {}) {
 }
 
 const helperSource = [
+    loadConstant('SUMMARY_HEADING'),
+    loadFunction('prependSummaryHeading'),
     loadFunction('formatStatsByteCount'),
     loadFunction('joinStatsListValues'),
     loadFunction('truncateStatsList'),
@@ -261,6 +288,8 @@ describe('summary stats weaving', () => {
                     getCurrentCompactedAnalysisSummary: () =>
                         '## Compaction Result\n\nThe LLM saw a small HTTP transfer.',
                     normalizeSummaryMarkdownHeadings: (input) =>
+                        `## Compaction Result\n\nThe LLM saw a small HTTP transfer.`,
+                    prependSummaryHeading: (input) =>
                         `# PacketSnitch's Summary\n\n${input}`,
                 },
             });
@@ -285,6 +314,8 @@ describe('summary stats weaving', () => {
                     getCurrentCompactedAnalysisSummary: () =>
                         '## Compaction Result\n\nLLM analysis content.',
                     normalizeSummaryMarkdownHeadings: (input) =>
+                        `## Compaction Result\n\nLLM analysis content.`,
+                    prependSummaryHeading: (input) =>
                         `# PacketSnitch's Summary\n\n${input}`,
                 },
             });
@@ -619,6 +650,150 @@ describe('summary stats weaving', () => {
             expect(body).toContain('SUMMARY_DISTILL_ENTRY_SIGNATURE');
             // Must filter out prior distilled entries.
             expect(body).toMatch(/filter[\s\S]{0,300}SUMMARY_DISTILL_ENTRY_SIGNATURE/);
+        });
+    });
+
+    describe('summary heading single-printing', () => {
+        // The "PacketSnitch's Summary" heading must be printed EXACTLY
+        // once at the top of the consolidated report — not once per
+        // context-scoped entry, not once per export pass. The previous
+        // behaviour embedded the heading inside
+        // `normalizeSummaryMarkdownHeadings`, which was called per
+        // entry, so multi-entry reports printed the heading repeatedly.
+        const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+        const sourceText = fs.readFileSync(sourcePath, 'utf8');
+
+        function extractFunctionBody(name) {
+            const startToken = `function ${name}`;
+            const startIndex = sourceText.indexOf(startToken);
+            if (startIndex === -1) {
+                return null;
+            }
+            const bodyStart = sourceText.indexOf('{', startIndex);
+            let depth = 0;
+            for (let cursor = bodyStart; cursor < sourceText.length; cursor += 1) {
+                const char = sourceText[cursor];
+                if (char === '{') depth += 1;
+                if (char === '}') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        return sourceText.slice(startIndex, cursor + 1);
+                    }
+                }
+            }
+            return null;
+        }
+
+        test('normalizeSummaryMarkdownHeadings no longer prepends the heading', () => {
+            // The header must have been promoted to a helper that is
+            // called only once at the top of the combined report.
+            const body = extractFunctionBody('normalizeSummaryMarkdownHeadings');
+            expect(body).toBeDefined();
+            // The literal "PacketSnitch's Summary" must NOT appear inside
+            // the body of normalizeSummaryMarkdownHeadings anymore.
+            expect(body).not.toContain("PacketSnitch's Summary");
+        });
+
+        test('a prependSummaryHeading helper exists and adds the heading once', () => {
+            const headerLine = sourceText.split('\n').find((line) =>
+                line.includes('prependSummaryHeading'),
+            );
+            expect(headerLine).toBeDefined();
+            expect(headerLine).toMatch(
+                /^(async\s+)?function prependSummaryHeading/,
+            );
+            const body = extractFunctionBody('prependSummaryHeading');
+            // The helper references the SUMMARY_HEADING constant and
+            // guards against double-prepending when the body already
+            // starts with the heading.
+            expect(body).toContain('SUMMARY_HEADING');
+            expect(body).toMatch(/startsWith/);
+        });
+
+        test('getSummaryMarkdownForExport prepends the heading exactly once', () => {
+            const body = extractFunctionBody('getSummaryMarkdownForExport');
+            expect(body).toContain('prependSummaryHeading');
+            // Should call it exactly once.
+            const calls = body.match(/prependSummaryHeading\(/g) || [];
+            expect(calls.length).toBe(1);
+        });
+
+        test('renderSummaryMarkdownPreview prepends the heading exactly once', () => {
+            const body = extractFunctionBody('renderSummaryMarkdownPreview');
+            expect(body).toContain('prependSummaryHeading');
+            const calls = body.match(/prependSummaryHeading\(/g) || [];
+            expect(calls.length).toBe(1);
+        });
+
+        test('buildSummaryBodyHtmlForHtmlExport does not re-add the heading per entry', () => {
+            // The HTML export renders each compacted entry individually.
+            // We used to call normalizeSummaryMarkdownHeadings per entry
+            // which would have re-added the heading per section. Verify
+            // the current source does not embed the heading literal
+            // inside the per-entry normalization path.
+            const body = extractFunctionBody('buildSummaryBodyHtmlForHtmlExport');
+            expect(body).toBeDefined();
+            // The heading must not live inside the function body.
+            expect(body).not.toContain("PacketSnitch's Summary");
+        });
+    });
+
+    describe('no-op data squelch in LLM prompts', () => {
+        // The LLM should be told to omit failed/empty decoders, parsers,
+        // and lookups from the final report. Verify the four summary
+        // prompts each carry the squelch instruction.
+        const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+        const sourceText = fs.readFileSync(sourcePath, 'utf8');
+        const summarizerPath = path.join(__dirname, '..', 'src/ui/panels/data-tools-llm-summarizer.js');
+        const summarizerText = fs.readFileSync(summarizerPath, 'utf8');
+
+        function extractFunctionBody(name, source = sourceText) {
+            const startToken = `function ${name}`;
+            const startIndex = source.indexOf(startToken);
+            if (startIndex === -1) return null;
+            const bodyStart = source.indexOf('{', startIndex);
+            let depth = 0;
+            for (let cursor = bodyStart; cursor < source.length; cursor += 1) {
+                const char = source[cursor];
+                if (char === '{') depth += 1;
+                if (char === '}') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        return source.slice(startIndex, cursor + 1);
+                    }
+                }
+            }
+            return null;
+        }
+
+        test('distill prompt tells the LLM to squelch no-op data', () => {
+            const body = extractFunctionBody('buildSummaryDistillPrompt');
+            expect(body).toBeDefined();
+            expect(body.toLowerCase()).toContain('squelch');
+            expect(body.toLowerCase()).toContain('no-op');
+        });
+
+        test('compaction prompt tells the LLM to squelch no-op data', () => {
+            // The compaction prompt lives inside runAnalysisCompaction
+            // — we look at the full function body for the squelch phrase.
+            const body = extractFunctionBody('runAnalysisCompaction');
+            expect(body).toBeDefined();
+            expect(body.toLowerCase()).toContain('squelch');
+            expect(body.toLowerCase()).toContain('no-op');
+        });
+
+        test('writeSummaryFromLLM tells the LLM to squelch no-op data', () => {
+            const body = extractFunctionBody('writeSummaryFromLLM');
+            expect(body).toBeDefined();
+            expect(body.toLowerCase()).toContain('squelch');
+            expect(body.toLowerCase()).toContain('no-op');
+        });
+
+        test('data-tools LLM summarizer tells the LLM to squelch no-op data', () => {
+            const body = extractFunctionBody('_buildDataToolsSummaryPrompt', summarizerText);
+            expect(body).toBeDefined();
+            expect(body.toLowerCase()).toContain('squelch');
+            expect(body.toLowerCase()).toContain('no-op');
         });
     });
 });

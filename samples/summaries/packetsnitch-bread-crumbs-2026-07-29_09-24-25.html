@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PacketSnitch Summary</title>
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+h1, h2, h3, h4 { font-weight: 600; }
+pre { background: #f5f5f5; padding: 0.75rem; overflow-x: auto; }
+code { background: #f0f0f0; padding: 0.15rem 0.3rem; border-radius: 3px; }
+blockquote { border-left: 4px solid #ccc; margin-left: 0; padding-left: 1rem; color: #555; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+th { background: #f5f5f5; }
+.summary-header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 1rem; }
+.summary-logo { max-width: 280px; height: auto; margin-bottom: 0.75rem; }
+.summary-meta { color: #666; font-size: 0.9rem; margin: 0; }
+.summary-meta a { color: #007acc; text-decoration: none; }
+.summary-meta a:hover { text-decoration: underline; }
+.summary-decoded-image { text-align: center; margin: 1.5rem 0; }
+.summary-decoded-image p { margin: 0 0 0.5rem; color: #444; }
+.summary-image { max-width: 280px; max-height: 350px; width: auto; height: auto; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; }
+.summary-image-meta { color: #888; font-size: 0.85rem; }
+.summary-section { margin-bottom: 1.5rem; }
+.summary-section-divider { border: none; border-top: 1px solid #ddd; margin: 2rem 0; }
+</style>
+</head>
+<body>
+<div class="summary-header">
+  <img src="data:image/png;base64,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" alt="PacketSnitch logo" class="summary-logo">
+  <p class="summary-meta">Generated by PacketSnitch 2.4.2169 on 7/29/2026, 9:24:37 AM — <a href="https://packetsnitch.com" target="_blank" rel="noopener noreferrer">packetsnitch.com</a></p>
+</div>
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$1|stream:10.0.1.23:36085:50.218.103.254:123:UDP|dt:decodes:1705626064">
+<h1>PacketSnitch's Summary</h1>
+<h2>Consolidated Network &amp; Workspace Analysis Summary</h2>
+<p>This summary merges three chronologically ordered analysis blurbs: a low-volume UDP network capture, and two snapshots of a data-conversion workspace examining an ASCII-armored PGP private key block. The network capture (June 2026) and the key-block analysis (July 2026) are <strong>temporally and contextually distinct artifacts</strong> — no cross-correlation is asserted, but both are documented here for reference.</p>
+
+<h2>1. Network Stream Analysis (Custom UDP Capture)</h2>
+<h3>Capture Overview</h3>
+<ul>
+<li><strong>Total datagrams:</strong> 2 UDP datagrams, no TCP traffic.</li>
+<li><strong>Inter-packet gap:</strong> ~53 ms.</li>
+<li><strong>Timestamps (ms):</strong> <code>1783275217593</code>, <code>1783275217646</code> → approximately <strong>2026-06-05T17:33:37Z</strong>.</li>
+<li><strong>Auxiliary protocols observed:</strong> None — no DNS resolution, no TLS handshake, no plaintext URLs, no credentials, no recognizable file-transfer headers in the visible bytes.</li>
+</ul>
+<h3>Packet-Level Breakdown</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Timestamp (ms)</th>
+<th>Protocol</th>
+<th>Payload Length (hex bytes)</th>
+<th>First Bytes (hex)</th>
+<th>Structural Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>1783275217593</td>
+<td>UDP</td>
+<td>32</td>
+<td><code>23 00 00 ... 00 45 86 b5 68 0b ed 47 38</code></td>
+<td>16-byte zero-padded body trailing a fixed 8-byte tail</td>
+</tr>
+<tr>
+<td>2</td>
+<td>1783275217646</td>
+<td>UDP</td>
+<td>40</td>
+<td><code>24 04 03 e9 00 00 0c ee 00 00 17 8a ...</code></td>
+<td>Fixed 12-byte header followed by four tagged fields (7-byte / 8-byte each)</td>
+</tr>
+</tbody></table>
+<h3>Inferred Protocol Characteristics</h3>
+<ul>
+<li><strong>Custom UDP application protocol.</strong> The leading opcodes (<code>0x23</code>, <code>0x24</code>) do <strong>not</strong> match any well-known IANA-assigned UDP service. Specifically excluded:<ul>
+<li>Not DNS (no question/answer framing).</li>
+<li>Not NTP.</li>
+<li>Not STUN/TURN (no 20-byte magic cookie).</li>
+<li>Not QUIC long-header.</li>
+<li>Not WireGuard (<code>0x01</code>–<code>0x04</code> message type range).</li>
+<li>Not VXLAN.</li>
+</ul>
+</li>
+<li><strong>Framing style:</strong> Packet 1 exhibits a short opcode-led header with a zero-padded body, while Packet 2 expands into a tag-length-value (TLV) style structure with at least four fields. This is consistent with a lightweight proprietary control or telemetry protocol.</li>
+<li><strong>No payload artifacts of interest:</strong> No credentials, hostnames, file names, URLs, or hashes were recoverable from the visible bytes.</li>
+</ul>
+
+<h2>2. PGP Private Key — Conversions Workspace (Two Snapshots)</h2>
+<p>The same artifact was inspected at two moments roughly <strong>26 ms apart</strong> within the same workspace session. The second snapshot represents the same input after the conversion pipeline populated its outputs.</p>
+<h3>Artifact Identity</h3>
+<ul>
+<li><strong>Type:</strong> ASCII-armored <strong>PGP private key</strong> block.</li>
+<li><strong>Armor markers:</strong> Begins with `</li>
+</ul>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:crypt|pkt:10.0.1.23$1|stream:10.0.1.23:36085:50.218.103.254:123:UDP">
+<h1>PacketSnitch's Summary</h1>
+<h2>Compacted Network Analysis Summary — PacketSnitch Session</h2>
+<h2>1. Capture-Level Overview</h2>
+<p>The capture encompasses <strong>1,116 packets</strong> across <strong>72 streams</strong> with total traffic of <strong>427.80 KB</strong> and an average stream length of <strong>15.50 packets</strong> (min 1, max 415). The capture includes <strong>17 internet hosts</strong> and <strong>44 total hosts</strong>, of which most reside on the internal <code>10.0.1.0/24</code> subnet, with a handful of external endpoints concentrated in U.S. cloud and hosting providers.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Total packets</td>
+<td>1,116</td>
+</tr>
+<tr>
+<td>Total streams</td>
+<td>72</td>
+</tr>
+<tr>
+<td>Total traffic</td>
+<td>427.80 KB</td>
+</tr>
+<tr>
+<td>Internet hosts</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Encrypted / Unencrypted / Undecodable</td>
+<td>52 / 1,064 / 23</td>
+</tr>
+<tr>
+<td>Stream length (avg / min / max)</td>
+<td>15.50 / 1 / 415 packets</td>
+</tr>
+<tr>
+<td>TCP retransmissions</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Out-of-order segments</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Bookmarks</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Heatmap packet hits</td>
+<td>668</td>
+</tr>
+<tr>
+<td>Unique credentials</td>
+<td>1 (<code>rN*********************eu</code>)</td>
+</tr>
+</tbody></table>
+<h3>Top Talkers</h3>
+<table>
+<thead>
+<tr>
+<th>Host</th>
+<th>Packets</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>10.0.1.22</td>
+<td>888</td>
+</tr>
+<tr>
+<td>165.22.172.253</td>
+<td>415</td>
+</tr>
+<tr>
+<td>10.0.1.23</td>
+<td>139</td>
+</tr>
+<tr>
+<td>10.0.1.30</td>
+<td>90</td>
+</tr>
+<tr>
+<td>20.42.73.30</td>
+<td>66</td>
+</tr>
+</tbody></table>
+<p><code>10.0.1.22</code> is by far the dominant internal node, accounting for ~80% of all packets, with <code>165.22.172.253</code> (Santa Clara) the primary external correspondent.</p>
+<h3>Geographic Footprint</h3>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Hits</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Santa Clara, United States</td>
+<td>415</td>
+</tr>
+<tr>
+<td>Washington, United States</td>
+<td>35</td>
+</tr>
+<tr>
+<td>Quincy, United States</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Falkenstein, Germany</td>
+<td>1</td>
+</tr>
+</tbody></table>
+<p>The bulk of geo-located traffic terminates in Santa Clara, CA (DigitalOcean/Cloudflare-adjacent range), with a small Microsoft Quincy presence and a single Hetzner Falkenstein hit.</p>
+<h3>Protocol &amp; MIME Profile</h3>
+<ul>
+<li><strong>Decoded protocols:</strong> ARP, DNS, FRAME, FTP, NFS, NTP, SSH, WebSocket</li>
+<li><strong>Transport/network:</strong> ARP, FRAME, ICMP, TCP, UDP, plus a residual "Undecodable" bucket</li>
+<li><strong>MIME types observed (8):</strong> <code>application/json</code>, <code>application/octet-stream</code>, <code>application/pgp-encrypted</code>, <code>application/pgp-keys</code>, <code>application/x-dosexec</code>, <code>image/x-atari-degas</code>, <code>image/x-tga</code>, <code>text/plain</code></li>
+<li><strong>Notable classified data:</strong> ASCII text (overstriking), ARJ archive, ATSC</li>
+</ul>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$1|stream:10.0.1.23:36085:50.218.103.254:123:UDP|dt:conversions:1492914770">
+<h1>PacketSnitch's Summary</h1>
+<h2>PGP Private Key Artifact — Network Analysis Summary</h2>
+<h2>Overview</h2>
+<p>A single <strong>886-byte ASCII-armored PGP private key block</strong> was observed in captured network traffic / workspace analysis between <strong>2026-07-26T01:44:17Z</strong> and <strong>2026-07-26T01:45:11.331Z</strong>. The artifact was reviewed across multiple analysis workspace states (Conversions hex view, MessagePack decode attempt, and a second Conversions pass). All three observations agree the payload is sensitive key material, not a benign data blob.</p>
+<h2>Artifact Identification</h2>
+<ul>
+<li><strong>Content type (high confidence):</strong> PGP ASCII Armored Data</li>
+<li><strong>Secondary guesses:</strong> Base64 Encoded Data, Base64URL Encoded Data</li>
+<li><strong>MIME type:</strong> <code>text/plain; charset=utf-8</code></li>
+<li><strong>Size:</strong> 886 bytes</li>
+<li><strong>Structure:</strong> Standard PGP armor — header line, blank line, base64 body lines, <code>=</code> CRC24 checksum line, trailer line</li>
+</ul>
+<h2>Verbatim Delimiters and Body Snippet</h2>
+<p>The decoded ASCII begins and ends with the standard PGP armor markers. The hex preview captured during the MessagePack decode attempt provides a usable reference of the leading bytes:</p>
+<table>
+<thead>
+<tr>
+<th>Offset</th>
+<th>Bytes (hex)</th>
+<th>ASCII</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0x00</td>
+<td><code>2d 2d 2d 2d 2d 42 45 47 49 4e 20 50 47 50 20 50 52 49 56 41 54 45 20 4b 45 59 20 42 4c 4f 43 4b 2d 2d 2d 2d 2d</code></td>
+<td><code>-----BEGIN PGP PRIVATE KEY BLOCK-----</code></td>
+</tr>
+<tr>
+<td>0x24</td>
+<td><code>0a 0a</code></td>
+<td><code>\n\n</code> (blank separator line)</td>
+</tr>
+<tr>
+<td>0x26</td>
+<td><code>6c 49 59 45 61 6b 71 4e 32 …</code></td>
+<td><code>lIYEakqN2…</code> (start of base64 body)</td>
+</tr>
+</tbody></table>
+<ul>
+<li><strong>Header:</strong> <code>-----BEGIN PGP PRIVATE KEY BLOCK-----</code></li>
+<li><strong>Trailer:</strong> <code>-----END PGP PRIVATE KEY BLOCK-----</code></li>
+<li>**Checksum line (last body line</li>
+</ul>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$6|stream:10.0.1.23:21:10.0.1.22:55346:TCP|dt:decodes:-40522424">
+<h1>PacketSnitch's Summary</h1>
+<ul>
+<li><h2>Workspace Summary — Conversions (Hex)</h2>
+</li>
+</ul>
+<p><strong>Tool context.</strong> The active subtab is <em>Conversions</em> in hex mode. The input preview is a 886-byte hex blob whose other conversion panes (Hex / ASCII / Base64) are still collapsed ("Click to expand output."). The byte length, MIME type, and Shannon entropy are populated, and the timestamp on the analysis is 2026-07-26T01:46:25.767Z.</p>
+<p><strong>Decoded payload.</strong> Hex-decoding the input preview yields a cleartext <strong>ProFTPD (Debian) FTP session transcript</strong> against server <code>10.0.1.23</code>. The user <code>psnitch</code> authenticates with the cleartext password <code>rNrKYTX9g7z3RgJRmxWuGHbeu</code> (response <code>230 ... logged in</code>), the server reports <code>UNIX Type: L8</code>, and three passive-mode data transfers occur:</p>
+<ul>
+<li><code>LIST</code> — file listing via ASCII mode.</li>
+<li><code>RETR breadcrumbs.txt.asc</code> — 374 bytes, BINARY mode.</li>
+<li><code>RETR sec.key</code> — 886 bytes, BINARY mode (matches the overall byte length of the capture).</li>
+</ul>
+<p>The session ends cleanly with <code>QUIT</code> → <code>221 Goodbye.</code>.</p>
+<p><strong>Analyst notes.</strong></p>
+<ul>
+<li><p>The capture contains <strong>plaintext FTP credentials</strong> for the <code>psnitch</code> account on <code>10.0.1.23</code> — flag for credential exposure.</p>
+</li>
+<li><p>Two files of interest were exfiltrated/received: <code>breadcrumbs.txt.asc</code> (PGP-armored, likely) and <code>sec.key</code> (an 886-byte key, very likely the same key file given the byte-length match).</p>
+</li>
+<li><p>Heuristic data-type guesses (<code>PGP ASCII Armored Data</code> high, <code>Base64/Base64URL</code> medium) reflect the presence of <code>breadcrumbs.txt.asc</code> content but do <strong>not</strong> describe the FTP transcript itself; the actual protocol is plaintext FTP, entropy 5.96 (medium), MIME <code>text/plain; charset=utf-8</code>.</p>
+</li>
+<li><h1>FTP Session Summary — <code>psnitch</code>@10.0.1.23</h1>
+</li>
+</ul>
+<p><strong>Server:</strong> ProFTPD (Debian) at <code>::ffff:10.0.1.23</code> · <strong>Client user:</strong> <code>psnitch</code> · <strong>Auth:</strong> successful (230)</p>
+<p>The session followed a standard FTP control-channel flow: banner → <code>USER</code>/<code>PASS</code> → login confirmation → <code>SYST</code> (UNIX Type: L8) → <code>PASV</code>/<code>LIST</code> directory enumeration → <code>TYPE I</code> (binary) → two file retrievals → <code>QUIT</code>. The cleartext <code>PASS</code> value <code>rNrKYTX9g7z3RgJRmxWuGHbeu</code> is visible in the decode.</p>
+<h2>Transfers (Passive Mode data connections)</h2>
+<ul>
+<li><code>LIST</code> — directory listing, ASCII mode (empty/confidential content not shown)</li>
+<li><code>RETR breadcrumbs.txt.asc</code> — 374 bytes, BINARY</li>
+<li><code>RETR sec.key</code> — 886 bytes, BINARY</li>
+</ul>
+<h2>Analyst Notes</h2>
+<ul>
+<li><p><strong>Plaintext credentials on the wire</strong> — <code>psnitch</code> / <code>rNrKYTX9g7z3RgJRmxWuGHbeu</code> are recoverable from the control channel; recommend rotating the password and migrating to SFTP/FTPS.</p>
+</li>
+<li><p><strong>Sensitive filenames</strong> — <code>sec.key</code> is an obvious keying/secret material candidate; confirm whether it is encrypted at rest and audit downstream storage of the 886-byte payload.</p>
+</li>
+<li><p><strong><code>breadcrumbs.txt.asc</code></strong> — <code>.asc</code> extension is consistent with an ASCII-armored PGP/GPG block; worth correlating with any signing keys or messages found on the host.</p>
+</li>
+<li><p><strong>Server fingerprint</strong> — ProFTPD on Debian at <code>10.0.1.23</code>; cross-check banner/response 220 against known honeypot or legitimate service inventory.</p>
+</li>
+<li><h2>Conv/Data Tools — Workspace Summary</h2>
+</li>
+</ul>
+<p><strong>Subtab:</strong> Conversions · <strong>Input format:</strong> Hex · <strong>Timestamp:</strong> 2026-07-26T01:48:45Z</p>
+<h3>Payload Overview</h3>
+<p>The hex input (701 bytes) decodes to a <strong>plaintext FTP control-session transcript</strong> between a client (<code>psnitch</code>) and a <strong>ProFTPD (Debian) server at <code>10.0.1.23</code></strong>. The output panels (Hex/ASCII/Base64) are still collapsed in the UI, so only the source hex has been reviewed.</p>
+<ul>
+<li><strong>MIME Type:</strong> <code>text/plain; charset=utf-8</code></li>
+<li><strong>Shannon Entropy:</strong> 5.40 (Medium) — consistent with readable text + short opaque tokens (password, filenames).</li>
+<li><strong>Data-Type Guesses:</strong> URL/Link (High), Filename/Path (High), Base64 (Medium) — the guesses are off-target; the payload is a structured protocol log, not a URL or base64 blob.</li>
+</ul>
+<h3>Protocol Flow</h3>
+<ol>
+<li><code>USER psnitch</code> → <code>331 Password required</code></li>
+<li><code>PASS rNrKYTX9g7z3RgJRmxWuGHbeu</code> → <code>230 logged in</code></li>
+<li><code>SYST</code> → <code>UNIX Type: L8</code>; three <code>PASV</code> negotiations to <code>10.0.1.23</code></li>
+<li><code>LIST</code> → directory listing (226 Transfer complete)</li>
+<li><code>RETR breadcrumbs.txt.asc</code> — <strong>374 bytes</strong>, binary mode</li>
+<li><code>RETR sec.key</code> — <strong>886 bytes</strong>, binary mode</li>
+<li><code>QUIT</code> → <code>221 Goodbye</code></li>
+</ol>
+<h3>Analyst Notes</h3>
+<ul>
+<li><strong>Credential exposure:</strong> username and password sent in cleartext over FTP — no TLS/SSL wrapper observed.</li>
+<li><strong>Sensitive retrieval:</strong> the session pulled a file named <code>sec.key</code> (886 B). Worth pulling and inspecting this artifact from the associated capture.</li>
+<li><strong>Next step:</strong> expand the ASCII/Base64 outputs in the UI to confirm full transcription, then correlate the <code>sec.key</code> transfer with a corresponding passive-mode data channel</li>
+</ul>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$6|stream:10.0.1.23:21:10.0.1.22:55346:TCP|dt:decodes:-1659690505">
+<h1>PacketSnitch's Summary</h1>
+<h2>PacketSnitch Analysis Summary — FTP Key Exfiltration over Cleartext</h2>
+<h2>Headline Findings</h2>
+<ul>
+<li>A user <code>psnitch</code> authenticated to a <strong>cleartext FTP</strong> server (<code>ProFTPD Server (Debian)</code>) at <strong><code>10.0.1.23</code></strong> and downloaded two sensitive artifacts:<ul>
+<li><code>breadcrumbs.txt.asc</code> — <strong>374 B</strong> ASCII-armored text/PGP block</li>
+<li><code>sec.key</code> — <strong>886 B</strong>, name and size consistent with an armored PGP <strong>secret key</strong></li>
+</ul>
+</li>
+<li>Credentials were transmitted in plaintext: <code>USER psnitch</code> / <code>PASS rNrKYTX9g7z3RgJRmxWuGHbeu</code> → <code>230 User psnitch logged in</code>.</li>
+<li>The capture also contains SSH (22), DNS (53), NTP (123), NFS (2049), WebSocket (443), and ARP traffic; the FTP session is the only explicitly credentialed, file-bearing plaintext service observed.</li>
+<li>Top talker <code>10.0.1.22</code> (888 packets) is the likely client; <code>10.0.1.23</code> (139 packets) is the FTP server. A large external host <code>165.22.172.253</code> (415 packets, geolocated to Santa Clara, US) is the dominant non-LAN talker.</li>
+</ul>
+<h2>FTP Session — <code>psnitch</code> @ 10.0.1.23</h2>
+<p><strong>Server / Session</strong></p>
+<ul>
+<li>Banner: <code>ProFTPD Server (Debian)</code> at <code>10.0.1.23</code> (also shown as <code>::ffff:10.0.1.23</code>).</li>
+<li>System type: <code>UNIX Type: L8</code>.</li>
+<li>Mode: <strong>PASV</strong>, <strong>TYPE I (binary)</strong> for both file retrievals.</li>
+<li>Session cleanly terminated with <code>221 Goodbye</code>.</li>
+</ul>
+<p><strong>Authentication (cleartext)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Response</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>USER psnitch</code></td>
+<td><code>331 Password required</code></td>
+<td>Username submitted in cleartext</td>
+</tr>
+<tr>
+<td><code>PASS rNrKYTX9g7z3RgJRmxWuGHbeu</code></td>
+<td><code>230 User psnitch logged in</code></td>
+<td>Password submitted in cleartext (no TLS/FTPS)</td>
+</tr>
+</tbody></table>
+<blockquote>
+<p>⚠️ Credentials transmitted in cleartext FTP. The same password appears in the capture's credentials table as <code>rN*********************eu</code> (redacted display) — full value captured above.</p>
+</blockquote>
+<p><strong>Directory Listing</strong></p>
+<ul>
+<li><code>LIST</code> returned <code>226 Transfer complete</code> over PASV endpoint <code>10,0,1,23,143,97</code> → TCP port <code>143*256+97 = 36705</code>.</li>
+</ul>
+<p><strong>File Retrievals</strong></p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Size</th>
+<th>Mode</th>
+<th>PASV endpoint</th>
+<th>Decoded TCP port</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>breadcrumbs.txt.asc</code></td>
+<td>374 B</td>
+<td>BINARY</td>
+<td><code>10,0,1,23,179,155</code></td>
+<td><code>179*256+155 = 45979</code></td>
+<td><code>226 Transfer complete</code></td>
+</tr>
+<tr>
+<td><code>sec.key</code></td>
+<td>886 B</td>
+<td>BINARY</td>
+<td><code>10,0,1,23,160,153</code></td>
+<td><code>160*256+153 = 41113</code></td>
+<td><code>226 Transfer complete</code></td>
+</tr>
+</tbody></table>
+<p>All three PASV data ports resolve back to the FTP control server <code>10.0.1.23</code>, as expected.</p>
+<h2>Sensitive Artifacts</h2>
+<h3><code>breadcrumbs.txt.asc</code> (374 B)</h3>
+<ul>
+<li>Likely an ASCII-armored PGP</li>
+</ul>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$6|stream:10.0.1.23:21:10.0.1.22:55346:TCP|dt:decodes:-385434350">
+<h1>PacketSnitch's Summary</h1>
+<ul>
+<li><h1>Conv/Data Tools Workspace Summary</h1>
+</li>
+</ul>
+<p><strong>Subtab:</strong> Decodes | <strong>Protocol:</strong> Plaintext | <strong>Timestamp:</strong> 2026-07-26 01:57:08 UTC</p>
+<h2>Decoded Payload</h2>
+<p>The active decode contains a Unix-style directory listing (<code>ls -l</code> format) totaling <strong>140 bytes</strong> of printable ASCII. Two files are referenced, both owned by user <code>psnitch</code> with permissions <code>-rw-r--r--</code>:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Size</th>
+<th>Modified</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>breadcrumbs.txt.asc</code></td>
+<td>374 bytes</td>
+<td>Jul 5 18:07</td>
+</tr>
+<tr>
+<td><code>sec.key</code></td>
+<td>886 bytes</td>
+<td>Jul 5 18:09</td>
+</tr>
+</tbody></table>
+<h2>Analyst Notes</h2>
+<ul>
+<li>The two filenames are notable: <code>breadcrumbs.txt.asc</code> (likely an <strong>ASCII-armored</strong> file given the <code>.asc</code> extension, often used for PGP/GPG signed messages, hashes, or signed key blocks) and <code>sec.key</code> (a private/security key artifact).</li>
+<li>The 2-minute gap between the two file timestamps suggests a sequential generation or modification workflow, with <code>sec.key</code> created after <code>breadcrumbs.txt.asc</code>.</li>
+<li>Only the <strong>listing</strong> is decoded here; the contents of either file are not present in the workspace payload.</li>
+</ul>
+<h2>Structural View</h2>
+<p>The <code>structuredTree</code> field is empty, indicating no parsed protocol tree is available for this decode — the data is being interpreted purely as a raw plaintext stream.</p>
+<ul>
+<li><h1>Conv/Data Tools Workspace Summary</h1>
+</li>
+</ul>
+<p><strong>Active View:</strong> Decodes tab, decoded as <code>plaintext</code> at 2026-07-26T01:57:10Z.</p>
+<p><strong>Decoded Payload (140 bytes):</strong>
+The capture contains the output of a <code>ls -l</code>-style directory listing for two files owned by user <code>psnitch</code>:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Size</th>
+<th>Permissions</th>
+<th>Modified</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>breadcrumbs.txt.asc</code></td>
+<td>374 bytes</td>
+<td><code>-rw-r--r--</code></td>
+<td>Jul 5 18:07</td>
+</tr>
+<tr>
+<td><code>sec.key</code></td>
+<td>886 bytes</td>
+<td><code>-rw-r--r--</code></td>
+<td>Jul 5 18:09</td>
+</tr>
+</tbody></table>
+<p><strong>Observations:</strong></p>
+<ul>
+<li><p>Both files are read-only (mode 644) and owned by the <code>psnitch</code> user, indicating they were generated or staged by the same analyst account.</p>
+</li>
+<li><p>The <code>.asc</code> extension on <code>breadcrumbs.txt</code> strongly suggests <strong>ASCII-armored content</strong> (commonly PGP/GPG or similar), which is consistent with the <strong>trailing dots</strong> observed in the <em>Printable ASCII</em> view — the armor checksum/trailer likely contains non-printable bytes rendered as <code>.</code>.</p>
+</li>
+<li><p><code>sec.key</code> naming is notable — despite the <code>.key</code> extension, the directory listing provides no insight into its actual format (private key, symmetric secret, etc.).</p>
+</li>
+<li><p>The 140-byte captured payload is only the listing itself, not the file contents; any follow-up analysis would require extracting the files or capturing their contents separately.</p>
+</li>
+<li><p>No structured tree is populated, so no protocol-specific field hierarchy is available beyond the raw plaintext view.</p>
+</li>
+<li><h1>Conv/Data Tools — Workspace Summary</h1>
+</li>
+</ul>
+<p><strong>Active View:</strong> Decodes tab, plaintext protocol (timestamp: 2026-07-26T01:57:14Z).</p>
+<h2>Decoded Payload</h2>
+<p>The captured plaintext payload is a Unix <code>ls -l</code>-style directory listing containing two files owned by user/group <code>psnitch</code>, both with permissions <code>-rw-r--r--</code> (0644):</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Size</th>
+<th>Timestamp</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>breadcrumbs.txt.asc</code></td>
+<td>374 bytes</td>
+<td>Jul 5 18:07</td>
+</tr>
+<tr>
+<td><code>sec.key</code></td>
+<td>886 bytes</td>
+<td>Jul 5 18:09</td>
+</tr>
+</tbody></table>
+<h2>Decoder Metrics</h2>
+<ul>
+<li><strong>Byte Length:</strong> 140</li>
+<li><strong>Printable ASCII:</strong> Full payload rendered as printable text (no non-printable data).</li>
+<li><strong>Structured Tree:</strong> Empty — no parsed hierarchy is available for this decode.</li>
+</ul>
+<h2>Analyst Notes</h2>
+<ul>
+<li><p>The presence of <code>sec.key</code> alongside an <code>.asc</code> (likely ASCII-armored) breadcrumbs file is notable from a sensitive-data perspective; consider flagging the flow for further review.</p>
+</li>
+<li><p>The structured tree is unpopulated, suggesting plaintext decoding is the appropriate interpretation rather than a layered/nested format.</p>
+</li>
+<li><h1>Conv/Data Tools Workspace Summary</h1>
+</li>
+</ul>
+<p><strong>Subtab:</strong> Conversions · <strong>Format:</strong> Hex · <strong>Captured:</strong> 2026-07-26 01:57:32 UTC</p>
+<h2>Input Characteristics</h2>
+<ul>
+<li><strong>Byte Length:</strong> 140 bytes</li>
+<li><strong>MIME Type:</strong> <code>text/plain; charset=utf-8</code></li>
+<li><strong>Shannon Entropy:</strong> 4.33 (Low) — consistent with structured English text, not compressed/encrypted data</li>
+<li><strong>Data Type Guesses:</strong> Filename / File Path (High), Base64URL Encoded Data (Medium), Alphanumeric Identifier (Low)</li>
+</ul>
+<h2>Input Preview</h2>
+<p>The visible hex prefix decodes to ASCII: <code>220 ProFTPD Server (Debian) [::ffff:10.0.1.23]\r\n</code>. This is a standard FTP server greeting banner, indicating a <strong>ProFTPD service on Debian</strong>, listening on the IPv6-mapped address <code>10.0.1.23</code>.</p>
+<h2>Output State</h2>
+<ul>
+<li><strong>Hex output:</strong> empty</li>
+<li><strong>ASCII / Base64 outputs:</strong> collapsed ("Click to expand output")</li>
+</ul>
+<p>The analyst should expand the ASCII and Base64 panels to inspect the full decoded payload and verify the remainder of the 140-byte capture (only the leading ~50 bytes are exposed in the preview).</p>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:data-tools|pkt:10.0.1.23$6|stream:10.0.1.23:21:10.0.1.22:55346:TCP|dt:decodes:1566469306">
+<h1>PacketSnitch's Summary</h1>
+<h2>Consolidated Analysis — ProFTPD Banner Capture (Internal Host 10.0.1.23)</h2>
+<h2>Primary Finding: FTP Service Greeting</h2>
+<p>The capture contains the initial <strong>FTP 220 service-ready banner</strong> from a ProFTPD daemon running on a Debian host. The exact payload observed is:</p>
+<pre><code>220 ProFTPD Server (Debian) [::ffff:10.0.1.23]\r\n
+</code></pre>
+<p><strong>Decoded breakdown:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>FTP Reply Code</td>
+<td><code>220</code> — Service ready for new user</td>
+</tr>
+<tr>
+<td>Server Software</td>
+<td><code>ProFTPD</code> (Debian package)</td>
+</tr>
+<tr>
+<td>Server Identifier</td>
+<td><code>[::ffff:10.0.1.23]</code> (IPv4-mapped IPv6, RFC 4291)</td>
+</tr>
+<tr>
+<td>Client/Source IP</td>
+<td><code>10.0.1.23</code> (RFC 1918 private space)</td>
+</tr>
+<tr>
+<td>Line Terminator</td>
+<td><code>\r\n</code> (CRLF)</td>
+</tr>
+<tr>
+<td>Byte Length</td>
+<td></td>
+</tr>
+</tbody></table>
+
+
+</section>
+<hr class="summary-section-divider">
+<section class="summary-section" data-signature="tab:stats|pkt:10.0.1.23$6|stream:10.0.1.23:21:10.0.1.22:55346:TCP">
+<h1>PacketSnitch's Summary</h1>
+<h2>PacketSnitch — Compacted Capture Analysis (Merged)</h2>
+<h2>1. Capture Overview</h2>
+<p>The pcap is a small, mixed-protocol capture totaling <strong>1,116 packets across 72 streams and 427.80 KB of traffic</strong>. The bulk of the session is plaintext: <strong>1,064 unencrypted packets vs. only 52 encrypted</strong>, with <strong>23 undecodable frames</strong>. Stream length averages <strong>15.50 packets</strong> (min 1, max 415), and there is light transport noise — <strong>1 TCP retransmission and 1 out-of-order segment</strong> — indicating a generally healthy but mildly lossy link. The <strong>Heatmap</strong> flagged <strong>668 packet hits</strong>, a high density of interesting/concentrated events relative to the total. <strong>One unique masked credential</strong> was observed: <code>rN*********************eu</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Total packets</td>
+<td>1,116</td>
+</tr>
+<tr>
+<td>Total streams</td>
+<td>72</td>
+</tr>
+<tr>
+<td>Total traffic</td>
+<td>427.80 KB</td>
+</tr>
+<tr>
+<td>Internet hosts</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Encrypted / Unencrypted / Undecodable</td>
+<td>52 / 1,064 / 23</td>
+</tr>
+<tr>
+<td>Bookmarks</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Stream length (avg / min / max)</td>
+<td>15.50 / 1 / 415</td>
+</tr>
+<tr>
+<td>TCP retransmissions</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Out-of-order segments</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Heatmap packet hits</td>
+<td>668</td>
+</tr>
+<tr>
+<td>Unique masked credentials</td>
+<td>1 (<code>rN*********************eu</code>)</td>
+</tr>
+</tbody></table>
+
+<h2>2. Top Talkers</h2>
+<p>The conversation is dominated by a single internal host and a single external endpoint, with the external host's packet count (415) matching</p>
+
+
+</section>
+</body>
+</html>

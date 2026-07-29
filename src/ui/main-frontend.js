@@ -6714,11 +6714,40 @@ function renderSelectedNoteMarkdownPreview(noteText) {
   notesPreviewEl.innerHTML = renderMarkdownToHtml(noteText);
 }
 
+// Single source of truth for the report's top-level heading. The
+// heading is prepended once at the top of the combined summary report
+// rather than being added inside `normalizeSummaryMarkdownHeadings`,
+// which can be invoked multiple times per entry and would otherwise
+// print "PacketSnitch's Summary" repeatedly.
+const SUMMARY_HEADING = "# PacketSnitch's Summary";
+
+// Prepends the consolidated summary heading to a markdown body. The
+// heading is the only place it is added so that the rest of the report
+// can repeat its own section headings without producing duplicates.
+function prependSummaryHeading(markdownText) {
+  const body = String(markdownText || "").trim();
+  if (!body) {
+    return `${SUMMARY_HEADING}\n\n_No summary available._`;
+  }
+  // If the body already starts with the heading (e.g. caller passed
+  // already-heading-prefixed content), don't double it up.
+  if (body.startsWith(SUMMARY_HEADING)) {
+    return body;
+  }
+  return `${SUMMARY_HEADING}\n\n${body}`;
+}
+
 // Normalizes summary markdown headings.
+//
+// This function is intentional about NOT adding the top-level report
+// heading — the heading is added once at the top of the combined report
+// via `prependSummaryHeading`. Adding it here too would cause repeated
+// "PacketSnitch's Summary" headings when the function is invoked per
+// context-scoped entry (see `buildSummaryBodyHtmlForHtmlExport`).
 function normalizeSummaryMarkdownHeadings(markdownText) {
   const source = String(markdownText || "").replace(/\r\n?/g, "\n");
   if (!source.trim()) {
-    return "# PacketSnitch's Summary\n\n_No summary available._";
+    return "";
   }
 
   const lines = source.split("\n");
@@ -6737,7 +6766,9 @@ function normalizeSummaryMarkdownHeadings(markdownText) {
       const headingMatch = line.match(/^(\s{0,3})(#{1,6})(\s+)(.*)$/);
       if (headingMatch) {
         const [, indent, hashes, spacing, titleText] = headingMatch;
-        // Remove any incoming h1 from LLM content; the Summary tab provides one fixed h1.
+        // Strip any incoming h1 from LLM content; the Summary tab
+        // provides one fixed h1 at the top of the report via
+        // `prependSummaryHeading`.
         if (hashes.length === 1) {
           normalizedLines.push(`${indent}##${spacing}${titleText}`);
           return;
@@ -6754,12 +6785,7 @@ function normalizeSummaryMarkdownHeadings(markdownText) {
     normalizedLines.push(line);
   });
 
-  const normalizedBody = normalizedLines.join("\n").trim();
-  if (!normalizedBody) {
-    return "# PacketSnitch's Summary\n\n_No summary available._";
-  }
-
-  return `# PacketSnitch's Summary\n\n${normalizedBody}`;
+  return normalizedLines.join("\n").trim();
 }
 
 // Renders summary markdown preview.
@@ -6768,7 +6794,7 @@ function renderSummaryMarkdownPreview(summaryText) {
   if (!summaryPreviewEl) return;
   initializeSummaryMarkdownLinkHandling();
   summaryPreviewEl.innerHTML = renderMarkdownToHtml(
-    normalizeSummaryMarkdownHeadings(summaryText),
+    prependSummaryHeading(normalizeSummaryMarkdownHeadings(summaryText)),
     { emptyPlaceholder: "No summary available" },
   );
 }
@@ -6783,14 +6809,19 @@ function renderCombinedAnalysisSummary() {
 
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
-  const compacted = normalizeSummaryMarkdownHeadings(
+  const body = normalizeSummaryMarkdownHeadings(
     getCurrentCompactedAnalysisSummary(),
   );
   const statsSection = buildStatsMarkdownSection();
-  if (!statsSection) return compacted;
-  return `${compacted}\n\n---\n\n${statsSection}`;
+  let combined = body;
+  if (body && statsSection) {
+    combined = `${body}\n\n---\n\n${statsSection}`;
+  } else if (!body && statsSection) {
+    combined = statsSection;
+  }
+  if (!combined) return "";
+  return prependSummaryHeading(combined);
 }
-
 // Formats a human-readable byte count (e.g. 1.5 KB, 12.34 MB) for the stats
 // summary section. Returns "0 B" for non-positive values.
 function formatStatsByteCount(bytesValue) {
@@ -18219,7 +18250,7 @@ function writeSummaryFromLLM() {
     const captureOverviewBlock = captureOverviewParts.length
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -18354,6 +18385,7 @@ async function runAnalysisCompaction() {
 - Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
 - Adds new blurbs to the existing analysis rather than replacing it. Keep prior key analysis points and extend them with the new data.
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
+- SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip lookups.
 - Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
 
 ${chronologicalBlurbs}`;
@@ -18961,8 +18993,9 @@ function buildSummaryDistillPrompt(reportMarkdown) {
     "2. CHRONOLOGICAL ORDER: re-sort the ENTIRE report in chronological order, using timestamps from the source data, packet indices, or session order as the anchor. When an event has no explicit timestamp, fall back to its position in the source. The Capture Statistics section stays at the top as the high-level overview, but everything below it should be in chronological order.",
     "3. SECTION HIGHLIGHTS: inside every main section, list the items that stand out as most important (security-relevant, anomalous, credential-bearing, or otherwise noteworthy) FIRST. Lesser findings follow.",
     "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, masked credential values, etc.). Drop only redundant or low-value observations.",
-    "5. STRUCTURE: keep valid Markdown headings, lists, and tables. Do not switch to HTML. Do not wrap the entire response in a single code fence.",
+    "5. STRUCTURE: keep valid Markdown headings, lists, and tables. Do not switch to HTML. Do not wrap the entire response in a single code fence. Do not print the report's top-level heading ('PacketSnitch's Summary') more than once — it is added automatically when the analyst reads the consolidated report, so any h1 in the source should be promoted to h2 or omitted.",
     "6. LENGTH: aim for a more compact report than the input. If the source is already concise, return it largely unchanged.",
+    "7. SQUELCH NO-OP DATA: do not report decoders, parsers, extractors, lookups, or conversions that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the distilled report instead of mentioning its absence. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip/threat-intel lookups. Only describe activity that actually surfaced real content. Silence is preferable to a paragraph that just says 'nothing was found'.",
     "",
     "Here is the source report to distil:",
     "",
