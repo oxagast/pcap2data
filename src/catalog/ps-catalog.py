@@ -1657,22 +1657,19 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="ps-catalog",
-        description=(
-            "PacketSnitch theme catalog server. See module docstring for "
-            "endpoint and CLI usage."
-        ),
-    )
-    parser.add_argument("--host", default=None)
-    parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--db", default=None)
-    parser.add_argument("--themes-dir", default=None)
-    parser.add_argument("--previews-dir", default=None)
-    parser.add_argument("--paddle-webhook-secret", default=None)
-    parser.add_argument("--paddle-public-key", default=None)
-    parser.add_argument(
+def _build_common_parser() -> argparse.ArgumentParser:
+    """Build the parent parser that holds every flag shared by the top-level
+    CLI and every subcommand. Returned parser uses add_help=False so its
+    help text doesn't conflict with the top-level parser's --help."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--host", default=None)
+    common.add_argument("--port", type=int, default=None)
+    common.add_argument("--db", default=None)
+    common.add_argument("--themes-dir", default=None)
+    common.add_argument("--previews-dir", default=None)
+    common.add_argument("--paddle-webhook-secret", default=None)
+    common.add_argument("--paddle-public-key", default=None)
+    common.add_argument(
         "--paddle-api-key",
         default=None,
         help=(
@@ -1681,7 +1678,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "disabled and only themes with a pre-stored checkoutUrl will work."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--paddle-env",
         choices=("live", "sandbox"),
         default=None,
@@ -1691,7 +1688,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "api.paddle.com + pay.paddle.com. Env: PS_CATALOG_PADDLE_ENV."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--tls-cert",
         default=None,
         help=(
@@ -1700,7 +1697,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Env: PS_CATALOG_TLS_CERT."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--tls-key",
         default=None,
         help=(
@@ -1708,7 +1705,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "--tls-cert. Env: PS_CATALOG_TLS_KEY."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--success-url",
         default=None,
         help=(
@@ -1716,7 +1713,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Env: PS_CATALOG_SUCCESS_URL."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--cancel-url",
         default=None,
         help=(
@@ -1724,7 +1721,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Env: PS_CATALOG_CANCEL_URL."
         ),
     )
-    parser.add_argument(
+    common.add_argument(
         "--allow-insecure-return-urls",
         action="store_true",
         default=None,
@@ -1734,22 +1731,48 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Env: PS_CATALOG_ALLOW_INSECURE_RETURN_URLS=1|0."
         ),
     )
-    parser.add_argument("--base-url", default=None)
-    parser.add_argument(
+    common.add_argument("--base-url", default=None)
+    common.add_argument(
         "--log-level",
         default=os.environ.get("PS_CATALOG_LOG_LEVEL", "INFO"),
         help="Python logging level (default INFO)",
     )
+    return common
+
+
+COMMON_PARSER = _build_common_parser()
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ps-catalog",
+        description=(
+            "PacketSnitch theme catalog server. See module docstring for "
+            "endpoint and CLI usage."
+        ),
+        # `parents` lets the global flags be accepted both before the
+        # subcommand (e.g. `ps-catalog.py --tls-cert FOO serve`) and after
+        # it (e.g. `ps-catalog.py serve --tls-cert FOO`). The flag is
+        # registered on the parent parser and inherited by every
+        # subcommand via `parents=[COMMON_PARSER]`.
+        parents=[COMMON_PARSER],
+    )
 
     sub = parser.add_subparsers(dest="command", required=False)
 
-    p_init = sub.add_parser("init", help="Create the sqlite database file")
+    p_init = sub.add_parser(
+        "init", help="Create the sqlite database file", parents=[COMMON_PARSER]
+    )
     p_init.set_defaults(func=cmd_init)
 
-    p_serve = sub.add_parser("serve", help="Run the HTTP server")
+    p_serve = sub.add_parser(
+        "serve", help="Run the HTTP server", parents=[COMMON_PARSER]
+    )
     p_serve.set_defaults(func=cmd_serve)
 
-    p_add_theme = sub.add_parser("add-theme", help="Register a theme JSON file")
+    p_add_theme = sub.add_parser(
+        "add-theme", help="Register a theme JSON file", parents=[COMMON_PARSER]
+    )
     p_add_theme.add_argument("theme_path")
     p_add_theme.add_argument(
         "--preview-filename",
@@ -1779,6 +1802,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_remove_theme = sub.add_parser(
         "remove-theme",
         help="Unregister a theme and (optionally) revoke its licenses / preview",
+        parents=[COMMON_PARSER],
     )
     p_remove_theme.add_argument("theme_id")
     p_remove_theme.add_argument(
@@ -1802,21 +1826,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_remove_theme.set_defaults(func=cmd_remove_theme)
 
     p_add_preview = sub.add_parser(
-        "add-preview", help="Copy a preview image into the previews dir"
+        "add-preview",
+        help="Copy a preview image into the previews dir",
+        parents=[COMMON_PARSER],
     )
     p_add_preview.add_argument("preview_path")
     p_add_preview.add_argument("theme_id")
     p_add_preview.set_defaults(func=cmd_add_preview)
 
     p_add_license = sub.add_parser(
-        "add-license", help="Manually grant a license (for dev/testing)"
+        "add-license",
+        help="Manually grant a license (for dev/testing)",
+        parents=[COMMON_PARSER],
     )
     p_add_license.add_argument("install_uuid")
     p_add_license.add_argument("theme_id")
     p_add_license.add_argument("--subscription", default=None)
     p_add_license.set_defaults(func=cmd_add_license)
 
-    p_list = sub.add_parser("list-themes", help="List all registered themes")
+    p_list = sub.add_parser(
+        "list-themes", help="List all registered themes", parents=[COMMON_PARSER]
+    )
     p_list.set_defaults(func=cmd_list_themes)
 
     return parser
