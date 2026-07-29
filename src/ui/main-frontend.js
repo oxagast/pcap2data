@@ -19112,17 +19112,26 @@ function pushDistilledSummaryIntoSummaryTab(distilledText) {
   // distilled snapshot in the running summary. Context-scoped entries
   // (the ones produced by runAnalysisCompaction) are preserved so the
   // analyst can still see how the LLM derived its findings.
-  compactedAnalysisSummaries = compactedAnalysisSummaries.filter(
+  const contextEntries = compactedAnalysisSummaries.filter(
     (entry) =>
       entry &&
       typeof entry === "object" &&
       entry.signature !== SUMMARY_DISTILL_ENTRY_SIGNATURE,
   );
-  compactedAnalysisSummaries.push({
-    signature: SUMMARY_DISTILL_ENTRY_SIGNATURE,
-    summary: distilledText.trim(),
-    lastUpdatedAt: Date.now(),
-  });
+  // The consolidated distilled summary is the headline output for the
+  // analyst, so it sits at the top of the summary stream. Everything
+  // already there (per-context compaction entries) is kept in its
+  // original order *below* the distilled block so the consolidated view
+  // is up front and center while the supporting context is still
+  // visible underneath.
+  compactedAnalysisSummaries = [
+    {
+      signature: SUMMARY_DISTILL_ENTRY_SIGNATURE,
+      summary: distilledText.trim(),
+      lastUpdatedAt: Date.now(),
+    },
+    ...contextEntries,
+  ];
   try {
     renderCombinedAnalysisSummary();
   } catch (err) {
