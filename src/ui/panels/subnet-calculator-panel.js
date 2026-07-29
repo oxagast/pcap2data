@@ -79,7 +79,7 @@ function createSubnetCalculatorPanel({
     }
 
     function getVirusTotalApiKey() {
-        return String(getCurrentSettings()?.backend?.virusTotalApiKey || "").trim();
+        return String(getCurrentSettings()?.apiKeys?.virusTotalApiKey || "").trim();
     }
 
     function getThreatIntelQueryInputValue() {

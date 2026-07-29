@@ -976,6 +976,9 @@ No keystore entries saved.</pre>
             <button id="settings-subtab-llm" class="settings-subtab-btn">
               LLM
             </button>
+            <button id="settings-subtab-api-keys" class="settings-subtab-btn">
+              API Keys
+            </button>
             <button id="settings-subtab-debug" class="settings-subtab-btn">
               Debug
             </button>
@@ -1067,12 +1070,6 @@ No keystore entries saved.</pre>
                 <select id="settings-llm-model"></select>
                 <div class="settings-help-text">Includes local and cloud variants for common models.</div>
 
-                <label for="settings-llm-api-key">Ollama API key</label>
-                <input id="settings-llm-api-key" type="password" autocomplete="off" spellcheck="false"
-                  placeholder="Leave blank to keep the stored key" />
-                <div class="settings-help-text">Stored locally in the settings file. Leave blank to keep the current
-                  key.</div>
-
                 <label class="settings-checkbox-row" for="settings-llm-active-by-default">
                   <input id="settings-llm-active-by-default" type="checkbox" />
                   LLM active by default
@@ -1104,6 +1101,72 @@ No keystore entries saved.</pre>
                 <input id="settings-llm-analysis-compaction-threshold-blubs" type="number" min="1" step="1" />
                 <div class="settings-help-text">After this many new analysis blurbs are appended, the LLM will compact
                   the recent history into a summary at the top of the Analysis panel.</div>
+                <div class="settings-help-text">
+                  <em>Note:</em> The Ollama API key has moved to the
+                  <strong>API Keys</strong> subtab.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-api-keys-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">LLM API Keys</div>
+                <div class="settings-status-row" aria-label="LLM diagnostics">
+                  <span id="settings-api-keys-llm-installed-status"
+                    class="settings-status-pill status-neutral">Installed:
+                    —</span>
+                  <span id="settings-api-keys-llm-online-status" class="settings-status-pill status-neutral">Online:
+                    —</span>
+                  <span id="settings-api-keys-llm-cloud-status" class="settings-status-pill status-neutral">Cloud API:
+                    —</span>
+                  <span id="settings-api-keys-llm-last-result-status" class="settings-status-pill status-neutral">Last
+                    call
+                    result: —</span>
+                </div>
+                <label for="settings-llm-api-key">Ollama API key</label>
+                <input id="settings-llm-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Stored locally in the settings file. Leave blank to keep the current
+                  key.</div>
+              </div>
+              <div class="settings-section">
+                <div class="settings-section-title">Threat Intel API Keys</div>
+                <div class="settings-status-row" aria-label="VirusTotal diagnostics">
+                  <span id="settings-backend-virustotal-endpoint-status"
+                    class="settings-status-pill status-neutral">VirusTotal Endpoint:
+                    —</span>
+                  <span id="settings-backend-virustotal-key-status"
+                    class="settings-status-pill status-neutral">VirusTotal Key:
+                    —</span>
+                </div>
+                <label for="settings-backend-virustotal-api-key">VirusTotal API key</label>
+                <input id="settings-backend-virustotal-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Used by Conv Threat Intel lookups against VirusTotal endpoints.
+                  Stored locally in the settings file.</div>
+              </div>
+              <div class="settings-section">
+                <div class="settings-section-title">Metrics Endpoint</div>
+                <div class="settings-status-row" aria-label="Metrics diagnostics">
+                  <span id="settings-api-keys-metrics-endpoint-status"
+                    class="settings-status-pill status-neutral">Endpoint:
+                    —</span>
+                  <span id="settings-api-keys-metrics-consent-status"
+                    class="settings-status-pill status-neutral">Consent:
+                    —</span>
+                  <span id="settings-api-keys-metrics-last-flush-status"
+                    class="settings-status-pill status-neutral">Last flush:
+                    —</span>
+                </div>
+                <div class="settings-help-text">Anonymous usage diagnostics for PacketSnitch. The endpoint URL is
+                  configured in the Privacy panel and the install UUID is generated on first run.</div>
+                <label for="settings-api-keys-metrics-install-id">Metrics install UUID</label>
+                <input id="settings-api-keys-metrics-install-id" type="text" readonly tabindex="-1" aria-readonly="true"
+                  class="settings-readonly-field" placeholder="Not generated yet" />
+                <div class="settings-help-text">Stable identifier used when reporting Metrics events. It is
+                  generated on first run and stored locally. This field cannot be edited from the UI.</div>
               </div>
             </div>
           </div>
@@ -1190,12 +1253,6 @@ No keystore entries saved.</pre>
                     —</span>
                   <span id="settings-backend-mode-status" class="settings-status-pill status-neutral">Mode:
                     —</span>
-                  <span id="settings-backend-virustotal-endpoint-status"
-                    class="settings-status-pill status-neutral">VirusTotal Endpoint:
-                    —</span>
-                  <span id="settings-backend-virustotal-key-status"
-                    class="settings-status-pill status-neutral">VirusTotal Key:
-                    —</span>
                 </div>
 
                 <label for="settings-backend-chunk-size">Default backend packet chunk size</label>
@@ -1221,12 +1278,6 @@ No keystore entries saved.</pre>
                 <label for="settings-backend-tcp-port">TCP port</label>
                 <input id="settings-backend-tcp-port" type="number" min="1" step="1" />
 
-                <label for="settings-backend-virustotal-api-key">VirusTotal API key</label>
-                <input id="settings-backend-virustotal-api-key" type="password" autocomplete="off" spellcheck="false"
-                  placeholder="Leave blank to keep the stored key" />
-                <div class="settings-help-text">Used by Conv Threat Intel lookups against VirusTotal endpoints.
-                  Stored locally in the settings file.</div>
-
                 <label class="settings-checkbox-row" for="settings-backend-force-legacy-spawn">
                   <input id="settings-backend-force-legacy-spawn" type="checkbox" />
                   Force legacy backend spawn mode
@@ -1242,6 +1293,10 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">
                   Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
                   instead of writing hosts-*.json files to disk.
+                </div>
+                <div class="settings-help-text">
+                  <em>Note:</em> The VirusTotal API key has moved to the
+                  <strong>API Keys</strong> subtab.
                 </div>
               </div>
             </div>

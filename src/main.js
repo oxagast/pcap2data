@@ -740,13 +740,13 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
     const ollamaFetch = getOllamaFetch(
       Number(settings.llm.ollamaRequestTimeoutSeconds) * 1000,
     );
-    const ollamaClient = settings.llm.ollamaApiKey
+    const ollamaClient = settings.apiKeys.ollamaApiKey
       ? new Ollama({
         fetch: ollamaFetch,
         headers: {
-          Authorization: settings.llm.ollamaApiKey.startsWith("Bearer ")
-            ? settings.llm.ollamaApiKey
-            : `Bearer ${settings.llm.ollamaApiKey}`,
+          Authorization: settings.apiKeys.ollamaApiKey.startsWith("Bearer ")
+            ? settings.apiKeys.ollamaApiKey
+            : `Bearer ${settings.apiKeys.ollamaApiKey}`,
         },
       })
       : new Ollama({ fetch: ollamaFetch });
@@ -1027,7 +1027,7 @@ function checkOllama() {
 
 async function checkOllamaCloudApi() {
   const settings = getAppSettings();
-  const apiKey = settings?.llm?.ollamaApiKey;
+  const apiKey = settings?.apiKeys?.ollamaApiKey;
   if (typeof apiKey !== "string" || !apiKey.trim()) {
     return {
       cloudApiReachable: false,
@@ -1772,7 +1772,12 @@ function buildVirusTotalAnalysisSummary(vtData) {
 function getBackendVirusTotalApiKeyFromSettings() {
   try {
     const settings = getAppSettings();
-    return String(settings?.backend?.virusTotalApiKey || settings?.backend?.virustotal_api_key || "").trim();
+    return String(
+      settings?.apiKeys?.virusTotalApiKey
+      || settings?.backend?.virusTotalApiKey
+      || settings?.backend?.virustotal_api_key
+      || "",
+    ).trim();
   } catch (err) {
     console.error("getBackendVirusTotalApiKeyFromSettings error:", err);
     return "";
@@ -3323,7 +3328,7 @@ ipcMain.handle("get-ollama-models", async () => {
     await loadSettingsFromDisk();
   }
   const settings = getAppSettings();
-  const apiKey = settings?.llm?.ollamaApiKey;
+  const apiKey = settings?.apiKeys?.ollamaApiKey;
   const hasApiKey = typeof apiKey === "string" && apiKey.trim();
 
   // 1. Try live ollama models first (returns [] if ollama is unavailable).

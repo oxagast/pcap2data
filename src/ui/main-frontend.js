@@ -952,6 +952,7 @@ function formatNetworkEndpointDisplay(ip, port) {
 
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
+const SETTINGS_SUBTAB_API_KEYS = "api-keys";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
@@ -1013,6 +1014,10 @@ let cachedVirusTotalDiagnostics = null;
 let virusTotalDiagnosticsInFlight = null;
 let virusTotalDiagnosticsLastSuccessAt = 0;
 const VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS = 30_000;
+let cachedMetricsDiagnostics = null;
+let metricsDiagnosticsInFlight = null;
+let metricsDiagnosticsLastSuccessAt = 0;
+const METRICS_DIAGNOSTICS_DEDUPE_MS = 30_000;
 let cachedSettingsAboutReleaseInfo = null;
 let settingsAboutReleaseInfoLoadPromise = null;
 let settingsAboutTypewriterToken = 0;
@@ -1184,6 +1189,221 @@ function syncLlmDiagnosticsIndicators() {
     lastResultCode === null || typeof lastResultCode === "undefined" ? "—" : String(lastResultCode),
     lastResultCode === 0 ? "status-ok" : lastResultCode === null || typeof lastResultCode === "undefined" ? "status-neutral" : "status-warn",
   );
+
+  // Mirror the same indicators in the API Keys panel so the pills light up
+  // regardless of which subtab the user is currently looking at.
+  renderLlmDiagnosticIndicator(
+    "settings-api-keys-llm-installed-status",
+    "Installed",
+    diagnostics?.ollamaInstalled ? "Yes" : "No",
+    diagnostics?.ollamaInstalled ? "status-ok" : "status-error",
+  );
+  renderLlmDiagnosticIndicator(
+    "settings-api-keys-llm-online-status",
+    "Online",
+    diagnostics?.ollamaServerListening ? "Yes" : "No",
+    diagnostics?.ollamaServerListening ? "status-ok" : "status-error",
+  );
+  renderLlmDiagnosticIndicator(
+    "settings-api-keys-llm-cloud-status",
+    "Cloud API",
+    cloudResultCode === null || typeof cloudResultCode === "undefined"
+      ? "—"
+      : String(cloudResultCode),
+    cloudResultCode === 0
+      ? "status-ok"
+      : cloudResultCode === null || typeof cloudResultCode === "undefined"
+        ? "status-neutral"
+        : "status-warn",
+  );
+  renderLlmDiagnosticIndicator(
+    "settings-api-keys-llm-last-result-status",
+    "Last call result",
+    lastResultCode === null || typeof lastResultCode === "undefined" ? "—" : String(lastResultCode),
+    lastResultCode === 0 ? "status-ok" : lastResultCode === null || typeof lastResultCode === "undefined" ? "status-neutral" : "status-warn",
+  );
+}
+
+// Returns metrics diagnostic element.
+function getMetricsDiagnosticElement(id) {
+  return document.getElementById(id);
+}
+
+// Renders metrics diagnostic indicator.
+function renderMetricsDiagnosticIndicator(elementId, label, value, stateClass) {
+  const element = getMetricsDiagnosticElement(elementId);
+  if (!element) return;
+  element.textContent = `${label}: ${value}`;
+  element.className = `settings-status-pill ${stateClass}`;
+}
+
+// Syncs metrics diagnostics indicators.
+function syncMetricsDiagnosticsIndicators() {
+  const diagnostics = cachedMetricsDiagnostics || {};
+  const privacySettings = getCurrentSettings()?.privacy || {};
+  const endpointConfigured = Boolean(
+    String(privacySettings.metricsEndpointUrl || "").trim(),
+  );
+  const endpointReachable = diagnostics.endpointReachable;
+
+  let endpointValue = "—";
+  let endpointClass = "status-neutral";
+  if (!endpointConfigured) {
+    endpointValue = "Not configured";
+    endpointClass = "status-warn";
+  } else if (endpointReachable === true) {
+    endpointValue = "Up";
+    endpointClass = "status-ok";
+  } else if (endpointReachable === false) {
+    endpointValue = "Down";
+    endpointClass = "status-error";
+  } else {
+    endpointValue = "Unknown";
+    endpointClass = "status-neutral";
+  }
+  renderMetricsDiagnosticIndicator(
+    "settings-api-keys-metrics-endpoint-status",
+    "Endpoint",
+    endpointValue,
+    endpointClass,
+  );
+
+  let consentValue = "—";
+  let consentClass = "status-neutral";
+  if (typeof diagnostics.consentStatus === "string" && diagnostics.consentStatus) {
+    if (diagnostics.consentStatus === "first-run") {
+      consentValue = "Not asked";
+      consentClass = "status-warn";
+    } else if (diagnostics.consentStatus === "enabled") {
+      consentValue = "Granted";
+      consentClass = "status-ok";
+    } else if (diagnostics.consentStatus === "disabled") {
+      consentValue = "Declined";
+      consentClass = "status-neutral";
+    } else {
+      consentValue = diagnostics.consentStatus;
+    }
+  }
+  renderMetricsDiagnosticIndicator(
+    "settings-api-keys-metrics-consent-status",
+    "Consent",
+    consentValue,
+    consentClass,
+  );
+
+  const lastFlush = diagnostics.lastFlush;
+  let lastFlushValue = "—";
+  let lastFlushClass = "status-neutral";
+  if (lastFlush && typeof lastFlush === "object") {
+    if (lastFlush.ok === true) {
+      lastFlushValue = `OK (${lastFlush.sent || 0})`;
+      lastFlushClass = "status-ok";
+    } else if (lastFlush.ok === false) {
+      lastFlushValue = lastFlush.reason
+        ? `Failed (${lastFlush.reason})`
+        : "Failed";
+      lastFlushClass = "status-error";
+    } else if (lastFlush.checkedAt) {
+      lastFlushValue = `Checked ${formatRelativeTimestamp(lastFlush.checkedAt)}`;
+      lastFlushClass = "status-neutral";
+    }
+  } else if (typeof lastFlush === "string") {
+    lastFlushValue = lastFlush;
+  }
+  renderMetricsDiagnosticIndicator(
+    "settings-api-keys-metrics-last-flush-status",
+    "Last flush",
+    lastFlushValue,
+    lastFlushClass,
+  );
+}
+
+function formatRelativeTimestamp(isoString) {
+  if (!isoString) return "";
+  const ts = Date.parse(isoString);
+  if (Number.isNaN(ts)) return isoString;
+  const deltaSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (deltaSec < 60) return `${deltaSec}s ago`;
+  if (deltaSec < 3600) return `${Math.round(deltaSec / 60)}m ago`;
+  if (deltaSec < 86400) return `${Math.round(deltaSec / 3600)}h ago`;
+  return `${Math.round(deltaSec / 86400)}d ago`;
+}
+
+// Refreshes metrics diagnostics by probing the configured endpoint.
+async function refreshMetricsDiagnostics({ force = false } = {}) {
+  if (!window.metricsapi || typeof window.metricsapi.getStatus !== "function") {
+    cachedMetricsDiagnostics = null;
+    syncMetricsDiagnosticsIndicators();
+    return null;
+  }
+  if (!force && metricsDiagnosticsInFlight) {
+    return metricsDiagnosticsInFlight;
+  }
+  if (
+    !force
+    && cachedMetricsDiagnostics
+    && Date.now() - metricsDiagnosticsLastSuccessAt < METRICS_DIAGNOSTICS_DEDUPE_MS
+  ) {
+    return cachedMetricsDiagnostics;
+  }
+  metricsDiagnosticsInFlight = (async () => {
+    try {
+      const status = await window.metricsapi.getStatus();
+      const privacySettings = getCurrentSettings()?.privacy || {};
+      const consentStatus = window.__PACKETSNITCH_METRICS__
+        && typeof window.__PACKETSNITCH_METRICS__.getConsentStatus === "function"
+        ? window.__PACKETSNITCH_METRICS__.getConsentStatus()
+        : null;
+      let endpointReachable = null;
+      const endpoint = String(privacySettings.metricsEndpointUrl || status?.endpoint || "").trim();
+      if (endpoint && privacySettings.metricsEnabled) {
+        try {
+          const flushResult = await window.metricsapi.flush({
+            installId: status?.installId || privacySettings.metricsInstallId || "",
+            appVersion: status?.appVersion || "",
+            sentAt: new Date().toISOString(),
+            events: [],
+          });
+          endpointReachable = Boolean(
+            flushResult && flushResult.ok === true && flushResult.reason !== "no-events",
+          );
+          // Treat an empty-events successful response as a connectivity OK.
+          if (flushResult && flushResult.ok === true) {
+            endpointReachable = true;
+          }
+        } catch (_error) {
+          endpointReachable = false;
+        }
+      }
+      cachedMetricsDiagnostics = {
+        consentStatus,
+        endpointReachable,
+        lastFlush: {
+          checkedAt: new Date().toISOString(),
+          ok: endpointReachable === true,
+          reason: endpointReachable === false ? "probe-failed" : null,
+          sent: 0,
+        },
+      };
+      metricsDiagnosticsLastSuccessAt = Date.now();
+    } catch (error) {
+      console.warn("Unable to resolve Metrics diagnostics:", error);
+      cachedMetricsDiagnostics = {
+        consentStatus: null,
+        endpointReachable: false,
+        lastFlush: {
+          checkedAt: new Date().toISOString(),
+          ok: false,
+          reason: "probe-failed",
+        },
+      };
+    } finally {
+      metricsDiagnosticsInFlight = null;
+    }
+    syncMetricsDiagnosticsIndicators();
+    return cachedMetricsDiagnostics;
+  })();
+  return metricsDiagnosticsInFlight;
 }
 
 // Returns backend diagnostic element.
@@ -1200,7 +1420,7 @@ function renderBackendDiagnosticIndicator(elementId, label, value, stateClass) {
 }
 
 function getBackendVirusTotalApiKey(settings = getCurrentSettings()) {
-  return String(settings?.backend?.virusTotalApiKey || "").trim();
+  return String(settings?.apiKeys?.virusTotalApiKey || "").trim();
 }
 
 function syncVirusTotalDiagnosticsIndicators() {
@@ -2413,6 +2633,9 @@ function syncSettingsFormFromState() {
   const backendVirusTotalApiKeyEl = document.getElementById(
     "settings-backend-virustotal-api-key",
   );
+  const apiKeysMetricsInstallIdEl = document.getElementById(
+    "settings-api-keys-metrics-install-id",
+  );
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
@@ -2518,9 +2741,14 @@ function syncSettingsFormFromState() {
   }
   if (backendVirusTotalApiKeyEl) {
     backendVirusTotalApiKeyEl.value = "";
-    backendVirusTotalApiKeyEl.placeholder = settings.backend.virusTotalApiKey
+    backendVirusTotalApiKeyEl.placeholder = settings.apiKeys?.virusTotalApiKey
       ? "Stored key present; leave blank to keep it"
       : "Leave blank to keep the stored key";
+  }
+  if (apiKeysMetricsInstallIdEl) {
+    apiKeysMetricsInstallIdEl.value = String(
+      settings.privacy?.metricsInstallId || "",
+    );
   }
   if (backendForceLegacySpawnEl) {
     backendForceLegacySpawnEl.checked = Boolean(settings.backend.forceLegacySpawn);
@@ -2583,7 +2811,7 @@ function syncSettingsFormFromState() {
   }
   if (apiKeyEl) {
     apiKeyEl.value = "";
-    apiKeyEl.placeholder = settings.llm.ollamaApiKey
+    apiKeyEl.placeholder = settings.apiKeys?.ollamaApiKey
       ? "Stored key present; leave blank to keep it"
       : "Leave blank to keep the stored key";
   }
@@ -2653,6 +2881,7 @@ function syncSettingsFormFromState() {
   }
   syncLlmDiagnosticsIndicators();
   syncBackendDiagnosticsIndicators();
+  syncMetricsDiagnosticsIndicators();
 }
 
 // Handles read settings form state.
@@ -2782,8 +3011,6 @@ function readSettingsFormState() {
       tcpPort: backendTcpPortEl
         ? backendTcpPortEl.value
         : DEFAULT_SETTINGS.backend.tcpPort,
-      virusTotalApiKey:
-        trimmedVirusTotalApiKey || currentSettings.backend.virusTotalApiKey || "",
       forceLegacySpawn: backendForceLegacySpawnEl
         ? backendForceLegacySpawnEl.checked
         : DEFAULT_SETTINGS.backend.forceLegacySpawn,
@@ -2828,7 +3055,6 @@ function readSettingsFormState() {
     },
     llm: {
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
-      ollamaApiKey: trimmedApiKey || currentSettings.llm.ollamaApiKey || "",
       activeByDefault: activeByDefaultEl
         ? activeByDefaultEl.checked
         : DEFAULT_SETTINGS.llm.activeByDefault,
@@ -2844,6 +3070,11 @@ function readSettingsFormState() {
       analysisCompactionThresholdBlubs: analysisCompactionThresholdBlubsEl
         ? analysisCompactionThresholdBlubsEl.value
         : DEFAULT_SETTINGS.llm.analysisCompactionThresholdBlubs,
+    },
+    apiKeys: {
+      ollamaApiKey: trimmedApiKey || currentSettings.apiKeys?.ollamaApiKey || "",
+      virusTotalApiKey:
+        trimmedVirusTotalApiKey || currentSettings.apiKeys?.virusTotalApiKey || "",
     },
     plugins: {
       autoDisableFailureThreshold: pluginFailureThresholdEl
@@ -3669,8 +3900,8 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   // Invalidate the VirusTotal diagnostics cache so a saved/cleared API key
   // is verified immediately rather than masked by a recent successful fetch.
   if (
-    previousSettings?.backend?.virusTotalApiKey !==
-    nextSettings?.backend?.virusTotalApiKey
+    previousSettings?.apiKeys?.virusTotalApiKey !==
+    nextSettings?.apiKeys?.virusTotalApiKey
   ) {
     invalidateVirusTotalDiagnosticsCache();
   }
@@ -3841,21 +4072,24 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const nextTab =
     tabName === SETTINGS_SUBTAB_LLM
       ? SETTINGS_SUBTAB_LLM
-      : tabName === SETTINGS_SUBTAB_BACKEND
-        ? SETTINGS_SUBTAB_BACKEND
-        : tabName === SETTINGS_SUBTAB_DEBUG
-          ? SETTINGS_SUBTAB_DEBUG
-          : tabName === SETTINGS_SUBTAB_PLUGINS
-            ? SETTINGS_SUBTAB_PLUGINS
-            : tabName === SETTINGS_SUBTAB_PRIVACY
-              ? SETTINGS_SUBTAB_PRIVACY
-              : tabName === SETTINGS_SUBTAB_ABOUT
-                ? SETTINGS_SUBTAB_ABOUT
-                : SETTINGS_SUBTAB_GENERAL;
+      : tabName === SETTINGS_SUBTAB_API_KEYS
+        ? SETTINGS_SUBTAB_API_KEYS
+        : tabName === SETTINGS_SUBTAB_BACKEND
+          ? SETTINGS_SUBTAB_BACKEND
+          : tabName === SETTINGS_SUBTAB_DEBUG
+            ? SETTINGS_SUBTAB_DEBUG
+            : tabName === SETTINGS_SUBTAB_PLUGINS
+              ? SETTINGS_SUBTAB_PLUGINS
+              : tabName === SETTINGS_SUBTAB_PRIVACY
+                ? SETTINGS_SUBTAB_PRIVACY
+                : tabName === SETTINGS_SUBTAB_ABOUT
+                  ? SETTINGS_SUBTAB_ABOUT
+                  : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
   metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
+  const apiKeysBtn = document.getElementById("settings-subtab-api-keys");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
   const pluginsBtn = document.getElementById("settings-subtab-plugins");
@@ -3863,6 +4097,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const aboutBtn = document.getElementById("settings-subtab-about");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
+  const apiKeysPanel = document.getElementById("settings-api-keys-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
   const pluginsPanel = document.getElementById("settings-plugins-panel");
@@ -3873,6 +4108,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (llmBtn) {
     llmBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_LLM);
+  }
+  if (apiKeysBtn) {
+    apiKeysBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_API_KEYS);
   }
   if (backendBtn) {
     backendBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_BACKEND);
@@ -3895,6 +4133,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (llmPanel) {
     llmPanel.hidden = nextTab !== SETTINGS_SUBTAB_LLM;
   }
+  if (apiKeysPanel) {
+    apiKeysPanel.hidden = nextTab !== SETTINGS_SUBTAB_API_KEYS;
+  }
   if (backendPanel) {
     backendPanel.hidden = nextTab !== SETTINGS_SUBTAB_BACKEND;
   }
@@ -3910,12 +4151,16 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (aboutPanel) {
     aboutPanel.hidden = nextTab !== SETTINGS_SUBTAB_ABOUT;
   }
-  if (nextTab === SETTINGS_SUBTAB_LLM) {
+  if (nextTab === SETTINGS_SUBTAB_LLM || nextTab === SETTINGS_SUBTAB_API_KEYS) {
     syncLlmDiagnosticsIndicators();
   }
-  if (nextTab === SETTINGS_SUBTAB_BACKEND) {
+  if (nextTab === SETTINGS_SUBTAB_BACKEND || nextTab === SETTINGS_SUBTAB_API_KEYS) {
     syncBackendDiagnosticsIndicators();
     void refreshBackendDiagnostics({ ensureReady: true });
+  }
+  if (nextTab === SETTINGS_SUBTAB_API_KEYS) {
+    syncMetricsDiagnosticsIndicators();
+    void refreshMetricsDiagnostics();
   }
   if (nextTab === SETTINGS_SUBTAB_PLUGINS) {
     void refreshPluginRegistryView();
@@ -20216,6 +20461,10 @@ document.getElementById("settings-subtab-general").addEventListener("click", () 
 
 document.getElementById("settings-subtab-llm").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_LLM);
+});
+
+document.getElementById("settings-subtab-api-keys").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_API_KEYS);
 });
 
 document.getElementById("settings-subtab-backend").addEventListener("click", () => {

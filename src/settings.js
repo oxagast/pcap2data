@@ -43,7 +43,6 @@ const DEFAULT_SETTINGS = Object.freeze({
         tcpHost: "127.0.0.1",
         tcpPort: 9020,
         forceLegacySpawn: false,
-        virusTotalApiKey: "",
     },
     debug: {
         bsonGzipSessionEnabled: true,
@@ -67,7 +66,6 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     llm: {
         ollamaModel: "minimax-m3:cloud",
-        ollamaApiKey: "",
         activeByDefault: false,
         backgroundSummaryGenerationEnabled: true,
         triggerDelaySeconds: 5,
@@ -75,6 +73,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         ollamaRequestTimeoutSeconds: 300,
         retryCount: 2,
         analysisCompactionThresholdBlubs: 6,
+    },
+    apiKeys: {
+        ollamaApiKey: "",
+        virusTotalApiKey: "",
     },
     plugins: {
         autoDisableFailureThreshold: 3,
@@ -184,6 +186,7 @@ function normalizeSettings(rawSettings = {}) {
     const debug = source.debug && typeof source.debug === "object" ? source.debug : {};
     const list = source.list && typeof source.list === "object" ? source.list : {};
     const llm = source.llm && typeof source.llm === "object" ? source.llm : {};
+    const apiKeys = source.apiKeys && typeof source.apiKeys === "object" ? source.apiKeys : {};
     const plugins = source.plugins && typeof source.plugins === "object" ? source.plugins : {};
     const privacy = source.privacy && typeof source.privacy === "object" ? source.privacy : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
@@ -191,6 +194,7 @@ function normalizeSettings(rawSettings = {}) {
     const debugDefaults = DEFAULT_SETTINGS.debug;
     const listDefaults = DEFAULT_SETTINGS.list;
     const defaults = DEFAULT_SETTINGS.llm;
+    const apiKeysDefaults = DEFAULT_SETTINGS.apiKeys;
     const pluginDefaults = DEFAULT_SETTINGS.plugins;
     const privacyDefaults = DEFAULT_SETTINGS.privacy;
 
@@ -254,10 +258,6 @@ function normalizeSettings(rawSettings = {}) {
                 typeof backend.forceLegacySpawn === "boolean"
                     ? backend.forceLegacySpawn
                     : backendDefaults.forceLegacySpawn,
-            virusTotalApiKey:
-                typeof backend.virusTotalApiKey === "string" && backend.virusTotalApiKey.trim()
-                    ? backend.virusTotalApiKey.trim()
-                    : backendDefaults.virusTotalApiKey,
         },
         debug: {
             bsonGzipSessionEnabled:
@@ -339,10 +339,6 @@ function normalizeSettings(rawSettings = {}) {
                 typeof llm.ollamaModel === "string" && llm.ollamaModel.trim()
                     ? llm.ollamaModel.trim()
                     : defaults.ollamaModel,
-            ollamaApiKey:
-                typeof llm.ollamaApiKey === "string" && llm.ollamaApiKey.trim()
-                    ? llm.ollamaApiKey.trim()
-                    : defaults.ollamaApiKey,
             activeByDefault:
                 typeof llm.activeByDefault === "boolean"
                     ? llm.activeByDefault
@@ -376,6 +372,16 @@ function normalizeSettings(rawSettings = {}) {
                 defaults.analysisCompactionThresholdBlubs,
                 1,
             ),
+        },
+        apiKeys: {
+            ollamaApiKey:
+                typeof apiKeys.ollamaApiKey === "string" && apiKeys.ollamaApiKey.trim()
+                    ? apiKeys.ollamaApiKey.trim()
+                    : apiKeysDefaults.ollamaApiKey,
+            virusTotalApiKey:
+                typeof apiKeys.virusTotalApiKey === "string" && apiKeys.virusTotalApiKey.trim()
+                    ? apiKeys.virusTotalApiKey.trim()
+                    : apiKeysDefaults.virusTotalApiKey,
         },
         plugins: {
             autoDisableFailureThreshold: toPositiveInteger(
