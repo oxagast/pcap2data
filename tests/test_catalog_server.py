@@ -1202,7 +1202,7 @@ def test_cli_add_theme_falls_back_to_json_paddle_block(tmp_path):
 
 def argparse_for(argv):
     parser = ps_catalog.build_arg_parser()
-    return parser.parse_args(argv)
+    return parser.parse_args(ps_catalog._hoist_global_flags(list(argv)))
 
 
 # ---------------------------------------------------------------------------

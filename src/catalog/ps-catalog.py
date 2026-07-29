@@ -1657,6 +1657,89 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
 
 
+def _register_common_flags(parser: argparse.ArgumentParser) -> None:
+    """Register the shared global flags directly on `parser`. Mirrors the
+    action set defined by `_build_common_parser`, but adds them in-place
+    rather than via `parents=` so the same flag set can also be inherited
+    by subcommand parsers without argparse seeing duplicate registrations.
+    """
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--db", default=None)
+    parser.add_argument("--themes-dir", default=None)
+    parser.add_argument("--previews-dir", default=None)
+    parser.add_argument("--paddle-webhook-secret", default=None)
+    parser.add_argument("--paddle-public-key", default=None)
+    parser.add_argument(
+        "--paddle-api-key",
+        default=None,
+        help=(
+            "Paddle API key used to create hosted-checkout sessions per click. "
+            "Env: PS_CATALOG_PADDLE_API_KEY. Without this, dynamic checkout is "
+            "disabled and only themes with a pre-stored checkoutUrl will work."
+        ),
+    )
+    parser.add_argument(
+        "--paddle-env",
+        choices=("live", "sandbox"),
+        default=None,
+        help=(
+            "Which Paddle environment to talk to. 'sandbox' uses "
+            "sandbox-api.paddle.com + sandbox-pay.paddle.io; 'live' uses "
+            "api.paddle.com + pay.paddle.com. Env: PS_CATALOG_PADDLE_ENV."
+        ),
+    )
+    parser.add_argument(
+        "--tls-cert",
+        default=None,
+        help=(
+            "Path to a PEM-encoded TLS certificate. When provided with "
+            "--tls-key, the server speaks HTTPS instead of HTTP. "
+            "Env: PS_CATALOG_TLS_CERT."
+        ),
+    )
+    parser.add_argument(
+        "--tls-key",
+        default=None,
+        help=(
+            "Path to a PEM-encoded TLS private key. Required together with "
+            "--tls-cert. Env: PS_CATALOG_TLS_KEY."
+        ),
+    )
+    parser.add_argument(
+        "--success-url",
+        default=None,
+        help=(
+            "Override the success_url passed to Paddle transactions. "
+            "Env: PS_CATALOG_SUCCESS_URL."
+        ),
+    )
+    parser.add_argument(
+        "--cancel-url",
+        default=None,
+        help=(
+            "Override the cancel_url passed to Paddle transactions. "
+            "Env: PS_CATALOG_CANCEL_URL."
+        ),
+    )
+    parser.add_argument(
+        "--allow-insecure-return-urls",
+        action="store_true",
+        default=None,
+        help=(
+            "Permit http:// (not just https://) in Paddle success_url / "
+            "cancel_url. Default: enabled in sandbox, disabled in live. "
+            "Env: PS_CATALOG_ALLOW_INSECURE_RETURN_URLS=1|0."
+        ),
+    )
+    parser.add_argument("--base-url", default=None)
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("PS_CATALOG_LOG_LEVEL", "INFO"),
+        help="Python logging level (default INFO)",
+    )
+
+
 def _build_common_parser() -> argparse.ArgumentParser:
     """Build the parent parser that holds every flag shared by the top-level
     CLI and every subcommand. Returned parser uses add_help=False so its
@@ -1750,29 +1833,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "PacketSnitch theme catalog server. See module docstring for "
             "endpoint and CLI usage."
         ),
-        # `parents` lets the global flags be accepted both before the
-        # subcommand (e.g. `ps-catalog.py --tls-cert FOO serve`) and after
-        # it (e.g. `ps-catalog.py serve --tls-cert FOO`). The flag is
-        # registered on the parent parser and inherited by every
-        # subcommand via `parents=[COMMON_PARSER]`.
-        parents=[COMMON_PARSER],
+        # We register every global flag directly on the top-level parser
+        # so they are accepted when supplied *before* the subcommand
+        # (e.g. `ps-catalog.py --tls-cert FOO serve`). We also attach
+        # the COMMON_PARSER to each subcommand so the same flags are
+        # accepted *after* the subcommand (e.g.
+        # `ps-catalog.py serve --tls-cert FOO`).
     )
 
     sub = parser.add_subparsers(dest="command", required=False)
 
     p_init = sub.add_parser(
-        "init", help="Create the sqlite database file", parents=[COMMON_PARSER]
+        "init", help="Create the sqlite database file",
     )
+    _register_common_flags(p_init)
     p_init.set_defaults(func=cmd_init)
 
     p_serve = sub.add_parser(
-        "serve", help="Run the HTTP server", parents=[COMMON_PARSER]
+        "serve", help="Run the HTTP server",
     )
+    _register_common_flags(p_serve)
     p_serve.set_defaults(func=cmd_serve)
 
     p_add_theme = sub.add_parser(
-        "add-theme", help="Register a theme JSON file", parents=[COMMON_PARSER]
+        "add-theme", help="Register a theme JSON file",
     )
+    _register_common_flags(p_add_theme)
     p_add_theme.add_argument("theme_path")
     p_add_theme.add_argument(
         "--preview-filename",
@@ -1802,8 +1888,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_remove_theme = sub.add_parser(
         "remove-theme",
         help="Unregister a theme and (optionally) revoke its licenses / preview",
-        parents=[COMMON_PARSER],
     )
+    _register_common_flags(p_remove_theme)
     p_remove_theme.add_argument("theme_id")
     p_remove_theme.add_argument(
         "--purge-licenses",
@@ -1828,8 +1914,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_add_preview = sub.add_parser(
         "add-preview",
         help="Copy a preview image into the previews dir",
-        parents=[COMMON_PARSER],
     )
+    _register_common_flags(p_add_preview)
     p_add_preview.add_argument("preview_path")
     p_add_preview.add_argument("theme_id")
     p_add_preview.set_defaults(func=cmd_add_preview)
@@ -1837,22 +1923,122 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_add_license = sub.add_parser(
         "add-license",
         help="Manually grant a license (for dev/testing)",
-        parents=[COMMON_PARSER],
     )
+    _register_common_flags(p_add_license)
     p_add_license.add_argument("install_uuid")
     p_add_license.add_argument("theme_id")
     p_add_license.add_argument("--subscription", default=None)
     p_add_license.set_defaults(func=cmd_add_license)
 
     p_list = sub.add_parser(
-        "list-themes", help="List all registered themes", parents=[COMMON_PARSER]
+        "list-themes", help="List all registered themes",
     )
+    _register_common_flags(p_list)
     p_list.set_defaults(func=cmd_list_themes)
 
     return parser
 
 
+def _hoist_global_flags(argv: List[str]) -> List[str]:
+    """Reorder `argv` so every shared `--foo VAL` flag is positioned *after*
+    the subcommand.
+
+    argparse drops `--tls-cert FOO serve` silently because the top-level
+    parser consumes `--tls-cert FOO` and doesn't propagate the value into
+    the subcommand's namespace. By moving all known global flags to
+    *after* the subcommand, the subparser is the only one that sees them
+    and the value flows through cleanly.
+
+    Flags with explicit `=value` syntax (`--tls-cert=/tmp/c.pem`) are also
+    hoisted. `--flag` (no value, action=store_true) is left alone.
+    """
+    if not argv:
+        return argv
+    hoistable = {
+        "--host",
+        "--port",
+        "--db",
+        "--themes-dir",
+        "--previews-dir",
+        "--paddle-webhook-secret",
+        "--paddle-public-key",
+        "--paddle-api-key",
+        "--paddle-env",
+        "--tls-cert",
+        "--tls-key",
+        "--success-url",
+        "--cancel-url",
+        "--allow-insecure-return-urls",
+        "--base-url",
+        "--log-level",
+    }
+    # Find the subcommand position. The subcommand is a known name from
+    # our subparser list — NOT just any non-flag token. This matters
+    # because flag values like `--tls-cert /tmp/c.pem` look like a
+    # subcommand + positional arg if we treat every non-flag token as a
+    # subcommand candidate.
+    subcommands = {
+        "init",
+        "serve",
+        "add-theme",
+        "remove-theme",
+        "add-preview",
+        "add-license",
+        "list-themes",
+    }
+    cmd_idx = None
+    for idx, token in enumerate(argv):
+        if token in subcommands:
+            cmd_idx = idx
+            break
+    if cmd_idx is None:
+        # No recognized subcommand, leave argv alone.
+        return argv
+
+    before = argv[:cmd_idx]
+    subcmd = argv[cmd_idx]
+    after = argv[cmd_idx + 1:]
+
+    # Walk through `before`, splitting into:
+    #   - `kept_before`: tokens we don't recognize (rare; we expect only
+    #     hoistable flags here in practice)
+    #   - `hoisted`: hoistable flag tokens (with their values)
+    hoisted: List[str] = []
+    kept_before: List[str] = []
+    i = 0
+    while i < len(before):
+        token = before[i]
+        # `--foo=val` form
+        if token.startswith("--") and "=" in token:
+            name = token.split("=", 1)[0]
+            if name in hoistable:
+                hoisted.append(token)
+                i += 1
+                continue
+        if token in hoistable:
+            hoisted.append(token)
+            # Consume the value too, unless this is a store_true flag.
+            if token == "--allow-insecure-return-urls":
+                i += 1
+                continue
+            if i + 1 < len(before):
+                hoisted.append(before[i + 1])
+                i += 2
+            else:
+                i += 1
+            continue
+        kept_before.append(token)
+        i += 1
+
+    # Reassemble: [subcmd, ...after-subcmd-flags, ...hoisted-before-flags,
+    # ...kept-before].
+    return [subcmd] + list(after) + hoisted + kept_before
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = _hoist_global_flags(list(argv))
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     logging.basicConfig(
