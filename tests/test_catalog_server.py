@@ -652,6 +652,484 @@ def test_cli_init_and_add_license(tmp_path):
     db.close()
 
 
+def test_cli_add_theme_with_paddle_flags(tmp_path):
+    """The --paddle-product-id / --paddle-price-id / --checkout-url flags must
+    be accepted by argparse and persisted into the themes table."""
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    themes_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=tmp_path / "previews",
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+
+    # initialize schema
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+
+    # add-theme with all three Paddle flags
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "add-theme",
+            str(theme_path),
+            "--paddle-product-id",
+            "pro_test_alpha",
+            "--paddle-price-id",
+            "pri_test_alpha",
+            "--checkout-url",
+            "https://buy.paddle.com/product/alpha/checkout",
+        ]
+    )
+    assert ps_catalog.cmd_add_theme(args, cfg) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        theme = db.get_theme("alpha")
+        assert theme is not None
+        assert theme["paddle_product_id"] == "pro_test_alpha"
+        assert theme["paddle_price_id"] == "pri_test_alpha"
+        assert theme["checkout_url"] == "https://buy.paddle.com/product/alpha/checkout"
+    finally:
+        db.close()
+
+
+def test_cli_add_theme_falls_back_to_json_paddle_block(tmp_path):
+    """When the CLI flags are omitted, the paddle.productId / paddle.priceId
+    fields inside the theme JSON should be used."""
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    themes_dir.mkdir()
+    theme_path = themes_dir / "beta.json"
+    theme_path.write_text(
+        json.dumps(
+            {
+                "id": "beta",
+                "name": "Beta",
+                "paddle": {"productId": "pro_from_json", "priceId": "pri_from_json"},
+            }
+        )
+    )
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=tmp_path / "previews",
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        theme = db.get_theme("beta")
+        assert theme["paddle_product_id"] == "pro_from_json"
+        assert theme["paddle_price_id"] == "pri_from_json"
+        assert theme["checkout_url"] == ""  # not set -> redirect auto-builds
+    finally:
+        db.close()
+
+
 def argparse_for(argv):
     parser = ps_catalog.build_arg_parser()
     return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# remove-theme CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_remove_theme_drops_row_and_file(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    # Now remove it.
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "alpha",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        assert db.get_theme("alpha") is None
+    finally:
+        db.close()
+    assert not theme_path.exists()
+
+
+def test_cli_remove_theme_keeps_licenses_by_default(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    install_uuid = str(uuid.uuid4())
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        db.grant_license(install_uuid, "alpha")
+    finally:
+        db.close()
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "alpha",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        assert db.get_theme("alpha") is None
+        # License row should still exist because we didn't pass --purge-licenses.
+        assert db.get_license(install_uuid, "alpha") is not None
+    finally:
+        db.close()
+
+
+def test_cli_remove_theme_purge_licenses_drops_them(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    install_uuid = str(uuid.uuid4())
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        db.grant_license(install_uuid, "alpha")
+    finally:
+        db.close()
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "alpha",
+            "--purge-licenses",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        assert db.get_theme("alpha") is None
+        # License row should be gone.
+        assert db.get_license(install_uuid, "alpha") is None
+    finally:
+        db.close()
+
+
+def test_cli_remove_theme_remove_preview(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+    preview_path = previews_dir / "alpha.jpg"
+    preview_path.write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+                "--preview-filename",
+                "alpha.jpg",
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "alpha",
+            "--remove-preview",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 0
+    assert not preview_path.exists()
+
+
+def test_cli_remove_theme_dry_run_leaves_everything(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+    theme_path = themes_dir / "alpha.json"
+    theme_path.write_text(json.dumps({"id": "alpha", "name": "Alpha"}))
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+    assert ps_catalog.cmd_add_theme(
+        argparse_for(
+            [
+                "--db",
+                str(db_path),
+                "--themes-dir",
+                str(themes_dir),
+                "add-theme",
+                str(theme_path),
+            ]
+        ),
+        cfg,
+    ) == 0
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "alpha",
+            "--purge-licenses",
+            "--dry-run",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 0
+
+    db = ps_catalog.CatalogDB(db_path)
+    try:
+        assert db.get_theme("alpha") is not None
+    finally:
+        db.close()
+    assert theme_path.exists()
+
+
+def test_cli_remove_theme_rejects_unknown_id(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "nope",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 2
+
+
+def test_cli_remove_theme_rejects_invalid_id(tmp_path):
+    db_path = tmp_path / "catalog.sqlite3"
+    themes_dir = tmp_path / "themes"
+    previews_dir = tmp_path / "previews"
+    themes_dir.mkdir()
+    previews_dir.mkdir()
+
+    cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=0,
+        db_path=db_path,
+        themes_dir=themes_dir,
+        previews_dir=previews_dir,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        base_url="http://127.0.0.1:0",
+    )
+    assert ps_catalog.cmd_init(argparse_for(["--db", str(db_path), "init"]), cfg) == 0
+
+    args = argparse_for(
+        [
+            "--db",
+            str(db_path),
+            "--themes-dir",
+            str(themes_dir),
+            "--previews-dir",
+            str(previews_dir),
+            "remove-theme",
+            "INVALID ID",
+        ]
+    )
+    assert ps_catalog.cmd_remove_theme(args, cfg) == 2

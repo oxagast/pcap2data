@@ -36,6 +36,7 @@ CLI
 ---
     ps-catalog.py --init                              # create sqlite db
     ps-catalog.py --add-theme PATH/TO/theme.json      # register a theme
+    ps-catalog.py --remove-theme THEMEID [--purge-licenses] [--remove-preview] [--dry-run]
     ps-catalog.py --add-preview PATH/TO/preview.jpg ID
     ps-catalog.py --add-license INSTALLUUID THEMEID [--subscription SUBID]
     ps-catalog.py --list-themes
@@ -320,6 +321,21 @@ class CatalogDB:
         with self._lock:
             self.conn.execute("DELETE FROM themes WHERE id = ?", (theme_id,))
 
+    def delete_theme_cascade(self, theme_id: str) -> int:
+        """Remove a theme and every license row that references it.
+
+        Returns the number of license rows that were deleted (0 if the theme
+        had no buyers yet). Caller is responsible for removing the theme's
+        JSON file from `themes_dir` afterwards.
+        """
+        with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM licenses WHERE theme_id = ?", (theme_id,)
+            )
+            license_count = cursor.rowcount
+            self.conn.execute("DELETE FROM themes WHERE id = ?", (theme_id,))
+            return license_count
+
     # ---- licenses ----
 
     def grant_license(
@@ -373,6 +389,34 @@ class CatalogDB:
                 (install_uuid,),
             ).fetchall()
         return [row["theme_id"] for row in rows]
+
+    def list_owned_install_uuids_for_theme(self, theme_id: str) -> List[str]:
+        """Return the installUuids that currently hold an unrevoked license
+        for the given theme. Used by `remove-theme --purge-licenses` for
+        auditing before deletion."""
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT install_uuid
+                  FROM licenses
+                 WHERE theme_id = ?
+                   AND revoked_at IS NULL
+                """,
+                (theme_id,),
+            ).fetchall()
+        return [row["install_uuid"] for row in rows]
+
+    def count_active_licenses_for_theme(self, theme_id: str) -> int:
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                  FROM licenses
+                 WHERE theme_id = ? AND revoked_at IS NULL
+                """,
+                (theme_id,),
+            ).fetchone()
+        return int(row["c"]) if row else 0
 
     def get_license(
         self, install_uuid: str, theme_id: str
@@ -1041,6 +1085,92 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def cmd_remove_theme(args: argparse.Namespace, config: Config) -> int:
+    """Unregister a theme and clean up its on-disk artifacts.
+
+    By default this only removes the database row + theme JSON under
+    themes_dir, leaving any already-granted licenses intact so buyers
+    aren't silently de-licensed. Pass --purge-licenses to also drop every
+    license row that references the theme (use this when you are sure you
+    want to invalidate every existing customer's access).
+
+    The matching preview image under previews_dir is removed only when
+    --remove-preview is passed, because the same file might be referenced
+    by other themes.
+    """
+    theme_id = str(args.theme_id or "").strip()
+    if not THEME_ID_RE.match(theme_id):
+        LOG.error("Invalid theme id %r (must match %s)", theme_id, THEME_ID_RE.pattern)
+        return 2
+
+    purge_licenses = bool(getattr(args, "purge_licenses", False))
+    remove_preview = bool(getattr(args, "remove_preview", False))
+    dry_run = bool(getattr(args, "dry_run", False))
+
+    db = CatalogDB(config.db_path)
+    try:
+        theme = db.get_theme(theme_id)
+        if theme is None:
+            LOG.error("Theme %s is not registered", theme_id)
+            return 2
+
+        owned_count = db.count_active_licenses_for_theme(theme_id)
+        theme_path = config.themes_dir / f"{theme_id}.json"
+        preview_filename = theme["preview_filename"]
+        preview_path = (
+            config.previews_dir / preview_filename
+            if preview_filename
+            else None
+        )
+
+        LOG.info(
+            "remove-theme theme=%s file=%s purge_licenses=%s remove_preview=%s owned_licenses=%d",
+            theme_id,
+            theme_path,
+            purge_licenses,
+            remove_preview,
+            owned_count,
+        )
+
+        if dry_run:
+            LOG.info("--dry-run: not making changes")
+            return 0
+
+        removed_licenses = 0
+        if purge_licenses:
+            removed_licenses = db.delete_theme_cascade(theme_id)
+        else:
+            db.delete_theme(theme_id)
+
+        removed_file = False
+        try:
+            if theme_path.is_file():
+                theme_path.unlink()
+                removed_file = True
+        except OSError as exc:
+            LOG.warning("Failed to remove theme file %s: %s", theme_path, exc)
+
+        removed_preview = False
+        if remove_preview and preview_path is not None:
+            try:
+                if preview_path.is_file():
+                    preview_path.unlink()
+                    removed_preview = True
+            except OSError as exc:
+                LOG.warning("Failed to remove preview %s: %s", preview_path, exc)
+
+        LOG.info(
+            "Removed theme %s (db row deleted, licenses_removed=%d, file_removed=%s, preview_removed=%s)",
+            theme_id,
+            removed_licenses,
+            removed_file,
+            removed_preview,
+        )
+        return 0
+    finally:
+        db.close()
+
+
 def cmd_add_preview(args: argparse.Namespace, config: Config) -> int:
     src = Path(args.preview_path).resolve()
     if not src.is_file():
@@ -1180,6 +1310,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Pre-built Paddle checkout URL to redirect buyers to.",
     )
     p_add_theme.set_defaults(func=cmd_add_theme)
+
+    p_remove_theme = sub.add_parser(
+        "remove-theme",
+        help="Unregister a theme and (optionally) revoke its licenses / preview",
+    )
+    p_remove_theme.add_argument("theme_id")
+    p_remove_theme.add_argument(
+        "--purge-licenses",
+        action="store_true",
+        help=(
+            "Also delete every license row referencing this theme. "
+            "Without this flag, existing buyers keep their access."
+        ),
+    )
+    p_remove_theme.add_argument(
+        "--remove-preview",
+        action="store_true",
+        help="Also delete the preview image file referenced by the theme row.",
+    )
+    p_remove_theme.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log what would happen without making any changes.",
+    )
+    p_remove_theme.set_defaults(func=cmd_remove_theme)
 
     p_add_preview = sub.add_parser(
         "add-preview", help="Copy a preview image into the previews dir"
