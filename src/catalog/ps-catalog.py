@@ -59,6 +59,12 @@ Environment variables (all optional; CLI flags override):
     PS_CATALOG_BASE_URL   default http://127.0.0.1:9021   (used to build
                                                           absolute checkout
                                                           URLs)
+    PS_CATALOG_TLS_CERT   default unset (PEM cert file; pair with
+                                   PS_CATALOG_TLS_KEY to enable HTTPS)
+    PS_CATALOG_TLS_KEY    default unset (PEM private key file)
+    PS_CATALOG_SUCCESS_URL default unset (override Paddle success return URL)
+    PS_CATALOG_CANCEL_URL  default unset (override Paddle cancel return URL)
+    PS_CATALOG_ALLOW_INSECURE_RETURN_URLS  default 1 in sandbox / 0 in live
 
 Paddle integration
 ------------------
@@ -87,6 +93,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import ssl
 import sys
 import threading
 import time
@@ -158,6 +165,19 @@ class Config:
     paddle_api_key: Optional[str]
     paddle_env: str  # "live" or "sandbox"
     base_url: str
+    success_url: Optional[str]
+    cancel_url: Optional[str]
+    allow_insecure_return_urls: bool
+    tls_cert: Optional[Path]
+    tls_key: Optional[Path]
+
+    @property
+    def use_tls(self) -> bool:
+        return self.tls_cert is not None and self.tls_key is not None
+
+    @property
+    def scheme(self) -> str:
+        return "https" if self.use_tls else "http"
 
     @property
     def paddle_api_base(self) -> str:
@@ -211,11 +231,62 @@ class Config:
         ).strip().lower()
         if paddle_env not in ("live", "sandbox"):
             paddle_env = "live"
+        success_url = (
+            getattr(args, "success_url", None)
+            or os.environ.get("PS_CATALOG_SUCCESS_URL")
+            or None
+        )
+        cancel_url = (
+            getattr(args, "cancel_url", None)
+            or os.environ.get("PS_CATALOG_CANCEL_URL")
+            or None
+        )
+        if getattr(args, "allow_insecure_return_urls", None) is not None:
+            allow_insecure = bool(args.allow_insecure_return_urls)
+        else:
+            env_flag = os.environ.get(
+                "PS_CATALOG_ALLOW_INSECURE_RETURN_URLS"
+            )
+            if env_flag is None:
+                # Default: allow http:// for sandbox, require https:// for live.
+                allow_insecure = paddle_env == "sandbox"
+            else:
+                allow_insecure = env_flag.strip().lower() in (
+                    "1", "true", "yes", "on"
+                )
+
+        tls_cert_str = (
+            getattr(args, "tls_cert", None)
+            or os.environ.get("PS_CATALOG_TLS_CERT")
+        )
+        tls_key_str = (
+            getattr(args, "tls_key", None)
+            or os.environ.get("PS_CATALOG_TLS_KEY")
+        )
+        tls_cert = Path(tls_cert_str).resolve() if tls_cert_str else None
+        tls_key = Path(tls_key_str).resolve() if tls_key_str else None
+        if (tls_cert is None) != (tls_key is None):
+            raise SystemExit(
+                "Both --tls-cert and --tls-key must be provided together "
+                "(or both omitted for plain HTTP)."
+            )
+
+        # If TLS is configured and the operator didn't override base_url, force
+        # it to https:// so the success_url / cancel_url Paddle receives is
+        # itself https://. (Paddle refuses to redirect back to plain http://
+        # for non-localhost URLs.)
+        base_url_default = f"http://{host}:{port}"
+        if (
+            tls_cert is not None
+            and not (args.base_url or os.environ.get("PS_CATALOG_BASE_URL"))
+        ):
+            base_url_default = f"https://{host}:{port}"
         base_url = (
             args.base_url
             or os.environ.get("PS_CATALOG_BASE_URL")
-            or f"http://{host}:{port}"
+            or base_url_default
         )
+
         return cls(
             host=host,
             port=port,
@@ -227,6 +298,11 @@ class Config:
             paddle_api_key=paddle_api_key,
             paddle_env=paddle_env,
             base_url=base_url.rstrip("/"),
+            success_url=success_url,
+            cancel_url=cancel_url,
+            allow_insecure_return_urls=allow_insecure,
+            tls_cert=tls_cert,
+            tls_key=tls_key,
         )
 
 
@@ -276,6 +352,31 @@ def create_paddle_transaction(
     if not price_id:
         raise PaddleError("price_id is required")
 
+    def _validate_return_url(value: Optional[str], label: str) -> Optional[str]:
+        if not value:
+            return None
+        try:
+            parsed = urllib.parse.urlparse(value)
+        except ValueError as exc:
+            raise PaddleError(f"{label} is not a valid URL: {exc}") from exc
+        if parsed.scheme not in ("https", "http"):
+            raise PaddleError(
+                f"{label} must use http(s); got {parsed.scheme!r}"
+            )
+        if parsed.scheme == "http" and not config.allow_insecure_return_urls:
+            raise PaddleError(
+                f"{label} uses plain http:// but the catalog is configured "
+                "to require https:// return URLs. Pass "
+                "--allow-insecure-return-urls (or set "
+                "PS_CATALOG_ALLOW_INSECURE_RETURN_URLS=1) for local "
+                "development, or serve the catalog over TLS and pass "
+                "--tls-cert/--tls-key."
+            )
+        return value
+
+    success_url = _validate_return_url(success_url, "success_url")
+    cancel_url = _validate_return_url(cancel_url, "cancel_url")
+
     payload = {
         "items": [{"price_id": price_id, "quantity": 1}],
         "custom_data": {
@@ -285,10 +386,10 @@ def create_paddle_transaction(
     }
     if success_url or cancel_url:
         # Paddle accepts return URLs on the transaction so the buyer lands
-        # somewhere sensible after a successful/cancelled checkout. We send
-        # them only when the operator has configured a base_url, since
-        # otherwise we'd be sending an http://127.0.0.1 link that Paddle
-        # would refuse to redirect to.
+        # somewhere sensible after a successful/cancelled checkout. If the
+        # server is HTTPS-only we always pass https://; if it's running in
+        # sandbox with --allow-insecure-return-urls, http://localhost is
+        # acceptable to Paddle's API.
         if success_url:
             payload["checkout"] = payload.get("checkout", {})
             payload["checkout"]["success_url"] = success_url
@@ -1274,7 +1375,24 @@ class CatalogHandler(BaseHTTPRequestHandler):
 def make_server(config: Config, db: CatalogDB) -> ThreadingHTTPServer:
     CatalogHandler.config = config
     CatalogHandler.db = db
-    return ThreadingHTTPServer((config.host, config.port), CatalogHandler)
+    server = ThreadingHTTPServer((config.host, config.port), CatalogHandler)
+    if config.use_tls:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        # We deliberately don't enable CERT_REQUIRED here — the catalog
+        # server is a public endpoint, not a Paddle-controlled client. Set
+        # PS_CATALOG_TLS_CERT/PS_CATALOG_TLS_KEY to paths of PEM files.
+        try:
+            ctx.load_cert_chain(
+                certfile=str(config.tls_cert),
+                keyfile=str(config.tls_key),
+            )
+        except (ssl.SSLError, FileNotFoundError, OSError) as exc:
+            raise SystemExit(
+                f"Failed to load TLS certificate: {exc}"
+            ) from exc
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    return server
 
 
 # ---------------------------------------------------------------------------
@@ -1511,12 +1629,14 @@ def cmd_serve(args: argparse.Namespace, config: Config) -> int:
     db = CatalogDB(config.db_path)
     server = make_server(config, db)
     LOG.info(
-        "ps-catalog listening on http://%s:%d (db=%s, themes=%s, previews=%s)",
+        "ps-catalog listening on %s://%s:%d (db=%s, themes=%s, previews=%s, paddle_env=%s)",
+        config.scheme,
         config.host,
         config.port,
         config.db_path,
         config.themes_dir,
         config.previews_dir,
+        config.paddle_env,
     )
     try:
         server.serve_forever()
@@ -1569,6 +1689,49 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Which Paddle environment to talk to. 'sandbox' uses "
             "sandbox-api.paddle.com + sandbox-pay.paddle.io; 'live' uses "
             "api.paddle.com + pay.paddle.com. Env: PS_CATALOG_PADDLE_ENV."
+        ),
+    )
+    parser.add_argument(
+        "--tls-cert",
+        default=None,
+        help=(
+            "Path to a PEM-encoded TLS certificate. When provided with "
+            "--tls-key, the server speaks HTTPS instead of HTTP. "
+            "Env: PS_CATALOG_TLS_CERT."
+        ),
+    )
+    parser.add_argument(
+        "--tls-key",
+        default=None,
+        help=(
+            "Path to a PEM-encoded TLS private key. Required together with "
+            "--tls-cert. Env: PS_CATALOG_TLS_KEY."
+        ),
+    )
+    parser.add_argument(
+        "--success-url",
+        default=None,
+        help=(
+            "Override the success_url passed to Paddle transactions. "
+            "Env: PS_CATALOG_SUCCESS_URL."
+        ),
+    )
+    parser.add_argument(
+        "--cancel-url",
+        default=None,
+        help=(
+            "Override the cancel_url passed to Paddle transactions. "
+            "Env: PS_CATALOG_CANCEL_URL."
+        ),
+    )
+    parser.add_argument(
+        "--allow-insecure-return-urls",
+        action="store_true",
+        default=None,
+        help=(
+            "Permit http:// (not just https://) in Paddle success_url / "
+            "cancel_url. Default: enabled in sandbox, disabled in live. "
+            "Env: PS_CATALOG_ALLOW_INSECURE_RETURN_URLS=1|0."
         ),
     )
     parser.add_argument("--base-url", default=None)
