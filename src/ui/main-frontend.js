@@ -956,6 +956,7 @@ const SETTINGS_SUBTAB_API_KEYS = "api-keys";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
+const SETTINGS_SUBTAB_THEMES = "themes";
 const SETTINGS_SUBTAB_PRIVACY = "privacy";
 const SETTINGS_SUBTAB_ABOUT = "about";
 const PACKETSNITCH_RELEASES_PAGE_URL =
@@ -2182,7 +2183,7 @@ function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
 
 // Returns theme select element.
 function getThemeSelectElement() {
-  return document.getElementById("settings-general-theme");
+  return document.getElementById("settings-themes-select");
 }
 
 // Returns llm model select element.
@@ -2319,7 +2320,7 @@ function getThemeSourceSuffix(theme) {
 
 // Handles update selected theme source note.
 function updateSelectedThemeSourceNote(themeId) {
-  const noteEl = document.getElementById("settings-theme-source-note");
+  const noteEl = document.getElementById("settings-themes-source-note");
   if (!noteEl) return;
   const theme = getThemeByIdFromList(themeId);
   if (!theme || !theme.hasUserBundledDiff) {
@@ -2591,8 +2592,9 @@ async function loadAvailableThemes() {
   return availableThemes;
 }
 
+// Updates theme directory hint.
 async function updateThemeDirectoryHint() {
-  const hintEl = document.getElementById("settings-theme-directory-hint");
+  const hintEl = document.getElementById("settings-themes-directory-hint");
   if (!hintEl || !window.themeapi || typeof window.themeapi.getThemesDirectory !== "function") {
     return;
   }
@@ -2603,6 +2605,364 @@ async function updateThemeDirectoryHint() {
     }
   } catch (error) {
     console.warn("Unable to resolve themes directory:", error);
+  }
+}
+
+// Theme preview and catalog state for the Settings → Themes subtab.
+let themesCatalogEntries = [];
+let themesCatalogLoading = false;
+let themesPreviewObjectUrl = null;
+let themesPreviewInFlight = 0;
+const themesEmbeddedPreviewCache = new Map();
+
+function getThemesPreviewElement() {
+  return document.getElementById("settings-themes-preview");
+}
+
+function getThemesPreviewFallbackElement() {
+  return document.getElementById("settings-themes-preview-fallback");
+}
+
+function getThemesCatalogListElement() {
+  return document.getElementById("settings-themes-catalog-list");
+}
+
+function getThemesCatalogStatusElement() {
+  return document.getElementById("settings-themes-catalog-status");
+}
+
+function setThemesCatalogStatus(message, { isError = false } = {}) {
+  const statusEl = getThemesCatalogStatusElement();
+  if (!statusEl) return;
+  statusEl.textContent = String(message || "");
+  statusEl.style.color = isError ? "#ff9090" : "";
+}
+
+function clearThemesPreviewObjectUrl() {
+  if (themesPreviewObjectUrl) {
+    try {
+      URL.revokeObjectURL(themesPreviewObjectUrl);
+    } catch (_error) {
+      // ignore
+    }
+    themesPreviewObjectUrl = null;
+  }
+}
+
+function resetThemesPreview() {
+  clearThemesPreviewObjectUrl();
+  const previewEl = getThemesPreviewElement();
+  const fallbackEl = getThemesPreviewFallbackElement();
+  if (previewEl) {
+    previewEl.style.removeProperty("background-image");
+    previewEl.hidden = true;
+  }
+  if (fallbackEl) {
+    fallbackEl.hidden = false;
+  }
+}
+
+function showThemesPreviewFromDataUri(dataUri) {
+  const previewEl = getThemesPreviewElement();
+  const fallbackEl = getThemesPreviewFallbackElement();
+  if (!previewEl || !fallbackEl) return;
+  if (!dataUri) {
+    resetThemesPreview();
+    return;
+  }
+  previewEl.style.setProperty("background-image", `url(${dataUri})`);
+  previewEl.hidden = false;
+  fallbackEl.hidden = true;
+}
+
+function buildThemesPreviewDataUri(themeConfig) {
+  if (!themeConfig || typeof themeConfig !== "object") return null;
+  const formatRaw = typeof themeConfig.format === "string"
+    ? themeConfig.format.trim().toLowerCase()
+    : "";
+  const format = formatRaw === "jpeg" ? "jpg" : formatRaw;
+  if (format !== "png" && format !== "jpg") return null;
+  const rawBase64 = typeof themeConfig.base64 === "string"
+    ? themeConfig.base64
+    : typeof themeConfig.data === "string"
+      ? themeConfig.data
+      : "";
+  if (!rawBase64) return null;
+  const mime = format === "png" ? "image/png" : "image/jpeg";
+  const base64 = rawBase64
+    .replace(/^data:image\/(png|jpeg|jpg);base64,/i, "")
+    .replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=]+$/.test(base64)) return null;
+  return `data:${mime};base64,${base64}`;
+}
+
+function getThemeEmbeddedPreviewDataUri(theme) {
+  if (!theme || typeof theme !== "object") return null;
+  if (themesEmbeddedPreviewCache.has(theme.id)) {
+    return themesEmbeddedPreviewCache.get(theme.id) || null;
+  }
+  const dataUri = buildThemesPreviewDataUri(theme.previewImage);
+  themesEmbeddedPreviewCache.set(theme.id, dataUri || "");
+  return dataUri;
+}
+
+async function fetchThemesPreviewFromUrl(previewUrl) {
+  if (!window.themeapi || typeof window.themeapi.fetchPreview !== "function") {
+    return null;
+  }
+  const requestToken = ++themesPreviewInFlight;
+  try {
+    const result = await window.themeapi.fetchPreview({ url: previewUrl });
+    if (requestToken !== themesPreviewInFlight) {
+      // A newer request superseded us; discard this one to avoid races.
+      if (result && result.dataUri && result.dataUri.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(result.dataUri);
+        } catch (_e) {
+          // ignore
+        }
+      }
+      return null;
+    }
+    if (result && typeof result.dataUri === "string" && result.dataUri) {
+      // Revoke any prior blob URL before adopting the new one.
+      if (themesPreviewObjectUrl) {
+        try {
+          URL.revokeObjectURL(themesPreviewObjectUrl);
+        } catch (_e) {
+          // ignore
+        }
+      }
+      if (result.dataUri.startsWith("blob:")) {
+        themesPreviewObjectUrl = result.dataUri;
+      }
+      return result.dataUri;
+    }
+    return null;
+  } catch (error) {
+    console.warn("Unable to fetch theme preview:", error);
+    return null;
+  }
+}
+
+async function refreshThemesPreviewForSelected() {
+  const themeSelectEl = getThemeSelectElement();
+  if (!themeSelectEl) return;
+  const selectedId = sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID);
+  const theme = getThemeByIdFromList(selectedId);
+  if (!theme) {
+    resetThemesPreview();
+    return;
+  }
+  const embeddedDataUri = getThemeEmbeddedPreviewDataUri(theme);
+  if (embeddedDataUri) {
+    showThemesPreviewFromDataUri(embeddedDataUri);
+    return;
+  }
+  const previewUrl = typeof theme.previewUrl === "string" ? theme.previewUrl.trim() : "";
+  if (previewUrl) {
+    resetThemesPreview();
+    const dataUri = await fetchThemesPreviewFromUrl(previewUrl);
+    if (dataUri) {
+      showThemesPreviewFromDataUri(dataUri);
+    } else {
+      resetThemesPreview();
+    }
+    return;
+  }
+  resetThemesPreview();
+}
+
+function renderThemesCatalog() {
+  const listEl = getThemesCatalogListElement();
+  if (!listEl) return;
+  listEl.innerHTML = "";
+  if (!Array.isArray(themesCatalogEntries) || themesCatalogEntries.length === 0) {
+    return;
+  }
+  themesCatalogEntries.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const cardEl = document.createElement("div");
+    cardEl.className = "settings-themes-catalog-card";
+    cardEl.setAttribute("role", "listitem");
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "settings-themes-catalog-name";
+    nameEl.textContent = String(entry.name || entry.id || "Theme");
+    cardEl.appendChild(nameEl);
+
+    if (entry.description) {
+      const descEl = document.createElement("div");
+      descEl.className = "settings-themes-catalog-desc";
+      descEl.textContent = String(entry.description);
+      cardEl.appendChild(descEl);
+    }
+
+    const priceEl = document.createElement("div");
+    priceEl.className = "settings-themes-catalog-price";
+    const priceLabel = typeof entry.priceLabel === "string" && entry.priceLabel.trim()
+      ? entry.priceLabel.trim()
+      : (typeof entry.priceCents === "number" && entry.priceCents > 0
+        ? `$${(entry.priceCents / 100).toFixed(2)}`
+        : "Free / included");
+    priceEl.textContent = priceLabel;
+    cardEl.appendChild(priceEl);
+
+    const statusEl = document.createElement("div");
+    statusEl.className = "settings-themes-catalog-status";
+    if (entry.owned) {
+      statusEl.textContent = "Owned";
+      statusEl.style.color = "#7be58a";
+    } else if (entry.installed) {
+      statusEl.textContent = "Installed (not licensed)";
+      statusEl.style.color = "#ffcf6b";
+    } else {
+      statusEl.textContent = "Available for purchase";
+      statusEl.style.color = "";
+    }
+    cardEl.appendChild(statusEl);
+
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "settings-actions-row";
+    actionsEl.style.marginTop = "0.4rem";
+
+    const previewBtn = document.createElement("button");
+    previewBtn.type = "button";
+    previewBtn.textContent = "Preview";
+    previewBtn.addEventListener("click", () => {
+      showThemesPreviewFromDataUri(buildThemesPreviewDataUri(entry.previewImage));
+    });
+    actionsEl.appendChild(previewBtn);
+
+    const buyBtn = document.createElement("button");
+    buyBtn.type = "button";
+    buyBtn.textContent = entry.owned ? "Open in Browser" : "Buy";
+    buyBtn.disabled = !entry.owned && !entry.checkoutUrl;
+    buyBtn.addEventListener("click", () => {
+      void startThemeCheckout(entry);
+    });
+    actionsEl.appendChild(buyBtn);
+
+    cardEl.appendChild(actionsEl);
+    listEl.appendChild(cardEl);
+  });
+}
+
+async function refreshThemesCatalog({ force = false } = {}) {
+  if (!window.themeapi || typeof window.themeapi.listCatalog !== "function") {
+    setThemesCatalogStatus("Online theme catalog is not available in this build.", { isError: true });
+    return;
+  }
+  if (themesCatalogLoading && !force) return;
+  themesCatalogLoading = true;
+  setThemesCatalogStatus("Loading catalog...");
+  try {
+    const result = await window.themeapi.listCatalog({ force });
+    themesCatalogEntries = Array.isArray(result?.entries) ? result.entries : [];
+    setThemesCatalogStatus(
+      themesCatalogEntries.length === 0
+        ? "No themes are available for purchase right now."
+        : `Loaded ${themesCatalogEntries.length} theme(s).`,
+    );
+    renderThemesCatalog();
+  } catch (error) {
+    console.warn("Unable to load theme catalog:", error);
+    setThemesCatalogStatus(
+      `Unable to load theme catalog: ${error?.message || error || "unknown error"}`,
+      { isError: true },
+    );
+  } finally {
+    themesCatalogLoading = false;
+  }
+}
+
+async function startThemeCheckout(catalogEntry) {
+  if (!catalogEntry || typeof catalogEntry !== "object") return;
+  if (!window.themeapi || typeof window.themeapi.startCheckout !== "function") {
+    setThemesCatalogStatus("Checkout is not available in this build.", { isError: true });
+    return;
+  }
+  if (catalogEntry.owned && catalogEntry.licenseUrl) {
+    try {
+      await window.themeapi.openExternalUrl(catalogEntry.licenseUrl);
+    } catch (_e) {
+      // ignore
+    }
+    return;
+  }
+  setThemesCatalogStatus("Opening checkout in your default browser...");
+  try {
+    const result = await window.themeapi.startCheckout({
+      themeId: catalogEntry.id,
+      checkoutUrl: catalogEntry.checkoutUrl || "",
+    });
+    if (result?.success) {
+      setThemesCatalogStatus(
+        result.openedExternally
+          ? "Checkout opened in your default browser. After completing payment, click Check License to refresh."
+          : "Checkout is ready. After completing payment, click Check License to refresh.",
+      );
+    } else {
+      setThemesCatalogStatus(
+        `Unable to start checkout: ${result?.error || "unknown error"}`,
+        { isError: true },
+      );
+    }
+  } catch (error) {
+    setThemesCatalogStatus(
+      `Unable to start checkout: ${error?.message || error || "unknown error"}`,
+      { isError: true },
+    );
+  }
+}
+
+async function checkThemesLicense() {
+  if (!window.themeapi || typeof window.themeapi.refreshLicenses !== "function") {
+    setThemesCatalogStatus("License check is not available in this build.", { isError: true });
+    return;
+  }
+  setThemesCatalogStatus("Checking license for this install...");
+  try {
+    const result = await window.themeapi.refreshLicenses();
+    const unlocked = Array.isArray(result?.unlockedThemeIds)
+      ? result.unlockedThemeIds
+      : [];
+    setThemesCatalogStatus(
+      unlocked.length === 0
+        ? "No new themes unlocked for this install yet."
+        : `Unlocked ${unlocked.length} theme(s): ${unlocked.join(", ")}. Reloading...`,
+    );
+    if (unlocked.length > 0) {
+      await loadAvailableThemes();
+      await refreshThemesPreviewForSelected();
+      await refreshThemesCatalog({ force: true });
+    }
+  } catch (error) {
+    setThemesCatalogStatus(
+      `Unable to check license: ${error?.message || error || "unknown error"}`,
+      { isError: true },
+    );
+  }
+}
+
+function bindThemesSubtabEvents() {
+  const refreshBtn = document.getElementById("settings-themes-refresh-catalog-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      void refreshThemesCatalog({ force: true });
+    });
+  }
+  const checkLicenseBtn = document.getElementById("settings-themes-check-license-btn");
+  if (checkLicenseBtn) {
+    checkLicenseBtn.addEventListener("click", () => {
+      void checkThemesLicense();
+    });
+  }
+  const selectEl = getThemeSelectElement();
+  if (selectEl) {
+    selectEl.addEventListener("change", () => {
+      void refreshThemesPreviewForSelected();
+    });
   }
 }
 
@@ -2731,6 +3091,23 @@ function syncSettingsFormFromState() {
   if (checkForNewReleasesOnStartupEl) {
     checkForNewReleasesOnStartupEl.checked = Boolean(
       settings?.general?.checkForNewReleasesOnStartup,
+    );
+  }
+  const themeServerBaseUrlEl = document.getElementById("settings-themes-server-base-url");
+  if (themeServerBaseUrlEl) {
+    themeServerBaseUrlEl.value = String(
+      settings?.general?.themeServerBaseUrl
+      || DEFAULT_SETTINGS.general.themeServerBaseUrl
+      || "",
+    );
+  }
+  const themeRefreshIntervalHoursEl = document.getElementById(
+    "settings-themes-refresh-interval-hours",
+  );
+  if (themeRefreshIntervalHoursEl) {
+    themeRefreshIntervalHoursEl.value = String(
+      Number(settings?.general?.themeRefreshIntervalHours)
+      || DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
     );
   }
   if (backendTcpHostEl) {
@@ -2887,6 +3264,10 @@ function syncSettingsFormFromState() {
 // Handles read settings form state.
 function readSettingsFormState() {
   const themeSelectEl = getThemeSelectElement();
+  const themeServerBaseUrlEl = document.getElementById("settings-themes-server-base-url");
+  const themeRefreshIntervalHoursEl = document.getElementById(
+    "settings-themes-refresh-interval-hours",
+  );
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
@@ -3003,6 +3384,12 @@ function readSettingsFormState() {
       checkForNewReleasesOnStartup: checkForNewReleasesOnStartupEl
         ? checkForNewReleasesOnStartupEl.checked
         : DEFAULT_SETTINGS.general.checkForNewReleasesOnStartup,
+      themeServerBaseUrl: themeServerBaseUrlEl
+        ? themeServerBaseUrlEl.value.trim()
+        : DEFAULT_SETTINGS.general.themeServerBaseUrl,
+      themeRefreshIntervalHours: themeRefreshIntervalHoursEl
+        ? Math.max(1, Number(themeRefreshIntervalHoursEl.value) || DEFAULT_SETTINGS.general.themeRefreshIntervalHours)
+        : DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
     },
     backend: {
       tcpHost: backendTcpHostEl
@@ -4080,11 +4467,13 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
             ? SETTINGS_SUBTAB_DEBUG
             : tabName === SETTINGS_SUBTAB_PLUGINS
               ? SETTINGS_SUBTAB_PLUGINS
-              : tabName === SETTINGS_SUBTAB_PRIVACY
-                ? SETTINGS_SUBTAB_PRIVACY
-                : tabName === SETTINGS_SUBTAB_ABOUT
-                  ? SETTINGS_SUBTAB_ABOUT
-                  : SETTINGS_SUBTAB_GENERAL;
+              : tabName === SETTINGS_SUBTAB_THEMES
+                ? SETTINGS_SUBTAB_THEMES
+                : tabName === SETTINGS_SUBTAB_PRIVACY
+                  ? SETTINGS_SUBTAB_PRIVACY
+                  : tabName === SETTINGS_SUBTAB_ABOUT
+                    ? SETTINGS_SUBTAB_ABOUT
+                    : SETTINGS_SUBTAB_GENERAL;
   activeSettingsSubtab = nextTab;
   metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
   const generalBtn = document.getElementById("settings-subtab-general");
@@ -4093,6 +4482,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
   const pluginsBtn = document.getElementById("settings-subtab-plugins");
+  const themesBtn = document.getElementById("settings-subtab-themes");
   const privacyBtn = document.getElementById("settings-subtab-privacy");
   const aboutBtn = document.getElementById("settings-subtab-about");
   const generalPanel = document.getElementById("settings-general-panel");
@@ -4101,6 +4491,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
   const pluginsPanel = document.getElementById("settings-plugins-panel");
+  const themesPanel = document.getElementById("settings-themes-panel");
   const privacyPanel = document.getElementById("settings-privacy-panel");
   const aboutPanel = document.getElementById("settings-about-panel");
   if (generalBtn) {
@@ -4120,6 +4511,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (pluginsBtn) {
     pluginsBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PLUGINS);
+  }
+  if (themesBtn) {
+    themesBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_THEMES);
   }
   if (privacyBtn) {
     privacyBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PRIVACY);
@@ -4144,6 +4538,22 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (pluginsPanel) {
     pluginsPanel.hidden = nextTab !== SETTINGS_SUBTAB_PLUGINS;
+  }
+  if (themesPanel) {
+    themesPanel.hidden = nextTab !== SETTINGS_SUBTAB_THEMES;
+    if (!themesPanel.hidden) {
+      void refreshThemesPreviewForSelected();
+      // Auto-fetch the online catalog on first open if the user has a
+      // theme server configured. The IPC handler returns a friendly
+      // "not configured" message when the base URL is empty, so we
+      // surface that as a status hint rather than a hard error.
+      if (
+        !themesCatalogLoading
+        && themesCatalogEntries.length === 0
+      ) {
+        void refreshThemesCatalog({ force: false });
+      }
+    }
   }
   if (privacyPanel) {
     privacyPanel.hidden = nextTab !== SETTINGS_SUBTAB_PRIVACY;
@@ -20479,6 +20889,10 @@ document.getElementById("settings-subtab-plugins").addEventListener("click", () 
   setSettingsSubtab(SETTINGS_SUBTAB_PLUGINS);
 });
 
+document.getElementById("settings-subtab-themes").addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_THEMES);
+});
+
 document.getElementById("settings-subtab-privacy").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_PRIVACY);
 });
@@ -20493,25 +20907,6 @@ document.getElementById("settings-about-refresh-btn").addEventListener("click", 
 
 document.getElementById("settings-about-download-btn").addEventListener("click", () => {
   void openSettingsAboutDownloadUrl();
-});
-
-document.getElementById("settings-general-theme").addEventListener("change", (event) => {
-  const selectedThemeId = sanitizeThemeId(event?.target?.value, FALLBACK_THEME_ID);
-  const previousThemeId = sanitizeThemeId(
-    getCurrentSettings()?.general?.themeId,
-    FALLBACK_THEME_ID,
-  );
-  if (selectedThemeId !== previousThemeId) {
-    writeLogEntry(
-      `Settings theme changed themeId=${JSON.stringify(previousThemeId)}->${JSON.stringify(selectedThemeId)}`,
-    );
-    statusUpdate(`Status: Theme changed to ${selectedThemeId}`);
-  } else {
-    writeLogEntry(`Settings theme selected themeId=${JSON.stringify(selectedThemeId)}`);
-    statusUpdate(`Status: Theme selected ${selectedThemeId} (no change)`);
-  }
-  updateSelectedThemeSourceNote(selectedThemeId);
-  void applyThemeById(selectedThemeId);
 });
 
 document.getElementById("settings-general-conv-json-indent").addEventListener("change", (event) => {
@@ -23672,6 +24067,17 @@ void loadAvailableThemes()
   .then(() => loadAvailableOllamaModels())
   .then(() => loadPersistedSettings())
   .then(() => refreshPluginRegistryView())
+  .then(() => {
+    // Wire the Themes subtab UI but do NOT fetch the online catalog here.
+    // The catalog call hits a remote HTTPS endpoint and must never block
+    // the startup-preload chain; it is invoked on-demand when the user
+    // opens the Themes subtab or clicks Refresh Catalog.
+    bindThemesSubtabEvents();
+    setThemesCatalogStatus(
+      "Click Refresh Catalog to load purchasable themes from the online catalog.",
+    );
+    return null;
+  })
   .then(() => {
     startupSettingsInitialized = true;
     maybeHideStartupPreload();

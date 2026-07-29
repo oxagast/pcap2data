@@ -1564,6 +1564,12 @@ contextBridge.exposeInMainWorld('themeapi', {
   list: () => ipcRenderer.invoke('themes-list'),
   get: (themeId) => ipcRenderer.invoke('themes-get', themeId),
   getThemesDirectory: () => ipcRenderer.invoke('themes-directory'),
+  listCatalog: (payload) => ipcRenderer.invoke('themes-catalog', payload),
+  fetchPreview: (payload) => ipcRenderer.invoke('themes-fetch-preview', payload),
+  startCheckout: (payload) => ipcRenderer.invoke('themes-start-checkout', payload),
+  refreshLicenses: (payload) => ipcRenderer.invoke('themes-refresh-licenses', payload),
+  download: (payload) => ipcRenderer.invoke('themes-download', payload),
+  openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
 });
 
 contextBridge.exposeInMainWorld('savedfiltersapi', {

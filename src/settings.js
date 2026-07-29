@@ -38,6 +38,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         manualConvImportMaxBytes: 2 * 1024 * 1024,
         nmapServiceScanEnabled: false,
         checkForNewReleasesOnStartup: true,
+        // Theme catalog + recache. Empty base URL means the online catalog
+        // and Paddle checkout are disabled; users can still apply bundled
+        // or local-file themes.
+        themeServerBaseUrl: "",
+        themeRefreshIntervalHours: 24 * 7,
     },
     backend: {
         tcpHost: "127.0.0.1",
@@ -243,6 +248,15 @@ function normalizeSettings(rawSettings = {}) {
                 typeof general.checkForNewReleasesOnStartup === "boolean"
                     ? general.checkForNewReleasesOnStartup
                     : generalDefaults.checkForNewReleasesOnStartup,
+            themeServerBaseUrl:
+                typeof general.themeServerBaseUrl === "string"
+                    ? general.themeServerBaseUrl.trim()
+                    : generalDefaults.themeServerBaseUrl,
+            themeRefreshIntervalHours: toPositiveInteger(
+                general.themeRefreshIntervalHours,
+                generalDefaults.themeRefreshIntervalHours,
+                1,
+            ),
         },
         backend: {
             tcpHost:

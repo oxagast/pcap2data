@@ -985,6 +985,9 @@ No keystore entries saved.</pre>
             <button id="settings-subtab-plugins" class="settings-subtab-btn">
               Plugins
             </button>
+            <button id="settings-subtab-themes" class="settings-subtab-btn">
+              Themes
+            </button>
             <button id="settings-subtab-privacy" class="settings-subtab-btn">
               Privacy
             </button>
@@ -998,11 +1001,9 @@ No keystore entries saved.</pre>
               <div class="settings-section">
                 <div class="settings-section-title">Frontend Defaults</div>
 
-                <label for="settings-general-theme">Theme</label>
-                <select id="settings-general-theme"></select>
-                <div class="settings-help-text" id="settings-theme-source-note" hidden></div>
-                <div class="settings-help-text" id="settings-theme-directory-hint">
-                  Add custom theme JSON files in your themes folder to create your own styles.
+                <div class="settings-help-text">
+                  <em>Note:</em> The theme selector has moved to its own
+                  <strong>Themes</strong> subtab to the right of Plugins.
                 </div>
 
                 <label for="settings-general-conv-json-indent">Conv JSON indent spaces</label>
@@ -1389,6 +1390,56 @@ No keystore entries saved.</pre>
                   A random, opaque identifier generated the first time you opt in. It is
                   used to count distinct installs without ever identifying you.
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="settings-themes-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">Theme</div>
+
+                <label for="settings-themes-select">Active theme</label>
+                <select id="settings-themes-select"></select>
+                <div class="settings-help-text" id="settings-themes-source-note" hidden></div>
+                <div class="settings-help-text" id="settings-themes-directory-hint">
+                  Add custom theme JSON files in your themes folder to create your own styles.
+                </div>
+
+                <div id="settings-themes-preview-wrap" class="settings-themes-preview-wrap">
+                  <div id="settings-themes-preview" class="settings-themes-preview" aria-label="Theme preview"></div>
+                  <div id="settings-themes-preview-fallback" class="settings-themes-preview-fallback">
+                    No preview available
+                  </div>
+                </div>
+
+                <div class="settings-section-title" style="margin-top: 1rem;">Browse &amp; Purchase</div>
+                <div class="settings-help-text">
+                  Search the online theme catalog, preview community themes, and unlock a
+                  purchased theme for this install. Checkout opens in your default browser
+                  via Paddle.
+                </div>
+
+                <label for="settings-themes-server-base-url">Theme server base URL</label>
+                <input id="settings-themes-server-base-url" type="url" placeholder="https://themes.packetsnitch.com" />
+                <div class="settings-help-text">
+                  Leave blank to disable the online catalog and Paddle checkout. Bundled
+                  and local-file themes still work.
+                </div>
+
+                <label for="settings-themes-refresh-interval-hours">Recache purchased themes every (hours)</label>
+                <input id="settings-themes-refresh-interval-hours" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  Minimum 1 hour. Default 168 (one week). The recache also runs once at
+                  startup so newly-purchased themes appear without waiting.
+                </div>
+
+                <div class="settings-actions-row">
+                  <button id="settings-themes-refresh-catalog-btn" type="button">Refresh Catalog</button>
+                  <button id="settings-themes-check-license-btn" type="button">Check License</button>
+                </div>
+                <div id="settings-themes-catalog-status" class="settings-help-text" aria-live="polite"></div>
+                <div id="settings-themes-catalog-list" class="settings-themes-catalog-list" role="list"></div>
               </div>
             </div>
           </div>

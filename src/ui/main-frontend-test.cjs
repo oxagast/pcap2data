@@ -827,6 +827,7 @@ const SETTINGS_SUBTAB_API_KEYS = "api-keys";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
+const SETTINGS_SUBTAB_THEMES = "themes";
 const SETTINGS_SUBTAB_ABOUT = "about";
 const PACKETSNITCH_RELEASES_PAGE_URL =
   "https://github.com/oxasploits/PacketSnitch/releases";
@@ -2031,7 +2032,7 @@ function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
 
 // Returns theme select element.
 function getThemeSelectElement() {
-  return document.getElementById("settings-general-theme");
+  return document.getElementById("settings-themes-select");
 }
 
 // Returns llm model select element.
@@ -21058,25 +21059,6 @@ document.getElementById("settings-about-refresh-btn").addEventListener("click", 
 
 document.getElementById("settings-about-download-btn").addEventListener("click", () => {
   void openSettingsAboutDownloadUrl();
-});
-
-document.getElementById("settings-general-theme").addEventListener("change", (event) => {
-  const selectedThemeId = sanitizeThemeId(event?.target?.value, FALLBACK_THEME_ID);
-  const previousThemeId = sanitizeThemeId(
-    getCurrentSettings()?.general?.themeId,
-    FALLBACK_THEME_ID,
-  );
-  if (selectedThemeId !== previousThemeId) {
-    writeLogEntry(
-      `Settings theme changed themeId=${JSON.stringify(previousThemeId)}->${JSON.stringify(selectedThemeId)}`,
-    );
-    statusUpdate(`Status: Theme changed to ${selectedThemeId}`);
-  } else {
-    writeLogEntry(`Settings theme selected themeId=${JSON.stringify(selectedThemeId)}`);
-    statusUpdate(`Status: Theme selected ${selectedThemeId} (no change)`);
-  }
-  updateSelectedThemeSourceNote(selectedThemeId);
-  void applyThemeById(selectedThemeId);
 });
 
 document.getElementById("settings-general-conv-json-indent").addEventListener("change", (event) => {

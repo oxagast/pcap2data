@@ -1,0 +1,379 @@
+// Tests for the Settings → Themes subtab, the 350x250 preview box, the
+// theme catalog, and the local theme cache (userData/theme-cache) that
+// makes purchased themes available offline.
+//
+// The renderer functions live in a giant CommonJS file
+// (src/ui/main-frontend.js) and the main-process helpers live in
+// src/main.js. We extract the relevant pure helpers with `vm` and
+// stub out `document`/`window`/`fetch`/`fs`/`electron` so the helpers
+// can run in plain Node without a full Electron app context.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const vm = require('vm');
+
+const PROJECT_ROOT = path.join(__dirname, '..');
+const RENDERER_PATH = path.join(PROJECT_ROOT, 'src', 'ui', 'main-frontend.js');
+const MAIN_PATH = path.join(PROJECT_ROOT, 'src', 'main.js');
+
+function extractFunctionSource(sourceText, functionName, { isAsync = false } = {}) {
+    const startToken = isAsync
+        ? `async function ${functionName}`
+        : `function ${functionName}`;
+    const startIndex = sourceText.indexOf(startToken);
+    if (startIndex === -1) {
+        // Fall back to the plain `function` token so callers that did
+        // not pass isAsync still work, but only when no `async function`
+        // matches. The `async function` check first prevents accidentally
+        // matching the bare `function` token at the start of an async fn.
+        if (isAsync) {
+            return extractFunctionSource(sourceText, functionName, { isAsync: false });
+        }
+        throw new Error(`Could not find function ${functionName}`);
+    }
+    let cursor = startIndex + startToken.length;
+    let parenDepth = 0;
+    let seenOpenParen = false;
+    for (; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === "(") {
+            parenDepth += 1;
+            seenOpenParen = true;
+            continue;
+        }
+        if (char === ")") {
+            parenDepth -= 1;
+            if (seenOpenParen && parenDepth === 0) {
+                cursor += 1;
+                break;
+            }
+        }
+    }
+    let depth = 0;
+    for (; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === '{') depth += 1;
+        if (char === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                return sourceText.slice(startIndex, cursor + 1);
+            }
+        }
+    }
+    throw new Error(`Could not parse function ${functionName}`);
+}
+
+function loadConstant(sourceText, constantName) {
+    const startToken = `const ${constantName} = `;
+    const startIndex = sourceText.indexOf(startToken);
+    if (startIndex === -1) {
+        throw new Error(`Could not find constant ${constantName}`);
+    }
+    let inSingle = false;
+    let inDouble = false;
+    let inBack = false;
+    for (let cursor = startIndex + startToken.length; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === "'" && !inDouble && !inBack) inSingle = !inSingle;
+        else if (char === '"' && !inSingle && !inBack) inDouble = !inDouble;
+        else if (char === '`' && !inSingle && !inDouble) inBack = !inBack;
+        else if (char === ';' && !inSingle && !inDouble && !inBack) {
+            return sourceText.slice(startIndex, cursor + 1);
+        }
+    }
+    throw new Error(`Could not parse constant ${constantName}`);
+}
+
+function loadRendererConstants(constantNames) {
+    const sourceText = fs.readFileSync(RENDERER_PATH, 'utf8');
+    return constantNames
+        .map((name) => loadConstant(sourceText, name))
+        .join('\n');
+}
+
+function loadRendererFunctions(functionNames) {
+    const sourceText = fs.readFileSync(RENDERER_PATH, 'utf8');
+    return functionNames
+        .map((name) => extractFunctionSource(sourceText, name))
+        .join('\n\n');
+}
+
+function loadMainFunction(functionName, { isAsync = false } = {}) {
+    const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+    return extractFunctionSource(sourceText, functionName, { isAsync });
+}
+
+function makePreviewVm() {
+    const context = {
+        URL: { revokeObjectURL: () => { } },
+        console,
+        window: {},
+        document: { getElementById: () => null },
+    };
+    vm.createContext(context);
+    return context;
+}
+
+describe('Settings → Themes subtab plumbing', () => {
+    test('renderer defines SETTINGS_SUBTAB_THEMES and SETTINGS_SUBTAB_PLUGINS', () => {
+        const sourceText = fs.readFileSync(RENDERER_PATH, 'utf8');
+        const consts = loadRendererConstants(['SETTINGS_SUBTAB_THEMES', 'SETTINGS_SUBTAB_PLUGINS']);
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(consts, context);
+        // `const` declarations live in script scope; access them via
+        // another runInContext rather than the context object directly.
+        expect(
+            vm.runInContext('SETTINGS_SUBTAB_THEMES', context),
+        ).toBe('themes');
+        expect(
+            vm.runInContext('SETTINGS_SUBTAB_PLUGINS', context),
+        ).toBe('plugins');
+    });
+
+    test('renderer setSettingsSubtab branch chain includes the themes tab', () => {
+        const source = fs.readFileSync(RENDERER_PATH, 'utf8');
+        expect(source).toMatch(/tabName === SETTINGS_SUBTAB_THEMES\s*\?\s*SETTINGS_SUBTAB_THEMES/);
+        expect(source).toMatch(/settings-themes-panel/);
+    });
+
+    test('startup bootstrap chain does NOT block on refreshThemesCatalog', () => {
+        // The catalog hits a remote HTTPS endpoint and must never sit in
+        // the preload-hide critical path; only bindThemesSubtabEvents and
+        // a status hint are wired at startup.
+        const source = fs.readFileSync(RENDERER_PATH, 'utf8');
+        const bootstrapMatch = source.match(
+            /void loadAvailableThemes\(\)[\s\S]+?startupSettingsInitialized = true;[\s\S]+?maybeHideStartupPreload\(\);/,
+        );
+        expect(bootstrapMatch).not.toBeNull();
+        const bootstrap = bootstrapMatch[0];
+        expect(bootstrap).toMatch(/bindThemesSubtabEvents\(\)/);
+        expect(bootstrap).toMatch(/Click Refresh Catalog/);
+        // refreshThemesCatalog must NOT be awaited before the startup
+        // preload is hidden.
+        expect(bootstrap).not.toMatch(/return refreshThemesCatalog\(/);
+    });
+
+    test('setSettingsSubtab auto-fetches catalog when Themes tab is opened', () => {
+        const source = fs.readFileSync(RENDERER_PATH, 'utf8');
+        // The Themes-panel branch should call refreshThemesPreviewForSelected
+        // and a guarded refreshThemesCatalog on first open.
+        const themesBranch = source.match(
+            /if \(themesPanel\) \{[\s\S]+?\n  \}\n/,
+        );
+        expect(themesBranch).not.toBeNull();
+        expect(themesBranch[0]).toMatch(/refreshThemesPreviewForSelected/);
+        expect(themesBranch[0]).toMatch(/refreshThemesCatalog\(\{ force: false \}\)/);
+    });
+});
+
+describe('renderer preview helpers', () => {
+    let context;
+    beforeAll(() => {
+        context = makePreviewVm();
+        const source = loadRendererFunctions([
+            'buildThemesPreviewDataUri',
+            'showThemesPreviewFromDataUri',
+            'resetThemesPreview',
+        ]);
+        vm.runInContext(source, context);
+    });
+
+    test('buildThemesPreviewDataUri accepts a valid jpg payload', () => {
+        const base64 = Buffer.from('hello world').toString('base64');
+        const dataUri = context.buildThemesPreviewDataUri({
+            format: 'jpg',
+            base64,
+        });
+        expect(dataUri).toBe(`data:image/jpeg;base64,${base64}`);
+    });
+
+    test('buildThemesPreviewDataUri accepts a valid png payload', () => {
+        const base64 = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString('base64');
+        const dataUri = context.buildThemesPreviewDataUri({
+            format: 'png',
+            base64,
+        });
+        expect(dataUri).toBe(`data:image/png;base64,${base64}`);
+    });
+
+    test('buildThemesPreviewDataUri strips an existing data URI prefix', () => {
+        const base64 = Buffer.from('xyz').toString('base64');
+        const dataUri = context.buildThemesPreviewDataUri({
+            format: 'png',
+            base64: `data:image/png;base64,${base64}`,
+        });
+        expect(dataUri).toBe(`data:image/png;base64,${base64}`);
+    });
+
+    test('buildThemesPreviewDataUri rejects an unsupported format', () => {
+        expect(
+            context.buildThemesPreviewDataUri({ format: 'gif', base64: 'abc' }),
+        ).toBeNull();
+    });
+
+    test('buildThemesPreviewDataUri rejects invalid base64', () => {
+        expect(
+            context.buildThemesPreviewDataUri({ format: 'jpg', base64: 'not base64 !' }),
+        ).toBeNull();
+    });
+
+    test('buildThemesPreviewDataUri returns null for empty input', () => {
+        expect(context.buildThemesPreviewDataUri(null)).toBeNull();
+        expect(context.buildThemesPreviewDataUri({})).toBeNull();
+    });
+});
+
+describe('main.js fetch timeout', () => {
+    test('fetchWithTimeout aborts after the requested timeout', async () => {
+        // We can't easily run an `await` in vm.runInContext because
+        // scripts are not treated as modules. So instead we lift the
+        // helper body verbatim and call it from real async context.
+        // The helper clamps the timeout to a 1000ms floor, so the
+        // fastest we can probe here is ~1000ms.
+        const helperSource = loadMainFunction('fetchWithTimeout', { isAsync: true });
+        // Fetch stub that respects the AbortSignal so the await actually
+        // rejects when fetchWithTimeout's setTimeout fires abort().
+        const fetchStub = (url, init) => new Promise((resolve, reject) => {
+            const signal = init && init.signal;
+            if (signal) {
+                if (signal.aborted) {
+                    reject(new DOMException('Aborted', 'AbortError'));
+                    return;
+                }
+                signal.addEventListener('abort', () => {
+                    reject(new DOMException('Aborted', 'AbortError'));
+                }, { once: true });
+            }
+            // Never resolves; the abort handler above is the only path.
+        });
+        const context = {
+            console,
+            DOMException,
+            fetch: fetchStub,
+            AbortController,
+            setTimeout,
+            clearTimeout,
+        };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const start = Date.now();
+        let caught = null;
+        try {
+            // Request 50ms; helper clamps to 1000ms minimum.
+            await context.fetchWithTimeout('https://example.invalid/', {}, 50);
+        } catch (error) {
+            caught = error;
+        }
+        const elapsed = Date.now() - start;
+        expect(caught).not.toBeNull();
+        expect(caught.name).toBe('AbortError');
+        expect(elapsed).toBeGreaterThanOrEqual(900);
+        expect(elapsed).toBeLessThan(3000);
+    }, 10000);
+
+    test('fetchThemeServerJson and fetchThemeServerBuffer use fetchWithTimeout', () => {
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        expect(sourceText).toMatch(/const THEME_SERVER_HTTP_TIMEOUT_MS = 5000/);
+        expect(sourceText).toMatch(/function fetchWithTimeout\(/);
+        const fetchJsonMatch = sourceText.match(
+            /async function fetchThemeServerJson[\s\S]+?^\}/m,
+        );
+        expect(fetchJsonMatch).not.toBeNull();
+        expect(fetchJsonMatch[0]).toMatch(/fetchWithTimeout\(/);
+        const fetchBufferMatch = sourceText.match(
+            /async function fetchThemeServerBuffer[\s\S]+?^\}/m,
+        );
+        expect(fetchBufferMatch).not.toBeNull();
+        expect(fetchBufferMatch[0]).toMatch(/fetchWithTimeout\(/);
+    });
+});
+
+describe('main.js theme helpers', () => {
+    test('normalizeThemeDefinition preserves previewImage and previewUrl', () => {
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        const helperSource = [
+            loadMainFunction('sanitizeThemeId'),
+            loadMainFunction('normalizeThemeEmbeddedImage'),
+            loadMainFunction('normalizeThemeDefinition'),
+        ].join('\n\n');
+        // normalizeThemeDefinition references `metadata.sourcePath` only,
+        // so the rest of the file is not required.
+        const context = {
+            console,
+        };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const result = context.normalizeThemeDefinition(
+            {
+                id: 'neon',
+                name: 'Neon',
+                description: 'A neon theme',
+                variables: { '--app-bg': '#000000' },
+                previewImage: { format: 'jpg', base64: 'aGVsbG8=' },
+                previewUrl: 'https://example.com/neon.png',
+            },
+            'neon',
+            { sourcePath: '/tmp/neon.json', sourceKind: 'cache', sourceMtimeMs: 1 },
+        );
+        expect(result).not.toBeNull();
+        expect(result.previewImage).toEqual({ format: 'jpg', base64: 'aGVsbG8=' });
+        expect(result.previewUrl).toBe('https://example.com/neon.png');
+    });
+
+    test('listThemeDefinitions merges cached themes via listCachedThemes stub', async () => {
+        // We don't run the full main.js (it would pull in Electron);
+        // we only verify the structural pieces by reading the source.
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        expect(sourceText).toMatch(/async function listCachedThemes/);
+        expect(sourceText).toMatch(/function getThemeCacheDir/);
+        expect(sourceText).toMatch(/const THEME_CACHE_DIR_NAME = "theme-cache"/);
+        // The new IPC handlers should all be registered.
+        for (const channel of [
+            'themes-catalog',
+            'themes-fetch-preview',
+            'themes-start-checkout',
+            'themes-refresh-licenses',
+            'themes-download',
+        ]) {
+            expect(sourceText).toContain(`ipcMain.handle("${channel}"`);
+        }
+        // listThemeDefinitions should include the cache directory in its merge.
+        const mergeStart = sourceText.indexOf('async function listThemeDefinitions');
+        const mergeEnd = sourceText.indexOf('function getThemeById', mergeStart);
+        const mergeBody = sourceText.slice(mergeStart, mergeEnd);
+        expect(mergeBody).toMatch(/listCachedThemes\(\)/);
+        expect(mergeBody).toMatch(/\[\.\.\.userThemes, \.\.\.cachedThemes, \.\.\.bundledThemes\]/);
+    });
+
+    test('installThemeRecacheTimer uses unref() and runs a startup license probe', () => {
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        expect(sourceText).toMatch(/async function installThemeRecacheTimer/);
+        expect(sourceText).toMatch(/themeRecacheTimer\.unref\(\)/);
+        expect(sourceText).toMatch(/reconcileThemeLicenses\(\{ force: false \}\)/);
+    });
+
+    test('preload exposes the new themeapi methods', () => {
+        const preload = fs.readFileSync(
+            path.join(PROJECT_ROOT, 'src', 'preload.js'),
+            'utf8',
+        );
+        expect(preload).toMatch(/listCatalog: \(payload\) => ipcRenderer\.invoke\('themes-catalog'/);
+        expect(preload).toMatch(/fetchPreview: \(payload\) => ipcRenderer\.invoke\('themes-fetch-preview'/);
+        expect(preload).toMatch(/startCheckout: \(payload\) => ipcRenderer\.invoke\('themes-start-checkout'/);
+        expect(preload).toMatch(/refreshLicenses: \(payload\) => ipcRenderer\.invoke\('themes-refresh-licenses'/);
+        expect(preload).toMatch(/download: \(payload\) => ipcRenderer\.invoke\('themes-download'/);
+    });
+});
+
+describe('settings.js schema additions', () => {
+    test('DEFAULT_SETTINGS.general includes the new theme fields', () => {
+        const settings = fs.readFileSync(
+            path.join(PROJECT_ROOT, 'src', 'settings.js'),
+            'utf8',
+        );
+        expect(settings).toMatch(/themeServerBaseUrl:\s*""/);
+        expect(settings).toMatch(/themeRefreshIntervalHours:\s*24 \* 7/);
+    });
+});

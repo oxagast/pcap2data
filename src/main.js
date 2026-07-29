@@ -1960,6 +1960,10 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
   if (Object.keys(variables).length === 0) return null;
   const logoImage = normalizeThemeEmbeddedImage(rawTheme.logoImage);
   const backdropImage = normalizeThemeEmbeddedImage(rawTheme.backdropImage);
+  const previewImage = normalizeThemeEmbeddedImage(rawTheme.previewImage);
+  const previewUrl = typeof rawTheme.previewUrl === "string" && rawTheme.previewUrl.trim()
+    ? rawTheme.previewUrl.trim()
+    : "";
   const quitButtonCharacter =
     typeof rawTheme.quitButtonCharacter === "string" && rawTheme.quitButtonCharacter.trim()
       ? rawTheme.quitButtonCharacter.trim()
@@ -1971,6 +1975,8 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
     variables,
     logoImage,
     backdropImage,
+    previewImage,
+    previewUrl,
     quitButtonCharacter,
     sourcePath: typeof metadata.sourcePath === "string" ? metadata.sourcePath : "",
     sourceKind: typeof metadata.sourceKind === "string" ? metadata.sourceKind : "unknown",
@@ -2123,7 +2129,17 @@ async function listThemeDefinitions() {
     }
   }
 
-  const allThemes = [...userThemes, ...bundledThemes];
+  let cachedThemes = [];
+  try {
+    cachedThemes = await listCachedThemes();
+    cachedThemes.forEach((theme) => {
+      theme.sourceKind = "cache";
+    });
+  } catch (error) {
+    console.warn("Unable to read cached themes:", error);
+  }
+
+  const allThemes = [...userThemes, ...cachedThemes, ...bundledThemes];
   const themesById = new Map();
   const duplicateStateById = new Map();
 
@@ -2173,6 +2189,8 @@ async function listThemeDefinitions() {
     variables: theme.variables,
     logoImage: theme.logoImage,
     backdropImage: theme.backdropImage,
+    previewImage: theme.previewImage || null,
+    previewUrl: typeof theme.previewUrl === "string" ? theme.previewUrl : "",
     quitButtonCharacter: theme.quitButtonCharacter,
     sourceKind: theme.sourceKind,
     hasUserBundledConflict: Boolean(duplicateStateById.get(theme.id)?.hasUserBundledConflict),
@@ -2189,6 +2207,291 @@ async function getThemeById(themeId) {
   const found = themes.find((theme) => theme.id === requestedId);
   if (found) return found;
   return themes.find((theme) => theme.id === "snitchbitch") || themes[0] || null;
+}
+
+// Theme cache + theme-server integration.
+// The cache lives at <userData>/theme-cache/<theme-id>/theme.json and is
+// consulted by listThemeDefinitions() so previously-purchased themes are
+// available offline. The theme server is a separate HTTPS service that
+// provides the catalog, checkout URLs, license reconciliation, and
+// authenticated theme downloads. PacketSnitch only consumes the API.
+const THEME_CACHE_DIR_NAME = "theme-cache";
+const THEME_SERVER_URL_KEY = "themeServerBaseUrl";
+const THEME_REFRESH_INTERVAL_HOURS_KEY = "themeRefreshIntervalHours";
+const DEFAULT_THEME_SERVER_BASE_URL = "";
+const DEFAULT_THEME_REFRESH_INTERVAL_HOURS = 24 * 7; // weekly
+const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
+const ALLOWED_THEME_PREVIEW_HOSTS = new Set();
+let cachedPurchasedThemeIds = new Set();
+let lastThemeLicenseCheckAtMs = 0;
+let themeRecacheTimer = null;
+let themeRecacheInFlight = false;
+
+function getThemeCacheDir() {
+  return path.join(app.getPath("userData"), THEME_CACHE_DIR_NAME);
+}
+
+function getThemeServerBaseUrl() {
+  try {
+    const settings = getAppSettings();
+    const candidate = settings?.general?.[THEME_SERVER_URL_KEY];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim().replace(/\/+$/, "");
+    }
+  } catch (_error) {
+    // ignore: settings not yet loaded
+  }
+  return DEFAULT_THEME_SERVER_BASE_URL;
+}
+
+function getThemeRefreshIntervalMs() {
+  let hours = DEFAULT_THEME_REFRESH_INTERVAL_HOURS;
+  try {
+    const settings = getAppSettings();
+    const candidate = Number(settings?.general?.[THEME_REFRESH_INTERVAL_HOURS_KEY]);
+    if (Number.isFinite(candidate) && candidate > 0) {
+      hours = candidate;
+    }
+  } catch (_error) {
+    // ignore
+  }
+  return Math.max(60 * 60 * 1000, hours * 60 * 60 * 1000);
+}
+
+function getThemeServerInstallUuid() {
+  try {
+    const settings = getAppSettings();
+    return String(settings?.privacy?.metricsInstallId || "").trim();
+  } catch (_error) {
+    return "";
+  }
+}
+
+function buildThemeServerUrl(relativePath, params = {}) {
+  const base = getThemeServerBaseUrl();
+  if (!base) return "";
+  const normalizedPath = String(relativePath || "").replace(/^\/+/, "");
+  let urlString = `${base}/${normalizedPath}`;
+  const query = new URLSearchParams();
+  const installUuid = getThemeServerInstallUuid();
+  if (installUuid) {
+    query.set("installUuid", installUuid);
+  }
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    const stringValue = String(value);
+    if (stringValue) query.set(key, stringValue);
+  });
+  const queryString = query.toString();
+  if (queryString) {
+    urlString += `?${queryString}`;
+  }
+  return urlString;
+}
+
+function isThemeServerConfigured() {
+  return Boolean(getThemeServerBaseUrl());
+}
+
+async function fetchWithTimeout(url, init = {}, timeoutMs = THEME_SERVER_HTTP_TIMEOUT_MS) {
+  if (typeof fetch !== "function") {
+    throw new Error("fetch is not available in this Node runtime");
+  }
+  const effectiveTimeoutMs = Math.max(1000, Number(timeoutMs) || THEME_SERVER_HTTP_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeoutMs);
+  if (typeof timeoutId.unref === "function") {
+    timeoutId.unref();
+  }
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchThemeServerJson(relativePath, { params, method = "GET", body, timeoutMs } = {}) {
+  const url = buildThemeServerUrl(relativePath, params);
+  if (!url) {
+    throw new Error("Theme server URL is not configured");
+  }
+  const response = await fetchWithTimeout(url, {
+    method,
+    headers: {
+      Accept: "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  }, timeoutMs);
+  if (!response.ok) {
+    throw new Error(`Theme server responded with HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function fetchThemeServerBuffer(relativePath, { params, timeoutMs } = {}) {
+  const url = buildThemeServerUrl(relativePath, params);
+  if (!url) {
+    throw new Error("Theme server URL is not configured");
+  }
+  const response = await fetchWithTimeout(url, {
+    method: "GET",
+    headers: {
+      Accept: "image/png, image/jpeg, application/json, application/octet-stream;q=0.5",
+    },
+  }, timeoutMs);
+  if (!response.ok) {
+    throw new Error(`Theme server responded with HTTP ${response.status}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+async function readCachedThemeDirEntries() {
+  const cacheDir = getThemeCacheDir();
+  try {
+    const entries = await fs.promises.readdir(cacheDir, { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory());
+  } catch (error) {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function readCachedThemeIds() {
+  const entries = await readCachedThemeDirEntries();
+  const ids = [];
+  for (const entry of entries) {
+    const filePath = path.join(getThemeCacheDir(), entry.name, "theme.json");
+    try {
+      await fs.promises.access(filePath, fs.constants.F_OK);
+      ids.push(sanitizeThemeId(entry.name, entry.name));
+    } catch (_error) {
+      // Stale directory without a theme.json; skip.
+    }
+  }
+  return ids;
+}
+
+async function ensureThemeCacheDir() {
+  await fs.promises.mkdir(getThemeCacheDir(), { recursive: true });
+}
+
+async function writeThemeToCache(themeId, rawThemeJsonText) {
+  await ensureThemeCacheDir();
+  const normalizedId = sanitizeThemeId(themeId, "custom");
+  const targetDir = path.join(getThemeCacheDir(), normalizedId);
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  const filePath = path.join(targetDir, "theme.json");
+  await fs.promises.writeFile(filePath, rawThemeJsonText, "utf8");
+  return filePath;
+}
+
+async function listCachedThemes() {
+  await ensureThemeCacheDir();
+  const cacheDir = getThemeCacheDir();
+  let entries;
+  try {
+    entries = await fs.promises.readdir(cacheDir, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const parsed = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const filePath = path.join(cacheDir, entry.name, "theme.json");
+    try {
+      const rawText = await fs.promises.readFile(filePath, "utf8");
+      const parsedObj = JSON.parse(rawText);
+      const stats = await fs.promises.stat(filePath);
+      const normalized = normalizeThemeDefinition(parsedObj, sanitizeThemeId(entry.name, "custom"), {
+        sourcePath: filePath,
+        sourceKind: "cache",
+        sourceMtimeMs: stats.mtimeMs,
+      });
+      if (!normalized) continue;
+      parsed.push(normalized);
+    } catch (error) {
+      console.warn(`Skipping invalid cached theme file: ${filePath}`, error);
+    }
+  }
+  return parsed;
+}
+
+function isCachedThemeStale(theme, { intervalMs } = {}) {
+  if (!theme || !Number.isFinite(theme.sourceMtimeMs) || theme.sourceMtimeMs <= 0) {
+    return true;
+  }
+  const ttl = Math.max(60 * 60 * 1000, Number(intervalMs) || getThemeRefreshIntervalMs());
+  return Date.now() - theme.sourceMtimeMs > ttl;
+}
+
+async function fetchAndCacheTheme(themeId) {
+  if (!isThemeServerConfigured()) return null;
+  const normalizedId = sanitizeThemeId(themeId, "");
+  if (!normalizedId) return null;
+  const rawBuffer = await fetchThemeServerBuffer(`/themes/${encodeURIComponent(normalizedId)}/download`);
+  const rawText = rawBuffer.toString("utf8");
+  const filePath = await writeThemeToCache(normalizedId, rawText);
+  return filePath;
+}
+
+async function reconcileThemeLicenses({ force = false } = {}) {
+  if (!isThemeServerConfigured()) {
+    return { unlockedThemeIds: [], purchased: false, error: "Theme server URL is not configured" };
+  }
+  if (!force) {
+    const since = Date.now() - lastThemeLicenseCheckAtMs;
+    if (since < 60 * 1000) {
+      return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, cached: true };
+    }
+  }
+  let payload;
+  try {
+    payload = await fetchThemeServerJson("/licenses", { params: { force: force ? "1" : "0" } });
+  } catch (error) {
+    return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, error: error.message };
+  }
+  const ownedIds = Array.isArray(payload?.ownedThemeIds) ? payload.ownedThemeIds : [];
+  const sanitizedOwned = ownedIds
+    .map((entry) => sanitizeThemeId(entry, ""))
+    .filter((entry) => entry);
+  const previouslyOwned = new Set(cachedPurchasedThemeIds);
+  const newlyUnlocked = sanitizedOwned.filter((id) => !previouslyOwned.has(id));
+  for (const themeId of sanitizedOwned) {
+    try {
+      await fetchAndCacheTheme(themeId);
+    } catch (error) {
+      console.warn(`Unable to refresh cached theme ${themeId}:`, error);
+    }
+  }
+  cachedPurchasedThemeIds = new Set(sanitizedOwned);
+  lastThemeLicenseCheckAtMs = Date.now();
+  return { unlockedThemeIds: newlyUnlocked, purchased: sanitizedOwned };
+}
+
+async function installThemeRecacheTimer() {
+  if (themeRecacheTimer) return;
+  const intervalMs = getThemeRefreshIntervalMs();
+  themeRecacheTimer = setInterval(() => {
+    if (themeRecacheInFlight) return;
+    themeRecacheInFlight = true;
+    reconcileThemeLicenses({ force: true })
+      .catch((error) => {
+        console.warn("Theme recache tick failed:", error);
+      })
+      .finally(() => {
+        themeRecacheInFlight = false;
+      });
+  }, intervalMs);
+  if (typeof themeRecacheTimer.unref === "function") {
+    themeRecacheTimer.unref();
+  }
+  // Run a one-shot startup check so the user does not have to wait a week
+  // for newly-purchased themes to show up after returning from checkout.
+  reconcileThemeLicenses({ force: false }).catch((error) => {
+    console.warn("Theme license startup probe failed:", error);
+  });
 }
 
 async function ensureSettingsFileExists(settings) {
@@ -2590,6 +2893,7 @@ function createWindow() {
     // it never blocks process exit.
     installMetricsFlushTimer();
     requestMetricsFlushFromRenderer();
+    installThemeRecacheTimer();
   });
   mainWindow.once("close", () => {
     appendActivityLogLine(
@@ -3654,6 +3958,136 @@ ipcMain.handle("themes-get", async (_event, themeId) => {
 
 ipcMain.handle("themes-directory", async () => {
   return ensureThemeFilesExist();
+});
+
+ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
+  if (!isThemeServerConfigured()) {
+    return { success: false, error: "Theme server URL is not configured", entries: [] };
+  }
+  try {
+    const catalog = await fetchThemeServerJson("/catalog", {
+      params: { force: payload?.force ? "1" : "0" },
+    });
+    const rawEntries = Array.isArray(catalog?.entries) ? catalog.entries : [];
+    const cachedIds = new Set(await readCachedThemeIds());
+    const ownedIds = new Set(cachedPurchasedThemeIds);
+    const entries = rawEntries
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const id = sanitizeThemeId(entry.id, "");
+        if (!id) return null;
+        const owned = ownedIds.has(id);
+        const installed = cachedIds.has(id);
+        return {
+          id,
+          name: String(entry.name || id),
+          description: String(entry.description || ""),
+          priceCents: Number.isFinite(Number(entry.priceCents)) ? Number(entry.priceCents) : null,
+          priceLabel: typeof entry.priceLabel === "string" ? entry.priceLabel : "",
+          checkoutUrl: typeof entry.checkoutUrl === "string" ? entry.checkoutUrl : "",
+          previewImage: normalizeThemeEmbeddedImage(entry.previewImage) || null,
+          previewUrl: typeof entry.previewUrl === "string" ? entry.previewUrl : "",
+          owned,
+          installed,
+          licenseUrl: typeof entry.licenseUrl === "string" ? entry.licenseUrl : "",
+        };
+      })
+      .filter(Boolean);
+    return { success: true, entries };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error || "Unknown error"), entries: [] };
+  }
+});
+
+ipcMain.handle("themes-fetch-preview", async (_event, payload = {}) => {
+  const previewUrl = typeof payload?.url === "string" ? payload.url.trim() : "";
+  if (!previewUrl) {
+    return { success: false, error: "Missing preview URL" };
+  }
+  try {
+    const parsed = new URL(previewUrl);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { success: false, error: "Preview URL must be http(s)" };
+    }
+  } catch (_error) {
+    return { success: false, error: "Invalid preview URL" };
+  }
+  try {
+    const response = await fetchWithTimeout(previewUrl, { method: "GET" });
+    if (!response.ok) {
+      return { success: false, error: `Preview responded with HTTP ${response.status}` };
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "image/png";
+    const mimeMatch = contentType.match(/^image\/(png|jpe?g)/i);
+    const mime = mimeMatch ? `image/${mimeMatch[1].toLowerCase().replace("jpg", "jpeg")}` : "image/png";
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    return { success: true, dataUri: `data:${mime};base64,${base64}` };
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      return { success: false, error: "Preview request timed out" };
+    }
+    return { success: false, error: error?.message || String(error || "Unknown error") };
+  }
+});
+
+ipcMain.handle("themes-start-checkout", async (_event, payload = {}) => {
+  const themeId = sanitizeThemeId(payload?.themeId, "");
+  if (!themeId) {
+    return { success: false, error: "Missing theme id" };
+  }
+  if (!isThemeServerConfigured()) {
+    return { success: false, error: "Theme server URL is not configured" };
+  }
+  let checkoutUrl = typeof payload?.checkoutUrl === "string" ? payload.checkoutUrl.trim() : "";
+  if (!checkoutUrl) {
+    checkoutUrl = buildThemeServerUrl(`/checkout/${encodeURIComponent(themeId)}`);
+  }
+  if (!checkoutUrl) {
+    return { success: false, error: "Unable to build checkout URL" };
+  }
+  try {
+    const parsed = new URL(checkoutUrl);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { success: false, error: "Checkout URL must be http(s)" };
+    }
+  } catch (_error) {
+    return { success: false, error: "Invalid checkout URL" };
+  }
+  try {
+    await shell.openExternal(checkoutUrl);
+    return { success: true, openedExternally: true, checkoutUrl };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error || "Unknown error") };
+  }
+});
+
+ipcMain.handle("themes-refresh-licenses", async (_event, payload = {}) => {
+  try {
+    const result = await reconcileThemeLicenses({ force: Boolean(payload?.force) });
+    return {
+      success: true,
+      unlockedThemeIds: Array.isArray(result.unlockedThemeIds) ? result.unlockedThemeIds : [],
+      purchasedThemeIds: [...cachedPurchasedThemeIds],
+    };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error || "Unknown error") };
+  }
+});
+
+ipcMain.handle("themes-download", async (_event, payload = {}) => {
+  const themeId = sanitizeThemeId(payload?.themeId, "");
+  if (!themeId) return { success: false, error: "Missing theme id" };
+  if (!isThemeServerConfigured()) {
+    return { success: false, error: "Theme server URL is not configured" };
+  }
+  try {
+    const filePath = await fetchAndCacheTheme(themeId);
+    cachedPurchasedThemeIds = new Set([...cachedPurchasedThemeIds, themeId]);
+    return { success: true, filePath };
+  } catch (error) {
+    return { success: false, error: error?.message || String(error || "Unknown error") };
+  }
 });
 
 ipcMain.handle("saved-filters-list", async () => {
