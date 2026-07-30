@@ -472,6 +472,7 @@ CREATE TABLE IF NOT EXISTS themes (
     preview_image TEXT NOT NULL DEFAULT '',
     preview_filename TEXT NOT NULL DEFAULT '',
     checkout_url TEXT NOT NULL DEFAULT '',
+    hosted_checkout_url TEXT NOT NULL DEFAULT '',
     license_url TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
@@ -547,7 +548,8 @@ class CatalogDB:
         preview_image: str,
         preview_filename: str,
         checkout_url: str,
-        license_url: str,
+        hosted_checkout_url: str = "",
+        license_url: str = "",
     ) -> None:
         now = int(time.time())
         with self._lock:
@@ -556,9 +558,10 @@ class CatalogDB:
                 INSERT INTO themes (
                     id, name, description, price_cents, price_label,
                     paddle_product_id, paddle_price_id,
-                    preview_image, preview_filename, checkout_url, license_url,
+                    preview_image, preview_filename,
+                    checkout_url, hosted_checkout_url, license_url,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     description=excluded.description,
@@ -569,6 +572,7 @@ class CatalogDB:
                     preview_image=excluded.preview_image,
                     preview_filename=excluded.preview_filename,
                     checkout_url=excluded.checkout_url,
+                    hosted_checkout_url=excluded.hosted_checkout_url,
                     license_url=excluded.license_url,
                     updated_at=excluded.updated_at
                 """,
@@ -583,6 +587,7 @@ class CatalogDB:
                     preview_image,
                     preview_filename,
                     checkout_url,
+                    hosted_checkout_url,
                     license_url,
                     now,
                     now,
@@ -901,6 +906,7 @@ class CatalogHandler(BaseHTTPRequestHandler):
             "priceCents": theme["price_cents"],
             "priceLabel": theme["price_label"],
             "checkoutUrl": checkout_url,
+            "hostedCheckoutUrl": theme["hosted_checkout_url"] or "",
             "previewImage": theme["preview_image"],
             "previewUrl": self._build_preview_url(
                 theme["id"], theme["preview_filename"]
@@ -926,6 +932,27 @@ class CatalogHandler(BaseHTTPRequestHandler):
         if query:
             url = f"{url}?{query}"
         return url
+
+    @staticmethod
+    def _append_recovery_params(
+        url: str, install_uuid: str, theme_id: str
+    ) -> str:
+        """Append ``installUuid`` and ``themeId`` to a static checkout URL
+        without clobbering any existing query string. Returns ``url``
+        unchanged if neither parameter is non-empty."""
+        if not (install_uuid or theme_id):
+            return url
+        try:
+            parsed = urllib.parse.urlparse(url)
+        except ValueError:
+            return url
+        existing = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+        if install_uuid:
+            existing.setdefault("installUuid", install_uuid)
+        if theme_id:
+            existing.setdefault("themeId", theme_id)
+        new_query = urllib.parse.urlencode(existing, doseq=True)
+        return urllib.parse.urlunparse(parsed._replace(query=new_query))
 
     def _build_preview_url(self, theme_id: str, preview_filename: str) -> str:
         if preview_filename:
@@ -1665,8 +1692,23 @@ class CatalogHandler(BaseHTTPRequestHandler):
         if theme is None:
             return self._write_json(404, {"error": "Theme not found"})
 
-        # If the operator pre-stored a static checkout URL, just redirect to
-        # it. Useful for sandbox testing with a single-use hsc_... token.
+        # Two flavors of pre-stored checkout URL:
+        #   * `hosted_checkout_url` — the operator-supplied Paddle Hosted
+        #     Checkout URL (typically a single-use `hsc_...` token from the
+        #     Paddle dashboard). When the buyer hits this endpoint we
+        #     append `installUuid` + `themeId` so the success/cancel pages
+        #     can recover the license context.
+        #   * `checkout_url` — an arbitrary static URL (legacy field). We
+        #     use it as-is without appending query params, for
+        #     backward compatibility.
+        hosted_url = (theme["hosted_checkout_url"] or "").strip()
+        if hosted_url:
+            install_uuid_q = self._query_param("installUuid") or ""
+            final_url = self._append_recovery_params(
+                hosted_url, install_uuid_q, theme_id
+            )
+            return self._write_redirect(final_url)
+
         if theme["checkout_url"]:
             return self._write_redirect(theme["checkout_url"])
 
@@ -2142,6 +2184,8 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         raw.setdefault("paddle", {})["priceId"] = args.paddle_price_id
     if getattr(args, "checkout_url", None):
         raw["checkoutUrl"] = args.checkout_url
+    if getattr(args, "hosted_checkout_url", None):
+        raw["hostedCheckoutUrl"] = args.hosted_checkout_url
 
     name = str(raw.get("name") or theme_id)
     description = str(raw.get("description") or "")
@@ -2179,6 +2223,11 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         if getattr(args, "checkout_url", None)
         else raw.get("checkoutUrl") or ""
     )
+    hosted_checkout_url = str(
+        args.hosted_checkout_url
+        if getattr(args, "hosted_checkout_url", None)
+        else raw.get("hostedCheckoutUrl") or ""
+    )
 
     db.upsert_theme(
         theme_id=theme_id,
@@ -2191,14 +2240,16 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         preview_image=preview_image,
         preview_filename=str(args.preview_filename or ""),
         checkout_url=checkout_url,
+        hosted_checkout_url=hosted_checkout_url,
         license_url=str(raw.get("licenseUrl") or ""),
     )
     LOG.info(
-        "Registered theme %s (file=%s, paddle_product=%s, paddle_price=%s, checkout=%s)",
+        "Registered theme %s (file=%s, paddle_product=%s, paddle_price=%s, hosted_checkout=%s, checkout=%s)",
         theme_id,
         target,
         paddle_product_id or "-",
         paddle_price_id or "-",
+        hosted_checkout_url or "-",
         checkout_url or "(auto)",
     )
     db.close()
@@ -2705,6 +2756,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="checkout_url",
         default=None,
         help="Pre-built Paddle checkout URL to redirect buyers to.",
+    )
+    p_add_theme.add_argument(
+        "--hosted-checkout-url",
+        dest="hosted_checkout_url",
+        default=None,
+        help=(
+            "Paddle Hosted Checkout URL (e.g. an hsc_... token from the "
+            "Paddle dashboard). When set, /checkout/<id> redirects to "
+            "this URL with installUuid + themeId appended so the "
+            "success/cancel pages can recover license context. "
+            "Overrides --checkout-url when both are set."
+        ),
     )
     p_add_theme.set_defaults(func=cmd_add_theme)
 
