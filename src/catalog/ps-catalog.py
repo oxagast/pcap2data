@@ -83,6 +83,7 @@ licenses via `--add-license INSTALLUUID THEMEID`.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import hashlib
 import hmac
@@ -1739,6 +1740,12 @@ class CatalogHandler(BaseHTTPRequestHandler):
                     paddle_customer_id="",
                     customer_email="",
                 )
+                LOG.info(
+                    "Recorded transaction intent transaction=%s installUuid=%s themeId=%s",
+                    transaction_id,
+                    install_uuid,
+                    theme_id,
+                )
             except Exception as exc:
                 LOG.warning(
                     "Failed to record transaction intent transaction=%s: %s",
@@ -2040,31 +2047,101 @@ def cmd_init(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _read_preview_image(path_str: str) -> str:
+    """Read a preview image from disk and return a base64 data URL.
+
+    Returns "" if `path_str` is empty. Raises FileNotFoundError if missing.
+    """
+    if not path_str:
+        return ""
+    p = Path(path_str).resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"Preview image not found: {p}")
+    suffix = p.suffix.lower().lstrip(".")
+    mime = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "svg": "image/svg+xml",
+    }.get(suffix, "application/octet-stream")
+    data = base64.b64encode(p.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
 def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
     db = CatalogDB(config.db_path)
-    theme_path = Path(args.theme_path).resolve()
-    if not theme_path.is_file():
-        LOG.error("Theme file not found: %s", theme_path)
-        return 2
-    try:
-        raw = json.loads(theme_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        LOG.error("Failed to read/parse %s: %s", theme_path, exc)
-        return 2
 
-    theme_id = str(
-        raw.get("id") or theme_path.stem
-    ).strip()
+    # Two ways to add a theme:
+    #   1) `add-theme <theme_path>` — read all metadata from a JSON file.
+    #   2) `add-theme --id <id> --name ...` — supply everything via flags.
+    # The flag path is convenient for one-liners / scripting.
+    raw: dict = {}
+    theme_path_arg = getattr(args, "theme_path", None)
+    if theme_path_arg:
+        theme_path = Path(theme_path_arg).resolve()
+        if not theme_path.is_file():
+            LOG.error("Theme file not found: %s", theme_path)
+            return 2
+        try:
+            raw = json.loads(theme_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            LOG.error("Failed to read/parse %s: %s", theme_path, exc)
+            return 2
+    else:
+        # Build an in-memory dict from flags. --id is required.
+        if not getattr(args, "theme_id", None):
+            LOG.error(
+                "add-theme requires either a <theme_path> positional "
+                "argument or --id <theme-id>"
+            )
+            return 2
+        raw = {}
+
+    # --id (flag form) overrides any id in the JSON; if neither was given,
+    # fall back to the file's stem.
+    flag_theme_id = getattr(args, "theme_id", None)
+    if flag_theme_id:
+        theme_id = str(flag_theme_id).strip()
+    elif theme_path_arg:
+        theme_id = str(raw.get("id") or Path(theme_path_arg).stem).strip()
+    else:
+        theme_id = str(raw.get("id") or "").strip()
+
+    if not theme_id:
+        LOG.error("Theme id is required (use --id <theme-id>)")
+        return 2
     if not THEME_ID_RE.match(theme_id):
         LOG.error("Invalid theme id %r (must match %s)", theme_id, THEME_ID_RE.pattern)
         return 2
 
-    # If the theme file isn't under themes_dir, copy it there so /download
-    # can serve it directly.
+    # If a JSON file was provided and isn't already under themes_dir, copy it
+    # there so /download can serve it directly. With the flag form we skip
+    # the file copy entirely (no source file).
     target = config.themes_dir / f"{theme_id}.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    if theme_path != target:
-        shutil.copyfile(theme_path, target)
+    if theme_path_arg:
+        if Path(theme_path_arg).resolve() != target:
+            shutil.copyfile(Path(theme_path_arg).resolve(), target)
+
+    # --- merge flags (override JSON values) -------------------------------
+    if getattr(args, "name", None):
+        raw["name"] = args.name
+    if getattr(args, "description", None):
+        raw["description"] = args.description
+    if getattr(args, "price_cents", None) is not None:
+        raw["priceCents"] = args.price_cents
+    if getattr(args, "price_label", None):
+        raw["priceLabel"] = args.price_label
+    if getattr(args, "license_url", None):
+        raw["licenseUrl"] = args.license_url
+    if getattr(args, "paddle_product_id", None):
+        raw.setdefault("paddle", {})["productId"] = args.paddle_product_id
+    if getattr(args, "paddle_price_id", None):
+        raw.setdefault("paddle", {})["priceId"] = args.paddle_price_id
+    if getattr(args, "checkout_url", None):
+        raw["checkoutUrl"] = args.checkout_url
 
     name = str(raw.get("name") or theme_id)
     description = str(raw.get("description") or "")
@@ -2076,6 +2153,15 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         preview_image = ""
     else:
         preview_image = str(preview_image)
+
+    # --preview-image <file> reads + base64-encodes a local image.
+    preview_image_flag = getattr(args, "preview_image", None)
+    if preview_image_flag:
+        try:
+            preview_image = _read_preview_image(preview_image_flag)
+        except FileNotFoundError as exc:
+            LOG.error("%s", exc)
+            return 2
 
     paddle = raw.get("paddle") or {}
     paddle_product_id = str(
@@ -2534,14 +2620,73 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p_serve.set_defaults(func=cmd_serve)
 
     p_add_theme = sub.add_parser(
-        "add-theme", help="Register a theme JSON file",
+        "add-theme",
+        help=(
+            "Register a theme. Either pass a JSON file as the positional "
+            "argument, or supply --id + the --name/--description/--price-* "
+            "flags to add a theme in one shot."
+        ),
     )
     _register_common_flags(p_add_theme)
-    p_add_theme.add_argument("theme_path")
+    p_add_theme.add_argument(
+        "theme_path",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional path to a theme JSON file. If omitted, --id and the "
+            "other --* flags must be supplied."
+        ),
+    )
+    p_add_theme.add_argument(
+        "--id",
+        dest="theme_id",
+        default=None,
+        help="Theme id (e.g. 'matrix-theme'). Overrides JSON's 'id' field.",
+    )
+    p_add_theme.add_argument(
+        "--name",
+        dest="name",
+        default=None,
+        help="Display name shown in the UI.",
+    )
+    p_add_theme.add_argument(
+        "--description",
+        dest="description",
+        default=None,
+        help="Short description shown in the theme card.",
+    )
+    p_add_theme.add_argument(
+        "--price-cents",
+        dest="price_cents",
+        type=_safe_int,
+        default=None,
+        help="Price in cents (e.g. 299 = $2.99). 0 or omit for free themes.",
+    )
+    p_add_theme.add_argument(
+        "--price-label",
+        dest="price_label",
+        default=None,
+        help="Display label for the price (e.g. '$2.99' or 'Free').",
+    )
+    p_add_theme.add_argument(
+        "--license-url",
+        dest="license_url",
+        default=None,
+        help="URL of a license / EULA document.",
+    )
     p_add_theme.add_argument(
         "--preview-filename",
         default=None,
-        help="Optional preview filename in the previews dir",
+        help="Optional preview filename in the previews dir.",
+    )
+    p_add_theme.add_argument(
+        "--preview-image",
+        dest="preview_image",
+        default=None,
+        help=(
+            "Path to a local preview image (png/jpg/gif/webp/svg). "
+            "Will be base64-encoded and embedded in the theme record."
+        ),
     )
     p_add_theme.add_argument(
         "--paddle-product-id",
