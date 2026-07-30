@@ -2192,10 +2192,26 @@ function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}
 }
 
 function normalizeThemeEmbeddedImage(rawImage) {
-  if (!rawImage || typeof rawImage !== "object") {
+  if (!rawImage) {
     return null;
   }
 
+  // --- new shape: a raw "data:image/...;base64,..." string -----------
+  if (typeof rawImage === "string") {
+    const m = rawImage.match(
+      /^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=]+)$/i
+    );
+    if (!m) return null;
+    const fmt = m[1].toLowerCase() === "jpeg" ? "jpg" : m[1].toLowerCase();
+    if (fmt !== "png" && fmt !== "jpg") return null;
+    return { format: fmt, base64: m[2] };
+  }
+
+  if (typeof rawImage !== "object") {
+    return null;
+  }
+
+  // --- legacy shape: {format, base64 | data} object ------------------
   const rawFormat = typeof rawImage.format === "string"
     ? rawImage.format.trim().toLowerCase()
     : "";

@@ -2676,7 +2676,22 @@ function showThemesPreviewFromDataUri(dataUri) {
 }
 
 function buildThemesPreviewDataUri(themeConfig) {
-  if (!themeConfig || typeof themeConfig !== "object") return null;
+  if (!themeConfig) return null;
+  // --- catalog-side shape: a raw "data:image/...;base64,..." string ---
+  if (typeof themeConfig === "string") {
+    if (/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/i.test(themeConfig)) {
+      return themeConfig;
+    }
+    return null;
+  }
+  if (typeof themeConfig !== "object") return null;
+  // --- new shape: a "data:image/...;base64,..." string in `.dataUri` ---
+  if (typeof themeConfig.dataUri === "string" && themeConfig.dataUri) {
+    if (/^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/i.test(themeConfig.dataUri)) {
+      return themeConfig.dataUri;
+    }
+  }
+  // --- legacy shape: {format, base64} object ---
   const formatRaw = typeof themeConfig.format === "string"
     ? themeConfig.format.trim().toLowerCase()
     : "";
