@@ -878,6 +878,7 @@ class CatalogHandler(BaseHTTPRequestHandler):
         theme: sqlite3.Row,
         owned_ids: Iterable[str],
         installed_ids: Iterable[str],
+        install_uuid: str = "",
     ) -> Dict[str, Any]:
         owned_set = set(owned_ids)
         installed_set = set(installed_ids)
@@ -887,7 +888,9 @@ class CatalogHandler(BaseHTTPRequestHandler):
             "description": theme["description"],
             "priceCents": theme["price_cents"],
             "priceLabel": theme["price_label"],
-            "checkoutUrl": self._build_checkout_url(theme["id"]),
+            "checkoutUrl": self._build_checkout_url(
+                theme["id"], install_uuid
+            ),
             "previewImage": theme["preview_image"],
             "previewUrl": self._build_preview_url(
                 theme["id"], theme["preview_filename"]
@@ -897,8 +900,22 @@ class CatalogHandler(BaseHTTPRequestHandler):
             "installed": theme["id"] in installed_set,
         }
 
-    def _build_checkout_url(self, theme_id: str) -> str:
-        return f"{self.config.base_url}/checkout/{urllib.parse.quote(theme_id)}"
+    def _build_checkout_url(self, theme_id: str, install_uuid: str = "") -> str:
+        url = f"{self.config.base_url}/checkout/{urllib.parse.quote(theme_id)}"
+        # Always append ``installUuid`` so the buyer can complete the
+        # transaction without an extra round-trip. ``themeId`` is also
+        # appended because the success/cancel pages use it as a backup
+        # identifier when Paddle's sandbox redirect strips the catalog
+        # params from the URL.
+        query = urllib.parse.urlencode({
+            k: v for k, v in (
+                ("installUuid", install_uuid),
+                ("themeId", theme_id),
+            ) if v
+        })
+        if query:
+            url = f"{url}?{query}"
+        return url
 
     def _build_preview_url(self, theme_id: str, preview_filename: str) -> str:
         if preview_filename:
@@ -1507,7 +1524,9 @@ class CatalogHandler(BaseHTTPRequestHandler):
         # We don't actually track installed state on the server; that is a
         # client-side concept (the renderer knows what is in userData/theme-cache).
         entries = [
-            self._catalog_entry(theme, owned_ids, installed_ids=[])
+            self._catalog_entry(
+                theme, owned_ids, installed_ids=[], install_uuid=install_uuid
+            )
             for theme in themes
         ]
         return self._write_json(200, {"entries": entries})

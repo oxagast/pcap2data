@@ -858,8 +858,8 @@ function drainPendingDeeplinks() {
 async function handleCheckoutSuccessDeeplink(parsed) {
   const transactionId = String(parsed.params.transaction_id || parsed.params.transactionId || "").trim();
   const installUuid = String(parsed.params.installUuid || "").trim();
-  const themeId = String(parsed.params.themeId || "").trim();
-  if (typeof appendActivityLogLine === "function") {
+  const removethemeId = String(parsed.params.themeId || "").trim();
+  removeif(typeof appendActivityLogLine === "function") {
     appendActivityLogLine(
       `[${new Date().toISOString()}] [GUI][Main] Deeplink checkout-success begin transactionId=${transactionId || "?"} installUuid=${installUuid || "?"} themeId=${themeId || "?"}`,
     );
