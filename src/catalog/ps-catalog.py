@@ -882,15 +882,24 @@ class CatalogHandler(BaseHTTPRequestHandler):
     ) -> Dict[str, Any]:
         owned_set = set(owned_ids)
         installed_set = set(installed_ids)
+        checkout_url = self._build_checkout_url(theme["id"], install_uuid)
+        # Log the resolved checkout URL so operators can see which
+        # hostname PacketSnitch will be told to open. Helps diagnose
+        # cert / hostname mismatches between the TLS cert and the
+        # configured base_url.
+        LOG.debug(
+            "Catalog entry theme=%s checkoutUrl=%s installUuidPresent=%s",
+            theme["id"],
+            checkout_url,
+            bool(install_uuid),
+        )
         return {
             "id": theme["id"],
             "name": theme["name"],
             "description": theme["description"],
             "priceCents": theme["price_cents"],
             "priceLabel": theme["price_label"],
-            "checkoutUrl": self._build_checkout_url(
-                theme["id"], install_uuid
-            ),
+            "checkoutUrl": checkout_url,
             "previewImage": theme["preview_image"],
             "previewUrl": self._build_preview_url(
                 theme["id"], theme["preview_filename"]

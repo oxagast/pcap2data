@@ -858,8 +858,8 @@ function drainPendingDeeplinks() {
 async function handleCheckoutSuccessDeeplink(parsed) {
   const transactionId = String(parsed.params.transaction_id || parsed.params.transactionId || "").trim();
   const installUuid = String(parsed.params.installUuid || "").trim();
-  const removethemeId = String(parsed.params.themeId || "").trim();
-  removeif(typeof appendActivityLogLine === "function") {
+  const themeId = String(parsed.params.themeId || "").trim();
+  if (typeof appendActivityLogLine === "function") {
     appendActivityLogLine(
       `[${new Date().toISOString()}] [GUI][Main] Deeplink checkout-success begin transactionId=${transactionId || "?"} installUuid=${installUuid || "?"} themeId=${themeId || "?"}`,
     );
@@ -4425,6 +4425,9 @@ ipcMain.handle("themes-start-checkout", async (_event, payload = {}) => {
   if (!checkoutUrl) {
     return { success: false, error: "Unable to build checkout URL" };
   }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] themes-start-checkout themeId=${themeId} url=${checkoutUrl}`,
+  );
   try {
     const parsed = new URL(checkoutUrl);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
