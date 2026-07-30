@@ -442,8 +442,9 @@ def create_paddle_transaction(
             body=response_body,
         ) from exc
 
+    data_block = parsed.get("data") or {}
     checkout_url = (
-        parsed.get("data", {}).get("checkout", {}).get("url")
+        data_block.get("checkout", {}).get("url")
         or parsed.get("data", {}).get("checkout_url")
         or ""
     )
@@ -453,7 +454,8 @@ def create_paddle_transaction(
             status=status,
             body=response_body,
         )
-    return checkout_url
+    transaction_id = str(data_block.get("id") or "").strip()
+    return checkout_url, transaction_id
 
 
 SCHEMA = """
@@ -489,6 +491,23 @@ CREATE INDEX IF NOT EXISTS licenses_install_idx
     ON licenses(install_uuid);
 CREATE INDEX IF NOT EXISTS licenses_theme_idx
     ON licenses(theme_id);
+
+-- Maps Paddle transaction_id -> (install_uuid, theme_id) so the
+-- checkout-success page can recover the buyer / theme context even
+-- when Paddle's sandbox API returns no custom_data on the GET
+-- response. The row is written when a transaction is created and is
+-- safe to leave around after the license is granted (a small leak,
+-- kept simple to avoid a separate cleanup task).
+CREATE TABLE IF NOT EXISTS transaction_intent (
+    transaction_id TEXT PRIMARY KEY,
+    install_uuid TEXT NOT NULL,
+    theme_id TEXT NOT NULL,
+    paddle_customer_id TEXT NOT NULL DEFAULT '',
+    customer_email TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS transaction_intent_install_idx
+    ON transaction_intent(install_uuid);
 """
 
 
@@ -670,6 +689,73 @@ class CatalogDB:
                 (install_uuid,),
             ).fetchall()
         return [row["theme_id"] for row in rows]
+
+    # ---- transaction_intent ----
+
+    def record_transaction_intent(
+        self,
+        transaction_id: str,
+        install_uuid: str,
+        theme_id: str,
+        paddle_customer_id: str = "",
+        customer_email: str = "",
+    ) -> None:
+        """Persist the (transaction_id -> install_uuid / theme_id) mapping
+        locally so we can recover it on the checkout-success page even
+        when Paddle's API doesn't echo ``custom_data`` back to us (the
+        sandbox response often omits it)."""
+        if not transaction_id or not install_uuid or not theme_id:
+            return
+        now = int(time.time())
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO transaction_intent (
+                    transaction_id, install_uuid, theme_id,
+                    paddle_customer_id, customer_email, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(transaction_id) DO UPDATE SET
+                    install_uuid=excluded.install_uuid,
+                    theme_id=excluded.theme_id,
+                    paddle_customer_id=excluded.paddle_customer_id,
+                    customer_email=excluded.customer_email
+                """,
+                (
+                    transaction_id,
+                    install_uuid,
+                    theme_id,
+                    paddle_customer_id,
+                    customer_email,
+                    now,
+                ),
+            )
+
+    def get_transaction_intent(self, transaction_id: str) -> Optional[dict]:
+        """Return the locally-stored intent for a Paddle transaction, or
+        ``None`` if we never created one (e.g. older catalog server
+        instance, or the buyer's transaction predates this feature)."""
+        if not transaction_id:
+            return None
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT transaction_id, install_uuid, theme_id,
+                       paddle_customer_id, customer_email, created_at
+                  FROM transaction_intent
+                 WHERE transaction_id = ?
+                """,
+                (transaction_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "transactionId": row["transaction_id"],
+            "installUuid": row["install_uuid"],
+            "themeId": row["theme_id"],
+            "paddleCustomerId": row["paddle_customer_id"],
+            "customerEmail": row["customer_email"],
+            "createdAt": row["created_at"],
+        }
 
     def list_owned_install_uuids_for_theme(self, theme_id: str) -> List[str]:
         """Return the installUuids that currently hold an unrevoked license
@@ -898,35 +984,72 @@ class CatalogHandler(BaseHTTPRequestHandler):
         transaction_id = (query.get("transaction_id") or [""])[0]
         customer_email = (query.get("customer_email") or [""])[0]
 
-        # If the catalog-side params are missing but Paddle's transaction_id
-        # is present, look it up. This handles the sandbox redirect quirk
-        # where Paddle appends transaction_id instead of our custom params.
-        # We only populate ``install_uuid`` / ``theme_id`` from the lookup
-        # when the transaction is in a paid state — otherwise we'd be
-        # synthesizing IDs that the proactive-grant logic would then trust,
-        # which would grant a license for a transaction that's still
-        # pending or that failed. The bare IDs from the lookup are kept in
-        # separate variables so we can still show them in the rendered
-        # page / deeplink button for debugging / manual reconciliation.
+        # If the catalog-side params are missing but Paddle's
+        # transaction_id is present, first try to recover the
+        # installUuid / themeId from the local ``transaction_intent``
+        # table — this avoids the brittle dependency on Paddle's API
+        # echoing custom_data back. We only populate the local
+        # variables from the lookup when the transaction is in a paid
+        # state — otherwise we'd be synthesizing IDs that the
+        # proactive-grant logic would then trust, which would grant a
+        # license for a transaction that's still pending or that
+        # failed. The bare IDs from the lookup are kept in separate
+        # variables so we can still show them in the rendered page /
+        # deeplink button for debugging / manual reconciliation.
         resolved_transaction = None
         if (not install_uuid or not theme_id) and transaction_id:
+            # 1. Try the local intent table first (no network, instant).
             try:
-                resolved_transaction = self._paddle_lookup_transaction(transaction_id)
-            except PaddleError as exc:
+                intent = self.db.get_transaction_intent(transaction_id)
+            except Exception as exc:
                 LOG.warning(
-                    "Failed to look up Paddle transaction %s: %s",
+                    "Failed to read transaction_intent for %s: %s",
                     transaction_id,
                     exc,
                 )
-                resolved_transaction = None
-            if resolved_transaction:
-                transaction_status = (
-                    str(resolved_transaction.get("status") or "").lower()
+                intent = None
+            if intent:
+                intent_install_uuid = (
+                    intent.get("installUuid") or ""
                 )
-                if transaction_status in self.PADDLE_TRANSACTION_PAID_STATUSES:
-                    install_uuid = (
-                        resolved_transaction.get("installUuid") or install_uuid
+                intent_theme_id = intent.get("themeId") or ""
+                if (
+                    INSTALL_UUID_RE.match(intent_install_uuid)
+                    and THEME_ID_RE.match(intent_theme_id)
+                ):
+                    install_uuid = intent_install_uuid
+                    theme_id = intent_theme_id
+                    LOG.info(
+                        "Recovered transaction context from local intent table "
+                        "transaction=%s installUuid=%s themeId=%s",
+                        transaction_id,
+                        install_uuid,
+                        theme_id,
                     )
+                if not customer_email:
+                    customer_email = intent.get("customerEmail") or ""
+
+            # 2. Fall back to the Paddle API for transactions created
+            #    before this server added the intent table, or when
+            #    the intent table doesn't have a row for some reason.
+            if (not install_uuid or not theme_id):
+                try:
+                    resolved_transaction = self._paddle_lookup_transaction(transaction_id)
+                except PaddleError as exc:
+                    LOG.warning(
+                        "Failed to look up Paddle transaction %s: %s",
+                        transaction_id,
+                        exc,
+                    )
+                    resolved_transaction = None
+                if resolved_transaction:
+                    transaction_status = (
+                        str(resolved_transaction.get("status") or "").lower()
+                    )
+                    if transaction_status in self.PADDLE_TRANSACTION_PAID_STATUSES:
+                        install_uuid = (
+                            resolved_transaction.get("installUuid") or install_uuid
+                        )
                     theme_id = (
                         resolved_transaction.get("themeId") or theme_id
                     )
@@ -1146,10 +1269,25 @@ class CatalogHandler(BaseHTTPRequestHandler):
         # the diagnostic that previously made the proactive grant fail
         # silently.
         if not install_uuid_value or not theme_id_value:
+            # Capture every place custom_data *could* live so the
+            # operator (or our diagnostic) can see exactly what shape
+            # Paddle returned for this transaction.
+            items_custom = []
+            for item in data.get("items", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                items_custom.append({
+                    "itemKeys": sorted(item.keys()),
+                    "itemCustomData": item.get("custom_data"),
+                    "itemPassthrough": item.get("passthrough"),
+                })
+            checkout_custom = (data.get("checkout") or {}).get("custom_data") \
+                if isinstance(data.get("checkout"), dict) else None
             LOG.warning(
                 "Paddle transaction lookup could not recover custom_data "
                 "transaction=%s status=%s installUuid=%s themeId=%s "
-                "dataKeys=%s topLevelCustomData=%s",
+                "dataKeys=%s topLevelCustomData=%s "
+                "itemsCustomData=%s checkoutCustomData=%s",
                 transaction_id,
                 status_value,
                 install_uuid_value or "<missing>",
@@ -1157,6 +1295,10 @@ class CatalogHandler(BaseHTTPRequestHandler):
                 sorted(data.keys()),
                 json.dumps(data.get("custom_data"))[:200]
                 if data.get("custom_data") is not None
+                else "<null>",
+                json.dumps(items_custom)[:500],
+                json.dumps(checkout_custom)[:200]
+                if checkout_custom is not None
                 else "<null>",
             )
         return {
@@ -1532,7 +1674,7 @@ class CatalogHandler(BaseHTTPRequestHandler):
             )
 
         try:
-            checkout_url = create_paddle_transaction(
+            checkout_url, transaction_id = create_paddle_transaction(
                 self.config,
                 price_id=theme["paddle_price_id"],
                 install_uuid=install_uuid,
@@ -1555,10 +1697,31 @@ class CatalogHandler(BaseHTTPRequestHandler):
                 },
             )
 
+        # Record the (transaction_id -> installUuid / themeId) mapping
+        # locally so the success page can recover the buyer context
+        # even if Paddle's API doesn't echo ``custom_data`` back to us
+        # (a common sandbox behavior).
+        if transaction_id:
+            try:
+                self.db.record_transaction_intent(
+                    transaction_id=transaction_id,
+                    install_uuid=install_uuid,
+                    theme_id=theme_id,
+                    paddle_customer_id="",
+                    customer_email="",
+                )
+            except Exception as exc:
+                LOG.warning(
+                    "Failed to record transaction intent transaction=%s: %s",
+                    transaction_id,
+                    exc,
+                )
+
         LOG.info(
-            "Created Paddle transaction theme=%s installUuid=%s url=%s",
+            "Created Paddle transaction theme=%s installUuid=%s transaction=%s url=%s",
             theme_id,
             install_uuid,
+            transaction_id or "?",
             checkout_url,
         )
         return self._write_redirect(checkout_url)

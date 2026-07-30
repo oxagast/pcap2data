@@ -311,7 +311,7 @@ def test_create_paddle_transaction_sends_correct_payload(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ps_catalog.urllib.request, "urlopen", fake_urlopen)
 
-    url = ps_catalog.create_paddle_transaction(
+    url, txn_id = ps_catalog.create_paddle_transaction(
         cfg,
         price_id="pri_test",
         install_uuid=install_uuid,
@@ -320,6 +320,7 @@ def test_create_paddle_transaction_sends_correct_payload(tmp_path, monkeypatch):
         cancel_url="https://packetsnitch.example.com/cancel",
     )
     assert url == "https://sandbox-pay.paddle.io/hsc_abc"
+    assert txn_id == "txn_test"
     assert captured[0][0] == "https://sandbox-api.paddle.com/transactions"
     body = json.loads(captured[0][1])
     assert body["items"] == [{"price_id": "pri_test", "quantity": 1}]
@@ -357,10 +358,12 @@ def test_create_paddle_transaction_uses_live_url_by_default(tmp_path, monkeypatc
 
     monkeypatch.setattr(ps_catalog.urllib.request, "urlopen", fake_urlopen)
 
-    url = ps_catalog.create_paddle_transaction(
+    url, txn_id = ps_catalog.create_paddle_transaction(
         cfg, price_id="pri", install_uuid=str(uuid.uuid4()), theme_id="x"
     )
     assert url == "https://pay.paddle.com/hsc_live"
+    # No ``id`` in the fake response — txn_id should be empty.
+    assert txn_id == ""
     assert captured[0] == "https://api.paddle.com/transactions"
 
 
@@ -1083,6 +1086,102 @@ def test_checkout_success_paid_status_grants_via_api(
         db.close()
 
 
+def test_checkout_success_uses_local_intent_table_when_paddle_returns_no_custom_data(
+    tmp_root, monkeypatch
+):
+    """End-to-end of the local-intent-table fallback: even when the
+    Paddle API doesn't echo custom_data back, the catalog can still
+    recover installUuid/themeId from the local transaction_intent
+    table and grant the license server-side."""
+    cfg_template, themes, previews, db_path = tmp_root
+    install_uuid = str(uuid.uuid4())
+    transaction_id = "txn_local_intent"
+
+    # Paddle returns the transaction but with no custom_data (the
+    # common sandbox case we want to survive).
+    def fake_lookup(self, txn_id):
+        return {
+            "installUuid": "",
+            "themeId": "",
+            "customerEmail": "",
+            "status": "completed",
+        }
+
+    monkeypatch.setattr(
+        ps_catalog.CatalogHandler,
+        "_paddle_lookup_transaction",
+        fake_lookup,
+    )
+
+    db = ps_catalog.CatalogDB(db_path)
+    _add_theme(db, themes, theme_id="matrix")
+    # Pre-populate the local intent table as if a previous checkout
+    # had recorded it. (In production this happens at transaction
+    # creation time.)
+    db.record_transaction_intent(
+        transaction_id=transaction_id,
+        install_uuid=install_uuid,
+        theme_id="matrix",
+        paddle_customer_id="ctm_test",
+        customer_email="buyer@example.com",
+    )
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host=cfg_template.host,
+        port=real_port,
+        db_path=cfg_template.db_path,
+        themes_dir=cfg_template.themes_dir,
+        previews_dir=cfg_template.previews_dir,
+        paddle_webhook_secret=cfg_template.paddle_webhook_secret,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        try:
+            # Only transaction_id in the URL. The catalog server should
+            # recover installUuid/themeId from the local intent table
+            # (not the Paddle API response) and grant the license.
+            status, _, body = _request(
+                conn,
+                "GET",
+                f"/checkout-success?transaction_id={transaction_id}",
+            )
+            assert status == 200
+            assert b"has been activated" in body
+            # The deeplink button should include the recovered IDs.
+            assert f"installUuid={install_uuid}".encode() in body
+            assert b"themeId=matrix" in body
+        finally:
+            conn.close()
+
+        owned = db.list_owned_theme_ids(install_uuid)
+        assert owned == ["matrix"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
 def test_checkout_cancel_page_renders(client):
     conn, server, cfg, themes, previews, db = client
     install_uuid = str(uuid.uuid4())
@@ -1526,7 +1625,7 @@ def test_create_paddle_transaction_accepts_http_when_insecure_allowed():
     import urllib.request as _ur
     ps_catalog.urllib.request.urlopen = lambda req, timeout=None: FakeResp()
     try:
-        url = ps_catalog.create_paddle_transaction(
+        url, txn_id = ps_catalog.create_paddle_transaction(
             cfg,
             price_id="pri",
             install_uuid=str(uuid.uuid4()),
@@ -1534,6 +1633,7 @@ def test_create_paddle_transaction_accepts_http_when_insecure_allowed():
             success_url="http://localhost:9021/checkout-success",
         )
         assert url == "https://sandbox-pay.paddle.io/x"
+        assert txn_id == ""
     finally:
         # No cleanup needed — monkeypatch-less direct setattr; subsequent
         # tests don't depend on the prior urlopen.
@@ -1559,7 +1659,7 @@ def test_create_paddle_transaction_accepts_https_always():
 
     ps_catalog.urllib.request.urlopen = lambda req, timeout=None: FakeResp()
     try:
-        url = ps_catalog.create_paddle_transaction(
+        url, txn_id = ps_catalog.create_paddle_transaction(
             cfg,
             price_id="pri",
             install_uuid=str(uuid.uuid4()),
@@ -1567,6 +1667,7 @@ def test_create_paddle_transaction_accepts_https_always():
             success_url="https://catalog.example.com/success",
         )
         assert url == "https://pay.paddle.com/x"
+        assert txn_id == ""
     finally:
         del ps_catalog.urllib.request.urlopen
 
