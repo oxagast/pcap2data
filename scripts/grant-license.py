@@ -36,6 +36,22 @@ def main():
         help="Theme id to grant. Default: matrix",
     )
     parser.add_argument(
+        "--catalog-source",
+        default=None,
+        help="Optional explicit path to a ps-catalog.py to load for the "
+             "schema bootstrap. If unset, the script searches the "
+             "workspace (parent of this file) and the catalog db "
+             "directory. Use --no-bootstrap to skip the bootstrap "
+             "entirely.",
+    )
+    parser.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="Skip loading ps-catalog.py for the schema bootstrap. The "
+             "catalog server must have run at least once on this DB so "
+             "all tables exist.",
+    )
+    parser.add_argument(
         "transaction_id",
         help="Paddle transaction id (e.g. txn_01kyra4erszf253208cj299rp7)",
     )
@@ -53,21 +69,41 @@ def main():
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
-    # Ensure the schema is up-to-date. CatalogDB.__init__ runs the
-    # same schema on first connect, but a fresh DB created by an older
-    # server won't have transaction_intent.
-    schema_path = Path(__file__).resolve().parent.parent / "src" / "catalog" / "ps-catalog.py"
-    if schema_path.is_file():
-        import importlib.util
+    # Best-effort schema bootstrap: load ps-catalog.py and run its
+    # CatalogDB constructor to ensure all tables (including the new
+    # transaction_intent) exist. We swallow any error because the
+    # bootstrap is only needed for fresh DBs; an existing DB created
+    # by an older server will already have the schema it needs (and
+    # might use a slightly different ps_catalog.py that fails to
+    # import for unrelated reasons — see ``--no-bootstrap`` to skip).
+    if not args.no_bootstrap:
+        schema_search_paths = [
+            Path(args.catalog_source) if args.catalog_source else None,
+            Path(__file__).resolve().parent.parent / "src" / "catalog" / "ps-catalog.py",
+            db_path.parent / "ps-catalog.py",
+        ]
+        schema_path = next(
+            (p for p in schema_search_paths if p and p.is_file()),
+            None,
+        )
+        if schema_path:
+            try:
+                import importlib.util
 
-        spec = importlib.util.spec_from_file_location("ps_catalog", schema_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        try:
-            mod.CatalogDB(db_path).close()
-            print(f"Schema updated at {db_path}")
-        except Exception as exc:
-            print(f"WARNING: schema bootstrap failed: {exc}", file=sys.stderr)
+                spec = importlib.util.spec_from_file_location(
+                    "ps_catalog_bootstrap", schema_path
+                )
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.CatalogDB(db_path).close()
+                print(f"Schema verified at {db_path}")
+            except Exception as exc:
+                print(
+                    f"WARNING: schema bootstrap skipped ({type(exc).__name__}: {exc}). "
+                    f"If the catalog DB is missing the ``transaction_intent`` table, "
+                    f"re-run the catalog server once to create it.",
+                    file=sys.stderr,
+                )
 
     # Verify the theme exists (the licenses table has a FK to themes).
     theme_row = conn.execute(
@@ -81,6 +117,22 @@ def main():
         )
         sys.exit(1)
     print(f"Theme: {theme_row['id']} ({theme_row['name']})")
+
+    # Ensure transaction_intent exists. Older catalog servers may not
+    # have created it; this is a no-op if it does.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transaction_intent (
+            transaction_id TEXT PRIMARY KEY,
+            install_uuid TEXT NOT NULL,
+            theme_id TEXT NOT NULL,
+            paddle_customer_id TEXT NOT NULL DEFAULT '',
+            customer_email TEXT NOT NULL DEFAULT '',
+            created_at INTEGER NOT NULL
+        )
+        """
+    )
+    conn.commit()
 
     # Record intent (idempotent — INSERT OR REPLACE on transaction_id).
     now = int(time.time())
