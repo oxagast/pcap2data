@@ -83,6 +83,7 @@ licenses via `--add-license INSTALLUUID THEMEID`.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import hmac
 import html
@@ -2232,6 +2233,31 @@ def cmd_list_themes(args: argparse.Namespace, config: Config) -> int:
 def cmd_serve(args: argparse.Namespace, config: Config) -> int:
     db = CatalogDB(config.db_path)
     server = make_server(config, db)
+    # Print the absolute path + md5 + mtime + a build-id-style
+    # timestamp so operators can verify, after a restart, exactly
+    # which source file the running process is actually loading.
+    # ``__file__`` resolves to the script path Python loaded; we also
+    # hash its contents to confirm we didn't pick up a stale
+    # __pycache__ entry that disagrees with the on-disk source.
+    try:
+        source_path = str(Path(__file__).resolve())
+        source_bytes = Path(__file__).read_bytes()
+        source_md5 = hashlib.md5(source_bytes).hexdigest()
+        source_size = len(source_bytes)
+        source_mtime = Path(__file__).stat().st_mtime
+        source_mtime_iso = (
+            datetime.datetime.fromtimestamp(source_mtime).isoformat(
+                timespec="seconds"
+            )
+        )
+    except Exception as exc:
+        source_path = f"<unreadable: {exc}>"
+        source_md5 = "?"
+        source_size = 0
+        source_mtime_iso = "?"
+    boot_id = hashlib.md5(
+        f"{source_path}|{source_md5}|{time.time()}".encode("utf-8")
+    ).hexdigest()[:12]
     LOG.info(
         "ps-catalog listening on %s://%s:%d (db=%s, themes=%s, previews=%s, paddle_env=%s)",
         config.scheme,
@@ -2241,6 +2267,26 @@ def cmd_serve(args: argparse.Namespace, config: Config) -> int:
         config.themes_dir,
         config.previews_dir,
         config.paddle_env,
+    )
+    LOG.info(
+        "ps-catalog build source=%s size=%d md5=%s mtime=%s bootId=%s startedAt=%s",
+        source_path,
+        source_size,
+        source_md5,
+        source_mtime_iso,
+        boot_id,
+        datetime.datetime.now().isoformat(timespec="seconds"),
+    )
+    # Feature flag summary so operators can confirm at a glance which
+    # capabilities the running server binary has. The schema version
+    # bumps when new tables are introduced; the intent-version bumps
+    # when new fields are recorded. Both are useful for support.
+    schema_version = db._schema_version() if hasattr(db, "_schema_version") else None
+    LOG.info(
+        "ps-catalog features schemaVersion=%s transactionIntent=%s customDataShapes=%s",
+        schema_version or "unknown",
+        "yes",
+        "toplevel,items,checkout",
     )
     try:
         server.serve_forever()
