@@ -1098,18 +1098,72 @@ class CatalogHandler(BaseHTTPRequestHandler):
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
             return None
-        custom_data = data.get("custom_data") or {}
-        if not isinstance(custom_data, dict):
-            custom_data = {}
+        # Paddle stores custom_data in a few shapes depending on API
+        # version and how the transaction was created. Try each so we
+        # don't silently miss the installUuid/themeId that the buyer
+        # was issued when checkout started.
+        def _parse_custom(raw):
+            if isinstance(raw, dict):
+                return raw
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except ValueError:
+                    return {}
+            return {}
+        custom_data = _parse_custom(data.get("custom_data"))
+        # Some Paddle responses only carry custom_data on the items
+        # array (per-line item) rather than on the transaction itself.
+        # Fall back to scanning items[] when the transaction-level
+        # lookup yielded nothing useful.
+        if not custom_data:
+            for item in data.get("items", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                item_custom = _parse_custom(
+                    item.get("custom_data") or item.get("passthrough")
+                )
+                if item_custom:
+                    custom_data = item_custom
+                    break
+        # Paddle's response also exposes checkout custom_data when the
+        # transaction was created via the hosted-checkout flow.
+        if not custom_data:
+            checkout = data.get("checkout") or {}
+            if isinstance(checkout, dict):
+                custom_data = _parse_custom(checkout.get("custom_data"))
         customer_email = ""
         customer = data.get("customer") or {}
         if isinstance(customer, dict):
             customer_email = str(customer.get("email") or "")
+        install_uuid_value = str(custom_data.get("installUuid") or "")
+        theme_id_value = str(custom_data.get("themeId") or "")
+        status_value = str(data.get("status") or "")
+        # If we couldn't recover the IDs, log enough context for the
+        # operator to see exactly what shape Paddle returned. This is
+        # the diagnostic that previously made the proactive grant fail
+        # silently.
+        if not install_uuid_value or not theme_id_value:
+            LOG.warning(
+                "Paddle transaction lookup could not recover custom_data "
+                "transaction=%s status=%s installUuid=%s themeId=%s "
+                "dataKeys=%s topLevelCustomData=%s",
+                transaction_id,
+                status_value,
+                install_uuid_value or "<missing>",
+                theme_id_value or "<missing>",
+                sorted(data.keys()),
+                json.dumps(data.get("custom_data"))[:200]
+                if data.get("custom_data") is not None
+                else "<null>",
+            )
         return {
-            "installUuid": str(custom_data.get("installUuid") or ""),
-            "themeId": str(custom_data.get("themeId") or ""),
+            "installUuid": install_uuid_value,
+            "themeId": theme_id_value,
             "customerEmail": customer_email,
-            "status": str(data.get("status") or ""),
+            "status": status_value,
         }
 
     def _maybe_grant_license(
