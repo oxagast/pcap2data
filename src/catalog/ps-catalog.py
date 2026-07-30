@@ -2206,6 +2206,15 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         except FileNotFoundError as exc:
             LOG.error("%s", exc)
             return 2
+        # Mirror the embedded data URL into `raw` so it lands in the
+        # on-disk theme JSON (the JSON file under themes_dir/ is what
+        # /download serves to PacketSnitch).
+        raw["previewImage"] = preview_image
+        LOG.info(
+            "Embedded preview image from %s (%d chars data URL)",
+            preview_image_flag,
+            len(preview_image),
+        )
 
     paddle = raw.get("paddle") or {}
     paddle_product_id = str(
@@ -2243,14 +2252,43 @@ def cmd_add_theme(args: argparse.Namespace, config: Config) -> int:
         hosted_checkout_url=hosted_checkout_url,
         license_url=str(raw.get("licenseUrl") or ""),
     )
+
+    # Always rewrite <themes_dir>/<id>.json so the on-disk file matches
+    # what we just stored in the DB. The /download endpoint serves this
+    # file to PacketSnitch, so any previewImage data URL we embedded has
+    # to land here too.
+    file_payload = {
+        "id": theme_id,
+        "name": name,
+        "description": description,
+        "priceCents": _safe_int(raw.get("priceCents")),
+        "priceLabel": str(raw.get("priceLabel") or ""),
+        "paddle": {
+            "productId": paddle_product_id,
+            "priceId": paddle_price_id,
+        },
+        "previewImage": preview_image,
+        "previewFilename": str(args.preview_filename or ""),
+        "checkoutUrl": checkout_url,
+        "hostedCheckoutUrl": hosted_checkout_url,
+        "licenseUrl": str(raw.get("licenseUrl") or ""),
+    }
+    try:
+        target.write_text(json.dumps(file_payload, indent=2))
+    except OSError as exc:
+        LOG.error("Failed to write theme JSON %s: %s", target, exc)
+        db.close()
+        return 2
+
     LOG.info(
-        "Registered theme %s (file=%s, paddle_product=%s, paddle_price=%s, hosted_checkout=%s, checkout=%s)",
+        "Registered theme %s (file=%s, paddle_product=%s, paddle_price=%s, hosted_checkout=%s, checkout=%s, preview=%d chars)",
         theme_id,
         target,
         paddle_product_id or "-",
         paddle_price_id or "-",
         hosted_checkout_url or "-",
         checkout_url or "(auto)",
+        len(preview_image),
     )
     db.close()
     return 0
