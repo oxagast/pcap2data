@@ -609,6 +609,71 @@ def test_checkout_static_url_still_wins(client):
     )
 
 
+def test_checkout_hosted_url_appends_recovery_params(client):
+    """A theme with a hosted_checkout_url should redirect to that URL with
+    installUuid + themeId appended (preserving any pre-existing query
+    params on the URL). The new column takes precedence over the legacy
+    checkout_url field when both are set."""
+    conn, server, cfg, themes, previews, db = client
+    db.upsert_theme(
+        theme_id="alpha",
+        name="Alpha",
+        description="",
+        price_cents=500,
+        price_label="",
+        paddle_product_id="",
+        paddle_price_id="pri_abc",
+        preview_image="",
+        preview_filename="",
+        checkout_url="https://sandbox-pay.paddle.io/hsc_OLD_LEGACY",
+        hosted_checkout_url=(
+            "https://sandbox-pay.paddle.io/hsc_NEWTOKEN?passthrough=abc"
+        ),
+        license_url="",
+    )
+    install_uuid = str(uuid.uuid4())
+    status, headers, _ = _request(
+        conn, "GET", f"/checkout/alpha?installUuid={install_uuid}"
+    )
+    assert status == 302
+    location = headers["Location"]
+    # The hosted URL wins over the legacy one.
+    assert location.startswith("https://sandbox-pay.paddle.io/hsc_NEWTOKEN")
+    # Pre-existing query params must be preserved.
+    assert "passthrough=abc" in location
+    # installUuid + themeId appended.
+    assert f"installUuid={install_uuid}" in location
+    assert "themeId=alpha" in location
+
+
+def test_checkout_hosted_url_preserves_user_supplied_query_params(client):
+    """If the buyer manually appends installUuid to the URL we should not
+    clobber it (setdefault semantics)."""
+    conn, server, cfg, themes, previews, db = client
+    db.upsert_theme(
+        theme_id="beta",
+        name="Beta",
+        description="",
+        price_cents=0,
+        price_label="",
+        paddle_product_id="",
+        paddle_price_id="",
+        preview_image="",
+        preview_filename="",
+        checkout_url="",
+        hosted_checkout_url="https://example.com/checkout",
+        license_url="",
+    )
+    supplied = str(uuid.uuid4())
+    status, headers, _ = _request(
+        conn, "GET", f"/checkout/beta?installUuid={supplied}"
+    )
+    assert status == 302
+    location = headers["Location"]
+    assert f"installUuid={supplied}" in location
+    assert "themeId=beta" in location
+
+
 def test_checkout_dynamic_creates_paddle_transaction(tmp_path, monkeypatch):
     """End-to-end: a server with --paddle-api-key calls Paddle /transactions
     and redirects to the returned checkout URL. We monkeypatch
