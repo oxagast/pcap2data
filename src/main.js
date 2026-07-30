@@ -58,6 +58,10 @@ try {
   console.warn("unzipper is unavailable, plugin zip install will be disabled", error);
 }
 const platform = os.platform();
+const PACKETSNITCH_DEEPLINK_SCHEME = "packetsnitch";
+const PACKETSNITCH_DEEPLINK_HOSTS = Object.freeze({
+  CHECKOUT_SUCCESS: "checkout-success",
+});
 const SESSION_COMPRESSION_XZ = "xz";
 const SESSION_COMPRESSION_GZIP = "gzip";
 const SESSION_FORMAT_BSON_GZIP = "bson-gzip";
@@ -712,14 +716,209 @@ if (!appLock) {
   app.quit();
   process.exit(0);
 }
-app.on("second-instance", () => {
+app.on("second-instance", (_event, argv) => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
     }
     mainWindow.focus();
   }
+  // On Windows/Linux the OS launches a second copy of the binary with
+  // the deeplink URL appended to argv when the user clicks a
+  // ``packetsnitch://`` link. Forward the URL into our shared handler.
+  const deeplink = findDeeplinkInArgv(argv);
+  if (deeplink) {
+    handleDeeplinkUrl(deeplink).catch((error) => {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] Deeplink (second-instance) failed message=${JSON.stringify(error?.message || String(error))}`,
+      );
+    });
+  }
 });
+
+// Register the packetsnitch:// scheme so the OS will route deeplinks
+// back into this app. ``setAsDefaultProtocolClient`` is a no-op on
+// Linux for ``app`` invocations that don't pass the script path, so
+// we always pass ``process.execPath`` plus the entry script when we
+// know it (i.e. when running unpackaged via electron-forge start).
+function registerDeeplinkProtocol() {
+  try {
+    const entryScript = (() => {
+      // When running under electron-forge start / electron, process.argv[1]
+      // is the path to our main.js. When running as a packaged app,
+      // process.argv[0] is the executable and argv[1] is empty.
+      const candidate = process.argv[1] || "";
+      return candidate && fs.existsSync(candidate) ? candidate : null;
+    })();
+    if (entryScript) {
+      app.setAsDefaultProtocolClient(PACKETSNITCH_DEEPLINK_SCHEME, process.execPath, [
+        entryScript,
+      ]);
+    } else {
+      app.setAsDefaultProtocolClient(PACKETSNITCH_DEEPLINK_SCHEME);
+    }
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Registered deeplink scheme scheme=${PACKETSNITCH_DEEPLINK_SCHEME} entryScript=${entryScript || "<packaged>"}`,
+    );
+  } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Failed to register deeplink scheme scheme=${PACKETSNITCH_DEEPLINK_SCHEME} message=${JSON.stringify(error?.message || String(error))}`,
+    );
+  }
+}
+
+function findDeeplinkInArgv(argv) {
+  if (!Array.isArray(argv)) return null;
+  for (const arg of argv) {
+    if (typeof arg === "string" && arg.toLowerCase().startsWith(`${PACKETSNITCH_DEEPLINK_SCHEME}://`)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+function parseDeeplink(url) {
+  if (typeof url !== "string") return null;
+  if (!url.toLowerCase().startsWith(`${PACKETSNITCH_DEEPLINK_SCHEME}://`)) {
+    return null;
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (_error) {
+    return null;
+  }
+  const params = {};
+  parsed.searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  return {
+    host: parsed.hostname || parsed.host || "",
+    pathname: parsed.pathname || "",
+    params,
+    raw: url,
+  };
+}
+
+async function handleDeeplinkUrl(url) {
+  const parsed = parseDeeplink(url);
+  if (!parsed) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Deeplink rejected (not a packetsnitch:// URL) url=${JSON.stringify(url)}`,
+    );
+    return { ok: false, error: "Not a packetsnitch:// URL" };
+  }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] Deeplink received host=${parsed.host || "?"} params=${Object.keys(parsed.params).join(",") || "<none>"}`,
+  );
+  if (
+    parsed.host === PACKETSNITCH_DEEPLINK_HOSTS.CHECKOUT_SUCCESS
+    || parsed.pathname.endsWith(PACKETSNITCH_DEEPLINK_HOSTS.CHECKOUT_SUCCESS)
+  ) {
+    return handleCheckoutSuccessDeeplink(parsed);
+  }
+  return { ok: false, error: `Unknown deeplink host: ${parsed.host || parsed.pathname}` };
+}
+
+// Pending deeplink broadcasts that arrived before the renderer was
+// ready to receive them. Drained in app.whenReady() once mainWindow
+// has finished loading its initial page.
+const pendingDeeplinks = [];
+
+function broadcastDeeplinkToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isLoading()) {
+    try {
+      mainWindow.webContents.send(channel, payload);
+      return true;
+    } catch (_error) {
+      // fall through to queue
+    }
+  }
+  pendingDeeplinks.push({ channel, payload });
+  return false;
+}
+
+function drainPendingDeeplinks() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  while (pendingDeeplinks.length > 0) {
+    const next = pendingDeeplinks.shift();
+    try {
+      mainWindow.webContents.send(next.channel, next.payload);
+    } catch (error) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] Pending deeplink drain failed message=${JSON.stringify(error?.message || String(error))}`,
+      );
+      // Put it back at the head so we retry after a renderer reload.
+      pendingDeeplinks.unshift(next);
+      break;
+    }
+  }
+}
+
+async function handleCheckoutSuccessDeeplink(parsed) {
+  const transactionId = String(parsed.params.transaction_id || parsed.params.transactionId || "").trim();
+  const installUuid = String(parsed.params.installUuid || "").trim();
+  const themeId = String(parsed.params.themeId || "").trim();
+  if (typeof appendActivityLogLine === "function") {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Deeplink checkout-success begin transactionId=${transactionId || "?"} installUuid=${installUuid || "?"} themeId=${themeId || "?"}`,
+    );
+  }
+  let reconcileResult;
+  try {
+    reconcileResult = await reconcileThemeLicenses({ force: true });
+  } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Deeplink checkout-success reconcile failed message=${JSON.stringify(error?.message || String(error))}`,
+    );
+    reconcileResult = { unlockedThemeIds: [], purchased: false, error: error?.message || String(error) };
+  }
+  const unlocked = Array.isArray(reconcileResult?.unlockedThemeIds)
+    ? reconcileResult.unlockedThemeIds
+    : [];
+  broadcastDeeplinkToRenderer("deeplink:checkout-success", {
+    transactionId,
+    installUuid,
+    themeId,
+    unlockedThemeIds: unlocked,
+    error: reconcileResult?.error || null,
+    at: new Date().toISOString(),
+  });
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] Deeplink checkout-success done unlockedCount=${unlocked.length} themeId=${themeId || "?"} error=${reconcileResult?.error ? JSON.stringify(reconcileResult.error) : "<none>"}`,
+  );
+  return { ok: true, unlockedThemeIds: unlocked };
+}
+
+registerDeeplinkProtocol();
+
+// macOS routes custom-protocol clicks via ``app.on('open-url')`` instead
+// of through argv. Register the handler before app.whenReady() so we
+// catch deeplinks that arrive while the app is starting.
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleDeeplinkUrl(url).catch((error) => {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Deeplink (open-url) failed message=${JSON.stringify(error?.message || String(error))}`,
+    );
+  });
+});
+
+// Pull a deeplink out of the launch argv (Windows/Linux cold start).
+{
+  const launchDeeplink = findDeeplinkInArgv(process.argv);
+  if (launchDeeplink) {
+    // Defer until the app is ready and mainWindow exists so we can
+    // broadcast the result back to the renderer.
+    app.whenReady().then(() => {
+      handleDeeplinkUrl(launchDeeplink).catch((error) => {
+        appendActivityLogLine(
+          `[${new Date().toISOString()}] [GUI][Main] Deeplink (launch) failed message=${JSON.stringify(error?.message || String(error))}`,
+        );
+      });
+    });
+  }
+}
 
 if (require("electron-squirrel-startup")) {
   app.quit();
@@ -3000,6 +3199,11 @@ function createWindow() {
     installMetricsFlushTimer();
     requestMetricsFlushFromRenderer();
     installThemeRecacheTimer();
+    // Now that the renderer is alive, replay any deeplinks that arrived
+    // before the main window finished loading (typical when the user
+    // clicks a ``packetsnitch://`` link in their browser while PacketSnitch
+    // is not running).
+    drainPendingDeeplinks();
   });
   mainWindow.once("close", () => {
     appendActivityLogLine(

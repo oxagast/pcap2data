@@ -809,6 +809,280 @@ def test_checkout_success_page_renders(client):
     assert b"matrix" in body
 
 
+def test_checkout_success_deeplink_button_visible(client):
+    """When installUuid/themeId are known, the success page should offer
+    a packetsnitch:// deeplink so PacketSnitch can pick up the
+    purchase automatically."""
+    conn, server, cfg, themes, previews, db = client
+    install_uuid = str(uuid.uuid4())
+    status, _, body = _request(
+        conn,
+        "GET",
+        f"/checkout-success?installUuid={install_uuid}&themeId=matrix",
+    )
+    assert status == 200
+    assert b"packetsnitch://checkout-success" in body
+    assert f"installUuid={install_uuid}".encode() in body
+    assert b"themeId=matrix" in body
+
+
+def test_checkout_success_proactive_grant_on_transaction_id(
+    tmp_root, monkeypatch
+):
+    """When Paddle only forwards ``transaction_id`` (the sandbox
+    redirect quirk), the catalog server should look the transaction up
+    via the Paddle API and grant the license server-side as a fallback
+    for setups where the webhook never arrives."""
+
+    cfg_template, themes, previews, db_path = tmp_root
+    install_uuid = str(uuid.uuid4())
+    transaction_id = "txn_test_42"
+
+    # Monkeypatch the Paddle API lookup to return a completed transaction
+    # with our installUuid / themeId in custom_data.
+    def fake_lookup(self, txn_id):
+        assert txn_id == transaction_id
+        return {
+            "installUuid": install_uuid,
+            "themeId": "matrix",
+            "customerEmail": "buyer@example.com",
+            "status": "completed",
+        }
+
+    monkeypatch.setattr(
+        ps_catalog.CatalogHandler,
+        "_paddle_lookup_transaction",
+        fake_lookup,
+    )
+
+    db = ps_catalog.CatalogDB(db_path)
+    _add_theme(db, themes, theme_id="matrix")
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host=cfg_template.host,
+        port=real_port,
+        db_path=cfg_template.db_path,
+        themes_dir=cfg_template.themes_dir,
+        previews_dir=cfg_template.previews_dir,
+        paddle_webhook_secret=cfg_template.paddle_webhook_secret,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_key",  # any non-empty value enables the lookup
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+        else:
+            raise RuntimeError("server did not start")
+
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        try:
+            # Hit the success page with only transaction_id. The server
+            # should look up the transaction, see status=completed, and
+            # grant the license.
+            status, _, body = _request(
+                conn,
+                "GET",
+                f"/checkout-success?transaction_id={transaction_id}",
+            )
+            assert status == 200
+            assert b"Purchase complete" in body
+            assert b"has been activated" in body  # proactive-grant message
+        finally:
+            conn.close()
+
+        # The license should now be in the DB.
+        owned = db.list_owned_theme_ids(install_uuid)
+        assert owned == ["matrix"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
+def test_checkout_success_pending_status_does_not_grant_via_api(
+    tmp_root, monkeypatch
+):
+    """When the URL only carries a transaction_id (the Paddle sandbox
+    redirect quirk), the catalog server falls back to the Paddle API
+    lookup. The lookup resolves installUuid/themeId from custom_data,
+    but if the transaction's Paddle status is still pending, do NOT
+    grant the license — wait for the webhook or a paid-status
+    refresh.
+
+    When the URL also carries installUuid+themeId explicitly, the
+    catalog grants directly (see
+    test_checkout_success_proactive_grant_on_transaction_id)."""
+    cfg_template, themes, previews, db_path = tmp_root
+    install_uuid = str(uuid.uuid4())
+    transaction_id = "txn_test_pending"
+
+    def fake_lookup(self, txn_id):
+        return {
+            "installUuid": install_uuid,
+            "themeId": "matrix",
+            "customerEmail": "",
+            "status": "pending",
+        }
+
+    monkeypatch.setattr(
+        ps_catalog.CatalogHandler,
+        "_paddle_lookup_transaction",
+        fake_lookup,
+    )
+
+    db = ps_catalog.CatalogDB(db_path)
+    _add_theme(db, themes, theme_id="matrix")
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host=cfg_template.host,
+        port=real_port,
+        db_path=cfg_template.db_path,
+        themes_dir=cfg_template.themes_dir,
+        previews_dir=cfg_template.previews_dir,
+        paddle_webhook_secret=cfg_template.paddle_webhook_secret,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        try:
+            # Only transaction_id in the URL — no installUuid/themeId.
+            # The Paddle lookup populates the IDs from custom_data but
+            # the status is pending, so the license is NOT granted and
+            # the page still shows "will be granted".
+            status, _, body = _request(
+                conn,
+                "GET",
+                f"/checkout-success?transaction_id={transaction_id}",
+            )
+            assert status == 200
+            assert b"will be granted" in body
+        finally:
+            conn.close()
+
+        owned = db.list_owned_theme_ids(install_uuid)
+        assert owned == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
+def test_checkout_success_paid_status_grants_via_api(
+    tmp_root, monkeypatch
+):
+    """End-to-end of the bare-transaction_id redirect path: the URL has
+    only a transaction_id, the Paddle API lookup returns
+    status=completed with installUuid/themeId in custom_data, and the
+    catalog grants the license server-side without needing the
+    webhook."""
+    cfg_template, themes, previews, db_path = tmp_root
+    install_uuid = str(uuid.uuid4())
+    transaction_id = "txn_test_completed_via_api"
+
+    def fake_lookup(self, txn_id):
+        return {
+            "installUuid": install_uuid,
+            "themeId": "matrix",
+            "customerEmail": "buyer@example.com",
+            "status": "completed",
+        }
+
+    monkeypatch.setattr(
+        ps_catalog.CatalogHandler,
+        "_paddle_lookup_transaction",
+        fake_lookup,
+    )
+
+    db = ps_catalog.CatalogDB(db_path)
+    _add_theme(db, themes, theme_id="matrix")
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host=cfg_template.host,
+        port=real_port,
+        db_path=cfg_template.db_path,
+        themes_dir=cfg_template.themes_dir,
+        previews_dir=cfg_template.previews_dir,
+        paddle_webhook_secret=cfg_template.paddle_webhook_secret,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        try:
+            status, _, body = _request(
+                conn,
+                "GET",
+                f"/checkout-success?transaction_id={transaction_id}",
+            )
+            assert status == 200
+            assert b"has been activated" in body
+        finally:
+            conn.close()
+
+        owned = db.list_owned_theme_ids(install_uuid)
+        assert owned == ["matrix"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
 def test_checkout_cancel_page_renders(client):
     conn, server, cfg, themes, previews, db = client
     install_uuid = str(uuid.uuid4())

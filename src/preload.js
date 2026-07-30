@@ -1570,6 +1570,22 @@ contextBridge.exposeInMainWorld('themeapi', {
   refreshLicenses: (payload) => ipcRenderer.invoke('themes-refresh-licenses', payload),
   download: (payload) => ipcRenderer.invoke('themes-download', payload),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
+  // Listen for ``packetsnitch://checkout-success?...`` deeplinks that
+  // the main process received from the OS protocol handler. Returns
+  // an unsubscribe function. ``callback`` receives the parsed deeplink
+  // payload (transactionId, installUuid, themeId, unlockedThemeIds,
+  // error, at).
+  onCheckoutSuccessDeeplink: (callback) => {
+    const listener = (_event, payload) => {
+      try {
+        callback(payload);
+      } catch (_error) {
+        // never throw across the bridge
+      }
+    };
+    ipcRenderer.on('deeplink:checkout-success', listener);
+    return () => ipcRenderer.removeListener('deeplink:checkout-success', listener);
+  },
 });
 
 contextBridge.exposeInMainWorld('savedfiltersapi', {

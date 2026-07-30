@@ -123,6 +123,16 @@ module.exports = {
   packagerConfig: {
     icon: path.join(__dirname, "logo", "ps-icon"),
     asar: true,
+    // Register the ``packetsnitch://`` URL scheme at the OS level so
+    // clicking a deeplink in the user's browser (e.g. from the catalog
+    // server's checkout-success page) launches PacketSnitch and routes
+    // the URL into the main process for license reconciliation.
+    protocols: [
+      {
+        name: "PacketSnitch Deeplink",
+        schemes: ["packetsnitch"],
+      },
+    ],
     extraResource: [
       // PyInstaller produces `snitch` on Linux/macOS and `snitch.exe` on Windows,
       // placed directly in src/backend/ (not in a subdirectory). Reference the

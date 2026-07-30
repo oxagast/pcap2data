@@ -85,6 +85,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import html
 import json
 import logging
 import mimetypes
@@ -882,38 +883,424 @@ class CatalogHandler(BaseHTTPRequestHandler):
     ) -> None:
         """Render a simple HTML thank-you / cancelled page after Paddle redirects the
         buyer back to us. Paddle will append ``installUuid`` and ``themeId`` query
-        params to whichever URL we passed as ``success_url`` / ``cancel_url``."""
-        install_uuid = urllib.parse.parse_qs(parsed.query).get("installUuid", [""])[0]
-        theme_id = urllib.parse.parse_qs(parsed.query).get("themeId", [""])[0]
+        params to whichever URL we passed as ``success_url`` / ``cancel_url``.
+
+        In sandbox mode Paddle sometimes ignores the configured ``success_url``
+        and instead redirects the buyer to the merchant's bare domain with
+        ``transaction_id`` / ``customer_email`` / ``paddle_customer_id`` as
+        query params. When we see that shape, look up the transaction via
+        the Paddle API to recover the ``installUuid`` / ``themeId`` we
+        stored in ``custom_data`` so the buyer still gets a working
+        deeplink back into PacketSnitch."""
+        query = urllib.parse.parse_qs(parsed.query)
+        install_uuid = (query.get("installUuid") or [""])[0]
+        theme_id = (query.get("themeId") or [""])[0]
+        transaction_id = (query.get("transaction_id") or [""])[0]
+        customer_email = (query.get("customer_email") or [""])[0]
+
+        # If the catalog-side params are missing but Paddle's transaction_id
+        # is present, look it up. This handles the sandbox redirect quirk
+        # where Paddle appends transaction_id instead of our custom params.
+        # We only populate ``install_uuid`` / ``theme_id`` from the lookup
+        # when the transaction is in a paid state — otherwise we'd be
+        # synthesizing IDs that the proactive-grant logic would then trust,
+        # which would grant a license for a transaction that's still
+        # pending or that failed. The bare IDs from the lookup are kept in
+        # separate variables so we can still show them in the rendered
+        # page / deeplink button for debugging / manual reconciliation.
+        resolved_transaction = None
+        if (not install_uuid or not theme_id) and transaction_id:
+            try:
+                resolved_transaction = self._paddle_lookup_transaction(transaction_id)
+            except PaddleError as exc:
+                LOG.warning(
+                    "Failed to look up Paddle transaction %s: %s",
+                    transaction_id,
+                    exc,
+                )
+                resolved_transaction = None
+            if resolved_transaction:
+                transaction_status = (
+                    str(resolved_transaction.get("status") or "").lower()
+                )
+                if transaction_status in self.PADDLE_TRANSACTION_PAID_STATUSES:
+                    install_uuid = (
+                        resolved_transaction.get("installUuid") or install_uuid
+                    )
+                    theme_id = (
+                        resolved_transaction.get("themeId") or theme_id
+                    )
+                customer_email = (
+                    customer_email
+                    or resolved_transaction.get("customerEmail")
+                    or ""
+                )
+
         is_success = path == "/checkout-success"
+
+        # Proactive grant on the success page. Paddle sandbox (and even
+        # some production configs) doesn't deliver webhooks to private
+        # or misconfigured destinations, so the buyer would otherwise
+        # have to wait until the webhook fires before ``GET /licenses``
+        # returns the new theme. As a fallback we re-check the
+        # transaction here and grant the license server-side if we have
+        # enough confidence the transaction was paid:
+        #
+        #   - URL carries installUuid + themeId -> grant directly
+        #     (caller already identified the buyer; this is the common
+        #     case when the catalog server's success_url is honored,
+        #     or when the operator manually constructs a deeplink).
+        #   - URL only carries a transaction_id -> look the transaction
+        #     up via the Paddle API and grant only when Paddle reports
+        #     status in {completed, paid, ready, captured}.
+        granted_here = False
+        if is_success and install_uuid and theme_id:
+            granted_here = self._maybe_grant_license(
+                install_uuid=install_uuid,
+                theme_id=theme_id,
+                paddle_subscription_id=transaction_id or "",
+                paddle_customer_id="",
+                source="checkout_success_direct",
+            )
+        elif is_success and transaction_id and not (install_uuid and theme_id):
+            granted_here = self._maybe_grant_license_via_paddle(
+                transaction_id=transaction_id,
+                install_uuid="",
+                theme_id="",
+                pre_resolved=resolved_transaction,
+            )
+
         title = "Purchase complete" if is_success else "Checkout cancelled"
         body = (
-            "Your license will be granted automatically when Paddle finishes "
-            "processing the transaction. You can close this tab and return to "
-            "PacketSnitch."
-            if is_success
-            else
-            "No charges were made. You can close this tab and try again from "
-            "the PacketSnitch Themes subtab."
+            "Your license has been activated and PacketSnitch will unlock "
+            "this theme automatically when you return."
+            if granted_here
+            else (
+                "Your license will be granted automatically when Paddle "
+                "finishes processing the transaction. You can close this "
+                "tab and return to PacketSnitch."
+                if is_success
+                else
+                "No charges were made. You can close this tab and try again "
+                "from the PacketSnitch Themes subtab."
+            )
         )
-        html = (
+
+        # Build a deeplink PacketSnitch will open when clicked. PacketSnitch
+        # registers the packetsnitch:// scheme via setAsDefaultProtocolClient
+        # so this hand-off works on macOS / Linux / Windows. We keep the
+        # query names aligned with PacketSnitch's deep-link handler.
+        deeplink_query = []
+        if transaction_id:
+            deeplink_query.append(f"transaction_id={urllib.parse.quote(transaction_id)}")
+        if install_uuid:
+            deeplink_query.append(f"installUuid={urllib.parse.quote(install_uuid)}")
+        if theme_id:
+            deeplink_query.append(f"themeId={urllib.parse.quote(theme_id)}")
+        deeplink_href = "packetsnitch://checkout-success"
+        if deeplink_query:
+            deeplink_href += "?" + "&".join(deeplink_query)
+
+        # Only show the deeplink button when PacketSnitch can do something
+        # with it (we know which theme to unlock). Without that context we
+        # still render the page but tell the user to click Check License
+        # in PacketSnitch manually.
+        deeplink_button = ""
+        if is_success and install_uuid and theme_id:
+            deeplink_button = (
+                f"<p><a class=\"deeplink\" href=\"{deeplink_href}\">"
+                "Return to PacketSnitch and unlock this theme</a></p>"
+                "<script>setTimeout(function(){"
+                f"window.location.href = {json.dumps(deeplink_href)};"
+                "}, 1500);</script>"
+            )
+        elif is_success:
+            deeplink_button = (
+                "<p>Open PacketSnitch and click <em>Check License</em> on the "
+                "Themes subtab to unlock your purchase.</p>"
+            )
+
+        page_html = (
             "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
             f"<title>{title}</title>"
             "<style>body{font-family:sans-serif;max-width:520px;margin:48px "
             "auto;padding:0 16px;color:#222}h1{font-size:22px}a{color:#3a6df0}"
+            "a.deeplink{display:inline-block;margin-top:8px;padding:10px 14px;"
+            "background:#3a6df0;color:#fff;border-radius:6px;text-decoration:none}"
             "</style></head><body>"
             f"<h1>{title}</h1>"
             f"<p>{body}</p>"
-            f"<p>installUuid: <code>{install_uuid}</code></p>"
-            f"<p>themeId: <code>{theme_id}</code></p>"
-            "</body></html>"
+            f"{deeplink_button}"
+            f"<p>installUuid: <code>{html.escape(install_uuid)}</code></p>"
+            f"<p>themeId: <code>{html.escape(theme_id)}</code></p>"
+            + (
+                f"<p>transaction: <code>{html.escape(transaction_id)}</code></p>"
+                if transaction_id
+                else ""
+            )
+            + (
+                f"<p>customer: <code>{html.escape(customer_email)}</code></p>"
+                if customer_email
+                else ""
+            )
+            + "</body></html>"
         )
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(html.encode("utf-8"))))
+        self.send_header("Content-Length", str(len(page_html.encode("utf-8"))))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
+        self.wfile.write(page_html.encode("utf-8"))
+
+    def _paddle_lookup_transaction(self, transaction_id: str) -> Optional[dict]:
+        """Look up a Paddle transaction by id and return a normalized dict
+        with ``installUuid`` / ``themeId`` pulled from ``custom_data`` plus
+        ``customerEmail`` and the transaction ``status``. Returns ``None``
+        when the API key is missing or the transaction cannot be found."""
+        if not self.config.paddle_api_key:
+            return None
+        if not transaction_id:
+            return None
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        url = f"{self.config.paddle_api_base}/transactions/{urllib.parse.quote(transaction_id)}"
+        req = urllib.request.Request(
+            url=url,
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self.config.paddle_api_key}",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                body_bytes = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            LOG.warning(
+                "Paddle transaction lookup HTTP %s for %s",
+                exc.code,
+                transaction_id,
+            )
+            return None
+        except urllib.error.URLError as exc:
+            LOG.warning(
+                "Paddle transaction lookup network error for %s: %s",
+                transaction_id,
+                exc,
+            )
+            return None
+        try:
+            payload = _json.loads(body_bytes)
+        except ValueError:
+            return None
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            return None
+        custom_data = data.get("custom_data") or {}
+        if not isinstance(custom_data, dict):
+            custom_data = {}
+        customer_email = ""
+        customer = data.get("customer") or {}
+        if isinstance(customer, dict):
+            customer_email = str(customer.get("email") or "")
+        return {
+            "installUuid": str(custom_data.get("installUuid") or ""),
+            "themeId": str(custom_data.get("themeId") or ""),
+            "customerEmail": customer_email,
+            "status": str(data.get("status") or ""),
+        }
+
+    def _maybe_grant_license(
+        self,
+        install_uuid: str,
+        theme_id: str,
+        paddle_subscription_id: str = "",
+        paddle_customer_id: str = "",
+        source: str = "checkout_success",
+    ) -> bool:
+        """Grant a theme license for the given install if it isn't
+        already granted. Returns ``True`` if the license is now present
+        (either freshly granted or already there), ``False`` if the ids
+        are invalid. Never raises — DB failures are logged and swallowed
+        so the success page can still render.
+
+        This is the direct grant path — it does NOT verify the
+        transaction against the Paddle API, so it should only be used
+        when the caller already has high confidence the transaction
+        happened (e.g. on the ``/checkout-success`` page itself, where
+        the buyer has just been redirected from Paddle's hosted
+        checkout). For the bare-transaction_id redirect path use
+        ``_maybe_grant_license_via_paddle`` which performs the API
+        lookup before granting."""
+        if not install_uuid or not theme_id:
+            LOG.info(
+                "Proactive grant skipped (missing ids) source=%s",
+                source,
+            )
+            return False
+        if not INSTALL_UUID_RE.match(install_uuid) or not THEME_ID_RE.match(theme_id):
+            LOG.warning(
+                "Proactive grant skipped (invalid ids) source=%s installUuid=%s themeId=%s",
+                source,
+                install_uuid,
+                theme_id,
+            )
+            return False
+        try:
+            already_owned = theme_id in self.db.list_owned_theme_ids(install_uuid)
+        except Exception as exc:
+            LOG.warning(
+                "Proactive grant ownership check failed source=%s installUuid=%s: %s",
+                source,
+                install_uuid,
+                exc,
+            )
+            already_owned = False
+        if already_owned:
+            LOG.info(
+                "Proactive grant skipped (already owned) source=%s installUuid=%s themeId=%s",
+                source,
+                install_uuid,
+                theme_id,
+            )
+            return True
+        try:
+            self.db.grant_license(
+                install_uuid=install_uuid,
+                theme_id=theme_id,
+                paddle_subscription_id=str(paddle_subscription_id or ""),
+                paddle_customer_id=str(paddle_customer_id or ""),
+            )
+        except Exception as exc:
+            LOG.warning(
+                "Proactive grant db write failed source=%s installUuid=%s themeId=%s: %s",
+                source,
+                install_uuid,
+                theme_id,
+                exc,
+            )
+            return False
+        LOG.info(
+            "Proactively granted license source=%s installUuid=%s themeId=%s paddleSubscriptionId=%s",
+            source,
+            install_uuid,
+            theme_id,
+            paddle_subscription_id or "<none>",
+        )
+        return True
+
+    # Statuses from Paddle's transaction object that indicate the
+    # customer has paid and the catalog should grant the license. This
+    # mirrors the webhook-side constants but is a focused subset that
+    # only applies to one-shot transactions (subscriptions use different
+    # statuses).
+    PADDLE_TRANSACTION_PAID_STATUSES = frozenset({
+        "completed",
+        "paid",
+        "ready",  # ready_to_capture or fully captured variants
+        "captured",
+    })
+
+    def _maybe_grant_license_via_paddle(
+        self,
+        transaction_id: str,
+        install_uuid: str = "",
+        theme_id: str = "",
+        pre_resolved: Optional[dict] = None,
+    ) -> bool:
+        """Reconcile a license against the Paddle API as a fallback for
+        sandbox / production setups where the Paddle webhook never
+        arrives. Returns ``True`` if the license was granted (or was
+        already present), ``False`` otherwise. Never raises — failures
+        are logged and swallowed so the success page can still render.
+
+        The Paddle API lookup recovers the ``installUuid`` /
+        ``themeId`` from the transaction's ``custom_data`` if the
+        caller didn't supply them (the common case for Paddle's
+        sandbox redirect which only carries ``transaction_id`` /
+        ``customer_email`` / ``paddle_customer_id``)."""
+        if not transaction_id:
+            return False
+        # Reuse the lookup result if the caller already performed the
+        # Paddle API round-trip (e.g. on the success-page handler which
+        # needs the resolved status to decide whether to populate the
+        # local installUuid / themeId variables).
+        resolved = pre_resolved
+        if resolved is None:
+            resolved = self._paddle_lookup_transaction(transaction_id)
+        if not resolved:
+            LOG.info(
+                "Proactive grant could not resolve transaction %s "
+                "(paddle_api_key missing or Paddle API lookup failed)",
+                transaction_id,
+            )
+            return False
+        final_install_uuid = (
+            install_uuid
+            or resolved.get("installUuid")
+            or ""
+        )
+        final_theme_id = (
+            theme_id
+            or resolved.get("themeId")
+            or ""
+        )
+        if (
+            not INSTALL_UUID_RE.match(final_install_uuid)
+            or not THEME_ID_RE.match(final_theme_id)
+        ):
+            LOG.warning(
+                "Proactive grant aborted (invalid ids after lookup) "
+                "installUuid=%s themeId=%s transaction=%s",
+                final_install_uuid,
+                final_theme_id,
+                transaction_id,
+            )
+            return False
+        # Idempotency: if the license is already granted for this
+        # install/theme, skip the grant entirely.
+        if final_theme_id in self.db.list_owned_theme_ids(final_install_uuid):
+            LOG.info(
+                "Proactive grant skipped (already owned) installUuid=%s themeId=%s",
+                final_install_uuid,
+                final_theme_id,
+            )
+            return True
+        status = (resolved.get("status") or "").lower()
+        if status not in self.PADDLE_TRANSACTION_PAID_STATUSES:
+            LOG.info(
+                "Proactive grant skipped (status=%s) installUuid=%s themeId=%s transaction=%s",
+                status,
+                final_install_uuid,
+                final_theme_id,
+                transaction_id,
+            )
+            return False
+        try:
+            self.db.grant_license(
+                install_uuid=final_install_uuid,
+                theme_id=final_theme_id,
+                paddle_subscription_id=str(transaction_id),
+                paddle_customer_id="",
+            )
+        except Exception as exc:
+            LOG.warning(
+                "Proactive grant db write failed installUuid=%s themeId=%s: %s",
+                final_install_uuid,
+                final_theme_id,
+                exc,
+            )
+            return False
+        LOG.info(
+            "Proactively granted license installUuid=%s themeId=%s via transaction=%s status=%s",
+            final_install_uuid,
+            final_theme_id,
+            transaction_id,
+            status,
+        )
+        return True
 
     def _handle_catalog(self, install_uuid: str) -> None:
         themes = self.db.list_themes()

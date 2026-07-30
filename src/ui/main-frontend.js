@@ -2889,6 +2889,53 @@ async function refreshThemesCatalog({ force = false } = {}) {
   }
 }
 
+// Subscribe once to the main-process deeplink channel so a
+// ``packetsnitch://checkout-success?...`` click in the user's browser
+// automatically reconciles licenses and refreshes the catalog without
+// the user having to manually click "Check License".
+if (window.themeapi && typeof window.themeapi.onCheckoutSuccessDeeplink === "function") {
+  window.themeapi.onCheckoutSuccessDeeplink(async (payload) => {
+    try {
+      const themeId = String(payload?.themeId || "").trim();
+      const unlocked = Array.isArray(payload?.unlockedThemeIds)
+        ? payload.unlockedThemeIds
+        : [];
+      const errorText = payload?.error ? String(payload.error) : "";
+      if (errorText) {
+        setThemesCatalogStatus(
+          `Deeplink received, but license reconcile failed: ${errorText}. You can click "Check License" to retry.`,
+          { isError: true },
+        );
+      } else if (unlocked.length > 0) {
+        const unlockedList = unlocked.join(", ");
+        setThemesCatalogStatus(
+          themeId && unlocked.includes(themeId)
+            ? `Theme "${themeId}" unlocked via deeplink. Reloading...`
+            : `Unlocked ${unlocked.length} theme(s) via deeplink: ${unlockedList}. Reloading...`,
+        );
+        await loadAvailableThemes();
+        await refreshThemesPreviewForSelected();
+        // Re-fetch the catalog so newly-licensed themes show as "owned".
+        try {
+          await refreshThemesCatalog({ force: false });
+        } catch (_e) {
+          // ignore — the catalog is a best-effort refresh
+        }
+      } else {
+        setThemesCatalogStatus(
+          "Deeplink received, but no new licenses were granted yet. Paddle may still be processing the payment. You can click \"Check License\" to retry.",
+        );
+      }
+    } catch (error) {
+      console.warn("Deeplink handler failed:", error);
+      setThemesCatalogStatus(
+        `Deeplink handler failed: ${error?.message || error || "unknown error"}`,
+        { isError: true },
+      );
+    }
+  });
+}
+
 async function startThemeCheckout(catalogEntry) {
   if (!catalogEntry || typeof catalogEntry !== "object") return;
   if (!window.themeapi || typeof window.themeapi.startCheckout !== "function") {
