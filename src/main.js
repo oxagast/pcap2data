@@ -2439,8 +2439,14 @@ async function getThemeById(themeId) {
 const THEME_CACHE_DIR_NAME = "theme-cache";
 const THEME_SERVER_URL_KEY = "themeServerBaseUrl";
 const THEME_REFRESH_INTERVAL_HOURS_KEY = "themeRefreshIntervalHours";
-const DEFAULT_THEME_SERVER_BASE_URL = "";
-const DEFAULT_THEME_REFRESH_INTERVAL_HOURS = 24 * 7; // weekly
+// Locked catalog server configuration. The URL, TLS policy, and recache
+// interval are hard-coded so the purchase path can't be redirected or
+// neutralized via settings edits. The constants here are the single
+// source of truth — both the helpers below and the default settings
+// in src/settings.js mirror these values.
+const DEFAULT_THEME_SERVER_BASE_URL = "https://oxasploits.com:9021/";
+const DEFAULT_THEME_REFRESH_INTERVAL_HOURS = 72; // 3 days
+const THEME_SERVER_ALLOW_INSECURE_TLS = true;
 const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
 const ALLOWED_THEME_PREVIEW_HOSTS = new Set();
 let cachedPurchasedThemeIds = new Set();
@@ -2453,30 +2459,16 @@ function getThemeCacheDir() {
 }
 
 function getThemeServerBaseUrl() {
-  try {
-    const settings = getAppSettings();
-    const candidate = settings?.general?.[THEME_SERVER_URL_KEY];
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim().replace(/\/+$/, "");
-    }
-  } catch (_error) {
-    // ignore: settings not yet loaded
-  }
+  // Locked: always returns the hard-coded catalog server URL. Settings
+  // cannot override this — see the comment block above the constants.
   return DEFAULT_THEME_SERVER_BASE_URL;
 }
 
 function getThemeRefreshIntervalMs() {
-  let hours = DEFAULT_THEME_REFRESH_INTERVAL_HOURS;
-  try {
-    const settings = getAppSettings();
-    const candidate = Number(settings?.general?.[THEME_REFRESH_INTERVAL_HOURS_KEY]);
-    if (Number.isFinite(candidate) && candidate > 0) {
-      hours = candidate;
-    }
-  } catch (_error) {
-    // ignore
-  }
-  return Math.max(60 * 60 * 1000, hours * 60 * 60 * 1000);
+  // Locked: 3 days. The recache is what pulls newly-purchased themes
+  // into the local cache, so a longer interval would let a settings
+  // edit delay the visibility of new purchases.
+  return DEFAULT_THEME_REFRESH_INTERVAL_HOURS * 60 * 60 * 1000;
 }
 
 function getThemeServerInstallUuid() {
@@ -2538,11 +2530,9 @@ function getInsecureThemeServerDispatcher(timeoutMs) {
 }
 
 function isThemeServerAllowInsecureTls() {
-  try {
-    return Boolean(getAppSettings()?.general?.allowInsecureTlsEndpoints);
-  } catch (_e) {
-    return false;
-  }
+  // Locked: self-signed certs are always allowed for the catalog
+  // server. Settings cannot override this.
+  return THEME_SERVER_ALLOW_INSECURE_TLS;
 }
 
 async function fetchWithTimeout(url, init = {}, timeoutMs = THEME_SERVER_HTTP_TIMEOUT_MS) {

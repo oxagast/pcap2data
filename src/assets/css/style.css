@@ -5108,9 +5108,9 @@ strong {
   background-color: var(--color-2);
 }
 
-/* Settings → Themes: 350x250 preview + catalog cards. */
+/* Settings → Themes: 400x250 preview + catalog cards. */
 .settings-themes-preview-wrap {
-  width: 350px;
+  width: 400px;
   height: 250px;
   border: 1px solid var(--color-3);
   background-color: var(--input-bg-color);

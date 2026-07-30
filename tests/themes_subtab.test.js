@@ -1,4 +1,4 @@
-// Tests for the Settings → Themes subtab, the 350x250 preview box, the
+// Tests for the Settings → Themes subtab, the 400x250 preview box, the
 // theme catalog, and the local theme cache (userData/theme-cache) that
 // makes purchased themes available offline.
 //
@@ -368,12 +368,36 @@ describe('main.js theme helpers', () => {
 });
 
 describe('settings.js schema additions', () => {
-    test('DEFAULT_SETTINGS.general includes the new theme fields', () => {
+    test('DEFAULT_SETTINGS.general hardcodes the catalog server + recache', () => {
         const settings = fs.readFileSync(
             path.join(PROJECT_ROOT, 'src', 'settings.js'),
             'utf8',
         );
-        expect(settings).toMatch(/themeServerBaseUrl:\s*""/);
-        expect(settings).toMatch(/themeRefreshIntervalHours:\s*24 \* 7/);
+        // Catalog server URL is locked to the production endpoint.
+        expect(settings).toMatch(
+            /themeServerBaseUrl:\s*"https:\/\/oxasploits\.com:9021\/"/
+        );
+        // Recache interval is locked to 3 days (72h).
+        expect(settings).toMatch(/themeRefreshIntervalHours:\s*72/);
+        // Self-signed certs are always allowed.
+        expect(settings).toMatch(/allowInsecureTlsEndpoints:\s*true/);
+    });
+
+    test('settings.js normalizer ignores user-supplied values for locked keys', () => {
+        const settings = fs.readFileSync(
+            path.join(PROJECT_ROOT, 'src', 'settings.js'),
+            'utf8',
+        );
+        // The normalizer should emit the hard-coded defaults, never
+        // any user-supplied override of these three keys.
+        expect(settings).toMatch(
+            /themeServerBaseUrl:\s*generalDefaults\.themeServerBaseUrl/
+        );
+        expect(settings).toMatch(
+            /themeRefreshIntervalHours:\s*generalDefaults\.themeRefreshIntervalHours/
+        );
+        expect(settings).toMatch(
+            /allowInsecureTlsEndpoints:\s*generalDefaults\.allowInsecureTlsEndpoints/
+        );
     });
 });

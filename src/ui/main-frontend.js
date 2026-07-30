@@ -3168,12 +3168,14 @@ function syncSettingsFormFromState() {
       settings?.general?.checkForNewReleasesOnStartup,
     );
   }
+  // Theme catalog base URL, self-signed-cert allowance, and recache
+  // interval are hard-coded — there are no UI controls for them any
+  // more. The defensive lookups below tolerate older bundles that may
+  // still expose the (now ignored) inputs.
   const themeServerBaseUrlEl = document.getElementById("settings-themes-server-base-url");
   if (themeServerBaseUrlEl) {
     themeServerBaseUrlEl.value = String(
-      settings?.general?.themeServerBaseUrl
-      || DEFAULT_SETTINGS.general.themeServerBaseUrl
-      || "",
+      DEFAULT_SETTINGS.general.themeServerBaseUrl || "",
     );
   }
   const themeRefreshIntervalHoursEl = document.getElementById(
@@ -3181,8 +3183,7 @@ function syncSettingsFormFromState() {
   );
   if (themeRefreshIntervalHoursEl) {
     themeRefreshIntervalHoursEl.value = String(
-      Number(settings?.general?.themeRefreshIntervalHours)
-      || DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
+      DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
     );
   }
   const themeAllowInsecureTlsEl = document.getElementById(
@@ -3190,7 +3191,7 @@ function syncSettingsFormFromState() {
   );
   if (themeAllowInsecureTlsEl) {
     themeAllowInsecureTlsEl.checked = Boolean(
-      settings?.general?.allowInsecureTlsEndpoints,
+      DEFAULT_SETTINGS.general.allowInsecureTlsEndpoints,
     );
   }
   if (backendTcpHostEl) {
@@ -3347,10 +3348,6 @@ function syncSettingsFormFromState() {
 // Handles read settings form state.
 function readSettingsFormState() {
   const themeSelectEl = getThemeSelectElement();
-  const themeServerBaseUrlEl = document.getElementById("settings-themes-server-base-url");
-  const themeRefreshIntervalHoursEl = document.getElementById(
-    "settings-themes-refresh-interval-hours",
-  );
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
   const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
@@ -3467,16 +3464,12 @@ function readSettingsFormState() {
       checkForNewReleasesOnStartup: checkForNewReleasesOnStartupEl
         ? checkForNewReleasesOnStartupEl.checked
         : DEFAULT_SETTINGS.general.checkForNewReleasesOnStartup,
-      themeServerBaseUrl: themeServerBaseUrlEl
-        ? themeServerBaseUrlEl.value.trim()
-        : DEFAULT_SETTINGS.general.themeServerBaseUrl,
-      themeRefreshIntervalHours: themeRefreshIntervalHoursEl
-        ? Math.max(1, Number(themeRefreshIntervalHoursEl.value) || DEFAULT_SETTINGS.general.themeRefreshIntervalHours)
-        : DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
-      allowInsecureTlsEndpoints: (() => {
-        const el = document.getElementById("settings-themes-allow-insecure-tls");
-        return el ? el.checked : DEFAULT_SETTINGS.general.allowInsecureTlsEndpoints;
-      })(),
+      // Theme catalog base URL, self-signed-cert allowance, and recache
+      // interval are hard-coded — never read from the UI, even if
+      // older bundles still expose the inputs.
+      themeServerBaseUrl: DEFAULT_SETTINGS.general.themeServerBaseUrl,
+      themeRefreshIntervalHours: DEFAULT_SETTINGS.general.themeRefreshIntervalHours,
+      allowInsecureTlsEndpoints: DEFAULT_SETTINGS.general.allowInsecureTlsEndpoints,
     },
     backend: {
       tcpHost: backendTcpHostEl

@@ -38,16 +38,16 @@ const DEFAULT_SETTINGS = Object.freeze({
         manualConvImportMaxBytes: 2 * 1024 * 1024,
         nmapServiceScanEnabled: false,
         checkForNewReleasesOnStartup: true,
-        // Theme catalog + recache. Empty base URL means the online catalog
-        // and Paddle checkout are disabled; users can still apply bundled
-        // or local-file themes.
-        themeServerBaseUrl: "",
-        themeRefreshIntervalHours: 24 * 7,
-        // Allow self-signed / private-CA TLS certificates for the theme
-        // server. Useful when running a personal catalog server with a
-        // self-signed cert during development. Off by default because
-        // skipping cert verification weakens transport security.
-        allowInsecureTlsEndpoints: false,
+        // Theme catalog + recache. The catalog server URL, the
+        // self-signed-cert allowance, and the recache interval are
+        // hard-coded so the purchase path can't be redirected or
+        // neutralized via settings edits. Locked values:
+        //   - themeServerBaseUrl:          https://oxasploits.com:9021/
+        //   - allowInsecureTlsEndpoints:  true (self-signed cert allowed)
+        //   - themeRefreshIntervalHours:   72 (3 days)
+        themeServerBaseUrl: "https://oxasploits.com:9021/",
+        themeRefreshIntervalHours: 72,
+        allowInsecureTlsEndpoints: true,
     },
     backend: {
         tcpHost: "127.0.0.1",
@@ -253,18 +253,12 @@ function normalizeSettings(rawSettings = {}) {
                 typeof general.checkForNewReleasesOnStartup === "boolean"
                     ? general.checkForNewReleasesOnStartup
                     : generalDefaults.checkForNewReleasesOnStartup,
-            themeServerBaseUrl:
-                typeof general.themeServerBaseUrl === "string"
-                    ? normalizeEndpointUrl(general.themeServerBaseUrl, general.themeServerBaseUrl.trim())
-                    : generalDefaults.themeServerBaseUrl,
-            themeRefreshIntervalHours: toPositiveInteger(
-                general.themeRefreshIntervalHours,
-                generalDefaults.themeRefreshIntervalHours,
-                1,
-            ),
-            allowInsecureTlsEndpoints: typeof general.allowInsecureTlsEndpoints === "boolean"
-                ? general.allowInsecureTlsEndpoints
-                : generalDefaults.allowInsecureTlsEndpoints,
+            // Locked values — ignore whatever the user has saved and
+            // always emit the hard-coded defaults so the catalog server
+            // can't be redirected and the recache can't be neutralized.
+            themeServerBaseUrl: generalDefaults.themeServerBaseUrl,
+            themeRefreshIntervalHours: generalDefaults.themeRefreshIntervalHours,
+            allowInsecureTlsEndpoints: generalDefaults.allowInsecureTlsEndpoints,
         },
         backend: {
             tcpHost:
