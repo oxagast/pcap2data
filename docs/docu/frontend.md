@@ -76,7 +76,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Prev / Next** | Navigate backwards and forwards through the packet list (or filtered set).                                                                                        |
 | **Filter bar**  | Enter a filter expression to narrow the displayed packets (see [Filtering](#filtering)).                                                                          |
 
-When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load/derive/decompress conversion values into Conv, follow bidirectional streams into Conv or Crypt, manage keystore entries, build filter expressions (including link/transport/application protocol filters), export packet/Conv outputs, interact with HTTP file bodies, and run LLM context actions. See [context-menu.md](context-menu.md) for full details.
+When right-clicking in packet/data views, PacketSnitch shows a context menu with shortcuts to copy text and payload views, load/derive/decompress conversion values into Conv, follow bidirectional streams into Conv or Crypt, manage keystore entries, build filter expressions (including link/transport/application protocol filters), export packet/Conv outputs, interact with HTTP file bodies, and run LLM context actions. See [context-menu](context-menu) for full details.
 
 ---
 
@@ -200,7 +200,7 @@ The Hashes sub-tab also provides a **Cross Reference Hash** button. When a hash 
 
 The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
-> The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu.md](context-menu.md) for details.
+> The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu](context-menu) for details.
 
 ##### Analyze Subnet Sub-tab
 
@@ -360,7 +360,7 @@ The **About** sub-tab provides release-note refresh and direct download actions 
 - Default bundled themes are mirrored there automatically on startup.
 - Theme definitions provide CSS variable overrides and optional custom logo data.
 
-See [themes](plugins.md#themes-reference) for complete theme schema, variable reference, logo setup, and opacity tuning.
+See [themes](plugins#themes-reference) for complete theme schema, variable reference, logo setup, and opacity tuning.
 
 ---
 
@@ -496,7 +496,7 @@ These auto-entries appear with a source of `session-auto` and can be promoted to
 
 ##### Manual URI/URL Entry
 
-The context menu's **Add to Keystore... → Manual URI** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**. See [context-menu.md](context-menu.md) for more on keystore context menu options.
+The context menu's **Add to Keystore... → Manual URI** options open a dialog to manually enter any `http://` or `https://` URL. The entered URL is saved as a `url` type entry in the selected keychain. Entries of this type can be opened directly in the system browser via **Open link**. See [context-menu](context-menu) for more on keystore context menu options.
 
 ---
 
@@ -523,7 +523,7 @@ The Notes workspace also includes a sanitized live Markdown preview for the sele
 
 ##### Notes Context Menu
 
-Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu. See [context-menu.md](context-menu.md) for details on context menu items.
+Right-clicking in packet or Conv views while notes are active shows a **Send to Notes...** submenu. See [context-menu](context-menu) for details on context menu items.
 
 Notes are saved as part of the session file when **Save Session** is used.
 
@@ -580,7 +580,7 @@ Visualizes the Shannon entropy of the payload as a numeric value and graphical i
 
 ### Filtering
 
-Packets can be <a href="/filters">filtered using an expression</a> in the filter bar. The syntax is:
+Packets can be <a href="/docu/filters">filtered using an expression</a> in the filter bar. The syntax is:
 
 ```
 attribute:value
@@ -595,7 +595,7 @@ ip.src.addr:192.168.1.1 && tcp.dst.port:443
 (payload.mime:text/html || payload.mime:application/json) && payload.entropy>=4.0
 ```
 
-Filter keys use the same dot-notation names as the [searchable attributes](filters.md) documented in the Backend docs. Keys are normalized to lowercase with spaces replaced by hyphens.
+Filter keys use the same dot-notation names as the [searchable attributes](filters) documented in the Backend docs. Keys are normalized to lowercase with spaces replaced by hyphens.
 
 The filter history dropdown merges session filter history with user-saved named filters. Right-clicking the filter input lets you save the current query with a label (or remove an exact saved match) via an in-app dialog.
 

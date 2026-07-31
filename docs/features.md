@@ -150,7 +150,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - Payload: hex, ASCII, length, MIME type, Shannon entropy, charset, encoding, distinct byte count, decompressed hex/ASCII.
 - GeoIP: country, city, postal code, timezone for source and destination.
 - Active recon: server banner.
-- All protocol-specific keys listed in [Filter Reference](filters.md).
+- All protocol-specific keys listed in [Filter Reference](docu/filters).
 
 ---
 

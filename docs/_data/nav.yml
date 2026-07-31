@@ -2,16 +2,8 @@
   link: /
 - name: Features
   link: /features
-- name: Backend
-  link: /backend
-- name: Frontend
-  link: /frontend
-- name: Filters
-  link: /filters
-- name: Context Menu
-  link: /context-menu
-- name: Plugins
-  link: /plugins
+- name: Documentation
+  link: /docu
 - name: Sponsor
   link: https://buymeacoffee.com/oxagast/membership
 - name: on GitHub

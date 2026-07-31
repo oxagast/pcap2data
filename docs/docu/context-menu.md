@@ -21,7 +21,7 @@
 
 ### Overview
 
-Right-clicking in packet views, payload panes, Conv, Crypt, List, Stats, Notes, and other data panels in the <a href="/frontend">frontend</a> opens the **context menu**. The menu is fully context-aware and only shows entries that apply to what is currently selected and which tab is active.
+Right-clicking in packet views, payload panes, Conv, Crypt, List, Stats, Notes, and other data panels in the <a href="/docu/frontend">frontend</a> opens the **context menu**. The menu is fully context-aware and only shows entries that apply to what is currently selected and which tab is active.
 
 ---
 
