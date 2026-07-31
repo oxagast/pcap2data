@@ -8,11 +8,13 @@ Welcome to the PacketSnitch storefront. Browse themes, plugins, and corporate li
 
 Customize the look and feel of PacketSnitch with these awesome themes!
 
+Check out the Themes section in PacketSnitch settings to purchase!
+
 | Theme        | Description                              | Price  |
 | ------------ | ---------------------------------------- | ------ |
 | The Matrix   | <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">A green-on-black digital rain aesthetic.</a> | $2.99  |
 | Nilla Horizon| <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">Soft cream and warm pastel horizons.</a>     | $2.99  |
-| Haruhi Suzumiya (Animated) | A vibrant, animated Haruhi-inspired theme. | $3.99 |
+| Haruhi Suzumiya (Animated) | <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-harui-suzumiya-theme.png">A vibrant, animated Haruhi-inspired theme.</a> | $3.99 |
 
 > Purchase links coming soon.
 
@@ -21,6 +23,8 @@ Customize the look and feel of PacketSnitch with these awesome themes!
 ## Plugins
 
 Coming soon. This section will list custom PacketSnitch plugins available for purchase.
+
+Check out the plugins section in PacketSnitch settings to purchase!
 
 ---
 
