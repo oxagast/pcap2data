@@ -989,7 +989,24 @@ class CatalogHandler(BaseHTTPRequestHandler):
         params = urllib.parse.parse_qs(parsed.query)
         first = lambda key: params.get(key, [""])[0]  # noqa: E731
 
-        if path == "/" or path == "/health":
+        if path == "/health":
+            return self._write_json(200, {"ok": True})
+
+        if path == "/":
+            # Paddle sandbox sometimes ignores the configured
+            # ``success_url`` and instead redirects the buyer back to
+            # the merchant's bare domain with ``_ptxn=<transaction_id>``
+            # (and sometimes ``transaction_id``, ``customer_email``,
+            # ``paddle_customer_id``) appended. Treat that as a
+            # checkout-success return so the proactive-grant + deeplink
+            # flow runs. A bare ``/`` with no transaction info still
+            # returns the healthcheck JSON.
+            params_lower = {k.lower() for k in params.keys()}
+            if any(
+                key in params_lower
+                for key in ("_ptxn", "transaction_id", "paddle_transaction_id")
+            ):
+                return self._handle_checkout_return("/checkout-success", parsed)
             return self._write_json(200, {"ok": True})
 
         if path == "/catalog":
@@ -1036,7 +1053,16 @@ class CatalogHandler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
         install_uuid = (query.get("installUuid") or [""])[0]
         theme_id = (query.get("themeId") or [""])[0]
-        transaction_id = (query.get("transaction_id") or [""])[0]
+        # Paddle sandbox sometimes uses ``_ptxn`` (or
+        # ``paddle_transaction_id``) instead of ``transaction_id`` when
+        # redirecting back to the merchant's bare domain. Treat any of
+        # them as the canonical transaction id so the recovery paths
+        # below can find the local intent table / call the lookup API.
+        transaction_id = (
+            (query.get("transaction_id") or [""])[0]
+            or (query.get("_ptxn") or [""])[0]
+            or (query.get("paddle_transaction_id") or [""])[0]
+        )
         customer_email = (query.get("customer_email") or [""])[0]
 
         # If the catalog-side params are missing but Paddle's

@@ -1247,6 +1247,94 @@ def test_checkout_success_uses_local_intent_table_when_paddle_returns_no_custom_
         db.close()
 
 
+def test_root_with_ptxn_routes_to_checkout_success(tmp_root, monkeypatch):
+    """Paddle sandbox sometimes ignores the configured success_url and
+    redirects the buyer to the merchant's bare domain with
+    ``_ptxn=<id>`` appended. The catalog server should detect that
+    pattern and route the request through the checkout-success
+    handler so the proactive-grant + deeplink flow runs (instead of
+    returning a healthcheck JSON)."""
+    cfg_template, themes, previews, db_path = tmp_root
+    install_uuid = str(uuid.uuid4())
+    transaction_id = "txn_ptxn_redirect"
+
+    # Paddle returns a completed transaction with installUuid/themeId
+    # echoed back so the proactive grant kicks in. The mock returns
+    # the normalized top-level shape that
+    # ``_paddle_lookup_transaction`` produces.
+    def fake_lookup(self, txn_id):
+        return {
+            "status": "completed",
+            "installUuid": install_uuid,
+            "themeId": "matrix",
+            "customerEmail": "buyer@example.com",
+        }
+
+    monkeypatch.setattr(
+        ps_catalog.CatalogHandler,
+        "_paddle_lookup_transaction",
+        fake_lookup,
+    )
+
+    db = ps_catalog.CatalogDB(db_path)
+    _add_theme(db, themes, theme_id="matrix")
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host=cfg_template.host,
+        port=real_port,
+        db_path=cfg_template.db_path,
+        themes_dir=cfg_template.themes_dir,
+        previews_dir=cfg_template.previews_dir,
+        paddle_webhook_secret=cfg_template.paddle_webhook_secret,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        try:
+            status, _, body = _request(
+                conn,
+                "GET",
+                f"/?_ptxn={transaction_id}",
+            )
+            assert status == 200
+            # The checkout-success page should be rendered, not the
+            # healthcheck JSON.
+            assert b"Purchase complete" in body
+            assert b"has been activated" in body
+            assert b"themeId=matrix" in body
+            assert f"installUuid={install_uuid}".encode() in body
+        finally:
+            conn.close()
+
+        # License was proactively granted.
+        owned = db.list_owned_theme_ids(install_uuid)
+        assert owned == ["matrix"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
 def test_checkout_cancel_page_renders(client):
     conn, server, cfg, themes, previews, db = client
     install_uuid = str(uuid.uuid4())
