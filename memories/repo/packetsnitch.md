@@ -70,7 +70,9 @@
   `insecureTls`, and `allowInsecureTls` to the renderer. The
   Privacy/Metrics diagnostics row in `src/index.html` shows a "TLS"
   pill (`settings-api-keys-metrics-tls-status`) that reads
-  "Self-signed allowed" when the dispatcher is in use.
+  "Self-signed allowed" (HTTPS + insecureTls), "Plain HTTP" (HTTP),
+  "Strict" (HTTPS + locked flag forced off), or "Unknown" (no
+  diagnostics yet).
 - Activity log lines for the metrics flush include `insecureTls=true|false`
   to make cert issues visible in `activity-log.txt`.
 - Regression tests live in `tests/metrics_insecure_tls.test.js`. The
@@ -80,3 +82,32 @@
   `getAppSettings`. Because `normalizeSettings` locks the flag to true,
   tests that need to exercise the flag=false path patch
   `context.getAppSettings` directly.
+
+## Metrics endpoint default is HTTP, not HTTPS
+
+- `DEFAULT_SETTINGS.privacy.metricsEndpointUrl` is
+  `http://143.198.179.97:8088/mhook` (plain HTTP). The default
+  metrics collector is intentionally HTTP because the open-source
+  collector is a plain Flask app and self-hosters regularly run it
+  over plain HTTP on their own box. The settings UI placeholder
+  (`src/index.html`) and help text both reflect the HTTP default.
+- `normalizeEndpointUrl` in `src/settings.js` MUST NOT silently
+  rewrite `http://` → `https://` for non-loopback hosts. A previous
+  version had a `if (!isLoopback && parsed.protocol === "http:") {
+  parsed.protocol = "https:" }` block that broke the production
+  endpoint and the self-hosted use case. The function now only
+  validates the URL is well-formed and uses http/https, then
+  returns the user's URL as-is.
+- `flushMetricsQueue` already handles both schemes:
+  - `parsedUrl.protocol === "http:" || "https:"` validation accepts
+    both.
+  - The insecure dispatcher is only attached when protocol is
+    `https:` (HTTP has no TLS to skip).
+- The renderer's TLS pill (`settings-api-keys-metrics-tls-status`)
+  in `src/ui/main-frontend.js` already handles the `http:` case
+  with `tlsValue = "Plain HTTP"`. No UI change needed.
+- Regression tests for the scheme-preservation contract live in
+  `tests/metrics_insecure_tls.test.js` under
+  `describe("normalizeEndpointUrl preserves the user's chosen scheme", ...)`,
+  including a `normalizeSettings` end-to-end test that confirms
+  the default stays HTTP.
