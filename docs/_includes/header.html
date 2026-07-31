@@ -297,9 +297,9 @@
        release version text and the page below it stay in place
        regardless of when the GitHub API responds.
 
-       The download row is wrapped in .download-bar (defined
-       below) which is the actual sticky element. These two
-       divs sit inside that container in normal flow. */
+       These two divs sit in normal flow inside .pinned-header
+       (the logo + download row container that sticks to the
+       top of the viewport). */
     #downloads {
         height: 60px;
         min-height: 60px;
@@ -329,13 +329,15 @@
         font-family: 'Geo', 'Geo-Fallback', sans-serif;
     }
 
-    /* The download bar is a direct child of .wrapper (placed
-       between the header and the main content). Sticks to the
-       top of the viewport so the "Latest Release" line and
-       the .deb / .rpm / .exe links stay pinned while the page
-       content scrolls underneath. The opaque background matches
-       the body so scrolling content never shows through. */
-    .download-bar {
+    /* Pinned top bar: the logo and the download row stacked
+       together and stuck to the top of the viewport. The nav
+       has been "rolled up" (removed) so the only persistent
+       elements above the fold are the logo, the "Latest
+       Release" line, and the .deb / .rpm / .exe links.
+
+       The opaque background matches the body so scrolling
+       content never shows through the pinned bar. */
+    .pinned-header {
         position: sticky;
         top: 0;
         z-index: 100;
@@ -358,21 +360,20 @@
 
     .wrapper-main {
         position: relative;
-        /* The .download-bar between the header and main content
-           occupies 1rem (top margin of #downloads) + 60px
-           (#downloads) + 60px (#download-links) = 136px in
-           normal flow. When the user scrolls, .download-bar
-           sticks to the top of the viewport and this margin
-           scrolls past, leaving the page content to scroll
-           directly under the pinned download row. */
+        /* .pinned-header (logo + download bar) occupies the top
+           of the page in normal flow and sticks to the viewport
+           top on scroll. The page content scrolls directly
+           underneath it. */
     }
 
 
     .header {
         text-align: center;
         margin: 0 auto;
-        /* Header is now just the logo + nav. The download
-           row lives in .download-bar below this block. */
+        /* Header is now just the logo. The nav has been
+           "rolled up" (removed) and the download row lives
+           in .download-bar below this block, both inside
+           .pinned-header. */
         height: auto;
         font-size: 15px;
     }
@@ -552,6 +553,5 @@
         <a href="https://packetsnitch.com/"><img fetchpriority="high" width="360" height="60"
                 alt="PacketSnitch by oxasploits"
                 src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/logo/ps-tagline-flicker.gif"></a>
-        {% include nav.html %}
     </div>
 </header>
