@@ -331,9 +331,9 @@
 
     /* Pinned top bar: the logo and the download row stacked
        together and stuck to the top of the viewport. The nav
-       has been "rolled up" (removed) so the only persistent
-       elements above the fold are the logo, the "Latest
-       Release" line, and the .deb / .rpm / .exe links.
+       lives above this bar in .top-nav (in normal flow) so
+       it scrolls away with the page while the logo and
+       download row stay pinned.
 
        The opaque background matches the body so scrolling
        content never shows through the pinned bar. */
@@ -342,6 +342,20 @@
         top: 0;
         z-index: 100;
         background-color: #343359;
+    }
+
+    /* Top nav: the page nav links. Sits above .pinned-header
+       in normal flow, so it's visible at the top of the page
+       and scrolls away as the user scrolls down. Centered to
+       match the logo below it. */
+    .top-nav {
+        text-align: center;
+        padding-top: 10px;
+        padding-bottom: 20px;
+    }
+
+    .top-nav a {
+        padding-right: 3px;
     }
 
     .wrapper {
