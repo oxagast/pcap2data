@@ -10,8 +10,8 @@ Customize the look and feel of PacketSnitch with these awesome themes!
 
 | Theme        | Description                              | Price  |
 | ------------ | ---------------------------------------- | ------ |
-| The Matrix   | A green-on-black digital rain aesthetic. | $2.99  |
-| Nilla Horizon| Soft cream and warm pastel horizons.     | $2.99  |
+| The Matrix   | <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-matrix-theme.png">A green-on-black digital rain aesthetic.</a> | $2.99  |
+| Nilla Horizon| <a href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-nilla-horizon-theme.png">Soft cream and warm pastel horizons.</a>     | $2.99  |
 | Haruhi Suzumiya (Animated) | A vibrant, animated Haruhi-inspired theme. | $3.99 |
 
 > Purchase links coming soon.
