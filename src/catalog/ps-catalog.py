@@ -123,6 +123,31 @@ PADDLE_API_BASE_SANDBOX = "https://sandbox-api.paddle.com"
 # Hosted-checkout URLs returned by the transactions API begin with one of these.
 PADDLE_CHECKOUT_HOST_LIVE = "https://pay.paddle.com"
 PADDLE_CHECKOUT_HOST_SANDBOX = "https://sandbox-pay.paddle.io"
+PADDLE_HOSTED_CHECKOUT_HOSTS = (
+    PADDLE_CHECKOUT_HOST_LIVE,
+    PADDLE_CHECKOUT_HOST_SANDBOX,
+)
+
+
+def is_paddle_hosted_checkout_url(url: str) -> bool:
+    """True if the URL is on Paddle's hosted-checkout domain
+    (``sandbox-pay.paddle.io`` in sandbox mode, ``pay.paddle.com`` in
+    live). Paddle's hosted form is the canonical payment page; when
+    the price doesn't have one configured, the ``checkout.url`` field
+    falls back to the merchant's bare domain with a ``_ptxn=<id>``
+    query string. We use that as a static fallback rather than
+    refusing the purchase."""
+    if not isinstance(url, str) or not url:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+    except ValueError:
+        return False
+    host = (parsed.scheme + "://" + parsed.netloc).lower()
+    return any(
+        host == (base + "/").lower() or host == base.lower()
+        for base in PADDLE_HOSTED_CHECKOUT_HOSTS
+    )
 
 THEME_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 INSTALL_UUID_RE = re.compile(
@@ -1781,12 +1806,31 @@ class CatalogHandler(BaseHTTPRequestHandler):
                 cancel_url=f"{self.config.base_url}/checkout-cancel?installUuid={install_uuid}&themeId={theme_id}",
             )
         except PaddleError as exc:
+            # No hosted checkout configured on the price OR the Paddle
+            # call failed for some other reason. If the theme has a
+            # pre-stored static checkout URL the buyer can still
+            # complete the purchase, so fall back to that before
+            # surfacing the Paddle error.
             LOG.warning(
-                "Failed to create Paddle transaction theme=%s installUuid=%s: %s",
+                "Paddle transaction creation failed theme=%s installUuid=%s: %s "
+                "(falling back to static checkout URL if configured)",
                 theme_id,
                 install_uuid,
                 exc,
             )
+            static_url = (theme["hosted_checkout_url"] or "").strip()
+            if not static_url and theme["checkout_url"]:
+                static_url = theme["checkout_url"]
+            if static_url:
+                final_url = self._append_recovery_params(
+                    static_url, install_uuid, theme_id
+                )
+                LOG.info(
+                    "Falling back to static checkout URL theme=%s url=%s",
+                    theme_id,
+                    final_url,
+                )
+                return self._write_redirect(final_url)
             return self._write_json(
                 502,
                 {
@@ -1794,6 +1838,25 @@ class CatalogHandler(BaseHTTPRequestHandler):
                     "paddleStatus": exc.status,
                 },
             )
+
+        # Paddle sometimes returns a ``checkout.url`` that points at
+        # the merchant's bare domain (with ``_ptxn=...`` appended)
+        # rather than at Paddle's hosted form. That happens when the
+        # price isn't set up with a hosted-checkout page. In that
+        # case we treat the URL as a static fallback: append
+        # installUuid + themeId so the success/cancel pages can
+        # recover license context, and redirect the buyer there.
+        if checkout_url and not is_paddle_hosted_checkout_url(checkout_url):
+            final_url = self._append_recovery_params(
+                checkout_url, install_uuid, theme_id
+            )
+            LOG.info(
+                "Paddle returned non-hosted checkout URL (treating as static) "
+                "theme=%s url=%s",
+                theme_id,
+                final_url,
+            )
+            checkout_url = final_url
 
         # Record the (transaction_id -> installUuid / themeId) mapping
         # locally so the success page can recover the buyer context

@@ -455,17 +455,13 @@ function normalizeEndpointUrl(value, fallback) {
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
             return fallback;
         }
-        // Auto-upgrade plain HTTP to HTTPS for non-loopback hosts. Almost
-        // every modern catalog / metrics / theme server is HTTPS-only, and
-        // silently downgrading to http:// produces cryptic "fetch failed"
-        // errors that are hard to debug from the UI. Loopback addresses
-        // (localhost / 127.0.0.1 / ::1) keep the user's scheme so local
-        // dev/test servers still work without TLS plumbing.
-        const host = String(parsed.hostname || "").toLowerCase();
-        const isLoopback = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
-        if (!isLoopback && parsed.protocol === "http:") {
-            parsed.protocol = "https:";
-        }
+        // Preserve the user's chosen scheme. We previously auto-upgraded
+        // any non-loopback ``http://`` URL to ``https://`` here, but the
+        // default metrics endpoint is plain HTTP and self-hosters regularly
+        // run the open-source collector over plain HTTP on their own box.
+        // Silently rewriting the scheme produced confusing "fetch failed"
+        // errors against the production endpoint and broke the self-hosted
+        // use case entirely. HTTPS still works when the user types it.
         return parsed.toString();
     } catch (_error) {
         return fallback;

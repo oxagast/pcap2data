@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import http.client
+import io
 import json
 import os
 import re
@@ -798,6 +799,221 @@ def test_checkout_dynamic_creates_paddle_transaction(tmp_path, monkeypatch):
             outbound["checkout"]["success_url"]
             == f"http://127.0.0.1:{real_port}/checkout-success?installUuid={install_uuid}&themeId=matrix"
         )
+
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
+def test_checkout_dynamic_uses_static_fallback_when_paddle_returns_non_hosted_url(
+    tmp_path, monkeypatch
+):
+    """When the price has no Paddle-hosted checkout configured, the
+    ``POST /transactions`` API still succeeds but returns a
+    ``checkout.url`` that points at the merchant's bare domain (with
+    ``_ptxn=...`` appended). The catalog should treat that URL as a
+    static fallback: append ``installUuid`` + ``themeId`` query params
+    so the success/cancel pages can recover license context."""
+    themes = tmp_path / "themes"
+    previews = tmp_path / "previews"
+    db_path = tmp_path / "catalog.sqlite3"
+    themes.mkdir()
+    previews.mkdir()
+
+    db = ps_catalog.CatalogDB(db_path)
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=real_port,
+        db_path=db_path,
+        themes_dir=themes,
+        previews_dir=previews,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_api_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    db.upsert_theme(
+        theme_id="nilla",
+        name="Nilla",
+        description="",
+        price_cents=399,
+        price_label="",
+        paddle_product_id="pro_nilla",
+        paddle_price_id="pri_nilla",
+        preview_image="",
+        preview_filename="",
+        checkout_url="",
+        license_url="",
+    )
+
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+
+        class FakeResponse:
+            def __init__(self, body_bytes: bytes, status_code: int = 200):
+                self._body = body_bytes
+                self.status = status_code
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        # Paddle returns a non-hosted checkout URL (the merchant's
+        # bare domain with ``_ptxn=...`` appended) — exactly what
+        # happens when the price has no hosted-checkout form
+        # configured.
+        def fake_urlopen(req, timeout=None):  # noqa: ARG001
+            payload = {
+                "data": {
+                    "id": "txn_nonhosted_xyz",
+                    "checkout": {
+                        "url": "https://oxasploits.com:9021?_ptxn=txn_nonhosted_xyz"
+                    },
+                }
+            }
+            return FakeResponse(json.dumps(payload).encode("utf-8"), 200)
+
+        monkeypatch.setattr(ps_catalog.urllib.request, "urlopen", fake_urlopen)
+
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        install_uuid = str(uuid.uuid4())
+        status, headers, _body = _request(
+            conn, "GET", f"/checkout/nilla?installUuid={install_uuid}"
+        )
+        assert status == 302
+        location = headers["Location"]
+        # The redirect goes to the URL Paddle gave us, with the
+        # recovery params appended.
+        assert location.startswith("https://oxasploits.com:9021")
+        assert "_ptxn=txn_nonhosted_xyz" in location
+        assert f"installUuid={install_uuid}" in location
+        assert "themeId=nilla" in location
+
+        # The transaction intent was recorded so the success page
+        # can recover the installUuid/themeId even without an API
+        # call.
+        intent = db.get_transaction_intent("txn_nonhosted_xyz")
+        assert intent["installUuid"] == install_uuid
+        assert intent["themeId"] == "nilla"
+
+        conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        db.close()
+
+
+def test_checkout_dynamic_falls_back_to_static_on_paddle_error(
+    tmp_path, monkeypatch
+):
+    """When ``POST /transactions`` fails AND the theme has a
+    pre-stored static ``hosted_checkout_url``, the catalog should
+    fall back to that URL with recovery params appended instead of
+    surfacing the Paddle error to the buyer."""
+    themes = tmp_path / "themes"
+    previews = tmp_path / "previews"
+    db_path = tmp_path / "catalog.sqlite3"
+    themes.mkdir()
+    previews.mkdir()
+
+    db = ps_catalog.CatalogDB(db_path)
+    real_port = _free_port()
+    real_cfg = ps_catalog.Config(
+        host="127.0.0.1",
+        port=real_port,
+        db_path=db_path,
+        themes_dir=themes,
+        previews_dir=previews,
+        paddle_webhook_secret=None,
+        paddle_public_key=None,
+        paddle_api_key="pdl_test_api_key",
+        paddle_env="sandbox",
+        base_url=f"http://127.0.0.1:{real_port}",
+        success_url=None,
+        cancel_url=None,
+        allow_insecure_return_urls=True,
+        tls_cert=None,
+        tls_key=None,
+    )
+    db.upsert_theme(
+        theme_id="fallback",
+        name="Fallback",
+        description="",
+        price_cents=399,
+        price_label="",
+        paddle_product_id="pro_fallback",
+        paddle_price_id="pri_fallback",
+        preview_image="",
+        preview_filename="",
+        checkout_url="",
+        hosted_checkout_url="https://example.com/buy-now?token=abc",
+        license_url="",
+    )
+
+    server = ps_catalog.make_server(real_cfg, db)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            try:
+                with socket.create_connection(
+                    (real_cfg.host, real_cfg.port), timeout=0.5
+                ):
+                    break
+            except OSError:
+                time.sleep(0.01)
+
+        # Paddle returns a 400 (price doesn't exist, wrong env, etc.)
+        def fake_urlopen(req, timeout=None):  # noqa: ARG001
+            raise urllib.error.HTTPError(
+                req.full_url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"error":{"type":"request_error"}}'),
+            )
+
+        monkeypatch.setattr(ps_catalog.urllib.request, "urlopen", fake_urlopen)
+
+        conn = http.client.HTTPConnection(real_cfg.host, real_cfg.port, timeout=5)
+        install_uuid = str(uuid.uuid4())
+        status, headers, _body = _request(
+            conn,
+            "GET",
+            f"/checkout/fallback?installUuid={install_uuid}",
+        )
+        assert status == 302
+        location = headers["Location"]
+        assert location.startswith("https://example.com/buy-now")
+        assert "token=abc" in location
+        assert f"installUuid={install_uuid}" in location
+        assert "themeId=fallback" in location
 
         conn.close()
     finally:

@@ -71,6 +71,12 @@
 			},
 			"problemMatcher": [],
 			"detail": "npm run test:backend && npm run test:frontend"
+		},
+		{
+			"label": "Run backend tests",
+			"type": "shell",
+			"command": "pytest tests/test_backend_compile.py tests/test_backend_json.py tests/test_backend_server.py --maxfail=1",
+			"problemMatcher": []
 		}
 	]
 }

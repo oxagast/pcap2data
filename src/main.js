@@ -1008,6 +1008,7 @@ ipcMain.handle("file-size", async () => {
 // no-op.
 const METRICS_FLUSH_REQUEST = "metrics:flush-request";
 const METRICS_MAX_EVENT_BATCH = 1000;
+const METRICS_HTTP_TIMEOUT_MS = 5000;
 let metricsFlushTimer = null;
 
 function getMetricsPrivacy() {
@@ -1019,6 +1020,38 @@ function getMetricsPrivacy() {
   } catch (_error) {
     return {};
   }
+}
+
+function isMetricsAllowInsecureTls() {
+  // Locked: the GUI's metrics endpoint lives on the same self-signed
+  // catalog server as the theme store, so the general
+  // ``allowInsecureTlsEndpoints`` flag (which is hard-coded to true
+  // in src/settings.js) gates the metrics transport too. Settings
+  // cannot override this.
+  try {
+    return Boolean(getAppSettings()?.general?.allowInsecureTlsEndpoints);
+  } catch (_error) {
+    return false;
+  }
+}
+
+const insecureMetricsDispatcherCache = new Map();
+
+function getInsecureMetricsDispatcher(timeoutMs) {
+  const normalized = Math.max(1000, Math.floor(Number(timeoutMs) || METRICS_HTTP_TIMEOUT_MS));
+  const cacheKey = String(normalized);
+  let dispatcher = insecureMetricsDispatcherCache.get(cacheKey);
+  if (!dispatcher) {
+    dispatcher = new Agent({
+      headersTimeout: normalized,
+      bodyTimeout: normalized,
+      connect: {
+        rejectUnauthorized: false,
+      },
+    });
+    insecureMetricsDispatcherCache.set(cacheKey, dispatcher);
+  }
+  return dispatcher;
 }
 
 async function flushMetricsQueue(payload) {
@@ -1056,11 +1089,19 @@ async function flushMetricsQueue(payload) {
     sentAt: String(payload.sentAt || new Date().toISOString()).trim(),
     events,
   };
+  // For HTTPS endpoints, optionally attach an undici dispatcher that
+  // skips certificate verification. The allow flag is locked to true so
+  // self-signed certs (the production deployment uses the same
+  // self-signed cert as the theme catalog server) work out of the box.
+  let dispatcher = null;
+  if (parsedUrl.protocol === "https:" && isMetricsAllowInsecureTls()) {
+    dispatcher = getInsecureMetricsDispatcher(METRICS_HTTP_TIMEOUT_MS);
+  }
   try {
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] Metrics flush begin endpoint=${parsedUrl.host} events=${events.length} installIdPresent=${Boolean(body.installId)}`,
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush begin endpoint=${parsedUrl.host} events=${events.length} installIdPresent=${Boolean(body.installId)} insecureTls=${Boolean(dispatcher)}`,
     );
-    const response = await undiciFetch(parsedUrl.href, {
+    const fetchInit = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1068,13 +1109,17 @@ async function flushMetricsQueue(payload) {
         "X-PacketSnitch-Client": "electron",
       },
       body: JSON.stringify(body),
-      headersTimeout: 5000,
-      bodyTimeout: 5000,
-    });
+      headersTimeout: METRICS_HTTP_TIMEOUT_MS,
+      bodyTimeout: METRICS_HTTP_TIMEOUT_MS,
+    };
+    if (dispatcher) {
+      fetchInit.dispatcher = dispatcher;
+    }
+    const response = await undiciFetch(parsedUrl.href, fetchInit);
     const status = response.status;
     const ok = status >= 200 && status < 300;
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] Metrics flush ok endpoint=${parsedUrl.host} status=${status} sent=${events.length}`,
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush ok endpoint=${parsedUrl.host} status=${status} sent=${events.length} insecureTls=${Boolean(dispatcher)}`,
     );
     return {
       ok,
@@ -1083,12 +1128,15 @@ async function flushMetricsQueue(payload) {
       error: ok ? undefined : `http-${status}`,
     };
   } catch (error) {
+    const errMessage = error?.message || String(error);
+    const isTlsError = /self.?signed|unable to verify|depth_zero|certificate|ssl|tls/i.test(errMessage);
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] Metrics flush failed endpoint=${parsedUrl.host} message=${JSON.stringify(error?.message || String(error))}`,
+      `[${new Date().toISOString()}] [GUI][Main] Metrics flush failed endpoint=${parsedUrl.host} insecureTls=${Boolean(dispatcher)} isTlsError=${isTlsError} message=${JSON.stringify(errMessage)}`,
     );
     return {
       ok: false,
-      error: error?.message || "exception",
+      error: errMessage,
+      isTlsError,
     };
   }
 }
@@ -1109,9 +1157,26 @@ ipcMain.handle("metrics:flush", async (_event, payload) => {
 
 ipcMain.handle("metrics:status", async () => {
   const privacy = getMetricsPrivacy();
+  const endpoint = String(privacy.metricsEndpointUrl || "").trim();
+  let endpointProtocol = "";
+  let insecureTls = false;
+  if (endpoint) {
+    try {
+      const parsedUrl = new URL(endpoint);
+      endpointProtocol = parsedUrl.protocol;
+      if (parsedUrl.protocol === "https:" && isMetricsAllowInsecureTls()) {
+        insecureTls = true;
+      }
+    } catch (_error) {
+      // leave endpointProtocol empty
+    }
+  }
   return {
     enabled: Boolean(privacy.metricsEnabled),
-    endpoint: String(privacy.metricsEndpointUrl || "").trim(),
+    endpoint,
+    endpointProtocol,
+    insecureTls,
+    allowInsecureTls: isMetricsAllowInsecureTls(),
     hasInstallId: Boolean(String(privacy.metricsInstallId || "").trim()),
     appVersion: String(app.getVersion() || "").trim(),
   };

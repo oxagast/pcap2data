@@ -1292,6 +1292,38 @@ function syncMetricsDiagnosticsIndicators() {
     consentClass,
   );
 
+  // TLS pill: shows whether the metrics transport will skip cert
+  // verification for HTTPS endpoints (the production catalog server
+  // uses a self-signed cert). Mirrors the ``allowInsecureTlsEndpoints``
+  // flag in src/settings.js which is locked to true.
+  let tlsValue = "—";
+  let tlsClass = "status-neutral";
+  const endpointProtocol = String(diagnostics.endpointProtocol || "").trim();
+  if (!endpointConfigured) {
+    tlsValue = "n/a";
+    tlsClass = "status-neutral";
+  } else if (endpointProtocol === "https:") {
+    if (diagnostics.insecureTls) {
+      tlsValue = "Self-signed allowed";
+      tlsClass = "status-ok";
+    } else if (diagnostics.allowInsecureTls === false) {
+      tlsValue = "Strict";
+      tlsClass = "status-warn";
+    } else {
+      tlsValue = "Unknown";
+      tlsClass = "status-neutral";
+    }
+  } else if (endpointProtocol === "http:") {
+    tlsValue = "Plain HTTP";
+    tlsClass = "status-neutral";
+  }
+  renderMetricsDiagnosticIndicator(
+    "settings-api-keys-metrics-tls-status",
+    "TLS",
+    tlsValue,
+    tlsClass,
+  );
+
   const lastFlush = diagnostics.lastFlush;
   let lastFlushValue = "—";
   let lastFlushClass = "status-neutral";
@@ -1379,6 +1411,9 @@ async function refreshMetricsDiagnostics({ force = false } = {}) {
       cachedMetricsDiagnostics = {
         consentStatus,
         endpointReachable,
+        endpointProtocol: String(status?.endpointProtocol || "").trim(),
+        insecureTls: Boolean(status?.insecureTls),
+        allowInsecureTls: Boolean(status?.allowInsecureTls),
         lastFlush: {
           checkedAt: new Date().toISOString(),
           ok: endpointReachable === true,
