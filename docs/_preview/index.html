@@ -137,97 +137,100 @@
         }
 
         .header {
-            padding-top: 20px .header nav {
-                padding-top: 10px;
-                padding-bottom: 20px
+            padding-top: 20px;
+        }
+
+        .header nav {
+            padding-top: 10px;
+            padding-bottom: 20px
+        }
+
+        .header nav a {
+            padding-right: 3px
+        }
+
+        .float-left {
+            float: left
+        }
+
+        .float-right {
+            float: right
+        }
+
+        .float-center {
+            text-align: center
+        }
+
+        .post-item {
+            display: block;
+            position: relative;
+            line-height: 24px;
+            padding-bottom: 5px;
+            margin: 5px 0
+        }
+
+        .post-summary {
+            padding-top: 30px;
+            padding-bottom: 30px
+        }
+
+        .post-nav {
+            padding-top: 100px;
+            text-align: center
+        }
+
+        .category-summary {
+            padding-top: 30px;
+            padding-bottom: 30px
+        }
+
+        .category-all-nav,
+        .category-header {
+            display: block;
+            position: relative;
+            line-height: 24px;
+            margin: 5px 0;
+            padding-bottom: 10px;
+            padding-top: 10px
+        }
+
+        .post-info {
+            padding-bottom: 30px;
+            margin: 20px 0 5px;
+            padding-top: 20px
+        }
+
+        .post-content {
+            line-height: 35px;
+            padding-bottom: 50px
+        }
+
+        .post-content h1,
+        h3,
+        code,
+        pre {
+            padding-bottom: 10px;
+            padding-top: 10px
+        }
+
+        .post-content h2 {
+            padding-bottom: 20px;
+            padding-top: 20px
+        }
+
+        @media only screen and (max-width: 479px) {
+            .mobile-hide {
+                display: none !important
             }
 
-            .header nav a {
-                padding-right: 3px
+            .footer-text {
+                float: left !important
             }
 
-            .float-left {
-                float: left
+            html {
+                margin: 1em !important
             }
-
-            .float-right {
-                float: right
-            }
-
-            .float-center {
-                text-align: center
-            }
-
-            .post-item {
-                display: block;
-                position: relative;
-                line-height: 24px;
-                padding-bottom: 5px;
-                margin: 5px 0
-            }
-
-            .post-summary {
-                padding-top: 30px;
-                padding-bottom: 30px
-            }
-
-            .post-nav {
-                padding-top: 100px;
-                text-align: center
-            }
-
-            .category-summary {
-                padding-top: 30px;
-                padding-bottom: 30px
-            }
-
-            .category-all-nav,
-            .category-header {
-                display: block;
-                position: relative;
-                line-height: 24px;
-                margin: 5px 0;
-                padding-bottom: 10px;
-                padding-top: 10px
-            }
-
-            .post-info {
-                padding-bottom: 30px;
-                margin: 20px 0 5px;
-                padding-top: 20px
-            }
-
-            .post-content {
-                line-height: 35px;
-                padding-bottom: 50px
-            }
-
-            .post-content h1,
-            h3,
-            code,
-            pre {
-                padding-bottom: 10px;
-                padding-top: 10px
-            }
-
-            .post-content h2 {
-                padding-bottom: 20px;
-                padding-top: 20px
-            }
-
-            @media only screen and (max-width: 479px) {
-                .mobile-hide {
-                    display: none !important
-                }
-
-                .footer-text {
-                    float: left !important
-                }
-
-                html {
-                    margin: 1em !important
-                }
-            }
+        }
     </style>
 
     <style>
@@ -456,12 +459,9 @@
         iframe[src*="youtube-nocookie.com"],
         iframe[src*="vimeo.com"] {
             width: 100%;
-            aspect-ratio: 16 / 9;
-            height: auto;
-        }
-
-        .main-content iframe {
+            aspect-ratio: 1000 / 544;
             max-width: 100%;
+            height: auto;
         }
 
         .loading-dls {
@@ -649,6 +649,24 @@
                     protocol behavior, PacketSnitch provides the tools you need to get the job done. The extensible
                     plugin architecture allows you to add custom decoders and analysis tools as needed.</p>
                 <p>End of preview content. The sticky pinned header should still be visible at the top of the viewport.
+                </p>
+                <hr>
+                <h2>Screenshot (the smaller one)</h2>
+                <p align="center">
+                    <a
+                        href="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.png">
+                        <img fetchpriority="high" alt="PacketSnitch Stats Workspace"
+                            src="https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/docs/screenshots/packetsnitch-preview.webp"
+                            width="1000" height="544">
+                    </a>
+                </p>
+                <h2>Demo Video (now same size as screenshot)</h2>
+                <p align="center">
+                    <iframe loading="lazy" width="1000" height="562"
+                        src="https://www.youtube.com/embed/WCEZkubllg8?si=3GnLIt4y4CxvIjmK" title="YouTube video player"
+                        frameborder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
                 </p>
             </div>
         </main>
