@@ -538,12 +538,16 @@
        (1000/544 ≈ 1.838) so the video is the same size as
        the smaller preview image on the overview page.
        Capped at 1000px wide to match the screenshot's
-       natural width so it doesn't stretch on wide screens. */
+       natural width so it doesn't stretch on wide screens.
+       `!important` is needed because the generic
+       .main-content iframe { max-width: 100% } rule below
+       has higher specificity (class+element beats
+       attribute selector) and would otherwise override this. */
     iframe[src*="youtube.com"],
     iframe[src*="youtube-nocookie.com"],
     iframe[src*="vimeo.com"] {
         width: 100%;
-        max-width: 1000px;
+        max-width: 1000px !important;
         aspect-ratio: 1000 / 544;
         height: auto;
     }
