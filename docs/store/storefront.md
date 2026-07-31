@@ -33,3 +33,9 @@ Coming soon. This section will list custom PacketSnitch plugins available for pu
 The corporate license allows unlimited use of PacketSnitch across your organization, including priority support and access to all current and future themes and plugins.
 
 > Purchase links coming soon.
+
+---
+
+## Packet Snitchin Apparel
+
+Coming soon.
