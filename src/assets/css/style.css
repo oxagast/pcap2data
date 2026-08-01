@@ -2831,6 +2831,30 @@ strong {
   resize: vertical;
 }
 
+.notes-concrete-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-5);
+  cursor: pointer;
+}
+
+.notes-concrete-toggle-row input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.notes-concrete-toggle-row input[type="checkbox"]:disabled+.notes-concrete-toggle-label {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.notes-concrete-toggle-label {
+  user-select: none;
+}
+
 .notes-preview-header {
   color: var(--header-text-color);
   font-weight: bold;

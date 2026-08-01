@@ -124,6 +124,9 @@ const helperSource = [
     loadFunction('truncateStatsList'),
     loadFunction('buildStatsMarkdownTable'),
     loadFunction('buildStatsMarkdownSection'),
+    loadFunction('getNotesSummarySection'),
+    loadFunction('isNoteConcrete'),
+    loadFunction('getCurrentSummaryReportMarkdown'),
     loadFunction('getSummaryMarkdownForExport'),
 ].join('\n\n');
 
