@@ -111,3 +111,35 @@
   `describe("normalizeEndpointUrl preserves the user's chosen scheme", ...)`,
   including a `normalizeSettings` end-to-end test that confirms
   the default stays HTTP.
+
+## Notes <-> Summary tab integration
+
+- Notes (Notes tab) feed the Summary tab (Analysis tab) automatically.
+  `getCurrentSummaryReportMarkdown()` is the single integration point;
+  it concatenates `getCurrentCompactedAnalysisSummary()` (LLM output)
+  with `getNotesSummarySection()` (analyst-curated notes).
+- Note entries carry a `concrete: boolean` flag. New notes default to
+  `concrete: false` ("inferred"). The Notes editor pane exposes a
+  `notes-concrete-toggle` checkbox so the analyst can flip a single
+  note to "concrete" (verified) at any time.
+- `getNotesSummarySection()` splits notes into two markdown buckets:
+  `## Inferred Data (from Notes)` and `## Verified Notes (from Notes)`,
+  joined by `---`. Both are clearly labeled so the analyst can never
+  confuse an analyst inference with a concrete observed fact.
+- The flag round-trips through session save/load via
+  `restoreSessionState` (`notes: deepCloneSessionData(notesList, [])`)
+  plus an explicit `concrete: note.concrete === true` mapping on load.
+- Add / remove / text edit / verified toggle all call
+  `refreshSummaryForNotes()` which routes to
+  `renderCombinedAnalysisSummary()`. The render is a no-op when the
+  Summary tab is hidden, so it is safe to call after every mutation.
+- Test mirror lives at `src/ui/main-frontend-test.cjs`; helpers added
+  there: `isNoteConcrete`, `getNotesSummarySection`,
+  `getCurrentSummaryReportMarkdown`, `refreshSummaryForNotes`. They
+  must stay byte-for-byte in sync with `src/ui/main-frontend.js`.
+- Regression tests live in `tests/notes_summary_integration.test.js`
+  (VM extraction; stubs `generateNoteId` + `normalizeNoteColor`).
+  `tests/summary_stats_weaving.test.js` must provide
+  `notesList: []` in its `runInFreshContext` defaults, otherwise
+  `getCurrentSummaryReportMarkdown` -> `getNotesSummarySection`
+  will read an undefined `notesList` and crash.
