@@ -6578,12 +6578,27 @@ function generateNoteId() {
   return `note-${Date.now()}-${noteIdCounter}`;
 }
 
+// Returns whether a note entry is flagged as concrete/verified data. Notes
+// default to "inferred" because the analyst is asserting context, not
+// capturing packets; the user must explicitly opt in to the concrete label.
+function isNoteConcrete(noteEntry) {
+  if (!noteEntry || typeof noteEntry !== "object") return false;
+  return noteEntry.concrete === true;
+}
+
 // Creates note entry.
-function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR) {
+function createNoteEntry(text = "", color = NOTE_DEFAULT_COLOR, options = null) {
+  const concreteFlag =
+    options && typeof options === "object" && options.concrete === true;
   return {
     id: generateNoteId(),
     text: typeof text === "string" ? text : String(text || ""),
     color: normalizeNoteColor(color),
+    // Inferred by default. The user can flip a note to "concrete" via the
+    // Verified toggle in the Notes editor pane when they want the Summary
+    // tab to treat its content as a concrete data point instead of an
+    // analyst inference.
+    concrete: Boolean(concreteFlag),
   };
 }
 
@@ -6752,9 +6767,111 @@ function renderSummaryMarkdownPreview(summaryText) {
   );
 }
 
+// Returns the analyst's Notes formatted as a markdown section for the
+// Summary tab. Notes are split into two buckets:
+//
+//   - **Inferred notes** (default): analyst observations that the LLM
+//     and the rest of the Summary tab should treat as inferred data,
+//     not concrete observed facts. Rendered under a clear "Inferred
+//     Data" heading so the analyst can never confuse the two.
+//   - **Verified notes** (`concrete: true`): notes the analyst has
+//     explicitly flagged as concrete/verified. These still appear on
+//     the Summary tab but under a "Verified Notes" heading that makes
+//     it obvious they carry more weight than inferred observations.
+//
+// Returns an empty string when there are no notes, so callers can join
+// the result with `---` separators without leaving dangling dividers.
+function getNotesSummarySection() {
+  if (!Array.isArray(notesList) || notesList.length === 0) return "";
+  const inferredNotes = [];
+  const verifiedNotes = [];
+  notesList.forEach((noteEntry) => {
+    if (!noteEntry || typeof noteEntry !== "object") return;
+    const noteText = String(noteEntry.text || "").trim();
+    if (!noteText) return;
+    if (isNoteConcrete(noteEntry)) {
+      verifiedNotes.push({ entry: noteEntry, text: noteText });
+    } else {
+      inferredNotes.push({ entry: noteEntry, text: noteText });
+    }
+  });
+
+  if (inferredNotes.length === 0 && verifiedNotes.length === 0) return "";
+
+  const blocks = [];
+
+  if (inferredNotes.length > 0) {
+    const inferredLines = [
+      "## Inferred Data (from Notes)",
+      "",
+      "> The following items were added by the analyst via the Notes tab.",
+      "> They are treated as **inferred data** (analyst observations or",
+      "> hypotheses) rather than concrete observed facts from the capture.",
+      "",
+    ];
+    inferredNotes.forEach((note, index) => {
+      const safeText = note.text.replace(/\r\n?/g, "\n");
+      inferredLines.push(`### Inferred Note ${index + 1}`);
+      inferredLines.push("");
+      inferredLines.push(safeText);
+      inferredLines.push("");
+    });
+    blocks.push(inferredLines.join("\n").trimEnd());
+  }
+
+  if (verifiedNotes.length > 0) {
+    const verifiedLines = [
+      "## Verified Notes (from Notes)",
+      "",
+      "> The following notes were explicitly marked as concrete/verified",
+      "> by the analyst. They are treated as concrete data points, not as",
+      "> inferences. Use them as authoritative context when reading the",
+      "> Summary tab.",
+      "",
+    ];
+    verifiedNotes.forEach((note, index) => {
+      const safeText = note.text.replace(/\r\n?/g, "\n");
+      verifiedLines.push(`### Verified Note ${index + 1}`);
+      verifiedLines.push("");
+      verifiedLines.push(safeText);
+      verifiedLines.push("");
+    });
+    blocks.push(verifiedLines.join("\n").trimEnd());
+  }
+
+  return blocks.join("\n\n---\n\n");
+}
+
+// Returns the full Summary tab report body in markdown form: the
+// compacted LLM analysis plus the analyst-curated Notes section (split
+// into inferred vs. verified). Both the on-screen renderer and the
+// export pipeline use this so the Notes tab content is reflected
+// everywhere the Summary tab is shown.
+function getCurrentSummaryReportMarkdown() {
+  const notesSection = getNotesSummarySection();
+  if (!notesSection) return summary;
+  if (!summary) return notesSection;
+  return `${summary}\n\n---\n\n${notesSection}`;
+}
+
+// Notifies the Summary tab that Notes content has changed. The Summary
+// tab is the authoritative home for note-derived content, so any
+// mutation to `notesList` (add, remove, text edit, verified toggle)
+// must re-render the Summary tab so the inferred/verified sections
+// stay in sync. Safe to call when the Summary tab is not the active
+// tab; the underlying render call is a no-op on a hidden tab and will
+// simply re-render the next time the analyst switches to it.
+function refreshSummaryForNotes() {
+  if (typeof renderCombinedAnalysisSummary === "function") {
+    renderCombinedAnalysisSummary();
+  } else if (typeof renderSummaryMarkdownPreview === "function") {
+    renderSummaryMarkdownPreview(getCurrentSummaryReportMarkdown());
+  }
+}
+
 // Returns normalized summary markdown for export.
 function getSummaryMarkdownForExport() {
-  return normalizeSummaryMarkdownHeadings(summary);
+  return normalizeSummaryMarkdownHeadings(getCurrentSummaryReportMarkdown());
 }
 
 // Normalizes plain-text export segment.
@@ -7100,6 +7217,15 @@ function renderNotesList() {
   newNoteColorEl.value = selectedNoteEntry
     ? normalizeNoteColor(selectedNoteEntry.color)
     : NOTE_DEFAULT_COLOR;
+  // Sync the Verified toggle so it always reflects the selected note's
+  // current concrete/inferred flag.
+  const notesConcreteToggleEl = document.getElementById(
+    "notes-concrete-toggle",
+  );
+  if (notesConcreteToggleEl) {
+    notesConcreteToggleEl.checked = isNoteConcrete(selectedNoteEntry);
+    notesConcreteToggleEl.disabled = !selectedNoteEntry;
+  }
   syncNotesEditorVisibilityUi();
 }
 
@@ -7121,6 +7247,10 @@ function addNote(
   selectedNoteId = noteEntry.id;
   notesEditorVisible = Boolean(editorVisible);
   renderNotesList();
+  // Notes feed the Summary tab as inferred/verified data, so any add
+  // must refresh the rendered Summary so the analyst sees the new
+  // entry without manually re-running the LLM.
+  refreshSummaryForNotes();
   statusUpdate("Status: Note added");
   writeLogEntry(
     `Note added source=${sourceLabel} length=${normalizedText.length}`,
@@ -7148,6 +7278,8 @@ function removeSelectedNote() {
   }
   notesEditorVisible = false;
   renderNotesList();
+  // Remove the deleted entry from any rendered Summary view.
+  refreshSummaryForNotes();
   statusUpdate("Status: Note removed");
   writeLogEntry(`Note removed id=${selectedNoteEntry.id}`);
 }
@@ -7886,6 +8018,9 @@ function initializeNotesPanel() {
         .trim();
       selectedOptionEl.textContent = `${notesSelectEl.selectedIndex + 1}. ${previewText || "(empty note)"}`;
     }
+    // Text edits flow through to the Summary tab's Inferred/Verified
+    // buckets, so re-render so the analyst sees the change live.
+    refreshSummaryForNotes();
   });
   newNoteColorEl.addEventListener("input", () => {
     const selectedNoteEntry = getSelectedNoteEntry();
@@ -7897,6 +8032,30 @@ function initializeNotesPanel() {
       selectedOptionEl.style.borderLeft = `8px solid ${selectedNoteEntry.color}`;
     }
   });
+
+  // The "Verified" toggle switches a note between inferred (default)
+  // and concrete. The Summary tab mirrors this flag by routing the
+  // note text into either the "Inferred Data" or "Verified Notes"
+  // heading, so any flip must refresh the rendered Summary.
+  const notesConcreteToggleEl = document.getElementById(
+    "notes-concrete-toggle",
+  );
+  if (notesConcreteToggleEl) {
+    notesConcreteToggleEl.addEventListener("change", () => {
+      const selectedNoteEntry = getSelectedNoteEntry();
+      if (!selectedNoteEntry) {
+        notesConcreteToggleEl.checked = false;
+        return;
+      }
+      selectedNoteEntry.concrete = notesConcreteToggleEl.checked === true;
+      refreshSummaryForNotes();
+      statusUpdate(
+        selectedNoteEntry.concrete
+          ? "Status: Note marked as verified data"
+          : "Status: Note marked as inferred data",
+      );
+    });
+  }
 
   renderNotesList();
   setNotesEditorVisibility(false);
@@ -8492,12 +8651,19 @@ async function restoreSessionState(sessionState) {
         text:
           typeof note.text === "string" ? note.text : String(note.text || ""),
         color: normalizeNoteColor(note.color),
+        // Preserve the verified/concrete flag through session save+load.
+        // Older sessions without the field default to inferred (false).
+        concrete: note.concrete === true,
       }))
     : [];
   notesList = loadedNotes;
   selectedNoteId = notesList.length > 0 ? notesList[0].id : null;
   notesEditorVisible = false;
   renderNotesList();
+  // Notes from the saved session feed the Summary tab as inferred/
+  // verified data, so re-render after loading them so the rendered
+  // report reflects the restored notes.
+  renderSummaryMarkdownPreview(getCurrentSummaryReportMarkdown());
 
   const selectedHost = String(sessionState.selectedHost || "").trim();
   if (
