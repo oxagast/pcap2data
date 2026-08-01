@@ -90,6 +90,10 @@ Recent behavior updates:
 - Summary generation is stream-aware: when packet navigation settles, the frontend schedules a follow-up summary for the active stream after the configured idle delay and appends non-duplicate findings.
 - LLM requests are issued through the Electron main process (`ollama:generate` IPC), which applies the configured model, bearer token, timeout, and token cap.
 - Existing summary text is persisted in saved sessions and restored on load.
+- **Notes integration**: every note created on the **Notes** tab is automatically mirrored on the Summary report under a dedicated heading so the analyst never has to copy/paste observations between the two tabs.
+  - By default each note is rendered under `## Inferred Data (from Notes)` and treated as analyst inference / hypothesis rather than as a concrete observed fact.
+  - When the note's **Mark as verified data (concrete)** checkbox in the Notes editor is on, the note is instead rendered under `## Verified Notes (from Notes)` and the Summary report treats it as a concrete data point.
+  - The concrete/inferred flag is persisted in the saved session and restored on load.
 
 ---
 
@@ -198,7 +202,10 @@ The Hashes sub-tab also provides a **Cross Reference Hash** button. When a hash 
 
 ##### Decodes Sub-tab
 
-The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5)) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5), JPEG, PNG, GIF, WebP) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+
+- The **Kerberos (krb5)** decoder disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages, showing pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and the protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to it.
+- The **SMB / Samba** decoder has a dedicated follow-stream mode that walks SMB2 read/write transactions and renders a per-message tree of headers, file content, and offsets. Single-block streams are now fed through the decoder pipeline correctly, and the inline decoder switch in the Host Data view honours the same selection.
 
 > The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu](context-menu) for details.
 
@@ -229,7 +236,7 @@ The **Threat Intel** sub-tab performs IP, URL, and hash reputation lookups using
 | **Use analyzed IP** | Seeds the input from the address currently being analyzed in the **Analyze Subnet** sub-tab. |
 | **Lookup Threat Intel** | Runs the configured lookups for the selected indicator type. |
 | **IPsum reputation card** | Shows whether the queried IP appears in the IPSum blocklist, the number of hits, and the list version/date. |
-| **VirusTotal card** | Shows VirusTotal reputation data (detection ratio, last analysis date, community score, etc.) for IPs, URLs, and hashes. Requires a VirusTotal API key configured in **Settings → Backend**. |
+| **VirusTotal card** | Shows VirusTotal reputation data (detection ratio, last analysis date, community score, etc.) for IPs, URLs, and hashes. Requires a VirusTotal API key configured in **Settings → API Keys**. |
 | **Tor exit node card** | Shows whether the queried IP is a known Tor exit node, including nickname/platform information. |
 
 When the **Analyze Subnet** sub-tab runs an analysis, the threat-intel input is automatically seeded with the inspected IP, the query type is set to `ip`, and IPsum, Tor, and VirusTotal results are fetched alongside the subnet cards. Those results are then displayed in the Threat Intel sub-tab. The dedicated subtab replaces the previous inline reputation card in Analyze Subnet.
@@ -281,7 +288,7 @@ Reserved workspace for future OpenSSH key and session tooling. For now, PacketSn
 
 #### Settings Tab
 
-The **Settings** tab is a persistent configuration workspace with five sub-tabs: **Frontend**, **Backend**, **LLM**, **Debug**, and **About**.
+The **Settings** tab is a persistent configuration workspace with nine sub-tabs: **Frontend**, **Backend**, **LLM**, **API Keys**, **Debug**, **Plugins**, **Themes**, **Privacy**, and **About**.
 
 Settings are stored locally at `~/.config/packetsnitch/config/settings.json` (Linux) or `C:\User\Username\AppData\Roaming\packetsnitch\config\settings.json` (Windows).
 
@@ -340,13 +347,75 @@ The LLM panel also exposes runtime diagnostics for local install status, daemon 
 | **Backend worker threads** | `general.backendWorkerThreads` | Worker-thread count passed to the backend parser. |
 | **TCP host** | `backend.tcpHost` | Hostname/IP used for backend HTTP service mode. |
 | **TCP port** | `backend.tcpPort` | Port used for backend HTTP service mode. |
-| **VirusTotal API key** | `backend.virusTotalApiKey` | API key used by the Conv **Threat Intel** sub-tab for VirusTotal IP, URL, and hash lookups. Stored locally in the settings file. |
 | **Force legacy backend spawn** | `backend.forceLegacySpawn` | Disables HTTP service mode and launches the backend process per capture run. |
 | **Enable backend HTTP data mode** | `debug.backendHttpDataModeEnabled` | Streams incremental capture snapshots over backend HTTP response payloads instead of relying on temporary `hosts-*.json` files. |
+
+> The VirusTotal API key has been moved out of this sub-tab into the dedicated **Settings → API Keys** sub-tab. See the [API Keys Sub-tab](#api-keys-sub-tab) section below.
+
+##### API Keys Sub-tab
+
+The **API Keys** sub-tab is a focused location for the secrets used by the renderer's outbound API calls. Storing the keys here keeps the **Backend** sub-tab uncluttered and gives each provider its own input + test surface.
+
+| Setting | Key | Description |
+| ------- | --- | ----------- |
+| **VirusTotal API key** | `backend.virusTotalApiKey` | Bearer key used by the Conv **Threat Intel** sub-tab for VirusTotal IP / URL / hash lookups. Stored locally in the settings file. |
+| **Metrics endpoint API key** | `privacy.metricsApiKey` | Optional bearer key sent to the self-hosted metrics endpoint. The key only travels with metrics events when the user supplies one; the bundled `src/metrics/server.py` enforces it on sensitive endpoints and rejects mismatched requests. |
+| **Ollama API key** | `llm.ollamaApiKey` | Optional bearer token for authenticated Ollama endpoints. This key still appears in the **LLM** sub-tab so the model/secret are co-located, but it is also re-rendered here for inventory. |
+
+If an API key field is left blank when saving, the currently stored key is retained so re-saving the form does not wipe a configured secret.
+
+##### Plugins Sub-tab
+
+The **Plugins** sub-tab lists discovered PacketSnitch plugins and lets you install, enable, disable, and uninstall them. Each plugin declares the capabilities it needs (`file.read`, `net.outbound`, `ui.menu`, etc.) and the runtime enforces them.
+
+| Control / Column | Description |
+| ---------------- | ----------- |
+| **Discovered plugins** | Lists every plugin folder under the runtime plugin path. |
+| **Capabilities column** | Shows the union of capabilities each plugin requests. The install dialog shows the same list and asks for confirmation before enabling. |
+| **Install from .zip** | Installs a plugin from a local `.zip` file. The capability dialog opens before the plugin is enabled. |
+| **Enable / Disable toggle** | Toggles the plugin's runtime registration without deleting its files. |
+| **Uninstall** | Removes the plugin's files and revokes all its capabilities. |
+
+Capabilities are gated by `config/plugin-capabilities.json`; entries in that file are the only keys the runtime will ever grant. Plugins requesting undeclared capabilities are rejected at install time.
+
+See [plugins](plugins#plugins-reference) for the complete plugin format, lifecycle, and authoring tutorial.
+
+##### Themes Sub-tab
+
+The **Themes** sub-tab is the home of the theme engine. It shows a 400×250 preview for every theme on disk plus the contents of the theme catalog, so purchased themes are available offline.
+
+| Control / Column | Description |
+| ---------------- | ----------- |
+| **Theme dropdown** | Switches the active theme. Changes are applied immediately. |
+| **Preview pane** | Renders a 400×250 preview of the currently selected theme using a representative surface + typography sample. |
+| **Theme catalog** | Lists catalog entries with name, description, price, and an **Install** action. Installed themes are cached under `userData/theme-cache` so they remain available without a network round-trip. |
+| **Themes directory hint** | Shows the resolved on-disk themes path so custom `.json` theme files can be dropped in. |
+
+See [themes](plugins#themes-reference) for the complete theme JSON schema, variable reference, logo setup, and opacity tuning.
+
+##### Privacy Sub-tab
+
+The **Privacy** sub-tab houses the opt-in anonymous metrics system, install identifier, and related consent state.
+
+| Setting | Key | Description |
+| ------- | --- | ----------- |
+| **Enable anonymous metrics** | `privacy.metricsEnabled` | Master toggle for the in-app metrics pipeline. When off, no events are queued or shipped. |
+| **Consent asked** | `privacy.metricsConsentAsked` | Records that the first-run consent dialog has been shown and answered. Set automatically; the user does not normally edit this. |
+| **Metrics endpoint URL** | `privacy.metricsEndpointUrl` | HTTP endpoint that receives NDJSON metrics events. Defaults to `http://143.198.179.97:8088/mhook` and can be repointed at any compatible receiver. |
+| **Flush interval (seconds)** | `privacy.metricsFlushIntervalSeconds` | How often the renderer flushes queued events to the endpoint. |
+| **Max queue size** | `privacy.metricsMaxQueueSize` | Upper bound on the in-memory event queue. When exceeded, the oldest events are dropped first. |
+| **Install UUID** | `privacy.metricsInstallId` | Auto-generated per-install UUID. Used as the `install_id` field on every shipped event so events can be rolled up anonymously. |
+| **API key for metrics endpoint** | `privacy.metricsApiKey` | Optional bearer key for the self-hosted metrics receiver. See the [API Keys Sub-tab](#api-keys-sub-tab) section. |
+
+The renderer enforces a strict `SAFE_PROP_KEYS` allowlist and per-key length caps on every event, so no PCAP paths, IPs, prompts, or other user content ever leave the renderer.
+
+> The bundled `src/metrics/server.py` is a self-hostable NDJSON-on-disk sink with a `/healthz` liveness probe and API-key-gated sensitive endpoints. It is ready to deploy behind any reverse proxy for self-hosted setups.
 
 ##### About Sub-tab
 
 The **About** sub-tab provides release-note refresh and direct download actions for newer releases, and is also used when startup release checks detect an available update.
+
+The top toolbar **Help** button opens the PacketSnitch documentation hub at <https://packetsnitch.com/docu/> in PacketSnitch's own in-app browser window (the same child `BrowserWindow` that `window.open` triggers). The main-process `did-create-window` handler in `src/main.js` locks that child window to whitelisted docs hosts (packetsnitch.com, github.com/oxasploits/PacketSnitch, buymeacoffee.com, virustotal.com), resizes it to 1200×900, strips the menu bar, and tags it with the desktop user-agent. Help is the **only** in-app link that stays anchored inside PacketSnitch — every other external link (release notes, donate, theme catalog, VirusTotal card, etc.) is routed to the user's default system browser via `shell.openExternal` so the user keeps their existing browser session, and the help window likewise keeps PacketSnitch-anchored navigation separate from the user's browser profile.
 
 ##### Actions
 
@@ -502,7 +571,7 @@ The context menu's **Add to Keystore... → Manual URI** options open a dialog t
 
 #### Notes Tab
 
-The **Notes** tab is a session notes workspace for creating and editing freeform text notes tied to the current session. Click **Notes** in the toolbar to open it.
+The **Notes** tab is a session notes workspace for creating and editing freeform text notes tied to the current session. Click **Notes** in the toolbar to open it. Every note is also automatically mirrored on the **Analysis / Summary** tab so observations and conclusions stay in sync (see the [Summary Frame](#summary-frame) section).
 
 ##### Notes Sidebar (right panel)
 
@@ -520,6 +589,15 @@ The **Notes** tab is a session notes workspace for creating and editing freeform
 The main content area shows a full-width editable text area for the currently selected note. Edits are reflected immediately in the notes list preview. The editor is disabled when no note is selected.
 
 The Notes workspace also includes a sanitized live Markdown preview for the selected note, including GitHub-style pipe tables.
+
+###### Verified Data Flag
+
+The editor footer includes a **Mark as verified data (concrete)** checkbox. The flag controls how the note is treated by the Summary tab:
+
+- **Off (default)**: the note is treated as analyst inference / hypothesis and is rendered on the Summary report under `## Inferred Data (from Notes)`.
+- **On**: the note is treated as a concrete, analyst-confirmed fact and is rendered under `## Verified Notes (from Notes)`.
+
+The flag is persisted alongside the note body in the saved session file and restored on load.
 
 ##### Notes Context Menu
 

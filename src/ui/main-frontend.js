@@ -21025,7 +21025,7 @@ document.getElementById("stats-btn").addEventListener("click", function () {
   showStats();
 });
 
-document.getElementById("help-btn").addEventListener("click", function () {
+document.getElementById("help-btn").addEventListener("click", async function () {
   // if the window is already open, make sure it doesn't get opened again, just focus it
   if (helpWin != null && !helpWin.closed) {
     // bring the help window back in front of the main window
@@ -21033,13 +21033,30 @@ document.getElementById("help-btn").addEventListener("click", function () {
     window.focus();
     return;
   }
-  // open the help page in a new window
-  writeLogEntry("Calling help page in new window");
-  helpWin = window.open("https://packetsnitch.com/", "_blank");
+  // open the help page in PacketSnitch's own in-app browser window.
+  // Unlike the rest of the in-app links (release notes, donate, theme
+  // catalog, VirusTotal card, etc.), which route to the user's default
+  // system browser via ``shell.openExternal`` so the user keeps their
+  // existing browser session, the Help button is the one link that
+  // should stay anchored inside PacketSnitch. The main process hooks
+  // ``mainWindow.webContents.on('did-create-window', ...)`` (see
+  // ``src/main.js``) to lock this child window to the whitelisted docs
+  // domains, resize it to 1200x900, strip the menu bar, and tag it
+  // with the desktop user-agent. Using ``window.open`` here is what
+  // triggers that handler; routing through ``shell.openExternal``
+  // would bypass it and pop the docs in the user's default browser
+  // instead.
+  const helpUrl = "https://packetsnitch.com/docu/";
+  writeLogEntry("Opening help page in PacketSnitch browser: " + helpUrl);
+  helpWin = window.open(helpUrl, "_blank");
   // if the window is closed, set helpWin to null
-  helpWin.addEventListener("beforeunload", () => {
+  if (helpWin) {
+    helpWin.addEventListener("beforeunload", () => {
+      helpWin = null;
+    });
+  } else {
     helpWin = null;
-  });
+  }
 });
 
 // Show data conversion tools when data tools button is clicked

@@ -18,6 +18,7 @@ PacketSnitch is a full-featured network packet analysis tool with a Python backe
 - [Settings Workspace](#settings-workspace)
 - [Theme Engine](#theme-engine)
 - [Plugin Engine](#plugin-engine)
+- [Privacy & Anonymous Metrics](#privacy--anonymous-metrics)
 - [Statistics Tab](#statistics-tab)
 - [List Tab](#list-tab)
 - [Conv Tab (Data Conversion Workspace)](#conv-tab-data-conversion-workspace)
@@ -193,13 +194,13 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
 ### Settings Workspace
 
-- Dedicated **Settings** tab with five sub-tabs: **Frontend**, **Backend**, **LLM**, **Debug**, and **About**.
+- Dedicated **Settings** tab with nine sub-tabs: **Frontend**, **Backend**, **LLM**, **API Keys**, **Debug**, **Plugins**, **Themes**, **Privacy**, and **About**.
 - Settings are persisted to `userData/config/settings.json` via main-process IPC (`settings-get`, `settings-save`, `settings-update`).
 - **Frontend** settings:
   - **Theme** selector (`general.themeId`) using discovered theme JSON files.
   - **Conv JSON indent spaces** (`general.convJsonIndentSpaces`) for packet JSON pretty-print formatting.
   - **Status reset delay (seconds)** (`general.statusResetSeconds`) controlling status message timeout.
-  - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`.
+  - **Default backend packet chunk size** (`general.backendPacketChunkSize`) with allowed values `25`, `100`, `250`, `500`, `2000`, `8000`.
   - **Backend worker threads** (`general.backendWorkerThreads`) with a default of `2 x CPU cores`.
   - **Stream warning threshold (packets)** (`general.streamContextWarnPacketThreshold`) for follow-stream Conv/Crypt warnings, defaulting to `20` with a minimum accepted value of `5`.
   - **Manual Conv import limit (MB)** (`general.manualConvImportMaxBytes`) for file-to-Conv hard limits and warning thresholds.
@@ -216,6 +217,10 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
   - **Max tokens for stream summary** (`llm.maxSummaryTokens`) applied to Ollama `num_predict`.
   - **LLM request timeout (seconds)** (`llm.ollamaRequestTimeoutSeconds`) for request headers/body reads.
   - **LLM retries** (`llm.retryCount`) for automatic retry attempts after failed calls.
+- **API Keys** sub-tab:
+  - **VirusTotal API key** (`backend.virusTotalApiKey`) moved out of the Backend sub-tab.
+  - **Metrics endpoint API key** (`privacy.metricsApiKey`) optional bearer for the self-hosted metrics receiver.
+  - **Ollama API key** (`llm.ollamaApiKey`) mirrored here for inventory (still editable in the LLM sub-tab).
 - **Debug** settings:
   - **Incremental refresh interval** (`debug.backendIncrementalRefreshMinIntervalMs`) to throttle heavy frontend snapshot refreshes.
   - **Incremental refresh packet threshold** (`debug.backendIncrementalRefreshMinPackets`) to throttle heavy frontend snapshot refreshes.
@@ -225,8 +230,10 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - **Backend** settings:
   - **TCP host** (`backend.tcpHost`) and **TCP port** (`backend.tcpPort`) for the bridge HTTP service.
   - **Force legacy backend spawn mode** (`backend.forceLegacySpawn`) to disable service mode and launch the backend per run.
-  - **VirusTotal API key** (`backend.virusTotalApiKey`) stored locally in settings and required for Conv Threat Intel VirusTotal lookups.
   - **Enable backend HTTP data mode** (`debug.backendHttpDataModeEnabled`) for in-memory incremental snapshots over HTTP payloads.
+- **Plugins** sub-tab (described below).
+- **Themes** sub-tab (described below).
+- **Privacy** sub-tab (described below).
 - **About** settings panel:
   - Release note refresh and update download actions when newer versions are detected.
 - **Save settings** writes normalized values to disk; **Restore defaults** resets to app defaults.
@@ -237,6 +244,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
 - Theme system is file-driven and runtime-discoverable.
 - Built-in defaults are bundled in `themes/*.json` and mirrored into `userData/themes` on startup.
+- **Settings → Themes** sub-tab is the in-app home of the theme engine: it shows a 400×250 preview of every installed theme plus the contents of the theme catalog, so purchased themes are available offline.
 - Renderer discovers themes using `themeapi.list()` and applies them using `themeapi.get(themeId)`.
 - Theme JSON schema supports:
   - `id`, `name`, `description`
@@ -246,6 +254,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - Invalid theme files are skipped without crashing, and duplicate IDs are de-duplicated.
 - Selected theme is persisted through `general.themeId` in settings and applied on startup.
 - Theme logo override uses a data URI generated from the JSON `logoImage`; fallback restores default app logo.
+- Theme catalog entries can be installed from **Settings → Themes** and are cached under `userData/theme-cache` so they remain available without a network round-trip.
 - Theme directory path is exposed in Settings (`themes-directory` IPC) to guide custom theme placement.
 
 ---
@@ -262,6 +271,21 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 - Plugin runtime receives host context (`documentRef`, `windowRef`, `statusUpdate`, `writeLogEntry`, PacketSnitch version, plugin metadata).
 - Runtime errors are tracked in the Plugins error panel; critical failures increment per-plugin counters and can auto-disable unstable plugins.
 - `hello-snitch` sample plugin demonstrates tab/panel injection, context-menu extension, file IO, remote fetch, and safe callback wrapping.
+- Capabilities are gated by `config/plugin-capabilities.json`; only keys declared there can ever be granted to a plugin. Plugins requesting undeclared capabilities are rejected at install time.
+
+---
+
+### Privacy & Anonymous Metrics
+
+- Dedicated **Settings → Privacy** sub-tab with all opt-in telemetry controls.
+- **Enable anonymous metrics** (`privacy.metricsEnabled`) is the master switch — when off, no events are queued or shipped.
+- **Metrics endpoint URL** (`privacy.metricsEndpointUrl`) defaults to `http://143.198.179.97:8088/mhook` and can be repointed at any compatible receiver.
+- **Flush interval** (`privacy.metricsFlushIntervalSeconds`) and **max queue size** (`privacy.metricsMaxQueueSize`) control batching behaviour; oldest events are dropped first when the queue is full.
+- **Install UUID** (`privacy.metricsInstallId`) is auto-generated per install and is the only identifier shipped with events.
+- **API key for metrics endpoint** (`privacy.metricsApiKey`) is an optional bearer key for the self-hosted receiver; see the **API Keys** sub-tab.
+- Renderer enforces a strict `SAFE_PROP_KEYS` allowlist and per-key length caps on every event, so no PCAP paths, IPs, prompts, or other user content ever leave the renderer.
+- First-run consent dialog is shown once; the answer is recorded in `privacy.metricsConsentAsked`.
+- The bundled `src/metrics/server.py` is a self-hostable NDJSON-on-disk sink with a `/healthz` liveness probe and API-key-gated sensitive endpoints.
 
 ---
 
@@ -333,8 +357,10 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### Decodes Sub-tab
 
 - Protocol decoder with auto-detect and manual protocol selection.
-- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5).
+- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5), JPEG, PNG, GIF, WebP.
 - Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.).
+- **Kerberos (krb5)** decoder disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages, showing pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and the protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to it.
+- **SMB / Samba** decoder has a dedicated follow-stream mode that walks SMB2 read/write transactions and renders a per-message tree of headers, file content, and offsets. Single-block streams are now fed through the decoder pipeline correctly, and the inline decoder switch in the Host Data view honours the same selection.
 - **Follow stream to Conv**: assembles a full bidirectional TCP stream into Conv with async chunked scanning and loading overlay to prevent UI freezes on large streams.
 
 #### Analyze Subnet Sub-tab
@@ -353,7 +379,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - Tor exit-node lookup using the local Tor dataset (backend endpoint `/tor`).
 - VirusTotal IP, URL, and hash reputation lookups via backend endpoint `/virustotal`.
 - **Cross Reference Hash** button on the Hashes sub-tab sends the current SHA-256 (or focused hash output) to the Threat Intel sub-tab and runs a hash lookup.
-- VirusTotal lookups require a VirusTotal API key stored in `backend.virusTotalApiKey` in **Settings → Backend**.
+- VirusTotal lookups require a VirusTotal API key stored in `backend.virusTotalApiKey` in **Settings → API Keys**.
 - **Use analyzed IP** button seeds the query from the address currently analyzed in the Analyze Subnet sub-tab.
 
 ---
@@ -429,10 +455,13 @@ Automatically extracts and adds entries to the Session keychain when a capture i
 - Create freeform text notes tied to the current session.
 - Color-tag notes with a color picker (visual coding per note).
 - Full-width editable text area; edits reflect immediately in the notes list preview.
+- **Mark as verified data (concrete)** checkbox per note routes the note to the **Verified Notes (from Notes)** heading on the Summary tab; the default inferred state routes it to the **Inferred Data (from Notes)** heading.
+- The concrete/inferred flag is persisted in the saved session and restored on load.
+- Sanitized live Markdown preview in the editor (including GitHub-style pipe tables).
 - Remove individual notes.
 - Export all notes to a plain-text file with `---` dividers.
 - Notes are saved as part of the session file.
-- **Send to Notes** context menu submenu: send selected/context text, List row visible data, Conv output, or Conv hashes to a new note.
+- **Send to Notes** context menu submenu: send selected/context text, List row visible data, Conv output, or Conv hashes to a new note. Context-menu-generated notes are always inferred; analysts can toggle the flag in the editor afterwards.
 
 ---
 
