@@ -678,9 +678,9 @@ const decodeFtpFromBytes = convDecoders.decodeFtpFromBytes;
 const parseAsn1Length = convDecoders.parseAsn1Length;
 
 // Phase 4 of the decoder refactor: app-layer protocol decoders (LDAP, SMB,
-// SIP, SMPP, Soulseek, BitTorrent) plus the shared SMB helpers now live under
-// src/ui/decoders/conv/. The local names below keep the rest of this file
-// unchanged and preserve the existing exports surface.
+// SIP, SMPP, Soulseek, BitTorrent, Kerberos) plus the shared SMB helpers
+// now live under src/ui/decoders/conv/. The local names below keep the
+// rest of this file unchanged and preserve the existing exports surface.
 const normalizeSmbDecoderBytes = convDecoders.normalizeSmbDecoderBytes;
 const findBytesSubsequence = convDecoders.findBytesSubsequence;
 const parseSmbNtlmSecurityBuffer = convDecoders.parseSmbNtlmSecurityBuffer;
@@ -692,6 +692,7 @@ const decodeSipFromBytes = convDecoders.decodeSipFromBytes;
 const decodeSmppFromBytes = convDecoders.decodeSmppFromBytes;
 const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
 const decodeBittorrentFromBytes = convDecoders.decodeBittorrentFromBytes;
+const decodeKerberosFromBytes = convDecoders.decodeKerberosFromBytes;
 
 // Phase 3 of the decoder refactor: ASN.1 helpers + BER/DER/Protobuf/MessagePack/
 // BSON now live under src/ui/decoders/conv/. The local names below keep the
@@ -934,6 +935,9 @@ function runProtoDecoder(bytes) {
       break;
     case "bittorrent":
       result = decodeBittorrentFromBytes(bytes);
+      break;
+    case "kerberos":
+      result = decodeKerberosFromBytes(bytes);
       break;
     case "plaintext":
       result = decodePlainTextFromBytes(bytes);

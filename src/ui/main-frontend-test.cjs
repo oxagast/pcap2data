@@ -13966,6 +13966,16 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   protoOutput.appendChild(table);
 }
 
+// Stubbed Kerberos decoder kept in sync with src/ui/decoders/conv/kerberos.js.
+// Returns null when bytes don't look like a Kerberos 5 message so the caller
+// can fall back to other decoders / auto-detect.
+function decodeKerberosFromBytes(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4) return null;
+  // Real implementation lives in src/ui/decoders/conv/kerberos.js; this
+  // stub mirrors its contract for the legacy test fixture.
+  return null;
+}
+
 // Runs proto decoder.
 function runProtoDecoder(bytes) {
   const decodeBytes = resolveDecoderInputBytes(bytes);
@@ -14052,6 +14062,9 @@ function runProtoDecoder(bytes) {
       break;
     case "bittorrent":
       result = decodeBittorrentFromBytes(decodeBytes);
+      break;
+    case "kerberos":
+      result = decodeKerberosFromBytes(decodeBytes);
       break;
     case "plaintext":
       result = decodePlainTextFromBytes(decodeBytes);

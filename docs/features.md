@@ -333,7 +333,7 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### Decodes Sub-tab
 
 - Protocol decoder with auto-detect and manual protocol selection.
-- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent.
+- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5).
 - Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.).
 - **Follow stream to Conv**: assembles a full bidirectional TCP stream into Conv with async chunked scanning and loading overlay to prevent UI freezes on large streams.
 

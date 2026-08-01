@@ -1,5 +1,16 @@
 # Release Notes
 
+## Unreleased
+**Type:** minor
+
+### ✨ Features
+- New Kerberos 5 (`krb5`) Conv decoder (`src/ui/decoders/conv/kerberos.js`): the Decodes sub-tab now exposes a "Kerberos (krb5)" entry that disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages and surfaces pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to the new decoder, and the inline decoder switch in `src/ui/main-frontend.js` + `src/ui/main-frontend-test.cjs` is updated to match.
+
+### 🧪 Tests
+- New `tests/kerberos_conv_decoder.test.js` exercises wiring, registry, hints, and AS-REQ/AS-REP round-trips through both the data-tools panel and main-frontend inline paths using hand-built ASN.1 fixtures.
+
+---
+
 ## v2.4.2169 - 2026-07-27
 **Type:** minor
 

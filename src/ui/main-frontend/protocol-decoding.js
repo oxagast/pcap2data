@@ -23,6 +23,7 @@ const {
     decodeSmppFromBytes,
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
+    decodeKerberosFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -145,6 +146,8 @@ function createProtocolDecodingHelpers({
                 return decodeSoulseekFromBytes(bytes);
             case "bittorrent":
                 return decodeBittorrentFromBytes(bytes);
+            case "kerberos":
+                return decodeKerberosFromBytes(bytes);
             case "jpeg":
                 return decodeJpegFromBytes(bytes);
             case "png":
