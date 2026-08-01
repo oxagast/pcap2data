@@ -44,6 +44,11 @@ const {
     parseSmbNtlmSecurityBuffer,
     decodeSmbTextBytes,
     bytesToHexLower,
+    extractSmb2CreateFileName,
+    parseDceRpcBind,
+    formatDceRpcUuid,
+    lookupDceRpcService,
+    DCE_RPC_SERVICE_UUIDS,
 } = require("./smb-helpers");
 
 const {

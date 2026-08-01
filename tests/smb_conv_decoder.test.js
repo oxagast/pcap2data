@@ -139,6 +139,10 @@ function loadDecoderFunctions(filePath) {
         parseSmbNtlmSecurityBuffer: convDecoders.parseSmbNtlmSecurityBuffer,
         decodeSmbTextBytes: convDecoders.decodeSmbTextBytes,
         bytesToHexLower: convDecoders.bytesToHexLower,
+        extractSmb2CreateFileName: convDecoders.extractSmb2CreateFileName,
+        parseDceRpcBind: convDecoders.parseDceRpcBind,
+        formatDceRpcUuid: convDecoders.formatDceRpcUuid,
+        lookupDceRpcService: convDecoders.lookupDceRpcService,
         decodeSmbFromBytes: convDecoders.decodeSmbFromBytes,
         autoDetectProtoFromBytes: convDecoders.autoDetectProtoFromBytes,
     };
@@ -210,6 +214,82 @@ function buildOffsetSmb2Payload(offset = 4) {
     return Buffer.concat([Buffer.alloc(offset, 0), buildSmb2Payload()]);
 }
 
+// Build an SMB2 CREATE request body whose NameOffset/NameLength point to a
+// UTF-16LE pipe path. The CREATE request body layout (after the 64-byte
+// SMB2 header) is at least 56 bytes of fixed fields followed by the variable
+// "name path buffer" (offset 40, length 48 = uint32 + uint16 + BufferFormat).
+function buildSmb2CreatePayload(pipeName) {
+    const nameBytes = Buffer.from(pipeName, 'utf16le');
+    const body = Buffer.alloc(56 + nameBytes.length);
+    body.writeUInt16LE(0, 0);          // SecurityFlags
+    body.writeUInt8(0, 2);             // RequestedOplockLevel
+    body.writeUInt32LE(0, 4);          // ImpersonationLevel
+    // 8..16 SmbCreateFlags
+    // 16..24 RootDirectory
+    // 24..32 DesiredAccess
+    // 32..40 FileAttributes
+    // 40..48 NameOffset + NameLength
+    body.writeUInt32LE(56, 40);        // NameOffset → right after fixed body
+    body.writeUInt16LE(nameBytes.length, 48);
+    body.writeUInt8(0x04, 50);         // BufferFormat (0x04 = path, per spec)
+    nameBytes.copy(body, 56);
+    const header = Buffer.alloc(64);
+    header.write('\xfeSMB', 0, 'binary');
+    header.writeUInt16LE(0x0005, 12);  // CREATE
+    return Buffer.concat([header, body]);
+}
+
+// Build a DCE/RPC bind PDU body that names a well-known interface. The body
+// is what `parseDceRpcBind` consumes directly (16-byte common header + bind
+// fields). 16-byte UUID written little-endian per MS-RPCE.
+function buildDceRpcBindPayload(uuid) {
+    // canonical 8-4-4-4-12 → bytes
+    const [d1, d2, d3, d4a, d4b] = uuid.split('-');
+    const uuidBytes = Buffer.alloc(16);
+    uuidBytes.writeUInt32LE(parseInt(d1, 16), 0);
+    uuidBytes.writeUInt16LE(parseInt(d2, 16), 4);
+    uuidBytes.writeUInt16LE(parseInt(d3, 16), 6);
+    uuidBytes.write(d4a, 8, 2, 'hex');
+    uuidBytes.write(d4b, 10, 6, 'hex');
+    const common = Buffer.alloc(16);
+    common[0] = 0x05; common[1] = 0x00; common[2] = 0x0b; // BIND
+    common[3] = 0x03; // PFC flags (first + last)
+    common.writeUInt32LE(0x10, 4); // drep (LE)
+    // fragLength (uint16 @ offset 8) filled later
+    common.writeUInt32LE(1, 12); // call_id
+    const bind = Buffer.alloc(16);
+    bind.writeUInt32LE(0x1000, 0);  // max_xmit_frag
+    bind.writeUInt32LE(0x1000, 4);  // max_recv_frag
+    bind.writeUInt32LE(0, 8);       // assoc_group_id
+    bind.writeUInt8(1, 12);         // num_contexts
+    bind.writeUInt8(0, 13);         // reserved
+    bind.writeUInt16LE(0, 14);      // reserved
+    const ctx = Buffer.alloc(4 + 20);
+    ctx.writeUInt16LE(0, 0);        // p_cont_id
+    ctx.writeUInt8(1, 2);           // n_transfer_syn
+    ctx.writeUInt8(0, 3);           // reserved
+    uuidBytes.copy(ctx, 4);
+    ctx.writeUInt32LE(0x00010000, 20); // abstract version (1.0)
+    const payload = Buffer.concat([common, bind, ctx]);
+    payload.writeUInt16LE(payload.length, 8);
+    return payload;
+}
+
+// Wrap a DCE/RPC bind PDU inside an SMB2 WRITE request body. SMB2 WRITE body
+// (MS-SMB2 §2.2.15): Offset(2) + reserved(4) + Length(4) + Buffer. The
+// length is a uint32 and the data starts at offset 10.
+function buildSmb2WritePayload(bindPdu) {
+    const body = Buffer.alloc(10 + bindPdu.length);
+    body.writeUInt16LE(0, 0);
+    body.writeUInt32LE(0, 2);
+    body.writeUInt32LE(bindPdu.length, 6);
+    bindPdu.copy(body, 10);
+    const header = Buffer.alloc(64);
+    header.write('\xfeSMB', 0, 'binary');
+    header.writeUInt16LE(0x0009, 12); // WRITE
+    return Buffer.concat([header, body]);
+}
+
 describe('SMB Conv decoder wiring', () => {
     const projectRoot = path.resolve(__dirname, '..');
     const decoderFiles = [
@@ -249,5 +329,59 @@ describe('SMB Conv decoder wiring', () => {
         const indexHtml = fs.readFileSync(path.join(projectRoot, 'src/index.html'), 'utf8');
         expect(indexHtml).toContain('<option value="smb">SMB / Samba</option>');
         expect(indexHtml).toContain('<option value="plaintext">Plain text</option>');
+    });
+
+    test.each(decoderFiles)('surfaces named pipe on SMB2 CREATE in %s', (filePath) => {
+        const { decodeSmbFromBytes } = loadDecoderFunctions(filePath);
+        const payload = new Uint8Array(buildSmb2CreatePayload('\\PIPE\\lsarpc'));
+        const result = decodeSmbFromBytes(payload);
+        expect(result).toEqual(
+            expect.objectContaining({
+                protocol: 'SMB',
+                fields: expect.arrayContaining([
+                    { name: 'Version', value: 'SMBv2/v3' },
+                    { name: 'Command', value: 'CREATE' },
+                    { name: 'Named Pipe', value: '\\PIPE\\lsarpc' },
+                ]),
+            }),
+        );
+    });
+
+    test.each(decoderFiles)('surfaces DCE/RPC bind info on SMB2 WRITE in %s', (filePath) => {
+        const { decodeSmbFromBytes } = loadDecoderFunctions(filePath);
+        // samr interface UUID — well-known DC RPC service.
+        const bindPdu = buildDceRpcBindPayload('12345778-1234-1234-1234-123456789012');
+        const payload = new Uint8Array(buildSmb2WritePayload(bindPdu));
+        const result = decodeSmbFromBytes(payload);
+        expect(result).toEqual(
+            expect.objectContaining({
+                protocol: 'SMB',
+                fields: expect.arrayContaining([
+                    { name: 'Command', value: 'WRITE' },
+                    { name: 'RPC Op', value: 'BIND' },
+                    { name: 'RPC Service', value: 'samr' },
+                ]),
+            }),
+        );
+        const ifaceField = result.fields.find((f) => f.name === 'RPC Interface');
+        expect(ifaceField.value).toBe('12345778-1234-1234-1234-123456789012');
+    });
+
+    test('UUID lookup maps well-known DC interfaces', () => {
+        const { lookupDceRpcService, formatDceRpcUuid } = require(
+            path.join(projectRoot, 'src/ui/decoders/conv/smb-helpers'),
+        );
+        expect(lookupDceRpcService('12345778-1234-1234-1234-123456789013')).toBe('lsarpc');
+        expect(lookupDceRpcService('e3514235-4b06-11d1-ab04-00c04fc2dcd2')).toBe('drs');
+        expect(lookupDceRpcService('00000000-0000-0000-0000-000000000000')).toBeNull();
+        // UUID byte order is mixed LE/BE; verify formatting reconstructs the
+        // canonical form (Data1/Data2/Data3 stored little-endian).
+        const u = formatDceRpcUuid(
+            new Uint8Array([
+                0x78, 0x57, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12,
+                0x34, 0x12, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12,
+            ]),
+        );
+        expect(u).toBe('12345778-1234-1234-3412-123456789012');
     });
 });

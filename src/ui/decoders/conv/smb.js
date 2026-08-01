@@ -9,6 +9,10 @@ const {
     parseSmbNtlmSecurityBuffer,
     decodeSmbTextBytes,
     bytesToHexLower,
+    extractSmb2CreateFileName,
+    parseDceRpcBind,
+    formatDceRpcUuid,
+    lookupDceRpcService,
 } = require("./smb-helpers");
 
 const SMB1_COMMANDS = {
@@ -81,6 +85,43 @@ function decodeSmbFromBytes(bytes) {
     if (!result) return null;
 
     const blob = normalized.slice(blobStart);
+
+    // Domain-controller analysis (SMB2): CREATE-on-named-pipe carries the pipe
+    // name in the request body; the first WRITE of DCE/RPC bytes carries the
+    // Bind PDU that names the interface (samr / lsarpc / netlogon / drsuapi).
+    // Surface these so the user can spot DC traffic at a glance.
+    if (
+        normalized[0] === 0xfe &&
+        normalized[1] === 0x53 &&
+        normalized[2] === 0x4d &&
+        normalized[3] === 0x42
+    ) {
+        const commandCode = view.getUint16(12, true);
+        if (commandCode === 0x0005 && blob.length >= 56) {
+            const pipeName = extractSmb2CreateFileName(blob);
+            if (pipeName) {
+                result.fields.push({ name: "Named Pipe", value: pipeName });
+            }
+        }
+        if (commandCode === 0x0009 && blob.length >= 16) {
+            // SMB2 WRITE request body (after 64-byte header): offset(2)
+            // + reserved(4) + length(4) + data. Find the first bind signature.
+            const bindInfo = findDceRpcBindInWriteBody(blob);
+            if (bindInfo) {
+                result.fields.push({ name: "RPC Op", value: bindInfo.type });
+                result.fields.push({ name: "RPC Interface", value: bindInfo.uuid });
+                result.fields.push({
+                    name: "RPC Version",
+                    value: `0x${bindInfo.version.toString(16).padStart(8, "0")}`,
+                });
+                const service = lookupDceRpcService(bindInfo.uuid);
+                if (service) {
+                    result.fields.push({ name: "RPC Service", value: service });
+                }
+            }
+        }
+    }
+
     const ntlmIndex = findBytesSubsequence(blob, NTLMSSP_MARKER);
     if (ntlmIndex === -1) return result;
     const ntlmBlob = blob.slice(ntlmIndex);
@@ -124,6 +165,22 @@ function decodeSmbFromBytes(bytes) {
     if (lmResponse.length) pushField("LM Response", bytesToHexLower(lmResponse));
     if (ntlmResponse.length) pushField("NTLM Response", bytesToHexLower(ntlmResponse));
     return result;
+}
+
+// Search the WRITE body (after the 64-byte SMB2 header) for the first
+// DCE/RPC Bind signature "05 00 0b ...". SMB2 WRITE body (MS-SMB2 §2.2.15):
+// Offset(2) + reserved(4) + Length(4) + Buffer. The data starts at offset 10.
+function findDceRpcBindInWriteBody(writeBody) {
+    if (!(writeBody instanceof Uint8Array) || writeBody.length < 24) return null;
+    const dataLength = new DataView(
+        writeBody.buffer,
+        writeBody.byteOffset,
+        writeBody.byteLength,
+    ).getUint32(6, true);
+    const dataStart = 10;
+    if (dataLength < 16 || dataStart + dataLength > writeBody.length) return null;
+    const dataSegment = writeBody.slice(dataStart, dataStart + dataLength);
+    return parseDceRpcBind(dataSegment);
 }
 
 module.exports = { decodeSmbFromBytes };
