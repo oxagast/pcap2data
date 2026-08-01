@@ -4,12 +4,21 @@
 **Type:** minor
 
 ### ✨ Features
+- The top toolbar **Help** button opens the PacketSnitch documentation hub at <https://packetsnitch.com/docu/> in PacketSnitch's own in-app browser window — the same child `BrowserWindow` that the previous behaviour used. The main-process `did-create-window` handler in `src/main.js` locks the child window to whitelisted docs hosts (packetsnitch.com, github.com/oxasploits/PacketSnitch, buymeacoffee.com, virustotal.com), resizes it to 1200×900, strips the menu bar, and tags it with the desktop user-agent. Help is the only in-app link that opens inside PacketSnitch; every other external link (release notes, donate, theme catalog, VirusTotal card, etc.) still routes to the user's default system browser via `shell.openExternal` so the user keeps their existing browser session.
 - New Kerberos 5 (`krb5`) Conv decoder (`src/ui/decoders/conv/kerberos.js`): the Decodes sub-tab now exposes a "Kerberos (krb5)" entry that disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages and surfaces pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to the new decoder, and the inline decoder switch in `src/ui/main-frontend.js` + `src/ui/main-frontend-test.cjs` is updated to match.
 - Notes tab is now wired into the Summary tab: every note created on the Notes tab is automatically reflected on the Analysis/Summary tab under a clear "Inferred Data (from Notes)" heading, so the analyst never has to copy/paste observations between the two tabs. Each note carries a new "Mark as verified data (concrete)" checkbox in the Notes editor; toggling it moves the note to a separate "Verified Notes (from Notes)" heading on the Summary tab so concrete analyst-confirmed facts are visually distinct from inferred observations. The flag persists across session save/load.
+- Better decodes stream following in Conv (`src/ui/decoders/conv/{index,smb,smb-helpers}.js` + `src/ui/panels/data-tools-panel.js`): the Conv **Decodes** subtab now has a dedicated SMB follow-stream path that walks SMB2 read/write transactions, presents a per-message tree of headers, file content, and offsets, and reuses the unified stream-stack assembly used by other decoders. The new SMB helpers are extracted into `smb-helpers.js` so the inline decoder code stays small and testable.
+
+### 🐛 Fixes
+- Fixed decoders bug for single block decodes: when a stream contains exactly one reassembly block, Conv **Decodes** now correctly feeds that block through the decoder pipeline instead of bailing out. Covered by `tests/conv_decodes_stream_stack.test.js`.
+- Inline decoder wiring (`src/ui/main-frontend.js`) now matches the dropdown entries — picking a protocol from the inline switch honours the same detection and hints path as the Conv Decodes subtab.
 
 ### 🧪 Tests
 - New `tests/kerberos_conv_decoder.test.js` exercises wiring, registry, hints, and AS-REQ/AS-REP round-trips through both the data-tools panel and main-frontend inline paths using hand-built ASN.1 fixtures.
 - New `tests/notes_summary_integration.test.js` covers the inferred/verified routing (`isNoteConcrete`, `createNoteEntry` default + opt-in, `getNotesSummarySection` heading selection, mixed buckets, legacy fallback), `getCurrentSummaryReportMarkdown` ordering, and session save/load round-tripping the `concrete` flag.
+- New `tests/conv_decodes_stream_stack.test.js` covers the new SMB follow-stream wiring, the stream-stack assembly pipeline, and the single-block decode regression.
+- New `tests/smb_conv_decoder.test.js` exercises the dedicated SMB Conv decoder including header parsing and tree rendering.
+- New `tests/summary_stats_weaving.test.js` extensions lock down the new "Inferred Data (from Notes)" / "Verified Notes (from Notes)" summary headings.
 
 ---
 

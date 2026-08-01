@@ -21099,7 +21099,7 @@ document.getElementById("stats-btn").addEventListener("click", function () {
   showStats();
 });
 
-document.getElementById("help-btn").addEventListener("click", function () {
+document.getElementById("help-btn").addEventListener("click", async function () {
   // if the window is already open, make sure it doesn't get opened again, just focus it
   if (helpWin != null && !helpWin.closed) {
     // bring the help window back in front of the main window
@@ -21107,13 +21107,27 @@ document.getElementById("help-btn").addEventListener("click", function () {
     window.focus();
     return;
   }
-  // open the help page in a new window
-  writeLogEntry("Calling help page in new window");
-  helpWin = window.open("https://packetsnitch.com/", "_blank");
+  // open the help page in the user's default system browser
+  const helpUrl = "https://packetsnitch.com/docu/";
+  writeLogEntry("Opening help page in default browser: " + helpUrl);
+  if (window.browserapi && typeof window.browserapi.openExternalUrl === "function") {
+    try {
+      await window.browserapi.openExternalUrl(helpUrl);
+      return;
+    } catch (err) {
+      console.error("openExternalUrl failed for help page, falling back to window.open:", err);
+    }
+  }
+  // Fallback: open in a new window if the openExternalUrl bridge is unavailable
+  helpWin = window.open(helpUrl, "_blank");
   // if the window is closed, set helpWin to null
-  helpWin.addEventListener("beforeunload", () => {
+  if (helpWin) {
+    helpWin.addEventListener("beforeunload", () => {
+      helpWin = null;
+    });
+  } else {
     helpWin = null;
-  });
+  }
 });
 
 // Show data conversion tools when data tools button is clicked

@@ -135,7 +135,7 @@ The **Manual URI** options open a dialog to manually enter any `http://` or `htt
 
 ### Send to Notes...
 
-Send the current selection or Conv output directly to a new note in the Notes workspace.
+Send the current selection or Conv output directly to a new note in the Notes workspace. New notes created from the context menu are always flagged as inferred data (the **Mark as verified data (concrete)** checkbox is off) so the Summary tab treats them as analyst hypothesis rather than a concrete fact. Analysts can toggle the flag afterwards in the Notes editor.
 
 | Item                            | Description                                                                      |
 | ------------------------------- | -------------------------------------------------------------------------------- |
@@ -144,7 +144,7 @@ Send the current selection or Conv output directly to a new note in the Notes wo
 | **Conv converted output**       | Creates a new note containing the current Conv tab conversion output.            |
 | **Conv hashes**                 | Creates a new note containing the current Conv tab hash outputs.                 |
 
-This submenu is only visible when there is context data available (selected text or active Conv output).
+This submenu is only visible when there is context data available (selected text or active Conv output). See the [Notes Tab](frontend#notes-tab) section for the verified-data flag and Summary tab integration.
 
 ---
 
@@ -217,7 +217,7 @@ Shown only when runtime LLM is available (enabled in Settings and Ollama runtime
 
 `Explain this data...` is shown only when the selected/context text passes significance checks (for example, minimum length and not purely numeric/hex noise).
 
-All three LLM actions write Markdown output into a new note and switch to the Notes workspace.
+All three LLM actions write Markdown output into a new note (always flagged as inferred) and switch to the Notes workspace. See the [Notes Tab](frontend#notes-tab) section for how to mark a note as concrete/verified data.
 
 ---
 

@@ -2,6 +2,8 @@
 
 This page includes both the PacketSnitch [Themes](#themes-reference) reference and a complete [Plugins](#plugins-reference) reference/tutorial.
 
+> The two surfaces exposed to end users are now **Settings → Themes** and **Settings → Plugins** in the app. The Settings → Themes sub-tab shows a 400×250 preview of every installed theme plus a catalog of paid themes that can be installed offline (cached under `userData/theme-cache`). The Settings → Plugins sub-tab lists every discovered plugin, lets you install from a `.zip`, and gates each plugin by its declared capabilities. The schema, file locations, and authoring notes below still apply — the in-app sub-tabs are the easiest way to discover and manage what's installed.
+
 ## Table of Contents
 
 - [Themes Reference](#themes-reference)
