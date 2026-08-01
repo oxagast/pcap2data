@@ -2645,6 +2645,8 @@ async function updateThemeDirectoryHint() {
 
 // Theme preview and catalog state for the Settings → Themes subtab.
 let themesCatalogEntries = [];
+let themesCatalogIsSandbox = false;
+let themesCatalogPaddleEnv = null;
 let themesCatalogLoading = false;
 let themesPreviewObjectUrl = null;
 let themesPreviewInFlight = 0;
@@ -2671,6 +2673,36 @@ function setThemesCatalogStatus(message, { isError = false } = {}) {
   if (!statusEl) return;
   statusEl.textContent = String(message || "");
   statusEl.style.color = isError ? "#ff9090" : "";
+}
+
+function getThemesCatalogSandboxBannerElement() {
+  return document.getElementById("settings-themes-catalog-sandbox-banner");
+}
+
+// Show or hide the sandbox warning banner above the catalog list. The
+// catalog server signals sandbox mode via either ``paddleEnv: "sandbox"``
+// (preferred) or the legacy ``sandbox: true`` boolean; either is enough.
+// Unknown / production responses hide the banner.
+function setThemesCatalogSandboxBanner({ paddleEnv, sandbox } = {}) {
+  const bannerEl = getThemesCatalogSandboxBannerElement();
+  if (!bannerEl) return;
+  const isSandboxEnv = typeof paddleEnv === "string" && paddleEnv.trim().toLowerCase() === "sandbox";
+  const isSandboxBool = sandbox === true;
+  const isSandbox = isSandboxEnv || isSandboxBool;
+  themesCatalogIsSandbox = isSandbox;
+  themesCatalogPaddleEnv = typeof paddleEnv === "string" && paddleEnv.trim()
+    ? paddleEnv.trim().toLowerCase()
+    : (isSandbox ? "sandbox" : null);
+  if (!isSandbox) {
+    bannerEl.hidden = true;
+    bannerEl.textContent = "";
+    return;
+  }
+  bannerEl.hidden = false;
+  bannerEl.textContent =
+    "Sandbox mode: the theme catalog is connected to Paddle's sandbox "
+    + "environment. Purchases will not be charged and no real licenses "
+    + "will be issued.";
 }
 
 function clearThemesPreviewObjectUrl() {
@@ -2909,6 +2941,13 @@ async function refreshThemesCatalog({ force = false } = {}) {
   try {
     const result = await window.themeapi.listCatalog({ force });
     themesCatalogEntries = Array.isArray(result?.entries) ? result.entries : [];
+    // Update the sandbox banner whenever we get a fresh catalog response.
+    // We read both signals (paddleEnv string and sandbox boolean) so we
+    // don't break if the server only emits one.
+    setThemesCatalogSandboxBanner({
+      paddleEnv: result?.paddleEnv,
+      sandbox: result?.sandbox,
+    });
     if (result && result.success === false) {
       // The main process already produced a human-readable error
       // message (e.g. "Could not reach theme server… change to https://…
@@ -3000,7 +3039,11 @@ async function startThemeCheckout(catalogEntry) {
     }
     return;
   }
-  setThemesCatalogStatus("Opening checkout in your default browser...");
+  setThemesCatalogStatus(
+    themesCatalogIsSandbox
+      ? "Opening checkout in your default browser. Sandbox mode is active — no real payment will be taken."
+      : "Opening checkout in your default browser...",
+  );
   try {
     const result = await window.themeapi.startCheckout({
       themeId: catalogEntry.id,
@@ -3037,6 +3080,13 @@ async function checkThemesLicense() {
     const unlocked = Array.isArray(result?.unlockedThemeIds)
       ? result.unlockedThemeIds
       : [];
+    // License reconcile also surfaces the server's Paddle environment,
+    // so refresh the sandbox banner in case the catalog fetch has been
+    // delayed or the user clicked Check License first.
+    setThemesCatalogSandboxBanner({
+      paddleEnv: result?.paddleEnv,
+      sandbox: result?.sandbox,
+    });
     setThemesCatalogStatus(
       unlocked.length === 0
         ? "No new themes unlocked for this install yet."

@@ -5148,6 +5148,16 @@ strong {
   margin-top: 0.5rem;
 }
 
+.settings-themes-catalog-sandbox-banner {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--surface-1) 75%, transparent);
+  color: var(--color-5);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .settings-themes-catalog-card {
   border: 1px solid var(--color-3);
   padding: 0.6rem 0.8rem;

@@ -225,6 +225,126 @@ describe('renderer preview helpers', () => {
     });
 });
 
+describe('Themes catalog sandbox banner', () => {
+    // Drives the sandbox signal through the real renderer helpers so we
+    // verify the banner state matches what the catalog IPC returns.
+    function makeSandboxVm() {
+        const bannerEl = {
+            hidden: true,
+            textContent: '',
+        };
+        const statusEl = {
+            textContent: '',
+            style: {},
+        };
+        const listEl = {};
+        const context = {
+            URL: { revokeObjectURL: () => { } },
+            console,
+            document: {
+                getElementById: (id) => {
+                    if (id === 'settings-themes-catalog-sandbox-banner') return bannerEl;
+                    if (id === 'settings-themes-catalog-status') return statusEl;
+                    if (id === 'settings-themes-catalog-list') return listEl;
+                    return null;
+                },
+            },
+            // Module-level renderer state the helper updates.
+            themesCatalogIsSandbox: false,
+            themesCatalogPaddleEnv: null,
+        };
+        vm.createContext(context);
+        // Bring in the module-level state the helper mutates so the
+        // vm's globals line up with main-frontend.js.
+        vm.runInContext('var themesCatalogEntries = [];', context);
+        // Load the helper so it can run inside the vm.
+        const source = loadRendererFunctions([
+            'getThemesCatalogSandboxBannerElement',
+            'setThemesCatalogStatus',
+            'setThemesCatalogSandboxBanner',
+        ]);
+        vm.runInContext(source, context);
+        return { context, bannerEl, statusEl };
+    }
+
+    test('hides the banner when neither paddleEnv nor sandbox is set', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({});
+        expect(bannerEl.hidden).toBe(true);
+        expect(bannerEl.textContent).toBe('');
+        expect(context.themesCatalogIsSandbox).toBe(false);
+        expect(context.themesCatalogPaddleEnv).toBe(null);
+    });
+
+    test('hides the banner when paddleEnv is production', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({ paddleEnv: 'production', sandbox: false });
+        expect(bannerEl.hidden).toBe(true);
+        expect(context.themesCatalogIsSandbox).toBe(false);
+        expect(context.themesCatalogPaddleEnv).toBe('production');
+    });
+
+    test('shows the banner when sandbox is true (legacy boolean signal)', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({ sandbox: true });
+        expect(bannerEl.hidden).toBe(false);
+        expect(bannerEl.textContent).toMatch(/sandbox/i);
+        expect(context.themesCatalogIsSandbox).toBe(true);
+        expect(context.themesCatalogPaddleEnv).toBe('sandbox');
+    });
+
+    test('shows the banner when paddleEnv === "sandbox" (preferred signal)', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({ paddleEnv: 'sandbox' });
+        expect(bannerEl.hidden).toBe(false);
+        expect(bannerEl.textContent).toMatch(/sandbox/i);
+        expect(context.themesCatalogIsSandbox).toBe(true);
+    });
+
+    test('shows the banner when both signals are present', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({ paddleEnv: 'sandbox', sandbox: true });
+        expect(bannerEl.hidden).toBe(false);
+        expect(context.themesCatalogIsSandbox).toBe(true);
+    });
+
+    test('hides the banner if production is signaled after sandbox', () => {
+        const { context, bannerEl } = makeSandboxVm();
+        context.setThemesCatalogSandboxBanner({ paddleEnv: 'sandbox' });
+        expect(bannerEl.hidden).toBe(false);
+        context.setThemesCatalogSandboxBanner({ paddleEnv: 'production', sandbox: false });
+        expect(bannerEl.hidden).toBe(true);
+        expect(context.themesCatalogIsSandbox).toBe(false);
+    });
+
+    test('themes-catalog handler emits sandbox + paddleEnv in success payload', () => {
+        // Spot-check the main-process return shape: the handler must
+        // forward both fields so the renderer can decide. The handler
+        // is registered as `ipcMain.handle("themes-catalog", async …)`,
+        // so we grep the source text rather than extracting by name.
+        const source = fs.readFileSync(MAIN_PATH, 'utf8');
+        const handlerStart = source.indexOf('ipcMain.handle("themes-catalog"');
+        expect(handlerStart).toBeGreaterThan(-1);
+        const handlerEnd = source.indexOf('\nipcMain.handle(', handlerStart + 1);
+        const handlerBody = handlerEnd === -1
+            ? source.slice(handlerStart)
+            : source.slice(handlerStart, handlerEnd);
+        expect(handlerBody).toMatch(/paddleEnv:\s*isSandboxCatalog/);
+        expect(handlerBody).toMatch(/sandbox:\s*isSandboxCatalog/);
+    });
+
+    test('reconcileThemeLicenses captures the server paddleEnv', () => {
+        const source = fs.readFileSync(MAIN_PATH, 'utf8');
+        const reconcileFn = extractFunctionSource(
+            source,
+            'reconcileThemeLicenses',
+        );
+        expect(reconcileFn).toMatch(/cachedThemeServerPaddleEnv/);
+        expect(reconcileFn).toMatch(/paddleEnv:\s*cachedThemeServerPaddleEnv/);
+        expect(reconcileFn).toMatch(/sandbox:\s*cachedThemeServerPaddleEnv === "sandbox"/);
+    });
+});
+
 describe('main.js fetch timeout', () => {
     test('fetchWithTimeout aborts after the requested timeout', async () => {
         // We can't easily run an `await` in vm.runInContext because
