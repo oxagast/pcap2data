@@ -90,6 +90,7 @@ const SUPPORTED_DECODER_PROTOS = new Set([
     "smpp",
     "soulseek",
     "bittorrent",
+    "kerberos",
     "jpeg",
     "png",
     "gif",

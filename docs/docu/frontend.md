@@ -198,7 +198,7 @@ The Hashes sub-tab also provides a **Cross Reference Hash** button. When a hash 
 
 ##### Decodes Sub-tab
 
-The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
+The **Decodes** sub-tab is a protocol decoder. Select a protocol from the **Protocol** dropdown (Auto-detect, HTTP, FTP, SMB / Samba, Telnet, SSH / OpenSSH, POP3, IMAP, SMTP, JSON, XML, YAML, Protobuf, MessagePack, BSON, ASN.1 BER, ASN.1 DER, LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5)) to attempt to parse the current conversion input bytes as that protocol and display a human-readable decoded view below.
 
 > The context menu can populate Conv from selected/context data, payload bytes, cursor ASCII, decompressed Conv input, HTTP body bytes, or full followed stream data. See [context-menu](context-menu) for details.
 
@@ -566,6 +566,7 @@ A protocol-specific table of lower-level packet fields. The table content varies
 | DHCP (port 67/68)            | Message type, transaction ID, client IP, offered IP, server IP                              |
 | NTP (port 123)               | Leap indicator, version, mode, stratum, reference ID                                        |
 | SIP (port 5060/5061)         | Message type, method/status, URI, From, To, Call-ID                                         |
+| Kerberos (port 88/464/750)   | Message type, pvno, realm, cname/sname, KDC options, till, nonce, etype list, ticket, encrypted part |
 | HTTP (port 80/443/8080/8443) | Request/response type, method, URL, status code, headers (host, server, content-type, etc.) |
 
 ##### Location

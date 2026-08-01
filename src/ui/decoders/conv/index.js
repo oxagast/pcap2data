@@ -26,6 +26,7 @@ const { decodeSipFromBytes } = require("./sip");
 const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
+const { decodeKerberosFromBytes } = require("./kerberos");
 
 const { decodeJpegFromBytes } = require("./jpeg");
 const { decodePngFromBytes } = require("./png");
@@ -103,6 +104,7 @@ module.exports = {
     decodeSmppFromBytes,
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
+    decodeKerberosFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
