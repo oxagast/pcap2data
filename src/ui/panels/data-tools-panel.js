@@ -66,6 +66,16 @@ let activeDataToolsProtoResult = null;
 let decodedImageRegistry = [];
 const MAX_DECODED_IMAGE_REGISTRY_SIZE = 50;
 
+// Per-packet byte slices captured when an entire stream is loaded into the
+// Decodes subtab. When populated, runProtoDecoder iterates over each entry
+// and renders the decodes as a vertical stack (newest first) instead of
+// decoding the concatenated stream as a single blob. Entries are plain
+// Uint8Array slices and the per-packet info needed to label them; the array
+// is cleared whenever the user edits the underlying input or loads a fresh
+// non-stream source.
+let dataToolsStreamPackets = null;
+const MAX_DATA_TOOLS_STREAM_PACKETS = 512;
+
 // ── Injected dependencies (set via initConvPanel) ─────────────────────────────
 
 let _writeLogEntry = () => { };
@@ -108,6 +118,40 @@ function getActiveConvSubtab() {
 // Returns active data tools proto result.
 function getActiveDataToolsProtoResult() {
   return activeDataToolsProtoResult;
+}
+
+// Returns the per-packet byte slice list captured when an entire stream was
+// loaded into the Decodes subtab. Returns null when no stream is active, so
+// callers can fall back to the single-blob decode path.
+function getDataToolsStreamPackets() {
+  return Array.isArray(dataToolsStreamPackets) ? dataToolsStreamPackets : null;
+}
+
+// Stores the per-packet byte slices for the active stream. Each entry is
+// expected to be { bytes: Uint8Array, info?: { packetIndex?, sourceKey? } }
+// so the stacked renderer can label the decode blocks (newest first) and
+// the user can correlate each block back to its packet. Passing null/empty
+// clears the stream state and reverts to single-blob decoding.
+function setDataToolsStreamPackets(packets) {
+  if (!Array.isArray(packets) || packets.length === 0) {
+    dataToolsStreamPackets = null;
+    return;
+  }
+  const normalized = packets
+    .filter((entry) => entry && entry.bytes instanceof Uint8Array && entry.bytes.length > 0)
+    .slice(0, MAX_DATA_TOOLS_STREAM_PACKETS)
+    .map((entry, index) => ({
+      bytes: entry.bytes,
+      info: entry.info && typeof entry.info === "object" ? entry.info : {},
+      orderIndex: index,
+    }));
+  dataToolsStreamPackets = normalized.length ? normalized : null;
+}
+
+// Clears the per-packet stream state. Called when the user edits the
+// underlying input or loads a fresh non-stream source.
+function clearDataToolsStreamPackets() {
+  dataToolsStreamPackets = null;
 }
 
 // ── Input parsing ─────────────────────────────────────────────────────────────
@@ -686,6 +730,10 @@ const findBytesSubsequence = convDecoders.findBytesSubsequence;
 const parseSmbNtlmSecurityBuffer = convDecoders.parseSmbNtlmSecurityBuffer;
 const decodeSmbTextBytes = convDecoders.decodeSmbTextBytes;
 const bytesToHexLower = convDecoders.bytesToHexLower;
+const extractSmb2CreateFileName = convDecoders.extractSmb2CreateFileName;
+const parseDceRpcBind = convDecoders.parseDceRpcBind;
+const formatDceRpcUuid = convDecoders.formatDceRpcUuid;
+const lookupDceRpcService = convDecoders.lookupDceRpcService;
 const decodeLdapFromBytes = convDecoders.decodeLdapFromBytes;
 const decodeSmbFromBytes = convDecoders.decodeSmbFromBytes;
 const decodeSipFromBytes = convDecoders.decodeSipFromBytes;
@@ -843,8 +891,259 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   protoOutput.appendChild(table);
 }
 
+// Runs the selected protocol decoder against the supplied bytes. Returns the
+// decoded result object (or null when the selected protocol cannot decode
+// the bytes). Pulled out of runProtoDecoder so the per-packet stream path
+// can reuse the same protocol→function switch without duplicating it.
+function decodeWithSelectedProtocol(bytes, protocol) {
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  if (!protocol) return null;
+  switch (protocol) {
+    case "http":
+      return decodeHttpFromBytes(bytes);
+    case "telnet":
+      return decodeTelnetFromBytes(bytes);
+    case "ssh":
+      return decodeSshFromBytes(bytes);
+    case "pop3":
+      return decodePop3FromBytes(bytes);
+    case "imap":
+      return decodeImapFromBytes(bytes);
+    case "smtp":
+      return decodeSmtpFromBytes(bytes);
+    case "ftp":
+      return decodeFtpFromBytes(bytes);
+    case "ber":
+      return decodeBerFromBytes(bytes);
+    case "der":
+      return decodeDerFromBytes(bytes);
+    case "json":
+      return decodeJsonFromBytes(bytes);
+    case "xml":
+      return decodeXmlFromBytes(bytes);
+    case "html":
+      return decodeHtmlFromBytes(bytes);
+    case "yaml":
+      return decodeYamlFromBytes(bytes);
+    case "protobuf":
+      return decodeProtobufFromBytes(bytes);
+    case "msgpack":
+      return decodeMessagePackFromBytes(bytes);
+    case "bson":
+      return decodeBsonFromBytes(bytes);
+    case "ldap":
+      return decodeLdapFromBytes(bytes);
+    case "smb":
+      return decodeSmbFromBytes(bytes);
+    case "sip":
+      return decodeSipFromBytes(bytes);
+    case "smpp":
+      return decodeSmppFromBytes(bytes);
+    case "soulseek":
+      return decodeSoulseekFromBytes(bytes);
+    case "bittorrent":
+      return decodeBittorrentFromBytes(bytes);
+    case "kerberos":
+      return decodeKerberosFromBytes(bytes);
+    case "plaintext":
+      return decodePlainTextFromBytes(bytes);
+    case "jpeg":
+      return decodeJpegFromBytes(bytes);
+    case "png":
+      return decodePngFromBytes(bytes);
+    case "gif":
+      return decodeGifFromBytes(bytes);
+    case "webp":
+      return decodeWebpFromBytes(bytes);
+    default:
+      return null;
+  }
+}
+
+// Renders one decode block in the stacked stream view. Mirrors the structure
+// of the single-blob renderProtoDecoderOutput table but does NOT write to the
+// shared dataset.decodedResult (which is reserved for the "active" result).
+function appendStreamPacketBlock(protoOutput, blockEl, result, selectedProtocol, protocol, blockLabel) {
+  if (!protoOutput || !blockEl) return;
+  if (!result) {
+    const span = document.createElement("div");
+    span.className = "data-tools-proto-none data-tools-proto-stream-empty";
+    span.textContent = selectedProtocol === "auto"
+      ? "No known protocol detected"
+      : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
+    blockEl.appendChild(span);
+    if (blockLabel) {
+      const note = document.createElement("div");
+      note.className = "data-tools-proto-stream-block-note";
+      note.textContent = blockLabel;
+      blockEl.appendChild(note);
+    }
+    protoOutput.appendChild(blockEl);
+    return;
+  }
+
+  if (result.imageDataUrl) {
+    registerDecodedImage(result);
+    const img = document.createElement("img");
+    img.src = result.imageDataUrl;
+    img.style.maxWidth = "100%";
+    img.style.maxHeight = "300px";
+    img.style.objectFit = "contain";
+    img.style.display = "block";
+    img.style.margin = "0 auto 12px auto";
+    blockEl.appendChild(img);
+  } else if (result.treeData) {
+    // For structured results (JSON/XML/YAML/HTML) we delegate to the shared
+    // tree renderer but into our block element rather than the panel root.
+    const treeHost = document.createElement("div");
+    treeHost.className = "data-tools-proto-stream-tree";
+    blockEl.appendChild(treeHost);
+    if (!renderStructuredDecoderTree(treeHost, result)) {
+      treeHost.remove();
+    }
+  } else if (Array.isArray(result.fields) && result.fields.length) {
+    const table = document.createElement("table");
+    table.className = "data-tools-proto-table";
+    const headerRow = document.createElement("tr");
+    const th1 = document.createElement("th");
+    th1.textContent = `${result.protocol} Field`;
+    const th2 = document.createElement("th");
+    th2.textContent = "Value";
+    headerRow.appendChild(th1);
+    headerRow.appendChild(th2);
+    table.appendChild(headerRow);
+    result.fields.forEach((field) => {
+      const tr = document.createElement("tr");
+      const tdName = document.createElement("td");
+      tdName.textContent = field.name;
+      const tdVal = document.createElement("td");
+      tdVal.textContent = field.value;
+      tr.appendChild(tdName);
+      tr.appendChild(tdVal);
+      table.appendChild(tr);
+    });
+    blockEl.appendChild(table);
+  }
+  if (blockLabel) {
+    const note = document.createElement("div");
+    note.className = "data-tools-proto-stream-block-note";
+    note.textContent = blockLabel;
+    blockEl.appendChild(note);
+  }
+  protoOutput.appendChild(blockEl);
+}
+
+// Decodes a stream's per-packet byte slices and renders the results as a
+// vertical stack (newest packet at the top, oldest at the bottom) in the
+// Decodes subtab. The first packet to decode successfully is also exposed
+// via activeDataToolsProtoResult / protoOutput.dataset.decodedResult so the
+// existing "get active decoder result" helpers still work.
+function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
+  const protoOutput = document.getElementById("data-tools-proto-output");
+  if (!protoOutput) return;
+  const packets = Array.isArray(streamPackets) ? streamPackets : [];
+  if (!packets.length) {
+    activeDataToolsProtoResult = null;
+    protoOutput.innerHTML = "";
+    delete protoOutput.dataset.decodedResult;
+    const span = document.createElement("span");
+    span.className = "data-tools-proto-none";
+    span.textContent = "Stream has no payload data to decode.";
+    protoOutput.appendChild(span);
+    return;
+  }
+
+  const selectEl = document.getElementById("data-tools-proto-select");
+  const selectedProtocol = selectEl ? selectEl.value : "auto";
+  // For stacked rendering we need a stable protocol for every packet. If
+  // the dropdown is on "auto" we try the hint on the first packet and fall
+  // back to per-packet auto-detection. Once chosen we keep that protocol
+  // across all packets so the panel shows homogeneous results.
+  const contextPacket = _getCurrentContextPacket() || null;
+  let resolvedProtocol = selectedProtocol;
+  if (resolvedProtocol === "auto") {
+    const firstPacketInfo = packets[0]?.info || null;
+    const hintPacket = contextPacket || (firstPacketInfo && firstPacketInfo.packet) || null;
+    const { protocolHint, portHint } = getPacketProtocolDecoderHint(hintPacket);
+    const firstBytes = packets[0].bytes;
+    const firstDetected = autoDetectProtoFromBytes(firstBytes, {
+      protocolHint,
+      portHint,
+    });
+    resolvedProtocol = firstDetected || "auto";
+    if (selectEl && resolvedProtocol && selectEl.value !== resolvedProtocol && resolvedProtocol !== "auto") {
+      selectEl.value = resolvedProtocol;
+    }
+  }
+
+  // Render newest-first: walk the list in reverse so the most recent packet
+  // appears at the top of the panel. We capture the first non-null result
+  // (oldest in iteration order) for activeDataToolsProtoResult so the
+  // existing single-result export helpers keep working.
+  protoOutput.innerHTML = "";
+  delete protoOutput.dataset.decodedResult;
+  const summary = document.createElement("div");
+  summary.className = "data-tools-proto-stream-summary";
+  const protocolLabel = resolvedProtocol && resolvedProtocol !== "auto"
+    ? resolvedProtocol.toUpperCase()
+    : "AUTO";
+  summary.textContent = `Decoded ${packets.length} packet${packets.length === 1 ? "" : "s"} as ${protocolLabel} (newest first).`;
+  protoOutput.appendChild(summary);
+
+  let firstSuccessfulResult = null;
+  const totalCount = packets.length;
+  for (let reverseIndex = 0; reverseIndex < totalCount; reverseIndex += 1) {
+    const packetIndex = totalCount - 1 - reverseIndex;
+    const entry = packets[packetIndex] || {};
+    const bytes = entry.bytes;
+    const info = entry.info || {};
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) continue;
+    const result = resolvedProtocol && resolvedProtocol !== "auto"
+      ? decodeWithSelectedProtocol(bytes, resolvedProtocol)
+      : decodeWithSelectedProtocol(bytes, autoDetectProtoFromBytes(bytes));
+    if (!firstSuccessfulResult) firstSuccessfulResult = result;
+    const block = document.createElement("div");
+    block.className = "data-tools-proto-stream-block";
+    const header = document.createElement("div");
+    header.className = "data-tools-proto-stream-header";
+    const headerText = info.packetIndex !== undefined && info.packetIndex !== null
+      ? `Packet ${info.packetIndex} of ${totalCount}`
+      : `Packet ${packetIndex + 1} of ${totalCount}`;
+    header.textContent = `${headerText} (${bytes.length} byte${bytes.length === 1 ? "" : "s"})`;
+    block.appendChild(header);
+    const blockLabel = info.sourceKey ? `Source: ${info.sourceKey}` : null;
+    appendStreamPacketBlock(protoOutput, block, result, selectedProtocol, resolvedProtocol, blockLabel);
+  }
+
+  if (firstSuccessfulResult) {
+    activeDataToolsProtoResult = firstSuccessfulResult;
+    protoOutput.dataset.decodedResult = JSON.stringify({
+      protocol: firstSuccessfulResult.protocol,
+      fields: Array.isArray(firstSuccessfulResult.fields)
+        ? firstSuccessfulResult.fields
+        : [],
+    });
+  } else {
+    activeDataToolsProtoResult = null;
+  }
+
+  if (options && options.requestSummary && activeConvSubtab === CONV_DECODES_SUBTAB) {
+    requestDataToolsBackgroundSummary(CONV_DECODES_SUBTAB);
+  }
+}
+
 // Runs proto decoder.
 function runProtoDecoder(bytes) {
+  // When an entire stream has been loaded into the Decodes subtab we render
+  // each packet's bytes as a separate stacked block (newest first) instead
+  // of decoding the concatenated stream as a single blob. This makes the
+  // panel behave the way an analyst expects: each row corresponds to a
+  // captured packet rather than a single arbitrary parse of the merged
+  // byte stream.
+  if (Array.isArray(dataToolsStreamPackets) && dataToolsStreamPackets.length > 0) {
+    runProtoDecoderForStreamPackets(dataToolsStreamPackets, { requestSummary: true });
+    return;
+  }
   const selectEl = document.getElementById("data-tools-proto-select");
   const selectedProtocol = selectEl ? selectEl.value : "auto";
   let protocol = selectedProtocol;
@@ -859,7 +1158,6 @@ function runProtoDecoder(bytes) {
       selectEl.value = protocol;
     }
   }
-  let result = null;
   const actualImageType = getImageTypeFromExifReader(bytes);
   const isImageProtocolSelected = ["jpeg", "png", "gif", "webp"].includes(protocol);
   // If the user explicitly selected an image decoder and the bytes are not
@@ -869,95 +1167,9 @@ function runProtoDecoder(bytes) {
     renderProtoDecoderOutput(null, selectedProtocol, protocol);
     return;
   }
-  switch (protocol) {
-    case "http":
-      result = decodeHttpFromBytes(bytes);
-      break;
-    case "telnet":
-      result = decodeTelnetFromBytes(bytes);
-      break;
-    case "ssh":
-      result = decodeSshFromBytes(bytes);
-      break;
-    case "pop3":
-      result = decodePop3FromBytes(bytes);
-      break;
-    case "imap":
-      result = decodeImapFromBytes(bytes);
-      break;
-    case "smtp":
-      result = decodeSmtpFromBytes(bytes);
-      break;
-    case "ftp":
-      result = decodeFtpFromBytes(bytes);
-      break;
-    case "ber":
-      result = decodeBerFromBytes(bytes);
-      break;
-    case "der":
-      result = decodeDerFromBytes(bytes);
-      break;
-    case "json":
-      result = decodeJsonFromBytes(bytes);
-      break;
-    case "xml":
-      result = decodeXmlFromBytes(bytes);
-      break;
-    case "html":
-      result = decodeHtmlFromBytes(bytes);
-      break;
-    case "yaml":
-      result = decodeYamlFromBytes(bytes);
-      break;
-    case "protobuf":
-      result = decodeProtobufFromBytes(bytes);
-      break;
-    case "msgpack":
-      result = decodeMessagePackFromBytes(bytes);
-      break;
-    case "bson":
-      result = decodeBsonFromBytes(bytes);
-      break;
-    case "ldap":
-      result = decodeLdapFromBytes(bytes);
-      break;
-    case "smb":
-      result = decodeSmbFromBytes(bytes);
-      break;
-    case "sip":
-      result = decodeSipFromBytes(bytes);
-      break;
-    case "smpp":
-      result = decodeSmppFromBytes(bytes);
-      break;
-    case "soulseek":
-      result = decodeSoulseekFromBytes(bytes);
-      break;
-    case "bittorrent":
-      result = decodeBittorrentFromBytes(bytes);
-      break;
-    case "kerberos":
-      result = decodeKerberosFromBytes(bytes);
-      break;
-    case "plaintext":
-      result = decodePlainTextFromBytes(bytes);
-      break;
-    case "jpeg":
-      result = decodeJpegFromBytes(bytes);
-      break;
-    case "png":
-      result = decodePngFromBytes(bytes);
-      break;
-    case "gif":
-      result = decodeGifFromBytes(bytes);
-      break;
-    case "webp":
-      result = decodeWebpFromBytes(bytes);
-      break;
-    default:
-      protocol = null;
-  }
-  renderProtoDecoderOutput(result, selectedProtocol, protocol);
+  const result = decodeWithSelectedProtocol(bytes, protocol);
+  const resolvedProtocol = result ? protocol : null;
+  renderProtoDecoderOutput(result, selectedProtocol, resolvedProtocol);
   if (activeConvSubtab === CONV_DECODES_SUBTAB) {
     requestDataToolsBackgroundSummary(CONV_DECODES_SUBTAB);
   }
@@ -970,6 +1182,9 @@ function clearProtoDecoderOutput() {
     protoOutput.innerHTML = "";
     delete protoOutput.dataset.decodedResult;
   }
+  // Clearing the output also drops the per-packet stream association so the
+  // next user-driven decode starts from a clean slate.
+  dataToolsStreamPackets = null;
 }
 
 // Registers a decoded image in the registry so it can be embedded in the
@@ -1159,8 +1374,13 @@ module.exports = {
   resetDataToolsOutputs,
   renderProtoDecoderOutput,
   runProtoDecoder,
+  runProtoDecoderForStreamPackets,
+  decodeWithSelectedProtocol,
   formatHexInputBytes,
   clearProtoDecoderOutput,
+  setDataToolsStreamPackets,
+  getDataToolsStreamPackets,
+  clearDataToolsStreamPackets,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
   crossReferenceCurrentHash,

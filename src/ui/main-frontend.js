@@ -263,7 +263,12 @@ const {
   decodeWebpFromBytes,
   renderProtoDecoderOutput,
   runProtoDecoder,
+  runProtoDecoderForStreamPackets,
+  decodeWithSelectedProtocol,
   clearProtoDecoderOutput,
+  setDataToolsStreamPackets,
+  getDataToolsStreamPackets,
+  clearDataToolsStreamPackets,
   EXIF_FILE_TYPE_TO_PROTO,
   getImageTypeFromExifReader,
   clearDataToolsSummary,
@@ -12811,6 +12816,7 @@ function updateDataToolsInputAfterSearchReplace(nextValue, selectionStart, selec
   inputEl.value = nextValue;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   if (
     Number.isInteger(selectionStart) &&
     Number.isInteger(selectionEnd) &&
@@ -13252,6 +13258,7 @@ async function runDataToolsConversion(options = {}) {
       } else {
         dataToolsOriginalInputBytes = null;
         dataToolsInputEditedFlag = false;
+        clearDataToolsStreamPackets();
       }
     }
     requestDataToolsBackgroundSummary(getActiveConvSubtab());
@@ -13930,6 +13937,7 @@ const cryptPanel = createCryptPanel({
       dataToolsContextPacket = null;
       dataToolsOriginalInputBytes = null;
       dataToolsInputEditedFlag = true;
+      clearDataToolsStreamPackets();
       inputEl.value = normalizedUtf8;
       formatEl.value = "ascii";
     }
@@ -15481,6 +15489,7 @@ function loadContextValueIntoDataTools(format) {
   const formatEl = document.getElementById("data-tools-format");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
@@ -15609,6 +15618,7 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   inputEl.value = cursorAsciiLoadData.value;
   formatEl.value = cursorAsciiLoadData.format;
   setDataToolsFileNameGuess("");
@@ -18879,6 +18889,44 @@ async function _doFollowStreamToConv(
   }
   dataToolsContextPacket = streamPackets[0] || null;
   const hydratedStreamPackets = await hydratePacketCollection(streamPackets);
+  // Capture per-packet byte slices BEFORE any decompression step. The
+  // per-packet decode state in data-tools-panel relies on the original
+  // packet bytes; after decompression the byte-to-packet relationship is
+  // lost, so we leave the stream state null in that case and let the
+  // single-blob decode path run instead.
+  if (!decompress) {
+    const streamPacketEntries = [];
+    for (let entryIndex = 0; entryIndex < hydratedStreamPackets.length; entryIndex += 1) {
+      const hydratedStreamPacket = hydratedStreamPackets[entryIndex];
+      if (!hydratedStreamPacket || typeof hydratedStreamPacket !== "object") {
+        continue;
+      }
+      const packetPayloadHex = getPacketPayloadHex(hydratedStreamPacket);
+      if (typeof packetPayloadHex !== "string" || !packetPayloadHex.trim()) {
+        continue;
+      }
+      const packetBytes = hexStringToUint8Array(packetPayloadHex);
+      if (!(packetBytes instanceof Uint8Array) || packetBytes.length === 0) {
+        continue;
+      }
+      const packetInfo = hydratedStreamPacket["packet.info"];
+      const packetSourceKey = typeof hydratedStreamPacket.__packetKey === "string"
+        ? hydratedStreamPacket.__packetKey
+        : "";
+      streamPacketEntries.push({
+        bytes: packetBytes,
+        info: {
+          packetIndex: Number.isFinite(Number(packetInfo?.index))
+            ? Number(packetInfo.index)
+            : null,
+          sourceKey: packetSourceKey,
+        },
+      });
+    }
+    setDataToolsStreamPackets(streamPacketEntries);
+  } else {
+    clearDataToolsStreamPackets();
+  }
   const combinedHex = await buildStreamHexAsync(hydratedStreamPackets);
   if (!combinedHex) {
     statusUpdate("Status: Stream packets have no payload data");
@@ -21690,6 +21738,7 @@ updateDataToolsConvertedOutputVisibility();
 document.getElementById("data-tools-input").addEventListener("input", () => {
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
   dataToolsHistorySelectEl.value = "";
   setDataToolsFileNameGuess("");
@@ -21705,6 +21754,7 @@ document.getElementById("data-tools-input").addEventListener("paste", () => {
   if (formatEl?.value !== "hex") return;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
   requestAnimationFrame(() => {
     normalizeDataToolsHexInputFormatting();
@@ -21871,6 +21921,7 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
   if (!selectedEntry) return;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
+  clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
   document.getElementById("data-tools-format").value = selectedEntry.format;
   document.getElementById("data-tools-input").value = selectedEntry.input;

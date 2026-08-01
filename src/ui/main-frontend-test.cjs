@@ -13281,6 +13281,99 @@ function bytesToHexLower(bytes) {
   ).join("");
 }
 
+function extractSmb2CreateFileName(createBody) {
+  if (!(createBody instanceof Uint8Array) || createBody.length < 56) return "";
+  const view = new DataView(createBody.buffer, createBody.byteOffset, createBody.byteLength);
+  const nameOffset = view.getUint32(40, true);
+  const nameLength = view.getUint16(48, true);
+  if (nameLength <= 0 || nameOffset + nameLength > createBody.length) return "";
+  return decodeSmbTextBytes(createBody.slice(nameOffset, nameOffset + nameLength), true);
+}
+
+function formatDceRpcUuid(uuidBytes) {
+  if (!(uuidBytes instanceof Uint8Array) || uuidBytes.length !== 16) return "";
+  const hex = bytesToHexLower(uuidBytes);
+  const swapPairs = (segment) =>
+    segment.match(/.{2}/g).reverse().join("");
+  const data1 = swapPairs(hex.slice(0, 8));
+  const data2 = swapPairs(hex.slice(8, 12));
+  const data3 = swapPairs(hex.slice(12, 16));
+  const data4 = hex.slice(16, 32);
+  return `${data1}-${data2}-${data3}-${data4.slice(0, 4)}-${data4.slice(4)}`;
+}
+
+const DCE_RPC_SERVICE_UUIDS = [
+  { uuid: "12345778-1234-abcd-ef00-0123456789ab", name: "lsass" },
+  { uuid: "12345778-1234-1234-1234-123456789012", name: "samr" },
+  { uuid: "12345778-1234-1234-1234-123456789013", name: "lsarpc" },
+  { uuid: "12345778-1234-1234-1234-123456789014", name: "netlogon" },
+  { uuid: "12345778-1234-1234-1234-123456789015", name: "svcctl" },
+  { uuid: "12345778-1234-1234-1234-123456789016", name: "spoolss" },
+  { uuid: "12345778-1234-1234-1234-123456789017", name: "drsuapi" },
+  { uuid: "12345778-1234-1234-1234-123456789018", name: "dfs" },
+  { uuid: "12345778-1234-1234-1234-12345678901a", name: "dssetup" },
+  { uuid: "12345778-1234-1234-1234-12345678901b", name: "dcerpc" },
+  { uuid: "6bffd098-a112-3610-9833-012c02573344", name: "dssetup" },
+  { uuid: "e3514235-4b06-11d1-ab04-00c04fc2dcd2", name: "drs" },
+  { uuid: "4f32a8b6-77b1-4aaf-ac95-90e52881a6b7", name: "drsuapi" },
+  { uuid: "8fb747b0-2d74-4b40-93a1-7bbd0cf03a6d", name: "lsarpc" },
+  { uuid: "367abb81-9844-35f1-ad32-98f038001003", name: "secure-channel" },
+  { uuid: "b45048b0-2d74-4b40-93a1-7bbd0cf03a6d", name: "netlogon" },
+];
+
+function lookupDceRpcService(uuid) {
+  if (typeof uuid !== "string") return null;
+  const lower = uuid.toLowerCase();
+  for (const entry of DCE_RPC_SERVICE_UUIDS) {
+    if (entry.uuid === lower) return entry.name;
+  }
+  return null;
+}
+
+function parseDceRpcBind(pduBody) {
+  if (!(pduBody instanceof Uint8Array) || pduBody.length < 16) return null;
+  const view = new DataView(pduBody.buffer, pduBody.byteOffset, pduBody.byteLength);
+  const versionMajor = pduBody[0];
+  const versionMinor = pduBody[1];
+  if (versionMajor !== 0x05 || versionMinor !== 0x00) return null;
+  const pduType = pduBody[2];
+  if (pduType !== 0x0b && pduType !== 0x0c) return null;
+  const fragLength = view.getUint16(8, true);
+  if (fragLength < 24 || fragLength > pduBody.length) return null;
+  let cursor = 16;
+  if (cursor + 13 > pduBody.length) return null;
+  cursor += 12;
+  const numContexts = pduBody[cursor];
+  cursor += 1 + 3;
+  for (let ctxIndex = 0; ctxIndex < numContexts && cursor + 20 <= pduBody.length; ctxIndex += 1) {
+    cursor += 4;
+    if (cursor + 20 > pduBody.length) return null;
+    const uuidBytes = pduBody.slice(cursor, cursor + 16);
+    cursor += 16;
+    const version = view.getUint32(cursor, true);
+    cursor += 4;
+    return {
+      type: pduType === 0x0b ? "BIND" : "BIND_ACK",
+      uuid: formatDceRpcUuid(uuidBytes),
+      version,
+    };
+  }
+  return null;
+}
+
+function findDceRpcBindInWriteBody(writeBody) {
+  if (!(writeBody instanceof Uint8Array) || writeBody.length < 24) return null;
+  const dataLength = new DataView(
+    writeBody.buffer,
+    writeBody.byteOffset,
+    writeBody.byteLength,
+  ).getUint32(6, true);
+  const dataStart = 10;
+  if (dataLength < 16 || dataStart + dataLength > writeBody.length) return null;
+  const dataSegment = writeBody.slice(dataStart, dataStart + dataLength);
+  return parseDceRpcBind(dataSegment);
+}
+
 function decodeSmbFromBytes(bytes) {
   const normalized = normalizeSmbDecoderBytes(bytes);
   if (!(normalized instanceof Uint8Array) || normalized.length < 8) return null;
@@ -13350,6 +13443,40 @@ function decodeSmbFromBytes(bytes) {
   if (!result) return null;
 
   const blob = normalized.slice(blobStart);
+
+  // Domain-controller analysis (SMB2): CREATE-on-named-pipe carries the pipe
+  // name in the request body; the first WRITE of DCE/RPC bytes carries the
+  // Bind PDU that names the interface (samr / lsarpc / netlogon / drsuapi).
+  if (
+    normalized[0] === 0xfe &&
+    normalized[1] === 0x53 &&
+    normalized[2] === 0x4d &&
+    normalized[3] === 0x42
+  ) {
+    const smb2CommandCode = view.getUint16(12, true);
+    if (smb2CommandCode === 0x0005 && blob.length >= 56) {
+      const pipeName = extractSmb2CreateFileName(blob);
+      if (pipeName) {
+        result.fields.push({ name: "Named Pipe", value: pipeName });
+      }
+    }
+    if (smb2CommandCode === 0x0009 && blob.length >= 16) {
+      const bindInfo = findDceRpcBindInWriteBody(blob);
+      if (bindInfo) {
+        result.fields.push({ name: "RPC Op", value: bindInfo.type });
+        result.fields.push({ name: "RPC Interface", value: bindInfo.uuid });
+        result.fields.push({
+          name: "RPC Version",
+          value: `0x${bindInfo.version.toString(16).padStart(8, "0")}`,
+        });
+        const service = lookupDceRpcService(bindInfo.uuid);
+        if (service) {
+          result.fields.push({ name: "RPC Service", value: service });
+        }
+      }
+    }
+  }
+
   const ntlmIndex = findBytesSubsequence(blob, new Uint8Array([0x4e, 0x54, 0x4c, 0x4d, 0x53, 0x53, 0x50, 0x00]));
   if (ntlmIndex === -1) return result;
   const ntlmBlob = blob.slice(ntlmIndex);
