@@ -2515,6 +2515,7 @@ const THEME_SERVER_ALLOW_INSECURE_TLS = true;
 const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
 const ALLOWED_THEME_PREVIEW_HOSTS = new Set();
 let cachedPurchasedThemeIds = new Set();
+let cachedThemeServerPaddleEnv = null; // "sandbox" | "production" | null
 let lastThemeLicenseCheckAtMs = 0;
 let themeRecacheTimer = null;
 let themeRecacheInFlight = false;
@@ -2833,7 +2834,25 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   }
   cachedPurchasedThemeIds = new Set(sanitizedOwned);
   lastThemeLicenseCheckAtMs = Date.now();
-  return { unlockedThemeIds: newlyUnlocked, purchased: sanitizedOwned };
+  // Capture the server's Paddle environment so the renderer can warn
+  // the user if the catalog is in sandbox mode. The server may signal
+  // sandbox via either ``paddleEnv: "sandbox"`` (preferred) or the
+  // legacy ``sandbox: true`` boolean.
+  const sandboxFlag = typeof payload?.sandbox === "boolean"
+    ? payload.sandbox
+    : null;
+  const paddleEnvFlag = typeof payload?.paddleEnv === "string" && payload.paddleEnv.trim()
+    ? payload.paddleEnv.trim().toLowerCase()
+    : null;
+  cachedThemeServerPaddleEnv = sandboxFlag === true || paddleEnvFlag === "sandbox"
+    ? "sandbox"
+    : (paddleEnvFlag || (sandboxFlag === false ? "production" : null));
+  return {
+    unlockedThemeIds: newlyUnlocked,
+    purchased: sanitizedOwned,
+    paddleEnv: cachedThemeServerPaddleEnv,
+    sandbox: cachedThemeServerPaddleEnv === "sandbox",
+  };
 }
 
 async function installThemeRecacheTimer() {
@@ -4387,7 +4406,24 @@ ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
         };
       })
       .filter(Boolean);
-    return { success: true, entries };
+    // Propagate the server's Paddle environment to the renderer so it
+    // can show a non-fatal warning when the catalog is in sandbox mode
+    // and purchases won't actually be charged. The server may signal
+    // sandbox via either ``paddleEnv: "sandbox"`` (preferred) or the
+    // legacy ``sandbox: true`` boolean.
+    const sandboxFlag = typeof catalog?.sandbox === "boolean"
+      ? catalog.sandbox
+      : null;
+    const paddleEnvFlag = typeof catalog?.paddleEnv === "string" && catalog.paddleEnv.trim()
+      ? catalog.paddleEnv.trim().toLowerCase()
+      : null;
+    const isSandboxCatalog = sandboxFlag === true || paddleEnvFlag === "sandbox";
+    return {
+      success: true,
+      paddleEnv: isSandboxCatalog ? "sandbox" : (paddleEnvFlag || (sandboxFlag === false ? "production" : null)),
+      sandbox: isSandboxCatalog,
+      entries,
+    };
   } catch (error) {
     const rawMessage = error?.message || String(error || "Unknown error");
     const causeCode = error?.cause?.code || error?.code || "";
