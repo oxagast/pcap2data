@@ -139,6 +139,13 @@ function runInFreshContext({ capturedPackets, stats, bookmarkList = [], extraCon
             bookmarkList: Array.isArray(bookmarkList) ? bookmarkList : [],
             buildCaptureStats,
             writeLogEntry: () => { },
+            // The Notes <-> Summary integration reads `notesList` directly
+            // out of the VM context. Older tests in this file don't
+            // exercise Notes, but they still call
+            // `getCurrentSummaryReportMarkdown` (transitively via
+            // `getSummaryMarkdownForExport`), so we provide an empty
+            // default to keep them working.
+            notesList: [],
         },
         extraContext,
     );

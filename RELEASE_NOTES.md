@@ -5,9 +5,11 @@
 
 ### ✨ Features
 - New Kerberos 5 (`krb5`) Conv decoder (`src/ui/decoders/conv/kerberos.js`): the Decodes sub-tab now exposes a "Kerberos (krb5)" entry that disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages and surfaces pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to the new decoder, and the inline decoder switch in `src/ui/main-frontend.js` + `src/ui/main-frontend-test.cjs` is updated to match.
+- Notes tab is now wired into the Summary tab: every note created on the Notes tab is automatically reflected on the Analysis/Summary tab under a clear "Inferred Data (from Notes)" heading, so the analyst never has to copy/paste observations between the two tabs. Each note carries a new "Mark as verified data (concrete)" checkbox in the Notes editor; toggling it moves the note to a separate "Verified Notes (from Notes)" heading on the Summary tab so concrete analyst-confirmed facts are visually distinct from inferred observations. The flag persists across session save/load.
 
 ### 🧪 Tests
 - New `tests/kerberos_conv_decoder.test.js` exercises wiring, registry, hints, and AS-REQ/AS-REP round-trips through both the data-tools panel and main-frontend inline paths using hand-built ASN.1 fixtures.
+- New `tests/notes_summary_integration.test.js` covers the inferred/verified routing (`isNoteConcrete`, `createNoteEntry` default + opt-in, `getNotesSummarySection` heading selection, mixed buckets, legacy fallback), `getCurrentSummaryReportMarkdown` ordering, and session save/load round-tripping the `concrete` flag.
 
 ---
 
