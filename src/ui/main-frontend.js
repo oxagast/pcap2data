@@ -12000,6 +12000,7 @@ function resetDataToolsOutputs() {
     "Shannon Entropy: 0.00 (Low)";
   resetHashOutputs();
   clearProtoDecoderOutput();
+  clearDataToolsStreamPackets();
   clearDataToolsSelectionState();
   setExpandedConvertedOutput(null);
   updateDataToolsConvertedOutputVisibility();
@@ -13592,6 +13593,7 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
   dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
@@ -13641,6 +13643,7 @@ function loadExtractionResultIntoHashesSubtab(bytes, fileNameHint) {
   }
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
@@ -15534,6 +15537,7 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = payloadBytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = payloadBytes;
   inputEl.value = formatHexInputBytesWithCap(payloadBytes);
   formatEl.value = "hex";
@@ -15567,6 +15571,7 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
   dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = decompressedCandidate.bytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = decompressedCandidate.bytes;
   inputEl.value = formatHexInputBytesWithCap(decompressedCandidate.bytes);
   formatEl.value = "hex";
@@ -17892,6 +17897,7 @@ function loadCarvedFileCandidateIntoConvTab(candidate) {
   dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = candidateBytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = candidateBytes;
   inputEl.value = formatHexInputBytesWithCap(candidateBytes);
   formatEl.value = "hex";
@@ -17970,6 +17976,7 @@ async function loadManualFileIntoConvTabFromContextMenu() {
     dataToolsContextPacket = null;
     dataToolsOriginalInputBytes = bytes;
     dataToolsInputEditedFlag = false;
+    clearDataToolsStreamPackets();
     dataToolsLastConversionBytes = bytes;
     inputEl.value = formatHexInputBytesWithCap(bytes);
     formatEl.value = "hex";
@@ -20626,6 +20633,7 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   dataToolsContextPacket = contextPacket;
   dataToolsOriginalInputBytes = httpBytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = httpBytes;
   inputEl.value = formatHexInputBytesWithCap(httpBytes);
   formatEl.value = "hex";
@@ -22248,6 +22256,7 @@ convertContextButtons.loadCarvableExtraction.addEventListener("click", async () 
   dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
@@ -22284,6 +22293,7 @@ convertContextButtons.loadCarvableDecoders.addEventListener("click", async () =>
   dataToolsContextPacket = null;
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";

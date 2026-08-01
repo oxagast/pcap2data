@@ -1182,9 +1182,13 @@ function clearProtoDecoderOutput() {
     protoOutput.innerHTML = "";
     delete protoOutput.dataset.decodedResult;
   }
-  // Clearing the output also drops the per-packet stream association so the
-  // next user-driven decode starts from a clean slate.
-  dataToolsStreamPackets = null;
+  // Note: we deliberately do NOT drop dataToolsStreamPackets here. This
+  // function is also invoked when the payload is large and we're sitting on
+  // a non-Decodes subtab — at that point the per-packet stream association
+  // must survive so the stacked render shows again when the user switches
+  // back to Decodes. Full-reset paths (resetDataToolsOutputs and the
+  // entry-point loaders in main-frontend.js) clear the stream state
+  // explicitly via clearDataToolsStreamPackets().
 }
 
 // Registers a decoded image in the registry so it can be embedded in the

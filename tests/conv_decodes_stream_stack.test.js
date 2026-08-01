@@ -254,4 +254,81 @@ describe("Conv Decodes panel exports the per-packet decode API", () => {
             expect(exportsBody).toContain(name);
         });
     });
+
+    test("clearProtoDecoderOutput does NOT clear stream state", () => {
+        // Decoupling: clearProtoDecoderOutput is also called when the
+        // payload is too large AND we're not on the Decodes subtab. In
+        // that path we want the visual output cleared but the per-packet
+        // stream state to survive so the stacked render shows again when
+        // the user switches back to Decodes. Full-reset paths clear the
+        // stream state explicitly via clearDataToolsStreamPackets().
+        const sourceText = fs.readFileSync(panelFile, "utf8");
+        // Locate the body of clearProtoDecoderOutput and assert it does
+        // not assign to dataToolsStreamPackets and does not invoke the
+        // explicit clearer. We strip line comments first so references
+        // inside comments don't trigger the assertion.
+        const fnMatch = sourceText.match(
+            /function clearProtoDecoderOutput\s*\([^)]*\)\s*\{([\s\S]*?)\n\}/,
+        );
+        expect(fnMatch).not.toBeNull();
+        const strippedBody = fnMatch[1].replace(/\/\/[^\n]*/g, "");
+        expect(strippedBody).not.toMatch(/dataToolsStreamPackets\s*=\s*null/);
+        expect(strippedBody).not.toMatch(/clearDataToolsStreamPackets\s*\(\s*\)/);
+    });
+});
+
+describe("Conv file-load entry points clear stream state", () => {
+    const projectRoot = path.resolve(__dirname, "..");
+    const mainFile = path.join(projectRoot, "src/ui/main-frontend.js");
+
+    // Each of these functions loads fresh, non-stream bytes into the Conv
+    // panel. If they did NOT clear dataToolsStreamPackets, a previously
+    // loaded stream would leak into a subsequent single-blob decode (e.g.
+    // a JPEG) and runProtoDecoder would route those bytes through the
+    // per-packet stream path instead of the single-blob decoder.
+    const entryPoints = [
+        "loadExtractionResultIntoConv",
+        "loadExtractionResultIntoHashesSubtab",
+        "loadCarvedFileCandidateIntoConvTab",
+        "loadRawPayloadIntoDataToolsFromContextMenu",
+        "loadActiveConvInputDecompressedFromContextMenu",
+        "loadHttpBodyIntoConvTabFromContextMenuImpl",
+        "loadManualFileIntoConvTabFromContextMenu",
+        "resetDataToolsOutputs",
+    ];
+
+    test.each(entryPoints)(
+        "%s clears the per-packet stream state",
+        (functionName) => {
+            const sourceText = fs.readFileSync(mainFile, "utf8");
+            // Find the function/method body. We accept both `function NAME(` and
+            // `NAME: function` shapes so future refactors don't surprise us.
+            const functionRegex = new RegExp(
+                `(?:function\\s+${functionName}|${functionName}\\s*:\\s*function)\\s*\\(`,
+            );
+            const match = sourceText.match(functionRegex);
+            expect(match).not.toBeNull();
+            const startIndex = match.index;
+            // Walk forward tracking brace depth to find the end of the body.
+            let depth = 0;
+            let cursor = startIndex;
+            let sawOpenBrace = false;
+            while (cursor < sourceText.length) {
+                const char = sourceText[cursor];
+                if (char === "{") {
+                    depth += 1;
+                    sawOpenBrace = true;
+                }
+                if (char === "}") {
+                    depth -= 1;
+                    if (sawOpenBrace && depth === 0) {
+                        break;
+                    }
+                }
+                cursor += 1;
+            }
+            const body = sourceText.slice(startIndex, cursor + 1);
+            expect(body).toMatch(/clearDataToolsStreamPackets\s*\(\s*\)/);
+        },
+    );
 });
