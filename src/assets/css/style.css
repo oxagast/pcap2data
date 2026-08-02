@@ -1138,6 +1138,7 @@ strong {
 #saved-filter-label-description,
 #follow-stream-confirm-description,
 #manual-conv-import-warning-description,
+#settings-reset-confirm-description,
 #plugin-install-capability-dialog-description,
 #session-delete-dialog-description {
   font-size: 12px;
@@ -1154,6 +1155,7 @@ strong {
 #saved-filter-label-dialog,
 #follow-stream-confirm-dialog,
 #manual-conv-import-warning-dialog,
+#settings-reset-confirm-dialog,
 #plugin-install-capability-dialog,
 #session-delete-dialog,
 #info-message-dialog {
@@ -1175,6 +1177,7 @@ strong {
 #saved-filter-label-dialog[hidden],
 #follow-stream-confirm-dialog[hidden],
 #manual-conv-import-warning-dialog[hidden],
+#settings-reset-confirm-dialog[hidden],
 #plugin-install-capability-dialog[hidden],
 #session-delete-dialog[hidden],
 #info-message-dialog[hidden] {
