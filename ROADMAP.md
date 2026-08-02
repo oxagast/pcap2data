@@ -1,0 +1,1355 @@
+# PacketSnitch Roadmap & Implementation Tracker
+
+> **A rolling, living document.** This file merges the historical `ideas.txt`
+> backlog with the `RELEASE_NOTES.md` history. Each item has a status, a
+> current-state description, and an estimate of remaining work. Update this
+> file as features are added, scoped down, or retired so the next person
+> (or future us) can pick up where the last one left off.
+
+---
+
+## Release velocity (how fast this project actually ships)
+
+The day-counts in this file are **calibrated to PacketSnitch's actual
+release cadence**, not generic estimates. From v0.9.130alpha on
+2026-03-24 through v2.4.2169 on 2026-07-27 (29 tagged releases in 125
+days):
+
+- **Average:** 1 release every **~4.3 days** (rolling 30-day average
+  during active development is closer to **1 every 1–3 days**).
+- **Largest gap:** ~10 days, only when crossing a major version
+  boundary (1.0 → 1.5 was the longest at 58 days; 1.5 → 2.0 was 13).
+- **Per-release footprint:** most releases bundle 5–25 bullet-level
+  changes, often spanning frontend, backend, tests, docs, and
+  installers in a single cut.
+
+**Calibration rule** (used to scale the original backlog estimates):
+
+| Original complexity | Original est. | This project's reality |
+| --- | --- | --- |
+| Low | 1–4 days | **0.5–1 day** (frequently ship in a single release) |
+| Medium | 3–8 days | **1–2 days** (1–2 releases) |
+| High | 6–12 days | **2–4 days** (1–2 weeks, 2–4 releases) |
+| Very High | 18–40 days | **1–2 weeks** (5–10 releases) |
+
+In other words: if `ideas.txt` said "10 days", on this project it's
+realistically closer to **3–4 days**, often broken into a couple of
+shippable slices. The "Est. remaining" numbers in this file already
+apply that calibration — when you pick up an item, expect to land it
+in days, not weeks.
+
+---
+
+## Status legend
+
+| Symbol | Meaning |
+| --- | --- |
+| ✅ | Shipped (in a tagged release) |
+| 🟡 | Partially implemented (some sub-bullets shipped, others still TODO) |
+| 🚧 | In progress (work started in `Unreleased` / current branch) |
+| 📋 | Planned (not yet started) |
+| 🗄️ | Deferred / parked (decided not to do, or punted to a much later release) |
+| ❌ | Withdrawn (no longer relevant) |
+
+> **Priority scale** (P0 highest, P3 lowest) and **Complexity** (Low / Medium /
+> High / Very High) are kept from the original backlog so we don't lose the
+> signal.
+
+---
+
+## Table of contents
+
+- [High priority features](#high-priority-features)
+- [Release 0.9.0 — Quick wins](#release-090--quick-wins)
+- [Release 0.10.0 — Analyst depth](#release-0100--analyst-depth)
+- [Release 0.11.0 — Advanced forensics](#release-0110--advanced-forensics)
+- [Detection & analysis](#detection--analysis)
+- [Visualization & investigation](#visualization--investigation)
+- [Protocol support](#protocol-support)
+- [AI features](#ai-features)
+- [Long-term (1.0+)](#long-term-10)
+- [Future / advanced ideas](#future--advanced-ideas)
+- [Suggested execution order](#suggested-execution-order)
+- [Backend optimizations](#backend-optimizations)
+- [Recently shipped (release history mirror)](#recently-shipped-release-history-mirror)
+
+---
+
+## High priority features
+
+### Session / Conversation Reconstruction
+
+> **Status:** 🟡 Partial — TCP/UDP stream reassembly, HTTP follow, FTP/SIP
+> decoders, SMB follow-stream, and an in-app follow-stream UI exist. SMTP
+> session view, FTP transfer reconstruction, and the unified HTTP *session*
+> view (vs. one-shot body extraction) still need work.
+
+- [🟡] Reassemble complete TCP/UDP conversations — **shipped** via the
+  backend HTTP service and the Conv tab's stream stack.
+- [🟡] Display client/server request-response chains — basic chain view
+  exists in the List/Stats tabs; a dedicated "Request → Response" tree per
+  conversation is still TODO.
+- [🟡] HTTP session view — body extraction ships; full session log (one
+  row per request) is partial.
+- [📋] SMTP session view
+- [📋] FTP transfer reconstruction (control channel parsing ships in
+  decoder, but no "rebuild the file" view yet)
+- [🟡] SMB file activity tracking — SMB Conv decoder + follow-stream
+  shipped in 2.4.2169. Activity timeline across the capture still TODO.
+
+### IOC / Threat Detection Engine
+
+> **Status:** 🟡 Partial — VirusTotal lookup ships under Conv → Threat
+> Intel. Bulk threat intel feeds, custom rules, and malware behavior
+> detection are still TODO.
+
+- [🟡] Detect known malicious IPs — VirusTotal IP lookup ships.
+- [🟡] Detect known malicious domains — VirusTotal domain lookup ships.
+- [📋] Detect suspicious user agents
+- [📋] Detect common malware behaviors
+- [📋] Custom IOC rule support
+- [📋] Import threat intelligence feeds (MISP, STIX, custom CSV)
+
+### PCAP Diff Mode
+
+> **Status:** 📋 Planned — nothing shipped.
+
+- [ ] Compare two captures
+- [ ] New hosts detected
+- [ ] Missing hosts
+- [ ] New protocols
+- [ ] New ports
+- [ ] Traffic volume changes
+- [ ] Timeline comparison
+
+### Artifact Extraction Framework
+
+> **Status:** 🟡 Partial — HTTP object extraction, file carving, and
+> carvable-files context menu ship (see 2.4.2115 / 2.4.2169). Other
+> artifact types and the unified "extract all" workflow are still TODO.
+
+- [🟡] Extract executables — carving ships for generic PE; explicit
+  "extract all PEs" pass still TODO.
+- [🟡] Extract PDFs — carving detects PDF magic; explicit extraction pass
+  still TODO.
+- [📋] Extract Office documents
+- [📋] Extract ZIP archives
+- [🟡] Extract images — JPEG/XML/JSON/YAML/HTML auto-extension hinting
+  ships in 2.4.2115.
+- [📋] Extract scripts
+- [🟡] Hash all extracted artifacts — MD5/SHA-1/SHA-256/384/512 + SHA3,
+  RIPEMD-160, Whirlpool hash outputs ship in the Conv tab.
+- [📋] Export artifacts to disk (bulk)
+
+### Network Graph Visualization
+
+> **Status:** 🟡 Partial — Heatmap view (with the worldmap) and an in-app
+  map projection ship. The *graph* view (host nodes, edge weights) is
+  still TODO.
+
+- [📋] Host-to-host relationship graph
+- [📋] Protocol-based graph coloring
+- [📋] Traffic volume weighting
+- [📋] Interactive exploration
+- [📋] Community clustering
+- [📋] Attack path visualization
+
+---
+
+## Release 0.9.0 — Quick wins
+
+### Saved Filter Library
+
+> **Status:** 🟡 Partial — filter history dropdown, label persistence, and
+> named filters ship (see 1.9.1442 + 2.4.2115). Categories/tags and
+> export/import of filter sets are still TODO.
+
+- [✅] Named filters
+- [🟡] Filter categories/tags — labels persist; free-form tag taxonomy
+  still TODO.
+- [🟡] Quick filter selection — history dropdown ships.
+- [📋] Share/export filter sets
+- **Priority:** P0 · **Complexity:** Low · **Est. remaining:** 0.5–1 day
+
+### Rule-Based Highlights
+
+> **Status:** 📋 Planned — nothing shipped yet.
+
+- [ ] Color rows based on filter matches
+- [ ] Highlight hosts
+- [ ] Highlight packets
+- [ ] Highlight conversations
+- [ ] Severity coloring
+- **Priority:** P0 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+### Packet Pinboard
+
+> **Status:** 🟡 Partial — bookmark column on packet list, host bookmarks,
+> session-level keychain, and packet-side bookmarking ship. A dedicated
+> "pinboard" workspace UI is still TODO.
+
+- [📋] Collect suspicious packets
+- [📋] Investigation workspace
+- [🟡] Bookmark packet evidence — packet-level bookmarks ship.
+- [🟡] Quick navigation — Prev/Next, host-targeted filter, and bookmark
+  dropdown ship.
+- **Priority:** P1 · **Complexity:** Low · **Est. remaining:** 0.5 day
+
+### IOC Extraction Panel
+
+> **Status:** 🟡 Partial — Stats panel lists IPs, domains, ports, hosts,
+> and credentials. A dedicated "IOCs" panel with deduplication and copy
+> actions is still TODO.
+
+- [🟡] Extract IP addresses — listed in Stats.
+- [🟡] Extract domains — DNS qname aggregation ships in Stats.
+- [🟡] Extract URLs — HTTP decoder harvests URLs.
+- [🟡] Extract hashes — Conv tab hash outputs cover MD5/SHA family, etc.
+- [🟡] Extract email addresses — partial (SMTP decoder captures them; no
+  dedicated list yet).
+- [📋] IOC deduplication
+- **Priority:** P0 · **Complexity:** Medium · **Est. remaining:** 1–2 days
+
+### One-Click IOC Export
+
+> **Status:** 🟡 Partial — "Save session JSON" ships; dedicated IOC
+> export (CSV/JSON) is still TODO.
+
+- [🟡] CSV export — covered indirectly via "Save JSON" + manual
+  conversion.
+- [🟡] JSON export — "Save JSON" ships.
+- [📋] Selective export (per IOC type / per host)
+- **Priority:** P0 · **Complexity:** Low · **Est. remaining:** 0.5 day
+
+### Report Templates
+
+> **Status:** 🟡 Partial — Summary/Analysis tab with LLM distillation and
+> markdown export ships. Named report templates and per-template export
+> are still TODO.
+
+- [📋] Incident response summary template
+- [📋] Triage report template
+- [🟡] Executive report — Summary tab with markdown export ships.
+- [📋] Exportable templates (HTML / PDF)
+- **Priority:** P1 · **Complexity:** Low · **Est. remaining:** 1 day
+
+---
+
+## Release 0.10.0 — Analyst depth
+
+### Diff Two Packets
+
+> **Status:** 📋 Planned.
+
+- [ ] Field-by-field comparison
+- [ ] Highlight changed values
+- [ ] Side-by-side view
+- **Priority:** P0 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Filter Builder UI
+
+> **Status:** 🟡 Partial — filter syntax validation, syntax highlighting,
+> history dropdown, and parens/`!`/`&&`/`||` support ship. A true visual
+> builder is still TODO.
+
+- [🟡] Visual query builder — covered by syntax highlighting + history.
+- [🟡] Boolean groups — `&&` / `||` / parens ship.
+- [🟡] Nested conditions — covered by parens grouping.
+- [🟡] Live query preview — filter status updates and result count ship.
+- [📋] Drag-and-drop condition chips
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 1–2 days
+
+### DNS Threat Lens
+
+> **Status:** 🟡 Partial — DNS decoder + Stats panel aggregation ship.
+> DGA / entropy / rare-TLD heuristics are still TODO.
+
+- [📋] Entropy outliers
+- [📋] Rare TLD detection
+- [📋] NXDOMAIN spikes
+- [📋] Suspicious DNS activity summary view
+- **Priority:** P0 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Protocol Anomaly Heuristics
+
+> **Status:** 🟡 Partial — TCP retransmission / out-of-order detection
+> ships. Generic anomaly scoring does not.
+
+- [📋] Session suspicion scoring
+- [📋] Packet suspicion scoring
+- [📋] Protocol misuse detection
+- [📋] Behavioral anomalies
+- **Priority:** P0 · **Complexity:** Medium · **Est. dev time:** 2–3 days
+
+### Batch Analysis
+
+> **Status:** 📋 Planned.
+
+- [ ] Multi-PCAP ingest
+- [ ] Consolidated summaries
+- [ ] Cross-capture analysis
+- [ ] Batch reporting
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Case Workspace
+
+> **Status:** 🟡 Partial — Notes tab + Session save/load + Notes →
+> Summary integration ship. A unified "Case" entity that ties packets,
+> IOCs, sessions, and reports is still TODO.
+
+- [🟡] Notes linked to packets — Notes tab ships; packet-anchored
+  references still TODO.
+- [🟡] Notes linked to IOCs — manual via copy/paste; structured link
+  still TODO.
+- [🟡] Investigation organization — session save/load covers most of it.
+- [✅] Session persistence — `.psb` (gzipped BSON) is the default session
+  format.
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 1–2 days
+
+---
+
+## Release 0.11.0 — Advanced forensics
+
+### Expert Events Feed
+
+> **Status:** 📋 Planned.
+
+- [ ] Anomaly event stream
+- [ ] Severity ratings
+- [ ] Event categorization
+- [ ] Timeline integration
+- **Priority:** P0 · **Complexity:** High · **Est. dev time:** 2–4 days
+
+### TLS Fingerprinting
+
+> **Status:** 🟡 Partial — TLS handshake decoding ships (HTTPS service
+> detection + SNI). JA3 / JA4 fingerprint generation is still TODO.
+
+- [🟡] JA3 fingerprints — handshake info is decoded; JA3 hash still TODO.
+- [🟡] JA4 fingerprints — same.
+- [🟡] Client identification — covered by User-Agent + SNI heuristics.
+- [📋] TLS anomaly detection
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 1 day
+
+### Stream Reassembly
+
+> **Status:** 🟡 Partial — TCP stream stack + Conv follow-stream ship
+> (see 2.4.2169). Missing-packet handling and ordered stream view are
+> still partial.
+
+- [🟡] TCP payload reconstruction — ships via the stream stack.
+- [🟡] Ordered stream view — pagination + "load more" ship.
+- [🟡] Missing packet handling — out-of-order / retransmission keys ship
+> (see 1.7.935); explicit "show gaps" UI is still TODO.
+- [✅] Protocol reconstruction foundation — used by HTTP, FTP, SIP, SMB
+> decoders.
+- **Priority:** P0 · **Complexity:** High · **Est. remaining:** 2–4 days
+
+### HTTP Object Extraction
+
+> **Status:** 🟡 Partial — body extraction + decompression-aware context
+> menu ship. A unified "objects" view is still TODO.
+
+- [🟡] Extract downloaded files — body copy + carve + file context menu
+  ship.
+- [🟡] Extract HTTP responses — same.
+- [🟡] File carving — carvable-files list ships (2.4.2115).
+- [🟡] Metadata extraction — MIME + chardet + data type guessing ship.
+- [📋] "All HTTP objects" panel
+- **Priority:** P0 · **Complexity:** High · **Est. remaining:** 2–4 days
+
+### Timeline View
+
+> **Status:** 📋 Planned — there is a heatmap/worldmap but not a packet
+> timeline view.
+
+- [ ] Zoomable timeline
+- [ ] Host activity timeline
+- [ ] Event overlays
+- [ ] Protocol filtering
+- **Priority:** P1 · **Complexity:** High · **Est. dev time:** 2–4 days
+
+### Conversation Graph
+
+> **Status:** 📋 Planned.
+
+- [ ] Interactive host graph
+- [ ] Service relationships
+- [ ] Communication mapping
+- [ ] Traffic weighting
+- **Priority:** P2 · **Complexity:** High · **Est. dev time:** 2–4 days
+
+---
+
+## Detection & analysis
+
+### Beacon Detection
+
+> **Status:** 📋 Planned.
+
+- [ ] Periodic communication detection
+- [ ] Low-and-slow beacon identification
+- [ ] Jitter analysis
+- [ ] C2 behavior scoring
+
+### Suspicious Entropy Dashboard
+
+> **Status:** 🟡 Partial — entropy readout in the data tools/Conv tab
+> ships. A ranked dashboard is still TODO.
+
+- [📋] Highest entropy hosts
+- [📋] Highest entropy conversations
+- [🟡] Encrypted payload detection — entropy box ships in info panel.
+- [📋] Potential covert channels
+
+### Credential Exposure Report
+
+> **Status:** 🟡 Partial — auto-detection for HTTP, SMTP, POP3, IMAP,
+> Telnet, FTP, SSH ships (see 1.4.508 + 1.7.935). A consolidated
+> "Credential Exposure Report" is still TODO.
+
+- [🟡] Basic auth detection — keystore autoadd ships.
+- [🟡] FTP credential detection — keystore autoadd ships.
+- [🟡] Telnet credential detection — keystore autoadd ships.
+- [🟡] SMTP authentication detection — keystore autoadd ships.
+- [📋] Password reuse identification
+- [📋] Consolidated report
+
+### DNS Intelligence
+
+> **Status:** 🟡 Partial — DNS decoder, qname aggregation, NXDOMAIN
+> signals all reachable. DGA / fast-flux / NRD / tunneling detectors
+> are still TODO.
+
+- [📋] DGA detection
+- [📋] Newly registered domains
+- [🟡] NXDOMAIN analysis — visible in Stats; no spike detection.
+- [📋] Fast-flux detection
+- [📋] DNS tunneling detection
+
+### Secret Detection
+
+> **Status:** 🟡 Partial — keystore autoadd harvests HTTP/SMTP/IMAP/POP3/
+> Telnet/SSH/FTP creds. Generic regex-based secret scanners are still
+> TODO.
+
+- [🟡] HTTP basic auth + cookies — covered.
+- [📋] AWS keys
+- [📋] Azure keys
+- [📋] GCP credentials
+- [📋] JWT tokens (heuristic detection; the *decoder* ships in Conv)
+- [📋] API keys
+- [📋] OAuth tokens
+- [📋] Private keys
+- [📋] Discord tokens
+- [📋] GitHub tokens
+
+### YARA Integration
+
+> **Status:** 📋 Planned.
+
+- [ ] Scan extracted artifacts
+- [ ] Scan payloads
+- [ ] Custom rule support
+- [ ] Rule hit reporting
+
+---
+
+## Visualization & investigation
+
+### Packet Relationship View
+
+> **Status:** 🟡 Partial — host-targeted filter, Prev/Next, and stream
+> grouping ship. A visual flow map is still TODO.
+
+- [🟡] Show linked packets — stream filter ships.
+- [🟡] Follow packet chains — Conv follow-stream ships.
+- [🟡] Track protocol transitions — `tcp.proto` vs `udp.proto` vs
+  `app.proto` keys ship.
+- [📋] Visual flow mapping
+
+### Packet Tagging System
+
+> **Status:** 📋 Planned.
+
+- [ ] User-defined tags
+- [ ] Color coding
+- [ ] Investigation notes (separate from the Notes tab)
+- [ ] Tag-based filtering
+
+### Saved Investigations
+
+> **Status:** 🟡 Partial — session save/load + Notes tab cover most of
+> this. A first-class "Investigation" entity with cases, evidence, and
+> per-investigator state is still TODO.
+
+- [🟡] Case management — session save/load ships.
+- [🟡] Investigator notes — Notes tab ships.
+- [🟡] Bookmarks — packet + host + keychain ships.
+- [🟡] Evidence tracking — session save includes carves + keystore.
+- [🟡] Export reports — Summary export + LLM distillation ships.
+- [📋] Per-investigator audit trail
+
+---
+
+## Protocol support
+
+### QUIC Support
+
+> **Status:** 📋 Planned.
+
+- [ ] Stream analysis
+- [ ] Metadata extraction
+- [ ] Session reconstruction
+
+### WebSocket Support
+
+> **Status:** 📋 Planned.
+
+- [ ] Message reconstruction
+- [ ] Frame analysis
+- [ ] Payload decoding
+
+### gRPC Support
+
+> **Status:** 📋 Planned.
+
+- [ ] Service identification
+- [ ] Method extraction
+- [ ] Message decoding
+
+### WireGuard Support
+
+> **Status:** 📋 Planned.
+
+- [ ] Handshake detection
+- [ ] Peer identification
+- [ ] Tunnel statistics
+
+> Already shipped as backend decoders (since 1.x): HTTP/2, SIP, FTP,
+> SMTP, POP3, IMAP, Telnet, IRC, MTP, LDAP, MySQL, PostgreSQL, XMPP,
+> SMB, MQTT, RTSP, TFTP, BGP, NNTP, RADIUS, SNMP, ICMP, DHCP, NTP,
+> Kerberos 5, Soulseek, BitTorrent, SMPP, SIGTRAN, IGMP, LLDP, PPP,
+> PPPoE, Brotli detection, HTTP decompression.
+
+---
+
+## AI features
+
+### Ask The Capture
+
+> **Status:** 🟡 Partial — the LLM is in the frontend (Ollama, default
+> model `qwen2.5-coder:7b`), with per-stream and per-distill prompts.
+> A free-form natural-language "ask the capture" UI is still TODO.
+
+- [📋] Natural language querying
+- [🟡] Host summaries — LLM distillation on the Summary tab.
+- [📋] Threat hunting assistance
+- [📋] Investigation recommendations
+- [📋] Automatic anomaly explanation
+
+### AI Investigation Assistant
+
+> **Status:** 🟡 Partial — Summary distillation ships.
+
+- [🟡] Generate findings — distilled summary ships.
+- [📋] Create executive summaries (separate template)
+- [🟡] Recommend next steps — partially via distillation prompt.
+- [📋] Highlight unusual behavior (anomaly-driven, not just LLM-driven)
+
+---
+
+## Long-term (1.0+)
+
+### Alert Rules + Notifications
+
+> **Status:** 📋 Planned.
+
+- [ ] Saved detections
+- [ ] Background monitoring
+- [ ] Event notifications
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Redaction Profiles
+
+> **Status:** 📋 Planned.
+
+- [ ] Mask secrets in UI
+- [ ] Mask secrets in exports
+- [ ] Custom redaction policies
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1 day
+
+### Local Plugin API
+
+> **Status:** 🟡 Partial — plugin capabilities JSON, capability
+> enforcement, sample `hello-snitch.zip` plugin, and plugin UI handler
+> ship. A full sandboxed extension API is still TODO.
+
+- [📋] Custom protocol decoders (full API)
+- [🟡] Extension framework — capabilities system ships.
+- [📋] Sandboxed execution
+- **Priority:** P2 · **Complexity:** Very High · **Est. remaining:**
+  1–2 weeks
+
+### Mini Decoder Scripting
+
+> **Status:** 📋 Planned.
+
+- [ ] User-defined parsers
+- [ ] Lightweight decoder runtime
+- [ ] Custom protocol support
+- **Priority:** P3 · **Complexity:** Very High · **Est. dev time:**
+  1–2 weeks
+
+### Live Capture Mode
+
+> **Status:** 📋 Planned.
+
+- [ ] Interface selection
+- [ ] Rolling capture ingestion
+- [ ] Continuous analysis
+- [ ] Long-running session support
+- **Priority:** P2 · **Complexity:** Very High · **Est. dev time:**
+  2–3 weeks
+
+---
+
+## Future / advanced ideas
+
+### Attack Path Reconstruction
+
+> **Status:** 📋 Planned.
+
+- [ ] Lateral movement tracking
+- [ ] Initial access identification
+- [ ] Compromise timeline generation
+
+### Traffic Baseline Engine
+
+> **Status:** 📋 Planned.
+
+- [ ] Learn normal behavior
+- [ ] Detect anomalies
+- [ ] Compare captures to baseline
+
+### MITRE ATT&CK Mapping
+
+> **Status:** 📋 Planned.
+
+- [ ] Technique identification
+- [ ] ATT&CK coverage reporting
+- [ ] Detection mapping
+
+### Threat Score System
+
+> **Status:** 📋 Planned.
+
+- [ ] Host risk scores
+- [ ] Conversation risk scores
+- [ ] Capture-wide threat score
+
+### Automatic Report Generator
+
+> **Status:** 🟡 Partial — LLM distillation + Summary export ships.
+> Per-template HTML/PDF report generation is still TODO.
+
+- [🟡] Executive summary — Summary tab ships.
+- [🟡] Technical findings — distilled summary ships.
+- [🟡] IOC appendix — partial via Stats.
+- [🟡] Artifact appendix — partial via carvable files.
+- [📋] Export to HTML / PDF
+
+---
+
+## Suggested execution order
+
+The original `ideas.txt` suggested this sequence. Items marked `[DONE]`
+have been absorbed into recent releases; items marked `[NEXT]` are
+where to pick up next; items marked `[NEW]` are additions based on
+work that's landed since.
+
+1. [🟡] Saved Filter Library *(mostly done — finish categories/export)*
+2. [📋] Rule-Based Highlights
+3. [🟡] IOC Extraction Panel *(basic data ships — needs dedicated panel)*
+4. [🟡] One-Click IOC Export *(JSON ships — needs CSV + selective)*
+5. [🟡] Report Templates *(Summary ships — needs templates + PDF)*
+6. [📋] Diff Two Packets
+7. [🟡] DNS Threat Lens *(aggregation ships — needs heuristics)*
+8. [📋] Protocol Anomaly Heuristics
+9. [📋] Batch Analysis
+10. [📋] Expert Events Feed
+11. [🟡] Stream Reassembly *(foundation ships — finish missing-packet UX)*
+12. [🟡] HTTP Object Extraction *(body + carve ships — needs objects panel)*
+13. [📋] Timeline View
+14. [📋] Conversation Graph
+15. [🟡] Live Capture Mode *(large effort — start scoping)*
+16. [🟡] Local Plugin API *(capabilities ship — needs sandbox)*
+
+`[NEW]` follow-ups worth queuing after the above:
+
+- [📋] Alert Rules + Notifications
+- [📋] Redaction Profiles
+- [📋] Traffic Baseline Engine
+- [📋] MITRE ATT&CK Mapping
+- [📋] Threat Score System
+- [📋] YARA Integration
+- [📋] QUIC / WebSocket / gRPC / WireGuard decoders
+- [📋] Secret Detection pass (AWS, Azure, GCP, JWT, OAuth, private keys)
+- [📋] PCAP Diff Mode
+
+---
+
+## Backend optimizations
+
+> **Status:** 🟡 Partial — a number of these have already been added in
+> 1.x / 2.x; the per-phase instrumentation request from the original
+> `ideas.txt` is still open.
+
+Add phase timers inside packet processing (not just threading) for:
+
+- [🟡] `getDatatypes` — inference work is timed at the *packet* level via
+  the backend's overall timing; per-phase sub-timers still TODO.
+- [🟡] `getTraits` — same.
+- [📋] `reverseDnsLookup` — instrument per-call latency.
+- [📋] `getServBanner` — instrument per-call latency.
+- [🟡] GeoIP lookup — cached (see 1.1.195 "O(1) lookups, GeoIP cache"),
+> per-call instrumentation still TODO.
+
+Already shipped (so we don't redo them):
+
+- ✅ Backend multi-job processing with job IDs (2.0)
+- ✅ Backend chunked push to renderer (1.7.848)
+- ✅ Lazy-load packets from disk (1.7.848)
+- ✅ Dynamic CPU core count (1.9.1442)
+- ✅ GeoIP cache + thread safety (1.1.195)
+- ✅ Backend scheduler optimizations (1.9.1442)
+- ✅ Streamlined frontend with stream payload caches (2.4.2115)
+- ✅ `.psb` (gzipped BSON) session format default (2.0)
+- ✅ Backend HTTP API (`/status`, `/version`, JSON endpoints) (1.9.1442)
+
+---
+
+## Recently shipped (release history mirror)
+
+> Short mirror of `RELEASE_NOTES.md` so this single file is enough to
+> skim. The full per-version notes still live in `RELEASE_NOTES.md`.
+
+### Unreleased
+
+- **Features**
+  - Help button opens docs hub in an in-app browser window locked to a
+    whitelisted set of hosts (`packetsnitch.com`, GitHub, BMC, VT).
+  - New Kerberos 5 (`krb5`) Conv decoder (AS-REQ/REP, TGS-REQ/REP,
+    AP-REQ/REP, KRB-ERROR, KRB-PRIV, KRB-CRED).
+  - Notes tab now auto-feeds the Summary tab under "Inferred Data
+    (from Notes)"; per-note "Mark as verified" toggle moves the note
+    to "Verified Notes (from Notes)".
+  - Dedicated SMB follow-stream path in the Conv Decodes subtab
+    (per-message tree, file content, offsets), backed by
+    `src/ui/decoders/conv/smb-helpers.js`.
+- **Fixes**
+  - Single-block Conv decode regression.
+  - Inline decoder wiring now matches the dropdown entries.
+- **Tests**
+  - `tests/kerberos_conv_decoder.test.js`
+  - `tests/notes_summary_integration.test.js`
+  - `tests/conv_decodes_stream_stack.test.js`
+  - `tests/smb_conv_decoder.test.js`
+  - `summary_stats_weaving.test.js` extensions
+
+### v2.4.2169 — 2026-07-27
+
+- **Features**
+  - Halved installer sizes.
+  - Anonymous, opt-in usage metrics (`src/metrics.js` + `metricsapi`).
+  - First-run consent overlay; Privacy subtab to manage it.
+  - Self-hostable metrics endpoint (`src/metrics/server.py`) with
+    NDJSON-on-disk sink and `/healthz`.
+  - "Analyze IP..." submenu in context menu; Subnet Calc and Threat
+    Intel drill-in.
+  - Carved-file context menu entries (load into Extraction/Decoders
+    with auto-extension hinting, send to VirusTotal).
+  - `runThreatIntelIpLookup` / `setAnalysisInput` exposed on Subnet
+    Calculator.
+  - Backend port reclaim on startup.
+- **Fixes**
+  - Heatmap map projection calibration consolidated into
+    `MAP_PROJECTION_CALIBRATION` constant in `src/settings.js`.
+  - VirusTotal startup diagnostic coalesced with a 30s dedupe window
+    + `invalidateVirusTotalDiagnosticsCache()` hook.
+  - Privacy block in `settings-update` is now deep-merged.
+  - Metrics flush loop now actually fires (paired renderer listener +
+    `beforeunload` final-flush).
+  - Install-screen consent overlay only auto-shows on clean installs.
+  - Resolved a stale merge marker in the Conv Decodes protocol
+    dropdown.
+  - Context menu dividers no longer orphan the new entries.
+- **Removed**
+  - Duplicated heatmap calibration constants.
+- **Improvements**
+  - New tests: `consent_overlay`, `metrics_privacy`,
+    `metrics_tab_tracking`, `test_metrics_server`,
+    `heatmap_projection_calibration`.
+  - `packetsnitch:settings-updated` event listener re-syncs in-memory
+    settings.
+  - Metrics tracking respects a strict `SAFE_PROP_KEYS` allowlist.
+  - Default Ollama model updated to `qwen2.5-coder:7b`.
+  - Metrics endpoint URL is user-configurable.
+
+### v2.4.2115 — 2026-07-26
+
+- **Features**
+  - Threat Intel sub-tab under Conv (VirusTotal + hash cross-ref).
+  - Subnet calculator panel in Conv (GeoIP + IP reputation).
+  - Nmap scan support and IP/Subnet analyzer rearrangements.
+  - Shodan support in IP information.
+  - High-resolution raster worldmap for Heatmap.
+  - More sample pcaps.
+  - Better plugin capabilities enforcement; `hello-snitch.zip` sample
+    plugin.
+  - Backend ico, distiller for the summary report generator, "bugfixer"
+    on the website, more LLM context.
+- **Fixes**
+  - File importing errors, Stats Total Traffic indicator, path
+    traversal in `snitch.py`, docs layout shifts, Conv hex input
+    scrolling, filter bleed + autocomplete.
+- **Removed**
+  - Lots of old dead code.
+- **Improvements**
+  - Major code cleanup, stream payload caches, frontend optimizations,
+    HTTP body and file carving fix, Subnet Calc UI cleanups, Heatmap
+    zoom, backend scheduler optimizations, better stream hydration,
+    parted-out backend decoders, sidebar renderer move, more backend
+    test coverage, docs font shipping, markdown in Summary, better
+    filter bar logic, search/replace in Conv, file carving section in
+    Stats, better Conv→Notes, Conv "load more" button, summary auto-gen
+    disable setting.
+
+### v2.3.1694 — 2026-07-23
+
+- **Removed:** `patchall` from `make` on Windows.
+- **Fixes:** quieter backend HTTP error on stop, PyInstaller `--icon`
+  replaced with `.spec` icon, backend ICO of the snitch.
+
+### v2.2.1638 — 2026-07-18
+
+- **Features**
+  - IPv6 support improvements (brackets on port, delimiters).
+  - Threat Intel sub-tab under Conv (VirusTotal).
+  - Backend HTTP server (refined).
+  - More sample pcaps, docs TOC, better stream hydration,
+    filter autocomplete.
+- **Fixes**
+  - List panel blank bug, big-endian nanosecond pcap, `ports.json`
+    removed from samples.
+- **Removed**
+  - `ports.json` from samples, frontend docs screenshots.
+- **Improvements**
+  - Backend pushes packets in chunks; lazyload from drive; more
+    decoders; keystore autoadd; backend existence check; filter
+    query status updates; explicit filter clear log; stream stats
+    in Host Data + Stats; Conv data saved with session; docs
+    context-menu reference; `tcp.proto` vs `udp.proto` vs `app.proto`
+    split; city listing via `loc.src.city || loc.dst.city`; globbing
+    regex in filter; Brotli detection; Help button + new window.
+
+### v2.1.1606 — 2026-07-16
+
+- **Features**
+  - Soulseek, BitTorrent, SMPP support; better PPP/PPPoE/LLDP.
+  - Improved plugin capabilities; better crypt for ambiguous data;
+    better XML/JSON/YAML; generic decoders renamed; updated build
+    config; backend fails on unknown filetype magic; GitHub workflow
+    fixes.
+- **Fixes:** list panel blank bug, big-endian nanosecond pcaps.
+- **Removed:** non-clickable password badge from UI.
+- **Improvements:** plugin enforcement tests, widened settings
+  panels, plugin UI handler, plugin support groundwork, decoders
+  parted out, sidebars widened, backend chunk size arbitrary, stream
+  payload caches, fixed creds uniqing, fixed HTTP body + carving,
+  cleaned UI.
+
+### v2.0.1573 — 2026-07-15 (major)
+
+- **Breaking:** new `.psb` (gzipped BSON) session format; old
+  sessions are not compatible.
+- **Features**
+  - `.psb` debug default, multi-job backend+frontend with job IDs,
+    common/ library fix, Conv tab retool, List tab columns hidden by
+    default, LDAP/Samba decoder improvements, markdown for LLM and
+    send-to-Notes shapes, startup splash, `/status` endpoint, major
+    serialization bug fix, streamlined ingestion, zero-payload
+    support, frontend logging tunables, List column rearranging,
+    settings tab improvements, backend version line, themes bundled,
+    updated Python spec.
+- **Fixes**
+  - SIP, Conv pagination, Conv formatting, filter bleed, word
+    wrap, settings overlap, virtualized list scrolling, Host Data
+    hidden bug, zero payload bug, dropdown theme colors, common/
+    finding bug.
+- **Removed:** unnecessary testcases dir creation in HTTP mode.
+- **Improvements**
+  - Version bump, spec file update, fade-out timing, longer startup
+    time, one-shot override for decodes subtab, session picker
+    updates, better LDAP, updated Samba, removed testcases dir
+    creation in HTTP, User-Agent updated, Help tab new domain,
+    settings tab updates, release check + download button, SnitchBitch
+    theme update, favicon, more backend test coverage, plugin
+    capabilities enforcement.
+
+### v2.0.1566 — 2026-07-14
+
+- `.psb` debug default, backend common/ fix, multi-job processing,
+  new BSON session format, major serialization fix, SIP improvements,
+  LDAP/Samba improvements.
+
+### v1.9.1518 — 2026-07-11
+
+- **Removed:** `models.txt` references, test auto-run, map crosshair.
+- **Fixes:** MAC address IP bleed, backend kickoff, map updates,
+> crosshair removal, smoother map animations.
+- **Improvements:** map animation, frontend streamlining, stream
+  payload caches, frontend optimizations, creds uniqing, backend
+  chunk size arbitrary, sidebars widened, test auto-run removed,
+  SnitchBitch theme update, favicon, sponsorship updates, release
+  check, download button, runtime main-process data, download link
+  generation, Windows/RedHat/Debian detection, better Nmap support,
+  Shodan support, threat intelligence under IP info, more
+  documentation.
+
+### v1.9.1442 — 2026-07-05
+
+- **Features**
+  - Worldmap, backend HTTP server, PGP workspace, settings tab,
+    frontend LLM, heatmap with Wikipedia images, layer fix, statusbar
+    forward, better default zoom/offset, heatmap zoom, worldmap view,
+    threat intel under IP info, credentials count + readout in Stats,
+    rudimentary SIGTRAN/SS7, anime theme, new pastels theme, better
+    theme engine, PGP tab (decrypt + verify), backend JSON HTTP API,
+    better filter history (saved + labeled), better filter bar.
+- **Fixes**
+  - Backend JSON duplicates, preprocessor legacy keys cleaned up
+    (**breaking** — old sessions may not load), Conv hex input
+    scrolling, filter validation, group-by-stream initial check, small
+    aesthetic changes, removed `threads` var.
+- **Breaking:** saved sessions may need to be discarded and rebuilt.
+- **Removed:** non-dot-notation keys, `threads` var, backend JSON
+  duplicates.
+- **Improvements**
+  - New themes (pastels, Sub7), light theme tweaks, new ico location,
+    encodings hidden import, conditional forge builds, Windows
+    installer icons fixed, .deb fixes under Kali, .desktop template,
+    UPX packing option (off by default), installer splash, backend
+    scheduler optimizations, List column resize/show-hide, backend
+    version string, version check, PGP autoloads secrets, heatmap
+    scales, FRAME/unknown fallback hardening, normalized key format,
+    src/dst port aliases, retuned map zoom, map calibration edits,
+    Prev/Next repositioned, LLM diagnostics in activity log, backend
+    server correctness.
+
+### v1.8.1384 — 2026-07-01
+
+- **Removed:** unneeded reqs, Ollama dep from backend, LLM
+  references/calls, `_dirname`/`_filename` patches.
+- **Fixes:** `requirements.txt` cleanup, Windows PyInstaller spec,
+  startup hardening, DefinePlugin + dirname fallback, runtime bug
+  attempts, Ollama compile attempt.
+- **Improvements:** version bump, Ollama runtime check, longer LLM
+  default timeout, per-stream LLM calls in frontend, LLM moves out of
+  backend, better scaling, "marked" for tables, markdown + note edit
+  mode, stream-size warning setting, settings tab, theme engine
+  (quit button, two new themes, light theme tweaks, fixed pretty JSON,
+  `snitch.py` chunk size, credentials counter, context-aware LLM,
+  per-stream targeted Ollama, improved filter grep, keystore filter,
+  logging touchups, theme engine carryover fix, theme engine logo
+  replacement, settings logging to activity log, theme selection
+  decision matrix).
+
+### v1.8.1332 — 2026-06-28
+
+- **Fixes:** array-type guards, zero-packets warnings, clear-on-zero
+  flow, valid-key check on zero-packet filter, license link.
+- **Improvements:** initial frontend LLM test, per-packet/key filter
+  + group, Total Traffic fix, beginning of heatmap.
+
+### v1.7.969 — 2026-06-24
+
+- **Features:** globbing regex in filter, Brotli detection, Help
+  button + docs window, docs access controls, extensive features
+  list, more sample captures, new compression sample, new filter
+  keys.
+- **Fixes:** backend clobbering on new session before done, layer
+  correctness, User-Agent = PacketSnitch, demo gif YouTube link,
+  more Help URL guards, `hideAllData` guards, BGP data type list
+  hiding, Overview 1→3 columns in Stats.
+- **Improvements:** `link.proto` context menu, transport/application
+  filter relabeling, proper protocol keys in backend for filtering,
+  globbing examples.
+
+### v1.7.935 — 2026-06-21
+
+- **Features:** SIP and FTP decoders (with keychain auto-populate),
+  `tcp.retransmission` key + retransmission/out-of-order keys,
+  retransmission stats in Stats, data type guesses for endpoints
+  + MAC, date/time type identifiers, single byte data type guessing,
+  Save Raw Conv data via context menu, streamlined protocol matching,
+  HTTP following (full body to Conv + export), decompression-aware
+  context menu, more sample data, preliminary IGMP backend, non-TCP
+  packet handling, lower-level protocol identifiers in Stats,
+  improved protocols-used readout in Host Data, protocol auth
+  extractors, bookmarked-host filter, large-stream warning, keystore
+  autoadd with lazyload metadata, table coloring.
+- **Fixes:** data types frame auto-hide, exploit pcap renamed.
+- **Improvements:** better targeted context menu, uppercased
+  application-layer protocols in Stats.
+
+### v1.7.848 — 2026-06-17
+
+- **Features:** backend chunked push, lazyload from drive, status
+  update 10s, JSON/pcap/pcapng constraint in session picker, more
+  decoders, keystore autoadd objects, session vs pcap check, backend
+  existence check, filter query status, explicit filter clear log,
+  stream stats on left, stream stats in Host Data + Stats, Conv
+  data in session, docs context-menu reference, `tcp.proto`/
+  `udp.proto`/`app.proto` split, location click → city query, DNS
+  qname stray-IP cleanup.
+- **Removed:** stray IPs from DNS qname in Stats, divider above
+  Exports submenu.
+- **Fixes:** packet array sync, autosave guards (real session
+  only, no dummy), autosave on exit + log write, session-open
+  check before save, new session clears old, port click searches
+  both TCP+UDP, `back-comm.js` loader handles new format, no tab
+  jumping during ingest, no repeated List view log, no unary space
+  on `[Snitch]`.
+- **Improvements:** save button moved to bottom, divider removed,
+  shorter context items, app+transport protocol filter contribution,
+  gif demo, static gif width, workflow/daily runs rename, repo stats
+  GH action, picker dim retention, `persistSessionToDisk` null
+  session name on autosave, autosave fix, exit button exits picker
+  not PS, no save/export/reprocess during preprocess, session
+  restoring reloads payload data, log renderer thread tag, error
+  message fix, reprocess-too-soon catch, more docs screenshots, docs
+  correction, stream order + filter context in Host Data, auto host
+  targeted filtering, session manager saves pcap.
+
+### v1.6.807 — 2026-06-14
+
+- **Features:** autosave on exit + log write, new compressed session
+  format.
+- **Removed:** dependency on manual save on exit.
+- **Fixes:** autosave on real session only, dummy session discard
+  (<5KB), session-open check before save, new session button
+  clears old, loading screen dim, blank hosts list for 0.0.0.0,
+  packet array sync.
+
+### v1.5.731 — 2026-06-07
+
+- **Features:** encodings hidden import, snitch binary location
+  swap, conditional forge builds per OS, .desktop template, UPX
+  option (off by default), installer splash.
+- **Fixes:** Windows installer icons, stripped backend package,
+  .deb under Kali, .desktop metadata, compression block notice.
+- **Improvements:** build metadata, description + uninstaller ico,
+  installer loop gif, some docs, new ico location, docs AI redo,
+  terminal explicit false in .desktop.
+- **Removed:** unneeded backend package stuff.
+
+### v1.5.705 — 2026-06-03
+
+- **Features**
+  - Width/height config for small screens, dynamic CPU core count,
+    Conv color coding improvements, Conv input history UI, Conv
+    output visibility mapping, hide redundant conv output pane,
+    clamp + constrain conversion panel columns, fix Conv output
+    expansion toggle, fix Conv background color, prevent drag-drop
+    text editing in Conv/filter/host inputs, fix Conv hex output
+    mouse-drag, refine Conv highlight map fallbacks, harden Conv
+    selection sync, Conv hex color coding + cross-frame selection
+    sync, guard conv output expand handlers, conv output expand/
+    collapse interaction, Conv text type heuristics, refine Conv
+    guess scan + context-menu derive, chunked Conv guess scanning
+    + context derive, sanitize host target filter query terms,
+    `guessDataType` refactor (UUID/JWT regex constants, base64
+    score constants), sync target host selection with filter bar,
+    tighten JWT regex, data type guessing (hashes, base64, PGP,
+    JWT, UUID) below MIME type in Conv, restrict keystore reset
+    to unlock mode, guard nested keystore reset, polish keystore
+    dialog wipe button, refine keystore dialog reset flow, keychain
+    wipe action to unlock dialog, log renderer console.error to
+    activity log, tidy keystore password confirm, fix keystore
+    reset function scope, centralize keystore reset warning text,
+    centralize keystore minimum password length constant, keystore
+    password reset with wipe warning, keep loading screen visible
+    until packets render, modified Python `requirements.txt` for
+    Linux.
+- **Removed:** `threads` var in backend config.
+- **Improvements:** normalize/remove duplicates, logging
+  congruence, build-from-source README, RPM builder patch, logging
+  code update, frontend in installed screen, installed-files
+  locator, removed compiled backend dir + added tagline logo, gif
+  update, paths fix, `patchup` removed from `npm run make` on
+  Windows, version update.
+
+### v1.5.618 — 2026-05-30
+
+- **Features:** frontend in installed screen, installed-files
+  locator.
+
+### v1.5.610 — 2026-05-29
+
+- **Removed:** compiled backend dir, `patchup` from `npm run make`.
+- **Improvements:** gif update, tagline purple, paths fix, README
+  update.
+
+### v1.4.508 — 2026-05-26
+
+- **Features**
+  - Stream filter when selecting packet from List/Stats, hash
+    algorithm outputs (MD5, SHA-1, SHA-256/384/512, SHA3-256/512,
+    RIPEMD-160, Whirlpool) in Conv, `@noble/hashes` + `whirlpool-js`,
+    refactor Conv hash to pure JS, reorganize context menu, HTTP
+    file context menu, cookie jar autoadd, "Add to Keystore" for
+    highlighted text, load-raw-payload-into-Conv action, multi-
+    level submenu viewport positioning, extract cookies + POST
+    body credentials to keystore, auto-detect HTTP/SMTP/POP3/IMAP/
+    Telnet creds, session key bookmarking, password-gated keychain,
+    first-time keychain password setup, IndexedDB keystore
+    persistence, split keystore panel, move keystore to standalone
+    panel, tighten Telnet auto-detection, HTTP/Telnet/SSH/POP3/IMAP/
+    SMTP decoders in Conv, Crypt tab with SSL workspace + persistent
+    keystore, filter validation + error reporting, context menu
+    explicit parens, no double-wrapping negated clauses, unary `!`
+    + is-not actions, explicit `&&`/`||` filter-append, Clear and...
+    submenu, no double `[Console]`, backend logs `[Console][Backend]`,
+    backend errors `[Console][Backend]`, UI logs `[GUI][UI]`, log
+    console output to activity log, tab bar width + Prev/Next
+    placement, Prev/Next to far right, swap Stats/Data tab
+    positions, rename Data → Conv, tighten context menu active
+    cursor guards, normalize context menu active packet cursor,
+    sync active packet cursor for context menu helpers, use active
+    packet accessor in context menu export, flip context submenus
+    inside viewport, restructure context menu into convert/filter/
+    export branches, TLSv1.2 context, allow min TLS1.2, TLS probe
+    reliability with SNI fallback, explicit TLSv1.2 banner probe,
+    refine HTTPS service checks + SNI, harden TLS context + tidy
+    HTTPS detection, fix TLS encryption details for HTTPS, replace
+    filter history popup with select dropdown, Conv tooltip, hex
+    copy actions in right-click menu, unify right-click context
+    menus + conditional copy visibility, right-click menu with
+    copy/paste/save JSON, blank right panel on List/Stats, darken
+    selected packet row on hover, Unknown fallback for stream
+    grouping, sortable packet-list columns, List tab enhancements
+    (hover highlight, bookmark column, stream grouping), new List
+    tab between Stats and Log, filter aliases and text matching
+    for `wire.proto`/`eth.src.vendor`/`mime.type`/`dns.qname`,
+    capture stats page, polish query highlight loop, refine
+    query-history empty-state styling, improve query syntax UI
+    accessibility/keyboard, allow empty query-history dropdown,
+    syntax highlighting for filter query input + history, packet
+    query history dropdown, cached host value in logging,
+    normalize error log helpers, log all frontend error paths,
+    harden activity timeframe parsing, fix IPC placement, activity
+    log UI + persistence, stream filter when selecting packet,
+    simplify `packetsForHost` fallback, preserve active filter and
+    packet on Host Data reopen.
+- **Fixes**
+  - Prev/Next positioning, UI tweaks + more error messages, tab
+    opacity, taller data tools input, port/Network Class context
+    menu filter detection, port handling, context filter query
+    sanitization, context filter value handling, context-menu
+    filters append to existing, context filter parsing edge cases,
+    editable target checks for paste, no deprecated `execCommand`,
+    context-menu paste targeting + reorder save option, save-json
+    handling + visibility flag, success status feedback for copy,
+    review nits, catch blocks + byteIndex naming, hex grid
+    iterator rename, context menu closing + hidden state, review
+    nits, refine context conversion validation, box sizing, log
+    search box, fixed column widths in packet list, normalize/
+    sanitize stats entries, hex grid cell square, simplify hex
+    grid cell wrapping rule.
+- **Improvements**
+  - Author line, removed eslint backup, chardet in backend reqs,
+    some theme changes, docs updates, list screenshot.
+
+### v1.3.353 — 2026-05-24
+
+- **Features**
+  - Electron forge updates, Python reqs, log search box, List tab
+    between Stats and Log, fixed column widths, removed unused
+    CSS class, stats screenshot, normalize/sanitize stats, filter
+    aliases for `wire.proto`/`eth.src.vendor`/`mime.type`/
+    `dns.qname`, capture stats page, query highlight polish, query-
+    history empty-state, query syntax UI accessibility/keys,
+    empty query-history dropdown, syntax highlighting for filter
+    + history, query history dropdown, cached host value, error
+    log helpers, log all frontend error paths, activity timeframe
+    hardening, IPC placement, activity log UI + persistence,
+    simplified `packetsForHost` fallback, hex grid cell rule +
+    square cells, chardet in backend reqs.
+- **Improvements**
+  - Removed eslint backup, theme changes, README screenshot,
+    screenshot 24.
+- **Removed**
+  - `eslint` backup.
+
+### v1.2.310 — 2026-04-23
+
+- **Features**
+  - Safely read MAC fields when Ethernet Frame may be N/A, MAC
+    info when one IP is private + the other internet, save JSON
+    from in-memory, README image, off-by-one fix for first packet
+    in host list, sync bookmark dropdown when target host
+    changes, `syncBookmarkDropdown` helper, sync bookmark
+    dropdown with packet navigation, eslint fixes, resolve all
+    JS errors in `src/`, linting config update, remove
+    `.progress-ps.html`, hosts.json 1s delay load, RADIUS TCP
+    per RFC 6614, wire new protocol decoders into frontend
+    pipeline, FTP/SMTP/POP3/IMAP/Telnet/IRC/MTP/LDAP/MySQL/
+    PostgreSQL/XMPP/SMB/MQTT/RTSP/TFTP/BGP/HTTP2/NNTP/RADIUS
+    decoders, extract protocol decoders into `decoders.js`,
+    `CopyPlugin` for `src/assets`, replace inline base64 PNGs with
+    files, backend `onedir` (saves 4s, no unpack), status shows
+    PS version, `SOFTWARE_VERSION`, install-complete screen on
+    new version, README rewrite.
+- **Improvements**
+  - Hide menu bar, fix images, filter docs link, filter keys
+    update.
+
+### v1.2.254 — 2026-04-16
+
+- **Features**
+  - Filters.md link, comprehensive Filters.md, README with
+    donation options, QR codes, organized docs, Frontend.md
+    install, `numWorkerThreads` = 2× CPU cores, draggable top
+    bar, aria-label, removed frame, README revisions, zoomed map
+    out, error auto-clear, README update, Backend.md/Frontend.md
+    split, HTTP backend+frontend decoder, `packet.protocol` →
+    `packet.proto`, SNMP/ICMP/SIP/DHCP/NTP, UDP/DNS backend+
+    frontend, default save to Documents, filesave worker pointer,
+    copy `hosts.json` to dest (no IPC), threaded save-JSON,
+    removed save functions, silent exit when output dir exists,
+    reset on reload, snake_case → camelCase in `snitch.py` and
+    `scripts.js`, code review fixes, descriptive variable names,
+    target host selection with filter readout, Save JSON with
+    save-as, reloading with optimized backend, removed .exe,
+    removed useless icons, nollm call fix, LLM enable/disable
+    + `--no-llm` flag, dev install, README with images/usage,
+    version, bookmark fixes, off-by-one, horizontal scroll
+    disabled, remove `dns.hostnames` non-leaf, Searchable
+    Attributes, README update, new screenshot, version, fixed
+    timestamp + recon, payloadascii tooltip, removed old samples,
+    new search params, load time timer, packet size + filter
+    result size readout, packet counting on sidebar,
+    positioning/z-index, zoom bug, version bump, initial display
+    bug fixes, no-packets-from-filter handling, screenshot, better
+    filtering, index fix, better filter, more filter, filter
+    almost working, starting filter functions, better
+    compression, better DNS host + catchall error, better error
+    + blink, summary box tweaks, encryption undefined fix, error
+    message, squirrel install, failsafes, screenshot, version,
+    data box bug + new data points, new extra info pane, loading
+    screen, backend dead on quit, installer/exe icons, first
+    working bins, Windows builds, OS detection, build
+    adjustments, backend install hook, initial commit.
+- **Fixes**
+  - Box resize, parens grouping, Unix path, JS errors,
+    payloadascii tooltip, linting, eslint fixes.
+- **Removed**
+  - Window frame, old unworking samples.
+- **Improvements**
+  - UI improvements, version, screenshot, .exe + useless icons,
+    bookmark code.
+
+### v1.2.227 — 2026-04-15
+
+- HTTP backend+frontend decoder, `packet.protocol` →
+  `packet.proto`, SNMP/ICMP/SIP/DHCP/NTP, UDP/DNS, save to
+  Documents, filesave worker, copy `hosts.json` to dest,
+  threaded save-JSON, snake_case → camelCase, reset on reload,
+  Save JSON, LLM enable + `--no-llm`, dev install, README,
+  version, bookmark fixes, off-by-one, horizontal scroll,
+  old samples, new search params, timer, packet/filter size
+  readout, packet counting, positioning, zoom, compression,
+  DNS, error handling, summary box, encryption undefined, error
+  message, squirrel, failsafes, data box, info pane, loading
+  screen, backend quit, installer/exe icons, first bins,
+  Windows, OS detection, build, backend hook, initial commit.
+
+### v1.1.195 — 2026-04-13
+
+- **Removed:** useless icons.
+- **Features:** icons, new ver, LLM toggle, `--no-llm`, dev
+  install, README, bookmark fixes, off-by-one, horizontal scroll.
+- **Improvements:** optimized `snitch.py` (O(1) lookups, GeoIP
+  cache, thread safety, bug fixes), backed off threads.
+
+### v1.1.184 — 2026-04-12
+
+- **Features:** version, bookmark fixes, off-by-one, horizontal
+  scroll, Searchable Attributes, README + screenshot, version,
+  timestamp + recon, payloadascii tooltip, old samples, new
+  search params, timer, packet/filter size, packet counting,
+  positioning, zoom, version, initial display bug fixes, no
+  packets from filter, better filter, better compression, better
+  DNS, better error, nice loading screen, cleaned code, initial
+  commit.
+- **Removed:** old unworking samples.
+- **Improvements:** box resize, parens grouping, UI improvements.
+
+### v1.0.175 — 2026-04-13
+
+- **Removed:** useless icons.
+- **Improvements:** icons, version bump, version update.
+
+### v1.0.158 — 2026-04-01 (major)
+
+- **Removed:** window frame.
+- **Features:** first stable 1.0; app framework, backend Python,
+  Electron UI, filter system, bookmark system, hex grid, info
+  panel + packet details, data box, loading screen, frameless
+  window, cross-platform installers, auto-update, statistics
+  tab, stream stats, compression + encoding detection, network
+  class detection, GeoIP, hostname resolution, backend LLM.
+- **Fixes:** initial display bugs, filter + bookmark improvements,
+  backend process management, various UI bugs.
+- **Improvements:** various.
+
+### v0.9.130alpha — 2026-03-24
+
+- **Features:** alpha release, initial working bins, app
+  framework, `snitch.py`, Electron UI, filter, bookmark, hex
+  grid, info panel, statistics, GeoIP, hostname, squirrel
+  installer, OS detection, icons, branding, build config.
+
+### Initial Development — 2026-02-17 to 2026-03-24
+
+- Pre-alpha: project scaffolding, Electron + Python backend
+  architecture, bookmarks/Prev-Next, logos, screenshots, hex
+  grid + payload, two-pane UI, checksum table, encryption
+  fallback, package detection, backend IPC bridge, location
+  logic, README, GNU GPLv3 reference, screenshot 14, more UI
+  alignment work, location sidebar, sort-of help menu, backend
+  icon, hex payload + payload pane, info pane, screenshot
+  updates, multi-pane mockups, icon placeholders, doc cleanup.
+
+---
+
+## How to update this file
+
+When you land a new feature, open this file and:
+
+1. Find the matching item in **Status legend**-style sections above.
+2. Bump its sub-bullet from `[ ]` → `[🟡]` or `[✅]`.
+3. If the whole item is done, flip the section-level status to
+   **Shipped** and add a bullet under `### Unreleased` in
+   `RELEASE_NOTES.md` as well.
+4. If scope shifts, update the **Est. remaining** or **Complexity**
+   line. Re-check the estimate against the
+   [Release velocity](#release-velocity-how-fast-this-project-actually-ships)
+   table at the top — if your new estimate doesn't fit, it probably
+   needs to be re-scoped (this project genuinely ships in days,
+   not weeks).
+5. If you add a brand-new idea not on this list, add a section in the
+   right thematic group with a fresh status.
+
+This file should never shrink — only grow and turn green.
