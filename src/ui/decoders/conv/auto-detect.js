@@ -21,6 +21,7 @@ const { decodeProtobufFromBytes } = require("./protobuf");
 const { decodeBerFromBytes } = require("./ber");
 const { decodeDerFromBytes } = require("./der");
 const { decodeLdapFromBytes } = require("./ldap");
+const { decodeEpmapFromBytes } = require("./epmap");
 const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
@@ -121,6 +122,14 @@ function autoDetectProtoFromBytes(bytes, options) {
         return portHint;
     }
 
+    // EPMAP (Microsoft RPC Endpoint Mapper on port 135) is best checked
+    // before the BSON / MessagePack / Protobuf detectors: the EPM Bind
+    // PDU starts with 0x05 0x00 0x0b and may otherwise look like a
+    // valid msgpack/protobuf frame.
+    if (typeof decodeEpmapFromBytes === "function" && decodeEpmapFromBytes(bytes)) {
+        return "epmap";
+    }
+
     const normalizedSmbBytes = normalizeSmbDecoderBytes(bytes);
     if (
         normalizedSmbBytes instanceof Uint8Array &&
@@ -190,6 +199,9 @@ function autoDetectProtoFromBytes(bytes, options) {
         return "imap";
     if (decodeLdapFromBytes(bytes)) return "ldap";
     try {
+        if (typeof decodeEpmapFromBytes === "function" && decodeEpmapFromBytes(bytes)) {
+            return "epmap";
+        }
         if (typeof decodeSmppFromBytes === "function" && decodeSmppFromBytes(bytes)) {
             return "smpp";
         }
