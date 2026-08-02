@@ -14360,6 +14360,7 @@ const convertContextSubmenus = {
   followStream: getCachedElement("ctx-follow-stream-submenu"),
   llm: getCachedElement("ctx-llm-submenu"),
   analyzeIp: getCachedElement("ctx-analyze-ip-submenu"),
+  reports: getCachedElement("ctx-reports-submenu"),
 };
 const convertContextDividerEl = getCachedElement("convert-context-divider");
 const convertContextSaveDividerEl = getCachedElement(
@@ -15515,12 +15516,12 @@ function showConvertContextMenu(
   const hasKeystoreActions =
     hasContextTextKeystoreActions || hasManualKeystoreUriAction;
   const hasExportActions =
-    showSaveJson ||
     hasPacketToExport ||
     hasPayloadToExport ||
     hasCookieActions ||
     hasConvExportActions ||
-    hasDecryptedDataToExport ||
+    hasDecryptedDataToExport;
+  const hasReportsActions =
     hasSummaryMarkdownToExport ||
     hasSummaryTextToExport ||
     hasSummaryHtmlToExport;
@@ -15564,6 +15565,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextSubmenus.export.style.display = hasExportActions
+    ? "block"
+    : "none";
+  convertContextSubmenus.reports.style.display = hasReportsActions
     ? "block"
     : "none";
   convertContextSubmenus.httpFile.style.display = hasHttpBody
@@ -15618,10 +15622,12 @@ function showConvertContextMenu(
     !hasNotesActions &&
     !hasKeystoreActions &&
     !hasExportActions &&
+    !hasReportsActions &&
     !hasHttpBody &&
     !hasFileCarveActions &&
     !hasFollowStreamActions &&
     !hasLlmActions &&
+    !showSaveJson &&
     !hasStatsLocationHeatmapAction &&
     !hasStatsCarvableAction &&
     !hasAnalyzeIpActions

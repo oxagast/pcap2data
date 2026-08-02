@@ -168,10 +168,15 @@ const convertContextMenuMarkup = `
       <button id="ctx-export-conv-hashes" role="menuitem">Conv hashes</button>
       <button id="ctx-export-conv-decodes" role="menuitem">Conv decode output</button>
       <button id="ctx-export-decrypted" role="menuitem">Decrypted data</button>
-      <button id="ctx-export-summary-md" role="menuitem">Summary (Markdown)</button>
-      <button id="ctx-export-summary-txt" role="menuitem">Summary (Text)</button>
-      <button id="ctx-export-summary-html" role="menuitem">Summary (HTML)</button>
       <button id="ctx-save-cookie-jar" role="menuitem">Cookie Jar</button>
+    </div>
+  </div>
+  <div id="ctx-reports-submenu" class="ctx-submenu">
+    <button id="ctx-reports-branch" class="ctx-branch" type="button">Reports...</button>
+    <div class="ctx-submenu-panel">
+      <button id="ctx-export-summary-md" role="menuitem">Save Report (Markdown)</button>
+      <button id="ctx-export-summary-txt" role="menuitem">Save Report (Text)</button>
+      <button id="ctx-export-summary-html" role="menuitem">Save Report (HTML)</button>
     </div>
   </div>
   <div id="ctx-http-file-submenu" class="ctx-submenu">
