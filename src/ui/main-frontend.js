@@ -14216,6 +14216,7 @@ let activeSavedFilterLabelDialogResolver = null;
 let activeSavedFilterDialogContext = null;
 let activeFollowStreamConfirmDialogResolver = null;
 let activeManualConvImportWarningDialogResolver = null;
+let activeSettingsResetConfirmDialogResolver = null;
 const convertContextMenuEl = getCachedElement("convert-context-menu");
 const convertContextButtons = {
   copy: getCachedElement("ctx-copy"),
@@ -16131,6 +16132,42 @@ function resolveManualConvImportWarningLoad(shouldContinue) {
   if (!activeManualConvImportWarningDialogResolver) return;
   const resolve = activeManualConvImportWarningDialogResolver;
   activeManualConvImportWarningDialogResolver = null;
+  resolve(Boolean(shouldContinue));
+}
+
+// Handles request settings reset confirmation.
+function requestSettingsResetConfirm() {
+  const dialogEl = document.getElementById("settings-reset-confirm-dialog");
+  const descriptionEl = document.getElementById("settings-reset-confirm-description");
+  const continueBtnEl = document.getElementById("settings-reset-confirm-continue-btn");
+  if (!dialogEl || !descriptionEl) {
+    return Promise.resolve(
+      window.confirm(
+        "This will reset all settings to their default values. Any unsaved changes will be lost. Continue?",
+      ),
+    );
+  }
+  if (activeSettingsResetConfirmDialogResolver) {
+    const resolve = activeSettingsResetConfirmDialogResolver;
+    activeSettingsResetConfirmDialogResolver = null;
+    resolve(false);
+  }
+  descriptionEl.textContent =
+    "This will reset all settings to their default values. Any unsaved changes will be lost. Continue?";
+  dialogEl.hidden = false;
+  if (continueBtnEl) continueBtnEl.focus();
+  return new Promise((resolve) => {
+    activeSettingsResetConfirmDialogResolver = resolve;
+  });
+}
+
+// Handles resolve settings reset confirmation.
+function resolveSettingsResetConfirm(shouldContinue) {
+  const dialogEl = document.getElementById("settings-reset-confirm-dialog");
+  if (dialogEl) dialogEl.hidden = true;
+  if (!activeSettingsResetConfirmDialogResolver) return;
+  const resolve = activeSettingsResetConfirmDialogResolver;
+  activeSettingsResetConfirmDialogResolver = null;
   resolve(Boolean(shouldContinue));
 }
 
@@ -21230,6 +21267,24 @@ document
   });
 
 document
+  .getElementById("settings-reset-confirm-continue-btn")
+  .addEventListener("click", () => resolveSettingsResetConfirm(true));
+document
+  .getElementById("settings-reset-confirm-cancel-btn")
+  .addEventListener("click", () => resolveSettingsResetConfirm(false));
+document
+  .getElementById("settings-reset-confirm-dialog")
+  .addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      resolveSettingsResetConfirm(true);
+      return;
+    }
+    if (event.key === "Escape") {
+      resolveSettingsResetConfirm(false);
+    }
+  });
+
+document
   .getElementById("plugin-install-capability-confirm-btn")
   .addEventListener("click", () => resolvePluginInstallCapabilityDialog(true));
 document
@@ -21275,8 +21330,13 @@ document.getElementById("settings-save-btn").addEventListener("click", () => {
   void persistSettingsFromForm();
 });
 
-document.getElementById("settings-reset-btn").addEventListener("click", () => {
-  void persistSettingsFromForm({ resetToDefaults: true });
+document.getElementById("settings-reset-btn").addEventListener("click", async () => {
+  const shouldReset = await requestSettingsResetConfirm();
+  if (!shouldReset) {
+    setSettingsStatus("Restore defaults canceled.");
+    return;
+  }
+  await persistSettingsFromForm({ resetToDefaults: true });
 });
 
 document.getElementById("settings-subtab-general").addEventListener("click", () => {
