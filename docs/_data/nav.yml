@@ -1,11 +1,11 @@
 - name: Overview
-  link: /
+  link: https://packetsnitch.com
 - name: Features
-  link: /features
+  link: https://packetsnitch.com/features
 - name: Store
   link: https://catalog.packetsnitch.com
 - name: Documentation
-  link: /docu
+  link: https://packetsnitch.com/docu
 - name: Sponsor
   link: https://buymeacoffee.com/oxagast/membership
 - name: on GitHub
