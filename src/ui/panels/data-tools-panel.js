@@ -736,6 +736,7 @@ const formatDceRpcUuid = convDecoders.formatDceRpcUuid;
 const lookupDceRpcService = convDecoders.lookupDceRpcService;
 const decodeLdapFromBytes = convDecoders.decodeLdapFromBytes;
 const decodeSmbFromBytes = convDecoders.decodeSmbFromBytes;
+const decodeEpmapFromBytes = convDecoders.decodeEpmapFromBytes;
 const decodeSipFromBytes = convDecoders.decodeSipFromBytes;
 const decodeSmppFromBytes = convDecoders.decodeSmppFromBytes;
 const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
@@ -939,6 +940,8 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeLdapFromBytes(bytes);
     case "smb":
       return decodeSmbFromBytes(bytes);
+    case "epmap":
+      return decodeEpmapFromBytes(bytes);
     case "sip":
       return decodeSipFromBytes(bytes);
     case "smpp":

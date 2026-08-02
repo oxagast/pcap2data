@@ -22,6 +22,7 @@ const { decodeBsonFromBytes } = require("./bson");
 
 const { decodeLdapFromBytes } = require("./ldap");
 const { decodeSmbFromBytes } = require("./smb");
+const { decodeEpmapFromBytes } = require("./epmap");
 const { decodeSipFromBytes } = require("./sip");
 const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
@@ -109,6 +110,7 @@ module.exports = {
     decodeBsonFromBytes,
     decodeLdapFromBytes,
     decodeSmbFromBytes,
+    decodeEpmapFromBytes,
     decodeSipFromBytes,
     decodeSmppFromBytes,
     decodeSoulseekFromBytes,
