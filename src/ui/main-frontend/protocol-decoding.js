@@ -24,6 +24,10 @@ const {
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
+    decodeDnsFromBytes,
+    decodeSnmpFromBytes,
+    decodeDhcpFromBytes,
+    decodeDhcpv6FromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -148,6 +152,14 @@ function createProtocolDecodingHelpers({
                 return decodeBittorrentFromBytes(bytes);
             case "kerberos":
                 return decodeKerberosFromBytes(bytes);
+            case "dns":
+                return decodeDnsFromBytes(bytes);
+            case "snmp":
+                return decodeSnmpFromBytes(bytes);
+            case "dhcp":
+                return decodeDhcpFromBytes(bytes);
+            case "dhcpv6":
+                return decodeDhcpv6FromBytes(bytes);
             case "jpeg":
                 return decodeJpegFromBytes(bytes);
             case "png":

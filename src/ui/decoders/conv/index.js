@@ -27,6 +27,10 @@ const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
+const { decodeDnsFromBytes } = require("./dns");
+const { decodeSnmpFromBytes } = require("./snmp");
+const { decodeDhcpFromBytes } = require("./dhcp");
+const { decodeDhcpv6FromBytes } = require("./dhcpv6");
 
 const { decodeJpegFromBytes } = require("./jpeg");
 const { decodePngFromBytes } = require("./png");
@@ -110,6 +114,10 @@ module.exports = {
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
+    decodeDnsFromBytes,
+    decodeSnmpFromBytes,
+    decodeDhcpFromBytes,
+    decodeDhcpv6FromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,

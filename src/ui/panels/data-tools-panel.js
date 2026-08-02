@@ -741,6 +741,10 @@ const decodeSmppFromBytes = convDecoders.decodeSmppFromBytes;
 const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
 const decodeBittorrentFromBytes = convDecoders.decodeBittorrentFromBytes;
 const decodeKerberosFromBytes = convDecoders.decodeKerberosFromBytes;
+const decodeDnsFromBytes = convDecoders.decodeDnsFromBytes;
+const decodeSnmpFromBytes = convDecoders.decodeSnmpFromBytes;
+const decodeDhcpFromBytes = convDecoders.decodeDhcpFromBytes;
+const decodeDhcpv6FromBytes = convDecoders.decodeDhcpv6FromBytes;
 
 // Phase 3 of the decoder refactor: ASN.1 helpers + BER/DER/Protobuf/MessagePack/
 // BSON now live under src/ui/decoders/conv/. The local names below keep the
@@ -945,6 +949,14 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeBittorrentFromBytes(bytes);
     case "kerberos":
       return decodeKerberosFromBytes(bytes);
+    case "dns":
+      return decodeDnsFromBytes(bytes);
+    case "snmp":
+      return decodeSnmpFromBytes(bytes);
+    case "dhcp":
+      return decodeDhcpFromBytes(bytes);
+    case "dhcpv6":
+      return decodeDhcpv6FromBytes(bytes);
     case "plaintext":
       return decodePlainTextFromBytes(bytes);
     case "jpeg":
