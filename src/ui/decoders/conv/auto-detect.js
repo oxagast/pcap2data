@@ -27,6 +27,9 @@ const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
 const { decodeDnsFromBytes } = require("./dns");
+const { decodeLlmnrFromBytes } = require("./llmnr");
+const { decodeNbnsFromBytes } = require("./nbns");
+const { decodeNbdgmFromBytes } = require("./nbdgm");
 const { decodeSnmpFromBytes } = require("./snmp");
 const { decodeDhcpFromBytes } = require("./dhcp");
 const { decodeDhcpv6FromBytes } = require("./dhcpv6");
@@ -216,6 +219,15 @@ function autoDetectProtoFromBytes(bytes, options) {
         }
         if (typeof decodeDnsFromBytes === "function" && decodeDnsFromBytes(bytes)) {
             return "dns";
+        }
+        if (typeof decodeLlmnrFromBytes === "function" && decodeLlmnrFromBytes(bytes)) {
+            return "llmnr";
+        }
+        if (typeof decodeNbnsFromBytes === "function" && decodeNbnsFromBytes(bytes)) {
+            return "nbns";
+        }
+        if (typeof decodeNbdgmFromBytes === "function" && decodeNbdgmFromBytes(bytes)) {
+            return "nbdgm";
         }
         if (typeof decodeSnmpFromBytes === "function" && decodeSnmpFromBytes(bytes)) {
             return "snmp";

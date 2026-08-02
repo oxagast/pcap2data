@@ -743,6 +743,9 @@ const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
 const decodeBittorrentFromBytes = convDecoders.decodeBittorrentFromBytes;
 const decodeKerberosFromBytes = convDecoders.decodeKerberosFromBytes;
 const decodeDnsFromBytes = convDecoders.decodeDnsFromBytes;
+const decodeLlmnrFromBytes = convDecoders.decodeLlmnrFromBytes;
+const decodeNbnsFromBytes = convDecoders.decodeNbnsFromBytes;
+const decodeNbdgmFromBytes = convDecoders.decodeNbdgmFromBytes;
 const decodeSnmpFromBytes = convDecoders.decodeSnmpFromBytes;
 const decodeDhcpFromBytes = convDecoders.decodeDhcpFromBytes;
 const decodeDhcpv6FromBytes = convDecoders.decodeDhcpv6FromBytes;
@@ -954,6 +957,12 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeKerberosFromBytes(bytes);
     case "dns":
       return decodeDnsFromBytes(bytes);
+    case "llmnr":
+      return decodeLlmnrFromBytes(bytes);
+    case "nbns":
+      return decodeNbnsFromBytes(bytes);
+    case "nbdgm":
+      return decodeNbdgmFromBytes(bytes);
     case "snmp":
       return decodeSnmpFromBytes(bytes);
     case "dhcp":
