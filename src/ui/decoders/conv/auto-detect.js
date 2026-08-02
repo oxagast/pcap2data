@@ -25,6 +25,10 @@ const { decodeSmppFromBytes } = require("./smpp");
 const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
+const { decodeDnsFromBytes } = require("./dns");
+const { decodeSnmpFromBytes } = require("./snmp");
+const { decodeDhcpFromBytes } = require("./dhcp");
+const { decodeDhcpv6FromBytes } = require("./dhcpv6");
 
 // Extracts a decoder hint for a packet from its application protocol and
 // transport ports. The result can be passed to autoDetectProtoFromBytes as
@@ -197,6 +201,18 @@ function autoDetectProtoFromBytes(bytes, options) {
         }
         if (typeof decodeKerberosFromBytes === "function" && decodeKerberosFromBytes(bytes)) {
             return "kerberos";
+        }
+        if (typeof decodeDnsFromBytes === "function" && decodeDnsFromBytes(bytes)) {
+            return "dns";
+        }
+        if (typeof decodeSnmpFromBytes === "function" && decodeSnmpFromBytes(bytes)) {
+            return "snmp";
+        }
+        if (typeof decodeDhcpFromBytes === "function" && decodeDhcpFromBytes(bytes)) {
+            return "dhcp";
+        }
+        if (typeof decodeDhcpv6FromBytes === "function" && decodeDhcpv6FromBytes(bytes)) {
+            return "dhcpv6";
         }
     } catch {
         // Keep auto-detect resilient; one decoder failure must not abort the whole chain.
