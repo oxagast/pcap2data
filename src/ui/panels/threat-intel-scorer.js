@@ -25,6 +25,15 @@ const DNS_NAME_REGEX = /^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1
 const URL_REGEX = /\bhttps?:\/\/[^\s<>"'`()]+/gi;
 const DOMAIN_HINT_REGEX = /\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}\b/g;
 
+// Debug helper: when set, the scorer logs extraAnomalies processing to
+// the renderer console. Toggle from devtools with
+// `globalThis.__THREAT_INTEL_DEBUG__ = true`. Defaults to true so
+// diagnostic output appears for first-time debugging; flip to false to
+// silence.
+if (typeof globalThis.__THREAT_INTEL_DEBUG__ === "undefined") {
+    globalThis.__THREAT_INTEL_DEBUG__ = true;
+}
+
 const HEURISTIC_SCORE_VERSION = 1;
 const MAX_SCORE = 100;
 
@@ -67,6 +76,27 @@ const WEIGHTS = Object.freeze({
     protocolAnomalyBeaconing: 8,
     protocolAnomalyDnsTunneling: 12,
     protocolAnomalyNonStandardPort: 4,
+
+    // Stats → Anomalies subtab detectors. These findings are pushed in
+    // from src/ui/panels/stats-panel.js via the `extraAnomalies`
+    // parameter to computeSessionThreatScore. They cover clear-cut
+    // attack patterns (portscans, brute-force) and statistical outliers
+    // that are otherwise easy to miss in a busy capture.
+    portscanDistinctPorts: 8,
+    portscanSyn: 10,
+    bruteForceLogin: 14,
+    baselinePacketLengthOutlier: 4,
+    baselineRateOutlier: 4,
+    cleartextHighEntropy: 8,
+});
+
+const EXTRA_ANOMALY_WEIGHT_DEFAULTS = Object.freeze({
+    "portscan-distinct-ports": "portscanDistinctPorts",
+    "portscan-syn": "portscanSyn",
+    "brute-force-login": "bruteForceLogin",
+    "baseline-packet-length-outlier": "baselinePacketLengthOutlier",
+    "baseline-rate-outlier": "baselineRateOutlier",
+    "cleartext-high-entropy": "cleartextHighEntropy",
 });
 
 const HIGH_ENTROPY_THRESHOLD = 7.5;
@@ -585,6 +615,7 @@ function computeSessionThreatScore({
     sessionThreatIntel = null,
     carvableFiles = null,
     inputBytes = null,
+    extraAnomalies = null,
 } = {}) {
     const ipIndicators = collectIpIndicators(capturedPackets);
     const domainIndicators = collectDomainIndicators(capturedPackets);
@@ -788,6 +819,57 @@ function computeSessionThreatScore({
         });
     }
 
+    // Stats → Anomalies subtab findings (portscans, brute-force, baseline
+    // outliers, embedded cleartext). Each finding carries a per-detector
+    // weight from stats-panel.js; we honor that weight but fall back to
+    // the WEIGHTS table when the detector omitted one.
+    const extraAnomalyFindings = [];
+    if (Array.isArray(extraAnomalies)) {
+        if (globalThis.__THREAT_INTEL_DEBUG__) {
+            try {
+                console.log(
+                    `[ThreatIntel][scorer] extraAnomalies array length=${extraAnomalies.length} kinds=${extraAnomalies.map((a) => a && a.kind).filter(Boolean).join(",")}`,
+                );
+            } catch (_e) {}
+        }
+        for (const finding of extraAnomalies) {
+            if (!finding || typeof finding !== "object") continue;
+            const kind = String(finding.kind || "").trim();
+            if (!kind) continue;
+            const explicitWeight = Number(finding.weight);
+            const fallbackKey = EXTRA_ANOMALY_WEIGHT_DEFAULTS[kind];
+            const fallbackWeight = fallbackKey ? Number(WEIGHTS[fallbackKey]) : 0;
+            const weight = Number.isFinite(explicitWeight) && explicitWeight > 0
+                ? explicitWeight
+                : (Number.isFinite(fallbackWeight) ? fallbackWeight : 0);
+            if (weight <= 0) continue;
+            rawScore += weight;
+            const occurrences = Number(finding.occurrences) || 1;
+            components.push({
+                kind,
+                label: finding.label || kind,
+                detail: finding.detail || "",
+                weight,
+                occurrences,
+                source: "stats-anomalies",
+            });
+            extraAnomalyFindings.push({ ...finding, weight });
+        }
+        if (globalThis.__THREAT_INTEL_DEBUG__) {
+            try {
+                console.log(
+                    `[ThreatIntel][scorer] extraAnomalies applied: count=${extraAnomalyFindings.length} rawScoreDelta=${extraAnomalyFindings.reduce((s, f) => s + f.weight, 0)}`,
+                );
+            } catch (_e) {}
+        }
+    } else if (globalThis.__THREAT_INTEL_DEBUG__) {
+        try {
+            console.log(
+                `[ThreatIntel][scorer] extraAnomalies NOT an array (${typeof extraAnomalies})`,
+            );
+        } catch (_e) {}
+    }
+
     const finalScore = clampScore(rawScore);
     const band = SCORE_BANDS.find((b) => finalScore >= b.min && finalScore <= b.max) || SCORE_BANDS[0];
 
@@ -820,7 +902,9 @@ function computeSessionThreatScore({
             },
             reputationLookups: reputationIndicators.length,
             anomalies: anomalies.length,
+            statsAnomalies: extraAnomalyFindings.length,
         },
+        statsAnomalies: extraAnomalyFindings,
         entropy: {
             value: Number(entropy.toFixed(2)),
             label: entropyLabel,

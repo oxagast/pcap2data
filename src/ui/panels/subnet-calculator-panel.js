@@ -1,6 +1,7 @@
 // Controls the Conv subnet workspace UI and network lookup tools.
 
-const { PacketSnitchThreatIntel } = require("./threat-intel-scorer");
+const threatIntelScorer = require("./threat-intel-scorer");
+const { collectStatsAnomalies: collectStatsAnomaliesDefault } = require("./stats-panel");
 
 const IPV4_HOST_BITS = 32;
 const IPV6_HOST_BITS = 128;
@@ -22,6 +23,7 @@ function createSubnetCalculatorPanel({
     getCurrentConvInputBytes = () => null,
     isLlmRuntimeEnabled = () => false,
     callLargeLanguageModel = null,
+    collectStatsAnomalies = null,
 } = {}) {
     let lookupRequestToken = 0;
     let nmapScanToken = 0;
@@ -415,17 +417,94 @@ function createSubnetCalculatorPanel({
     // automatic re-renders that fire after every lookup. The explicit
     // "Recompute" button passes silent=false to give the user feedback.
     function recomputeSessionThreatScore({ silent = false } = {}) {
-        if (!PacketSnitchThreatIntel || typeof PacketSnitchThreatIntel.computeSessionThreatScore !== "function") {
+        const debugLog = (message, extra) => {
+            if (typeof writeLogEntry !== "function") return;
+            const suffix = extra === undefined ? "" : ` ${typeof extra === "string" ? extra : JSON.stringify(extra)}`;
+            writeLogEntry(`[ThreatIntel][recompute] ${message}${suffix}`);
+        };
+        debugLog("ENTER", `silent=${silent}`);
+        if (!threatIntelScorer || typeof threatIntelScorer.computeSessionThreatScore !== "function") {
+            debugLog("EARLY-RETURN scorer unavailable");
             return null;
         }
-        const capturedPackets = (typeof getCapturePackets === "function")
-            ? getCapturePackets()
-            : null;
+        if (typeof getCapturePackets !== "function") {
+            debugLog("EARLY-RETURN getCapturePackets is not a function");
+            return null;
+        }
+        const capturedPackets = getCapturePackets();
+        const hostKeys = (capturedPackets && typeof capturedPackets === "object")
+            ? Object.keys(capturedPackets.host || {})
+            : [];
+        let packetCount = 0;
+        for (const h of hostKeys) {
+            const list = capturedPackets.host?.[h];
+            if (Array.isArray(list)) packetCount += list.length;
+        }
+        debugLog(
+            "capturedPackets shape",
+            `hosts=${hostKeys.length} packets=${packetCount} hasHost=${Boolean(capturedPackets && capturedPackets.host)}`,
+        );
+        if (packetCount === 0) {
+            debugLog("WARNING capturedPackets has 0 packets — score will be 0");
+        }
         const carvableFiles = (typeof getCarvableFiles === "function")
             ? getCarvableFiles()
             : null;
         const inputBytes = resolveCurrentConvInputBytes();
-        const score = PacketSnitchThreatIntel.computeSessionThreatScore({
+        // Roll the Stats → Anomalies subtab findings (portscans,
+        // brute-force, baseline outliers, embedded cleartext) into
+        // the Session Threat Score so the Threat Intel panel sees
+        // them. We flatten the grouped result into a single array of
+        // findings — each one carries kind/label/detail/weight already.
+        //
+        // Prefer an injected collector (lets the host app wrap or
+        // override it) but fall back to the canonical stats-panel
+        // collector so the integration still works even if the host
+        // forgot to pass one in.
+        const collector = (typeof collectStatsAnomalies === "function")
+            ? collectStatsAnomalies
+            : collectStatsAnomaliesDefault;
+        debugLog(
+            "collector selected",
+            `injected=${typeof collectStatsAnomalies === "function"} default=${typeof collectStatsAnomaliesDefault === "function"} usingDefault=${collector === collectStatsAnomaliesDefault}`,
+        );
+        let extraAnomalies = [];
+        let statsAnomalyGroups = null;
+        if (typeof collector === "function") {
+            try {
+                const grouped = collector(capturedPackets) || {};
+                statsAnomalyGroups = grouped;
+                extraAnomalies = []
+                    .concat(grouped.protocolAnomalies || [])
+                    .concat(grouped.portscans || [])
+                    .concat(grouped.bruteForce || [])
+                    .concat(grouped.baselineOutliers || [])
+                    .concat(grouped.embeddedContent || []);
+                debugLog(
+                    "collector result",
+                    `protocolAnomalies=${(grouped.protocolAnomalies||[]).length} portscans=${(grouped.portscans||[]).length} bruteForce=${(grouped.bruteForce||[]).length} baselineOutliers=${(grouped.baselineOutliers||[]).length} embeddedContent=${(grouped.embeddedContent||[]).length} total=${extraAnomalies.length}`,
+                );
+                if (extraAnomalies.length > 0) {
+                    debugLog(
+                        "extraAnomalies kinds",
+                        extraAnomalies.map((a) => `${a.kind}(w=${a.weight})`).join(","),
+                    );
+                }
+            } catch (error) {
+                debugLog(
+                    "collector THREW",
+                    `${error && error.message ? error.message : error}`,
+                );
+                if (typeof writeLogEntry === "function") {
+                    writeLogEntry(
+                        `Stats anomalies could not be folded into the threat score: ${error && error.message ? error.message : error}`,
+                    );
+                }
+            }
+        } else {
+            debugLog("WARNING no collector available — extraAnomalies will be empty");
+        }
+        const score = threatIntelScorer.computeSessionThreatScore({
             capturedPackets,
             threatIntelState,
             sessionThreatIntel: sessionThreatIntelRecords.map((entry) => ({
@@ -436,20 +515,60 @@ function createSubnetCalculatorPanel({
             })),
             carvableFiles,
             inputBytes,
+            extraAnomalies,
         });
         if (score) {
-            const anomalies = PacketSnitchThreatIntel.detectProtocolAnomalies(capturedPackets);
+            debugLog(
+                "score computed",
+                `score=${score.score} band=${score.band} components=${(score.components||[]).length} statsAnomalies=${(score.statsAnomalies||[]).length} indicators.statsAnomalies=${score.indicators?.statsAnomalies}`,
+            );
+            const statsAnomComponents = (score.components || []).filter((c) => c.source === "stats-anomalies");
+            if (statsAnomComponents.length > 0) {
+                debugLog(
+                    "stats-anomalies components in score",
+                    statsAnomComponents.map((c) => `${c.kind}(w=${c.weight})`).join(","),
+                );
+            }
+            const anomalies = threatIntelScorer.detectProtocolAnomalies(capturedPackets);
             score._anomalies = anomalies;
+            // Surface stats-anomaly counts in the panel status so the
+            // user can see the aggregator actually picked them up.
+            if (statsAnomalyGroups) {
+                score._statsAnomalySummary = {
+                    portscans: (statsAnomalyGroups.portscans || []).length,
+                    bruteForce: (statsAnomalyGroups.bruteForce || []).length,
+                    baselineOutliers: (statsAnomalyGroups.baselineOutliers || []).length,
+                    embeddedContent: (statsAnomalyGroups.embeddedContent || []).length,
+                    protocolAnomalies: (statsAnomalyGroups.protocolAnomalies || []).length,
+                };
+            }
         }
         renderSessionThreatScore(score);
-        if (!silent) {
+        if (!silent && score) {
+            if (statsAnomalyGroups) {
+                const total = extraAnomalies.length;
+                if (total > 0) {
+                    const summary = score._statsAnomalySummary;
+                    const parts = [];
+                    if (summary.protocolAnomalies) parts.push(`${summary.protocolAnomalies} protocol`);
+                    if (summary.portscans) parts.push(`${summary.portscans} portscan`);
+                    if (summary.bruteForce) parts.push(`${summary.bruteForce} brute-force`);
+                    if (summary.baselineOutliers) parts.push(`${summary.baselineOutliers} baseline`);
+                    if (summary.embeddedContent) parts.push(`${summary.embeddedContent} embedded`);
+                    setPanelStatus(
+                        `Threat score: ${score.score} (${score.band}) — folded in ${total} stats finding(s) (${parts.join(", ")}).`,
+                    );
+                } else {
+                    setPanelStatus(`Threat score: ${score.score} (${score.band}).`);
+                }
+            }
             if (typeof writeLogEntry === "function") {
                 writeLogEntry(
-                    `[ThreatIntel] Session Threat Score recomputed score=${score?.score} band=${score?.band}`,
+                    `[ThreatIntel] Session Threat Score recomputed score=${score.score} band=${score.band}`,
                 );
             }
             if (typeof statusUpdate === "function") {
-                statusUpdate(`Status: Session Threat Score recomputed (${score?.score}/100 ${score?.band})`);
+                statusUpdate(`Status: Session Threat Score recomputed (${score.score}/100 ${score.band})`);
             }
         }
         return score;
@@ -491,7 +610,7 @@ function createSubnetCalculatorPanel({
             );
         }
         try {
-            const prompt = PacketSnitchThreatIntel.buildSessionThreatLlmPrompt(lastThreatScoreResult);
+            const prompt = threatIntelScorer.buildSessionThreatLlmPrompt(lastThreatScoreResult);
             const response = await callLargeLanguageModel(prompt, { signal: controller.signal });
             if (controller.signal.aborted) return;
             const text = String(response?.response || "").trim();
@@ -535,7 +654,7 @@ function createSubnetCalculatorPanel({
             return false;
         }
         if (typeof addNote !== "function") return false;
-        const breakdown = PacketSnitchThreatIntel.buildSessionThreatScoreBreakdown(lastThreatScoreResult);
+        const breakdown = threatIntelScorer.buildSessionThreatScoreBreakdown(lastThreatScoreResult);
         const didAdd = addNote(breakdown, "#d32f2f", "session-threat-score", true);
         if (didAdd) {
             if (typeof showNotesWorkspace === "function") showNotesWorkspace();
