@@ -678,6 +678,30 @@ strong {
   overflow-x: hidden;
 }
 
+.stats-anomalies-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 12px 2px;
+}
+
+.stats-anomalies-summary {
+  font-family: "Tahoma", "Courier New", Courier, monospace;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-3);
+  background-color: color-mix(in srgb, var(--color-7) 70%, transparent);
+  color: var(--color-5);
+}
+
+.stats-anomalies-footer {
+  margin-top: 6px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-5);
+  opacity: 0.78;
+}
+
 #data_tools_box {
   display: none;
   border: 8px solid var(--color-3);
@@ -5028,6 +5052,224 @@ strong {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Session Threat Score card on the Threat Intel subtab. The card spans the
+   full grid width and shows the numeric score, a colored band pill, the
+   top contributing indicators, a capture footprint summary, and any
+   detected protocol anomalies. */
+#subnet-ti-score-card {
+  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 92%, #000 8%);
+}
+
+#subnet-ti-score-card .subnet-calc-card-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#subnet-ti-score-band-pill {
+  margin-left: auto;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.subnet-ti-score-band-clean {
+  background-color: #2e7d32;
+  color: #ffffff;
+}
+
+.subnet-ti-score-band-low {
+  background-color: #558b2f;
+  color: #ffffff;
+}
+
+.subnet-ti-score-band-medium {
+  background-color: #f9a825;
+  color: #1a1a1a;
+}
+
+.subnet-ti-score-band-high {
+  background-color: #ef6c00;
+  color: #ffffff;
+}
+
+.subnet-ti-score-band-critical {
+  background-color: #c62828;
+  color: #ffffff;
+}
+
+.subnet-ti-score-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.4fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 760px) {
+  .subnet-ti-score-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.subnet-ti-score-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  border-radius: 6px;
+}
+
+.subnet-ti-score-value {
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-1);
+  font-family: "Orbitron", "Segoe UI", system-ui, sans-serif;
+}
+
+.subnet-ti-score-max {
+  font-size: 12px;
+  color: var(--color-6);
+  margin-top: -2px;
+}
+
+.subnet-ti-score-description {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-6);
+}
+
+.subnet-ti-score-actions {
+  margin-top: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.subnet-ti-score-llm-status {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-6);
+  min-height: 16px;
+  word-break: break-word;
+}
+
+.subnet-ti-score-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subnet-ti-score-components {
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-5);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.subnet-ti-score-components ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.subnet-ti-score-components li {
+  padding: 2px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-3) 70%, transparent 30%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.subnet-ti-score-components li:last-child {
+  border-bottom: none;
+}
+
+.subnet-ti-score-component-weight {
+  font-family: "Orbitron", "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  min-width: 36px;
+  display: inline-block;
+  text-align: right;
+}
+
+.subnet-ti-score-component-weight-positive {
+  color: #ef5350;
+}
+
+.subnet-ti-score-component-weight-negative {
+  color: #66bb6a;
+}
+
+.subnet-ti-score-component-label {
+  font-weight: 600;
+  color: var(--color-1);
+}
+
+.subnet-ti-score-component-detail {
+  color: var(--color-6);
+  font-size: 11px;
+}
+
+.subnet-ti-score-footprint {
+  margin-top: 10px;
+}
+
+.subnet-ti-score-footprint-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-6);
+}
+
+.subnet-ti-score-footprint-list li::before {
+  content: "•";
+  color: var(--color-1);
+  margin-right: 6px;
+}
+
+.subnet-ti-score-anomalies {
+  margin-top: 10px;
+}
+
+.subnet-ti-score-anomalies-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-5);
+}
+
+.subnet-ti-score-anomalies-list li {
+  padding: 2px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-3) 70%, transparent 30%);
+}
+
+.subnet-ti-score-anomalies-list li:last-child {
+  border-bottom: none;
+}
+
+.subnet-ti-score-anomaly-weight {
+  font-family: "Orbitron", "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  color: #ef5350;
+  margin-right: 6px;
+}
+
 
 /* First-run metrics consent overlay.
    Shown after the install screen on a clean ~/.config directory

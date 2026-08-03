@@ -3,6 +3,49 @@
 const threadName = "Stats";
 const h337 = require("heatmap.js");
 const { MAP_PROJECTION_CALIBRATION } = require("../../settings");
+// The threat-intel scorer is a pure module that already implements
+// Shannon entropy and a protocol-anomaly detector. We reuse the
+// anomaly detector directly so the Anomalies subtab and the eventual
+// Threat Intel correlation panel agree on what counts as anomalous.
+const {
+  detectProtocolAnomalies: detectThreatProtocolAnomalies,
+  calculateShannonEntropy: calculateThreatShannonEntropy,
+} = require("./threat-intel-scorer");
+
+// --- Anomalies subtab tuning -----------------------------------------
+// Thresholds are conservative; an analyst can always click a tag to
+// drill into the offending packets, and the threat-intel panel can
+// later promote anything in here to a scored indicator.
+const ANOMALY_PORTSCAN_DISTINCT_PORTS = 15;
+const ANOMALY_PORTSCAN_MIN_PACKETS = 15;
+const ANOMALY_PORTSCAN_SYN_MIN = 10;
+const ANOMALY_BRUTEFORCE_MIN_ATTEMPTS = 6;
+const ANOMALY_BRUTEFORCE_TIME_WINDOW_MS = 60 * 1000;
+const ANOMALY_BASELINE_MIN_SAMPLES = 8;
+const ANOMALY_BASELINE_OUTLIER_STDDEV = 2.5;
+const ANOMALY_ENTROPY_CLEARTEXT_THRESHOLD = 5.5;
+const ANOMALY_ENTROPY_MIN_SAMPLE_LENGTH = 32;
+const ANOMALY_PROTOCOL_CONTENT_MIN_BYTES = 16;
+
+// Canonical destination ports for each auth-bearing protocol. Used by
+// the brute-force detector to identify "attempt" packets — the
+// attacker is the one whose packet targets the well-known port.
+// Decoding more than just these (e.g. ephemeral) would let the
+// server's response packets inflate the burst counter and would
+// split one attacker's outbound flow into thousands of buckets.
+const STATS_ANOMALY_AUTH_PORTS = {
+  FTP: [20, 21],
+  SSH: [22],
+  TELNET: [23],
+  SMTP: [25, 465, 587],
+  DNS: [53],
+  HTTP: [80, 8080],
+  HTTP2: [80, 8080],
+  POP3: [110, 995],
+  IMAP: [143, 993],
+  KERBEROS: [88],
+  Kerberos: [88],
+};
 
 const DEFAULT_HEATMAP_INTENSITY = 100;
 const DEFAULT_HEATMAP_TIGHTNESS = 145;
@@ -3328,6 +3371,715 @@ function totalTrafficBytes(capturedPackets) {
   return totalBytes;
 }
 
+// ============================================================================
+// Anomalies subtab detection helpers
+// ============================================================================
+//
+// These helpers compute structured anomaly findings that the Stats →
+// Anomalies subtab renders. They are intentionally pure (no DOM, no
+// globals) so they can be unit-tested in isolation and so a future
+// Threat Intel panel can re-use the same detectors without a UI.
+//
+// Each detector returns an array of plain objects shaped like:
+//   { kind, label, detail, weight, occurrences, target?, query? }
+// where:
+//   * ``kind`` is a stable machine-readable identifier
+//   * ``label`` is a short human-readable title used as the tag text
+//   * ``detail`` is a longer single-sentence explanation
+//   * ``weight`` is a coarse importance hint (0-10) for sorting
+//   * ``occurrences`` is the count behind the finding
+//   * ``target`` is an optional IP/host the finding is about
+//   * ``query`` is an optional filter expression that, when present,
+//     is wired up as a clickable filter tag
+//
+// If we can't compute a finding (e.g. we have too few samples for a
+// statistical baseline) we return an empty array rather than guess.
+
+// Iterates over all packets in a capturedPackets structure without
+// relying on the threat-intel scorer's internal helper. The shapes
+// are stable enough that the loop is short and clear.
+function statsAnomaliesIteratePackets(capturedPackets) {
+  if (!capturedPackets || typeof capturedPackets !== "object") return [];
+  const hosts = capturedPackets["host"];
+  if (!hosts || typeof hosts !== "object") return [];
+  const out = [];
+  for (const hostBucket of Object.keys(hosts)) {
+    const packets = hosts[hostBucket];
+    if (!Array.isArray(packets)) continue;
+    for (let index = 0; index < packets.length; index += 1) {
+      const packet = packets[index];
+      const packetInfo = packet?.["packet.info"];
+      if (!packetInfo || typeof packetInfo !== "object") continue;
+      out.push({ host: hostBucket, packet, packetInfo });
+    }
+  }
+  return out;
+}
+
+// Reads a single string field from packet.info with sensible fallbacks.
+// The wire shape stores dotted keys as a single property on a parent
+// keyed by the upper-case protocol, e.g. packetInfo["IP"]["ip.src.addr"].
+// We accept either "ip.src.addr" (best-effort, tries common parents)
+// or "IP.ip.src.addr" (parent-prefixed, explicit).
+function statsAnomaliesReadString(packetInfo, dotKey, legacyKey) {
+  if (!packetInfo || typeof packetInfo !== "object") return "";
+  const parts = String(dotKey || "").split(".");
+  const tryRead = (parentKey, leafKey) => {
+    const parent = packetInfo[parentKey];
+    if (parent && typeof parent === "object") {
+      const value = parent[leafKey];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return "";
+  };
+  if (parts.length >= 2) {
+    // First try with an explicit parent prefix (e.g. "IP.ip.src.addr").
+    if (parts.length >= 3) {
+      const out = tryRead(parts[0], parts.slice(1).join("."));
+      if (out) return out;
+    }
+    // Otherwise try common parents (IP, TCP, UDP, HTTP, DNS, FTP, SMTP, Kerberos, KERBEROS).
+    const leaf = parts.join(".");
+    const parents = ["IP", "ip", "TCP", "tcp", "UDP", "udp", "HTTP", "http", "DNS", "dns", "FTP", "ftp", "SMTP", "smtp", "Kerberos", "KERBEROS"];
+    for (const p of parents) {
+      const out = tryRead(p, leaf);
+      if (out) return out;
+    }
+  }
+  if (typeof packetInfo[dotKey] === "string" && packetInfo[dotKey].trim()) {
+    return packetInfo[dotKey].trim();
+  }
+  if (typeof legacyKey === "string" && typeof packetInfo[legacyKey] === "string") {
+    return packetInfo[legacyKey].trim();
+  }
+  return "";
+}
+
+// Reads a numeric port from a packet, returning null when the field
+// is missing or not a number.
+function statsAnomaliesReadPort(packetInfo, proto) {
+  if (!packetInfo || typeof packetInfo !== "object") return null;
+  const transport = proto === "UDP" ? "UDP" : proto === "TCP" ? "TCP" : null;
+  if (!transport) return null;
+  const transportData = packetInfo[transport] || {};
+  const dotted = transportData[
+    transport === "TCP" ? "tcp.dst.port" : "udp.dstport"
+  ] ?? transportData[
+    transport === "TCP" ? "tcp.src.port" : "udp.srcport"
+  ];
+  const legacy = transportData["Destination port"] ?? transportData["Source port"];
+  const raw = (dotted ?? legacy);
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : null;
+}
+
+// Detects portscan patterns. A "portscan" here is a single source IP
+// that hits an unusually large number of distinct destination ports on
+// the same transport, optionally with a TCP SYN bias. We surface
+// per-(src, proto) buckets so a noisy host doesn't drown the findings.
+function detectStatsAnomaliesPortscan(capturedPackets) {
+  const packets = statsAnomaliesIteratePackets(capturedPackets);
+  if (packets.length === 0) return [];
+
+  // bucketKey -> { src, proto, distinctPorts:Set, packets, synCount }
+  const buckets = new Map();
+  for (const entry of packets) {
+    const pi = entry.packetInfo;
+    const proto = String(pi?.["packet.proto"] ?? pi?.["Protocol"] ?? "").toUpperCase();
+    if (proto !== "TCP" && proto !== "UDP") continue;
+    const src = statsAnomaliesReadString(pi, "ip.src.addr", "Source IP");
+    const dst = statsAnomaliesReadString(pi, "ip.dst.addr", "Destination IP");
+    if (!src || !dst) continue;
+    const dstPort = statsAnomaliesReadPort(pi, proto);
+    if (!Number.isFinite(dstPort)) continue;
+    const key = `${proto}:${src}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        src,
+        proto,
+        distinctPorts: new Set(),
+        packets: 0,
+        synCount: 0,
+        firstSeen: null,
+        lastSeen: null,
+        dstSet: new Set(),
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.distinctPorts.add(dstPort);
+    bucket.packets += 1;
+    bucket.dstSet.add(dst);
+    if (proto === "TCP") {
+      const tcp = pi["TCP"] || {};
+      const flags = String(tcp["tcp.flags"] ?? tcp["Flags"] ?? "").toUpperCase();
+      const isSyn = /\bS\b/.test(flags) && !/\bA\b/.test(flags);
+      if (isSyn) bucket.synCount += 1;
+    }
+    const ts = Number(pi["packet.timestamp"] ?? pi["Packet Timestamp"]);
+    if (Number.isFinite(ts)) {
+      const ms = ts > 1e12 ? ts : ts * 1000;
+      if (bucket.firstSeen === null || ms < bucket.firstSeen) bucket.firstSeen = ms;
+      if (bucket.lastSeen === null || ms > bucket.lastSeen) bucket.lastSeen = ms;
+    }
+  }
+
+  const findings = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.distinctPorts.size < ANOMALY_PORTSCAN_DISTINCT_PORTS) continue;
+    if (bucket.packets < ANOMALY_PORTSCAN_MIN_PACKETS) continue;
+    const isSynHeavy = bucket.proto === "TCP"
+      && bucket.synCount >= ANOMALY_PORTSCAN_SYN_MIN
+      && bucket.synCount / Math.max(1, bucket.packets) >= 0.4;
+    const kind = isSynHeavy ? "portscan-syn" : "portscan-distinct-ports";
+    const label = isSynHeavy
+      ? `SYN scan from ${bucket.src}`
+      : `Port scan from ${bucket.src} (${bucket.distinctPorts.size} ports)`;
+    const detail = isSynHeavy
+      ? `${bucket.src} sent ${bucket.synCount} SYN packets to ${bucket.dstSet.size} host(s) on ${bucket.distinctPorts.size} distinct port(s).`
+      : `${bucket.src} probed ${bucket.distinctPorts.size} distinct ${bucket.proto} port(s) across ${bucket.dstSet.size} host(s).`;
+    findings.push({
+      kind,
+      label,
+      detail,
+      weight: isSynHeavy ? 8 : 6,
+      occurrences: isSynHeavy ? bucket.synCount : bucket.packets,
+      target: bucket.src,
+      query: `ip.src.addr: ${bucket.src} && packet.proto: ${bucket.proto}`,
+    });
+  }
+
+  findings.sort((a, b) => b.weight - a.weight || b.occurrences - a.occurrences);
+  return findings;
+}
+
+// Decodes the upper-case protocol name from a packet for grouping.
+function statsAnomaliesReadProto(packetInfo) {
+  return String(packetInfo?.["packet.proto"] ?? packetInfo?.["Protocol"] ?? "").toUpperCase();
+}
+
+// Decodes a UNIX-ms timestamp or null.
+function statsAnomaliesReadTimestamp(packetInfo) {
+  if (!packetInfo || typeof packetInfo !== "object") return null;
+  const raw = packetInfo["packet.timestamp"] ?? packetInfo["Packet Timestamp"];
+  if (raw === null || raw === undefined) return null;
+  // Numeric path: UNIX-seconds (<= 1e12) or UNIX-ms (> 1e12).
+  if (typeof raw === "number") {
+    if (!Number.isFinite(raw) || raw <= 0) return null;
+    return raw > 1e12 ? raw : raw * 1000;
+  }
+  // String path: ISO-8601 (e.g. "2002-06-18 02:12:11.010076"). The
+  // Python backend writes timestamps as space-separated UTC strings
+  // instead of "T"-separated, so we normalize before Date.parse.
+  if (typeof raw === "string" && raw.trim()) {
+    let candidate = raw.trim();
+    // "YYYY-MM-DD HH:MM:SS[.ffffff]" -> "YYYY-MM-DDTHH:MM:SS[.ffffff]Z"
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(candidate)) {
+      candidate = candidate.replace(" ", "T");
+      if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(candidate)) candidate += "Z";
+    }
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+    // Fallback: numeric coercion (some captures use stringified ints).
+    const num = Number(raw);
+    if (Number.isFinite(num) && num > 0) return num > 1e12 ? num : num * 1000;
+  }
+  return null;
+}
+
+// Detects brute-force login patterns. We look for the canonical
+// auth-bearing protocols (SSH, FTP, HTTP-with-Auth, Telnet, SMTP,
+// IMAP, POP3, Kerberos) where many distinct "username-ish" payloads
+// are directed at the same (dst, port) within a short window. We
+// intentionally keep this lightweight — the goal is a hint, not a
+// fingerprint — and the click-through filter exposes the offending
+// packets so the analyst can confirm.
+function detectStatsAnomaliesBruteForce(capturedPackets) {
+  const packets = statsAnomaliesIteratePackets(capturedPackets);
+  if (packets.length === 0) return [];
+
+  // Map of bucketKey -> { dst, port, appProto, attempts:[ts], sources:Set }
+  const buckets = new Map();
+  for (const entry of packets) {
+    const pi = entry.packetInfo;
+    const transportProto = statsAnomaliesReadProto(pi);
+    if (!isLikelyAuthProtocol(transportProto, pi)) continue;
+    const appProto = statsAnomaliesInferAppProto(pi, transportProto);
+    const dst = statsAnomaliesReadString(pi, "ip.dst.addr", "Destination IP");
+    if (!dst) continue;
+    // Port lookup: try the app-proto section first (it may carry
+    // transport ports under some wire shapes), then fall back to the
+    // transport section.
+    let dstPort = statsAnomaliesReadPort(pi, transportProto === "UDP" ? "UDP" : "TCP");
+    if (!Number.isFinite(dstPort) && appProto !== transportProto) {
+      dstPort = statsAnomaliesReadPortFromSection(pi, appProto);
+    }
+    if (!Number.isFinite(dstPort)) continue;
+    const src = statsAnomaliesReadString(pi, "ip.src.addr", "Source IP");
+    const ts = statsAnomaliesReadTimestamp(pi);
+    // Bucket by (appProto, src, dst) — the auth PORT is implied by
+    // the protocol. Bucketing by port would split an attacker's
+    // outbound flow across thousands of ephemeral source ports, and
+    // would also create one bucket per server→client response
+    // connection (which would balloon the findings list for any
+    // normal capture with multiple concurrent sessions).
+    //
+    // We further restrict to "attempts" being packets whose
+    // destination port is the canonical auth port for the protocol
+    // (e.g. 21 for FTP, 22 for SSH, 25 for SMTP). Otherwise we still
+    // count the packet so the bucket has a port label, but we don't
+    // record it as an "attempt" — this prevents the server's
+    // response packets from inflating the burst counter.
+    const authPorts = STATS_ANOMALY_AUTH_PORTS[appProto] || [];
+    const isAuthPort = authPorts.includes(dstPort);
+    const key = `${appProto}:${src}->${dst}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = {
+        dst,
+        port: dstPort,
+        proto: appProto,
+        attempts: [],
+        sources: new Set(),
+      };
+      buckets.set(key, bucket);
+    }
+    if (isAuthPort && Number.isFinite(ts)) bucket.attempts.push(ts);
+    if (src) bucket.sources.add(src);
+  }
+
+  const findings = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.attempts.length < ANOMALY_BRUTEFORCE_MIN_ATTEMPTS) continue;
+    bucket.attempts.sort((a, b) => a - b);
+    const maxBurst = maxBurstWithinWindow(
+      bucket.attempts,
+      ANOMALY_BRUTEFORCE_TIME_WINDOW_MS,
+    );
+    if (maxBurst < ANOMALY_BRUTEFORCE_MIN_ATTEMPTS) continue;
+    findings.push({
+      kind: "brute-force-login",
+      label: `Brute-force login (${bucket.proto}) on ${bucket.dst}:${bucket.port}`,
+      detail: `${maxBurst} auth attempts within a ${ANOMALY_BRUTEFORCE_TIME_WINDOW_MS / 1000}s window (total ${bucket.attempts.length}) from ${bucket.sources.size} source(s).`,
+      weight: 7,
+      occurrences: maxBurst,
+      target: bucket.dst,
+      query: `ip.dst.addr: ${bucket.dst} && packet.proto: ${bucket.proto} && ${bucket.proto}.dst.port: ${bucket.port}`,
+    });
+  }
+
+  findings.sort((a, b) => b.weight - a.weight || b.occurrences - a.occurrences);
+  return findings;
+}
+
+// Reads a numeric port from an arbitrary nested section
+// (e.g. packetInfo["TCP"]["FTP"]["tcp.dst.port"]) — the backend
+// occasionally nests transport metadata inside the decoded protocol
+// section instead of on the transport section itself.
+function statsAnomaliesReadPortFromSection(packetInfo, sectionName) {
+  if (!packetInfo || typeof packetInfo !== "object") return null;
+  const section = packetInfo[sectionName];
+  if (!section || typeof section !== "object") return null;
+  for (const key of ["tcp.dst.port", "udp.dstport", "Destination port"]) {
+    const raw = section[key];
+    if (raw === undefined || raw === null) continue;
+    const num = Number(raw);
+    if (Number.isFinite(num)) return num;
+  }
+  return null;
+}
+
+// Picks the canonical application-protocol label for an auth-bearing
+// packet. When the outer packet.proto is the transport (TCP/UDP), we
+// sniff the decoded section nested under it (FTP, SMTP, etc.) so the
+// finding reads as "FTP" rather than "TCP".
+function statsAnomaliesInferAppProto(packetInfo, fallbackProto) {
+  if (!packetInfo || typeof packetInfo !== "object") return fallbackProto;
+  const authSectionNames = [
+    "FTP", "SMTP", "IMAP", "POP3", "KERBEROS", "Kerberos",
+    "SSH", "Telnet", "TELNET", "HTTP", "HTTP2",
+  ];
+  for (const transport of ["TCP", "UDP", "tls", "TLS"]) {
+    const section = packetInfo[transport];
+    if (!section || typeof section !== "object") continue;
+    for (const name of authSectionNames) {
+      if (section[name] && typeof section[name] === "object") return name.toUpperCase();
+    }
+  }
+  return fallbackProto;
+}
+
+function isLikelyAuthProtocol(proto, packetInfo) {
+  // Direct label match — when the wire reports the decoded
+  // application protocol as packet.proto (rare in this codebase but
+  // still a valid shape).
+  if (proto === "SSH" || proto === "FTP" || proto === "TELNET" || proto === "SMTP"
+      || proto === "IMAP" || proto === "POP3" || proto === "KERBEROS"
+      || proto === "HTTP" || proto === "HTTP2") {
+    return true;
+  }
+  if (!packetInfo || typeof packetInfo !== "object") return false;
+
+  // The Python backend decodes FTP/SMTP/IMAP/POP3/Kerberos/Telnet
+  // into nested sections under the transport ("TCP"/"UDP"), and the
+  // outer packet.proto stays as the transport label. We treat the
+  // presence of any of these sections as an auth-bearing signal.
+  const authSectionNames = ["FTP", "SMTP", "IMAP", "POP3", "KERBEROS", "Kerberos", "SSH", "Telnet", "TELNET"];
+  for (const section of ["TCP", "UDP", "tls", "TLS"]) {
+    const transport = packetInfo[section];
+    if (!transport || typeof transport !== "object") continue;
+    for (const name of authSectionNames) {
+      if (transport[name] && typeof transport[name] === "object") return true;
+    }
+  }
+
+  // HTTP carrying a non-empty Authorization header is treated as an
+  // auth-bearing flow even if the transport is reported as a generic
+  // TCP packet.
+  if (proto === "TCP") {
+    const http = packetInfo["HTTP"] || packetInfo["http"];
+    if (http && typeof http === "object") {
+      const auth = http["http.authorization"] ?? http["Authorization"] ?? null;
+      if (typeof auth === "string" && auth.trim()) return true;
+    }
+  }
+  return false;
+}
+
+// Returns the maximum number of attempts that fit within any rolling
+// window of ``windowMs`` milliseconds. Linear scan is fine here — the
+// per-bucket attempt count is bounded by what the wire can carry in
+// one second of traffic.
+function maxBurstWithinWindow(timestamps, windowMs) {
+  if (!Array.isArray(timestamps) || timestamps.length === 0) return 0;
+  let max = 0;
+  let left = 0;
+  for (let right = 0; right < timestamps.length; right += 1) {
+    while (timestamps[right] - timestamps[left] > windowMs) left += 1;
+    const span = right - left + 1;
+    if (span > max) max = span;
+  }
+  return max;
+}
+
+// Builds a "normal" baseline from the capture and flags outlier
+// protocols/flows that deviate by more than a few standard deviations.
+// The baseline looks at: (a) average packet length per protocol,
+// (b) packets-per-minute per protocol. Findings are sorted by their
+// z-score so the most out-of-character protocol floats to the top.
+function detectStatsAnomaliesBaselineOutliers(capturedPackets) {
+  const packets = statsAnomaliesIteratePackets(capturedPackets);
+  if (packets.length === 0) return [];
+
+  const lengthByProto = new Map();
+  const perMinuteByProto = new Map();
+  for (const entry of packets) {
+    const pi = entry.packetInfo;
+    const proto = statsAnomaliesReadProto(pi);
+    if (!proto) continue;
+    const length = Number(pi["packet.len"] ?? pi["Packet Length"] ?? NaN);
+    if (Number.isFinite(length) && length > 0) {
+      const sample = lengthByProto.get(proto) || [];
+      sample.push(length);
+      lengthByProto.set(proto, sample);
+    }
+    const ts = statsAnomaliesReadTimestamp(pi);
+    if (Number.isFinite(ts)) {
+      const bucket = perMinuteByProto.get(proto) || new Map();
+      const minute = Math.floor(ts / 60000);
+      bucket.set(minute, (bucket.get(minute) || 0) + 1);
+      perMinuteByProto.set(proto, bucket);
+    }
+  }
+
+  const findings = [];
+  for (const [proto, lengths] of lengthByProto.entries()) {
+    if (lengths.length < ANOMALY_BASELINE_MIN_SAMPLES) continue;
+    const mean = lengths.reduce((a, b) => a + b, 0) / lengths.length;
+    if (!Number.isFinite(mean) || mean <= 0) continue;
+    const variance = lengths.reduce((acc, value) => acc + ((value - mean) ** 2), 0)
+      / lengths.length;
+    const stddev = Math.sqrt(variance);
+    if (!Number.isFinite(stddev) || stddev === 0) continue;
+    const sortedLengths = [...lengths].sort((a, b) => a - b);
+    const max = sortedLengths[sortedLengths.length - 1];
+    const zScore = (max - mean) / stddev;
+    if (zScore < ANOMALY_BASELINE_OUTLIER_STDDEV) continue;
+    findings.push({
+      kind: "baseline-packet-length-outlier",
+      label: `${proto} packets far larger than baseline`,
+      detail: `Largest ${proto} packet was ${max} bytes (mean ${mean.toFixed(0)}, stddev ${stddev.toFixed(0)}, z=${zScore.toFixed(1)}).`,
+      weight: Math.min(6, Math.max(2, Math.round(zScore) - 1)),
+      occurrences: lengths.length,
+      query: `packet.proto: ${proto}`,
+    });
+  }
+
+  for (const [proto, perMinute] of perMinuteByProto.entries()) {
+    if (perMinute.size < ANOMALY_BASELINE_MIN_SAMPLES) continue;
+    const rates = [...perMinute.values()];
+    const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+    if (!Number.isFinite(mean) || mean <= 0) continue;
+    const variance = rates.reduce((acc, value) => acc + ((value - mean) ** 2), 0)
+      / rates.length;
+    const stddev = Math.sqrt(variance);
+    if (!Number.isFinite(stddev) || stddev === 0) continue;
+    const sortedRates = [...rates].sort((a, b) => a - b);
+    const max = sortedRates[sortedRates.length - 1];
+    const zScore = (max - mean) / stddev;
+    if (zScore < ANOMALY_BASELINE_OUTLIER_STDDEV) continue;
+    findings.push({
+      kind: "baseline-packet-rate-outlier",
+      label: `${proto} spike (${max} packets in a single minute)`,
+      detail: `Peak ${proto} rate was ${max}/min (mean ${mean.toFixed(1)}/min, stddev ${stddev.toFixed(1)}, z=${zScore.toFixed(1)}).`,
+      weight: Math.min(7, Math.max(2, Math.round(zScore))),
+      occurrences: max,
+      query: `packet.proto: ${proto}`,
+    });
+  }
+
+  findings.sort((a, b) => b.weight - a.weight);
+  return findings;
+}
+
+// Looks for content that "doesn't belong" in the protocol that
+// carried it. The cheap-and-cheerful check is: if a cleartext
+// protocol (HTTP URI, DNS name, SMTP command line, FTP command line)
+// has Shannon entropy > 7.2 it almost certainly contains encoded /
+// binary / obfuscated data and the analyst should look at it. We
+// pull candidate strings from the protocol-specific packet fields
+// that the threat-intel scorer and other detectors already use.
+function detectStatsAnomaliesEmbeddedContent(capturedPackets) {
+  const packets = statsAnomaliesIteratePackets(capturedPackets);
+  if (packets.length === 0) return [];
+
+  const findings = [];
+  for (const entry of packets) {
+    const pi = entry.packetInfo;
+    const proto = statsAnomaliesReadProto(pi);
+    const candidates = collectCleartextPayloadCandidates(pi, proto);
+    if (candidates.length === 0) continue;
+    for (const candidate of candidates) {
+      const bytes = textToByteLike(candidate.value);
+      if (!bytes || bytes.length < ANOMALY_ENTROPY_MIN_SAMPLE_LENGTH) continue;
+      const entropy = calculateThreatShannonEntropy(bytes);
+      if (entropy < ANOMALY_ENTROPY_CLEARTEXT_THRESHOLD) continue;
+      const labelField = candidate.label || proto;
+      findings.push({
+        kind: "cleartext-high-entropy",
+        label: `High entropy in ${labelField} (${entropy.toFixed(2)})`,
+        detail: `${labelField} string "${truncateForDisplay(candidate.value)}" is ${bytes.length} bytes with Shannon entropy ${entropy.toFixed(2)} — likely encoded or binary.`,
+        weight: 5,
+        occurrences: 1,
+        query: `packet.proto: ${proto}`,
+      });
+    }
+  }
+
+  findings.sort((a, b) => b.weight - a.weight);
+  return findings.slice(0, 25);
+}
+
+function collectCleartextPayloadCandidates(packetInfo, proto) {
+  if (!packetInfo || typeof packetInfo !== "object") return [];
+  const out = [];
+  const push = (label, value) => {
+    if (typeof value === "string" && value.length >= ANOMALY_PROTOCOL_CONTENT_MIN_BYTES) {
+      out.push({ label, value });
+    }
+  };
+  if (proto === "DNS") {
+    const dns = packetInfo["DNS"] || packetInfo["dns"];
+    push("DNS query name", dns?.["dns.qry.name"] ?? dns?.["Query Name"]);
+  } else if (proto === "HTTP" || proto === "HTTP2") {
+    const http = packetInfo["HTTP"] || packetInfo["http"];
+    push("HTTP request URI", http?.["http.request.uri"] ?? http?.["Request URI"]);
+    push("HTTP host", http?.["http.host"] ?? http?.["Host"]);
+    push("HTTP user agent", http?.["http.user_agent"] ?? http?.["User-Agent"]);
+  } else if (proto === "FTP") {
+    const ftp = packetInfo["FTP"] || packetInfo["ftp"];
+    push("FTP request arg", ftp?.["ftp.request.arg"] ?? ftp?.["Request Arg"]);
+  } else if (proto === "SMTP") {
+    const smtp = packetInfo["SMTP"] || packetInfo["smtp"];
+    push("SMTP request", smtp?.["smtp.req.command"] ?? smtp?.["Request command"]);
+  } else if (proto === "KERBEROS") {
+    const krb = packetInfo["Kerberos"] || packetInfo["KERBEROS"];
+    push("Kerberos principal", krb?.["kerberos.realm"] ?? krb?.["Realm"]);
+  }
+  return out;
+}
+
+function textToByteLike(text) {
+  if (typeof text !== "string" || text.length === 0) return null;
+  // We only need an indexable byte array for Shannon entropy. The
+  // modulo-256 reduction keeps us from having to allocate a UTF-8
+  // encoder and still gives a useful entropy signal for ASCII-ish
+  // payloads.
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    bytes[i] = code < 0x100 ? code : code % 256;
+  }
+  return bytes;
+}
+
+function truncateForDisplay(text, max = 64) {
+  const value = String(text || "");
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
+// Aggregates every anomaly detector into a single list. Used by the
+// Anomalies subtab renderer and the future Threat Intel correlation
+// panel so they cannot drift apart.
+function collectStatsAnomalies(capturedPackets) {
+  if (!capturedPackets || typeof capturedPackets !== "object") {
+    return {
+      protocolAnomalies: [],
+      portscans: [],
+      bruteForce: [],
+      baselineOutliers: [],
+      embeddedContent: [],
+      totalCount: 0,
+    };
+  }
+  const protocolAnomalies = safeAnomaliesCall(() => detectThreatProtocolAnomalies(capturedPackets));
+  const portscans = safeAnomaliesCall(() => detectStatsAnomaliesPortscan(capturedPackets));
+  const bruteForce = safeAnomaliesCall(() => detectStatsAnomaliesBruteForce(capturedPackets));
+  const baselineOutliers = safeAnomaliesCall(() => detectStatsAnomaliesBaselineOutliers(capturedPackets));
+  const embeddedContent = safeAnomaliesCall(() => detectStatsAnomaliesEmbeddedContent(capturedPackets));
+  return {
+    protocolAnomalies,
+    portscans,
+    bruteForce,
+    baselineOutliers,
+    embeddedContent,
+    totalCount:
+      protocolAnomalies.length
+      + portscans.length
+      + bruteForce.length
+      + baselineOutliers.length
+      + embeddedContent.length,
+  };
+}
+
+function safeAnomaliesCall(fn) {
+  try {
+    const result = fn();
+    return Array.isArray(result) ? result : [];
+  } catch (error) {
+    writeLogEntry(`[${threadName}] Anomalies detector failed: ${error?.message || error}`);
+    return [];
+  }
+}
+
+// Renders the Anomalies subtab body into a host element. The shape of
+// the rendered output mirrors the Statistics subtab: one section per
+// detector kind, each section's title in stats-section-title, and
+// clickable tags that pipe into the existing filter pipeline.
+function renderStatsAnomaliesPanel({
+  documentRef,
+  anomalies,
+  applyStatsQuery,
+}) {
+  if (!documentRef || typeof documentRef.createElement !== "function") {
+    return null;
+  }
+  const host = documentRef.createElement("div");
+  host.className = "stats-anomalies-panel";
+
+  const summary = documentRef.createElement("div");
+  summary.className = "stats-anomalies-summary";
+  if (!anomalies || anomalies.totalCount === 0) {
+    summary.textContent = "No anomalies detected. The capture looks in-character for every protocol observed.";
+  } else {
+    const breakdown = [];
+    if (anomalies.protocolAnomalies.length) breakdown.push(`${anomalies.protocolAnomalies.length} protocol`);
+    if (anomalies.portscans.length) breakdown.push(`${anomalies.portscans.length} port scan`);
+    if (anomalies.bruteForce.length) breakdown.push(`${anomalies.bruteForce.length} brute force`);
+    if (anomalies.baselineOutliers.length) breakdown.push(`${anomalies.baselineOutliers.length} baseline`);
+    if (anomalies.embeddedContent.length) breakdown.push(`${anomalies.embeddedContent.length} embedded content`);
+    summary.textContent = `${anomalies.totalCount} anomalies detected — ${breakdown.join(", ")}.`;
+  }
+  host.appendChild(summary);
+
+  const sections = [
+    { title: "Protocol Anomalies (DNS tunneling, beaconing, non-standard ports, …)", items: anomalies?.protocolAnomalies || [] },
+    { title: "Port Scans", items: anomalies?.portscans || [] },
+    { title: "Brute-Force Logins", items: anomalies?.bruteForce || [] },
+    { title: "Out-of-Character Baseline Outliers", items: anomalies?.baselineOutliers || [] },
+    { title: "Embedded / High-Entropy Content in Cleartext Protocols", items: anomalies?.embeddedContent || [] },
+  ];
+
+  let hasAnySection = false;
+  for (const section of sections) {
+    if (!Array.isArray(section.items) || section.items.length === 0) continue;
+    hasAnySection = true;
+    const sectionEl = documentRef.createElement("div");
+    sectionEl.className = "stats-section";
+
+    const heading = documentRef.createElement("div");
+    heading.className = "stats-section-title";
+    heading.textContent = section.title;
+    sectionEl.appendChild(heading);
+
+    const tagList = documentRef.createElement("div");
+    tagList.className = "stats-tag-list";
+    for (const anomaly of section.items) {
+      const payload = buildAnomalyTagPayload(anomaly);
+      if (!payload.label) continue;
+      const tag = documentRef.createElement("span");
+      tag.className = "stats-tag";
+      tag.textContent = payload.label;
+      if (payload.title) tag.title = payload.title;
+      if (payload.query) tag.dataset.statsAnomalyQuery = payload.query;
+      tagList.appendChild(tag);
+    }
+    if (tagList.children.length === 0) continue;
+    sectionEl.appendChild(tagList);
+    host.appendChild(sectionEl);
+  }
+
+  if (!hasAnySection && (!anomalies || anomalies.totalCount === 0)) {
+    // Summary paragraph above already covers this case; nothing more
+    // to render.
+  }
+
+  // Footer hint that points the user at the future threat-intel
+  // correlation work without cluttering the section above.
+  if (anomalies && anomalies.totalCount > 0) {
+    const footer = documentRef.createElement("div");
+    footer.className = "stats-anomalies-footer";
+    footer.textContent =
+      "Anomalies detected here will be correlated with the Threat Intel panel in a future release.";
+    host.appendChild(footer);
+  }
+
+  // Wire the click handler so each anomaly tag filters packets.
+  if (typeof applyStatsQuery === "function") {
+    host.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target || typeof target.closest !== "function") return;
+      const tag = target.closest(".stats-tag");
+      if (!tag || !tag.dataset?.statsAnomalyQuery) return;
+      const query = tag.dataset.statsAnomalyQuery;
+      if (query) applyStatsQuery(query);
+    });
+  }
+
+  return host;
+}
+
+function buildAnomalyTagPayload(anomaly) {
+  if (!anomaly || typeof anomaly !== "object") {
+    return { label: "Unknown anomaly", title: "" };
+  }
+  return {
+    label: String(anomaly.label || anomaly.kind || "Anomaly"),
+    title: String(anomaly.detail || ""),
+    query: typeof anomaly.query === "string" ? anomaly.query : "",
+  };
+}
 
 
 // Creates stats panel.
@@ -3497,8 +4249,14 @@ function createStatsPanel(options) {
       mapTabBtn.className = "stats-subtab-btn";
       mapTabBtn.textContent = "Map";
 
+      const anomaliesTabBtn = documentRef.createElement("button");
+      anomaliesTabBtn.type = "button";
+      anomaliesTabBtn.className = "stats-subtab-btn";
+      anomaliesTabBtn.textContent = "Anomalies";
+
       subtabRow.appendChild(statisticsTabBtn);
       subtabRow.appendChild(mapTabBtn);
+      subtabRow.appendChild(anomaliesTabBtn);
       content.appendChild(subtabRow);
 
       const statisticsPanel = documentRef.createElement("div");
@@ -3508,8 +4266,13 @@ function createStatsPanel(options) {
       mapPanel.className = "stats-subtab-panel";
       mapPanel.style.display = "none";
 
+      const anomaliesPanel = documentRef.createElement("div");
+      anomaliesPanel.className = "stats-subtab-panel";
+      anomaliesPanel.style.display = "none";
+
       content.appendChild(statisticsPanel);
       content.appendChild(mapPanel);
+      content.appendChild(anomaliesPanel);
 
       const stats = buildCaptureStats(
         getCapturedPackets(),
@@ -3522,19 +4285,41 @@ function createStatsPanel(options) {
 
       let heatmapSectionRenderer = null;
       let heatmapSectionFocusLocation = null;
+      const renderAnomaliesPanel = () => {
+        anomaliesPanel.replaceChildren();
+        const anomalies = collectStatsAnomalies(getCapturedPackets());
+        const panelEl = renderStatsAnomaliesPanel({
+          documentRef,
+          anomalies,
+          applyStatsQuery,
+        });
+        if (panelEl) {
+          anomaliesPanel.appendChild(panelEl);
+        } else {
+          anomaliesPanel.textContent = "Unable to render anomalies for this capture.";
+        }
+      };
       const setActiveStatsSubtab = (tabId) => {
         const showMap = tabId === "map";
-        statisticsTabBtn.classList.toggle("active", !showMap);
+        const showAnomalies = tabId === "anomalies";
+        const showStatistics = !showMap && !showAnomalies;
+        statisticsTabBtn.classList.toggle("active", showStatistics);
         mapTabBtn.classList.toggle("active", showMap);
-        statisticsPanel.style.display = showMap ? "none" : "block";
+        anomaliesTabBtn.classList.toggle("active", showAnomalies);
+        statisticsPanel.style.display = showStatistics ? "block" : "none";
         mapPanel.style.display = showMap ? "block" : "none";
+        anomaliesPanel.style.display = showAnomalies ? "block" : "none";
         if (showMap && typeof heatmapSectionRenderer === "function") {
           heatmapSectionRenderer();
+        }
+        if (showAnomalies) {
+          renderAnomaliesPanel();
         }
       };
 
       statisticsTabBtn.addEventListener("click", () => setActiveStatsSubtab("statistics"));
       mapTabBtn.addEventListener("click", () => setActiveStatsSubtab("map"));
+      anomaliesTabBtn.addEventListener("click", () => setActiveStatsSubtab("anomalies"));
 
       // Defensive normalization so unusual packet schemas do not break stats rendering.
       const normalizeStringArray = (values) =>
@@ -3618,7 +4403,11 @@ function createStatsPanel(options) {
         };
       }
 
-      const initialSubtab = showOptions?.openSubtab === "map" ? "map" : "statistics";
+      const initialSubtab = showOptions?.openSubtab === "map"
+        ? "map"
+        : showOptions?.openSubtab === "anomalies"
+          ? "anomalies"
+          : "statistics";
       setActiveStatsSubtab(initialSubtab);
 
       const focusLocation = showOptions?.focusLocation;
@@ -3855,6 +4644,11 @@ function createStatsPanel(options) {
         focusLocation,
       });
     },
+    showStatsAnomalies: () => {
+      showStats({
+        openSubtab: "anomalies",
+      });
+    },
   };
 }
 
@@ -3862,4 +4656,9 @@ module.exports = {
   id: "stats",
   createStatsPanel,
   buildCaptureStats,
+  collectStatsAnomalies,
+  detectStatsAnomaliesPortscan,
+  detectStatsAnomaliesBruteForce,
+  detectStatsAnomaliesBaselineOutliers,
+  detectStatsAnomaliesEmbeddedContent,
 };

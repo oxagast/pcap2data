@@ -143,3 +143,32 @@
   `notesList: []` in its `runInFreshContext` defaults, otherwise
   `getCurrentSummaryReportMarkdown` -> `getNotesSummarySection`
   will read an undefined `notesList` and crash.
+
+## Session Threat Score (Threat Intel subtab)
+
+- Deterministic 0-100 score for the whole capture/session, rendered as a
+  card in the Conv panel Threat Intel subtab. See
+  `memories/repo/threat_intel_scorer.md` for full details.
+- Aggregates per-target reputation (IPSum, Tor, VirusTotal), file-hash
+  reputation, frequency weighting on top-5 public IPs and domains,
+  Shannon entropy on Conv input, and 5 protocol anomalies (DNS tunneling,
+  beaconing, non-standard ports, cleartext-to-public, single-destination
+  flood).
+- Pure module at `src/ui/panels/threat-intel-scorer.js` (no DOM, just
+  exports `module.exports` AND `globalThis.PacketSnitchThreatIntel`).
+  Integration lives in `subnet-calculator-panel.js`:
+  - New ctor params: `getCarvableFiles`, `getCurrentConvInputBytes`,
+    `isLlmRuntimeEnabled`, `callLargeLanguageModel`.
+  - New return interface: `recomputeSessionThreatScore`,
+    `runThreatScoreLlmAssessment`, `sendThreatScoreToNotes`,
+    `getLastThreatScoreLlmStatus`.
+- Recompute hooks (must call `recomputeSessionThreatScore({ silent: true })`):
+  `fileLoaded`, `clearExtractionResultsForStats`,
+  `registerExtractionResultForStats`, data-tools-convert-btn click,
+  `persistSettingsFromForm`, `refreshOllamaStartupAvailability`.
+- Tests: `tests/threat_intel_scorer.test.js` (40 unit tests, no VM).
+  Includes a regression test for the
+  IP-malicious-vs-file-hash-malicious double-counting bug (VT branch is
+  now gated on `record.type !== "hash"`).
+- New sync hooks in `src/ui/main-frontend-test.cjs` mirror the
+  `main-frontend.js` changes one-for-one.

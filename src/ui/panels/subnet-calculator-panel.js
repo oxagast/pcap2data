@@ -1,7 +1,11 @@
 // Controls the Conv subnet workspace UI and network lookup tools.
 
+const { PacketSnitchThreatIntel } = require("./threat-intel-scorer");
+
 const IPV4_HOST_BITS = 32;
 const IPV6_HOST_BITS = 128;
+
+const THREAT_SCORE_INPUT_BYTES_MIN = 32;
 
 function createSubnetCalculatorPanel({
     statusUpdate = () => { },
@@ -14,6 +18,10 @@ function createSubnetCalculatorPanel({
     openHeatmapLocation = () => { },
     getCurrentPacketIps = () => ({ src: "", dst: "" }),
     onSummaryRequested = null,
+    getCarvableFiles = () => [],
+    getCurrentConvInputBytes = () => null,
+    isLlmRuntimeEnabled = () => false,
+    callLargeLanguageModel = null,
 } = {}) {
     let lookupRequestToken = 0;
     let nmapScanToken = 0;
@@ -27,6 +35,18 @@ function createSubnetCalculatorPanel({
     const threatIntelInputEl = document.getElementById("subnet-ti-input");
     const threatIntelLookupBtnEl = document.getElementById("subnet-ti-lookup-btn");
     const threatIntelUseAnalyzedIpBtnEl = document.getElementById("subnet-ti-use-analyzed-ip-btn");
+    const threatScoreCardEl = document.getElementById("subnet-ti-score-card");
+    const threatScoreValueEl = document.getElementById("subnet-ti-score-value");
+    const threatScoreBandPillEl = document.getElementById("subnet-ti-score-band-pill");
+    const threatScoreDescriptionEl = document.getElementById("subnet-ti-score-description");
+    const threatScoreComponentsEl = document.getElementById("subnet-ti-score-components");
+    const threatScoreFootprintEl = document.getElementById("subnet-ti-score-footprint");
+    const threatScoreAnomaliesEl = document.getElementById("subnet-ti-score-anomalies");
+    const threatScoreAnomaliesListEl = document.getElementById("subnet-ti-score-anomalies-list");
+    const threatScoreRecomputeBtnEl = document.getElementById("subnet-ti-score-recompute-btn");
+    const threatScoreLlmBtnEl = document.getElementById("subnet-ti-score-llm-btn");
+    const threatScoreSendNotesBtnEl = document.getElementById("subnet-ti-score-send-notes-btn");
+    const threatScoreLlmStatusEl = document.getElementById("subnet-ti-score-llm-status");
     const summaryEl = document.getElementById("subnet-calc-summary");
     const rangeEl = document.getElementById("subnet-calc-range");
     const binaryEl = document.getElementById("subnet-calc-binary");
@@ -41,6 +61,17 @@ function createSubnetCalculatorPanel({
         tor: null,
         virustotal: null,
     };
+    // Session-wide cache of threat intel records that have ever been
+    // looked up for this capture. The score engine consumes this list in
+    // addition to the live threatIntelState so the Session Threat Score
+    // reflects every lookup, not just the most recent one.
+    let sessionThreatIntelRecords = [];
+    // Last score result so the LLM narrative / Notes send can reference
+    // the same numbers shown in the UI.
+    let lastThreatScoreResult = null;
+    // Pending LLM controller, in case the user clicks "Get LLM Assessment"
+    // again while a previous call is still in flight.
+    let pendingThreatScoreLlmController = null;
     let whoisCacheByIp = Object.create(null);
     let shodanCacheByIp = Object.create(null);
     const nmapScanState = {
@@ -128,6 +159,14 @@ function createSubnetCalculatorPanel({
                 input: getThreatIntelQueryInputValue(),
                 type: getThreatIntelQueryTypeValue(),
                 state: clonePlainData(threatIntelState, null),
+                sessionRecords: clonePlainData(sessionThreatIntelRecords, []),
+                lastScore: lastThreatScoreResult
+                    ? {
+                        score: lastThreatScoreResult.score,
+                        band: lastThreatScoreResult.band,
+                        generatedAt: lastThreatScoreResult.generatedAt,
+                    }
+                    : null,
             },
         };
     }
@@ -150,6 +189,21 @@ function createSubnetCalculatorPanel({
         }
         if (restoredTiState.input && threatIntelInputEl) {
             threatIntelInputEl.value = String(restoredTiState.input);
+        }
+        if (Array.isArray(restoredTiState.sessionRecords)) {
+            sessionThreatIntelRecords = clonePlainData(restoredTiState.sessionRecords, [])
+                || [];
+        } else {
+            sessionThreatIntelRecords = [];
+        }
+        if (restoredTiState.lastScore && typeof restoredTiState.lastScore === "object") {
+            lastThreatScoreResult = {
+                score: Number(restoredTiState.lastScore.score) || 0,
+                band: String(restoredTiState.lastScore.band || "Clean"),
+                generatedAt: String(restoredTiState.lastScore.generatedAt || ""),
+            };
+        } else {
+            lastThreatScoreResult = null;
         }
 
         const restoredNmap = normalizedState.nmap && typeof normalizedState.nmap === "object"
@@ -197,7 +251,305 @@ function createSubnetCalculatorPanel({
     function resetSessionCacheState() {
         whoisCacheByIp = Object.create(null);
         shodanCacheByIp = Object.create(null);
+        sessionThreatIntelRecords = [];
+        lastThreatScoreResult = null;
+        if (pendingThreatScoreLlmController) {
+            try {
+                pendingThreatScoreLlmController.abort();
+            } catch (_error) {
+                // ignore
+            }
+            pendingThreatScoreLlmController = null;
+        }
         resetCaptureNmapState();
+    }
+
+    // Returns the most recent LLM status text so callers (e.g. tests) can
+    // inspect what the panel last reported to the user.
+    function getLastThreatScoreLlmStatus() {
+        return threatScoreLlmStatusEl?.textContent || "";
+    }
+
+    function setThreatScoreLlmStatus(message) {
+        if (!threatScoreLlmStatusEl) return;
+        threatScoreLlmStatusEl.textContent = String(message || "");
+    }
+
+    function setThreatScoreLlmButtonEnabled(enabled) {
+        if (!threatScoreLlmBtnEl) return;
+        threatScoreLlmBtnEl.disabled = !enabled;
+    }
+
+    function setThreatScoreNotesButtonEnabled(enabled) {
+        if (!threatScoreSendNotesBtnEl) return;
+        threatScoreSendNotesBtnEl.disabled = !enabled;
+    }
+
+    // Resolves the current Conv input as a Uint8Array. Returns null if the
+    // input is empty or too small to produce a meaningful entropy reading.
+    function resolveCurrentConvInputBytes() {
+        if (typeof getCurrentConvInputBytes !== "function") return null;
+        let bytes = null;
+        try {
+            bytes = getCurrentConvInputBytes();
+        } catch (_error) {
+            return null;
+        }
+        if (!bytes || typeof bytes.length !== "number" || bytes.length === 0) {
+            return null;
+        }
+        if (bytes.length < THREAT_SCORE_INPUT_BYTES_MIN) return null;
+        return bytes;
+    }
+
+    // Renders the Session Threat Score result into the DOM. The function
+    // is intentionally defensive: any missing element is silently ignored
+    // so it is safe to call from contexts where the Threat Intel subtab
+    // has not yet been opened.
+    function renderSessionThreatScore(scoreResult) {
+        if (!scoreResult || typeof scoreResult !== "object") return;
+        lastThreatScoreResult = scoreResult;
+        const bandKey = String(scoreResult.band || "Clean").toLowerCase();
+        if (threatScoreValueEl) {
+            threatScoreValueEl.textContent = String(scoreResult.score);
+            threatScoreValueEl.dataset.score = String(scoreResult.score);
+            threatScoreValueEl.dataset.band = scoreResult.band;
+        }
+        if (threatScoreBandPillEl) {
+            threatScoreBandPillEl.textContent = scoreResult.band;
+            threatScoreBandPillEl.className = `subnet-calc-grade-badge subnet-ti-score-band-${bandKey}`;
+        }
+        if (threatScoreDescriptionEl) {
+            threatScoreDescriptionEl.textContent = scoreResult.bandDescription || "";
+        }
+        if (threatScoreComponentsEl) {
+            threatScoreComponentsEl.innerHTML = "";
+            const components = Array.isArray(scoreResult.components)
+                ? scoreResult.components.slice(0, 10)
+                : [];
+            if (components.length === 0) {
+                const empty = document.createElement("div");
+                empty.className = "subnet-ti-score-component-empty";
+                empty.textContent = "No risk indicators triggered.";
+                threatScoreComponentsEl.appendChild(empty);
+            } else {
+                const list = document.createElement("ul");
+                for (const component of components) {
+                    const item = document.createElement("li");
+                    const weight = Number(component.weight) || 0;
+                    const weightEl = document.createElement("span");
+                    weightEl.className = `subnet-ti-score-component-weight ${weight >= 0
+                        ? "subnet-ti-score-component-weight-positive"
+                        : "subnet-ti-score-component-weight-negative"}`;
+                    weightEl.textContent = weight > 0 ? `+${weight}` : `${weight}`;
+                    item.appendChild(weightEl);
+                    const labelEl = document.createElement("span");
+                    labelEl.className = "subnet-ti-score-component-label";
+                    labelEl.textContent = component.label || component.kind || "indicator";
+                    item.appendChild(labelEl);
+                    if (component.detail) {
+                        const detailEl = document.createElement("span");
+                        detailEl.className = "subnet-ti-score-component-detail";
+                        detailEl.textContent = `— ${component.detail}`;
+                        item.appendChild(detailEl);
+                    }
+                    list.appendChild(item);
+                }
+                threatScoreComponentsEl.appendChild(list);
+            }
+        }
+        if (threatScoreFootprintEl) {
+            const ind = scoreResult.indicators || {};
+            const entropy = scoreResult.entropy || {};
+            const ipTop = (ind.ips?.topPublic || []).slice(0, 3).map((p) => p.ip).join(", ");
+            const lines = [
+                `Public IPs observed: ${ind.ips?.publicCount ?? 0}${ipTop ? ` (top: ${ipTop})` : ""}`,
+                `Unique domains observed: ${ind.domains?.total ?? 0}`,
+                `URLs observed: ${ind.urls?.total ?? 0}`,
+                `File hashes registered: ${ind.hashes?.total ?? 0}`,
+                `Reputation lookups completed: ${ind.reputationLookups ?? 0}`,
+                `Protocol anomalies: ${ind.anomalies ?? 0}`,
+                `Current Conv input entropy: ${entropy.value ?? "?"} bits/byte (${entropy.label || "Unknown"})`,
+            ];
+            threatScoreFootprintEl.innerHTML = "";
+            for (const line of lines) {
+                const li = document.createElement("li");
+                li.textContent = line;
+                threatScoreFootprintEl.appendChild(li);
+            }
+        }
+        if (threatScoreAnomaliesEl && threatScoreAnomaliesListEl) {
+            const anomalies = scoreResult.indicators?.anomalies || 0;
+            const detail = Array.isArray(scoreResult._anomalies) ? scoreResult._anomalies : [];
+            if (anomalies > 0 && detail.length > 0) {
+                threatScoreAnomaliesEl.hidden = false;
+                threatScoreAnomaliesListEl.innerHTML = "";
+                for (const anomaly of detail) {
+                    const li = document.createElement("li");
+                    const weightEl = document.createElement("span");
+                    weightEl.className = "subnet-ti-score-anomaly-weight";
+                    const w = Number(anomaly.weight) || 0;
+                    weightEl.textContent = `+${w}`;
+                    li.appendChild(weightEl);
+                    const labelEl = document.createElement("span");
+                    labelEl.textContent = ` ${anomaly.label || anomaly.kind}: ${anomaly.detail || ""}`;
+                    li.appendChild(labelEl);
+                    threatScoreAnomaliesListEl.appendChild(li);
+                }
+            } else {
+                threatScoreAnomaliesEl.hidden = true;
+                threatScoreAnomaliesListEl.innerHTML = "";
+            }
+        }
+        setThreatScoreNotesButtonEnabled(Boolean(scoreResult));
+        // The LLM button requires both that we have something to send AND
+        // that Ollama is actually available right now. The enable check
+        // re-evaluates on every render so it tracks the current setting.
+        if (typeof isLlmRuntimeEnabled === "function") {
+            setThreatScoreLlmButtonEnabled(Boolean(isLlmRuntimeEnabled()));
+        }
+    }
+
+    // Computes a fresh Session Threat Score and renders it. The `silent`
+    // option suppresses status / log output, which is appropriate for the
+    // automatic re-renders that fire after every lookup. The explicit
+    // "Recompute" button passes silent=false to give the user feedback.
+    function recomputeSessionThreatScore({ silent = false } = {}) {
+        if (!PacketSnitchThreatIntel || typeof PacketSnitchThreatIntel.computeSessionThreatScore !== "function") {
+            return null;
+        }
+        const capturedPackets = (typeof getCapturePackets === "function")
+            ? getCapturePackets()
+            : null;
+        const carvableFiles = (typeof getCarvableFiles === "function")
+            ? getCarvableFiles()
+            : null;
+        const inputBytes = resolveCurrentConvInputBytes();
+        const score = PacketSnitchThreatIntel.computeSessionThreatScore({
+            capturedPackets,
+            threatIntelState,
+            sessionThreatIntel: sessionThreatIntelRecords.map((entry) => ({
+                source: entry.source,
+                target: entry.target,
+                type: entry.type,
+                payload: entry.payload,
+            })),
+            carvableFiles,
+            inputBytes,
+        });
+        if (score) {
+            const anomalies = PacketSnitchThreatIntel.detectProtocolAnomalies(capturedPackets);
+            score._anomalies = anomalies;
+        }
+        renderSessionThreatScore(score);
+        if (!silent) {
+            if (typeof writeLogEntry === "function") {
+                writeLogEntry(
+                    `[ThreatIntel] Session Threat Score recomputed score=${score?.score} band=${score?.band}`,
+                );
+            }
+            if (typeof statusUpdate === "function") {
+                statusUpdate(`Status: Session Threat Score recomputed (${score?.score}/100 ${score?.band})`);
+            }
+        }
+        return score;
+    }
+
+    // Triggers a one-shot Ollama assessment on top of the deterministic
+    // score. The LLM is offered as advisory; the deterministic score is
+    // never overwritten by the model output.
+    async function runThreatScoreLlmAssessment() {
+        if (!lastThreatScoreResult) {
+            recomputeSessionThreatScore({ silent: true });
+        }
+        if (!lastThreatScoreResult) {
+            setThreatScoreLlmStatus("Compute the Session Threat Score first.");
+            return;
+        }
+        if (typeof isLlmRuntimeEnabled !== "function" || !isLlmRuntimeEnabled()) {
+            setThreatScoreLlmStatus("Enable LLM in Settings to use this action.");
+            return;
+        }
+        if (typeof callLargeLanguageModel !== "function") {
+            setThreatScoreLlmStatus("LLM runtime is not available.");
+            return;
+        }
+        if (pendingThreatScoreLlmController) {
+            try {
+                pendingThreatScoreLlmController.abort();
+            } catch (_error) {
+                // ignore
+            }
+        }
+        const controller = new AbortController();
+        pendingThreatScoreLlmController = controller;
+        setThreatScoreLlmButtonEnabled(false);
+        setThreatScoreLlmStatus("Asking Ollama for a Session Threat Score assessment...");
+        if (typeof writeLogEntry === "function") {
+            writeLogEntry(
+                `[ThreatIntel] Requesting LLM Session Threat Score assessment score=${lastThreatScoreResult.score} band=${lastThreatScoreResult.band}`,
+            );
+        }
+        try {
+            const prompt = PacketSnitchThreatIntel.buildSessionThreatLlmPrompt(lastThreatScoreResult);
+            const response = await callLargeLanguageModel(prompt, { signal: controller.signal });
+            if (controller.signal.aborted) return;
+            const text = String(response?.response || "").trim();
+            if (!text) {
+                setThreatScoreLlmStatus("LLM returned no assessment.");
+                return;
+            }
+            setThreatScoreLlmStatus(text);
+            if (typeof writeLogEntry === "function") {
+                writeLogEntry(
+                    `[ThreatIntel] LLM Session Threat Score assessment received chars=${text.length}`,
+                );
+            }
+        } catch (error) {
+            if (controller.signal.aborted) return;
+            const message = error?.message || String(error || "unknown error");
+            setThreatScoreLlmStatus(`LLM assessment failed: ${message}`);
+            if (typeof writeLogEntry === "function") {
+                writeLogEntry(`[ThreatIntel] LLM Session Threat Score assessment failed: ${message}`);
+            }
+        } finally {
+            if (pendingThreatScoreLlmController === controller) {
+                pendingThreatScoreLlmController = null;
+            }
+            if (typeof isLlmRuntimeEnabled === "function") {
+                setThreatScoreLlmButtonEnabled(Boolean(isLlmRuntimeEnabled()));
+            } else {
+                setThreatScoreLlmButtonEnabled(true);
+            }
+        }
+    }
+
+    // Sends a concise Session Threat Score summary to the Notes tab. The
+    // note is created as a "concrete" entry because it is grounded in the
+    // observable indicators in the capture, not analyst inference.
+    function sendThreatScoreToNotes() {
+        if (!lastThreatScoreResult) {
+            if (typeof statusUpdate === "function") {
+                statusUpdate("Status: Compute the Session Threat Score first.");
+            }
+            return false;
+        }
+        if (typeof addNote !== "function") return false;
+        const breakdown = PacketSnitchThreatIntel.buildSessionThreatScoreBreakdown(lastThreatScoreResult);
+        const didAdd = addNote(breakdown, "#d32f2f", "session-threat-score", true);
+        if (didAdd) {
+            if (typeof showNotesWorkspace === "function") showNotesWorkspace();
+            if (typeof statusUpdate === "function") {
+                statusUpdate("Status: Session Threat Score summary added to Notes");
+            }
+            if (typeof writeLogEntry === "function") {
+                writeLogEntry(
+                    `[ThreatIntel] Session Threat Score summary added to notes score=${lastThreatScoreResult.score} band=${lastThreatScoreResult.band}`,
+                );
+            }
+            return true;
+        }
+        return false;
     }
 
     function setPanelStatus(message, isError = false) {
@@ -1562,19 +1914,67 @@ function createSubnetCalculatorPanel({
         }
     }
 
+    function recordSessionThreatIntel(source, target, type, payload) {
+        if (!source || !target) return;
+        const normalizedTarget = String(target).trim();
+        if (!normalizedTarget) return;
+        const key = `${source}:${type || "ip"}:${normalizedTarget.toLowerCase()}`;
+        const existingIndex = sessionThreatIntelRecords.findIndex(
+            (entry) => entry && entry.key === key,
+        );
+        const entry = {
+            key,
+            source,
+            target: normalizedTarget,
+            type: type || "ip",
+            payload: clonePlainData(payload, null),
+            recordedAt: new Date().toISOString(),
+        };
+        if (existingIndex >= 0) {
+            sessionThreatIntelRecords[existingIndex] = entry;
+        } else {
+            sessionThreatIntelRecords.push(entry);
+        }
+        // Keep the cache bounded so a busy session does not grow unbounded.
+        if (sessionThreatIntelRecords.length > 256) {
+            sessionThreatIntelRecords = sessionThreatIntelRecords.slice(-256);
+        }
+    }
+
     function renderIpsumResult(analysis, reputationResult) {
         threatIntelState.ipsum = reputationResult;
+        if (reputationResult && reputationResult.success !== false && reputationResult.ip) {
+            recordSessionThreatIntel("ipsum", reputationResult.ip, "ip", reputationResult);
+        }
         renderThreatIntelResult(analysis);
+        recomputeSessionThreatScore({ silent: true });
     }
 
     function renderTorResult(analysis, torResult) {
         threatIntelState.tor = torResult;
+        if (torResult && torResult.success !== false && torResult.ip) {
+            recordSessionThreatIntel("tor", torResult.ip, "ip", torResult);
+        }
         renderThreatIntelResult(analysis);
+        recomputeSessionThreatScore({ silent: true });
     }
 
     function renderVirusTotalResult(analysis, virustotalResult) {
         threatIntelState.virustotal = virustotalResult;
+        if (virustotalResult && virustotalResult.success !== false) {
+            const target = virustotalResult.lookupValue
+                || virustotalResult.ip
+                || analysis?.lookupTargetIp
+                || "";
+            if (target) {
+                const queryType = virustotalResult.lookupType
+                    || analysis?.lookupType
+                    || (target && String(target).includes(":") ? "ip" : "ip");
+                recordSessionThreatIntel("virustotal", target, queryType, virustotalResult);
+            }
+        }
         renderThreatIntelResult(analysis);
+        recomputeSessionThreatScore({ silent: true });
     }
 
     function renderWhoisResult(analysis, whoisResult) {
@@ -2160,6 +2560,7 @@ function createSubnetCalculatorPanel({
         if (cachedInput) {
             // A prior query is available: refresh the display with cached results.
             renderThreatIntelResult({ lookupTargetIp: nmapScanState.currentInspectedIp });
+            recomputeSessionThreatScore({ silent: true });
             return;
         }
 
@@ -2167,11 +2568,13 @@ function createSubnetCalculatorPanel({
             // No explicit TI query yet, but an analyzed IP exists; seed the input.
             if (threatIntelTypeEl) threatIntelTypeEl.value = "ip";
             if (threatIntelInputEl) threatIntelInputEl.value = inspectedIp;
+            recomputeSessionThreatScore({ silent: true });
             return;
         }
 
         // Fall back to rendering whatever cached state we have (may be empty placeholder).
         renderThreatIntelResult({ lookupTargetIp: nmapScanState.currentInspectedIp });
+        recomputeSessionThreatScore({ silent: true });
     }
 
     function resetCaptureNmapState() {
@@ -2271,6 +2674,11 @@ function createSubnetCalculatorPanel({
             threatIntelTypeEl.value = "ip";
         }
         renderEmptyState();
+        // Re-render the score card so the user can see the session-level
+        // score reflect only what is still in the cache. We do NOT clear
+        // sessionThreatIntelRecords here because the session-wide score
+        // should persist across a "Clear" of the local lookup form.
+        recomputeSessionThreatScore({ silent: true });
         setPanelStatus("Enter an IPv4 or IPv6 address/network to analyze.");
     }
 
@@ -2400,6 +2808,15 @@ function createSubnetCalculatorPanel({
     threatIntelLookupBtnEl?.addEventListener("click", () => {
         lookupThreatIntelFromManualInput();
     });
+    threatScoreRecomputeBtnEl?.addEventListener("click", () => {
+        recomputeSessionThreatScore({ silent: false });
+    });
+    threatScoreLlmBtnEl?.addEventListener("click", () => {
+        void runThreatScoreLlmAssessment();
+    });
+    threatScoreSendNotesBtnEl?.addEventListener("click", () => {
+        sendThreatScoreToNotes();
+    });
     nmapScanBtnEl?.addEventListener("click", () => {
         void runCaptureNmapScan({ auto: false, reason: "manual-button", force: true });
     });
@@ -2422,16 +2839,20 @@ function createSubnetCalculatorPanel({
     return {
         analyzeCurrentInput,
         clear,
+        getLastThreatScoreLlmStatus,
         getSessionState,
         loadCurrentPacketAddress,
         maybeAutoStartCaptureNmapScan,
         maybeKickoffNmapOnTabOpen,
         maybeKickoffThreatIntelOnTabOpen,
+        recomputeSessionThreatScore,
         resetSessionCacheState,
         resetCaptureNmapState,
         restoreSessionState,
         runThreatIntelHashLookup,
         runThreatIntelIpLookup,
+        runThreatScoreLlmAssessment,
+        sendThreatScoreToNotes,
         setAnalysisInput,
     };
 }

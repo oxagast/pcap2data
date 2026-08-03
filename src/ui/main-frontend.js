@@ -1142,6 +1142,11 @@ async function refreshOllamaStartupAvailability() {
     cachedLlmDiagnostics = null;
     syncLlmDiagnosticsIndicators();
   }
+  // Re-render the Session Threat Score card so the LLM "Get Assessment"
+  // button enables/disables to track Ollama availability.
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
   return ollamaVersionCheckPassed;
 }
 
@@ -4467,6 +4472,11 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
   syncRuntimeLlmToggleFromSettings();
+  // Re-render the Session Threat Score card so the LLM "Get Assessment"
+  // button tracks the current LLM toggle state.
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
   await applyThemeById(savedSettings.general.themeId);
   syncSettingsFormFromState();
   logSettingsMutation(
@@ -5550,6 +5560,9 @@ function fileLoaded(isLoaded) {
   isFileLoaded = isLoaded;
   if (isLoaded) {
     clearExtractionResultsForStats();
+    if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+      subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+    }
 
     const loadEndTime = performance.now();
     document.getElementById("load-time").textContent =
@@ -12159,6 +12172,9 @@ function resetDataToolsOutputs() {
   dataToolsManualCarveResult = null;
   dataToolsRenderedOutputPanes.clear();
   clearExtractionResultsForStats();
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
   document.getElementById("data-tools-hex-output").value = "";
   document.getElementById("data-tools-binary-output").value = "";
   document.getElementById("data-tools-decimal-output").value = "";
@@ -18431,6 +18447,10 @@ function registerExtractionResultForStats(fileName, bytes) {
     sourceDetail: "Conv Extraction",
   });
   extractionCarvableRegistry = extractionCarvableRegistry.slice(0, 50);
+  // New carve may change the Session Threat Score (file-hash indicators).
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
 }
 
 // Clears extraction carvable registry.
@@ -21034,6 +21054,16 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
   getBackendTransportOptions: () => getBackendTransportOptionsFromSettings(),
   getCurrentSettings: () => getCurrentSettings(),
   getCapturePackets: () => capturedPackets,
+  getCarvableFiles: () => extractionCarvableRegistry.slice(),
+  getCurrentConvInputBytes: () => {
+    try {
+      return getCurrentDataToolsInputBytes();
+    } catch (_error) {
+      return null;
+    }
+  },
+  isLlmRuntimeEnabled,
+  callLargeLanguageModel,
   openHeatmapLocation: ({ latitude, longitude, label }) => {
     showStatsHeatmapLocation({ latitude, longitude, label });
   },
@@ -21887,6 +21917,9 @@ document
   .addEventListener("click", () => {
     runDataToolsConversion();
     updateDataToolsCursorReadout("data-tools-input");
+    if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+      subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+    }
   });
 document
   .getElementById("data-tools-send-to-decodes-btn")

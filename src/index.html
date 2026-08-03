@@ -576,10 +576,59 @@
           </div>
           <div id="conv-threat-intel-panel" class="crypt-subtab-panel" hidden>
             <div class="subnet-calc-grid">
+              <div class="data-tools-section subnet-calc-card subnet-calc-card-wide" id="subnet-ti-score-card">
+                <div class="subnet-calc-card-label">
+                  Session Threat Score
+                  <span id="subnet-ti-score-band-pill"
+                    class="subnet-calc-grade-badge subnet-ti-score-band-clean">Clean</span>
+                </div>
+                <div class="subnet-ti-score-layout">
+                  <div class="subnet-ti-score-readout">
+                    <div id="subnet-ti-score-value" class="subnet-ti-score-value">0</div>
+                    <div class="subnet-ti-score-max">/ 100</div>
+                    <div id="subnet-ti-score-description" class="subnet-ti-score-description">
+                      No indicators of compromise were detected.
+                    </div>
+                    <div class="data-tools-actions subnet-calc-actions-row subnet-ti-score-actions">
+                      <button id="subnet-ti-score-recompute-btn" type="button">Recompute</button>
+                      <button id="subnet-ti-score-llm-btn" type="button" disabled>
+                        Get LLM Assessment
+                      </button>
+                      <button id="subnet-ti-score-send-notes-btn" type="button" disabled>
+                        Send to Notes
+                      </button>
+                    </div>
+                    <div id="subnet-ti-score-llm-status" class="subnet-ti-score-llm-status" aria-live="polite"></div>
+                  </div>
+                  <div class="subnet-ti-score-breakdown">
+                    <div class="subnet-calc-card-label">Top Contributing Indicators</div>
+                    <div id="subnet-ti-score-components" class="subnet-ti-score-components">
+                      No risk indicators triggered.
+                    </div>
+                  </div>
+                </div>
+                <div class="subnet-ti-score-footprint">
+                  <div class="subnet-calc-card-label">Capture Footprint</div>
+                  <ul id="subnet-ti-score-footprint" class="subnet-ti-score-footprint-list">
+                    <li>Public IPs observed: 0</li>
+                    <li>Unique domains observed: 0</li>
+                    <li>URLs observed: 0</li>
+                    <li>File hashes registered: 0</li>
+                    <li>Reputation lookups completed: 0</li>
+                    <li>Protocol anomalies: 0</li>
+                    <li>Current Conv input entropy: Unknown</li>
+                  </ul>
+                </div>
+                <div id="subnet-ti-score-anomalies" class="subnet-ti-score-anomalies" hidden>
+                  <div class="subnet-calc-card-label">Protocol Anomalies</div>
+                  <ul id="subnet-ti-score-anomalies-list" class="subnet-ti-score-anomalies-list"></ul>
+                </div>
+              </div>
               <div class="data-tools-section subnet-calc-controls">
                 <div class="data-tools-title">Threat Intelligence Lookup</div>
                 <div class="subnet-calc-note">
-                  Query IP reputation, Tor exit nodes, and VirusTotal for IPs, URLs, or hashes.
+                  Query IP reputation, Tor exit nodes, and VirusTotal for IPs, URLs, or hashes. Every lookup feeds
+                  the Session Threat Score above; lookups are remembered for the whole capture.
                 </div>
                 <label for="subnet-ti-input">Threat Intel Query (IP / URL / hash)</label>
                 <div class="data-tools-actions subnet-calc-actions-row">

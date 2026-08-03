@@ -273,7 +273,11 @@ in days, not weeks.
 ### Protocol Anomaly Heuristics
 
 > **Status:** 🟡 Partial — TCP retransmission / out-of-order detection
-> ships. Generic anomaly scoring does not.
+> ships. Generic anomaly scoring does not. The **Anomalies sub-tab**
+> under Stats now surfaces: protocol-content anomalies, portscans,
+> brute-force login bursts, baseline packet-length / per-minute
+> outliers, and high-entropy cleartext payloads. Future work ties
+> these into the Threat Intel panel for scored correlation.
 
 - [📋] Session suspicion scoring
 - [📋] Packet suspicion scoring
@@ -675,7 +679,7 @@ work that's landed since.
 5. [🟡] Report Templates *(Summary ships — needs templates + PDF)*
 6. [📋] Diff Two Packets
 7. [🟡] DNS Threat Lens *(aggregation ships — needs heuristics)*
-8. [📋] Protocol Anomaly Heuristics
+8. [�] Protocol Anomaly Heuristics *(Anomalies sub-tab ships portscan, brute-force, baseline outlier, and high-entropy cleartext detection — needs scored correlation with Threat Intel)*
 9. [📋] Batch Analysis
 10. [📋] Expert Events Feed
 11. [🟡] Stream Reassembly *(foundation ships — finish missing-packet UX)*
