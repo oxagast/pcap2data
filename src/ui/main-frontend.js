@@ -210,7 +210,7 @@ const {
 const {
   getLatestKeystoreSummary,
 } = require("./panels/keystore-llm-summarizer");
-const { createStatsPanel, buildCaptureStats } = require("./panels/stats-panel");
+const { createStatsPanel, buildCaptureStats, collectStatsAnomalies } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
@@ -21077,6 +21077,18 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
     };
   },
   onSummaryRequested: () => requestDataToolsBackgroundSummary(CONV_SUBNET_SUBTAB),
+  // Fold the Stats → Anomalies subtab findings (portscans,
+  // brute-force, baseline outliers, embedded cleartext) into the
+  // Session Threat Score so the Threat Intel panel surfaces them.
+  collectStatsAnomalies: typeof collectStatsAnomalies === "function"
+    ? (packets) => {
+        try {
+          return collectStatsAnomalies(packets) || {};
+        } catch (_error) {
+          return {};
+        }
+      }
+    : null,
 });
 
 document.getElementById("close-btn").addEventListener("click", () => {
