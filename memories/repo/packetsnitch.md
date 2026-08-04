@@ -172,3 +172,29 @@
   now gated on `record.type !== "hash"`).
 - New sync hooks in `src/ui/main-frontend-test.cjs` mirror the
   `main-frontend.js` changes one-for-one.
+
+## Wi-Fi 802.11 decryption (legacy spawn path)
+
+- AES-CCMP decryption for pcaps like `samples/pcaps/wifi-Coherer-Induction.pcap`
+  (SSID="Coherer", BSSID=00:0c:41:82:b2:55, password="Induction") is
+  driven by JS-bridge keys passed via `--wifi-keys-file <path>`. The
+  Python backend reads the file at startup and calls
+  `_setActiveWifiKeys(payload)`. The 802.11 frame parser/decryptor
+  lives in `src/backend/decoders/wireless_80211.py`.
+- The legacy spawn path (`forceLegacySpawn` or concurrent-run guard)
+  stages the keys file at `testcaseOutputDir/wifi-keys-<jobId>.json`
+  — OUTSIDE `jobOutputDir`. The previous location was inside
+  `jobOutputDir` and got wiped by `fs.rmSync(jobOutputDir)` immediately
+  before the backend spawned, so the backend always saw a missing
+  file and silently skipped decryption. The bridge cleans up the
+  keys file in the `backendProc.on('close', ...)` handler.
+- The renderer must also honor `wifiKeysRerunInFlight` in the
+  path-mode snapshot handler (`processBackendJsonPathPayload`) so the
+  new hosts.json triggers a full reindex instead of leaving the
+  renderer's packet stubs pointed at pre-decryption content.
+  Regression tests: `tests/wifi_keys_rerun_path_mode.test.js`,
+  `tests/wifi_keys_legacy_spawn_placement.test.js`,
+  `tests/legacy_all_host_sentinel.test.js`.
+- Coherer handshake facts (SSID="Coherer", BSSID=00:0c:41:82:b2:55,
+  password="Induction", PMK=a288fcf0caaacda9a9f58633ff35e8992a01d9c10ba5e02efdf8cb5d730ce7bc)
+  decrypt 203/204 CCMP frames in the Coherer sample.

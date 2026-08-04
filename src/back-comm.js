@@ -2272,11 +2272,20 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     // background rerun triggered while the first backend run is still
     // releasing its handles (concurrent-run guard) would silently drop
     // the keys and produce undecrypted 802.11 frames.
+    //
+    // The keys file is staged in testcaseOutputDir (sibling of
+    // jobOutputDir) so the jobOutputDir wipe below doesn't delete it
+    // — previously the wifi-keys file lived inside jobOutputDir and
+    // the wipe on second/later runs removed it before the backend
+    // could read it, which made decryption silently no-op.
     let wifiKeysFilePath = null;
     if (Array.isArray(options.wifiKeys) && options.wifiKeys.length > 0) {
       try {
-        fs.mkdirSync(jobOutputDir, { recursive: true });
-        wifiKeysFilePath = path.join(jobOutputDir, "wifi-keys.json");
+        fs.mkdirSync(testcaseOutputDir, { recursive: true });
+        wifiKeysFilePath = path.join(
+          testcaseOutputDir,
+          `wifi-keys-${backendJobId}.json`,
+        );
         fs.writeFileSync(
           wifiKeysFilePath,
           JSON.stringify(options.wifiKeys),
@@ -2488,6 +2497,18 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
           });
         } else {
           sendError("[Bridge] hosts.json not found after backend execution!");
+        }
+
+        // Clean up the staged wifi keys file now that the backend has
+        // finished.  It's owned by this job and isn't needed again.
+        if (wifiKeysFilePath && fs.existsSync(wifiKeysFilePath)) {
+          try {
+            fs.unlinkSync(wifiKeysFilePath);
+          } catch (cleanupError) {
+            global.logBackend(
+              `[Bridge] Failed to remove staged wifi keys file ${wifiKeysFilePath}: ${cleanupError.message}`,
+            );
+          }
         }
 
         resolve({
