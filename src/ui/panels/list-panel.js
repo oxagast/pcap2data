@@ -46,6 +46,39 @@ function isUnknownLikeProtocol(value) {
   );
 }
 
+// Protocol names that describe the link / framing layer rather than the
+// application layer.  These can legitimately appear in
+// ``packet.decoded_protocols`` (e.g. "WIFI" is prepended by the backend's
+// 802.11 decryption merge, "Ethernet" / "Linux Cooked" / "FRAME" come
+// from the frame's link-protocol extraction), but they must never be
+// surfaced as the "App Protocol" for a packet whose transport or
+// application layer has already been decoded.  Filtering them here
+// keeps the List panel honest about what was actually decoded (HTTP,
+// SSH, DNS, ...) rather than re-labelling every decrypted TCP frame
+// as "WIFI".
+const LINK_LAYER_PROTOCOL_NAMES = new Set(
+  [
+    "WIFI",
+    "IEEE 802.11",
+    "ETHERNET",
+    "LINUX COOKED",
+    "LINUX COOKED V2",
+    "LINUX COOKED V1",
+    "FRAME",
+    "LINK",
+    "RAW",
+    "LOOPBACK",
+    "NULL",
+    "TUN",
+    "TAP",
+  ].map((name) => name.toUpperCase()),
+);
+
+function isLinkLayerProtocolName(name) {
+  if (typeof name !== "string") return false;
+  return LINK_LAYER_PROTOCOL_NAMES.has(name.trim().toUpperCase());
+}
+
 // Returns whether protocol like field name.
 function isProtocolLikeFieldName(fieldName, fieldValue) {
   if (fieldName.includes(".")) return false;
@@ -66,14 +99,22 @@ function collectDecodedProtocolNames(packetInfo) {
   packetDecodedValues.forEach((packetDecoded) => {
     if (Array.isArray(packetDecoded)) {
       packetDecoded.forEach((name) => {
-        if (typeof name === "string" && name.trim()) {
-          decodedNames.add(name.trim());
-        }
+        if (typeof name !== "string") return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        // Skip link-layer protocols — those describe the framing layer
+        // (WIFI, Ethernet, FRAME, ...) and should never be chosen as the
+        // application layer when a higher protocol has been decoded.
+        if (isLinkLayerProtocolName(trimmed)) return;
+        decodedNames.add(trimmed);
       });
       return;
     }
     if (typeof packetDecoded === "string" && packetDecoded.trim()) {
-      decodedNames.add(packetDecoded.trim());
+      const trimmed = packetDecoded.trim();
+      if (!isLinkLayerProtocolName(trimmed)) {
+        decodedNames.add(trimmed);
+      }
     }
   });
 
