@@ -238,6 +238,7 @@ import decoders.telnet as dec_telnet
 import decoders.tftp as dec_tftp
 import decoders.wan_link as dec_wan_link
 import decoders.websocket as dec_websocket
+import decoders.wireless_80211 as dec_wireless_80211
 import decoders.xmpp as dec_xmpp
 
 activeRecon = "False"
@@ -247,6 +248,8 @@ checkTor = True
 verbose = 0
 torJsonData = {}
 torNetworkIps = {}
+activeWifiKeys = []
+activeWifiKeysLock = threading.Lock()
 # Shared result lists, protected by their respective locks so that threads
 # can safely append results concurrently without data corruption.
 allPacketInfo = []
@@ -379,6 +382,28 @@ def _getRuntimeConfigSnapshot():
         }
 
 
+def _setActiveWifiKeys(entries):
+    """Replace the active 802.11 key list (used by the wireless decoder)."""
+    global activeWifiKeys
+    if not isinstance(entries, list):
+        return
+    normalized = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        normalized.append(
+            {
+                "bssid": str(entry.get("bssid") or "").strip(),
+                "ssid": str(entry.get("ssid") or "").strip(),
+                "psk": str(entry.get("psk") or "").strip(),
+                "pmkHex": str(entry.get("pmkHex") or "").strip(),
+                "wepKeyHex": str(entry.get("wepKeyHex") or "").strip(),
+            }
+        )
+    with activeWifiKeysLock:
+        activeWifiKeys = normalized
+
+
 def _applyRuntimeConfigUpdate(request):
     global hostChunkSize
     global numWorkerThreads
@@ -394,6 +419,9 @@ def _applyRuntimeConfigUpdate(request):
             request.get("workerThreads"),
             numWorkerThreads,
         )
+    if "wifiKeys" in request:
+        _setActiveWifiKeys(request.get("wifiKeys"))
+        updates["wifiKeys"] = len(activeWifiKeys)
 
     if not updates:
         return {
@@ -2630,11 +2658,49 @@ def _isLikelyMacAddress(value):
     return bool(re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", valueText))
 
 
+def _macToString(value):
+    """
+    Lightweight MAC/address formatter used by the wireless decoder paths.
+    Returns "Broadcast" for the all-ones MAC and "N/A" for unknown values.
+    """
+    if value is None:
+        return "N/A"
+    try:
+        text = str(value).strip()
+    except Exception:
+        return "N/A"
+    if not text:
+        return "N/A"
+    if text == "ff:ff:ff:ff:ff:ff":
+        return "Broadcast"
+    if text == "00:00:00:00:00:00":
+        return "N/A"
+    return text
+
+
 def extractLinkLayerInfo(p):
     """
     Return normalized link-layer metadata for Ethernet and Linux cooked packets.
     Returns a dict with keys: linkProto, srcAddr, dstAddr, linuxCooked.
+
+    IEEE 802.11 (Wi-Fi) frames are also recognized here so that the rest of
+    the pipeline can attach wireless metadata to the packet.
     """
+    if dec_wireless_80211._looksLikeWifi(p):
+        dot11Layer, _radioTapLayer, _encryptedLayer = dec_wireless_80211.getWirelessLayers(p)
+        srcAddr = (
+            _macToString(getattr(dot11Layer, "addr2", None)) if dot11Layer is not None else "N/A"
+        )
+        dstAddr = (
+            _macToString(getattr(dot11Layer, "addr1", None)) if dot11Layer is not None else "N/A"
+        )
+        return {
+            "linkProto": "IEEE 802.11",
+            "srcAddr": srcAddr,
+            "dstAddr": dstAddr,
+            "linuxCooked": None,
+        }
+
     etherClass = getattr(scapy, "Ether", None)
     if (etherClass and p.haslayer(etherClass)) or p.haslayer("Ether"):
         etherLayer = p[etherClass] if etherClass and p.haslayer(etherClass) else p["Ether"]
@@ -2913,6 +2979,145 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 dstIp if dstIp != "0.0.0.0" else srcIp,
             )
 
+        # Decode IEEE 802.11 (Wi-Fi) link-layer frames that do not carry
+        # IP / ARP / WAN-link layers.  When keys are present we additionally
+        # try to strip WEP/CCMP/TKIP and re-run the packet loop on the
+        # decrypted payload to populate IP/TCP/UDP normally.
+        wirelessSection = dec_wireless_80211.decodeWirelessFrame(p)
+        if wirelessSection is not None:
+            wifiDecryptResult = dec_wireless_80211.decryptWifiPayload(p, activeWifiKeys)
+            rawFrame = bytes(p)
+            decryptedFrame = None
+            if wifiDecryptResult and wifiDecryptResult.get("ok") and wifiDecryptResult.get("plaintextHex"):
+                try:
+                    decryptedFrame = bytes.fromhex(wifiDecryptResult["plaintextHex"])
+                except Exception:
+                    decryptedFrame = None
+            if decryptedFrame:
+                # Re-parse the decrypted bytes as an 802.2 LLC frame so
+                # we can descend into IP / TCP / UDP / DHCP etc.  Most
+                # CCMP-encrypted Wi-Fi data frames use an LLC/SNAP
+                # header (DSAP=0xAA SSAP=0xAA Control=0x03 OUI=00:00:00
+                # EtherType=0x0800 for IPv4) rather than a plain
+                # 802.3 Ethernet frame, so ``scapy.Ether`` mis-parses
+                # the destination MAC bytes.
+                try:
+                    innerPacket = scapy.LLC(decryptedFrame)
+                except Exception:
+                    try:
+                        innerPacket = scapy.Ether(decryptedFrame)
+                    except Exception:
+                        innerPacket = scapy.SafeDataPlane(bytes(decryptedFrame))
+                try:
+                    innerInfo = packetLoop(
+                        innerPacket,
+                        packetIndex,
+                        srcPortFilter,
+                        dstPortFilter,
+                        timeout,
+                    )
+                except Exception:
+                    innerInfo = None
+                if innerInfo is not None:
+                    # packetLoop returns a {"packet.info": {...},
+                    # "extra.info": {...}} dict via joinInfo(); unwrap it.
+                    innerPacketInfo = None
+                    if isinstance(innerInfo, dict):
+                        innerPacketInfo = innerInfo.get("packet.info")
+                    elif isinstance(innerInfo, (str, bytes, bytearray)):
+                        try:
+                            innerPacketInfo = json.loads(innerInfo)
+                        except Exception:
+                            innerPacketInfo = None
+                    if isinstance(innerPacketInfo, dict):
+                        # Splice the wireless metadata + decryption status
+                        # in front of the inner packet info so the renderer
+                        # still sees the decrypted network traffic.
+                        innerPacketInfo["Wireless"] = wirelessSection
+                        innerPacketInfo["link.proto"] = "IEEE 802.11"
+                        innerPacketInfo["link.src.mac.addr"] = srcMacAddr
+                        innerPacketInfo["link.dst.mac.addr"] = dstMacAddr
+                        innerPacketInfo["link.src.mac.vendor"] = srcMacVendor
+                        innerPacketInfo["link.dst.mac.vendor"] = dstMacVendor
+                        innerPacketInfo["wifi.decrypt.ok"] = True
+                        innerPacketInfo["wifi.decrypt.algorithm"] = wifiDecryptResult.get("algorithm")
+                        decryptedProtocols = list(innerPacketInfo.get("packet.decoded_protocols") or [])
+                        if "WIFI" not in decryptedProtocols:
+                            decryptedProtocols.append("WIFI")
+                        innerPacketInfo["packet.decoded_protocols"] = decryptedProtocols
+                        return json.dumps(innerPacketInfo)
+
+            timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+                "%Y-%m-%d %H:%M:%S.%f"
+            )
+            decodedProtocols = list(wirelessSection.get("packet.decoded_protocols") or ["WIFI"])
+            decodedProtocols = ["WIFI"] + [d for d in decodedProtocols if d != "WIFI"]
+            wifiInfo = {
+                "packet.processed": int(packetIndex),
+                "packet.timestamp": timestamp,
+                "packet.proto": "WIFI",
+                "link.proto": "IEEE 802.11",
+                "packet.decoded_protocols": decodedProtocols,
+                "Ethernet Frame": {
+                    "ether.src.mac.addr": srcMacAddr,
+                    "link.src.mac.addr": srcMacAddr,
+                    "ether.dst.mac.addr": dstMacAddr,
+                    "link.dst.mac.addr": dstMacAddr,
+                    "ether.src.mac.vendor": srcMacVendor,
+                    "link.src.mac.vendor": srcMacVendor,
+                    "ether.dst.mac.vendor": dstMacVendor,
+                    "link.dst.mac.vendor": dstMacVendor,
+                }
+                if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+                else "N/A",
+                "Wireless": wirelessSection,
+                "wifi.decrypt.ok": bool(wifiDecryptResult and wifiDecryptResult.get("ok")),
+                "wifi.decrypt.algorithm": (wifiDecryptResult or {}).get("algorithm", "None"),
+                "wifi.decrypt.error": (wifiDecryptResult or {}).get("error"),
+                "Raw data": {
+                    "Payload": {
+                        "payload.hex": rawFrame.hex(),
+                        "payload.ascii": rawFrame.decode(errors="ignore"),
+                    },
+                    "Packet": rawFrame.hex(),
+                    "packet.hex": rawFrame.hex(),
+                    "payload.len": len(rawFrame),
+                },
+            }
+            try:
+                dataTypeInfo = getDatatypes(
+                    rawFrame,
+                    0,
+                    0,
+                    "0.0.0.0",
+                    "0.0.0.0",
+                    timeout,
+                    "udp",
+                )
+            except Exception:
+                mimeType = magic.from_buffer(rawFrame, mime=True)
+                dataTypeInfo = {
+                    "MIME Type": mimeType,
+                    "payload.mime": mimeType,
+                    "Decompressed": {"Decompressed": False},
+                    "payload.decompressed": {"Decompressed": False},
+                    "Data Types": ["Unknown data type"],
+                    "Traits": {"Length": len(rawFrame)},
+                }
+            if wanLinkSection is not None:
+                wifiInfo["Link Control"] = wanLinkSection
+                wifiInfo["packet.decoded_protocols"] = decodedProtocols + list(
+                    wanLinkSection.get("wan.detected", [])
+                )
+            return joinInfo(
+                outputDir,
+                "wifi",
+                packetIndex,
+                _jsonDumpEncoded(dataTypeInfo),
+                _jsonDumpEncoded(wifiInfo),
+                "0.0.0.0",
+            )
+
         rawPayload = bytes(p.payload) if bytes(p.payload) else bytes(p)
         if rawPayload is None or len(rawPayload) == 0:
             return None
@@ -3022,8 +3227,17 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         transportProtocol = "igmp"
         dstPortStr = "igmp"
     elif isIcmp:
-        # ICMP: use the full ICMP layer bytes as the payload
-        icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
+        # ICMP: use the full ICMP layer bytes as the payload.  IPv6
+        # ICMPv6 packets report haslayer("ICMP") True in some scapy
+        # versions but p["ICMP"] raises — fall back to
+        # networkLayer.payload for those.
+        try:
+            if p.haslayer("ICMP"):
+                icmpLayer = p["ICMP"]
+            else:
+                icmpLayer = networkLayer.payload
+        except Exception:
+            icmpLayer = networkLayer.payload
         rawPayload = bytes(icmpLayer)
         srcPort = 0
         dstPort = 0
@@ -3913,6 +4127,18 @@ with additional network and server information.
         default=2 * (os.cpu_count() or 1),
     )
     parser.add_argument(
+        "--wifi-keys-file",
+        dest="wifi_keys_file",
+        help=(
+            "Path to a JSON file containing 802.11 wifi keys to install on "
+            "startup. Used by the legacy backend spawn path so background "
+            "reruns triggered by 'Send Wi-Fi keys to backend' can decrypt "
+            "802.11 frames even when the concurrent-run guard bypasses the "
+            "HTTP service."
+        ),
+        default=None,
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         help="Enable verbose output for debugging.",
@@ -4023,6 +4249,24 @@ def runCaptureFromArgs(runArgs):
     emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
 
+    if getattr(runArgs, "wifi_keys", None):
+        try:
+            _setActiveWifiKeys(runArgs.wifi_keys)
+        except Exception:
+            pass
+    elif getattr(runArgs, "wifi_keys_file", None):
+        try:
+            wifiKeysPath = str(runArgs.wifi_keys_file).strip()
+            if wifiKeysPath and os.path.isfile(wifiKeysPath):
+                with open(wifiKeysPath, "r", encoding="utf-8") as wifiKeysFile:
+                    wifiKeysPayload = json.load(wifiKeysFile)
+                if isinstance(wifiKeysPayload, list) and wifiKeysPayload:
+                    _setActiveWifiKeys(wifiKeysPayload)
+        except Exception:
+            # Failed to read the wifi keys file is non-fatal — the backend
+            # will just skip 802.11 decryption for this run.
+            pass
+
     checkTor = bool(getattr(args, "use_tor_check", True))
     torJsonData = {}
     torNetworkIps = {}
@@ -4082,6 +4326,13 @@ def runCaptureFromArgs(runArgs):
         }
 
     packets = scapy.rdpcap(runArgs.pcap_file)  # type: ignore
+    # Populate the WPA2 4-way handshake cache once per capture so that
+    # CCMP data-frame decryption can find ANonce/SNonce/MAC tuples
+    # without re-scanning the entire pcap per packet.
+    try:
+        dec_wireless_80211.populateWifiHandshakeCache(packets)
+    except Exception:
+        pass
     tcpStreamInitialDstPortMap = buildTcpStreamInitialDstPortMap(packets)
     allPacketCount = len(packets)
     totalPackets = len(packets)
@@ -4725,6 +4976,7 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 server_host="127.0.0.1",
                 server_port=0,
                 job_id=requestJobId,
+                wifi_keys=request.get("wifiKeys") if isinstance(request.get("wifiKeys"), list) else None,
             )
 
             progressQueue = queue.Queue()
