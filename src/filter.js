@@ -262,6 +262,13 @@ function getAliasedFieldValue(packetItem, normalizedKey) {
     }
     case 'link-proto':
       return searchFullKey(packetItem, 'link.proto');
+    case 'wifi-proto':
+      return (
+        searchFullKey(packetItem, 'wifi.cipher') ??
+        searchFullKey(packetItem, 'wifi.crypto') ??
+        searchFullKey(packetItem, 'wifi.type') ??
+        searchFullKey(packetItem, 'wifi.ssid')
+      );
     case 'network-proto':
       return searchFullKey(packetItem, 'network.proto');
     case 'tcp-src-port':

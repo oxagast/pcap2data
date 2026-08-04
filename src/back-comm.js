@@ -120,7 +120,7 @@ function buildBackendProcessEnv() {
   return env;
 }
 
-async function sendBackendControlCommand(action, timeoutMs = 5000) {
+async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload = null) {
   const isReady = await probeSnitchHttpBackendReady(
     currentBackendHttpHost,
     currentBackendHttpPort,
@@ -135,7 +135,9 @@ async function sendBackendControlCommand(action, timeoutMs = 5000) {
   }
 
   return new Promise((resolve) => {
-    const body = JSON.stringify({ action });
+    const body = JSON.stringify(extraPayload && typeof extraPayload === "object"
+      ? { action, ...extraPayload }
+      : { action });
     const req = http.request(
       {
         host: currentBackendHttpHost,
@@ -1478,6 +1480,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     pcapSourcePayload = null,
     useHttpDataSnapshots = false,
     jobId = "",
+    wifiKeys = null,
   } = options;
   const normalizedJobId = normalizeBackendJobId(jobId) || createBackendJobId("http");
 
@@ -1539,6 +1542,9 @@ async function runBackendCommandViaHttp(filename, options = {}) {
       emitJsonSnapshots: Boolean(useHttpDataSnapshots),
       verbose: 1,
     };
+    if (Array.isArray(wifiKeys)) {
+      requestPayload.wifiKeys = wifiKeys;
+    }
     if (pcapSourcePayload && typeof pcapSourcePayload.data === "string") {
       requestPayload.pcapBase64 = pcapSourcePayload.data;
       requestPayload.pcapFileName = pcapSourcePayload.fileName || "session-reprocess.pcap";
@@ -2229,6 +2235,7 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
         pcapSourcePayload,
         useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
         jobId: backendJobId,
+        wifiKeys: options.wifiKeys,
       });
       if (httpResult?.success) {
         global.logBackend("[Bridge] Backend completed using HTTP service mode");
@@ -2258,9 +2265,36 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
     }
 
     const jobOutputDir = path.join(testcaseOutputDir, backendJobId);
+    // The legacy spawn path can't ride along with the HTTP service's
+    // runtime config update, so when wifi keys are supplied we write
+    // them to a per-job JSON file and pass --wifi-keys-file so the
+    // python backend can install them at startup. Without this, a
+    // background rerun triggered while the first backend run is still
+    // releasing its handles (concurrent-run guard) would silently drop
+    // the keys and produce undecrypted 802.11 frames.
+    let wifiKeysFilePath = null;
+    if (Array.isArray(options.wifiKeys) && options.wifiKeys.length > 0) {
+      try {
+        fs.mkdirSync(jobOutputDir, { recursive: true });
+        wifiKeysFilePath = path.join(jobOutputDir, "wifi-keys.json");
+        fs.writeFileSync(
+          wifiKeysFilePath,
+          JSON.stringify(options.wifiKeys),
+          "utf8",
+        );
+      } catch (writeError) {
+        global.logBackend(
+          `[Bridge] Failed to stage wifi keys for legacy spawn: ${writeError.message}`,
+        );
+        wifiKeysFilePath = null;
+      }
+    }
+    const legacyExtraArgs = wifiKeysFilePath
+      ? ["--wifi-keys-file", wifiKeysFilePath]
+      : [];
     const backendArgs = usePythonBackend
-      ? [backendScriptPath, filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)]
-      : [filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads)];
+      ? [backendScriptPath, filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads), ...legacyExtraArgs]
+      : [filename, "-v", "-a", "-o", jobOutputDir, "--host-chunk-size", String(hostChunkSize), "--worker-threads", String(workerThreads), ...legacyExtraArgs];
     // Always start with a clean output directory so snitch never hits the
     // interactive overwrite prompt on second (and later) runs.
     if (fs.existsSync(jobOutputDir)) {
@@ -2471,12 +2505,13 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   }
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions, jobId) => {
+ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
   return runBackendCommandInternal(filename, useLLM, {
     hostChunkSize,
     workerThreads,
     backendOptions,
     jobId,
+    wifiKeys: Array.isArray(wifiKeys) ? wifiKeys : null,
   });
 });
 
@@ -2502,7 +2537,7 @@ ipcMain.handle("init-backend-service", async (_event, backendOptions) => {
   };
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions, jobId) => {
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
   const backendJobId = normalizeBackendJobId(jobId) || createBackendJobId("backend");
   let tempPathForCleanup = "";
   try {
@@ -2520,6 +2555,10 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
       workerThreads,
       backendOptions,
       jobId: backendJobId,
+      // Pass wifi keys straight through to the backend so the first packet
+      // the backend decrypts can use them — no need to wait for a separate
+      // set-runtime-config round-trip after the run starts.
+      wifiKeys: Array.isArray(wifiKeys) ? wifiKeys : null,
     });
     return result;
   } catch (error) {
@@ -2547,10 +2586,27 @@ ipcMain.handle("control-backend-service", async (_event, action) => {
   if (action === "shutdown") {
     return requestBackendShutdown();
   }
+  if (action && typeof action === "object" && action.action === "set-runtime-config") {
+    const payload = { ...action };
+    delete payload.action;
+    return sendBackendControlCommand("set-runtime-config", 5000, payload);
+  }
   return {
     success: false,
     error: "Unsupported backend control action",
   };
+});
+
+ipcMain.handle("set-backend-wifi-keys", async (_event, wifiKeys) => {
+  const keys = Array.isArray(wifiKeys) ? wifiKeys : [];
+  if (!keys.length) {
+    return {
+      success: true,
+      accepted: 0,
+      message: "No Wi-Fi keys supplied; backend will not decrypt 802.11 payloads",
+    };
+  }
+  return sendBackendControlCommand("set-runtime-config", 5000, { wifiKeys: keys });
 });
 
 ipcMain.handle("lookup-backend-geoip", async (_event, ipAddress, options = {}) => {

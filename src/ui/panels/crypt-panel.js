@@ -115,12 +115,14 @@ function createCryptPanel({
   getSessionKeychainEntries,
   getFirstLineOrFallback,
   sendDecryptedToConv,
+  rerunBackendWithWifiKeys,
 }) {
   const {
     MAIN_TAB_CRYPT,
     CRYPT_SSL_SUBTAB,
     CRYPT_PGP_SUBTAB,
     CRYPT_OPENSSH_SUBTAB,
+    CRYPT_WIFI_SUBTAB,
     SESSION_KEYCHAIN_LABEL,
     isLikelyIpAddress,
     extractIpv6EndpointParts,
@@ -158,6 +160,24 @@ function createCryptPanel({
   let pgpLastOutputPayload = null;
   let pgpPrivateKeyCandidates = [];
   let pgpPassphraseCandidates = [];
+  let wifiEncounteredEntries = [];
+  let wifiAllEncounteredEntries = [];
+  let wifiActiveEntryIndex = -1;
+  let wifiKeystoreKeys = [];
+  let wifiLastDecryptedPayload = null;
+  let wifiBackendKeysAccepted = 0;
+  let wifiBackendKeysLastSentAt = null;
+  // Snapshot of the keys last handed to setBackendWifiKeys. We keep this
+  // around so the auto-rerun triggered after a successful send can reuse
+  // the exact same keys even if the session keychain is mutated (e.g. by
+  // a debounced keystore-LLM rebuild) before the rerun callback fires.
+  let wifiBackendKeysLastSent = [];
+  const wifiFilterState = {
+    ssid: "",
+    bssid: "",
+    decryptableOnly: false,
+    sort: "index",
+  };
 
   function getHostPacketMap(capturedPackets) {
     if (!capturedPackets || typeof capturedPackets !== "object") return null;
@@ -2586,6 +2606,7 @@ function createCryptPanel({
     const sslActive = tabName === CRYPT_SSL_SUBTAB;
     const pgpActive = tabName === CRYPT_PGP_SUBTAB;
     const opensshActive = tabName === CRYPT_OPENSSH_SUBTAB;
+    const wifiActive = tabName === CRYPT_WIFI_SUBTAB;
     document
       .getElementById("crypt-subtab-ssl")
       .classList.toggle("active", sslActive);
@@ -2595,14 +2616,782 @@ function createCryptPanel({
     document
       .getElementById("crypt-subtab-openssh")
       .classList.toggle("active", opensshActive);
+    document
+      .getElementById("crypt-subtab-wifi")
+      .classList.toggle("active", wifiActive);
     document.getElementById("crypt-ssl-panel").hidden = !sslActive;
     document.getElementById("crypt-pgp-panel").hidden = !pgpActive;
     document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
+    document.getElementById("crypt-wifi-panel").hidden = !wifiActive;
     if (pgpActive) {
       refreshPgpEncounteredEntries();
       refreshPgpPrivateKeyCandidates();
       refreshPgpPassphraseCandidates();
     }
+    if (wifiActive) {
+      refreshWifiEncounteredEntries();
+      refreshWifiKeystoreEntries();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wireless (IEEE 802.11) subtab
+  // ---------------------------------------------------------------------------
+
+  function normalizeWifiBssidString(value) {
+    if (!value) return "";
+    const cleaned = String(value)
+      .trim()
+      .toLowerCase()
+      .replace(/[^0-9a-f]/g, "");
+    if (cleaned.length !== 12) return "";
+    const pairs = [];
+    for (let i = 0; i < 12; i += 2) {
+      pairs.push(cleaned.slice(i, i + 2));
+    }
+    return pairs.join(":");
+  }
+
+  function getWifiSection(packetInfo) {
+    if (!packetInfo || typeof packetInfo !== "object") return null;
+    const direct = packetInfo["Wireless"] || packetInfo["wireless"];
+    return direct && typeof direct === "object" ? direct : null;
+  }
+
+  function isWifiPacket(packetInfo) {
+    if (!packetInfo || typeof packetInfo !== "object") return false;
+    const proto = packetInfo["packet.proto"] || packetInfo["Protocol"];
+    if (typeof proto === "string" && proto.toUpperCase() === "WIFI") return true;
+    if (
+      typeof packetInfo["link.proto"] === "string" &&
+      packetInfo["link.proto"].toLowerCase().includes("802.11")
+    ) {
+      return true;
+    }
+    return getWifiSection(packetInfo) !== null;
+  }
+
+  function getWifiEncounteredEntries() {
+    const entries = [];
+    const capturedPackets = getCapturedPackets();
+    const hostMap = getHostPacketMap(capturedPackets);
+    if (!hostMap) return entries;
+
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
+      if (!Array.isArray(packets)) continue;
+      packets.forEach((packet, packetOffset) => {
+        const packetInfo = getPacketInfo(packet);
+        if (!isWifiPacket(packetInfo)) return;
+        const wifi = getWifiSection(packetInfo) || {};
+        const packetIndex =
+          packetInfo["Index"] ?? packetInfo["packet.processed"] ?? packetOffset;
+        entries.push({
+          host,
+          packetIndex,
+          packet,
+          ssid: wifi["wifi.ssid"] ?? wifi["ssid"] ?? "",
+          bssid: wifi["wifi.bssid"] ?? wifi["bssid"] ?? "",
+          channel: wifi["wifi.channel"] ?? wifi["channel"] ?? "",
+          type: wifi["wifi.type"] ?? wifi["type"] ?? "",
+          subtype: wifi["wifi.subtype"] ?? wifi["subtype"] ?? "",
+          cipher: wifi["wifi.cipher"] ?? wifi["cipher"] ?? "",
+          crypto: wifi["wifi.crypto"] ?? wifi["crypto"] ?? "",
+          decryptOk: wifi["wifi.decrypt.ok"] === true,
+          decryptAlgorithm: wifi["wifi.decrypt.algorithm"] || "",
+          linkProto: packetInfo["link.proto"] || "IEEE 802.11",
+        });
+      });
+    }
+
+    return entries.sort((a, b) => {
+      const aIdx = Number(a.packetIndex);
+      const bIdx = Number(b.packetIndex);
+      if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+      return String(a.packetIndex).localeCompare(String(b.packetIndex));
+    });
+  }
+
+  function classifyWifiEntryDecryptability(entry) {
+    if (!entry) return "unknown";
+    if (entry.decryptOk) return "decrypted";
+    const ssid = String(entry.ssid || "").trim();
+    const bssid = String(entry.bssid || "").trim().toLowerCase();
+    const cipher = String(entry.cipher || "").toUpperCase();
+    const crypto = String(entry.crypto || "").toUpperCase();
+    if (!wifiKeystoreKeys.length) return "no-keys";
+    const matchingBssid = wifiKeystoreKeys.filter((k) => {
+      const summary = readWifiEntrySummary(k);
+      const keyBssid = normalizeWifiBssidString(summary.bssid || k.bssid || "");
+      if (!keyBssid) return true;
+      if (!bssid) return true;
+      return keyBssid === bssid;
+    });
+    if (!matchingBssid.length) return "no-key-for-bssid";
+    const supportsCipher = (() => {
+      if (cipher.includes("WEP") || cipher.includes("WEP40") || cipher.includes("WEP104")) {
+        return matchingBssid.some((k) => {
+          const type = String(k.type || "").toLowerCase();
+          const content = String(k.content || "").trim();
+          return (
+            type === "wifi-wep" ||
+            type === "wep" ||
+            /^[0-9a-fA-F]{10,32}$/.test(content)
+          );
+        });
+      }
+      if (
+        cipher.includes("CCMP") ||
+        cipher.includes("WPA") ||
+        cipher.includes("TKIP") ||
+        crypto.includes("WPA") ||
+        crypto.includes("WPA2") ||
+        crypto.includes("WPA3")
+      ) {
+        return matchingBssid.some((k) => {
+          const type = String(k.type || "").toLowerCase();
+          const content = String(k.content || "").trim();
+          return (
+            type === "wifi-wpa-psk" ||
+            type === "wifi-pmk" ||
+            type === "wpa-psk" ||
+            type === "wpa-pmk" ||
+            /^[0-9a-fA-F]{64}$/.test(content) ||
+            (/\s/.test(content) && content.length >= 8 && content.length <= 63)
+          );
+        });
+      }
+      return false;
+    })();
+    return supportsCipher ? "decryptable" : "no-match";
+  }
+
+  function applyWifiFilters(rawEntries) {
+    const base = Array.isArray(rawEntries) ? rawEntries.slice() : [];
+    const ssidNeedle = String(wifiFilterState.ssid || "").trim().toLowerCase();
+    const bssidNeedle = String(wifiFilterState.bssid || "").trim().toLowerCase();
+    const wantDecryptable = Boolean(wifiFilterState.decryptableOnly);
+    const filtered = base.filter((entry) => {
+      if (ssidNeedle) {
+        const ssid = String(entry.ssid || "").toLowerCase();
+        if (!ssid.includes(ssidNeedle)) return false;
+      }
+      if (bssidNeedle) {
+        const bssid = String(entry.bssid || "").toLowerCase();
+        const cleanedBssid = bssid.replace(/[^0-9a-f]/g, "");
+        const cleanedNeedle = bssidNeedle.replace(/[^0-9a-f]/g, "");
+        if (!bssid) return false;
+        if (cleanedBssid && cleanedNeedle) {
+          if (!cleanedBssid.includes(cleanedNeedle)) return false;
+        } else if (!bssid.includes(bssidNeedle)) {
+          return false;
+        }
+      }
+      if (wantDecryptable) {
+        const cls = classifyWifiEntryDecryptability(entry);
+        if (cls !== "decrypted" && cls !== "decryptable") return false;
+      }
+      return true;
+    });
+    const sortKey = String(wifiFilterState.sort || "index");
+    if (sortKey === "decryptable-first") {
+      const rank = (cls) => {
+        if (cls === "decrypted") return 0;
+        if (cls === "decryptable") return 1;
+        if (cls === "no-key-for-bssid") return 3;
+        if (cls === "no-keys") return 4;
+        if (cls === "no-match") return 5;
+        return 2;
+      };
+      filtered.sort((a, b) => {
+        const ra = rank(classifyWifiEntryDecryptability(a));
+        const rb = rank(classifyWifiEntryDecryptability(b));
+        if (ra !== rb) return ra - rb;
+        const aIdx = Number(a.packetIndex);
+        const bIdx = Number(b.packetIndex);
+        if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+        return String(a.packetIndex).localeCompare(String(b.packetIndex));
+      });
+    } else if (sortKey === "ssid") {
+      filtered.sort((a, b) => {
+        const ssidCompare = String(a.ssid || "").localeCompare(
+          String(b.ssid || ""),
+        );
+        if (ssidCompare !== 0) return ssidCompare;
+        const aIdx = Number(a.packetIndex);
+        const bIdx = Number(b.packetIndex);
+        if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+        return 0;
+      });
+    } else if (sortKey === "bssid") {
+      filtered.sort((a, b) => {
+        const bssidCompare = String(a.bssid || "").localeCompare(
+          String(b.bssid || ""),
+        );
+        if (bssidCompare !== 0) return bssidCompare;
+        const aIdx = Number(a.packetIndex);
+        const bIdx = Number(b.packetIndex);
+        if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+        return 0;
+      });
+    } else {
+      filtered.sort((a, b) => {
+        const aIdx = Number(a.packetIndex);
+        const bIdx = Number(b.packetIndex);
+        if (Number.isFinite(aIdx) && Number.isFinite(bIdx)) return aIdx - bIdx;
+        return String(a.packetIndex).localeCompare(String(b.packetIndex));
+      });
+    }
+    return filtered;
+  }
+
+  function updateWifiFilterStatus() {
+    const statusEl = document.getElementById("crypt-wifi-filter-status");
+    if (!statusEl) return;
+    const totalRaw = wifiAllEncounteredEntries.length;
+    const totalShown = wifiEncounteredEntries.length;
+    const parts = [];
+    if (wifiFilterState.ssid) parts.push(`SSID~="${wifiFilterState.ssid}"`);
+    if (wifiFilterState.bssid) parts.push(`BSSID~="${wifiFilterState.bssid}"`);
+    if (wifiFilterState.decryptableOnly) parts.push("decryptable-only");
+    const sortLabel = {
+      "index": "by index",
+      "decryptable-first": "decryptable first",
+      "ssid": "by SSID",
+      "bssid": "by BSSID",
+    }[wifiFilterState.sort] || "by index";
+    const filterClause = parts.length ? ` [${parts.join(", ")}]` : "";
+    statusEl.textContent = `Showing ${totalShown} of ${totalRaw} 802.11 frames (sorted ${sortLabel})${filterClause}`;
+  }
+
+  function renderWifiEncounteredDetails(entry) {
+    const detailsEl = document.getElementById("crypt-wifi-encountered-details");
+    if (!entry) {
+      detailsEl.textContent =
+        "No 802.11 frames detected in the loaded capture.";
+      return;
+    }
+    const cls = classifyWifiEntryDecryptability(entry);
+    const keyParts = [
+      `Host: ${entry.host}`,
+      `Packet: ${entry.packetIndex}`,
+      `Link: ${entry.linkProto}`,
+      `Type: ${entry.type || "Unknown"}${entry.subtype ? ` / ${entry.subtype}` : ""}`,
+      `SSID: ${entry.ssid || "(probe/none)"}`,
+      `BSSID: ${entry.bssid || "N/A"}`,
+      `Channel: ${entry.channel || "Unknown"}`,
+      `Cipher: ${entry.cipher || "Unknown"}`,
+      `Crypto: ${entry.crypto || "Unknown"}`,
+      `Decrypt: ${entry.decryptOk ? `Yes (${entry.decryptAlgorithm || "OK"})` : "Not yet"}`,
+      `Status: ${describeWifiClass(cls)}`,
+    ];
+    if (entry.bssid) {
+      const matching = wifiKeystoreKeys.filter((k) => {
+        const summary = readWifiEntrySummary(k);
+        const keyBssid = normalizeWifiBssidString(summary.bssid || k.bssid || "");
+        if (!keyBssid) return true;
+        return keyBssid === entry.bssid;
+      });
+      keyParts.push(`Keystore keys for BSSID: ${matching.length}`);
+    }
+    detailsEl.textContent = keyParts.join("\n");
+  }
+
+  function renderCurrentWifiEncounteredEntries() {
+    const listEl = document.getElementById("crypt-wifi-encountered-list");
+    listEl.replaceChildren();
+    wifiActiveEntryIndex = -1;
+
+    if (wifiEncounteredEntries.length === 0) {
+      const option = document.createElement("option");
+      const totalRaw = wifiAllEncounteredEntries.length;
+      if (totalRaw === 0) {
+        option.textContent = "No 802.11 frames detected in loaded capture.";
+      } else {
+        option.textContent = `No 802.11 frames match the current filter (0 of ${totalRaw}).`;
+      }
+      option.disabled = true;
+      listEl.appendChild(option);
+      renderWifiEncounteredDetails(null);
+      clearWifiDecryptionOutput();
+      updateWifiFilterStatus();
+      return;
+    }
+
+    wifiEncounteredEntries.forEach((entry, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      const ssid = entry.ssid || "(no SSID)";
+      const bssid = entry.bssid || "ff:ff:ff:ff:ff:ff";
+      const cipher = entry.cipher || "Unknown";
+      const cls = classifyWifiEntryDecryptability(entry);
+      let marker = "";
+      if (entry.decryptOk) marker = " ✔";
+      else if (cls === "decryptable") marker = " ★";
+      else if (cls === "no-key-for-bssid") marker = " ✗";
+      option.textContent = `#${entry.packetIndex} ${ssid} [${bssid}] ${cipher}${marker}`;
+      option.title = describeWifiClass(cls);
+      listEl.appendChild(option);
+    });
+
+    listEl.selectedIndex = 0;
+    wifiActiveEntryIndex = 0;
+    renderWifiEncounteredDetails(wifiEncounteredEntries[0]);
+    clearWifiDecryptionOutput();
+    updateWifiFilterStatus();
+  }
+
+  function describeWifiClass(cls) {
+    switch (cls) {
+      case "decrypted":
+        return "Decrypted by backend";
+      case "decryptable":
+        return "Decryptable with current keystore keys";
+      case "no-keys":
+        return "No Wi-Fi keys in the keystore";
+      case "no-key-for-bssid":
+        return "No keystore key for this BSSID";
+      case "no-match":
+        return "Keystore key does not match cipher";
+      default:
+        return "Unknown decryptability";
+    }
+  }
+
+  function refreshWifiEncounteredEntries() {
+    wifiAllEncounteredEntries = getWifiEncounteredEntries();
+    wifiEncounteredEntries = applyWifiFilters(wifiAllEncounteredEntries);
+    renderCurrentWifiEncounteredEntries();
+  }
+
+  function applyWifiFiltersAndRender() {
+    wifiEncounteredEntries = applyWifiFilters(wifiAllEncounteredEntries);
+    renderCurrentWifiEncounteredEntries();
+  }
+
+  function readWifiFilterInputs() {
+    const ssidEl = document.getElementById("crypt-wifi-filter-ssid");
+    const bssidEl = document.getElementById("crypt-wifi-filter-bssid");
+    const decryptableEl = document.getElementById(
+      "crypt-wifi-filter-decryptable",
+    );
+    const sortEl = document.getElementById("crypt-wifi-filter-sort");
+    wifiFilterState.ssid = (ssidEl?.value || "").trim();
+    wifiFilterState.bssid = (bssidEl?.value || "").trim();
+    wifiFilterState.decryptableOnly = Boolean(decryptableEl?.checked);
+    wifiFilterState.sort = sortEl?.value || "index";
+  }
+
+  function applyWifiFilterFromInputs() {
+    readWifiFilterInputs();
+    applyWifiFiltersAndRender();
+    const ssidPart = wifiFilterState.ssid ? ` SSID~="${wifiFilterState.ssid}"` : "";
+    const bssidPart = wifiFilterState.bssid ? ` BSSID~="${wifiFilterState.bssid}"` : "";
+    const decryptPart = wifiFilterState.decryptableOnly ? " decryptable-only" : "";
+    statusUpdate(
+      `Status: Wi-Fi filter applied — ${wifiEncounteredEntries.length} frame(s) match${ssidPart}${bssidPart}${decryptPart}`,
+    );
+    writeLogEntry(
+      `[${threadName}] Wi-Fi encountered filter applied: ssid=${JSON.stringify(wifiFilterState.ssid)} bssid=${JSON.stringify(wifiFilterState.bssid)} decryptableOnly=${wifiFilterState.decryptableOnly} sort=${wifiFilterState.sort} -> ${wifiEncounteredEntries.length} frame(s)`,
+    );
+  }
+
+  function clearWifiFilter() {
+    const ssidEl = document.getElementById("crypt-wifi-filter-ssid");
+    const bssidEl = document.getElementById("crypt-wifi-filter-bssid");
+    const decryptableEl = document.getElementById(
+      "crypt-wifi-filter-decryptable",
+    );
+    const sortEl = document.getElementById("crypt-wifi-filter-sort");
+    if (ssidEl) ssidEl.value = "";
+    if (bssidEl) bssidEl.value = "";
+    if (decryptableEl) decryptableEl.checked = false;
+    if (sortEl) sortEl.value = "index";
+    wifiFilterState.ssid = "";
+    wifiFilterState.bssid = "";
+    wifiFilterState.decryptableOnly = false;
+    wifiFilterState.sort = "index";
+    applyWifiFiltersAndRender();
+    statusUpdate("Status: Cleared Wi-Fi filter");
+  }
+
+  function selectWifiEncounteredEntry(index) {
+    if (
+      !Number.isFinite(index) ||
+      index < 0 ||
+      index >= wifiEncounteredEntries.length
+    ) {
+      wifiActiveEntryIndex = -1;
+      renderWifiEncounteredDetails(null);
+      return;
+    }
+    wifiActiveEntryIndex = index;
+    renderWifiEncounteredDetails(wifiEncounteredEntries[index]);
+    clearWifiDecryptionOutput();
+  }
+
+  function loadSelectedWifiEntry() {
+    const entry = wifiEncounteredEntries[wifiActiveEntryIndex];
+    if (!entry) {
+      statusUpdate("Status: Select an 802.11 frame first");
+      return;
+    }
+    const packet = entry.packet;
+    const packetInfo = getPacketInfo(packet);
+    const index = packetInfo["Index"] ?? packetInfo["packet.processed"] ?? entry.packetIndex;
+    statusUpdate(`Status: Loaded 802.11 frame #${index} (${entry.ssid || "(no SSID)"})`);
+    writeLogEntry(`[${threadName}] Loaded 802.11 frame #${index} from crypt:wireless`);
+  }
+
+  function applyWifiFilterForActiveEntry() {
+    const entry = wifiEncounteredEntries[wifiActiveEntryIndex];
+    if (!entry) {
+      statusUpdate("Status: Select an 802.11 frame to filter on");
+      return;
+    }
+    const filters = [];
+    if (entry.bssid) {
+      filters.push(`wifi.bssid == "${entry.bssid}"`);
+    }
+    if (entry.ssid && entry.ssid !== "(probe/none)") {
+      filters.push(`wifi.ssid == "${entry.ssid}"`);
+    }
+    if (wifiFilterState.decryptableOnly) {
+      filters.push('wifi.decrypt.ok == "true"');
+    }
+    if (!filters.length) {
+      filters.push(`packet.proto == "WIFI"`);
+    }
+    const query = filters.join(" || ");
+    filterInputEl.value = query;
+    syncFilterHighlight();
+    runFilterQuery();
+    statusUpdate(`Status: Applied Wi-Fi filter "${query}"`);
+    writeLogEntry(`[${threadName}] Applied Wi-Fi filter from crypt:wireless: ${query}`);
+  }
+
+  function getWifiKeychainEntries() {
+    if (typeof getSessionKeychainEntries !== "function") return [];
+    const entries = getSessionKeychainEntries();
+    return Array.isArray(entries) ? entries : [];
+  }
+
+  function readWifiEntrySummary(entry) {
+    if (!entry || typeof entry !== "object") return {};
+    const summary = entry.summary;
+    if (typeof summary === "string") {
+      try {
+        const parsed = JSON.parse(summary);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch (_err) {
+        // fall through to label parsing
+      }
+    }
+    const label = String(entry.label || "");
+    const out = {};
+    const ssidMatch = label.match(/ssid=([^ ]+)/);
+    if (ssidMatch) out.ssid = ssidMatch[1];
+    const bssidMatch = label.match(/bssid=([0-9a-f:]{17})/i);
+    if (bssidMatch) out.bssid = bssidMatch[1].toLowerCase();
+    return out;
+  }
+
+  function isWifiKeystoreEntry(entry) {
+    if (!entry || typeof entry !== "object") return false;
+    const type = String(entry.type || "").toLowerCase();
+    if (type.startsWith("wifi")) return true;
+    if (type === "wep" || type === "wpa-psk" || type === "wpa-pmk") return true;
+    return false;
+  }
+
+  function wifiEntryToBackendKey(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const summary = readWifiEntrySummary(entry);
+    const ssid = String(summary.ssid || "").trim();
+    const bssid = normalizeWifiBssidString(summary.bssid || entry.bssid || "");
+    const raw = String(entry.content || "").trim();
+    const type = String(entry.type || "").toLowerCase();
+    const out = {};
+    if (ssid) out.ssid = ssid;
+    if (bssid) out.bssid = bssid;
+    if (type === "wifi-wep" || type === "wep" || /^[0-9a-fA-F]{10,32}$/.test(raw)) {
+      out.wepKeyHex = raw.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+    } else if (type === "wifi-pmk" || type === "wpa-pmk" || /^[0-9a-fA-F]{64}$/.test(raw)) {
+      out.pmkHex = raw.replace(/[^0-9a-fA-F]/g, "").toLowerCase();
+    } else {
+      out.psk = raw;
+    }
+    return out;
+  }
+
+  function refreshWifiKeystoreEntries() {
+    const entries = getWifiKeychainEntries().filter(isWifiKeystoreEntry);
+    wifiKeystoreKeys = entries;
+    const listEl = document.getElementById("crypt-wifi-keystore-list");
+    listEl.replaceChildren();
+    if (!entries.length) {
+      const option = document.createElement("option");
+      option.textContent = "No Wi-Fi keys saved in the session keychain.";
+      option.disabled = true;
+      listEl.appendChild(option);
+    } else {
+      entries.forEach((entry, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        const summary = readWifiEntrySummary(entry);
+        const type = entry.type || "unknown";
+        const ssid = summary.ssid || entry.label || "(no SSID)";
+        const bssid = summary.bssid || "any";
+        const preview = String(entry.content || "")
+          .replace(/\s+/g, " ")
+          .slice(0, 32);
+        option.textContent = `${type} ${ssid} [${bssid}] ${preview}`;
+        listEl.appendChild(option);
+      });
+      listEl.selectedIndex = 0;
+    }
+    // Re-render the encountered list so the decryptability markers and the
+    // 'decryptable-only' filter pick up the freshly-loaded keys.
+    if (wifiAllEncounteredEntries.length) {
+      applyWifiFiltersAndRender();
+    }
+  }
+
+  function addWifiKeyFromForm() {
+    const typeEl = document.getElementById("crypt-wifi-key-type");
+    const ssidEl = document.getElementById("crypt-wifi-ssid-input");
+    const bssidEl = document.getElementById("crypt-wifi-bssid-input");
+    const keyEl = document.getElementById("crypt-wifi-key-input");
+    const keyType = typeEl?.value || "wpa-psk";
+    const ssid = (ssidEl?.value || "").trim();
+    const bssid = normalizeWifiBssidString(bssidEl?.value || "");
+    const value = (keyEl?.value || "").trim();
+    if (!value) {
+      statusUpdate("Status: Wi-Fi key material is empty");
+      return;
+    }
+    if (typeof addSessionKeystoreEntry !== "function") {
+      doError("Session keychain is not available in this build.");
+      return;
+    }
+    const label = [
+      `Wi-Fi ${keyType}`,
+      ssid ? `ssid=${ssid}` : null,
+      bssid ? `bssid=${bssid}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const summary = JSON.stringify({ ssid, bssid, type: keyType });
+    const entry = {
+      type: `wifi-${keyType}`,
+      label,
+      source: "crypt-wireless",
+      content: value,
+      summary,
+    };
+    try {
+      addSessionKeystoreEntry(entry);
+      if (keyEl) keyEl.value = "";
+      statusUpdate(`Status: Saved Wi-Fi key (${keyType}) to session keychain`);
+      refreshWifiKeystoreEntries();
+    } catch (err) {
+      doError(`Could not save Wi-Fi key: ${err.message || err}`);
+    }
+  }
+
+  function removeSelectedWifiKeystoreKey() {
+    const listEl = document.getElementById("crypt-wifi-keystore-list");
+    const idx = Number(listEl.value);
+    if (!Number.isFinite(idx) || idx < 0 || idx >= wifiKeystoreKeys.length) {
+      statusUpdate("Status: Select a Wi-Fi key to remove");
+      return;
+    }
+    const entry = wifiKeystoreKeys[idx];
+    if (entry?.delete) {
+      try {
+        entry.delete();
+      } catch (_err) {
+        // ignore
+      }
+    }
+    refreshWifiKeystoreEntries();
+  }
+
+  function collectBackendWifiKeys() {
+    const keys = wifiKeystoreKeys
+      .map(wifiEntryToBackendKey)
+      .filter((k) => k && typeof k === "object");
+    return keys;
+  }
+
+  function getBackendWifiIpc() {
+    if (typeof window === "undefined") return null;
+    const candidates = [window.snitchapi, window.backend, window.getfileapi];
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate.setBackendWifiKeys === "function") {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function updateWifiBackendStatus(message) {
+    wifiBackendKeysLastSentAt = new Date().toISOString();
+    const statusEl = document.getElementById("crypt-wifi-backend-status");
+    if (statusEl) {
+      statusEl.textContent = `Last sent ${wifiBackendKeysLastSentAt}: ${message}`;
+    }
+  }
+
+  async function sendWifiKeysToBackend() {
+    const keys = collectBackendWifiKeys();
+    if (!keys.length) {
+      statusUpdate("Status: No Wi-Fi keys to send to backend");
+      updateWifiBackendStatus("No keys sent (keychain empty)");
+      return;
+    }
+    const api = getBackendWifiIpc();
+    if (!api || typeof api.setBackendWifiKeys !== "function") {
+      doError("Wi-Fi bridge is not available; the backend cannot decrypt 802.11 payloads.");
+      return;
+    }
+    // Snapshot the keys BEFORE the IPC so the auto-rerun callback below
+    // can reuse them even if the session keychain is rebuilt/emptied
+    // between the IPC round-trip and the rerun dispatch (a real race we
+    // observed: the keystore-LLM debounce rebuild wiped the user-added
+    // key by the time triggerWifiKeysRerun re-read collectBackendWifiKeys).
+    wifiBackendKeysLastSent = Array.isArray(keys)
+      ? keys.map((entry) => (entry && typeof entry === "object" ? { ...entry } : entry))
+      : [];
+    try {
+      const result = await api.setBackendWifiKeys(keys);
+      if (result && result.success) {
+        wifiBackendKeysAccepted = Number(result.accepted || keys.length);
+        statusUpdate(
+          `Status: Backend accepted ${wifiBackendKeysAccepted} Wi-Fi key(s); re-running capture to decrypt 802.11 frames...`,
+        );
+        updateWifiBackendStatus(
+          `Sent ${keys.length} key(s); backend accepted ${wifiBackendKeysAccepted}; rerun queued`,
+        );
+        writeLogEntry(
+          `[${threadName}] Sent ${keys.length} Wi-Fi key(s) to backend for decryption`,
+        );
+        // Automatically kick off a background rerun so the freshly
+        // decrypted 802.11 frames merge into the live session data
+        // without the user needing to click "Reprocess Session PCAP".
+        if (typeof rerunBackendWithWifiKeys === "function") {
+          try {
+            const didRerun = rerunBackendWithWifiKeys({
+              keys: wifiBackendKeysLastSent,
+            });
+            if (!didRerun) {
+              statusUpdate(
+                "Status: Backend accepted Wi-Fi keys; click 'Reprocess Session PCAP' to apply them",
+              );
+            }
+          } catch (rerunError) {
+            logErrorEntry("crypt-wifi-auto-rerun", rerunError);
+          }
+        }
+      } else {
+        doError(`Backend rejected Wi-Fi keys: ${result?.error || "unknown error"}`);
+      }
+    } catch (err) {
+      doError(`Failed to send Wi-Fi keys to backend: ${err.message || err}`);
+    }
+  }
+
+  function decryptSelectedWifiEntry() {
+    const entry = wifiEncounteredEntries[wifiActiveEntryIndex];
+    if (!entry) {
+      statusUpdate("Status: Select an 802.11 frame first");
+      return;
+    }
+    const packetInfo = getPacketInfo(entry.packet);
+    const wifi = getWifiSection(packetInfo) || {};
+    const preview = document.getElementById("crypt-wifi-decrypt-preview");
+    const sendBtnEl = document.getElementById("crypt-wifi-send-conv-btn");
+    if (wifi["wifi.decrypt.ok"] === true) {
+      const plaintextHex = String(wifi["wifi.decrypt.payload"] || "");
+      const algo = wifi["wifi.decrypt.algorithm"] || "unknown";
+      wifiLastDecryptedPayload = {
+        sourceLabel: `packet #${entry.packetIndex}`,
+        hexValue: plaintextHex,
+        asciiSummary: hexToAsciiPreview(plaintextHex),
+        algorithm: algo,
+      };
+      if (preview) {
+        preview.textContent = [
+          `Decryption result for packet #${entry.packetIndex}`,
+          `Algorithm: ${algo}`,
+          `Bytes: ${plaintextHex.length / 2}`,
+          "",
+          "ASCII / UTF-8 preview:",
+          hexToAsciiPreview(plaintextHex) || "(no printable output)",
+          "",
+          "Hex:",
+          plaintextHex || "(empty)",
+        ].join("\n");
+      }
+      if (sendBtnEl) sendBtnEl.disabled = false;
+      statusUpdate(`Status: Decrypted 802.11 frame #${entry.packetIndex} (${algo})`);
+      return;
+    }
+
+    if (preview) {
+      preview.textContent = [
+        `No backend decrypt available for packet #${entry.packetIndex}.`,
+        `Algorithm: ${wifi["wifi.cipher"] || "Unknown"}`,
+        `SSID: ${entry.ssid || "(none)"}`,
+        `BSSID: ${entry.bssid || "N/A"}`,
+        "",
+        "Send matching Wi-Fi keys from the keystore (button above) and re-run the capture.",
+      ].join("\n");
+    }
+    if (sendBtnEl) sendBtnEl.disabled = true;
+    statusUpdate("Status: Wi-Fi frame has no decrypt yet; send keystore keys and re-run capture");
+  }
+
+  function clearWifiDecryptionOutput() {
+    const preview = document.getElementById("crypt-wifi-decrypt-preview");
+    if (preview) {
+      preview.textContent = "No 802.11 decryption attempted yet.";
+    }
+    const sendBtnEl = document.getElementById("crypt-wifi-send-conv-btn");
+    if (sendBtnEl) sendBtnEl.disabled = true;
+    wifiLastDecryptedPayload = null;
+  }
+
+  function sendWifiDecryptedPayloadToConv() {
+    if (!wifiLastDecryptedPayload || !wifiLastDecryptedPayload.hexValue) {
+      statusUpdate("Status: Decrypt a Wi-Fi frame first");
+      return;
+    }
+    if (typeof sendDecryptedToConv !== "function") {
+      doError("Send-to-conv helper is not available in this build.");
+      return;
+    }
+    sendDecryptedToConv({
+      hexValue: wifiLastDecryptedPayload.hexValue,
+      utf8Value: wifiLastDecryptedPayload.asciiSummary || "",
+    });
+    statusUpdate(`Status: Sent ${wifiLastDecryptedPayload.sourceLabel} to Conv`);
+  }
+
+  function hexToAsciiPreview(hexString) {
+    if (typeof hexString !== "string" || !hexString) return "";
+    const bytes = [];
+    for (let i = 0; i < hexString.length; i += 2) {
+      const byte = parseInt(hexString.slice(i, i + 2), 16);
+      if (Number.isNaN(byte)) return "";
+      bytes.push(byte);
+    }
+    const decoded = Buffer.from(bytes).toString("utf8");
+    return PRINTABLE_UTF8_PREVIEW_REGEX.test(decoded)
+      ? decoded
+      : decoded
+        .slice(0, MAX_ASCII_PREVIEW_LENGTH)
+        .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, ".");
   }
 
   function applyCryptCertificateText(rawText, sourceLabel) {
@@ -2967,6 +3756,10 @@ function createCryptPanel({
     refreshPgpEncounteredEntries();
     refreshPgpPrivateKeyCandidates();
     refreshPgpPassphraseCandidates();
+    if (tabName === CRYPT_WIFI_SUBTAB) {
+      refreshWifiEncounteredEntries();
+      refreshWifiKeystoreEntries();
+    }
   }
 
   return {
@@ -3000,6 +3793,23 @@ function createCryptPanel({
     useSelectedPgpPasswordCandidate,
     getLastTlsDecryptedPayload,
     getLastPgpOutputPayload,
+    refreshWifiEncounteredEntries,
+    selectWifiEncounteredEntry,
+    loadSelectedWifiEntry,
+    applyWifiFilterForActiveEntry,
+    applyWifiFilterFromInputs,
+    clearWifiFilter,
+    refreshWifiKeystoreEntries,
+    addWifiKeyFromForm,
+    removeSelectedWifiKeystoreKey,
+    sendWifiKeysToBackend,
+    getLastSentWifiKeys: () =>
+      Array.isArray(wifiBackendKeysLastSent) ? wifiBackendKeysLastSent.slice() : [],
+    decryptSelectedWifiEntry,
+    sendWifiDecryptedPayloadToConv,
+    clearWifiDecryptionOutput,
+    classifyWifiEntryDecryptability,
+    describeWifiClass,
   };
 }
 

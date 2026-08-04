@@ -722,7 +722,11 @@ async function applyTabFilterKeyAutocomplete() {
   return true;
 }
 
-const SESSION_FILE_SCHEMA_VERSION = 1;
+// Bumped from 1 → 2 when DUMMY_ALL_HOST changed from the literal
+// "0.0.0.0" sentinel to the non-IP-shaped "__ALL_HOSTS__" sentinel.
+// Older sessions that saved selectedHost="0.0.0.0" (meaning "All
+// Hosts") need to be translated to the new sentinel on load.
+const SESSION_FILE_SCHEMA_VERSION = 2;
 const PACKETSNITCH_VERSION = String(psVer || "").trim() || "unknown";
 const SESSION_CAPTURE_KEY = "capture.data";
 const SESSION_STATE_KEY = "session.state";
@@ -792,7 +796,13 @@ const DATA_TOOLS_OUTPUT_FORMAT_DETAILS = {
     outputSelector: "#data-tools-base64-output",
   },
 };
-const DUMMY_ALL_HOST = "0.0.0.0";
+// Sentinel host value for the "All Hosts" dropdown option.  Previously
+// this was the literal "0.0.0.0" which collided with the real host key
+// used by wifi-only frames (undecrypted management/control frames get
+// bucketed under 0.0.0.0 in the backend), so the dropdown ended up with
+// two options that both selected "0.0.0.0" and the user could not tell
+// them apart.  Use a non-IP-shaped sentinel instead.
+const DUMMY_ALL_HOST = "__ALL_HOSTS__";
 const DUMMY_ALL_HOST_ALIAS = "All Hosts";
 const DUMMY_BOOKMARKED_HOST = "__BOOKMARKED__";
 const DUMMY_BOOKMARKED_HOST_ALIAS = "Bookmarked";
@@ -891,6 +901,7 @@ const CONTEXT_MIME_REGEX =
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
+const CRYPT_WIFI_SUBTAB = "wifi";
 const VALID_MAIN_TABS = [
   MAIN_TAB_SUMMARY,
   MAIN_TAB_DATA,
@@ -1051,6 +1062,12 @@ const backendProgressState = {
   etaLastSampleAtMs: 0,
   etaLastSampleProcessedPackets: 0,
   etaPacketsPerSecond: 0,
+  // True for the duration of a "send wifi keys -> background rerun" so the
+  // onJsonData handler forces a full packet-stub reindex on the first
+  // chunk. Without this the incremental merge skips reindexing when the
+  // new packet count matches the old one, leaving the UI stuck on the
+  // pre-decryption packet content.
+  wifiKeysRerunInFlight: false,
 };
 let activeBackendJobId = "";
 let sessionPcapSource = null;
@@ -4924,6 +4941,7 @@ function resetBackendProgressState() {
   backendProgressState.etaLastSampleAtMs = 0;
   backendProgressState.etaLastSampleProcessedPackets = 0;
   backendProgressState.etaPacketsPerSecond = 0;
+  backendProgressState.wifiKeysRerunInFlight = false;
   pendingBackendCaptureUpdate = null;
   backendLastAppliedSnapshotProcessedPackets = 0;
   backendLastAppliedSnapshotAtMs = 0;
@@ -9557,6 +9575,17 @@ function buildSessionStateSnapshot() {
       keystorePanel.getSessionKeychainEntries(),
       [],
     ),
+    // Persist 802.11 wifi keys inside the session payload so reprocessing
+    // a session PCAP automatically hands the keys back to the backend,
+    // rather than relying on the user to re-click "Send Wi-Fi keys to
+    // backend" after every reprocess. The renderer pushes them to the
+    // backend during restoreSessionState() — no manual re-entry needed.
+    sessionWifiKeys: deepCloneSessionData(
+      typeof cryptPanel?.collectBackendWifiKeys === "function"
+        ? cryptPanel.collectBackendWifiKeys()
+        : [],
+      [],
+    ),
     currentSummary: summary,
     compactedAnalysisSummaries: Array.isArray(compactedAnalysisSummaries)
       ? compactedAnalysisSummaries.map((entry) => ({
@@ -9949,6 +9978,29 @@ async function restoreSessionState(sessionState) {
     deepCloneSessionData(loadedSessionEntries, []),
     sessionState.keystoreMode,
   );
+
+  // Now that the keystore panel is repopulated, refresh the crypt panel's
+  // wifi key list (it reads through getWifiKeychainEntries) and auto-push
+  // any restored wifi keys to the backend. This means a reprocessed or
+  // reloaded session automatically re-decrypts 802.11 frames without the
+  // user having to manually click "Send Wi-Fi keys to backend".
+  const hasRestoredWifiKeys = Array.isArray(sessionState.sessionWifiKeys)
+    && sessionState.sessionWifiKeys.length > 0;
+  if (hasRestoredWifiKeys) {
+    if (typeof cryptPanel?.refreshWifiKeystoreEntries === "function") {
+      cryptPanel.refreshWifiKeystoreEntries();
+    }
+    if (typeof cryptPanel?.sendWifiKeysToBackend === "function") {
+      // Fire and forget — backend IPC is async and we don't want to block
+      // session restore on it. Errors are surfaced via crypt-panel's
+      // existing statusUpdate/doError paths.
+      cryptPanel
+        .sendWifiKeysToBackend()
+        .catch((error) => {
+          logErrorEntry("crypt-wifi-auto-resend", error);
+        });
+    }
+  }
   if (sessionState.currentSummary && typeof sessionState.currentSummary === "string") {
     summary = sessionState.currentSummary;
     summaryFromSavedSession = true;
@@ -10016,7 +10068,21 @@ async function restoreSessionState(sessionState) {
   // report reflects the restored notes.
   renderCombinedAnalysisSummary();
 
-  const selectedHost = String(sessionState.selectedHost || "").trim();
+  // Translate the legacy "0.0.0.0" sentinel used by sessions saved
+  // before the DUMMY_ALL_HOST sentinel change ("0.0.0.0" → "__ALL_HOSTS__")
+  // into the current sentinel.  Without this, a saved session that
+  // picked "All Hosts" would silently re-select the real "0.0.0.0" host
+  // (which contains all undecrypted wifi management/control frames) and
+  // the user would only see that host's packets.  Only translate when
+  // the session was saved with the legacy schema (v1) — sessions saved
+  // with v2+ use the new sentinel intentionally.
+  const LEGACY_ALL_HOST_SENTINEL = "0.0.0.0";
+  const sessionSchemaVersion = Number(sessionState?.schemaVersion) || 0;
+  const rawSelectedHost = String(sessionState.selectedHost || "").trim();
+  const isLegacyAllHostSelection =
+    sessionSchemaVersion < SESSION_FILE_SCHEMA_VERSION
+    && rawSelectedHost === LEGACY_ALL_HOST_SENTINEL;
+  const selectedHost = isLegacyAllHostSelection ? DUMMY_ALL_HOST : rawSelectedHost;
   if (
     selectedHost &&
     (
@@ -14091,6 +14157,7 @@ const cryptPanel = createCryptPanel({
     CRYPT_SSL_SUBTAB,
     CRYPT_PGP_SUBTAB,
     CRYPT_OPENSSH_SUBTAB,
+    CRYPT_WIFI_SUBTAB,
     SESSION_KEYCHAIN_LABEL,
     STRICT_IPV4_REGEX,
     isLikelyIpAddress,
@@ -14140,6 +14207,19 @@ const cryptPanel = createCryptPanel({
     markDataToolsInputCommitted();
     showDataTools(CONV_CONVERSIONS_SUBTAB);
     runDataToolsConversion();
+  },
+  // After the backend accepts the wifi keys, kick off a silent
+  // background rerun so the user doesn't have to click "Reprocess
+  // Session PCAP" themselves. The new decrypted packets are merged
+  // into the live session data via applyIncrementalCaptureSnapshot.
+  // The crypt panel passes the keys it just sent so the rerun uses
+  // the same payload even if the session keychain is mutated before
+  // the rerun callback fires.
+  rerunBackendWithWifiKeys: (options = {}) => {
+    if (typeof triggerWifiKeysRerun === "function") {
+      return triggerWifiKeysRerun(options);
+    }
+    return false;
   },
 });
 
@@ -21695,6 +21775,62 @@ document
 document
   .getElementById("crypt-subtab-openssh")
   .addEventListener("click", () => setCryptSubtab(CRYPT_OPENSSH_SUBTAB));
+document
+  .getElementById("crypt-subtab-wifi")
+  .addEventListener("click", () => setCryptSubtab(CRYPT_WIFI_SUBTAB));
+document
+  .getElementById("crypt-wifi-refresh-btn")
+  .addEventListener("click", () => cryptPanel.refreshWifiEncounteredEntries());
+document
+  .getElementById("crypt-wifi-encountered-list")
+  .addEventListener("change", function () {
+    cryptPanel.selectWifiEncounteredEntry(Number(this.value));
+  });
+document
+  .getElementById("crypt-wifi-load-selected-btn")
+  .addEventListener("click", () => cryptPanel.loadSelectedWifiEntry());
+document
+  .getElementById("crypt-wifi-apply-filter-btn")
+  .addEventListener("click", () => cryptPanel.applyWifiFilterForActiveEntry());
+document
+  .getElementById("crypt-wifi-refresh-keystore-btn")
+  .addEventListener("click", () => cryptPanel.refreshWifiKeystoreEntries());
+document
+  .getElementById("crypt-wifi-add-key-btn")
+  .addEventListener("click", () => cryptPanel.addWifiKeyFromForm());
+document
+  .getElementById("crypt-wifi-remove-key-btn")
+  .addEventListener("click", () => cryptPanel.removeSelectedWifiKeystoreKey());
+document
+  .getElementById("crypt-wifi-send-backend-btn")
+  .addEventListener("click", () => cryptPanel.sendWifiKeysToBackend());
+document
+  .getElementById("crypt-wifi-decrypt-btn")
+  .addEventListener("click", () => cryptPanel.decryptSelectedWifiEntry());
+document
+  .getElementById("crypt-wifi-send-conv-btn")
+  .addEventListener("click", () => cryptPanel.sendWifiDecryptedPayloadToConv());
+document
+  .getElementById("crypt-wifi-clear-btn")
+  .addEventListener("click", () => cryptPanel.clearWifiDecryptionOutput());
+document
+  .getElementById("crypt-wifi-filter-apply-btn")
+  .addEventListener("click", () => cryptPanel.applyWifiFilterFromInputs());
+document
+  .getElementById("crypt-wifi-filter-clear-btn")
+  .addEventListener("click", () => cryptPanel.clearWifiFilter());
+document
+  .getElementById("crypt-wifi-filter-ssid")
+  .addEventListener("input", () => cryptPanel.applyWifiFilterFromInputs());
+document
+  .getElementById("crypt-wifi-filter-bssid")
+  .addEventListener("input", () => cryptPanel.applyWifiFilterFromInputs());
+document
+  .getElementById("crypt-wifi-filter-decryptable")
+  .addEventListener("change", () => cryptPanel.applyWifiFilterFromInputs());
+document
+  .getElementById("crypt-wifi-filter-sort")
+  .addEventListener("change", () => cryptPanel.applyWifiFilterFromInputs());
 document.getElementById("crypt-refresh-btn").addEventListener("click", () => {
   refreshCryptEncounteredEntries();
 });
@@ -24131,12 +24267,19 @@ async function processBackendJsonDataPayload(payload) {
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
     writeLogEntry(
-      `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_has_packets = ${payloadHasPackets} complete = ${payload.complete}`,
+      `Backend in-memory snapshot received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} payload_has_packets = ${payloadHasPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
     );
     await yieldToRenderer();
+    // For a wifi-keys rerun, route through the incremental merge path
+    // (rather than the wholesale-replace path) so bookmarks, notes, and
+    // the heatmap survive. The final chunk applies forceFullReindex to
+    // refresh packet stubs with the freshly-decrypted 802.11 content.
+    const useIncrementalForFirstChunk =
+      backendProgressState.wifiKeysRerunInFlight === true;
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
-      incrementalUpdate: false,
+      incrementalUpdate: useIncrementalForFirstChunk,
+      finalUpdate: useIncrementalForFirstChunk,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-first-chunk",
@@ -24175,10 +24318,15 @@ async function processBackendJsonDataPayload(payload) {
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
     await yieldToRenderer();
+    // Force a full reindex on the final chunk of a wifi-keys rerun so
+    // the decrypted packet content becomes visible. Intermediate chunks
+    // skip this to avoid wasted work during the rerun.
+    const forceFullReindexForWifiKeys =
+      backendProgressState.wifiKeysRerunInFlight === true;
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
-      finalUpdate: false,
+      finalUpdate: forceFullReindexForWifiKeys,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-final",
@@ -24188,7 +24336,7 @@ async function processBackendJsonDataPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
+      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
     );
     logIngestionChunkTiming("data", "final-chunk-applied", payload, performance.now() - chunkStartTime, {
       label: payload.label,
@@ -24197,6 +24345,13 @@ async function processBackendJsonDataPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    if (backendProgressState.wifiKeysRerunInFlight) {
+      backendProgressState.wifiKeysRerunInFlight = false;
+      statusUpdate("Status: Wi-Fi keys applied; 802.11 frames updated");
+      writeLogEntry(
+        `[${threadName}] Wi-Fi keys rerun completed; cleared rerun flag`,
+      );
+    }
     if (payload.jobId && payload.jobId === activeBackendJobId) {
       activeBackendJobId = "";
     }
@@ -24238,7 +24393,23 @@ window.jsonapi.onJsonData((rawPayload) => {
 
 // here we create the backend process and hook it to the handler
 function runSnitch(file, options = {}) {
-  const { fromSessionSource = false, forceUnknownMagicLoad = false } = options;
+  const {
+    fromSessionSource = false,
+    forceUnknownMagicLoad = false,
+    // silent = true: don't show full-screen loading overlays or wipe the
+    // summary panel. Used for background reruns triggered by "Send Wi-Fi
+    // keys to backend" so the user can keep interacting with the session
+    // while the backend re-processes the PCAP and incrementally merges
+    // decrypted packets back into the live data.
+    silent = false,
+    // wifiKeysForRun: explicit override for the wifi keys sent to the
+    // backend on this run. When omitted (e.g. for a normal file load) we
+    // fall back to reading the current session keychain. The wifi-keys
+    // rerun path uses this to ship the keys that were just sent to the
+    // backend, since the session keychain can be cleared by a debounced
+    // keystore-LLM rebuild between the IPC and the rerun dispatch.
+    wifiKeysForRun: wifiKeysOverride = null,
+  } = options;
   const backendJobId = createFrontendBackendJobId();
   activeBackendJobId = backendJobId;
   const backendChunkSize = getBackendPacketChunkSize();
@@ -24251,13 +24422,22 @@ function runSnitch(file, options = {}) {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
   backendProgressState.processing = true;
-  document.getElementById("loading-screen").style.display = "block";
-  document.getElementById("loading-container").style.display = "block";
-  document.getElementById("loading-text").textContent = "Loading packets...";
-  showSummaryLoading();
-  document.getElementById("status").textContent =
-    "Status: Running snitch backend, this may take a few minutes...";
-  document.getElementById("error-container").style.display = "none";
+  if (!silent) {
+    document.getElementById("loading-screen").style.display = "block";
+    document.getElementById("loading-container").style.display = "block";
+    document.getElementById("loading-text").textContent = "Loading packets...";
+    showSummaryLoading();
+    document.getElementById("status").textContent =
+      "Status: Running snitch backend, this may take a few minutes...";
+    document.getElementById("error-container").style.display = "none";
+  } else {
+    statusUpdate(
+      "Status: Re-running capture with Wi-Fi keys to decrypt 802.11 frames...",
+    );
+    writeLogEntry(
+      `[${threadName}] Background rerun started job_id=${backendJobId} reason=wifi-keys`,
+    );
+  }
   startTime = performance.now();
   const useLLM = isLlmEnabledInSettings();
   const fileLabel = fromSessionSource
@@ -24269,8 +24449,35 @@ function runSnitch(file, options = {}) {
     ...backendTransportOptions,
     allowUnknownMagicLoad: forceUnknownMagicLoad,
   };
+  // Pull the current wifi keystore entries so they ride along with the
+  // backend run. The backend then decrypts 802.11 frames as they're
+  // parsed instead of waiting on a separate set-runtime-config call.
+  // Empty array (or null) is fine — it just means no decryption. When
+  // the caller passes an explicit override (e.g. the wifi-keys rerun
+  // path) we use that as-is instead of re-reading the session keychain.
+  // If the live keychain is empty but the user has previously pushed
+  // keys to the backend (cached in the crypt panel), we reuse the
+  // cached snapshot so reprocess paths still decrypt 802.11 frames.
+  let wifiKeysForRun = Array.isArray(wifiKeysOverride)
+    ? wifiKeysOverride
+    : [];
+  if (wifiKeysForRun.length === 0
+    && typeof cryptPanel?.collectBackendWifiKeys === "function") {
+    const liveKeys = cryptPanel.collectBackendWifiKeys();
+    if (Array.isArray(liveKeys) && liveKeys.length > 0) {
+      wifiKeysForRun = liveKeys;
+    } else if (typeof cryptPanel?.getLastSentWifiKeys === "function") {
+      const cachedKeys = cryptPanel.getLastSentWifiKeys();
+      if (Array.isArray(cachedKeys) && cachedKeys.length > 0) {
+        wifiKeysForRun = cachedKeys;
+        writeLogEntry(
+          `[${threadName}] Reusing ${cachedKeys.length} cached Wi-Fi key(s) from last backend send (session keychain is empty)`,
+        );
+      }
+    }
+  }
   writeLogEntry(
-    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} force_unknown_magic = ${forceUnknownMagicLoad} `,
+    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} force_unknown_magic = ${forceUnknownMagicLoad} wifi_keys = ${wifiKeysForRun.length} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
@@ -24281,6 +24488,7 @@ function runSnitch(file, options = {}) {
         backendWorkerThreads,
         backendOptions,
         backendJobId,
+        wifiKeysForRun,
       )
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
     : window.snitchapi.runBackendCommand(
@@ -24290,6 +24498,7 @@ function runSnitch(file, options = {}) {
       backendWorkerThreads,
       backendOptions,
       backendJobId,
+      wifiKeysForRun,
     );
   backendPromise
     .then((result) => {
@@ -24317,6 +24526,75 @@ function runSnitch(file, options = {}) {
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });
+}
+
+// Triggers a background rerun of snitch against the stored session PCAP
+// using the supplied wifi keys. The existing onJsonData listener
+// routes the new packets through processCaptureData({incrementalUpdate:
+// true}) -> applyIncrementalCaptureSnapshot, which merges the freshly
+// decrypted 802.11 frames into capturedPackets in place. Bookmarks,
+// notes, and the heatmap survive because packet keys are content-derived
+// and stay stable across reruns.
+//
+// Accepts an options object:
+//   keys: explicit list of wifi keys to send to the backend. When
+//     provided, the rerun uses these even if the session keychain is
+//     empty by the time this fires. The crypt panel passes the keys it
+//     just snapshotted before calling setBackendWifiKeys, so the
+//     rerun is decoupled from any later keystore mutation.
+function triggerWifiKeysRerun(options = {}) {
+  const explicitKeys = Array.isArray(options?.keys) ? options.keys : null;
+  if (!sessionPcapSource || !sessionPcapSource.data) {
+    const diagWhy = !sessionPcapSource
+      ? "sessionPcapSource is null"
+      : "sessionPcapSource.data is empty";
+    writeLogEntry(
+      `[${threadName}] Wifi-keys rerun aborted: ${diagWhy} name=${sessionPcapSource?.fileName || "n/a"} bytes=${sessionPcapSource?.byteLength || 0}`,
+    );
+    statusUpdate("Status: No stored session PCAP available for Wi-Fi rerun");
+    return false;
+  }
+  if (backendProgressState.processing) {
+    writeLogEntry(
+      `[${threadName}] Skipping wifi-keys rerun: backend is already processing`,
+    );
+    return false;
+  }
+  // Prefer explicit keys (just-sent snapshot) so the rerun is robust to
+  // a session keychain that gets cleared by the keystore-LLM debounce
+  // rebuild between the IPC and this callback. Fall back to the live
+  // keychain when no explicit payload was supplied.
+  const wifiKeys =
+    explicitKeys
+    && explicitKeys.length > 0
+      ? explicitKeys
+      : typeof cryptPanel?.collectBackendWifiKeys === "function"
+        ? cryptPanel.collectBackendWifiKeys()
+        : [];
+  if (!Array.isArray(wifiKeys) || wifiKeys.length === 0) {
+    const sessionCount = typeof cryptPanel?.getSessionKeychainEntries === "function"
+      ? (cryptPanel.getSessionKeychainEntries() || []).length
+      : 0;
+    writeLogEntry(
+      `[${threadName}] Wifi-keys rerun aborted: no wifi keys available (explicit=${explicitKeys?.length || 0} session_keychain_size=${sessionCount})`,
+    );
+    return false;
+  }
+  // Mark this run as a wifi-keys rerun BEFORE runSnitch resets backend
+  // progress state. The onJsonData handler checks this flag to force a
+  // full packet-stub reindex on the first chunk — otherwise the
+  // incremental merge sees equal old/new packet counts and skips
+  // reindexing, leaving the UI stuck on pre-decryption packet content.
+  backendProgressState.wifiKeysRerunInFlight = true;
+  writeLogEntry(
+    `[${threadName}] Triggering background wifi-keys rerun keys=${wifiKeys.length} source=${explicitKeys ? "explicit-snapshot" : "live-keychain"}`,
+  );
+  runSnitch(sessionPcapSource, {
+    fromSessionSource: true,
+    silent: true,
+    wifiKeysForRun: wifiKeys,
+  });
+  return true;
 }
 
 // Handles do error.

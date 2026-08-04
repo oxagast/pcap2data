@@ -5061,13 +5061,29 @@ strong {
   background-color: color-mix(in srgb, var(--data-tools-frame-bg) 92%, #000 8%);
 }
 
-#subnet-ti-score-card .subnet-calc-card-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Header row that holds the two column labels ("Session Threat Score"
+   and "Top Contributing Indicators"). It mirrors the layout grid's
+   column tracks so each label sits directly above its column. */
+.subnet-ti-score-header {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.4fr);
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.subnet-ti-score-header .subnet-calc-card-label {
+  margin-bottom: 0;
+}
+
+@media (max-width: 760px) {
+  .subnet-ti-score-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
 }
 
 #subnet-ti-score-band-pill {
+  align-self: flex-end;
   margin-left: auto;
   text-transform: uppercase;
   font-weight: 700;
@@ -5150,21 +5166,38 @@ strong {
   gap: 6px;
 }
 
+/* LLM assessment status — sits below the readout/breakdown grid as a
+   full-width row that spans the parent card. Hidden when empty so the
+   status text doesn't reserve vertical space before an assessment runs. */
 .subnet-ti-score-llm-status {
-  margin-top: 4px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  border-radius: 6px;
   font-size: 12px;
-  color: var(--color-6);
-  min-height: 16px;
-  word-break: break-word;
+  line-height: 1.4;
+  color: var(--color-5);
+  word-break: normal;
+  overflow-wrap: break-word;
+  white-space: normal;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.subnet-ti-score-llm-status:empty {
+  display: none;
 }
 
 .subnet-ti-score-breakdown {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-height: 0;
 }
 
 .subnet-ti-score-components {
+  flex: 1 1 auto;
   border: 1px solid var(--color-3);
   background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
   border-radius: 6px;
@@ -5172,7 +5205,7 @@ strong {
   font-size: 12px;
   line-height: 1.4;
   color: var(--color-5);
-  max-height: 220px;
+  min-height: 0;
   overflow-y: auto;
 }
 

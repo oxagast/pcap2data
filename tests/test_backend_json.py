@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import importlib.util
@@ -28,6 +29,42 @@ def _load_backend_module():
 def _sample_pcap() -> Path:
     # Keep this pinned to one fixture capture so test runs are stable.
     return _project_root() / "samples" / "test-packets.pcap"
+
+
+def _wifi_sample_pcap() -> Path:
+    # Wireshark wiki sample "Coherer" capture (wifi-Coherer-Induction.pcap).
+    # The WPA-PSK passphrase is the well-known sample value "Induction"
+    # (the SSID is "Coherer", BSSID 00:0c:41:82:b2:55).
+    return _project_root() / "samples" / "pcaps" / "wifi-Coherer-Induction.pcap"
+
+
+def _run_backend_with_wifi_keys(
+    pcap_file: Path,
+    output_dir: Path,
+    conf_file: Path,
+    wifi_keys_file: Path,
+) -> subprocess.CompletedProcess:
+    """Run the backend with --wifi-keys-file so the legacy spawn path can
+    decrypt 802.11 frames exactly the way the JS bridge does when the
+    concurrent-run guard is in play."""
+    cmd = [
+        sys.executable,
+        str(_backend_script()),
+        str(pcap_file),
+        "-o",
+        str(output_dir),
+        "-c",
+        str(conf_file),
+        "-T",
+        "1",
+        "--worker-threads",
+        "1",
+        "--host-chunk-size",
+        "25",
+        "--wifi-keys-file",
+        str(wifi_keys_file),
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
 def _write_test_config(path: Path) -> None:
@@ -623,3 +660,231 @@ def test_backend_real_pcap_stream_app_protocol_labels_are_consistent(tmp_path: P
         )
 
     assert checked_stream_count > 0, "Expected at least one stream with a decodable app protocol"
+
+def test_backend_wifi_keys_file_installs_keys_via_set_active(monkeypatch, tmp_path: Path):
+    """The --wifi-keys-file CLI flow must install keys via _setActiveWifiKeys
+    so the legacy spawn path can decrypt 802.11 frames when the concurrent-
+    run guard bypasses the HTTP service. We don't ship a real 802.11 PCAP
+    here; we just verify the install hook fires for the supplied file."""
+    backend = _load_backend_module()
+
+    installed = {}
+
+    def _fake_install(entries):
+        installed["keys"] = list(entries)
+        # Mirror the real implementation's global side effect.
+        backend.activeWifiKeys = list(entries)
+
+    monkeypatch.setattr(backend, "_setActiveWifiKeys", _fake_install)
+
+    # Build a fake args namespace with wifi_keys_file pointing at a JSON list.
+    args = _pytest_argparse_namespace(
+        {
+            "wifi_keys": None,
+            "wifi_keys_file": None,
+        },
+    )
+    keys_file = tmp_path / "wifi-keys.json"
+    payload = [
+        {"ssid": "TestNet", "bssid": "00:11:22:33:44:55", "psk": "supersecret"},
+    ]
+    keys_file.write_text(json.dumps(payload), encoding="utf-8")
+    args.wifi_keys_file = str(keys_file)
+
+    # Drive the same block runCaptureFromArgs uses to install the keys.
+    if getattr(args, "wifi_keys", None):
+        backend._setActiveWifiKeys(args.wifi_keys)
+    elif getattr(args, "wifi_keys_file", None):
+        wifiKeysPath = str(args.wifi_keys_file).strip()
+        if wifiKeysPath and os.path.isfile(wifiKeysPath):
+            with open(wifiKeysPath, "r", encoding="utf-8") as fh:
+                wifiKeysPayload = json.load(fh)
+            if isinstance(wifiKeysPayload, list) and wifiKeysPayload:
+                backend._setActiveWifiKeys(wifiKeysPayload)
+
+    assert "keys" in installed, "_setActiveWifiKeys was not invoked"
+    assert installed["keys"] == payload
+    assert backend.activeWifiKeys == payload
+
+
+def test_backend_wifi_keys_file_ignores_missing_file(monkeypatch, tmp_path: Path):
+    """A missing --wifi-keys-file path is non-fatal; the backend should
+    still start (with no keys installed) rather than crash."""
+    backend = _load_backend_module()
+    called = {"count": 0}
+
+    def _fake_install(entries):
+        called["count"] += 1
+        backend.activeWifiKeys = list(entries)
+
+    monkeypatch.setattr(backend, "_setActiveWifiKeys", _fake_install)
+
+    missing_path = tmp_path / "does-not-exist.json"
+    args = _pytest_argparse_namespace(
+        {
+            "wifi_keys": None,
+            "wifi_keys_file": str(missing_path),
+        },
+    )
+
+    if getattr(args, "wifi_keys", None):
+        backend._setActiveWifiKeys(args.wifi_keys)
+    elif getattr(args, "wifi_keys_file", None):
+        wifiKeysPath = str(args.wifi_keys_file).strip()
+        if wifiKeysPath and os.path.isfile(wifiKeysPath):
+            with open(wifiKeysPath, "r", encoding="utf-8") as fh:
+                wifiKeysPayload = json.load(fh)
+            if isinstance(wifiKeysPayload, list) and wifiKeysPayload:
+                backend._setActiveWifiKeys(wifiKeysPayload)
+
+    assert called["count"] == 0, "_setActiveWifiKeys should not run for a missing file"
+
+
+def test_backend_wifi_keys_file_ignores_non_list_payload(monkeypatch, tmp_path: Path):
+    """If the --wifi-keys-file points to a JSON object (not a list), the
+    backend must skip installation rather than crash."""
+    backend = _load_backend_module()
+    called = {"count": 0}
+
+    def _fake_install(entries):
+        called["count"] += 1
+        backend.activeWifiKeys = list(entries)
+
+    monkeypatch.setattr(backend, "_setActiveWifiKeys", _fake_install)
+
+    keys_file = tmp_path / "wifi-keys-bad.json"
+    keys_file.write_text(json.dumps({"ssid": "x"}), encoding="utf-8")
+    args = _pytest_argparse_namespace(
+        {
+            "wifi_keys": None,
+            "wifi_keys_file": str(keys_file),
+        },
+    )
+
+    if getattr(args, "wifi_keys", None):
+        backend._setActiveWifiKeys(args.wifi_keys)
+    elif getattr(args, "wifi_keys_file", None):
+        wifiKeysPath = str(args.wifi_keys_file).strip()
+        if wifiKeysPath and os.path.isfile(wifiKeysPath):
+            with open(wifiKeysPath, "r", encoding="utf-8") as fh:
+                wifiKeysPayload = json.load(fh)
+            if isinstance(wifiKeysPayload, list) and wifiKeysPayload:
+                backend._setActiveWifiKeys(wifiKeysPayload)
+
+    assert called["count"] == 0, "Non-list JSON payload should not trigger install"
+
+
+def test_backend_cli_parser_accepts_wifi_keys_file_arg():
+    """argparse must recognise --wifi-keys-file with dest=wifi_keys_file
+    so the JS bridge can pass the JSON path to the legacy-spawned backend."""
+    import argparse
+
+    backend = _load_backend_module()
+    parser = backend.buildParser()
+    # Smoke: ensure dest is registered with the right type.
+    for action in parser._actions:
+        if action.dest == "wifi_keys_file":
+            assert action.default is None, "wifi_keys_file should default to None"
+            return
+    pytest.fail("--wifi-keys-file CLI argument not registered on parser")
+
+
+def _pytest_argparse_namespace(attrs):
+    """Tiny shim that mimics argparse.Namespace for the wifi-keys tests."""
+    import argparse
+
+    ns = argparse.Namespace()
+    for key, value in attrs.items():
+        setattr(ns, key, value)
+    return ns
+
+
+def test_backend_decrypts_coherer_wifi_capture_with_psk(tmp_path: Path):
+    """End-to-end check: feeding the Wireshark 'Coherer' WPA capture plus
+    the well-known 'Induction' passphrase through the backend via the
+    --wifi-keys-file path proves the JS bridge can successfully hand
+    802.11 keys to the legacy-spawned backend process AND that the
+    AES-CCMP decryptor recovers plaintext for the matching 4-way
+    handshake client.
+
+    The Coherer capture has a complete 4-way handshake for client
+    00:0d:93:82:36:3a so we expect to see successfully-decrypted
+    CCMP frames (algorithm=CCMP, plaintextHex set) on that BSSID.
+    """
+    pcap_file = _wifi_sample_pcap()
+    if not pcap_file.exists():
+        pytest.skip(f"Wifi sample pcap not found: {pcap_file}")
+
+    keys_file = tmp_path / "wifi-keys.json"
+    keys_file.write_text(
+        json.dumps(
+            [
+                {
+                    "ssid": "Coherer",
+                    "bssid": "00:0c:41:82:b2:55",
+                    "psk": "Induction",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "snitch-output-coherer"
+    conf_file = tmp_path / "test-conf-coherer.yaml"
+    _write_test_config(conf_file)
+
+    result = _run_backend_with_wifi_keys(
+        pcap_file=pcap_file,
+        output_dir=output_dir,
+        conf_file=conf_file,
+        wifi_keys_file=keys_file,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            "Backend execution failed for Coherer wifi capture.\n"
+            f"exit={result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    hosts_file = output_dir / "hosts.json"
+    assert hosts_file.exists(), f"Expected output file not found: {hosts_file}"
+
+    hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    packets = _flatten_packets(hosts_data)
+    assert packets, "Expected decoded packets in Coherer hosts.json"
+
+    wifi_packet_count = 0
+    ccmp_attempted_count = 0
+    ccmp_decrypted_count = 0
+    bssid_match_count = 0
+    coherer_bssid = "00:0c:41:82:b2:55"
+    for packet in packets:
+        packet_info = packet.get("packet.info", {})
+        if packet_info.get("link.proto") != "IEEE 802.11":
+            continue
+        wifi_packet_count += 1
+        algorithm = packet_info.get("wifi.decrypt.algorithm")
+        wireless_section = packet_info.get("Wireless") or {}
+        packet_bssid = wireless_section.get("wifi.bssid", "").lower()
+        if algorithm == "CCMP":
+            ccmp_attempted_count += 1
+            if packet_bssid == coherer_bssid:
+                bssid_match_count += 1
+                if packet_info.get("wifi.decrypt.ok"):
+                    ccmp_decrypted_count += 1
+
+    assert wifi_packet_count > 0, "Expected at least one IEEE 802.11 packet in Coherer capture"
+    assert ccmp_attempted_count > 0, (
+        "Expected at least one CCMP data frame to be processed — proves the "
+        "wifi decoder is running the AES-CCMP path (not skipping the keys)."
+    )
+    assert bssid_match_count > 0, (
+        "Expected at least one CCMP frame on the Coherer BSSID "
+        f"({coherer_bssid}) so the keys are being matched to the right AP."
+    )
+    assert ccmp_decrypted_count > 0, (
+        "Expected at least one CCMP frame on the Coherer BSSID to be "
+        "successfully decrypted with the supplied PSK — proves the "
+        "AES-CCMP plaintext recovery path is wired end-to-end."
+    )

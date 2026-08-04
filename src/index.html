@@ -577,13 +577,14 @@
           <div id="conv-threat-intel-panel" class="crypt-subtab-panel" hidden>
             <div class="subnet-calc-grid">
               <div class="data-tools-section subnet-calc-card subnet-calc-card-wide" id="subnet-ti-score-card">
-                <div class="subnet-calc-card-label">
-                  Session Threat Score
-                  <span id="subnet-ti-score-band-pill"
-                    class="subnet-calc-grade-badge subnet-ti-score-band-clean">Clean</span>
+                <div class="subnet-ti-score-header">
+                  <div class="subnet-calc-card-label">Session Threat Score</div>
+                  <div class="subnet-calc-card-label">Top Contributing Indicators</div>
                 </div>
                 <div class="subnet-ti-score-layout">
                   <div class="subnet-ti-score-readout">
+                    <span id="subnet-ti-score-band-pill"
+                      class="subnet-calc-grade-badge subnet-ti-score-band-clean">Clean</span>
                     <div id="subnet-ti-score-value" class="subnet-ti-score-value">0</div>
                     <div class="subnet-ti-score-max">/ 100</div>
                     <div id="subnet-ti-score-description" class="subnet-ti-score-description">
@@ -598,15 +599,14 @@
                         Send to Notes
                       </button>
                     </div>
-                    <div id="subnet-ti-score-llm-status" class="subnet-ti-score-llm-status" aria-live="polite"></div>
                   </div>
                   <div class="subnet-ti-score-breakdown">
-                    <div class="subnet-calc-card-label">Top Contributing Indicators</div>
                     <div id="subnet-ti-score-components" class="subnet-ti-score-components">
                       No risk indicators triggered.
                     </div>
                   </div>
                 </div>
+                <div id="subnet-ti-score-llm-status" class="subnet-ti-score-llm-status" aria-live="polite"></div>
                 <div class="subnet-ti-score-footprint">
                   <div class="subnet-calc-card-label">Capture Footprint</div>
                   <ul id="subnet-ti-score-footprint" class="subnet-ti-score-footprint-list">
@@ -679,6 +679,9 @@
             </button>
             <button id="crypt-subtab-openssh" class="crypt-subtab-btn">
               OpenSSH
+            </button>
+            <button id="crypt-subtab-wifi" class="crypt-subtab-btn">
+              Wireless
             </button>
           </div>
 
@@ -820,6 +823,92 @@ No decrypted TLS/SSL output yet.</pre>
           <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
             <div class="crypt-placeholder">
               OpenSSH workspace reserved for future key/session tooling.
+            </div>
+          </div>
+
+          <div id="crypt-wifi-panel" class="crypt-subtab-panel" hidden>
+            <div class="crypt-grid">
+              <div class="crypt-section">
+                <div class="crypt-section-title">Encountered 802.11 Transmissions</div>
+                <select id="crypt-wifi-encountered-list" size="10"></select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-wifi-refresh-btn">Refresh</button>
+                  <button id="crypt-wifi-load-selected-btn">Load selected</button>
+                  <button id="crypt-wifi-apply-filter-btn">Filter packets</button>
+                </div>
+                <div id="crypt-wifi-encountered-details">
+                  No 802.11 frames detected in the loaded capture.
+                </div>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">Filter 802.11 Frames</div>
+                <input id="crypt-wifi-filter-ssid" type="text"
+                  placeholder="Filter by SSID (substring, case-insensitive)" />
+                <input id="crypt-wifi-filter-bssid" type="text"
+                  placeholder="Filter by BSSID (aa:bb:cc:dd:ee:ff or partial)" />
+                <div class="crypt-actions-row">
+                  <label class="crypt-key-type-label" for="crypt-wifi-filter-decryptable">
+                    <input id="crypt-wifi-filter-decryptable" type="checkbox" />
+                    Only decryptable with my keys
+                  </label>
+                </div>
+                <div class="crypt-actions-row">
+                  <label class="crypt-key-type-label" for="crypt-wifi-filter-sort">
+                    Sort:
+                  </label>
+                  <select id="crypt-wifi-filter-sort">
+                    <option value="index">Packet index</option>
+                    <option value="decryptable-first">Decryptable first</option>
+                    <option value="ssid">SSID (A-Z)</option>
+                    <option value="bssid">BSSID</option>
+                  </select>
+                </div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-wifi-filter-apply-btn">Apply filter</button>
+                  <button id="crypt-wifi-filter-clear-btn">Clear filter</button>
+                </div>
+                <div id="crypt-wifi-filter-status" role="status" aria-live="polite">
+                  Showing all 802.11 frames.
+                </div>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">Wi-Fi Keys (Keystore)</div>
+                <select id="crypt-wifi-keystore-list" size="10"></select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-wifi-refresh-keystore-btn">Refresh keystore</button>
+                  <button id="crypt-wifi-add-key-btn">Add key</button>
+                  <button id="crypt-wifi-remove-key-btn">Remove selected</button>
+                </div>
+                <div class="crypt-actions-row">
+                  <label class="crypt-key-type-label" for="crypt-wifi-key-type">Key type:</label>
+                  <select id="crypt-wifi-key-type">
+                    <option value="wpa-psk">WPA/WPA2 PSK</option>
+                    <option value="wep">WEP (hex/ascii)</option>
+                    <option value="pmk">WPA PMK (hex)</option>
+                  </select>
+                </div>
+                <input id="crypt-wifi-ssid-input" type="text" placeholder="SSID (optional)" />
+                <input id="crypt-wifi-bssid-input" type="text" placeholder="BSSID (aa:bb:cc:dd:ee:ff, optional)" />
+                <input id="crypt-wifi-key-input" type="text" placeholder="PSK passphrase, WEP key, or PMK hex" />
+                <div class="crypt-actions-row">
+                  <button id="crypt-wifi-send-backend-btn">Send keys to backend</button>
+                </div>
+                <div id="crypt-wifi-backend-status" role="status" aria-live="polite">
+                  Backend not yet notified of Wi-Fi keys.
+                </div>
+              </div>
+
+              <div class="crypt-section crypt-wifi-decrypt-section">
+                <div class="crypt-section-title">802.11 Payload Decrypt</div>
+                <div class="crypt-actions-row">
+                  <button id="crypt-wifi-decrypt-btn">Decrypt selected</button>
+                  <button id="crypt-wifi-send-conv-btn" disabled>Send to Conv</button>
+                  <button id="crypt-wifi-clear-btn">Clear</button>
+                </div>
+                <pre id="crypt-wifi-decrypt-preview">No 802.11 decryption attempted yet.</pre>
+              </div>
             </div>
           </div>
         </div>

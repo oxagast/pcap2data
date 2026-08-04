@@ -1,0 +1,11 @@
+
+module my-dbuslaunch 1.0;
+
+require {
+	type unconfined_dbusd_t;
+	type unconfined_t;
+	class process2 { nnp_transition nosuid_transition };
+}
+
+#============= unconfined_t ==============
+allow unconfined_t unconfined_dbusd_t:process2 { nnp_transition nosuid_transition };
