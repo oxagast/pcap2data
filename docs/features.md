@@ -291,7 +291,7 @@ Each protocol contributes dot-notation metadata keys usable in the filter bar.
 
 ### Statistics Tab
 
-Aggregate statistics over the entire loaded capture, presented as clickable tag clouds:
+Aggregate statistics over the entire loaded capture, presented as clickable tag clouds. The tab is split into three sub-tabs: **Statistics**, **Map**, and **Anomalies**.
 
 - **Capture Overview**: total packets, unique hosts, encrypted vs. unencrypted counts, unique protocol count, unique GeoIP location count.
 - **Capture Overview** now also includes `Total Traffic` (sum of payload bytes) and `Credentials Found` (current active keychain entry count).
@@ -309,6 +309,16 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 - **ARP/RARP Operations**: ARP/RARP operation type counts.
 - **IGMP Message Types**: IGMP type distribution.
 - Clicking any tag (except location) pre-fills the filter bar with the corresponding filter expression.
+
+#### Statistics → Anomalies Sub-tab
+
+Surfaces four structured anomaly detectors running over the loaded capture, with click-to-filter cards that pre-fill the filter bar:
+
+- **Portscans** — flags a single source sweeping many destination ports in a short window. Each finding lists the source IP, the targeted port count, and the targeted port list.
+- **Brute-force login bursts** — repeated failed authentication attempts to a single host on common services: FTP (21), SSH (22), Telnet (23), SMTP (25), POP3 (110), IMAP (143), RDP (3389), VNC (5900), LDAP (389/636). Rolling per-destination / per-service window.
+- **Baseline packet-length / per-minute outliers** — rolling per-minute packet-count and average length baselines; flags minutes that drift more than a configurable standard deviation from the mean.
+- **High-entropy cleartext payloads** — flags outbound payloads that are both unencrypted and above an entropy threshold (potential covert channels).
+- The detectors share an engine with the Threat Intel sub-tab's **Protocol Anomalies** section so the two views never disagree.
 
 #### Internet Heatmap / Worldmap
 
@@ -357,9 +367,18 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### Decodes Sub-tab
 
 - Protocol decoder with auto-detect and manual protocol selection.
-- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5), JPEG, PNG, GIF, WebP.
-- Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.).
+- Supported protocols: HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, DNS, SNMP, DHCP, DHCPv6, EPMAP, LLMNR, NBNS, NBDGM (NetBIOS Datagram Service), JSON (generic), XML (generic), YAML (generic), Protobuf (generic), MessagePack (generic), BSON (generic), ASN.1 BER (generic), ASN.1 DER (generic), LDAP, SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5), JPEG, PNG, GIF, WebP.
+- Auto-detect identifies the likely protocol from byte patterns (SIP detected via INVITE/ACK/SIP/2.0 regex, etc.) and from per-protocol port hints (DNS=53, SNMP=161/162, DHCP=67/68, DHCPv6=546/547, EPMAP=135, LLMNR=5355, NBNS=137, NBDGM=138, LDAP=389/636).
+- **DNS** decoder splits TCP-framed DNS into 2-byte length-prefixed messages, walks each header (id, QR/Opcode/AA/TC/RD/RA/AD/CD, rcode), parses question + answer/authority/additional sections, and renders per-RR resource records with typed rdata (A, AAAA, CNAME, MX, NS, TXT, SOA, PTR, SRV, HINFO). Supports RFC 1035 §4.1.4 label-sequence decoding with compression-pointer dereferencing across message boundaries.
+- **SNMP** decoder consumes BER-encoded SNMPv1/v2c/v3 PDUs and surfaces the version, community string, request-id, error-status (with named values), error-index, and a flattened VarBind tree with OID, named-MIB lookup (`1.3.6.1.2.1.1.1.0` → `sysDescr.0`, etc.), and a hex-or-textual value preview.
+- **DHCP** decoder walks the RFC 2131 BOOTP/DHCP header (op, htype/hlen, hops, xid, secs, flags `BROADCAST`, ciaddr/yiaddr/siaddr/giaddr, chaddr, sname, file, magic cookie) and then streams the DHCP option list in declaration order, decoding every option from the registry (subnet-mask, router, host-name, message-type → `DHCPDISCOVER`/`DHCPOFFER`/`DHCPREQUEST`/`DHCPDECLINE`/`DHCPACK`/`DHCPNAK`/`DHCPRELEASE`/`DHCPINFORM`, server-id, parameter-request-list, …) and surfacing the parsed fields as a tree.
+- **DHCPv6** decoder parses the 1-byte msg-type (`SOLICIT`/`ADVERTISE`/`REQUEST`/…) + 3-byte transaction-id header, then walks the TLV option stream (client-id, server-id, IA-NA, IA-TA, IAADDR, ORO, preference, rapid-commit, status-code, vendor-class, dns-servers, domain-search-list, …) with proper 16-bit option-length handling and recursive nested IA / relay-message options. Status-code sub-options are decoded into `Success` / `UnspecFail` / `NoAddrsAvail` / `NoBinding` / `NotOnLink` / `UseMulticast` / `NoPrefixAvail` / etc.
+- **EPMAP** decoder walks the DCE/RPC endpoint mapper (EPM) request/response shape and surfaces the tower/UUID/vers/rhs/flags fields plus the inquiry/insert/delete/replace lookup types.
+- **LLMNR** decoder disassembles LLMNR (RFC 4795) queries and responses, including the QR/Opcode/C/TC/T/Z/RCODE bits, question/answer/authority/additional sections with typed rdata preview (A/AAAA/PTR/CNAME/HINFO).
+- **NBNS** decoder parses NetBIOS name-encoding (32-byte half-ASCII label) and the RR-type fields (NB, NBSTAT, GENERAL-NAME-SERVICE, …), surfacing each entry as a flat list with name/type/class.
+- **NBDGM** decoder walks the NetBIOS datagram service (RFC 1002 §6) 8-byte header (msg-type, datagram-id, datagram-length, packet-offset, source-name, destination-name) and surfaces both broadcast and unicast datagram types.
 - **Kerberos (krb5)** decoder disassembles AS-REQ/AS-REP/TGS-REQ/TGS-REP/AP-REQ/AP-REP/KRB-ERROR/KRB-PRIV/KRB-CRED messages, showing pvno, msg-type, realm, cname/sname, KDC options (with the RFC 4120 bit-numbered flags), till, nonce, etype list, ticket (tkt-vno/realm), and an EncryptedData etype + cipher preview. Auto-detect and the protocol/port hints (`krb5`, `kerberos`, ports 88/464/750) route matching traffic to it.
+- **LDAP** decoder parses search/filters/entries/attribute rendering; entry attributes are surfaced as a typed tree (DN, objectClass, cn, sn, etc.) with raw bytes for opaque values.
 - **SMB / Samba** decoder has a dedicated follow-stream mode that walks SMB2 read/write transactions and renders a per-message tree of headers, file content, and offsets. Single-block streams are now fed through the decoder pipeline correctly, and the inline decoder switch in the Host Data view honours the same selection.
 - **Follow stream to Conv**: assembles a full bidirectional TCP stream into Conv with async chunked scanning and loading overlay to prevent UI freezes on large streams.
 
@@ -374,6 +393,11 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 
 #### Threat Intel Sub-tab
 
+- **Session Threat Score** card at the top of the Threat Intel sub-tab summarizes the analyzed capture as a 0-100 score with a banded pill (`Clean` / `Low` / `Medium` / `High` / `Critical`), a color-graded weight breakdown of every contributing indicator (IPSum hits, Tor exit nodes, VirusTotal malicious / suspicious verdicts, high-entropy cleartext, portscan / brute-force / baseline outliers from the **Stats → Anomalies** sub-tab, public-IP / domain / URL / hash counts, and the current Conv input entropy), and a **Capture Footprint** summary with public IPs / unique domains / URLs / registered hashes / reputation lookups / protocol anomalies. Three actions live on the card:
+  - **Recompute** — re-derive the deterministic score.
+  - **Get LLM Assessment** — asks the active LLM to summarize the breakdown into a short analyst narrative plus up to 5 concrete next actions.
+  - **Send to Notes** — appends the breakdown to the active Notes tab as a structured note.
+- Every per-target lookup in the Threat Intel sub-tab feeds the next recompute, so the score evolves as the analyst does more lookups.
 - Query type selector for `auto`, `ip`, `url`, or `hash` lookups.
 - IP reputation lookup via the IPSum blocklist (backend endpoint `/ipsum`).
 - Tor exit-node lookup using the local Tor dataset (backend endpoint `/tor`).
@@ -414,6 +438,16 @@ Aggregate statistics over the entire loaded capture, presented as clickable tag 
 #### OpenSSH Sub-tab
 
 Reserved workspace for future OpenSSH key and session tooling. The Conv decoder can still parse SSH/OpenSSH text structures today.
+
+#### Wifi Sub-tab
+
+- **Encountered 802.11 transmissions**: list of every distinct 802.11 frame detected in the capture, with SSID, BSSID, channel, frame type/subtype, cipher, and crypto metadata.
+- **Filter by SSID / BSSID**: substring filters narrow the list to transmissions matching a specific network or client.
+- **Decryptable with my keys** filter: shows only frames that the keystore's wifi keys can actually decrypt.
+- **Wi-Fi Keys (Keystore)**: per-session key list pulled from the keystore. Key types supported are `wifi-wep` (hex WEP key), `wifi-wpa-psk` (WPA2 passphrase), and `wifi-pmk` (pre-computed PMK). Key entries can be added, edited, and removed directly from this panel.
+- **Send keys to backend**: pushes the current wifi keys to the backend via the `setBackendWifiKeys` IPC, which stages them on disk and triggers an automatic background rerun so the decrypted data flows through the rest of the workspace without a manual reload.
+- **802.11 Payload Decrypt**: when a WPA2 4-way handshake is present in the capture, the backend derives the per-session PTK (PBKDF2-HMAC-SHA1 PMK → PRF-384 PTK per IEEE 802.11i §8.5.1) and uses the TK portion to decrypt CCMP data frames. WEP and pre-computed PMK keys are also supported. Decrypted hex and ASCII preview plus a **Send to Conv** button.
+- Saved sessions round-trip the wifi keystore entries; on session restore the bridge re-sends them to the backend so re-opening a wifi capture still decrypts 802.11 frames without manual re-entry.
 
 ---
 
@@ -532,6 +566,13 @@ Available in packet views, payload panes, Conv tab, and other data panels. Adapt
 - **Conv input** / **Conv Raw** / **Conv output** (hex, binary, decimal, integer, ASCII, base64).
 - **Conv hashes** and **Conv decode output** exports.
 - **Cookie Jar**: save extracted cookies to disk.
+
+#### Reports...
+
+- **Save Report (Markdown)**: assemble the current session's analysis summary as Markdown and save it to disk. When the LLM is enabled, a final distillation pass (dedupe + chronological sort + importance re-rank) runs before the save dialog opens so the saved file is the cleaned-up version.
+- **Save Report (Text)**: same flow, plain-text output.
+- **Save Report (HTML)**: same flow, HTML output.
+- If the LLM is disabled, fails, or the report is too short to warrant a pass, the distiller transparently falls back to the un-distilled report.
 
 #### HTTP Body...
 

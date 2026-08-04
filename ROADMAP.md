@@ -95,7 +95,9 @@ in days, not weeks.
 - [📋] FTP transfer reconstruction (control channel parsing ships in
   decoder, but no "rebuild the file" view yet)
 - [🟡] SMB file activity tracking — SMB Conv decoder + follow-stream
-  shipped in 2.4.2169. Activity timeline across the capture still TODO.
+  ships in 2.4.2169 (per-message tree, file content, offsets, dedicated
+  `src/ui/decoders/conv/smb-helpers.js`). Activity timeline across the
+  capture still TODO.
 
 ### IOC / Threat Detection Engine
 
@@ -223,14 +225,17 @@ in days, not weeks.
 
 ### Report Templates
 
-> **Status:** 🟡 Partial — Summary/Analysis tab with LLM distillation and
-> markdown export ships. Named report templates and per-template export
-> are still TODO.
+> **Status:** 🟡 Partial — Summary/Analysis tab with LLM distillation,
+> markdown export, and a new **Reports...** submenu in the right-click
+> context menu (Markdown / Text / HTML) ship. Named report templates
+> and PDF export are still TODO.
 
 - [📋] Incident response summary template
 - [📋] Triage report template
 - [🟡] Executive report — Summary tab with markdown export ships.
-- [📋] Exportable templates (HTML / PDF)
+- [🟡] Exportable templates — Markdown / Text / HTML ship via the
+  Reports... context menu submenu; HTML is light-styled.
+- [📋] Export to PDF
 - **Priority:** P1 · **Complexity:** Low · **Est. remaining:** 1 day
 
 ---
@@ -274,10 +279,17 @@ in days, not weeks.
 
 > **Status:** 🟡 Partial — TCP retransmission / out-of-order detection
 > ships. Generic anomaly scoring does not. The **Anomalies sub-tab**
-> under Stats now surfaces: protocol-content anomalies, portscans,
-> brute-force login bursts, baseline packet-length / per-minute
-> outliers, and high-entropy cleartext payloads. Future work ties
-> these into the Threat Intel panel for scored correlation.
+> under Stats ships: protocol-content anomalies, portscans
+> (`detectStatsAnomaliesPortscan`), brute-force login bursts
+> (`detectStatsAnomaliesBruteForce` — FTP/SSH/Telnet/SMTP/POP3/IMAP/
+> RDP/VNC/LDAP), baseline packet-length / per-minute outliers
+> (`detectStatsAnomaliesBaselineOutliers`), and high-entropy cleartext
+> payloads (`detectStatsAnomaliesEmbeddedContent`). The findings render
+> as click-to-filter cards in `renderStatsAnomaliesPanel` and the
+> detector engine is shared with the Threat Intel sub-tab's
+> **Session Threat Score** so the two views never disagree. Future
+> work ties per-packet suspicion into the score and adds ranked
+> anomaly dashboards.
 
 - [📋] Session suspicion scoring
 - [📋] Packet suspicion scoring
@@ -534,7 +546,14 @@ in days, not weeks.
 > SMTP, POP3, IMAP, Telnet, IRC, MTP, LDAP, MySQL, PostgreSQL, XMPP,
 > SMB, MQTT, RTSP, TFTP, BGP, NNTP, RADIUS, SNMP, ICMP, DHCP, NTP,
 > Kerberos 5, Soulseek, BitTorrent, SMPP, SIGTRAN, IGMP, LLDP, PPP,
-> PPPoE, Brotli detection, HTTP decompression.
+> PPPoE, Brotli detection, HTTP decompression, DNS, DHCPv6.
+>
+> The Conv **Decodes** subtab also has front-end stream decoders for
+> HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, DNS,
+> SNMP, DHCP, DHCPv6, EPMAP, LLMNR, NBNS, NBDGM, LDAP (upgraded for
+> search/filters/entries + typed attribute tree), SIP, SMPP, Soulseek,
+> BitTorrent, Kerberos (krb5), and generic JSON / XML / YAML /
+> Protobuf / MessagePack / BSON / ASN.1 BER / ASN.1 DER.
 
 ---
 
@@ -544,19 +563,30 @@ in days, not weeks.
 
 > **Status:** 🟡 Partial — the LLM is in the frontend (Ollama, default
 > model `qwen2.5-coder:7b`), with per-stream and per-distill prompts.
-> A free-form natural-language "ask the capture" UI is still TODO.
+> The right-click context menu's **Ask PacketSnitch...** submenu ships
+> for Ask a question / Explain this data / Summarize this packet, and
+> the **Session Threat Score** card adds a Get LLM Assessment action.
+> Free-form natural-language "ask the capture" UI is still TODO.
 
+- [🟡] Packet-aware prompting — Ask PacketSnitch... submenu ships.
+- [🟡] Host summaries — LLM distillation on the Summary tab; Session
+  Threat Score → Get LLM Assessment ships.
 - [📋] Natural language querying
-- [🟡] Host summaries — LLM distillation on the Summary tab.
 - [📋] Threat hunting assistance
 - [📋] Investigation recommendations
-- [📋] Automatic anomaly explanation
+- [🟡] Automatic anomaly explanation — partially via Session Threat
+  Score breakdown.
 
 ### AI Investigation Assistant
 
-> **Status:** 🟡 Partial — Summary distillation ships.
+> **Status:** 🟡 Partial — Summary distillation ships. The Threat Intel
+> sub-tab's **Session Threat Score** card adds an on-demand LLM
+> assessment action that summarizes the deterministic score breakdown
+> into a short analyst narrative plus up to 5 concrete next actions.
 
 - [🟡] Generate findings — distilled summary ships.
+- [🟡] Score-driven recommendations — Session Threat Score → "Get LLM
+  Assessment" ships.
 - [📋] Create executive summaries (separate template)
 - [🟡] Recommend next steps — partially via distillation prompt.
 - [📋] Highlight unusual behavior (anomaly-driven, not just LLM-driven)
@@ -646,11 +676,16 @@ in days, not weeks.
 
 ### Threat Score System
 
-> **Status:** 📋 Planned.
-
-- [ ] Host risk scores
-- [ ] Conversation risk scores
-- [ ] Capture-wide threat score
+> **Status:** � Partial — the **Session Threat Score** ships in the
+> Threat Intel sub-tab as a 0-100 score with `Clean` / `Low` / `Medium` /
+> `High` / `Critical` banded pill, a color-graded weight breakdown of
+> every contributing indicator (IPSum, Tor, VirusTotal malicious /
+> suspicious verdicts, high-entropy cleartext, portscan / brute-force /
+> baseline outliers from the Stats → Anomalies sub-tab, public-IP /
+> domain / URL / hash counts, and the current Conv input entropy), and
+> a **Capture Footprint** summary. **Recompute** / **Get LLM
+> Assessment** / **Send to Notes** actions live on the card. Per-host
+> and per-conversation risk scores are still TODO.
 
 ### Automatic Report Generator
 
@@ -679,7 +714,7 @@ work that's landed since.
 5. [🟡] Report Templates *(Summary ships — needs templates + PDF)*
 6. [📋] Diff Two Packets
 7. [🟡] DNS Threat Lens *(aggregation ships — needs heuristics)*
-8. [�] Protocol Anomaly Heuristics *(Anomalies sub-tab ships portscan, brute-force, baseline outlier, and high-entropy cleartext detection — needs scored correlation with Threat Intel)*
+8. [🟡] Protocol Anomaly Heuristics *(Anomalies sub-tab ships portscan, brute-force, baseline outlier, and high-entropy cleartext detection — needs scored correlation with Threat Intel)*
 9. [📋] Batch Analysis
 10. [📋] Expert Events Feed
 11. [🟡] Stream Reassembly *(foundation ships — finish missing-packet UX)*
@@ -745,6 +780,38 @@ Already shipped (so we don't redo them):
     whitelisted set of hosts (`packetsnitch.com`, GitHub, BMC, VT).
   - New Kerberos 5 (`krb5`) Conv decoder (AS-REQ/REP, TGS-REQ/REP,
     AP-REQ/REP, KRB-ERROR, KRB-PRIV, KRB-CRED).
+  - New Conv Decodes dropdown entries + stream decoders for **DNS,
+    SNMP, DHCP, DHCPv6** (auto-detect + protocol/port hints;
+    RR/option/TLV walks with typed rdata preview).
+  - Conv Decodes entries for **EPMAP, LLMNR, NBNS, NBDGM (NetBIOS
+    Datagram Service)**, plus upgraded LDAP (search/filters/entries,
+    typed attribute tree).
+  - **Crypt → Wifi subtab** with 802.11 / RadioTap decoding, WPA2
+    4-way handshake PTK derivation (PBKDF2-HMAC-SHA1 PMK → PRF-384
+    PTK per IEEE 802.11i §8.5.1), AES-CCMP / TKIP / WEP decryption,
+    SSID/BSSID filter, "decryptable with my keys" filter, keystore-
+    backed `wifi-wep` / `wifi-wpa-psk` / `wifi-pmk` keys, and
+    auto-rerun after `setBackendWifiKeys`.
+  - **Stats → Anomalies sub-tab**: portscan, brute-force login bursts
+    (FTP/SSH/Telnet/SMTP/POP3/IMAP/RDP/VNC/LDAP), baseline packet-
+    length / per-minute outliers, high-entropy cleartext payloads —
+    click-to-filter cards. Shares the engine with the Threat Intel
+    sub-tab so the two views never disagree.
+  - **Session Threat Score** in the Threat Intel sub-tab: 0-100 score
+    with `Clean` / `Low` / `Medium` / `High` / `Critical` banded pill,
+    color-graded weight breakdown of every contributing indicator,
+    Capture Footprint (public IPs / unique domains / URLs / hashes /
+    reputation lookups / protocol anomalies), **Recompute** /
+    **Get LLM Assessment** / **Send to Notes** actions. Every per-
+    target lookup feeds the next recompute.
+  - **Save Report...** submenu in the right-click context menu with
+    Markdown / Text / HTML export backed by an LLM distillation pass
+    (dedupe + chronological sort + importance re-rank) with a clean
+    fallback to the un-distilled report.
+  - Wifi keys round-trip through sessions — saved sessions carry
+    802.11 keys, and on restore the bridge re-sends them to the
+    backend so re-opening a wifi capture still decrypts without
+    manual re-entry.
   - Notes tab now auto-feeds the Summary tab under "Inferred Data
     (from Notes)"; per-note "Mark as verified" toggle moves the note
     to "Verified Notes (from Notes)".
@@ -754,11 +821,31 @@ Already shipped (so we don't redo them):
 - **Fixes**
   - Single-block Conv decode regression.
   - Inline decoder wiring now matches the dropdown entries.
+  - **Wifi rerun no longer drops decryption on the second run** —
+    legacy spawn path now stages the per-job `wifi-keys.json` in
+    `testcaseOutputDir` (a sibling of `jobOutputDir`) with a unique
+    `wifi-keys-<jobId>.json` filename, and the bridge cleans it up
+    after the backend closes.
+  - **Restore defaults** button is now confirmable via a new in-app
+    overlay (`#settings-reset-confirm-dialog`) with `Restore` /
+    `Cancel` buttons and full keyboard support; falls back to
+    `window.confirm` if the DOM nodes are missing.
+  - **All-Hosts sentinel survives across snapshot refreshes** — the
+    `0.0.0.0` "All Hosts" virtual option stays bound to the full
+    packet set after a backend progressive snapshot or rerun.
 - **Tests**
   - `tests/kerberos_conv_decoder.test.js`
+  - `tests/{dns,snmp,dhcp,dhcpv6}_conv_decoder.test.js`
+  - `tests/{epmap,llmnr,nbns,nbdgm,ldap}_conv_decoder.test.js`
   - `tests/notes_summary_integration.test.js`
   - `tests/conv_decodes_stream_stack.test.js`
   - `tests/smb_conv_decoder.test.js`
+  - `tests/stats_anomalies.test.js`
+  - `tests/threat_intel_scorer.test.js`
+  - `tests/threat_intel_stats_anomalies.test.js`
+  - `tests/wifi_keys_legacy_spawn_placement.test.js`
+  - `tests/wifi_keys_rerun_path_mode.test.js`
+  - `tests/legacy_all_host_sentinel.test.js`
   - `summary_stats_weaving.test.js` extensions
 
 ### v2.4.2169 — 2026-07-27
