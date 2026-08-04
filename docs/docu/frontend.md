@@ -66,7 +66,7 @@ The toolbar at the top of the content area contains navigation and view-switchin
 | **Analysis**    | Switch to the Summary Frame to view the frontend-generated LLM analysis report and appended stream-context findings.                                               |
 | **Host Data**   | Switch to the packet data view (Packet Info + Payload panes) for the currently selected host.                                                                     |
 | **Conv**        | Open the data conversion workspace for translating between hex, binary, base64, ASCII, and decimal, with MIME detection, entropy analysis, and protocol decoding. |
-| **Crypt**       | Open the encryption workspace for inspecting encountered SSL/TLS sessions, loading certificates and private keys, and accessing PGP/OpenSSH workspaces.           |
+| **Crypt**       | Open the encryption workspace for inspecting encountered SSL/TLS sessions, loading certificates and private keys, accessing PGP/OpenSSH workspaces, and decrypting 802.11 (Wi-Fi) frames. |
 | **Keystore**    | Open the local credential store for managing session and persistent keychain entries (passwords, keys, certificates, cookies).                                    |
 | **Stats**       | Show capture-level aggregate statistics (protocols, hosts, ports, MIME types, GeoIP locations, etc.) derived from the full loaded dataset.                        |
 | **List**        | Show all packets in a searchable, sortable, stream-groupable list view.                                                                                           |
@@ -254,7 +254,7 @@ Note: *If this data looks similar to the hosts.json data, it should, as that is 
 
 #### Crypt Tab (Encryption Workspace)
 
-The **Crypt** tab provides a multi-panel workspace for inspecting cryptographic material encountered in a capture or loaded from files. It has three sub-tabs: **SSL**, **PGP**, and **OpenSSH**.
+The **Crypt** tab provides a multi-panel workspace for inspecting cryptographic material encountered in a capture or loaded from files. It has four sub-tabs: **SSL**, **PGP**, **OpenSSH**, and **Wireless** (IEEE 802.11). All four share the same grid-style layout; switching between them keeps the rest of the workspace state (filter bar, packet cursor, keystore) intact.
 
 ##### SSL Sub-tab
 
@@ -283,6 +283,22 @@ Successful decrypt/verify operations can also store validated PGP private key/pa
 ##### OpenSSH Sub-tab
 
 Reserved workspace for future OpenSSH key and session tooling. For now, PacketSnitch can still recognize SSH/OpenSSH material in Conv decode/detection flows.
+
+##### Wireless Sub-tab (IEEE 802.11 / Wi-Fi)
+
+The Wireless sub-tab is the frontend home of the 802.11 frame decoder and decryptor in [src/backend/decoders/wireless_80211.py](../src/backend/decoders/wireless_80211.py). It surfaces every 802.11 frame observed in the capture, lets the analyst push Wi-Fi keys (WPA/WPA2-PSK, WEP, or pre-computed PMK) to the backend, and re-runs the capture with decryption enabled so the decrypted inner packets flow into the rest of the workspace.
+
+| Panel | Description |
+| ----- | ----------- |
+| **Encountered 802.11 Transmissions** | A list of every distinct 802.11 transmission detected in the capture, populated from `wireless.wifi.ssid` / `wireless.wifi.bssid` / `wireless.wifi.subtype` / `wireless.wifi.cipher`. Buttons: **Refresh** (re-scan the loaded data), **Load selected** (open the frame in Host Data), **Filter packets** (populate the filter bar with `wifi.bssid == "..."` or `wifi.ssid == "..."`). |
+| **Filter 802.11 Frames** | Substring filters by SSID (case-insensitive) and BSSID (colon or 12-hex form), an **Only decryptable with my keys** checkbox that keeps frames whose BSSID + algorithm matches an entry in the keystore sub-list, and a **Sort** dropdown (packet index, decryptable first, SSID A-Z, BSSID). Status line reports how many frames match the current filter. |
+| **Wi-Fi Keys (Keystore)** | Per-session key list pulled from the keystore, plus an **Add key** form. The form takes an optional SSID, an optional BSSID, and the key material; the **Key type** dropdown picks one of `wpa-psk` (WPA/WPA2 passphrase), `wep` (hex, 5/13/16 bytes for WEP-40/WEP-104/WEP-128), or `pmk` (WPA PMK, 32-byte hex). The list supports **Add key**, **Remove selected**, and **Refresh keystore**. |
+| **Send keys to backend** | Pushes the current Wi-Fi key list to the backend via the `setBackendWifiKeys` IPC. The bridge stages the key payload in `testcaseOutputDir/wifi-keys-<jobId>.json` (outside `jobOutputDir` so the spawn-path `fs.rmSync` cannot drop it) and re-launches the backend with `--wifi-keys-file`. The renderer-side `wifiKeysRerunInFlight` flag tells the snapshot handler to re-index against the new `hosts.json` so decrypted frames show up immediately. The status line reports the IPC round-trip result and a final `Decryption done.` once the rerun completes. |
+| **802.11 Decrypt** | Runs `decryptWifiPayload` against the currently selected 802.11 frame with the active key set and surfaces the result in the `crypt-wifi-decrypt-preview` panel: header (Algorithm, SSID, BSSID, OK/Error), decrypted hex + ASCII preview, and a **Send to Conv** button that loads the plaintext bytes into the Conv → Conversions sub-tab. **Clear** wipes the preview. |
+
+The full backend contract (key file format, `--wifi-keys-file` flag, decrypt status attributes, end-to-end result shape) is documented in the [Crypt tab / 802.11 (Wi-Fi) decryption](backend#crypt-tab--80211-wi-fi-decryption) section of the Backend docs; the Wireless sub-tab is the renderer-side counterpart of that contract.
+
+> Saved sessions round-trip the Wi-Fi keystore entries; on session restore the bridge re-sends them to the backend so re-opening a Wi-Fi capture still decrypts 802.11 frames without manual re-entry.
 
 ---
 
@@ -646,6 +662,7 @@ A protocol-specific table of lower-level packet fields. The table content varies
 | SIP (port 5060/5061)         | Message type, method/status, URI, From, To, Call-ID                                         |
 | Kerberos (port 88/464/750)   | Message type, pvno, realm, cname/sname, KDC options, till, nonce, etype list, ticket, encrypted part |
 | HTTP (port 80/443/8080/8443) | Request/response type, method, URL, status code, headers (host, server, content-type, etc.) |
+| IEEE 802.11 (Wi-Fi)          | SSID, BSSID, channel, frequency, frame type/subtype, cipher, crypto suite (WPA / WPA2 / WPA3 / Open), RSN info, RadioTap signal/noise/rate, plus `wifi.decrypt.ok` / `wifi.decrypt.algorithm` / `wifi.decrypt.error` when the frame was a decryption candidate. |
 
 ##### Location
 
