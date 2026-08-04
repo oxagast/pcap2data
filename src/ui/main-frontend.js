@@ -24176,10 +24176,20 @@ async function processBackendJsonPathPayload(payload) {
     }
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
+    // Force a full reindex on the final chunk of a wifi-keys rerun so
+    // the decrypted packet content becomes visible. The path-mode
+    // handler doesn't have a separate "first chunk" branch like the
+    // in-memory handler does, so we have to do the full reindex here
+    // for both intermediate and final chunks. Without this, the
+    // incremental merge sees equal old/new packet counts (same 1093
+    // packets, just decrypted instead of encrypted) and skips
+    // reindexing — leaving the UI stuck on pre-decryption content.
+    const forceFullReindexForWifiKeys =
+      backendProgressState.wifiKeysRerunInFlight === true;
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
       incrementalUpdate: true,
-      finalUpdate: false,
+      finalUpdate: forceFullReindexForWifiKeys,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-path-final",
@@ -24196,6 +24206,13 @@ async function processBackendJsonPathPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    if (backendProgressState.wifiKeysRerunInFlight) {
+      backendProgressState.wifiKeysRerunInFlight = false;
+      statusUpdate("Status: Wi-Fi keys applied; 802.11 frames updated");
+      writeLogEntry(
+        `[${threadName}] Wi-Fi keys rerun completed; cleared rerun flag`,
+      );
+    }
     if (payload.jobId && payload.jobId === activeBackendJobId) {
       activeBackendJobId = "";
     }
