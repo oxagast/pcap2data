@@ -69,6 +69,7 @@ try:
         Dot11Deauth,
         Dot11QoS,
         Dot11Encrypted,
+        Dot11WEP,
         Dot11CCMP,
         Dot11TKIP,
         RadioTap,
@@ -87,6 +88,7 @@ except Exception:  # pragma: no cover - very old scapy
     Dot11Deauth = getattr(scapy, "Dot11Deauth", None)
     Dot11QoS = getattr(scapy, "Dot11QoS", None)
     Dot11Encrypted = getattr(scapy, "Dot11Encrypted", None)
+    Dot11WEP = getattr(scapy, "Dot11WEP", None)
     Dot11CCMP = getattr(scapy, "Dot11CCMP", None)
     Dot11TKIP = getattr(scapy, "Dot11TKIP", None)
     RadioTap = getattr(scapy, "RadioTap", None)
@@ -988,34 +990,127 @@ def _tkipDecrypt(pmk, dot11Header, tkipLayer, rawFrame):
     return None
 
 
-def _wepDecrypt(weKey, rawFrame, iv):
-    """RC4 stream cipher decrypt (WEP-40 / WEP-104)."""
-    if not weKey or rawFrame is None:
-        return None
+def _wepDecrypt(weKey, wepBody):
+    """
+    RC4 stream cipher decrypt (WEP-40 / WEP-104 / WEP-128).
+
+    ``wepBody`` must be the raw WEP frame body: 3 bytes IV + 1 byte KeyID +
+    ciphertext + 4 bytes ICV (i.e. ``bytes(p[Dot11WEP])`` for a parsed
+    scapy packet, or the WEP payload bytes from the raw frame).
+
+    Returns a tuple ``(plaintext, icv_ok)`` where ``plaintext`` is the
+    decrypted payload bytes (without the trailing 4-byte ICV) and
+    ``icv_ok`` is a boolean indicating whether the WEP ICV (CRC-32 of the
+    plaintext) matched the ICV in the frame.  Returns ``(None, False)``
+    when the body is too short or the key is missing.
+    """
+    if not weKey or wepBody is None or len(wepBody) < 4 + 4:
+        return None, False
+    iv = wepBody[0:3]
+    ciphertext = wepBody[4:-4]
+    icv = wepBody[-4:]
+    seed = iv + bytes(weKey)
+    plaintext = None
     try:
-        seed = bytes([iv & 0xFF, (iv >> 8) & 0xFF, (iv >> 16) & 0xFF]) + weKey
-        # Scapy's WEP layer is optional; if available, use it.
-        try:
-            from scapy.layers.dot11 import Dot11WEP
+        from cryptography.hazmat.primitives.ciphers import Cipher
 
-            rebuilt = Dot11WEP() / bytes(rawFrame)
-            rebuilt.iv = iv & 0xFFFFFF
-            rebuilt.key = weKey
-            plaintext = bytes(rebuilt.decrypt())
-            return plaintext
-        except Exception:
-            pass
-        # Fallback: manual RC4 (used only as a safety net).
+        # ARC4 has been moved to the decrepit module in cryptography >= 43
+        # to flag it as a legacy algorithm.  Try the decrepit path first
+        # to avoid the deprecation warning, then fall back to the legacy
+        # path for older cryptography versions.
         try:
-            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-            cipher = Cipher(algorithms.ARC4(seed), modes.StreamMode())
-            decryptor = cipher.decryptor()
-            return decryptor.update(bytes(rawFrame)) + decryptor.finalize()
+            from cryptography.hazmat.decrepit.ciphers.algorithms import ARC4
         except Exception:
-            return None
+            from cryptography.hazmat.primitives.ciphers.algorithms import ARC4
+
+        cipher = Cipher(ARC4(seed), None)
+        decryptor = cipher.decryptor()
+        plaintext = decryptor.update(ciphertext) + decryptor.finalize()
     except Exception:
-        return None
+        return None, False
+    # The WEP ICV is the standard CRC-32 of the plaintext, stored in
+    # little-endian byte order in the frame.  Many real captures
+    # (and synthetic test pcaps) ship with a corrupt or zeroed ICV, so
+    # we *verify* but do not *require* a match: a sanity check on the
+    # plaintext (must look like an LLC/SNAP header) is what actually
+    # gates "ok" downstream.
+    icv_ok = False
+    try:
+        import zlib
+
+        computed = zlib.crc32(plaintext) & 0xFFFFFFFF
+        icv_int = struct.unpack("<I", icv)[0]
+        icv_ok = computed == icv_int
+    except Exception:
+        icv_ok = False
+    return plaintext, icv_ok
+
+
+# Common IANA-assigned EtherType values found in 802.11 data frames.  We
+# keep this list narrow on purpose: the goal is to recognize "looks
+# like a real LLC/SNAP payload" without being so permissive that
+# random RC4 output slips through.
+_KNOWN_80211_ETHERTYPES = {
+    0x0800,  # IPv4
+    0x0806,  # ARP
+    0x0842,  # WoL (Wake-on-LAN)
+    0x86DD,  # IPv6
+    0x888E,  # EAPOL (802.1X)
+    0x888C,  # TDLS
+    0x8863,  # PPPoE Discovery
+    0x8864,  # PPPoE Session
+    0x8100,  # VLAN-tagged
+    0x8847,  # MPLS unicast
+    0x8848,  # MPLS multicast
+    0x8863,  # PPPoE Discovery
+    0x88A8,  # Provider Bridging
+    0x88CC,  # LLDP
+    0x88E5,  # MACsec
+}
+
+
+def _wepPlaintextLooksValid(plaintext):
+    """
+    Sanity check for a freshly-decrypted WEP payload.
+
+    Returns True when the bytes plausibly form an 802.2 LLC / SNAP
+    header (the common case for encrypted 802.11 data frames).  This
+    guards against false positives where the wrong key happens to
+    produce garbage that slips past the lenient CRC-32 verification
+    (which is lenient because WEP pcaps in the wild often have a
+    corrupt or zeroed ICV).
+    """
+    if not plaintext or len(plaintext) < 8:
+        return False
+    dsap = plaintext[0]
+    ssap = plaintext[1]
+    ctrl = plaintext[2]
+    # LLC/SNAP-wrapped 802.11 data frame:
+    #   DSAP=0xAA, SSAP=0xAA, Control=0x03,
+    #   3-byte OUI (often 0x000000 or vendor OUI),
+    #   2-byte EtherType.
+    # The 7-bit SAP comparison strips the I/G and C/R bits.
+    if (dsap & 0xFE) == 0xAA and (ssap & 0xFE) == 0xAA and ctrl == 0x03:
+        if len(plaintext) < 8:
+            return False
+        ether_type = (plaintext[6] << 8) | plaintext[7]
+        if ether_type in _KNOWN_80211_ETHERTYPES:
+            return True
+        # Even with an unrecognised EtherType, the LLC/SNAP header
+        # itself is strong evidence of a valid 802.11 data frame.
+        # Allow it as long as the EtherType is in the IANA "EtherType"
+        # assignment range (>= 0x0600), and reject obviously bogus
+        # values (< 0x0600, which is reserved).
+        if 0x0600 <= ether_type <= 0xFFFF:
+            return True
+        return False
+    # Raw Ethernet II (no LLC header): 6-byte DA + 6-byte SA + 2-byte
+    # EtherType.  Require the EtherType to be an assigned value.
+    if len(plaintext) >= 14:
+        ether_type = (plaintext[12] << 8) | plaintext[13]
+        if ether_type in _KNOWN_80211_ETHERTYPES:
+            return True
+    return False
 
 
 def _looksLikeWifi(p):
@@ -1077,6 +1172,12 @@ def getWirelessLayers(p):
         try:
             if p.haslayer(Dot11TKIP):
                 encryptedLayer = p[Dot11TKIP]
+        except Exception:
+            encryptedLayer = None
+    if encryptedLayer is None and Dot11WEP is not None:
+        try:
+            if p.haslayer(Dot11WEP):
+                encryptedLayer = p[Dot11WEP]
         except Exception:
             encryptedLayer = None
     if encryptedLayer is None and Dot11Encrypted is not None:
@@ -1422,25 +1523,50 @@ def decryptWifiPayload(p, wifiKeys):
             "bssid": bssid,
         }
 
-    # WEP: protected bit set, no separate encrypted layer.
-    if fc & 0x40:
+    # WEP: protected bit set, with a Dot11WEP layer (preferred) or
+    # fall back to a FCfield-only probe when the WEP layer was not
+    # detected.  The WEP body (3-byte IV + 1-byte KeyID + ciphertext +
+    # 4-byte ICV) is what we feed to the RC4 primitive, *not* the full
+    # 802.11 frame.
+    wepBody = None
+    if (
+        encryptedLayer is not None
+        and Dot11WEP is not None
+        and isinstance(encryptedLayer, Dot11WEP)
+    ):
+        try:
+            wepBody = bytes(encryptedLayer)
+        except Exception:
+            wepBody = None
+    elif fc & 0x40:
+        # No scapy WEP layer but the Protected bit is set.  Slice the
+        # WEP body out of the raw frame using the 802.11 MAC header
+        # length (24 bytes for non-QoS data, 26 for QoS, 30 for HT/4-addr).
+        try:
+            macHeaderLen = 24
+            if Dot11QoS is not None:
+                try:
+                    if p.haslayer(Dot11QoS):
+                        macHeaderLen = 26
+                except Exception:
+                    pass
+            # 4-address frames (ToDS + FromDS) add 6 bytes for addr4.
+            if toDs and fromDs:
+                macHeaderLen += 6
+            if macHeaderLen + 4 + 4 <= len(rawFrame):
+                wepBody = rawFrame[macHeaderLen:]
+        except Exception:
+            wepBody = None
+    if wepBody is not None and len(wepBody) >= 4 + 4:
         for entry in candidates:
             wepKey = _resolveWepKey(entry)
             if not wepKey:
                 continue
-            iv = 0
             try:
-                if encryptedLayer is not None and hasattr(encryptedLayer, "iv"):
-                    iv = int(encryptedLayer.iv)
+                plaintext, _icvOk = _wepDecrypt(wepKey, wepBody)
             except Exception:
-                iv = 0
-            try:
-                if encryptedLayer is None:
-                    iv = int(rawFrame[0:3].hex(), 16)
-            except Exception:
-                iv = 0
-            plaintext = _wepDecrypt(wepKey, rawFrame, iv)
-            if plaintext is not None:
+                plaintext = None
+            if plaintext is not None and _wepPlaintextLooksValid(plaintext):
                 return {
                     "ok": True,
                     "plaintextHex": plaintext.hex(),

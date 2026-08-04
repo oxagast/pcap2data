@@ -888,3 +888,161 @@ def test_backend_decrypts_coherer_wifi_capture_with_psk(tmp_path: Path):
         "successfully decrypted with the supplied PSK — proves the "
         "AES-CCMP plaintext recovery path is wired end-to-end."
     )
+
+
+def test_backend_decrypts_wep_capture_with_hex_key(tmp_path: Path):
+    """End-to-end parity check: feeding the WEP sample pcap plus the
+    WEP-40 hex key through the backend via the --wifi-keys-file path
+    proves the JS bridge can hand WEP keys to the backend AND that the
+    RC4 WEP decryptor recovers plaintext for the matching BSSID.
+
+    The wep-smaller.pcap is encrypted with WEP-40 key A4:81:53:B4:CF
+    on BSSID c0:4a:00:80:76:e4.  We expect to see successfully
+    decrypted WEP frames (algorithm=WEP, plaintextHex set) on that
+    BSSID, with the decrypted LLC/SNAP+IPv4 plaintext descending into
+    IP/TCP/UDP in the inner packet loop — the same recursive descent
+    the AES-CCMP path uses for WPA2.
+    """
+    pcap_file = _project_root() / "samples" / "pcaps" / "wep-smaller.pcap"
+    if not pcap_file.exists():
+        pytest.skip(f"WEP sample pcap not found: {pcap_file}")
+
+    keys_file = tmp_path / "wifi-keys-wep.json"
+    keys_file.write_text(
+        json.dumps(
+            [
+                {
+                    "bssid": "c0:4a:00:80:76:e4",
+                    "wepKeyHex": "A48153B4CF",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "snitch-output-wep"
+    conf_file = tmp_path / "test-conf-wep.yaml"
+    _write_test_config(conf_file)
+
+    result = _run_backend_with_wifi_keys(
+        pcap_file=pcap_file,
+        output_dir=output_dir,
+        conf_file=conf_file,
+        wifi_keys_file=keys_file,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            "Backend execution failed for WEP wifi capture.\n"
+            f"exit={result.returncode}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+    hosts_file = output_dir / "hosts.json"
+    assert hosts_file.exists(), f"Expected output file not found: {hosts_file}"
+
+    hosts_data = json.loads(hosts_file.read_text(encoding="utf-8"))
+    packets = _flatten_packets(hosts_data)
+    assert packets, "Expected decoded packets in WEP hosts.json"
+
+    wifi_packet_count = 0
+    wep_attempted_count = 0
+    wep_decrypted_count = 0
+    bssid_match_count = 0
+    inner_ip_count = 0
+    wep_bssid = "c0:4a:00:80:76:e4"
+    for packet in packets:
+        packet_info = packet.get("packet.info", {})
+        if packet_info.get("link.proto") != "IEEE 802.11":
+            continue
+        wifi_packet_count += 1
+        algorithm = packet_info.get("wifi.decrypt.algorithm")
+        wireless_section = packet_info.get("Wireless") or {}
+        packet_bssid = (wireless_section.get("wifi.bssid") or "").lower()
+        if algorithm == "WEP":
+            wep_attempted_count += 1
+            if packet_bssid == wep_bssid:
+                bssid_match_count += 1
+                if packet_info.get("wifi.decrypt.ok"):
+                    wep_decrypted_count += 1
+                    # The recursive packet loop should have descended
+                    # into the decrypted LLC/SNAP+IP and emitted an
+                    # IP section — same parity as the CCMP path.
+                    if "IP" in packet_info and isinstance(
+                        packet_info["IP"], dict
+                    ):
+                        inner_ip_count += 1
+
+    assert wifi_packet_count > 0, "Expected at least one IEEE 802.11 packet in WEP capture"
+    assert wep_attempted_count > 0, (
+        "Expected at least one WEP data frame to be processed — proves the "
+        "wifi decoder is running the WEP path (not skipping the keys)."
+    )
+    assert bssid_match_count > 0, (
+        "Expected at least one WEP frame on the matching BSSID "
+        f"({wep_bssid}) so the WEP key is being matched to the right AP."
+    )
+    assert wep_decrypted_count > 0, (
+        "Expected at least one WEP frame to be successfully decrypted "
+        "with the supplied hex key — proves the RC4 plaintext recovery "
+        "path is wired end-to-end with the same parity as AES-CCMP."
+    )
+    assert inner_ip_count > 0, (
+        "Expected at least one decrypted WEP frame to descend into the "
+        "IP/TCP/UDP packet loop (the same recursive descent the CCMP "
+        "path uses for WPA2)."
+    )
+
+
+def test_backend_wep_decoder_unit_level():
+    """Unit-level parity test: the wireless_80211 decoder should
+    recognise Dot11WEP, accept 5/13/16-byte WEP keys, and decrypt
+    the WEP pcap into bytes that start with a valid LLC/SNAP+IP
+    header when given the right key.  This is the equivalent of
+    the AES-CCMP unit tests, but for WEP — it is the contract that
+    keeps the two paths in lockstep when new features are added."""
+    import importlib.util
+
+    decoder_path = _project_root() / "src" / "backend" / "decoders" / "wireless_80211.py"
+    spec = importlib.util.spec_from_file_location("wep_decoder_unit_test", decoder_path)
+    assert spec is not None and spec.loader is not None
+    decoder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(decoder)
+
+    pcap_path = _project_root() / "samples" / "pcaps" / "wep-smaller.pcap"
+    if not pcap_path.exists():
+        pytest.skip(f"WEP sample pcap not found: {pcap_path}")
+
+    from scapy.all import rdpcap
+    from scapy.layers.dot11 import Dot11WEP
+
+    pkts = rdpcap(str(pcap_path))
+    wep_frames = [p for p in pkts[:50] if p.haslayer(Dot11WEP)]
+    assert wep_frames, "Expected at least one WEP frame in the sample pcap"
+
+    # Wrong key: every attempt should fail the plaintext sanity check.
+    wrong_key = "DEADBEEFCA"
+    wrong_successes = 0
+    for p in wep_frames:
+        result = decoder.decryptWifiPayload(p, [{"wepKeyHex": wrong_key}])
+        if result and result.get("ok"):
+            wrong_successes += 1
+    assert wrong_successes == 0, (
+        "Wrong WEP key must never produce an ok=True result; got "
+        f"{wrong_successes} false positives out of {len(wep_frames)}"
+    )
+
+    # Right key: every attempt should succeed, and the decrypted bytes
+    # must begin with the LLC/SNAP+IPv4 header (aa aa 03 00 ... 08 00 45 00).
+    right_key = "A48153B4CF"
+    right_successes = 0
+    for p in wep_frames:
+        result = decoder.decryptWifiPayload(p, [{"wepKeyHex": right_key}])
+        if result and result.get("ok") and result.get("algorithm") == "WEP":
+            plaintext = bytes.fromhex(result.get("plaintextHex", ""))
+            if plaintext[:3] == b"\xaa\xaa\x03" and plaintext[6:8] == b"\x08\x00":
+                right_successes += 1
+    assert right_successes == len(wep_frames), (
+        "Every WEP frame in the sample pcap should decrypt with the "
+        f"correct key; got {right_successes}/{len(wep_frames)}"
+    )

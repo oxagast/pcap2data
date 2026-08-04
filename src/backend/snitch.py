@@ -3033,6 +3033,19 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         # Splice the wireless metadata + decryption status
                         # in front of the inner packet info so the renderer
                         # still sees the decrypted network traffic.
+                        #
+                        # Note: we deliberately do NOT prepend "WIFI" to
+                        # ``packet.decoded_protocols`` here.  The link-layer
+                        # protocol is already recorded via ``link.proto =
+                        # "IEEE 802.11"`` (set below), and prepending the
+                        # generic "WIFI" placeholder used to make the
+                        # List-panel "App Protocol" column display "WIFI"
+                        # for every decrypted TCP/UDP/ICMP frame — masking
+                        # the real application-layer protocol (HTTP, SSH,
+                        # DNS, ...).  Leaving ``decoded_protocols`` to the
+                        # inner packet's transport/app-layer values keeps
+                        # the renderer honest about what was actually
+                        # decoded inside the (now-stripped) 802.11 frame.
                         innerPacketInfo["Wireless"] = wirelessSection
                         innerPacketInfo["link.proto"] = "IEEE 802.11"
                         innerPacketInfo["link.src.mac.addr"] = srcMacAddr
@@ -3041,10 +3054,6 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                         innerPacketInfo["link.dst.mac.vendor"] = dstMacVendor
                         innerPacketInfo["wifi.decrypt.ok"] = True
                         innerPacketInfo["wifi.decrypt.algorithm"] = wifiDecryptResult.get("algorithm")
-                        decryptedProtocols = list(innerPacketInfo.get("packet.decoded_protocols") or [])
-                        if "WIFI" not in decryptedProtocols:
-                            decryptedProtocols.append("WIFI")
-                        innerPacketInfo["packet.decoded_protocols"] = decryptedProtocols
                         return json.dumps(innerPacketInfo)
 
             timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
