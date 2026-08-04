@@ -198,3 +198,83 @@
 - Coherer handshake facts (SSID="Coherer", BSSID=00:0c:41:82:b2:55,
   password="Induction", PMK=a288fcf0caaacda9a9f58633ff35e8992a01d9c10ba5e02efdf8cb5d730ce7bc)
   decrypt 203/204 CCMP frames in the Coherer sample.
+
+## WEP 802.11 decryption
+
+- WEP (Wired Equivalent Privacy) decryption now lives alongside the
+  AES-CCMP / TKIP paths in [src/backend/decoders/wireless_80211.py](src/backend/decoders/wireless_80211.py).
+  `getWirelessLayers` picks up `Dot11WEP` frames the same way it
+  picks up `Dot11CCMP` / `Dot11TKIP`, and `decryptWifiPayload` adds a
+  WEP branch that resolves the candidate via `_resolveWepKey`.
+- `_wepDecrypt(weKey, wepBody)` takes the WEP body bytes (3-byte IV +
+  1-byte KeyID + ciphertext + 4-byte ICV), derives the RC4 seed from
+  `iv + key`, and pulls `ARC4` from
+  `cryptography.hazmat.decrepit.ciphers.algorithms` (with a fallback
+  to `cryptography.hazmat.primitives.ciphers.algorithms` for older
+  installs — `cryptography >= 43` moved ARC4 to the decrepit module).
+  Returns `(plaintext, icv_ok)` so callers can see both the recovered
+  bytes and whether the CRC-32 ICV matched.
+- WEP ICV verification is LENIENT. Real WEP pcaps in the wild often
+  have a corrupt or zeroed ICV (and the synthetic test pcap is one
+  such case), so `_wepDecrypt` *verifies* but does not *require* a
+  match. The "ok" verdict instead comes from
+  `_wepPlaintextLooksValid`, a structural sanity check that:
+  - Requires the LLC/SNAP header (`DSAP=0xAA SSAP=0xAA Control=0x03`,
+    ignoring the I/G and C/R bits on DSAP/SSAP) for the common
+    802.11 data frame, plus a 2-byte EtherType in the IANA assignment
+    range (>= 0x0600) or in the small known-good set
+    (`0x0800` IPv4, `0x0806` ARP, `0x86DD` IPv6, `0x888E` EAPOL,
+    `0x8863`/`0x8864` PPPoE, `0x8847`/`0x8848` MPLS, `0x88A8`
+    provider-bridging, `0x88CC` LLDP, `0x88E5` MACsec, `0x8100`
+    VLAN, `0x0842` WoL).
+  - Falls back to raw Ethernet II (6-byte DA + 6-byte SA + 2-byte
+    EtherType) when the LLC/SNAP header is missing, requiring an
+    IANA-known EtherType.
+  - The wrong key therefore never produces a false positive even
+    when the ICV is lenient.
+- WEP key sizes: `_resolveWepKey` accepts 5-byte (WEP-40),
+  13-byte (WEP-104) and 16-byte (WEP-128) keys via the same
+  `wepKeyHex` field. Malformed lengths (anything other than
+  10/26/32 hex chars, or non-hex chars) return `None`.
+- When scapy's `Dot11WEP` layer is not present but the frame's
+  protected bit (`fc & 0x40`) is set, the WEP body is sliced out of
+  the raw frame using the 802.11 MAC header length (24 bytes for
+  non-QoS data, 26 for QoS, 30 for 4-address ToDS+FromDS frames).
+  This covers captures where scapy couldn't auto-parse the WEP layer.
+- The backend in [src/backend/snitch.py](src/backend/snitch.py) NO
+  LONGER prepends `"WIFI"` to `packet.decoded_protocols` when
+  splicing wireless metadata into a decrypted inner packet. The
+  link-layer identity is already carried by `link.proto = "IEEE 802.11"`,
+  and prepending `"WIFI"` used to make the List panel's **App
+  Protocol** column display `WIFI` for every decrypted TCP/UDP/ICMP
+  frame — masking the real application-layer protocol (HTTP, SSH,
+  DNS, ...). The renderer in
+  [src/ui/panels/list-panel.js](src/ui/panels/list-panel.js) also
+  defensively filters link-layer protocol names
+  (`WIFI`, `IEEE 802.11`, `ETHERNET`, `LINUX COOKED` / `V1` / `V2`,
+  `FRAME`, `LINK`, `RAW`, `LOOPBACK`, `NULL`, `TUN`, `TAP`) out of
+  `collectDecodedProtocolNames` so a legacy `decoded_protocols`
+  payload (e.g. an older hosts.json) cannot trick the column.
+- WEP regression coverage:
+  - `tests/test_backend_wireless_80211_wep.py` — unit tests that
+    load the decoder module directly, including
+    `test_get_wireless_layers_recognises_dot11wep`,
+    `test_wep_decrypt_produces_valid_llc_snap_plaintext`,
+    `test_wep_decrypt_rejects_wrong_key_with_sanity_check`,
+    `test_decrypt_wifi_payload_wep_returns_parity_shape`,
+    `test_wep_plaintext_looks_valid_rejects_obvious_garbage`,
+    `test_wep_plaintext_looks_valid_accepts_known_ethertypes`, and
+    `test_resolve_wep_key_accepts_5_13_16_byte_keys`.
+  - `tests/test_backend_json.py::test_backend_decrypts_wep_capture_with_hex_key`
+    — end-to-end: the WEP sample pcap + WEP-40 key A4:81:53:B4:CF on
+    BSSID c0:4a:00:80:76:e4 is fed through the full backend via
+    `--wifi-keys-file`, and the test asserts that the matching
+    BSSID surfaces decrypted 802.11 frames with `algorithm=WEP`,
+    `wifi.decrypt.ok=true`, and a descended `IP` section in the
+    inner packet info (parity with the CCMP path).
+  - `tests/list_panel_app_protocol.test.js` — VM-based regression
+    that locks down both halves of the link-layer-protocol fix.
+- WEP sample: `samples/pcaps/wep-A4-81-53-B4-CF.pcap`
+  (BSSID c0:4a:00:80:76:e4, WEP-40 key A4:81:53:B4:CF). The previous
+  `wep-smaller.pcap` / `wep.pcap` were removed in favour of this
+  single representative capture so the repo stays slim.

@@ -10,6 +10,7 @@
 - [Usage](#usage)
 - [Output Structure](#output-structure)
 - [HTTP Service Mode](#http-service-mode)
+- [Crypt tab / 802.11 (Wi-Fi) decryption](#crypt-tab--80211-wi-fi-decryption)
 - [Searchable Attributes](#searchable-attributes)
 - [Notes](#notes)
 - [License](#license)
@@ -31,8 +32,9 @@ In the desktop app, this parser is wrapped by an Electron bridge that can either
   - GeoIP lookup for source/destination IPs
   - Port descriptions (ICANN database)
   - MAC vendor lookup
-  - Protocol-specific fields for link/WAN (ARP/RARP/PPP families), network (ICMP/IGMP), transport (TCP/UDP/SCTP), and application protocols including DNS, HTTP/HTTP2, SNMP, DHCP, NTP, SIP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH, SMPP, Soulseek, and BitTorrent
+  - Protocol-specific fields for link/WAN (ARP/RARP/PPP families, IEEE 802.11 / Wi-Fi), network (ICMP/IGMP), transport (TCP/UDP/SCTP), and application protocols including DNS, HTTP/HTTP2, SNMP, DHCP, NTP, SIP, FTP, SMTP, POP3, IMAP, Telnet, IRC, SMB, MQTT, RTSP, TFTP, BGP, XMPP, LDAP, MySQL, PostgreSQL, NNTP, MTP/MMS, RADIUS, WebSocket, NFS, Kerberos, SSH, SMPP, Soulseek, and BitTorrent
   - Active recon: server banners, SSL certificate info, web page titles (optional)
+  - **IEEE 802.11 (Wi-Fi) link-layer metadata and decryption** — the `wireless_80211.py` decoder surfaces SSID, BSSID, frame type/subtype, channel, cipher, RSN/IE info, and RadioTap signal/noise/rate on every 802.11 frame, and decrypts WEP / WPA-PSK (AES-CCMP) / pre-computed PMK payloads when the renderer supplies matching keys via the `--wifi-keys-file` flag. See the [Crypt tab / 802.11 (Wi-Fi) decryption](#crypt-tab--80211-wi-fi-decryption) section below for the full contract.
 - Consolidates all testcase info into `hosts.json`.
 - Supports incremental chunk snapshots (`hosts-<N>.json`) for progressive frontend loading.
 - Supports an HTTP service mode used by the Electron bridge for status/stats, `ping`, `version`, `process`, and control requests.
@@ -87,6 +89,7 @@ python3 snitch.py --version
 | `--server`           | Run in HTTP service mode                               |
 | `--server-host`      | Bind host for HTTP service mode (default: `127.0.0.1`) |
 | `--server-port`      | Bind port for HTTP service mode (default: `9020`)      |
+| `--wifi-keys-file`   | Path to a JSON file containing 802.11 decryption keys passed in by the renderer (Crypt → Wireless sub-tab). Format: `[{"ssid": "...", "bssid": "...", "psk": "passphrase", "pmkHex": "32-byte-hex", "wepKeyHex": "5/13/16-byte-hex"}, ...]`. See [Crypt tab / 802.11 (Wi-Fi) decryption](#crypt-tab--80211-wi-fi-decryption) below for the contract. |
 | `-v, --verbose`      | Increase verbosity (repeat for more detail)           |
 
 #### Example
@@ -127,6 +130,99 @@ Important behavior:
 - Progress events may include filesystem snapshot paths or full in-memory capture payloads.
 - NDJSON mode is used for incremental progress streaming.
 - If service mode is unavailable, the Electron bridge falls back to legacy spawn mode.
+
+### Crypt tab / 802.11 (Wi-Fi) decryption
+
+The backend ships an end-to-end 802.11 frame decoder and decryptor in [src/backend/decoders/wireless_80211.py](../src/backend/decoders/wireless_80211.py) (with the WPA2 4-way PTK derivation in [src/backend/decoders/wpa2_ptk.py](../src/backend/decoders/wpa2_ptk.py)). The frontend surfaces it as the **Crypt → Wireless** sub-tab; the backend contract is documented here so both halves of the round-trip stay in sync.
+
+#### Decoder responsibilities
+
+- **Frame recognition**: auto-detects Dot11 / RadioTap frames, walks management (Beacon, Probe Req/Resp, Auth, Assoc Req/Resp, Reassoc, Disassoc, Deauth, Action), control (RTS, CTS, ACK, Block Ack, PS-Poll, CF-End), and data sub-types. A4 / QoS / ToDS / FromDS layout is resolved to recover BSSID, source MAC (SA), destination MAC (DA), and station MAC.
+- **Metadata**: every 802.11 frame populates the `link.proto = "IEEE 802.11"` field plus a `Wireless` sub-section (see the [802.11 fields table](#ieee-80211-wi-fi-fields) below).
+- **Decryption candidates**: the decoder recognises `Dot11CCMP`, `Dot11TKIP`, `Dot11WEP`, and the generic `Dot11Encrypted` layers and tries each path in turn with the active Wi-Fi key set.
+
+#### Key delivery (`--wifi-keys-file`)
+
+Keys are pushed in by the renderer's `setBackendWifiKeys` IPC, which stages them on disk in `testcaseOutputDir/wifi-keys-<jobId>.json` (a sibling of the per-job `jobOutputDir` so the spawn-path `fs.rmSync(jobOutputDir)` cleanup cannot drop the file mid-run). The file is removed in the bridge's `backendProc.on('close', ...)` handler. The CLI / spawn argv is:
+
+```
+python3 snitch.py traffic.pcap -o output_dir --wifi-keys-file <path>
+```
+
+The file is a JSON array; each element is one candidate key. At least one of `psk`, `pmkHex`, or `wepKeyHex` must be set; `ssid` and `bssid` are optional filters and can be omitted for "try this key against every frame":
+
+```json
+[
+  {
+    "ssid": "Coherer",
+    "bssid": "00:0c:41:82:b2:55",
+    "psk": "Induction"
+  },
+  {
+    "bssid": "c0:4a:00:80:76:e4",
+    "wepKeyHex": "A48153B4CF"
+  },
+  {
+    "ssid": "Lab-5G",
+    "bssid": "aa:bb:cc:dd:ee:ff",
+    "pmkHex": "a288fcf0caaacda9a9f58633ff35e8992a01d9c10ba5e02efdf8cb5d730ce7bc"
+  }
+]
+```
+
+| Field        | Type   | Description                                                                                                  |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `ssid`       | string | Optional. Restricts the key to frames whose SSID matches (case-insensitive).                                |
+| `bssid`      | string | Optional. Restricts the key to frames whose BSSID matches (colon-formatted or unspaced 12 hex).             |
+| `psk`        | string | WPA / WPA2 / WPA3 passphrase. Combined with `ssid` via PBKDF2-HMAC-SHA1 (4096 iterations) to derive the PMK. |
+| `pmkHex`     | string | Pre-computed Pairwise Master Key as 32-byte (64 hex char) hex. Skips the PBKDF2 step.                        |
+| `wepKeyHex`  | string | Hex WEP key, 10 / 26 / 32 chars (5 / 13 / 16 bytes = WEP-40 / WEP-104 / WEP-128).                            |
+
+#### WPA2 / AES-CCMP decryption
+
+- The backend scans every EAPOL-Key frame once via `populateWifiHandshakeCache` and buckets the captured (ANonce, SNonce) pairs by `(BSSID, client MAC)`. ToDS / FromDS / WDS addressing is resolved per IEEE 802.11 §9.3.2.1.
+- The cache is then queried with the data frame's `(BSSID, client MAC)` tuple. When both nonces are present and a `psk` / `pmkHex` entry exists for the BSSID, `populatePtkForBssid` derives the 64-byte PTK per IEEE 802.11i §8.5.1.1 (PRF-384 over the six-field canonical input `Min(AA,SA) || Max(AA,SA) || Min(ANonce,SNonce) || Max(ANonce,SNonce) || BSSID || ANonce`) and stores the TK portion.
+- The CCMP frame is then decrypted using the same per-block AES-CCM primitive that airdecap-ng uses (manual RFC 3610 implementation so the output is byte-compatible with Wireshark). AAD layout, PN endianness, and CTR counter construction all match the airdecap-ng / libnl80211 reference.
+- When a frame decrypts successfully, the inner LLC/SNAP+IP packet is spliced back into the regular packet loop and re-decoded as if it had been a normal Ethernet/IP frame. The host loop's `link.proto` for that packet becomes `"IEEE 802.11"`, the source/destination MAC addresses are added to `link.src.mac.addr` / `link.dst.mac.addr`, the wireless metadata is included under `Wireless`, and `wifi.decrypt.ok = true` plus `wifi.decrypt.algorithm = "CCMP"` are set. Link-layer protocol names (`WIFI`, `IEEE 802.11`, …) are never prepended to `packet.decoded_protocols` so the renderer's **App Protocol** column always reports the real application-layer protocol of the decrypted payload.
+
+#### WEP decryption
+
+- `_wepDecrypt(weKey, wepBody)` takes the raw WEP body (3-byte IV + 1-byte KeyID + ciphertext + 4-byte ICV) and RC4-decrypts it. The decryptor pulls `ARC4` from `cryptography.hazmat.decrepit.ciphers.algorithms` (with a fallback to the legacy `cryptography.hazmat.primitives.ciphers.algorithms` path so the code keeps working on `cryptography < 43`).
+- The WEP ICV (CRC-32 of the plaintext, little-endian) is verified leniently — real WEP pcaps in the wild often have a corrupt or zeroed ICV, so the ICV is reported (`icv_ok`) but not used to gate the verdict. The "ok" verdict instead comes from `_wepPlaintextLooksValid`, which requires the plaintext to look like an 802.2 LLC / SNAP header (`DSAP=0xAA SSAP=0xAA Control=0x03`, I/G and C/R bits stripped) plus an IANA-assigned EtherType, or a raw Ethernet-II header with a known EtherType. A wrong key therefore never produces a false positive.
+- When scapy's `Dot11WEP` layer is not present but the FC protected bit is set, the WEP body is sliced out of the raw frame using the 802.11 MAC header length (24 bytes for non-QoS, 26 for QoS, 30 for 4-address ToDS+FromDS frames).
+
+#### Decryption status attributes
+
+Every 802.11 frame that was a decryption candidate (CCMP / TKIP / WEP / generic `Dot11Encrypted`) carries the following attributes in `packet.info` so the renderer can render a per-frame decrypt status pill:
+
+| Attribute               | Type    | Description                                                                                       |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `wifi.decrypt.ok`       | boolean | `true` when the decryptor produced a valid plaintext for this frame.                              |
+| `wifi.decrypt.algorithm`| string  | `CCMP`, `TKIP`, or `WEP` for the path that succeeded; `"None"` for a frame that could not be decrypted with the supplied keys. |
+| `wifi.decrypt.error`    | string  | Optional. Error message for the failed decrypt path (e.g. `"MIC mismatch"`, `"key length invalid"`). |
+
+#### End-to-end decrypt result shape
+
+`decryptWifiPayload` returns the same dict shape for every algorithm so the renderer's `crypt-wifi-decrypt-preview` / **Send to Conv** path can be algorithm-agnostic:
+
+```json
+{
+  "ok": true,
+  "plaintextHex": "aaaa03000000080045000054...",
+  "algorithm": "CCMP",
+  "ssid": "Coherer",
+  "bssid": "00:0c:41:82:b2:55"
+}
+```
+
+#### Sample captures
+
+The repo ships two ready-to-use Wi-Fi captures for end-to-end smoke testing:
+
+| File                                              | BSSID                  | Algorithm | Key                                                                                  |
+| ------------------------------------------------- | ---------------------- | --------- | ------------------------------------------------------------------------------------ |
+| `samples/pcaps/wifi-Coherer-Induction.pcap`       | `00:0c:41:82:b2:55`    | CCMP      | SSID `Coherer`, PSK `Induction` (PMK `a288fcf0caaacda9a9f58633ff35e8992a01d9c10ba5e02efdf8cb5d730ce7bc`) |
+| `samples/pcaps/wep-A4-81-53-B4-CF.pcap`           | `c0:4a:00:80:76:e4`    | WEP       | WEP-40 key `A4:81:53:B4:CF`                                                          |
 
 ### Searchable Attributes
 
@@ -315,6 +411,35 @@ Each testcase JSON contains the following dot-notation keys as leaf nodes, which
 | `sip.call_id`     | string | `Call-ID` header value                                         |
 | `sip.status_code` | string | SIP status code (e.g. `200`) — responses only                  |
 | `sip.status_msg`  | string | SIP status message (e.g. `OK`) — responses only                |
+
+#### IEEE 802.11 (Wi-Fi) Fields
+
+The following dot-notation keys are populated for every IEEE 802.11 frame detected in the capture. Decryption-related fields are only present on frames that were decryption candidates (CCMP / TKIP / WEP / generic `Dot11Encrypted`); see the [Crypt tab / 802.11 (Wi-Fi) decryption](#crypt-tab--80211-wi-fi-decryption) section above for the algorithm-specific contracts.
+
+| Attribute                | Type    | Description                                                                                |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------ |
+| `link.proto`             | string  | Set to `"IEEE 802.11"` for every 802.11 frame (carries link-layer identity on the packet). |
+| `link.src.mac.addr`      | string  | 802.11 source MAC (SA / TA)                                                               |
+| `link.dst.mac.addr`      | string  | 802.11 destination MAC (DA / RA)                                                          |
+| `link.src.mac.vendor`    | string  | OUI vendor lookup for the source MAC                                                       |
+| `link.dst.mac.vendor`    | string  | OUI vendor lookup for the destination MAC                                                  |
+| `wireless.wifi.ssid`     | string  | SSID recovered from Beacon / Probe Req / Probe Resp (`Hidden/N/A` when redacted)           |
+| `wireless.wifi.bssid`    | string  | BSSID (AP MAC) for the frame                                                              |
+| `wireless.wifi.type`     | string  | Dot11 type label: `Management` / `Control` / `Data` / `Extension`                          |
+| `wireless.wifi.subtype`  | string  | Dot11 subtype label (e.g. `Beacon`, `QoS Data`, `Action`)                                 |
+| `wireless.wifi.subtype_num` | integer | Numeric subtype nibble (0-15) of the frame                                              |
+| `wireless.wifi.channel`  | string  | Operating channel as recovered from RadioTap / Dot11                                       |
+| `wireless.wifi.frequency` | string | Operating frequency (`<N> MHz`)                                                            |
+| `wireless.wifi.cipher`   | string  | Detected cipher: `Open`, `WEP`, `TKIP (RC4)`, `CCMP-128 (AES)`, etc.                      |
+| `wireless.wifi.crypto`   | string  | Crypto suite label: `Open`, `WPA`, `WPA2`, `WPA3`                                          |
+| `wireless.wifi.signal_dbm` | string | RadioTap signal strength (e.g. `-58 dBm`)                                                  |
+| `wireless.wifi.noise_dbm` | string  | RadioTap noise floor (e.g. `-95 dBm`)                                                      |
+| `wireless.wifi.rate_mbps` | string  | RadioTap data rate (e.g. `54.0 Mbps`)                                                      |
+| `wireless.wifi.rsn`      | object  | Parsed RSN IE (version, group cipher, pairwise ciphers, AKM suites) when present            |
+| `wireless.wifi.vendor_ies` | list   | Vendor IEs (WPA / Microsoft) when present in the frame                                     |
+| `wifi.decrypt.ok`        | boolean | `true` when the decryptor produced a valid plaintext for this frame                        |
+| `wifi.decrypt.algorithm` | string  | `CCMP`, `TKIP`, `WEP`, or `None`                                                          |
+| `wifi.decrypt.error`     | string  | Optional error message for the failed decrypt path                                         |
 
 ### Notes
 
