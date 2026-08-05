@@ -31,10 +31,11 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 
 - 📂 **Load PCAP files** — Point the backend at a capture, then explore interactively in the desktop app
 - 🔍 **Powerful filtering** — Filter by port, country, entropy, MIME type, and more using dot-notation expressions
+- 🌐 **Full IPv6 support** — Native IPv6 parsing, shared `ip.*` filter keys (with `network.proto` / `ip.proto.num` for family disambiguation), bracketed endpoint display, BigInt-backed subnet math, and IPv6 enrichment for GeoIP, WHOIS, Tor, Shodan, and VirusTotal
 - 🌍 **GeoIP integration** — See source/destination locations with country, city, and timezone
 - 📊 **Payload analysis** — Shannon entropy visualization, MIME type detection, hex dump with ASCII view
 - 🤖 **LLM summaries** — Generate AI-powered analysis reports using Ollama
-- 📑 **Protocol decoding** — DNS, HTTP, SSL/TLS, DHCP, NTP, SIP, and more
+- 📑 **Protocol decoding** — DNS, HTTP, SSL/TLS, DHCP, NTP, SIP, IPv6, ICMPv6, DHCPv6, and more
 - 🧩 **Plugin engine** — Install zip plugins, manage runtime safety thresholds, and extend UI workflows from the built-in Plugins manager
 
 ---
