@@ -806,4 +806,127 @@ describe('summary stats weaving', () => {
             expect(body.toLowerCase()).toContain('no-op');
         });
     });
+
+    describe('aggressive dedupe in summary LLM prompts', () => {
+        // The distillation prompt (export-time dedupe + chronological sort)
+        // and the compaction prompt (every analysis-compaction run) must
+        // each explicitly tell the LLM to collapse duplicate facts so the
+        // analyst never reads the same observation reworded over and over.
+        // These tests pin down that wording so future tweaks can't
+        // silently weaken the dedupe contract.
+        const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+        const sourceText = fs.readFileSync(sourcePath, 'utf8');
+
+        function extractFunctionBody(name, source = sourceText) {
+            const startToken = `function ${name}`;
+            const startIndex = source.indexOf(startToken);
+            if (startIndex === -1) return null;
+            const bodyStart = source.indexOf('{', startIndex);
+            let depth = 0;
+            for (let cursor = bodyStart; cursor < source.length; cursor += 1) {
+                const char = source[cursor];
+                if (char === '{') depth += 1;
+                if (char === '}') {
+                    depth -= 1;
+                    if (depth === 0) {
+                        return source.slice(startIndex, cursor + 1);
+                    }
+                }
+            }
+            return null;
+        }
+
+        test('distill prompt labels dedupe as the most important rule', () => {
+            // The dedupe rule must be promoted to the #1 / most-important
+            // rule in the distillation prompt so the LLM prioritises it
+            // over chronological sort, section highlights, length, etc.
+            const body = extractFunctionBody('buildSummaryDistillPrompt');
+            expect(body).toBeDefined();
+            // The literal "AGGRESSIVE DEDUPE" header must appear in the
+            // prompt so the LLM knows to treat it as a top-level
+            // distillation rule.
+            expect(body).toContain('AGGRESSIVE DEDUPE');
+            // The phrase "most important" must appear in the same rule
+            // (next to AGGRESSIVE DEDUPE) so the LLM sees the priority.
+            const dedupeRuleMatch = body.match(
+                /\d+\.\s+AGGRESSIVE DEDUPE[\s\S]{0,500}?most important/i,
+            );
+            expect(dedupeRuleMatch).not.toBeNull();
+        });
+
+        test('distill prompt forbids reworded restatements of the same fact', () => {
+            // The dedupe rule must explicitly tell the LLM that a
+            // reworded duplicate is still a duplicate and must be
+            // deleted, not kept as a "different wording".
+            const body = extractFunctionBody('buildSummaryDistillPrompt');
+            expect(body).toBeDefined();
+            const lower = body.toLowerCase();
+            // Must mention rewording / rephrasing and forbid it.
+            expect(lower).toContain('reword');
+            // Must instruct the LLM to drop the redundant restatement.
+            expect(lower).toMatch(/drop the (rest|redundant|restatement)/);
+            // Must forbid keeping both copies of a duplicated fact.
+            expect(lower).toContain('keep it once');
+        });
+
+        test('distill prompt resolves Capture Statistics vs LLM-blurb overlap', () => {
+            // When the same fact is summarised at a high level in the
+            // Capture Statistics section AND described in an LLM blurb,
+            // the prompt must tell the LLM which copy to drop.
+            const body = extractFunctionBody('buildSummaryDistillPrompt');
+            expect(body).toBeDefined();
+            const lower = body.toLowerCase();
+            // Must mention the Capture Statistics section by name.
+            expect(lower).toContain('capture statistics');
+            // Must tell the LLM the per-stream / blurb version is the
+            // more detailed one to keep.
+            expect(lower).toContain('more detailed');
+            // Must tell the LLM the Capture Statistics section should
+            // only carry facts that don't appear elsewhere.
+            expect(lower).toMatch(
+                /capture statistics[\s\S]{0,500}?do not appear elsewhere/,
+            );
+        });
+
+        test('compaction prompt carries an explicit DEDUPLICATE rule', () => {
+            // Every compaction run must remind the LLM to dedupe
+            // (a) within the previously compacted summary and
+            // (b) across the new blurbs, so repeated facts don't
+            // accumulate as more blurbs are folded in.
+            const body = extractFunctionBody('runAnalysisCompaction');
+            expect(body).toBeDefined();
+            const lower = body.toLowerCase();
+            // The literal "DEDUPLICATE" rule label must be present.
+            expect(lower).toContain('deduplicate');
+            // Must explicitly cover both the previously compacted
+            // summary and the new blurbs.
+            expect(lower).toMatch(
+                /deduplicate[\s\S]{0,500}?(previously compacted|new blurbs)/,
+            );
+            // Must forbid the LLM from rewording a fact that is
+            // already present in the running summary.
+            expect(lower).toContain('reword');
+        });
+
+        test('per-stream LLM prompt (writeSummaryFromLLM) carries a DEDUPLICATE rule', () => {
+            // The first blub-generation prompt must also tell the LLM
+            // not to reword the same fact twice within a single blurb
+            // (so the blurbs that feed compaction are already deduped
+            // before they ever reach runAnalysisCompaction).
+            const body = extractFunctionBody('writeSummaryFromLLM');
+            expect(body).toBeDefined();
+            const lower = body.toLowerCase();
+            expect(lower).toContain('deduplicate');
+            expect(lower).toContain('reword');
+            // The prompt's "have already described" clause must also
+            // forbid rephrasing a fact the LLM already described in
+            // a previous turn.
+            expect(lower).toMatch(
+                /have already described[\s\S]{0,300}?do not reword/,
+            );
+            // The closing sentence must explicitly forbid rephrasing a
+            // fact that is already in the running summary.
+            expect(lower).toContain('never rephrase');
+        });
+    });
 });
