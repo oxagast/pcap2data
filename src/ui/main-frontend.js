@@ -19444,7 +19444,7 @@ function writeSummaryFromLLM() {
     const captureOverviewBlock = captureOverviewParts.length
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.  When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -19574,6 +19574,7 @@ async function runAnalysisCompaction() {
 
   const combinedInput = `${captureOverview}${previousCompactedBlock}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
 - Treats the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into the output so the compacted summary covers both the LLM blurbs AND the capture-level picture.
+- DEDUPLICATE — both within the previously compacted summary and across the new blurbs. The same fact, IP, port, credential, hostname, file name, URL, hash, protocol, or finding must not appear more than once in reworded form. If the previous compacted summary already mentions an IP that a new blurb describes, keep the more detailed / more concrete version and drop the restatement. If two new blurbs describe the same observation in different words, merge them into a single canonical sentence. A reader should never feel that the same thing is being reworded over and over.
 - Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
 - Preserves the chronological order of significant events where it matters.
 - Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
@@ -20166,15 +20167,17 @@ const SUMMARY_DISTILL_OUTPUT_MAX_CHARS = 60000;
 
 // Builds the prompt that asks the LLM to distil the final exported report.
 // The LLM is told to:
-//   1. Minimise repeated/redundant information across all sections.
-//   2. Sort the entire report chronologically, anchoring each entry by the
+//   1. Aggressively deduplicate so the same fact / observation / phrase
+//      never appears more than once in reworded form across the report.
+//   2. Minimise repeated/redundant information across all sections.
+//   3. Sort the entire report chronologically, anchoring each entry by the
 //      earliest signal in the source data (protocol timestamp, packet index,
 //      or session order).
-//   3. Inside every main section, list the most security-relevant items
+//   4. Inside every main section, list the most security-relevant items
 //      first so the analyst can see what stands out at a glance.
-//   4. Keep the capture-level Stats section intact (it's the high-level
+//   5. Keep the capture-level Stats section intact (it's the high-level
 //      picture) but trim the LLM blurbs so they don't repeat it.
-//   5. Return valid Markdown so downstream text/HTML export still works.
+//   6. Return valid Markdown so downstream text/HTML export still works.
 function buildSummaryDistillPrompt(reportMarkdown) {
   return [
     "You are PacketSnitch, a network forensics assistant.",
@@ -20183,12 +20186,17 @@ function buildSummaryDistillPrompt(reportMarkdown) {
     "It is critical that you do not invent any facts — only reorganise and condense what is already present in the source report.",
     "",
     "Distillation rules — apply ALL of them:",
-    "1. DEDUPLICATE: if the same fact, IP, port, credential, or finding appears more than once across any section, keep it ONCE in the most appropriate section. The Capture Statistics section often restates things the LLM blurbs also mention — make sure those facts live in only one place.",
+    "1. AGGRESSIVE DEDUPE — the most important rule. The source report was assembled by stitching together LLM blurbs, Stats panel rows, keystore summaries, and a per-stream LLM summary. Those inputs frequently restate the same fact in slightly different words. You MUST collapse every duplicate into a single canonical statement. Concretely:",
+    "   - If the same fact, IP, port, credential, hostname, file name, URL, hash, protocol, or finding appears more than once in any section OR across sections, keep it ONCE in the most appropriate section. Delete the rest of the copies entirely — do not just rephrase them.",
+    "   - If two paragraphs say essentially the same thing in different words, merge them into one paragraph that captures the union of facts and drop the redundant wording.",
+    "   - If a finding is summarised at a high level in the Capture Statistics section AND described again in an LLM blurb, keep the more detailed version in the LLM-blurb / per-stream section and remove the high-level restatement from the Capture Statistics section. The Capture Statistics section must contain only facts that do not appear elsewhere in the report.",
+    "   - If a credential, IP, port, or hostname is mentioned in the Keychain Overview AND in an LLM blurb, keep the first concrete mention and drop the restatement.",
+    "   - Do NOT keep a sentence that simply rewords another sentence already in the report, even if the wording is technically different. A reader should never feel that the same observation is being repeated.",
     "2. CHRONOLOGICAL ORDER: re-sort the ENTIRE report in chronological order, using timestamps from the source data, packet indices, or session order as the anchor. When an event has no explicit timestamp, fall back to its position in the source. The Capture Statistics section stays at the top as the high-level overview, but everything below it should be in chronological order.",
     "3. SECTION HIGHLIGHTS: inside every main section, list the items that stand out as most important (security-relevant, anomalous, credential-bearing, or otherwise noteworthy) FIRST. Lesser findings follow.",
-    "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, masked credential values, etc.). Drop only redundant or low-value observations.",
+    "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, masked credential values, etc.). Drop only redundant or low-value observations, and especially drop restatements of facts that already appear elsewhere in the report.",
     "5. STRUCTURE: keep valid Markdown headings, lists, and tables. Do not switch to HTML. Do not wrap the entire response in a single code fence. Do not print the report's top-level heading ('PacketSnitch's Summary') more than once — it is added automatically when the analyst reads the consolidated report, so any h1 in the source should be promoted to h2 or omitted.",
-    "6. LENGTH: aim for a more compact report than the input. If the source is already concise, return it largely unchanged.",
+    "6. LENGTH: aim for a noticeably more compact report than the input. The aggressive dedupe in rule 1 should produce a shorter output, not a longer one. If the source is already fully deduplicated, return it largely unchanged.",
     "7. SQUELCH NO-OP DATA: do not report decoders, parsers, extractors, lookups, or conversions that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the distilled report instead of mentioning its absence. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip/threat-intel lookups. Only describe activity that actually surfaced real content. Silence is preferable to a paragraph that just says 'nothing was found'.",
     "",
     "Here is the source report to distil:",
