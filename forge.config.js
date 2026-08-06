@@ -141,6 +141,12 @@ module.exports = {
       process.platform === "win32"
         ? "src/backend/snitch.exe"
         : "src/backend/snitch",
+      // The CAB + 7z archive helper is also a PyInstaller onefile bundle
+      // placed directly in src/backend/ alongside ``snitch``. The Node
+      // main process picks the right binary for ``process.platform``.
+      process.platform === "win32"
+        ? "src/backend/snitch-extract.exe"
+        : "src/backend/snitch-extract",
       "src/backend/common/",
       "src/data/new_session.json",
       "src/data/goodies.txt",

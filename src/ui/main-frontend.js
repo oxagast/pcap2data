@@ -13597,6 +13597,23 @@ function inferExtractionFormatName(bytes) {
   if (b.length >= 3 && b[0] === 0x4c && b[1] === 0x5a && b[2] === 0x4f) return "lzo";
   if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "zip";
   if (b.length >= 4 && (b[0] === 0x28 || b[0] === 0x29) && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd) return "brotli";
+  // Microsoft Cabinet signature "MSCF" (0x4D 0x53 0x43 0x46) at offset 0.
+  if (b.length >= 4
+    && b[0] === 0x4d && b[1] === 0x53 && b[2] === 0x43 && b[3] === 0x46) {
+    return "cab";
+  }
+  // 7-Zip signature "7z¼¯'\x1c" (37 7A BC AF 27 1C) at offset 0.
+  if (b.length >= 6
+    && b[0] === 0x37 && b[1] === 0x7a && b[2] === 0xbc && b[3] === 0xaf
+    && b[4] === 0x27 && b[5] === 0x1c) {
+    return "7z";
+  }
+  // Plain tar magic at offset 257: POSIX ustar header "ustar\0" or GNU "ustar  ".
+  if (b.length >= 263
+    && b[257] === 0x75 && b[258] === 0x73 && b[259] === 0x74 && b[260] === 0x61 && b[261] === 0x72
+    && (b[262] === 0x00 || (b[262] === 0x20 && b[263] === 0x20))) {
+    return "tar";
+  }
   return null;
 }
 
@@ -13673,8 +13690,13 @@ function refreshExtractionPanelForCurrentConvInput() {
   extractionPanelCurrentFormat = fmt;
 
   els.detectValue.textContent = fmt ? fmt.toUpperCase() : "None / unknown";
-  els.decompressBtn.disabled = !fmt || fmt === "zip";
-  els.listArchiveBtn.disabled = fmt !== "zip";
+  // ``decompress`` only applies to single-stream compressors; ZIP, tar, CAB,
+  // and 7z archives are listed instead (they can also contain entries that
+  // are themselves compressed, but the operation we expose is "list entries").
+  els.decompressBtn.disabled =
+    !fmt || fmt === "zip" || fmt === "tar" || fmt === "cab" || fmt === "7z";
+  els.listArchiveBtn.disabled =
+    fmt !== "zip" && fmt !== "tar" && fmt !== "cab" && fmt !== "7z";
   if (els.tree) els.tree.innerHTML = "";
   if (els.preview) els.preview.hidden = true;
   if (els.output) els.output.hidden = true;
@@ -13692,7 +13714,7 @@ function setExtractionOutputText(bytes) {
 
 async function handleExtractionDecompress() {
   const fmt = extractionPanelCurrentFormat;
-  if (!fmt || fmt === "zip") return;
+  if (!fmt || fmt === "zip" || fmt === "tar" || fmt === "cab" || fmt === "7z") return;
   if (!window.extractapi || typeof window.extractapi.decompress !== "function") {
     setExtractionError("Extraction API is unavailable.");
     return;
@@ -13726,7 +13748,8 @@ async function handleExtractionDecompress() {
 }
 
 async function handleExtractionListArchive() {
-  if (extractionPanelCurrentFormat !== "zip") return;
+  const fmt = extractionPanelCurrentFormat;
+  if (fmt !== "zip" && fmt !== "tar" && fmt !== "cab" && fmt !== "7z") return;
   if (!window.extractapi || typeof window.extractapi.listArchive !== "function") {
     setExtractionError("Extraction API is unavailable.");
     return;
@@ -21170,12 +21193,12 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
   // Session Threat Score so the Threat Intel panel surfaces them.
   collectStatsAnomalies: typeof collectStatsAnomalies === "function"
     ? (packets) => {
-        try {
-          return collectStatsAnomalies(packets) || {};
-        } catch (_error) {
-          return {};
-        }
+      try {
+        return collectStatsAnomalies(packets) || {};
+      } catch (_error) {
+        return {};
       }
+    }
     : null,
 });
 
@@ -21812,15 +21835,6 @@ document
 document
   .getElementById("crypt-wifi-send-backend-btn")
   .addEventListener("click", () => cryptPanel.sendWifiKeysToBackend());
-document
-  .getElementById("crypt-wifi-decrypt-btn")
-  .addEventListener("click", () => cryptPanel.decryptSelectedWifiEntry());
-document
-  .getElementById("crypt-wifi-send-conv-btn")
-  .addEventListener("click", () => cryptPanel.sendWifiDecryptedPayloadToConv());
-document
-  .getElementById("crypt-wifi-clear-btn")
-  .addEventListener("click", () => cryptPanel.clearWifiDecryptionOutput());
 document
   .getElementById("crypt-wifi-filter-apply-btn")
   .addEventListener("click", () => cryptPanel.applyWifiFilterFromInputs());
@@ -24591,7 +24605,7 @@ function triggerWifiKeysRerun(options = {}) {
   // keychain when no explicit payload was supplied.
   const wifiKeys =
     explicitKeys
-    && explicitKeys.length > 0
+      && explicitKeys.length > 0
       ? explicitKeys
       : typeof cryptPanel?.collectBackendWifiKeys === "function"
         ? cryptPanel.collectBackendWifiKeys()

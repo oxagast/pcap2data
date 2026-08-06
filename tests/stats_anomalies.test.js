@@ -65,15 +65,15 @@ function makePacket({
     ...(isUdp
       ? { UDP: { "udp.srcport": srcPort, "udp.dstport": dstPort } }
       : {
-          TCP: {
-            "tcp.src.port": srcPort,
-            "tcp.dst.port": dstPort,
-            ...(flags ? { "tcp.flags": flags } : {}),
-            ...(decodedSection && typeof decodedSection === "object"
-              ? { [decodedSection.name]: decodedSection.payload || {} }
-              : {}),
-          },
-        }),
+        TCP: {
+          "tcp.src.port": srcPort,
+          "tcp.dst.port": dstPort,
+          ...(flags ? { "tcp.flags": flags } : {}),
+          ...(decodedSection && typeof decodedSection === "object"
+            ? { [decodedSection.name]: decodedSection.payload || {} }
+            : {}),
+        },
+      }),
   };
   if (Number.isFinite(length)) pi["packet.len"] = length;
   // Accept numeric or string timestamps — the Python backend writes
@@ -634,5 +634,114 @@ describe("stats anomalies subtab detectors", () => {
     const aggregated = panel.collectStatsAnomalies(undefined);
     expect(aggregated.totalCount).toBe(0);
     expect(aggregated.protocolAnomalies).toEqual([]);
+  });
+});
+
+describe("buildCaptureStats — encrypted packet classification for 802.11", () => {
+  let panel;
+  beforeAll(() => {
+    // buildCaptureStats internally calls getUniqueCredentialList(),
+    // which reads from `window.keystoreCreds`. Provide a minimal shim
+    // so the call site doesn't blow up in the node test environment.
+    if (typeof globalThis.window === "undefined") {
+      globalThis.window = { keystoreCreds: new Set() };
+    } else if (!globalThis.window.keystoreCreds) {
+      globalThis.window.keystoreCreds = new Set();
+    }
+    panel = freshRequireStatsPanel();
+  });
+
+  function makeWifiPacket({
+    packetProto = "WIFI",
+    linkProto = "IEEE 802.11",
+    crypto = null,
+    cipher = null,
+    fcProtected = true,
+  } = {}) {
+    const wireless = {};
+    if (crypto !== null) wireless["wifi.crypto"] = crypto;
+    if (cipher !== null) wireless["wifi.cipher"] = cipher;
+    if (fcProtected) wireless["wifi.fc.protected"] = true;
+    return {
+      "packet.info": {
+        "packet.proto": packetProto,
+        "link.proto": linkProto,
+        "packet.len": 100,
+        "packet.timestamp": 1_700_000_000,
+        IP: { "ip.src.addr": "10.0.0.1", "ip.dst.addr": "10.0.0.2" },
+        Wireless: wireless,
+      },
+    };
+  }
+
+  test("buildCaptureStats returns the encrypted/unencrypted counters", () => {
+    const stats = panel.buildCaptureStats(
+      wrapPackets([makeWifiPacket({ crypto: "WPA2" })]),
+    );
+    expect(stats.encryptedCount).toBe(1);
+    expect(stats.unencryptedCount).toBe(0);
+  });
+
+  test.each([
+    ["WPA"],
+    ["WPA2"],
+    ["WPA3"],
+    ["WEP"],
+  ])("counts %s frames as encrypted in the Conv summary", (crypto) => {
+    const stats = panel.buildCaptureStats(
+      wrapPackets([
+        makeWifiPacket({ crypto }),
+        makeWifiPacket({ crypto }),
+        makeWifiPacket({ crypto }),
+      ]),
+    );
+    expect(stats.encryptedCount).toBe(3);
+    expect(stats.unencryptedCount).toBe(0);
+  });
+
+  test("Open (or unknown-crypto) 802.11 frames count as unencrypted", () => {
+    const stats = panel.buildCaptureStats(
+      wrapPackets([
+        makeWifiPacket({ crypto: "Open" }),
+        makeWifiPacket({}), // no wifi.crypto at all -> unencrypted
+      ]),
+    );
+    expect(stats.encryptedCount).toBe(0);
+    expect(stats.unencryptedCount).toBe(2);
+  });
+
+  test("mixed open + encrypted wifi frames split between the two counters", () => {
+    const stats = panel.buildCaptureStats(
+      wrapPackets([
+        makeWifiPacket({ crypto: "WPA2" }),
+        makeWifiPacket({ crypto: "WPA2" }),
+        makeWifiPacket({ crypto: "WEP" }),
+        makeWifiPacket({ crypto: "Open" }),
+        makeWifiPacket({}), // unknown
+      ]),
+    );
+    expect(stats.encryptedCount).toBe(3);
+    expect(stats.unencryptedCount).toBe(2);
+  });
+
+  test("falls back to the legacy 'Crypto' key when 'wifi.crypto' is missing", () => {
+    // Older captures (and the new decoder's fallback paths) may emit
+    // the human-readable "Crypto" key instead of the dotted form.
+    const stats = panel.buildCaptureStats(
+      wrapPackets([
+        {
+          "packet.info": {
+            "packet.proto": "WIFI",
+            "link.proto": "IEEE 802.11",
+            "packet.len": 100,
+            "packet.timestamp": 1_700_000_000,
+            IP: { "ip.src.addr": "10.0.0.1", "ip.dst.addr": "10.0.0.2" },
+            Wireless: { Crypto: "WPA" },
+          },
+        },
+      ]),
+    );
+    expect(stats.encryptedCount).toBe(1);
+    expect(stats.unencryptedCount).toBe(0);
   });
 });
