@@ -22,6 +22,7 @@ const convertContextMenuMarkup = `
       <button id="convert-context-derive-guess" type="button">Derive Type</button>
       <button id="convert-context-load-cursor-ascii" type="button">Cursor ASCII to Conv tab</button>
       <button id="convert-context-load-payload" type="button">Raw Payload to Conv tab</button>
+      <button id="convert-context-load-packet" type="button">Raw Packet into Conv tab</button>
       <button id="convert-context-decompress-conv" type="button">Decompress to Conv tab</button>
       <button id="convert-context-load-file" type="button">Import File</button>
     </div>

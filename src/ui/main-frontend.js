@@ -14366,6 +14366,7 @@ const convertContextButtons = {
   loadFile: getCachedElement("convert-context-load-file"),
   loadCursorAscii: getCachedElement("convert-context-load-cursor-ascii"),
   loadPayload: getCachedElement("convert-context-load-payload"),
+  loadPacket: getCachedElement("convert-context-load-packet"),
   decompressConv: getCachedElement("convert-context-decompress-conv"),
   copyHex: getCachedElement("convert-context-copy-hex"),
   copyAscii: getCachedElement("convert-context-copy-ascii"),
@@ -15225,6 +15226,9 @@ function showConvertContextMenu(
   const currentPayloadHex = getCurrentRawPayloadHex();
   const hasPayloadToExport =
     !isSummaryTabContext && Boolean(currentPayloadHex);
+  const hasPacketToLoad = !isSummaryTabContext && Boolean(getCurrentContextPacket());
+  const currentRawPacketHex = hasPacketToLoad ? getCurrentRawPacketHex() : "";
+  const hasRawPacketToLoad = Boolean(currentRawPacketHex);
   const isConvTabActive = activeMainTab === MAIN_TAB_DATA_TOOLS;
   const hasConvInputToExport =
     isConvTabActive && Boolean(getConvContextExportText("input"));
@@ -15394,6 +15398,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.loadPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
+  convertContextButtons.loadPacket.style.display = hasRawPacketToLoad
     ? "block"
     : "none";
   convertContextButtons.loadFile.style.display = "block";
@@ -15848,6 +15855,32 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   showDataTools();
   runDataToolsConversion();
   writeLogEntry("Context conversion loaded raw payload into Conv tab");
+}
+
+// Loads the entire raw packet (full frame) into Conv as hex data.
+function loadRawPacketIntoDataToolsFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
+  const packetHex = getCurrentRawPacketHex(contextPacket);
+  hideConvertContextMenu();
+  if (!packetHex) {
+    statusUpdate("Status: No raw packet available to load");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const packetBytes = hexStringToUint8Array(packetHex);
+  dataToolsContextPacket = contextPacket;
+  dataToolsOriginalInputBytes = packetBytes;
+  dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
+  dataToolsLastConversionBytes = packetBytes;
+  inputEl.value = formatHexInputBytesWithCap(packetBytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess("");
+  markDataToolsInputCommitted();
+  showDataTools();
+  runDataToolsConversion();
+  writeLogEntry("Context conversion loaded raw packet into Conv tab");
 }
 
 async function loadActiveConvInputDecompressedFromContextMenu() {
@@ -19661,6 +19694,25 @@ function getCurrentRawPayloadHex(packet = null) {
   return typeof payloadHex === "string" ? payloadHex : "";
 }
 
+// Returns current raw packet (full frame) hex.
+function getCurrentRawPacketHex(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  const rawData = contextPacket?.["packet.info"]?.["Raw data"];
+  if (!rawData || typeof rawData !== "object") return "";
+  const candidates = [
+    rawData["Packet"],
+    rawData["packet.hex"],
+    rawData["Frame"],
+    rawData["frame.hex"],
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
 // Returns current http data.
 function getCurrentHttpData(packet = null) {
   const contextPacket = packet || getCurrentContextPacket();
@@ -22436,6 +22488,9 @@ convertContextButtons.loadFile.addEventListener("click", () => {
 });
 convertContextButtons.loadPayload.addEventListener("click", () => {
   loadRawPayloadIntoDataToolsFromContextMenu();
+});
+convertContextButtons.loadPacket.addEventListener("click", () => {
+  loadRawPacketIntoDataToolsFromContextMenu();
 });
 convertContextButtons.decompressConv.addEventListener("click", () => {
   loadActiveConvInputDecompressedFromContextMenu();

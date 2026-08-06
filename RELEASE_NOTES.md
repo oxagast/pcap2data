@@ -803,6 +803,7 @@
 - Cookie jar context menu branch
 - Add to Keystore context menu for highlighted text
 - Context-menu action to load raw payload into Conv tab
+- Context-menu action to load the full raw packet (entire frame) into Conv tab
 - Multi-level submenu viewport positioning via ancestor panel revelation
 - Extract cookies and generic POST body credentials into session keystore
 - Auto-detect credentials in HTTP, SMTP, POP3, IMAP, Telnet and add to session keystore

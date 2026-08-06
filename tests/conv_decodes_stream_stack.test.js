@@ -291,6 +291,7 @@ describe("Conv file-load entry points clear stream state", () => {
         "loadExtractionResultIntoHashesSubtab",
         "loadCarvedFileCandidateIntoConvTab",
         "loadRawPayloadIntoDataToolsFromContextMenu",
+        "loadRawPacketIntoDataToolsFromContextMenu",
         "loadActiveConvInputDecompressedFromContextMenu",
         "loadHttpBodyIntoConvTabFromContextMenuImpl",
         "loadManualFileIntoConvTabFromContextMenu",
