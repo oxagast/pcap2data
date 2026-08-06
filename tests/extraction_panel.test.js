@@ -222,6 +222,49 @@ describe('Conv Extraction helpers', () => {
         expect(ctx.inferExtractionFormatName(brotli)).toBe('brotli');
     });
 
+    test('detects CAB magic "MSCF"', () => {
+        const cab = new Uint8Array([0x4d, 0x53, 0x43, 0x46, 0x00, 0x00, 0x00, 0x00]);
+        expect(ctx.inferExtractionFormatName(cab)).toBe('cab');
+    });
+
+    test('detects 7z magic "7z¼¯\'\\x1c"', () => {
+        const sevenZip = new Uint8Array([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]);
+        expect(ctx.inferExtractionFormatName(sevenZip)).toBe('7z');
+    });
+
+    test('detects tar magic at offset 257 (POSIX ustar\\0)', () => {
+        const tarBytes = new Uint8Array(512);
+        tarBytes[257] = 0x75;
+        tarBytes[258] = 0x73;
+        tarBytes[259] = 0x74;
+        tarBytes[260] = 0x61;
+        tarBytes[261] = 0x72;
+        tarBytes[262] = 0x00;
+        expect(ctx.inferExtractionFormatName(tarBytes)).toBe('tar');
+    });
+
+    test('detects tar magic at offset 257 (GNU ustar<space><space>)', () => {
+        const tarBytes = new Uint8Array(512);
+        tarBytes[257] = 0x75;
+        tarBytes[258] = 0x73;
+        tarBytes[259] = 0x74;
+        tarBytes[260] = 0x61;
+        tarBytes[261] = 0x72;
+        tarBytes[262] = 0x20;
+        tarBytes[263] = 0x20;
+        expect(ctx.inferExtractionFormatName(tarBytes)).toBe('tar');
+    });
+
+    test('does not detect tar in short buffer below 263 bytes', () => {
+        const tooShort = new Uint8Array(260);
+        tooShort[257] = 0x75;
+        tooShort[258] = 0x73;
+        tooShort[259] = 0x74;
+        tooShort[260] = 0x61;
+        tooShort[261] = 0x72;
+        expect(ctx.inferExtractionFormatName(tooShort)).toBeNull();
+    });
+
     test('returns null for random bytes', () => {
         const random = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
         expect(ctx.inferExtractionFormatName(random)).toBeNull();

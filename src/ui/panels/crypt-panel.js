@@ -164,7 +164,6 @@ function createCryptPanel({
   let wifiAllEncounteredEntries = [];
   let wifiActiveEntryIndex = -1;
   let wifiKeystoreKeys = [];
-  let wifiLastDecryptedPayload = null;
   let wifiBackendKeysAccepted = 0;
   let wifiBackendKeysLastSentAt = null;
   // Snapshot of the keys last handed to setBackendWifiKeys. We keep this
@@ -2913,7 +2912,6 @@ function createCryptPanel({
       option.disabled = true;
       listEl.appendChild(option);
       renderWifiEncounteredDetails(null);
-      clearWifiDecryptionOutput();
       updateWifiFilterStatus();
       return;
     }
@@ -2937,7 +2935,6 @@ function createCryptPanel({
     listEl.selectedIndex = 0;
     wifiActiveEntryIndex = 0;
     renderWifiEncounteredDetails(wifiEncounteredEntries[0]);
-    clearWifiDecryptionOutput();
     updateWifiFilterStatus();
   }
 
@@ -3027,7 +3024,6 @@ function createCryptPanel({
     }
     wifiActiveEntryIndex = index;
     renderWifiEncounteredDetails(wifiEncounteredEntries[index]);
-    clearWifiDecryptionOutput();
   }
 
   function loadSelectedWifiEntry() {
@@ -3299,83 +3295,6 @@ function createCryptPanel({
     } catch (err) {
       doError(`Failed to send Wi-Fi keys to backend: ${err.message || err}`);
     }
-  }
-
-  function decryptSelectedWifiEntry() {
-    const entry = wifiEncounteredEntries[wifiActiveEntryIndex];
-    if (!entry) {
-      statusUpdate("Status: Select an 802.11 frame first");
-      return;
-    }
-    const packetInfo = getPacketInfo(entry.packet);
-    const wifi = getWifiSection(packetInfo) || {};
-    const preview = document.getElementById("crypt-wifi-decrypt-preview");
-    const sendBtnEl = document.getElementById("crypt-wifi-send-conv-btn");
-    if (wifi["wifi.decrypt.ok"] === true) {
-      const plaintextHex = String(wifi["wifi.decrypt.payload"] || "");
-      const algo = wifi["wifi.decrypt.algorithm"] || "unknown";
-      wifiLastDecryptedPayload = {
-        sourceLabel: `packet #${entry.packetIndex}`,
-        hexValue: plaintextHex,
-        asciiSummary: hexToAsciiPreview(plaintextHex),
-        algorithm: algo,
-      };
-      if (preview) {
-        preview.textContent = [
-          `Decryption result for packet #${entry.packetIndex}`,
-          `Algorithm: ${algo}`,
-          `Bytes: ${plaintextHex.length / 2}`,
-          "",
-          "ASCII / UTF-8 preview:",
-          hexToAsciiPreview(plaintextHex) || "(no printable output)",
-          "",
-          "Hex:",
-          plaintextHex || "(empty)",
-        ].join("\n");
-      }
-      if (sendBtnEl) sendBtnEl.disabled = false;
-      statusUpdate(`Status: Decrypted 802.11 frame #${entry.packetIndex} (${algo})`);
-      return;
-    }
-
-    if (preview) {
-      preview.textContent = [
-        `No backend decrypt available for packet #${entry.packetIndex}.`,
-        `Algorithm: ${wifi["wifi.cipher"] || "Unknown"}`,
-        `SSID: ${entry.ssid || "(none)"}`,
-        `BSSID: ${entry.bssid || "N/A"}`,
-        "",
-        "Send matching Wi-Fi keys from the keystore (button above) and re-run the capture.",
-      ].join("\n");
-    }
-    if (sendBtnEl) sendBtnEl.disabled = true;
-    statusUpdate("Status: Wi-Fi frame has no decrypt yet; send keystore keys and re-run capture");
-  }
-
-  function clearWifiDecryptionOutput() {
-    const preview = document.getElementById("crypt-wifi-decrypt-preview");
-    if (preview) {
-      preview.textContent = "No 802.11 decryption attempted yet.";
-    }
-    const sendBtnEl = document.getElementById("crypt-wifi-send-conv-btn");
-    if (sendBtnEl) sendBtnEl.disabled = true;
-    wifiLastDecryptedPayload = null;
-  }
-
-  function sendWifiDecryptedPayloadToConv() {
-    if (!wifiLastDecryptedPayload || !wifiLastDecryptedPayload.hexValue) {
-      statusUpdate("Status: Decrypt a Wi-Fi frame first");
-      return;
-    }
-    if (typeof sendDecryptedToConv !== "function") {
-      doError("Send-to-conv helper is not available in this build.");
-      return;
-    }
-    sendDecryptedToConv({
-      hexValue: wifiLastDecryptedPayload.hexValue,
-      utf8Value: wifiLastDecryptedPayload.asciiSummary || "",
-    });
-    statusUpdate(`Status: Sent ${wifiLastDecryptedPayload.sourceLabel} to Conv`);
   }
 
   function hexToAsciiPreview(hexString) {
@@ -3805,9 +3724,6 @@ function createCryptPanel({
     sendWifiKeysToBackend,
     getLastSentWifiKeys: () =>
       Array.isArray(wifiBackendKeysLastSent) ? wifiBackendKeysLastSent.slice() : [],
-    decryptSelectedWifiEntry,
-    sendWifiDecryptedPayloadToConv,
-    clearWifiDecryptionOutput,
     classifyWifiEntryDecryptability,
     describeWifiClass,
   };

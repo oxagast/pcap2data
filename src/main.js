@@ -14,7 +14,7 @@ const { pathToFileURL } = require("url");
 const { exec, execFile } = require("child_process");
 const os = require("os");
 const util = require("util");
-const { pipeline } = require("stream");
+const { pipeline, Readable } = require("stream");
 const { gzip, gunzip, brotliDecompress } = require("zlib");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const { Agent, fetch: undiciFetch } = require("undici");
@@ -57,7 +57,38 @@ try {
 } catch (error) {
   console.warn("unzipper is unavailable, plugin zip install will be disabled", error);
 }
+// ``tar`` (https://www.npmjs.com/package/tar) is used to list and
+// extract entries from plain tarballs streamed through the Conv tab's
+// Extract subtab. It transparently decompresses gzip/bzip2/xz wrappers
+// when the bytes are piped through ``tar.Parse`` (handled inside the
+// lib via minizlib), so we never need to call the gzip system tool
+// before listing or extracting a ``.tar.gz`` archive. Pulled in via a
+// guarded ``require`` so an installation that lacks the optional
+// dependency still loads: listing just won't be offered to the
+// renderer and an explicit error surfaces from the IPC handler.
+let tar = null;
+try {
+  tar = require("tar");
+} catch (error) {
+  console.warn(
+    "tar is unavailable, tar archive listing/extraction will be disabled",
+    error,
+  );
+}
 const platform = os.platform();
+// ``snitch_extract`` is a PyInstaller-bundled Python helper that adds
+// archive formats the Node side cannot decode on its own. Today it
+// covers Microsoft Cabinet (.cab) via ``cabarchive`` and 7-Zip (.7z)
+// via ``py7zr``. The binary ships inside the Electron ``extraResource``
+// tree next to ``snitch`` itself; in dev mode we look for the raw
+// script under ``src/backend`` and run it through ``python3``.
+//
+// Resolved lazily — first call walks the candidate list once and
+// caches the absolute path so we don't pay an ``fs.existsSync`` cost
+// per archive entry on big captures.
+let cachedSnitchExtractPath = null;
+const SNITCH_EXTRACT_BINARY_NAME =
+  platform === "win32" ? "snitch-extract.exe" : "snitch-extract";
 const PACKETSNITCH_DEEPLINK_SCHEME = "packetsnitch";
 const PACKETSNITCH_DEEPLINK_HOSTS = Object.freeze({
   CHECKOUT_SUCCESS: "checkout-success",
@@ -1777,7 +1808,207 @@ function inferExtractionFormatFromBytes(bytes) {
   if (b.length >= 3 && b[0] === 0x4c && b[1] === 0x5a && b[2] === 0x4f) return "lzo";
   if (b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return "zip";
   if (b.length >= 4 && (b[0] === 0x28 || b[0] === 0x29) && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd) return "brotli";
+  // Microsoft Cabinet file (CAB). The signature is the ASCII bytes
+  // ``"MSCF"`` (0x4D 0x53 0x43 0x46) at offset 0. CAB has no compression
+  // envelope of its own — the inner stream is either DEFLATE or one of
+  // the legacy ``MSZIP``/``LZX`` variants — but the magic is reliable
+  // for every variant we've ever seen in the wild.
+  if (
+    b.length >= 4
+    && b[0] === 0x4d
+    && b[1] === 0x53
+    && b[2] === 0x43
+    && b[3] === 0x46
+  ) {
+    return "cab";
+  }
+  // 7-Zip archive. The signature is six bytes ``37 7A BC AF 27 1C``
+  // (the printable part renders as ``"7z¼¯'\x1c"``). Unlike tar, 7z
+  // bundles arbitrary codec chains (LZMA/LZMA2 + BCJ filters etc.) so
+  // we cannot decode it in pure JS — the bundled Python backend
+  // ``snitch_extract`` (py7zr) handles listing and entry extraction.
+  if (
+    b.length >= 6
+    && b[0] === 0x37
+    && b[1] === 0x7a
+    && b[2] === 0xbc
+    && b[3] === 0xaf
+    && b[4] === 0x27
+    && b[5] === 0x1c
+  ) {
+    return "7z";
+  }
+  // Plain POSIX/GNU tar header detection: a tar file is a sequence of
+  // 512-byte blocks; the first header carries the ``ustar`` signature
+  // at byte offset 257 — exactly ``"ustar\0"`` for POSIX tar (USTAR
+  // version 0) and ``"ustar  "`` (two trailing spaces) for old GNU
+  // tar. We only check the first header, which is enough to distinguish
+  // tar from arbitrary binary blobs while still requiring a meaningful
+  // minimum input size (>= 263 bytes for the POSIX variant).
+  if (
+    b.length >= 263
+    && b[257] === 0x75
+    && b[258] === 0x73
+    && b[259] === 0x74
+    && b[260] === 0x61
+    && b[261] === 0x72
+    && (
+      b[262] === 0x00
+      || (b[262] === 0x20 && b.length >= 264 && b[263] === 0x20)
+    )
+  ) {
+    return "tar";
+  }
   return null;
+}
+
+// Resolve the path to the bundled ``snitch_extract`` helper. Returns
+// ``null`` if the binary (or the dev-mode ``snitch_extract.py``) is not
+// present, which lets callers surface a clean "format X is not
+// supported in this build" error to the renderer. Cached after the
+// first lookup; this is safe because the install layout is fixed for
+// the life of the process.
+function resolveSnitchExtractPath() {
+  if (cachedSnitchExtractPath !== null) {
+    return cachedSnitchExtractPath || null;
+  }
+  const isDev = !app.isPackaged;
+  const basePath = isDev
+    ? path.join(__dirname, "../../src/backend/")
+    : process.resourcesPath;
+  const candidates = [
+    path.join(basePath, SNITCH_EXTRACT_BINARY_NAME),
+    path.join(basePath, "snitch_extract", SNITCH_EXTRACT_BINARY_NAME),
+  ];
+  if (isDev) {
+    // In dev we prefer the bundled binary if the build script has
+    // already produced one, but fall back to running the script
+    // through ``python3`` so contributors without PyInstaller still
+    // work as long as the Python deps are installed.
+    candidates.push(path.join(basePath, "snitch_extract.py"));
+  }
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) {
+        cachedSnitchExtractPath = candidate;
+        return candidate;
+      }
+    } catch (_err) {
+      // Ignore — existsSync is best-effort.
+    }
+  }
+  cachedSnitchExtractPath = "";
+  return null;
+}
+
+// Spawn ``snitch_extract`` with the given argv and pipe the archive
+// bytes through stdin. The helper is required to emit a single JSON
+// object on stdout and a non-zero exit on failure; stderr is captured
+// for diagnostics.
+async function runSnitchExtract(args, bytes) {
+  const toolPath = resolveSnitchExtractPath();
+  if (!toolPath) {
+    throw new Error(
+      "Archive browser helper (snitch_extract) is not bundled with this build",
+    );
+  }
+  const isPythonScript = toolPath.endsWith(".py");
+  const cmd = isPythonScript ? "python3" : toolPath;
+  const fullArgs = isPythonScript ? [toolPath, ...args] : args;
+  return await new Promise((resolve, reject) => {
+    const child = require("child_process").spawn(cmd, fullArgs, {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let stdoutBytes = 0;
+    let stdoutLimitHit = false;
+    child.stdout.on("data", (chunk) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > EXTRACTION_MAX_OUTPUT_BYTES * 4) {
+        stdoutLimitHit = true;
+        try {
+          child.kill("SIGKILL");
+        } catch (_err) { /* ignore */ }
+        return;
+      }
+      stdoutChunks.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+    child.on("error", (err) => reject(err));
+    child.on("close", (code) => {
+      if (stdoutLimitHit) {
+        reject(new Error("snitch_extract output exceeded the safety budget"));
+        return;
+      }
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
+      if (code !== 0) {
+        reject(
+          new Error(
+            `snitch_extract exited with code ${code}: ${stderr.trim() || stdout.trim()}`,
+          ),
+        );
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (err) {
+        reject(
+          new Error(
+            `snitch_extract produced unparseable JSON: ${err.message}; stderr=${stderr.trim()}`,
+          ),
+        );
+      }
+    });
+    child.stdin.on("error", () => { /* EPIPE if child died early */ });
+    if (bytes && bytes.length > 0) {
+      child.stdin.end(bytes);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+function mapArchiveEntryShape({ path: entryPath, type, size, compressedSize }) {
+  const isSafe = isSafeArchiveRelativePath(entryPath);
+  const safePath = isSafe
+    ? normalizeArchivePath(entryPath)
+    : sanitizeArchiveRelativePath(entryPath);
+  // 7z and CAB report entry kinds as strings like "file" / "folder" /
+  // "symlink"; normalise to the same two-value vocabulary the renderer
+  // already understands for ZIP ("file" / "directory").
+  let normalizedType = "file";
+  if (typeof type === "string") {
+    const lowered = type.toLowerCase();
+    if (
+      lowered === "directory" ||
+      lowered === "folder" ||
+      lowered === "dir"
+    ) {
+      normalizedType = "directory";
+    } else if (
+      lowered === "symlink" ||
+      lowered === "link" ||
+      lowered === "symboliclink"
+    ) {
+      normalizedType = "symlink";
+    }
+  }
+  const numericSize = Number.isFinite(Number(size)) ? Number(size) : 0;
+  const numericCompressed = Number.isFinite(Number(compressedSize))
+    ? Number(compressedSize)
+    : 0;
+  return {
+    path: entryPath,
+    safePath,
+    type: normalizedType,
+    compressedSize: numericCompressed,
+    uncompressedSize: numericSize,
+    isSafe: isSafe && normalizedType !== "directory",
+    unsafeReason: isSafe ? null : "Path contains traversal or absolute components",
+  };
 }
 
 async function decompressWithSystemTool(inputPath, algorithm) {
@@ -1835,64 +2066,205 @@ async function decompressBytesMain(bytes, algorithm) {
   }
 }
 
+async function listTarEntries(bytes) {
+  if (!tar || typeof tar.Parse !== "function") {
+    throw new Error("Tar archive support is unavailable (missing tar dependency)");
+  }
+  return await new Promise((resolve, reject) => {
+    const source = Readable.from(bytes);
+    const parser = new tar.Parse({ strict: true });
+    const entries = [];
+    let totalBytes = 0;
+    parser.on("entry", (entry) => {
+      // Drain the entry so the parser can advance to the next header.
+      // We don't need the body for listing — only metadata — but we
+      // still consume it so a 10GB file inside the archive doesn't
+      // pin us waiting for it.
+      entry.on("data", () => { /* discard */ });
+      const numericSize = Number.isFinite(Number(entry.size))
+        ? Number(entry.size)
+        : 0;
+      totalBytes += numericSize;
+      entries.push({
+        path: entry.path,
+        type: entry.type || "File",
+        size: numericSize,
+        compressedSize: 0,
+      });
+    });
+    parser.on("error", (err) => reject(err));
+    parser.on("end", () => resolve({ entries, totalBytes }));
+    parser.on("close", () => resolve({ entries, totalBytes }));
+    source.on("error", (err) => reject(err));
+    source.pipe(parser);
+  });
+}
+
+async function extractTarEntry(bytes, normalizedTarget, normalizedSafe) {
+  if (!tar || typeof tar.Parse !== "function") {
+    throw new Error("Tar archive support is unavailable (missing tar dependency)");
+  }
+  return await new Promise((resolve, reject) => {
+    const source = Readable.from(bytes);
+    const parser = new tar.Parse({ strict: true });
+    let totalBytes = 0;
+    let matched = false;
+    parser.on("entry", (entry) => {
+      const normalized = normalizeArchivePath(entry.path);
+      const candidateSafe = sanitizeArchiveRelativePath(entry.path);
+      const matches =
+        normalized === normalizedTarget ||
+        (normalizedSafe && normalized === normalizedSafe) ||
+        (candidateSafe && normalizedSafe && candidateSafe === normalizedSafe);
+      if (!matches) {
+        entry.on("data", () => { /* discard — wrong entry */ });
+        return;
+      }
+      if (matched) {
+        // Same path appearing more than once (multi-volume). Take the
+        // first one and skip the rest.
+        entry.on("data", () => { /* discard */ });
+        return;
+      }
+      if (
+        entry.type !== "File" &&
+        entry.type !== "OldFile" &&
+        entry.type !== "ContiguousFile"
+      ) {
+        matched = true;
+        reject(new Error("Cannot extract a non-file tar entry"));
+        try { parser.destroy(); } catch (_e) { /* ignore */ }
+        return;
+      }
+      matched = true;
+      const chunks = [];
+      entry.on("data", (chunk) => {
+        totalBytes += chunk.length;
+        if (totalBytes > EXTRACTION_MAX_OUTPUT_BYTES) {
+          try { parser.destroy(); } catch (_e) { /* ignore */ }
+          reject(
+            new Error(
+              `Extracted entry too large (${formatByteCount(totalBytes)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`,
+            ),
+          );
+          return;
+        }
+        chunks.push(chunk);
+      });
+      entry.on("end", () => resolve(Buffer.concat(chunks)));
+      entry.on("error", (err) => reject(err));
+    });
+    parser.on("error", (err) => {
+      if (!matched) reject(err);
+    });
+    parser.on("end", () => {
+      if (!matched) reject(new Error(`Archive entry not found: ${normalizedTarget}`));
+    });
+    parser.on("close", () => {
+      if (!matched) reject(new Error(`Archive entry not found: ${normalizedTarget}`));
+    });
+    source.on("error", (err) => reject(err));
+    source.pipe(parser);
+  });
+}
+
 async function listArchiveEntriesMain(bytes) {
   if (!bytes || bytes.length === 0) throw new Error("No archive bytes to inspect");
   if (bytes.length > EXTRACTION_MAX_INPUT_BYTES) {
     throw new Error(`Archive too large (${formatByteCount(bytes.length)} > ${formatByteCount(EXTRACTION_MAX_INPUT_BYTES)})`);
   }
   const detected = inferExtractionFormatFromBytes(bytes);
-  if (detected !== "zip") {
-    throw new Error("Archive browsing is only supported for PKZIP (.zip) files");
+  if (detected === "zip") {
+    if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
+      throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+    }
+    const directory = await unzipper.Open.buffer(bytes);
+    return directory.files.map((entry) => {
+      const type = entry.type === "Directory" ? "directory" : "file";
+      const isSafe = isSafeArchiveRelativePath(entry.path);
+      const safePath = isSafe
+        ? normalizeArchivePath(entry.path)
+        : sanitizeArchiveRelativePath(entry.path);
+      return {
+        path: entry.path,
+        safePath,
+        type,
+        compressedSize: Number.isFinite(Number(entry.compressedSize)) ? Number(entry.compressedSize) : 0,
+        uncompressedSize: Number.isFinite(Number(entry.vars?.uncompressedSize)) ? Number(entry.vars.uncompressedSize) : 0,
+        isSafe: isSafe && type !== "directory",
+        unsafeReason: isSafe ? null : "Path contains traversal or absolute components",
+      };
+    });
   }
-  if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
-    throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+  if (detected === "tar") {
+    const { entries } = await listTarEntries(bytes);
+    return entries.map(mapArchiveEntryShape);
   }
-  const directory = await unzipper.Open.buffer(bytes);
-  return directory.files.map((entry) => {
-    const type = entry.type === "Directory" ? "directory" : "file";
-    const isSafe = isSafeArchiveRelativePath(entry.path);
-    const safePath = isSafe
-      ? normalizeArchivePath(entry.path)
-      : sanitizeArchiveRelativePath(entry.path);
-    return {
-      path: entry.path,
-      safePath,
-      type,
-      compressedSize: Number.isFinite(Number(entry.compressedSize)) ? Number(entry.compressedSize) : 0,
-      uncompressedSize: Number.isFinite(Number(entry.vars?.uncompressedSize)) ? Number(entry.vars.uncompressedSize) : 0,
-      isSafe: isSafe && type !== "directory",
-      unsafeReason: isSafe ? null : "Path contains traversal or absolute components",
-    };
-  });
+  if (detected === "cab" || detected === "7z") {
+    const result = await runSnitchExtract(["list"], bytes);
+    if (!result || !Array.isArray(result.entries)) {
+      throw new Error(`snitch_extract returned no entries for ${detected} archive`);
+    }
+    return result.entries.map(mapArchiveEntryShape);
+  }
+  throw new Error(
+    "Archive browsing is only supported for PKZIP (.zip), POSIX/GNU tar, Microsoft Cabinet (.cab), and 7-Zip (.7z) files",
+  );
 }
 
 async function extractArchiveEntryMain(bytes, entryPath, safePath) {
   if (!bytes || bytes.length === 0) throw new Error("No archive bytes to extract from");
   if (!entryPath) throw new Error("No archive entry path specified");
   const detected = inferExtractionFormatFromBytes(bytes);
-  if (detected !== "zip") {
-    throw new Error("Single-entry extraction is only supported for PKZIP (.zip) files");
-  }
-  if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
-    throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+  if (!detected) {
+    throw new Error("Unknown archive format");
   }
   const normalizedTarget = normalizeArchivePath(entryPath);
   const normalizedSafe = safePath ? normalizeArchivePath(safePath) : null;
   if (!isSafeArchiveRelativePath(normalizedTarget) && !normalizedSafe) {
     throw new Error(`Unsafe archive entry path: ${entryPath}`);
   }
-  const directory = await unzipper.Open.buffer(bytes);
-  const entry = directory.files.find((e) => {
-    const n = normalizeArchivePath(e.path);
-    return n === normalizedTarget || (normalizedSafe && n === normalizedSafe);
-  });
-  if (!entry) throw new Error(`Archive entry not found: ${entryPath}`);
-  if (entry.type === "Directory") throw new Error("Cannot extract a directory entry");
-  const extractedBuffer = await entry.buffer();
-  if (extractedBuffer.length > EXTRACTION_MAX_OUTPUT_BYTES) {
-    throw new Error(`Extracted entry too large (${formatByteCount(extractedBuffer.length)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`);
+  if (detected === "zip") {
+    if (!unzipper || !unzipper.Open || typeof unzipper.Open.buffer !== "function") {
+      throw new Error("ZIP archive support is unavailable (missing unzipper dependency)");
+    }
+    const directory = await unzipper.Open.buffer(bytes);
+    const entry = directory.files.find((e) => {
+      const n = normalizeArchivePath(e.path);
+      return n === normalizedTarget || (normalizedSafe && n === normalizedSafe);
+    });
+    if (!entry) throw new Error(`Archive entry not found: ${entryPath}`);
+    if (entry.type === "Directory") throw new Error("Cannot extract a directory entry");
+    const extractedBuffer = await entry.buffer();
+    if (extractedBuffer.length > EXTRACTION_MAX_OUTPUT_BYTES) {
+      throw new Error(`Extracted entry too large (${formatByteCount(extractedBuffer.length)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`);
+    }
+    return extractedBuffer;
   }
-  return extractedBuffer;
+  if (detected === "tar") {
+    const buffer = await extractTarEntry(bytes, normalizedTarget, normalizedSafe);
+    if (buffer.length > EXTRACTION_MAX_OUTPUT_BYTES) {
+      throw new Error(`Extracted entry too large (${formatByteCount(buffer.length)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`);
+    }
+    return buffer;
+  }
+  if (detected === "cab" || detected === "7z") {
+    const result = await runSnitchExtract(
+      ["extract", normalizedSafe || normalizedTarget],
+      bytes,
+    );
+    if (!result || typeof result.bytesBase64 !== "string") {
+      throw new Error(`snitch_extract did not return bytes for ${entryPath}`);
+    }
+    const extracted = Buffer.from(result.bytesBase64, "base64");
+    if (extracted.length > EXTRACTION_MAX_OUTPUT_BYTES) {
+      throw new Error(`Extracted entry too large (${formatByteCount(extracted.length)} > ${formatByteCount(EXTRACTION_MAX_OUTPUT_BYTES)})`);
+    }
+    return extracted;
+  }
+  throw new Error(
+    "Single-entry extraction is only supported for PKZIP (.zip), POSIX/GNU tar, Microsoft Cabinet (.cab), and 7-Zip (.7z) files",
+  );
 }
 
 function formatByteCount(n) {
@@ -1918,8 +2290,11 @@ function installExtractionHandlers() {
   ipcMain.handle("list-archive", async (_event, { bytesBase64 } = {}) => {
     try {
       const input = Buffer.from(String(bytesBase64 || ""), "base64");
+      // Detect up front so the renderer learns the real format even if
+      // listing later fails (e.g. when the bundled helper is missing).
+      const format = inferExtractionFormatFromBytes(input);
       const entries = await listArchiveEntriesMain(input);
-      return { success: true, format: "zip", entries };
+      return { success: true, format: format || "unknown", entries };
     } catch (err) {
       console.error("list-archive error:", err);
       return { success: false, error: err?.message || String(err) };

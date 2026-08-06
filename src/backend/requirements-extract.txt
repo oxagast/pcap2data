@@ -1,0 +1,25 @@
+# Minimal Python requirements for the snitch_extract archive helper.
+#
+# This file is intentionally separate from ``requirements.txt`` (the
+# deps for the full snitch.py backend, which pulls in scapy, numpy,
+# geoip2, etc.) because the archive helper is shipped as its own
+# PyInstaller onefile bundle and we don't want PyInstaller to drag in
+# the heavy backend deps at build time.
+#
+# ``build-extractor.js`` installs this file into the active Python
+# environment with ``pip install -r requirements-extract.txt`` before
+# invoking PyInstaller, so contributors don't need to remember to
+# install these deps manually before building.
+#
+# Both libraries are pure Python (no compiled extensions) so they
+# bundle cleanly across Windows, macOS, and Linux without needing
+# system headers or toolchains.
+#
+#   * ``cabarchive`` — read-only Microsoft Cabinet (.cab) parser. Used
+#     for listing entries and extracting a single entry's bytes.
+#   * ``py7zr`` — 7-Zip (.7z) parser. Ships its own pure-Python LZMA /
+#     LZMA2 codec stack plus BCJ filter support, so we don't need
+#     system ``7z``/``7za`` binaries at runtime.
+cabarchive==0.2.4 ; sys_platform != "win32"
+cabarchive-windows==1.0.0 ; sys_platform == "win32"
+py7zr==0.22.0

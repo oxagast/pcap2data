@@ -3202,8 +3202,23 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
         );
       }
 
+      // 802.11 frames that are not Open (WPA/WPA2/WPA3/WEP/...) are
+      // encrypted at the link layer, even though they have no TLS
+      // "Encryption Data" entry — so count them as encrypted first.
+      const wifiSection = pi?.["Wireless"];
+      const wifiCrypto = normalizeStatsTextValue(
+        wifiSection?.["wifi.crypto"] ?? wifiSection?.["Crypto"],
+      );
+      const isEncryptedWifiFrame =
+        wifiSection &&
+        typeof wifiSection === "object" &&
+        wifiCrypto &&
+        wifiCrypto.toLowerCase() !== "open";
+
       const encData = ei?.["Traits"]?.["Server Info"]?.["Encryption Data"];
-      if (!encData || encData === "N/A") {
+      if (isEncryptedWifiFrame) {
+        encryptedCount++;
+      } else if (!encData || encData === "N/A") {
         unencryptedCount++;
       } else {
         encryptedCount++;
@@ -3466,7 +3481,7 @@ function statsAnomaliesReadPort(packetInfo, proto) {
     transport === "TCP" ? "tcp.dst.port" : "udp.dstport"
   ] ?? transportData[
     transport === "TCP" ? "tcp.src.port" : "udp.srcport"
-  ];
+    ];
   const legacy = transportData["Destination port"] ?? transportData["Source port"];
   const raw = (dotted ?? legacy);
   const num = Number(raw);
@@ -3714,8 +3729,8 @@ function isLikelyAuthProtocol(proto, packetInfo) {
   // application protocol as packet.proto (rare in this codebase but
   // still a valid shape).
   if (proto === "SSH" || proto === "FTP" || proto === "TELNET" || proto === "SMTP"
-      || proto === "IMAP" || proto === "POP3" || proto === "KERBEROS"
-      || proto === "HTTP" || proto === "HTTP2") {
+    || proto === "IMAP" || proto === "POP3" || proto === "KERBEROS"
+    || proto === "HTTP" || proto === "HTTP2") {
     return true;
   }
   if (!packetInfo || typeof packetInfo !== "object") return false;
