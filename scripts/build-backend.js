@@ -96,31 +96,29 @@ function preflightCheck() {
 }
 
 function buildArgs(target) {
+    // We invoke ``scripts/run_pyinstaller.py`` directly instead of
+    // ``python3 -m PyInstaller`` because the wrapper consumes the
+    // patched-.so cache produced by ``stage_patched_sos.py`` and
+    // substitutes ``a.binaries[].src_name`` between Analysis and EXE.
+    // Staticx refuses any DT_RUNPATH that ends up in the PyInstaller
+    // archive (e.g. ``libabsl_*.so.20260526`` shipped by grpcio /
+    // tensorboard / pyarrow); caching and patching those files before
+    // bundling is what lets the build finish.
     const targetConfig = TARGETS[target];
     const args = [
-        "-m",
-        "PyInstaller",
-        "--noconfirm",
-        "--clean",
-        "--onefile",
+        path.join(PROJECT_ROOT, "scripts", "run_pyinstaller.py"),
         "--name",
         targetConfig.exeName,
         "--distpath",
         BACKEND_DIR,
         "--workpath",
         BUILD_WORK_DIR,
-        // PyInstaller always writes a `.spec` next to where it runs; route it
-        // into the build directory so we never accidentally land a checked-in
-        // spec under src/backend/ that hard-codes another machine's paths.
-        "--specpath",
-        BUILD_WORK_DIR,
+        "--manifest",
+        path.join(BUILD_WORK_DIR, "patched-sos", "manifest.json"),
+        // PyInstaller's run_pyinstaller.py wrapper expects boolean
+        // flags matching its CLI, so map from our TARGETS table.
+        "--console",
     ];
-
-    // Console mode preserves stdout/stderr; we keep it because the GUI
-    // streams the backend's log output. Both windows and *nix want this.
-    if (targetConfig.consoleFlag) {
-        args.push(targetConfig.consoleFlag);
-    }
 
     if (targetConfig.iconFlag) {
         args.push(...targetConfig.iconFlag);
@@ -181,6 +179,51 @@ function invokePyInstaller(args) {
     }
     if (result.status !== 0) {
         console.error(`[build-backend] PyInstaller exited with code ${result.status}`);
+        process.exit(result.status || 1);
+    }
+}
+
+// Run ``stage_patched_sos.py`` before PyInstaller to copy non-writable
+// ``.so`` files with ``DT_RUNPATH`` (e.g. ``libabsl_*.so.20260526``
+// bundled by grpcio / tensorboard / pyarrow wheels on system Python
+// installs) into a writable cache and ``patchelf`` them there. The
+// cache is consumed by ``run_pyinstaller.py`` so PyInstaller bundles
+// the patched copy instead of the root-owned original. Without this,
+// ``staticx`` later aborts with ``staticx: Unsupported PyInstaller
+// input ... DT_RUNPATH='$ORIGIN'`` even though our ``stripBadRpaths``
+// pass correctly rewrote the same files when they were writable.
+function stagePatchedSos(target) {
+    if (target !== "linux") {
+        // macOS / Windows onefiles do not go through staticx, so the
+        // DT_RUNPATH audit never fires and we can skip the cache.
+        return;
+    }
+    const cacheDir = path.join(BUILD_WORK_DIR, "patched-sos");
+    const venvPython = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
+    const probePython = fs.existsSync(venvPython) ? venvPython : "python3";
+    const args = [
+        path.join(PROJECT_ROOT, "scripts", "stage_patched_sos.py"),
+        "--python",
+        probePython,
+        "--cache-dir",
+        cacheDir,
+    ];
+    console.log(`[build-backend] staging non-writable patched .so files: python3 ${args.join(" ")}`);
+    const result = spawnSync("python3", args, {
+        cwd: PROJECT_ROOT,
+        stdio: "inherit",
+        env: process.env,
+    });
+    if (result.error) {
+        console.error(
+            `[build-backend] failed to spawn stage_patched_sos.py: ${result.error.message}`,
+        );
+        process.exit(1);
+    }
+    if (result.status !== 0) {
+        console.error(
+            `[build-backend] stage_patched_sos.py exited with code ${result.status}`,
+        );
         process.exit(result.status || 1);
     }
 }
@@ -398,7 +441,7 @@ function stripBadRpaths(target) {
                     }
                     continue;
                 }
-                if (!entry.name.endsWith(".so")) continue;
+                if (!/\.so(\.\d+)*$/.test(entry.name)) continue;
                 try {
                     fs.accessSync(full, fs.constants.W_OK);
                 } catch (error) {
@@ -612,6 +655,7 @@ function main() {
     removeExistingBinary(targetConfig.exeName);
 
     stripBadRpaths(target);
+    stagePatchedSos(target);
 
     const args = buildArgs(target);
     invokePyInstaller(args);
