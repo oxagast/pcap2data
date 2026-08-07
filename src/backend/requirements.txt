@@ -1,4 +1,15 @@
 PyInstaller==6.21.0
+# staticx re-wraps the PyInstaller onefile output so the bundled
+# Python interpreter links its loader dependencies statically and can
+# be run on other Linux machines without matching libpython / libstdc++
+# / etc. versions. Linux-only; macOS/Windows targets ignore it.
+#
+# 0.13.0 has a known incompatibility with PyInstaller 5.10+ (it reads
+# ``pyi_ar.toc.data`` which no longer exists; the build dies with
+# ``AttributeError: 'dict' object has no attribute 'data'``).
+# 0.14.x added a ``CArchiveReaderPre510Adapter`` to bridge the new
+# archive format. Pin to 0.14.x.
+staticx==0.14.2 ; sys_platform == "linux"
 beautifulsoup4==4.14.3
 geoip2==2.9.0
 numpy==2.4.2

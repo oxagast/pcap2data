@@ -1,0 +1,28 @@
+--- api.py
++++ api.py	2026-08-07 17:58:29.567662102 -0400
+@@ -87,14 +87,24 @@
+             raise FormatMismatchError(
+                 f"Bootloader machine ({bldr_mach}) doesn't match program machine ({prog_mach})")
+ 
++        # STATICX_BOOTLOADER_IDENTIFY_PATCH_APPLIED: tolerate exit code 2 from the bootloader identify probe.
+         # Run the bootloader for identification
++        # The bootloader intentionally exits with status 2 in identify
++        # mode (no archive attached; that's how it identifies itself).
++        # staticx 0.14.x calls ``r.check_returncode()`` here, which
++        # raises ``CalledProcessError`` on every build. Until upstream
++        # is fixed we tolerate exit codes 0 and 2 and re-raise for any
++        # other failure so genuine loader errors still surface.
+         r = subprocess.run(
+                 args = [bootloader],
+                 env = dict(STATICX_BOOTLOADER_IDENTIFY='1'),
+                 stderr = subprocess.PIPE,
+                 text = True,
+                 )
+-        r.check_returncode()
++        if r.returncode not in (0, 2):
++            raise subprocess.CalledProcessError(
++                r.returncode, r.args, output=r.stdout, stderr=r.stderr,
++            )
+         lines = (line.split(':', 1)[1].strip() for line in r.stderr.splitlines())
+         logging.debug("Bootloader: " + " ".join(lines))
+ 
