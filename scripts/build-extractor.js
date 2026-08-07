@@ -9,15 +9,24 @@
 // pulls in two extra deps (cabarchive, py7zr) that the main
 // ``snitch.py`` does not need.
 //
+// On Linux, after PyInstaller finishes, the script additionally runs
+// ``staticx`` to re-wrap the onefile binary with its dynamically-linked
+// loader dependencies statically bundled. This produces a portable
+// ``snitch-extract`` that can be run on other Linux machines without
+// matching glibc / libstdc++ / libpython versions that the build host
+// had. ``staticx`` only supports Linux 64-bit, so macOS and Windows
+// builds skip the re-wrap step and ship the plain PyInstaller binary.
+//
 // Usage:
 //   node scripts/build-extractor.js           # build for the current OS
 //   node scripts/build-extractor.js linux     # force a target
 //   node scripts/build-extractor.js macos
 //   node scripts/build-extractor.js windows
 //
-// The script writes the binary directly to ``src/backend/snitch-extract[.exe]``
-// so the existing forge.config.js extraResource entries and
-// ``src/main.js`` lookup logic continue to work unchanged.
+// The script writes the final binary directly to
+// ``src/backend/snitch-extract[.exe]`` so the existing
+// forge.config.js extraResource entries and ``src/main.js`` lookup
+// logic continue to work unchanged.
 
 "use strict";
 
@@ -132,6 +141,24 @@ function buildArgs(target) {
         // Console mode preserves stdout/stderr; the Node side reads
         // both. Both Windows and *nix want this.
         "--console",
+        // Linux-only: collect scipy/numpy compiled extensions so the
+        // PyInstaller onefile does not carry DT_RUNPATH entries that
+        // point at the build host's ``/opt/_internal/cpython-...``
+        // site-packages. ``staticx`` refuses to re-wrap binaries
+        // whose loader dependencies reference paths that won't exist
+        // on the target machine. The ``snitch-extract`` helper does
+        // not actually import scipy/numpy at runtime, but PyInstaller
+        // still walks the full dependency graph for hidden imports
+        // and pulls these in transitively; forcing them to be
+        // collected with no DT_RUNPATH keeps the staticx wrap clean.
+        ...(target === "linux"
+            ? [
+                "--collect-binaries", "scipy",
+                "--collect-binaries", "scipy_openblas32",
+                "--collect-binaries", "numpy",
+                "--collect-data", "scipy",
+            ]
+            : []),
         ENTRY_SCRIPT,
     ];
 }
@@ -167,6 +194,257 @@ function invokePyInstaller(args) {
     }
 }
 
+// staticx re-wrap for the snitch-extract binary. See the matching
+// ``rewrapWithStaticx`` block in scripts/build-backend.js for the
+// full rationale; in short: staticx only works on Linux 64-bit, so we
+// only invoke it when the active target is Linux and otherwise leave
+// the plain PyInstaller binary in place.
+function rewrapWithStaticx(target) {
+    if (target !== "linux") {
+        return;
+    }
+    const outputPath = path.join(BACKEND_DIR, "snitch-extract");
+    const pyinstallerPath = path.join(BACKEND_DIR, ".snitch-extract.pyinstaller");
+    if (!fs.existsSync(outputPath)) {
+        console.error(
+            `[build-extractor] expected PyInstaller output at ${outputPath} before staticx wrap`,
+        );
+        process.exit(1);
+    }
+    try {
+        fs.renameSync(outputPath, pyinstallerPath);
+    } catch (error) {
+        console.error(
+            `[build-extractor] failed to stage PyInstaller output for staticx: ${error.message}`,
+        );
+        process.exit(1);
+    }
+    console.log(
+        `[build-extractor] re-wrapping with staticx: ${pyinstallerPath} -> ${outputPath}`,
+    );
+    const result = spawnSync(
+        "staticx",
+        ["--strip", pyinstallerPath, outputPath],
+        {
+            cwd: PROJECT_ROOT,
+            stdio: "inherit",
+            env: process.env,
+        },
+    );
+    try {
+        fs.unlinkSync(pyinstallerPath);
+    } catch (error) {
+        if (error && error.code !== "ENOENT") {
+            console.warn(
+                `[build-extractor] could not remove staged PyInstaller binary ${pyinstallerPath}: ${error.message}`,
+            );
+        }
+    }
+    if (result.error) {
+        if (result.error.code === "ENOENT") {
+            console.error(
+                `[build-extractor] staticx was not found on PATH. Install it with 'pip install staticx' (or 'pip3 install -r src/backend/requirements-extract.txt') and re-run.`,
+            );
+        } else {
+            console.error(`[build-extractor] failed to spawn staticx: ${result.error.message}`);
+        }
+        process.exit(1);
+    }
+    if (result.status !== 0) {
+        console.error(`[build-extractor] staticx exited with code ${result.status}`);
+        process.exit(result.status || 1);
+    }
+}
+
+// Manylinux wheels bake the build host's absolute prefix into
+// ``DT_RUNPATH`` on a handful of compiled ``.so`` files (notably
+// ``scipy/special/cython_special.cpython-314-x86_64-linux-gnu.so``,
+// which carries ``DT_RUNPATH='/opt/_internal/cpython-3.14.0rc1/.../scipy_openblas32/lib'``).
+// ``staticx`` refuses to re-wrap a PyInstaller onefile whose embedded
+// archive contains any ``DT_RUNPATH`` entry (see staticx #188); the
+// build dies during staticx's audit phase.
+//
+// We rewrite every ``.so`` with a ``DT_RUNPATH`` to use a
+// ``$ORIGIN``-relative ``DT_RPATH`` (using ``patchelf --force-rpath``)
+// pointing at the wheel's bundled ``.libs`` sibling directory. After
+// this rewrite, the loader can still resolve OpenBLAS / libgfortran
+// from the wheel's bundled ``scipy.libs`` (or ``numpy.libs``)
+// directory at runtime. ``DT_RPATH`` with a ``$ORIGIN``-relative
+// value is what staticx expects; ``DT_RUNPATH`` is forbidden outright
+// regardless of whether the path is absolute or relative.
+//
+// Linux-only because the ``DT_RUNPATH`` problem is Linux/manylinux
+// only; macOS uses ``LC_LOAD_DYLIB`` and Windows uses import tables.
+// ``patchelf`` is also Linux-only, so the helper short-circuits on
+// other targets. ``snitch-extract`` does not import scipy/numpy at
+// runtime, but PyInstaller's hidden-import walk can still drag them
+// in from the build environment; this rewrite keeps staticx happy in
+// that case. If no offending ``.so`` files are present in the
+// environment, the helper is a no-op.
+function stripBadRpaths(target) {
+    if (target !== "linux") {
+        return;
+    }
+    const probe = spawnSync(
+        "python3",
+        ["-c", "import site, sys; print('\\n'.join(site.getsitepackages() + [sys.prefix]))"],
+        { cwd: PROJECT_ROOT, stdio: ["ignore", "pipe", "inherit"], env: process.env },
+    );
+    if (probe.error || probe.status !== 0) {
+        console.warn(
+            `[build-extractor] could not resolve site-packages to scan for bad DT_RUNPATH entries: ` +
+            `${probe.error ? probe.error.message : `python3 exited ${probe.status}`}`,
+        );
+        return;
+    }
+    const siteRoots = probe.stdout
+        .toString()
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    let touched = 0;
+    for (const root of siteRoots) {
+        if (!fs.existsSync(root)) continue;
+        const stack = [root];
+        while (stack.length) {
+            const dir = stack.pop();
+            let entries;
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch (error) {
+                continue;
+            }
+            for (const entry of entries) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    stack.push(full);
+                    continue;
+                }
+                if (!entry.name.endsWith(".so")) continue;
+                if (rewriteSORpath(full, root)) {
+                    touched += 1;
+                }
+            }
+        }
+    }
+    if (touched === 0) {
+        console.log(
+            "[build-extractor] no absolute DT_RUNPATH entries found in site-packages; nothing to patch",
+        );
+    } else {
+        console.log(
+            `[build-extractor] rewrote ${touched} .so file(s) to drop absolute DT_RUNPATH entries`,
+        );
+    }
+}
+
+// Parses ``readelf -d`` output for ``DT_RUNPATH`` / ``DT_RPATH``
+// entries. Returns ``{ runpath, rpath }`` (each possibly null).
+function readElfDynamic(soPath) {
+    const result = spawnSync("readelf", ["-d", soPath], {
+        cwd: PROJECT_ROOT,
+        stdio: ["ignore", "pipe", "ignore"],
+        env: process.env,
+    });
+    if (result.error || result.status !== 0) {
+        return null;
+    }
+    const stdout = result.stdout.toString();
+    let runpath = null;
+    let rpath = null;
+    for (const line of stdout.split("\n")) {
+        const runMatch = line.match(/\(RUNPATH\).*?:\s*\[([^\]]*)\]/);
+        if (runMatch) runpath = runMatch[1];
+        const rpathMatch = line.match(/\(RPATH\).*?:\s*\[([^\]]*)\]/);
+        if (rpathMatch) rpath = rpathMatch[1];
+    }
+    return { runpath, rpath };
+}
+
+// Rewrites ``soPath`` to drop its absolute ``DT_RUNPATH`` and replace
+// it with a ``$ORIGIN``-relative ``RPATH`` pointing at the wheel's
+// ``.libs`` sibling directory. Returns true if a rewrite was applied.
+function rewriteSORpath(soPath, siteRoot) {
+    const dyn = readElfDynamic(soPath);
+    if (!dyn) return false;
+    // ``staticx`` forbids any ``DT_RUNPATH`` entry, whether it points
+    // at an absolute path like ``/opt/_internal/...`` or at a
+    // ``$ORIGIN``-relative path. The fix in both cases is to convert
+    // the entry to ``DT_RPATH`` (which staticx accepts when it's
+    // relative) so the loader still resolves the wheel's bundled
+    // libraries but staticx's audit is happy.
+    //
+    // ``DT_RPATH`` is allowed as long as the path is ``$ORIGIN``-
+    // relative. We only rewrite files that have a ``DT_RUNPATH``,
+    // since ``DT_RPATH`` already passes staticx's audit and leaving
+    // them alone avoids spurious edits.
+    const offendingRunpath = dyn.runpath != null;
+    if (!offendingRunpath) return false;
+    const libsSibling = findLibsSibling(soPath, siteRoot);
+    if (!libsSibling) {
+        console.warn(
+            `[build-extractor] skipping ${soPath}: cannot locate a .libs sibling to write a $ORIGIN RPATH`,
+        );
+        return false;
+    }
+    const rel = path.relative(path.dirname(soPath), libsSibling);
+    const newRpath = `$ORIGIN/${rel.split(path.sep).join("/")}`;
+    // ``--remove-rpath`` drops both ``RPATH`` and ``RUNPATH``; we
+    // re-set ``RPATH`` (not ``RUNPATH``) because staticx is fine with
+    // a relative ``RPATH`` and forbids ``RUNPATH`` outright.
+    //
+    // ``--force-rpath`` (rather than ``--set-rpath``) is critical
+    // here: modern patchelf defaults to writing ``DT_RUNPATH``,
+    // which staticx also forbids. ``--force-rpath`` downgrades the
+    // entry to ``DT_RPATH`` at the cost of a warning, which is what
+    // staticx wants to see.
+    const remove = spawnSync("patchelf", ["--remove-rpath", soPath], {
+        cwd: PROJECT_ROOT,
+        stdio: "inherit",
+        env: process.env,
+    });
+    if (remove.error || remove.status !== 0) {
+        console.error(
+            `[build-extractor] patchelf --remove-rpath failed on ${soPath}; ` +
+            `install 'patchelf' (e.g. apt install patchelf) and re-run`,
+        );
+        process.exit(remove.status || 1);
+    }
+    const setrp = spawnSync("patchelf", ["--force-rpath", "--set-rpath", newRpath, soPath], {
+        cwd: PROJECT_ROOT,
+        stdio: "inherit",
+        env: process.env,
+    });
+    if (setrp.error || setrp.status !== 0) {
+        console.error(
+            `[build-extractor] patchelf --force-rpath --set-rpath ${newRpath} failed on ${soPath}`,
+        );
+        process.exit(setrp.status || 1);
+    }
+    console.log(
+        `[build-extractor]   ${path.relative(PROJECT_ROOT, soPath)}: DT_RUNPATH=${dyn.runpath} -> RPATH=${newRpath}`,
+    );
+    return true;
+}
+
+// Walk up from ``soPath`` toward ``siteRoot`` looking for a sibling
+// directory named ``<pkg>.libs``. Returns the absolute path of that
+// sibling, or null if none is found.
+function findLibsSibling(soPath, siteRoot) {
+    let dir = path.dirname(soPath);
+    while (dir.startsWith(siteRoot)) {
+        const parent = path.dirname(dir);
+        const base = path.basename(dir);
+        const libs = path.join(parent, `${base}.libs`);
+        if (fs.existsSync(libs)) {
+            return libs;
+        }
+        if (dir === siteRoot) break;
+        dir = parent;
+    }
+    return null;
+}
+
 function verifyOutput(exeName) {
     const outputPath = path.join(BACKEND_DIR, exeName);
     if (!fs.existsSync(outputPath)) {
@@ -187,14 +465,48 @@ function main() {
     console.log(`[build-extractor] target platform: ${target}`);
 
     preflightCheck();
+    applyStaticxPatch();
     installRequirements();
     removeExistingBinary(targetConfig.exeName);
 
+    stripBadRpaths(target);
+
     const args = buildArgs(target);
     invokePyInstaller(args);
+    rewrapWithStaticx(target);
     verifyOutput(targetConfig.exeName);
 
     console.log(`[build-extractor] done.`);
+}
+
+// Apply the project-local staticx workaround before doing anything
+// else. The applier is idempotent: re-running it on an already-patched
+// or upstream-fixed install is a no-op with exit 0. We invoke it as a
+// separate Node script so the patch logic stays out of this file and
+// can be regenerated independently from the upstream source.
+//
+// On macOS/Windows the applier short-circuits because staticx is not
+// installed, so this call is cheap and harmless.
+function applyStaticxPatch() {
+    const applier = path.join(PROJECT_ROOT, "scripts", "apply-staticx-patch.js");
+    const result = spawnSync(process.execPath, [applier], {
+        cwd: PROJECT_ROOT,
+        stdio: "inherit",
+        env: process.env,
+    });
+    if (result.error) {
+        console.error(
+            `[build-extractor] failed to spawn ${applier}: ${result.error.message}`,
+        );
+        process.exit(1);
+    }
+    if (result.status !== 0) {
+        console.error(
+            `[build-extractor] staticx patcher exited with code ${result.status}; ` +
+            "see messages above for details",
+        );
+        process.exit(result.status || 1);
+    }
 }
 
 main();
