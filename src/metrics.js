@@ -11,15 +11,20 @@
 //   - `metrics.flush()` is a fire-and-forget forwarder to the main process.
 //   - `props` are filtered through `SAFE_PROP_KEYS` so we never accidentally
 //     send raw user content (PCAP paths, IPs, LLM prompts, etc.).
-//   - The first time `init()` runs we generate a UUIDv4 install id and write
-//     it back to `settings.privacy.metricsInstallId`.
-//   - Every `settingsapi.update` (consent, setEnabled, setEndpointUrl,
-//     persistInstallId) dispatches a `packetsnitch:settings-updated`
-//     CustomEvent on `window` with the new settings in `detail`, so the
-//     renderer can refresh its in-memory snapshot and re-sync the
-//     privacy tab form. Without this the consent overlay's Yes button
-//     would write the new state to disk but the privacy tab would
-//     still show the old value.
+//   - The install id is generated exactly once: when the user first opts
+//     in to metrics via the consent overlay (`recordConsent(true)`). It
+//     is NEVER minted by `init()` itself, because `init()` runs at
+//     module load — before the renderer's persisted settings snapshot
+//     has been pushed into the metrics module — which would cause a
+//     fresh id to be generated on every launch. The persisted id is
+//     adopted by `setSettingsSnapshot()` once the snapshot arrives, so
+//     subsequent runs reuse the same id forever.
+//   - Every `settingsapi.update` (consent, setEnabled, setEndpointUrl)
+//     dispatches a `packetsnitch:settings-updated` CustomEvent on
+//     `window` with the new settings in `detail`, so the renderer can
+//     refresh its in-memory snapshot and re-sync the privacy tab form.
+//     Without this the consent overlay's Yes button would write the new
+//     state to disk but the privacy tab would still show the old value.
 
 const SAFE_PROP_KEYS = new Set([
     "tab",
@@ -66,19 +71,37 @@ const metrics = {
     // empty privacy block. That had two bad effects:
     //   1. ``metrics.track()`` was always a no-op because
     //      ``isEnabled()`` saw ``metricsEnabled`` as undefined.
-    //   2. ``init()`` always thought there was no install id, so it
-    //      generated a new one on every run and wrote it back via
+    //   2. ``init()`` always thought there was no install id (the
+    //      snapshot had not arrived yet) and used to mint a fresh one
+    //      on every run, clobbering the persisted value with a partial
     //      ``settingsapi.update({ privacy: { metricsInstallId: id } })``.
-    //      That partial update used to clobber the user's other
-    //      privacy fields (the main process did a shallow merge);
-    //      it is now a deep merge but the snapshot makes the
-    //      dependency explicit and removes the race entirely.
+    //      The id is now generated only once, by ``recordConsent(true)``,
+    //      and the snapshot simply adopts whatever id is on disk.
     settingsSnapshot: null,
 };
 
 function setSettingsSnapshot(snapshot) {
     if (snapshot && typeof snapshot === "object") {
         metrics.settingsSnapshot = snapshot;
+        // Adopt the persisted install id from the snapshot. The
+        // renderer pushes its in-memory settings snapshot AFTER
+        // ``init()`` has already run (and after ``init()`` was
+        // changed to stop minting a fresh id on its own), so this
+        // is the moment we actually pick up the on-disk value for
+        // subsequent ``flush`` payloads. We only overwrite when the
+        // snapshot has a non-empty string — that way the freshly
+        // minted id from a just-completed ``recordConsent`` call
+        // (which updates ``metrics.installId`` directly) is not
+        // clobbered if the broadcast arrives before our local copy
+        // is reflected back through the snapshot.
+        if (metrics.initialized) {
+            const persistedId = String(
+                snapshot && snapshot.privacy && snapshot.privacy.metricsInstallId || "",
+            ).trim();
+            if (persistedId) {
+                metrics.installId = persistedId;
+            }
+        }
     } else {
         metrics.settingsSnapshot = null;
     }
@@ -187,19 +210,6 @@ function generateInstallId() {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function persistInstallId(id) {
-    if (typeof window === "undefined" || !window.settingsapi || typeof window.settingsapi.update !== "function") {
-        return Promise.resolve(null);
-    }
-    try {
-        const savedSettings = window.settingsapi.update({ privacy: { metricsInstallId: id } });
-        return broadcastSettingsUpdated(savedSettings);
-    } catch (_error) {
-        // Best-effort: the id is also kept in memory for the rest of this run.
-        return Promise.resolve(null);
-    }
-}
-
 // Settings changes made through the metrics module (consent, toggling
 // the privacy switch, updating the endpoint URL, etc.) only round-trip
 // to the renderer's in-memory ``appSettings`` and the privacy form if
@@ -239,27 +249,22 @@ function init({ appVersion = "" } = {}) {
     if (metrics.initialized) {
         return metrics;
     }
-    const privacy = getPrivacy();
     // The install id is a stable per-install marker, not a tracking
-    // payload. Generate it on first run regardless of metrics consent
-    // so the catalog server (and other non-tracking features like
-    // license reconciliation) can personalize responses for this
-    // install. The id is *only* sent to the metrics endpoint when the
-    // user has opted in to metrics — see ``flushMetricsQueue`` /
-    // ``buildMetricsFlushBody``. For opted-out installs the id stays
-    // on disk and is reused for catalog / license calls but never
-    // accompanies a metrics POST.
-    let id = String(privacy.metricsInstallId || "").trim();
-    if (!id) {
-        id = generateInstallId();
-        // Best-effort persist; the in-memory copy is what matters for
-        // the rest of this run even if the IPC write fails.
-        try {
-            persistInstallId(id);
-        } catch (_error) {
-            // ignore: we still have the id in memory
-        }
-    }
+    // payload. It is *only* generated when the user explicitly opts
+    // in to metrics via the consent overlay (see ``recordConsent``),
+    // never on a bare ``init()`` call. Generating one here would
+    // change the id on every run because the renderer's persisted
+    // settings snapshot is pushed into the metrics module AFTER
+    // ``init()`` is invoked at module load — a clean-install snapshot
+    // arrives moments later and would replace the freshly minted id,
+    // but on subsequent runs the persisted id would already be
+    // absent (we wrote it before reading anything back) so ``init``
+    // would mint a brand new one every launch. The catalog server
+    // and other non-tracking features only ever see the id we hand
+    // back from the privacy block, so leaving it empty until
+    // ``recordConsent`` is the correct behaviour.
+    const privacy = getPrivacy();
+    const id = String(privacy.metricsInstallId || "").trim();
     metrics.installId = id;
     metrics.appVersion = String(appVersion || "");
     metrics.initialized = true;
