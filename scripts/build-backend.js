@@ -290,13 +290,50 @@ function stripBadRpaths(target) {
     if (target !== "linux") {
         return;
     }
-    // Resolve the active interpreter's ``site-packages`` directories
-    // by asking Python directly. This works whether the build is run
-    // from a system ``python3``, a virtualenv, or the project's
-    // ``.venv``.
+    // Resolve which Python interpreter owns the ``.so`` files we care
+    // about. PyInstaller will only bundle files that the active
+    // Python can ``import``, so the rewrite pass should mirror that
+    // scope. Two cases:
+    //
+    // 1. The project ships a local ``.venv`` (``${PROJECT_ROOT}/.venv``).
+    //    Use it. The venv is hermetic and only contains project
+    //    dependencies, so we never touch unrelated system directories
+    //    (e.g. on Kali Linux, ``/usr/share/metasploit-framework`` is
+    //    reachable through ``/usr/lib/python3/dist-packages`` symlinks
+    //    and we should not be modifying those).
+    //
+    // 2. No project venv. Use whatever ``python3`` is on PATH but
+    //    skip any site-packages root the current user can't write
+    //    to. This protects root-owned system site-packages and avoids
+    //    ``patchelf: Permission denied`` failures.
+    //
+    // In both cases, we also skip individual ``.so`` files that are
+    // not writable (root-owned, read-only mounts, etc.) -- if we
+    // can't rewrite them, no point in trying.
+    const venvPython = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
+    let probePython = "python3";
+    if (fs.existsSync(venvPython)) {
+        probePython = venvPython;
+    }
     const probe = spawnSync(
-        "python3",
-        ["-c", "import site, sys; print('\\n'.join(site.getsitepackages() + [sys.prefix]))"],
+        probePython,
+        [
+            "-c",
+            // Probe returns three kinds of directories in priority
+            // order so we cover the active Python's import scope:
+            //  1. ``site.getsitepackages()`` -- the active Python's
+            //     system / venv site-packages directories (these are
+            //     where wheels and ``pip install`` land by default).
+            //  2. ``site.getusersitepackages()`` -- ``pip install --user``
+            //     installs (typically under ``~/.local/lib/...``).
+            //  3. ``sys.prefix`` is intentionally NOT included: on a
+            //     venv it would point at ``.venv`` itself, which is
+            //     not a package directory and would cause the walk to
+            //     recurse into ``.venv/bin/`` (and on system Python
+            //     it would point at ``/usr``). Use ``site.getsitepackages``
+            //     only -- it already covers the real package roots.
+            "import site, sys; print('\\n'.join(site.getsitepackages() + [site.getusersitepackages()]))",
+        ],
         { cwd: PROJECT_ROOT, stdio: ["ignore", "pipe", "inherit"], env: process.env },
     );
     if (probe.error || probe.status !== 0) {
@@ -312,6 +349,8 @@ function stripBadRpaths(target) {
         .map((s) => s.trim())
         .filter(Boolean);
     let touched = 0;
+    let skippedUnreadable = 0;
+    let skippedUnwritable = 0;
     for (const root of siteRoots) {
         if (!fs.existsSync(root)) continue;
         // Walk every .so file directly (not via ``rglob``) so we keep
@@ -325,7 +364,11 @@ function stripBadRpaths(target) {
             try {
                 entries = fs.readdirSync(dir, { withFileTypes: true });
             } catch (error) {
-                continue;
+                if (error.code === "EACCES" || error.code === "EPERM") {
+                    skippedUnreadable += 1;
+                    continue;
+                }
+                throw error;
             }
             for (const entry of entries) {
                 const full = path.join(dir, entry.name);
@@ -333,20 +376,68 @@ function stripBadRpaths(target) {
                     stack.push(full);
                     continue;
                 }
+                if (entry.isSymbolicLink()) {
+                    // A few wheels ship as a directory symlink (e.g.
+                    // ``cv2 -> opencv_python_headless`` on Fedora).
+                    // Resolve the link to see whether the target is
+                    // actually a directory we should walk into. We
+                    // do NOT filter by resolved path here -- any
+                    // target inside the active Python's package
+                    // roots is in scope; the per-file ``W_OK`` and
+                    // ``DT_RUNPATH`` checks below keep us from
+                    // touching anything we shouldn't.
+                    let targetStat;
+                    try {
+                        targetStat = fs.statSync(full);
+                    } catch (error) {
+                        // Broken symlink; skip silently.
+                        continue;
+                    }
+                    if (targetStat.isDirectory()) {
+                        stack.push(full);
+                    }
+                    continue;
+                }
                 if (!entry.name.endsWith(".so")) continue;
+                try {
+                    fs.accessSync(full, fs.constants.W_OK);
+                } catch (error) {
+                    // Root-owned ``.so`` or read-only mount; nothing
+                    // we can do. PyInstaller won't be able to bundle
+                    // it anyway, so a silent skip is fine. This is
+                    // the path that catches root-owned system
+                    // extensions on Kali (e.g. ``pg_ext.so`` inside
+                    // ``/usr/share/metasploit-framework/...``).
+                    skippedUnwritable += 1;
+                    continue;
+                }
                 if (rewriteSORpath(full, root)) {
                     touched += 1;
                 }
             }
         }
     }
+    if (skippedUnreadable > 0) {
+        console.log(
+            `[build-backend] skipped ${skippedUnreadable} unreadable site-packages ` +
+            `directory(ies); the active Python (${probePython}) can reach but ` +
+            `the build user cannot list them`,
+        );
+    }
+    if (skippedUnwritable > 0) {
+        console.log(
+            `[build-backend] skipped ${skippedUnwritable} non-writable .so file(s); ` +
+            `these are root-owned and not part of the build environment`,
+        );
+    }
     if (touched === 0) {
         console.log(
-            "[build-backend] no absolute DT_RUNPATH entries found in site-packages; nothing to patch",
+            `[build-backend] no DT_RUNPATH entries to rewrite in the active Python's ` +
+            `site-packages (probe: ${probePython})`,
         );
     } else {
         console.log(
-            `[build-backend] rewrote ${touched} .so file(s) to drop absolute DT_RUNPATH entries`,
+            `[build-backend] rewrote ${touched} .so file(s) to drop DT_RUNPATH entries`,
         );
     }
 }
