@@ -4320,6 +4320,104 @@ ipcMain.handle("save-text", async (_event, options = {}) => {
   }
 });
 
+// Renders the supplied HTML in a hidden BrowserWindow and writes the
+// resulting PDF to disk. The renderer is responsible for producing the
+// same HTML it already uses for the HTML summary export — this handler
+// just turns that HTML into a paginated PDF via Electron's built-in
+// `webContents.printToPDF` API. No third-party PDF dependency required.
+ipcMain.handle("save-pdf-report", async (_event, options = {}) => {
+  const html = typeof options?.html === "string" ? options.html : "";
+  if (!html.trim()) {
+    return { success: false, error: "No HTML content to render" };
+  }
+
+  const dialogTitle =
+    typeof options?.title === "string" && options.title.trim()
+      ? options.title.trim()
+      : "Save PDF Report";
+  const defaultNameRaw =
+    typeof options?.defaultName === "string" && options.defaultName.trim()
+      ? options.defaultName.trim()
+      : "packetsnitch-report.pdf";
+  const defaultName = path.basename(defaultNameRaw);
+  const customFilters = Array.isArray(options?.filters)
+    ? options.filters
+      .map((entry) => {
+        const name =
+          typeof entry?.name === "string" && entry.name.trim()
+            ? entry.name.trim()
+            : "";
+        const extensions = Array.isArray(entry?.extensions)
+          ? entry.extensions
+            .map((extension) =>
+              typeof extension === "string" ? extension.trim().replace(/^\./, "") : "",
+            )
+            .filter(Boolean)
+          : [];
+        if (!name || !extensions.length) return null;
+        return { name, extensions };
+      })
+      .filter(Boolean)
+    : [];
+  const dialogFilters = customFilters.length
+    ? customFilters
+    : [
+      { name: "PDF Files", extensions: ["pdf"] },
+      { name: "All Files", extensions: ["*"] },
+    ];
+  const defaultExtension =
+    typeof options?.defaultExtension === "string" && options.defaultExtension.trim()
+      ? options.defaultExtension.trim().replace(/^\./, "")
+      : "pdf";
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: dialogTitle,
+    defaultPath: path.join(app.getPath("documents"), defaultName),
+    filters: dialogFilters,
+    defaultExtension,
+  });
+  if (canceled || !filePath) return { success: false, canceled: true };
+
+  // Inline the HTML via a data: URL so the renderer can resolve any
+  // relative resource references (e.g. embedded base64 images) without
+  // needing a temp file on disk. The hidden window is fully off-screen
+  // and never shown to the user.
+  const htmlWindow = new BrowserWindow({
+    show: false,
+    width: 1024,
+    height: 1280,
+    webPreferences: {
+      offscreen: false,
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  try {
+    const dataUrl = `data:text/html;charset=UTF-8;base64,${Buffer.from(
+      html,
+      "utf8",
+    ).toString("base64")}`;
+    await htmlWindow.loadURL(dataUrl);
+    const pdfBuffer = await htmlWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: "Letter",
+      margins: {
+        marginType: "default",
+      },
+    });
+    await fs.promises.writeFile(filePath, pdfBuffer);
+    return { success: true };
+  } catch (err) {
+    console.error("PDF save error:", err);
+    return { success: false, error: err.message };
+  } finally {
+    if (!htmlWindow.isDestroyed()) {
+      htmlWindow.destroy();
+    }
+  }
+});
+
 ipcMain.handle("get-asset-base64", async (_event, relativePath) => {
   const rel = typeof relativePath === "string" ? relativePath.trim() : "";
   if (!rel) {

@@ -178,6 +178,7 @@ const convertContextMenuMarkup = `
       <button id="ctx-export-summary-md" role="menuitem">Save Report (Markdown)</button>
       <button id="ctx-export-summary-txt" role="menuitem">Save Report (Text)</button>
       <button id="ctx-export-summary-html" role="menuitem">Save Report (HTML)</button>
+      <button id="ctx-export-summary-pdf" role="menuitem">Save Report (PDF)</button>
     </div>
   </div>
   <div id="ctx-http-file-submenu" class="ctx-submenu">

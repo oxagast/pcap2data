@@ -759,6 +759,48 @@ strong {
   margin-bottom: 8px;
 }
 
+.summary-workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.summary-workspace-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.summary-workspace-header-btn {
+  background-color: var(--color-7);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-weight: bold;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s;
+}
+
+.summary-workspace-header-btn:hover,
+.summary-workspace-header-btn:focus {
+  background-color: var(--color-2);
+  border-color: var(--color-3);
+  color: var(--color-1);
+  outline: none;
+}
+
+.summary-workspace-header-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .crypt-subtab-row {
   display: flex;
   gap: 8px;
