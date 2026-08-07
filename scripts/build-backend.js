@@ -407,27 +407,40 @@ function rewriteSORpath(soPath, siteRoot) {
     // them alone avoids spurious edits.
     const offendingRunpath = dyn.runpath != null;
     if (!offendingRunpath) return false;
-    // The original ``.so`` lives at e.g. ``<siteRoot>/scipy/special/foo.so``;
-    // after PyInstaller bundles the wheel the file ends up at the same
-    // relative location (``<bundle>/scipy/special/foo.so``), and the
-    // ``scipy.libs`` sibling is at ``<bundle>/scipy.libs``. So the
-    // ``$ORIGIN``-relative path is ``../../scipy.libs``.
+
+    // Decide what DT_RPATH value to write. Two cases:
     //
-    // For numpy's layout, ``numpy.libs`` is a sibling of ``numpy/``
-    // under ``site-packages``; the existing scipy ``.so`` files use
-    // ``$ORIGIN/../../scipy.libs`` and numpy uses
-    // ``$ORIGIN/../../numpy.libs``. We pick the correct ``.libs``
-    // sibling based on the closest package ancestor that contains a
-    // sibling ``<pkg>.libs`` directory.
-    const libsSibling = findLibsSibling(soPath, siteRoot);
-    if (!libsSibling) {
-        console.warn(
-            `[build-backend] skipping ${soPath}: cannot locate a .libs sibling to write a $ORIGIN RPATH`,
-        );
-        return false;
+    // 1. The existing DT_RUNPATH is ``$ORIGIN``-relative (e.g. just
+    //    ``$ORIGIN``, ``$ORIGIN/lib``, ``$ORIGIN/../foo``). In that
+    //    case we preserve the value verbatim. The loader's behavior
+    //    is identical whether the entry is ``DT_RUNPATH`` or
+    //    ``DT_RPATH``; only the dynamic tag changes, and staticx is
+    //    happy because it accepts ``$ORIGIN``-relative ``DT_RPATH``.
+    //    This handles libraries like ``libabsl_*.so`` (Abseil, pulled
+    //    in by gRPC / tensorboard / etc.) whose DT_RUNPATH points at
+    //    their own directory for self-contained dependency lookup.
+    //
+    // 2. The existing DT_RUNPATH is absolute (e.g. scipy's
+    //    ``cython_special.so`` with ``/opt/_internal/cpython-.../scipy_openblas32/lib``).
+    //    An absolute path is meaningless on the target machine, so
+    //    we redirect to the wheel's bundled ``<pkg>.libs`` directory
+    //    via ``$ORIGIN``. We pick the closest ``<pkg>.libs`` sibling
+    //    by walking up from the ``.so`` toward the site-packages root.
+    let newRpath;
+    if (dyn.runpath.startsWith("$ORIGIN")) {
+        newRpath = dyn.runpath;
+    } else {
+        const libsSibling = findLibsSibling(soPath, siteRoot);
+        if (!libsSibling) {
+            console.warn(
+                `[build-backend] skipping ${path.relative(PROJECT_ROOT, soPath)}: ` +
+                `absolute DT_RUNPATH with no .libs sibling to redirect to`,
+            );
+            return false;
+        }
+        const rel = path.relative(path.dirname(soPath), libsSibling);
+        newRpath = `$ORIGIN/${rel.split(path.sep).join("/")}`;
     }
-    const rel = path.relative(path.dirname(soPath), libsSibling);
-    const newRpath = `$ORIGIN/${rel.split(path.sep).join("/")}`;
     // ``--remove-rpath`` drops both ``RPATH`` and ``RUNPATH``; we
     // re-set ``RPATH`` (not ``RUNPATH``) because staticx is fine with
     // a relative ``RPATH`` and forbids ``RUNPATH`` outright.
@@ -504,7 +517,7 @@ function main() {
     console.log(`[build-backend] target platform: ${target}`);
 
     preflightCheck();
-    applyStaticxPatch();
+    applyProjectPatches();
     removeExistingBinary(targetConfig.exeName);
 
     stripBadRpaths(target);
@@ -517,16 +530,16 @@ function main() {
     console.log(`[build-backend] done.`);
 }
 
-// Apply the project-local staticx workaround before doing anything
-// else. The applier is idempotent: re-running it on an already-patched
-// or upstream-fixed install is a no-op with exit 0. We invoke it as a
-// separate Node script so the patch logic stays out of this file and
-// can be regenerated independently from the upstream source.
-//
-// On macOS/Windows the applier short-circuits because staticx is not
-// installed, so this call is cheap and harmless.
-function applyStaticxPatch() {
-    const applier = path.join(PROJECT_ROOT, "scripts", "apply-staticx-patch.js");
+// Apply all project-local patches under ``patches/`` before doing
+// anything else. The applier (``scripts/apply-patches.js``) is
+// idempotent: re-running it on already-applied or upstream-fixed
+// installs is a no-op with exit 0. Each patch is a unified diff
+// with magic ``# cwd:`` / ``# python:`` directives at the top, so
+// the applier can locate target files across venvs, node_modules,
+// and other dynamic layouts without needing GNU ``patch`` on PATH
+// (which makes this Windows-friendly).
+function applyProjectPatches() {
+    const applier = path.join(PROJECT_ROOT, "scripts", "apply-patches.js");
     const result = spawnSync(process.execPath, [applier], {
         cwd: PROJECT_ROOT,
         stdio: "inherit",
@@ -540,7 +553,7 @@ function applyStaticxPatch() {
     }
     if (result.status !== 0) {
         console.error(
-            `[build-backend] staticx patcher exited with code ${result.status}; ` +
+            `[build-backend] patch applier exited with code ${result.status}; ` +
             "see messages above for details",
         );
         process.exit(result.status || 1);

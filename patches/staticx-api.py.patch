@@ -1,5 +1,23 @@
+# require-import: staticx
+# python: os.path.dirname(staticx.__file__)
+#
+# This patch works around an upstream bug in staticx 0.14.x: the
+# bootloader-identify probe calls ``r.check_returncode()`` on the
+# result of running the bootloader with ``STATICX_BOOTLOADER_IDENTIFY=1``,
+# but the bootloader intentionally exits with status 2 in identify
+# mode (no archive attached; that's the documented protocol). The
+# patch tolerates exit codes 0 and 2 and re-raises ``CalledProcessError``
+# for any other failure so genuine loader errors still surface.
+#
+# The patch is keyed on the ``STATICX_BOOTLOADER_IDENTIFY_PATCH_APPLIED``
+# sentinel comment, which the applier (``scripts/apply-patches.js``)
+# uses for idempotency.
+#
+# Regenerate from upstream with::
+#
+#     python3 -c "import sys; sys.path.insert(0, '/path/to/staticx-0.14.2'); ..." # see /memories/repo/staticx_backend_build.md
 --- api.py
-+++ api.py	2026-08-07 17:58:29.567662102 -0400
++++ api.py
 @@ -87,14 +87,24 @@
              raise FormatMismatchError(
                  f"Bootloader machine ({bldr_mach}) doesn't match program machine ({prog_mach})")
@@ -25,4 +43,3 @@
 +            )
          lines = (line.split(':', 1)[1].strip() for line in r.stderr.splitlines())
          logging.debug("Bootloader: " + " ".join(lines))
- 

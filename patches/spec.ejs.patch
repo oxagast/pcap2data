@@ -1,5 +1,18 @@
---- node_modules/electron-installer-redhat/resources/spec.ejs	2026-05-31 11:51:43.342676172 -0400
-+++ spec.ejs	2026-05-31 11:44:37.177697544 -0400
+# cwd: node_modules/electron-installer-redhat/resources
+# target: spec.ejs
+#
+# The ``electron-installer-redhat`` RPM spec template emits
+# ``cp usr/* ...`` from inside the package's ``resources/`` directory,
+# but the actual source tree at build time is one level above (in the
+# project root's ``out/`` directory produced by electron-forge). The
+# patched ``cp ../usr/* ...`` correctly references that parent
+# directory.
+#
+# This patch is idempotent: the applier (``scripts/apply-patches.js``)
+# detects when ``spec.ejs`` already contains ``../usr/*`` and skips
+# re-application.
+--- node_modules/electron-installer-redhat/resources/spec.ejs
++++ spec.ejs
 @@ -24,7 +24,7 @@
  
  %>%install
