@@ -1327,6 +1327,7 @@ contextBridge.exposeInMainWorld('saveapi', {
   saveHttpBody: (bodyHex, contentType) =>
     ipcRenderer.invoke('save-http-body', bodyHex, contentType),
   saveNotes: (notesText) => ipcRenderer.invoke('save-notes', notesText),
+  savePdfReport: (options) => ipcRenderer.invoke('save-pdf-report', options),
 });
 
 contextBridge.exposeInMainWorld('extractapi', {

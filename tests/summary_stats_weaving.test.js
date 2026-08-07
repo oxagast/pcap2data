@@ -35,6 +35,44 @@ function loadFunction(functionName) {
     return extractFunctionSource(sourceText, functionName);
 }
 
+// Same as loadFunction, but preserves the `async` keyword on the
+// declaration. `loadFunction` searches for `function <name>` which
+// strips the `async` prefix; this helper searches for
+// `async function <name>` first and keeps the `async` keyword in
+// the extracted source so the function remains awaitable in the
+// test sandbox. Falls back to loadFunction's behaviour if the
+// function is not declared async.
+function loadAsyncFunction(functionName) {
+    const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+    const sourceText = fs.readFileSync(sourcePath, 'utf8');
+    const asyncStartToken = `async function ${functionName}`;
+    const plainStartToken = `function ${functionName}`;
+    let startIndex = sourceText.indexOf(asyncStartToken);
+    let isAsync = startIndex !== -1;
+    if (!isAsync) {
+        startIndex = sourceText.indexOf(plainStartToken);
+    }
+    if (startIndex === -1) {
+        throw new Error(`Could not find function ${functionName}`);
+    }
+    const bodyStart = sourceText.indexOf('{', startIndex);
+    let depth = 0;
+    for (let cursor = bodyStart; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === '{') depth += 1;
+        if (char === '}') {
+            depth -= 1;
+            if (depth === 0) {
+                // Slice from the `async` token (or `function` token for
+                // non-async helpers) so the extracted source already
+                // carries the keyword. Do NOT re-prepend `async`.
+                return sourceText.slice(startIndex, cursor + 1);
+            }
+        }
+    }
+    throw new Error(`Could not parse function ${functionName}`);
+}
+
 function loadConstant(constantName) {
     const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
     const sourceText = fs.readFileSync(sourcePath, 'utf8');
@@ -452,9 +490,11 @@ describe('summary stats weaving', () => {
 
         test('distillSummaryMarkdownWithLLM exists and is exported as a function', () => {
             // The distiller must be a top-level function in the file so the
-            // export flow can call it.
+            // export flow can call it. Look for the actual declaration line
+            // rather than the first mention (which may be in a comment
+            // describing the function's contract or return values).
             const headerLine = sourceText.split('\n').find((line) =>
-                line.includes('distillSummaryMarkdownWithLLM'),
+                /^(async\s+)?function\s+distillSummaryMarkdownWithLLM\b/.test(line),
             );
             expect(headerLine).toBeDefined();
             expect(headerLine).toMatch(
@@ -660,6 +700,347 @@ describe('summary stats weaving', () => {
             expect(body).toContain('SUMMARY_DISTILL_ENTRY_SIGNATURE');
             // Must filter out prior distilled entries.
             expect(body).toMatch(/filter[\s\S]{0,300}SUMMARY_DISTILL_ENTRY_SIGNATURE/);
+        });
+
+        describe('export-time distillation cache', () => {
+            // The export-time distiller caches the LLM result keyed on a
+            // fingerprint of the *analyst-visible* content. A re-save with
+            // no new context must skip the LLM pass and return the cached
+            // distilled text under SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED.
+            // The cache must be invalidated when notes change so the
+            // analyst always sees a fresh distillation on the next save
+            // after they add context.
+            const sourcePath = path.join(__dirname, '..', 'src/ui/main-frontend.js');
+            const sourceText = fs.readFileSync(sourcePath, 'utf8');
+
+            function extractFunctionBody(name) {
+                const startToken = `function ${name}`;
+                const startIndex = sourceText.indexOf(startToken);
+                if (startIndex === -1) {
+                    throw new Error(`Could not find function ${name}`);
+                }
+                const bodyStart = sourceText.indexOf('{', startIndex);
+                let depth = 0;
+                for (let cursor = bodyStart; cursor < sourceText.length; cursor += 1) {
+                    const char = sourceText[cursor];
+                    if (char === '{') depth += 1;
+                    if (char === '}') {
+                        depth -= 1;
+                        if (depth === 0) {
+                            return sourceText.slice(startIndex, cursor + 1);
+                        }
+                    }
+                }
+                throw new Error(`Could not parse function ${name}`);
+            }
+
+            function bootDistillCacheContext(overrides = {}) {
+                const llmCalls = [];
+                const context = Object.assign(
+                    {
+                        // Single-entry cache state, mirroring the module-
+                        // level declaration in main-frontend.js.
+                        summaryDistillCache: {
+                            inputHash: '',
+                            inputLength: 0,
+                            distilledText: '',
+                            distilledAt: 0,
+                        },
+                        // Mimic the prior `__distilled__` push: a list of
+                        // summary entries that may or may not include one.
+                        compactedAnalysisSummaries: [],
+                        notesList: [],
+                        // A safe no-op log writer.
+                        writeLogEntry: () => { },
+                        // The fingerprint builder reads these. The
+                        // overrides let tests control notes / stats.
+                        buildStatsMarkdownSection: () => 'STATS',
+                        isNoteConcrete: () => false,
+                        // The LLM mock records calls and returns canned
+                        // responses so we can verify cache hits short-
+                        // circuit the call.
+                        callLargeLanguageModelWithRetry: async (prompt) => {
+                            llmCalls.push(prompt);
+                            return { response: `DISTILLED(${prompt.length})` };
+                        },
+                        isLlmRuntimeEnabled: () => true,
+                        isLlmEnabledInSettings: () => true,
+                        LLM_MAX_CONTENT_LENGTH: 200000,
+                        SUMMARY_DISTILL_MIN_LENGTH: 400,
+                        SUMMARY_DISTILL_INPUT_MAX_CHARS: 60000,
+                        SUMMARY_DISTILL_OUTPUT_MAX_CHARS: 60000,
+                        // The distiller also calls these for status.
+                        statusUpdate: () => { },
+                    },
+                    overrides,
+                );
+                // Wrap the source in an async IIFE so the distiller's
+                // `await` is valid. Function declarations inside an
+                // async IIFE are scoped to that IIFE — expose them onto
+                // the surrounding context so tests can call them
+                // directly via `context.distillSummaryMarkdownWithLLM`.
+                const source = `
+                    (async () => {
+                        ${[
+                        loadConstant('SUMMARY_DISTILL_ENTRY_SIGNATURE'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED'),
+                        loadConstant('SUMMARY_DISTILL_OK'),
+                        loadConstant('SUMMARY_DISTILL_ERROR'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_EMPTY'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_TOO_SHORT'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_RUNTIME_DISABLED'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_SETTINGS_DISABLED'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_PROMPT_TOO_LONG'),
+                        loadConstant('SUMMARY_DISTILL_SKIP_LLM_EMPTY'),
+                        loadFunction('hashSummaryInputForDistillCache'),
+                        loadFunction('resetSummaryDistillCache'),
+                        loadFunction('buildSummaryDistillCacheFingerprint'),
+                        loadFunction('buildSummaryDistillPrompt'),
+                        loadAsyncFunction('distillSummaryMarkdownWithLLM'),
+                    ].join('\n\n')}
+                        globalThis.hashSummaryInputForDistillCache = hashSummaryInputForDistillCache;
+                        globalThis.resetSummaryDistillCache = resetSummaryDistillCache;
+                        globalThis.buildSummaryDistillCacheFingerprint = buildSummaryDistillCacheFingerprint;
+                        globalThis.distillSummaryMarkdownWithLLM = distillSummaryMarkdownWithLLM;
+                        globalThis.__booted = true;
+                    })();
+                `;
+                vm.createContext(context);
+                vm.runInContext(source, context);
+                // Wait for the async IIFE to finish binding the
+                // functions to globalThis before returning. The IIFE
+                // only does synchronous work after the await in the
+                // distiller, so by the time vm.runInContext returns the
+                // microtask queue has the IIFE pending. A short polling
+                // loop yields until globalThis.__booted is set.
+                const waitForBoot = () => new Promise((resolve) => {
+                    const check = () => {
+                        if (context.__booted) {
+                            resolve();
+                        } else {
+                            setImmediate(check);
+                        }
+                    };
+                    check();
+                });
+                return waitForBoot().then(() => ({ context, llmCalls }));
+            }
+
+            function longEnough(text) {
+                // Pad the input so it clears SUMMARY_DISTILL_MIN_LENGTH.
+                return `${text}\n\n${'x'.repeat(500)}`;
+            }
+
+            test('buildSummaryDistillCacheFingerprint excludes the distilled entry', () => {
+                // The fingerprint must not include the distilled entry's
+                // summary text. If it did, every re-save would have a
+                // different fingerprint and the cache would never hit.
+                const baseline = longEnough('baseline content');
+                const bootPromise = bootDistillCacheContext();
+                return bootPromise.then(({ context }) => {
+                    // First save: no distilled entry.
+                    context.compactedAnalysisSummaries = [
+                        { signature: 'ctx:1', summary: 'Context one' },
+                        { signature: 'ctx:2', summary: 'Context two' },
+                    ];
+                    const fpWithoutDistilled =
+                        context.buildSummaryDistillCacheFingerprint();
+                    // Simulate the prior save pushing a `__distilled__` entry.
+                    context.compactedAnalysisSummaries = [
+                        { signature: '__distilled__', summary: 'LLM distilled blob' },
+                        { signature: 'ctx:1', summary: 'Context one' },
+                        { signature: 'ctx:2', summary: 'Context two' },
+                    ];
+                    const fpWithDistilled =
+                        context.buildSummaryDistillCacheFingerprint();
+                    // The distilled entry is the ONLY thing that changed
+                    // and the fingerprints must match.
+                    expect(fpWithDistilled).toBe(fpWithoutDistilled);
+                    // Sanity check: the baseline is not blank.
+                    expect(fpWithoutDistilled.length).toBeGreaterThan(0);
+                    void baseline;
+                });
+            });
+
+            test('fingerprint diverges when a new note is added', () => {
+                // Notes are part of the cache key so an added note forces
+                // a fresh distillation on the next save.
+                return bootDistillCacheContext().then(({ context }) => {
+                    context.notesList = [];
+                    const fpEmpty = context.buildSummaryDistillCacheFingerprint();
+                    context.notesList = [
+                        { text: 'analyst observation', concrete: false, updatedAt: 1 },
+                    ];
+                    const fpWithNote =
+                        context.buildSummaryDistillCacheFingerprint();
+                    expect(fpWithNote).not.toBe(fpEmpty);
+                });
+            });
+
+            test('fingerprint diverges when a context entry is added', () => {
+                // New analysis context (a new compaction pass entry)
+                // must also force re-distillation.
+                return bootDistillCacheContext().then(({ context }) => {
+                    context.compactedAnalysisSummaries = [
+                        { signature: 'ctx:1', summary: 'A' },
+                    ];
+                    const fpOne = context.buildSummaryDistillCacheFingerprint();
+                    context.compactedAnalysisSummaries = [
+                        { signature: 'ctx:1', summary: 'A' },
+                        { signature: 'ctx:2', summary: 'B' },
+                    ];
+                    const fpTwo = context.buildSummaryDistillCacheFingerprint();
+                    expect(fpTwo).not.toBe(fpOne);
+                });
+            });
+
+            test('re-save with no new context short-circuits the LLM call', async () => {
+                // The full end-to-end check: two consecutive saves with
+                // the same analyst-visible state must invoke the LLM
+                // exactly once. The second call must return
+                // SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED with the cached
+                // distilled text and must NOT call the LLM again.
+                const { context, llmCalls } = await bootDistillCacheContext();
+                context.compactedAnalysisSummaries = [
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                context.notesList = [
+                    { text: 'note one', concrete: false, updatedAt: 1 },
+                ];
+                const input1 = longEnough('# Summary\n\nfirst save body');
+                const input2 = longEnough('# Summary\n\nfirst save body');
+                // First save: cache empty, LLM is called.
+                const result1 = await context.distillSummaryMarkdownWithLLM(input1);
+                expect(result1.status).toBe('ok');
+                expect(result1.text).toMatch(/^DISTILLED\(/);
+                expect(llmCalls.length).toBe(1);
+                // Second save: same analyst-visible state, but the input
+                // *appears* different because we simulate the post-save
+                // state where the `__distilled__` entry has been pushed.
+                // The distiller must ignore the distilled entry and
+                // short-circuit on the fingerprint.
+                context.compactedAnalysisSummaries = [
+                    { signature: '__distilled__', summary: result1.text },
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                const result2 = await context.distillSummaryMarkdownWithLLM(input2);
+                expect(result2.status).toBe('already_distilled');
+                expect(result2.text).toBe(result1.text);
+                expect(llmCalls.length).toBe(1); // still only one LLM call
+            });
+
+            test('resetSummaryDistillCache forces a fresh distillation', async () => {
+                // After the cache is reset (e.g. note edit), the next
+                // save must call the LLM again even with the same input.
+                const { context, llmCalls } = await bootDistillCacheContext();
+                context.compactedAnalysisSummaries = [
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                const input = longEnough('# Summary\n\ncontent');
+                await context.distillSummaryMarkdownWithLLM(input);
+                expect(llmCalls.length).toBe(1);
+                // Simulate the prior save pushing the distilled entry.
+                context.compactedAnalysisSummaries = [
+                    { signature: '__distilled__', summary: 'cached' },
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                context.resetSummaryDistillCache();
+                const result = await context.distillSummaryMarkdownWithLLM(input);
+                expect(result.status).toBe('ok');
+                expect(llmCalls.length).toBe(2);
+            });
+
+            test('refreshSummaryForNotes invalidates the cache', () => {
+                // The Notes <-> Summary integration helper must clear
+                // the cache so the next save after a note edit
+                // re-distills. Verified by source-text inspection so we
+                // do not have to boot the entire Notes integration.
+                const body = extractFunctionBody('refreshSummaryForNotes');
+                expect(body).toContain('resetSummaryDistillCache');
+            });
+
+            test('cache is shared across all save paths (text, html, markdown, pdf)', async () => {
+                // The four save flows — text, html, markdown via the
+                // context menu, and pdf via the header button — must
+                // share the same module-scoped distillation cache so a
+                // re-save in any format after a successful distillation
+                // short-circuits the LLM pass. This is the property the
+                // user expects: once the report has been distilled, no
+                // subsequent export in any format should re-invoke the
+                // LLM unless new context has been added.
+                //
+                // We exercise the cache directly by simulating the
+                // distiller invocation that each save path makes. If
+                // the cache were path-local, four consecutive calls
+                // would each invoke the LLM; with a shared cache the
+                // first call populates the entry and the next three
+                // hit it.
+                const { context, llmCalls } = await bootDistillCacheContext();
+                context.compactedAnalysisSummaries = [
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                context.notesList = [
+                    { text: 'note one', concrete: false, updatedAt: 1 },
+                ];
+                const input = longEnough('# Summary\n\ncontent for save');
+                // First save (any format): LLM is called.
+                const r1 = await context.distillSummaryMarkdownWithLLM(input);
+                expect(r1.status).toBe('ok');
+                expect(llmCalls.length).toBe(1);
+                // Simulate the post-save state where the distilled
+                // entry has been pushed into compactedAnalysisSummaries.
+                context.compactedAnalysisSummaries = [
+                    { signature: '__distilled__', summary: r1.text },
+                    { signature: 'ctx:1', summary: 'Some analysis' },
+                ];
+                // The next three saves — emulating text / html /
+                // markdown / pdf — must all hit the cache. We re-use
+                // the same input string for the call (the export-time
+                // builder is responsible for formatting; the cache
+                // decision is made before that step).
+                const r2 = await context.distillSummaryMarkdownWithLLM(input);
+                const r3 = await context.distillSummaryMarkdownWithLLM(input);
+                const r4 = await context.distillSummaryMarkdownWithLLM(input);
+                expect(r2.status).toBe('already_distilled');
+                expect(r3.status).toBe('already_distilled');
+                expect(r4.status).toBe('already_distilled');
+                expect(llmCalls.length).toBe(1); // still only one LLM call
+                // Every cache hit returns the same distilled text so
+                // the analyst's exported file content is consistent
+                // across formats.
+                expect(r2.text).toBe(r1.text);
+                expect(r3.text).toBe(r1.text);
+                expect(r4.text).toBe(r1.text);
+            });
+
+            test('every save path routes through the cached distiller', () => {
+                // Static check: both `saveSummaryFromContextMenu` (used
+                // by text / html / markdown) and `saveSummaryAsPdf`
+                // (used by the PDF header button) must await the same
+                // `distillSummaryMarkdownWithLLM` function so the cache
+                // state is shared across all four export formats.
+                const contextMenuBody = extractFunctionBody(
+                    'saveSummaryFromContextMenu',
+                );
+                const pdfBody = extractFunctionBody('saveSummaryAsPdf');
+                expect(contextMenuBody).toContain('distillSummaryMarkdownWithLLM');
+                expect(contextMenuBody).toMatch(
+                    /await\s+distillSummaryMarkdownWithLLM\(/,
+                );
+                expect(pdfBody).toContain('distillSummaryMarkdownWithLLM');
+                expect(pdfBody).toMatch(
+                    /await\s+distillSummaryMarkdownWithLLM\(/,
+                );
+                // Both paths must surface the cache-hit status so the
+                // analyst sees a positive "LLM not re-invoked" message
+                // instead of a generic "export not distilled" warning.
+                expect(contextMenuBody).toContain(
+                    'SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED',
+                );
+                expect(pdfBody).toContain(
+                    'SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED',
+                );
+            });
         });
     });
 

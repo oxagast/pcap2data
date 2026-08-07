@@ -141,7 +141,19 @@
           <p id="error-message"></p>
         </div>
         <div id="summary_box">
-          <div class="summary-workspace-header">Analysis Summary</div>
+          <div class="summary-workspace-header">
+            <span class="summary-workspace-header-title">Analysis Summary</span>
+            <span class="summary-workspace-header-actions">
+              <button id="summary-save-html-btn" class="summary-workspace-header-btn" type="button"
+                title="Save the analysis summary as a standalone HTML file">
+                Save as HTML
+              </button>
+              <button id="summary-save-pdf-btn" class="summary-workspace-header-btn" type="button"
+                title="Save the analysis summary as a PDF document">
+                Save as PDF
+              </button>
+            </span>
+          </div>
           <div id="summary-compaction-status" class="summary-compaction-status" aria-live="polite" hidden>
             <span class="loading"></span>
             <span id="summary-compaction-status-text">Compacting analysis…</span>

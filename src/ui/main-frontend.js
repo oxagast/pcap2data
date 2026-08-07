@@ -8123,6 +8123,15 @@ function refreshSummaryForNotes() {
   if (typeof renderCombinedAnalysisSummary === "function") {
     renderCombinedAnalysisSummary();
   }
+  // Notes are part of the export-time pre-distillation input, so any
+  // add / remove / verified toggle / text edit changes the hash that
+  // the distill cache keys on. Reset the cache so the next save runs
+  // the LLM pass over the new content rather than skipping it as a
+  // stale cache hit. The cache is also reset on renderer reload, so
+  // this is the only path that needs to clear it from user actions.
+  if (typeof resetSummaryDistillCache === "function") {
+    resetSummaryDistillCache();
+  }
 }
 
 // Builds a stable signature string that identifies the current analysis context.
@@ -14357,6 +14366,7 @@ const convertContextButtons = {
   exportSummaryMarkdown: getCachedElement("ctx-export-summary-md"),
   exportSummaryText: getCachedElement("ctx-export-summary-txt"),
   exportSummaryHtml: getCachedElement("ctx-export-summary-html"),
+  exportSummaryPdf: getCachedElement("ctx-export-summary-pdf"),
   hex: getCachedElement("convert-context-hex"),
   binary: getCachedElement("convert-context-binary"),
   base64: getCachedElement("convert-context-base64"),
@@ -15335,6 +15345,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportSummaryHtml.style.display = hasSummaryHtmlToExport
+    ? "block"
+    : "none";
+  convertContextButtons.exportSummaryPdf.style.display = hasSummaryHtmlToExport
     ? "block"
     : "none";
   convertContextButtons.httpFileSave.style.display = hasHttpBody
@@ -20292,8 +20305,138 @@ const SUMMARY_DISTILL_SKIP_RUNTIME_DISABLED = "runtime_disabled";
 const SUMMARY_DISTILL_SKIP_SETTINGS_DISABLED = "settings_disabled";
 const SUMMARY_DISTILL_SKIP_PROMPT_TOO_LONG = "prompt_too_long";
 const SUMMARY_DISTILL_SKIP_LLM_EMPTY = "llm_empty";
+// Returned by distillSummaryMarkdownWithLLM when the current save's
+// pre-distillation input matches the most-recent successful save. The
+// prior distilled snapshot is returned unchanged so the user does not
+// pay for a second LLM distillation pass on a report that was already
+// distilled without any new context being added. The check is purely
+// session-scoped (one in-memory entry) so reloads or session restores
+// naturally re-distill on the first save after they mutate the
+// `compactedAnalysisSummaries` state.
+const SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED = "already_distilled";
 const SUMMARY_DISTILL_OK = "ok";
 const SUMMARY_DISTILL_ERROR = "error";
+
+// Single-entry in-memory cache for the export-time LLM distillation.
+// Keyed by a fast FNV-1a hash of the trimmed pre-distillation report
+// (raw input, before any LLM call). Populated only on
+// `SUMMARY_DISTILL_OK` so skips, errors, and the new "already
+// distilled" path never poison the cache with non-distilled text.
+//
+// Trade-offs:
+//   - Single entry, not LRU. Two consecutive saves that distill
+//     different reports (e.g. a save, a new note, another save) will
+//     overwrite the prior entry — that is the right behaviour because
+//     the second distillation is for a different input.
+//   - Renderer-scoped. A page reload or session restore discards the
+//     cache, so the first save after a restore runs the distiller
+//     again. This is the right trade-off because a restored session
+//     has no guarantee that its restored `__distilled__` entry was
+//     produced by a distillation over exactly the current input.
+let summaryDistillCache = {
+  inputHash: "",
+  inputLength: 0,
+  distilledText: "",
+  distilledAt: 0,
+};
+
+// 32-bit FNV-1a hash for cache keys. Not cryptographic — it only
+// needs to reliably detect "same report content as last save", and
+// FNV-1a does so with vanishingly small collision probability for
+// report-sized inputs. The intermediate multiply is done in two
+// stages (`hash + (hash << N)`) to keep the running value within
+// JS's exact-integer range (2^53) so the final `>>> 0` always
+// produces a well-defined 32-bit unsigned hash.
+function hashSummaryInputForDistillCache(input) {
+  const text = String(input || "");
+  let hash = 0x811c9dc5; // FNV offset basis
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash =
+      (hash +
+        ((hash << 1) +
+          (hash << 4) +
+          (hash << 7) +
+          (hash << 8) +
+          (hash << 24))) >>>
+      0;
+  }
+  return hash.toString(16);
+}
+
+// Resets the export-time distillation cache. Called whenever the
+// running Summary tab is mutated in a way that is expected to change
+// the pre-distillation input (new note, verified toggle, note edit,
+// etc.) so the next save does not get a stale cache hit. The cache
+// also resets itself implicitly on renderer reload because it lives
+// only in the renderer's memory.
+function resetSummaryDistillCache() {
+  summaryDistillCache = {
+    inputHash: "",
+    inputLength: 0,
+    distilledText: "",
+    distilledAt: 0,
+  };
+}
+
+// Returns a fingerprint string for the export-time distillation cache
+// that reflects *only* the analyst-visible "real" content sources
+// (per-context compaction summaries, analyst Notes, and the running
+// stats section). The prior `__distilled__` entry is deliberately
+// excluded so that re-saving without adding new context still
+// produces the same fingerprint as the previous save — even though
+// the rendered export markdown now contains the distilled text. This
+// is the property that lets the cache detect "no new context since
+// the last save" reliably.
+//
+// The fingerprint also intentionally excludes the headings and
+// structural framing applied by `prependSummaryHeading` /
+// `normalizeSummaryMarkdownHeadings` so cosmetic export-only edits
+// do not invalidate the cache.
+//
+// Concatenation order is fixed and stable; the values are joined with
+// a separator that cannot appear in any of the source strings so the
+// hash uniquely identifies the tuple of (notes, per-context entries,
+// stats). Order of the per-context entries is preserved.
+function buildSummaryDistillCacheFingerprint() {
+  const contextEntries = Array.isArray(compactedAnalysisSummaries)
+    ? compactedAnalysisSummaries.filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        entry.signature !== SUMMARY_DISTILL_ENTRY_SIGNATURE,
+    )
+    : [];
+  const contextText = contextEntries
+    .map((entry) => String(entry?.summary || "").trim())
+    .filter((text) => text.length > 0)
+    .join("\u0001ctx\u0001");
+  const notesText = Array.isArray(notesList)
+    ? notesList
+      .map((noteEntry) => {
+        if (!noteEntry || typeof noteEntry !== "object") return "";
+        const text = String(noteEntry.text || "").trim();
+        const concrete = isNoteConcrete(noteEntry) ? "1" : "0";
+        const updatedAt = Number(noteEntry.updatedAt) || 0;
+        return `${concrete}|${updatedAt}|${text}`;
+      })
+      .filter((row) => row.length > 0)
+      .join("\u0001note\u0001")
+    : "";
+  let statsText = "";
+  try {
+    if (typeof buildStatsMarkdownSection === "function") {
+      statsText = String(buildStatsMarkdownSection() || "");
+    }
+  } catch (err) {
+    // Stats section can throw if state is mid-initialisation; an empty
+    // stats string is fine for fingerprinting — the cache will simply
+    // miss and force a fresh distillation rather than risk a stale hit
+    // with mismatched stats.
+    statsText = "";
+  }
+  return `${contextText}\u0000--notes--\u0000${notesText}\u0000--stats--\u0000${statsText}`;
+}
 
 // Distils the final export report through the LLM. This is a single-pass
 // dedupe / chronological-sort / re-rank operation that runs after the LLM
@@ -20314,6 +20457,53 @@ async function distillSummaryMarkdownWithLLM(summaryMarkdown) {
     return reportResult(summaryMarkdown, SUMMARY_DISTILL_SKIP_EMPTY);
   }
   const trimmed = summaryMarkdown.trim();
+  // Cache lookup: if the user already saved (and successfully distilled)
+  // the exact same *analyst-visible* content (notes + per-context
+  // compaction entries + stats), return the cached distilled snapshot
+  // without re-invoking the LLM. This makes "Save again, no new
+  // context" a no-op for distillation, which matters because the prior
+  // save pushed the distilled entry into compactedAnalysisSummaries —
+  // re-distilling on the next save would feed the LLM the already-
+  // distilled text (the rendered export markdown now contains the
+  // `__distilled__` entry, so a literal-string hash of the rendered
+  // markdown would diverge on every re-save and defeat the cache).
+  //
+  // The fingerprint therefore ignores the `__distilled__` entry and
+  // is computed directly from the underlying state via
+  // `buildSummaryDistillCacheFingerprint`. New context (a new note,
+  // a new compaction pass, a stats refresh) changes the fingerprint
+  // and the LLM is invoked again.
+  const inputFingerprint = (() => {
+    try {
+      return hashSummaryInputForDistillCache(
+        buildSummaryDistillCacheFingerprint(),
+      );
+    } catch (err) {
+      // If fingerprint building throws (e.g. unexpected state during
+      // mid-initialisation), fall back to a literal-string hash of
+      // the rendered input. Worst case this disables the cache for
+      // this save and the next save re-distills, which is the safe
+      // failure mode.
+      writeLogEntry(
+        `Summary distill cache fingerprint failed, falling back to literal hash: ${err?.message || err}`,
+      );
+      return hashSummaryInputForDistillCache(trimmed);
+    }
+  })();
+  if (
+    inputFingerprint === summaryDistillCache.inputHash
+    && summaryDistillCache.distilledText
+    && summaryDistillCache.distilledText.length > 0
+  ) {
+    const reason =
+      `input matches previously-distilled snapshot (length=${trimmed.length}, distilled_at=${new Date(summaryDistillCache.distilledAt).toISOString()})`;
+    writeLogEntry(`Summary distill skipped: ${reason}`);
+    return reportResult(
+      summaryDistillCache.distilledText,
+      SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED,
+      reason,
+    );
+  }
   if (trimmed.length < SUMMARY_DISTILL_MIN_LENGTH) {
     const reason = `report length ${trimmed.length} below threshold ${SUMMARY_DISTILL_MIN_LENGTH}`;
     writeLogEntry(`Summary distill skipped: ${reason}`);
@@ -20384,6 +20574,16 @@ async function distillSummaryMarkdownWithLLM(summaryMarkdown) {
     writeLogEntry(
       `Summary distill completed: input=${trimmed.length} chars output=${finalDistilled.length} chars`,
     );
+    // Populate the cache only on a real distillation. The cache holds
+    // the pre-distillation fingerprint alongside the LLM's response so
+    // a subsequent save with unchanged input can short-circuit the
+    // LLM call entirely.
+    summaryDistillCache = {
+      inputHash: inputFingerprint,
+      inputLength: trimmed.length,
+      distilledText: finalDistilled,
+      distilledAt: Date.now(),
+    };
     return reportResult(finalDistilled, SUMMARY_DISTILL_OK);
   } catch (error) {
     const reason = error?.message || String(error);
@@ -20523,6 +20723,28 @@ async function saveSummaryFromContextMenu(format = "markdown") {
     statusUpdate(
       `Status: LLM distilled report (${inputChars} → ${outputChars} chars, ${deltaLabel}). Summary tab updated.`,
     );
+  } else if (distillOutcome.status === SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED) {
+    // Cache hit: the report was already distilled in a prior save and
+    // the user has not added any new context since. Surface a positive
+    // message so the analyst knows the saved file is the previously
+    // distilled version (not a fresh run) and that the LLM was not
+    // called for this save. The format label is included so the user
+    // sees which export type they just saved (text / HTML / Markdown
+    // — the PDF path has its own message because it goes through
+    // saveSummaryAsPdf, not this function).
+    const inputChars = rawSummaryMarkdown.trim().length;
+    const outputChars = summaryMarkdown.trim().length;
+    const formatLabel = normalizedFormat === "text"
+      ? "Text"
+      : normalizedFormat === "html"
+        ? "HTML"
+        : "Markdown";
+    statusUpdate(
+      `Status: ${formatLabel} built from previously-distilled report (${outputChars} chars, no new context detected). LLM not re-invoked.`,
+    );
+    // Make sure no callers downstream rely on the input length being
+    // visible here; the only consumer is this status string.
+    void inputChars;
   } else if (canDistill) {
     // LLM runtime is enabled but the distiller returned the original —
     // tell the user why so they know it wasn't actually distilled.
@@ -20653,6 +20875,220 @@ ${bodyHtml}
         );
       }
     });
+}
+
+// Triggered from a header button (or anywhere outside the context menu).
+// Currently delegates to the existing context-menu save path for the
+// text-based formats, and to saveSummaryAsPdf for PDF.
+async function saveSummaryFromHeaderButton(format = "markdown") {
+  const normalizedFormat =
+    format === "text" ? "text" : format === "html" ? "html" : format === "pdf" ? "pdf" : "markdown";
+  if (normalizedFormat === "pdf") {
+    return saveSummaryAsPdf();
+  }
+  return saveSummaryFromContextMenu(normalizedFormat);
+}
+
+// Saves the summary as a PDF by rendering the same self-contained HTML
+// used for HTML export through an off-screen BrowserWindow and asking
+// Electron to print that page to PDF. We share the HTML export pipeline
+// so the PDF version is visually consistent with the on-disk HTML report.
+async function saveSummaryAsPdf() {
+  const rawSummaryMarkdown = getSummaryMarkdownForExport();
+  if (!rawSummaryMarkdown.trim()) {
+    statusUpdate("Status: No summary available to export");
+    return;
+  }
+  const summaryBaseName = getSummaryExportBaseName();
+  const summaryTimestamp = formatDateTimeForFileName(new Date());
+
+  // Same LLM distillation pass as the context-menu save flow: dedupe,
+  // sort chronologically, re-rank by importance. The HTML (and therefore
+  // the PDF) is rendered from this distilled version.
+  const canDistill =
+    typeof isLlmRuntimeEnabled === "function"
+      ? isLlmRuntimeEnabled()
+      : false;
+  if (canDistill) {
+    statusUpdate("Status: Distilling PDF export report via LLM...");
+  }
+  let distillOutcome = {
+    text: rawSummaryMarkdown,
+    status: SUMMARY_DISTILL_SKIP_EMPTY,
+  };
+  try {
+    distillOutcome = await distillSummaryMarkdownWithLLM(rawSummaryMarkdown);
+  } catch (error) {
+    writeLogEntry(
+      `Summary distill threw during PDF export, using original report: ${error?.message || error}`,
+    );
+    distillOutcome = {
+      text: rawSummaryMarkdown,
+      status: SUMMARY_DISTILL_ERROR,
+      reason: error?.message || String(error),
+    };
+  }
+  let summaryMarkdown = distillOutcome.text;
+  if (distillOutcome.status === SUMMARY_DISTILL_OK) {
+    const pushed = pushDistilledSummaryIntoSummaryTab(summaryMarkdown);
+    if (pushed) {
+      summaryMarkdown = getSummaryMarkdownForExport();
+    }
+  }
+  if (distillOutcome.status === SUMMARY_DISTILL_OK) {
+    const inputChars = rawSummaryMarkdown.trim().length;
+    const outputChars = summaryMarkdown.trim().length;
+    const delta = inputChars - outputChars;
+    const deltaLabel = delta > 0 ? `−${delta}` : `+${Math.abs(delta)}`;
+    statusUpdate(
+      `Status: LLM distilled report (${inputChars} → ${outputChars} chars, ${deltaLabel}). Summary tab updated.`,
+    );
+  } else if (distillOutcome.status === SUMMARY_DISTILL_SKIP_ALREADY_DISTILLED) {
+    // Cache hit during PDF export: the report was already distilled in
+    // a prior save with no new context since. Same UX as the text/HTML
+    // path: tell the analyst the LLM was not re-invoked and the PDF
+    // was built from the cached distilled snapshot.
+    const outputChars = summaryMarkdown.trim().length;
+    statusUpdate(
+      `Status: PDF built from previously-distilled report (${outputChars} chars, no new context detected). LLM not re-invoked.`,
+    );
+  } else if (canDistill) {
+    const reason = distillOutcome.reason || distillOutcome.status;
+    statusUpdate(`Status: Export not distilled (${reason}).`);
+  }
+
+  // Build the same self-contained HTML document that saveSummaryFromContextMenu("html")
+  // writes to disk, then hand it to the main process for PDF rendering. This
+  // means the PDF and the standalone HTML report are visually identical.
+  let bodyHtml = "";
+  try {
+    bodyHtml = await buildSummaryBodyHtmlForHtmlExport(summaryMarkdown);
+  } catch (err) {
+    console.error("Failed to build summary body for PDF export:", err);
+    statusUpdate("Status: Failed to build summary for PDF export");
+    return;
+  }
+  const generatedDate = new Date().toLocaleString();
+  let logoSrc = "";
+  if (
+    window.saveapi &&
+    typeof window.saveapi.getAssetBase64 === "function"
+  ) {
+    try {
+      const logoResult = await window.saveapi.getAssetBase64(
+        "logo/packet-snitch-tag-transp.png",
+      );
+      if (logoResult?.success && logoResult.data && logoResult.mime) {
+        logoSrc = `data:${logoResult.mime};base64,${logoResult.data}`;
+      }
+    } catch (err) {
+      console.warn("Failed to load logo for PDF summary export:", err);
+    }
+  }
+  const logoHtml = logoSrc
+    ? `<img src="${logoSrc}" alt="PacketSnitch logo" class="summary-logo">`
+    : "";
+  const fullHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PacketSnitch Summary</title>
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+h1, h2, h3, h4 { font-weight: 600; }
+pre { background: #f5f5f5; padding: 0.75rem; overflow-x: auto; }
+code { background: #f0f0f0; padding: 0.15rem 0.3rem; border-radius: 3px; }
+blockquote { border-left: 4px solid #ccc; margin-left: 0; padding-left: 1rem; color: #555; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+th { background: #f5f5f5; }
+.summary-header { text-align: center; margin-bottom: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 1rem; }
+.summary-logo { max-width: 280px; height: auto; margin-bottom: 0.75rem; }
+.summary-meta { color: #666; font-size: 0.9rem; margin: 0; }
+.summary-meta a { color: #007acc; text-decoration: none; }
+.summary-meta a:hover { text-decoration: underline; }
+.summary-decoded-image { text-align: center; margin: 1.5rem 0; }
+.summary-decoded-image p { margin: 0 0 0.5rem; color: #444; }
+.summary-image { max-width: 280px; max-height: 350px; width: auto; height: auto; object-fit: contain; border: 1px solid #ddd; border-radius: 4px; }
+.summary-image-meta { color: #888; font-size: 0.85rem; }
+.summary-section { margin-bottom: 1.5rem; }
+.summary-section-divider { border: none; border-top: 1px solid #ddd; margin: 2rem 0; }
+</style>
+</head>
+<body>
+<div class="summary-header">
+  ${logoHtml}
+  <p class="summary-meta">Generated by PacketSnitch ${PACKETSNITCH_VERSION} on ${generatedDate} — <a href="https://packetsnitch.com" target="_blank" rel="noopener noreferrer">packetsnitch.com</a></p>
+</div>
+${bodyHtml}
+</body>
+</html>`;
+
+  if (
+    !window.saveapi ||
+    typeof window.saveapi.savePdfReport !== "function"
+  ) {
+    statusUpdate("Status: PDF export unavailable (missing IPC bridge)");
+    return;
+  }
+  statusUpdate("Status: Preparing PDF export...");
+  const result = await window.saveapi.savePdfReport({
+    html: fullHtml,
+    title: "Export Summary (PDF)",
+    defaultName: `packetsnitch-${summaryBaseName}-${summaryTimestamp}.pdf`,
+    defaultExtension: "pdf",
+    filters: [
+      { name: "PDF Documents", extensions: ["pdf"] },
+      { name: "All Files", extensions: ["*"] },
+    ],
+  });
+  if (!result) {
+    doError("Summary PDF export failed");
+    logErrorEntry("export-summary-pdf", "no result from savePdfReport");
+    statusUpdate("Status: Summary PDF export failed - no response");
+    return;
+  }
+  if (result.canceled) {
+    statusUpdate("Status: Export cancelled");
+    return;
+  }
+  if (result.success) {
+    statusUpdate("Status: Summary exported as PDF");
+    writeLogEntry("Summary PDF export completed");
+    return;
+  }
+  const errorMessage =
+    typeof result === "object" && "error" in result
+      ? result.error
+      : "unknown";
+  doError("Summary PDF export failed");
+  logErrorEntry("export-summary-pdf", errorMessage || "unknown");
+  statusUpdate(
+    `Status: Summary PDF export failed - ${errorMessage || "unknown error"}`,
+  );
+}
+
+// Expose the Summary export entry points on globalThis so other
+// webpack-bundled modules (e.g. summary-panel.js) can reach them
+// without needing to grow factory-injected dependencies. The panel
+// factory is loaded by src/front.js BEFORE this module, so a plain
+// module-local `function` declaration here is invisible to its
+// click-handler closures. The previous comment in summary-panel.js
+// already documented this contract but the assignment was never
+// actually wired up, which is why the "Save as HTML" / "Save as PDF"
+// header buttons silently no-op'd while the context menu still worked
+// (the context menu is wired in this same module's scope, so it has
+// direct closure access to the functions).
+//
+// The export key is namespaced so the renderer never grows a bare
+// `globalThis.saveSummaryFromHeaderButton` (which would be visible to
+// any other script that runs in the page).
+if (typeof globalThis !== "undefined") {
+  globalThis.__PACKETSNITCH_SUMMARY_EXPORT__ = {
+    saveSummaryFromHeaderButton,
+    saveSummaryAsPdf,
+    saveSummaryFromContextMenu,
+  };
 }
 
 async function currentPacketToConvJson() {
@@ -22975,6 +23411,9 @@ convertContextButtons.exportSummaryText.addEventListener("click", () => {
 });
 convertContextButtons.exportSummaryHtml.addEventListener("click", () => {
   saveSummaryFromContextMenu("html");
+});
+convertContextButtons.exportSummaryPdf.addEventListener("click", () => {
+  saveSummaryAsPdf();
 });
 convertContextButtons.saveCookieJar.addEventListener(
   "click",
