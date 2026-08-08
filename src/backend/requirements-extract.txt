@@ -20,8 +20,9 @@
 #   * ``py7zr`` — 7-Zip (.7z) parser. Ships its own pure-Python LZMA /
 #     LZMA2 codec stack plus BCJ filter support, so we don't need
 #     system ``7z``/``7za`` binaries at runtime.
-cabarchive==0.2.4 ; sys_platform != "win32"
-cabarchive-windows==1.0.0 ; sys_platform == "win32"
+#cabarchive==0.2.4 ; sys_platform != "win32"
+#cabarchive-windows==1.0.0 ; sys_platform == "win32"
+cabarchive==0.2.4
 py7zr==0.22.0
 # staticx is required for the build pipeline so the Linux PyInstaller
 # onefile can be re-wrapped into a portable self-contained executable.
