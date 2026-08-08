@@ -152,6 +152,18 @@ module.exports = {
       "src/data/goodies.txt",
       "src/data/valid-keys.txt",
       "config/models.json",
+      // The app icon is embedded into ``PacketSnitch.exe`` by
+      // ``primaryIcon`` below, but we also want the raw .ico file
+      // available at runtime so the post-install codepath can point
+      // Start Menu folder shortcuts at it. Without this, the icon
+      // would only exist inside the EXE's icon resource and would
+      // need to be extracted via ``Update.exe`` (which is awkward).
+      // The platform-specific filename mirrors ``primaryIcon``;
+      // both names are shipped so the helper can pick the right
+      // one without conditional logic on the icon extension.
+      process.platform === "win32"
+        ? "logo/ps-icon.ico"
+        : "logo/ps-icon.png",
       "themes",
       "src/ui/fragments",
     ],

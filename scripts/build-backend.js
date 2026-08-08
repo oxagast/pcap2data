@@ -30,11 +30,24 @@
 //   node scripts/build-backend.js linux     # force a target
 //   node scripts/build-backend.js macos
 //   node scripts/build-backend.js windows
+//   node scripts/build-backend.js --force   # ignore cache, rebuild
 //
 // The script writes the final binary directly to
 // ``src/backend/snitch[.exe]`` so the existing forge.config.js
 // extraResource entries and src/main.js lookup logic continue to work
 // unchanged.
+//
+// Incremental build cache (``scripts/build-cache.js``):
+// To save time on repeated ``npm run make`` invocations, the script
+// computes a SHA-256 cache key over every input that can affect the
+// bundled binary (every ``.py`` under ``src/backend/``, the pinned
+// dependency versions, the build-pipeline scripts, the resolved
+// Python interpreter, and the build argument list). If the key
+// matches the previously-built key and ``src/backend/snitch[.exe]``
+// still exists with non-zero size, the script skips the entire
+// PyInstaller + staticx pipeline and exits. To force a rebuild, pass
+// ``--force`` or set ``SNITCH_FORCE_BUILD=1`` / ``FORCE=1`` in the
+// environment.
 
 "use strict";
 
@@ -47,6 +60,28 @@ const BACKEND_DIR = path.join(PROJECT_ROOT, "src", "backend");
 const ICON_PATH = path.join(BACKEND_DIR, "snitch.ico");
 const ENTRY_SCRIPT = path.join(BACKEND_DIR, "snitch.py");
 const BUILD_WORK_DIR = path.join(PROJECT_ROOT, "build", "pyinstaller");
+const CACHE_HELPER = require("./build-cache");
+
+// The full ``src/backend/`` tree is the "backend code" from
+// PyInstaller's perspective -- the entry script plus every module it
+// imports at runtime. Any edit to any of these files invalidates the
+// cache. We also include the pinned dependency versions (a bump in
+// ``numpy`` changes the bundled bytecode), the build pipeline scripts
+// (their templates affect what PyInstaller produces), and the resolved
+// Python interpreter (different interpreters bundle different stdlib
+// bytecode). See ``scripts/build-cache.js`` for the full hash inputs.
+const SOURCE_ROOTS = ["src/backend"];
+const REQUIREMENTS_FILES = ["src/backend/requirements.txt"];
+// ``build-extractor.js`` is intentionally NOT included here: it's a
+// sibling script that builds a different binary with a different
+// entry script and a different requirements file. Mixing the two
+// caches would be a layering bug, not a safety net.
+const SCRIPT_FILES = [
+    "scripts/run_pyinstaller.py",
+    "scripts/stage_patched_sos.py",
+    "scripts/build-cache.js",
+    "scripts/build-backend.js",
+];
 
 const TARGETS = {
     linux: { exeName: "snitch", iconFlag: null, consoleFlag: null },
@@ -671,9 +706,77 @@ function chmodBinary(exeName) {
 }
 
 function main() {
+    // Consume ``--force`` from ``process.argv`` BEFORE we call
+    // ``resolveTarget()`` so a stray ``--force`` in argv[2] doesn't
+    // get mistaken for a target name (e.g. ``node build-backend.js
+    // --force`` without a target should fall through to the platform
+    // default, not error out with "Unknown target '--force'").
+    const forceFlag = CACHE_HELPER.consumeForceFlag();
+    const forceEnv = CACHE_HELPER.forceRequestedViaEnv();
+    const force = forceFlag || forceEnv;
+
     const target = resolveTarget();
     const targetConfig = TARGETS[target];
     console.log(`[build-backend] target platform: ${target}`);
+    if (forceFlag) {
+        console.log("[build-backend] --force requested; ignoring cache");
+    } else if (forceEnv) {
+        console.log(
+            "[build-backend] FORCE=1 / SNITCH_FORCE_BUILD=1 requested; ignoring cache",
+        );
+    }
+
+    // Compute the cache key before doing any side-effectful work so a
+    // cache hit can short-circuit cleanly. ``buildArgs()`` is pure
+    // (reads TARGETS + ICON_PATH only), so we can call it here and
+    // reuse the same flag list both for the cache key and the actual
+    // ``spawnSync`` later. This way a change in ``--collect-binaries
+    // scipy`` invalidates the cache without us having to thread that
+    // flag separately.
+    const plannedArgs = buildArgs(target);
+    const venvPython = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
+    const probePython = fs.existsSync(venvPython) ? venvPython : "python3";
+    const cacheKey = CACHE_HELPER.computeCacheKey({
+        projectRoot: PROJECT_ROOT,
+        sourceRoots: SOURCE_ROOTS,
+        requirementsFiles: REQUIREMENTS_FILES,
+        scriptFiles: SCRIPT_FILES,
+        // ``plannedArgs`` is the actual ``run_pyinstaller.py``
+        // invocation we'd hand to ``spawnSync``. Different targets
+        // already differ in their entry script / collect-binaries
+        // list; folding the whole array into the key means we never
+        // miss an invalidation when those flags change. We truncate
+        // at the entry-script position so we don't hash the absolute
+        // path of the local checkout (which would invalidate the
+        // cache the moment someone moves their repo).
+        buildArgs: {
+            target,
+            args: plannedArgs.slice(0, plannedArgs.indexOf(ENTRY_SCRIPT)),
+        },
+        python: probePython,
+        target,
+    });
+    const cacheKeyPath = path.join(BUILD_WORK_DIR, `${targetConfig.exeName}.cache-key`);
+    const binaryPath = path.join(BACKEND_DIR, targetConfig.exeName);
+    const decision = CACHE_HELPER.shouldRebuild({
+        cacheKey,
+        cacheKeyPath,
+        binaryPath,
+        force,
+    });
+    if (!decision.rebuild) {
+        const stats = fs.statSync(binaryPath);
+        console.log(
+            `[build-backend] cache hit (key=${cacheKey.slice(0, 12)}...); ` +
+            `skipping rebuild. existing binary at ${binaryPath} ` +
+            `(${(stats.size / 1024 / 1024).toFixed(2)} MiB, mtime=${stats.mtime.toISOString()})`,
+        );
+        console.log("[build-backend] done.");
+        return;
+    }
+    console.log(
+        `[build-backend] cache miss (reason: ${decision.reason}; key=${cacheKey.slice(0, 12)}...); rebuilding`,
+    );
 
     preflightCheck();
     applyProjectPatches();
@@ -687,6 +790,13 @@ function main() {
     rewrapWithStaticx(target);
     verifyOutput(targetConfig.exeName);
     chmodBinary(targetConfig.exeName);
+
+    // Persist the cache key only after every step (PyInstaller +
+    // staticx + chmod) succeeded. If any of them crashed, the next
+    // invocation will re-run the full pipeline -- which is exactly
+    // what we want.
+    CACHE_HELPER.writeCacheKey(cacheKeyPath, cacheKey);
+    console.log(`[build-backend] wrote cache key to ${cacheKeyPath}`);
 
     console.log(`[build-backend] done.`);
 }
