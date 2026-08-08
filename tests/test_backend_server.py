@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,90 @@ def _backend_script() -> Path:
     return _project_root() / "src" / "backend" / "snitch.py"
 
 
+def _collect_libs_dirs(site_packages_roots):
+    """Walk every site-packages root and return the unique set of
+    `<package>.libs/` directories found inside it.
+
+    Manylinux wheels ship tuned native binaries in `<package>.libs/`;
+    CPython extensions that link against them fail to load unless the
+    dynamic linker can resolve them. See
+    /memories/repo/manylinux_libs_ld_library_path.md.
+    """
+    libs = []
+    seen = set()
+    for root in site_packages_roots:
+        if root is None or not root.exists():
+            continue
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.endswith(".libs"):
+                continue
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            if entry in seen:
+                continue
+            seen.add(entry)
+            libs.append(str(entry))
+    return libs
+
+
+def _build_backend_subprocess_env():
+    """Inject `LD_LIBRARY_PATH` so the spawned Python can dlopen
+    manylinux `.libs/` shims (e.g. `libscipy_openblas64_-<hash>.so`).
+
+    Mirrors the Linux-only behavior in
+    `src/back-comm.js::buildBackendProcessEnv`.
+    """
+    env = os.environ.copy()
+    if sys.platform != "linux":
+        return env
+
+    home = Path.home()
+    version_roots = [
+        home / ".local" / "lib",
+        Path("/usr/local/lib64"),
+        Path("/usr/local/lib"),
+        home / ".local" / "lib64",
+    ]
+    site_packages_roots = []
+    for version_root in version_roots:
+        if not version_root.exists():
+            continue
+        try:
+            for entry in version_root.iterdir():
+                if entry.name.startswith("python") and entry.is_dir():
+                    site_packages_roots.append(entry / "site-packages")
+        except OSError:
+            continue
+
+    project_root = _project_root()
+    for sibling in ("lib", "lib64"):
+        venv_lib = project_root / ".venv" / sibling
+        if venv_lib.exists():
+            try:
+                for entry in venv_lib.iterdir():
+                    if entry.name.startswith("python") and entry.is_dir():
+                        site_packages_roots.append(entry / "site-packages")
+            except OSError:
+                pass
+
+    libs = _collect_libs_dirs(site_packages_roots)
+    if not libs:
+        return env
+
+    path_sep = ":"
+    merged = path_sep.join(libs)
+    existing = env.get("LD_LIBRARY_PATH")
+    env["LD_LIBRARY_PATH"] = f"{merged}{path_sep}{existing}" if existing else merged
+    return env
+
+
 def _run_backend(server_port: int) -> subprocess.CompletedProcess:
     cmd = [
         sys.executable,
@@ -21,7 +106,13 @@ def _run_backend(server_port: int) -> subprocess.CompletedProcess:
         "--server", "--server-port", str(server_port)
     ]
     # we need to run this in the background so wget can run
-    snitch = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    snitch = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_build_backend_subprocess_env(),
+    )
     try:
         # wait a bit for the server to start
         snitch.wait(timeout=3)
