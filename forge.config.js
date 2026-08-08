@@ -148,22 +148,6 @@ module.exports = {
         ? "src/backend/snitch-extract.exe"
         : "src/backend/snitch-extract",
       "src/backend/common/",
-      // The GeoLite2 City database is required by the backend for IP
-      // geolocation. ``src/backend/common/`` already includes it via
-      // the directory copy above, but we list it explicitly here so
-      // the dependency is obvious to anyone reading the forge config
-      // and so a future rename of the directory doesn't accidentally
-      // drop a 56 MB database from the installer.
-      "src/backend/common/GeoLite2-City.mmdb",
-      // IEEE OUI MAC-vendor lookup table used by the backend to
-      // annotate traffic with manufacturer names. ``src/backend/common/``
-      // carries it transitively; pin it explicitly for the same reason
-      // as the GeoLite database above.
-      "src/backend/common/mac-vendors-export.csv",
-      // IANA service-names-port-numbers registry used by the backend
-      // to look up well-known port -> service mappings. Same rationale
-      // as the other common/ files: explicit > implicit.
-      "src/backend/common/service-names-port-numbers.csv",
       "src/data/new_session.json",
       "src/data/goodies.txt",
       "src/data/valid-keys.txt",
