@@ -1124,6 +1124,94 @@ function resolveSquirrelUpdateExe({
   return path.resolve(exeDir, "..", "Update.exe");
 }
 
+// Enumerate the on-disk locations of every file the Squirrel
+// installer dropped on the user's system. The summary dialog
+// surfaces this list so the user can see where the application,
+// the backend binaries, and the support databases live after the
+// installer finishes.
+//
+// The schema is the same as the ``binaryPaths`` argument accepted
+// by ``buildSquirrelSummaryText``:
+//
+//   {
+//     executable: string,    // PacketSnitch.exe
+//     updateExe: string,     // Squirrel's Update.exe
+//     backend: string,       // snitch(.exe)
+//     extractor: string,     // snitch-extract(.exe)
+//     commonDir: string,     // process.resourcesPath/common
+//     databases: [...]       // mmdb/csv/dat support files
+//   }
+//
+// ``existsSyncFn`` is a dependency-injection seam so the unit tests
+// can drive this helper on Linux without touching the real
+// filesystem. ``platformName`` and ``execPath`` are also injected so
+// the helper is reproducible from a test.
+function resolveSquirrelInstalledFiles({
+  platformName = process.platform,
+  execPath = process.execPath,
+  resourcesPath = typeof process.resourcesPath === "string"
+    ? process.resourcesPath
+    : "",
+  existsSyncFn = fs.existsSync,
+} = {}) {
+  if (platformName !== "win32") {
+    return null;
+  }
+  const safeExecPath = String(execPath || "");
+  const safeResourcesPath = String(resourcesPath || "");
+  const exeDir = path.dirname(safeExecPath);
+  // ``process.resourcesPath`` for a Squirrel install points at the
+  // ``resources/`` directory inside the per-version app folder
+  // (e.g. ``.../app-1.2.3/resources/``). The backend binaries land
+  // directly under that folder, alongside the ``common/`` data
+  // directory the backend reads at runtime.
+  const backendExeName = "snitch.exe";
+  const extractorExeName = "snitch-extract.exe";
+  const backendPath = safeResourcesPath
+    ? path.join(safeResourcesPath, backendExeName)
+    : "";
+  const extractorPath = safeResourcesPath
+    ? path.join(safeResourcesPath, extractorExeName)
+    : "";
+  const commonDir = safeResourcesPath
+    ? path.join(safeResourcesPath, "common")
+    : "";
+  // The three support databases the backend ships with. Listing them
+  // explicitly (rather than globbing the ``common/`` directory) keeps
+  // the install message stable even if a future dataset is added —
+  // the dialog only shows what the user actually needs to know
+  // about.
+  const databaseSpecs = [
+    { label: "GeoLite2 City", fileName: "GeoLite2-City.mmdb" },
+    { label: "MAC vendors", fileName: "mac-vendors-export.csv" },
+    { label: "Service names", fileName: "service-names-port-numbers.csv" },
+  ];
+  const databases = databaseSpecs.map((spec) => {
+    const filePath = commonDir ? path.join(commonDir, spec.fileName) : "";
+    return {
+      label: spec.label,
+      path: filePath,
+      exists: filePath ? Boolean(existsSyncFn(filePath)) : false,
+    };
+  });
+  return {
+    executable: safeExecPath
+      ? path.resolve(safeExecPath)
+      : "",
+    updateExe: path.resolve(exeDir, "..", "Update.exe"),
+    backend: backendPath
+      ? path.resolve(backendPath)
+      : "",
+    extractor: extractorPath
+      ? path.resolve(extractorPath)
+      : "",
+    commonDir: commonDir
+      ? path.resolve(commonDir)
+      : "",
+    databases,
+  };
+}
+
 // Run ``Update.exe`` with the given Squirrel flag and capture the
 // result. Squirrel exits 0 on success and non-zero on any failure;
 // we surface both the exit code and stderr to the caller so the
@@ -1290,11 +1378,30 @@ async function runSquirrelShortcutOperation({
 // shows. Splits the operation log into "what was installed" and
 // "errors", so the user can see at a glance whether anything went
 // wrong. Truncates stderr to keep the dialog legible.
+//
+// ``binaryPaths`` (optional) lists the on-disk locations of the
+// files the installer placed on the system so the user can see at
+// a glance where to find the application, the backend binaries,
+// and the support databases (GeoLite2, IEEE OUI MAC vendors, IANA
+// service-names-port-numbers). The schema is:
+//
+//   {
+//     executable: string,    // PacketSnitch.exe
+//     updateExe: string,     // Squirrel's Update.exe
+//     backend: string,       // snitch(.exe)
+//     extractor: string,     // snitch-extract(.exe)
+//     commonDir: string,     // process.resourcesPath/common
+//     databases: string[],   // support files (mmdb/csv/dat)
+//   }
+//
+// ``binaryPaths`` is dependency-injected so the unit tests can
+// exercise the rendering without booting Electron.
 function buildSquirrelSummaryText({
   operationKind,
   version,
   operationLog = [],
   errorCount,
+  binaryPaths,
 } = {}) {
   const lines = [];
   lines.push(`PacketSnitch ${version || ""}`.trim());
@@ -1307,6 +1414,41 @@ function buildSquirrelSummaryText({
   } else if (operationKind === "uninstall") {
     lines.push("");
     lines.push("The application was removed.");
+  }
+  if (binaryPaths && typeof binaryPaths === "object") {
+    const installedLines = [];
+    if (binaryPaths.executable) {
+      installedLines.push(`  Application : ${binaryPaths.executable}`);
+    }
+    if (binaryPaths.updateExe) {
+      installedLines.push(`  Squirrel    : ${binaryPaths.updateExe}`);
+    }
+    if (binaryPaths.backend) {
+      installedLines.push(`  Backend     : ${binaryPaths.backend}`);
+    }
+    if (binaryPaths.extractor) {
+      installedLines.push(`  Extractor   : ${binaryPaths.extractor}`);
+    }
+    if (binaryPaths.commonDir) {
+      installedLines.push(`  Data folder : ${binaryPaths.commonDir}`);
+    }
+    if (Array.isArray(binaryPaths.databases) && binaryPaths.databases.length > 0) {
+      installedLines.push("  Databases   :");
+      binaryPaths.databases.forEach((entry) => {
+        if (!entry) return;
+        if (typeof entry === "string") {
+          installedLines.push(`    - ${entry}`);
+        } else if (entry && typeof entry === "object") {
+          const label = entry.label ? `${entry.label}: ` : "";
+          installedLines.push(`    - ${label}${entry.path || ""}`);
+        }
+      });
+    }
+    if (installedLines.length > 0) {
+      lines.push("");
+      lines.push("Installed files:");
+      installedLines.forEach((entry) => lines.push(entry));
+    }
   }
   if (Array.isArray(operationLog) && operationLog.length > 0) {
     lines.push("");
@@ -1623,11 +1765,25 @@ async function runSquirrelStartupGateAsync({
   // fires when a previous version is being replaced and the user
   // already saw the new install's summary. Stay silent.
   if (rawCmd !== "--squirrel-obsolete") {
+    // Compute the on-disk locations of every file the installer
+    // dropped so the summary dialog can list them for the user.
+    // The helper short-circuits to ``null`` on non-Windows so the
+    // Linux/macOS install path stays untouched.
+    let binaryPaths = null;
+    try {
+      binaryPaths = resolveSquirrelInstalledFiles({
+        platformName,
+        execPath: exePath,
+      });
+    } catch (_error) {
+      binaryPaths = null;
+    }
     const summary = buildSquirrelSummaryText({
       operationKind,
       version: typeof app.getVersion === "function" ? app.getVersion() : "",
       operationLog,
       errorCount,
+      binaryPaths,
     });
     summaryFn({
       title: errorCount > 0
