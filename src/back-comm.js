@@ -117,6 +117,82 @@ function buildBackendProcessEnv() {
   } catch (_error) {
     env.PACKETSNITCH_USERDATA_PATH = path.join(os.homedir(), ".packetsnitch");
   }
+  // Manylinux wheels (numpy, scipy, gRPC, OpenCV, PyArrow, ...) ship tuned
+  // native binaries in a sibling `<package>.libs/` directory next to the
+  // package's `__init__.py`. CPython extension modules that link against
+  // those vendored `.so` files fail to load unless the dynamic linker can
+  // resolve them, which it does NOT do from `<package>.libs/` by default —
+  // it only checks standard paths, RPATH, and LD_LIBRARY_PATH. Without this
+  // injection, snitch.py crashes on import with
+  // `ImportError: libscipy_openblas64_-<hash>.so: cannot open shared
+  // object file` whenever the dev-mode `python3` backend is launched
+  // against a site-packages tree where the openblas shim lives next to a
+  // numpy that wasn't installed alongside its sibling scipy.
+  if (platform === "linux") {
+    const libsRoots = [];
+    const homeDir = os.homedir();
+    const versionRoots = [
+      path.join(homeDir, ".local", "lib"),
+      path.join("/usr/local/lib64"),
+      path.join("/usr/local/lib"),
+      path.join(homeDir, ".local", "lib64"),
+    ];
+    for (const versionRoot of versionRoots) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(versionRoot);
+      } catch (_error) {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!/^python3\.\d+$/.test(entry)) continue;
+        libsRoots.push(path.join(versionRoot, entry, "site-packages"));
+      }
+    }
+    // Project-local venv (created by `npm run build:deps` /
+    // `pip3 install --break-system-packages`) lives one level above
+    // src/back-comm.js (src/back-comm.js -> src/ -> <project>).
+    const projectRoot = path.resolve(__dirname, "..");
+    const venvLibRoot = path.join(projectRoot, ".venv", "lib");
+    let venvVersionEntries = [];
+    try {
+      venvVersionEntries = fs.readdirSync(venvLibRoot);
+    } catch (_error) {
+      venvVersionEntries = [];
+    }
+    for (const venvEntry of venvVersionEntries) {
+      if (!/^python3\.\d+$/.test(venvEntry)) continue;
+      libsRoots.push(path.join(venvLibRoot, venvEntry, "site-packages"));
+    }
+
+    const libPathEntries = new Set();
+    for (const root of libsRoots) {
+      let candidates = [];
+      try {
+        candidates = fs.readdirSync(root);
+      } catch (_error) {
+        continue;
+      }
+      for (const candidate of candidates) {
+        if (!candidate.endsWith(".libs")) continue;
+        const fullPath = path.join(root, candidate);
+        try {
+          if (fs.statSync(fullPath).isDirectory()) {
+            libPathEntries.add(fullPath);
+          }
+        } catch (_error) {
+          // ignore stat failures (race, permission, etc.)
+        }
+      }
+    }
+
+    if (libPathEntries.size > 0) {
+      const merged = Array.from(libPathEntries).join(path.delimiter);
+      env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
+        ? `${merged}${path.delimiter}${env.LD_LIBRARY_PATH}`
+        : merged;
+    }
+  }
   return env;
 }
 

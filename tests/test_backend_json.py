@@ -38,6 +38,104 @@ def _wifi_sample_pcap() -> Path:
     return _project_root() / "samples" / "pcaps" / "wifi-Coherer-Induction.pcap"
 
 
+def _collect_libs_dirs(site_packages_roots):
+    """Walk every site-packages root and return the unique set of
+    `<package>.libs/` directories found inside it.
+
+    Manylinux wheels (numpy, scipy, gRPC, OpenCV, PyArrow, ...) ship tuned
+    native binaries in a sibling `<package>.libs/` directory next to the
+    package's `__init__.py`. CPython extension modules that link against
+    those vendored `.so` files fail to load unless the dynamic linker can
+    resolve them — which it does NOT do from `<package>.libs/` by default.
+    See /memories/repo/manylinux_libs_ld_library_path.md.
+    """
+    libs = []
+    seen = set()
+    for root in site_packages_roots:
+        if root is None or not root.exists():
+            continue
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.endswith(".libs"):
+                continue
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            if entry in seen:
+                continue
+            seen.add(entry)
+            libs.append(str(entry))
+    return libs
+
+
+def _build_backend_subprocess_env():
+    """Inject `LD_LIBRARY_PATH` so the spawned Python can dlopen
+    manylinux `.libs/` shims (e.g. `libscipy_openblas64_-<hash>.so`).
+
+    Mirrors the Linux-only behavior in
+    `src/back-comm.js::buildBackendProcessEnv` so pytest runs against the
+    same site-packages topology as the Electron bridge.
+    """
+    env = os.environ.copy()
+    if sys.platform != "linux":
+        return env
+
+    home = Path.home()
+    version_roots = [
+        home / ".local" / "lib",
+        Path("/usr/local/lib64"),
+        Path("/usr/local/lib"),
+        home / ".local" / "lib64",
+    ]
+    site_packages_roots = []
+    for version_root in version_roots:
+        if not version_root.exists():
+            continue
+        try:
+            for entry in version_root.iterdir():
+                if entry.name.startswith("python") and entry.is_dir():
+                    site_packages_roots.append(entry / "site-packages")
+        except OSError:
+            continue
+
+    project_root = _project_root()
+    venv_lib = project_root / ".venv" / "lib"
+    if venv_lib.exists():
+        try:
+            for entry in venv_lib.iterdir():
+                if entry.name.startswith("python") and entry.is_dir():
+                    site_packages_roots.append(entry / "site-packages")
+        except OSError:
+            pass
+
+    # The venv on this host splits purelib/ platlib across `lib` and `lib64`;
+    # cover both so LD_LIBRARY_PATH resolves whichever tree Python is using.
+    for sibling in ("lib64", "lib"):
+        alt = project_root / ".venv" / sibling
+        if alt.exists():
+            try:
+                for entry in alt.iterdir():
+                    if entry.name.startswith("python") and entry.is_dir():
+                        site_packages_roots.append(entry / "site-packages")
+            except OSError:
+                pass
+
+    libs = _collect_libs_dirs(site_packages_roots)
+    if not libs:
+        return env
+
+    path_sep = ":"
+    merged = path_sep.join(libs)
+    existing = env.get("LD_LIBRARY_PATH")
+    env["LD_LIBRARY_PATH"] = f"{merged}{path_sep}{existing}" if existing else merged
+    return env
+
+
 def _run_backend_with_wifi_keys(
     pcap_file: Path,
     output_dir: Path,
@@ -64,7 +162,7 @@ def _run_backend_with_wifi_keys(
         "--wifi-keys-file",
         str(wifi_keys_file),
     ]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=_build_backend_subprocess_env())
 
 
 def _write_test_config(path: Path) -> None:
@@ -88,7 +186,7 @@ def _run_backend(pcap_file: Path, output_dir: Path, conf_file: Path) -> subproce
         "--host-chunk-size",
         "25",
     ]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, check=False, env=_build_backend_subprocess_env())
 
 
 def _assert_hosts_json_valid(hosts_data: dict) -> None:
