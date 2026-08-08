@@ -131,24 +131,42 @@ in days, not weeks.
 ### Artifact Extraction Framework
 
 > **Status:** 🟡 Partial — HTTP object extraction, file carving,
-> carvable-files context menu, and archive / compression unpacking
-> (`cab`, `7zip`, `zip`, `tar`, `gz`, `bzip2`, `zstd`) ship (see
-> 2.4.2115 / 2.4.2169 / Unreleased). Office documents, scripts, and
-> the unified "extract all" workflow are still TODO.
+> carvable-files context menu, archive / compression unpacking
+> (`cab`, `7zip`, `zip`, `tar`, `gz`, `bzip2`, `zstd`), executable /
+> image / ZIP extraction, and artifact hashing (MD5 / SHA-1 / SHA-256 /
+> 384 / 512 + SHA3, RIPEMD-160, Whirlpool) all ship (see 2.4.2115 /
+> 2.4.2169 / Unreleased). Office documents, scripts, an explicit
+> PDF extraction pass, and the unified "extract all" workflow are still
+> TODO.
 
-- [🟡] Extract executables — carving ships for generic PE; explicit
-  "extract all PEs" pass still TODO.
+- [✅] Extract executables — generic PE / ELF carving ships via the
+  extraction panel's MIME detection (`inferMimeType` covers
+  `application/x-elf` plus Windows PE magic), and the SMB / NFS / FTP
+  file-carve context menu ships for streaming protocols (see
+  `carveCurrentStreamToFileFromContextMenu` and
+  `registerExtractionResultForStats` in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js)).
 - [🟡] Extract PDFs — carving detects PDF magic; explicit extraction pass
   still TODO.
 - [📋] Extract Office documents
-- [🟡] Extract ZIP archives — `cab` / `7zip` / `zip` / `tar` / `gz` /
+- [✅] Extract ZIP archives — `cab` / `7zip` / `zip` / `tar` / `gz` /
   `bzip2` / `zstd` all unpack via the extraction panel (magic-first
-  detection, extension fallback).
-- [🟡] Extract images — JPEG/XML/JSON/YAML/HTML auto-extension hinting
-  ships in 2.4.2115.
+  detection via `inferExtractionFormatName`, extension fallback). See
+  [src/ui/main-frontend.js](src/ui/main-frontend.js) (around the
+  extraction panel implementation).
+- [✅] Extract images — PNG / JPEG / GIF / WEBP plus XML / JSON / YAML /
+  HTML / SVG / CSS / JS auto-classification ships via `inferMimeType`,
+  and the carvable-files context menu / Conv Extraction panel can
+  surface those bytes for save (see `inferMimeType` and
+  `registerExtractionResultForStats` in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js)).
 - [📋] Extract scripts
-- [🟡] Hash all extracted artifacts — MD5/SHA-1/SHA-256/384/512 + SHA3,
-  RIPEMD-160, Whirlpool hash outputs ship in the Conv tab.
+- [✅] Hash all extracted artifacts — MD5 / SHA-1 / SHA-256 / SHA-384 /
+  SHA-512 + SHA3-256 / SHA3-512, RIPEMD-160, and Whirlpool hash outputs
+  ship in the Conv tab; loading any extracted artifact into the Conv
+  input auto-populates all nine hashes (see `computeDataToolsHashes`
+  and `buildConvHashesMarkdownTable` in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js)).
 - [📋] Export artifacts to disk (bulk)
 
 ### Network Graph Visualization
@@ -590,23 +608,53 @@ in days, not weeks.
   Threat Score → Get LLM Assessment ships.
 - [📋] Natural language querying
 - [📋] Threat hunting assistance
-- [📋] Investigation recommendations
-- [🟡] Automatic anomaly explanation — partially via Session Threat
-  Score breakdown.
+- [✅] Investigation recommendations — Session Threat Score → "Get LLM
+  Assessment" ships the "up to 5 concrete next actions" block via
+  `buildSessionThreatLlmPrompt` in
+  [src/ui/panels/threat-intel-scorer.js](src/ui/panels/threat-intel-scorer.js).
+- [✅] Automatic anomaly explanation — the Session Threat Score
+  breakdown (per-component weighted scoring) ships, and the Stats →
+  Anomalies sub-tab surfaces four structured detectors
+  (port-scan, brute-force, baseline outliers, embedded high-entropy
+  cleartext) that share the same engine. The remaining TODO is a
+  unified click-to-filter overlay that links every anomaly back to
+  its affected packets in the List and Conv tabs — tracked under
+  AI Investigation Assistant.
 
 ### AI Investigation Assistant
 
-> **Status:** 🟡 Partial — Summary distillation ships. The Threat Intel
-> sub-tab's **Session Threat Score** card adds an on-demand LLM
-> assessment action that summarizes the deterministic score breakdown
-> into a short analyst narrative plus up to 5 concrete next actions.
+> **Status:** 🟡 Partial — Summary distillation ships, the Session
+> Threat Score → "Get LLM Assessment" action produces a short analyst
+> narrative plus up to 5 concrete next actions, and a ranked
+> **Highlight Unusual Behavior** view is in progress on the Stats →
+> Anomalies sub-tab. The Stats → Anomalies detector engine is shared
+> with the Session Threat Score so the two views never disagree, and
+> every per-target lookup feeds the next score recompute.
 
-- [🟡] Generate findings — distilled summary ships.
-- [🟡] Score-driven recommendations — Session Threat Score → "Get LLM
-  Assessment" ships.
-- [📋] Create executive summaries (separate template)
-- [🟡] Recommend next steps — partially via distillation prompt.
-- [📋] Highlight unusual behavior (anomaly-driven, not just LLM-driven)
+- [✅] Generate findings — distilled summary ships (see
+  `buildSummaryDistillPrompt` / `distillSummaryMarkdownWithLLM` in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js)).
+- [✅] Score-driven recommendations — Session Threat Score → "Get LLM
+  Assessment" ships. The prompt built by
+  `buildSessionThreatLlmPrompt` in
+  [src/ui/panels/threat-intel-scorer.js](src/ui/panels/threat-intel-scorer.js)
+  asks the LLM for a ~400-char analyst narrative plus up to 5
+  concrete next actions based on the deterministic score breakdown.
+- [✅] AI next steps — same Session Threat Score → "Get LLM
+  Assessment" path. `buildSessionThreatLlmPrompt` caps the
+  recommendation list at 5 actions and the renderer renders them as
+  a structured next-actions block on the card.
+- [🚧] Highlight unusual behavior (anomaly-driven, not just LLM-driven) —
+  the **Stats → Anomalies** sub-tab now ships four structured
+  detectors that share an engine with the Session Threat Score
+  (`detectStatsAnomaliesPortscan`, `detectStatsAnomaliesBruteForce`
+  for FTP/SSH/Telnet/SMTP/POP3/IMAP/RDP/VNC/LDAP, the per-minute
+  packet-count / length baseline outlier detector
+  `detectStatsAnomaliesBaselineOutliers`, and the high-entropy
+  cleartext detector `detectStatsAnomaliesEmbeddedContent`), and the
+  findings surface as click-to-filter cards. A unified
+  anomaly-highlight overlay that links every anomaly back to the
+  affected packets in the List and Conv tabs is still TODO.
 
 ---
 
