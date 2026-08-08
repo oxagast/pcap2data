@@ -645,6 +645,31 @@ function verifyOutput(exeName) {
     );
 }
 
+// Set the binary's mode to ``0755`` (``rwxr-xr-x``) so deb/rpm
+// packaging tools and direct installs land it with the standard
+// permissions for a system executable. PyInstaller (and staticx
+// on Linux) sometimes tighten the mode to ``0700`` or leave it at
+// the build user's umask, which makes the resulting ``snitch``
+// or ``snitch-extract`` unreadable to non-root users when packaged
+// into ``/usr/lib/packetsnitch/`` and then symlinked or copied to
+// ``/usr/bin/``. The Windows path is a no-op because ``fs.chmod``
+// only honours the executable bit on Windows and we already gate
+// this on non-Windows.
+function chmodBinary(exeName) {
+    if (process.platform === "win32") {
+        return;
+    }
+    const outputPath = path.join(BACKEND_DIR, exeName);
+    if (!fs.existsSync(outputPath)) {
+        return;
+    }
+    fs.chmodSync(outputPath, 0o755);
+    const stats = fs.statSync(outputPath);
+    console.log(
+        `[build-backend] chmod 0755 ${outputPath} (now ${(stats.mode & 0o777).toString(8)})`,
+    );
+}
+
 function main() {
     const target = resolveTarget();
     const targetConfig = TARGETS[target];
@@ -661,6 +686,7 @@ function main() {
     invokePyInstaller(args);
     rewrapWithStaticx(target);
     verifyOutput(targetConfig.exeName);
+    chmodBinary(targetConfig.exeName);
 
     console.log(`[build-backend] done.`);
 }
