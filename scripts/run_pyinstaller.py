@@ -51,8 +51,10 @@ import argparse
 import json
 import os
 import shlex
+import site
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 
@@ -360,7 +362,29 @@ def main(argv: list[str] | None = None) -> int:
     spec_path.write_text(spec_text, encoding="utf-8")
     print(f"[run-pyinstaller] wrote patched spec at {spec_path}")
 
-    # 2. Invoke PyInstaller's CLI with our spec file as the only
+    # 2. Compute ``LD_LIBRARY_PATH`` additions so PyInstaller's
+    # isolated subprocess (used by hooks like ``hook-matplotlib.py``)
+    # can find vendored shared libraries that numpy / scipy wheels
+    # ship under ``<pkg>.libs/`` directories. These libraries live
+    # next to the package but are NOT on the loader's default search
+    # path, so importing numpy (via matplotlib -> numpy) in a
+    # subprocess fails with ``libscipy_openblas64_-XXX.so: cannot
+    # open shared object file`` and aborts the build.
+    # See https://github.com/pypa/manylinux for the ``.libs``
+    # convention.
+    env = os.environ.copy()
+    libs_dirs = _find_libs_dirs()
+    if libs_dirs:
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(
+            libs_dirs + ([existing] if existing else [])
+        )
+        print(
+            "[run-pyinstaller] LD_LIBRARY_PATH additions: "
+            f"{libs_dirs}"
+        )
+
+    # 3. Invoke PyInstaller's CLI with our spec file as the only
     # positional argument so it skips spec generation. The ``--`` is
     # the conventional separator between PyInstaller flags and any
     # user-provided flags; we don't have user flags, so we omit it.
@@ -379,8 +403,71 @@ def main(argv: list[str] | None = None) -> int:
         "[run-pyinstaller] running: "
         f"{shlex.join([sys.executable, *pyi_args])}"
     )
-    result = subprocess.run([sys.executable, *pyi_args])
+    result = subprocess.run([sys.executable, *pyi_args], env=env)
     return result.returncode
+
+
+def _find_libs_dirs() -> list[str]:
+    """Return a list of directories containing vendored ``.so`` files
+    that should be on ``LD_LIBRARY_PATH`` for the build's Python
+    subprocess to succeed.
+
+    Manylinux wheels (numpy, scipy, gRPC, etc.) ship their native
+    libraries in ``<package>.libs/`` directories next to the package
+    itself. When the Python interpreter imports the package, the
+    CPython ABI extension module is loaded from the package dir, but
+    the *vendored* libraries it depends on (e.g.
+    ``libscipy_openblas64_*.so``, ``libgfortran-*.so.5``) are loaded
+    via the dynamic linker, which only checks standard paths and
+    ``LD_LIBRARY_PATH`` -- not the package's own directory.
+
+    We walk every site-packages directory Python knows about and
+    collect any ``<something>.libs`` directory we find. We also walk
+    the stdlib ``sysconfig`` paths so that ``/usr/lib/python3.13``-
+    style distributions are covered.
+    """
+    candidates: list[str] = []
+    roots: list[str] = []
+    try:
+        roots.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        user = site.getusersitepackages()
+        if user:
+            roots.append(user)
+    except Exception:
+        pass
+    try:
+        sp = sysconfig.get_paths().get("purelib")
+        if sp:
+            roots.append(sp)
+    except Exception:
+        pass
+    try:
+        sp = sysconfig.get_paths().get("platlib")
+        if sp:
+            roots.append(sp)
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            for entry in os.listdir(root):
+                if not entry.endswith(".libs"):
+                    continue
+                full = os.path.join(root, entry)
+                if os.path.isdir(full):
+                    candidates.append(full)
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+    # Deduplicate while preserving order.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
 
 
 if __name__ == "__main__":
