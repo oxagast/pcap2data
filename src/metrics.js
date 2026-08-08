@@ -25,6 +25,15 @@
 //     refresh its in-memory snapshot and re-sync the privacy tab form.
 //     Without this the consent overlay's Yes button would write the new
 //     state to disk but the privacy tab would still show the old value.
+//   - The renderer's initial `setSettingsSnapshot()` push (driven by
+//     `loadPersistedSettings()` at startup) also dispatches the same
+//     event. The first-run consent overlay's `maybeShowConsentOverlay`
+//     is wired up *before* the snapshot has been pushed, so it
+//     subscribes to `packetsnitch:settings-updated` and re-evaluates
+//     once the snapshot arrives. Without this broadcast the overlay
+//     would never re-check after bootstrap and a fresh install would
+//     never be prompted — and because the install id is only minted by
+//     `recordConsent(true)`, the uuid would also never be generated.
 
 const SAFE_PROP_KEYS = new Set([
     "tab",
@@ -81,6 +90,7 @@ const metrics = {
 };
 
 function setSettingsSnapshot(snapshot) {
+    const hadSnapshot = hasSettingsSnapshot();
     if (snapshot && typeof snapshot === "object") {
         metrics.settingsSnapshot = snapshot;
         // Adopt the persisted install id from the snapshot. The
@@ -104,6 +114,16 @@ function setSettingsSnapshot(snapshot) {
         }
     } else {
         metrics.settingsSnapshot = null;
+    }
+    // Broadcast a ``packetsnitch:settings-updated`` event whenever a
+    // fresh snapshot is pushed into the metrics module, so anything
+    // that deferred re-evaluation while the snapshot was missing
+    // (notably the first-run consent overlay wired up at renderer
+    // bootstrap) gets a chance to re-check. We only fire on the
+    // null → present transition so repeated `setCurrentSettings`
+    // calls from the privacy tab form do not generate event storms.
+    if (!hadSnapshot && hasSettingsSnapshot()) {
+        broadcastSettingsUpdated(Promise.resolve(metrics.settingsSnapshot));
     }
 }
 
