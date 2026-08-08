@@ -38,6 +38,12 @@ const DEFAULT_SETTINGS = Object.freeze({
         manualConvImportMaxBytes: 2 * 1024 * 1024,
         nmapServiceScanEnabled: false,
         checkForNewReleasesOnStartup: true,
+        // Landing tab opened after a capture finishes loading. Users
+        // who want the richer at-a-glance overview can prefer "stats",
+        // packet hunters can prefer "list", and the per-packet drill-down
+        // remains available via "data". Stored as the same identifier
+        // the main-tab state machine already uses (``MAIN_TAB_*``).
+        defaultTab: "stats",
         // Theme catalog + recache. The catalog server URL, the
         // self-signed-cert allowance, and the recache interval are
         // hard-coded so the purchase path can't be redirected or
@@ -253,6 +259,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof general.checkForNewReleasesOnStartup === "boolean"
                     ? general.checkForNewReleasesOnStartup
                     : generalDefaults.checkForNewReleasesOnStartup,
+            defaultTab: normalizeDefaultTab(
+                general.defaultTab,
+                generalDefaults.defaultTab,
+            ),
             // Locked values — ignore whatever the user has saved and
             // always emit the hard-coded defaults so the catalog server
             // can't be redirected and the recache can't be neutralized.
@@ -468,10 +478,26 @@ function normalizeEndpointUrl(value, fallback) {
     }
 }
 
+// Valid identifiers for the landing-tab preference. The values must
+// stay in sync with ``MAIN_TAB_*`` in ``src/ui/main-frontend.js``;
+// unknown values fall back to the default so a stale persisted
+// setting can never brick the initial-tab dispatch.
+const VALID_DEFAULT_TABS = new Set(["data", "stats", "list"]);
+
+function normalizeDefaultTab(value, fallback) {
+    if (typeof value !== "string") {
+        return fallback;
+    }
+    const trimmed = value.trim().toLowerCase();
+    return VALID_DEFAULT_TABS.has(trimmed) ? trimmed : fallback;
+}
+
 module.exports = {
     DEFAULT_SETTINGS,
     MAP_PROJECTION_CALIBRATION,
+    VALID_DEFAULT_TABS,
     cloneDefaultSettings,
     normalizeSettings,
     normalizeEndpointUrl,
+    normalizeDefaultTab,
 };

@@ -231,6 +231,7 @@ const {
   DEFAULT_SETTINGS,
   cloneDefaultSettings,
   normalizeSettings,
+  VALID_DEFAULT_TABS,
 } = require("../settings");
 const {
   initConvPanel,
@@ -919,6 +920,46 @@ const VALID_CRYPT_SUBTABS = [
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
 let activeCryptSubtab = CRYPT_SSL_SUBTAB;
+
+// Resolves the user's preferred landing tab from settings, falling
+// back to the default if the persisted value is missing or unknown.
+// ``settings.general.defaultTab`` is stored as one of "data",
+// "stats", or "list" (see ``VALID_DEFAULT_TABS`` in
+// ``src/settings.js``); the caller maps the result to the matching
+// ``MAIN_TAB_*`` constant and dispatches the corresponding renderer.
+function resolveDefaultLandingTab() {
+  const settings = getCurrentSettings();
+  const configured = settings?.general?.defaultTab;
+  if (typeof configured === "string" && VALID_DEFAULT_TABS.has(configured)) {
+    return configured;
+  }
+  return DEFAULT_SETTINGS.general.defaultTab;
+}
+
+// Opens the workspace the user configured as the landing tab. Called
+// after a capture finishes loading with no session state to restore
+// so the post-load view matches the General → "Open after capture
+// load" setting without forcing the user to click a tab.
+function openDefaultLandingTab() {
+  const tabId = resolveDefaultLandingTab();
+  if (tabId === MAIN_TAB_DATA) {
+    // The Data workspace requires the user to have navigated into a
+    // specific packet; just route them through the existing entry
+    // point so the first packet's hex/ASCII view is primed the same
+    // way it would be after they clicked the Data button.
+    handlePacketNavigation("first-load");
+    return;
+  }
+  if (tabId === MAIN_TAB_LIST) {
+    showPacketList();
+    return;
+  }
+  // ``MAIN_TAB_STATS`` and any unknown value fall through here —
+  // ``VALID_DEFAULT_TABS`` already strips unknowns at normalize time,
+  // but we keep Stats as a defensive default so a corrupt setting can
+  // never strand the user on a blank workspace.
+  showStats();
+}
 
 function isLikelyIpAddress(value) {
   const rawValue = String(value || "").trim();
@@ -3175,6 +3216,7 @@ function syncSettingsFormFromState() {
   const checkForNewReleasesOnStartupEl = document.getElementById(
     "settings-general-check-for-new-releases-on-startup",
   );
+  const defaultTabEl = document.getElementById("settings-general-default-tab");
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendVirusTotalApiKeyEl = document.getElementById(
@@ -3279,6 +3321,14 @@ function syncSettingsFormFromState() {
     checkForNewReleasesOnStartupEl.checked = Boolean(
       settings?.general?.checkForNewReleasesOnStartup,
     );
+  }
+  if (defaultTabEl) {
+    const resolvedDefaultTab = VALID_DEFAULT_TABS.has(
+      settings?.general?.defaultTab,
+    )
+      ? settings.general.defaultTab
+      : DEFAULT_SETTINGS.general.defaultTab;
+    defaultTabEl.value = resolvedDefaultTab;
   }
   // Theme catalog base URL, self-signed-cert allowance, and recache
   // interval are hard-coded — there are no UI controls for them any
@@ -3478,6 +3528,7 @@ function readSettingsFormState() {
   const checkForNewReleasesOnStartupEl = document.getElementById(
     "settings-general-check-for-new-releases-on-startup",
   );
+  const defaultTabEl = document.getElementById("settings-general-default-tab");
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendVirusTotalApiKeyEl = document.getElementById(
@@ -3576,6 +3627,9 @@ function readSettingsFormState() {
       checkForNewReleasesOnStartup: checkForNewReleasesOnStartupEl
         ? checkForNewReleasesOnStartupEl.checked
         : DEFAULT_SETTINGS.general.checkForNewReleasesOnStartup,
+      defaultTab: defaultTabEl
+        ? defaultTabEl.value
+        : DEFAULT_SETTINGS.general.defaultTab,
       // Theme catalog base URL, self-signed-cert allowance, and recache
       // interval are hard-coded — never read from the UI, even if
       // older bundles still expose the inputs.
@@ -9535,7 +9589,7 @@ async function finalizeLoadedCapture(sessionState) {
     writeLogEntry("New session initialized: created new session state");
     document.getElementById("total-packets").textContent =
       "Total Packets: " + loadedTotalPacketCount;
-    showPacketList();
+    openDefaultLandingTab();
   }
   document.getElementById("loading-screen").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
@@ -10153,7 +10207,7 @@ async function restoreSessionState(sessionState) {
   const savedMainTab =
     typeof tabState.main === "string" && VALID_MAIN_TABS.includes(tabState.main)
       ? tabState.main
-      : MAIN_TAB_DATA;
+      : resolveDefaultLandingTab();
   const savedConvTab = VALID_CONV_SUBTABS.includes(tabState.conv)
     ? tabState.conv
     : CONV_CONVERSIONS_SUBTAB;
@@ -22089,6 +22143,14 @@ document
   .addEventListener("change", (event) => {
     writeLogEntry(
       `Settings updated checkForNewReleasesOnStartup=${Boolean(event?.target?.checked)}`,
+    );
+  });
+
+document
+  .getElementById("settings-general-default-tab")
+  ?.addEventListener("change", (event) => {
+    writeLogEntry(
+      `Settings updated defaultTab=${JSON.stringify(event?.target?.value || "")}`,
     );
   });
 
