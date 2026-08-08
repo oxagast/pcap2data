@@ -1173,6 +1173,11 @@ function resolveSquirrelInstalledFiles({
     ? process.resourcesPath
     : "",
   existsSyncFn = fs.existsSync,
+  folderName = typeof app !== "undefined" && app && typeof app.getName === "function"
+    ? app.getName()
+    : "PacketSnitch",
+  startMenuBaseDir = "",
+  desktopDir = "",
 } = {}) {
   if (platformName !== "win32") {
     return null;
@@ -1235,6 +1240,26 @@ function resolveSquirrelInstalledFiles({
       ? winPath.resolve(commonDir)
       : "",
     databases,
+    // App launcher shortcuts. ``startMenuFolder`` lives at
+    // ``%APPDATA%\Microsoft\Windows\Start Menu\Programs\PacketSnitch\``
+    // and contains the app shortcut plus a documentation link.
+    // ``desktopShortcut`` is the per-user link on the desktop.
+    // ``appShortcutPath`` and ``docsShortcutPath`` are the
+    // individual ``.lnk`` files inside the Start Menu folder.
+    // Including them in the summary dialog lets the user find any
+    // shortcut by name without having to open Explorer.
+    startMenuFolder: startMenuBaseDir
+      ? winPath.resolve(winPath.join(startMenuBaseDir, folderName))
+      : "",
+    appShortcutPath: startMenuBaseDir
+      ? winPath.resolve(winPath.join(startMenuBaseDir, folderName, `${folderName}.lnk`))
+      : "",
+    docsShortcutPath: startMenuBaseDir
+      ? winPath.resolve(winPath.join(startMenuBaseDir, folderName, "Documentation.lnk"))
+      : "",
+    desktopShortcut: desktopDir
+      ? winPath.resolve(winPath.join(desktopDir, `${folderName}.lnk`))
+      : "",
   };
 }
 
@@ -1319,67 +1344,73 @@ function runSquirrelUpdateStep({
   });
 }
 
-// Run a single Squirrel install/update/uninstall operation by spawning
-// ``Update.exe`` with the appropriate flag. We translate the squirrel
-// argv into an Update.exe flag (``--createShortcut`` for install/
-// update, ``--removeShortcut`` for uninstall) so we don't have to
-// share the electron-squirrel-startup dependency. The result is
-// appended to ``operationLog`` so the summary dialog can show every
-// step the user took.
+// Run a single Squirrel install/update/uninstall operation by
+// creating or removing the Start Menu folder and the Desktop
+// shortcut. By owning every shortcut here (rather than handing
+// part of the work to Squirrel's ``--createShortcut`` and part to
+// a hand-rolled PowerShell helper) we keep all shortcut metadata
+// — icon, working directory, description, window style — in one
+// place. Squirrel's flag-based shortcut creation can't emit a .lnk
+// with a custom icon, can't create URL shortcuts, and can't
+// arrange shortcuts into a folder; the PowerShell helper does all
+// three.
+//
+// On install/update we emit **two** operation-log entries:
+//
+//   * ``Create Desktop shortcut for <target>`` — the per-user
+//     shortcut on the user's Desktop.
+//   * ``Create Start Menu folder PacketSnitch`` — the per-user
+//     folder containing both the app link and the documentation
+//     link.
+//
+// On uninstall we emit the symmetric removal entries. On
+// ``--squirrel-obsolete`` we emit a single no-op entry so the
+// caller can still see the install flow ran.
 //
 // ``operationLog`` is mutated in place; the caller is expected to
 // inspect it after the returned promise resolves.
 async function runSquirrelShortcutOperation({
   platformName = process.platform,
-  updateExePath,
   squirrelCommand,
   execPath = process.execPath,
-  execFileFn = require("child_process").execFile,
+  execFileFn = require("child_process").spawnSync,
   operationLog,
+  folderName = "PacketSnitch",
+  folderIconPath = "",
+  docsUrl = "https://packetsnitch.com/docu/",
+  startMenuBaseDir = "",
+  desktopDir = "",
+  // ``spawnFn`` is the legacy name for ``execFileFn``: callers that
+  // still pass ``spawnFn`` keep working. ``execFileFn`` wins when
+  // both are provided so the test stubs can override the type.
+  spawnFn,
   timeoutMs = 60_000,
 } = {}) {
-  const basename = platformName === "win32" ? path.win32.basename : path.basename;
-  const target = platformName === "win32"
-    ? basename(String(execPath || ""))
-    : "";
-  let flag;
-  let label;
-  if (squirrelCommand === "--squirrel-install" || squirrelCommand === "--squirrel-updated") {
-    // ``--createShortcut=<target>`` by itself only emits a Start
-    // Menu shortcut — Squirrel's default locations are Start Menu
-    // only. The user wants both Start Menu AND Desktop links, so
-    // we explicitly pass ``--shortcut-locations=Desktop,StartMenu``
-    // to override the default. The comma-separated list is the
-    // Squirrel v1.x convention (verified against the
-    // ``Update.exe`` source); passing a single value means "only
-    // that location", which is what we want for uninstall.
-    flag = `--createShortcut=${target},--shortcut-locations=Desktop,StartMenu`;
-    label = `Create Start Menu and Desktop shortcuts for ${target}`;
-  } else if (squirrelCommand === "--squirrel-uninstall") {
-    flag = `--removeShortcut=${target}`;
-    label = `Remove Start Menu and Desktop shortcuts for ${target}`;
-  } else if (squirrelCommand === "--squirrel-obsolete") {
-    // ``--squirrel-obsolete`` fires when a previous version is being
-    // replaced; the new install already cleaned up the old files and
-    // we don't need to touch shortcuts here.
-    flag = null;
-    label = "Obsolete version replaced";
-  } else {
+  const winPath = path.win32;
+  const nativeExecFn = spawnFn || execFileFn;
+
+  if (platformName !== "win32") {
     const result = {
       ok: false,
-      label: `Unknown squirrel command ${squirrelCommand}`,
-      stderr: "",
-      stdout: "",
-      exitCode: null,
       skipped: true,
+      reason: "Shortcut creation is a Windows-only concept",
+      label: "Create Desktop shortcut",
     };
     if (Array.isArray(operationLog)) operationLog.push(result);
     return result;
   }
+  const safeExecPath = String(execPath || "");
+  const safeDesktopDir = String(desktopDir || "");
+  const safeStartMenuDir = String(startMenuBaseDir || "");
+  const safeIconPath = String(folderIconPath || "");
+
+  // ``--squirrel-obsolete`` fires when a previous version is being
+  // replaced by a new install. The new install already creates the
+  // shortcuts for the new version; we have nothing to do here.
   if (squirrelCommand === "--squirrel-obsolete") {
     const result = {
       ok: true,
-      label,
+      label: "Obsolete version replaced",
       stderr: "",
       stdout: "",
       exitCode: 0,
@@ -1388,25 +1419,237 @@ async function runSquirrelShortcutOperation({
     if (Array.isArray(operationLog)) operationLog.push(result);
     return result;
   }
-  const result = await runSquirrelUpdateStep({
-    platformName,
-    updateExePath,
-    args: [flag],
-    execFileFn,
-    timeoutMs,
-  });
-  const enriched = {
-    ok: result.ok,
-    label,
-    stderr: result.stderr,
-    stdout: result.stdout,
-    exitCode: result.exitCode,
-    signal: result.signal || null,
-    skipped: result.skipped,
-    reason: result.reason,
+
+  if (squirrelCommand === "--squirrel-install" || squirrelCommand === "--squirrel-updated") {
+    const exePath = winPath.resolve(safeExecPath);
+    const desktopShortcutPath = safeDesktopDir
+      ? winPath.join(safeDesktopDir, `${folderName}.lnk`)
+      : "";
+    const folderPath = safeStartMenuDir
+      ? winPath.join(safeStartMenuDir, folderName)
+      : "";
+    const folderAppShortcutPath = folderPath
+      ? winPath.join(folderPath, `${folderName}.lnk`)
+      : "";
+    const folderDocsShortcutPath = folderPath
+      ? winPath.join(folderPath, "Documentation.lnk")
+      : "";
+    const logLineWriter = (line) => {
+      if (typeof appendActivityLogLine === "function") {
+        appendActivityLogLine(line);
+      }
+    };
+    // Build a single PowerShell script that creates the Desktop
+    // shortcut AND the Start Menu folder (containing both links)
+    // so the post-install dialog only waits for one PowerShell
+    // process per Squirrel install.
+    const psScript = [
+      "$ErrorActionPreference = 'Stop'",
+      "$exePath = " + JSON.stringify(exePath),
+      "$iconPath = " + JSON.stringify(safeIconPath),
+      "$folderName = " + JSON.stringify(folderName),
+      "$docsUrl = " + JSON.stringify(String(docsUrl || "")),
+      "$desktopShortcutPath = " + JSON.stringify(desktopShortcutPath),
+      "$folderPath = " + JSON.stringify(folderPath),
+      "$folderAppShortcutPath = " + JSON.stringify(folderAppShortcutPath),
+      "$folderDocsShortcutPath = " + JSON.stringify(folderDocsShortcutPath),
+      "$exeDir = [System.IO.Path]::GetDirectoryName($exePath)",
+      "$wsh = New-Object -ComObject WScript.Shell",
+      // ---- Desktop shortcut ----
+      "$desktopShortcut = $wsh.CreateShortcut($desktopShortcutPath)",
+      "$desktopShortcut.TargetPath = $exePath",
+      "$desktopShortcut.WorkingDirectory = $exeDir",
+      "$desktopShortcut.IconLocation = $iconPath + ',0'",
+      "$desktopShortcut.Description = $folderName",
+      "$desktopShortcut.WindowStyle = 7",
+      "$desktopShortcut.Save()",
+      // ---- Start Menu folder ----
+      "if (-not (Test-Path -LiteralPath $folderPath)) {",
+      "  New-Item -ItemType Directory -Path $folderPath -Force | Out-Null",
+      "}",
+      "$appShortcut = $wsh.CreateShortcut($folderAppShortcutPath)",
+      "$appShortcut.TargetPath = $exePath",
+      "$appShortcut.WorkingDirectory = $exeDir",
+      "$appShortcut.IconLocation = $iconPath + ',0'",
+      "$appShortcut.Description = $folderName",
+      "$appShortcut.WindowStyle = 7",
+      "$appShortcut.Save()",
+      "$docsShortcut = $wsh.CreateShortcut($folderDocsShortcutPath)",
+      "$docsShortcut.TargetPath = $docsUrl",
+      "$docsShortcut.IconLocation = $iconPath + ',0'",
+      "$docsShortcut.Description = 'PacketSnitch documentation'",
+      "$docsShortcut.Save()",
+      "exit 0",
+    ].join("\n");
+    const encodedCommand = Buffer.from(psScript, "utf16le").toString("base64");
+    const spawnResult = nativeExecFn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodedCommand,
+      ],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+        timeout: timeoutMs,
+      },
+    );
+    const stderrText = spawnResult && spawnResult.stderr
+      ? Buffer.from(spawnResult.stderr).toString("utf8")
+      : "";
+    const ok = spawnResult && spawnResult.status === 0;
+    // Surface the operation as two distinct log entries so the
+    // summary dialog can show the user exactly which step failed.
+    const desktopEntry = {
+      ok,
+      label: `Create Desktop shortcut for ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+    };
+    const folderEntry = {
+      ok,
+      label: `Create Start Menu folder ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+    };
+    if (Array.isArray(operationLog)) {
+      operationLog.push(desktopEntry);
+      operationLog.push(folderEntry);
+    }
+    if (!ok) {
+      try {
+        logLineWriter(
+          `[${new Date().toISOString()}] [GUI][Main] Shortcut creation failed status=${spawnResult ? spawnResult.status : "null"} stderr=${JSON.stringify(stderrText)}`,
+        );
+      } catch (_logError) {
+        // ignore — logging is best-effort
+      }
+    }
+    return {
+      ok,
+      label: `Create Desktop shortcut and Start Menu folder for ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+      desktopShortcutPath,
+      folderPath,
+      folderAppShortcutPath,
+      folderDocsShortcutPath,
+    };
+  }
+
+  if (squirrelCommand === "--squirrel-uninstall") {
+    const desktopShortcutPath = safeDesktopDir
+      ? winPath.join(safeDesktopDir, `${folderName}.lnk`)
+      : "";
+    const folderPath = safeStartMenuDir
+      ? winPath.join(safeStartMenuDir, folderName)
+      : "";
+    const psScript = [
+      "$ErrorActionPreference = 'Stop'",
+      "$desktopShortcutPath = " + JSON.stringify(desktopShortcutPath),
+      "$folderPath = " + JSON.stringify(folderPath),
+      "if (Test-Path -LiteralPath $desktopShortcutPath) {",
+      "  Remove-Item -LiteralPath $desktopShortcutPath -Force",
+      "}",
+      "if (Test-Path -LiteralPath $folderPath) {",
+      "  Remove-Item -LiteralPath $folderPath -Recurse -Force",
+      "}",
+      "exit 0",
+    ].join("\n");
+    const encodedCommand = Buffer.from(psScript, "utf16le").toString("base64");
+    const spawnResult = nativeExecFn(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encodedCommand,
+      ],
+      {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+        timeout: timeoutMs,
+      },
+    );
+    const stderrText = spawnResult && spawnResult.stderr
+      ? Buffer.from(spawnResult.stderr).toString("utf8")
+      : "";
+    const ok = spawnResult && spawnResult.status === 0;
+    const desktopEntry = {
+      ok,
+      label: `Remove Desktop shortcut for ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+    };
+    const folderEntry = {
+      ok,
+      label: `Remove Start Menu folder ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+    };
+    if (Array.isArray(operationLog)) {
+      operationLog.push(desktopEntry);
+      operationLog.push(folderEntry);
+    }
+    return {
+      ok,
+      label: `Remove Desktop shortcut and Start Menu folder for ${folderName}`,
+      stderr: stderrText,
+      stdout: "",
+      exitCode: spawnResult ? spawnResult.status : null,
+      skipped: false,
+      desktopShortcutPath,
+      folderPath,
+    };
+  }
+
+  const unknown = {
+    ok: false,
+    label: `Unknown squirrel command ${squirrelCommand}`,
+    stderr: "",
+    stdout: "",
+    exitCode: null,
+    skipped: true,
   };
-  if (Array.isArray(operationLog)) operationLog.push(enriched);
-  return enriched;
+  if (Array.isArray(operationLog)) operationLog.push(unknown);
+  return unknown;
+}
+
+
+// Resolve the per-user Start Menu ``Programs`` folder on Windows.
+// ``%APPDATA%\Microsoft\Windows\Start Menu\Programs`` is the
+// conventional per-user Programs location; it works on every
+// supported Windows version and respects ``ROAMINGAPPDATA`` when
+// the user has folder redirection enabled. Returning the empty
+// string on non-Windows lets the caller short-circuit cleanly.
+function resolveSquirrelStartMenuBaseDir({
+  platformName = process.platform,
+  appDataDir = "",
+} = {}) {
+  if (platformName !== "win32") {
+    return "";
+  }
+  const root = String(appDataDir || "");
+  if (!root) {
+    return "";
+  }
+  return path.win32.join(root, "Microsoft", "Windows", "Start Menu", "Programs");
 }
 
 // Build the human-readable summary that the post-install dialog
@@ -1466,6 +1709,22 @@ function buildSquirrelSummaryText({
     }
     if (binaryPaths.commonDir) {
       installedLines.push(`  Data folder : ${binaryPaths.commonDir}`);
+    }
+    // The Start Menu folder is shown before the Desktop shortcut so
+    // the user sees the bundled-docs location first; the Desktop
+    // link is the most-used entry and is appended last so the
+    // dialog highlights it.
+    if (binaryPaths.desktopShortcut) {
+      installedLines.push(`  Desktop     : ${binaryPaths.desktopShortcut}`);
+    }
+    if (binaryPaths.startMenuFolder) {
+      installedLines.push(`  Start menu  : ${binaryPaths.startMenuFolder}`);
+      if (binaryPaths.appShortcutPath) {
+        installedLines.push(`    - App link : ${binaryPaths.appShortcutPath}`);
+      }
+      if (binaryPaths.docsShortcutPath) {
+        installedLines.push(`    - Docs link: ${binaryPaths.docsShortcutPath}`);
+      }
     }
     if (Array.isArray(binaryPaths.databases) && binaryPaths.databases.length > 0) {
       installedLines.push("  Databases   :");
@@ -1797,20 +2056,53 @@ async function runSquirrelStartupGateAsync({
     `[${new Date().toISOString()}] [GUI][Main] Squirrel ${operationKind} begin command=${rawCmd} updateExePath=${updateExePath}`,
   );
 
+  // Resolve the install layout once and reuse the values for both
+  // the shortcut-operation call below and the summary-dialog
+  // payload afterwards. Computing them in two places would let
+  // them drift apart if process.env ever changes between the two
+  // reads (it shouldn't, but defensive consistency is cheap).
+  const folderName = typeof app.getName === "function"
+    ? app.getName()
+    : "PacketSnitch";
+  const folderIconPath = typeof process.resourcesPath === "string"
+    && process.resourcesPath
+    ? path.win32.join(process.resourcesPath, "ps-icon.ico")
+    : "";
+  const startMenuBaseDir = resolveSquirrelStartMenuBaseDir({
+    platformName,
+    appDataDir: typeof process.env !== "undefined" && process.env
+      ? process.env.APPDATA || ""
+      : "",
+  });
+  const desktopDir = typeof process.env !== "undefined" && process.env
+    ? process.env.USERPROFILE
+      ? path.win32.join(process.env.USERPROFILE, "Desktop")
+      : ""
+    : "";
+
   let result;
   try {
+    // ``runSquirrelShortcutOperation`` creates BOTH the Desktop
+    // shortcut and the Start Menu folder (containing the app
+    // link and the documentation link) via a single PowerShell
+    // invocation. We pass the icon path so the .lnk files use
+    // the same icon the rest of the installer ships.
     result = await runSquirrelShortcutOperation({
       platformName,
-      updateExePath,
       squirrelCommand: rawCmd,
       execPath: exePath,
-      execFileFn: deps.execFileFn,
       operationLog,
+      folderName,
+      folderIconPath,
+      docsUrl: "https://packetsnitch.com/docu/",
+      startMenuBaseDir,
+      desktopDir,
+      spawnFn: deps.execFileFn || deps.spawnFn,
     });
   } catch (error) {
     result = {
       ok: false,
-      label: "Update.exe spawn",
+      label: "Shortcut creation spawn",
       stderr: String(error?.message || String(error)),
       stdout: "",
       exitCode: null,
@@ -1836,6 +2128,9 @@ async function runSquirrelStartupGateAsync({
       binaryPaths = resolveSquirrelInstalledFiles({
         platformName,
         execPath: exePath,
+        folderName,
+        startMenuBaseDir,
+        desktopDir,
       });
     } catch (_error) {
       binaryPaths = null;

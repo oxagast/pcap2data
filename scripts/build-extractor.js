@@ -22,11 +22,22 @@
 //   node scripts/build-extractor.js linux     # force a target
 //   node scripts/build-extractor.js macos
 //   node scripts/build-extractor.js windows
+//   node scripts/build-extractor.js --force   # ignore cache, rebuild
 //
 // The script writes the final binary directly to
 // ``src/backend/snitch-extract[.exe]`` so the existing
 // forge.config.js extraResource entries and ``src/main.js`` lookup
 // logic continue to work unchanged.
+//
+// Incremental build cache (``scripts/build-cache.js``):
+// Same caching strategy as ``scripts/build-backend.js``: SHA-256 over
+// every backend ``.py`` file, the pinned dependency versions in
+// ``requirements-extract.txt``, the build-pipeline scripts, the
+// resolved Python interpreter, and the build argument list. If the
+// key matches the previously-built key and the existing binary is
+// still in place, the script skips the entire PyInstaller + staticx
+// pipeline. To force a rebuild, pass ``--force`` or set
+// ``SNITCH_FORCE_BUILD=1`` / ``FORCE=1`` in the environment.
 
 "use strict";
 
@@ -43,6 +54,23 @@ const BUILD_WORK_DIR = path.join(PROJECT_ROOT, "build", "pyinstaller-extract");
 // ``requirements.txt`` (which pulls in scapy, numpy, geoip2, …) so the
 // PyInstaller bundle for the archive helper stays small.
 const REQUIREMENTS_FILE = path.join(BACKEND_DIR, "requirements-extract.txt");
+const CACHE_HELPER = require("./build-cache");
+
+// Cache key inputs. The extractor shares the ``src/backend/`` tree
+// with the main ``snitch`` binary (it imports modules from ``common/``
+// and the same decoders are reachable via the full hidden-import
+// walk), so editing any backend ``.py`` invalidates BOTH caches --
+// not just the extractor's. The requirements file is the slim
+// ``requirements-extract.txt`` because that's what determines which
+// wheels the PyInstaller Analysis pulls in for this binary.
+const SOURCE_ROOTS = ["src/backend"];
+const REQUIREMENTS_FILES = ["src/backend/requirements-extract.txt"];
+const SCRIPT_FILES = [
+    "scripts/run_pyinstaller.py",
+    "scripts/stage_patched_sos.py",
+    "scripts/build-cache.js",
+    "scripts/build-extractor.js",
+];
 
 const TARGETS = {
     linux: { exeName: "snitch-extract" },
@@ -665,9 +693,69 @@ function chmodBinary(exeName) {
 }
 
 function main() {
+    // Consume ``--force`` from ``process.argv`` BEFORE
+    // ``resolveTarget()`` so a stray ``--force`` in argv[2] doesn't
+    // get mistaken for a target name.
+    const forceFlag = CACHE_HELPER.consumeForceFlag();
+    const forceEnv = CACHE_HELPER.forceRequestedViaEnv();
+    const force = forceFlag || forceEnv;
+
     const target = resolveTarget();
     const targetConfig = TARGETS[target];
     console.log(`[build-extractor] target platform: ${target}`);
+    if (forceFlag) {
+        console.log("[build-extractor] --force requested; ignoring cache");
+    } else if (forceEnv) {
+        console.log(
+            "[build-extractor] FORCE=1 / SNITCH_FORCE_BUILD=1 requested; ignoring cache",
+        );
+    }
+
+    // Compute the cache key before doing any side-effectful work
+    // (``installRequirements`` calls pip and modifies the env, so
+    // doing it after the key check would mean a cache hit still paid
+    // the pip cost). See ``build-backend.js`` for the full rationale
+    // on the cache key inputs.
+    const plannedArgs = buildArgs(target);
+    const venvPython = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
+    const probePython = fs.existsSync(venvPython) ? venvPython : "python3";
+    const cacheKey = CACHE_HELPER.computeCacheKey({
+        projectRoot: PROJECT_ROOT,
+        sourceRoots: SOURCE_ROOTS,
+        requirementsFiles: REQUIREMENTS_FILES,
+        scriptFiles: SCRIPT_FILES,
+        buildArgs: {
+            target,
+            // Truncate at the entry-script position so we don't hash
+            // the absolute path of the local checkout (which would
+            // invalidate the cache the moment someone moves their
+            // repo).
+            args: plannedArgs.slice(0, plannedArgs.indexOf(ENTRY_SCRIPT)),
+        },
+        python: probePython,
+        target,
+    });
+    const cacheKeyPath = path.join(BUILD_WORK_DIR, `${targetConfig.exeName}.cache-key`);
+    const binaryPath = path.join(BACKEND_DIR, targetConfig.exeName);
+    const decision = CACHE_HELPER.shouldRebuild({
+        cacheKey,
+        cacheKeyPath,
+        binaryPath,
+        force,
+    });
+    if (!decision.rebuild) {
+        const stats = fs.statSync(binaryPath);
+        console.log(
+            `[build-extractor] cache hit (key=${cacheKey.slice(0, 12)}...); ` +
+            `skipping rebuild. existing binary at ${binaryPath} ` +
+            `(${(stats.size / 1024 / 1024).toFixed(2)} MiB, mtime=${stats.mtime.toISOString()})`,
+        );
+        console.log("[build-extractor] done.");
+        return;
+    }
+    console.log(
+        `[build-extractor] cache miss (reason: ${decision.reason}; key=${cacheKey.slice(0, 12)}...); rebuilding`,
+    );
 
     preflightCheck();
     applyProjectPatches();
@@ -682,6 +770,10 @@ function main() {
     rewrapWithStaticx(target);
     verifyOutput(targetConfig.exeName);
     chmodBinary(targetConfig.exeName);
+
+    // Persist the cache key only after every step succeeded.
+    CACHE_HELPER.writeCacheKey(cacheKeyPath, cacheKey);
+    console.log(`[build-extractor] wrote cache key to ${cacheKeyPath}`);
 
     console.log(`[build-extractor] done.`);
 }

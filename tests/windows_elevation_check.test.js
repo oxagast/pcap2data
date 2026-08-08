@@ -93,6 +93,7 @@ function makeGateVm() {
         "relaunchInstallerElevatedViaUac",
         "resolveSquirrelUpdateExe",
         "resolveSquirrelInstalledFiles",
+        "resolveSquirrelStartMenuBaseDir",
         "runSquirrelUpdateStep",
         "runSquirrelShortcutOperation",
         "buildSquirrelSummaryText",
@@ -391,114 +392,189 @@ describe("relaunchInstallerElevatedViaUac", () => {
 });
 
 describe("runSquirrelShortcutOperation", () => {
-    // The helper wraps ``execFile``, which is callback-based:
-    // ``execFile(exe, args, options, (error, stdout, stderr) => ...)``.
-    // Return a stub that records the flag it was asked to run and
-    // then invokes the callback with success = ``0`` exit / ``null``
-    // error. ``runSquirrelUpdateStep`` resolves the promise when
-    // the callback fires, so we MUST invoke the callback (returning
-    // a value just leaks the Promise and hangs the test).
-    const makeExecFileStub = (capture) => (exe, args, options, callback) => {
-        capture.flag = args[0];
-        callback(null, "", "");
+    // The new helper delegates to PowerShell via
+    // ``spawnSync(powershell.exe, [...])``: ``spawnFn`` records
+    // the argv and returns a ``{ status, stderr }`` result.
+    // ``Buffer.from(...)`` is used inside the helper to decode the
+    // stderr bytes; providing a string is fine here because the
+    // helper passes it through unchanged.
+    const makeSpawnStub = (capture) => (cmd, args, options) => {
+        capture.cmd = cmd;
+        capture.args = args;
+        capture.options = options;
+        return { status: 0, stderr: "" };
     };
 
-    test("creates both Desktop and Start Menu shortcuts on install", async () => {
-        // The user reported that the desktop link wasn't being
-        // created on Windows. Squirrel's default for
-        // ``--createShortcut=<target>`` is Start Menu only, so we
-        // explicitly pass ``--shortcut-locations=Desktop,StartMenu``
-        // to override the default. This test pins that flag in
-        // place so the regression doesn't sneak back in.
+    test("creates the Desktop shortcut and Start Menu folder on install", async () => {
+        // The user wants a folder in the Start Menu called
+        // ``PacketSnitch`` containing both the app link and a link
+        // to the documentation site. The new helper owns the
+        // Desktop shortcut as well so all shortcut metadata lives
+        // in one PowerShell script.
         const harness = makeGateVm();
-        const captured = { flag: null };
+        const captured = {};
+        const operationLog = [];
         const result = await harness.runSquirrelShortcutOperation({
             platformName: "win32",
-            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
             squirrelCommand: "--squirrel-install",
             execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
-            execFileFn: makeExecFileStub(captured),
+            spawnFn: makeSpawnStub(captured),
+            operationLog,
+            folderName: "PacketSnitch",
+            folderIconPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\ps-icon.ico",
+            docsUrl: "https://packetsnitch.com/docu/",
+            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            desktopDir: "C:\\Users\\me\\Desktop",
         });
-        expect(captured.flag).toContain("--createShortcut=PacketSnitch.exe");
-        expect(captured.flag).toContain("--shortcut-locations=Desktop,StartMenu");
+        expect(captured.cmd).toBe("powershell.exe");
+        const encodedIndex = captured.args.indexOf("-EncodedCommand");
+        expect(encodedIndex).toBeGreaterThanOrEqual(0);
+        const decodedScript = Buffer.from(captured.args[encodedIndex + 1], "base64").toString("utf16le");
+        // The PowerShell script must create the WScript.Shell COM
+        // object, emit two .lnk files, and target the URL as the
+        // docs link.
+        expect(decodedScript).toContain("WScript.Shell");
+        expect(decodedScript).toContain("CreateShortcut");
+        expect(decodedScript).toContain("https://packetsnitch.com/docu/");
+        expect(decodedScript).toContain("PacketSnitch.lnk");
+        expect(decodedScript).toContain("Documentation.lnk");
+        expect(decodedScript).toContain("ps-icon.ico");
         expect(result.ok).toBe(true);
+        // The operation log should surface BOTH actions so the
+        // summary dialog can list them by step.
+        expect(operationLog.length).toBe(2);
+        expect(operationLog[0].label).toContain("Desktop shortcut");
+        expect(operationLog[1].label).toContain("Start Menu folder");
     });
 
-    test("creates both Desktop and Start Menu shortcuts on update", async () => {
+    test("creates the same Desktop shortcut and Start Menu folder on update", async () => {
         const harness = makeGateVm();
-        const captured = { flag: null };
+        const captured = {};
+        const operationLog = [];
         await harness.runSquirrelShortcutOperation({
             platformName: "win32",
-            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
             squirrelCommand: "--squirrel-updated",
             execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
-            execFileFn: makeExecFileStub(captured),
+            spawnFn: makeSpawnStub(captured),
+            operationLog,
+            folderName: "PacketSnitch",
+            folderIconPath: "C:\\path\\ps-icon.ico",
+            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            desktopDir: "C:\\Users\\me\\Desktop",
         });
-        expect(captured.flag).toContain("--shortcut-locations=Desktop,StartMenu");
+        // The PowerShell script should be the same shape as
+        // install: ``CreateShortcut`` is invoked twice, once for
+        // the Desktop ``.lnk`` and once for the Start Menu
+        // ``.lnk`` (and a third time for the docs URL).
+        const encodedIndex = captured.args.indexOf("-EncodedCommand");
+        const decodedScript = Buffer.from(captured.args[encodedIndex + 1], "base64").toString("utf16le");
+        const createShortcutCalls = (decodedScript.match(/CreateShortcut/g) || []).length;
+        expect(createShortcutCalls).toBeGreaterThanOrEqual(3);
     });
 
-    test("uses --removeShortcut for uninstall without explicit locations", async () => {
-        // Uninstall removes both Desktop and Start Menu entries
-        // because Squirrel's ``--removeShortcut`` matches by name
-        // across all locations, regardless of which ones were
-        // originally created.
+    test("removes the Desktop shortcut and Start Menu folder on uninstall", async () => {
         const harness = makeGateVm();
-        const captured = { flag: null };
-        await harness.runSquirrelShortcutOperation({
+        const captured = {};
+        const operationLog = [];
+        const result = await harness.runSquirrelShortcutOperation({
             platformName: "win32",
-            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
             squirrelCommand: "--squirrel-uninstall",
             execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
-            execFileFn: makeExecFileStub(captured),
+            spawnFn: makeSpawnStub(captured),
+            operationLog,
+            folderName: "PacketSnitch",
+            folderIconPath: "C:\\path\\ps-icon.ico",
+            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            desktopDir: "C:\\Users\\me\\Desktop",
         });
-        expect(captured.flag).toContain("--removeShortcut=PacketSnitch.exe");
-        expect(captured.flag).not.toContain("--shortcut-locations");
+        const encodedIndex = captured.args.indexOf("-EncodedCommand");
+        const decodedScript = Buffer.from(captured.args[encodedIndex + 1], "base64").toString("utf16le");
+        expect(decodedScript).toContain("Remove-Item");
+        expect(decodedScript).toContain("PacketSnitch.lnk");
+        // The folder path uses the same name as the
+        // ``startMenuBaseDir`` + ``folderName`` join.
+        expect(decodedScript).toContain("Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\PacketSnitch");
+        expect(result.ok).toBe(true);
+        expect(operationLog.length).toBe(2);
+        expect(operationLog[0].label).toContain("Remove Desktop shortcut");
+        expect(operationLog[1].label).toContain("Remove Start Menu folder");
     });
 
     test("returns a successful no-op for --squirrel-obsolete", async () => {
         const harness = makeGateVm();
         let spawned = false;
+        const operationLog = [];
         const result = await harness.runSquirrelShortcutOperation({
             platformName: "win32",
-            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
             squirrelCommand: "--squirrel-obsolete",
             execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
-            execFileFn: () => {
+            spawnFn: (cmd, args, options) => {
                 spawned = true;
-                // No-op: ``--squirrel-obsolete`` short-circuits
-                // before invoking ``execFile``, so the callback
-                // never fires.
-                return undefined;
+                return { status: 0, stderr: "" };
             },
+            operationLog,
+            folderName: "PacketSnitch",
+            folderIconPath: "C:\\path\\ps-icon.ico",
+            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            desktopDir: "C:\\Users\\me\\Desktop",
         });
         // ``--squirrel-obsolete`` fires when a previous version is
-        // being replaced; we must not spawn ``Update.exe`` again or
-        // we'd race with the new install that's already running.
+        // being replaced; we must not spawn PowerShell again. The
+        // new install creates the shortcuts for the new version.
         expect(spawned).toBe(false);
         expect(result.ok).toBe(true);
         expect(result.skipped).toBe(false);
+        // The no-op entry is still emitted so the summary dialog
+        // can show the user what step ran.
+        expect(operationLog.length).toBe(1);
+        expect(operationLog[0].label).toContain("Obsolete");
     });
 
-    test("captures Update.exe failures so the summary dialog can show them", async () => {
+    test("captures PowerShell failures so the summary dialog can show them", async () => {
         const harness = makeGateVm();
+        const operationLog = [];
         const result = await harness.runSquirrelShortcutOperation({
             platformName: "win32",
-            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
             squirrelCommand: "--squirrel-install",
             execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
-            execFileFn: (exe, args, options, callback) => {
-                // Mirror the real ``execFile`` callback signature:
-                // ``(error, stdout, stderr)``. Non-zero exit code
-                // arrives as the first argument with ``code`` set.
-                const error = new Error("Update.exe refused");
-                error.code = 2;
-                callback(error, "", "icon write failed");
-                return undefined;
-            },
+            spawnFn: () => ({ status: 2, stderr: "icon write failed" }),
+            operationLog,
+            folderName: "PacketSnitch",
+            folderIconPath: "C:\\path\\ps-icon.ico",
+            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            desktopDir: "C:\\Users\\me\\Desktop",
         });
         expect(result.ok).toBe(false);
         expect(result.exitCode).toBe(2);
         expect(result.stderr).toContain("icon write failed");
+        // Both steps should be marked as failed so neither claims
+        // success in the summary dialog.
+        expect(operationLog.length).toBe(2);
+        operationLog.forEach((entry) => {
+            expect(entry.ok).toBe(false);
+        });
+    });
+
+    test("non-Windows hosts are skipped without spawning PowerShell", async () => {
+        const harness = makeGateVm();
+        let spawned = false;
+        const operationLog = [];
+        const result = await harness.runSquirrelShortcutOperation({
+            platformName: "linux",
+            squirrelCommand: "--squirrel-install",
+            execPath: "/usr/local/bin/packetsnitch",
+            spawnFn: () => {
+                spawned = true;
+                return { status: 0, stderr: "" };
+            },
+            operationLog,
+        });
+        expect(spawned).toBe(false);
+        expect(result.skipped).toBe(true);
+        // The skip itself is logged so the summary dialog can tell
+        // the user the install path applies to Windows only.
+        expect(operationLog.length).toBe(1);
+        expect(operationLog[0].skipped).toBe(true);
     });
 });
 
@@ -681,6 +757,59 @@ describe("buildSquirrelSummaryText", () => {
         });
         expect(text).toContain("Installed files:");
         expect(text).toContain("1 step(s) reported errors.");
+    });
+
+    test("renders the Start Menu folder layout with the app and docs links", () => {
+        // The user wants a Start Menu folder containing both the
+        // app link and the documentation link. The summary dialog
+        // must surface the folder path and both individual .lnk
+        // files so the user can find them by name.
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+            binaryPaths: {
+                startMenuFolder: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch",
+                appShortcutPath: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk",
+                docsShortcutPath: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk",
+                desktopShortcut: "C:\\Users\\me\\Desktop\\PacketSnitch.lnk",
+            },
+        });
+        expect(text).toContain("Desktop     : C:\\Users\\me\\Desktop\\PacketSnitch.lnk");
+        expect(text).toContain("Start menu  : C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch");
+        expect(text).toContain("App link : C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk");
+        expect(text).toContain("Docs link: C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk");
+    });
+});
+
+describe("resolveSquirrelStartMenuBaseDir", () => {
+    test("returns the empty string on non-Windows so the caller can short-circuit", () => {
+        const harness = makeGateVm();
+        const result = harness.resolveSquirrelStartMenuBaseDir({
+            platformName: "linux",
+            appDataDir: "/home/user/.config",
+        });
+        expect(result).toBe("");
+    });
+
+    test("returns the empty string when APPDATA is missing", () => {
+        const harness = makeGateVm();
+        const result = harness.resolveSquirrelStartMenuBaseDir({
+            platformName: "win32",
+            appDataDir: "",
+        });
+        expect(result).toBe("");
+    });
+
+    test("joins APPDATA with the conventional Start Menu Programs path", () => {
+        const harness = makeGateVm();
+        const result = harness.resolveSquirrelStartMenuBaseDir({
+            platformName: "win32",
+            appDataDir: "C:\\Users\\me\\AppData\\Roaming",
+        });
+        expect(result).toBe(
+            path.win32.join("C:\\Users\\me\\AppData\\Roaming", "Microsoft", "Windows", "Start Menu", "Programs"),
+        );
     });
 });
 
