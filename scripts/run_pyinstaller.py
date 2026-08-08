@@ -244,6 +244,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon={_icon!r},
 )
 """
 
@@ -268,6 +269,7 @@ def _render_spec(args: argparse.Namespace) -> str:
         _name=args.name,
         _upx=args.upx,
         _console=args.console,
+        _icon=str(args.icon.resolve()) if args.icon else None,
     )
 
 
@@ -345,6 +347,16 @@ def _parse_cli(argv: list[str]) -> argparse.Namespace:
         action="append",
         default=[],
         help="Extra ``pathex`` entry for PyInstaller. May be repeated.",
+    )
+    parser.add_argument(
+        "--icon",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an icon file (.ico on Windows, .icns on macOS) to "
+            "embed in the resulting binary. Omit on Linux -- the "
+            "PyInstaller onefile is console-only and has no icon."
+        ),
     )
     return parser.parse_args(argv)
 
