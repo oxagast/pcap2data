@@ -93,6 +93,7 @@
     "electron-icon-maker": "^0.0.5",
     "globals": "^17.5.0",
     "jest": "^30.4.2",
+    "jsdom": "^29.1.1",
     "node-loader": "^2.1.0",
     "style-loader": "^3.3.4",
     "webpack-cli": "^7.0.2"

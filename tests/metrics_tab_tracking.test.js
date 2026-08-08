@@ -6,35 +6,118 @@
 // not record a metric.  This test exercises the
 // ``metrics.trackTabSwitch`` helper and the document-level click
 // listener that funnels every tab / subtab click into it.
+//
+// We use a hand-rolled DOM stub — JSDOM is overkill for this
+// regression test and brings in a large ESM-only dep tree that
+// the existing jest config cannot transform. (See
+// tests/consent_overlay_no_repeat.test.js for the same reasoning.)
 
 const path = require("path");
-const { JSDOM } = require("jsdom");
 
-function bootDom() {
-    return new JSDOM(
-        `<!doctype html><html><body>
-          <input type="button" id="summary-btn" value="Analysis" />
-          <input type="button" id="data-btn" value="Host Data" />
-          <input type="button" id="data-tools-btn" value="Conv" />
-          <input type="button" id="crypt-btn" value="Crypt" />
-          <input type="button" id="keystore-btn" value="Keystore" />
-          <input type="button" id="stats-btn" value="Stats" />
-          <input type="button" id="list-btn" value="List" />
-          <input type="button" id="notes-btn" value="Notes" />
-          <input type="button" id="settings-btn" value="Settings" />
-          <button id="conv-subtab-conversions">Conv</button>
-          <button id="conv-subtab-hashes">Hashes</button>
-          <button id="conv-subtab-extraction">Extraction</button>
-          <button id="conv-subtab-decodes">Decodes</button>
-          <button id="conv-subtab-subnet">Subnet</button>
-          <button id="conv-subtab-threat-intel">Threat Intel</button>
-          <button id="conv-subtab-packet-json">Packet JSON</button>
-          <button id="crypt-subtab-ssl">SSL</button>
-          <button id="crypt-subtab-pgp">PGP</button>
-          <button id="crypt-subtab-openssh">OpenSSH</button>
-        </body></html>`,
-        { url: "http://localhost/" },
-    );
+// Minimal DOM stub.
+//
+// Why this shape: the production handler is registered on
+// ``document.addEventListener("click", ...)`` and inspects
+// ``event.target.id``. Real browsers bubble click events from the
+// clicked element up to the document, so we mirror that here: each
+// element stores a reference to its parent and ``click()`` walks
+// the ancestor chain dispatching a click event to every listener
+// registered at each level (including the document).
+
+function makeFakeElement(id) {
+    return {
+        id,
+        nodeName: id ? id.toUpperCase() : "DIV",
+        children: [],
+        _parent: null,
+    };
+}
+
+function makeFakeDocument() {
+    const documentListeners = new Map();
+    const elementsById = new Map();
+    const body = makeFakeElement("body");
+
+    function dispatchOnAncestors(event, startEl) {
+        let target = startEl;
+        while (target) {
+            const set = target._listeners && target._listeners.get("click");
+            if (set) {
+                for (const cb of Array.from(set)) {
+                    cb(event);
+                }
+            }
+            target = target._parent;
+        }
+        // Finally dispatch to the document listeners.
+        const docSet = documentListeners.get("click");
+        if (docSet) {
+            for (const cb of Array.from(docSet)) {
+                cb(event);
+            }
+        }
+    }
+
+    function attachClick(el) {
+        el._listeners = el._listeners || new Map();
+        el._listeners.set("click", el._listeners.get("click") || new Set());
+        el.click = function () {
+            dispatchOnAncestors({ type: "click", target: el }, el);
+        };
+    }
+
+    const ids = [
+        "summary-btn",
+        "data-btn",
+        "data-tools-btn",
+        "crypt-btn",
+        "keystore-btn",
+        "stats-btn",
+        "list-btn",
+        "notes-btn",
+        "settings-btn",
+        "conv-subtab-conversions",
+        "conv-subtab-hashes",
+        "conv-subtab-extraction",
+        "conv-subtab-decodes",
+        "conv-subtab-subnet",
+        "conv-subtab-threat-intel",
+        "conv-subtab-packet-json",
+        "crypt-subtab-ssl",
+        "crypt-subtab-pgp",
+        "crypt-subtab-openssh",
+    ];
+    for (const id of ids) {
+        const el = makeFakeElement(id);
+        attachClick(el);
+        elementsById.set(id, el);
+        body.children.push(el);
+        el._parent = body;
+    }
+
+    return {
+        body,
+        elementsById,
+        document: {
+            body,
+            addEventListener(type, cb) {
+                if (!documentListeners.has(type)) documentListeners.set(type, new Set());
+                documentListeners.get(type).add(cb);
+            },
+            removeEventListener(type, cb) {
+                const set = documentListeners.get(type);
+                if (set) set.delete(cb);
+            },
+            getElementById(id) {
+                return elementsById.get(id) || null;
+            },
+            createElement(/* tagName */) {
+                const el = makeFakeElement("");
+                attachClick(el);
+                return el;
+            },
+        },
+    };
 }
 
 function installClickListener(dom) {
@@ -61,7 +144,7 @@ function installClickListener(dom) {
     };
     const CONV_SUBTAB_PREFIX = "conv-subtab-";
     const CRYPT_SUBTAB_PREFIX = "crypt-subtab-";
-    dom.window.document.addEventListener("click", (event) => {
+    dom.document.addEventListener("click", (event) => {
         if (!metrics || typeof metrics.trackTabSwitch !== "function") return;
         const target = event.target;
         if (!target || typeof target !== "object" || typeof target.id !== "string") return;
@@ -153,52 +236,52 @@ describe("document-level click listener tracks every tab and subtab button", () 
     let trackedEvents;
 
     beforeEach(() => {
-        dom = bootDom();
+        dom = makeFakeDocument();
         trackedEvents = installClickListener(dom);
     });
 
     test("tracks the Analysis tab", () => {
-        dom.window.document.getElementById("summary-btn").click();
+        dom.elementsById.get("summary-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "summary" }]);
     });
 
     test("tracks the Host Data tab", () => {
-        dom.window.document.getElementById("data-btn").click();
+        dom.elementsById.get("data-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "data" }]);
     });
 
     test("tracks the Conv tab itself", () => {
-        dom.window.document.getElementById("data-tools-btn").click();
+        dom.elementsById.get("data-tools-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "data-tools" }]);
     });
 
     test("tracks the Crypt tab itself", () => {
-        dom.window.document.getElementById("crypt-btn").click();
+        dom.elementsById.get("crypt-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "crypt" }]);
     });
 
     test("tracks the Keystore tab", () => {
-        dom.window.document.getElementById("keystore-btn").click();
+        dom.elementsById.get("keystore-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "keystore" }]);
     });
 
     test("tracks the Stats tab", () => {
-        dom.window.document.getElementById("stats-btn").click();
+        dom.elementsById.get("stats-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "stats" }]);
     });
 
     test("tracks the List tab", () => {
-        dom.window.document.getElementById("list-btn").click();
+        dom.elementsById.get("list-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "list" }]);
     });
 
     test("tracks the Notes tab", () => {
-        dom.window.document.getElementById("notes-btn").click();
+        dom.elementsById.get("notes-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "notes" }]);
     });
 
     test("tracks the Settings tab", () => {
-        dom.window.document.getElementById("settings-btn").click();
+        dom.elementsById.get("settings-btn").click();
         expect(trackedEvents).toEqual([{ name: "tab.switch", tab: "settings" }]);
     });
 
@@ -213,9 +296,7 @@ describe("document-level click listener tracks every tab and subtab button", () 
             "packet-json",
         ];
         convSubtabs.forEach((subtab) => {
-            dom.window.document
-                .getElementById(`conv-subtab-${subtab}`)
-                .click();
+            dom.elementsById.get(`conv-subtab-${subtab}`).click();
         });
         expect(trackedEvents).toEqual(
             convSubtabs.map((subtab) => ({
@@ -229,9 +310,7 @@ describe("document-level click listener tracks every tab and subtab button", () 
     test("tracks every crypt subtab", () => {
         const cryptSubtabs = ["ssl", "pgp", "openssh"];
         cryptSubtabs.forEach((subtab) => {
-            dom.window.document
-                .getElementById(`crypt-subtab-${subtab}`)
-                .click();
+            dom.elementsById.get(`crypt-subtab-${subtab}`).click();
         });
         expect(trackedEvents).toEqual(
             cryptSubtabs.map((subtab) => ({
@@ -243,9 +322,10 @@ describe("document-level click listener tracks every tab and subtab button", () 
     });
 
     test("ignores clicks on elements without a tracked id", () => {
-        const div = dom.window.document.createElement("div");
+        const div = dom.document.createElement("div");
         div.id = "unrelated";
-        dom.window.document.body.appendChild(div);
+        dom.body.children.push(div);
+        div._parent = dom.body;
         div.click();
         expect(trackedEvents).toEqual([]);
     });
