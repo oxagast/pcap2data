@@ -2209,25 +2209,13 @@ No keystore entries saved.</pre>
     <button id="ctx-save-json" role="menuitem">Save Session</button>
   </div>
 
-  <!-- Installation complete screen – shown only on first run after a new version install -->
-  <div id="install-screen">
-    <div id="install-screen-inner">
-      <div id="install-title">PacketSnitch Installation Complete</div>
-      <div id="install-version"></div>
-      <hr class="install-divider" />
-      <div id="install-files-heading">Installed Files</div>
-      <ul id="install-file-list"></ul>
-      <hr class="install-divider" />
-      <div id="install-ollama-status"></div>
-      <button id="install-continue-btn">Continue</button>
-    </div>
-  </div>
-
-  <!-- First-run consent prompt – shown after the install screen on a
-       clean ~/.config directory (i.e. the user has never been asked
-       whether to send anonymous diagnostic data to oxasploits.com).
-       Once the user has decided (either way) the overlay is hidden
-       and never shown again on this install. -->
+  <!-- First-run consent prompt – shown on a clean ~/.config directory
+       (i.e. the user has never been asked whether to send anonymous
+       diagnostic data to oxasploits.com). Once the user has decided
+       (either way) the overlay is hidden and never shown again on
+       this install. The native install summary dialog (PowerShell
+       MessageBox) now handles the install complete screen — see
+       ``src/main.js`` Squirrel shutdown path. -->
   <div id="metrics-consent-overlay" hidden>
     <div id="metrics-consent-card">
       <div id="metrics-consent-title">Help improve PacketSnitch?</div>

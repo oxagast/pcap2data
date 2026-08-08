@@ -214,7 +214,7 @@ const { createStatsPanel, buildCaptureStats, collectStatsAnomalies } = require("
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
-const { initializeInstallScreen } = require("./panels/install-screen");
+const { initializeConsentOverlay } = require("./panels/consent-overlay");
 const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
 const {
@@ -5192,7 +5192,11 @@ const {
     new Worker(new URL("./workers/capture-ingest-worker.js", import.meta.url)),
 });
 
-initializeInstallScreen({
+// The web install screen is gone (the native install summary dialog
+// now lives on the Squirrel shutdown path in ``src/main.js``), but
+// the first-run metrics consent overlay still needs to be wired up
+// here so it surfaces on a clean ``~/.config`` directory.
+initializeConsentOverlay({
   installapi: window.installapi,
   documentRef: document,
   metrics,

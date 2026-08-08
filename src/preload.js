@@ -997,15 +997,6 @@ async function loadPluginRuntime(payload = {}) {
   const pluginSecurityState = createPluginSecurityState(pluginEntry);
 
   try {
-    if (!window.installapi || typeof window.installapi.checkFirstRun !== 'function') {
-      window.installapi = {
-        checkFirstRun: async () => ({
-          success: true,
-          version: packetsnitchVersion,
-        }),
-      };
-    }
-
     const entryCandidates = buildPluginEntryCandidates(pluginEntry);
     let pluginModule = null;
     let entryPath = '';
@@ -1486,7 +1477,6 @@ contextBridge.exposeInMainWorld('quitapi', {
 });
 
 contextBridge.exposeInMainWorld('installapi', {
-  checkFirstRun: () => ipcRenderer.invoke('check-first-run'),
   getLlmDiagnostics: () => ipcRenderer.invoke('get-llm-diagnostics'),
   onLlmDiagnosticsUpdated: (callback) => {
     const listener = (_event, diagnostics) => {
@@ -1495,7 +1485,6 @@ contextBridge.exposeInMainWorld('installapi', {
     ipcRenderer.on('llm-diagnostics-updated', listener);
     return () => ipcRenderer.removeListener('llm-diagnostics-updated', listener);
   },
-  dismissFirstRun: () => ipcRenderer.invoke('dismiss-first-run'),
 });
 
 contextBridge.exposeInMainWorld('logapi', {
