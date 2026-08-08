@@ -45,12 +45,6 @@ function bootDom() {
         `<!doctype html><html><head>
       <style>${loadOverlayCss()}</style>
     </head><body>
-      <div id="install-screen" style="display: none;">
-        <div id="install-version"></div>
-        <ul id="install-file-list"></ul>
-        <div id="install-ollama-status"></div>
-        <button id="install-continue-btn">Continue</button>
-      </div>
       <div id="metrics-consent-overlay" hidden>
         <div id="metrics-consent-card">
           <div id="metrics-consent-title">Help improve PacketSnitch?</div>
@@ -144,8 +138,8 @@ describe("metrics consent overlay", () => {
         });
         fakeWindow.__PACKETSNITCH_METRICS__ = metrics;
 
-        const installScreen = require(path.resolve("src/ui/panels/install-screen"));
-        installScreen.initializeInstallScreen({
+        const consentOverlay = require(path.resolve("src/ui/panels/consent-overlay"));
+        consentOverlay.initializeConsentOverlay({
             installapi: null,
             documentRef: dom.window.document,
             metrics,
@@ -179,8 +173,8 @@ describe("metrics consent overlay", () => {
         });
         fakeWindow.__PACKETSNITCH_METRICS__ = metrics;
 
-        const installScreen = require(path.resolve("src/ui/panels/install-screen"));
-        installScreen.initializeInstallScreen({
+        const consentOverlay = require(path.resolve("src/ui/panels/consent-overlay"));
+        consentOverlay.initializeConsentOverlay({
             installapi: null,
             documentRef: dom.window.document,
             metrics,
@@ -222,8 +216,8 @@ describe("metrics consent overlay", () => {
             syncSettingsFormFromStateMock();
         });
 
-        const installScreen = require(path.resolve("src/ui/panels/install-screen"));
-        installScreen.initializeInstallScreen({
+        const consentOverlay = require(path.resolve("src/ui/panels/consent-overlay"));
+        consentOverlay.initializeConsentOverlay({
             installapi: null,
             documentRef: dom.window.document,
             metrics,
@@ -258,8 +252,8 @@ describe("metrics consent overlay", () => {
             syncSettingsFormFromStateMock();
         });
 
-        const installScreen = require(path.resolve("src/ui/panels/install-screen"));
-        installScreen.initializeInstallScreen({
+        const consentOverlay = require(path.resolve("src/ui/panels/consent-overlay"));
+        consentOverlay.initializeConsentOverlay({
             installapi: null,
             documentRef: dom.window.document,
             metrics,

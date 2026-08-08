@@ -81,7 +81,7 @@ function makeFakeWindow() {
 describe("metrics consent overlay — does not re-prompt after answered", () => {
     let fakeDocument;
     let fakeWindow;
-    let installScreen;
+    let consentOverlay;
     let metrics;
 
     beforeEach(() => {
@@ -90,7 +90,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
         fakeWindow = makeFakeWindow();
         global.window = fakeWindow;
         global.document = fakeDocument;
-        installScreen = require(path.resolve("src/ui/panels/install-screen"));
+        consentOverlay = require(path.resolve("src/ui/panels/consent-overlay"));
         metrics = require(path.resolve("src/metrics"));
     });
 
@@ -101,7 +101,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
 
     test("does not show the overlay before the persisted settings snapshot is pushed", () => {
         metrics.setSettingsSnapshot(null);
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });
@@ -113,7 +113,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
         metrics.setSettingsSnapshot({
             privacy: { metricsConsentAsked: false, metricsEnabled: false, metricsInstallId: "" },
         });
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });
@@ -125,7 +125,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
         metrics.setSettingsSnapshot({
             privacy: { metricsConsentAsked: true, metricsEnabled: true, metricsInstallId: "abc-123" },
         });
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });
@@ -137,7 +137,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
         metrics.setSettingsSnapshot({
             privacy: { metricsConsentAsked: true, metricsEnabled: false, metricsInstallId: "" },
         });
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });
@@ -147,7 +147,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
 
     test("defers until settings snapshot is pushed, then shows on first-run", () => {
         metrics.setSettingsSnapshot(null);
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });
@@ -167,7 +167,7 @@ describe("metrics consent overlay — does not re-prompt after answered", () => 
 
     test("defers until settings snapshot is pushed, then stays hidden when already answered", () => {
         metrics.setSettingsSnapshot(null);
-        const shown = installScreen.maybeShowConsentOverlay({
+        const shown = consentOverlay.maybeShowConsentOverlay({
             documentRef: fakeDocument,
             metrics,
         });

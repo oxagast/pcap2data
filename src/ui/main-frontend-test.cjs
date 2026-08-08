@@ -114,7 +114,7 @@ const { createStatsPanel, buildCaptureStats } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
-const { initializeInstallScreen } = require("./panels/install-screen");
+const { initializeConsentOverlay } = require("./panels/consent-overlay");
 const { initializeSessionPicker } = require("./panels/session-picker");
 const { createDataPanel } = require("./panels/data-panel");
 const {
@@ -4332,7 +4332,7 @@ const {
     new Worker(new URL("./workers/capture-ingest-worker.js", "file:///tmp/dummy.js")),
 });
 
-initializeInstallScreen({
+initializeConsentOverlay({
   installapi: window.installapi,
   documentRef: document,
 });
@@ -20171,28 +20171,28 @@ function getCurrentRawPayloadHex(packet = null) {
     "payload.hex"
     ] ??
     contextPacket?.["packet.info"]?.["Raw data"]?.["Payload"]?.[
-
-
-    // Returns current raw packet (full frame) hex.
-    function getCurrentRawPacketHex(packet = null) {
-      const contextPacket = packet || getCurrentContextPacket();
-      const rawData = contextPacket?.["packet.info"]?.["Raw data"];
-      if (!rawData || typeof rawData !== "object") return "";
-      const candidates = [
-        rawData["Packet"],
-        rawData["packet.hex"],
-        rawData["Frame"],
-        rawData["frame.hex"],
-      ];
-      for (const candidate of candidates) {
-        if (typeof candidate === "string" && candidate.length > 0) {
-          return candidate;
-        }
-      }
-      return "";
-    }   "Hex Encoded"
+    "Hex Encoded"
     ];
   return typeof payloadHex === "string" ? payloadHex : "";
+}
+
+// Returns current raw packet (full frame) hex.
+function getCurrentRawPacketHex(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  const rawData = contextPacket?.["packet.info"]?.["Raw data"];
+  if (!rawData || typeof rawData !== "object") return "";
+  const candidates = [
+    rawData["Packet"],
+    rawData["packet.hex"],
+    rawData["Frame"],
+    rawData["frame.hex"],
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return "";
 }
 
 // Returns current http data.
