@@ -1206,6 +1206,18 @@ No keystore entries saved.</pre>
                   Automatically opens About when a newer PacketSnitch release is available.
                 </div>
 
+                <label for="settings-general-default-tab">Open after capture load</label>
+                <select id="settings-general-default-tab">
+                  <option value="data">Host Data</option>
+                  <option value="stats">Stats</option>
+                  <option value="list">List</option>
+                </select>
+                <div class="settings-help-text">
+                  Choose which workspace opens first once a capture finishes loading.
+                  Stats gives a high-level overview; List shows every packet in
+                  pcap order; Host Data drills into a single packet at a time.
+                </div>
+
                 <label class="settings-checkbox-row" for="settings-debug-frontend-ingest-threading-enabled">
                   <input id="settings-debug-frontend-ingest-threading-enabled" type="checkbox" />
                   Enable frontend ingest threading
