@@ -187,7 +187,7 @@ describe("main-frontend.js: carved-file decoders wiring", () => {
 describe("Docs: 'Load carved file into Decoders' is documented", () => {
     test("context-menu.md mentions the new entry", () => {
         const doc = fs.readFileSync(
-            path.join(PROJECT_ROOT, "docs/context-menu.md"),
+            path.join(PROJECT_ROOT, "docs/PacketSnitch-Website/docu/context-menu.md"),
             "utf8",
         );
         expect(doc).toContain("Load carved file into Decoders");

@@ -48,10 +48,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         // self-signed-cert allowance, and the recache interval are
         // hard-coded so the purchase path can't be redirected or
         // neutralized via settings edits. Locked values:
-        //   - themeServerBaseUrl:          https://oxasploits.com:9021/
+        //   - themeServerBaseUrl:          https://catalog.packetsnitch.com:9021/
         //   - allowInsecureTlsEndpoints:  true (self-signed cert allowed)
         //   - themeRefreshIntervalHours:   72 (3 days)
-        themeServerBaseUrl: "https://oxasploits.com:9021/",
+        themeServerBaseUrl: "https://catalog.packetsnitch.com:9021/",
         themeRefreshIntervalHours: 72,
         allowInsecureTlsEndpoints: true,
     },

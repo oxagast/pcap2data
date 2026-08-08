@@ -4134,7 +4134,7 @@ const THEME_REFRESH_INTERVAL_HOURS_KEY = "themeRefreshIntervalHours";
 // neutralized via settings edits. The constants here are the single
 // source of truth — both the helpers below and the default settings
 // in src/settings.js mirror these values.
-const DEFAULT_THEME_SERVER_BASE_URL = "https://oxasploits.com:9021/";
+const DEFAULT_THEME_SERVER_BASE_URL = "https://catalog.packetsnitch.com:9021/";
 const DEFAULT_THEME_REFRESH_INTERVAL_HOURS = 72; // 3 days
 const THEME_SERVER_ALLOW_INSECURE_TLS = true;
 const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
@@ -4292,6 +4292,7 @@ async function fetchThemeServerJson(relativePath, { params, method = "GET", body
     method,
     headers: {
       Accept: "application/json",
+      "User-Agent": userAgent,
     },
     body: body ? JSON.stringify(body) : undefined,
   }, timeoutMs);
@@ -4310,6 +4311,7 @@ async function fetchThemeServerBuffer(relativePath, { params, timeoutMs } = {}) 
     method: "GET",
     headers: {
       Accept: "image/png, image/jpeg, application/json, application/octet-stream;q=0.5",
+      "User-Agent": userAgent,
     },
   }, timeoutMs);
   if (!response.ok) {

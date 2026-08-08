@@ -408,6 +408,20 @@ describe('main.js fetch timeout', () => {
         expect(fetchBufferMatch).not.toBeNull();
         expect(fetchBufferMatch[0]).toMatch(/fetchWithTimeout\(/);
     });
+
+    test('fetchThemeServerJson and fetchThemeServerBuffer send the PacketSnitch User-Agent', () => {
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        const fetchJsonMatch = sourceText.match(
+            /async function fetchThemeServerJson[\s\S]+?^\}/m,
+        );
+        expect(fetchJsonMatch).not.toBeNull();
+        expect(fetchJsonMatch[0]).toMatch(/"User-Agent":\s*userAgent/);
+        const fetchBufferMatch = sourceText.match(
+            /async function fetchThemeServerBuffer[\s\S]+?^\}/m,
+        );
+        expect(fetchBufferMatch).not.toBeNull();
+        expect(fetchBufferMatch[0]).toMatch(/"User-Agent":\s*userAgent/);
+    });
 });
 
 describe('main.js theme helpers', () => {
@@ -495,7 +509,7 @@ describe('settings.js schema additions', () => {
         );
         // Catalog server URL is locked to the production endpoint.
         expect(settings).toMatch(
-            /themeServerBaseUrl:\s*"https:\/\/oxasploits\.com:9021\/"/
+            /themeServerBaseUrl:\s*"https:\/\/catalog\.packetsnitch\.com:9021\/"/
         );
         // Recache interval is locked to 3 days (72h).
         expect(settings).toMatch(/themeRefreshIntervalHours:\s*72/);
