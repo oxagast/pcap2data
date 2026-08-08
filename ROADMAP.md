@@ -98,6 +98,10 @@ in days, not weeks.
   ships in 2.4.2169 (per-message tree, file content, offsets, dedicated
   `src/ui/decoders/conv/smb-helpers.js`). Activity timeline across the
   capture still TODO.
+- [🟡] Load full packet into Conv — new `Load full packet (with
+  headers) into Conv` action on the right-click context menu hands
+  the selected packet (link-layer headers and all) to the Conv tab
+  as the analysis input.
 
 ### IOC / Threat Detection Engine
 
@@ -126,16 +130,20 @@ in days, not weeks.
 
 ### Artifact Extraction Framework
 
-> **Status:** 🟡 Partial — HTTP object extraction, file carving, and
-> carvable-files context menu ship (see 2.4.2115 / 2.4.2169). Other
-> artifact types and the unified "extract all" workflow are still TODO.
+> **Status:** 🟡 Partial — HTTP object extraction, file carving,
+> carvable-files context menu, and archive / compression unpacking
+> (`cab`, `7zip`, `zip`, `tar`, `gz`, `bzip2`, `zstd`) ship (see
+> 2.4.2115 / 2.4.2169 / Unreleased). Office documents, scripts, and
+> the unified "extract all" workflow are still TODO.
 
 - [🟡] Extract executables — carving ships for generic PE; explicit
   "extract all PEs" pass still TODO.
 - [🟡] Extract PDFs — carving detects PDF magic; explicit extraction pass
   still TODO.
 - [📋] Extract Office documents
-- [📋] Extract ZIP archives
+- [🟡] Extract ZIP archives — `cab` / `7zip` / `zip` / `tar` / `gz` /
+  `bzip2` / `zstd` all unpack via the extraction panel (magic-first
+  detection, extension fallback).
 - [🟡] Extract images — JPEG/XML/JSON/YAML/HTML auto-extension hinting
   ships in 2.4.2115.
 - [📋] Extract scripts
@@ -226,17 +234,21 @@ in days, not weeks.
 ### Report Templates
 
 > **Status:** 🟡 Partial — Summary/Analysis tab with LLM distillation,
-> markdown export, and a new **Reports...** submenu in the right-click
-> context menu (Markdown / Text / HTML) ship. Named report templates
-> and PDF export are still TODO.
+> markdown export, a **Reports...** submenu in the right-click context
+> menu (Markdown / Text / HTML), a dedicated **Save as PDF** button on
+> the Summary workspace header, and a context-menu **Save Report
+> (PDF)** entry ship. Named report templates are still TODO.
 
 - [📋] Incident response summary template
 - [📋] Triage report template
 - [🟡] Executive report — Summary tab with markdown export ships.
-- [🟡] Exportable templates — Markdown / Text / HTML ship via the
+- [✅] Exportable templates — Markdown / Text / HTML ship via the
   Reports... context menu submenu; HTML is light-styled.
-- [📋] Export to PDF
-- **Priority:** P1 · **Complexity:** Low · **Est. remaining:** 1 day
+- [✅] Export to PDF — the Summary header "Save as PDF" button and the
+  context-menu "Save Report (PDF)" entry both render the same
+  self-contained HTML the HTML exporter uses, then hand it to Electron's
+  `webContents.printToPDF` (no third-party PDF dependency).
+- **Priority:** P1 · **Complexity:** Low · **Est. remaining:** 0.5 day (templates)
 
 ---
 
@@ -310,8 +322,9 @@ in days, not weeks.
 ### Case Workspace
 
 > **Status:** 🟡 Partial — Notes tab + Session save/load + Notes →
-> Summary integration ship. A unified "Case" entity that ties packets,
-> IOCs, sessions, and reports is still TODO.
+> Summary integration (with the "Inferred Data (from Notes)" vs.
+> "Verified Notes (from Notes)" split) ship. A unified "Case" entity
+> that ties packets, IOCs, sessions, and reports is still TODO.
 
 - [🟡] Notes linked to packets — Notes tab ships; packet-anchored
   references still TODO.
@@ -320,6 +333,10 @@ in days, not weeks.
 - [🟡] Investigation organization — session save/load covers most of it.
 - [✅] Session persistence — `.psb` (gzipped BSON) is the default session
   format.
+- [🟡] Notes auto-feed Summary — every note now appears on the Summary
+  tab under "Inferred Data (from Notes)", and the per-note "Mark as
+  verified" toggle moves the note to "Verified Notes (from Notes)".
+  The flag persists across session save/load.
 - **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 1–2 days
 
 ---
@@ -562,7 +579,7 @@ in days, not weeks.
 ### Ask The Capture
 
 > **Status:** 🟡 Partial — the LLM is in the frontend (Ollama, default
-> model `qwen2.5-coder:7b`), with per-stream and per-distill prompts.
+> model `minimax-m3:cloud`), with per-stream and per-distill prompts.
 > The right-click context menu's **Ask PacketSnitch...** submenu ships
 > for Ask a question / Explain this data / Summarize this packet, and
 > the **Session Threat Score** card adds a Get LLM Assessment action.
@@ -676,7 +693,7 @@ in days, not weeks.
 
 ### Threat Score System
 
-> **Status:** � Partial — the **Session Threat Score** ships in the
+> **Status:** 🟡 Partial — the **Session Threat Score** ships in the
 > Threat Intel sub-tab as a 0-100 score with `Clean` / `Low` / `Medium` /
 > `High` / `Critical` banded pill, a color-graded weight breakdown of
 > every contributing indicator (IPSum, Tor, VirusTotal malicious /
@@ -690,13 +707,19 @@ in days, not weeks.
 ### Automatic Report Generator
 
 > **Status:** 🟡 Partial — LLM distillation + Summary export ships.
-> Per-template HTML/PDF report generation is still TODO.
+> Per-template (incident-response / triage) HTML/PDF report generation
+> is still TODO. The base HTML and PDF export paths are wired (see
+> **Report Templates** above).
 
 - [🟡] Executive summary — Summary tab ships.
 - [🟡] Technical findings — distilled summary ships.
 - [🟡] IOC appendix — partial via Stats.
 - [🟡] Artifact appendix — partial via carvable files.
-- [📋] Export to HTML / PDF
+- [✅] Export to HTML / PDF — Markdown / Text / HTML ship via the
+  context-menu **Reports...** submenu, and PDF ships via the Summary
+  header **Save as PDF** button + the context-menu **Save Report
+  (PDF)** entry (Electron `webContents.printToPDF`, no third-party
+  PDF dependency).
 
 ---
 
@@ -765,6 +788,12 @@ Already shipped (so we don't redo them):
 - ✅ Streamlined frontend with stream payload caches (2.4.2115)
 - ✅ `.psb` (gzipped BSON) session format default (2.0)
 - ✅ Backend HTTP API (`/status`, `/version`, JSON endpoints) (1.9.1442)
+- ✅ Statically linked backend via `staticx` (Unreleased) — single
+  self-contained `snitch` + `snitch-extract` binary pair that no
+  longer needs a co-located Python or system libraries; content-
+  hashed build cache in `scripts/build-cache.js`; `with-libs-path.js`
+  env wrapper keeps the in-test backend booting on Kali, fresh
+  containers, and minimal CI images.
 
 ---
 
@@ -805,9 +834,13 @@ Already shipped (so we don't redo them):
     **Get LLM Assessment** / **Send to Notes** actions. Every per-
     target lookup feeds the next recompute.
   - **Save Report...** submenu in the right-click context menu with
-    Markdown / Text / HTML export backed by an LLM distillation pass
-    (dedupe + chronological sort + importance re-rank) with a clean
-    fallback to the un-distilled report.
+    Markdown / Text / HTML / **PDF** export backed by an LLM
+    distillation pass (dedupe + chronological sort + importance
+    re-rank) with a clean fallback to the un-distilled report. PDF
+    reuses the same self-contained HTML the HTML exporter builds
+    and hands it to Electron's `webContents.printToPDF` (no
+    third-party PDF dependency); the Summary header **Save as PDF**
+    button calls the same path.
   - Wifi keys round-trip through sessions — saved sessions carry
     802.11 keys, and on restore the bridge re-sends them to the
     backend so re-opening a wifi capture still decrypts without
@@ -847,6 +880,48 @@ Already shipped (so we don't redo them):
   - `tests/wifi_keys_rerun_path_mode.test.js`
   - `tests/legacy_all_host_sentinel.test.js`
   - `summary_stats_weaving.test.js` extensions
+  - `tests/windows_elevation_check.test.js` extensions
+  - `tests/test_backend_{compile,json,server}.py` extensions
+- **Build & packaging**
+  - **Statically linked backend** via `staticx` — the snitch Python
+    backend is now a single self-contained binary that no longer
+    needs a co-located Python or system libraries to launch. The
+    `scripts/with-libs-path.js` env wrapper keeps the in-test backend
+    booting on Kali, fresh containers, and minimal CI images.
+  - **Backend build cache** (`scripts/build-cache.js`) — content-hashed
+    wrapper around PyInstaller + staticx + snitch-extract so unchanged
+    rebuilds skip the slow steps; produces a single canonical
+    `snitch` + `snitch-extract` pair for packaging.
+  - **Windows installer hardening** — Start-menu shortcut (correctly
+    under `Programs\PacketSnitch`) and desktop icon now flow from the
+    same PowerShell helper so per-machine vs. per-user installs can
+    no longer disagree, and a re-install no longer produces duplicate
+    shortcuts. New `tests/windows_elevation_check.test.js` cases lock
+    this in.
+  - **Self-hostable backend env** — `scripts/with-libs-path.js` is the
+    single env wrapper that augments `LD_LIBRARY_PATH` / `PATH` (and
+    Windows equivalents) before launching the snitch binary, and
+    `src/back-comm.js` calls into it for the new
+    `testcaseOutputDir`-based keys-file staging.
+  - **Extraction panel handles archives** — extractor now natively
+    unpacks `cab`, `7zip`, `zip`, `tar`, `gz`, `bzip2`, and `zstd`
+    archives and compression, with magic-first detection falling
+    back to extension matching and consistent per-entry carve
+    context menu (load into Extraction / Decoders, send to
+    VirusTotal) across nested entries.
+  - **"Load full packet (with headers) into Conv"** via the
+    right-click context menu — the selected packet (link-layer
+    headers and all) lands in the Conv tab as the analysis input
+    so analysts can walk the L2/L3/L4 structure in the data-tools
+    panel without a separate Wireshark hop.
+  - **Metrics install UUID is now minted exactly once** — the
+    install-UUID minting path that powers `metricsInstallId` no
+    longer regenerates the UUID on every settings-save or consent
+    decision, so install identity stays stable across upgrades,
+    settings changes, and a "restore defaults" pass.
+  - **Default Ollama model updated to `minimax-m3:cloud`** — a
+    clean install no longer requests a model the user doesn't
+    have.
 
 ### v2.4.2169 — 2026-07-27
 
