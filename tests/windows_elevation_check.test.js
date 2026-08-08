@@ -10,13 +10,19 @@
 // ``src/main.js`` now wraps ``require("electron-squirrel-startup")``
 // with a gate that:
 //   * On non-Windows: delegates straight to squirrel-startup.
-//   * On Windows for a ``--squirrel-install`` / ``--squirrel-updated``
-//     event: probes elevation via ``net session``. If not elevated,
-//     shows a native message box, attempts a UAC relaunch of the
-//     installer, and exits.
-//   * On Windows for ``--squirrel-uninstall`` / ``--squirrel-obsolete``
-//     or any non-install event: delegates to squirrel-startup because
-//     those events don't touch protected locations.
+//   * On Windows for any squirrel event (install / update / uninstall
+//     / obsolete): runs ``Update.exe`` itself so we can capture the
+//     exit code and surface shortcut-creation failures to the user.
+//   * On Windows for ``--squirrel-install`` / ``--squirrel-updated``:
+//     probes elevation via ``net session``. If not elevated, shows
+//     a native message box, attempts a UAC relaunch of the
+//     installer, and exits. If elevated, skips the warning and the
+//     UAC relaunch — the install just continues.
+//
+// After the install steps, a post-install summary dialog shows the
+// user the on-disk locations of the application, the backend
+// binaries, and the support databases (GeoLite2, IEEE OUI MAC
+// vendors, IANA service-names-port-numbers).
 //
 // The tests below extract the gate's helpers with ``vm.runInContext``,
 // the same pattern as ``tests/metrics_insecure_tls.test.js``, so we
@@ -36,6 +42,16 @@ function extractFunctionDeclaration(sourceText, functionName) {
     const startIndex = sourceText.indexOf(startToken);
     if (startIndex === -1) {
         throw new Error(`Could not find function ${functionName}`);
+    }
+    // If the declaration is ``async function <name>`` (used by
+    // ``runSquirrelShortcutOperation`` and
+    // ``runSquirrelStartupGateAsync``), rewind the start index so
+    // the extracted snippet preserves the ``async`` keyword; the
+    // ``vm`` sandbox otherwise evaluates the body as a plain
+    // function and rejects the top-level ``await`` it contains.
+    let snippetStart = startIndex;
+    if (snippetStart >= 6 && sourceText.slice(snippetStart - 6, snippetStart) === "async ") {
+        snippetStart -= 6;
     }
     let cursor = startIndex + startToken.length;
     let parenDepth = 0;
@@ -62,7 +78,7 @@ function extractFunctionDeclaration(sourceText, functionName) {
         if (char === "}") {
             depth -= 1;
             if (depth === 0) {
-                return sourceText.slice(startIndex, cursor + 1);
+                return sourceText.slice(snippetStart, cursor + 1);
             }
         }
     }
@@ -125,6 +141,11 @@ function makeGateVm() {
         Object,
         JSON,
         Error,
+        // ``Buffer`` is used by the PowerShell dialog helpers to
+        // build the ``-EncodedCommand`` base64 payload. The vm
+        // sandbox otherwise doesn't expose the global ``Buffer``
+        // that Node injects.
+        Buffer,
         // ``app`` is referenced in the gate's exit branch. Stub it so
         // a path that calls ``app.quit()`` doesn't blow up; the stub
         // records calls instead.
@@ -236,13 +257,16 @@ describe("showWindowsElevationMessageBox", () => {
         expect(captured).not.toBeNull();
         expect(captured.cmd).toBe("powershell.exe");
         expect(Array.isArray(captured.args)).toBe(true);
-        // The command-string lives in the last positional argument
-        // after ``-Command``. It must mention the WinForms MessageBox
-        // and embed our title.
-        const commandArg = captured.args[captured.args.length - 1];
-        expect(typeof commandArg).toBe("string");
-        expect(commandArg).toContain("System.Windows.Forms.MessageBox");
-        expect(commandArg).toContain("PacketSnitch installer");
+        // The PowerShell script is passed via ``-EncodedCommand`` as
+        // a base64-encoded UTF-16LE payload. Decode it before
+        // asserting so the test stays readable and the schema
+        // matches what the runtime PowerShell host actually sees.
+        const encodedIndex = captured.args.indexOf("-EncodedCommand");
+        expect(encodedIndex).toBeGreaterThanOrEqual(0);
+        const encodedPayload = captured.args[encodedIndex + 1];
+        const decodedScript = Buffer.from(encodedPayload, "base64").toString("utf16le");
+        expect(decodedScript).toContain("System.Windows.Forms.MessageBox");
+        expect(decodedScript).toContain("PacketSnitch installer");
     });
 
     test("swallows spawn failures so the gate never throws", () => {
@@ -255,6 +279,32 @@ describe("showWindowsElevationMessageBox", () => {
                 },
             });
         }).not.toThrow();
+    });
+
+    test("default message tells the user about the UAC prompt instead of asking them to relaunch manually", () => {
+        // The gate auto-relaunches the installer via UAC when the
+        // user clicks Yes on the consent prompt. Asking them to
+        // right-click and "Run as administrator" themselves would
+        // mean two installers running concurrently — which races on
+        // the per-version install folder and the per-user HKCU
+        // registry entries. The default message must NOT contain
+        // that instruction.
+        const harness = makeGateVm();
+        let captured = null;
+        harness.showWindowsElevationMessageBox({
+            platformName: "win32",
+            spawnFn: (cmd, args) => {
+                captured = { args };
+                return { status: 0 };
+            },
+        });
+        const encodedIndex = captured.args.indexOf("-EncodedCommand");
+        const decodedScript = Buffer.from(captured.args[encodedIndex + 1], "base64").toString("utf16le");
+        expect(decodedScript).not.toMatch(/right-click/i);
+        expect(decodedScript).not.toMatch(/Run as administrator/i);
+        // The message should at least mention the UAC consent
+        // prompt so the user knows what to expect next.
+        expect(decodedScript).toMatch(/Administrator permission/i);
     });
 });
 
@@ -340,6 +390,300 @@ describe("relaunchInstallerElevatedViaUac", () => {
     });
 });
 
+describe("runSquirrelShortcutOperation", () => {
+    // The helper wraps ``execFile``, which is callback-based:
+    // ``execFile(exe, args, options, (error, stdout, stderr) => ...)``.
+    // Return a stub that records the flag it was asked to run and
+    // then invokes the callback with success = ``0`` exit / ``null``
+    // error. ``runSquirrelUpdateStep`` resolves the promise when
+    // the callback fires, so we MUST invoke the callback (returning
+    // a value just leaks the Promise and hangs the test).
+    const makeExecFileStub = (capture) => (exe, args, options, callback) => {
+        capture.flag = args[0];
+        callback(null, "", "");
+    };
+
+    test("creates both Desktop and Start Menu shortcuts on install", async () => {
+        // The user reported that the desktop link wasn't being
+        // created on Windows. Squirrel's default for
+        // ``--createShortcut=<target>`` is Start Menu only, so we
+        // explicitly pass ``--shortcut-locations=Desktop,StartMenu``
+        // to override the default. This test pins that flag in
+        // place so the regression doesn't sneak back in.
+        const harness = makeGateVm();
+        const captured = { flag: null };
+        const result = await harness.runSquirrelShortcutOperation({
+            platformName: "win32",
+            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
+            squirrelCommand: "--squirrel-install",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+            execFileFn: makeExecFileStub(captured),
+        });
+        expect(captured.flag).toContain("--createShortcut=PacketSnitch.exe");
+        expect(captured.flag).toContain("--shortcut-locations=Desktop,StartMenu");
+        expect(result.ok).toBe(true);
+    });
+
+    test("creates both Desktop and Start Menu shortcuts on update", async () => {
+        const harness = makeGateVm();
+        const captured = { flag: null };
+        await harness.runSquirrelShortcutOperation({
+            platformName: "win32",
+            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
+            squirrelCommand: "--squirrel-updated",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+            execFileFn: makeExecFileStub(captured),
+        });
+        expect(captured.flag).toContain("--shortcut-locations=Desktop,StartMenu");
+    });
+
+    test("uses --removeShortcut for uninstall without explicit locations", async () => {
+        // Uninstall removes both Desktop and Start Menu entries
+        // because Squirrel's ``--removeShortcut`` matches by name
+        // across all locations, regardless of which ones were
+        // originally created.
+        const harness = makeGateVm();
+        const captured = { flag: null };
+        await harness.runSquirrelShortcutOperation({
+            platformName: "win32",
+            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
+            squirrelCommand: "--squirrel-uninstall",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+            execFileFn: makeExecFileStub(captured),
+        });
+        expect(captured.flag).toContain("--removeShortcut=PacketSnitch.exe");
+        expect(captured.flag).not.toContain("--shortcut-locations");
+    });
+
+    test("returns a successful no-op for --squirrel-obsolete", async () => {
+        const harness = makeGateVm();
+        let spawned = false;
+        const result = await harness.runSquirrelShortcutOperation({
+            platformName: "win32",
+            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
+            squirrelCommand: "--squirrel-obsolete",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+            execFileFn: () => {
+                spawned = true;
+                // No-op: ``--squirrel-obsolete`` short-circuits
+                // before invoking ``execFile``, so the callback
+                // never fires.
+                return undefined;
+            },
+        });
+        // ``--squirrel-obsolete`` fires when a previous version is
+        // being replaced; we must not spawn ``Update.exe`` again or
+        // we'd race with the new install that's already running.
+        expect(spawned).toBe(false);
+        expect(result.ok).toBe(true);
+        expect(result.skipped).toBe(false);
+    });
+
+    test("captures Update.exe failures so the summary dialog can show them", async () => {
+        const harness = makeGateVm();
+        const result = await harness.runSquirrelShortcutOperation({
+            platformName: "win32",
+            updateExePath: "C:\\Program Files\\PacketSnitch\\Update.exe",
+            squirrelCommand: "--squirrel-install",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+            execFileFn: (exe, args, options, callback) => {
+                // Mirror the real ``execFile`` callback signature:
+                // ``(error, stdout, stderr)``. Non-zero exit code
+                // arrives as the first argument with ``code`` set.
+                const error = new Error("Update.exe refused");
+                error.code = 2;
+                callback(error, "", "icon write failed");
+                return undefined;
+            },
+        });
+        expect(result.ok).toBe(false);
+        expect(result.exitCode).toBe(2);
+        expect(result.stderr).toContain("icon write failed");
+    });
+});
+
+describe("resolveSquirrelInstalledFiles", () => {
+    test("returns null on non-Windows so the caller can omit the section", () => {
+        const harness = makeGateVm();
+        const installed = harness.resolveSquirrelInstalledFiles({
+            platformName: "linux",
+            execPath: "/usr/local/bin/packetsnitch",
+            resourcesPath: "/usr/local/share/packetsnitch/resources",
+        });
+        expect(installed).toBeNull();
+    });
+
+    test("returns the Squirrel install layout for a Windows exe", () => {
+        const harness = makeGateVm();
+        const installed = harness.resolveSquirrelInstalledFiles({
+            platformName: "win32",
+            execPath: "C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\PacketSnitch.exe",
+            resourcesPath: "C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\resources",
+            existsSyncFn: () => false,
+        });
+        expect(installed).not.toBeNull();
+        // The helper uses ``path.resolve`` to normalize the result;
+        // on Linux that treats Windows-style paths as relative and
+        // prefixes the cwd, so we compute the expected value with
+        // ``path.win32`` directly to match the on-Windows semantics.
+        const win32 = path.win32;
+        expect(installed.executable).toBe(
+            win32.resolve("C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\PacketSnitch.exe"),
+        );
+        // ``Update.exe`` sits one level up from the per-version
+        // ``app-<version>`` directory, in the Squirrel install root.
+        expect(installed.updateExe).toBe(
+            win32.resolve("C:\\Users\\me\\AppData\\Local\\packetsnitch\\Update.exe"),
+        );
+        expect(installed.backend).toBe(
+            win32.resolve("C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\resources\\snitch.exe"),
+        );
+        expect(installed.extractor).toBe(
+            win32.resolve("C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\resources\\snitch-extract.exe"),
+        );
+        expect(installed.commonDir).toBe(
+            win32.resolve("C:\\Users\\me\\AppData\\Local\\packetsnitch\\app-1.2.3\\resources\\common"),
+        );
+    });
+
+    test("lists the GeoIP, MAC vendor, and IANA databases under common/", () => {
+        const harness = makeGateVm();
+        const installed = harness.resolveSquirrelInstalledFiles({
+            platformName: "win32",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.0.0\\PacketSnitch.exe",
+            resourcesPath: "C:\\Program Files\\PacketSnitch\\app-1.0.0\\resources",
+            existsSyncFn: () => false,
+        });
+        const databaseLabels = installed.databases.map((entry) => entry.label);
+        // ``labels`` are the user-facing strings shown in the
+        // summary dialog; keeping them stable avoids "why is the
+        // install message different?" surprises when the database
+        // filenames change.
+        expect(databaseLabels).toEqual([
+            "GeoLite2 City",
+            "MAC vendors",
+            "Service names",
+        ]);
+        const fileNames = installed.databases.map((entry) => path.win32.basename(entry.path));
+        expect(fileNames).toEqual([
+            "GeoLite2-City.mmdb",
+            "mac-vendors-export.csv",
+            "service-names-port-numbers.csv",
+        ]);
+        installed.databases.forEach((entry) => {
+            // ``path.win32`` relative-prefix check works on any
+            // platform because we compare the resolved absolute
+            // win32-paths directly.
+            expect(entry.path.startsWith(installed.commonDir)).toBe(true);
+        });
+    });
+
+    test("marks each database as missing when existsSync returns false", () => {
+        const harness = makeGateVm();
+        const installed = harness.resolveSquirrelInstalledFiles({
+            platformName: "win32",
+            execPath: "C:\\Program Files\\PacketSnitch\\app-1.0.0\\PacketSnitch.exe",
+            resourcesPath: "C:\\Program Files\\PacketSnitch\\app-1.0.0\\resources",
+            existsSyncFn: () => false,
+        });
+        installed.databases.forEach((entry) => {
+            expect(entry.exists).toBe(false);
+        });
+    });
+});
+
+describe("buildSquirrelSummaryText", () => {
+    test("renders an Installed files section listing binary paths", () => {
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+            binaryPaths: {
+                executable: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe",
+                updateExe: "C:\\Program Files\\PacketSnitch\\Update.exe",
+                backend: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\snitch.exe",
+                extractor: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\snitch-extract.exe",
+                commonDir: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common",
+                databases: [
+                    { label: "GeoLite2 City", path: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common\\GeoLite2-City.mmdb" },
+                    { label: "MAC vendors", path: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common\\mac-vendors-export.csv" },
+                ],
+            },
+        });
+        // The user requested that the install message list
+        // "where the binaries are located" — every binary path
+        // the helper returned should appear in the rendered text.
+        expect(text).toContain("PacketSnitch 1.2.3");
+        expect(text).toContain("The application was installed successfully.");
+        expect(text).toContain("Installed files:");
+        expect(text).toContain("Application : C:\\Program Files\\PacketSnitch\\app-1.2.3\\PacketSnitch.exe");
+        expect(text).toContain("Squirrel    : C:\\Program Files\\PacketSnitch\\Update.exe");
+        expect(text).toContain("Backend     : C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\snitch.exe");
+        expect(text).toContain("Extractor   : C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\snitch-extract.exe");
+        expect(text).toContain("Data folder : C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common");
+        expect(text).toContain("Databases   :");
+        expect(text).toContain("GeoLite2 City: C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common\\GeoLite2-City.mmdb");
+        expect(text).toContain("MAC vendors: C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\common\\mac-vendors-export.csv");
+    });
+
+    test("omits the Installed files section when binaryPaths is not provided", () => {
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+        });
+        expect(text).toContain("PacketSnitch 1.2.3");
+        expect(text).toContain("The application was installed successfully.");
+        expect(text).not.toContain("Installed files:");
+    });
+
+    test("renders an Installed files section when binaryPaths is an empty object", () => {
+        // ``binaryPaths: {}`` means the helper found no install
+        // location (e.g. resourcesPath was empty). We still
+        // emit the section header so the dialog layout is stable,
+        // and the section body is empty because every accessor
+        // returned ``undefined``.
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+            binaryPaths: {},
+        });
+        expect(text).toContain("Installed files:");
+    });
+
+    test("accepts plain string entries in the databases array", () => {
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+            binaryPaths: {
+                databases: ["C:\\path\\to\\database.mmdb"],
+            },
+        });
+        expect(text).toContain("Databases   :");
+        expect(text).toContain("C:\\path\\to\\database.mmdb");
+    });
+
+    test("still appends the error count footer when binaryPaths is provided", () => {
+        const harness = makeGateVm();
+        const text = harness.buildSquirrelSummaryText({
+            operationKind: "install",
+            version: "1.2.3",
+            binaryPaths: {
+                executable: "C:\\path\\PacketSnitch.exe",
+            },
+            operationLog: [
+                { ok: true, label: "Create shortcut" },
+                { ok: false, label: "Write registry", stderr: "boom", exitCode: 1 },
+            ],
+            errorCount: 1,
+        });
+        expect(text).toContain("Installed files:");
+        expect(text).toContain("1 step(s) reported errors.");
+    });
+});
+
 describe("runSquirrelStartupGate", () => {
     test("delegates to squirrel-startup on non-Windows (no elevation check)", () => {
         const harness = makeGateVm();
@@ -366,7 +710,11 @@ describe("runSquirrelStartupGate", () => {
         expect(result).toBe(false);
     });
 
-    test("delegates to squirrel-startup on Windows for non-install events", () => {
+    test("runs Update.exe directly on Windows for non-install events", () => {
+        // The current design runs ``Update.exe`` itself for every
+        // Windows squirrel event so we can capture the exit code
+        // and surface shortcut-creation failures to the user. The
+        // legacy ``electron-squirrel-startup`` fallback is gone.
         const harness = makeGateVm();
         let squirrelCalls = 0;
         let execCalls = 0;
@@ -376,7 +724,7 @@ describe("runSquirrelStartupGate", () => {
             deps: {
                 execSyncFn: () => {
                     execCalls += 1;
-                    throw new Error("should not be called for uninstall");
+                    throw new Error("should not probe elevation for uninstall");
                 },
                 squirrelStartupFn: () => {
                     squirrelCalls += 1;
@@ -385,11 +733,15 @@ describe("runSquirrelStartupGate", () => {
             },
         });
         expect(execCalls).toBe(0);
-        expect(squirrelCalls).toBe(1);
+        // ``runSquirrelStartupGateAsync`` is invoked fire-and-forget
+        // for Windows squirrel events, so the synchronous return
+        // value is whatever the gate decided (``true``) and the
+        // legacy squirrel-startup hook is no longer called.
+        expect(squirrelCalls).toBe(0);
         expect(result).toBe(true);
     });
 
-    test("delegates to squirrel-startup on Windows for --squirrel-obsolete", () => {
+    test("runs Update.exe directly on Windows for --squirrel-obsolete", () => {
         const harness = makeGateVm();
         let squirrelCalls = 0;
         const result = harness.runSquirrelStartupGate({
@@ -405,11 +757,17 @@ describe("runSquirrelStartupGate", () => {
                 },
             },
         });
-        expect(squirrelCalls).toBe(1);
+        expect(squirrelCalls).toBe(0);
         expect(result).toBe(true);
     });
 
-    test("delegates to squirrel-startup on Windows when process IS elevated", () => {
+    test("skips the elevation warning when the Windows process IS elevated", () => {
+        // The user's request: when the installer is started as
+        // administrator initially, it shouldn't ask to be restarted
+        // as admin — it should just continue with the install.
+        // ``runSquirrelStartupGateAsync`` probes elevation via
+        // ``net session`` and, when elevated, skips the message
+        // box and the UAC relaunch and runs ``Update.exe`` itself.
         const harness = makeGateVm();
         let execCalls = 0;
         let squirrelCalls = 0;
@@ -427,8 +785,14 @@ describe("runSquirrelStartupGate", () => {
                 },
             },
         });
+        // ``isWindowsProcessElevated`` ran once and returned true.
         expect(execCalls).toBe(1);
-        expect(squirrelCalls).toBe(1);
+        // ``squirrelStartupFn`` is no longer invoked for the
+        // elevated install path: ``runSquirrelStartupGateAsync``
+        // calls ``Update.exe`` directly so we can capture errors.
+        expect(squirrelCalls).toBe(0);
+        // The synchronous gate returns ``true`` (matching the
+        // outer ``if (runSquirrelStartupGate({}))`` site).
         expect(result).toBe(true);
     });
 

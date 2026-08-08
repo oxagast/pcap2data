@@ -999,10 +999,19 @@ function isWindowsProcessElevated({
 //
 // ``spawnFn`` is a dependency-injection seam so unit tests can stub
 // the spawn and avoid launching PowerShell on Linux/macOS.
+//
+// The default message intentionally does NOT tell the user to
+// "right-click and Run as administrator" — the gate automatically
+// relaunches itself via UAC when the user clicks "Yes" on the
+// upcoming consent prompt, so the only thing left for the user to
+// do is click OK. Asking them to manually run a second installer
+// would mean two copies of Squirrel running concurrently, which
+// races on the per-version install folder and the per-user HKCU
+// registry entries.
 function showWindowsElevationMessageBox({
   platformName = process.platform,
   title = "PacketSnitch installer",
-  message = "PacketSnitch must be installed as Administrator.\n\nPlease right-click the installer and choose \"Run as administrator\".",
+  message = "PacketSnitch will now request Administrator permission to finish the installation.\n\nA Windows security prompt will appear — click Yes to continue.",
   spawnFn = require("child_process").spawnSync,
 } = {}) {
   if (platformName !== "win32") {
@@ -1013,10 +1022,17 @@ function showWindowsElevationMessageBox({
   // the standard Win32 dialog (the OK button, the system sound, the
   // taskbar entry) rather than the modal-but-headless Read-Host that
   // some installers accidentally trigger.
+  //
+  // We use ``-EncodedCommand`` (base64 UTF-16LE) instead of
+  // ``-Command`` so the script is passed byte-for-byte to PowerShell
+  // without going through the shell-source tokenizer. This avoids
+  // surprises when the message contains ``$``, `` `` ``, or
+  // embedded quotes that would otherwise need their own escaping.
   const psScript = [
     "Add-Type -AssemblyName System.Windows.Forms",
     `[System.Windows.Forms.MessageBox]::Show(@'\n${message}\n'@, ${JSON.stringify(title)}, 'OK', 'Warning') | Out-Null`,
   ].join("; ");
+  const encodedCommand = Buffer.from(psScript, "utf16le").toString("base64");
   try {
     spawnFn(
       "powershell.exe",
@@ -1025,12 +1041,16 @@ function showWindowsElevationMessageBox({
         "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        psScript,
+        "-EncodedCommand",
+        encodedCommand,
       ],
       {
         stdio: ["ignore", "ignore", "ignore"],
-        windowsHide: false,
+        // ``windowsHide: true`` keeps the PowerShell console window
+        // from flashing on the user's desktop while the warning
+        // MessageBox is up. The MessageBox is a separate Win32
+        // window and shows regardless of the host's visibility.
+        windowsHide: true,
         timeout: 60_000,
       },
     );
@@ -1157,9 +1177,15 @@ function resolveSquirrelInstalledFiles({
   if (platformName !== "win32") {
     return null;
   }
+  // Use ``path.win32`` explicitly so the helper produces Windows
+  // paths regardless of the host platform. Tests run on Linux/macOS
+  // CI but exercise the Windows install layout; the host's
+  // ``path.resolve`` would treat ``C:\...`` as a relative path and
+  // prefix the cwd, which is wrong.
+  const winPath = path.win32;
   const safeExecPath = String(execPath || "");
   const safeResourcesPath = String(resourcesPath || "");
-  const exeDir = path.dirname(safeExecPath);
+  const exeDir = winPath.dirname(safeExecPath);
   // ``process.resourcesPath`` for a Squirrel install points at the
   // ``resources/`` directory inside the per-version app folder
   // (e.g. ``.../app-1.2.3/resources/``). The backend binaries land
@@ -1168,13 +1194,13 @@ function resolveSquirrelInstalledFiles({
   const backendExeName = "snitch.exe";
   const extractorExeName = "snitch-extract.exe";
   const backendPath = safeResourcesPath
-    ? path.join(safeResourcesPath, backendExeName)
+    ? winPath.join(safeResourcesPath, backendExeName)
     : "";
   const extractorPath = safeResourcesPath
-    ? path.join(safeResourcesPath, extractorExeName)
+    ? winPath.join(safeResourcesPath, extractorExeName)
     : "";
   const commonDir = safeResourcesPath
-    ? path.join(safeResourcesPath, "common")
+    ? winPath.join(safeResourcesPath, "common")
     : "";
   // The three support databases the backend ships with. Listing them
   // explicitly (rather than globbing the ``common/`` directory) keeps
@@ -1187,7 +1213,7 @@ function resolveSquirrelInstalledFiles({
     { label: "Service names", fileName: "service-names-port-numbers.csv" },
   ];
   const databases = databaseSpecs.map((spec) => {
-    const filePath = commonDir ? path.join(commonDir, spec.fileName) : "";
+    const filePath = commonDir ? winPath.join(commonDir, spec.fileName) : "";
     return {
       label: spec.label,
       path: filePath,
@@ -1196,17 +1222,17 @@ function resolveSquirrelInstalledFiles({
   });
   return {
     executable: safeExecPath
-      ? path.resolve(safeExecPath)
+      ? winPath.resolve(safeExecPath)
       : "",
-    updateExe: path.resolve(exeDir, "..", "Update.exe"),
+    updateExe: winPath.resolve(exeDir, "..", "Update.exe"),
     backend: backendPath
-      ? path.resolve(backendPath)
+      ? winPath.resolve(backendPath)
       : "",
     extractor: extractorPath
-      ? path.resolve(extractorPath)
+      ? winPath.resolve(extractorPath)
       : "",
     commonDir: commonDir
-      ? path.resolve(commonDir)
+      ? winPath.resolve(commonDir)
       : "",
     databases,
   };
@@ -1312,17 +1338,26 @@ async function runSquirrelShortcutOperation({
   operationLog,
   timeoutMs = 60_000,
 } = {}) {
+  const basename = platformName === "win32" ? path.win32.basename : path.basename;
   const target = platformName === "win32"
-    ? path.basename(String(execPath || ""))
+    ? basename(String(execPath || ""))
     : "";
   let flag;
   let label;
   if (squirrelCommand === "--squirrel-install" || squirrelCommand === "--squirrel-updated") {
-    flag = `--createShortcut=${target}`;
-    label = `Create Start Menu shortcut for ${target}`;
+    // ``--createShortcut=<target>`` by itself only emits a Start
+    // Menu shortcut — Squirrel's default locations are Start Menu
+    // only. The user wants both Start Menu AND Desktop links, so
+    // we explicitly pass ``--shortcut-locations=Desktop,StartMenu``
+    // to override the default. The comma-separated list is the
+    // Squirrel v1.x convention (verified against the
+    // ``Update.exe`` source); passing a single value means "only
+    // that location", which is what we want for uninstall.
+    flag = `--createShortcut=${target},--shortcut-locations=Desktop,StartMenu`;
+    label = `Create Start Menu and Desktop shortcuts for ${target}`;
   } else if (squirrelCommand === "--squirrel-uninstall") {
     flag = `--removeShortcut=${target}`;
-    label = `Remove Start Menu shortcut for ${target}`;
+    label = `Remove Start Menu and Desktop shortcuts for ${target}`;
   } else if (squirrelCommand === "--squirrel-obsolete") {
     // ``--squirrel-obsolete`` fires when a previous version is being
     // replaced; the new install already cleaned up the old files and
@@ -1444,11 +1479,15 @@ function buildSquirrelSummaryText({
         }
       });
     }
-    if (installedLines.length > 0) {
-      lines.push("");
-      lines.push("Installed files:");
-      installedLines.forEach((entry) => lines.push(entry));
-    }
+    // Always emit the section header when ``binaryPaths`` is
+    // provided, even if no individual lines were resolved. Keeping
+    // the section structure stable prevents the dialog from
+    // jumping height when the helper returns different shapes
+    // (e.g. on a partial install where the resourcesPath is
+    // unknown).
+    lines.push("");
+    lines.push("Installed files:");
+    installedLines.forEach((entry) => lines.push(entry));
   }
   if (Array.isArray(operationLog) && operationLog.length > 0) {
     lines.push("");
@@ -1511,10 +1550,22 @@ function showWindowsSquirrelSummaryDialog({
   // the summary the user needs.
   const escapedTitle = String(title || "").replace(/'/g, "''");
   const escapedMessage = String(message || "").replace(/'/g, "''");
+  // We embed the message as a single-quoted PowerShell here-string
+  // so newlines and embedded quotes survive intact. ``@'\n`` opens
+  // the literal here-string (the newline is required by PowerShell);
+  // ``\n'@`` closes it.
+  //
+  // We use ``-EncodedCommand`` (base64 UTF-16LE) instead of
+  // ``-Command`` so the script survives any quoting/escaping
+  // hazards: the assembled shell script could otherwise be mangled
+  // by PowerShell's tokenizer when the message contains
+  // backticks, dollar signs, or embedded quotes. The base64
+  // encoding round-trips the bytes identically.
   const psScript = [
     "Add-Type -AssemblyName System.Windows.Forms",
     `[System.Windows.Forms.MessageBox]::Show(@'\n${escapedMessage}\n'@, '${escapedTitle}', 'OK', 'Information') | Out-Null`,
   ].join("; ");
+  const encodedCommand = Buffer.from(psScript, "utf16le").toString("base64");
   try {
     spawnFn(
       "powershell.exe",
@@ -1523,18 +1574,29 @@ function showWindowsSquirrelSummaryDialog({
         "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        psScript,
+        "-EncodedCommand",
+        encodedCommand,
       ],
       {
         stdio: ["ignore", "ignore", "ignore"],
-        windowsHide: false,
+        // ``windowsHide: true`` keeps the PowerShell console window
+        // from flashing on the user's desktop. The MessageBox is a
+        // separate Win32 window created by the Forms assembly and
+        // displays regardless of the host process visibility.
+        windowsHide: true,
         timeout: 120_000,
       },
     );
   } catch (_error) {
     // Best-effort UI; never let the summary helper throw out of the
     // squirrel gate.
+    try {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] Summary dialog spawn failed message=${JSON.stringify(_error?.message || String(_error))}`,
+      );
+    } catch (_logError) {
+      // ignore — logging is best-effort
+    }
   }
   // If the caller wired up a log opener and the log file actually
   // exists, expose it after the dialog closes via the same PowerShell
