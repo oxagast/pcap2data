@@ -423,7 +423,7 @@ describe("runSquirrelShortcutOperation", () => {
             folderName: "PacketSnitch",
             folderIconPath: "C:\\Program Files\\PacketSnitch\\app-1.2.3\\resources\\ps-icon.ico",
             docsUrl: "https://packetsnitch.com/docu/",
-            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            startMenuBaseDir: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
             desktopDir: "C:\\Users\\me\\Desktop",
         });
         expect(captured.cmd).toBe("powershell.exe");
@@ -459,7 +459,7 @@ describe("runSquirrelShortcutOperation", () => {
             operationLog,
             folderName: "PacketSnitch",
             folderIconPath: "C:\\path\\ps-icon.ico",
-            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            startMenuBaseDir: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
             desktopDir: "C:\\Users\\me\\Desktop",
         });
         // The PowerShell script should be the same shape as
@@ -484,7 +484,7 @@ describe("runSquirrelShortcutOperation", () => {
             operationLog,
             folderName: "PacketSnitch",
             folderIconPath: "C:\\path\\ps-icon.ico",
-            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            startMenuBaseDir: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
             desktopDir: "C:\\Users\\me\\Desktop",
         });
         const encodedIndex = captured.args.indexOf("-EncodedCommand");
@@ -515,7 +515,7 @@ describe("runSquirrelShortcutOperation", () => {
             operationLog,
             folderName: "PacketSnitch",
             folderIconPath: "C:\\path\\ps-icon.ico",
-            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            startMenuBaseDir: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
             desktopDir: "C:\\Users\\me\\Desktop",
         });
         // ``--squirrel-obsolete`` fires when a previous version is
@@ -541,7 +541,7 @@ describe("runSquirrelShortcutOperation", () => {
             operationLog,
             folderName: "PacketSnitch",
             folderIconPath: "C:\\path\\ps-icon.ico",
-            startMenuBaseDir: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs",
+            startMenuBaseDir: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs",
             desktopDir: "C:\\Users\\me\\Desktop",
         });
         expect(result.ok).toBe(false);
@@ -769,16 +769,21 @@ describe("buildSquirrelSummaryText", () => {
             operationKind: "install",
             version: "1.2.3",
             binaryPaths: {
-                startMenuFolder: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch",
-                appShortcutPath: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk",
-                docsShortcutPath: "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk",
+                // The install writes to the system-wide Start Menu
+                // folder (the location Windows 11's modern Start
+                // Menu actually reads), not the per-user APPDATA
+                // folder. The folder name is capitalized
+                // ``PacketSnitch`` to match the brand.
+                startMenuFolder: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch",
+                appShortcutPath: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk",
+                docsShortcutPath: "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk",
                 desktopShortcut: "C:\\Users\\me\\Desktop\\PacketSnitch.lnk",
             },
         });
         expect(text).toContain("Desktop     : C:\\Users\\me\\Desktop\\PacketSnitch.lnk");
-        expect(text).toContain("Start menu  : C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch");
-        expect(text).toContain("App link : C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk");
-        expect(text).toContain("Docs link: C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk");
+        expect(text).toContain("Start menu  : C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch");
+        expect(text).toContain("App link : C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\PacketSnitch.lnk");
+        expect(text).toContain("Docs link: C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\PacketSnitch\\Documentation.lnk");
     });
 });
 
@@ -787,28 +792,46 @@ describe("resolveSquirrelStartMenuBaseDir", () => {
         const harness = makeGateVm();
         const result = harness.resolveSquirrelStartMenuBaseDir({
             platformName: "linux",
-            appDataDir: "/home/user/.config",
+            programDataDir: "/var/lib",
         });
         expect(result).toBe("");
     });
 
-    test("returns the empty string when APPDATA is missing", () => {
+    test("returns the empty string when PROGRAMDATA is missing and no ProgramFiles fallback is available", () => {
         const harness = makeGateVm();
         const result = harness.resolveSquirrelStartMenuBaseDir({
             platformName: "win32",
-            appDataDir: "",
+            programDataDir: "",
+            programFilesDir: "",
         });
         expect(result).toBe("");
     });
 
-    test("joins APPDATA with the conventional Start Menu Programs path", () => {
+    test("joins PROGRAMDATA with the system-wide Start Menu Programs path", () => {
+        // Windows 11's modern Start Menu reads from the
+        // system-wide Programs folder, not the per-user APPDATA
+        // location. The helper must return the system-wide path
+        // so the install puts the folder where the modern Start
+        // Menu will actually display it.
         const harness = makeGateVm();
         const result = harness.resolveSquirrelStartMenuBaseDir({
             platformName: "win32",
-            appDataDir: "C:\\Users\\me\\AppData\\Roaming",
+            programDataDir: "C:\\ProgramData",
         });
         expect(result).toBe(
-            path.win32.join("C:\\Users\\me\\AppData\\Roaming", "Microsoft", "Windows", "Start Menu", "Programs"),
+            path.win32.join("C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs"),
+        );
+    });
+
+    test("falls back to ProgramFiles when PROGRAMDATA is missing", () => {
+        const harness = makeGateVm();
+        const result = harness.resolveSquirrelStartMenuBaseDir({
+            platformName: "win32",
+            programDataDir: "",
+            programFilesDir: "C:\\Program Files",
+        });
+        expect(result).toBe(
+            path.win32.join("C:\\Program Files", "Microsoft", "Windows", "Start Menu", "Programs"),
         );
     });
 });

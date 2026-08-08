@@ -1173,9 +1173,11 @@ function resolveSquirrelInstalledFiles({
     ? process.resourcesPath
     : "",
   existsSyncFn = fs.existsSync,
-  folderName = typeof app !== "undefined" && app && typeof app.getName === "function"
-    ? app.getName()
-    : "PacketSnitch",
+  // The folder name uses the brand capitalization
+  // ``PacketSnitch`` rather than the lowercase ``app.getName()``
+  // slug from ``package.json``. The summary dialog and Start Menu
+  // both surface this name, so the casing matters.
+  folderName = "PacketSnitch",
   startMenuBaseDir = "",
   desktopDir = "",
 } = {}) {
@@ -1632,22 +1634,46 @@ async function runSquirrelShortcutOperation({
 }
 
 
-// Resolve the per-user Start Menu ``Programs`` folder on Windows.
-// ``%APPDATA%\Microsoft\Windows\Start Menu\Programs`` is the
-// conventional per-user Programs location; it works on every
-// supported Windows version and respects ``ROAMINGAPPDATA`` when
-// the user has folder redirection enabled. Returning the empty
-// string on non-Windows lets the caller short-circuit cleanly.
+// Resolve the system-wide Start Menu ``Programs`` folder on
+// Windows. ``C:\ProgramData\Microsoft\Windows\Start Menu\Programs``
+// is the location the modern Windows 11 Start Menu reads from
+// (per-user ``%APPDATA%\Microsoft\Windows\Start Menu\Programs`` is
+// only visible via the legacy classic Start Menu, the Win+X
+// power-user menu, and ``shell:start menu``). The Squirrel
+// install is already running elevated when this path is touched,
+// so writing to ``ProgramData`` is permitted.
+//
+// ``programDataDir`` and ``programFilesDir`` are dependency-
+// injected so the unit tests can drive the helper on Linux/macOS
+// without touching the real environment. The default environment
+// lookups (``%PROGRAMDATA%`` and ``%ProgramFiles%``) are only used
+// when the caller doesn't pass them explicitly.
+//
+// Falling back to ``C:\Program Files`` when ``%PROGRAMDATA%`` is
+// missing is intentional: ``ProgramData`` was introduced in
+// Windows 2000, so the value is always present on every supported
+// Windows version; the fallback exists only as a defensive
+// default for the test sandbox.
 function resolveSquirrelStartMenuBaseDir({
   platformName = process.platform,
-  appDataDir = "",
+  programDataDir = "",
+  programFilesDir = "",
 } = {}) {
   if (platformName !== "win32") {
     return "";
   }
-  const root = String(appDataDir || "");
+  const root = String(programDataDir || "");
   if (!root) {
-    return "";
+    // ``%PROGRAMDATA%`` is the canonical Windows env var; fall
+    // back to ``%ProgramFiles%`` if the caller didn't inject one
+    // and we can't read the env. This branch is also exercised by
+    // the unit tests, which run on Linux without
+    // ``process.env`` populated.
+    const fallback = String(programFilesDir || "");
+    if (!fallback) {
+      return "";
+    }
+    return path.win32.join(fallback, "Microsoft", "Windows", "Start Menu", "Programs");
   }
   return path.win32.join(root, "Microsoft", "Windows", "Start Menu", "Programs");
 }
@@ -2061,17 +2087,25 @@ async function runSquirrelStartupGateAsync({
   // payload afterwards. Computing them in two places would let
   // them drift apart if process.env ever changes between the two
   // reads (it shouldn't, but defensive consistency is cheap).
-  const folderName = typeof app.getName === "function"
-    ? app.getName()
-    : "PacketSnitch";
+  //
+  // The folder name is hardcoded to ``PacketSnitch`` (capitalized)
+  // so the Start Menu entry shows the brand name correctly even
+  // though ``package.json`` uses the lowercase slug
+  // ``packetsnitch``. ``app.getName()`` would return the
+  // ``productName`` (also lowercase); we want the human-readable
+  // brand here.
+  const folderName = "PacketSnitch";
   const folderIconPath = typeof process.resourcesPath === "string"
     && process.resourcesPath
     ? path.win32.join(process.resourcesPath, "ps-icon.ico")
     : "";
   const startMenuBaseDir = resolveSquirrelStartMenuBaseDir({
     platformName,
-    appDataDir: typeof process.env !== "undefined" && process.env
-      ? process.env.APPDATA || ""
+    programDataDir: typeof process.env !== "undefined" && process.env
+      ? process.env.PROGRAMDATA || ""
+      : "",
+    programFilesDir: typeof process.env !== "undefined" && process.env
+      ? process.env.ProgramFiles || process.env.ProgramW6432 || ""
       : "",
   });
   const desktopDir = typeof process.env !== "undefined" && process.env
