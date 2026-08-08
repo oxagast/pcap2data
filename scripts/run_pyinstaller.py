@@ -62,11 +62,14 @@ _SPEC_TEMPLATE = """\
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
-# Load the patched-.so manifest so the Analysis step can re-route
-# ``a.binaries[].src_name`` entries to the cached, DT_RUNPATH-free
-# copies.
+# Load the pre-staged.patchelf cache (populated by
+# stage_patched_sos.py). Keys are absolute paths to the original
+# (un-patched) .so files; values are writable cached copies with
+# DT_RUNPATH rewritten to DT_RPATH.
 _MANIFEST_PATH = {_manifest_path!r}
 _PATCHES = {{}}
 _CACHE_DIR = None
@@ -102,26 +105,120 @@ for _pkg in {_collect_data!r}:
         a.collect_data(_pkg)
 
 
+def _read_dynamic_section(path):
+    '''Return list of (tag, value) pairs from the dynamic section of
+    the given ELF file. Uses ``patchelf --print-rpath`` for the
+    rpath/runpath tags we care about, falling back to ``readelf -d`` if
+    patchelf is not available.'''
+    import re
+    try:
+        out = subprocess.run(
+            ["patchelf", "--print-rpath", path],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        out = ""
+    runpath = out
+    try:
+        out = subprocess.run(
+            ["patchelf", "--print-needed", path],
+            capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        out = []
+    return runpath, out
+
+
+def _ensure_patched(src_name, dest_name):
+    '''Return a path to a DT_RUNPATH-free copy of ``src_name``.
+
+    Order of operations:
+      1. If ``src_name`` is already in the manifest cache, use the
+         cached copy directly.
+      2. Otherwise, try to patchelf ``src_name`` in place. If it
+         works, return ``src_name`` unchanged.
+      3. Otherwise (root-owned, not writable), copy to a writable
+         subdirectory of the cache and patchelf the copy. The copy
+         is keyed by the relative path of the source so subsequent
+         builds reuse it.
+    '''
+    if src_name in _PATCHES:
+        return _PATCHES[src_name]
+    if not os.path.isfile(src_name):
+        return src_name
+    runpath, _ = _read_dynamic_section(src_name)
+    if not runpath:
+        return src_name
+    # Already a DT_RPATH, not a DT_RUNPATH. Try in place first.
+    try:
+        subprocess.run(
+            ["patchelf", "--remove-rpath", src_name],
+            capture_output=True, check=True,
+        )
+        return src_name
+    except (subprocess.CalledProcessError, FileNotFoundError, PermissionError, OSError):
+        pass
+    # In-place patchelf failed (probably root-owned). Stage to the
+    # cache directory and patchelf there.
+    if not _CACHE_DIR:
+        _CACHE_DIR_RUNTIME = os.path.join(
+            os.path.dirname(__file__) or os.getcwd(),
+            "build",
+            "pyinstaller",
+            "patched-sos",
+        )
+    else:
+        _CACHE_DIR_RUNTIME = _CACHE_DIR
+    # Key the cached copy by the absolute path of the source so we
+    # reuse the same file across builds.
+    ab = os.path.abspath(src_name)
+    cache_path = os.path.join(_CACHE_DIR_RUNTIME, ab.lstrip("/"))
+    cache_path = cache_path.replace(os.sep + ".", os.sep + "_dot_")
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    if not os.path.isfile(cache_path):
+        shutil.copy2(ab, cache_path)
+        os.chmod(cache_path, 0o644)
+    try:
+        subprocess.run(
+            ["patchelf", "--remove-rpath", cache_path],
+            capture_output=True, check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If patchelf still fails after staging, give up and return
+        # the original -- the build will fail downstream with a
+        # clearer error than ours.
+        return src_name
+    return cache_path
+
+
 # Substitute ``a.binaries[].src_name`` for any cached .so files. The
 # cache is populated by ``stage_patched_sos.py`` with patchelf-rewritten
 # copies of root-owned DT_RUNPATH files. Without this, staticx would
 # later fail with ``Unsupported DT_RUNPATH '$ORIGIN'`` on libabsl /
 # gRPC / tensorboard binaries.
-if _PATCHES:
-    _new_binaries = []
-    _substituted = 0
-    for _entry in a.binaries:
-        _dest_name, _src_name, _typecode = _entry[:3]
-        if _src_name in _PATCHES:
-            _new_binaries.append((_dest_name, _PATCHES[_src_name], _typecode))
+_new_binaries = []
+_substituted = 0
+for _entry in a.binaries:
+    _dest_name, _src_name, _typecode = _entry[:3]
+    if _src_name in _PATCHES:
+        _new_binaries.append((_dest_name, _PATCHES[_src_name], _typecode))
+        _substituted += 1
+        continue
+    # Fast-path: if the .so ends with .so and lives somewhere we
+    # couldn't patchelf in place (i.e. it still has DT_RUNPATH),
+    # route through the cache on demand.
+    if _src_name.endswith(".so") or ".so." in os.path.basename(_src_name):
+        _new_src = _ensure_patched(_src_name, _dest_name)
+        if _new_src != _src_name:
+            _new_binaries.append((_dest_name, _new_src, _typecode))
             _substituted += 1
-        else:
-            _new_binaries.append(_entry)
-    a.binaries = _new_binaries
-    print(
-        f"[run-pyinstaller-spec] substituted {{_substituted}} .so "
-        f"src_name(s) with cached, patched copies from {{_CACHE_DIR}}"
-    )
+            continue
+    _new_binaries.append(_entry)
+a.binaries = _new_binaries
+print(
+    f"[run-pyinstaller-spec] substituted {{_substituted}} .so "
+    f"src_name(s) with cached, patched copies from {{_CACHE_DIR or '<build-time cache>'}}"
+)
 
 
 pyz = PYZ(a.pure)

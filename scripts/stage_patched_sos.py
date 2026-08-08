@@ -16,8 +16,8 @@ archive and ``staticx`` then refuses to re-wrap with::
 This script walks active site-packages, finds .so files that have
 DT_RUNPATH and that we cannot write to, copies them to a writable cache
 under ``${BUILD_WORK_DIR}/patched-sos/`` (preserving relative path), runs
-``patchelf --remove-rpath --force-rpath --set-rpath`` on the cached copy,
-and writes ``manifest.json`` so the build script can re-route PyInstaller's
+``patchelf --remove-rpath`` on the cached copy, and writes
+``manifest.json`` so the build script can re-route PyInstaller's
 ``a.binaries`` ``src_name`` entries to the patched copies.
 
 The manifest schema::
@@ -32,6 +32,15 @@ The manifest schema::
     }
 
 The script is idempotent: re-running cleans and rebuilds the cache.
+
+Note: ``scripts/run_pyinstaller.py`` now also patches DT_RUNPATH
+in-place via ``_ensure_patched()`` for any ``a.binaries`` entry whose
+source file is not in this manifest. This script is therefore a
+fast-path: it pre-stages everything in site-packages so the build
+spends less time on per-binary patchelf work. Files in system
+directories (e.g. ``/usr/lib/x86_64-linux-gnu/libabsl_*.so`` on Kali)
+that PyInstaller pulls in as transitive dependencies are handled
+on-the-fly by the spec.
 """
 
 from __future__ import annotations
