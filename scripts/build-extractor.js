@@ -85,10 +85,16 @@ function preflightCheck() {
 }
 
 // Install the slim ``requirements-extract.txt`` deps into the active
-// Python environment so PyInstaller can import them. Uses
-// ``python3 -m pip`` so we pick up the exact interpreter PyInstaller
-// will run against; falls through gracefully if the user already has
-// the deps and ``pip`` is just being noisy.
+// Python environment so PyInstaller can import them.
+//
+// We prefer the project's ``.venv`` if one exists -- pip on
+// externally-managed system Pythons (PEP 668, e.g. Kali/Debian) will
+// refuse to install without ``--break-system-packages``, which is
+// risky and not portable. The venv is hermetic and already holds
+// every dependency the build needs. If no venv is present we fall
+// back to the system ``python3`` and pass ``--break-system-packages``
+// so the build still works on a fresh Kali box where the user has
+// not set up a venv.
 function installRequirements() {
     if (!fs.existsSync(REQUIREMENTS_FILE)) {
         console.error(
@@ -96,12 +102,19 @@ function installRequirements() {
         );
         process.exit(1);
     }
+    const venvPython = path.join(PROJECT_ROOT, ".venv", "bin", "python3");
+    const useVenv = process.platform !== "win32" && fs.existsSync(venvPython);
+    const python = useVenv ? venvPython : "python3";
+    const pipArgs = ["-m", "pip", "install", "--requirement", REQUIREMENTS_FILE];
+    if (!useVenv) {
+        pipArgs.push("--break-system-packages");
+    }
     console.log(
-        `[build-extractor] installing Python deps from ${REQUIREMENTS_FILE}`,
+        `[build-extractor] installing Python deps from ${REQUIREMENTS_FILE} using ${python}`,
     );
     const result = spawnSync(
-        "python3",
-        ["-m", "pip", "install", "--requirement", REQUIREMENTS_FILE],
+        python,
+        pipArgs,
         {
             cwd: PROJECT_ROOT,
             stdio: "inherit",
