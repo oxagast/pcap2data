@@ -342,6 +342,43 @@ function createPluginFsApi(pluginState) {
 function createPluginNetworkApi(pluginState, guardedFetch) {
   return {
     fetch: guardedFetch,
+    // ``fetchRemoteText`` is the CORS-proof escape hatch for plugin
+    // fetches. ``fetch`` runs in the renderer process and is gated
+    // by Chromium's CORS preflight, which silently drops responses
+    // from hosts like ``termbin.com`` that don't send
+    // ``Access-Control-Allow-Origin``. This bridge runs in the main
+    // process via undici, which has no CORS gate, so the plugins
+    // can collaborate over arbitrary plain-text endpoints without
+    // requiring each host to opt in to CORS. The capability gate
+    // is the same ``network.fetch.http`` used by ``fetch``, so
+    // plugins that don't already have that capability still cannot
+    // reach this code path.
+    fetchRemoteText: async (input, options = {}) => {
+      assertPluginCapability(pluginState, 'network.fetch.http', 'fetchRemoteText');
+      const requestUrl = typeof input === 'string'
+        ? input
+        : typeof input?.url === 'string'
+          ? input.url
+          : '';
+      const trimmedUrl = String(requestUrl || '').trim();
+      if (!trimmedUrl) {
+        return { ok: false, error: 'Missing URL' };
+      }
+      try {
+        const parsedUrl = new URL(trimmedUrl);
+        const protocol = String(parsedUrl.protocol || '').toLowerCase();
+        if (protocol !== 'http:' && protocol !== 'https:') {
+          return { ok: false, error: `Unsupported URL protocol ${protocol || 'unknown'}` };
+        }
+      } catch (_error) {
+        return { ok: false, error: 'Invalid URL' };
+      }
+      return ipcRenderer.invoke('fetch-remote-text', {
+        url: trimmedUrl,
+        maxBytes: Number.isFinite(options?.maxBytes) ? options.maxBytes : undefined,
+        timeoutMs: Number.isFinite(options?.timeoutMs) ? options.timeoutMs : undefined,
+      });
+    },
     socketConnect: ({ host, port, timeoutMs = 5000 } = {}) => {
       assertPluginCapability(pluginState, 'network.socket.connect', 'network.socket.connect');
       return new Promise((resolve, reject) => {
