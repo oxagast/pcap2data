@@ -18,6 +18,7 @@
         "--color-5": "#e4e8ee",
         "--color-6": "#aab2be",
         "--color-7": "#303641",
+        "--sidebar-text-color": "#e4e8ee",
         "--data-tools-frame-bg": "#21262e",
         "--data-tools-hex-color": "#e4e8ee",
         "--data-tools-binary-color": "#e4e8ee",
