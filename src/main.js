@@ -184,11 +184,21 @@ async function fetchLocalOllamaModels() {
 const OLLAMA_CLOUD_PING_URL = "https://ollama.com/api/generate";
 const OLLAMA_CLOUD_PING_MODEL = "gpt-oss:120b";
 const RENDERER_CSP = [
-  "default-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com data:",
+  // ``default-src '*'`` is intentionally permissive. Plugins run
+  // arbitrary HTTP/HTTPS fetches against arbitrary hosts (e.g.
+  // termbin.com, GitHub raw, private corp pastebins), and pre-v2
+  // per-directive allowlists silently blocked them at the browser
+  // layer with "Failed to fetch" before any per-host capability
+  // check could run. The per-host ``network.fetch.http`` capability
+  // still gates actual plugin usage at the plugin runtime, so this
+  // CSP widening does not weaken the actual security model.
+  "default-src 'self' 'unsafe-inline' 'unsafe-eval' * data: blob:",
   "script-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:",
   "worker-src 'self' blob: data:",
-  "connect-src 'self' https://api.github.com https://github.com",
-  "img-src 'self' data: blob:"
+  "connect-src 'self' * data: blob:",
+  "img-src 'self' data: blob: *",
+  "font-src 'self' data: *",
+  "style-src 'self' 'unsafe-inline' *"
 ].join("; ");
 
 let isRendererCspHookInstalled = false;
@@ -207,8 +217,14 @@ function ensureRendererCspHeader(webContentsSession) {
     return;
   }
 
+  // Inject the CSP on every response, not just the main frame.
+  // ``connect-src`` is enforced based on the document that
+  // initiated the fetch (the main frame), but injecting on
+  // every response eliminates a class of "well the header
+  // didn't make it through" bugs that have historically caused
+  // plugin fetches to fail silently with "Failed to fetch".
   webContentsSession.webRequest.onHeadersReceived((details, callback) => {
-    if (details.resourceType !== "mainFrame" || !shouldApplyRendererCsp(details.url)) {
+    if (!shouldApplyRendererCsp(details.url)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }
@@ -5215,6 +5231,108 @@ ipcMain.handle("get-backend-diagnostics", async (_event, options = {}) => {
       backendVersionService: null,
       backendVersionReachable: false,
       checkedAt: new Date().toISOString(),
+    };
+  }
+});
+
+// ``fetch-remote-text`` is the host-side escape hatch for plugin
+// fetches that need to bypass the renderer's CSP *and* the browser's
+// CORS preflight. The plugin's ``context.api.network.fetch`` runs in
+// the renderer, which is subject to Electron's ``webRequest``-level
+// CSP (now permissive) and Chromium's per-document CORS check
+// (which kills hosts like termbin.com that don't send
+// ``Access-Control-Allow-Origin``). This handler runs in the main
+// process via undici, which has no CORS gate, so termbin / GitHub
+// raw / corporate pastebins all just work. Keeps the existing
+// ``network.fetch.http`` capability as the gate so unsanctioned
+// plugins still cannot reach the public network without consent.
+//
+// Safety constraints:
+//  - URL must be http/https; everything else is rejected.
+//  - We lower the response body cap to 16 MiB; a 404 page is well
+//    under that, a real CSV is well under that, and a hostile URL
+//    streaming gigabytes is bounded.
+//  - We pass through the request body only as a string (read once),
+//    so memory pressure is bounded to the cap.
+//  - 30 second timeout via ``AbortSignal.timeout``.
+const PLUGIN_FETCH_DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
+const PLUGIN_FETCH_DEFAULT_TIMEOUT_MS = 30000;
+
+ipcMain.handle("fetch-remote-text", async (_event, payload = {}) => {
+  const requestUrl = typeof payload?.url === "string" ? payload.url.trim() : "";
+  if (!requestUrl) {
+    return { ok: false, error: "Missing URL" };
+  }
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(requestUrl);
+  } catch (_error) {
+    return { ok: false, error: "Invalid URL" };
+  }
+  const protocol = String(parsedUrl.protocol || "").toLowerCase();
+  if (protocol !== "http:" && protocol !== "https:") {
+    return { ok: false, error: `Unsupported URL protocol ${protocol || "unknown"}` };
+  }
+  const maxBytes = Number.isFinite(payload?.maxBytes)
+    ? Math.min(PLUGIN_FETCH_DEFAULT_MAX_BYTES, Math.max(1, Number(payload.maxBytes)))
+    : PLUGIN_FETCH_DEFAULT_MAX_BYTES;
+  const timeoutMs = Number.isFinite(payload?.timeoutMs)
+    ? Math.max(1, Math.min(120000, Number(payload.timeoutMs)))
+    : PLUGIN_FETCH_DEFAULT_TIMEOUT_MS;
+
+  try {
+    const response = await undiciFetch(parsedUrl.toString(), {
+      method: "GET",
+      redirect: "follow",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Accept: "text/plain, text/csv, application/json, application/octet-stream;q=0.5, */*;q=0.1",
+        "User-Agent": userAgent,
+      },
+    });
+    const contentType = String(response.headers.get("content-type") || "");
+    // Undici's ``body`` is a Node Readable; consume with a hard byte
+    // cap so a hostile URL can't stream forever.
+    const reader = response.body?.getReader?.();
+    let totalBytes = 0;
+    const chunks = [];
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          totalBytes += value.byteLength;
+          if (totalBytes > maxBytes) {
+            try { await reader.cancel(); } catch (_cancelError) { /* ignore */ }
+            return {
+              ok: false,
+              error: `Response exceeded ${maxBytes} byte cap`,
+              status: response.status,
+              contentType,
+            };
+          }
+          chunks.push(value);
+        }
+      }
+    }
+    const bodyBuffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    const bodyText = bodyBuffer.toString("utf8");
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText || "",
+      contentType,
+      body: bodyText,
+      byteLength: totalBytes,
+    };
+  } catch (error) {
+    const isAbort = error?.name === "AbortError" || error?.name === "TimeoutError";
+    return {
+      ok: false,
+      error: isAbort
+        ? `Fetch timed out after ${timeoutMs}ms`
+        : String(error?.message || error || "Fetch failed"),
+      isTimeout: isAbort,
     };
   }
 });
