@@ -8,6 +8,9 @@ src/backend/snitch-extract
 src/backend/snitch-extract.exe
 src/metrics/var
 backend/snitch.exe
+backend/snitch-extract.exe
+snitch
+snitch-extract
 testcases
 .VSCodeCounter
 memories

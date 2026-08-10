@@ -1024,6 +1024,15 @@ let notesEditorVisible = false;
 let currentSessionName = null;
 let sessionPickerPanel = null;
 let lastBackendLoadRequest = null;
+// True once the user has explicitly closed the current session (e.g.
+// hit "New capture" / opened a different file from the picker). When
+// set, the next backend JSON payload clears currentSessionName so the
+// Save-Session flow will prompt for a fresh name. When false, a
+// background rerun (e.g. the wifi-keys rerun) is allowed to keep the
+// existing session name and other session-bound state alive so the
+// user can keep working with the same named session through the
+// rerun.
+let sessionExplicitlyClosed = true;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
@@ -1109,6 +1118,13 @@ const backendProgressState = {
   // new packet count matches the old one, leaving the UI stuck on the
   // pre-decryption packet content.
   wifiKeysRerunInFlight: false,
+  // Session-bound state snapshot taken at the start of a wifi-keys
+  // rerun (currentSessionName, filter query, selected host). The
+  // payload handler re-applies this when the rerun completes so the
+  // user's session identity and view state survive the rerun.
+  // See triggerWifiKeysRerun / processBackendJsonDataPayload /
+  // processBackendJsonPathPayload.
+  pendingSessionRerunSnapshot: null,
 };
 let activeBackendJobId = "";
 let sessionPcapSource = null;
@@ -4996,6 +5012,7 @@ function resetBackendProgressState() {
   backendProgressState.etaLastSampleProcessedPackets = 0;
   backendProgressState.etaPacketsPerSecond = 0;
   backendProgressState.wifiKeysRerunInFlight = false;
+  backendProgressState.pendingSessionRerunSnapshot = null;
   pendingBackendCaptureUpdate = null;
   backendLastAppliedSnapshotProcessedPackets = 0;
   backendLastAppliedSnapshotAtMs = 0;
@@ -5373,6 +5390,11 @@ sessionPickerPanel = initializeSessionPicker({
   buildSessionFilePayload,
   onSessionSelected: async (name, jsonData) => {
     currentSessionName = name;
+    // Loading a named session from the library: subsequent background
+    // reruns (e.g. the wifi-keys rerun) must inherit this session name
+    // and other session-bound state, so mark the session as
+    // "live" until the user explicitly closes it.
+    sessionExplicitlyClosed = false;
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
     resetBackendProgressState();
@@ -5430,11 +5452,14 @@ sessionPickerPanel = initializeSessionPicker({
       });
   },
 });
-
 async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
   resetBackendProgressState();
+  // User explicitly cleared the session: the next backend JSON payload
+  // is allowed to clear currentSessionName and the renderer will
+  // prompt for a fresh name on the next Save-Session click.
+  sessionExplicitlyClosed = true;
   currentSessionName = null;
   p = [];
   capturedPackets = {};
@@ -5555,6 +5580,12 @@ document
         writeLogEntry(`User selected capture/session file path=${filePath}`);
         // Clear library session name – this is a manual file load, not from the library
         currentSessionName = null;
+        // Manual file load is a fresh session: the next backend payload
+        // is allowed to wipe currentSessionName and the next Save will
+        // prompt for a name. Background reruns from this same PCAP
+        // won't re-prompt (see sessionExplicitlyClosed gating in
+        // processBackendJsonPathPayload / processBackendJsonDataPayload).
+        sessionExplicitlyClosed = true;
         lastBackendLoadRequest = {
           kind: "file",
           filePath,
@@ -24679,7 +24710,17 @@ function queueBackendCaptureUpdate(kind, payload) {
 async function processBackendJsonPathPayload(payload) {
   const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
-  currentSessionName = null;
+  // Only clear the library session name when the user has explicitly
+  // closed the session (New Capture / file picker / onNewSession)
+  // OR when this is NOT a wifi-keys background rerun. A wifi-keys
+  // rerun is decoupled from the user's "current" session identity —
+  // it just re-processes the same stored PCAP with new keys — so the
+  // session name must survive across the rerun so the next Save-Session
+  // click writes to the same library entry.
+  if (sessionExplicitlyClosed
+    && !backendProgressState.wifiKeysRerunInFlight) {
+    currentSessionName = null;
+  }
 
   backendProgressState.processedPackets = Math.max(
     backendProgressState.processedPackets,
@@ -24736,10 +24777,15 @@ async function processBackendJsonPathPayload(payload) {
     backendProgressState.firstChunkLoaded = true;
     markAppliedBackendSnapshot(payload);
     hideLoadingOverlay();
-    filterInputEl.value = "";
-    updateFilterClearButtonState();
-    clearFilterQuery();
-    syncFilterHighlight();
+    // Same session-following guard as the in-memory first-chunk
+    // path: a wifi-keys rerun must not wipe the user's filter
+    // query.
+    if (!backendProgressState.wifiKeysRerunInFlight) {
+      filterInputEl.value = "";
+      updateFilterClearButtonState();
+      clearFilterQuery();
+      syncFilterHighlight();
+    }
     logIngestionChunkTiming("path", "first-chunk-applied", payload, performance.now() - chunkStartTime);
   } else {
     if (!payload.complete) {
@@ -24790,6 +24836,11 @@ async function processBackendJsonPathPayload(payload) {
     backendProgressState.processing = false;
     if (backendProgressState.wifiKeysRerunInFlight) {
       backendProgressState.wifiKeysRerunInFlight = false;
+      // Re-apply session-bound state at the end of a path-mode
+      // wifi-keys rerun (mirrors the in-memory handler).
+      const snapshot = backendProgressState.pendingSessionRerunSnapshot;
+      backendProgressState.pendingSessionRerunSnapshot = null;
+      restoreSessionBoundStateFromRerun(snapshot);
       statusUpdate("Status: Wi-Fi keys applied; 802.11 frames updated");
       writeLogEntry(
         `[${threadName}] Wi-Fi keys rerun completed; cleared rerun flag`,
@@ -24821,7 +24872,17 @@ async function processBackendJsonPathPayload(payload) {
 async function processBackendJsonDataPayload(payload) {
   const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
-  currentSessionName = null;
+  // Only clear the library session name when the user has explicitly
+  // closed the session (New Capture / file picker / onNewSession)
+  // OR when this is NOT a wifi-keys background rerun. A wifi-keys
+  // rerun is decoupled from the user's "current" session identity —
+  // it just re-processes the same stored PCAP with new keys — so the
+  // session name must survive across the rerun so the next Save-Session
+  // click writes to the same library entry.
+  if (sessionExplicitlyClosed
+    && !backendProgressState.wifiKeysRerunInFlight) {
+    currentSessionName = null;
+  }
 
   backendProgressState.processedPackets = Math.max(
     backendProgressState.processedPackets,
@@ -24888,12 +24949,19 @@ async function processBackendJsonDataPayload(payload) {
     });
     backendProgressState.firstChunkLoaded = true;
     markAppliedBackendSnapshot(payload);
-    clearSummaryContent();
-    hideLoadingOverlay();
-    filterInputEl.value = "";
-    updateFilterClearButtonState();
-    clearFilterQuery();
-    syncFilterHighlight();
+    // Skip summary/filter wipes on a wifi-keys rerun: the rerun
+    // should preserve the user's existing summary tab and filter
+    // query. Without this guard the renderer would snap back to the
+    // blank "Loading..." summary and lose the active filter the user
+    // typed before clicking "Send Wi-Fi keys to backend".
+    if (!backendProgressState.wifiKeysRerunInFlight) {
+      clearSummaryContent();
+      hideLoadingOverlay();
+      filterInputEl.value = "";
+      updateFilterClearButtonState();
+      clearFilterQuery();
+      syncFilterHighlight();
+    }
     logIngestionChunkTiming("data", "first-chunk-applied", payload, performance.now() - chunkStartTime, {
       label: payload.label,
     });
@@ -24946,6 +25014,17 @@ async function processBackendJsonDataPayload(payload) {
     backendProgressState.processing = false;
     if (backendProgressState.wifiKeysRerunInFlight) {
       backendProgressState.wifiKeysRerunInFlight = false;
+      // Re-apply the session-bound state we snapshotted at the start
+      // of the wifi-keys rerun. This is the half of the
+      // session-following contract that makes the rerun transparent
+      // to the user: the library session name, active filter, and
+      // selected host survive the rerun so the next Save-Session
+      // click writes back to the same library entry and the user
+      // stays on the same filtered/host-scoped view they had before
+      // clicking "Send Wi-Fi keys to backend".
+      const snapshot = backendProgressState.pendingSessionRerunSnapshot;
+      backendProgressState.pendingSessionRerunSnapshot = null;
+      restoreSessionBoundStateFromRerun(snapshot);
       statusUpdate("Status: Wi-Fi keys applied; 802.11 frames updated");
       writeLogEntry(
         `[${threadName}] Wi-Fi keys rerun completed; cleared rerun flag`,
@@ -24954,7 +25033,13 @@ async function processBackendJsonDataPayload(payload) {
     if (payload.jobId && payload.jobId === activeBackendJobId) {
       activeBackendJobId = "";
     }
-    clearSummaryContent();
+    // Same as the first-chunk path: a wifi-keys rerun must not
+    // wipe the user's current summary content; the rerun should
+    // just splice in the freshly-decrypted packets and leave the
+    // existing report alone.
+    if (!backendProgressState.wifiKeysRerunInFlight) {
+      clearSummaryContent();
+    }
     hideLoadingOverlay();
     const loadEndTime = performance.now();
     document.getElementById("load-time").textContent =
@@ -25121,10 +25206,84 @@ function runSnitch(file, options = {}) {
       if (backendJobId !== activeBackendJobId) {
         return;
       }
+      // If the rerun aborted before any payload handler reached
+      // the wifi-keys completion branch, make sure the in-flight
+      // flag and the session-bound snapshot don't leak into the
+      // next backend run. The normal completion path clears both
+      // inside processBackendJson*Payload; this is the safety net
+      // for backend-promise-level errors (spawn failure, IPC
+      // rejection, etc.).
+      if (backendProgressState.wifiKeysRerunInFlight) {
+        backendProgressState.wifiKeysRerunInFlight = false;
+        backendProgressState.pendingSessionRerunSnapshot = null;
+        writeLogEntry(
+          `[${threadName}] Wifi-keys rerun aborted before completion; cleared rerun flag and snapshot`,
+        );
+      }
       backendProgressState.processing = false;
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });
+}
+
+// Captures a snapshot of the session-bound renderer state that must
+// survive a wifi-keys rerun: the library session name (so the next
+// Save-Session click writes back to the same entry), the active
+// filter query, and the selected host filter. Other session-bound
+// state (bookmarks, notes, summary) is already preserved by the
+// incremental-merge code path; this is the small set of fields that
+// the renderer's normal "fresh capture" payload handler wipes.
+function captureSessionBoundStateForRerun() {
+  const targetHostsEl = document.getElementById("target_hosts");
+  return {
+    currentSessionName:
+      typeof currentSessionName === "string" && currentSessionName.trim()
+        ? currentSessionName
+        : null,
+    filterQuery:
+      typeof filterInputEl?.value === "string" ? filterInputEl.value : "",
+    selectedHost:
+      targetHostsEl && typeof targetHostsEl.value === "string"
+        ? targetHostsEl.value
+        : (typeof hostFilterEl?.value === "string"
+          ? hostFilterEl.value
+          : ""),
+  };
+}
+
+// Re-applies a session-bound state snapshot that was captured at the
+// start of a wifi-keys rerun. Called from the payload handlers when
+// the rerun completes, so a rerun that just decrypted 802.11 frames
+// leaves the user on the same session name, filter, and host they
+// had before they clicked "Send Wi-Fi keys to backend".
+function restoreSessionBoundStateFromRerun(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return;
+  if (typeof snapshot.currentSessionName === "string"
+    && snapshot.currentSessionName.trim()) {
+    currentSessionName = snapshot.currentSessionName;
+  }
+  if (typeof snapshot.filterQuery === "string") {
+    if (filterInputEl && filterInputEl.value !== snapshot.filterQuery) {
+      filterInputEl.value = snapshot.filterQuery;
+      syncFilterHighlight();
+    }
+    const trimmed = snapshot.filterQuery.trim();
+    if (trimmed) {
+      void runFilterQuery(snapshot.filterQuery, { trackHistory: false });
+    }
+  }
+  if (typeof snapshot.selectedHost === "string" && snapshot.selectedHost) {
+    const targetHostsEl = document.getElementById("target_hosts");
+    if (targetHostsEl) {
+      targetHostsEl.value = snapshot.selectedHost;
+    }
+    if (hostFilterEl) {
+      hostFilterEl.value = snapshot.selectedHost;
+    }
+  }
+  writeLogEntry(
+    `[${threadName}] Restored session-bound state after Wi-Fi rerun name=${snapshot.currentSessionName || "<none>"} filter=${JSON.stringify(snapshot.filterQuery)} host=${JSON.stringify(snapshot.selectedHost)}`,
+  );
 }
 
 // Triggers a background rerun of snitch against the stored session PCAP
@@ -25185,8 +25344,17 @@ function triggerWifiKeysRerun(options = {}) {
   // incremental merge sees equal old/new packet counts and skips
   // reindexing, leaving the UI stuck on pre-decryption packet content.
   backendProgressState.wifiKeysRerunInFlight = true;
+  // Snapshot session-bound state (library session name, active filter
+  // query, selected host) so it can be re-applied when the rerun
+  // completes. Without this, a rerun that doesn't explicitly wipe
+  // those fields would still leave them in whatever state the
+  // incremental merge left them, and a rerun that *does* wipe them
+  // (defensive code, future refactors) would lose the user's
+  // session identity across the rerun.
+  backendProgressState.pendingSessionRerunSnapshot =
+    captureSessionBoundStateForRerun();
   writeLogEntry(
-    `[${threadName}] Triggering background wifi-keys rerun keys=${wifiKeys.length} source=${explicitKeys ? "explicit-snapshot" : "live-keychain"}`,
+    `[${threadName}] Triggering background wifi-keys rerun keys=${wifiKeys.length} source=${explicitKeys ? "explicit-snapshot" : "live-keychain"} snapshot_name=${backendProgressState.pendingSessionRerunSnapshot?.currentSessionName || "<none>"}`,
   );
   runSnitch(sessionPcapSource, {
     fromSessionSource: true,
