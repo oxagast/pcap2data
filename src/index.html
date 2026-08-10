@@ -484,6 +484,28 @@
                   Cross Reference Hash
                 </button>
               </div>
+              <div class="data-tools-hash-reverse-section">
+                <div class="data-tools-title">Hash Reverse</div>
+                <div class="data-tools-hash-reverse-grid">
+                  <label for="data-tools-hash-reverse-input">Hash to reverse</label>
+                  <input type="text" id="data-tools-hash-reverse-input" class="data-tools-hash-reverse-input"
+                    spellcheck="false" placeholder="Paste a hash (MD5 / SHA-1 / SHA-256 / …)" />
+                  <label for="data-tools-hash-reverse-status">Status</label>
+                  <div id="data-tools-hash-reverse-status" class="data-tools-hash-reverse-status">
+                    Enter a hash and click <em>Reverse Hash</em>. The
+                    request is sent to hashes.com; cost is deducted
+                    from your account.
+                  </div>
+                </div>
+                <div class="data-tools-hash-reverse-actions">
+                  <button id="data-tools-hash-reverse-btn" type="button"
+                    title="POST the hash to hashes.com /en/api/search and render any plaintext matches">
+                    Reverse Hash
+                  </button>
+                </div>
+                <pre id="data-tools-hash-reverse-result"
+                  class="data-tools-hash-reverse-result">No reverse-lookup has been run yet.</pre>
+              </div>
             </div>
           </div>
 
@@ -961,6 +983,9 @@ No decrypted TLS/SSL output yet.</pre>
                 <button id="crypt-send-to-persistent-btn">
                   Send to persistent
                 </button>
+                <button id="crypt-send-to-hashes-btn">
+                  Send to Hashes
+                </button>
                 <button id="crypt-delete-keystore-entry-btn">
                   Delete selected
                 </button>
@@ -1328,6 +1353,13 @@ No keystore entries saved.</pre>
                   placeholder="Leave blank to keep the stored key" />
                 <div class="settings-help-text">Used by Conv Threat Intel lookups against VirusTotal endpoints.
                   Stored locally in the settings file.</div>
+                <label for="settings-backend-hashescom-api-key" style="margin-top: 0.7rem;">Hashes.com API
+                  key</label>
+                <input id="settings-backend-hashescom-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Used by the Conv &rarr; Hashes &rarr; Hash Reverse panel to
+                  look up plaintext for known hashes via hashes.com. Stored locally in the settings
+                  file.</div>
               </div>
               <div class="settings-section">
                 <div class="settings-section-title">Metrics Endpoint</div>

@@ -2423,14 +2423,16 @@ strong {
   padding: 4px 6px;
 }
 
-.data-tools-hashes-actions {
+.data-tools-hashes-actions,
+.data-tools-hash-reverse-actions {
   grid-column: 1 / -1;
   display: flex;
   gap: 8px;
   margin-top: 8px;
 }
 
-.data-tools-hashes-actions button {
+.data-tools-hashes-actions button,
+.data-tools-hash-reverse-actions button {
   background-color: var(--color-2);
   border: 1px solid var(--color-3);
   color: var(--color-5);
@@ -2438,8 +2440,63 @@ strong {
   cursor: pointer;
 }
 
-.data-tools-hashes-actions button:hover {
+.data-tools-hashes-actions button:hover,
+.data-tools-hash-reverse-actions button:hover {
   background-color: var(--color-2-hover);
+}
+
+.data-tools-hash-reverse-section {
+  margin-top: 12px;
+  border-top: 1px solid var(--color-3);
+  padding-top: 10px;
+}
+
+.data-tools-hash-reverse-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.data-tools-hash-reverse-grid label {
+  margin: 0;
+  color: var(--color-5);
+  font-size: 12px;
+}
+
+.data-tools-hash-reverse-input {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.data-tools-hash-reverse-status {
+  color: var(--color-5);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.data-tools-hash-reverse-result {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--data-tools-frame-bg);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  margin: 8px 0 0 0;
+  min-height: 80px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* ── Extraction subtab ─────────────────────────────────────────────────────── */

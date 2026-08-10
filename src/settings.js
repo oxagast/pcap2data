@@ -93,6 +93,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     apiKeys: {
         ollamaApiKey: "",
         virusTotalApiKey: "",
+        hashesComApiKey: "",
     },
     plugins: {
         autoDisableFailureThreshold: 3,
@@ -408,6 +409,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof apiKeys.virusTotalApiKey === "string" && apiKeys.virusTotalApiKey.trim()
                     ? apiKeys.virusTotalApiKey.trim()
                     : apiKeysDefaults.virusTotalApiKey,
+            hashesComApiKey:
+                typeof apiKeys.hashesComApiKey === "string" && apiKeys.hashesComApiKey.trim()
+                    ? apiKeys.hashesComApiKey.trim()
+                    : apiKeysDefaults.hashesComApiKey,
         },
         plugins: {
             autoDisableFailureThreshold: toPositiveInteger(

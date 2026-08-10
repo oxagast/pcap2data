@@ -257,6 +257,9 @@ const {
   setConvSubtab,
   runDataToolsHashesFromInput,
   crossReferenceCurrentHash,
+  runDataToolsHashReverseLookup,
+  setDataToolsHashReverseInput,
+  normalizeDataToolsHashForReverseLookup,
   decodeHttpFromBytes,
   decodeJpegFromBytes,
   decodePngFromBytes,
@@ -3384,6 +3387,15 @@ function syncSettingsFormFromState() {
       ? "Stored key present; leave blank to keep it"
       : "Leave blank to keep the stored key";
   }
+  const backendHashesComApiKeyEl = document.getElementById(
+    "settings-backend-hashescom-api-key",
+  );
+  if (backendHashesComApiKeyEl) {
+    backendHashesComApiKeyEl.value = "";
+    backendHashesComApiKeyEl.placeholder = settings.apiKeys?.hashesComApiKey
+      ? "Stored key present; leave blank to keep it"
+      : "Leave blank to keep the stored key";
+  }
   if (apiKeysMetricsInstallIdEl) {
     apiKeysMetricsInstallIdEl.value = String(
       settings.privacy?.metricsInstallId || "",
@@ -3550,6 +3562,9 @@ function readSettingsFormState() {
   const backendVirusTotalApiKeyEl = document.getElementById(
     "settings-backend-virustotal-api-key",
   );
+  const backendHashesComApiKeyEl = document.getElementById(
+    "settings-backend-hashescom-api-key",
+  );
   const backendForceLegacySpawnEl = document.getElementById(
     "settings-backend-force-legacy-spawn",
   );
@@ -3611,6 +3626,9 @@ function readSettingsFormState() {
   );
   const trimmedVirusTotalApiKey = backendVirusTotalApiKeyEl
     ? backendVirusTotalApiKeyEl.value.trim()
+    : "";
+  const trimmedHashesComApiKey = backendHashesComApiKeyEl
+    ? backendHashesComApiKeyEl.value.trim()
     : "";
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
@@ -3724,6 +3742,8 @@ function readSettingsFormState() {
       ollamaApiKey: trimmedApiKey || currentSettings.apiKeys?.ollamaApiKey || "",
       virusTotalApiKey:
         trimmedVirusTotalApiKey || currentSettings.apiKeys?.virusTotalApiKey || "",
+      hashesComApiKey:
+        trimmedHashesComApiKey || currentSettings.apiKeys?.hashesComApiKey || "",
     },
     plugins: {
       autoDisableFailureThreshold: pluginFailureThresholdEl
@@ -8544,6 +8564,14 @@ function initializeSummaryMarkdownLinkHandling() {
 }
 
 // Syncs notes editor visibility ui.
+//
+// The Edit Note button is intentionally left enabled even when no note is
+// selected — clicking it from an empty Notes list is the supported way to
+// spin up a new empty note without having to type into the small input
+// box on the right sidebar. The button label switches between "Edit Note"
+// (when the editor is hidden or no note exists yet) and "Done Editing"
+// (when the editor is open for the currently selected note), so the
+// analyst can always tell whether a click will start or finish editing.
 function syncNotesEditorVisibilityUi() {
   const notesEditorWrapEl = document.querySelector(".notes-editor-wrap");
   const notesEditorEl = document.getElementById("notes-editor");
@@ -8558,7 +8586,7 @@ function syncNotesEditorVisibilityUi() {
     notesEditorEl.disabled = !hasSelectedNote || !showEditor;
   }
   if (toggleButtonEl) {
-    toggleButtonEl.disabled = !hasSelectedNote;
+    toggleButtonEl.disabled = false;
     toggleButtonEl.textContent = showEditor ? "Done Editing" : "Edit Note";
   }
 }
@@ -8652,6 +8680,37 @@ function addNote(
     `Note added source=${sourceLabel} length=${normalizedText.length}`,
   );
   return true;
+}
+
+// Ensures the Notes editor is ready to start a new note.
+//
+// Used by the Notes tab and the Edit Note button so the analyst can
+// spin up a brand-new empty note without having to type into the
+// small right-sidebar input box. If a note is already selected the
+// call is a no-op and the existing entry is returned, so the helper
+// is safe to call from any "open the Notes editor" entry point.
+//
+// The helper deliberately goes through ``createNoteEntry`` (which
+// accepts empty text) instead of ``addNote`` (which rejects empty
+// text), so an empty draft note can exist with no body yet. The new
+// note is unshifted to the top of ``notesList`` to match the order
+// that ``addNote`` produces, and the editor is shown immediately so
+// the cursor lands in a usable text field.
+//
+// Returns the note entry the editor is now bound to (either the
+// pre-existing selection or the newly-created draft).
+function ensureNotesEditorReadyForNewNote() {
+  const existing = getSelectedNoteEntry();
+  if (existing) {
+    return existing;
+  }
+  const noteEntry = createNoteEntry("", NOTE_DEFAULT_COLOR);
+  notesList.unshift(noteEntry);
+  selectedNoteId = noteEntry.id;
+  notesEditorVisible = true;
+  renderNotesList();
+  refreshSummaryForNotes();
+  return noteEntry;
 }
 
 // Handles remove selected note.
@@ -9394,10 +9453,20 @@ function initializeNotesPanel() {
     renderNotesList();
   });
   editToggleButtonEl.addEventListener("click", () => {
-    const selectedNoteEntry = getSelectedNoteEntry();
-    if (!selectedNoteEntry) return;
-    setNotesEditorVisibility(!notesEditorVisible);
+    let selectedNoteEntry = getSelectedNoteEntry();
+    if (!selectedNoteEntry) {
+      // No note is currently selected (or the list is empty). Treat
+      // the click as the user asking us to spin up a brand-new empty
+      // note, so they never need to type into the small right-sidebar
+      // input box just to start writing. ``ensureNotesEditorReadyForNewNote``
+      // also forces the editor visible, so the toggle below is a no-op
+      // for the freshly-created draft (the cursor lands in the editor).
+      selectedNoteEntry = ensureNotesEditorReadyForNewNote();
+    }
     if (notesEditorVisible) {
+      setNotesEditorVisibility(false);
+    } else {
+      setNotesEditorVisibility(true);
       notesEditorEl.focus();
     }
   });
@@ -14261,6 +14330,7 @@ const { showDataTools, showNotesWorkspace, showSettingsWorkspace } =
     runDeferredDataToolsAnalysisForActiveSubtab,
     renderNotesList,
     ensureNotesWorkspaceMounted,
+    ensureNotesEditorReadyForNewNote,
     setSettingsSubtab,
     syncSettingsFormFromState,
   });
@@ -21732,6 +21802,36 @@ initConvPanel({
   isLlmRuntimeEnabled,
   isBackgroundSummaryGenerationEnabled,
   appendAnalysisBlub,
+  // Persist successful hashes.com reverse lookups into the session
+  // keychain. Each plaintext becomes a ``secret``-typed entry so
+  // the user can find the reversal later without re-running the
+  // lookup. ``addSessionKeystoreEntry`` is idempotent — passing the
+  // same reversal twice is a safe no-op.
+  addHashReverseToKeystore: (entries) => {
+    if (!Array.isArray(entries) || entries.length === 0) return 0;
+    const addFn = keystorePanel?.addSessionKeystoreEntry;
+    if (typeof addFn !== "function") return 0;
+    let addedCount = 0;
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") continue;
+      try {
+        addFn({
+          type: String(entry.type || "secret"),
+          label: String(entry.label || "").trim(),
+          source: String(entry.source || "hashes-com-reverse"),
+          content: String(entry.content || ""),
+          summary: String(entry.summary || ""),
+          packetIndex: entry.packetIndex ?? "?",
+        });
+        addedCount += 1;
+      } catch (entryError) {
+        writeLogEntry(
+          `[DataTools] Failed to persist reversed hash to keystore label="${entry.label}" message=${JSON.stringify(entryError?.message || String(entryError))}`,
+        );
+      }
+    }
+    return addedCount;
+  },
 });
 
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
@@ -22654,6 +22754,42 @@ document
     void keystorePanel.sendSelectedSessionEntryToPersistent();
   });
 document
+  .getElementById("crypt-send-to-hashes-btn")
+  .addEventListener("click", () => {
+    const entry = keystorePanel.getSelectedSessionEntryForHashes?.();
+    if (!entry) {
+      statusUpdate("Status: Select a keystore entry first to send to Hashes");
+      return;
+    }
+    const content = String(entry.normalizedContent || entry.content || "").trim();
+    if (!content) {
+      statusUpdate("Status: Selected entry has no content to send to Hashes");
+      return;
+    }
+    // Prefer the canonical hex-only normalization so a secret like
+    // "aabbcc..." survives surrounding whitespace / separators; fall
+    // back to the raw content for anything that doesn't look like a
+    // hex hash (the user can still click Reverse Hash manually).
+    const normalizedHash = typeof normalizeDataToolsHashForReverseLookup === "function"
+      ? normalizeDataToolsHashForReverseLookup(content)
+      : "";
+    const reverseValue = normalizedHash || content;
+    if (typeof showDataTools === "function") {
+      showDataTools(CONV_HASHES_SUBTAB);
+    } else {
+      setConvSubtab(CONV_HASHES_SUBTAB);
+    }
+    if (typeof setDataToolsHashReverseInput === "function") {
+      setDataToolsHashReverseInput(reverseValue);
+    }
+    statusUpdate(
+      `Status: Sent "${entry.label}" to Hashes reverse-lookup`,
+    );
+    writeLogEntry(
+      `[Keystore] Keystore entry sent to Hashes reverse-lookup label="${entry.label}" hashLength=${reverseValue.length}`,
+    );
+  });
+document
   .getElementById("crypt-delete-keystore-entry-btn")
   .addEventListener("click", () => {
     void keystorePanel.deleteSelectedCryptKeystoreEntry();
@@ -22897,6 +23033,11 @@ document
   .getElementById("data-tools-cross-ref-hash-btn")
   .addEventListener("click", () => {
     crossReferenceCurrentHash(subnetCalculatorPanel?.runThreatIntelHashLookup);
+  });
+document
+  .getElementById("data-tools-hash-reverse-btn")
+  .addEventListener("click", () => {
+    void runDataToolsHashReverseLookup();
   });
 document
   .getElementById("data-tools-clear-btn")

@@ -11,6 +11,7 @@ function createWorkspaceTabController({
     runDeferredDataToolsAnalysisForActiveSubtab,
     renderNotesList,
     ensureNotesWorkspaceMounted,
+    ensureNotesEditorReadyForNewNote,
     setSettingsSubtab,
     syncSettingsFormFromState,
 }) {
@@ -68,6 +69,19 @@ function createWorkspaceTabController({
         if (rightsideDataEl) rightsideDataEl.hidden = true;
         if (rightsideNotesEl) rightsideNotesEl.hidden = false;
         if (rightsideConvInsightsEl) rightsideConvInsightsEl.hidden = true;
+        // Auto-prepare a brand-new empty note when the list is empty so
+        // the analyst can start typing immediately by clicking the
+        // "Edit Note" button at the top — no need to type into the
+        // small right-sidebar input box first. Existing notes are
+        // left untouched, so this is a no-op for sessions that already
+        // have notes loaded.
+        if (typeof ensureNotesEditorReadyForNewNote === "function") {
+            try {
+                ensureNotesEditorReadyForNewNote();
+            } catch (err) {
+                writeLogEntry(`[${threadName}] Notes auto-prepare failed: ${err.message}`);
+            }
+        }
         renderNotesList();
     }
 
