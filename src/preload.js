@@ -1369,6 +1369,8 @@ contextBridge.exposeInMainWorld('extractapi', {
     ipcRenderer.invoke('sha256-bytes', { bytesBase64 }),
   uploadVirusTotal: ({ bytesBase64, fileName, apiKey }) =>
     ipcRenderer.invoke('upload-virustotal', { bytesBase64, fileName, apiKey }),
+  hashesComSearch: ({ hashes, hash, apiKey, key }) =>
+    ipcRenderer.invoke('hashes-com:search', { hashes, hash, apiKey, key }),
 });
 
 contextBridge.exposeInMainWorld('previewapi', {
@@ -1599,6 +1601,7 @@ contextBridge.exposeInMainWorld('themeapi', {
   fetchPreview: (payload) => ipcRenderer.invoke('themes-fetch-preview', payload),
   startCheckout: (payload) => ipcRenderer.invoke('themes-start-checkout', payload),
   refreshLicenses: (payload) => ipcRenderer.invoke('themes-refresh-licenses', payload),
+  getLicenseTier: () => ipcRenderer.invoke('themes-get-license-tier'),
   download: (payload) => ipcRenderer.invoke('themes-download', payload),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   // Listen for ``packetsnitch://checkout-success?...`` deeplinks that

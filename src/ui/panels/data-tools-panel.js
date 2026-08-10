@@ -87,9 +87,10 @@ let _callLargeLanguageModel = null;
 let _isLlmRuntimeEnabled = () => false;
 let _isBackgroundSummaryGenerationEnabled = () => false;
 let _appendAnalysisBlub = null;
+let _addHashReverseToKeystore = () => 0;
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub, addHashReverseToKeystore }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
@@ -99,6 +100,15 @@ function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurre
   _isLlmRuntimeEnabled = isLlmRuntimeEnabled || (() => false);
   _isBackgroundSummaryGenerationEnabled = isBackgroundSummaryGenerationEnabled || (() => false);
   _appendAnalysisBlub = appendAnalysisBlub || null;
+  // ``addHashReverseToKeystore`` is a renderer-side bridge into the
+  // keystore panel. We deliberately keep data-tools-panel agnostic of
+  // keystore-panel (the keystore panel is loaded separately and the
+  // circular import would otherwise be a pain); the bridge accepts a
+  // list of plaintext entries that came back from hashes.com and
+  // returns the count that were actually persisted.
+  _addHashReverseToKeystore = typeof addHashReverseToKeystore === "function"
+    ? addHashReverseToKeystore
+    : () => 0;
   initDataToolsLlmSummarizer({
     callLargeLanguageModel: _callLargeLanguageModel,
     isLlmRuntimeEnabled: _isLlmRuntimeEnabled,
@@ -588,6 +598,256 @@ function crossReferenceCurrentHash(runThreatIntelHashLookup) {
   if (typeof runThreatIntelHashLookup === "function") {
     runThreatIntelHashLookup(hashValue);
   }
+}
+
+// Reverse-lookup panel (Hashes subtab). The keystore "Send to Hashes" button
+// pre-fills the input, but the user can also paste any hash here. We POST
+// to hashes.com via the IPC bridge and render the ``founds`` array as
+// ``algorithm:plaintext`` lines (with ``salt`` when present).
+//
+// We deliberately do NOT call into Threat Intel / VirusTotal: hashes.com
+// is a dedicated reverse-hash service and runs on a different auth
+// surface (the user's hashes.com account, not their VT quota).
+async function runDataToolsHashReverseLookup() {
+  const inputEl = document.getElementById("data-tools-hash-reverse-input");
+  const statusEl = document.getElementById("data-tools-hash-reverse-status");
+  const resultEl = document.getElementById("data-tools-hash-reverse-result");
+  if (!inputEl || !statusEl || !resultEl) {
+    return;
+  }
+  const rawHash = String(inputEl.value || "").trim();
+  if (!rawHash) {
+    statusEl.textContent = "Enter a hash to reverse.";
+    resultEl.textContent = "No reverse-lookup has been run yet.";
+    _statusUpdate("Status: Enter a hash to reverse-lookup.");
+    return;
+  }
+  // The hashes.com API accepts multiple hashes per request, but the
+  // single-input UI only ever sends one. Whitespace-separating on
+  // space / comma / semicolon makes it forgiving for users who paste
+  // "abc123 def456" or "abc123,def456".
+  const hashes = rawHash
+    .split(/[\s,;]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (!hashes.length) {
+    statusEl.textContent = "Enter a hash to reverse.";
+    return;
+  }
+  const setStatus = (text) => {
+    statusEl.textContent = text;
+  };
+  const setResult = (text) => {
+    resultEl.textContent = text;
+  };
+  setStatus(`Querying hashes.com for ${hashes.length} hash(es)…`);
+  setResult("Reverse-lookup in progress…");
+  _statusUpdate(`Status: Reverse-looking up hash via hashes.com…`);
+  _writeLogEntry(
+    `[${threadName}] Hash reverse lookup begin count=${hashes.length}`,
+  );
+  const bridge = typeof window !== "undefined" ? window.extractapi : null;
+  if (!bridge || typeof bridge.hashesComSearch !== "function") {
+    setStatus("Hashes.com bridge is unavailable (preload missing hashesComSearch).");
+    setResult("IPC bridge is unavailable. Try restarting the app.");
+    return;
+  }
+  try {
+    const response = await bridge.hashesComSearch({ hashes });
+    if (!response || response.success === false) {
+      const errorMessage = response?.error || "Hashes.com lookup failed.";
+      setStatus(`Hashes.com lookup failed: ${errorMessage}`);
+      setResult(`Error: ${errorMessage}`);
+      _statusUpdate("Status: Hashes.com lookup failed.");
+      _writeLogEntry(
+        `[${threadName}] Hash reverse lookup failed message=${JSON.stringify(errorMessage)}`,
+      );
+      return;
+    }
+    const founds = Array.isArray(response.founds) ? response.founds : [];
+    const unfounds = Array.isArray(response.unfounds) ? response.unfounds : [];
+    const lines = [];
+    lines.push(`Endpoint: ${response.endpoint || "https://hashes.com/en/api/search"}`);
+    lines.push(`HTTP status: ${response.httpStatus ?? "n/a"}`);
+    lines.push(`API success: ${response.success === false ? "false" : "true"}`);
+    if (Number.isFinite(Number(response.cost))) {
+      lines.push(`Cost: ${response.cost}`);
+    }
+    lines.push(`Matched: ${founds.length}`);
+    lines.push(`Unmatched: ${unfounds.length}`);
+    lines.push("");
+    if (founds.length === 0) {
+      lines.push("No plaintext matches were returned by hashes.com.");
+    } else {
+      lines.push("Plaintext matches:");
+      for (const found of founds) {
+        const algo = found.algorithm || "Unknown";
+        const plaintext = found.plaintext || "";
+        const hashLabel = found.hash || "";
+        const salt = found.salt ? ` (salt=${found.salt})` : "";
+        const leadingHash = hashLabel && hashLabel !== plaintext
+          ? `${hashLabel} → `
+          : "";
+        lines.push(`- ${algo}: ${leadingHash}${plaintext}${salt}`);
+      }
+    }
+    if (unfounds.length > 0) {
+      lines.push("");
+      lines.push("Unmatched hashes:");
+      for (const missed of unfounds) {
+        const missedHash = formatUnmatchedHashLine(missed);
+        if (!missedHash) continue;
+        lines.push(`- ${missedHash}`);
+      }
+    }
+    setResult(lines.join("\n"));
+    setStatus(
+      `Done. ${founds.length} matched / ${unfounds.length} unmatched.`,
+    );
+    _statusUpdate(
+      `Status: Hashes.com reverse-lookup complete (matched=${founds.length}).`,
+    );
+    _writeLogEntry(
+      `[${threadName}] Hash reverse lookup complete matched=${founds.length} unmatched=${unfounds.length} cost=${response.cost ?? "n/a"}`,
+    );
+    // Mirror successful reverses back into the keystore so the user
+    // can find them later without re-running the lookup. Each match
+    // becomes a ``secret``-typed entry carrying the plaintext, the
+    // algorithm hashes.com reported, and the original hash. We
+    // dedupe inside ``addSessionKeystoreEntry`` itself, so passing
+    // the same reverse twice is a safe no-op.
+    if (founds.length > 0) {
+      const keystoreEntries = buildHashReverseKeystoreEntries({
+        queryHashes: hashes,
+        founds,
+      });
+      if (keystoreEntries.length > 0) {
+        const persistedCount = _addHashReverseToKeystore(keystoreEntries);
+        if (persistedCount > 0) {
+          const keystoreNote = ` Persisted ${persistedCount} match(es) to keystore.`;
+          setStatus(
+            `Done. ${founds.length} matched / ${unfounds.length} unmatched.${keystoreNote}`,
+          );
+          _statusUpdate(
+            `Status: Hashes.com reverse-lookup complete (matched=${founds.length}, keystore=${persistedCount}).`,
+          );
+          _writeLogEntry(
+            `[${threadName}] Hash reverse results persisted to keystore count=${persistedCount}`,
+          );
+        }
+      }
+    }
+  } catch (error) {
+    const errorMessage = error?.message || String(error);
+    setStatus(`Hashes.com lookup failed: ${errorMessage}`);
+    setResult(`Error: ${errorMessage}`);
+    _statusUpdate("Status: Hashes.com lookup failed.");
+    _writeLogEntry(
+      `[${threadName}] Hash reverse lookup threw message=${JSON.stringify(errorMessage)}`,
+    );
+  }
+}
+
+// Coerce an ``unfounds`` entry (either ``{hash, salt, algorithm}``
+// object or legacy bare string) into the hash string the renderer
+// wants to show in the result panel. Returns the empty string when
+// no hash can be extracted, so callers can skip rendering.
+function formatUnmatchedHashLine(entry) {
+  if (!entry) return "";
+  if (typeof entry === "string") return entry.trim();
+  if (typeof entry === "object") {
+    return String(entry.hash || "").trim();
+  }
+  return "";
+}
+
+// Build a list of keystore-shaped entries from a successful
+// hashes.com reverse lookup. Each ``found`` is one entry; we
+// carry the plaintext (so the entry is actually useful), the
+// algorithm hashes.com reported, and the original hash as both
+// ``content`` (so the keystore dedupe logic sees a stable value)
+// and a human-readable ``summary`` line. When a single hash
+// resolves to multiple plaintexts (rare but possible with weak
+// algorithms), each gets its own entry so the user can audit
+// every reversal independently.
+function buildHashReverseKeystoreEntries({ queryHashes, founds }) {
+  if (!Array.isArray(founds) || founds.length === 0) return [];
+  const queryHashIndex = new Map();
+  if (Array.isArray(queryHashes)) {
+    queryHashes.forEach((entry) => {
+      const normalized = String(entry || "").trim().toLowerCase();
+      if (normalized) queryHashIndex.set(normalized, true);
+    });
+  }
+  const entries = [];
+  for (const found of founds) {
+    const plaintext = String(found?.plaintext || "").trim();
+    if (!plaintext) continue;
+    const hash = String(found?.hash || "").trim();
+    const algorithm = String(found?.algorithm || "Unknown").trim();
+    const salt = String(found?.salt || "").trim();
+    const labelSuffix = hash
+      ? `${hash.slice(0, 12)}…${hash.slice(-8) || ""}`
+      : `${algorithm}`;
+    const summary = salt
+      ? `Reversed ${algorithm} hash (salt=${salt})`
+      : `Reversed ${algorithm} hash`;
+    // Sanity-check that the resolved hash matches something we
+    // actually asked for — a guard against a future hashes.com
+    // response shape that drifts and accidentally returns hashes
+    // the user never submitted. If the lookup didn't echo a
+    // ``hash`` field, we still record the entry (the plaintext is
+    // useful on its own) but tag the summary so the user knows.
+    const requestedHash = hash
+      ? queryHashIndex.has(hash.toLowerCase())
+      : false;
+    entries.push({
+      type: "secret",
+      label: `reversed-${algorithm}-${labelSuffix}`,
+      source: "hashes-com-reverse",
+      content: plaintext,
+      summary: requestedHash || !hash
+        ? summary
+        : `${summary} (unverified origin)`,
+      packetIndex: "?",
+    });
+  }
+  return entries;
+}
+
+// Pre-fill the reverse-lookup input. Called by the Keystore
+// "Send to Hashes" button so a saved secret/cert/key that is already a
+// hash doesn't have to be retyped.
+function setDataToolsHashReverseInput(value) {
+  const inputEl = document.getElementById("data-tools-hash-reverse-input");
+  if (!inputEl) return false;
+  inputEl.value = String(value || "").trim();
+  return true;
+}
+
+// Parse common hash hex formats ("0x...", with/without separators, etc.)
+// into a single normalized string. We deliberately accept multiple
+// lengths (32, 40, 56, 64, 96, 128 hex chars) so users can paste
+// MD5 / SHA-1 / SHA-224 / SHA-256 / SHA-384 / SHA-512 / RIPEMD-160.
+// We do NOT attempt to actually identify the algorithm from the
+// length — hashes.com accepts all of these and returns the algorithm
+// in the response.
+function normalizeDataToolsHashForReverseLookup(rawValue) {
+  const text = String(rawValue || "");
+  // Strip leading ``0x`` (with or without a separator character after it)
+  // and any non-hex / non-separator characters. Keep hex digits only so
+  // pasted hashes with stray whitespace, commas, dashes, or colons still
+  // come through.
+  const stripped = text
+    .trim()
+    .replace(/^0x\s*/i, "")
+    .replace(/[\s,:;\-_./|\\()\[\]{}<>'"`]+/g, "")
+    .toLowerCase();
+  // Drop any further non-hex bytes (defensive — if the user pastes a
+  // long string that isn't a hash, we surface an empty result and let
+  // the UI tell them so instead of forwarding garbage to hashes.com).
+  const hexOnly = stripped.replace(/[^0-9a-f]/g, "");
+  return hexOnly;
 }
 
 // Parses hash input reading bytes.
@@ -1412,6 +1672,11 @@ module.exports = {
   runDataToolsConversion,
   runDataToolsHashesFromInput,
   crossReferenceCurrentHash,
+  runDataToolsHashReverseLookup,
+  setDataToolsHashReverseInput,
+  normalizeDataToolsHashForReverseLookup,
+  formatUnmatchedHashLine,
+  buildHashReverseKeystoreEntries,
   showDataTools,
   setConvSubtab,
   getPacketProtocolDecoderHint,

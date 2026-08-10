@@ -2875,6 +2875,34 @@ function createKeystorePanel({
     requestKeystoreReviewNow();
   }
 
+  // Read-only access to the currently selected entry. Returns
+  // ``{ label, type, source, content, summary, normalizedContent }`` or
+  // ``null`` if nothing is selected. The Conv "Send to Hashes" handler
+  // in main-frontend.js calls this and forwards ``content`` to the
+  // Hash Reverse panel — keeping the keystore panel agnostic about
+  // Conv subtab routing avoids a circular import (data-tools-panel
+  // would otherwise need to know about keystore-panel just to switch
+  // tabs).
+  function getSelectedSessionEntryForHashes() {
+    const listEl = document.getElementById("crypt-keystore-list");
+    const selectedIndex = Number(listEl?.value);
+    if (
+      !Number.isFinite(selectedIndex) ||
+      !cryptRenderedKeystoreEntries[selectedIndex]
+    ) {
+      return null;
+    }
+    const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
+    return {
+      label: String(selectedEntry.label || ""),
+      type: String(selectedEntry.type || ""),
+      source: String(selectedEntry.source || ""),
+      content: String(selectedEntry.content || ""),
+      normalizedContent: normalizeSessionSecretValue(selectedEntry.content),
+      summary: String(selectedEntry.summary || ""),
+    };
+  }
+
   function grepSessionKeystoreEntriesByContent(content) {
     const normalizedContent = content.trim().toLowerCase();
     // get the session keystore entries from from the keystore-panel.js aray
@@ -3321,6 +3349,7 @@ function createKeystorePanel({
     loadSelectedCryptKeystoreEntry,
     deleteSelectedCryptKeystoreEntry,
     sendSelectedSessionEntryToPersistent,
+    getSelectedSessionEntryForHashes,
     showKeystoreWorkspace,
     renderCryptKeystoreList,
     renderCryptKeystoreDetails,

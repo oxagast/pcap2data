@@ -3604,6 +3604,50 @@ function installExtractionHandlers() {
       return { success: false, error: err?.message || String(err) };
     }
   });
+
+  // Hash reverse-lookup against hashes.com. The hashes.com ``/en/api/search``
+  // endpoint accepts ``multipart/form-data`` with the API key in the ``key``
+  // field and one or more hashes in repeated ``hashes[]`` fields. The
+  // documented curl form is::
+  //
+  //     curl -X POST -H "Content-type: multipart/form-data" \
+  //       -F 'key=<API_KEY>' \
+  //       -F 'hashes[]=<HASH>' \
+  //       https://hashes.com/en/api/search
+  //
+  // The response shape is::
+  //     {"success":true,"cost":1,"count":1,
+  //      "founds":[{"hash":"...","salt":"","plaintext":"...","algorithm":"MD5"}],
+  //      "unfounds":[]}
+  //
+  // ``hashes`` may be a single string or an array of strings. We forward the
+  // caller-provided list verbatim and surface the full response body to the
+  // renderer so the UI can render per-found algorithm/plaintext lines.
+  ipcMain.handle("hashes-com:search", async (_event, payload = {}) => {
+    try {
+      const rawHashes = Array.isArray(payload?.hashes)
+        ? payload.hashes
+        : (typeof payload?.hash === "string" ? [payload.hash] : []);
+      const normalizedHashes = rawHashes
+        .map((entry) => String(entry || "").trim())
+        .filter(Boolean);
+      if (normalizedHashes.length === 0) {
+        throw new Error("At least one hash is required");
+      }
+      const key = String(
+        payload?.apiKey
+        || payload?.key
+        || getBackendHashesComApiKeyFromSettings()
+        || "",
+      ).trim();
+      if (!key) throw new Error("Hashes.com API key is required");
+      const result = await searchHashesCom(normalizedHashes, key);
+      return { success: true, ...result };
+    } catch (err) {
+      console.error("hashes-com:search error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
 }
 
 async function uploadFileToVirusTotal(fileBuffer, fileName, apiKey) {
@@ -3693,6 +3737,134 @@ function getBackendVirusTotalApiKeyFromSettings() {
     console.error("getBackendVirusTotalApiKeyFromSettings error:", err);
     return "";
   }
+}
+
+// Read the hashes.com API key from saved settings. The key is stored under
+// ``settings.apiKeys.hashesComApiKey`` (mirroring the
+// ``virusTotalApiKey`` shape), but we also fall back to a few legacy
+// snake-case locations so existing installs that pre-date this feature
+// don't get stuck behind a fresh "key not configured" error.
+function getBackendHashesComApiKeyFromSettings() {
+  try {
+    const settings = getAppSettings();
+    return String(
+      settings?.apiKeys?.hashesComApiKey
+      || settings?.apiKeys?.hashescomApiKey
+      || settings?.apiKeys?.hashes_com_api_key
+      || settings?.backend?.hashesComApiKey
+      || "",
+    ).trim();
+  } catch (err) {
+    console.error("getBackendHashesComApiKeyFromSettings error:", err);
+    return "";
+  }
+}
+
+// POST a list of hashes to hashes.com and surface the parsed JSON.
+// We deliberately return the raw response body (``success``,
+// ``count``, ``founds``, ``unfounds``, ``cost``) so the renderer can
+// format it without needing a second IPC round-trip.
+async function searchHashesCom(hashes, apiKey) {
+  if (!Array.isArray(hashes) || hashes.length === 0) {
+    throw new Error("At least one hash is required");
+  }
+  if (!apiKey) {
+    throw new Error("Hashes.com API key is required");
+  }
+  const boundary = `----PacketSnitchHashesBoundary${crypto.randomBytes(8).toString("hex")}`;
+  // Build the multipart body by hand so we don't pull in
+  // ``form-data`` just for this single call. ``hashes[]`` is a
+  // repeated field per the hashes.com API spec; we emit one
+  // ``hashes[]`` part per request hash, then a closing boundary.
+  const parts = [];
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="key"\r\n\r\n` +
+      `${apiKey}\r\n`,
+      "utf-8",
+    ),
+  );
+  for (const hash of hashes) {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="hashes[]"\r\n\r\n` +
+        `${String(hash)}\r\n`,
+        "utf-8",
+      ),
+    );
+  }
+  parts.push(Buffer.from(`--${boundary}--\r\n`, "utf-8"));
+  const body = Buffer.concat(parts);
+
+  const response = await undiciFetch("https://hashes.com/en/api/search", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(body.length),
+      "User-Agent": userAgent,
+    },
+    body,
+  });
+
+  const responseText = await response.text().catch(() => "");
+  let responseData = null;
+  try {
+    responseData = JSON.parse(responseText);
+  } catch (_parseError) {
+    responseData = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Hashes.com search failed: ${response.status} ${response.statusText} ${responseText}`,
+    );
+  }
+  // The endpoint may legitimately return ``{success:false}`` (e.g.
+  // invalid key, rate-limited). Surface the parsed body either way so
+  // the renderer can render the message; only treat a network-level
+  // error as a thrown error.
+  const safeResponse = responseData && typeof responseData === "object"
+    ? responseData
+    : { raw: responseText };
+  const founds = Array.isArray(safeResponse.founds) ? safeResponse.founds : [];
+  const unfounds = Array.isArray(safeResponse.unfounds) ? safeResponse.unfounds : [];
+  return {
+    endpointReachable: true,
+    endpoint: "https://hashes.com/en/api/search",
+    httpStatus: response.status,
+    success: safeResponse.success !== false,
+    cost: Number.isFinite(Number(safeResponse.cost)) ? Number(safeResponse.cost) : 0,
+    count: Number.isFinite(Number(safeResponse.count)) ? Number(safeResponse.count) : founds.length,
+    founds: founds.map((entry) => ({
+      hash: typeof entry?.hash === "string" ? entry.hash : "",
+      salt: typeof entry?.salt === "string" ? entry.salt : "",
+      plaintext: typeof entry?.plaintext === "string" ? entry.plaintext : "",
+      algorithm: typeof entry?.algorithm === "string" ? entry.algorithm : "",
+    })),
+    unfounds: unfounds.map((entry) => {
+      // ``unfounds`` comes back in the same shape as ``founds``
+      // (``{hash, salt, algorithm, ...}``) — entries without a
+      // plaintext. ``String(entry)`` would coerce the whole object to
+      // ``"[object Object]"`` and we'd lose the hash the user actually
+      // asked us to look up. Normalize to the same shape as ``founds``
+      // and let the renderer pull ``hash`` out of each entry.
+      if (entry && typeof entry === "object") {
+        return {
+          hash: typeof entry.hash === "string" ? entry.hash : "",
+          salt: typeof entry.salt === "string" ? entry.salt : "",
+          algorithm: typeof entry.algorithm === "string" ? entry.algorithm : "",
+        };
+      }
+      // Defensive fallback for any legacy server that returns bare
+      // strings instead of objects.
+      const stringValue = String(entry || "").trim();
+      return stringValue ? { hash: stringValue, salt: "", algorithm: "" } : null;
+    }).filter(Boolean),
+    raw: safeResponse,
+  };
 }
 
 function resolvePluginFailureThreshold(pluginEntry, settings) {
@@ -4157,6 +4329,7 @@ const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
 const ALLOWED_THEME_PREVIEW_HOSTS = new Set();
 let cachedPurchasedThemeIds = new Set();
 let cachedThemeServerPaddleEnv = null; // "sandbox" | "production" | null
+let cachedLicenseTier = "free"; // "free" | "professional" | "enterprise"
 let lastThemeLicenseCheckAtMs = 0;
 let themeRecacheTimer = null;
 let themeRecacheInFlight = false;
@@ -4436,7 +4609,7 @@ async function fetchAndCacheTheme(themeId) {
 
 async function reconcileThemeLicenses({ force = false } = {}) {
   if (!isThemeServerConfigured()) {
-    return { unlockedThemeIds: [], purchased: false, error: "Theme server URL is not configured" };
+    return { unlockedThemeIds: [], purchased: false, error: "Theme server URL is not configured", licenseTier: cachedLicenseTier };
   }
   if (!force) {
     const since = Date.now() - lastThemeLicenseCheckAtMs;
@@ -4444,7 +4617,12 @@ async function reconcileThemeLicenses({ force = false } = {}) {
       appendActivityLogLine(
         `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses cached since=${since}ms`,
       );
-      return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, cached: true };
+      return {
+        unlockedThemeIds: [...cachedPurchasedThemeIds],
+        purchased: false,
+        cached: true,
+        licenseTier: cachedLicenseTier,
+      };
     }
   }
   appendActivityLogLine(
@@ -4457,7 +4635,12 @@ async function reconcileThemeLicenses({ force = false } = {}) {
     appendActivityLogLine(
       `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses failed message=${JSON.stringify(error?.message || String(error))}`,
     );
-    return { unlockedThemeIds: [...cachedPurchasedThemeIds], purchased: false, error: error.message };
+    return {
+      unlockedThemeIds: [...cachedPurchasedThemeIds],
+      purchased: false,
+      error: error.message,
+      licenseTier: cachedLicenseTier,
+    };
   }
   const ownedIds = Array.isArray(payload?.ownedThemeIds) ? payload.ownedThemeIds : [];
   const sanitizedOwned = ownedIds
@@ -4477,6 +4660,24 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   }
   cachedPurchasedThemeIds = new Set(sanitizedOwned);
   lastThemeLicenseCheckAtMs = Date.now();
+  // Capture the account-level license tier reported by the catalog
+  // so the renderer can show Pro / Enterprise affordances without
+  // having to issue a second IPC call. The server returns
+  // ``licenseTier`` as one of ``"free" | "professional" |
+  // "enterprise"``; we trust whichever string the server gave us
+  // and fall back to ``"free"`` when the field is missing so the
+  // client never reads ``undefined``. See the manual-update
+  // operator workflow: tiers are set by the operator when a
+  // customer subscribes via Paddle, so the renderer can treat this
+  // value as authoritative until the next reconcile.
+  const rawTier = typeof payload?.licenseTier === "string"
+    ? payload.licenseTier.trim().toLowerCase()
+    : "";
+  if (rawTier === "free" || rawTier === "professional" || rawTier === "enterprise") {
+    cachedLicenseTier = rawTier;
+  } else {
+    cachedLicenseTier = "free";
+  }
   // Capture the server's Paddle environment so the renderer can warn
   // the user if the catalog is in sandbox mode. The server may signal
   // sandbox via either ``paddleEnv: "sandbox"`` (preferred) or the
@@ -4495,6 +4696,7 @@ async function reconcileThemeLicenses({ force = false } = {}) {
     purchased: sanitizedOwned,
     paddleEnv: cachedThemeServerPaddleEnv,
     sandbox: cachedThemeServerPaddleEnv === "sandbox",
+    licenseTier: cachedLicenseTier,
   };
 }
 
@@ -6303,10 +6505,24 @@ ipcMain.handle("themes-refresh-licenses", async (_event, payload = {}) => {
       success: true,
       unlockedThemeIds: Array.isArray(result.unlockedThemeIds) ? result.unlockedThemeIds : [],
       purchasedThemeIds: [...cachedPurchasedThemeIds],
+      licenseTier: cachedLicenseTier,
     };
   } catch (error) {
     return { success: false, error: error?.message || String(error || "Unknown error") };
   }
+});
+
+// Cheap, in-process read of the most recently observed license
+// tier. The renderer can call this on demand (e.g. to decide
+// whether to show a "Pro" badge) without paying the cost of a
+// full reconcile. The value is updated by ``reconcileThemeLicenses``
+// each time the catalog is hit, so callers should still trigger a
+// reconcile before displaying the tier if they want a fresh
+// answer. We deliberately do NOT block on the network here so
+// the renderer can render the cached tier instantly while a
+// background reconcile is in flight.
+ipcMain.handle("themes-get-license-tier", async () => {
+  return { success: true, licenseTier: cachedLicenseTier };
 });
 
 ipcMain.handle("themes-download", async (_event, payload = {}) => {

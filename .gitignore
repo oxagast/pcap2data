@@ -2,6 +2,7 @@ node_modules
 build
 out
 .npmrc
+src/PacketSnitch-Pro
 src/backend/snitch
 src/backend/snitch.exe
 src/backend/snitch-extract
