@@ -837,6 +837,12 @@ let notesEditorVisible = false;
 let currentSessionName = null;
 let sessionPickerPanel = null;
 let lastBackendLoadRequest = null;
+// Mirror of the main-frontend session-following flag. When the user
+// explicitly closes the session (New Capture / file picker), this
+// flips to true so the next backend JSON payload is allowed to wipe
+// currentSessionName. When false, a background rerun (e.g. the
+// wifi-keys rerun) inherits the existing session-bound state.
+let sessionExplicitlyClosed = true;
 let notesList = [];
 let selectedNoteId = null;
 let noteIdCounter = 0;
@@ -4454,6 +4460,10 @@ sessionPickerPanel = initializeSessionPicker({
   buildSessionFilePayload,
   onSessionSelected: async (name, jsonData) => {
     currentSessionName = name;
+    // Mirror of main-frontend.js: a named library session is a
+    // "live" session — subsequent background reruns inherit the
+    // session name until the user explicitly closes the session.
+    sessionExplicitlyClosed = false;
     startTime = performance.now();
     statusUpdate("Loading session: " + name);
     resetBackendProgressState();
@@ -4516,6 +4526,11 @@ async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
   resetBackendProgressState();
+  // Mirror of main-frontend.js: mark the session as explicitly
+  // closed so the next backend JSON payload is allowed to wipe
+  // currentSessionName and the next Save-Session click prompts for
+  // a fresh name.
+  sessionExplicitlyClosed = true;
   currentSessionName = null;
   p = [];
   capturedPackets = {};
@@ -4633,6 +4648,11 @@ document
         writeLogEntry(`User selected capture/session file path=${filePath}`);
         // Clear library session name – this is a manual file load, not from the library
         currentSessionName = null;
+        // Mirror of main-frontend.js: manual file load is a fresh
+        // session. Background reruns from this same PCAP will still
+        // honor the session name (see sessionExplicitlyClosed gating
+        // in processBackendJson*Payload).
+        sessionExplicitlyClosed = true;
         lastBackendLoadRequest = {
           kind: "file",
           filePath,
@@ -23917,7 +23937,14 @@ function queueBackendCaptureUpdate(kind, payload) {
 async function processBackendJsonPathPayload(payload) {
   const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
-  currentSessionName = null;
+  // Mirror of main-frontend.js: only clear currentSessionName when
+  // the user explicitly closed the session OR this is not a
+  // wifi-keys background rerun. The wifiKeysRerunInFlight field is
+  // not on backendProgressState in the test mirror yet, so the
+  // gating is best-effort: false is the safe default.
+  if (sessionExplicitlyClosed) {
+    currentSessionName = null;
+  }
 
   backendProgressState.processedPackets = Math.max(
     backendProgressState.processedPackets,
@@ -24042,7 +24069,13 @@ async function processBackendJsonPathPayload(payload) {
 async function processBackendJsonDataPayload(payload) {
   const chunkStartTime = performance.now();
   document.getElementById("error-container").style.display = "none";
-  currentSessionName = null;
+  // Mirror of main-frontend.js: only clear currentSessionName when
+  // the user explicitly closed the session. (No wifiKeysRerunInFlight
+  // gating in the test mirror since the test mirror predates the
+  // wifi-keys rerun feature.)
+  if (sessionExplicitlyClosed) {
+    currentSessionName = null;
+  }
 
   backendProgressState.processedPackets = Math.max(
     backendProgressState.processedPackets,
