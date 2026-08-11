@@ -1371,6 +1371,10 @@ contextBridge.exposeInMainWorld('extractapi', {
     ipcRenderer.invoke('upload-virustotal', { bytesBase64, fileName, apiKey }),
   hashesComSearch: ({ hashes, hash, apiKey, key }) =>
     ipcRenderer.invoke('hashes-com:search', { hashes, hash, apiKey, key }),
+  hashesComIdentify: ({ hash, extended }) =>
+    ipcRenderer.invoke('hashes-com:identify', { hash, extended }),
+  hashesComDiagnostics: ({ apiKey } = {}) =>
+    ipcRenderer.invoke('hashes-com:diagnostics', { apiKey }),
 });
 
 contextBridge.exposeInMainWorld('previewapi', {

@@ -83,6 +83,7 @@ function makeFakeDocument() {
         "conv-subtab-subnet",
         "conv-subtab-threat-intel",
         "conv-subtab-packet-json",
+        "crypt-subtab-hashes",
         "crypt-subtab-ssl",
         "crypt-subtab-pgp",
         "crypt-subtab-openssh",

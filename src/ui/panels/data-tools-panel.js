@@ -59,6 +59,27 @@ const HASH_IDS = [
   "data-tools-whirlpool-output",
 ];
 
+// ID prefix + hash-algorithm pairs used to render the Crypt-side Hashes
+// mirror. Same algorithms as the Conv-side outputs; only the DOM IDs
+// differ so we don't collide with the Conv Hashes panel.
+const CRYPT_HASH_IDS = [
+  "crypt-hashes-md5-output",
+  "crypt-hashes-sha1-output",
+  "crypt-hashes-sha256-output",
+  "crypt-hashes-sha384-output",
+  "crypt-hashes-sha512-output",
+  "crypt-hashes-sha3-256-output",
+  "crypt-hashes-sha3-512-output",
+  "crypt-hashes-ripemd160-output",
+  "crypt-hashes-whirlpool-output",
+];
+// DOM IDs that pair HASH_IDS ↔ CRYPT_HASH_IDS 1:1. Used by
+// ``renderHashesIntoOutputs`` below to keep the two panels in sync.
+const HASH_ID_PAIRS = HASH_IDS.map((convId, index) => ({
+  convId,
+  cryptId: CRYPT_HASH_IDS[index],
+}));
+
 // ── Conv tab state ────────────────────────────────────────────────────────────
 
 let activeConvSubtab = CONV_CONVERSIONS_SUBTAB;
@@ -88,9 +109,10 @@ let _isLlmRuntimeEnabled = () => false;
 let _isBackgroundSummaryGenerationEnabled = () => false;
 let _appendAnalysisBlub = null;
 let _addHashReverseToKeystore = () => 0;
+let _recordHashesComLookupOutcome = () => { };
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub, addHashReverseToKeystore }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub, addHashReverseToKeystore, recordHashesComLookupOutcome }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
@@ -109,6 +131,25 @@ function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurre
   _addHashReverseToKeystore = typeof addHashReverseToKeystore === "function"
     ? addHashReverseToKeystore
     : () => 0;
+  // ``recordHashesComLookupOutcome`` is the renderer-side hook that
+  // updates the Settings "Last Cost" / "Last Lookup" pills. Failures
+  // here would only break indicator freshness, so we swallow them and
+  // log instead of bubbling.
+  _recordHashesComLookupOutcome = typeof recordHashesComLookupOutcome === "function"
+    ? (outcome) => {
+      try {
+        recordHashesComLookupOutcome(outcome);
+      } catch (hookError) {
+        try {
+          _writeLogEntry(
+            `[${threadName}] recordHashesComLookupOutcome threw message=${JSON.stringify(hookError?.message || String(hookError))}`,
+          );
+        } catch (_nestedError) {
+          // best-effort logging only
+        }
+      }
+    }
+    : () => { };
   initDataToolsLlmSummarizer({
     callLargeLanguageModel: _callLargeLanguageModel,
     isLlmRuntimeEnabled: _isLlmRuntimeEnabled,
@@ -543,28 +584,45 @@ function setHashInputReadingFromBytes(bytes) {
     formatHashInputReading(bytes);
 }
 
-// Computes data tools hashes.
-function computeDataToolsHashes(bytes) {
+// Pure computation: returns the nine hash hex strings that the
+// Conv + Crypt Hashes panels render. No DOM access; safe to call
+// from anywhere. Matches ``HASH_IDS`` order: MD5, SHA-1, SHA-256,
+// SHA-384, SHA-512, SHA3-256, SHA3-512, RIPEMD-160, Whirlpool.
+function computeHashValues(bytes) {
   const wordArray = CryptoJS.lib.WordArray.create(bytes);
   const byteString = bytesToCharString(bytes);
+  const whirlpoolHash = bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
+  return [
+    CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex),
+    CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex),
+    CryptoJS.SHA256(wordArray).toString(CryptoJS.enc.Hex),
+    CryptoJS.SHA384(wordArray).toString(CryptoJS.enc.Hex),
+    CryptoJS.SHA512(wordArray).toString(CryptoJS.enc.Hex),
+    sha3_256(bytes),
+    sha3_512(bytes),
+    CryptoJS.RIPEMD160(wordArray).toString(CryptoJS.enc.Hex),
+    whirlpoolHash,
+  ];
+}
 
-  document.getElementById("data-tools-md5-output").value =
-    CryptoJS.MD5(wordArray).toString(CryptoJS.enc.Hex);
-  document.getElementById("data-tools-sha1-output").value =
-    CryptoJS.SHA1(wordArray).toString(CryptoJS.enc.Hex);
-  document.getElementById("data-tools-sha256-output").value =
-    CryptoJS.SHA256(wordArray).toString(CryptoJS.enc.Hex);
-  document.getElementById("data-tools-sha384-output").value =
-    CryptoJS.SHA384(wordArray).toString(CryptoJS.enc.Hex);
-  document.getElementById("data-tools-sha512-output").value =
-    CryptoJS.SHA512(wordArray).toString(CryptoJS.enc.Hex);
-  document.getElementById("data-tools-sha3-256-output").value = sha3_256(bytes);
-  document.getElementById("data-tools-sha3-512-output").value = sha3_512(bytes);
-  document.getElementById("data-tools-ripemd160-output").value =
-    CryptoJS.RIPEMD160(wordArray).toString(CryptoJS.enc.Hex);
-  const whirlpoolHash =
-    bytes.length > 0 ? whirlpool.encSync(byteString, "hex") : "";
-  document.getElementById("data-tools-whirlpool-output").value = whirlpoolHash;
+// Writes a list of nine hash hex strings into the matching DOM input
+// elements. ``ids`` mirrors the order produced by ``computeHashValues``.
+// Missing DOM nodes are silently skipped (so a partially-mounted
+// Crypt panel doesn't blow up if a hash element hasn't rendered yet).
+function writeHashOutputs(ids, values) {
+  for (let i = 0; i < ids.length && i < values.length; i += 1) {
+    const el = document.getElementById(ids[i]);
+    if (el) el.value = values[i];
+  }
+}
+
+// Computes data tools hashes and writes them into the Conv Hashes
+// outputs. The Crypt-side mirror is updated separately by
+// ``renderCryptHashesFromConvInput`` so the two panels don't have
+// to share a refresh path.
+function computeDataToolsHashes(bytes) {
+  const values = computeHashValues(bytes);
+  writeHashOutputs(HASH_IDS, values);
 }
 // we need to use 
 
@@ -575,6 +633,40 @@ function runDataToolsHashesFromInput() {
   if (activeConvSubtab === CONV_HASHES_SUBTAB) {
     requestDataToolsBackgroundSummary(CONV_HASHES_SUBTAB);
   }
+}
+
+// Mirrors the Conv Hashes outputs into the Crypt → Hashes panel.
+// Reads whatever is currently in ``#data-tools-hash-input-reading``,
+// recomputes the nine digests, and writes them into the
+// ``crypt-hashes-*-output`` inputs. Also reflects the Conv input box
+// contents into the read-only ``crypt-hashes-input-reading`` display so
+// the user sees exactly what got hashed. Silently no-ops when the
+// Conv input box has never been populated (no bytes means no hashes).
+function renderCryptHashesFromConvInput() {
+  const convInputEl = document.getElementById("data-tools-hash-input-reading");
+  const cryptInputEl = document.getElementById("crypt-hashes-input-reading");
+  if (!convInputEl) return;
+  const hashInput = convInputEl.value;
+  if (cryptInputEl) {
+    cryptInputEl.value = hashInput;
+  }
+  // Empty input → empty hash outputs (don't throw).
+  if (!hashInput) {
+    writeHashOutputs(CRYPT_HASH_IDS, new Array(CRYPT_HASH_IDS.length).fill(""));
+    return;
+  }
+  let bytes;
+  try {
+    bytes = parseHashInputReadingBytes(hashInput);
+  } catch (error) {
+    _writeLogEntry(
+      `[${threadName}] renderCryptHashesFromConvInput parse failed message=${JSON.stringify(error?.message || String(error))}`,
+    );
+    writeHashOutputs(CRYPT_HASH_IDS, new Array(CRYPT_HASH_IDS.length).fill(""));
+    return;
+  }
+  const values = computeHashValues(bytes);
+  writeHashOutputs(CRYPT_HASH_IDS, values);
 }
 
 function getSelectedHashValue() {
@@ -650,6 +742,11 @@ async function runDataToolsHashReverseLookup() {
   if (!bridge || typeof bridge.hashesComSearch !== "function") {
     setStatus("Hashes.com bridge is unavailable (preload missing hashesComSearch).");
     setResult("IPC bridge is unavailable. Try restarting the app.");
+    _recordHashesComLookupOutcome({
+      success: false,
+      cost: 0,
+      error: "hashesComSearch bridge unavailable",
+    });
     return;
   }
   try {
@@ -662,6 +759,11 @@ async function runDataToolsHashReverseLookup() {
       _writeLogEntry(
         `[${threadName}] Hash reverse lookup failed message=${JSON.stringify(errorMessage)}`,
       );
+      _recordHashesComLookupOutcome({
+        success: false,
+        cost: Number.isFinite(Number(response?.cost)) ? Number(response.cost) : 0,
+        error: errorMessage,
+      });
       return;
     }
     const founds = Array.isArray(response.founds) ? response.founds : [];
@@ -710,6 +812,11 @@ async function runDataToolsHashReverseLookup() {
     _writeLogEntry(
       `[${threadName}] Hash reverse lookup complete matched=${founds.length} unmatched=${unfounds.length} cost=${response.cost ?? "n/a"}`,
     );
+    _recordHashesComLookupOutcome({
+      success: true,
+      cost: Number.isFinite(Number(response.cost)) ? Number(response.cost) : 0,
+      error: "",
+    });
     // Mirror successful reverses back into the keystore so the user
     // can find them later without re-running the lookup. Each match
     // becomes a ``secret``-typed entry carrying the plaintext, the
@@ -738,12 +845,135 @@ async function runDataToolsHashReverseLookup() {
       }
     }
   } catch (error) {
+    // See the matching block in ``runDataToolsHashIdentify`` for
+    // context: Electron throws ``No handler registered for '<channel>'``
+    // when the running Electron app bundle predates the IPC handler
+    // the renderer is calling. Surface a specific hint so the user
+    // knows to restart instead of wondering why their click fails.
     const errorMessage = error?.message || String(error);
+    let friendly = `Error: ${errorMessage}`;
+    if (/No handler registered/i.test(errorMessage)) {
+      friendly +=
+        "\n\nThe Electron main process is missing this IPC handler. "
+        + "Stop the running app (Ctrl+C in the terminal where `npm start` is running) "
+        + "and relaunch it so the updated main/preload bundles reload.";
+    }
     setStatus(`Hashes.com lookup failed: ${errorMessage}`);
-    setResult(`Error: ${errorMessage}`);
+    setResult(friendly);
     _statusUpdate("Status: Hashes.com lookup failed.");
     _writeLogEntry(
       `[${threadName}] Hash reverse lookup threw message=${JSON.stringify(errorMessage)}`,
+    );
+    _recordHashesComLookupOutcome({
+      success: false,
+      cost: 0,
+      error: errorMessage,
+    });
+  }
+}
+
+// Identify what algorithm(s) a given hash could possibly be.
+// hashes.com exposes a public GET endpoint ``/en/api/identifier``
+// that takes ``hash=<value>`` (plus optional ``extended=true``)
+// and returns a candidate algorithm list. This is the "what kind
+// of hash is this?" companion to the reverse-lookup button —
+// when the user has a hash of unknown provenance they can ask
+// hashes.com to enumerate the likely algorithms *before* burning
+// credits on a reverse-lookup that targets the wrong one.
+async function runDataToolsHashIdentify() {
+  const inputEl = document.getElementById("data-tools-hash-reverse-input");
+  const resultEl = document.getElementById("data-tools-hash-identify-result");
+  if (!resultEl) return;
+  const rawHash = String(inputEl?.value || "").trim();
+  if (!rawHash) {
+    resultEl.textContent =
+      "Enter a hash and click Identify Hash Types.";
+    _statusUpdate("Status: Enter a hash to identify.");
+    return;
+  }
+  const setResult = (text) => {
+    resultEl.textContent = text;
+  };
+  setResult("Identifier-lookup in progress…");
+  _statusUpdate("Status: Asking hashes.com what algorithms this hash could be…");
+  _writeLogEntry(
+    `[${threadName}] Hash identifier lookup begin hashLength=${rawHash.length}`,
+  );
+  const bridge = typeof window !== "undefined" ? window.extractapi : null;
+  if (!bridge || typeof bridge.hashesComIdentify !== "function") {
+    setResult(
+      "IPC bridge is unavailable (preload missing hashesComIdentify). Try restarting the app.",
+    );
+    return;
+  }
+  try {
+    const response = await bridge.hashesComIdentify({
+      hash: rawHash,
+      extended: true,
+    });
+    if (!response || response.success === false) {
+      const errorMessage =
+        (response && response.error)
+        || (response && response.message)
+        || "Hashes.com identifier lookup failed.";
+      setResult(`Error: ${errorMessage}`);
+      _statusUpdate("Status: Hashes.com identifier lookup failed.");
+      _writeLogEntry(
+        `[${threadName}] Hash identifier lookup failed message=${JSON.stringify(errorMessage)}`,
+      );
+      return;
+    }
+    const algorithms = Array.isArray(response.algorithms)
+      ? response.algorithms
+      : [];
+    const lines = [];
+    lines.push(
+      `Endpoint: ${response.endpoint || "https://hashes.com/en/api/identifier"}`,
+    );
+    lines.push(`HTTP status: ${response.httpStatus ?? "n/a"}`);
+    lines.push(`Mode: ${response.extended ? "extended" : "concise"}`);
+    lines.push(`Matches: ${algorithms.length}`);
+    lines.push("");
+    if (algorithms.length === 0) {
+      const note = response.message
+        ? ` (${response.message})`
+        : "";
+      lines.push(`No candidate algorithms returned.${note}`);
+    } else {
+      lines.push("Candidate algorithms:");
+      for (const algo of algorithms) {
+        lines.push(`- ${algo}`);
+      }
+    }
+    setResult(lines.join("\n"));
+    _statusUpdate(
+      `Status: Hashes.com identifier complete (candidates=${algorithms.length}).`,
+    );
+    _writeLogEntry(
+      `[${threadName}] Hash identifier lookup complete candidates=${algorithms.length} mode=${response.extended ? "extended" : "concise"}`,
+    );
+  } catch (error) {
+    // Electron rejects ``ipcRenderer.invoke`` with a generic
+    // ``"No handler registered for '<channel>'"`` Error whenever
+    // the renderer's preload was loaded against a main process
+    // bundle that doesn't (yet) have the matching ``ipcMain.handle``.
+    // That almost always means the running Electron process was
+    // launched *before* the handler was added and the user is
+    // running stale main/preload bundles. Surface a specific hint
+    // so they don't have to guess why their click mysteriously
+    // fails after pulling new code.
+    const errorMessage = error?.message || String(error);
+    let friendly = `Error: ${errorMessage}`;
+    if (/No handler registered/i.test(errorMessage)) {
+      friendly +=
+        "\n\nThe Electron main process is missing this IPC handler. "
+        + "Stop the running app (Ctrl+C in the terminal where `npm start` is running) "
+        + "and relaunch it so the updated main/preload bundles reload.";
+    }
+    setResult(friendly);
+    _statusUpdate("Status: Hashes.com identifier lookup failed.");
+    _writeLogEntry(
+      `[${threadName}] Hash identifier lookup threw message=${JSON.stringify(errorMessage)}`,
     );
   }
 }
@@ -1671,8 +1901,10 @@ module.exports = {
   clearDataToolsStreamPackets,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
+  renderCryptHashesFromConvInput,
   crossReferenceCurrentHash,
   runDataToolsHashReverseLookup,
+  runDataToolsHashIdentify,
   setDataToolsHashReverseInput,
   normalizeDataToolsHashForReverseLookup,
   formatUnmatchedHashLine,
