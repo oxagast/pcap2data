@@ -461,9 +461,9 @@ function renderSettingsAboutTerminalReadout(readoutText, { animateCommand = fals
 }
 
 async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
-  const runningVersion = String(psVer || "").trim() || "Unknown";
+  const runningVersion = String(PACKETSNITCH_VERSION || "").trim() || "Unknown";
   if (!forceRefresh && state.cachedSettingsAboutReleaseInfo) {
-    setSettingsAboutDownloadButtonState(cachedSettingsAboutReleaseInfo.downloadInfo || {});
+    setSettingsAboutDownloadButtonState(state.cachedSettingsAboutReleaseInfo.downloadInfo || {});
     renderSettingsAboutTerminalReadout(
       buildSettingsAboutTerminalReadout(state.cachedSettingsAboutReleaseInfo),
       { animateCommand: true },

@@ -1066,6 +1066,8 @@ const PACKETSNITCH_RELEASES_PAGE_URL =
   "https://github.com/oxasploits/PacketSnitch/releases";
 const PACKETSNITCH_RELEASES_LATEST_API_URL =
   "https://api.github.com/repos/oxasploits/PacketSnitch/releases/latest";
+const PACKETSNITCH_RELEASES_API_URL =
+  "https://api.github.com/repos/oxasploits/PacketSnitch/releases";
 let notesEditorVisible = false;
 let currentSessionName = null;
 let sessionPickerPanel = null;
@@ -1172,29 +1174,29 @@ window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = startupReleaseCheckPromi
 // identifiers. Defined before the ``let``s so the getters/setters
 // close over the right bindings (TDZ-safe).
 const releaseNotesState = {
-    get cachedSettingsAboutReleaseInfo() { return cachedSettingsAboutReleaseInfo; },
-    set cachedSettingsAboutReleaseInfo(v) { cachedSettingsAboutReleaseInfo = v; },
-    get settingsAboutReleaseInfoLoadPromise() { return settingsAboutReleaseInfoLoadPromise; },
-    set settingsAboutReleaseInfoLoadPromise(v) { settingsAboutReleaseInfoLoadPromise = v; },
-    get settingsAboutTypewriterToken() { return settingsAboutTypewriterToken; },
-    set settingsAboutTypewriterToken(v) { settingsAboutTypewriterToken = v; },
-    get settingsAboutTypewriterTimeoutId() { return settingsAboutTypewriterTimeoutId; },
-    set settingsAboutTypewriterTimeoutId(v) { settingsAboutTypewriterTimeoutId = v; },
-    get settingsAboutDownloadButtonUrl() { return settingsAboutDownloadButtonUrl; },
-    set settingsAboutDownloadButtonUrl(v) { settingsAboutDownloadButtonUrl = v; },
-    get cachedLinuxReleasePackageFamily() { return cachedLinuxReleasePackageFamily; },
-    set cachedLinuxReleasePackageFamily(v) { cachedLinuxReleasePackageFamily = v; },
-    get cachedRuntimePlatform() { return cachedRuntimePlatform; },
-    set cachedRuntimePlatform(v) { cachedRuntimePlatform = v; },
-    get startupReleaseCheckHandled() { return startupReleaseCheckHandled; },
-    set startupReleaseCheckHandled(v) { startupReleaseCheckHandled = v; },
-    get resolveStartupReleaseCheckPromise() { return resolveStartupReleaseCheckPromise; },
-    set resolveStartupReleaseCheckPromise(v) { resolveStartupReleaseCheckPromise = v; },
-    get startupReleaseCheckPromise() { return startupReleaseCheckPromise; },
-    set startupReleaseCheckPromise(v) {
-        startupReleaseCheckPromise = v;
-        window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = v;
-    },
+  get cachedSettingsAboutReleaseInfo() { return cachedSettingsAboutReleaseInfo; },
+  set cachedSettingsAboutReleaseInfo(v) { cachedSettingsAboutReleaseInfo = v; },
+  get settingsAboutReleaseInfoLoadPromise() { return settingsAboutReleaseInfoLoadPromise; },
+  set settingsAboutReleaseInfoLoadPromise(v) { settingsAboutReleaseInfoLoadPromise = v; },
+  get settingsAboutTypewriterToken() { return settingsAboutTypewriterToken; },
+  set settingsAboutTypewriterToken(v) { settingsAboutTypewriterToken = v; },
+  get settingsAboutTypewriterTimeoutId() { return settingsAboutTypewriterTimeoutId; },
+  set settingsAboutTypewriterTimeoutId(v) { settingsAboutTypewriterTimeoutId = v; },
+  get settingsAboutDownloadButtonUrl() { return settingsAboutDownloadButtonUrl; },
+  set settingsAboutDownloadButtonUrl(v) { settingsAboutDownloadButtonUrl = v; },
+  get cachedLinuxReleasePackageFamily() { return cachedLinuxReleasePackageFamily; },
+  set cachedLinuxReleasePackageFamily(v) { cachedLinuxReleasePackageFamily = v; },
+  get cachedRuntimePlatform() { return cachedRuntimePlatform; },
+  set cachedRuntimePlatform(v) { cachedRuntimePlatform = v; },
+  get startupReleaseCheckHandled() { return startupReleaseCheckHandled; },
+  set startupReleaseCheckHandled(v) { startupReleaseCheckHandled = v; },
+  get resolveStartupReleaseCheckPromise() { return resolveStartupReleaseCheckPromise; },
+  set resolveStartupReleaseCheckPromise(v) { resolveStartupReleaseCheckPromise = v; },
+  get startupReleaseCheckPromise() { return startupReleaseCheckPromise; },
+  set startupReleaseCheckPromise(v) {
+    startupReleaseCheckPromise = v;
+    window.__PACKETSNITCH_STARTUP_RELEASE_CHECK_PROMISE__ = v;
+  },
 };
 const backendProgressState = {
   firstChunkLoaded: false,
@@ -13261,7 +13263,14 @@ const {
   renderSettingsAboutTerminalReadout,
   loadSettingsAboutReleaseInfo,
 } = createReleaseNotesHelpers({
+  PACKETSNITCH_VERSION,
+  PACKETSNITCH_RELEASES_API_URL,
+  PACKETSNITCH_RELEASES_LATEST_API_URL,
+  PACKETSNITCH_RELEASES_PAGE_URL,
+  PACKETSNITCH_AUTHOR_NAME,
+  PACKETSNITCH_TERMINAL_IDENTITY,
   state: releaseNotesState,
+  getCurrentSettings,
   setSettingsSubtab,
   showSettingsWorkspace,
   openExternalUrl: (url) => window.browserapi?.openExternalUrl?.(url),
