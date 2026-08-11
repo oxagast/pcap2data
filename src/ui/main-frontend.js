@@ -275,13 +275,10 @@ const {
   setDataToolsStreamPackets,
   getDataToolsStreamPackets,
   clearDataToolsStreamPackets,
-  EXIF_FILE_TYPE_TO_PROTO,
-  getImageTypeFromExifReader,
   clearDataToolsSummary,
   requestDataToolsBackgroundSummary,
 } = require("./panels/data-tools-panel");
 const {
-  getCurrentSummaryContext,
   getCurrentSummaryContextHash,
 } = require("./panels/data-tools-llm-summarizer");
 const { normalizeSmbDecoderBytes } = require('./decoders/conv/smb-helpers');
@@ -4026,10 +4023,6 @@ function getPluginCapabilityPanelMetaElement() {
 
 function getPluginCapabilityPanelListElement() {
   return document.getElementById("settings-plugins-selected-capabilities");
-}
-
-function getPluginFailureThresholdInputElement() {
-  return document.getElementById("settings-plugins-auto-disable-failure-threshold");
 }
 
 function getPluginErrorPanelElement() {
@@ -13925,18 +13918,6 @@ function runDeferredDataToolsAnalysisForActiveSubtab() {
     runProtoDecoder(bytes);
   }
   requestDataToolsBackgroundSummary(activeSubtab);
-}
-
-// Returns the decoder hint for the current context packet so other panels or
-// context actions can ask what the Conv Decodes subtab would use first.
-function getCurrentPacketProtocolDecoderHint() {
-  const packet =
-    (dataToolsContextPacket && !dataToolsInputEditedFlag
-      ? dataToolsContextPacket
-      : null) ||
-    getCurrentContextPacket() ||
-    getCurrentPacketForExport();
-  return getPacketProtocolDecoderHint(packet);
 }
 
 // ── Extraction subtab renderer logic ────────────────────────────────────────
