@@ -256,8 +256,10 @@ const {
   formatHexInputBytes,
   setConvSubtab,
   runDataToolsHashesFromInput,
+  renderCryptHashesFromConvInput,
   crossReferenceCurrentHash,
   runDataToolsHashReverseLookup,
+  runDataToolsHashIdentify,
   setDataToolsHashReverseInput,
   normalizeDataToolsHashForReverseLookup,
   decodeHttpFromBytes,
@@ -902,6 +904,7 @@ const STRICT_IPV4_REGEX =
 const CONTEXT_MAC_REGEX = /\b([0-9A-Fa-f]{2}([-:])){5}[0-9A-Fa-f]{2}\b/;
 const CONTEXT_MIME_REGEX =
   /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/i;
+const CRYPT_HASHES_SUBTAB = "hashes";
 const CRYPT_SSL_SUBTAB = "ssl";
 const CRYPT_PGP_SUBTAB = "pgp";
 const CRYPT_OPENSSH_SUBTAB = "openssh";
@@ -917,12 +920,13 @@ const VALID_MAIN_TABS = [
   MAIN_TAB_KEYSTORE,
 ];
 const VALID_CRYPT_SUBTABS = [
+  CRYPT_HASHES_SUBTAB,
   CRYPT_SSL_SUBTAB,
   CRYPT_PGP_SUBTAB,
   CRYPT_OPENSSH_SUBTAB,
 ];
 let activeMainTab = MAIN_TAB_SUMMARY;
-let activeCryptSubtab = CRYPT_SSL_SUBTAB;
+let activeCryptSubtab = CRYPT_HASHES_SUBTAB;
 
 // Resolves the user's preferred landing tab from settings, falling
 // back to the default if the persisted value is missing or unknown.
@@ -1084,6 +1088,16 @@ let cachedVirusTotalDiagnostics = null;
 let virusTotalDiagnosticsInFlight = null;
 let virusTotalDiagnosticsLastSuccessAt = 0;
 const VIRUS_TOTAL_DIAGNOSTICS_DEDUPE_MS = 30_000;
+let cachedHashesComDiagnostics = null;
+let hashesComDiagnosticsInFlight = null;
+let hashesComDiagnosticsLastSuccessAt = 0;
+const HASHES_COM_DIAGNOSTICS_DEDUPE_MS = 30_000;
+// Tracks the last user-initiated reverse lookup so the Settings
+// "Last Cost" / "Last Lookup" pills reflect what the user actually
+// paid (the diagnostic probe costs zero credits and shouldn't be
+// conflated with a real reverse). Populated by
+// ``recordHashesComLookupOutcome``.
+let cachedHashesComLastLookup = null;
 let cachedMetricsDiagnostics = null;
 let metricsDiagnosticsInFlight = null;
 let metricsDiagnosticsLastSuccessAt = 0;
@@ -1546,6 +1560,10 @@ function getBackendVirusTotalApiKey(settings = getCurrentSettings()) {
   return String(settings?.apiKeys?.virusTotalApiKey || "").trim();
 }
 
+function getBackendHashesComApiKey(settings = getCurrentSettings()) {
+  return String(settings?.apiKeys?.hashesComApiKey || "").trim();
+}
+
 function syncVirusTotalDiagnosticsIndicators() {
   const diagnostics = cachedVirusTotalDiagnostics;
   const hasStoredKey = Boolean(getBackendVirusTotalApiKey());
@@ -1694,6 +1712,183 @@ function invalidateVirusTotalDiagnosticsCache() {
   syncVirusTotalDiagnosticsIndicators();
 }
 
+// ── hashes.com diagnostics ──────────────────────────────────────────────────
+//
+// The hashes.com probe is a zero-credit empty lookup (POST an empty
+// ``hashes[]`` field — the API accepts it as a no-op). The Settings tab
+// renders four pills: endpoint reachability, key validity, last cost, and
+// last lookup result. Like the VirusTotal path we coalesce concurrent
+// callers and cache a recent successful probe for 30s so a startup burst
+// only hits the API once.
+
+function syncHashesComDiagnosticsIndicators() {
+  const diagnostics = cachedHashesComDiagnostics;
+  const hasStoredKey = Boolean(getBackendHashesComApiKey());
+  const endpointReachable = diagnostics?.endpointReachable;
+  const keyConfigured = hasStoredKey || Boolean(diagnostics?.keyConfigured);
+  const keyValid = diagnostics?.keyValid;
+
+  const endpointValue =
+    endpointReachable === true ? "Up" : endpointReachable === false ? "Down" : "—";
+  const endpointClass =
+    endpointReachable === true
+      ? "status-ok"
+      : endpointReachable === false
+        ? "status-error"
+        : "status-neutral";
+
+  const keyValue =
+    !keyConfigured
+      ? "Missing"
+      : keyValid === true
+        ? "Valid"
+        : keyValid === false
+          ? "Invalid"
+          : "Configured";
+  const keyClass =
+    !keyConfigured
+      ? "status-warn"
+      : keyValid === true
+        ? "status-ok"
+        : keyValid === false
+          ? "status-error"
+          : "status-neutral";
+
+  // "Last Cost" pill surfaces the credit cost reported by the most
+  // recent reverse lookup (cached separately from the diagnostic
+  // probe so we can show the actual cost the user paid, not just the
+  // cost of the diagnostic ping — which is always zero). When no
+  // lookup has happened yet we surface "—" with a neutral class so
+  // the pill never claims a false zero.
+  const lastCost = Number(cachedHashesComLastLookup?.cost);
+  const hasLastLookup = Boolean(cachedHashesComLastLookup);
+  const creditValue = hasLastLookup && Number.isFinite(lastCost)
+    ? `${lastCost} credit${lastCost === 1 ? "" : "s"}`
+    : "—";
+  const creditClass = !hasLastLookup
+    ? "status-neutral"
+    : lastCost === 0
+      ? "status-ok"
+      : "status-warn";
+
+  const lastLookupStatus = cachedHashesComLastLookup?.success;
+  const lastLookupError = cachedHashesComLastLookup?.error;
+  const lastLookupValue = !cachedHashesComLastLookup
+    ? "—"
+    : lastLookupStatus === true
+      ? "OK"
+      : lastLookupStatus === false
+        ? `Error: ${lastLookupError || "lookup failed"}`
+        : "—";
+  const lastLookupClass = !cachedHashesComLastLookup
+    ? "status-neutral"
+    : lastLookupStatus === true
+      ? "status-ok"
+      : lastLookupStatus === false
+        ? "status-error"
+        : "status-neutral";
+
+  renderBackendDiagnosticIndicator(
+    "settings-backend-hashescom-endpoint-status",
+    "Hashes.com Endpoint",
+    endpointValue,
+    endpointClass,
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-hashescom-key-status",
+    "Hashes.com Key",
+    keyValue,
+    keyClass,
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-hashescom-credit-status",
+    "Last Cost",
+    creditValue,
+    creditClass,
+  );
+  renderBackendDiagnosticIndicator(
+    "settings-backend-hashescom-last-result-status",
+    "Last Lookup",
+    lastLookupValue,
+    lastLookupClass,
+  );
+}
+
+async function refreshHashesComDiagnostics({ force = false } = {}) {
+  if (
+    !window.extractapi
+    || typeof window.extractapi.hashesComDiagnostics !== "function"
+  ) {
+    cachedHashesComDiagnostics = null;
+    syncHashesComDiagnosticsIndicators();
+    return null;
+  }
+
+  if (!force) {
+    if (hashesComDiagnosticsInFlight) {
+      return hashesComDiagnosticsInFlight;
+    }
+    if (
+      cachedHashesComDiagnostics
+      && cachedHashesComDiagnostics.endpointReachable !== false
+      && Date.now() - hashesComDiagnosticsLastSuccessAt
+      < HASHES_COM_DIAGNOSTICS_DEDUPE_MS
+    ) {
+      return cachedHashesComDiagnostics;
+    }
+  }
+
+  const apiKey = getBackendHashesComApiKey();
+  hashesComDiagnosticsInFlight = (async () => {
+    try {
+      const diagnostics = await window.extractapi.hashesComDiagnostics({
+        apiKey,
+      });
+      cachedHashesComDiagnostics = diagnostics || null;
+      if (cachedHashesComDiagnostics?.endpointReachable) {
+        hashesComDiagnosticsLastSuccessAt = Date.now();
+      }
+    } catch (error) {
+      console.warn("Unable to resolve hashes.com diagnostics:", error);
+      cachedHashesComDiagnostics = {
+        endpointReachable: false,
+        keyConfigured: Boolean(apiKey),
+        keyValid: false,
+        success: false,
+        cost: 0,
+        count: 0,
+        lastError: error?.message || String(error),
+        checkedAt: new Date().toISOString(),
+      };
+    } finally {
+      hashesComDiagnosticsInFlight = null;
+    }
+    syncHashesComDiagnosticsIndicators();
+    return cachedHashesComDiagnostics;
+  })();
+  return hashesComDiagnosticsInFlight;
+}
+
+function invalidateHashesComDiagnosticsCache() {
+  hashesComDiagnosticsLastSuccessAt = 0;
+  cachedHashesComDiagnostics = null;
+  syncHashesComDiagnosticsIndicators();
+}
+
+// Capture the cost + success state from a real reverse lookup so the
+// "Last Cost" / "Last Lookup" pills can reflect what the user actually
+// paid. Called from the data-tools panel after every
+// ``hashes-com:search`` round-trip.
+function recordHashesComLookupOutcome({ success, cost, error }) {
+  cachedHashesComLastLookup = {
+    success: success === true,
+    cost: Number.isFinite(Number(cost)) ? Number(cost) : 0,
+    error: typeof error === "string" ? error : "",
+    at: new Date().toISOString(),
+  };
+  syncHashesComDiagnosticsIndicators();
+}
+
 async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
   if (!window.snitchapi || typeof window.snitchapi.getBackendDiagnostics !== "function") {
     cachedBackendDiagnostics = null;
@@ -1713,6 +1908,7 @@ async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
   }
   syncBackendDiagnosticsIndicators();
   await refreshVirusTotalDiagnostics();
+  await refreshHashesComDiagnostics();
   return cachedBackendDiagnostics;
 }
 
@@ -3533,6 +3729,7 @@ function syncSettingsFormFromState() {
   syncLlmDiagnosticsIndicators();
   syncBackendDiagnosticsIndicators();
   syncMetricsDiagnosticsIndicators();
+  syncHashesComDiagnosticsIndicators();
 }
 
 // Handles read settings form state.
@@ -4574,6 +4771,14 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   ) {
     invalidateVirusTotalDiagnosticsCache();
   }
+  // Same idea for hashes.com: a saved/cleared API key must be re-verified
+  // before the connectivity pill can claim "Valid".
+  if (
+    previousSettings?.apiKeys?.hashesComApiKey !==
+    nextSettings?.apiKeys?.hashesComApiKey
+  ) {
+    invalidateHashesComDiagnosticsCache();
+  }
   const savedSettings = await window.settingsapi.save(nextSettings);
   setCurrentSettings(savedSettings);
   syncCaptureIngestWorkersFromSettings();
@@ -4858,6 +5063,8 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (nextTab === SETTINGS_SUBTAB_API_KEYS) {
     syncMetricsDiagnosticsIndicators();
     void refreshMetricsDiagnostics();
+    syncHashesComDiagnosticsIndicators();
+    void refreshHashesComDiagnostics({ force: true });
   }
   if (nextTab === SETTINGS_SUBTAB_PLUGINS) {
     void refreshPluginRegistryView();
@@ -10313,7 +10520,7 @@ async function restoreSessionState(sessionState) {
     : CONV_CONVERSIONS_SUBTAB;
   const savedCryptTab = VALID_CRYPT_SUBTABS.includes(tabState.crypt)
     ? tabState.crypt
-    : CRYPT_SSL_SUBTAB;
+    : CRYPT_HASHES_SUBTAB;
 
   if (savedMainTab === MAIN_TAB_SUMMARY) {
     showSummary();
@@ -10344,6 +10551,9 @@ async function restoreSessionState(sessionState) {
     }
   } else if (savedMainTab === MAIN_TAB_CRYPT) {
     showCryptWorkspace(savedCryptTab);
+    if (savedCryptTab === CRYPT_HASHES_SUBTAB) {
+      renderCryptHashesFromConvInput();
+    }
   } else if (savedMainTab === MAIN_TAB_KEYSTORE && keystorePanel.isUnlocked()) {
     keystorePanel.showKeystoreWorkspace();
   }
@@ -14345,6 +14555,7 @@ function getFirstLineOrFallback(elementId, fallback = "") {
 const cryptPanel = createCryptPanel({
   constants: {
     MAIN_TAB_CRYPT,
+    CRYPT_HASHES_SUBTAB,
     CRYPT_SSL_SUBTAB,
     CRYPT_PGP_SUBTAB,
     CRYPT_OPENSSH_SUBTAB,
@@ -19568,7 +19779,7 @@ async function _doFollowStreamToCrypt(streamPackets = getFollowStreamPackets()) 
     statusUpdate("Status: Stream packets have no payload data");
     return;
   }
-  showCryptWorkspace();
+  showCryptWorkspace(CRYPT_SSL_SUBTAB);
   loadStreamIntoCryptEncountered(hydratedStreamPackets, combinedHex);
   writeLogEntry(
     `Follow stream loaded ${streamPackets.length} packets into Crypt tab`,
@@ -21832,6 +22043,12 @@ initConvPanel({
     }
     return addedCount;
   },
+  // Push the cost + success of every reverse lookup into the Settings
+  // "Last Cost" / "Last Lookup" pills. Failures here only affect
+  // indicator freshness, so we swallow and log.
+  recordHashesComLookupOutcome: (outcome) => {
+    recordHashesComLookupOutcome(outcome);
+  },
 });
 
 const subnetCalculatorPanel = createSubnetCalculatorPanel({
@@ -21944,7 +22161,12 @@ document.getElementById("crypt-btn").addEventListener("click", function () {
     doError("Please upload a JSON file before accessing crypt tools.");
     return;
   }
+  // Default to Hashes (the new first subtab). showCryptWorkspace's
+  // default already does this; we keep the explicit call here for
+  // readability and to ensure the Hashes mirror renders even when
+  // the saved session restored the Crypt tab on SSL/PGP/etc.
   showCryptWorkspace();
+  renderCryptHashesFromConvInput();
 });
 
 document
@@ -22482,6 +22704,16 @@ document
     requestDataToolsBackgroundSummary(CONV_PACKET_JSON_SUBTAB);
   });
 
+document
+  .getElementById("crypt-subtab-hashes")
+  .addEventListener("click", () => {
+    setCryptSubtab(CRYPT_HASHES_SUBTAB);
+    // The Crypt Hashes panel reads its input from the Conv Hashes
+    // textarea, so the mirror only refreshes when the user actively
+    // opens the subtab. This keeps the two panels loosely coupled
+    // (no event subscriptions crossing workspaces).
+    renderCryptHashesFromConvInput();
+  });
 document
   .getElementById("crypt-subtab-ssl")
   .addEventListener("click", () => setCryptSubtab(CRYPT_SSL_SUBTAB));
@@ -23038,6 +23270,11 @@ document
   .getElementById("data-tools-hash-reverse-btn")
   .addEventListener("click", () => {
     void runDataToolsHashReverseLookup();
+  });
+document
+  .getElementById("data-tools-hash-identify-btn")
+  .addEventListener("click", () => {
+    void runDataToolsHashIdentify();
   });
 document
   .getElementById("data-tools-clear-btn")
@@ -25815,7 +26052,7 @@ onload = function () {
   // document.getElementById("selectBookmark").style.display = "none";
   hideConvertContextMenu();
   keystorePanel.resetKeystoreState();
-  setCryptSubtab(CRYPT_SSL_SUBTAB);
+  setCryptSubtab(CRYPT_HASHES_SUBTAB);
   setConvSubtab(CONV_CONVERSIONS_SUBTAB);
   setSettingsSubtab(SETTINGS_SUBTAB_GENERAL);
   syncSettingsFormFromState();

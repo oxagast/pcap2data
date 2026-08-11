@@ -3648,6 +3648,124 @@ function installExtractionHandlers() {
       return { success: false, error: err?.message || String(err) };
     }
   });
+
+  // Identify what algorithm(s) a given hash could possibly be.
+  // hashes.com exposes a GET endpoint ``/en/api/identifier`` that
+  // takes ``hash=<value>`` (and an optional ``extended=true|false``
+  // flag) and returns a candidate list — useful when a hash came
+  // out of an unknown source and the user wants to know which
+  // algorithms to try a reverse-lookup against.
+  //
+  // The endpoint is public (no API key required), but we still
+  // surface the response shape through the renderer so the UI can
+  // render an error pill when the network is down.
+  ipcMain.handle("hashes-com:identify", async (_event, payload = {}) => {
+    try {
+      const rawHash = String(payload?.hash || "").trim();
+      if (!rawHash) {
+        throw new Error("A hash is required for identifier lookup");
+      }
+      const extendedFlag = payload?.extended === true || payload?.extended === "true";
+      const result = await identifyHashesCom(rawHash, { extended: extendedFlag });
+      return { success: true, ...result };
+    } catch (err) {
+      console.error("hashes-com:identify error:", err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  });
+
+  // Probe hashes.com to populate the Settings tab "Connectivity" /
+  // "Credit use" diagnostics pills. We POST a single bogus 64-char
+  // all-zero hex hash (MD5-shaped, overwhelmingly unlikely to ever
+  // collide with a real entry) using the user's key. Per the
+  // hashes.com docs (https://hashes.com/en/docs), cost is 0 credits
+  // per HTTP request and 1 credit per *decrypted* hash — so a
+  // non-matching probe costs exactly 0 credits while still exercising
+  // both network reachability and key validity in one round-trip.
+  // A ``success: true`` body indicates the key is accepted; a
+  // ``success: false`` body indicates a bad / missing key (the
+  // error string lives in ``raw.error`` or ``raw.message``); an HTTP
+  // non-2xx or network failure indicates the endpoint itself is
+  // unreachable. The ``keyConfigured`` flag distinguishes "no key
+  // set" (settings UI shows the warning) from "key set but
+  // rejected" (settings UI shows the error).
+  ipcMain.handle("hashes-com:diagnostics", async (_event, payload = {}) => {
+    const storedKey = getBackendHashesComApiKeyFromSettings();
+    const overrideKey = String(payload?.apiKey || "").trim();
+    const key = overrideKey || storedKey;
+    if (!key) {
+      return {
+        endpointReachable: false,
+        keyConfigured: false,
+        keyValid: false,
+        success: false,
+        cost: 0,
+        count: 0,
+        founds: 0,
+        lastError: "No hashes.com API key configured",
+        checkedAt: new Date().toISOString(),
+      };
+    }
+    try {
+      // hashes.com charges 0 credits per HTTP request and 1 credit
+      // per *decrypted* hash (per https://hashes.com/en/docs), so
+      // submitting a single bogus hash is a free way to verify both
+      // network reachability and key validity in one round-trip:
+      // ``searchHashesCom`` throws on non-2xx HTTP, so a returned
+      // value proves the endpoint is reachable, and the parsed
+      // body tells us whether the API accepted the key
+      // (``success: true``) or rejected it (``success: false`` with
+      // an error message).
+      //
+      // We deliberately do NOT pass an empty ``hashes`` array here:
+      // ``searchHashesCom`` pre-flight-rejects empty input as a
+      // safety guard for the renderer's reverse-lookup button, but
+      // that guard would defeat the diagnostic ping by short-
+      // circuiting before the network round-trip ever happens.
+      // The 64-char all-zero hex string is a valid hash shape
+      // (MD5-shaped) and is overwhelmingly unlikely to ever collide
+      // with a real entry, so the diagnostic costs exactly 0 credits
+      // and never actually decrypts anything.
+      const probeHash = "0".repeat(64);
+      const result = await searchHashesCom([probeHash], key);
+      // ``searchHashesCom`` throws on non-2xx HTTP responses, so any
+      // value it returned is a successful HTTP round-trip. The body
+      // tells us whether the API accepted the key (``success: true``)
+      // or rejected it (``success: false`` with an error message).
+      const apiAccepted = result.success !== false;
+      const errorMessage = apiAccepted
+        ? ""
+        : (typeof result.raw?.error === "string"
+          ? result.raw.error
+          : "Hashes.com API rejected the request");
+      return {
+        endpointReachable: result.endpointReachable === true,
+        endpoint: result.endpoint || "https://hashes.com/en/api/search",
+        httpStatus: result.httpStatus,
+        keyConfigured: true,
+        keyValid: apiAccepted,
+        success: apiAccepted,
+        cost: Number.isFinite(Number(result.cost)) ? Number(result.cost) : 0,
+        count: Number.isFinite(Number(result.count)) ? Number(result.count) : 0,
+        founds: Array.isArray(result.founds) ? result.founds.length : 0,
+        lastError: errorMessage,
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      return {
+        endpointReachable: false,
+        endpoint: "https://hashes.com/en/api/search",
+        keyConfigured: Boolean(key),
+        keyValid: false,
+        success: false,
+        cost: 0,
+        count: 0,
+        founds: 0,
+        lastError: error?.message || String(error),
+        checkedAt: new Date().toISOString(),
+      };
+    }
+  });
 }
 
 async function uploadFileToVirusTotal(fileBuffer, fileName, apiKey) {
@@ -3863,6 +3981,70 @@ async function searchHashesCom(hashes, apiKey) {
       const stringValue = String(entry || "").trim();
       return stringValue ? { hash: stringValue, salt: "", algorithm: "" } : null;
     }).filter(Boolean),
+    raw: safeResponse,
+  };
+}
+
+// GET the hashes.com ``/en/api/identifier`` endpoint with a single
+// hash (optionally ``extended=true``) and surface the candidate
+// algorithm list. The endpoint is public — no API key required —
+// so the diagnostics pills aren't affected by whether the user has
+// configured one. We deliberately use ``URL`` + ``URLSearchParams``
+// to escape the hash safely: hex hashes with ``:`` separators (a
+// common salt-aware format) would otherwise trip the path parser.
+async function identifyHashesCom(rawHash, { extended = false } = {}) {
+  const hash = String(rawHash || "").trim();
+  if (!hash) {
+    throw new Error("A hash is required for identifier lookup");
+  }
+  const params = new URLSearchParams();
+  params.set("hash", hash);
+  if (extended) {
+    params.set("extended", "true");
+  }
+  const url = `https://hashes.com/en/api/identifier?${params.toString()}`;
+  const response = await undiciFetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      "User-Agent": userAgent,
+    },
+  });
+  const responseText = await response.text().catch(() => "");
+  let responseData = null;
+  try {
+    responseData = JSON.parse(responseText);
+  } catch (_parseError) {
+    responseData = null;
+  }
+  if (!response.ok) {
+    throw new Error(
+      `Hashes.com identifier failed: ${response.status} ${response.statusText} ${responseText}`,
+    );
+  }
+  // The endpoint may legitimately return ``{success:false}`` with
+  // a human-readable ``message`` field (e.g. "No hashes found.
+  // Did you forget one per line?"). We surface the parsed body
+  // either way so the renderer can render the message; only a
+  // network-level error is treated as thrown.
+  const safeResponse = responseData && typeof responseData === "object"
+    ? responseData
+    : { raw: responseText };
+  const algorithms = Array.isArray(safeResponse.algorithms)
+    ? safeResponse.algorithms
+      .map((entry) => String(entry || ""))
+      .filter(Boolean)
+    : [];
+  return {
+    endpointReachable: true,
+    endpoint: "https://hashes.com/en/api/identifier",
+    httpStatus: response.status,
+    success: safeResponse.success !== false,
+    extended: Boolean(extended),
+    algorithms,
+    message: typeof safeResponse.message === "string"
+      ? safeResponse.message
+      : "",
     raw: safeResponse,
   };
 }

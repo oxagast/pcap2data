@@ -502,9 +502,15 @@
                     title="POST the hash to hashes.com /en/api/search and render any plaintext matches">
                     Reverse Hash
                   </button>
+                  <button id="data-tools-hash-identify-btn" type="button"
+                    title="GET the hashes.com /en/api/identifier endpoint and list candidate algorithms">
+                    Identify Hash Types
+                  </button>
                 </div>
                 <pre id="data-tools-hash-reverse-result"
                   class="data-tools-hash-reverse-result">No reverse-lookup has been run yet.</pre>
+                <pre id="data-tools-hash-identify-result"
+                  class="data-tools-hash-reverse-result">No identifier-lookup has been run yet.</pre>
               </div>
             </div>
           </div>
@@ -708,7 +714,10 @@
         <div id="crypt_box">
           <div class="crypt-workspace-header">Crypt Workspace</div>
           <div class="crypt-subtab-row">
-            <button id="crypt-subtab-ssl" class="crypt-subtab-btn active">
+            <button id="crypt-subtab-hashes" class="crypt-subtab-btn active">
+              Hashes
+            </button>
+            <button id="crypt-subtab-ssl" class="crypt-subtab-btn">
               SSL
             </button>
             <button id="crypt-subtab-pgp" class="crypt-subtab-btn">
@@ -722,7 +731,91 @@
             </button>
           </div>
 
-          <div id="crypt-ssl-panel" class="crypt-subtab-panel">
+          <!--
+            Crypt → Hashes mirrors the Conv → Hashes panel. The input
+            box lives on the Conv tab (where the user enters / pastes
+            bytes); this panel reads the current value of
+            ``#data-tools-hash-input-reading`` and renders the hashes
+            here so users don't have to flip workspaces to inspect
+            digests. A ``crypt-hashes-`` ID prefix avoids collisions
+            with the Conv-side output elements.
+          -->
+          <div id="crypt-hashes-panel" class="crypt-subtab-panel">
+            <div class="data-tools-section data-tools-hashes-section">
+              <div class="data-tools-title">Hashes</div>
+              <div class="data-tools-hashes-note">
+                Edit input on the
+                <strong>Conv → Conversions</strong>
+                tab and click
+                <em>Hash this data</em>; hashes update here automatically. Use
+                <strong>Conv → Hashes</strong>
+                to edit the raw input directly.
+              </div>
+              <div class="data-tools-hashes-grid">
+                <div class="data-tools-output-label">Hashed Input</div>
+                <textarea id="crypt-hashes-input-reading" class="data-tools-hash-input-reading" readonly
+                  placeholder="Type text on the Conv tab to hash..."
+                  title="Edit input on the Conv → Conversions / Hashes tab."></textarea>
+                <div class="data-tools-output-label">MD5</div>
+                <input type="text" id="crypt-hashes-md5-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-1</div>
+                <input type="text" id="crypt-hashes-sha1-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-256</div>
+                <input type="text" id="crypt-hashes-sha256-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-384</div>
+                <input type="text" id="crypt-hashes-sha384-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA-512</div>
+                <input type="text" id="crypt-hashes-sha512-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA3-256</div>
+                <input type="text" id="crypt-hashes-sha3-256-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">SHA3-512</div>
+                <input type="text" id="crypt-hashes-sha3-512-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">RIPEMD-160</div>
+                <input type="text" id="crypt-hashes-ripemd160-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+                <div class="data-tools-output-label">Whirlpool</div>
+                <input type="text" id="crypt-hashes-whirlpool-output" class="data-tools-hash-output" readonly
+                  placeholder="—" />
+              </div>
+              <div class="data-tools-hash-reverse-section">
+                <div class="data-tools-title">Hash Reverse</div>
+                <div class="data-tools-hash-reverse-grid">
+                  <label for="crypt-hashes-hash-reverse-input">Hash to reverse</label>
+                  <input type="text" id="crypt-hashes-hash-reverse-input" class="data-tools-hash-reverse-input"
+                    spellcheck="false" placeholder="Paste a hash (MD5 / SHA-1 / SHA-256 / …)" />
+                  <label for="crypt-hashes-hash-reverse-status">Status</label>
+                  <div id="crypt-hashes-hash-reverse-status" class="data-tools-hash-reverse-status">
+                    Enter a hash and click <em>Reverse Hash</em>. The
+                    request is sent to hashes.com; cost is deducted
+                    from your account.
+                  </div>
+                </div>
+                <div class="data-tools-hash-reverse-actions">
+                  <button id="crypt-hashes-hash-reverse-btn" type="button"
+                    title="POST the hash to hashes.com /en/api/search and render any plaintext matches">
+                    Reverse Hash
+                  </button>
+                  <button id="crypt-hashes-hash-identify-btn" type="button"
+                    title="GET the hashes.com /en/api/identifier endpoint and list candidate algorithms">
+                    Identify Hash Types
+                  </button>
+                </div>
+                <pre id="crypt-hashes-hash-reverse-result"
+                  class="data-tools-hash-reverse-result">No reverse-lookup has been run yet.</pre>
+                <pre id="crypt-hashes-hash-identify-result"
+                  class="data-tools-hash-reverse-result">No identifier-lookup has been run yet.</pre>
+              </div>
+            </div>
+          </div>
+
+          <div id="crypt-ssl-panel" class="crypt-subtab-panel" hidden>
             <div class="crypt-grid">
               <div class="crypt-section">
                 <div class="crypt-section-title">Encountered SSL/TLS</div>
@@ -930,7 +1023,7 @@ No decrypted TLS/SSL output yet.</pre>
                 <input id="crypt-wifi-bssid-input" type="text" placeholder="BSSID (aa:bb:cc:dd:ee:ff, optional)" />
                 <input id="crypt-wifi-key-input" type="text" placeholder="PSK passphrase, WEP key, or PMK hex" />
                 <div class="crypt-actions-row">
-                  <button id="crypt-wifi-send-backend-btn">Send keys to backend</button>
+                  <button id="crypt-wifi-send-backend-btn">Decrypt Traffic</button>
                 </div>
                 <div id="crypt-wifi-backend-status" role="status" aria-live="polite">
                   Backend not yet notified of Wi-Fi keys.
@@ -1353,6 +1446,20 @@ No keystore entries saved.</pre>
                   placeholder="Leave blank to keep the stored key" />
                 <div class="settings-help-text">Used by Conv Threat Intel lookups against VirusTotal endpoints.
                   Stored locally in the settings file.</div>
+                <div class="settings-status-row" aria-label="Hashes.com diagnostics" style="margin-top: 0.5rem;">
+                  <span id="settings-backend-hashescom-endpoint-status"
+                    class="settings-status-pill status-neutral">Hashes.com Endpoint:
+                    —</span>
+                  <span id="settings-backend-hashescom-key-status"
+                    class="settings-status-pill status-neutral">Hashes.com Key:
+                    —</span>
+                  <span id="settings-backend-hashescom-credit-status" class="settings-status-pill status-neutral">Last
+                    Cost:
+                    —</span>
+                  <span id="settings-backend-hashescom-last-result-status"
+                    class="settings-status-pill status-neutral">Last Lookup:
+                    —</span>
+                </div>
                 <label for="settings-backend-hashescom-api-key" style="margin-top: 0.7rem;">Hashes.com API
                   key</label>
                 <input id="settings-backend-hashescom-api-key" type="password" autocomplete="off" spellcheck="false"

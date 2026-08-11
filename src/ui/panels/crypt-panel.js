@@ -119,6 +119,7 @@ function createCryptPanel({
 }) {
   const {
     MAIN_TAB_CRYPT,
+    CRYPT_HASHES_SUBTAB,
     CRYPT_SSL_SUBTAB,
     CRYPT_PGP_SUBTAB,
     CRYPT_OPENSSH_SUBTAB,
@@ -2602,10 +2603,14 @@ function createCryptPanel({
 
   function setCryptSubtab(tabName) {
     setActiveCryptSubtab(tabName);
+    const hashesActive = tabName === CRYPT_HASHES_SUBTAB;
     const sslActive = tabName === CRYPT_SSL_SUBTAB;
     const pgpActive = tabName === CRYPT_PGP_SUBTAB;
     const opensshActive = tabName === CRYPT_OPENSSH_SUBTAB;
     const wifiActive = tabName === CRYPT_WIFI_SUBTAB;
+    document
+      .getElementById("crypt-subtab-hashes")
+      .classList.toggle("active", hashesActive);
     document
       .getElementById("crypt-subtab-ssl")
       .classList.toggle("active", sslActive);
@@ -2618,6 +2623,7 @@ function createCryptPanel({
     document
       .getElementById("crypt-subtab-wifi")
       .classList.toggle("active", wifiActive);
+    document.getElementById("crypt-hashes-panel").hidden = !hashesActive;
     document.getElementById("crypt-ssl-panel").hidden = !sslActive;
     document.getElementById("crypt-pgp-panel").hidden = !pgpActive;
     document.getElementById("crypt-openssh-panel").hidden = !opensshActive;
@@ -3645,7 +3651,7 @@ function createCryptPanel({
     return { ...pgpLastOutputPayload };
   }
 
-  function showCryptWorkspace(tabName = CRYPT_SSL_SUBTAB) {
+  function showCryptWorkspace(tabName = CRYPT_HASHES_SUBTAB) {
     setActiveMainTab(MAIN_TAB_CRYPT);
     if (getJsonCapture() === "") {
       statusUpdate("Status: No JSON file loaded, please upload a file first");
