@@ -13,6 +13,17 @@ const vm = require('vm');
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const MAIN_JS = path.join(PROJECT_ROOT, 'src', 'main.js');
 const FRONTEND_JS = path.join(PROJECT_ROOT, 'src', 'ui', 'main-frontend.js');
+// Theme / catalog helpers were extracted to
+// ``src/ui/main-frontend/themes-catalog.js``. ``extractFunctionSource``
+// falls back to this path so the existing tests can keep sourcing
+// their slices without having to chase the new module boundary.
+const THEMES_CATALOG_JS = path.join(
+    PROJECT_ROOT,
+    'src',
+    'ui',
+    'main-frontend',
+    'themes-catalog.js',
+);
 
 // ---- helpers (subset of the extraction harness) -----------------------
 
@@ -20,6 +31,12 @@ function extractFunctionSource(sourceText, functionName) {
     const startToken = `function ${functionName}`;
     let startIndex = sourceText.indexOf(startToken);
     if (startIndex === -1) {
+        // Fall back to the themes-catalog factory module when the
+        // function was extracted as part of the Step A slice.
+        const themesCatalogSource = fs.readFileSync(THEMES_CATALOG_JS, 'utf8');
+        if (themesCatalogSource.indexOf(startToken) !== -1) {
+            return extractFunctionSource(themesCatalogSource, functionName);
+        }
         throw new Error(`Could not find function ${functionName}`);
     }
     const lastIndex = sourceText.lastIndexOf(startToken);

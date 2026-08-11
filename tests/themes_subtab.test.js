@@ -15,14 +15,35 @@ const vm = require('vm');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const RENDERER_PATH = path.join(PROJECT_ROOT, 'src', 'ui', 'main-frontend.js');
+// Helpers related to the Themes subtab, theme preview, and online
+// catalog were extracted to ``src/ui/main-frontend/themes-catalog.js``.
+// ``extractFunctionSource`` falls back to this path so the existing
+// tests can keep sourcing their slices from a single helper while the
+// actual code lives in the factory module.
+const THEMES_CATALOG_PATH = path.join(
+    PROJECT_ROOT,
+    'src',
+    'ui',
+    'main-frontend',
+    'themes-catalog.js',
+);
 const MAIN_PATH = path.join(PROJECT_ROOT, 'src', 'main.js');
 
 function extractFunctionSource(sourceText, functionName, { isAsync = false } = {}) {
     const startToken = isAsync
         ? `async function ${functionName}`
         : `function ${functionName}`;
-    const startIndex = sourceText.indexOf(startToken);
+    let startIndex = sourceText.indexOf(startToken);
     if (startIndex === -1) {
+        // After the Step A themes-catalog extraction, the helpers live
+        // in ``src/ui/main-frontend/themes-catalog.js`` rather than
+        // ``main-frontend.js``. When the requested function is no
+        // longer in the orchestrator, fall back to the factory module
+        // so the existing tests can keep sourcing from one helper.
+        const themesCatalogSource = fs.readFileSync(THEMES_CATALOG_PATH, 'utf8');
+        if (themesCatalogSource.indexOf(startToken) !== -1) {
+            return extractFunctionSource(themesCatalogSource, functionName, { isAsync });
+        }
         // Fall back to the plain `function` token so callers that did
         // not pass isAsync still work, but only when no `async function`
         // matches. The `async function` check first prevents accidentally
