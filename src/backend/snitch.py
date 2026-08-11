@@ -242,7 +242,7 @@ import decoders.wireless_80211 as dec_wireless_80211
 import decoders.xmpp as dec_xmpp
 
 activeRecon = "False"
-numWorkerThreads = 2 * (os.cpu_count() or 1)
+numWorkerThreads = (os.cpu_count() // 2 or 2)
 isSSH = False
 checkTor = True
 verbose = 0
@@ -2339,7 +2339,6 @@ def uploadFileToVirusTotal(fileBuffer, fileName, apiKey):
         raise Exception(f"VirusTotal upload failed with HTTP {response.status_code}: {response.text[:500]}")
     payload = response.json() if response.content else {}
     return buildVirusTotalUploadResponseSummary(payload)
-
 
 def getTcpStreamKey(srcIp, srcPort, dstIp, dstPort):
     """
@@ -4792,7 +4791,6 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
 
             self.sendJson(200, response)
             return
-
         self.sendJson(
             404,
             {
