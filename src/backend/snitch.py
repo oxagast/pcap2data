@@ -169,11 +169,16 @@ def packetSnitchRequestHeaders(accept=None, extraHeaders=None):
 
 def logBackendStartup(mode):
     safeMode = str(mode or "unknown").strip() or "unknown"
+    defaultThreads, physicalCores, hyperthreading = describeDefaultWorkerThreadCount()
+    threadingLabel = "on" if hyperthreading else "off"
     print(
         "[Main] Backend startup "
         + f"mode={safeMode} "
         + f"version={PACKETSNITCH_VERSION} "
-        + f"version_source={PACKETSNITCH_VERSION_SOURCE}",
+        + f"version_source={PACKETSNITCH_VERSION_SOURCE} "
+        + f"default_worker_threads={defaultThreads} "
+        + f"physical_cores={physicalCores} "
+        + f"hyperthreading={threadingLabel}",
         file=sys.stderr,
     )
 
@@ -241,8 +246,107 @@ import decoders.websocket as dec_websocket
 import decoders.wireless_80211 as dec_wireless_80211
 import decoders.xmpp as dec_xmpp
 
+_DEFAULT_WORKER_THREADS_CACHE = None
+_DEFAULT_WORKER_THREADS_CACHE_LOCK = threading.Lock()
+
+
+def getDefaultWorkerThreadCount():
+    """
+    Return a sensible default worker-thread count based on physical CPU cores.
+
+    The backend is mostly I/O-bound (scapy parsing + HTTP lookups), but very
+    CPU-bound phases (entropy, scipy aggregations) make over-subscribing to
+    logical cores (SMT/HT siblings) wasteful. This helper prefers the real
+    physical-core count from the OS and only falls back to ``os.cpu_count()``
+    on platforms where that information is not available.
+
+    Linux: parse /proc/cpuinfo. The ``cpu cores`` field reports physical
+    cores per package; ``siblings`` reports logical units. When SMT is
+    active (``siblings > cpu cores``) we use physical cores divided by 2
+    so a worker leaves headroom for the other hardware thread. When SMT is
+    off, half of physical cores is still a reasonable default.
+
+    macOS / Windows: ``os.cpu_count()`` only exposes logical CPUs, so we
+    fall back to half of that with a floor of 2 to keep a single-hyperthread
+    box usable.
+
+    Returns ``(workerThreads, physicalCores, hyperthreading)``. The first
+    element is the only one callers should use as a thread count; the
+    other two are diagnostic metadata for status / startup logging.
+    """
+    global _DEFAULT_WORKER_THREADS_CACHE
+    with _DEFAULT_WORKER_THREADS_CACHE_LOCK:
+        if _DEFAULT_WORKER_THREADS_CACHE is not None:
+            return _DEFAULT_WORKER_THREADS_CACHE
+
+        detected = None
+        hyperthreading = False
+        physicalCores = 0
+
+        if sys.platform.startswith("linux"):
+            try:
+                with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as cpuinfo:
+                    coresPerPackage = None
+                    siblingsPerPackage = None
+                    for rawLine in cpuinfo:
+                        line = rawLine.strip()
+                        if line.startswith("cpu cores"):
+                            try:
+                                coresPerPackage = int(line.split(":", 1)[1].strip())
+                            except (ValueError, IndexError):
+                                coresPerPackage = None
+                        elif line.startswith("siblings"):
+                            try:
+                                siblingsPerPackage = int(line.split(":", 1)[1].strip())
+                            except (ValueError, IndexError):
+                                siblingsPerPackage = None
+
+                    if coresPerPackage and coresPerPackage > 0:
+                        physicalCores = coresPerPackage
+                        if (
+                            siblingsPerPackage
+                            and siblingsPerPackage > coresPerPackage
+                        ):
+                            hyperthreading = True
+                        # /proc/cpuinfo "cpu cores" is per-package; multiply by
+                        # the number of distinct physical ids when available
+                        # to account for multi-socket / multi-package systems.
+                        physicalIdSet = set()
+                        cpuinfo.seek(0)
+                        for rawLine in cpuinfo:
+                            line = rawLine.strip()
+                            if line.startswith("physical id"):
+                                physicalIdSet.add(line.split(":", 1)[1].strip())
+                        if len(physicalIdSet) > 1:
+                            physicalCores = coresPerPackage * len(physicalIdSet)
+            except OSError:
+                detected = None
+
+        if physicalCores <= 0:
+            logicalCpus = os.cpu_count() or 1
+            # Best-effort fallback when physical-core info is unavailable:
+            # treat every reported CPU as a separate execution unit.
+            physicalCores = logicalCpus
+            hyperthreading = False
+
+        # Half of physical cores, with a floor of 2 so a single-core box
+        # still gets a usable thread pool. When SMT is active we already
+        # accounted for the second logical thread by halving.
+        detected = max(2, physicalCores // 2)
+        _DEFAULT_WORKER_THREADS_CACHE = (detected, physicalCores, hyperthreading)
+        return _DEFAULT_WORKER_THREADS_CACHE
+
+
+def describeDefaultWorkerThreadCount():
+    """
+    Return ``(workerThreads, physicalCores, hyperthreading)`` for diagnostic
+    logging. Safe to call before the backend fully initializes.
+    """
+    return getDefaultWorkerThreadCount()
+
+
 activeRecon = "False"
-numWorkerThreads = (os.cpu_count() // 2 or 2)
+numWorkerThreads = getDefaultWorkerThreadCount()[0]
 isSSH = False
 checkTor = True
 verbose = 0
@@ -490,6 +594,8 @@ def _buildBackendStatusPayload(server=None):
         except Exception:
             serverAddress = None
 
+    defaultThreads, physicalCores, hyperthreading = describeDefaultWorkerThreadCount()
+    threadingLabel = "on" if hyperthreading else "off"
     statusLine = (
         "status=ok "
         + f"mode={backendRuntimeMode} "
@@ -497,6 +603,8 @@ def _buildBackendStatusPayload(server=None):
         + f"uptime_s={uptimeSeconds:.3f} "
         + f"workerThreads={runtimeConfig['workerThreads']} "
         + f"hostChunkSize={runtimeConfig['hostChunkSize']} "
+        + f"physicalCores={physicalCores} "
+        + f"hyperthreading={threadingLabel} "
         + f"runningJobs={len(runningJobs)} "
         + f"jobsProcessed={jobsProcessedSinceStart}"
     )
@@ -521,6 +629,9 @@ def _buildBackendStatusPayload(server=None):
         "uptimeSeconds": round(uptimeSeconds, 3),
         "runtime": {
             **runtimeConfig,
+            "physicalCores": int(physicalCores),
+            "hyperthreading": threadingLabel,
+            "defaultWorkerThreads": int(defaultThreads),
             "processing": bool(processingLock.locked()),
             "stopRequested": bool(stopEvent.is_set()),
             "jobsProcessedSinceStart": jobsProcessedSinceStart,
@@ -4130,9 +4241,12 @@ with additional network and server information.
     )
     parser.add_argument(
         "--worker-threads",
-        help="Number of backend worker threads (default: 2x CPU cores).",
+        help=(
+            "Number of backend worker threads. Defaults to half of physical "
+            "CPU cores (minimum 2); overridden by --worker-threads."
+        ),
         type=int,
-        default=2 * (os.cpu_count() or 1),
+        default=getDefaultWorkerThreadCount()[0],
     )
     parser.add_argument(
         "--wifi-keys-file",
@@ -4351,8 +4465,8 @@ def runCaptureFromArgs(runArgs):
         }
 
     requestedWorkerThreads = int(
-        getattr(runArgs, "worker_threads", 2 * (os.cpu_count() or 1))
-        or 2 * (os.cpu_count() or 1)
+        getattr(runArgs, "worker_threads", getDefaultWorkerThreadCount()[0])
+        or getDefaultWorkerThreadCount()[0]
     )
     numWorkerThreads = max(1, requestedWorkerThreads)
     outputDir = currentDir + "/" + "testcases"
