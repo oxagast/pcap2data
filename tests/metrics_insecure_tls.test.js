@@ -412,16 +412,43 @@ describe("metrics:status IPC handler exposes insecureTls", () => {
     test("renderer's cachedMetricsDiagnostics records insecureTls / endpointProtocol", () => {
         const rendererPath = path.join(PROJECT_ROOT, "src", "ui", "main-frontend.js");
         const source = fs.readFileSync(rendererPath, "utf8");
-        expect(source).toMatch(/endpointProtocol:\s*String\(status\?\.endpointProtocol/);
-        expect(source).toMatch(/insecureTls:\s*Boolean\(status\?\.insecureTls\)/);
-        expect(source).toMatch(/allowInsecureTls:\s*Boolean\(status\?\.allowInsecureTls\)/);
+        // The metrics diagnostics refresh helper now lives in
+        // ``src/ui/main-frontend/settings-diagnostics.js`` as
+        // ``refreshMetricsDiagnostics``. Check BOTH surfaces so
+        // a regression that deletes the cached-record line OR
+        // extracts the helper still fails the test loudly.
+        const factoryPath = path.join(
+            PROJECT_ROOT,
+            "src",
+            "ui",
+            "main-frontend",
+            "settings-diagnostics.js",
+        );
+        const factorySource = fs.readFileSync(factoryPath, "utf8");
+        const combined = source + "\n" + factorySource;
+        expect(combined).toMatch(/endpointProtocol:\s*String\(status\?\.endpointProtocol/);
+        expect(combined).toMatch(/insecureTls:\s*Boolean\(status\?\.insecureTls\)/);
+        expect(combined).toMatch(/allowInsecureTls:\s*Boolean\(status\?\.allowInsecureTls\)/);
     });
 
     test("renderer renders the TLS pill in the diagnostics row", () => {
         const rendererPath = path.join(PROJECT_ROOT, "src", "ui", "main-frontend.js");
         const source = fs.readFileSync(rendererPath, "utf8");
-        expect(source).toMatch(/settings-api-keys-metrics-tls-status/);
-        expect(source).toMatch(/Self-signed allowed/);
+        // ``syncMetricsDiagnosticsIndicators`` was extracted to
+        // the settings-diagnostics factory; the TLS-pill render
+        // code follows the same path. Check both files so a
+        // regression in either surface fails loudly.
+        const factoryPath = path.join(
+            PROJECT_ROOT,
+            "src",
+            "ui",
+            "main-frontend",
+            "settings-diagnostics.js",
+        );
+        const factorySource = fs.readFileSync(factoryPath, "utf8");
+        const combined = source + "\n" + factorySource;
+        expect(combined).toMatch(/settings-api-keys-metrics-tls-status/);
+        expect(combined).toMatch(/Self-signed allowed/);
     });
 
     test("index.html includes the TLS pill in the diagnostics row", () => {

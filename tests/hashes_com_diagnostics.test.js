@@ -84,7 +84,14 @@ describe("hashes.com diagnostics — source presence", () => {
         // module.exports, since main-frontend.js is loaded via
         // webpack as a script). We still want a regression that
         // accidentally deletes one of them to break the test
-        // loudly.
+        // loudly. The helpers may live in
+        // ``src/ui/main-frontend/settings-diagnostics.js`` (the
+        // factory module) with a thin ``const { helper } = ...``
+        // re-export in main-frontend.js — so we check BOTH
+        // surfaces.
+        const settingsDiagnosticsSource = readSource(
+            "src/ui/main-frontend/settings-diagnostics.js",
+        );
         for (const helper of [
             "syncHashesComDiagnosticsIndicators",
             "refreshHashesComDiagnostics",
@@ -95,7 +102,11 @@ describe("hashes.com diagnostics — source presence", () => {
             const declarationPattern = new RegExp(
                 `function\\s+${helper}\\b|const\\s+${helper}\\b|let\\s+${helper}\\b`,
             );
-            expect(mainFrontendSource).toMatch(declarationPattern);
+            const matchesInMain = declarationPattern.test(mainFrontendSource);
+            const matchesInFactory = declarationPattern.test(
+                settingsDiagnosticsSource,
+            );
+            expect(matchesInMain || matchesInFactory).toBe(true);
         }
     });
 
