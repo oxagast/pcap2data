@@ -818,6 +818,39 @@ const DUMMY_BOOKMARKED_HOST_ALIAS = "Bookmarked";
 const BOOKMARK_FILTER_QUERY = "bookmark: true";
 const PACKET_KEY_SEPARATOR = "$";
 
+// Live-state bridge for the packet detail view factory. The four
+// ``let`` bindings below stay as the canonical module-level state
+// for the rest of the renderer; the factory accesses them through
+// this object so its reads/writes stay in lockstep with the
+// orchestrator's identifiers. Defined before the ``let``s so the
+// getters/setters close over the right bindings.
+const packetDetailViewState = {
+  get index() {
+    return index;
+  },
+  set index(nextValue) {
+    index = nextValue;
+  },
+  get filteredPackets() {
+    return filteredPackets;
+  },
+  set filteredPackets(nextValue) {
+    filteredPackets = nextValue;
+  },
+  get streamProtocol() {
+    return streamProtocol;
+  },
+  set streamProtocol(nextValue) {
+    streamProtocol = nextValue;
+  },
+  get capturedPackets() {
+    return capturedPackets;
+  },
+  set capturedPackets(nextValue) {
+    capturedPackets = nextValue;
+  },
+};
+
 let capturedPackets = {};
 let jsonCapture = "";
 let currentIp;
@@ -1244,10 +1277,35 @@ async function refreshOllamaStartupAvailability() {
     syncLlmDiagnosticsIndicators();
   }
   // Re-render the Session Threat Score card so the LLM "Get Assessment"
-  // button enables/disables to track Ollama availability.
-  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
-    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
-  }
+  // button enables/disables to track Ollama availability. The
+  // ``void refreshOllamaStartupAvailability()`` invocation runs
+  // during initial load, but ``subnetCalculatorPanel`` is declared
+  // further down in the module (line ~21237) as a ``const``, which
+  // means it sits in its temporal dead zone until that line executes.
+  // The ``await`` above normally yields long enough for the top-level
+  // execution to reach the panel declaration, but if the IPC reply
+  // resolves before line 21237 runs (or webpack's eval wrapper
+  // changes the tick ordering), the resume can hit a TDZ. Defer
+  // the recompute with ``setTimeout(..., 0)`` AND wrap it in a
+  // try/catch — the try/catch protects against TDZ ``ReferenceError``
+  // (which ``typeof`` does NOT), and the setTimeout guarantees the
+  // access lands on a fresh macrotask after the entire renderer
+  // module has finished loading.
+  setTimeout(() => {
+    try {
+      if (typeof subnetCalculatorPanel !== "undefined"
+        && subnetCalculatorPanel
+        && typeof subnetCalculatorPanel.recomputeSessionThreatScore === "function") {
+        subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+      }
+    } catch (_error) {
+      // subnetCalculatorPanel may still be in its temporal dead
+      // zone if the renderer module hasn't finished loading yet.
+      // Swallow — the recompute is a UI nicety, not a correctness
+      // requirement, and the next legitimate refresh call will
+      // succeed once the panel is bound.
+    }
+  }, 0);
   return ollamaVersionCheckPassed;
 }
 
@@ -4627,8 +4685,15 @@ initializeConsentOverlay({
   metrics,
 });
 
-void refreshOllamaStartupAvailability();
-void refreshBackendDiagnostics({ ensureReady: false });
+// ``refreshOllamaStartupAvailability`` and ``refreshBackendDiagnostics``
+// are fired after ``subnetCalculatorPanel`` is initialized below (see
+// the invocation just after the ``createSubnetCalculatorPanel({...})``
+// call). Firing them earlier put them in the panel binding's temporal
+// dead zone, since the ``const`` is declared further down in source
+// order. The await inside ``refreshOllamaStartupAvailability`` should
+// give the top-level code enough time to reach the panel declaration,
+// but in practice the IPC reply can resolve on the same microtask
+// tick — so we delay the invocation until after the panel is bound.
 
 if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "function") {
   window.installapi.onLlmDiagnosticsUpdated((diagnostics) => {
@@ -4684,19 +4749,53 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   openCarvedFileInConv: loadCarvedFileCandidateIntoConvTab,
 });
 
-// Packet detail rendering — small DOM helpers (hex grid, ASCII
-// fade-in, printable-character checks) that back the Data
-// workspace. ``infoPanel`` itself still lives in the orchestrator
-// because it has dozens of cross-cutting dependencies; the
-// extracted helpers below are the pure DOM utilities the rest of
-// the packet detail pipeline composes.
+// Packet detail rendering — the Data workspace's per-packet info
+// panel, the hex/ASCII grid, and the printable-character checks.
+// All of the helpers that compose the "Data" tab's packet-detail
+// UI live behind this factory: the small pure-utility functions
+// (isPrintable, hexToAscii, truncate, clearGridHighlights,
+// popHexGrid) plus the heavyweight infoPanel renderer. The
+// factory accepts a state object (for index, filteredPackets,
+// streamProtocol, capturedPackets), a DOM element reference, and
+// the orchestrator helpers it composes; mutations to the state
+// object are reflected back to the module-level ``let``s via the
+// getter/setter bridge declared above.
 const {
   isPrintable,
   hexToAscii,
   truncate,
   clearGridHighlights,
   popHexGrid,
-} = createPacketDetailViewHelpers();
+  infoPanel,
+} = createPacketDetailViewHelpers({
+  state: packetDetailViewState,
+  hostFilterEl,
+  statusUpdate,
+  doError,
+  updateCurrentPacketCounters,
+  showStatsHeatmapLocation,
+  escapeHtml,
+  formatNetworkEndpointDisplay,
+  getPacketKey,
+  getPacketInfoPayloadLength,
+  getTcpStreamArrivalStatusByPacketKey,
+  buildBidirectionalStreamKey,
+  sortPacketsByOwnStreamOrder,
+  // ``warmStreamPacketHydrationCache`` is destructured from
+  // ``createStreamHelpers`` further down in the orchestrator (around
+  // line ~5896). It is not yet bound when this factory call runs at
+  // module top level, so we resolve it through a thunk that reads
+  // ``globalThis.warmStreamPacketHydrationCache`` — which the
+  // stream helpers factory attaches once it has run. The fallback
+  // keeps the factory usable in tests/isolation.
+  resolveWarmStreamPacketHydrationCache: () => {
+    const candidate =
+      typeof globalThis.warmStreamPacketHydrationCache === "function"
+        ? globalThis.warmStreamPacketHydrationCache
+        : null;
+    return candidate;
+  },
+});
 
 const summaryPanel = createSummaryPanel({
   documentRef: document,
@@ -5832,6 +5931,13 @@ const {
   getPacketsForHost: () => p,
   getCaptureApi: () => window.captureapi,
 });
+
+// Expose ``warmStreamPacketHydrationCache`` on ``globalThis`` so the
+// ``createPacketDetailViewHelpers`` factory can resolve it through a
+// thunk (see the ``resolveWarmStreamPacketHydrationCache`` option in
+// that factory's call site). The factory runs at module top level
+// before this declaration, so it cannot read the const directly.
+globalThis.warmStreamPacketHydrationCache = warmStreamPacketHydrationCache;
 
 // Returns whether location filter query.
 function isLocationFilterQuery(filterQuery) {
@@ -21225,6 +21331,9 @@ const subnetCalculatorPanel = createSubnetCalculatorPanel({
     : null,
 });
 
+void refreshOllamaStartupAvailability();
+void refreshBackendDiagnostics({ ensureReady: false });
+
 document.getElementById("close-btn").addEventListener("click", () => {
   void requestApplicationClose();
 });
@@ -23467,556 +23576,6 @@ if (dataTypesOverrideButtonEl) {
   });
 }
 
-/**
- * Utility to create a table from data and headers, and append to a container.
- */
-// probably should break this function up into smaller pieces,
-// but it works for now, it takes the current packet info and
-// populates the info panel with it, including the side tables
-// and the main info table, also updates the timestamp and
-// currentIp:port info at the top
-function infoPanel(pk) {
-  const infoPaneEl = document.getElementById("packetInfoPane");
-  document.getElementById("rightside").style.display = "block";
-  document.getElementById("leftside").style.display = "block";
-  infoPaneEl.style.display = "block";
-  if (!Array.isArray(pk) || pk.length === 0) {
-    statusUpdate("Status: No packet information found for this host");
-    doError("No packet information found for this host!");
-    return;
-  }
-  const p = pk[index];
-  if (!p || !p["packet.info"]) {
-    statusUpdate("Status: Packet data is unavailable for this entry");
-    doError("Packet data is unavailable for this entry!");
-    return;
-  }
-  updateCurrentPacketCounters(pk, {
-    isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
-  });
-  let packetInfoData = p["packet.info"] || {};
-  let extraInfoData = p["extra.info"] || {};
-  const ipData = packetInfoData["IP"] || {};
-  const traitsData = extraInfoData["Traits"] || {};
-  const networkData = traitsData["Network Data"] || {};
-  const serverInfo = traitsData["Server Info"] || {};
-  const srcLocation = networkData?.["ip.src"]?.["Location"] || networkData?.["Source IP"]?.["Location"] || {};
-  const dstLocation = networkData?.["ip.dst"]?.["Location"] || networkData?.["Destination IP"]?.["Location"] || {};
-  const parseLocationCoordinate = (value, min, max) => {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) return null;
-    if (numericValue < min || numericValue > max) return null;
-    return numericValue;
-  };
-  const bindLocationTableToHeatmap = (locationData, locationSideLabel) => {
-    const latitude = parseLocationCoordinate(locationData?.["Latitude"], -90, 90);
-    const longitude = parseLocationCoordinate(locationData?.["Longitude"], -180, 180);
-    if (latitude === null || longitude === null) return;
-
-    const locationContainer = document.getElementById("sideloctable");
-    const locationTable = locationContainer?.querySelector("table:last-of-type");
-    if (!locationTable) return;
-
-    const city = String(locationData?.["City"] || "").trim();
-    const country = String(locationData?.["Country"] || "").trim();
-    const locationLabel = [city, country].filter(Boolean).join(", ") || locationSideLabel;
-
-    const openHeatmapAtLocation = () => {
-      showStatsHeatmapLocation({
-        latitude,
-        longitude,
-        label: locationLabel,
-      });
-    };
-
-    locationTable.style.cursor = "pointer";
-    locationTable.title = "Open Stats map and zoom to this location";
-    locationTable.addEventListener("click", openHeatmapAtLocation);
-  };
-  let packetTimestamp =
-    (packetInfoData["packet.timestamp"] ?? packetInfoData["Packet Timestamp"]) || "N/A";
-  let ipChecksum = ipData["ip.chksum"] ?? ipData["IP Checksum"] ?? "N/A";
-
-  // Determine transport protocol (TCP or UDP); fall back to TCP for older captures
-  const protocol =
-    (packetInfoData["packet.proto"] ?? packetInfoData["Protocol"]) || "Unknown";
-  const transportData = packetInfoData[protocol] || {};
-
-  const transportChecksum =
-    protocol === "TCP"
-      ? transportData["tcp.chksum"] ?? transportData["TCP checksum"]
-      : protocol === "UDP"
-        ? transportData["udp.chksum"] ?? transportData["UDP checksum"]
-        : protocol === "IGMP"
-          ? transportData["IGMP Checksum"]
-          : protocol === "ICMP"
-            ? transportData["ICMP Checksum"]
-            : "N/A";
-  const transportLayerLen =
-    protocol === "TCP"
-      ? transportData["tcp.len"] ?? transportData["TCP layer length"]
-      : protocol === "UDP"
-        ? transportData["UDP length"]
-        : protocol === "IGMP"
-          ? transportData["Wire length"]
-          : protocol === "ICMP"
-            ? transportData["Wire length"]
-            : "N/A";
-  const tcpFlags =
-    protocol === "TCP" && transportData["TCP Flag Data"]
-      ? transportData["TCP Flag Data"]["Flags"]
-      : "N/A";
-
-  const sourceIpPort = formatNetworkEndpointDisplay(
-    ipData["ip.src.addr"] ?? ipData["Source IP"] ?? hostFilterEl.value ?? "Unknown",
-    transportData["tcp.src.port"] ?? transportData["udp.src.port"] ?? transportData["sctp.src.port"] ?? transportData["Source port"] ?? "?",
-  );
-  const destIpPort = formatNetworkEndpointDisplay(
-    ipData["ip.dst.addr"] ?? ipData["Destination IP"] ?? hostFilterEl.value ?? "Unknown",
-    transportData["tcp.dst.port"] ?? transportData["udp.dst.port"] ?? transportData["sctp.dst.port"] ?? transportData["Destination port"] ?? "?",
-  );
-  const etherFrame =
-    typeof packetInfoData["Ethernet Frame"] === "object" &&
-      packetInfoData["Ethernet Frame"] !== null
-      ? packetInfoData["Ethernet Frame"]
-      : {};
-  const srcMac = etherFrame["ether.src.mac.addr"] ?? etherFrame["MAC Source"] ?? "N/A";
-  const dstMac = etherFrame["ether.dst.mac.addr"] ?? etherFrame["MAC Destination"] ?? "N/A";
-  const srcMacVendor = etherFrame["ether.src.mac.vendor"] ?? etherFrame["MAC Source Vendor"] ?? "N/A";
-  const dstMacVendor = etherFrame["ether.dst.mac.vendor"] ?? etherFrame["MAC Destination Vendor"] ?? "N/A";
-  const ipLayerLen = ipData["ip.len"] ?? ipData["IP layer length"] ?? "N/A";
-  const wireLen = transportData["Wire length"] ?? "N/A";
-  const payloadLen = getPacketInfoPayloadLength(packetInfoData);
-  let sslVersion = "";
-  let sslAlgos = "";
-  if (
-    serverInfo["Encryption Data"] == "N/A" ||
-    serverInfo.hasOwnProperty("Encryption Data") == false
-  ) {
-    sslVersion = "Not encrypted";
-    sslAlgos = "";
-  } else {
-    sslVersion = serverInfo["Encryption Data"]?.["SSL Version"] ?? "Not available";
-    sslAlgos =
-      serverInfo["Encryption Data"]?.["Encrypted With"]?.join(
-        "<br>Extra algo info: ",
-      ) ?? "No algorithm information available";
-  }
-  const isDecompressed = extraInfoData?.["Decompressed"]?.["Decompressed"];
-  function removeIps(ipList) {
-    const ipRegex =
-      /\b((25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\.){3}(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)\b/;
-    return ipList.filter((item) => !ipRegex.test(item));
-  }
-
-  let dnsHostsHtml;
-  if (
-    networkData?.["Hostnames"]?.["Hostnames"] == undefined
-  ) {
-    dnsHostsHtml = "localhost";
-  } else {
-    dnsHostsHtml =
-      "localhost<br>" +
-      networkData["Hostnames"]["Hostnames"].join(
-        "<br>",
-      );
-  }
-  const filteredDnsHosts = removeIps(dnsHostsHtml.split("<br>")).join("<br>");
-  dnsHostsHtml = filteredDnsHosts == "" ? "localhost" : filteredDnsHosts;
-
-  const pageTitle = serverInfo["Page Title"];
-  const isEncrypted = serverInfo["Encrypted"];
-  const protoName = networkData["app.proto"] ?? "Unknown";
-  const protoDescription = networkData["Port Description"];
-  const srcNetClass = networkData?.["ip.src"]?.["Class"] ?? networkData?.["Source IP"]?.["Class"] ?? "N/A";
-  const dstNetClass = networkData?.["ip.dst"]?.["Class"] ?? networkData?.["Destination IP"]?.["Class"] ?? "N/A";
-  document.getElementById("sidedatatable").textContent = "";
-  document.getElementById("protoInfoSrc").textContent = "Source";
-  document.getElementById("protoInfoDest").textContent = "Destination";
-  document.getElementById("comp").textContent = "Unknown";
-  if (isDecompressed == false || isDecompressed == undefined) {
-    const types = Array.isArray(extraInfoData["Data Types"])
-      ? extraInfoData["Data Types"]
-      : [];
-
-    types.forEach((type) => {
-      if (type.includes("Zlib") || type.includes("zlib")) {
-        document.getElementById("comp").textContent = "Compressed with zlib";
-
-        console.log("Data type identified: " + type);
-      }
-      if (type.includes("Gzip") || type.includes("gzip")) {
-        document.getElementById("comp").textContent = "Compressed with gzip";
-      }
-      if (type.includes("Zip")) {
-        document.getElementById("comp").textContent = "Compressed with zip";
-      }
-    });
-  }
-  if (isDecompressed == true) {
-    document.getElementById("comp").textContent =
-      "Not regonized as compressed data";
-  }
-  //  wireLen
-  if (pageTitle == undefined || pageTitle == "N/A") {
-    document.getElementById("website").textContent =
-      "Not available for this server";
-  } else {
-    document.getElementById("website").textContent = pageTitle;
-  }
-  //document.getElementById("crypt").textContent = isEncrypted;
-  const dnsCollapsedList = dnsHostsHtml.replace(/(<br\s*\/?>\s*)+/gi, "<br>");
-  document.getElementById("dns").innerHTML = dnsCollapsedList;
-  if (sslAlgos == undefined || sslAlgos == "") {
-    //document.getElementById("crypt").innerHTML = sslCert
-    //  ? "Encrypted with: " + sslVersion + "<br>" + sslAlgos
-    //  : "Not Encrypted";
-    document.getElementById("crypt").innerHTML = "Not encrypted";
-  } else {
-    document.getElementById("crypt").innerHTML =
-      "Encrypted with: " + sslVersion + "<br>" + sslAlgos;
-  }
-
-  const protocolsUsed = [];
-  const seenProtocolKeys = new Set();
-  const normalizeProtocolLabel = (value) => {
-    const text = String(value ?? "").trim();
-    if (!text) return "";
-    const lowered = text.toLowerCase();
-    if (lowered === "unknown" || lowered === "n/a" || lowered === "null") {
-      return "";
-    }
-    return text;
-  };
-  const addProtocolUsed = (layer, protocolLabel, details = "") => {
-    const normalizedLabel = normalizeProtocolLabel(protocolLabel);
-    if (!normalizedLabel) return;
-    const normalizedLayer = String(layer ?? "").trim();
-    const dedupeKey = `${normalizedLayer.toLowerCase()}| ${normalizedLabel.toLowerCase()} `;
-    if (seenProtocolKeys.has(dedupeKey)) return;
-    seenProtocolKeys.add(dedupeKey);
-    protocolsUsed.push({
-      layer: normalizedLayer,
-      protocol: normalizedLabel,
-      details: normalizeProtocolLabel(details),
-    });
-  };
-
-  if (packetInfoData["Ethernet Frame"]) {
-    addProtocolUsed("Link", "Ethernet");
-  }
-  if (protocol === "ARP" || protocol === "RARP") {
-    addProtocolUsed("Network", protocol, transportData?.["Operation"]);
-  } else if (protocol === "IGMP") {
-    if (packetInfoData["IP"]) {
-      addProtocolUsed("Network", "IP");
-    }
-    addProtocolUsed("Network", "IGMP", transportData?.["Type"]);
-  } else {
-    if (packetInfoData["IP"]) {
-      addProtocolUsed("Network", "IP");
-    }
-    addProtocolUsed("Transport", protocol);
-    addProtocolUsed("Application", protoName, protoDescription);
-  }
-
-  const sslVersionLabel =
-    extraInfoData?.["Traits"]?.["Server Info"]?.["Encryption Data"]?.[
-    "SSL Version"
-    ];
-  addProtocolUsed("Encryption", sslVersionLabel);
-  if (isEncrypted === true) {
-    addProtocolUsed("Encryption", "TLS");
-  }
-
-  const protocolsEl = document.getElementById("protocols");
-  if (protocolsUsed.length === 0) {
-    protocolsEl.innerHTML = "Unknown";
-  } else {
-    protocolsEl.innerHTML = protocolsUsed
-      .map((entry) => {
-        const detailText = entry.details
-          ? ` (${escapeHtml(String(entry.details))
-          })`
-          : "";
-        if (!entry.layer) {
-          return `${escapeHtml(String(entry.protocol))}${detailText} `;
-        }
-        return `${escapeHtml(String(entry.layer))}: ${escapeHtml(String(entry.protocol))}${detailText} `;
-      })
-      .join("<br>");
-  }
-
-  const currentStreamKey = buildBidirectionalStreamKey(packetInfoData);
-  const streamPacketRefs = [];
-  const streamPackets = [];
-
-  // ensure that all the packets in the stream all report the same application protocol, for consistency
-  if (capturedPackets && capturedPackets["host"]) {
-    for (const host of Object.keys(capturedPackets["host"])) {
-      const hostPackets = capturedPackets["host"][host];
-      if (!Array.isArray(hostPackets)) continue;
-      for (let packetIndex = 0; packetIndex < hostPackets.length; packetIndex += 1) {
-        const pkt = hostPackets[packetIndex];
-        const pi = pkt?.["packet.info"];
-        if (pi && buildBidirectionalStreamKey(pi) === currentStreamKey) {
-          streamPacketRefs.push({
-            packet: pkt,
-            host,
-            packetIndex,
-          });
-          streamPackets.push(pkt);
-          // check and see if they all have the same application protocol,
-          // if not, we will use the first packet's application protocol
-          //  for the stream, for consistency
-          const pktProtoName =
-            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["tcp.proto"] ||
-            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["sctp.proto"] ||
-            pi?.["extra.info"]?.["Traits"]?.["Network Data"]?.["udp.proto"] ||
-            "Unknown";
-          if (streamPackets.length === 1) {
-            // first packet in the stream, set the stream protocol
-            streamProtocol = pktProtoName;
-          } else if (pktProtoName !== streamProtocol) {
-            // different protocol found, log a warning and continue using the first packet's protocol
-            console.warn(`Inconsistent application protocol in stream: expected ${streamProtocol}, but found ${pktProtoName} `);
-          }
-        }
-      }
-    }
-  }
-
-  void warmStreamPacketHydrationCache(currentStreamKey, streamPacketRefs);
-
-  const sortedStreamPackets = sortPacketsByOwnStreamOrder(streamPackets);
-  const tcpArrivalStatusByPacketKey = getTcpStreamArrivalStatusByPacketKey(
-    sortedStreamPackets,
-  );
-  const currentTcpArrivalStatus = tcpArrivalStatusByPacketKey.get(getPacketKey(p));
-  const tcpStreamStatusText =
-    protocol === "TCP"
-      ? currentTcpArrivalStatus?.label || "In-order TCP segment"
-      : "N/A";
-
-  const checksumData = [
-    { name: "IP Checksum", value: ipChecksum },
-    { name: protocol + " Checksum", value: transportChecksum },
-    { name: "Flags", value: tcpFlags },
-    { name: "TCP Stream Status", value: tcpStreamStatusText },
-    { name: "IP Length", value: ipLayerLen },
-    { name: protocol + " Length", value: transportLayerLen },
-    { name: "Wire Length", value: wireLen },
-    { name: "Payload Length", value: payloadLen },
-  ];
-  const checksumHeaders = ["Protocol data", "Details"];
-  createTable(checksumData, checksumHeaders, "sidedatatable");
-
-  // DNS info table (shown for UDP/DNS packets)
-  renderDnsTable(transportData);
-
-  // ICMP info table (shown for ICMP packets)
-  renderIcmpTable(protocol, transportData);
-
-  // IGMP info table (shown for IGMP packets)
-  renderIgmpTable(protocol, transportData);
-
-  // ARP/RARP info table (shown for ARP and RARP packets)
-  renderArpTable(protocol, transportData);
-
-  // WAN/link control info table (shown when ATM/PPP/Frame Relay style link layers are present)
-  renderLinkControlTable(packetInfoData);
-
-  // SNMP info table (shown for SNMP packets on port 161/162)
-  renderSnmpTable(transportData);
-
-  // DHCP info table (shown for DHCP packets on port 67/68)
-  renderDhcpTable(transportData);
-
-  // NTP info table (shown for NTP packets on port 123)
-  renderNtpTable(transportData);
-
-  // SIP info table (shown for SIP packets on port 5060/5061)
-  renderSipTable(transportData);
-
-  // HTTP info table (shown for HTTP request/response packets)
-  renderHttpTable(transportData);
-
-  // HTTP/2 info table (shown for HTTP/2 frames on any TCP port)
-  renderHttp2Table(transportData);
-
-  // FTP info table (shown for FTP packets on port 20/21)
-  renderFtpTable(transportData);
-
-  // SMTP info table (shown for SMTP packets on port 25/587/465)
-  renderSmtpTable(transportData);
-
-  // POP3 info table (shown for POP3 packets on port 110/995)
-  renderPop3Table(transportData);
-
-  // IMAP info table (shown for IMAP packets on port 143/993)
-  renderImapTable(transportData);
-
-  // Telnet info table (shown for Telnet packets on port 23)
-  renderTelnetTable(transportData);
-
-  // IRC info table (shown for IRC packets on port 6667/6668/6669)
-  renderIrcTable(transportData);
-
-  // MTP info table (shown for MTP/MMS packets on port 1755)
-  renderMtpTable(transportData);
-
-  // LDAP info table (shown for LDAP packets on port 389/636)
-  renderLdapTable(transportData);
-
-  // MySQL info table (shown for MySQL packets on port 3306)
-  renderMysqlTable(transportData);
-
-  // PostgreSQL info table (shown for PostgreSQL packets on port 5432)
-  renderPostgresqlTable(transportData);
-
-  // XMPP info table (shown for XMPP packets on port 5222/5223)
-  renderXmppTable(transportData);
-
-  // SMB info table (shown for SMB packets on port 139/445)
-  renderSmbTable(transportData);
-
-  // SMPP info table (shown for SMPP packets on port 2775/3550)
-  renderSmppTable(transportData);
-
-  // Soulseek info table (shown for Soulseek packets on common ports)
-  renderSoulseekTable(transportData);
-
-  // BitTorrent info table (shown for peer-wire, handshake, and DHT/KRPC packets)
-  renderBitTorrentTable(transportData);
-
-  // MQTT info table (shown for MQTT packets on port 1883/8883)
-  renderMqttTable(transportData);
-
-  // RTSP info table (shown for RTSP packets on port 554)
-  renderRtspTable(transportData);
-
-  // TFTP info table (shown for TFTP packets on UDP port 69)
-  renderTftpTable(transportData);
-
-  // BGP info table (shown for BGP packets on port 179)
-  renderBgpTable(transportData);
-
-  // NNTP info table (shown for NNTP packets on port 119)
-  renderNntpTable(transportData);
-
-  // RADIUS info table (shown for RADIUS packets on port 1812/1813/1645/1646)
-  renderRadiusTable(transportData);
-
-  // WebSocket info table (shown for WebSocket frames/upgrades on port 80/443/8080/8443/8765)
-  renderWebSocketTable(transportData);
-
-  // NFS/RPC info table (shown for NFS/RPC packets on port 2049/111)
-  renderNfsTable(transportData);
-
-  // Kerberos info table (shown for Kerberos packets on port 88)
-  renderKerberosTable(transportData);
-
-  // SSH info table (shown for SSH packets on port 22/2222)
-  renderSshTable(transportData);
-
-  // SCTP/SIGTRAN info table (shown for SCTP packets and SS7 adaptation layers)
-  renderSctpTable(transportData);
-
-  const ipTableHeaders = ["Packet", "Data"];
-  const srcIpData = [
-    { name: "IP:Port", value: sourceIpPort },
-    { name: "MAC", value: srcMac },
-    { name: "MAC Vendor", value: srcMacVendor },
-    { name: "Network Class", value: srcNetClass },
-  ];
-  createTable(srcIpData, ipTableHeaders, "protoInfoSrc");
-  const dstIpData = [
-    { name: "IP:Port", value: destIpPort },
-    { name: "MAC", value: dstMac },
-    { name: "MAC Vendor", value: dstMacVendor },
-    { name: "Network Class", value: dstNetClass },
-  ];
-  createTable(dstIpData, ipTableHeaders, "protoInfoDest");
-  const entropyValue = Number(traitsData["Shannon Entropy"] ?? 0);
-  const tcpTimestampSuffix =
-    protocol === "TCP" && tcpStreamStatusText !== "N/A"
-      ? ` ${tcpStreamStatusText} `
-      : "";
-  document.getElementById("timestamp").innerHTML =
-    "Timestamp " + packetTimestamp + "<br>" + tcpTimestampSuffix;
-
-  //document.getElementById("ip2ip").textContent = sourceIpPort + " ~ " + destIpPort;
-  document.getElementById("sideloctable").textContent = "";
-  document.getElementById("entropybox").textContent =
-    "\u096F " + entropyValue.toFixed(2);
-  const entropyBoxEl = document.getElementById("entropybox");
-  if (entropyValue >= 6.8) {
-    entropyBoxEl.className = "high";
-  } else if (entropyValue >= 4.5) {
-    entropyBoxEl.className = "med";
-  } else {
-    entropyBoxEl.className = "low";
-  }
-  const secondColumnCells = document.querySelectorAll(
-    "table tr td:nth-child(1), table tr th:nth-child(1)",
-  );
-  secondColumnCells.forEach((cell) => {
-    cell.style.width = "23%";
-  });
-  if (
-    srcLocation["City"] == undefined
-  ) {
-    const localnetData = [{ name: "Location", value: "Localnet" }];
-    const localnetHeaders = ["Source Host", "Location"];
-    createTable(localnetData, localnetHeaders, "sideloctable");
-  } else {
-    const srcLocData = [
-      {
-        name: "Country",
-        value:
-          srcLocation["Country"] ?? "N/A",
-      },
-      {
-        name: "City",
-        value: srcLocation["City"] ?? "N/A",
-      },
-      {
-        name: "Timezone",
-        value: srcLocation["Time Zone"] ?? "N/A",
-      },
-    ];
-    const srcLocHeaders = ["Source Host", "Location"];
-    createTable(srcLocData, srcLocHeaders, "sideloctable");
-    bindLocationTableToHeatmap(srcLocation, "Source location");
-  }
-  if (
-    dstLocation["City"] == undefined
-  ) {
-    const localnetData = [{ name: "Location", value: "Localnet" }];
-    const localnetHeaders = ["Destination Host", "Location"];
-    createTable(localnetData, localnetHeaders, "sideloctable");
-  } else {
-    const dstLocData = [
-      {
-        name: "Country",
-        value:
-          dstLocation["Country"] ?? "N/A",
-      },
-      {
-        name: "City",
-        value: dstLocation["City"] ?? "N/A",
-      },
-      {
-        name: "Timezone",
-
-        value: dstLocation["Time Zone"] ?? "N/A",
-      },
-    ];
-    const dstLocHeaders = ["Destination Host", "Location"];
-    createTable(dstLocData, dstLocHeaders, "sideloctable");
-    bindLocationTableToHeatmap(dstLocation, "Destination location");
-  }
-}
 
 // Save the currently loaded capture plus session state to disk
 document.getElementById("save-json-btn").addEventListener("click", function () {
