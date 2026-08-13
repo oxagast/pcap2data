@@ -1591,6 +1591,18 @@ contextBridge.exposeInMainWorld('modelsapi', {
   invalidateOllamaModelsCache: () => ipcRenderer.invoke('invalidate-ollama-models-cache'),
 });
 
+// Lightweight LLM bridge for the renderer to ask the main process to
+// forward prompts to the configured Ollama backend. Keep this tiny — the
+// main process already enforces timeouts, API keys, diagnostics, and
+// logging. The renderer should provide prompts and handle parsing.
+contextBridge.exposeInMainWorld('llmapi', {
+  generate: (prompt) => ipcRenderer.invoke('ollama:generate', prompt),
+});
+
+contextBridge.exposeInMainWorld('opensshapi', {
+  loadQwertyModel: () => ipcRenderer.invoke('openssh-load-qwerty-model'),
+});
+
 contextBridge.exposeInMainWorld('settingsapi', {
   get: () => ipcRenderer.invoke('settings-get'),
   save: (settings) => ipcRenderer.invoke('settings-save', settings),

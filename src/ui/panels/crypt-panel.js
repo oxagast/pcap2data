@@ -231,6 +231,563 @@ function createCryptPanel({
     );
   }
 
+  // ── OpenSSH keystroke-timing subtab ───────────────────────────────────
+  //
+  // Detects TCP flows on port 22 / 2222, computes inter-packet delays,
+  // then runs the QWERTY digraph decoder in src/ui/decoders/ssh-keystrokes
+  // to produce top-N decoded keystroke hypotheses plus a Plotly chart.
+
+  const SSH_DEFAULT_PORTS = [22, 2222];
+
+  function parseSshPacketTimestampMs(packet) {
+    const ts =
+      packet?.["packet.info"]?.["packet.timestamp"] ??
+      packet?.["packet.info"]?.["Packet Timestamp"];
+    if (typeof ts !== "string" || !ts.trim()) return null;
+    const parsed = Date.parse(ts);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function isSshPort(transportData) {
+    const candidates = [
+      transportData?.["tcp.src.port"],
+      transportData?.["tcp.dst.port"],
+      transportData?.["Source port"],
+      transportData?.["source.port"],
+      transportData?.["Destination port"],
+      transportData?.["destination.port"],
+    ];
+    for (const value of candidates) {
+      const n = Number(value);
+      if (SSH_DEFAULT_PORTS.includes(n)) return true;
+    }
+    return false;
+  }
+
+  function getSshEncounteredFlows() {
+    const flows = [];
+    const hostMap = getHostPacketMap(getCapturedPackets());
+    if (!hostMap) return flows;
+    const flowKeyByEndpoint = (srcIp, srcPort, dstIp, dstPort) => {
+      const a = `${srcIp}:${srcPort}`;
+      const b = `${dstIp}:${dstPort}`;
+      const [first, second] = [a, b].sort();
+      return `tcp|${first}|${second}`;
+    };
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
+      if (!Array.isArray(packets)) continue;
+      packets.forEach((packet) => {
+        const packetInfo = getPacketInfo(packet);
+        const transportData = getTransportData(packetInfo, "TCP");
+        if (!isSshPort(transportData)) return;
+        const srcIp =
+          packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "?";
+        const dstIp =
+          packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "?";
+        const srcPort = Number(transportData?.["tcp.src.port"] ?? "?");
+        const dstPort = Number(transportData?.["tcp.dst.port"] ?? "?");
+        const timestamp = parseSshPacketTimestampMs(packet);
+        const packetIndex =
+          packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? null;
+        const direction =
+          srcPort === 22 || srcPort === 2222
+            ? "s2c"
+            : dstPort === 22 || dstPort === 2222
+              ? "c2s"
+              : "?";
+        flows.push({
+          host,
+          packet,
+          srcIp,
+          srcPort,
+          dstIp,
+          dstPort,
+          timestamp,
+          packetIndex,
+          direction,
+          flowKey: flowKeyByEndpoint(srcIp, srcPort, dstIp, dstPort),
+        });
+      });
+    }
+    return flows;
+  }
+
+  function aggregateSshFlows(flows) {
+    const byKey = new Map();
+    for (const entry of flows) {
+      const bucket = byKey.get(entry.flowKey) || {
+        flowKey: entry.flowKey,
+        host: entry.host,
+        srcIp: entry.srcIp,
+        srcPort: entry.srcPort,
+        dstIp: entry.dstIp,
+        dstPort: entry.dstPort,
+        packets: [],
+      };
+      bucket.packets.push(entry);
+      byKey.set(entry.flowKey, bucket);
+    }
+    const buckets = Array.from(byKey.values());
+    for (const bucket of buckets) {
+      bucket.packets.sort((a, b) => {
+        const ta = a.timestamp || 0;
+        const tb = b.timestamp || 0;
+        if (ta !== tb) return ta - tb;
+        return (a.packetIndex || 0) - (b.packetIndex || 0);
+      });
+      bucket.c2sPacketCount = bucket.packets.filter((p) => p.direction === "c2s").length;
+      bucket.s2cPacketCount = bucket.packets.filter((p) => p.direction === "s2c").length;
+      bucket.firstTimestamp = bucket.packets[0]?.timestamp ?? null;
+      bucket.lastTimestamp = bucket.packets[bucket.packets.length - 1]?.timestamp ?? null;
+    }
+    buckets.sort((a, b) => {
+      const ta = a.firstTimestamp || 0;
+      const tb = b.firstTimestamp || 0;
+      return ta - tb;
+    });
+    return buckets;
+  }
+
+  function computeInterPacketDelays(packets, directionFilter) {
+    if (directionFilter === "c2s" || directionFilter === "s2c") {
+      packets = packets.filter((p) => p.direction === directionFilter);
+    }
+    const delays = [];
+    let prevTs = null;
+    for (const pkt of packets) {
+      if (pkt.timestamp === null || pkt.timestamp === undefined) continue;
+      if (prevTs !== null) {
+        const d = pkt.timestamp - prevTs;
+        if (Number.isFinite(d) && d > 0 && d < 60_000) {
+          delays.push(d);
+        }
+      }
+      prevTs = pkt.timestamp;
+    }
+    return delays;
+  }
+
+  let sshAllFlows = [];
+  let sshFlows = [];
+  let sshSelectedFlowKey = null;
+  let sshDecoder = null;
+  let sshModel = null;
+  let sshModelLoadPromise = null;
+
+  function getSshDecoderModule() {
+    if (sshDecoder) return sshDecoder;
+    try {
+      // eslint-disable-next-line global-require
+      sshDecoder = require("../decoders/ssh-keystrokes");
+    } catch (err) {
+      console.warn("[Crypt/OpenSSH] decoder unavailable:", err);
+      sshDecoder = null;
+    }
+    return sshDecoder;
+  }
+
+  function ensureSshModelLoaded() {
+    if (sshModel) return Promise.resolve(sshModel);
+    if (sshModelLoadPromise) return sshModelLoadPromise;
+    const decoder = getSshDecoderModule();
+    if (!decoder) {
+      return Promise.reject(new Error("Decoder module failed to load"));
+    }
+    const api =
+      typeof window !== "undefined" && window.opensshapi
+        ? window.opensshapi
+        : null;
+    if (!api || typeof api.loadQwertyModel !== "function") {
+      // No IPC bridge — fall back to the heuristic-only model so the
+      // decoder still works (just without empirical priors).
+      sshModel = decoder.loadQwertyModel({});
+      return Promise.resolve(sshModel);
+    }
+    sshModelLoadPromise = api
+      .loadQwertyModel()
+      .then((response) => {
+        sshModelLoadPromise = null;
+        if (response && response.success && response.model) {
+          sshModel = decoder.loadQwertyModel(response.model);
+        } else {
+          console.warn(
+            "[Crypt/OpenSSH] qwerty model load returned:",
+            response && response.error,
+          );
+          sshModel = decoder.loadQwertyModel({});
+        }
+        return sshModel;
+      })
+      .catch((err) => {
+        sshModelLoadPromise = null;
+        console.warn("[Crypt/OpenSSH] qwerty model load failed:", err);
+        sshModel = decoder.loadQwertyModel({});
+        return sshModel;
+      });
+    return sshModelLoadPromise;
+  }
+
+  function refreshSshEncounteredFlows() {
+    sshAllFlows = aggregateSshFlows(getSshEncounteredFlows());
+    sshFlows = sshAllFlows;
+    renderSshFlowOptions();
+  }
+
+  function renderSshFlowOptions() {
+    const listEl = document.getElementById("crypt-openssh-flows");
+    const detailsEl = document.getElementById("crypt-openssh-flow-details");
+    const analyzeBtn = document.getElementById("crypt-openssh-analyze-btn");
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    if (sshFlows.length === 0) {
+      const option = document.createElement("option");
+      option.textContent = "No SSH flows detected in the loaded capture.";
+      option.disabled = true;
+      listEl.appendChild(option);
+      if (analyzeBtn) analyzeBtn.disabled = true;
+      if (detailsEl) {
+        detailsEl.textContent =
+          "Load a capture that contains port 22 or 2222 TCP traffic.";
+      }
+      return;
+    }
+    if (analyzeBtn) analyzeBtn.disabled = false;
+    sshFlows.forEach((flow, idx) => {
+      const option = document.createElement("option");
+      option.value = String(idx);
+      const span =
+        flow.lastTimestamp && flow.firstTimestamp
+          ? Math.max(0, flow.lastTimestamp - flow.firstTimestamp)
+          : 0;
+      option.textContent =
+        `#${idx + 1} ${flow.srcIp}:${flow.srcPort} ↔ ${flow.dstIp}:${flow.dstPort} ` +
+        `(${flow.packets.length} pkts, c2s=${flow.c2sPacketCount}, s2c=${flow.s2cPacketCount}, ~${(span / 1000).toFixed(1)}s)`;
+      listEl.appendChild(option);
+    });
+    listEl.selectedIndex = 0;
+    sshSelectedFlowKey = sshFlows[0]?.flowKey || null;
+    renderSshFlowDetails(sshFlows[0]);
+  }
+
+  function renderSshFlowDetails(flow) {
+    const detailsEl = document.getElementById("crypt-openssh-flow-details");
+    if (!detailsEl) return;
+    if (!flow) {
+      detailsEl.textContent = "Select a flow to inspect.";
+      return;
+    }
+    const span =
+      flow.lastTimestamp && flow.firstTimestamp
+        ? Math.max(0, flow.lastTimestamp - flow.firstTimestamp)
+        : 0;
+    detailsEl.textContent = [
+      `Host: ${flow.host}`,
+      `5-tuple: ${flow.srcIp}:${flow.srcPort} ↔ ${flow.dstIp}:${flow.dstPort}`,
+      `Packets: ${flow.packets.length} (c2s=${flow.c2sPacketCount}, s2c=${flow.s2cPacketCount})`,
+      `Span: ${(span / 1000).toFixed(3)} s`,
+    ].join("\n");
+  }
+
+  function selectSshEncounteredFlow(flowIndex) {
+    const flow = sshFlows[flowIndex];
+    sshSelectedFlowKey = flow ? flow.flowKey : null;
+    renderSshFlowDetails(flow);
+  }
+
+  function analyzeSelectedSshFlow() {
+    const decoder = getSshDecoderModule();
+    if (!decoder) {
+      const summaryEl = document.getElementById("crypt-openssh-summary");
+      if (summaryEl) {
+        summaryEl.textContent =
+          "Decoder module failed to load — see devtools for details.";
+      }
+      return;
+    }
+    const flow = sshFlows.find((f) => f.flowKey === sshSelectedFlowKey);
+    if (!flow) return;
+    const directionEl = document.getElementById("crypt-openssh-direction");
+    const topNEl = document.getElementById("crypt-openssh-topn");
+    const direction = directionEl?.value || "both";
+    const topN = Math.max(1, Number(topNEl?.value || 5));
+    const summaryEl = document.getElementById("crypt-openssh-summary");
+    ensureSshModelLoaded()
+      .then((model) => {
+        const delays = computeInterPacketDelays(flow.packets, direction);
+        renderSshChart(delays, decoder, model);
+        const candidates = decoder.decodeKeystrokes(delays, { topN, model });
+        // Try to ask the configured Ollama backend to re-rank candidates for
+        // more realistic, typing-aware probabilities. This is best-effort and
+        // falls back to the decoder's native scores on error or when LLM is
+        // unavailable.
+        (async () => {
+          let finalCandidates = candidates.slice();
+          try {
+            if (typeof window !== "undefined" && window.llmapi && typeof window.llmapi.generate === "function") {
+              const reRanked = await rerankCandidatesWithLlm(delays, candidates);
+              if (Array.isArray(reRanked) && reRanked.length > 0) {
+                finalCandidates = reRanked;
+              }
+            }
+          } catch (err) {
+            // Don't surface LLM errors to the user beyond a console warning.
+            console.warn("[Crypt/OpenSSH] LLM re-ranking failed:", err);
+          }
+          renderSshCandidates(finalCandidates, delays, decoder);
+          renderSshSummary(flow, delays, finalCandidates);
+        })();
+      })
+      .catch((err) => {
+        if (summaryEl) {
+          summaryEl.textContent =
+            "Failed to load QWERTY model: " + (err?.message || err);
+        }
+      });
+  }
+
+  function renderSshChart(delays, decoder) {
+    const chartEl = document.getElementById("crypt-openssh-chart");
+    const legendEl = document.getElementById("crypt-openssh-chart-legend");
+    if (!chartEl) return;
+    if (!delays.length) {
+      chartEl.replaceChildren();
+      if (legendEl) {
+        legendEl.textContent =
+          "Not enough packets in this direction to plot a distribution.";
+      }
+      return;
+    }
+    const series = decoder.buildChartSeries(delays);
+    const layout = {
+      margin: { t: 20, r: 12, l: 40, b: 36 },
+      bargap: 0.05,
+      xaxis: {
+        title: { text: "Inter-key delay (ms)" },
+        range: [0, Math.max(...series.histogram.x) + series.binSize],
+      },
+      yaxis: { title: { text: "Count" } },
+      legend: { orientation: "h", y: -0.2 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+    };
+    if (typeof window.Plotly !== "undefined") {
+      window.Plotly.newPlot(
+        chartEl,
+        [series.histogram, series.reference],
+        layout,
+        { displayModeBar: false, responsive: true },
+      );
+    } else if (legendEl) {
+      legendEl.textContent =
+        "Plotly unavailable — chart skipped. Histogram: " +
+        JSON.stringify(series.histogram.y);
+    }
+    if (legendEl) {
+      legendEl.textContent =
+        `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
+        `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms).`;
+    }
+  }
+
+  function renderSshCandidates(candidates, delays, decoder) {
+    const tbodyEl = document.querySelector("#crypt-openssh-candidates tbody");
+    if (!tbodyEl) return;
+    tbodyEl.replaceChildren();
+    if (!candidates.length) {
+      const row = document.createElement("tr");
+      row.className = "crypt-table-empty";
+      const cell = document.createElement("td");
+      cell.colSpan = 5;
+      cell.textContent = "No candidates produced (insufficient or non-positive delays).";
+      row.appendChild(cell);
+      tbodyEl.appendChild(row);
+      return;
+    }
+    const avgDelta =
+      delays.reduce((s, v) => s + v, 0) / Math.max(1, delays.length);
+
+    // Choose ranking/probability source: prefer LLM-combined score when
+    // available (candidate.combinedScore in [0,1]), otherwise fall back to
+    // the decoder's log-prob (convert to probability with exp).
+    const scores = candidates.map((c) => {
+      const decoderProb = Number.isFinite(c.logProb) ? Math.exp(c.logProb) : 0;
+      const combined = Number.isFinite(c.combinedScore) ? c.combinedScore : decoderProb;
+      return combined;
+    });
+    const bestScore = Math.max(...scores, 1e-12);
+
+    candidates.forEach((cand, idx) => {
+      const row = document.createElement("tr");
+      if (idx === 0) row.className = "crypt-table-top";
+      const rankCell = document.createElement("td");
+      rankCell.textContent = String(idx + 1);
+      const textCell = document.createElement("td");
+      textCell.textContent = cand.text || "(empty)";
+      const logPCell = document.createElement("td");
+      logPCell.textContent = Number.isFinite(cand.logProb) ? cand.logProb.toFixed(2) : "n/a";
+      const avgCell = document.createElement("td");
+      avgCell.textContent = avgDelta.toFixed(1);
+      const scoreCell = document.createElement("td");
+      const decoderProb = Number.isFinite(cand.logProb) ? Math.exp(cand.logProb) : 0;
+      const displayScore = Number.isFinite(cand.combinedScore) ? cand.combinedScore : decoderProb;
+      const relative = displayScore / bestScore;
+      scoreCell.textContent = `${(relative * 100).toFixed(1)}%`;
+      row.appendChild(rankCell);
+      row.appendChild(textCell);
+      row.appendChild(logPCell);
+      row.appendChild(avgCell);
+      row.appendChild(scoreCell);
+      tbodyEl.appendChild(row);
+    });
+  }
+
+  // Ask Ollama to re-score the decoder candidates. Returns a new array of
+  // candidate objects sorted by combinedScore (descending) when successful.
+  // The function is best-effort and will return the original candidates on
+  // any parse/error failure.
+  async function rerankCandidatesWithLlm(delays, candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
+
+    // Build a concise, machine-friendly prompt that asks the LLM to return
+    // a strict JSON array of {"text": ..., "score": 0..1} entries.
+    const payload = {
+      delays: delays.slice(0, 200), // avoid extremely long prompts
+      candidates: candidates.map((c) => ({ text: c.text || "", logProb: c.logProb })),
+      note: "Return strictly a JSON array of objects [{\"text\": string, \"score\": number}] where score is a probability 0..1. Match candidate text exactly when possible. Keep the output valid JSON with no additional commentary. Use realistic typing priors (QWERTY adjacency, common digraphs, shell prompts, likely words) when assigning scores."
+    };
+
+    const prompt = `You are an assistant that evaluates how likely candidate keystroke strings match a sequence of observed inter-key delays (in milliseconds).
+
+Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array only, e.g. [{"text":"candidate1","score":0.42}, ...].`;
+
+    let rawResp;
+    try {
+      rawResp = await window.llmapi.generate(prompt);
+    } catch (err) {
+      console.warn("LLM generate error:", err);
+      return candidates;
+    }
+
+    // Extract textual content from the known Ollama response shapes.
+    let textResp = "";
+    try {
+      if (typeof rawResp === "string") {
+        textResp = rawResp;
+      } else if (rawResp && typeof rawResp === "object") {
+        // Ollama client may return { output: [{ content: '...' }, ...] }
+        if (Array.isArray(rawResp.output) && rawResp.output.length > 0) {
+          textResp = rawResp.output.map((o) => o.content || "").join("\n");
+        } else if (Array.isArray(rawResp)) {
+          textResp = rawResp.map((r) => (r && r.content) || JSON.stringify(r)).join("\n");
+        } else if (rawResp?.[0]?.content) {
+          textResp = rawResp[0].content;
+        } else if (rawResp?.content) {
+          textResp = rawResp.content;
+        } else {
+          textResp = JSON.stringify(rawResp);
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to normalize LLM response:", err, rawResp);
+      return candidates;
+    }
+
+    // Try to find a JSON array in the response.
+    const jsonMatch = textResp.match(/\[\s*\{[\s\S]*\}\s*\]/m);
+    if (!jsonMatch) {
+      // Last resort: try to parse entire text as JSON
+      try {
+        const parsedAll = JSON.parse(textResp);
+        if (Array.isArray(parsedAll)) {
+          return mergeLlmScoresIntoCandidates(parsedAll, candidates);
+        }
+      } catch (_e) {
+        console.warn("LLM response did not contain JSON array");
+        return candidates;
+      }
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed)) return candidates;
+      return mergeLlmScoresIntoCandidates(parsed, candidates);
+    } catch (err) {
+      console.warn("Failed to parse JSON from LLM response:", err);
+      return candidates;
+    }
+
+    function mergeLlmScoresIntoCandidates(parsedArray, originalCandidates) {
+      // Map texts to scores; allow case-insensitive matching and simple
+      // substring fallback.
+      const scoreMap = new Map();
+      for (const item of parsedArray) {
+        if (!item || typeof item !== "object") continue;
+        const t = String(item.text || "").trim();
+        let s = Number(item.score);
+        if (!Number.isFinite(s) || s < 0) s = 0;
+        if (s > 1) s = 1;
+        scoreMap.set(t, s);
+      }
+
+      // Build arrays for normalization.
+      const llmScores = originalCandidates.map((c) => {
+        const text = String(c.text || "").trim();
+        if (scoreMap.has(text)) return scoreMap.get(text);
+        // case-insensitive exact match
+        for (const [k, v] of scoreMap.entries()) {
+          if (k.toLowerCase() === text.toLowerCase()) return v;
+        }
+        // substring/contains match
+        for (const [k, v] of scoreMap.entries()) {
+          if (text && k && (text.includes(k) || k.includes(text))) return v;
+        }
+        return 0.01; // small default
+      });
+
+      // Normalize decoder probabilities and LLM scores, then combine.
+      const decoderProbs = originalCandidates.map((c) => (Number.isFinite(c.logProb) ? Math.exp(c.logProb) : 0));
+      const sumDecoder = decoderProbs.reduce((s, v) => s + v, 0) || 1e-12;
+      const sumLlm = llmScores.reduce((s, v) => s + v, 0) || 1e-12;
+      const decoderNorm = decoderProbs.map((v) => v / sumDecoder);
+      const llmNorm = llmScores.map((v) => v / sumLlm);
+
+      // Combine with a modest bias toward the statistical decoder (60/40).
+      const alpha = 0.6;
+      const combined = originalCandidates.map((c, i) => alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i]);
+
+      // Attach combinedScore to candidates and sort.
+      const merged = originalCandidates.map((c, i) => ({
+        ...c,
+        combinedScore: combined[i],
+        llmScore: llmScores[i],
+        decoderProb: decoderProbs[i],
+      }));
+
+      merged.sort((a, b) => b.combinedScore - a.combinedScore);
+      return merged;
+    }
+  }
+
+  function renderSshSummary(flow, delays, candidates) {
+    const summaryEl = document.getElementById("crypt-openssh-summary");
+    if (!summaryEl) return;
+    if (!delays.length) {
+      summaryEl.textContent = `Flow ${flow.flowKey}: 0 delays available.`;
+      return;
+    }
+    const sorted = delays.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    summaryEl.textContent = [
+      `Flow: ${flow.srcIp}:${flow.srcPort} ↔ ${flow.dstIp}:${flow.dstPort}`,
+      `Delays: ${delays.length} | min=${min.toFixed(1)} ms | median=${median.toFixed(1)} ms | max=${max.toFixed(1)} ms`,
+      `Top hypothesis: "${candidates[0]?.text || "(none)"}"  (logP=${candidates[0]?.logProb?.toFixed(2) ?? "n/a"})`,
+    ].join("\n");
+  }
+
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {
     const normalized = (rawText || "").trim();
     if (!normalized) {
@@ -2637,6 +3194,9 @@ function createCryptPanel({
       refreshWifiEncounteredEntries();
       refreshWifiKeystoreEntries();
     }
+    if (opensshActive) {
+      refreshSshEncounteredFlows();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -3685,6 +4245,9 @@ function createCryptPanel({
       refreshWifiEncounteredEntries();
       refreshWifiKeystoreEntries();
     }
+    if (tabName === CRYPT_OPENSSH_SUBTAB) {
+      refreshSshEncounteredFlows();
+    }
   }
 
   return {
@@ -3732,6 +4295,9 @@ function createCryptPanel({
       Array.isArray(wifiBackendKeysLastSent) ? wifiBackendKeysLastSent.slice() : [],
     classifyWifiEntryDecryptability,
     describeWifiClass,
+    refreshSshEncounteredFlows,
+    selectSshEncounteredFlow,
+    analyzeSelectedSshFlow,
   };
 }
 
