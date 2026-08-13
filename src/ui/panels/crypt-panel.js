@@ -1506,12 +1506,12 @@ Instructions:
     if (!text) return null;
     const obj = parseLlmJsonObject(text);
     if (!obj || typeof obj !== "object") return null;
-    const cleaned = sanitizeTextForAlphabet(String(obj.text || "")).trim();
+    const cleaned = sanitizeTextForAlphabetShared(String(obj.text || "")).trim();
     if (!cleaned) return null;
     const confidence = clamp01(obj.confidence);
     const kind = String(obj.kind || "command").toLowerCase();
     const rationale = String(obj.rationale || "").trim();
-    const isCommand = obj.isCommand === true || looksLikeShellCommand(cleaned);
+    const isCommand = obj.isCommand === true || looksLikeShellCommandShared(cleaned);
     return {
       text: cleaned,
       confidence: Number.isFinite(confidence) ? confidence : 0,
@@ -1794,7 +1794,7 @@ Instructions:
             }
 
             if (bestText && bestText.trim()) {
-              bestText = sanitizeTextForAlphabet(bestText).trim();
+              bestText = sanitizeTextForAlphabetShared(bestText).trim();
               if (bestText) {
                 // Find best matching candidate or insert as synthetic.
                 const lcBest = bestText.toLowerCase();
@@ -1829,7 +1829,7 @@ Instructions:
                     logProb: Number.NEGATIVE_INFINITY,
                     decoderProb: 0.0001,
                     llmScore: Number.isFinite(bestConf) ? bestConf : 0.5,
-                    llmIsCommand: looksLikeShellCommand(bestText),
+                    llmIsCommand: looksLikeShellCommandShared(bestText),
                     combinedScore: 0,
                     synthetic: true,
                   };
@@ -1910,7 +1910,7 @@ Instructions:
         if (!Number.isFinite(s)) s = Number(item.score) || 0;
         if (!Number.isFinite(s) || s < 0) s = 0;
         if (s > 1) s = 1;
-        const isCommand = !!item.isCommand || looksLikeShellCommandLocal(t);
+        const isCommand = !!item.isCommand || looksLikeShellCommandShared(t);
         scoreMap.set(t, { s, isCommand });
       }
 
