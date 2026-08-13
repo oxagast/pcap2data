@@ -519,14 +519,15 @@ function createCryptPanel({
         renderSshChart(delays, decoder, model);
         const candidates = decoder.decodeKeystrokes(delays, { topN, model });
         // Try to ask the configured Ollama backend to re-rank candidates for
-        // more realistic, typing-aware probabilities. This is best-effort and
-        // falls back to the decoder's native scores on error or when LLM is
-        // unavailable.
+        // more realistic, typing-aware probabilities. Provide the QWERTY
+        // priors so the model can combine timing-likelihoods with language
+        // priors. This is best-effort and falls back to the decoder's native
+        // scores on error or when LLM is unavailable.
         (async () => {
           let finalCandidates = candidates.slice();
           try {
             if (typeof window !== "undefined" && window.llmapi && typeof window.llmapi.generate === "function") {
-              const reRanked = await rerankCandidatesWithLlm(delays, candidates);
+              const reRanked = await rerankCandidatesWithLlm(delays, candidates, model);
               if (Array.isArray(reRanked) && reRanked.length > 0) {
                 finalCandidates = reRanked;
               }
@@ -618,6 +619,22 @@ function createCryptPanel({
     });
     const bestScore = Math.max(...scores, 1e-12);
 
+    // Show an LLM indicator in the chart legend if LLM scores are present.
+    try {
+      const legendEl = document.getElementById("crypt-openssh-chart-legend");
+      if (legendEl) {
+        const anyLlm = candidates.some((c) => Number.isFinite(c.llmScore) || Number.isFinite(c.combinedScore));
+        if (anyLlm) {
+          // Append a short badge; keep existing text and only add if not present.
+          if (!/LLM re-?ranked/.test(legendEl.textContent || "")) {
+            legendEl.textContent = (legendEl.textContent || "").trim() + " • LLM re-ranked";
+          }
+        }
+      }
+    } catch (_err) {
+      // ignore DOM indicator failures
+    }
+
     candidates.forEach((cand, idx) => {
       const row = document.createElement("tr");
       if (idx === 0) row.className = "crypt-table-top";
@@ -647,20 +664,32 @@ function createCryptPanel({
   // candidate objects sorted by combinedScore (descending) when successful.
   // The function is best-effort and will return the original candidates on
   // any parse/error failure.
-  async function rerankCandidatesWithLlm(delays, candidates) {
+  async function rerankCandidatesWithLlm(delays, candidates, model) {
     if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
 
+    // Pull small priors from model to aid the LLM: baselines and a small
+    // list of empirical digraphs (if present). Keep the payload compact.
+    const baselines = (model && model.baselines) || null;
+    const empirical = (model && model.empirical) || null;
+    const allowedAlphabet = (model && model.alphabet) || "abcdefghijklmnopqrstuvwxyz0123456789 .,-_/:;=?!@#$%^&*()[]{}<>'\"|\\~`+";
+
     // Build a concise, machine-friendly prompt that asks the LLM to return
-    // a strict JSON array of {"text": ..., "score": 0..1} entries.
+    // a strict JSON array of objects. Instruct the model to score both
+    // timing-likelihood (using QWERTY/digraph priors) and language-model
+    // plausibility for shell/ssh commands, and to combine them into a
+    // single score between 0 and 1. Responses must be commands suitable
+    // for an interactive ssh shell and must use only allowed characters.
     const payload = {
       delays: delays.slice(0, 200), // avoid extremely long prompts
       candidates: candidates.map((c) => ({ text: c.text || "", logProb: c.logProb })),
-      note: "Return strictly a JSON array of objects [{\"text\": string, \"score\": number}] where score is a probability 0..1. Match candidate text exactly when possible. Keep the output valid JSON with no additional commentary. Use realistic typing priors (QWERTY adjacency, common digraphs, shell prompts, likely words) when assigning scores."
+      baselines: baselines || {},
+      empiricalDigraphsSample: Object.keys(empirical || {}).slice(0, 40),
+      allowedAlphabet,
+      note:
+        "Return strictly a JSON array of objects [{\"text\": string, \"score\": number, \"isCommand\": boolean}]. 'score' is a combined probability in [0,1] that the text was typed in this SSH session given the timing data and language priors. Only return entries that are plausible SSH shell commands (file paths, commands with flags, arguments). Keep the output valid JSON with no additional commentary."
     };
 
-    const prompt = `You are an assistant that evaluates how likely candidate keystroke strings match a sequence of observed inter-key delays (in milliseconds).
-
-Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array only, e.g. [{"text":"candidate1","score":0.42}, ...].`;
+    const prompt = `You are a specialist assistant that combines keystroke-timing likelihoods with shell-language priors to judge which candidate strings are most likely to have been typed in an interactive SSH session.\n\nContext JSON:\n${JSON.stringify(payload)}\n\nUse QWERTY and digraph timing priors to approximate timing-likelihoods, and use your language model knowledge to score how plausible each candidate is as an SSH shell command (examples: ls, cd, sudo, git status, cat /etc/passwd, ./run.sh). Output JSON array only.`;
 
     let rawResp;
     try {
@@ -676,7 +705,6 @@ Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array on
       if (typeof rawResp === "string") {
         textResp = rawResp;
       } else if (rawResp && typeof rawResp === "object") {
-        // Ollama client may return { output: [{ content: '...' }, ...] }
         if (Array.isArray(rawResp.output) && rawResp.output.length > 0) {
           textResp = rawResp.output.map((o) => o.content || "").join("\n");
         } else if (Array.isArray(rawResp)) {
@@ -697,7 +725,6 @@ Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array on
     // Try to find a JSON array in the response.
     const jsonMatch = textResp.match(/\[\s*\{[\s\S]*\}\s*\]/m);
     if (!jsonMatch) {
-      // Last resort: try to parse entire text as JSON
       try {
         const parsedAll = JSON.parse(textResp);
         if (Array.isArray(parsedAll)) {
@@ -718,32 +745,61 @@ Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array on
       return candidates;
     }
 
+    function sanitizeTextForAlphabet(text) {
+      if (!text || typeof text !== "string") return "";
+      const allowed = new Set(String(allowedAlphabet).split(""));
+      // Preserve whitespace and common shell punctuation; remove disallowed
+      // characters.
+      let out = "";
+      for (const ch of text) {
+        if (allowed.has(ch) || ch === '\n' || ch === '\t') out += ch;
+      }
+      return out.trim();
+    }
+
+    function looksLikeShellCommand(t) {
+      if (!t || typeof t !== "string") return false;
+      const trimmed = t.trim();
+      if (!trimmed) return false;
+      // Common command starts: words, ./, /, -, cd, sudo, ssh, scp, git, ls, cat, nano
+      return /^([a-zA-Z0-9_./-]|\.|\s)/.test(trimmed) && /[a-zA-Z0-9/._-]/.test(trimmed);
+    }
+
     function mergeLlmScoresIntoCandidates(parsedArray, originalCandidates) {
       // Map texts to scores; allow case-insensitive matching and simple
       // substring fallback.
       const scoreMap = new Map();
       for (const item of parsedArray) {
         if (!item || typeof item !== "object") continue;
-        const t = String(item.text || "").trim();
-        let s = Number(item.score);
+        const t = sanitizeTextForAlphabet(String(item.text || "")).trim();
+        let s = Number(item.score ?? item.score?.value ?? item.prob ?? item.confidence);
+        if (!Number.isFinite(s)) s = Number(item.score) || 0;
         if (!Number.isFinite(s) || s < 0) s = 0;
         if (s > 1) s = 1;
-        scoreMap.set(t, s);
+        const isCommand = !!item.isCommand || looksLikeShellCommand(t);
+        scoreMap.set(t, { s, isCommand });
       }
 
       // Build arrays for normalization.
       const llmScores = originalCandidates.map((c) => {
-        const text = String(c.text || "").trim();
-        if (scoreMap.has(text)) return scoreMap.get(text);
-        // case-insensitive exact match
+        const text = sanitizeTextForAlphabet(String(c.text || "")).trim();
+        if (scoreMap.has(text)) return scoreMap.get(text).s;
         for (const [k, v] of scoreMap.entries()) {
-          if (k.toLowerCase() === text.toLowerCase()) return v;
+          if (k.toLowerCase() === text.toLowerCase()) return v.s;
         }
-        // substring/contains match
         for (const [k, v] of scoreMap.entries()) {
-          if (text && k && (text.includes(k) || k.includes(text))) return v;
+          if (text && k && (text.includes(k) || k.includes(text))) return v.s;
         }
         return 0.01; // small default
+      });
+
+      const llmIsCommand = originalCandidates.map((c) => {
+        const text = sanitizeTextForAlphabet(String(c.text || "")).trim();
+        if (scoreMap.has(text)) return !!scoreMap.get(text).isCommand;
+        for (const [k, v] of scoreMap.entries()) {
+          if (k.toLowerCase() === text.toLowerCase()) return !!v.isCommand;
+        }
+        return false;
       });
 
       // Normalize decoder probabilities and LLM scores, then combine.
@@ -753,17 +809,26 @@ Context JSON:\n${JSON.stringify(payload)}\n\nPlease respond with a JSON array on
       const decoderNorm = decoderProbs.map((v) => v / sumDecoder);
       const llmNorm = llmScores.map((v) => v / sumLlm);
 
-      // Combine with a modest bias toward the statistical decoder (60/40).
+      // Combine with a modest bias toward the statistical decoder (60/40),
+      // but boost candidates flagged as commands by the LLM slightly.
       const alpha = 0.6;
-      const combined = originalCandidates.map((c, i) => alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i]);
+      const merged = originalCandidates.map((c, i) => {
+        const baseCombined = alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i];
+        const commandBoost = llmIsCommand[i] ? 1.12 : 1.0; // slight boost
+        return {
+          ...c,
+          combinedScore: baseCombined * commandBoost,
+          llmScore: llmScores[i],
+          decoderProb: decoderProbs[i],
+          llmIsCommand: !!llmIsCommand[i],
+        };
+      });
 
-      // Attach combinedScore to candidates and sort.
-      const merged = originalCandidates.map((c, i) => ({
-        ...c,
-        combinedScore: combined[i],
-        llmScore: llmScores[i],
-        decoderProb: decoderProbs[i],
-      }));
+      // Normalize combined scores to [0,1]
+      const sumCombined = merged.reduce((s, v) => s + (v.combinedScore || 0), 0) || 1e-12;
+      for (const m of merged) {
+        m.combinedScore = m.combinedScore / sumCombined;
+      }
 
       merged.sort((a, b) => b.combinedScore - a.combinedScore);
       return merged;
