@@ -1,0 +1,11 @@
+name,description,filter
+IMAP - all traffic,IMAP4 messages,application.proto: IMAP
+IMAPS - all traffic,IMAPS messages,application.proto: IMAPS
+SMTP - all traffic,SMTP messages,application.proto: SMTP
+SMTPS - all traffic,SMTPS messages,application.proto: SMTPS
+POP3 - all traffic,POP3 messages,application.proto: POP3
+POP3S - all traffic,POP3S messages,application.proto: POP3S
+FTP - control channel,FTP control,application.proto: FTP
+FTP-DATA - data channel,FTP data channel,application.proto: FTP-DATA
+HTTP - web (non-TLS),HTTP traffic,application.proto: HTTP
+HTTPS - web (TLS),HTTPS traffic,application.proto: HTTPS

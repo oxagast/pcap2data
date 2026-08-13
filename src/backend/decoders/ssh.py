@@ -48,11 +48,24 @@ def decodeSSH(rawPayload, srcPort=None, dstPort=None):
             banner = firstLineRaw.decode(errors="ignore").strip()
             m = re.match(r"^SSH-(\d+\.\d+)-([^\s]+)(?:\s+(.*))?$", banner)
 
+            # Infer direction from ports when possible. Prefer explicit SSH
+            # ports (22,2222), otherwise use well-known port heuristic
+            # (ports <= 1024 are likely servers).
             direction = "Unknown"
             if srcPort in (22, 2222):
                 direction = "Server Identification"
             elif dstPort in (22, 2222):
                 direction = "Client Identification"
+            else:
+                try:
+                    if srcPort is not None and dstPort is not None:
+                        if srcPort <= 1024 and dstPort > 1024:
+                            direction = "Server Identification"
+                        elif dstPort <= 1024 and srcPort > 1024:
+                            direction = "Client Identification"
+                except Exception:
+                    # fall back to Unknown if ports aren't integers
+                    direction = "Unknown"
 
             if not m:
                 return {

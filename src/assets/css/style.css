@@ -1394,6 +1394,226 @@ strong {
   padding: 12px;
 }
 
+.crypt-openssh-chart {
+  flex: 1;
+  min-height: 240px;
+  border: 1px solid var(--color-3);
+  background-color: color-mix(in srgb, var(--surface-1, var(--crypt-panel-bg)) 92%, transparent);
+}
+
+.crypt-openssh-legend {
+  font-size: 12px;
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-full {
+  grid-column: 1 / -1;
+}
+
+/* OpenSSH panel: top two sections (sessions + delay distribution) share
+ * 50/50, full-width section spans both. */
+.crypt-openssh-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.crypt-openssh-insight {
+  border: 1px solid color-mix(in srgb, var(--color-2) 60%, transparent);
+  border-left: 4px solid var(--color-2);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-2) 4%, transparent);
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-insight[hidden] {
+  display: none;
+}
+
+.crypt-openssh-primary {
+  border: 1px solid color-mix(in srgb, var(--color-4) 60%, transparent);
+  border-left: 4px solid var(--color-4);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-4) 5%, transparent);
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-primary[hidden] {
+  display: none;
+}
+
+.crypt-openssh-insight-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-6);
+  margin-bottom: 6px;
+}
+
+.crypt-openssh-insight-label {
+  font-weight: 600;
+  color: var(--color-2);
+}
+
+.crypt-openssh-insight-source {
+  font-size: 10px;
+  color: var(--color-6);
+}
+
+.crypt-openssh-insight-text {
+  font-size: 12px;
+  color: var(--crypt-panel-text);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.crypt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--crypt-panel-text);
+  table-layout: fixed;
+}
+
+.crypt-table thead th {
+  text-align: left;
+  background-color: var(--color-2);
+  color: var(--color-1);
+  padding: 4px 6px;
+  border: 1px solid var(--color-3);
+}
+
+.crypt-table thead th:nth-child(1) {
+  width: 4%;
+}
+
+/* #           */
+.crypt-table thead th:nth-child(2) {
+  width: 64%;
+}
+
+/* Hypothesis  */
+.crypt-table thead th:nth-child(3) {
+  width: 10%;
+}
+
+/* log P       */
+.crypt-table thead th:nth-child(4) {
+  width: 12%;
+}
+
+/* Avg Δ (ms)  */
+.crypt-table thead th:nth-child(5) {
+  width: 10%;
+}
+
+/* Score       */
+
+.crypt-table tbody td {
+  padding: 4px 6px;
+  border: 1px solid var(--color-3);
+  font-family: "Courier New", Courier, monospace;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.crypt-table tbody td:nth-child(2) {
+  word-break: break-all;
+}
+
+.crypt-table tbody tr.crypt-table-top {
+  background-color: color-mix(in srgb, #d4edda 60%, transparent);
+  font-weight: bold;
+}
+
+.crypt-table tbody tr.crypt-table-empty td {
+  text-align: center;
+  font-style: italic;
+  color: var(--color-6);
+}
+
+.crypt-openssh-summary {
+  font-size: 12px;
+  color: var(--crypt-panel-text);
+  white-space: pre-wrap;
+}
+
+.crypt-openssh-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-6);
+  font-style: italic;
+}
+
+.crypt-openssh-progress[hidden] {
+  display: none;
+}
+
+.crypt-openssh-primary {
+  border: 1px solid color-mix(in srgb, var(--color-4) 60%, transparent);
+  border-left: 4px solid var(--color-4);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: color-mix(in srgb, var(--color-4) 8%, transparent);
+  color: var(--crypt-panel-text);
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+}
+
+.crypt-openssh-primary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-6);
+  margin-bottom: 6px;
+}
+
+.crypt-openssh-primary-label {
+  font-weight: 600;
+  color: var(--color-2);
+}
+
+.crypt-openssh-primary-source {
+  font-size: 10px;
+  color: var(--color-6);
+}
+
+.crypt-openssh-primary-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-5);
+  word-break: break-word;
+  margin-bottom: 6px;
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+}
+
+.crypt-openssh-primary-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-6);
+  margin-bottom: 6px;
+}
+
+.crypt-openssh-primary-rationale {
+  font-size: 12px;
+  color: var(--color-6);
+  white-space: pre-wrap;
+  font-family: var(--font-family, sans-serif);
+  border-top: 1px dashed color-mix(in srgb, var(--color-6) 35%, transparent);
+  padding-top: 6px;
+}
+
 #keystore_box {
   display: none;
   border: 8px solid var(--color-3);
@@ -3953,6 +4173,21 @@ strong {
 
 #sidedatatable {
   justify-content: center;
+}
+
+.timing-low {
+  background-color: #d4edda !important;
+  color: #155724 !important;
+}
+
+.timing-moderate {
+  background-color: #fff3cd !important;
+  color: #856404 !important;
+}
+
+.timing-high {
+  background-color: #f8d7da !important;
+  color: #721c24 !important;
 }
 
 #timestamp {

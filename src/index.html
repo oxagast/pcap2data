@@ -19,6 +19,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700&display=swap" />
+  <!-- Plotly (OpenSSH subtab delay histogram) — vendored under src/assets/vendor/ -->
+  <script src="../assets/vendor/plotly-2.35.2.min.js" charset="utf-8"></script>
 
   <link rel="stylesheet" href="../assets/css/style.css" type="text/css" />
 </head>
@@ -951,8 +953,87 @@ No decrypted TLS/SSL output yet.</pre>
           </div>
 
           <div id="crypt-openssh-panel" class="crypt-subtab-panel" hidden>
-            <div class="crypt-placeholder">
-              OpenSSH workspace reserved for future key/session tooling.
+            <div class="crypt-grid crypt-openssh-grid">
+              <div class="crypt-section">
+                <div class="crypt-section-title">SSH Sessions (port 22 / 2222)</div>
+                <select id="crypt-openssh-flows" size="6"></select>
+                <div class="crypt-actions-row">
+                  <button id="crypt-openssh-refresh-btn">Refresh</button>
+                  <button id="crypt-openssh-analyze-btn" disabled>Analyze selected</button>
+                  <span id="crypt-openssh-progress" class="crypt-openssh-progress" hidden>
+                    <span class="loading"></span>
+                    <span id="crypt-openssh-progress-text">Working…</span>
+                  </span>
+                </div>
+                <div id="crypt-openssh-flow-details">
+                  No SSH flows detected in the loaded capture.
+                </div>
+              </div>
+
+              <div class="crypt-section">
+                <div class="crypt-section-title">Inter-key delay distribution</div>
+                <div id="crypt-openssh-chart" class="crypt-openssh-chart"></div>
+                <div id="crypt-openssh-chart-legend" class="crypt-openssh-legend">
+                  Select a flow and click <strong>Analyze selected</strong>.
+                </div>
+              </div>
+
+              <div class="crypt-section crypt-openssh-full">
+                <div class="crypt-section-title">Top-N decoded candidates</div>
+                <div class="crypt-actions-row">
+                  <label class="crypt-key-type-label" for="crypt-openssh-topn">
+                    Show top
+                  </label>
+                  <select id="crypt-openssh-topn">
+                    <option value="3">3</option>
+                    <option value="5" selected>5</option>
+                    <option value="8">8</option>
+                    <option value="12">12</option>
+                  </select>
+                  <label class="crypt-key-type-label" for="crypt-openssh-direction">
+                    Direction
+                  </label>
+                  <select id="crypt-openssh-direction">
+                    <option value="both" selected>Client → Server</option>
+                    <option value="c2s">Client → Server only</option>
+                    <option value="s2c">Server → Client only</option>
+                  </select>
+                </div>
+                <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
+                  <div class="crypt-openssh-insight-header">
+                    <span class="crypt-openssh-insight-label">LLM insight</span>
+                    <span class="crypt-openssh-insight-source" id="crypt-openssh-insight-source"></span>
+                  </div>
+                  <div id="crypt-openssh-insight-text" class="crypt-openssh-insight-text"></div>
+                </div>
+                <div id="crypt-openssh-primary" class="crypt-openssh-primary" hidden>
+                  <div class="crypt-openssh-primary-header">
+                    <span class="crypt-openssh-primary-label">Top guess</span>
+                    <span class="crypt-openssh-primary-source" id="crypt-openssh-primary-source"></span>
+                  </div>
+                  <div id="crypt-openssh-primary-text" class="crypt-openssh-primary-text"></div>
+                  <div class="crypt-openssh-primary-meta">
+                    <span id="crypt-openssh-primary-confidence"></span>
+                    <span id="crypt-openssh-primary-kind"></span>
+                  </div>
+                  <div id="crypt-openssh-primary-rationale" class="crypt-openssh-primary-rationale"></div>
+                </div>
+                <table id="crypt-openssh-candidates" class="crypt-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Hypothesis</th>
+                      <th>log P</th>
+                      <th>Avg Δ (ms)</th>
+                      <th>Score</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+                <div id="crypt-openssh-summary" class="crypt-openssh-summary">
+                  No analysis run yet.
+                </div>
+              </div>
             </div>
           </div>
 

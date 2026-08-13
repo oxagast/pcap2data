@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "baselines": {
+    "sameKey": {
+      "mean": 220,
+      "std": 45
+    },
+    "adjacentKey": {
+      "mean": 20.07,
+      "std": 4.66
+    },
+    "nearbyKey": {
+      "mean": 27.47,
+      "std": 6.34
+    },
+    "farKey": {
+      "mean": 36.97,
+      "std": 8.45
+    },
+    "crossRow": {
+      "mean": 42.25,
+      "std": 10.56
+    }
+  },
+  "notes": {
+    "source": "ssh-session-oxasploits.com.pcap",
+    "adjacent_empirical_median_ms": 20.071029663085938,
+    "adjacent_empirical_mean_ms": 20.204786070096237,
+    "adjacent_empirical_std_ms": 4.6560172055314855,
+    "typing_sample_count": 4856
+  }
+}

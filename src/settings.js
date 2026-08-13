@@ -89,6 +89,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         ollamaRequestTimeoutSeconds: 300,
         retryCount: 2,
         analysisCompactionThresholdBlubs: 6,
+        // New LLM UI controls
+        language: "english",
+        llmWeightPercent: 40, // percent weight given to LLM when merging (0-100)
+        preset: "english", // presets: english, command-line, vim
+        autotuneEnabled: false,
     },
     apiKeys: {
         ollamaApiKey: "",
@@ -399,7 +404,17 @@ function normalizeSettings(rawSettings = {}) {
                 defaults.analysisCompactionThresholdBlubs,
                 1,
             ),
+            // New fields for language/preset/weight/autotune tuning
+            language: typeof llm.language === "string" && llm.language.trim() ? llm.language.trim() : defaults.language,
+            llmWeightPercent: toPositiveInteger(
+                llm.llmWeightPercent,
+                defaults.llmWeightPercent,
+                0,
+            ),
+            preset: typeof llm.preset === "string" && llm.preset.trim() ? llm.preset.trim() : defaults.preset,
+            autotuneEnabled: typeof llm.autotuneEnabled === "boolean" ? llm.autotuneEnabled : defaults.autotuneEnabled,
         },
+
         apiKeys: {
             ollamaApiKey:
                 typeof apiKeys.ollamaApiKey === "string" && apiKeys.ollamaApiKey.trim()

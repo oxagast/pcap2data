@@ -264,6 +264,10 @@ function createCryptPanel({
     return false;
   }
 
+  // Default chunk size — process 100 packets at a time so the UI thread
+  // can keep painting between chunks.
+  const SSH_PACKET_CHUNK_SIZE = 100;
+
   function getSshEncounteredFlows() {
     const flows = [];
     const hostMap = getHostPacketMap(getCapturedPackets());
@@ -311,6 +315,195 @@ function createCryptPanel({
       });
     }
     return flows;
+  }
+
+  // Async variant of `getSshEncounteredFlows`. Walks every packet in
+  // chunks of `SSH_PACKET_CHUNK_SIZE` and yields to the event loop between
+  // chunks so the renderer can paint progress and stay responsive on
+  // very large captures. `onProgress` (optional) is invoked with
+  // `{ processed, total }` after each chunk.
+  async function collectSshEncounteredFlows(onProgress) {
+    const flows = [];
+    const hostMap = getHostPacketMap(getCapturedPackets());
+    if (!hostMap) return flows;
+    const flowKeyByEndpoint = (srcIp, srcPort, dstIp, dstPort) => {
+      const a = `${srcIp}:${srcPort}`;
+      const b = `${dstIp}:${dstPort}`;
+      const [first, second] = [a, b].sort();
+      return `tcp|${first}|${second}`;
+    };
+    let total = 0;
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
+      if (Array.isArray(packets)) total += packets.length;
+    }
+    let processed = 0;
+    for (const host of Object.keys(hostMap)) {
+      const packets = hostMap[host];
+      if (!Array.isArray(packets)) continue;
+      for (let i = 0; i < packets.length; i += 1) {
+        const packet = packets[i];
+        const packetInfo = getPacketInfo(packet);
+        const transportData = getTransportData(packetInfo, "TCP");
+        if (isSshPort(transportData)) {
+          const srcIp =
+            packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"] ?? "?";
+          const dstIp =
+            packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"] ?? "?";
+          const srcPort = Number(transportData?.["tcp.src.port"] ?? "?");
+          const dstPort = Number(transportData?.["tcp.dst.port"] ?? "?");
+          const timestamp = parseSshPacketTimestampMs(packet);
+          const packetIndex =
+            packetInfo?.["Index"] ?? packetInfo?.["packet.processed"] ?? null;
+          const direction =
+            srcPort === 22 || srcPort === 2222
+              ? "s2c"
+              : dstPort === 22 || dstPort === 2222
+                ? "c2s"
+                : "?";
+          flows.push({
+            host,
+            packet,
+            srcIp,
+            srcPort,
+            dstIp,
+            dstPort,
+            timestamp,
+            packetIndex,
+            direction,
+            flowKey: flowKeyByEndpoint(srcIp, srcPort, dstIp, dstPort),
+          });
+        }
+        processed += 1;
+        if (processed % SSH_PACKET_CHUNK_SIZE === 0) {
+          if (typeof onProgress === "function") {
+            try { onProgress({ processed, total }); } catch (_e) { /* ignore */ }
+          }
+          // Yield to the event loop so the renderer can paint.
+          // eslint-disable-next-line no-await-in-loop
+          await yieldToUi();
+        }
+      }
+    }
+    if (typeof onProgress === "function") {
+      try { onProgress({ processed, total }); } catch (_e) { /* ignore */ }
+    }
+    return flows;
+  }
+
+  // Async variant of `aggregateSshFlows`. Sorts each bucket in chunks and
+  // yields so the UI thread stays responsive.
+  async function aggregateSshFlowsAsync(flows) {
+    const byKey = new Map();
+    for (const entry of flows) {
+      const bucket = byKey.get(entry.flowKey) || {
+        flowKey: entry.flowKey,
+        host: entry.host,
+        srcIp: entry.srcIp,
+        srcPort: entry.srcPort,
+        dstIp: entry.dstIp,
+        dstPort: entry.dstPort,
+        packets: [],
+      };
+      bucket.packets.push(entry);
+      byKey.set(entry.flowKey, bucket);
+    }
+    const buckets = Array.from(byKey.values());
+    for (let bi = 0; bi < buckets.length; bi += 1) {
+      const bucket = buckets[bi];
+      bucket.packets.sort((a, b) => {
+        const ta = a.timestamp || 0;
+        const tb = b.timestamp || 0;
+        if (ta !== tb) return ta - tb;
+        return (a.packetIndex || 0) - (b.packetIndex || 0);
+      });
+      bucket.c2sPacketCount = bucket.packets.filter((p) => p.direction === "c2s").length;
+      bucket.s2cPacketCount = bucket.packets.filter((p) => p.direction === "s2c").length;
+      bucket.firstTimestamp = bucket.packets[0]?.timestamp ?? null;
+      bucket.lastTimestamp = bucket.packets[bucket.packets.length - 1]?.timestamp ?? null;
+      if (bi % SSH_PACKET_CHUNK_SIZE === 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    buckets.sort((a, b) => {
+      const ta = a.firstTimestamp || 0;
+      const tb = b.firstTimestamp || 0;
+      return ta - tb;
+    });
+    return buckets;
+  }
+
+  // Yield to the event loop so the renderer can paint. Uses
+  // requestAnimationFrame when available (smoother progress repainting)
+  // and falls back to setTimeout(0) otherwise.
+  function yieldToUi() {
+    return new Promise((resolve) => {
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  // Async variant of `computeInterPacketDelaysWithIndexes`. Yields after
+  // every `SSH_PACKET_CHUNK_SIZE` packets so the UI stays responsive even
+  // on very long captures. The direction filter (when set) is also chunked
+  // so it does not block on very large packet arrays.
+  async function computeInterPacketDelaysWithIndexesAsync(packets, directionFilter, onProgress) {
+    // Chunked filter so the direction filter itself doesn't block on huge
+    // packet arrays. For "both" we skip the filter and use the source array.
+    let filtered = packets;
+    const total = packets.length;
+    if (directionFilter === "c2s" || directionFilter === "s2c") {
+      filtered = [];
+      for (let i = 0; i < packets.length; i += 1) {
+        if (packets[i].direction === directionFilter) filtered.push(packets[i]);
+        if (i % SSH_PACKET_CHUNK_SIZE === 0 && i !== 0) {
+          // eslint-disable-next-line no-await-in-loop
+          await yieldToUi();
+        }
+      }
+    }
+    const out = [];
+    let prevTs = null;
+    let idx = 0;
+    for (let i = 0; i < filtered.length; i += 1) {
+      const pkt = filtered[i];
+      if (pkt.timestamp === null || pkt.timestamp === undefined) {
+        idx += 1;
+      } else {
+        if (prevTs !== null) {
+          const d = pkt.timestamp - prevTs;
+          if (Number.isFinite(d) && d > 0 && d < 60_000) {
+            let pktLen = null;
+            try {
+              const pinfo = getPacketInfo(pkt.packet);
+              pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
+              if (!Number.isFinite(pktLen)) pktLen = null;
+            } catch (_e) {
+              pktLen = null;
+            }
+            out.push({ delay: d, index: idx, packetLength: pktLen });
+          }
+        }
+        prevTs = pkt.timestamp;
+        idx += 1;
+      }
+      // Yield every SSH_PACKET_CHUNK_SIZE packets and report progress.
+      if (i % SSH_PACKET_CHUNK_SIZE === 0) {
+        if (typeof onProgress === "function") {
+          try { onProgress({ processed: i + 1, total: filtered.length }); } catch (_e) { /* ignore */ }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    if (typeof onProgress === "function") {
+      try { onProgress({ processed: filtered.length, total: filtered.length }); } catch (_e) { /* ignore */ }
+    }
+    return out;
   }
 
   function aggregateSshFlows(flows) {
@@ -366,6 +559,144 @@ function createCryptPanel({
       prevTs = pkt.timestamp;
     }
     return delays;
+  }
+
+  // Compute inter-packet delays but preserve the packet index of the later
+  // packet for mapping delays back to keystroke positions. Returns an array
+  // of { delay, index } objects where index is the 0-based index within the
+  // filtered packet list of the packet that ended the interval.
+  function computeInterPacketDelaysWithIndexes(packets, directionFilter) {
+    if (directionFilter === "c2s" || directionFilter === "s2c") {
+      packets = packets.filter((p) => p.direction === directionFilter);
+    }
+    const out = [];
+    let prevTs = null;
+    let idx = 0;
+    for (const pkt of packets) {
+      if (pkt.timestamp === null || pkt.timestamp === undefined) {
+        idx += 1;
+        continue;
+      }
+      if (prevTs !== null) {
+        const d = pkt.timestamp - prevTs;
+        if (Number.isFinite(d) && d > 0 && d < 60_000) {
+          // Try to extract a packet length if available in the packet.info
+          let pktLen = null;
+          try {
+            const pinfo = getPacketInfo(pkt.packet);
+            pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
+            if (!Number.isFinite(pktLen)) pktLen = null;
+          } catch (_e) {
+            pktLen = null;
+          }
+          out.push({ delay: d, index: idx, packetLength: pktLen });
+        }
+      }
+      prevTs = pkt.timestamp;
+      idx += 1;
+    }
+    return out;
+  }
+
+  // Heuristic to estimate where an Enter/Return keypress likely occurred.
+  // Uses robust statistics (median, MAD-like) and absolute thresholds to
+  // find a large inter-key gap that plausibly corresponds to the end of a
+  // typed command. Returns the estimated command length (number of
+  // characters) or null if no clear boundary is detected.
+  function estimateCommandLengthFromDelaysWithIdx(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
+    const vals = delaysWithIdx.map((d) => d.delay).filter((v) => Number.isFinite(v));
+    if (!vals.length) return null;
+
+    // Median
+    const sorted = vals.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+
+    // MAD-ish: use median absolute deviation to be robust to outliers
+    const absDevs = sorted.map((v) => Math.abs(v - median));
+    const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
+    const approxStd = mad * 1.4826 || 0; // convert MAD to approx std
+
+    // Candidate threshold: a gap significantly larger than typical typing gaps
+    const dynamicThresh = median + Math.max(3 * approxStd, 150);
+    const absoluteMin = 400; // ms — typical typing inter-char rarely exceeds this except for Return
+    const threshold = Math.max(dynamicThresh, absoluteMin);
+
+    // Find the first gap that exceeds threshold; prefer the last such gap but
+    // bias toward larger gaps near the end of sequence (user likely pressed
+    // Enter after typing the command).
+    let candidates = delaysWithIdx.filter((d) => d.delay >= threshold);
+    if (!candidates.length) {
+      // If none found, pick the single largest gap if it's reasonably large
+      const maxEntry = delaysWithIdx.reduce((best, cur) => (cur.delay > (best?.delay || 0) ? cur : best), null);
+      if (maxEntry && maxEntry.delay >= 600) candidates = [maxEntry];
+    }
+    if (!candidates.length) return null;
+
+    // Prefer the candidate with highest score = delay * (1 + proximity-to-end)
+    const n = delaysWithIdx.length;
+    let best = null;
+    let bestScore = -Infinity;
+    for (const c of candidates) {
+      const proximityFactor = 1 + (c.index / Math.max(1, n));
+      const score = c.delay * proximityFactor;
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+
+    if (!best) return null;
+    // delay at index k corresponds to gap between keystroke k-1 and k, so the
+    // number of characters typed before the gap is best.index (the later pkt
+    // index), we return that as the estimated length.
+    return best.index;
+  }
+
+  // Attempt to detect likely backspace/delete occurrences using timing and
+  // packet-length heuristics. Returns an object { indices: [...], count } of
+  // estimated keystroke positions where a backspace/delete was likely sent.
+  function detectBackspaceHints(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return { indices: [], count: 0 };
+    const indices = [];
+    // Simple heuristics:
+    // - Very short delays (< 80 ms) in repeated succession may indicate rapid
+    //   keypresses or holding backspace for repeated deletes.
+    // - Single-byte packet lengths (when available) make single-key events
+    //   more likely.
+    for (let i = 0; i < delaysWithIdx.length; i++) {
+      const cur = delaysWithIdx[i];
+      if (!cur || !Number.isFinite(cur.delay)) continue;
+      const isVeryShort = cur.delay < 80;
+      const prev = delaysWithIdx[i - 1];
+      const prevShort = prev && Number.isFinite(prev.delay) ? prev.delay < 80 : false;
+      const pktLen = Number.isFinite(cur.packetLength) ? cur.packetLength : null;
+      const smallPkt = pktLen === null ? true : pktLen <= 2; // unknown length -> allow
+      // Heuristic: consecutive very short intervals with small packet lengths
+      // are suspicious for backspace/delete sequences.
+      if (isVeryShort && prevShort && smallPkt) {
+        // Mark the later index as a possible backspace event
+        indices.push(cur.index);
+        continue;
+      }
+      // Also mark cases where there's a cluster of very short delays (3+)
+      // around this position.
+      if (isVeryShort) {
+        const cluster = [
+          delaysWithIdx[i - 2] ? delaysWithIdx[i - 2].delay < 80 : false,
+          delaysWithIdx[i - 1] ? delaysWithIdx[i - 1].delay < 80 : false,
+          delaysWithIdx[i + 1] ? delaysWithIdx[i + 1].delay < 80 : false,
+        ];
+        const clusterCount = cluster.filter(Boolean).length;
+        if (clusterCount >= 2 && smallPkt) {
+          indices.push(cur.index);
+        }
+      }
+    }
+    // Deduplicate and sort
+    const uniq = Array.from(new Set(indices)).sort((a, b) => a - b);
+    return { indices: uniq, count: uniq.length };
   }
 
   let sshAllFlows = [];
@@ -428,9 +759,28 @@ function createCryptPanel({
     return sshModelLoadPromise;
   }
 
-  function refreshSshEncounteredFlows() {
-    sshAllFlows = aggregateSshFlows(getSshEncounteredFlows());
-    sshFlows = sshAllFlows;
+  async function refreshSshEncounteredFlows() {
+    const detailsEl = document.getElementById("crypt-openssh-flow-details");
+    const listEl = document.getElementById("crypt-openssh-flows");
+    if (detailsEl) {
+      detailsEl.textContent = "Scanning packets for SSH flows (chunked 100/chunk)...";
+    }
+    if (listEl) {
+      listEl.replaceChildren();
+      const opt = document.createElement("option");
+      opt.textContent = "Scanning...";
+      opt.disabled = true;
+      listEl.appendChild(opt);
+    }
+    try {
+      const flows = await collectSshEncounteredFlows();
+      sshAllFlows = await aggregateSshFlowsAsync(flows);
+      sshFlows = sshAllFlows;
+    } catch (err) {
+      console.warn("[Crypt/OpenSSH] chunked refresh failed, falling back:", err);
+      sshAllFlows = aggregateSshFlows(getSshEncounteredFlows());
+      sshFlows = sshAllFlows;
+    }
     renderSshFlowOptions();
   }
 
@@ -490,6 +840,154 @@ function createCryptPanel({
     ].join("\n");
   }
 
+  // Synchronous chart series builder (kept for the decoder's own tests).
+  // For very large delay arrays the renderer uses `buildChartSeriesAsync`
+  // instead so the histogram loop and `Math.max(...delays)` don't block.
+  function buildChartSeries(delays, decoder) {
+    return decoder.buildChartSeries(delays);
+  }
+
+  // Async chart-series builder that yields to the event loop every
+  // SSH_PACKET_CHUNK_SIZE delays. Avoids the `Math.max(...arr)` spread
+  // (which can stack-overflow on huge arrays) and keeps the histogram
+  // loop off the main thread for the full duration.
+  async function buildChartSeriesAsync(delays, decoder) {
+    const binSize = Math.max(10, Math.floor(decoder.DEFAULT_DIGRAPH_PARAMS.binSize || 25));
+    const chunkSize = SSH_PACKET_CHUNK_SIZE;
+    let maxDelay = 500;
+    const valid = [];
+    for (let i = 0; i < delays.length; i += 1) {
+      const d = delays[i];
+      if (Number.isFinite(d) && d > 0) {
+        valid.push(d);
+        if (d > maxDelay) maxDelay = d;
+      }
+      if (i % chunkSize === 0 && i !== 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    const bins = [];
+    for (let edge = 0; edge <= maxDelay; edge += decoder.DEFAULT_DIGRAPH_PARAMS.binSize || 25) {
+      bins.push({ x0: edge, x1: edge + (decoder.DEFAULT_DIGRAPH_PARAMS.binSize || 25), count: 0 });
+    }
+    for (let i = 0; i < valid.length; i += 1) {
+      const idx = Math.min(bins.length - 1, Math.floor(valid[i] / (decoder.DEFAULT_DIGRAPH_PARAMS.binSize || 25)));
+      bins[idx].count += 1;
+      if (i % chunkSize === 0 && i !== 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    const bin = decoder.DEFAULT_DIGRAPH_PARAMS.binSize || 25;
+    const histogram = {
+      x: bins.map((b) => b.x0 + bin / 2),
+      y: bins.map((b) => b.count),
+      type: "bar",
+      name: "Observed inter-key delays",
+      marker: { color: "rgba(99, 110, 250, 0.55)" },
+    };
+    const mean = decoder.DEFAULT_DIGRAPH_PARAMS.mean;
+    const std = decoder.DEFAULT_DIGRAPH_PARAMS.std;
+    const totalCount = valid.length || 1;
+    const refX = [];
+    const refY = [];
+    for (let edge = 0; edge <= maxDelay; edge += bin) {
+      const center = edge + bin / 2;
+      refX.push(center);
+      const density = Math.exp(decoder.gaussianLogProbability(center, mean, std)) * bin * totalCount;
+      refY.push(density);
+    }
+    const reference = {
+      x: refX,
+      y: refY,
+      type: "scatter",
+      mode: "lines",
+      name: `Neutral Gaussian (μ=${mean} ms, σ=${std} ms)`,
+      line: { color: "rgba(220, 71, 71, 0.9)", width: 2 },
+    };
+    return { histogram, reference, binSize: bin };
+  }
+
+  async function estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
+    const vals = [];
+    for (let i = 0; i < delaysWithIdx.length; i += 1) {
+      const v = delaysWithIdx[i].delay;
+      if (Number.isFinite(v)) vals.push(v);
+      if (i % SSH_PACKET_CHUNK_SIZE === 0 && i !== 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    if (!vals.length) return null;
+    const sorted = vals.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    const absDevs = sorted.map((v) => Math.abs(v - median));
+    const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
+    const approxStd = mad * 1.4826 || 0;
+    const dynamicThresh = median + Math.max(3 * approxStd, 150);
+    const absoluteMin = 400;
+    const threshold = Math.max(dynamicThresh, absoluteMin);
+    let candidates = delaysWithIdx.filter((d) => d.delay >= threshold);
+    if (!candidates.length) {
+      const maxEntry = delaysWithIdx.reduce((best, cur) => (cur.delay > (best?.delay || 0) ? cur : best), null);
+      if (maxEntry && maxEntry.delay >= 600) candidates = [maxEntry];
+    }
+    if (!candidates.length) return null;
+    const n = delaysWithIdx.length;
+    let best = null;
+    let bestScore = -Infinity;
+    for (const c of candidates) {
+      const proximityFactor = 1 + (c.index / Math.max(1, n));
+      const score = c.delay * proximityFactor;
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    if (!best) return null;
+    return best.index;
+  }
+
+  async function detectBackspaceHintsAsync(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return { indices: [], count: 0 };
+    const indices = [];
+    for (let i = 0; i < delaysWithIdx.length; i += 1) {
+      const cur = delaysWithIdx[i];
+      if (!cur || !Number.isFinite(cur.delay)) continue;
+      const isVeryShort = cur.delay < 80;
+      const prev = delaysWithIdx[i - 1];
+      const prevShort = prev && Number.isFinite(prev.delay) ? prev.delay < 80 : false;
+      const pktLen = Number.isFinite(cur.packetLength) ? cur.packetLength : null;
+      const smallPkt = pktLen === null ? true : pktLen <= 2;
+      if (isVeryShort && prevShort && smallPkt) {
+        indices.push(cur.index);
+        continue;
+      }
+      if (isVeryShort) {
+        const cluster = [
+          delaysWithIdx[i - 2] ? delaysWithIdx[i - 2].delay < 80 : false,
+          delaysWithIdx[i - 1] ? delaysWithIdx[i - 1].delay < 80 : false,
+          delaysWithIdx[i + 1] ? delaysWithIdx[i + 1].delay < 80 : false,
+        ];
+        const clusterCount = cluster.filter(Boolean).length;
+        if (clusterCount >= 2 && smallPkt) {
+          indices.push(cur.index);
+        }
+      }
+      if (i % SSH_PACKET_CHUNK_SIZE === 0 && i !== 0) {
+        // eslint-disable-next-line no-await-in-loop
+        await yieldToUi();
+      }
+    }
+    const uniq = Array.from(new Set(indices)).sort((a, b) => a - b);
+    return { indices: uniq, count: uniq.length };
+  }
+
+  // Check the threshold of 100 packets at a time so that the rest of the
+  // pipeline (chart, summary, candidates) doesn't block the UI thread.
   function selectSshEncounteredFlow(flowIndex) {
     const flow = sshFlows[flowIndex];
     sshSelectedFlowKey = flow ? flow.flowKey : null;
@@ -510,34 +1008,131 @@ function createCryptPanel({
     if (!flow) return;
     const directionEl = document.getElementById("crypt-openssh-direction");
     const topNEl = document.getElementById("crypt-openssh-topn");
+    const progressEl = document.getElementById("crypt-openssh-progress");
+    const progressTextEl = document.getElementById("crypt-openssh-progress-text");
+    const analyzeBtn = document.getElementById("crypt-openssh-analyze-btn");
+    function setProgress(label) {
+      if (progressEl) progressEl.hidden = false;
+      if (progressTextEl) progressTextEl.textContent = label || "Working…";
+    }
+    function clearProgress() {
+      if (progressEl) progressEl.hidden = true;
+      if (progressTextEl) progressTextEl.textContent = "Working…";
+    }
+    if (analyzeBtn) analyzeBtn.disabled = true;
+    setProgress("Scanning packets…");
     const direction = directionEl?.value || "both";
-    const topN = Math.max(1, Number(topNEl?.value || 5));
+    const topN = Math.max(1, Number(topNEl?.value || 32));
+    // The LLM needs more evidence than the UI table shows. ``llmTopN`` is
+    // the working set we send to the language model for reranking and
+    // best-guess assembling — larger than the on-screen candidate list so
+    // the LLM can pick up commands/filenames that the Viterbi beam pruned.
+    const llmTopN = Math.max(topN, 32);
     const summaryEl = document.getElementById("crypt-openssh-summary");
     ensureSshModelLoaded()
-      .then((model) => {
-        const delays = computeInterPacketDelays(flow.packets, direction);
-        renderSshChart(delays, decoder, model);
-        const candidates = decoder.decodeKeystrokes(delays, { topN, model });
-        // Try to ask the configured Ollama backend to re-rank candidates for
-        // more realistic, typing-aware probabilities. Provide the QWERTY
-        // priors so the model can combine timing-likelihoods with language
-        // priors. This is best-effort and falls back to the decoder's native
-        // scores on error or when LLM is unavailable.
+      .then(async (model) => {
+        // Use the indexed delays so we can map large pauses back to a
+        // keystroke position and estimate the command length (Enter/Return).
+        // Build the delays in chunks of 100 packets to keep the UI thread
+        // responsive on very long sessions.
+        const delaysWithIdx = await computeInterPacketDelaysWithIndexesAsync(flow.packets, direction, ({ processed, total }) => {
+          if (summaryEl) {
+            summaryEl.textContent = `Building inter-key delays (${processed}/${total})...`;
+          }
+          setProgress(`Building inter-key delays (${processed}/${total})…`);
+        });
+        const delays = delaysWithIdx.map((d) => d.delay);
+        if (summaryEl) {
+          summaryEl.textContent = `Building histogram (${delays.length} intervals)...`;
+        }
+        setProgress(`Building histogram (${delays.length} intervals)…`);
+        await yieldToUi();
+        const series = await buildChartSeriesAsync(delays, decoder);
+        renderSshChartWithSeries(series, delays, decoder);
+        if (summaryEl) {
+          summaryEl.textContent = `Decoding keystrokes (${delays.length} intervals)...`;
+        }
+        setProgress(`Decoding keystrokes (${delays.length} intervals)…`);
+        await yieldToUi();
+        let candidates;
+        try {
+          // Prefer the worker-thread decoder when the preload bridge is
+          // available — it runs the synchronous Viterbi on a worker so
+          // the renderer never blocks, even on very long sessions.
+          const api =
+            typeof window !== "undefined" && window.opensshapi
+              ? window.opensshapi
+              : null;
+          if (api && typeof api.decode === "function") {
+            const resp = await api.decode({ delays, topN, model });
+            if (resp && resp.success && Array.isArray(resp.candidates)) {
+              candidates = resp.candidates;
+            } else {
+              console.warn("[Crypt/OpenSSH] worker decode failed:", resp && resp.error);
+              candidates = decoder.decodeKeystrokes(delays, { topN, model });
+            }
+          } else if (typeof decoder.decodeKeystrokesBatched === "function") {
+            // Fallback: batched decoder runs on the main thread but yields.
+            candidates = await decoder.decodeKeystrokesBatched(delays, { topN, model, batchSize: 100 });
+          } else {
+            candidates = decoder.decodeKeystrokes(delays, { topN, model });
+          }
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] decode failed, falling back:", err);
+          candidates = decoder.decodeKeystrokes(delays, { topN, model });
+        }
+        if (summaryEl) {
+          summaryEl.textContent = `Estimating command length (${delaysWithIdx.length} samples)...`;
+        }
+        setProgress(`Estimating command length (${delaysWithIdx.length} samples)…`);
+        await yieldToUi();
+        const estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx);
+        const backspaceHints = await detectBackspaceHintsAsync(delaysWithIdx);
+
+        // Run the LLM as the primary result builder. The decoder provides
+        // a working set of timing-derived candidate strings; the language
+        // model assembles them with shell/file language priors and returns
+        // a single best-guess text, probability, kind, and a short
+        // rationale. The decoder candidates remain visible as supporting
+        // evidence below the primary result.
         (async () => {
+          setProgress("Asking LLM to assemble best guess…");
           let finalCandidates = candidates.slice();
+          let primaryResult = null;
+          let insightResult = null;
+          // mode drives the placeholder text inside the LLM cards when
+          // the prompt ran but didn't yield a usable result.
+          let renderMode = "no-llm";
           try {
             if (typeof window !== "undefined" && window.llmapi && typeof window.llmapi.generate === "function") {
-              const reRanked = await rerankCandidatesWithLlm(delays, candidates, model);
-              if (Array.isArray(reRanked) && reRanked.length > 0) {
-                finalCandidates = reRanked;
+              renderMode = "no-result";
+              try {
+                const llmBundle = await assembleLlmPrimaryResult(delays, candidates, model, { estimatedCommandLength, delaysWithIdx, backspaceHints });
+                if (llmBundle && llmBundle.primary) {
+                  primaryResult = llmBundle.primary;
+                }
+                if (llmBundle && llmBundle.insight) {
+                  insightResult = llmBundle.insight;
+                }
+                if (Array.isArray(llmBundle && llmBundle.rankedCandidates) && llmBundle.rankedCandidates.length > 0) {
+                  finalCandidates = llmBundle.rankedCandidates;
+                }
+                if (primaryResult || insightResult) renderMode = "ok";
+              } catch (innerErr) {
+                console.warn("[Crypt/OpenSSH] LLM primary result failed:", innerErr);
+                renderMode = "error";
               }
             }
-          } catch (err) {
-            // Don't surface LLM errors to the user beyond a console warning.
-            console.warn("[Crypt/OpenSSH] LLM re-ranking failed:", err);
+          } catch (outerErr) {
+            // Defensive guard around the feature-detect block above.
+            console.warn("[Crypt/OpenSSH] LLM primary result path failed:", outerErr);
+            renderMode = "error";
           }
+          renderSshPrimary(primaryResult, insightResult, { mode: renderMode });
           renderSshCandidates(finalCandidates, delays, decoder);
-          renderSshSummary(flow, delays, finalCandidates);
+          renderSshSummary(flow, delays, finalCandidates, estimatedCommandLength, backspaceHints);
+          clearProgress();
+          if (analyzeBtn) analyzeBtn.disabled = false;
         })();
       })
       .catch((err) => {
@@ -545,7 +1140,52 @@ function createCryptPanel({
           summaryEl.textContent =
             "Failed to load QWERTY model: " + (err?.message || err);
         }
+        clearProgress();
+        if (analyzeBtn) analyzeBtn.disabled = false;
       });
+  }
+
+  function renderSshChartWithSeries(series, delays, decoder) {
+    const chartEl = document.getElementById("crypt-openssh-chart");
+    const legendEl = document.getElementById("crypt-openssh-chart-legend");
+    if (!chartEl) return;
+    if (!delays.length) {
+      chartEl.replaceChildren();
+      if (legendEl) {
+        legendEl.textContent =
+          "Not enough packets in this direction to plot a distribution.";
+      }
+      return;
+    }
+    const layout = {
+      margin: { t: 20, r: 12, l: 40, b: 36 },
+      bargap: 0.05,
+      xaxis: {
+        title: { text: "Inter-key delay (ms)" },
+        range: [0, Math.max(...series.histogram.x) + series.binSize],
+      },
+      yaxis: { title: { text: "Count" } },
+      legend: { orientation: "h", y: -0.2 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+    };
+    if (typeof window.Plotly !== "undefined") {
+      window.Plotly.newPlot(
+        chartEl,
+        [series.histogram, series.reference],
+        layout,
+        { displayModeBar: false, responsive: true },
+      );
+    } else if (legendEl) {
+      legendEl.textContent =
+        "Plotly unavailable — chart skipped. Histogram: " +
+        JSON.stringify(series.histogram.y);
+    }
+    if (legendEl) {
+      legendEl.textContent =
+        `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
+        `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms).`;
+    }
   }
 
   function renderSshChart(delays, decoder) {
@@ -589,6 +1229,98 @@ function createCryptPanel({
       legendEl.textContent =
         `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
         `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms).`;
+    }
+  }
+
+  /**
+   * Render the LLM-derived insight + primary result cards.
+   * ``insight`` is shown at the top of the Top-N full-width section
+   * (just under the dropdowns and above the top-guess); ``primary``
+   * follows directly underneath. Both are ``null`` when the LLM
+   * is unavailable — in that case we keep the cards visible with a
+   * diagnostic message so the user can see that the LLM prompt path
+   * exists, even when no LLM is configured or the model call failed.
+   *
+   * ``mode`` is one of:
+   *   - "ok"        — primary and/or insight came back from the LLM
+   *   - "no-llm"    — ``window.llmapi.generate`` is unavailable
+   *   - "no-result" — LLM call returned an empty/unparseable result
+   *   - "error"     — LLM call threw an exception
+   */
+  function renderSshPrimary(primary, insight, opts) {
+    const mode = (opts && opts.mode) || (primary || insight ? "ok" : "no-llm");
+    const textEl = document.getElementById("crypt-openssh-primary-text");
+    const confEl = document.getElementById("crypt-openssh-primary-confidence");
+    const kindEl = document.getElementById("crypt-openssh-primary-kind");
+    const sourceEl = document.getElementById("crypt-openssh-primary-source");
+    const rationaleEl = document.getElementById("crypt-openssh-primary-rationale");
+    const primaryEl = document.getElementById("crypt-openssh-primary");
+    const insightEl = document.getElementById("crypt-openssh-insight");
+    const insightTextEl = document.getElementById("crypt-openssh-insight-text");
+    const insightSourceEl = document.getElementById("crypt-openssh-insight-source");
+
+    // Primary card is always visible (non-hidden) once analysis has run —
+    // its content communicates either the LLM's best-guess, or a "LLM
+    // unavailable" diagnostic so the user understands the prompt ran but
+    // no model is wired up.
+    if (primaryEl) primaryEl.hidden = false;
+
+    if (primary && primary.text) {
+      if (textEl) textEl.textContent = primary.text;
+      if (confEl) {
+        confEl.textContent = Number.isFinite(primary.confidence)
+          ? `Confidence: ${(primary.confidence * 100).toFixed(1)}%`
+          : "Confidence: —";
+      }
+      if (kindEl) {
+        kindEl.textContent = primary.kind ? `Type: ${primary.kind}` : "Type: —";
+      }
+      if (sourceEl) {
+        sourceEl.textContent = primary.source || "decoder + LLM";
+      }
+      if (rationaleEl) {
+        rationaleEl.textContent = primary.rationale || "";
+      }
+    } else {
+      // No primary result from the LLM. Show a diagnostic in the same
+      // card so the user knows the prompt path was exercised.
+      const label =
+        mode === "error"
+          ? "LLM call failed."
+          : mode === "no-result"
+            ? "LLM returned no usable result."
+            : "LLM not configured. Showing decoder candidates only.";
+      if (textEl) textEl.textContent = label;
+      if (confEl) confEl.textContent = "Confidence: —";
+      if (kindEl) kindEl.textContent = "Type: —";
+      if (sourceEl) sourceEl.textContent = "decoder only";
+      if (rationaleEl) {
+        rationaleEl.textContent =
+          "The decoder still provides the best per-character hypotheses in the table below.";
+      }
+    }
+
+    // Insight card sits above the primary card. Always visible after
+    // analysis completes — content varies by mode:
+    //   - "ok"        → LLM-authored analyst paragraph
+    //   - "no-llm"    → "LLM unavailable; primary result was produced by the decoder alone."
+    //   - "no-result" → "LLM did not return an insight string."
+    //   - "error"     → "LLM call failed before an insight could be produced."
+    if (insightEl) insightEl.hidden = false;
+    if (insight && insight.text) {
+      if (insightTextEl) insightTextEl.textContent = insight.text;
+      if (insightSourceEl) {
+        insightSourceEl.textContent = insight.source || "decoder + LLM";
+      }
+    } else {
+      const fallback =
+        mode === "error"
+          ? "The LLM call failed before an analyst note could be produced. Check the activity log for diagnostics."
+          : mode === "no-result"
+            ? "The LLM did not return an insight string for this session."
+            : "The LLM is not configured or unavailable. To enable insight, install Ollama and select a model in Settings.";
+      if (insightTextEl) insightTextEl.textContent = fallback;
+      if (insightSourceEl) insightSourceEl.textContent = "decoder only";
     }
   }
 
@@ -660,11 +1392,274 @@ function createCryptPanel({
     });
   }
 
+  // ── LLM-driven primary result assembly ─────────────────────────────────
+  //
+  // Combines the decoder's Viterbi candidates with shell/file language
+  // priors to produce a single best-guess command/filename/text plus a
+  // short LLM-authored insight paragraph that interprets the guess in
+  // context. The function also reranks the decoder candidates so the
+  // evidence table below the primary card reflects the same LLM
+  // confidence order.
+  //
+  // Returns:
+  //   { primary, insight, rankedCandidates }
+  // or
+  //   { rankedCandidates }   (when the LLM is unavailable).
+  async function assembleLlmPrimaryResult(delays, candidates, model, opts) {
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return { rankedCandidates: [] };
+    }
+    const result = { rankedCandidates: candidates.slice() };
+    if (typeof window === "undefined" || !window.llmapi || typeof window.llmapi.generate !== "function") {
+      return result;
+    }
+    const evidence = buildLlmEvidence(delays, candidates, model, opts);
+
+    // ── Step 1: assemble the primary best-guess.
+    let primary = null;
+    try {
+      primary = await requestLlmPrimary(evidence);
+    } catch (err) {
+      console.warn("[Crypt/OpenSSH] LLM primary assembly failed:", err);
+    }
+    if (primary) result.primary = primary;
+
+    // ── Step 2: insight paragraph that interprets the primary guess in
+    // context (commands, filenames, intent, security implications).
+    if (primary && primary.text) {
+      try {
+        const insight = await requestLlmInsight(evidence, primary);
+        if (insight) result.insight = insight;
+      } catch (err) {
+        console.warn("[Crypt/OpenSSH] LLM insight failed:", err);
+      }
+    }
+
+    // ── Step 3: rerank the decoder candidates so the evidence table
+    // matches the LLM's preferred order. Falls back to the decoder's own
+    // scores if the LLM call fails.
+    try {
+      const ranked = await requestLlmRerank(evidence, candidates);
+      if (Array.isArray(ranked) && ranked.length > 0) {
+        result.rankedCandidates = ranked;
+      }
+    } catch (err) {
+      console.warn("[Crypt/OpenSSH] LLM rerank failed:", err);
+    }
+
+    return result;
+  }
+
+  // Build the JSON evidence packet the LLM sees. Keeps the payload
+  // compact enough for a single Ollama call while still carrying the
+  // decoder's top candidates, digraph priors, command-length estimate,
+  // and backspace hints.
+  function buildLlmEvidence(delays, candidates, model, opts) {
+    const baselines = (model && model.baselines) || {};
+    const empirical = (model && model.empirical) || {};
+    const allowedAlphabet =
+      (model && model.alphabet) ||
+      "abcdefghijklmnopqrstuvwxyz0123456789 .,-_/:;=?!@#$%^&*()[]{}<>'\"|\\~`+";
+    const presetSetting =
+      typeof document !== "undefined" && document.getElementById("settings-llm-preset")
+        ? document.getElementById("settings-llm-preset").value
+        : "english";
+    const delaysWithIdx = Array.isArray(opts && opts.delaysWithIdx)
+      ? opts.delaysWithIdx.slice(0, 200)
+      : null;
+    const estimatedCommandLength = Number.isFinite(opts && opts.estimatedCommandLength)
+      ? opts.estimatedCommandLength
+      : null;
+    return {
+      kind: "openssh-keystroke-timing",
+      languagePreset: presetSetting || "english",
+      allowedAlphabet,
+      delays: delays.slice(0, 200),
+      delaysWithIdx: delaysWithIdx || undefined,
+      estimatedCommandLength: estimatedCommandLength !== null ? estimatedCommandLength : undefined,
+      backspaceHints: (opts && opts.backspaceHints) || undefined,
+      candidates: candidates.map((c) => ({ text: c.text || "", logProb: c.logProb })),
+      baselines,
+      empiricalDigraphsSample: Object.keys(empirical || {}).slice(0, 40),
+    };
+  }
+
+  // Ask the LLM to pick a single best-guess string and label it.
+  async function requestLlmPrimary(evidence) {
+    const prompt = `You are a specialist assistant that combines keystroke-timing likelihoods with shell-language priors to recover what was typed during an interactive SSH session. The user has provided an evidence packet from a QWERTY/digraph decoder and wants your single best reconstruction of the typed text.
+
+Evidence JSON:
+${JSON.stringify(evidence)}
+
+Instructions:
+- Output a single, valid JSON object: {"text": string, "confidence": number in [0,1], "kind": "command" | "filename" | "path" | "argument" | "phrase" | "unknown", "rationale": string, "isCommand": boolean}.
+- "text" must be a single string composed only of characters from the allowedAlphabet. The decoder's top candidates are the most likely substrings, but you may also assemble variants (e.g. "git status" or "cat /etc/passwd") by combining the best pieces.
+- "confidence" is a number in [0,1] reflecting how likely this exact string was typed in this SSH session, given the timing and language priors.
+- "kind" describes the kind of text recovered (command, filename, etc.).
+- "isCommand" is true if the text looks like a shell command.
+- "rationale" is a 1–2 sentence explanation of why this text best matches the evidence.
+- If the evidence is too sparse to produce a meaningful guess, return {"text": "", "confidence": 0, "kind": "unknown", "rationale": "insufficient evidence", "isCommand": false}.
+- Return ONLY the JSON object, no other commentary.`;
+
+    const raw = await window.llmapi.generate(prompt);
+    const text = extractLlmText(raw);
+    if (!text) return null;
+    const obj = parseLlmJsonObject(text);
+    if (!obj || typeof obj !== "object") return null;
+    const cleaned = sanitizeTextForAlphabet(String(obj.text || "")).trim();
+    if (!cleaned) return null;
+    const confidence = clamp01(obj.confidence);
+    const kind = String(obj.kind || "command").toLowerCase();
+    const rationale = String(obj.rationale || "").trim();
+    const isCommand = obj.isCommand === true || looksLikeShellCommand(cleaned);
+    return {
+      text: cleaned,
+      confidence: Number.isFinite(confidence) ? confidence : 0,
+      kind,
+      rationale,
+      isCommand,
+      source: "decoder + LLM",
+    };
+  }
+
+  // Ask the LLM to author a short insight paragraph that interprets the
+  // primary guess in context: what command it looks like, what file it
+  // touches, what the user was likely doing, and any security-relevant
+  // observations.
+  async function requestLlmInsight(evidence, primary) {
+    const prompt = `You are a security-aware assistant interpreting a recovered SSH keystroke. The decoder + LLM produced the following best-guess text:
+
+Primary guess JSON:
+${JSON.stringify({
+      text: primary.text,
+      kind: primary.kind,
+      isCommand: primary.isCommand,
+      confidence: primary.confidence,
+      rationale: primary.rationale,
+    })}
+
+Original evidence (top decoder candidates and timing priors):
+${JSON.stringify({
+      topCandidates: evidence.candidates.slice(0, 12),
+      estimatedCommandLength: evidence.estimatedCommandLength,
+      backspaceHints: evidence.backspaceHints,
+      languagePreset: evidence.languagePreset,
+    })}
+
+Instructions:
+- Write a concise (3–6 sentence) analyst note explaining what was likely typed, what the user appears to have been doing, and whether the text contains anything security-relevant (file paths, credentials, network endpoints, dangerous commands, etc.).
+- If the primary guess is a shell command, mention what the command does and what artifacts it would leave behind.
+- If you can extract filenames, paths, hostnames, usernames, or other meaningful tokens, list them inline.
+- If the evidence is too weak to draw conclusions, say so explicitly.
+- Output a single string under the JSON key "text". No other keys, no other text.
+- Return ONLY the JSON object: {"text": "..."}.`;
+
+    const raw = await window.llmapi.generate(prompt);
+    const text = extractLlmText(raw);
+    if (!text) return null;
+    const obj = parseLlmJsonObject(text);
+    if (!obj || typeof obj !== "object") return null;
+    const insightText = String(obj.text || "").trim();
+    if (!insightText) return null;
+    return { text: insightText, source: "decoder + LLM" };
+  }
+
+  // Ask the LLM to rerank the decoder candidates. Returns the same
+  // candidate objects, decorated with llmScore/combinedScore, sorted
+  // descending by combinedScore. Falls back to the decoder's own
+  // logProb on any failure.
+  async function requestLlmRerank(evidence, candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
+    const prompt = `You are re-ranking SSH keystroke-timing candidates using shell/file language priors. Each candidate is a string the decoder thinks the user may have typed, with a timing log-probability. Re-score them and return a JSON array of objects.
+
+Evidence JSON:
+${JSON.stringify({
+      candidates: evidence.candidates,
+      languagePreset: evidence.languagePreset,
+      estimatedCommandLength: evidence.estimatedCommandLength,
+    })}
+
+Instructions:
+- Output a JSON array of objects in the same order as the input candidates: [{"text": string, "score": number in [0,1], "isCommand": boolean}].
+- "score" is a combined probability in [0,1] that the text was typed in this session.
+- "isCommand" is true if the candidate is a shell command.
+- Return ONLY the JSON array, no other commentary.`;
+
+    let raw;
+    try {
+      raw = await window.llmapi.generate(prompt);
+    } catch (err) {
+      console.warn("LLM rerank generate error:", err);
+      return candidates;
+    }
+    const text = extractLlmText(raw);
+    if (!text) return candidates;
+    const arr = parseLlmJsonArray(text);
+    if (!arr) return candidates;
+    return mergeLlmScoresIntoCandidates(arr, candidates);
+  }
+
+  // ── LLM response helpers ──────────────────────────────────────────────
+  function extractLlmText(raw) {
+    if (typeof raw === "string") return raw;
+    if (!raw || typeof raw !== "object") return "";
+    try {
+      if (Array.isArray(raw.output) && raw.output.length > 0) {
+        return raw.output.map((o) => o.content || "").join("\n");
+      }
+      if (Array.isArray(raw)) {
+        return raw.map((r) => (r && r.content) || JSON.stringify(r)).join("\n");
+      }
+      if (raw[0] && raw[0].content) return raw[0].content;
+      if (raw.content) return raw.content;
+      return JSON.stringify(raw);
+    } catch (_e) {
+      return "";
+    }
+  }
+
+  function parseLlmJsonObject(text) {
+    if (!text || typeof text !== "string") return null;
+    try {
+      return JSON.parse(text);
+    } catch (_e) { /* fall through to regex */ }
+    const m = text.match(/\{[\s\S]*\}/m);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[0]);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function parseLlmJsonArray(text) {
+    if (!text || typeof text !== "string") return null;
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_e) { /* fall through */ }
+    const m = text.match(/\[\s*\{[\s\S]*\}\s*\]/m);
+    if (!m) return null;
+    try {
+      return JSON.parse(m[0]);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function clamp01(n) {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return NaN;
+    if (x < 0) return 0;
+    if (x > 1) return 1;
+    return x;
+  }
+
   // Ask Ollama to re-score the decoder candidates. Returns a new array of
   // candidate objects sorted by combinedScore (descending) when successful.
   // The function is best-effort and will return the original candidates on
   // any parse/error failure.
-  async function rerankCandidatesWithLlm(delays, candidates, model) {
+  async function rerankCandidatesWithLlm(delays, candidates, model, opts = {}) {
     if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
 
     // Pull small priors from model to aid the LLM: baselines and a small
@@ -672,6 +1667,25 @@ function createCryptPanel({
     const baselines = (model && model.baselines) || null;
     const empirical = (model && model.empirical) || null;
     const allowedAlphabet = (model && model.alphabet) || "abcdefghijklmnopqrstuvwxyz0123456789 .,-_/:;=?!@#$%^&*()[]{}<>'\"|\\~`+";
+
+    // Include any estimated command length / Enter detection hints discovered
+    // by local heuristics so the LLM can respect likely command boundaries.
+    const estimatedCommandLength = Number.isFinite(opts.estimatedCommandLength) ? opts.estimatedCommandLength : null;
+    const delaysWithIdx = Array.isArray(opts.delaysWithIdx) ? opts.delaysWithIdx.slice(0, 200) : null;
+
+    // Read user tuning: preset and LLM weight slider (persisted in Settings).
+    const presetSetting = (typeof document !== 'undefined' && document.getElementById('settings-llm-preset')) ? document.getElementById('settings-llm-preset').value : 'english';
+    let llmWeightPercent = 40;
+    try {
+      if (typeof document !== 'undefined' && document.getElementById('settings-llm-weight-percent')) {
+        const v = Number(document.getElementById('settings-llm-weight-percent').value);
+        if (Number.isFinite(v)) llmWeightPercent = Math.max(0, Math.min(100, v));
+      }
+    } catch (_e) {
+      llmWeightPercent = 40;
+    }
+    // decoder weight alpha = 1 - llmWeightFraction
+    const computedAlpha = Math.max(0, Math.min(1, 1 - llmWeightPercent / 100));
 
     // Build a concise, machine-friendly prompt that asks the LLM to return
     // a strict JSON array of objects. Instruct the model to score both
@@ -681,16 +1695,29 @@ function createCryptPanel({
     // for an interactive ssh shell and must use only allowed characters.
     const payload = {
       delays: delays.slice(0, 200), // avoid extremely long prompts
+      delaysWithIdx: delaysWithIdx || undefined,
+      estimatedCommandLength: estimatedCommandLength !== null ? estimatedCommandLength : undefined,
+      backspaceHints: opts.backspaceHints || undefined,
       candidates: candidates.map((c) => ({ text: c.text || "", logProb: c.logProb })),
       baselines: baselines || {},
       empiricalDigraphsSample: Object.keys(empirical || {}).slice(0, 40),
       allowedAlphabet,
+      languagePreset: presetSetting || 'english',
+      llmWeightPercent: llmWeightPercent,
       note:
-        "Return strictly a JSON array of objects [{\"text\": string, \"score\": number, \"isCommand\": boolean}]. 'score' is a combined probability in [0,1] that the text was typed in this SSH session given the timing data and language priors. Only return entries that are plausible SSH shell commands (file paths, commands with flags, arguments). Keep the output valid JSON with no additional commentary."
+        "Return strictly a JSON array of objects [{\"text\": string, \"score\": number, \"isCommand\": boolean}]. 'score' is a combined probability in [0,1] that the text was typed in this SSH session given the timing data and language priors. If an estimatedCommandLength is provided, prefer candidates whose length best matches that estimate (within ±2 chars). If backspaceHints are provided, consider that deletions may have occurred at those positions and prefer candidate texts that can explain those corrections. Keep the output valid JSON with no additional commentary."
     };
 
-    const prompt = `You are a specialist assistant that combines keystroke-timing likelihoods with shell-language priors to judge which candidate strings are most likely to have been typed in an interactive SSH session.\n\nContext JSON:\n${JSON.stringify(payload)}\n\nUse QWERTY and digraph timing priors to approximate timing-likelihoods, and use your language model knowledge to score how plausible each candidate is as an SSH shell command (examples: ls, cd, sudo, git status, cat /etc/passwd, ./run.sh). Output JSON array only.`;
+    let prompt = `You are a specialist assistant that combines keystroke-timing likelihoods with shell-language priors to judge which candidate strings are most likely to have been typed in an interactive SSH session. Use the language preset: ${String(presetSetting || 'english')}.
 
+Context JSON:
+${JSON.stringify(payload)}
+
+Instructions:
+- Use QWERTY and digraph timing priors to approximate timing-likelihoods. If delaysWithIdx and estimatedCommandLength are provided, use them to prefer candidates that align with the detected Enter/Return boundary. If backspaceHints are present, assume those positions likely correspond to deletion keypresses (Backspace/Delete) and allow candidate texts that are shorter or contain corrections at those positions.
+- Use your language model knowledge to score how plausible each candidate is as an SSH shell command (examples: ls, cd, sudo, git status, cat /etc/passwd, ./run.sh). If the preset is 'command-line' prefer typical shell invocations; if 'vim', increase tolerance for editor-like fragments and keypress patterns.
+- Prefer outputs that are valid commands for an interactive shell and follow POSIX-style command patterns where appropriate.
+- Output JSON array only, with objects: {\"text\": string, \"score\": number in [0,1], \"isCommand\": boolean}.`;
     let rawResp;
     try {
       rawResp = await window.llmapi.generate(prompt);
@@ -728,7 +1755,114 @@ function createCryptPanel({
       try {
         const parsedAll = JSON.parse(textResp);
         if (Array.isArray(parsedAll)) {
-          return mergeLlmScoresIntoCandidates(parsedAll, candidates);
+          let merged = mergeLlmScoresIntoCandidates(parsedAll, candidates);
+          // Attempt to get a single best-guess from the LLM to further bias
+          // by language plausibility. Best-guess is optional; failures are
+          // non-fatal.
+          try {
+            const bestPrompt = `Given the same context and the candidate list, return a strict JSON object with the single most probable SSH command string that could have been typed and a confidence in [0,1]. Example: {"text":"ls -la","confidence":0.82}. Return ONLY the object.`;
+            const bestResp = await window.llmapi.generate(bestPrompt);
+            let bestText = "";
+            let bestConf = null;
+            if (typeof bestResp === "string") {
+              try {
+                const b = JSON.parse(bestResp);
+                bestText = b.text || "";
+                bestConf = Number.isFinite(b.confidence) ? b.confidence : null;
+              } catch (_e) {
+                // try to extract object from text
+                const m = bestResp.match(/\{[\s\S]*\}/m);
+                if (m) {
+                  try {
+                    const b2 = JSON.parse(m[0]);
+                    bestText = b2.text || "";
+                    bestConf = Number.isFinite(b2.confidence) ? b2.confidence : null;
+                  } catch (_e2) { }
+                }
+              }
+            } else if (bestResp && typeof bestResp === "object") {
+              if (bestResp?.text) {
+                bestText = bestResp.text;
+                bestConf = Number.isFinite(bestResp.confidence) ? bestResp.confidence : null;
+              } else if (bestResp?.content) {
+                try {
+                  const b3 = JSON.parse(bestResp.content);
+                  bestText = b3.text || "";
+                  bestConf = Number.isFinite(b3.confidence) ? b3.confidence : null;
+                } catch (_e) { }
+              }
+            }
+
+            if (bestText && bestText.trim()) {
+              bestText = sanitizeTextForAlphabet(bestText).trim();
+              if (bestText) {
+                // Find best matching candidate or insert as synthetic.
+                const lcBest = bestText.toLowerCase();
+                let matched = null;
+                for (const mc of merged) {
+                  if ((mc.text || "").toLowerCase() === lcBest) {
+                    matched = mc;
+                    break;
+                  }
+                }
+                if (!matched) {
+                  for (const mc of merged) {
+                    const t = (mc.text || "").toLowerCase();
+                    if (t && (t.includes(lcBest) || lcBest.includes(t))) {
+                      matched = mc;
+                      break;
+                    }
+                  }
+                }
+                if (matched) {
+                  // Boost matched candidate's llmScore toward bestConf
+                  if (Number.isFinite(bestConf)) {
+                    matched.llmScore = Math.max(matched.llmScore || 0, bestConf);
+                  } else {
+                    matched.llmScore = Math.max(matched.llmScore || 0, 0.5);
+                  }
+                  matched.llmBestGuess = true;
+                } else {
+                  // Insert synthetic candidate at the top
+                  const synth = {
+                    text: bestText,
+                    logProb: Number.NEGATIVE_INFINITY,
+                    decoderProb: 0.0001,
+                    llmScore: Number.isFinite(bestConf) ? bestConf : 0.5,
+                    llmIsCommand: looksLikeShellCommand(bestText),
+                    combinedScore: 0,
+                    synthetic: true,
+                  };
+                  merged.unshift(synth);
+                }
+
+                // Re-normalize LLM scores and re-compute combined scores with
+                // a bias toward the LLM (more language-driven ranking).
+                // Reduce decoder weight slightly when a best-guess is present so
+                // language plausibility has more pull. computedAlpha is the
+                // decoder-weight baseline derived from the UI slider; scale it
+                // toward language for the best-guess path.
+                const alpha = Math.max(0, computedAlpha * 0.6);
+                const decoderProbs = merged.map((c) => c.decoderProb || (Number.isFinite(c.logProb) ? Math.exp(c.logProb) : 0));
+                const sumDecoder = decoderProbs.reduce((s, v) => s + v, 0) || 1e-12;
+                const decoderNorm = decoderProbs.map((v) => v / sumDecoder);
+                const llmScores = merged.map((c) => Number.isFinite(c.llmScore) ? c.llmScore : 0.01);
+                const sumLlm = llmScores.reduce((s, v) => s + v, 0) || 1e-12;
+                const llmNorm = llmScores.map((v) => v / sumLlm);
+                for (let i = 0; i < merged.length; i++) {
+                  const cmdBoost = merged[i].llmIsCommand ? 1.12 : 1.0;
+                  merged[i].combinedScore = (alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i]) * cmdBoost;
+                }
+                const sumC = merged.reduce((s, v) => s + (v.combinedScore || 0), 0) || 1e-12;
+                for (const m of merged) m.combinedScore = m.combinedScore / sumC;
+
+                merged.sort((a, b) => b.combinedScore - a.combinedScore);
+              }
+            }
+          } catch (_bgErr) {
+            // ignore best-guess failures
+          }
+          return merged;
         }
       } catch (_e) {
         console.warn("LLM response did not contain JSON array");
@@ -737,6 +1871,16 @@ function createCryptPanel({
     }
 
     try {
+      if (!jsonMatch || !jsonMatch[0]) {
+        // Defensive fallback: try parsing the full textResp as JSON array.
+        try {
+          const parsedAll2 = JSON.parse(textResp);
+          if (Array.isArray(parsedAll2)) return mergeLlmScoresIntoCandidates(parsedAll2, candidates);
+        } catch (_e) {
+          console.warn("LLM response matched but had no capture group; falling back to original candidates");
+          return candidates;
+        }
+      }
       const parsed = JSON.parse(jsonMatch[0]);
       if (!Array.isArray(parsed)) return candidates;
       return mergeLlmScoresIntoCandidates(parsed, candidates);
@@ -745,11 +1889,9 @@ function createCryptPanel({
       return candidates;
     }
 
-    function sanitizeTextForAlphabet(text) {
+    function sanitizeTextForAlphabetLocal(text, allowedAlphabet) {
       if (!text || typeof text !== "string") return "";
-      const allowed = new Set(String(allowedAlphabet).split(""));
-      // Preserve whitespace and common shell punctuation; remove disallowed
-      // characters.
+      const allowed = new Set(String(allowedAlphabet || "").split(""));
       let out = "";
       for (const ch of text) {
         if (allowed.has(ch) || ch === '\n' || ch === '\t') out += ch;
@@ -757,32 +1899,24 @@ function createCryptPanel({
       return out.trim();
     }
 
-    function looksLikeShellCommand(t) {
-      if (!t || typeof t !== "string") return false;
-      const trimmed = t.trim();
-      if (!trimmed) return false;
-      // Common command starts: words, ./, /, -, cd, sudo, ssh, scp, git, ls, cat, nano
-      return /^([a-zA-Z0-9_./-]|\.|\s)/.test(trimmed) && /[a-zA-Z0-9/._-]/.test(trimmed);
-    }
-
-    function mergeLlmScoresIntoCandidates(parsedArray, originalCandidates) {
+    function mergeLlmScoresIntoCandidatesLocal(parsedArray, originalCandidates, allowedAlphabet, computedAlphaLocal) {
       // Map texts to scores; allow case-insensitive matching and simple
       // substring fallback.
       const scoreMap = new Map();
       for (const item of parsedArray) {
         if (!item || typeof item !== "object") continue;
-        const t = sanitizeTextForAlphabet(String(item.text || "")).trim();
+        const t = sanitizeTextForAlphabetLocal(String(item.text || ""), allowedAlphabet).trim();
         let s = Number(item.score ?? item.score?.value ?? item.prob ?? item.confidence);
         if (!Number.isFinite(s)) s = Number(item.score) || 0;
         if (!Number.isFinite(s) || s < 0) s = 0;
         if (s > 1) s = 1;
-        const isCommand = !!item.isCommand || looksLikeShellCommand(t);
+        const isCommand = !!item.isCommand || looksLikeShellCommandLocal(t);
         scoreMap.set(t, { s, isCommand });
       }
 
       // Build arrays for normalization.
       const llmScores = originalCandidates.map((c) => {
-        const text = sanitizeTextForAlphabet(String(c.text || "")).trim();
+        const text = sanitizeTextForAlphabetLocal(String(c.text || ""), allowedAlphabet).trim();
         if (scoreMap.has(text)) return scoreMap.get(text).s;
         for (const [k, v] of scoreMap.entries()) {
           if (k.toLowerCase() === text.toLowerCase()) return v.s;
@@ -794,7 +1928,7 @@ function createCryptPanel({
       });
 
       const llmIsCommand = originalCandidates.map((c) => {
-        const text = sanitizeTextForAlphabet(String(c.text || "")).trim();
+        const text = sanitizeTextForAlphabetLocal(String(c.text || ""), allowedAlphabet).trim();
         if (scoreMap.has(text)) return !!scoreMap.get(text).isCommand;
         for (const [k, v] of scoreMap.entries()) {
           if (k.toLowerCase() === text.toLowerCase()) return !!v.isCommand;
@@ -809,9 +1943,10 @@ function createCryptPanel({
       const decoderNorm = decoderProbs.map((v) => v / sumDecoder);
       const llmNorm = llmScores.map((v) => v / sumLlm);
 
-      // Combine with a modest bias toward the statistical decoder (60/40),
-      // but boost candidates flagged as commands by the LLM slightly.
-      const alpha = 0.6;
+      // Combine using the UI-configured weighting: computedAlpha is the
+      // decoder-weight baseline (1 - llmWeightFraction). Slightly boost
+      // candidates that look like commands.
+      const alpha = typeof computedAlphaLocal === 'number' ? computedAlphaLocal : 0.6;
       const merged = originalCandidates.map((c, i) => {
         const baseCombined = alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i];
         const commandBoost = llmIsCommand[i] ? 1.12 : 1.0; // slight boost
@@ -835,7 +1970,84 @@ function createCryptPanel({
     }
   }
 
-  function renderSshSummary(flow, delays, candidates) {
+  function sanitizeTextForAlphabetShared(text, allowedAlphabet) {
+    if (!text || typeof text !== "string") return "";
+    const allowed = new Set(String(allowedAlphabet || "").split(""));
+    let out = "";
+    for (const ch of text) {
+      if (allowed.has(ch) || ch === '\n' || ch === '\t') out += ch;
+    }
+    return out.trim();
+  }
+
+  function looksLikeShellCommandShared(t) {
+    if (!t || typeof t !== "string") return false;
+    const trimmed = t.trim();
+    if (!trimmed) return false;
+    return /^([a-zA-Z0-9_./-]|\.|\s)/.test(trimmed) && /[a-zA-Z0-9/._-]/.test(trimmed);
+  }
+
+  function mergeLlmScoresIntoCandidatesShared(parsedArray, originalCandidates, allowedAlphabet, computedAlpha) {
+    const scoreMap = new Map();
+    for (const item of parsedArray) {
+      if (!item || typeof item !== "object") continue;
+      const t = sanitizeTextForAlphabetShared(String(item.text || ""), allowedAlphabet).trim();
+      let s = Number(item.score ?? item.score?.value ?? item.prob ?? item.confidence);
+      if (!Number.isFinite(s)) s = Number(item.score) || 0;
+      if (!Number.isFinite(s) || s < 0) s = 0;
+      if (s > 1) s = 1;
+      const isCommand = !!item.isCommand || looksLikeShellCommandShared(t);
+      scoreMap.set(t, { s, isCommand });
+    }
+
+    const llmScores = originalCandidates.map((c) => {
+      const text = sanitizeTextForAlphabetShared(String(c.text || ""), allowedAlphabet).trim();
+      if (scoreMap.has(text)) return scoreMap.get(text).s;
+      for (const [k, v] of scoreMap.entries()) {
+        if (k.toLowerCase() === text.toLowerCase()) return v.s;
+      }
+      for (const [k, v] of scoreMap.entries()) {
+        if (text && k && (text.includes(k) || k.includes(text))) return v.s;
+      }
+      return 0.01;
+    });
+
+    const llmIsCommand = originalCandidates.map((c) => {
+      const text = sanitizeTextForAlphabetShared(String(c.text || ""), allowedAlphabet).trim();
+      if (scoreMap.has(text)) return !!scoreMap.get(text).isCommand;
+      for (const [k, v] of scoreMap.entries()) {
+        if (k.toLowerCase() === text.toLowerCase()) return !!v.isCommand;
+      }
+      return false;
+    });
+
+    const decoderProbs = originalCandidates.map((c) => (Number.isFinite(c.logProb) ? Math.exp(c.logProb) : 0));
+    const sumDecoder = decoderProbs.reduce((s, v) => s + v, 0) || 1e-12;
+    const sumLlm = llmScores.reduce((s, v) => s + v, 0) || 1e-12;
+    const decoderNorm = decoderProbs.map((v) => v / sumDecoder);
+    const llmNorm = llmScores.map((v) => v / sumLlm);
+
+    const alpha = typeof computedAlpha === "number" ? computedAlpha : 0.6;
+    const merged = originalCandidates.map((c, i) => {
+      const baseCombined = alpha * decoderNorm[i] + (1 - alpha) * llmNorm[i];
+      const commandBoost = llmIsCommand[i] ? 1.12 : 1.0;
+      return {
+        ...c,
+        combinedScore: baseCombined * commandBoost,
+        llmScore: llmScores[i],
+        decoderProb: decoderProbs[i],
+        llmIsCommand: !!llmIsCommand[i],
+      };
+    });
+    const sumCombined = merged.reduce((s, v) => s + (v.combinedScore || 0), 0) || 1e-12;
+    for (const m of merged) {
+      m.combinedScore = m.combinedScore / sumCombined;
+    }
+    merged.sort((a, b) => b.combinedScore - a.combinedScore);
+    return merged;
+  }
+
+  function renderSshSummary(flow, delays, candidates, estimatedCommandLength, backspaceHints) {
     const summaryEl = document.getElementById("crypt-openssh-summary");
     if (!summaryEl) return;
     if (!delays.length) {
@@ -846,11 +2058,21 @@ function createCryptPanel({
     const median = sorted[Math.floor(sorted.length / 2)];
     const min = sorted[0];
     const max = sorted[sorted.length - 1];
-    summaryEl.textContent = [
+    const topText = candidates[0]?.text || "(none)";
+    const topLogP = candidates[0]?.logProb?.toFixed(2) ?? "n/a";
+
+    const lines = [
       `Flow: ${flow.srcIp}:${flow.srcPort} ↔ ${flow.dstIp}:${flow.dstPort}`,
       `Delays: ${delays.length} | min=${min.toFixed(1)} ms | median=${median.toFixed(1)} ms | max=${max.toFixed(1)} ms`,
-      `Top hypothesis: "${candidates[0]?.text || "(none)"}"  (logP=${candidates[0]?.logProb?.toFixed(2) ?? "n/a"})`,
-    ].join("\n");
+      `Top hypothesis: "${topText}"  (logP=${topLogP})`,
+    ];
+    if (Number.isFinite(estimatedCommandLength)) {
+      lines.push(`Estimated command length (chars): ${Number(estimatedCommandLength)}`);
+    }
+    if (backspaceHints && typeof backspaceHints.count === 'number' && backspaceHints.count > 0) {
+      lines.push(`Detected possible deletions (Backspace/Delete): ${backspaceHints.count}`);
+    }
+    summaryEl.textContent = lines.join("\n");
   }
 
   function formatCryptSummary(rawText, label, sourceLabel, expectedRegex) {

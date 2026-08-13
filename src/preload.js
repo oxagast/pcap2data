@@ -1601,6 +1601,7 @@ contextBridge.exposeInMainWorld('llmapi', {
 
 contextBridge.exposeInMainWorld('opensshapi', {
   loadQwertyModel: () => ipcRenderer.invoke('openssh-load-qwerty-model'),
+  decode: (payload) => ipcRenderer.invoke('openssh-decode', payload),
 });
 
 contextBridge.exposeInMainWorld('settingsapi', {

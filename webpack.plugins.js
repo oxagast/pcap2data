@@ -20,6 +20,12 @@ class FixForgeRendererPathsPlugin {
           let html = htmlAsset.source.source().toString();
           html = html.replace(/src="\/main_window\//g, 'src="../main_window/');
           html = html.replace(/href="assets\/css\/style\.css"/g, 'href="../assets/css/style.css"');
+          // Vendored Plotly script is referenced relative to the asar root,
+          // so we need the same ../assets/ prefix the css fix-up uses.
+          html = html.replace(
+            /src="assets\/vendor\/plotly-2\.35\.2\.min\.js"/,
+            'src="../assets/vendor/plotly-2.35.2.min.js"',
+          );
 
           compilation.updateAsset(htmlAssetName, new sources.RawSource(html));
         },

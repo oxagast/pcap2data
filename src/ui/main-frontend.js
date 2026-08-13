@@ -3656,6 +3656,89 @@ function syncSettingsFormFromState() {
   if (modelEl) {
     renderLlmModelOptions(settings.llm.ollamaModel);
   }
+  // New UI sync for LLM preset/weight/autotune — create controls dynamically if missing
+  try {
+    // Ensure a container reference — place new controls near the model select if possible
+    const modelWrapper = modelEl ? modelEl.parentNode : null;
+
+    // Preset select
+    let presetNode = document.getElementById('settings-llm-preset');
+    if (!presetNode) {
+      presetNode = document.createElement('select');
+      presetNode.id = 'settings-llm-preset';
+      const optEnglish = document.createElement('option'); optEnglish.value = 'english'; optEnglish.textContent = 'English (Recommended)';
+      const optCmd = document.createElement('option'); optCmd.value = 'command-line'; optCmd.textContent = 'Command-line (Shell)';
+      const optVim = document.createElement('option'); optVim.value = 'vim'; optVim.textContent = 'VIM (editor-like)';
+      presetNode.appendChild(optEnglish);
+      presetNode.appendChild(optCmd);
+      presetNode.appendChild(optVim);
+      if (modelWrapper && modelWrapper.parentNode) {
+        // insert after modelEl if modelEl exists, otherwise append to settings panel
+        modelWrapper.insertBefore(presetNode, modelEl.nextSibling);
+      } else {
+        document.body.appendChild(presetNode);
+      }
+    }
+    presetNode.value = settings.llm.preset || DEFAULT_SETTINGS.llm.preset || 'english';
+
+    // Weight slider + display
+    let weightNode = document.getElementById('settings-llm-weight-percent');
+    let weightDisplay = document.getElementById('settings-llm-weight-display');
+    if (!weightNode) {
+      weightNode = document.createElement('input');
+      weightNode.type = 'range';
+      weightNode.id = 'settings-llm-weight-percent';
+      weightNode.min = 0; weightNode.max = 100; weightNode.step = 1;
+      if (modelWrapper && modelWrapper.parentNode) {
+        modelWrapper.insertBefore(weightNode, presetNode.nextSibling);
+      } else {
+        document.body.appendChild(weightNode);
+      }
+    }
+    if (!weightDisplay) {
+      weightDisplay = document.createElement('span');
+      weightDisplay.id = 'settings-llm-weight-display';
+      weightDisplay.className = 'settings-small-muted';
+      weightDisplay.textContent = '';
+      if (weightNode && weightNode.parentNode) {
+        weightNode.parentNode.insertBefore(weightDisplay, weightNode.nextSibling);
+      } else {
+        document.body.appendChild(weightDisplay);
+      }
+    }
+    const pct = Number.isFinite(Number(settings.llm.llmWeightPercent))
+      ? Number(settings.llm.llmWeightPercent)
+      : (DEFAULT_SETTINGS.llm.llmWeightPercent || 40);
+    weightNode.value = String(Math.max(0, Math.min(100, pct)));
+    weightDisplay.textContent = `${weightNode.value}%`;
+    weightNode.addEventListener('input', () => {
+      weightDisplay.textContent = `${weightNode.value}%`;
+    });
+
+    // Autotune checkbox
+    let autotuneNode = document.getElementById('settings-llm-autotune');
+    if (!autotuneNode) {
+      const label = document.createElement('label');
+      label.className = 'settings-checkbox-row';
+      autotuneNode = document.createElement('input');
+      autotuneNode.type = 'checkbox';
+      autotuneNode.id = 'settings-llm-autotune';
+      label.appendChild(autotuneNode);
+      label.appendChild(document.createTextNode(' Enable LLM autotune'));
+      if (weightDisplay && weightDisplay.parentNode) {
+        weightDisplay.parentNode.insertBefore(label, weightDisplay.nextSibling);
+      } else if (modelWrapper && modelWrapper.parentNode) {
+        modelWrapper.insertBefore(label, presetNode.nextSibling);
+      } else {
+        document.body.appendChild(label);
+      }
+    }
+    autotuneNode.checked = Boolean(settings.llm.autotuneEnabled);
+  } catch (e) {
+    // Non-fatal — if DOM insertion fails, continue without UI controls
+    console.warn('Failed to render dynamic LLM settings controls:', e);
+  }
+
   if (apiKeyEl) {
     apiKeyEl.value = "";
     apiKeyEl.placeholder = settings.apiKeys?.ollamaApiKey
@@ -3934,7 +4017,12 @@ function readSettingsFormState() {
       analysisCompactionThresholdBlubs: analysisCompactionThresholdBlubsEl
         ? analysisCompactionThresholdBlubsEl.value
         : DEFAULT_SETTINGS.llm.analysisCompactionThresholdBlubs,
+      // New persisted LLM tuning fields
+      preset: presetEl ? (presetEl.value || DEFAULT_SETTINGS.llm.preset) : DEFAULT_SETTINGS.llm.preset,
+      llmWeightPercent: llmWeightEl ? Number(llmWeightEl.value) : DEFAULT_SETTINGS.llm.llmWeightPercent,
+      autotuneEnabled: autotuneEl ? Boolean(autotuneEl.checked) : Boolean(DEFAULT_SETTINGS.llm.autotuneEnabled),
     },
+
     apiKeys: {
       ollamaApiKey: trimmedApiKey || currentSettings.apiKeys?.ollamaApiKey || "",
       virusTotalApiKey:
@@ -22773,6 +22861,19 @@ document
 document.getElementById("crypt-refresh-btn").addEventListener("click", () => {
   refreshCryptEncounteredEntries();
 });
+
+// ── OpenSSH keystroke-timing subtab wiring ─────────────────────────────
+document
+  .getElementById("crypt-openssh-refresh-btn")
+  .addEventListener("click", () => cryptPanel.refreshSshEncounteredFlows());
+document
+  .getElementById("crypt-openssh-flows")
+  .addEventListener("change", function () {
+    cryptPanel.selectSshEncounteredFlow(Number(this.value));
+  });
+document
+  .getElementById("crypt-openssh-analyze-btn")
+  .addEventListener("click", () => cryptPanel.analyzeSelectedSshFlow());
 document
   .getElementById("crypt-encountered-list")
   .addEventListener("change", function () {
@@ -24898,7 +24999,7 @@ function infoPanel(pk) {
   renderKerberosTable(transportData);
 
   // SSH info table (shown for SSH packets on port 22/2222)
-  renderSshTable(transportData);
+  renderSshTable(transportData, packetTimestamp);
 
   // SCTP/SIGTRAN info table (shown for SCTP packets and SS7 adaptation layers)
   renderSctpTable(transportData);

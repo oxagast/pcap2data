@@ -1,0 +1,648 @@
+{
+    "_comment": "Empirical Gaussian timing model for adjacent keypresses. Values are (mean, std) inter-key intervals in milliseconds, sourced from published keystroke-dynamics studies (Monrose & Rubin 1997; Song, Miller, & Stahie 2001; Killourhy & Maxion 2009 \u2014 averaged across touch typists). Used as priors by the OpenSSH subtab decoder; heuristic digraph table takes precedence when an entry is present. The bundled ``layout`` is QWERTY; users can override it (DVORAK, Colemak, AZERTY, custom splits, etc.) by editing the ``layout`` field \u2014 the decoder geometry is data-driven.",
+    "version": 1,
+    "baselines": {
+        "sameKey": {
+            "mean": 220,
+            "std": 45
+        },
+        "adjacentKey": {
+            "mean": 95,
+            "std": 25
+        },
+        "nearbyKey": {
+            "mean": 130,
+            "std": 30
+        },
+        "farKey": {
+            "mean": 175,
+            "std": 40
+        },
+        "crossRow": {
+            "mean": 200,
+            "std": 50
+        }
+    },
+    "commonDigraphs": [
+        "th",
+        "he",
+        "in",
+        "er",
+        "an",
+        "en",
+        "on",
+        "at",
+        "re",
+        "nd",
+        "ti",
+        "es",
+        "or",
+        "te",
+        "of",
+        "ed",
+        "is",
+        "it",
+        "al",
+        "ar",
+        "st",
+        "to",
+        "nt",
+        "ng",
+        "se",
+        "ha",
+        "as",
+        "ou",
+        "io",
+        "le",
+        "ve",
+        "co",
+        "me",
+        "de",
+        "hi",
+        "ri",
+        "ro",
+        "ic",
+        "ne",
+        "ea",
+        "ra",
+        "ce",
+        "li",
+        "ch",
+        "ll",
+        "be",
+        "ma",
+        "si",
+        "om",
+        "ur"
+    ],
+    "samples": [
+        "th",
+        "he",
+        "in",
+        "er",
+        "an",
+        "en",
+        "on",
+        "at",
+        "es",
+        "re",
+        "or",
+        "ti",
+        "is",
+        "st",
+        "le",
+        "ou",
+        "ar",
+        "te",
+        "ng",
+        "al",
+        "it",
+        "de",
+        "se",
+        "ha",
+        "as",
+        "to",
+        "nt",
+        "ed",
+        "is",
+        "an",
+        "io",
+        "ve",
+        "ra",
+        "ri",
+        "ne",
+        "me",
+        "ic",
+        "si",
+        "li",
+        "ce",
+        "ll",
+        "be",
+        "ma",
+        "ur",
+        "us",
+        "el",
+        "ta",
+        "la",
+        "lo",
+        "co",
+        "ss",
+        "ro",
+        "if",
+        "no",
+        "pe",
+        "ac",
+        "ct",
+        "di",
+        "io",
+        "hi",
+        "fo",
+        "ow",
+        "pa",
+        "et",
+        "ow",
+        "ke",
+        "we",
+        "so",
+        "ch",
+        "ee"
+    ],
+    "empirical": {
+        "  ": {
+            "mean": 20.37,
+            "std": 0.94
+        },
+        "th": {
+            "mean": 19.38,
+            "std": 3.0
+        },
+        "au": {
+            "mean": 22.82,
+            "std": 22.14
+        },
+        "13": {
+            "mean": 22.28,
+            "std": 21.83
+        },
+        "ss": {
+            "mean": 20.11,
+            "std": 1.03
+        },
+        "o ": {
+            "mean": 20.15,
+            "std": 0.73
+        },
+        "it": {
+            "mean": 20.34,
+            "std": 0.77
+        },
+        "pa": {
+            "mean": 19.79,
+            "std": 0.91
+        },
+        "le": {
+            "mean": 20.1,
+            "std": 1.08
+        },
+        "es": {
+            "mean": 19.87,
+            "std": 1.12
+        },
+        "s ": {
+            "mean": 20.03,
+            "std": 0.9
+        },
+        "-v": {
+            "mean": 18.79,
+            "std": 0.44
+        },
+        "p ": {
+            "mean": 19.61,
+            "std": 0.83
+        },
+        "ll": {
+            "mean": 20.36,
+            "std": 0.96
+        },
+        ">(": {
+            "mean": 19.96,
+            "std": 0.89
+        },
+        "cc": {
+            "mean": 20.42,
+            "std": 1.06
+        },
+        "ca": {
+            "mean": 20.35,
+            "std": 0.81
+        },
+        "at": {
+            "mean": 20.4,
+            "std": 1.01
+        },
+        "t ": {
+            "mean": 19.94,
+            "std": 0.91
+        },
+        " /": {
+            "mean": 20.1,
+            "std": 1.16
+        },
+        "/p": {
+            "mean": 20.12,
+            "std": 0.98
+        },
+        "as": {
+            "mean": 20.16,
+            "std": 1.12
+        },
+        "sw": {
+            "mean": 19.88,
+            "std": 0.41
+        },
+        "wd": {
+            "mean": 19.64,
+            "std": 1.22
+        },
+        "ps": {
+            "mean": 19.79,
+            "std": 0.55
+        },
+        " a": {
+            "mean": 19.83,
+            "std": 1.18
+        },
+        "| ": {
+            "mean": 20.06,
+            "std": 1.11
+        },
+        " g": {
+            "mean": 19.26,
+            "std": 0.38
+        },
+        "gr": {
+            "mean": 19.35,
+            "std": 0.85
+        },
+        "re": {
+            "mean": 18.5,
+            "std": 0.34
+        },
+        "ep": {
+            "mean": 19.19,
+            "std": 0.66
+        },
+        "ar": {
+            "mean": 19.68,
+            "std": 0.92
+        },
+        "rs": {
+            "mean": 19.19,
+            "std": 1.2
+        },
+        "sh": {
+            "mean": 19.35,
+            "std": 0.81
+        },
+        "ha": {
+            "mean": 20.19,
+            "std": 1.19
+        },
+        "al": {
+            "mean": 19.91,
+            "std": 0.88
+        },
+        " e": {
+            "mean": 20.48,
+            "std": 1.11
+        },
+        "er": {
+            "mean": 20.17,
+            "std": 0.45
+        },
+        "pe": {
+            "mean": 20.51,
+            "std": 0.84
+        },
+        "wh": {
+            "mean": 20.3,
+            "std": 0.72
+        },
+        "ch": {
+            "mean": 20.69,
+            "std": 0.55
+        },
+        "ho": {
+            "mean": 20.16,
+            "std": 0.9
+        },
+        "on": {
+            "mean": 20.04,
+            "std": 1.09
+        },
+        "am": {
+            "mean": 20.34,
+            "std": 0.85
+        },
+        "mi": {
+            "mean": 19.94,
+            "std": 1.12
+        },
+        "ls": {
+            "mean": 20.39,
+            "std": 0.86
+        },
+        "-a": {
+            "mean": 20.15,
+            "std": 1.13
+        },
+        "lh": {
+            "mean": 20.38,
+            "std": 1.14
+        },
+        "ee": {
+            "mean": 19.93,
+            "std": 0.55
+        },
+        "30": {
+            "mean": 19.58,
+            "std": 0.88
+        },
+        "0 ": {
+            "mean": 19.55,
+            "std": 0.93
+        },
+        " (": {
+            "mean": 19.72,
+            "std": 1.02
+        },
+        "=1": {
+            "mean": 19.67,
+            "std": 0.8
+        },
+        "ai": {
+            "mean": 20.59,
+            "std": 0.53
+        },
+        "fi": {
+            "mean": 20.62,
+            "std": 0.36
+        },
+        "te": {
+            "mean": 20.52,
+            "std": 0.47
+        },
+        "f ": {
+            "mean": 20.98,
+            "std": 0.75
+        },
+        "ul": {
+            "mean": 21.02,
+            "std": 0.43
+        },
+        "lc": {
+            "mean": 21.01,
+            "std": 0.61
+        },
+        "in": {
+            "mean": 20.67,
+            "std": 0.63
+        },
+        "em": {
+            "mean": 20.97,
+            "std": 0.6
+        },
+        "st": {
+            "mean": 20.59,
+            "std": 0.51
+        },
+        ".c": {
+            "mean": 20.84,
+            "std": 0.56
+        },
+        "(t": {
+            "mean": 28.48,
+            "std": 40.65
+        },
+        "hu": {
+            "mean": 23.73,
+            "std": 25.21
+        },
+        "u,": {
+            "mean": 23.42,
+            "std": 23.66
+        },
+        ",a": {
+            "mean": 26.95,
+            "std": 47.49
+        },
+        "ug": {
+            "mean": 24.39,
+            "std": 30.81
+        },
+        "g1": {
+            "mean": 23.96,
+            "std": 26.67
+        },
+        "3)": {
+            "mean": 24.04,
+            "std": 26.95
+        },
+        ")=": {
+            "mean": 53.73,
+            "std": 228.14
+        },
+        "ip": {
+            "mean": 19.48,
+            "std": 0.8
+        },
+        "ab": {
+            "mean": 19.5,
+            "std": 0.44
+        },
+        "bl": {
+            "mean": 18.65,
+            "std": 0.17
+        },
+        " -": {
+            "mean": 20.25,
+            "std": 1.11
+        },
+        "vl": {
+            "mean": 18.62,
+            "std": 0.21
+        },
+        "ta": {
+            "mean": 19.88,
+            "std": 0.97
+        },
+        " l": {
+            "mean": 20.5,
+            "std": 0.5
+        },
+        "l>": {
+            "mean": 19.5,
+            "std": 0.66
+        },
+        "=c": {
+            "mean": 20.07,
+            "std": 0.94
+        },
+        "/e": {
+            "mean": 19.62,
+            "std": 1.05
+        },
+        "et": {
+            "mean": 19.89,
+            "std": 0.81
+        },
+        "tc": {
+            "mean": 20.19,
+            "std": 0.78
+        },
+        "c/": {
+            "mean": 19.98,
+            "std": 0.68
+        },
+        "dc": {
+            "mean": 18.83,
+            "std": 0.69
+        },
+        "d>": {
+            "mean": 20.21,
+            "std": 1.03
+        },
+        "ux": {
+            "mean": 19.2,
+            "std": 0.75
+        },
+        "x ": {
+            "mean": 20.05,
+            "std": 0.99
+        },
+        " |": {
+            "mean": 19.9,
+            "std": 0.86
+        },
+        " m": {
+            "mean": 18.92,
+            "std": 0.1
+        },
+        "ma": {
+            "mean": 20.13,
+            "std": 0.68
+        },
+        " p": {
+            "mean": 19.35,
+            "std": 0.92
+        },
+        "rl": {
+            "mean": 19.61,
+            "std": 0.71
+        },
+        "=w": {
+            "mean": 19.98,
+            "std": 0.47
+        },
+        "ww": {
+            "mean": 20.38,
+            "std": 0.25
+        },
+        "=l": {
+            "mean": 20.48,
+            "std": 0.32
+        },
+        " w": {
+            "mean": 19.66,
+            "std": 0.98
+        },
+        "eb": {
+            "mean": 20.02,
+            "std": 1.06
+        },
+        "bo": {
+            "mean": 20.33,
+            "std": 0.75
+        },
+        "o.": {
+            "mean": 19.84,
+            "std": 1.56
+        },
+        ".j": {
+            "mean": 20.08,
+            "std": 0.55
+        },
+        "js": {
+            "mean": 26.46,
+            "std": 11.72
+        },
+        "so": {
+            "mean": 18.32,
+            "std": 1.92
+        },
+        ">1": {
+            "mean": 20.51,
+            "std": 0.85
+        },
+        "oa": {
+            "mean": 21.32,
+            "std": 0.21
+        },
+        " >": {
+            "mean": 20.8,
+            "std": 0.53
+        },
+        " u": {
+            "mean": 20.99,
+            "std": 0.61
+        },
+        "e ": {
+            "mean": 20.29,
+            "std": 0.15
+        },
+        "il": {
+            "mean": 20.55,
+            "std": 0.23
+        },
+        "li": {
+            "mean": 20.73,
+            "std": 0.51
+        },
+        " f": {
+            "mean": 20.9,
+            "std": 0.5
+        },
+        "n.": {
+            "mean": 21.33,
+            "std": 0.32
+        },
+        ".p": {
+            "mean": 21.29,
+            "std": 0.35
+        },
+        "1 ": {
+            "mean": 21.09,
+            "std": 0.48
+        },
+        "fu": {
+            "mean": 20.52,
+            "std": 0.09
+        },
+        "/ ": {
+            "mean": 20.62,
+            "std": 0.51
+        },
+        "po": {
+            "mean": 21.0,
+            "std": 0.19
+        },
+        "tf": {
+            "mean": 20.91,
+            "std": 0.5
+        },
+        "ix": {
+            "mean": 20.28,
+            "std": 0.23
+        },
+        "r.": {
+            "mean": 20.59,
+            "std": 0.43
+        },
+        "cf": {
+            "mean": 20.9,
+            "std": 0.31
+        },
+        " n": {
+            "mean": 21.23,
+            "std": 0.34
+        },
+        "nw": {
+            "mean": 20.83,
+            "std": 0.51
+        },
+        "ws": {
+            "mean": 21.27,
+            "std": 0.39
+        }
+    }
+}

@@ -26,12 +26,13 @@ function createTable(data, headers, containerId) {
   for (let i = 0; i < data.length; i++) {
     const item = data[i];
     const row = document.createElement('tr');
-    const values = Object.values(item);
-    for (let j = 0; j < values.length; j++) {
-      const td = document.createElement('td');
-      td.textContent = values[j];
-      row.appendChild(td);
-    }
+    if (item.className) row.className = item.className.trim();
+    const nameTd = document.createElement('td');
+    nameTd.textContent = item.name;
+    row.appendChild(nameTd);
+    const valueTd = document.createElement('td');
+    valueTd.textContent = item.value;
+    row.appendChild(valueTd);
     table.appendChild(row);
   }
 

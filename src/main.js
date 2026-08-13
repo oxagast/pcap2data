@@ -16,6 +16,7 @@ const os = require("os");
 const util = require("util");
 const { pipeline, Readable } = require("stream");
 const { gzip, gunzip, brotliDecompress } = require("zlib");
+const { Worker } = require("worker_threads");
 const { registerCaptureStoreHandlers } = require("./capture-store");
 const { Agent, fetch: undiciFetch } = require("undici");
 const {
@@ -5780,6 +5781,117 @@ ipcMain.handle("get-goodies", async () => {
     console.warn(`Goodies file not found at ${goodiesPath}`);
     return [];
   }
+});
+
+// Reads the OpenSSH keystroke-timing decoder's QWERTY digraph model from
+// src/data/qwerty-model.json (shipped via extraResource). The renderer
+// does not get fs access, so the JSON is fetched through this bridge.
+ipcMain.handle("openssh-load-qwerty-model", async () => {
+  const candidates = [
+    path.join(process.resourcesPath || "", "data", "qwerty-model.json"),
+    path.join("src", "data", "qwerty-model.json"),
+    path.join(__dirname, "..", "data", "qwerty-model.json"),
+    path.join(__dirname, "..", "src", "data", "qwerty-model.json"),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const raw = await fs.promises.readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return { success: true, model: parsed };
+      }
+    } catch (_err) {
+      // try the next candidate
+    }
+  }
+  return { success: false, error: "qwerty-model.json not found" };
+});
+
+// Run the OpenSSH keystroke-timing decoder in a worker thread so the
+// renderer never blocks on large sessions. The worker accepts a
+// pre-built model and an array of observed inter-key delays and returns
+// the top-N candidate strings.
+ipcMain.handle("openssh-decode", async (_event, payload) => {
+  if (!payload || typeof payload !== "object") {
+    return { success: false, error: "invalid payload" };
+  }
+  const delays = Array.isArray(payload.delays) ? payload.delays : [];
+  const topN = Math.max(1, Math.floor(Number(payload.topN) || 8));
+  const model = payload.model && typeof payload.model === "object" ? payload.model : null;
+  if (!model) {
+    return { success: false, error: "model is required" };
+  }
+  // Resolve the worker file location. Webpack rewrites module IDs but
+  // leaves sibling .js files on disk. The worker may live in:
+  //   1. The webpack output directory (dev): .webpack/main/ui/...
+  //   2. The source directory (when read straight from src/).
+  //   3. The packaged app directory (when shipped inside the app).
+  //   4. Inside an asar bundle (only when asar is disabled).
+  function resolveWorkerPath() {
+    const candidates = [
+      // Dev with webpack output.
+      path.join(__dirname, "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      // Dev reading from src/.
+      path.join(__dirname, "..", "src", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      // Packaged: same layout as dev (webpack output).
+      path.join(process.resourcesPath || "", "app", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      path.join(process.resourcesPath || "", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+    ];
+    for (const candidate of candidates) {
+      try {
+        if (candidate && fs.existsSync(candidate)) return candidate;
+      } catch (_e) { /* ignore */ }
+    }
+    // Fall back to the first candidate — the Worker constructor will
+    // raise a clear error if the file is missing.
+    return candidates[0];
+  }
+
+  const workerPath = resolveWorkerPath();
+  return new Promise((resolve) => {
+    let settled = false;
+    let worker;
+    try {
+      worker = new Worker(workerPath);
+    } catch (err) {
+      resolve({ success: false, error: "Failed to start worker: " + (err && err.message ? err.message : String(err)) });
+      return;
+    }
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try { worker.terminate(); } catch (_e) { /* ignore */ }
+      resolve(result);
+    };
+    worker.on("message", (msg) => {
+      if (!msg || msg.type !== "result") return;
+      if (msg.success) {
+        finish({ success: true, candidates: msg.candidates || [] });
+      } else {
+        finish({ success: false, error: msg.error || "unknown worker error" });
+      }
+    });
+    worker.on("error", (err) => {
+      finish({ success: false, error: "Worker error: " + (err && err.message ? err.message : String(err)) });
+    });
+    worker.on("exit", (code) => {
+      if (!settled) {
+        finish({ success: false, error: "Worker exited with code " + code });
+      }
+    });
+    try {
+      worker.postMessage({
+        type: "decode",
+        delays,
+        topN,
+        batchSize: 100,
+        model,
+      });
+    } catch (err) {
+      finish({ success: false, error: "Failed to post message: " + (err && err.message ? err.message : String(err)) });
+    }
+  });
 });
 
 ipcMain.handle("quit-app", () => {

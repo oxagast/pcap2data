@@ -151,6 +151,12 @@ module.exports = {
       "src/data/new_session.json",
       "src/data/goodies.txt",
       "src/data/valid-keys.txt",
+      // OpenSSH keystroke-timing decoder's QWERTY digraph model. The
+      // renderer can't read this directly (no fs access) so the main
+      // process exposes it through the ``opensshapi.loadQwertyModel``
+      // preload bridge. Shipped from ``src/data/`` so the source path
+      // and the packaged path both resolve through ``process.resourcesPath``.
+      "src/data/qwerty-model.json",
       "config/models.json",
       // The app icon is embedded into ``PacketSnitch.exe`` by
       // ``primaryIcon`` below, but we also want the raw .ico file
