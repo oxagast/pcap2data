@@ -1550,6 +1550,14 @@ strong {
   font-size: 12px;
   color: var(--color-6);
   font-style: italic;
+  /* Force the progress indicator onto its own row below the action
+     buttons. The progress text varies in length ("Working…",
+     "Decoding keystrokes (3792 intervals)…") and a longer string used
+     to wrap the inline span onto a new row, shoving the buttons up.
+     Always reserving a full row keeps the layout stable. */
+  flex-basis: 100%;
+  flex-grow: 0;
+  flex-shrink: 0;
 }
 
 .crypt-openssh-progress[hidden] {

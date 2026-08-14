@@ -727,6 +727,358 @@ function buildChartSeries(observedDelays, options = {}) {
     return { histogram, reference, binSize };
 }
 
+// ── Obfuscation-packet detection ────────────────────────────────────────
+//
+// Some SSH servers insert filler packets on a fixed cadence (commonly
+// every 20 ms, but the actual value varies — 5/6/10/12/15/20/25/30/40 ms
+// are all seen in the wild depending on kernel scheduler, Nagle state,
+// and the obfuscation library) to flood the timing channel and defeat
+// keystroke-side analysis. The pattern is detectable because the
+// observed inter-key delays end up sitting near integer multiples of
+// the pad period with very low spread — something real typing never
+// produces — and because the autocorrelation of the delay sequence
+// shows a sharp peak at the pad period.
+//
+// `detect20msPadding(delaysMs, opts)` runs a TWO-PASS detector:
+//
+//   Pass 1 — autocorrelation. We slide a window over a wide range of
+//   candidate periods (default 5 ms → 80 ms, 1 ms steps) and pick the
+//   period whose autocorrelation peak rises highest above the local
+//   noise floor. No magic period is hard-coded — the data tells us.
+//
+//   Pass 2 — refine. We re-run the per-period residue scan around the
+//   pass-1 winner (±3 ms, 0.5 ms steps) to find the exact period with
+//   the tightest residual std, and to compute coverage / dominant
+//   residue / paddedIntervals.
+//
+// `opts` fields (all optional):
+//   - `periodMinMs`       : number  - lower bound of autocorrelation scan
+//                                           (default 5)
+//   - `periodMaxMs`       : number  - upper bound of autocorrelation scan
+//                                           (default 80)
+//   - `periodStepMs`      : number  - step size for the scan (default 1)
+//   - `refineStepMs`      : number  - step size for the refine pass (default 0.5)
+//   - `refineWindowMs`    : number  - half-width of the refine window
+//                                           around the pass-1 winner (default 3)
+//   - `toleranceMs`       : number  - "near a multiple" width (default
+//                                           max(2, period*0.15)). The
+//                                           default scales with period so
+//                                           short cadences (5 ms) get a
+//                                           narrow window and long cadences
+//                                           (50 ms) get a wider one.
+//   - `minCoverage`       : number  - minimum fraction of delays that
+//                                           must fall within tolerance of a
+//                                           multiple of the candidate period
+//                                           to count as detected (default 0.5)
+//   - `maxResidualStdMs`  : number  - hard ceiling on the residue std
+//                                           (default null = use the
+//                                           period-relative rule below)
+//   - `stdTighteningFactor`: number - observed std must be <= factor *
+//                                           (P / sqrt(12)) to count as a
+//                                           real cadence (default 0.55)
+//   - `autocorrPeakThreshold`: number - minimum peak / noise-floor ratio
+//                                           to accept a pass-1 candidate
+//                                           (default 1.4)
+//   - `minSampleCount`    : number  - minimum delays before the detector
+//                                           runs (default 25)
+//   - `snap`              : boolean - when true, populate
+//                                           `snappedDelaysMs` and
+//                                           `keystrokeDelaysMs` (default true)
+//
+// Returns: {
+//   detected:            boolean,
+//   periodMs:            number|null,
+//   coverage:            number,           // fraction of intervals classified as filler
+//   residualStdMs:       number,           // std-dev of residues at best period
+//   dominantResidueMs:   number,           // most common residue value
+//   snappedDelaysMs:     number[]|null,    // delays with integer multiples
+//                                           // of period removed (preserves
+//                                           // filler-padded interval count)
+//   keystrokeDelaysMs:   number[]|null,    // delays with filler intervals
+//                                           // removed entirely (one delay
+//                                           // per real keystroke)
+//   paddedIntervals:     number[]|null,    // indices into the input array
+//                                           // that were classified as filler
+//   pass1Candidate:      number|null,      // period suggested by pass 1
+//                                           // before refine
+//   pass1PeakRatio:      number,           // pass-1 first-difference
+//                                           // peak / noise floor
+//   candidateScores:     [{ periodMs, coverage, residualStdMs }, ...],
+// }
+
+// First-difference histogram pass 1. The most direct fingerprint of
+// a fixed-cadence obfuscator is that consecutive delays differ by
+// integer multiples of the cadence P. We build a histogram of
+// `|delays[i+1] - delays[i]|` rounded to the nearest integer ms, and
+// the strongest peak in that histogram IS the cadence.
+//
+// Why this works:
+//   - For real typing, consecutive-delay differences follow a roughly
+//     smooth distribution (no sharp peaks).
+//   - For a padded session where every inter-character gap is N*P for
+//     some N, the consecutive-delay difference is either 0 (same N)
+//     or ±P (N changed by 1). The histogram has a sharp peak at P.
+//   - The peak survives jitter: ±1 ms noise spreads P into [P-1, P+1]
+//     but the bin at P still wins.
+//
+// Returns the candidate period (ms) with the strongest peak relative
+// to the median bin, or null if no peak exceeds `peakThreshold`.
+function findCadenceViaFirstDifference(delays, opts) {
+    const periodMin = Number.isFinite(opts.periodMinMs) ? opts.periodMinMs : 5;
+    const periodMax = Number.isFinite(opts.periodMaxMs) ? opts.periodMaxMs : 80;
+    const peakThreshold = Number.isFinite(opts.autocorrPeakThreshold)
+        ? opts.autocorrPeakThreshold
+        : 1.6;
+
+    // Build the histogram of first differences (in ms, rounded).
+    const diffs = [];
+    for (let i = 1; i < delays.length; i += 1) {
+        diffs.push(Math.abs(delays[i] - delays[i - 1]));
+    }
+    if (diffs.length < 4) return null;
+
+    // Use integer-ms bins up to periodMax*2 — we want enough range to
+    // capture the peak even if it lands slightly above periodMax due
+    // to jitter accumulation.
+    const histogram = new Map();
+    for (const d of diffs) {
+        const key = Math.round(d);
+        histogram.set(key, (histogram.get(key) || 0) + 1);
+    }
+
+    // Compute median bin count as a noise floor.
+    const counts = Array.from(histogram.values()).sort((a, b) => a - b);
+    const medianIdx = Math.floor(counts.length / 2);
+    const noiseFloor = counts[medianIdx] || 1;
+
+    let best = null;
+    for (const [key, count] of histogram.entries()) {
+        if (key < periodMin || key > periodMax) continue;
+        const peakRatio = count / Math.max(noiseFloor, 1);
+        if (peakRatio < peakThreshold) continue;
+        if (!best || peakRatio > best.peakRatio) {
+            best = { periodMs: key, peakRatio, count };
+        }
+    }
+    return best;
+}
+
+// Autocorrelation helper kept for diagnostics / future use. It scores
+// how much the delay sequence correlates with itself shifted by
+// `periodMs / stepMs` samples. For padding-amplified sequences this
+// returns high values, but the first-difference histogram is more
+// reliable for picking the period, so this function is only used to
+// surface a secondary peak ratio in the result.
+function autocorrelationScore(delays, periodMs, stepMs) {
+    const samplesPerPeriod = Math.max(1, Math.round(periodMs / stepMs));
+    if (samplesPerPeriod <= 0 || samplesPerPeriod >= delays.length) return 0;
+    const n = delays.length;
+    const mean = delays.reduce((s, v) => s + v, 0) / n;
+    const centered = delays.map((d) => d - mean);
+    let autocorr = 0;
+    let count = 0;
+    for (let i = 0; i + samplesPerPeriod < n; i += 1) {
+        autocorr += centered[i] * centered[i + samplesPerPeriod];
+        count += 1;
+    }
+    let variance = 0;
+    for (let i = 0; i < n; i += 1) variance += centered[i] * centered[i];
+    if (variance <= 0 || count === 0) return 0;
+    return (autocorr / count) / (variance / n);
+}
+
+// Pass 2 — refine. Given a candidate period, sweep a small window
+// around it at sub-millisecond resolution and pick the exact period
+// whose residue std is lowest AND whose coverage is highest. Then
+// compute paddedIntervals / snappedDelaysMs / keystrokeDelaysMs.
+function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
+    const refineStep = Number.isFinite(opts.refineStepMs) ? opts.refineStepMs : 0.5;
+    const refineWindow = Number.isFinite(opts.refineWindowMs) ? opts.refineWindowMs : 3;
+    const toleranceBase = Number.isFinite(opts.toleranceMs) ? opts.toleranceMs : null;
+    const minCoverage = Number.isFinite(opts.minCoverage) ? opts.minCoverage : 0.5;
+    const stdTighteningFactor = Number.isFinite(opts.stdTighteningFactor)
+        ? opts.stdTighteningFactor
+        : 0.55;
+    const maxResidualStd = Number.isFinite(opts.maxResidualStdMs)
+        ? opts.maxResidualStdMs
+        : null;
+    const snap = opts.snap !== false;
+
+    const low = Math.max(1, candidatePeriodMs - refineWindow);
+    const high = candidatePeriodMs + refineWindow;
+    let best = null;
+    const allScores = [];
+    for (let p = low; p <= high + 1e-6; p += refineStep) {
+        const tolerance = toleranceBase !== null
+            ? toleranceBase
+            : Math.max(2, p * 0.15);
+        let matches = 0;
+        const residues = [];
+        const paddedIdx = [];
+        for (let i = 0; i < delays.length; i += 1) {
+            const d = delays[i];
+            const rounded = Math.round(d / p);
+            const distanceMs = Math.abs(d - rounded * p);
+            if (distanceMs <= tolerance) {
+                matches += 1;
+                paddedIdx.push(i);
+            }
+            residues.push(d - rounded * p);
+        }
+        const coverage = matches / delays.length;
+        const mean = residues.reduce((s, v) => s + v, 0) / residues.length;
+        const variance = residues.reduce((s, v) => s + (v - mean) ** 2, 0) / residues.length;
+        const std = Math.sqrt(variance);
+        const uniformStd = p / Math.sqrt(12);
+        const stdThreshold = maxResidualStd !== null
+            ? Math.min(maxResidualStd, uniformStd * stdTighteningFactor)
+            : uniformStd * stdTighteningFactor;
+        // Mode of residues (rounded to 1 ms) for diagnostic logging.
+        const buckets = new Map();
+        for (const r of residues) {
+            const key = Math.round(r);
+            buckets.set(key, (buckets.get(key) || 0) + 1);
+        }
+        let dominant = 0;
+        let dominantCount = -1;
+        for (const [k, v] of buckets.entries()) {
+            if (v > dominantCount) { dominant = k; dominantCount = v; }
+        }
+        const score = {
+            periodMs: p,
+            coverage,
+            residualStdMs: std,
+            uniformStdMs: uniformStd,
+            stdThresholdMs: stdThreshold,
+            dominantResidueMs: dominant,
+            paddedIndices: paddedIdx,
+        };
+        allScores.push(score);
+        if (!best) {
+            best = { ...score };
+            continue;
+        }
+        // Tightest cadence with the most coverage wins.
+        if (
+            score.coverage > best.coverage ||
+            (score.coverage === best.coverage && score.residualStdMs < best.residualStdMs)
+        ) {
+            best = { ...score };
+        }
+    }
+
+    const detected = best
+        && best.coverage >= minCoverage
+        && best.residualStdMs <= best.stdThresholdMs;
+
+    if (!detected) {
+        return {
+            detected: false,
+            periodMs: null,
+            coverage: best ? best.coverage : 0,
+            residualStdMs: best ? best.residualStdMs : NaN,
+            dominantResidueMs: best ? best.dominantResidueMs : NaN,
+            snappedDelaysMs: null,
+            keystrokeDelaysMs: null,
+            paddedIntervals: null,
+            pass1Candidate: candidatePeriodMs,
+            candidateScores: allScores,
+        };
+    }
+
+    const periodMs = best.periodMs;
+    const paddedIndices = best.paddedIndices;
+    let snappedDelaysMs = null;
+    let keystrokeDelaysMs = null;
+    if (snap) {
+        // snappedDelaysMs preserves interval count: each input delay
+        // becomes its residue (delay - round(delay/period)*period). The
+        // decoder can still consume it, but the values are now small.
+        snappedDelaysMs = delays.map((d) => {
+            const rounded = Math.round(d / periodMs);
+            return d - rounded * periodMs;
+        });
+        // keystrokeDelaysMs REMOVES padded intervals entirely, so the
+        // decoder sees one delay per real keystroke instead of one per
+        // packet. Use this when the decoder is sensitive to interval
+        // count (e.g. Viterbi beam width assumptions).
+        keystrokeDelaysMs = [];
+        for (let i = 0; i < delays.length; i += 1) {
+            if (paddedIndices.indexOf(i) >= 0) continue;
+            keystrokeDelaysMs.push(snappedDelaysMs[i]);
+        }
+    }
+
+    return {
+        detected: true,
+        periodMs,
+        coverage: best.coverage,
+        residualStdMs: best.residualStdMs,
+        dominantResidueMs: best.dominantResidueMs,
+        snappedDelaysMs,
+        keystrokeDelaysMs,
+        paddedIntervals: paddedIndices,
+        pass1Candidate: candidatePeriodMs,
+        candidateScores: allScores,
+    };
+}
+
+function detect20msPadding(delaysMs, opts) {
+    const o = opts || {};
+    const minSampleCount = Number.isFinite(o.minSampleCount) ? o.minSampleCount : 25;
+    const snap = o.snap !== false; // default true
+
+    const delays = Array.isArray(delaysMs)
+        ? delaysMs.filter((d) => Number.isFinite(d) && d > 0)
+        : [];
+    const notDetected = {
+        detected: false,
+        periodMs: null,
+        coverage: 0,
+        residualStdMs: NaN,
+        dominantResidueMs: NaN,
+        snappedDelaysMs: null,
+        keystrokeDelaysMs: null,
+        paddedIntervals: null,
+        pass1Candidate: null,
+        pass1PeakRatio: 0,
+        candidateScores: [],
+    };
+    if (delays.length < minSampleCount) return notDetected;
+
+    // Pass 1 — first-difference histogram scan.
+    const pass1 = findCadenceViaFirstDifference(delays, o);
+    if (!pass1) {
+        return Object.assign({}, notDetected);
+    }
+
+    // Pass 2 — refine around the pass-1 winner.
+    const refined = refineCadenceAtPeriod(delays, pass1.periodMs, o);
+    if (!refined.detected) {
+        return Object.assign({}, notDetected, {
+            coverage: refined.coverage,
+            residualStdMs: refined.residualStdMs,
+            dominantResidueMs: refined.dominantResidueMs,
+            pass1Candidate: pass1.periodMs,
+            pass1PeakRatio: pass1.peakRatio,
+            candidateScores: refined.candidateScores.slice().sort((a, b) => {
+                if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+                return a.residualStdMs - b.residualStdMs;
+            }),
+        });
+    }
+
+    return Object.assign({}, refined, {
+        snappedDelaysMs: snap ? refined.snappedDelaysMs : null,
+        keystrokeDelaysMs: snap ? refined.keystrokeDelaysMs : null,
+        pass1PeakRatio: pass1.peakRatio,
+        candidateScores: refined.candidateScores.slice().sort((a, b) => {
+            if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+            return a.residualStdMs - b.residualStdMs;
+        }),
+    });
+}
+
 // ── Public surface ──────────────────────────────────────────────────────
 
 module.exports = {
@@ -749,6 +1101,8 @@ module.exports = {
     decodeKeystrokesBatched,
     // Chart
     buildChartSeries,
+    // Obfuscation detection
+    detect20msPadding,
     // Testing hooks
     _setModelForTesting(model) {
         CURRENT_MODEL = model;

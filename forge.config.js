@@ -157,6 +157,11 @@ module.exports = {
       // preload bridge. Shipped from ``src/data/`` so the source path
       // and the packaged path both resolve through ``process.resourcesPath``.
       "src/data/qwerty-model.json",
+      // Seed shell-history corpus used by the LLM as a frequency-
+      // weighted prior for SSH keystroke decoder candidates. The main
+      // process loads it via the ``ssh-shell-corpus`` IPC handler so
+      // the renderer never needs fs access.
+      "src/data/shell_data",
       "config/models.json",
       // The app icon is embedded into ``PacketSnitch.exe`` by
       // ``primaryIcon`` below, but we also want the raw .ico file

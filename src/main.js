@@ -2225,7 +2225,7 @@ if (runSquirrelStartupGate({})) {
 
 
 
-ipcMain.handle('ollama:generate', async (_event, prompt) => {
+ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
   try {
     if (!isOllamaClientModuleAvailable()) {
       throw new Error("Ollama client module is unavailable");
@@ -2247,12 +2247,32 @@ ipcMain.handle('ollama:generate', async (_event, prompt) => {
         },
       })
       : new Ollama({ fetch: ollamaFetch });
+    // Per-call options override the user's defaults. The renderer passes
+    // { maxTokens, temperature } for prompts that need a larger response
+    // budget than the user-configured maxSummaryTokens (e.g. the OpenSSH
+    // session-level interpretation, which returns a multi-field JSON).
+    const overrideTokens = Number(options && options.maxTokens);
+    const numPredict = Number.isFinite(overrideTokens) && overrideTokens > 0
+      ? Math.max(settings.llm.maxSummaryTokens, overrideTokens)
+      : settings.llm.maxSummaryTokens;
+    const overrideTemp = Number(options && options.temperature);
+    const temperature = Number.isFinite(overrideTemp) ? overrideTemp : 0.5;
+    // Per-call think override. The renderer can pass ``think: false`` to
+    // disable the model's internal-reasoning channel — Ollama cloud
+    // models like ``minimax-m3:cloud`` use thinking mode by default,
+    // and the entire response budget can be consumed by reasoning with
+    // nothing emitted as ``response``. Disabling thinking is the most
+    // reliable way to get a structured answer back.
+    const overrideThink = options && Object.prototype.hasOwnProperty.call(options, "think")
+      ? options.think
+      : false;
     const response = await ollamaClient.generate({
       model: settings.llm.ollamaModel,
       prompt,
+      think: overrideThink === false ? false : Boolean(overrideThink),
       options: {
-        temperature: 0.5,
-        num_predict: settings.llm.maxSummaryTokens,
+        temperature,
+        num_predict: numPredict,
       },
     });
     setLlmDiagnostics({
@@ -5808,6 +5828,39 @@ ipcMain.handle("openssh-load-qwerty-model", async () => {
   return { success: false, error: "qwerty-model.json not found" };
 });
 
+// Read the user's seed shell-history corpus from src/data/shell_data.
+// Used by the SSH keystroke decoder's LLM pipeline as a frequency-
+// weighted prior over which shell commands the user actually runs.
+// The file may not exist (first-run / user opted out), so this
+// handler returns success=false rather than throwing.
+let shellCorpusCache = null;
+let shellCorpusCacheAttempted = false;
+async function readShellCorpus() {
+  if (shellCorpusCacheAttempted) return shellCorpusCache;
+  shellCorpusCacheAttempted = true;
+  const candidates = [
+    path.join(process.resourcesPath || "", "data", "shell_data"),
+    path.join("src", "data", "shell_data"),
+    path.join(__dirname, "..", "data", "shell_data"),
+    path.join(__dirname, "..", "src", "data", "shell_data"),
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const raw = await fs.promises.readFile(candidate, "utf8");
+      shellCorpusCache = { success: true, corpus: raw, source: candidate };
+      return shellCorpusCache;
+    } catch (_err) {
+      // try the next candidate
+    }
+  }
+  shellCorpusCache = { success: false, error: "shell_data not found" };
+  return shellCorpusCache;
+}
+ipcMain.handle("ssh-shell-corpus", async () => {
+  return await readShellCorpus();
+});
+
 // Run the OpenSSH keystroke-timing decoder in a worker thread so the
 // renderer never blocks on large sessions. The worker accepts a
 // pre-built model and an array of observed inter-key delays and returns
@@ -5829,11 +5882,17 @@ ipcMain.handle("openssh-decode", async (_event, payload) => {
   //   3. The packaged app directory (when shipped inside the app).
   //   4. Inside an asar bundle (only when asar is disabled).
   function resolveWorkerPath() {
+    const cwd = process.cwd();
     const candidates = [
       // Dev with webpack output.
       path.join(__dirname, "ui", "decoders", "ssh-keystrokes", "worker.js"),
-      // Dev reading from src/.
+      // Dev reading from src/ (electron-forge package does not always
+      // copy the worker into the webpack output dir; fall back here so
+      // the worker still loads).
       path.join(__dirname, "..", "src", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      path.join(__dirname, "..", "..", "src", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      path.join(cwd, "src", "ui", "decoders", "ssh-keystrokes", "worker.js"),
+      path.join(cwd, ".webpack", "main", "ui", "decoders", "ssh-keystrokes", "worker.js"),
       // Packaged: same layout as dev (webpack output).
       path.join(process.resourcesPath || "", "app", "ui", "decoders", "ssh-keystrokes", "worker.js"),
       path.join(process.resourcesPath || "", "ui", "decoders", "ssh-keystrokes", "worker.js"),

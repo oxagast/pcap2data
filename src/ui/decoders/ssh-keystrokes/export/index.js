@@ -1,0 +1,1511 @@
+"use strict";
+
+// Pure helpers for rendering the OpenSSH keystroke-timing trace as a
+// plain-text file the user can save, share, and paste into another tool
+// (or another LLM). Kept DOM-free so it's trivially unit-testable.
+//
+// Public API:
+//   buildSshKeystrokeExport(state, opts?) -> string
+//   computeDelayStats(delays) -> {min,max,mean,median,stddev,p90,p99,burstCount,pauseCount}
+//   formatNumber(n) -> string
+//   wrapText(text, width) -> string
+//   directionLabel(direction) -> "client → server" | "server → client" | "client → server"
+
+function directionLabel(direction) {
+    if (direction === "c2s") return "client \u2192 server";
+    if (direction === "s2c") return "server \u2192 client";
+    // "both" / "client \u2192 server only" / undefined / anything else
+    return "client \u2192 server";
+}
+
+// Format a number with a sane default precision; handle NaN/Infinity as "\u2014".
+function formatNumber(n) {
+    if (!Number.isFinite(n)) return "\u2014";
+    if (Math.abs(n) >= 1000) return n.toFixed(1);
+    if (Math.abs(n) >= 10) return n.toFixed(2);
+    return n.toFixed(3);
+}
+
+// Compute summary statistics for an array of delays (in milliseconds).
+function computeDelayStats(delays) {
+    const sorted = (Array.isArray(delays) ? delays : [])
+        .filter(Number.isFinite)
+        .slice()
+        .sort((a, b) => a - b);
+    const n = sorted.length;
+    if (n === 0) {
+        return {
+            min: NaN, max: NaN, mean: NaN, median: NaN, stddev: NaN,
+            p90: NaN, p99: NaN, burstCount: 0, pauseCount: 0,
+        };
+    }
+    const sum = sorted.reduce((s, v) => s + v, 0);
+    const mean = sum / n;
+    const median = n % 2 === 0
+        ? (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+        : sorted[(n - 1) / 2];
+    const percentile = (q) => {
+        const idx = Math.min(n - 1, Math.max(0, Math.floor(q * (n - 1))));
+        return sorted[idx];
+    };
+    const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
+    return {
+        min: sorted[0],
+        max: sorted[n - 1],
+        mean,
+        median,
+        stddev: Math.sqrt(variance),
+        p90: percentile(0.9),
+        p99: percentile(0.99),
+        burstCount: sorted.filter((v) => v < 30).length,
+        pauseCount: sorted.filter((v) => v > 500).length,
+    };
+}
+
+// Word-wrap a string to `width` columns while preserving paragraph
+// breaks (blank lines).
+function wrapText(text, width) {
+    if (typeof text !== "string" || !text) return "";
+    const out = [];
+    for (const para of text.split(/\n\s*\n/)) {
+        const words = para.split(/\s+/).filter(Boolean);
+        let line = "";
+        for (const w of words) {
+            if (line.length === 0) line = w;
+            else if (line.length + 1 + w.length <= width) line = `${line} ${w}`;
+            else { out.push(line); line = w; }
+        }
+        if (line) out.push(line);
+        out.push("");
+    }
+    // Drop trailing blank produced by the final paragraph so the export
+    // doesn't end with a double newline beyond the file '\n'.
+    while (out.length && out[out.length - 1] === "") out.pop();
+    return out.join("\n");
+}
+
+// Build the LLM-friendly text export for a single OpenSSH flow analysis.
+//
+// `state` shape (all optional except `delays`):
+//   {
+//     flow: { srcIp, srcPort, dstIp, dstPort, packets, firstTimestamp, lastTimestamp },
+//     model: { layout },
+//     direction: "c2s" | "s2c" | "both",
+//     delays: number[],                          // inter-key delays in ms
+//     delaysWithIdx: [{ delay, index, packetLength }],
+//     candidates: [{ text, logProb, combinedScore, llmIsCommand, synthetic }],
+//     primary: { text, confidence, kind, isCommand, rationale, source },
+//     insight: { text, source },
+//     estimatedCommandLength: number,
+//     backspaceHints: number[],
+//     paddingDetection: {                       // from detect20msPadding()
+//       detected, periodMs, coverage, residualStdMs,
+//       dominantResidueMs, candidateScores: [...],
+//     },
+//   }
+// `opts.now` is an injectable clock for deterministic tests.
+function buildSshKeystrokeExport(state, opts) {
+    opts = opts || {};
+    const lines = [];
+    const now = (typeof opts.now === "function" ? opts.now() : new Date()).toISOString();
+    const flow = state && state.flow;
+    const delays = (state && state.delays) || [];
+    const delaysWithIdx = (state && state.delaysWithIdx) || [];
+    const candidates = (state && state.candidates) || [];
+    const primary = state && state.primary;
+    const insight = state && state.insight;
+    const estLen = state && state.estimatedCommandLength;
+    const model = state && state.model;
+    const direction = (state && state.direction) || "c2s";
+
+    // ── Header ──────────────────────────────────────────────────────────
+    lines.push("# OpenSSH keystroke-timing trace");
+    lines.push(`# Generated by PacketSnitch at ${now}`);
+    if (flow) {
+        lines.push(
+            `# Flow: ${flow.srcIp || "?"}:${flow.srcPort || "?"} \u2192 ` +
+            `${flow.dstIp || "?"}:${flow.dstPort || "?"} (${directionLabel(direction)})`,
+        );
+        lines.push(
+            `# Packets: ${flow.packets ? flow.packets.length : 0}` +
+            `  \u2022  Inter-key delays: ${delays.length}` +
+            `  \u2022  Direction: ${direction}`,
+        );
+    } else {
+        lines.push("# Flow: unknown");
+        lines.push(`# Inter-key delays: ${delays.length}`);
+    }
+    const spanSec = flow && flow.firstTimestamp && flow.lastTimestamp
+        ? Math.max(0, (flow.lastTimestamp - flow.firstTimestamp) / 1000)
+        : null;
+    if (Number.isFinite(spanSec)) {
+        lines.push(`# Flow span: ${spanSec.toFixed(3)} s`);
+    }
+    if (delays.length > 0) {
+        const sum = delays.reduce((s, v) => s + v, 0);
+        const avg = sum / delays.length;
+        lines.push(
+            `# Average inter-key delay: ${avg.toFixed(2)} ms  \u2022  Total: ${sum.toFixed(1)} ms`,
+        );
+    }
+    lines.push("");
+
+    // ── CSV table ───────────────────────────────────────────────────────
+    lines.push("keystroke_index,delay_ms,packet_index,packet_length");
+    const indexed = delaysWithIdx.length === delays.length
+        ? delaysWithIdx
+        : delays.map((d, i) => ({ delay: d, index: i, packetLength: null }));
+    for (let i = 0; i < indexed.length; i += 1) {
+        const row = indexed[i] || {};
+        const delay = Number.isFinite(row.delay)
+            ? row.delay
+            : (Number.isFinite(delays[i]) ? delays[i] : "");
+        const pktIdx = Number.isFinite(row.index) ? row.index : "";
+        const pktLen = Number.isFinite(row.packetLength) ? row.packetLength : "";
+        lines.push(`${i + 1},${formatNumber(delay)},${pktIdx},${pktLen}`);
+    }
+    lines.push(`(${indexed.length} rows)`);
+    lines.push("");
+
+    // ── Summary statistics ──────────────────────────────────────────────
+    lines.push("## Summary");
+    lines.push(`- Total delays: ${delays.length}`);
+    if (delays.length > 0) {
+        const stats = computeDelayStats(delays);
+        lines.push(`- Min delay: ${formatNumber(stats.min)} ms`);
+        lines.push(`- Median delay: ${formatNumber(stats.median)} ms`);
+        lines.push(`- Mean delay: ${formatNumber(stats.mean)} ms`);
+        lines.push(`- Max delay: ${formatNumber(stats.max)} ms`);
+        lines.push(`- Std-dev: ${formatNumber(stats.stddev)} ms`);
+        lines.push(`- 90th percentile: ${formatNumber(stats.p90)} ms`);
+        lines.push(`- 99th percentile: ${formatNumber(stats.p99)} ms`);
+        lines.push(`- Bursts (<30 ms): ${stats.burstCount}`);
+        lines.push(`- Thinking pauses (>500 ms): ${stats.pauseCount}`);
+    }
+    if (Number.isFinite(estLen)) {
+        lines.push(`- Estimated command length (chars): ${estLen}`);
+    }
+    if (state && Array.isArray(state.backspaceHints) && state.backspaceHints.length > 0) {
+        lines.push(`- Backspace hints (count): ${state.backspaceHints.length}`);
+    }
+    lines.push("");
+
+    // ── Decoder candidates ──────────────────────────────────────────────
+    if (candidates.length > 0) {
+        lines.push("## Top decoded candidates (local Viterbi decoder)");
+        candidates.slice(0, 12).forEach((c, idx) => {
+            const rank = idx + 1;
+            const text = JSON.stringify(c.text || "");
+            const logP = Number.isFinite(c.logProb) ? c.logProb.toFixed(2) : "\u2014";
+            const combined = Number.isFinite(c.combinedScore)
+                ? c.combinedScore.toFixed(3)
+                : "\u2014";
+            const isCommand = c.llmIsCommand || c.synthetic ? " [cmd?]" : "";
+            lines.push(`${rank}. ${text}  (logP=${logP}, combined=${combined})${isCommand}`);
+        });
+        lines.push("");
+    }
+
+    // ── LLM primary result ─────────────────────────────────────────────
+    if (primary && primary.text) {
+        lines.push("## LLM best guess");
+        lines.push(`Text: ${JSON.stringify(primary.text)}`);
+        if (Number.isFinite(primary.confidence)) {
+            lines.push(`Confidence: ${(primary.confidence * 100).toFixed(1)}%`);
+        }
+        if (primary.kind) lines.push(`Kind: ${primary.kind}`);
+        if (typeof primary.isCommand === "boolean") {
+            lines.push(`Looks like a shell command: ${primary.isCommand ? "yes" : "no"}`);
+        }
+        if (primary.rationale) {
+            lines.push(`Rationale: ${primary.rationale}`);
+        }
+        lines.push("");
+    }
+
+    // ── LLM analyst insight ────────────────────────────────────────────
+    if (insight && insight.text) {
+        lines.push("## LLM analyst insight");
+        lines.push(wrapText(insight.text, 80));
+        lines.push("");
+    }
+
+    // ── Padding detection (SSH server obfuscation fingerprint) ─────────
+    const padding = state && state.paddingDetection;
+    if (padding && padding.detected) {
+        const period = Number.isFinite(padding.periodMs) ? `${padding.periodMs} ms` : "—";
+        const coverage = Number.isFinite(padding.coverage)
+            ? `${(padding.coverage * 100).toFixed(1)}%`
+            : "—";
+        const residualStd = Number.isFinite(padding.residualStdMs)
+            ? `${padding.residualStdMs.toFixed(2)} ms`
+            : "—";
+        const dominant = Number.isFinite(padding.dominantResidueMs)
+            ? `${padding.dominantResidueMs.toFixed(2)} ms`
+            : "—";
+        lines.push("## Padding detection");
+        lines.push(
+            `Detected ${period} cadence (coverage ${coverage}, residual std ${residualStd}, dominant offset ${dominant}).`,
+        );
+        lines.push(
+            "The SSH server appears to be inserting filler packets on a fixed schedule — common",
+        );
+        lines.push(
+            "obfuscation against keystroke-side analysis. The decoder peeled the cadence off",
+        );
+        lines.push(
+            "before scoring, so the candidates above were reconstructed from the residuals only.",
+        );
+        if (Array.isArray(padding.candidateScores) && padding.candidateScores.length > 0) {
+            lines.push("");
+            lines.push("Candidate periods:");
+            for (const cs of padding.candidateScores) {
+                const p = Number.isFinite(cs.periodMs) ? `${cs.periodMs} ms` : "—";
+                const c = Number.isFinite(cs.coverage) ? `${(cs.coverage * 100).toFixed(1)}%` : "—";
+                const r = Number.isFinite(cs.residualStdMs) ? `${cs.residualStdMs.toFixed(2)} ms` : "—";
+                lines.push(`- ${p}: coverage ${c}, residual std ${r}`);
+            }
+        }
+        lines.push("");
+    } else if (padding && Array.isArray(padding.candidateScores) && padding.candidateScores.length > 0) {
+        // No detection, but surface the scores anyway so the analyst can
+        // see why (e.g., borderline coverage or wide residuals).
+        lines.push("## Padding detection");
+        lines.push("No fixed-cadence padding detected. Candidate scores:");
+        for (const cs of padding.candidateScores) {
+            const p = Number.isFinite(cs.periodMs) ? `${cs.periodMs} ms` : "—";
+            const c = Number.isFinite(cs.coverage) ? `${(cs.coverage * 100).toFixed(1)}%` : "—";
+            const r = Number.isFinite(cs.residualStdMs) ? `${cs.residualStdMs.toFixed(2)} ms` : "—";
+            lines.push(`- ${p}: coverage ${c}, residual std ${r}`);
+        }
+        lines.push("");
+    }
+
+    // ── Notes ──────────────────────────────────────────────────────────
+    lines.push("## Notes");
+    lines.push(
+        "This file contains ONLY timing-channel information recovered from inter-key packet delays.",
+    );
+    lines.push(
+        "The actual SSH session is encrypted end-to-end; the decoder + LLM best-effort recovery is",
+    );
+    lines.push(
+        "shown above for analyst triage. Treat every candidate as untrusted until verified against",
+    );
+    lines.push(
+        "the original capture or external context (user intent, host configuration, etc.).",
+    );
+    if (model && model.layout) {
+        lines.push("");
+        lines.push(`Keyboard layout used: ${model.layout}`);
+    }
+
+    return lines.join("\n") + "\n";
+}
+
+// Minimum delays we'll summarize — anything below this is too thin to
+// justify an LLM guess. Below this threshold the analysis brief returns
+// `null` so the caller can fall back to a deterministic decoder-only
+// result.
+const BRIEF_MIN_SAMPLES = 30;
+const BRIEF_MAX_DELAY_MS = 200; // for burst/pause lists
+
+// Render the LLM-facing analysis brief — the same data the user can
+// save with "Export keystrokes", repackaged as plain text so a model
+// can read it. Returns `null` when the sample is too small to draw
+// reliable conclusions; in that case the caller should fall back to a
+// no-LLM path instead of forcing a guess.
+//
+// `state` shape matches `buildSshKeystrokeExport`. Extra `opts`:
+//   - `maxSamples`    : number  — cap on inter-key delays listed in
+//                                       the burst/pause sections
+//                                       (default 80)
+//   - `minSamples`    : number  — minimum delays required to produce
+//                                       a brief (default 30)
+function buildSshTimingAnalysisBrief(state, opts) {
+    const o = opts || {};
+    const minSamples = Number.isFinite(o.minSamples) ? o.minSamples : BRIEF_MIN_SAMPLES;
+    const maxSamples = Number.isFinite(o.maxSamples) ? o.maxSamples : 80;
+
+    const delays = (state && state.delays) || [];
+    const valid = Array.isArray(delays)
+        ? delays.filter((d) => Number.isFinite(d) && d > 0)
+        : [];
+    if (valid.length < minSamples) {
+        return {
+            ok: false,
+            reason: "too_few_samples",
+            sampleCount: valid.length,
+            minSamples,
+        };
+    }
+
+    const capped = valid.slice(0, maxSamples);
+    const overflow = valid.length > maxSamples ? valid.length - maxSamples : 0;
+    const flow = state && state.flow;
+    const candidates = (state && state.candidates) || [];
+    const primary = state && state.primary;
+    const padding = state && state.paddingDetection;
+    const direction = (state && state.direction) || "c2s";
+    const stats = computeDelayStats(valid);
+
+    // Splits: short runs of fast typing ("bursts" within a single
+    // word/token) and pauses (often command boundaries).
+    const bursts = valid.filter((d) => d < 30);
+    const pauses = valid.filter((d) => d > 500).sort((a, b) => b - a);
+
+    const lines = [];
+
+    // ── Legend ────────────────────────────────────────────────────────
+    // The legend MUST come first so the LLM reads it before any data.
+    // It defines every threshold, every column, every derived metric,
+    // and how to interpret each section. Without it the model often
+    // mis-reads the brief (e.g. treats 75 ms "burst" as a slow inter-key
+    // delay, or treats a 600 ms pause as "two commands").
+    lines.push("# ════════════════════════════════════════════════════════════════════════");
+    lines.push("# LEGEND — how to read this brief");
+    lines.push("# ════════════════════════════════════════════════════════════════════════");
+    lines.push("#");
+    lines.push("# Domain: inter-key delay (IID) trace recovered from a packet capture.");
+    lines.push("# IID = time gap between two consecutive SSH payloads on the wire.");
+    lines.push("# Lower IID = keys typed faster. Higher IID = a pause (or a server-throttled gap).");
+    lines.push("# All IID values are in milliseconds (ms). All time/duration values are in ms");
+    lines.push("# unless suffixed with 's' (seconds) or 'B' (bytes).");
+    lines.push("#");
+    lines.push("# ── Pause classification (used in Aggregate timing statistics) ──");
+    lines.push("#   • Bursts         < 30 ms      : typed in rapid succession, within a word/token");
+    lines.push("#   • Within-command 30-200 ms    : brief intra-command hesitation");
+    lines.push("#   • Short-thinking 200-500 ms   : the user paused to think mid-command");
+    lines.push("#   • Command-bound 500-2000 ms  : high-confidence command boundary (most likely)");
+    lines.push("#   • Idle           > 2000 ms    : user walked away / waited for command output");
+    lines.push("#");
+    lines.push("# ── Percentiles (Aggregate timing statistics) ──");
+    lines.push("#   • p90 : 90th-percentile IID (only 10% of intervals are larger)");
+    lines.push("#   • p99 : 99th-percentile IID (the slowest 1% of intervals)");
+    lines.push("#   Use p99 (not max) to ignore the few extreme outliers that distort the scale.");
+    lines.push("#");
+    lines.push("# ── Coefficient of variation (CV) ──");
+    lines.push("#   CV = stddev / mean. Low CV (≈ 0) → metronomic cadence (paste, script, macro).");
+    lines.push("#   High CV (≈ 1) → variable manual typing with bursts and pauses.");
+    lines.push("#");
+    lines.push("# ── Burst structure (Shape signature) ──");
+    lines.push("#   A 'burst' is a maximal run of consecutive sub-30 ms IIDs.");
+    lines.push("#   Burst length ≈ number of characters typed quickly in one word/token.");
+    lines.push("#   • short  (≤3) : short tokens like 'ls', 'cd', 'git', 'vim', 'sudo', or repeated");
+    lines.push("#                  single keys");
+    lines.push("#   • medium (4-7): typical command words like 'cat', 'systemctl', 'service',");
+    lines.push("#                  'status', 'restart'");
+    lines.push("#   • long   (≥8) : long identifiers/paths like a filename, hostname, or");
+    lines.push("#                  'restart-something-long'");
+    lines.push("#   A bimodal distribution (lots of short + lots of long) is the fingerprint of");
+    lines.push("#   shell commands mixing short verbs with long paths/options.");
+    lines.push("#");
+    lines.push("# ── Backspace cluster location (Shape signature) ──");
+    lines.push("#   'leading'   = first 25% of stream  → user mistyped the command then retyped");
+    lines.push("#   'mid'       = 25-75% of stream      → in-the-middle correction (e.g. wrong arg)");
+    lines.push("#   'trailing'  = last 25% of stream   → corrected just before Enter (last-second fix)");
+    lines.push("#   'longest run' = longest stretch of consecutive backspaces; ≥3 means the user");
+    lines.push("#                   deleted an entire word or phrase, then retyped it.");
+    lines.push("#");
+    lines.push("# ── Typing mode heuristic ──");
+    lines.push("#   • paste-or-script : uniform fast cadence, no pauses, no corrections");
+    lines.push("#                        → content was pasted or generated by a script");
+    lines.push("#   • scripted         : uniform cadence with very few pauses");
+    lines.push("#                        → a tool produced the typing at a steady rate");
+    lines.push("#   • fast-typing      : most intervals are bursts, but pauses do occur");
+    lines.push("#                        → a human typing fast (skilled user)");
+    lines.push("#   • natural-typing   : variable cadence with bursts and command-boundary pauses");
+    lines.push("#                        → a normal interactive shell session");
+    lines.push("#   • mixed            : ambiguous; weights between typing and s2c shape accordingly");
+    lines.push("#");
+    lines.push("# ── Padding detection (SSH server-side timing obfuscation) ──");
+    lines.push("#   Some servers insert filler packets on a fixed cadence (commonly every 20 ms,");
+    lines.push("#   but the actual period varies) to defeat keystroke-side timing attacks. The");
+    lines.push("#   local detector finds the cadence on its own via a first-difference histogram");
+    lines.push("#   scan (pass 1) and a sub-millisecond refine around the winner (pass 2) — no");
+    lines.push("#   cadence value is hard-coded. When detected, the IIDs in this brief have");
+    lines.push("#   ALREADY been peeled AND the filler intervals have been REMOVED (one delay");
+    lines.push("#   per real keystroke, not per packet). Treat residual sub-cadence jitter as");
+    lines.push("#   noise from imperfect peeling, NOT as a sub-keystroke clock or burst structure.");
+    lines.push("#   'coverage' = fraction of intervals that fit the detected cadence exactly.");
+    lines.push("#   'residual std' = std-dev of IIDs AFTER cadence removal; low (≈ 2 ms) = clean peel.");
+    lines.push("#   'filler intervals' = how many input intervals were classified as padding.");
+    lines.push("#");
+    lines.push("# ── Sampled inter-key delays (head/tail) ──");
+    lines.push("#   The first 12 and last 12 IIDs of the typed stream, in ms. Use these to see");
+    lines.push("#   the leading/trailing pattern — useful for inferring whether the stream starts");
+    lines.push("#   mid-command or whether the user typed a partial command before disconnecting.");
+    lines.push("#");
+    lines.push("# ── Server output (s2c) summary ──");
+    lines.push("#   The OUTBOUND side of the SSH conversation. Each chunk is a continuous run of");
+    lines.push("#   s2c packets; a gap of > 8 s between s2c packets starts a new chunk.");
+    lines.push("#   • 'rate' (char/s)   : total bytes divided by chunk duration");
+    lines.push("#   • 'flatness'        : 1 = evenly-spaced packets (paged file), 0 = bursty");
+    lines.push("#   • 'kind' classification :");
+    lines.push("#       - prompt-or-echo     : <100 B (a shell prompt or echoed command)");
+    lines.push("#       - paged-file-content : flat, slow (<200 char/s) over >80 ms avg gap");
+    lines.push("#                            → likely cat/less/grep of a config file");
+    lines.push("#       - large-file-dump   : >5 kB/s in <3 s");
+    lines.push("#                            → likely cat of a larger file");
+    lines.push("#       - short-status-output : 200-5000 char/s in <1.5 s");
+    lines.push("#                            → likely systemctl status / ps aux | head / ip a");
+    lines.push("#       - dynamic-output    : bursty timing");
+    lines.push("#                            → interactive output (progress bars, prompts, etc.)");
+    lines.push("#       - mixed             : ambiguous");
+    lines.push("#   Use the s2c chunk kind to guess the COMMAND CLASS that produced it, even when");
+    lines.push("#   the c2s typing can't recover exact characters (e.g. with 20 ms obfuscation).");
+    lines.push("#");
+    lines.push("# ── Viterbi decoder candidates ──");
+    lines.push("#   The local decoder's top 12 strings, ranked by log-probability of the timing.");
+    lines.push("#   • 'logP'  : log-probability of the timing given the candidate string (higher =");
+    lines.push("#               more plausible timing match). Raw, not normalized.");
+    lines.push("#   • 'combined' : LLM-reweighted score in [0,1] that blends logP with language");
+    lines.push("#                   priors. Prefer candidates with higher combined scores.");
+    lines.push("#   • '[cmd?]'  : the decoder tagged this candidate as 'looks like a shell command'");
+    lines.push("#   The decoder sees ONLY the timing (not the s2c output). Candidates are most");
+    lines.push("#   reliable for SHORT commands; for long paths/filenames the timing signal alone");
+    lines.push("#   is too weak to pin down specific characters — rely on the shape signature and");
+    lines.push("#   s2c summary for those.");
+    lines.push("#");
+    lines.push("# ════════════════════════════════════════════════════════════════════════");
+    lines.push("#");
+
+    // ── Header ────────────────────────────────────────────────────────
+    lines.push("# SSH Session: Keystroke Timing Analysis Brief");
+    lines.push("# (same data as the \"Export keystrokes\" file, repackaged for LLM consumption)");
+    if (flow) {
+        lines.push(
+            `# Flow: ${flow.srcIp || "?"}:${flow.srcPort || "?"} -> ` +
+            `${flow.dstIp || "?"}:${flow.dstPort || "?"} (${directionLabel(direction)})`,
+        );
+    }
+    const spanSec = flow && flow.firstTimestamp && flow.lastTimestamp
+        ? Math.max(0, (flow.lastTimestamp - flow.firstTimestamp) / 1000)
+        : null;
+    if (Number.isFinite(spanSec)) {
+        lines.push(`# Flow span: ${spanSec.toFixed(3)} s`);
+    }
+    const layout = (state && state.model && state.model.layout) || "qwerty";
+    lines.push(`# Keyboard layout: ${layout}`);
+    lines.push(`# Direction: ${direction}`);
+    lines.push(`# Inter-key delays available: ${valid.length}` + (overflow > 0 ? ` (truncated to ${maxSamples} for this brief, ${overflow} dropped)` : ""));
+    lines.push("");
+
+    // ── Aggregated timing statistics ─────────────────────────────────
+    lines.push("## Aggregate timing statistics");
+    lines.push(`- Samples: ${valid.length}` + (overflow > 0 ? ` (truncated to ${maxSamples})` : ""));
+    if (Number.isFinite(spanSec)) {
+        lines.push(`- Flow span: ${spanSec.toFixed(3)} s`);
+        lines.push(`- Average cadence: ${(valid.length / spanSec).toFixed(2)} keys/s`);
+    }
+    lines.push(`- Median inter-key delay: ${formatNumber(stats.median)} ms`);
+    lines.push(`- Mean inter-key delay: ${formatNumber(stats.mean)} ms`);
+    lines.push(`- Std-dev: ${formatNumber(stats.stddev)} ms`);
+    lines.push(`- Min / max: ${formatNumber(stats.min)} ms / ${formatNumber(stats.max)} ms`);
+    lines.push(`- 90th percentile: ${formatNumber(stats.p90)} ms`);
+    lines.push(`- 99th percentile: ${formatNumber(stats.p99)} ms`);
+    lines.push(
+        `- Bursts (<30 ms): ${stats.burstCount} ` +
+        `(${((stats.burstCount / valid.length) * 100).toFixed(1)}% of keys were typed in rapid succession — within a word/token)`,
+    );
+    lines.push(
+        `- Thinking pauses (>500 ms): ${stats.pauseCount} ` +
+        `(each very likely a command boundary or "thinking pause")`,
+    );
+    lines.push("");
+
+    // ── Shape signature (compact digest for LLM reasoning) ──────────
+    // Computed once and used both for the rendered section and as
+    // input to the decoder-candidate re-rank prompt. Captures cadence,
+    // burst structure (≈ word lengths), pause distribution (≈
+    // command boundaries), backspace cluster locations, and s2c
+    // response shape. The LLM uses these signals to rank command
+    // candidates by shape even when the timing can't recover exact
+    // characters (e.g. when a 20 ms obfuscation cadence is active).
+    const shapeSignature = computeShapeSignature({
+        delays,
+        backspaceHints: state && state.backspaceHints,
+        s2cSummary: state && state.s2cSummary,
+    });
+    if (shapeSignature && shapeSignature.ok) {
+        lines.push(renderShapeSignature(shapeSignature));
+    }
+
+    // ── Shell command priors (seed corpus) ───────────────────────────
+    // Optional — only emitted when the caller precomputed `shellPriors`
+    // (e.g. from src/data/shell_data). The priors tell the LLM which
+    // commands and argument shapes the user *actually* runs, so it
+    // can boost decoder candidates whose shape matches real prior
+    // commands. Without this the model only knows generic shell
+    // examples — it can't tell whether the user is more likely to
+    // type `git push` or `git remote add`.
+    const shellPriors = state && state.shellPriors;
+    if (shellPriors && shellPriors.ok && shellPriors.totalCommands > 0) {
+        const rendered = renderShellPriors(shellPriors, o.shellPriorsOpts);
+        if (rendered) {
+            lines.push(rendered);
+        }
+    }
+
+    // ── Most prominent bursts and pauses ─────────────────────────────
+    // Bursts are clustered runs; a long burst usually means a single
+    // word was typed quickly. Pauses are usually command boundaries.
+    lines.push("## Most prominent bursts (<30 ms) — within-word typing");
+    if (bursts.length === 0) {
+        lines.push("- none");
+    } else {
+        const sortedBursts = bursts.slice().sort((a, b) => a - b);
+        const shown = sortedBursts.slice(0, 10);
+        for (const b of shown) lines.push(`- ${b.toFixed(1)} ms`);
+        if (sortedBursts.length > shown.length) {
+            lines.push(`- ... ${sortedBursts.length - shown.length} more`);
+        }
+    }
+    lines.push("");
+
+    lines.push("## Most prominent pauses (>500 ms) — likely command boundaries");
+    if (pauses.length === 0) {
+        lines.push("- none");
+    } else {
+        const shown = pauses.slice(0, 8);
+        for (const p of shown) lines.push(`- ${p.toFixed(1)} ms`);
+        if (pauses.length > shown.length) {
+            lines.push(`- ... ${pauses.length - shown.length} more`);
+        }
+    }
+    lines.push("");
+
+    // ── First/last few raw delays (sampled) ──────────────────────────
+    // Provides the model with a sense of the leading and trailing
+    // patterns — important for inferring command prefixes and
+    // whether the user typed a partial command.
+    lines.push(`## Sampled inter-key delays (first 12 and last 12 of ${capped.length})`);
+    lines.push("- head: " + capped.slice(0, 12).map((d) => d.toFixed(0)).join(", "));
+    if (capped.length > 24) {
+        lines.push("- tail: " + capped.slice(-12).map((d) => d.toFixed(0)).join(", "));
+    } else if (capped.length > 12) {
+        lines.push("- tail: " + capped.slice(12).map((d) => d.toFixed(0)).join(", "));
+    }
+    lines.push("");
+
+    // ── Padding detection summary ───────────────────────────────────
+    if (padding && padding.detected) {
+        const pct = Number.isFinite(padding.coverage)
+            ? `${(padding.coverage * 100).toFixed(0)}%`
+            : "—";
+        const fillerCount = Array.isArray(padding.paddedIntervals)
+            ? padding.paddedIntervals.length
+            : null;
+        const pass1 = Number.isFinite(padding.pass1Candidate)
+            ? padding.pass1Candidate
+            : null;
+        const pass1Peak = Number.isFinite(padding.pass1PeakRatio)
+            ? padding.pass1PeakRatio.toFixed(2)
+            : null;
+        const detectorNote = pass1 !== null && pass1Peak !== null
+            ? ` Pass 1 (first-difference histogram) suggested ${pass1} ms ` +
+            `(peak ratio ${pass1Peak}); pass 2 refined to ${padding.periodMs} ms.`
+            : "";
+        const fillerNote = fillerCount !== null
+            ? ` ${fillerCount} filler interval(s) were removed before this brief was generated; ` +
+            `the inter-key delays above are real keystroke gaps only.`
+            : "";
+        lines.push("## Padding detection");
+        lines.push(
+            `Detected ${padding.periodMs} ms cadence (coverage ${pct}).${detectorNote}`,
+        );
+        lines.push(
+            "The inter-key delays in the aggregate statistics, burst/pause lists, and head/tail samples above",
+        );
+        lines.push(
+            "have ALREADY been peeled by the local detector — the obfuscation period was subtracted from each",
+        );
+        lines.push(
+            "raw delay before this brief was generated. Treat any residual sub-cadence jitter as noise from",
+        );
+        lines.push(
+            "imperfect peeling, NOT as evidence of an extra sub-keystroke clock or burst structure.",
+        );
+        if (fillerNote) {
+            lines.push(fillerNote.trim());
+        }
+        lines.push(
+            "The decoder candidates below were also reconstructed from the peeled (residual) cadence.",
+        );
+        lines.push("");
+    }
+
+    // ── Decoder candidates ───────────────────────────────────────────
+    if (candidates.length > 0) {
+        lines.push("## Local Viterbi decoder candidates (top 12 by log-probability)");
+        candidates.slice(0, 12).forEach((c, idx) => {
+            const text = JSON.stringify(c.text || "");
+            const logP = Number.isFinite(c.logProb) ? c.logProb.toFixed(2) : "—";
+            const combined = Number.isFinite(c.combinedScore)
+                ? c.combinedScore.toFixed(3)
+                : "—";
+            const tag = c.llmIsCommand || c.synthetic ? " [cmd?]" : "";
+            lines.push(`${idx + 1}. ${text}  (logP=${logP}, combined=${combined})${tag}`);
+        });
+        lines.push("");
+    }
+
+    // ── LLM primary (if previously produced) ─────────────────────────
+    if (primary && primary.text) {
+        lines.push("## Previous LLM best guess (round-tripped for self-consistency)");
+        lines.push(`- Text: ${JSON.stringify(primary.text)}`);
+        if (Number.isFinite(primary.confidence)) {
+            lines.push(`- Confidence: ${(primary.confidence * 100).toFixed(1)}%`);
+        }
+        if (primary.kind) lines.push(`- Kind: ${primary.kind}`);
+        if (primary.rationale) lines.push(`- Rationale: ${primary.rationale}`);
+        lines.push("");
+    }
+
+    // ── Server-output (s2c) summary, if pre-computed by the caller ───
+    // The renderer computes this on demand and passes it through `state`.
+    // We always print it (even when ok=false) so the model knows we
+    // considered it.
+    if (state && state.s2cSummary) {
+        const s = state.s2cSummary;
+        if (s.ok) {
+            lines.push("## Server output (s2c) summary");
+            lines.push(s.summaryText);
+        } else if (s.reason) {
+            lines.push("## Server output (s2c) summary");
+            lines.push(`- not available: ${s.reason}`);
+            if (s.reason === "too_few_s2c_packets") {
+                lines.push(`- only ${s.sampleCount} s2c packet(s) available (need ${s.minSamples})`);
+            } else if (s.reason === "no_s2c_packets") {
+                lines.push("- no s2c packets in this flow — only the typed-side timing is available");
+            }
+        }
+        lines.push("");
+    }
+
+    return {
+        ok: true,
+        text: lines.join("\n"),
+        sampleCount: valid.length,
+        truncated: overflow > 0,
+        truncatedDropped: overflow,
+    };
+}
+
+// ── Server-output (s2c) summarizer ─────────────────────────────────
+//
+// Pull the second side of the conversation into the brief: the
+// server's outbound packets carry the *result* of the typed commands,
+// and their byte sizes + inter-arrival rates are a strong signal for
+// "what kind of command produced this" — a flat 50 char/s for ~1 s is
+// characteristic of `cat`/`less` of a small config file, while a
+// bursty 5 kB in 50 ms followed by silence matches `systemctl status`
+// or `ps aux | head`.
+//
+// `summarizeS2cOutput` returns either:
+//   { ok: false, reason: "..." }  when the input is too thin
+//   { ok: true,  summaryText, chunks, totalBytes, totalDurationMs, totalChunks, okTooFewPackets }
+// The renderer is expected to pass `flow.packets` directly; the helper
+// is fully pure (no DOM, no IPC) so it's trivially testable.
+const S2C_MIN_PACKETS = 4;        // need at least this many s2c packets
+const S2C_CHUNK_GAP_MS = 8000;    // gap > this ends a chunk (8 s = wide enough to merge paged-file-output streams)
+const S2C_CHUNK_MAX_DURATION_MS = 30_000;
+
+function summarizeS2cOutput(packets, opts) {
+    const o = opts || {};
+    const minPackets = Number.isFinite(o.minPackets) ? o.minPackets : S2C_MIN_PACKETS;
+    const chunkGapMs = Number.isFinite(o.chunkGapMs) ? o.chunkGapMs : S2C_CHUNK_GAP_MS;
+
+    if (!Array.isArray(packets) || packets.length === 0) {
+        return { ok: false, reason: "no_packets" };
+    }
+    const s2c = packets
+        .filter((p) => p && p.direction === "s2c")
+        .slice()
+        .sort((a, b) => {
+            const ta = Number.isFinite(a.timestamp) ? a.timestamp : 0;
+            const tb = Number.isFinite(b.timestamp) ? b.timestamp : 0;
+            return ta - tb;
+        });
+    if (s2c.length === 0) {
+        return { ok: false, reason: "no_s2c_packets" };
+    }
+
+    // Compute byte length for each s2c packet via the same logic the
+    // renderer's getPacketInfo helper uses. Packets without a usable
+    // timestamp are counted in s2cEnriched but excluded from
+    // s2cWithTs so downstream chunking skips them.
+    const s2cEnriched = s2c.map((pkt) => {
+        const info =
+            pkt && pkt.packet && (pkt.packet["packet.info"] || pkt.packet["Packet Info"]);
+        const pinfo = info && typeof info === "object" ? info : {};
+        const pktLen = Number(
+            pinfo["packet.length"] ?? pinfo["Packet Length"] ?? pinfo["Length"] ?? 0,
+        );
+        return {
+            ts: Number.isFinite(pkt.timestamp) ? pkt.timestamp : null,
+            bytes: Number.isFinite(pktLen) && pktLen > 0 ? pktLen : 0,
+        };
+    });
+    const s2cWithTs = s2cEnriched.filter((e) => e.ts !== null);
+
+    if (s2cWithTs.length < minPackets) {
+        return {
+            ok: false,
+            reason: "too_few_s2c_packets",
+            sampleCount: s2cWithTs.length,
+            minSamples: minPackets,
+        };
+    }
+
+    // ── Group into chunks ────────────────────────────────────────────
+    // A chunk is a maximal run where consecutive packets are within
+    // `chunkGapMs` of each other. Long gaps between s2c packets
+    // usually mean the prompt returned and the user is composing the
+    // next command.
+    const chunks = [];
+    let current = null;
+    let prevTs = null;
+    let prevDelay = null;
+    const interDelays = [];
+
+    for (const entry of s2cWithTs) {
+        if (prevTs === null) {
+            current = {
+                startTs: entry.ts,
+                endTs: entry.ts,
+                bytes: 0,
+                packetCount: 0,
+                minInterMs: null,
+                maxInterMs: null,
+            };
+            chunks.push(current);
+        } else {
+            const d = entry.ts - prevTs;
+            if (d > chunkGapMs) {
+                // gap → start a new chunk
+                current = {
+                    startTs: entry.ts,
+                    endTs: entry.ts,
+                    bytes: 0,
+                    packetCount: 0,
+                    minInterMs: null,
+                    maxInterMs: null,
+                };
+                chunks.push(current);
+                prevDelay = null;
+            } else if (Number.isFinite(d) && d > 0) {
+                interDelays.push(d);
+                if (current.minInterMs === null || d < current.minInterMs) current.minInterMs = d;
+                if (current.maxInterMs === null || d > current.maxInterMs) current.maxInterMs = d;
+            }
+        }
+        current.bytes += entry.bytes;
+        current.packetCount += 1;
+        current.endTs = entry.ts;
+        prevTs = entry.ts;
+    }
+
+    if (chunks.length === 0) {
+        return { ok: false, reason: "no_chunked_output" };
+    }
+
+    // ── Compute per-chunk rate + classification ──────────────────────
+    const classified = chunks.map((c, i) => {
+        const durationMs = Math.max(1, c.endTs - c.startTs);
+        const rateCharPerSec = (c.bytes / durationMs) * 1000;
+        // Average inter-packet delay within the chunk (ms). Null when
+        // the chunk only has one packet.
+        const avgInterMs = c.packetCount > 1 && c.minInterMs !== null
+            ? (c.minInterMs + c.maxInterMs) / 2
+            : null;
+        // Burstiness: (max - min) / max, in [0, 1]. A perfectly flat
+        // stream scores 0; a wildly bursty stream scores close to 1.
+        const bursty = c.packetCount > 1 && c.maxInterMs !== null && c.minInterMs !== null
+            ? Math.min(1, (c.maxInterMs - c.minInterMs) / Math.max(1, c.maxInterMs))
+            : 0;
+        let kind = "unknown";
+        // Classification is driven by three signals:
+        //   * total bytes (size class)
+        //   * rateCharPerSec (overall pace)
+        //   * avgInterMs (gap between packets within a chunk) +
+        //     bursty (whether the gaps are uniform)
+        // A paged file dump usually has evenly-spaced packets (low
+        // bursty) with long gaps (high avgInterMs). A fast file dump
+        // has tiny gaps (low avgInterMs) but high throughput.
+        if (c.bytes < 100) {
+            kind = "prompt-or-echo";
+        } else if (avgInterMs !== null && avgInterMs >= 80 && rateCharPerSec < 200 && bursty < 0.7) {
+            kind = "paged-file-content";
+        } else if (rateCharPerSec > 5000 && durationMs < 3000) {
+            kind = "large-file-dump";
+        } else if (rateCharPerSec > 200 && durationMs < 1500) {
+            kind = "short-status-output";
+        } else if (bursty > 0.5) {
+            kind = "dynamic-output";
+        } else {
+            kind = "mixed";
+        }
+        return {
+            idx: i + 1,
+            startTs: c.startTs,
+            endTs: c.endTs,
+            totalBytes: c.bytes,
+            durationMs,
+            rateCharPerSec,
+            avgInterMs,
+            packetCount: c.packetCount,
+            rateFlatness: 1 - bursty, // 1 = perfectly flat, 0 = very bursty
+            kind,
+        };
+    });
+
+    const totalBytes = classified.reduce((s, c) => s + c.totalBytes, 0);
+    const totalDurationMs = classified.reduce((s, c) => s + c.durationMs, 0);
+
+    // ── Render summary text ──────────────────────────────────────────
+    const lines = [];
+    lines.push(`# Server output (s2c) summary`);
+    lines.push(
+        `# ${s2cWithTs.length} s2c packets, ${classified.length} chunk(s), ` +
+        `${formatNumber(totalBytes / 1024)} kB total over ${formatNumber(totalDurationMs / 1000)} s`,
+    );
+    if (interDelays.length > 0) {
+        const stats = computeDelayStats(interDelays);
+        lines.push(
+            `# Median inter-packet delay (within chunks): ${formatNumber(stats.median)} ms`,
+        );
+    }
+    lines.push("");
+    lines.push("## Output chunks (sized, timed, classified)");
+    for (const c of classified) {
+        const sec = (c.durationMs / 1000).toFixed(2);
+        const bytes = c.totalBytes;
+        const rate = formatNumber(c.rateCharPerSec);
+        const flat = (1 - c.rateFlatness).toFixed(2);
+        lines.push(
+            `- chunk ${c.idx}: ${bytes} B in ${sec} s — ` +
+            `rate ${rate} char/s, ${c.packetCount} pkt(s), flatness ${flat} — kind: ${c.kind}`,
+        );
+    }
+    lines.push("");
+    lines.push("## Chunk-kind interpretation guide");
+    lines.push(
+        "- paged-file-content: flat, slow (<50 char/s) over >500 ms — likely `cat`/`less` of a config file or log",
+    );
+    lines.push(
+        "- large-file-dump: very fast dump (>5 kB/s in <2 s) — likely `cat` of a larger file",
+    );
+    lines.push(
+        "- short-status-output: fast, brief — likely `systemctl status`, `ps aux | head`, `ls -l`, `ip a`",
+    );
+    lines.push(
+        "- dynamic-output: bursty — likely interactive commands, prompts, or progress bars",
+    );
+    lines.push(
+        "- prompt-or-echo: tiny (<100 B) — likely a shell prompt or command echo",
+    );
+    lines.push("");
+    return {
+        ok: true,
+        summaryText: lines.join("\n"),
+        chunks: classified,
+        totalBytes,
+        totalDurationMs,
+        totalChunks: classified.length,
+        totalS2cPackets: s2cWithTs.length,
+    };
+}
+
+// ── Shape signature ────────────────────────────────────────────────
+//
+// Compact digest of the *shape* of what was typed, for the LLM to use
+// when ranking "what was typed" candidates. Timing-only keystroke
+// recovery cannot tell us which specific keys were pressed (without
+// empirical digraph training), but it *can* tell us the high-level
+// shape of the session:
+//
+//   - How fast did the user type? (overall cadence, median, std-dev)
+//   - How long was each word? (burst-length distribution)
+//   - Where did they pause? (think pause locations relative to flow)
+//   - Did they make corrections? (backspace cluster locations)
+//   - Was the cadence uniform or grouped into bursts+pauses?
+//   - How much data came back from the server for each command?
+//
+// `computeShapeSignature(state)` returns a plain object with these
+// signals. `buildSshTimingAnalysisBrief` renders it as a "Shape
+// signature" section that the LLM can use to inform command-class
+// guesses — short, fast, unspaced text → probably `cat /etc/...`;
+// longer bursts separated by 500ms pauses → multi-word command like
+// `systemctl restart something`; lots of backspaces near the start →
+// user mistyped the command and corrected.
+function computeShapeSignature(state) {
+    const delays = (state && state.delays) || [];
+    const valid = Array.isArray(delays)
+        ? delays.filter((d) => Number.isFinite(d) && d > 0)
+        : [];
+    if (valid.length === 0) return null;
+
+    const stats = computeDelayStats(valid);
+
+    // ── Burst structure: lengths of consecutive sub-30ms runs ──────
+    // A "burst" is a maximal run of inter-key delays all <30ms (the
+    // within-word threshold). Burst length ≈ number of characters in
+    // a word typed quickly.
+    const bursts = [];
+    let current = 0;
+    for (const d of valid) {
+        if (d < 30) {
+            current += 1;
+        } else if (current > 0) {
+            bursts.push(current);
+            current = 0;
+        }
+    }
+    if (current > 0) bursts.push(current);
+
+    // ── Pause structure: gaps classified by length ────────────────
+    // <200ms = within-command pause, 200-500ms = short thinking
+    // pause, 500-2000ms = clear command boundary, >2000ms = idle /
+    // walked away.
+    const pauses = {
+        withinCommand: 0,    // 30-200ms
+        shortThinking: 0,    // 200-500ms
+        commandBoundary: 0,  // 500-2000ms
+        idle: 0,             // >2000ms
+    };
+    for (const d of valid) {
+        if (d >= 30 && d < 200) pauses.withinCommand += 1;
+        else if (d >= 200 && d < 500) pauses.shortThinking += 1;
+        else if (d >= 500 && d < 2000) pauses.commandBoundary += 1;
+        else if (d >= 2000) pauses.idle += 1;
+    }
+
+    // ── Burst length distribution ───────────────────────────────────
+    // Histogram of burst lengths. Median burst length ≈ median word
+    // length in characters. Bimodal distributions suggest code with
+    // short tokens + long identifiers.
+    const burstLengthStats = bursts.length > 0
+        ? computeDelayStats(bursts.map((n) => n * 10)) // scale so the % formatter is happy
+        : { median: 0, mean: 0, max: 0, min: 0 };
+    // Re-derive integer medians for bursts (DelayStats treats values as floats).
+    const sortedBursts = bursts.slice().sort((a, b) => a - b);
+    const burstMedian = sortedBursts.length > 0
+        ? (sortedBursts.length % 2 === 0
+            ? (sortedBursts[sortedBursts.length / 2 - 1] + sortedBursts[sortedBursts.length / 2]) / 2
+            : sortedBursts[(sortedBursts.length - 1) / 2])
+        : 0;
+    const burstMean = bursts.length > 0
+        ? bursts.reduce((s, n) => s + n, 0) / bursts.length
+        : 0;
+    const burstMax = bursts.length > 0 ? sortedBursts[sortedBursts.length - 1] : 0;
+
+    // ── Backspace cluster analysis ──────────────────────────────────
+    // The caller passes `backspaceHints` with shape
+    //   { indices: [int, ...], count: N }.
+    // We classify the clusters by where they fall in the typed stream.
+    const backspaceHints = state && state.backspaceHints;
+    const bsCount = backspaceHints && Number.isFinite(backspaceHints.count)
+        ? backspaceHints.count
+        : 0;
+    let bsLeading = 0;       // first 25% of stream
+    let bsMid = 0;           // middle 50%
+    let bsTrailing = 0;      // last 25%
+    let bsRunLength = 0;     // longest run of consecutive indices
+    if (bsCount > 0 && Array.isArray(backspaceHints.indices)) {
+        const sorted = backspaceHints.indices.slice().sort((a, b) => a - b);
+        const cut1 = valid.length * 0.25;
+        const cut2 = valid.length * 0.75;
+        let prev = -Infinity;
+        let runLen = 0;
+        let maxRun = 0;
+        for (const idx of sorted) {
+            if (idx < cut1) bsLeading += 1;
+            else if (idx < cut2) bsMid += 1;
+            else bsTrailing += 1;
+            if (idx === prev + 1) {
+                runLen += 1;
+            } else {
+                runLen = 1;
+            }
+            if (runLen > maxRun) maxRun = runLen;
+            prev = idx;
+        }
+        bsRunLength = maxRun;
+    }
+
+    // ── Cadence uniformity ──────────────────────────────────────────
+    // Coefficient of variation (std / mean). Low = metronomic (pasted
+    // or scripted), high = variable (manual typing with pauses).
+    const cv = stats.mean > 0 ? stats.stddev / stats.mean : 0;
+
+    // ── s2c response shape (if available) ──────────────────────────
+    // Already computed by summarizeS2cOutput; the brief passes it in
+    // via state.s2cSummary. Here we just expose a compact summary.
+    const s2c = state && state.s2cSummary;
+    const s2cDigest = (s2c && s2c.ok)
+        ? {
+            totalChunks: s2c.totalChunks,
+            totalBytes: s2c.totalBytes,
+            totalDurationMs: s2c.totalDurationMs,
+            avgChunkBytes: s2c.totalChunks > 0
+                ? Math.round(s2c.totalBytes / s2c.totalChunks)
+                : 0,
+            avgChunkDurationMs: s2c.totalChunks > 0
+                ? Math.round(s2c.totalDurationMs / s2c.totalChunks)
+                : 0,
+            kinds: (s2c.chunks || []).slice(0, 8).map((c) => ({
+                idx: c.idx,
+                bytes: c.totalBytes,
+                rateCharPerSec: Math.round(c.rateCharPerSec),
+                durationMs: c.durationMs,
+                kind: c.kind,
+            })),
+        }
+        : null;
+
+    // ── Heuristic typing-mode label ─────────────────────────────────
+    // "paste" if cadence is fast + uniform + low backspaces + low
+    // pauses; "script" if uniform but no pauses; "typing" if natural
+    // variability + many bursts; "mixed" otherwise.
+    let typingMode = "mixed";
+    if (cv < 0.25 && stats.median < 50 && pauses.commandBoundary < 2 && bsCount === 0) {
+        typingMode = "paste-or-script";
+    } else if (cv < 0.4 && pauses.commandBoundary < 3) {
+        typingMode = "scripted";
+    } else if (stats.burstCount / valid.length > 0.5) {
+        typingMode = "fast-typing";
+    } else {
+        typingMode = "natural-typing";
+    }
+
+    return {
+        ok: true,
+        sampleCount: valid.length,
+        cadence: {
+            medianMs: stats.median,
+            meanMs: stats.mean,
+            stddevMs: stats.stddev,
+            cv,
+            keysPerSec: Number.isFinite(stats.median) && stats.median > 0
+                ? Math.round(1000 / stats.median)
+                : 0,
+        },
+        burstStructure: {
+            burstCount: bursts.length,
+            medianLength: burstMedian,
+            meanLength: Number(burstMean.toFixed(1)),
+            maxLength: burstMax,
+            // Length bucket distribution — short / medium / long bursts.
+            short: bursts.filter((n) => n <= 3).length,
+            medium: bursts.filter((n) => n >= 4 && n <= 7).length,
+            long: bursts.filter((n) => n >= 8).length,
+        },
+        pauses,
+        backspaces: {
+            count: bsCount,
+            leadingPct: bsCount > 0 ? Math.round((bsLeading / bsCount) * 100) : 0,
+            midPct: bsCount > 0 ? Math.round((bsMid / bsCount) * 100) : 0,
+            trailingPct: bsCount > 0 ? Math.round((bsTrailing / bsCount) * 100) : 0,
+            longestRun: bsRunLength,
+        },
+        typingMode,
+        s2c: s2cDigest,
+    };
+}
+
+// Render the shape signature as a compact text block for the brief.
+function renderShapeSignature(shape) {
+    if (!shape || !shape.ok) return "";
+    const lines = [];
+    lines.push("## Shape signature (use this to rank command candidates)");
+    const c = shape.cadence;
+    lines.push(
+        `- Cadence: median ${formatNumber(c.medianMs)} ms (~${c.keysPerSec} keys/s), ` +
+        `std-dev ${formatNumber(c.stddevMs)} ms, CV ${formatNumber(c.cv)}`,
+    );
+    lines.push(`- Typing mode: ${shape.typingMode}`);
+    const b = shape.burstStructure;
+    if (b.burstCount > 0) {
+        lines.push(
+            `- Burst structure: ${b.burstCount} burst(s); median length ${formatNumber(b.medianLength)} chars, ` +
+            `mean ${formatNumber(b.meanLength)} chars, max ${b.maxLength} chars ` +
+            `(short≤3: ${b.short}, medium 4-7: ${b.medium}, long≥8: ${b.long})`,
+        );
+    } else {
+        lines.push("- Burst structure: no bursts detected (no within-word runs <30 ms)");
+    }
+    const p = shape.pauses;
+    lines.push(
+        `- Pause distribution: within-command (30-200 ms): ${p.withinCommand}, ` +
+        `short-thinking (200-500 ms): ${p.shortThinking}, ` +
+        `command-boundary (500-2000 ms): ${p.commandBoundary}, ` +
+        `idle (>2000 ms): ${p.idle}`,
+    );
+    const bs = shape.backspaces;
+    if (bs.count > 0) {
+        const parts = [];
+        if (bs.leadingPct > 0) parts.push(`leading ${bs.leadingPct}%`);
+        if (bs.midPct > 0) parts.push(`mid ${bs.midPct}%`);
+        if (bs.trailingPct > 0) parts.push(`trailing ${bs.trailingPct}%`);
+        const loc = parts.length > 0 ? parts.join(", ") : "no clear cluster";
+        lines.push(
+            `- Backspaces (corrections): ${bs.count} event(s), longest run ${bs.longestRun} ` +
+            `— distribution: ${loc}. ` +
+            (bs.longestRun >= 3
+                ? `Longest run of corrections suggests the user typed then deleted several chars — prefer candidates with shorter final length or known typo patterns.`
+                : `Discrete corrections suggest isolated typos; prefer candidates that differ from a slightly shorter common command.`),
+        );
+    } else {
+        lines.push("- Backspaces (corrections): none detected");
+    }
+    if (shape.s2c) {
+        const s = shape.s2c;
+        lines.push(
+            `- Server response (s2c): ${s.totalChunks} chunk(s), ${s.totalBytes} B total, ` +
+            `avg ${s.avgChunkBytes} B/chunk over ${s.avgChunkDurationMs} ms.`,
+        );
+        if (s.kinds && s.kinds.length > 0) {
+            lines.push("- Per-chunk shape (most relevant for command-class guesses):");
+            for (const k of s.kinds) {
+                lines.push(
+                    `  - chunk ${k.idx}: ${k.bytes} B in ${k.durationMs} ms (~${k.rateCharPerSec} char/s) — ${k.kind}`,
+                );
+            }
+        }
+    }
+    lines.push("");
+    return lines.join("\n");
+}
+
+// ── Shell command priors from seed corpus ───────────────────────────
+//
+// The seed corpus (e.g. src/data/shell_data, a slice of zsh history
+// exported via `history -f`) is a ground-truth set of realistic shell
+// commands the user has actually typed. When the LLM is asked to
+// recover what was typed from a keystroke-timing trace, this prior
+// is much stronger than the LLM's general shell knowledge because
+// it captures:
+//   - which commands the user *actually* runs (their workflow)
+//   - which argument shapes are typical (paths, hostnames, options)
+//   - which commands are clustered around specific topics
+//
+// We expose this prior to the LLM as a "Shell command priors" section
+// in the brief, plus a per-verb lookup the LLM can query when matching
+// a typed prefix to likely completions.
+//
+// `buildShellCommandPriors(corpus, opts)` is a pure function that:
+//   - Splits corpus by line, skipping blank lines / JSON fragments
+//   - Normalizes each line by stripping leading whitespace, the
+//     shell prompt prefix (anything before the first command char),
+//     and trailing comments/whitespace
+//   - Buckets each command by its first verb (or first 1-2 verbs for
+//     subcommand shapes like `git push`, `systemctl restart`)
+//   - Tallies counts and keeps top examples per verb
+//
+// Returns: {
+//   ok, totalLines, totalCommands, uniqueCommands,
+//   verbs: { "cat": { count, examples: [...] }, ... },
+//   topVerbs: [{ verb, count }, ...] sorted descending
+// }
+const PRIOR_MIN_FREQ = 1;
+const PRIOR_MAX_EXAMPLES_PER_VERB = 5;
+const PRIOR_MAX_VERBS_IN_BRIEF = 20;
+const PRIOR_MAX_EXAMPLES_IN_BRIEF = 3;
+const PRIOR_MAX_TOTAL_EXAMPLES_IN_BRIEF = 30;
+
+// A command line is "real" if it starts with an ASCII letter,
+// underscore, slash, dot, or common executable punctuation — OR if
+// it begins with a shell prompt (anything before a `$`, `#`, `%`,
+// or `❯` separator). JSON fragments ({, [, ", }]) are rejected.
+function looksLikeShellCommandLine(line) {
+    if (typeof line !== "string") return false;
+    const trimmed = line.trim();
+    if (trimmed.length === 0) return false;
+    // JSON-like fragments at the start: braces, brackets, or quoted
+    // keys. Allow a leading `[...]` prompt only when it contains
+    // shell-prompt-like content (@ or :).
+    if (/^[{}\]]/.test(trimmed)) return false;
+    if (/^"/.test(trimmed)) return false;
+    // Prompt patterns: starts with `[user@host pwd]`, `[host pwd]`,
+    // `user@host:pwd`, `�`, `% CMD`, or `$ CMD` (when the `$`/`#`/`%`
+    // is followed by a space + a command char). These all precede a
+    // separator that stripShellPrompt() will consume.
+    if (/^\[?[\w.\-]+(@|:)/.test(trimmed)) return true;
+    if (/^❯/.test(trimmed)) return true;
+    if (/^[$#%]\s+[A-Za-z_./\\~]/.test(trimmed)) return true;
+    // Otherwise the command must start with a shell-commandable char.
+    if (!/^[A-Za-z_./\\~]/.test(trimmed)) return false;
+    return true;
+}
+
+function stripShellPrompt(line) {
+    // Common shell prompts: "[user@host pwd]$ CMD", "[host pwd]$ CMD",
+    // "user@host:~$ CMD", "❯ CMD", "% CMD", "# CMD" (root prompt).
+    // Strip the leading prompt ONLY when the separator is at the
+    // start of the line (after whitespace) — i.e. it's a real prompt
+    // marker. We must NOT treat an inline "#" (mid-line bash comment)
+    // as a prompt separator, because that would consume the command
+    // before the comment and leave the comment text as the "command".
+    let s = line.trim();
+    // Bracketed prompt: "[anything]" followed by an optional separator
+    // ($/#/%/❯) and optional whitespace — eat it. The separator may
+    // appear immediately after "]" with no whitespace ("[host]$ cmd")
+    // or with whitespace ("[host pwd] $ cmd"). We capture the optional
+    // separator inside the match so stripShellPrompt returns the
+    // command cleanly.
+    const bracketed = s.match(/^\[[^\]]*\](?:[$#%❯]\s*|\s+)/);
+    if (
+        bracketed &&
+        bracketed.index >= 0 &&
+        bracketed.index + bracketed[0].length < s.length
+    ) {
+        s = s.slice(bracketed.index + bracketed[0].length).trim();
+    }
+    // Unbracketed prompt: "user@host:pwd$ CMD" or "user@host:~$ CMD".
+    // The prompt starts at the beginning of the line, contains an `@`
+    // or `:` (host indicator), and ends with the prompt separator
+    // ($/#/%/❯) followed by whitespace.
+    const unbracketed = s.match(/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^$#%❯]*[$#%❯]\s+/);
+    if (
+        unbracketed &&
+        unbracketed.index === 0 &&
+        unbracketed.index + unbracketed[0].length < s.length
+    ) {
+        s = s.slice(unbracketed.index + unbracketed[0].length).trim();
+    }
+    // The separator must appear at the start of (what's left of) the
+    // line for it to be a prompt — not anywhere later in the line.
+    const m = s.match(/^[$#%❯]\s+/);
+    if (
+        m &&
+        m.index === 0 &&
+        m.index + m[0].length < s.length
+    ) {
+        return s.slice(m[0].length).trim();
+    }
+    return s.trim();
+}
+
+function normalizeCommandLine(line) {
+    // Strip inline bash comments (anything after an unquoted '#').
+    // The shell treats '#' as a comment only at the start of a token,
+    // but for shell-history purposes '#' mid-command is uncommon and
+    // its presence usually indicates a comment — strip everything
+    // from the first '#' that's preceded by whitespace.
+    let s = stripShellPrompt(line);
+    // Drop trailing whitespace and a trailing semicolon (commonly
+    // appended by editors).
+    s = s.replace(/;\s*$/, "").trim();
+    if (!s) return null;
+    // Strip trailing comment. Be conservative — only strip if '#' is
+    // preceded by whitespace to avoid eating 'foo#bar' style args.
+    s = s.replace(/\s+#.*$/, "").trim();
+    if (!s) return null;
+    return s;
+}
+
+function extractCommandVerb(command) {
+    if (!command) return null;
+    // Tokenize on whitespace, respecting shell quoting lightly
+    // (we don't need to be perfect — just to identify the verb).
+    const tokens = command.match(/(?:[^\s"']+|"([^"]*)"|'([^']*)')+/g);
+    if (!tokens || tokens.length === 0) return null;
+    let first = tokens[0];
+    // Strip a path prefix so "/usr/bin/cat" → "cat".
+    const lastSlash = first.lastIndexOf("/");
+    if (lastSlash >= 0) first = first.slice(lastSlash + 1);
+    if (first.length === 0) return null;
+    // Two-verb shape for known multi-verb commands: capture the
+    // first two tokens as the bucket key (e.g. "git push" → "git push",
+    // "systemctl restart" → "systemctl restart").
+    const twoVerbs = new Set([
+        "git", "systemctl", "systemd", "service", "docker", "podman",
+        "kubectl", "aws", "gcloud", "az", "doctl", "npm", "pnpm",
+        "yarn", "pip", "pip3", "cargo", "go", "make", "sudo",
+        "time", "nohup", "xargs",
+    ]);
+    let key = first;
+    if (twoVerbs.has(first) && tokens.length >= 2) {
+        let second = tokens[1].replace(/^["']|["']$/g, "");
+        // Normalize flag-style second tokens (e.g. `git -C foo status`
+        // becomes "git <flag>") by collapsing to "git" alone when
+        // the second token starts with '-'. This keeps the prior
+        // buckets broad.
+        if (second.startsWith("-")) {
+            key = first;
+        } else {
+            key = `${first} ${second}`;
+        }
+    }
+    return key;
+}
+
+function buildShellCommandPriors(corpus, opts) {
+    const o = opts || {};
+    const minFreq = Number.isFinite(o.minFreq) ? o.minFreq : PRIOR_MIN_FREQ;
+    const maxExamplesPerVerb = Number.isFinite(o.maxExamplesPerVerb)
+        ? o.maxExamplesPerVerb
+        : PRIOR_MAX_EXAMPLES_PER_VERB;
+
+    if (typeof corpus !== "string" || corpus.length === 0) {
+        return {
+            ok: false,
+            reason: "empty_corpus",
+            totalLines: 0,
+            totalCommands: 0,
+            uniqueCommands: 0,
+            verbs: {},
+            topVerbs: [],
+        };
+    }
+
+    const lines = corpus.split(/\r?\n/);
+    const verbs = Object.create(null);
+    let totalCommands = 0;
+    let uniqueCommands = 0;
+    const uniqueSet = new Set();
+
+    for (const rawLine of lines) {
+        if (!looksLikeShellCommandLine(rawLine)) continue;
+        const normalized = normalizeCommandLine(rawLine);
+        if (!normalized) continue;
+        const verb = extractCommandVerb(normalized);
+        if (!verb) continue;
+        if (!verbs[verb]) {
+            verbs[verb] = { count: 0, examples: [] };
+        }
+        verbs[verb].count += 1;
+        totalCommands += 1;
+        if (!uniqueSet.has(normalized)) {
+            uniqueSet.add(normalized);
+            uniqueCommands += 1;
+        }
+        if (verbs[verb].examples.length < maxExamplesPerVerb) {
+            // Capture distinct examples — skip if we already have this
+            // exact normalized command.
+            if (!verbs[verb].examples.includes(normalized)) {
+                verbs[verb].examples.push(normalized);
+            }
+        }
+    }
+
+    const topVerbs = Object.keys(verbs)
+        .map((verb) => ({ verb, count: verbs[verb].count }))
+        .filter((e) => e.count >= minFreq)
+        .sort((a, b) => b.count - a.count);
+
+    return {
+        ok: true,
+        totalLines: lines.length,
+        totalCommands,
+        uniqueCommands,
+        verbs,
+        topVerbs,
+    };
+}
+
+function renderShellPriors(priors, opts) {
+    if (!priors || !priors.ok) return "";
+    const o = opts || {};
+    const maxVerbs = Number.isFinite(o.maxVerbs) ? o.maxVerbs : PRIOR_MAX_VERBS_IN_BRIEF;
+    const maxExamplesPerVerb = Number.isFinite(o.maxExamplesPerVerb)
+        ? o.maxExamplesPerVerb
+        : PRIOR_MAX_EXAMPLES_IN_BRIEF;
+    const maxTotalExamples = Number.isFinite(o.maxTotalExamples)
+        ? o.maxTotalExamples
+        : PRIOR_MAX_TOTAL_EXAMPLES_IN_BRIEF;
+    if (priors.totalCommands === 0) return "";
+
+    const lines = [];
+    lines.push("## Shell command priors (from your shell history)");
+    lines.push(
+        `Built from ${priors.totalCommands} shell command(s) in the seed corpus ` +
+        `(${priors.uniqueCommands} unique). Use these priors to BOOST candidates that`,
+    );
+    lines.push(
+        "match common shell-command shapes you've actually typed. The first column is the",
+    );
+    lines.push(
+        "verb bucket (e.g. 'cat', 'git push', 'systemctl restart'); the examples show",
+    );
+    lines.push(
+        "realistic argument shapes — paths, hostnames, flags, filenames — to weight",
+    );
+    lines.push(
+        "candidate text against. When a candidate is structurally similar to one of these",
+    );
+    lines.push("examples (same verb + same argument shape), raise its confidence.");
+    lines.push("");
+    // Redaction placeholder guidance. The corpus is scrubbed of PII
+    // before it reaches us, so any run of 4+ consecutive 'A' chars
+    // (e.g. "AAAA", "AAAAAAAAAAAAA") marks a redacted token — a
+    // username, hostname, IP, file path, JSON key, etc. The original
+    // value is unknown. Tell the LLM to substitute any plausible
+    // value of the same LENGTH (not just any string) when
+    // reconstructing the command, because the timing signal in the
+    // brief constrains how many characters were typed.
+    lines.push(
+        "Note on redactions: any run of 4+ consecutive 'A' characters in an example",
+    );
+    lines.push(
+        "(e.g. 'AAAA', 'AAAAAAAAAAAAA') is a REDACTION PLACEHOLDER — the real value",
+    );
+    lines.push(
+        "was scrubbed out of the corpus for privacy. Treat each placeholder as an",
+    );
+    lines.push(
+        "arbitrary string of that SAME LENGTH when interpreting verb/argument shape,",
+    );
+    lines.push(
+        "not as the literal letters 'A'. The verb bucket (cat, git push, etc.) is",
+    );
+    lines.push(
+        "still informative; the specific redacted token is NOT. Use the placeholder",
+    );
+    lines.push(
+        "positions to learn WHERE the user typically embeds usernames, hostnames,",
+    );
+    lines.push(
+        "paths, and keys — but substitute any plausible value of matching length when",
+    );
+    lines.push(
+        "reconstructing the command from a candidate.",
+    );
+    lines.push("");
+    let totalExamples = 0;
+    let verbsShown = 0;
+    for (const entry of priors.topVerbs) {
+        if (verbsShown >= maxVerbs) break;
+        const bucket = priors.verbs[entry.verb];
+        if (!bucket) continue;
+        const examples = bucket.examples.slice(0, maxExamplesPerVerb);
+        // Stop if adding this verb would blow the global example budget.
+        if (totalExamples + examples.length > maxTotalExamples) break;
+        const pct = ((bucket.count / priors.totalCommands) * 100).toFixed(1);
+        lines.push(`- ${entry.verb}  (${bucket.count}×, ${pct}% of corpus)`);
+        for (const ex of examples) {
+            lines.push(`    - ${ex}`);
+            totalExamples += 1;
+        }
+        verbsShown += 1;
+    }
+    lines.push("");
+    return lines.join("\n");
+}
+
+module.exports = {
+    buildSshKeystrokeExport,
+    buildSshTimingAnalysisBrief,
+    computeShapeSignature,
+    renderShapeSignature,
+    buildShellCommandPriors,
+    renderShellPriors,
+    summarizeS2cOutput,
+    BRIEF_MIN_SAMPLES,
+    S2C_MIN_PACKETS,
+    computeDelayStats,
+    formatNumber,
+    wrapText,
+    directionLabel,
+};

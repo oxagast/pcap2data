@@ -960,6 +960,8 @@ No decrypted TLS/SSL output yet.</pre>
                 <div class="crypt-actions-row">
                   <button id="crypt-openssh-refresh-btn">Refresh</button>
                   <button id="crypt-openssh-analyze-btn" disabled>Analyze selected</button>
+                  <button id="crypt-openssh-export-btn" disabled
+                    title="Save the keystroke timing trace for this flow as a text file">Export keystrokes</button>
                   <span id="crypt-openssh-progress" class="crypt-openssh-progress" hidden>
                     <span id="crypt-openssh-progress-text">Working…</span>
                     <span class="loading"></span>
@@ -994,8 +996,8 @@ No decrypted TLS/SSL output yet.</pre>
                     Direction
                   </label>
                   <select id="crypt-openssh-direction">
-                    <option value="both" selected>Client → Server</option>
-                    <option value="c2s">Client → Server only</option>
+                    <option value="both">Both directions</option>
+                    <option value="c2s" selected>Client → Server only</option>
                     <option value="s2c">Server → Client only</option>
                   </select>
                 </div>

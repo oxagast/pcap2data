@@ -1596,12 +1596,13 @@ contextBridge.exposeInMainWorld('modelsapi', {
 // main process already enforces timeouts, API keys, diagnostics, and
 // logging. The renderer should provide prompts and handle parsing.
 contextBridge.exposeInMainWorld('llmapi', {
-  generate: (prompt) => ipcRenderer.invoke('ollama:generate', prompt),
+  generate: (prompt, options = {}) => ipcRenderer.invoke('ollama:generate', prompt, options),
 });
 
 contextBridge.exposeInMainWorld('opensshapi', {
   loadQwertyModel: () => ipcRenderer.invoke('openssh-load-qwerty-model'),
   decode: (payload) => ipcRenderer.invoke('openssh-decode', payload),
+  loadShellCorpus: () => ipcRenderer.invoke('ssh-shell-corpus'),
 });
 
 contextBridge.exposeInMainWorld('settingsapi', {
@@ -1660,11 +1661,6 @@ contextBridge.exposeInMainWorld('pluginapi', {
   uninstall: (payload) => ipcRenderer.invoke('plugins-uninstall', payload),
   updateRuntimeData: (payload) => updatePluginRuntimeDataState(payload),
   getCapabilityCatalog: () => PLUGIN_CAPABILITY_CATALOG,
-});
-
-
-contextBridge.exposeInMainWorld("llmapi", {
-  generate: (prompt, options = {}) => ipcRenderer.invoke("ollama:generate", prompt, options),
 });
 
 contextBridge.exposeInMainWorld("metricsapi", {

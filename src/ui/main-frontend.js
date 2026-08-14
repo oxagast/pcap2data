@@ -22875,6 +22875,9 @@ document
   .getElementById("crypt-openssh-analyze-btn")
   .addEventListener("click", () => cryptPanel.analyzeSelectedSshFlow());
 document
+  .getElementById("crypt-openssh-export-btn")
+  .addEventListener("click", () => cryptPanel.exportSshKeystrokes());
+document
   .getElementById("crypt-encountered-list")
   .addEventListener("change", function () {
     const selectedIndex = Number(this.value);

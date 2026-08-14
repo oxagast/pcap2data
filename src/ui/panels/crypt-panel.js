@@ -654,49 +654,25 @@ function createCryptPanel({
     return best.index;
   }
 
-  // Attempt to detect likely backspace/delete occurrences using timing and
-  // packet-length heuristics. Returns an object { indices: [...], count } of
-  // estimated keystroke positions where a backspace/delete was likely sent.
-  function detectBackspaceHints(delaysWithIdx) {
-    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return { indices: [], count: 0 };
-    const indices = [];
-    // Simple heuristics:
-    // - Very short delays (< 80 ms) in repeated succession may indicate rapid
-    //   keypresses or holding backspace for repeated deletes.
-    // - Single-byte packet lengths (when available) make single-key events
-    //   more likely.
-    for (let i = 0; i < delaysWithIdx.length; i++) {
-      const cur = delaysWithIdx[i];
-      if (!cur || !Number.isFinite(cur.delay)) continue;
-      const isVeryShort = cur.delay < 80;
-      const prev = delaysWithIdx[i - 1];
-      const prevShort = prev && Number.isFinite(prev.delay) ? prev.delay < 80 : false;
-      const pktLen = Number.isFinite(cur.packetLength) ? cur.packetLength : null;
-      const smallPkt = pktLen === null ? true : pktLen <= 2; // unknown length -> allow
-      // Heuristic: consecutive very short intervals with small packet lengths
-      // are suspicious for backspace/delete sequences.
-      if (isVeryShort && prevShort && smallPkt) {
-        // Mark the later index as a possible backspace event
-        indices.push(cur.index);
-        continue;
-      }
-      // Also mark cases where there's a cluster of very short delays (3+)
-      // around this position.
-      if (isVeryShort) {
-        const cluster = [
-          delaysWithIdx[i - 2] ? delaysWithIdx[i - 2].delay < 80 : false,
-          delaysWithIdx[i - 1] ? delaysWithIdx[i - 1].delay < 80 : false,
-          delaysWithIdx[i + 1] ? delaysWithIdx[i + 1].delay < 80 : false,
-        ];
-        const clusterCount = cluster.filter(Boolean).length;
-        if (clusterCount >= 2 && smallPkt) {
-          indices.push(cur.index);
-        }
-      }
+  // Backspace/delete detection is implemented as a pure helper in
+  // src/ui/decoders/ssh-keystrokes/backspace-detect.js so it can be
+  // unit-tested without instantiating the panel. The local
+  // `detectBackspaceHintsAsync` is a thin yield-aware wrapper that
+  // delegates to the module — this keeps one canonical implementation.
+  async function detectBackspaceHintsAsync(delaysWithIdx, opts) {
+    const fn = getDetectBackspaceHints();
+    if (!fn) return { indices: [], count: 0 };
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) {
+      return { indices: [], count: 0 };
     }
-    // Deduplicate and sort
-    const uniq = Array.from(new Set(indices)).sort((a, b) => a - b);
-    return { indices: uniq, count: uniq.length };
+    // Yield once before classification so the renderer can paint a
+    // "Detecting backspaces…" progress state if it wants to. The
+    // detector itself is O(N) and finishes in milliseconds on
+    // realistic-sized inputs, so additional yields are unnecessary.
+    if (typeof yieldToUi === "function") {
+      await yieldToUi();
+    }
+    return fn(delaysWithIdx, opts);
   }
 
   let sshAllFlows = [];
@@ -705,6 +681,13 @@ function createCryptPanel({
   let sshDecoder = null;
   let sshModel = null;
   let sshModelLoadPromise = null;
+  // Per-flow analysis cache. Keyed by `flow.flowKey` so re-selecting a
+  // previously-analyzed flow retains its timing trace and decoder
+  // candidates; this is what powers the "Export keystrokes" button.
+  // Shape: { flow, model, delays, delaysWithIdx, candidates, primary,
+  //         insight, renderMode, estimatedCommandLength, backspaceHints,
+  //         analyzedAt }.
+  const sshLastAnalysisByFlowKey = new Map();
 
   function getSshDecoderModule() {
     if (sshDecoder) return sshDecoder;
@@ -716,6 +699,35 @@ function createCryptPanel({
       sshDecoder = null;
     }
     return sshDecoder;
+  }
+
+  // Pure helpers (text builder + stats) live in their own module so
+  // they can be unit-tested without instantiating the panel. Loading is
+  // best-effort: a missing module leaves `sshExportModule` null and the
+  // button falls through to a graceful console-warning path.
+  let sshExportModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshExportModule = require("../decoders/ssh-keystrokes/export");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] export module unavailable:", err);
+    sshExportModule = null;
+  }
+  // Backspace/delete detector — same pattern: pure helper in its own
+  // module, required lazily so a missing module doesn't crash the panel.
+  let sshBackspaceModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshBackspaceModule = require("../decoders/ssh-keystrokes/backspace-detect");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] backspace-detect module unavailable:", err);
+    sshBackspaceModule = null;
+  }
+  function getDetectBackspaceHints() {
+    return (sshBackspaceModule
+      && typeof sshBackspaceModule.detectBackspaceHints === "function")
+      ? sshBackspaceModule.detectBackspaceHints
+      : null;
   }
 
   function ensureSshModelLoaded() {
@@ -772,6 +784,10 @@ function createCryptPanel({
       opt.disabled = true;
       listEl.appendChild(opt);
     }
+    // Drop any cached analysis from a prior capture — flowKey() values
+    // may be reused after the user loads a different pcap, and stale
+    // timing traces for the wrong capture would corrupt the export.
+    sshLastAnalysisByFlowKey.clear();
     try {
       const flows = await collectSshEncounteredFlows();
       sshAllFlows = await aggregateSshFlowsAsync(flows);
@@ -838,6 +854,86 @@ function createCryptPanel({
       `Packets: ${flow.packets.length} (c2s=${flow.c2sPacketCount}, s2c=${flow.s2cPacketCount})`,
       `Span: ${(span / 1000).toFixed(3)} s`,
     ].join("\n");
+    // Refresh the export button — it should be enabled only when the
+    // currently-selected flow has a cached analysis result.
+    refreshSshExportButton();
+  }
+
+  // Enable the "Export keystrokes" button only when the user has analyzed
+  // the currently-selected flow. Cheap to call (single DOM lookup); safe
+  // to fire from anywhere flow state changes.
+  function refreshSshExportButton() {
+    const exportBtn = document.getElementById("crypt-openssh-export-btn");
+    if (!exportBtn) return;
+    const hasResult = !!(sshSelectedFlowKey && sshLastAnalysisByFlowKey.get(sshSelectedFlowKey));
+    exportBtn.disabled = !hasResult;
+    if (hasResult) {
+      exportBtn.title = "Save the keystroke timing trace for this flow as a text file";
+    } else {
+      exportBtn.title = "Run 'Analyze selected' first — the export needs the timing trace";
+    }
+  }
+
+  // ── Keystroke-timing export ─────────────────────────────────────────
+  //
+  // Click handler for the "Export keystrokes" button. The text builder
+  // itself lives in src/ui/decoders/ssh-keystrokes/export so it's pure
+  // and unit-testable; this wrapper just glues it to the cached
+  // analysis and the OS save dialog.
+  async function exportSshKeystrokes() {
+    const exportBtn = document.getElementById("crypt-openssh-export-btn");
+    if (exportBtn) exportBtn.disabled = true;
+    try {
+      const cached = sshSelectedFlowKey
+        ? sshLastAnalysisByFlowKey.get(sshSelectedFlowKey)
+        : null;
+      if (!cached) {
+        if (typeof appendActivityLogLine === "function") {
+          appendActivityLogLine("[Crypt/OpenSSH] export requested with no cached analysis");
+        }
+        return;
+      }
+      if (!sshExportModule || typeof sshExportModule.buildSshKeystrokeExport !== "function") {
+        console.warn("[Crypt/OpenSSH] export module missing; cannot build text");
+        return;
+      }
+      const text = sshExportModule.buildSshKeystrokeExport(cached);
+      const flow = cached.flow || {};
+      const defaultName = `packetsnitch-ssh-${(flow.srcIp || "client").replace(/[^a-zA-Z0-9_.-]/g, "_")}-to-${(flow.dstIp || "server").replace(/[^a-zA-Z0-9_.-]/g, "_")}-${Date.now()}.txt`;
+      const saveText =
+        typeof window !== "undefined" &&
+          window.saveapi &&
+          typeof window.saveapi.saveText === "function"
+          ? window.saveapi.saveText
+          : null;
+      if (!saveText) {
+        console.warn("[Crypt/OpenSSH] window.saveapi.saveText unavailable; cannot save export");
+        return;
+      }
+      const result = await saveText({
+        text,
+        title: "Export SSH keystroke timing trace",
+        defaultName,
+        defaultExtension: "txt",
+        filters: [
+          { name: "Text", extensions: ["txt"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (result && result.success) {
+        if (typeof appendActivityLogLine === "function" && result.filePath) {
+          appendActivityLogLine(`[Crypt/OpenSSH] exported keystrokes to ${result.filePath}`);
+        }
+      } else if (result && result.canceled) {
+        // user cancelled the save dialog — no log entry
+      } else if (result && result.error) {
+        console.warn("[Crypt/OpenSSH] saveText error:", result.error);
+      }
+    } finally {
+      // Always re-evaluate the button state from the cache so the
+      // disabled state matches whether data is still available.
+      refreshSshExportButton();
+    }
   }
 
   // Synchronous chart series builder (kept for the decoder's own tests).
@@ -951,41 +1047,6 @@ function createCryptPanel({
     return best.index;
   }
 
-  async function detectBackspaceHintsAsync(delaysWithIdx) {
-    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return { indices: [], count: 0 };
-    const indices = [];
-    for (let i = 0; i < delaysWithIdx.length; i += 1) {
-      const cur = delaysWithIdx[i];
-      if (!cur || !Number.isFinite(cur.delay)) continue;
-      const isVeryShort = cur.delay < 80;
-      const prev = delaysWithIdx[i - 1];
-      const prevShort = prev && Number.isFinite(prev.delay) ? prev.delay < 80 : false;
-      const pktLen = Number.isFinite(cur.packetLength) ? cur.packetLength : null;
-      const smallPkt = pktLen === null ? true : pktLen <= 2;
-      if (isVeryShort && prevShort && smallPkt) {
-        indices.push(cur.index);
-        continue;
-      }
-      if (isVeryShort) {
-        const cluster = [
-          delaysWithIdx[i - 2] ? delaysWithIdx[i - 2].delay < 80 : false,
-          delaysWithIdx[i - 1] ? delaysWithIdx[i - 1].delay < 80 : false,
-          delaysWithIdx[i + 1] ? delaysWithIdx[i + 1].delay < 80 : false,
-        ];
-        const clusterCount = cluster.filter(Boolean).length;
-        if (clusterCount >= 2 && smallPkt) {
-          indices.push(cur.index);
-        }
-      }
-      if (i % SSH_PACKET_CHUNK_SIZE === 0 && i !== 0) {
-        // eslint-disable-next-line no-await-in-loop
-        await yieldToUi();
-      }
-    }
-    const uniq = Array.from(new Set(indices)).sort((a, b) => a - b);
-    return { indices: uniq, count: uniq.length };
-  }
-
   // Check the threshold of 100 packets at a time so that the rest of the
   // pipeline (chart, summary, candidates) doesn't block the UI thread.
   function selectSshEncounteredFlow(flowIndex) {
@@ -1013,15 +1074,27 @@ function createCryptPanel({
     const analyzeBtn = document.getElementById("crypt-openssh-analyze-btn");
     function setProgress(label) {
       if (progressEl) progressEl.hidden = false;
-      if (progressTextEl) progressTextEl.textContent = label || "Working…";
+      // The progress span already has an animated loading-dots
+      // pseudo-element (`.loading::after`), so the text shouldn't end
+      // with its own ellipsis — that would render as double dots
+      // ("Decoding keystrokes (3792 intervals)……" → looks like
+      // "Decoding...  ...").
+      let text = label || "Working";
+      text = String(text).replace(/\.+\s*$/, "").replace(/…\s*$/, "");
+      if (!text) text = "Working";
+      if (progressTextEl) progressTextEl.textContent = text;
     }
     function clearProgress() {
       if (progressEl) progressEl.hidden = true;
-      if (progressTextEl) progressTextEl.textContent = "Working…";
+      if (progressTextEl) progressTextEl.textContent = "Working";
     }
     if (analyzeBtn) analyzeBtn.disabled = true;
     setProgress("Scanning packets…");
-    const direction = directionEl?.value || "both";
+    // Disable export until this new analysis completes; the cache will
+    // be refreshed (and the button re-enabled) at the end of the run.
+    const exportBtn = document.getElementById("crypt-openssh-export-btn");
+    if (exportBtn) exportBtn.disabled = true;
+    const direction = directionEl?.value || "c2s";
     const topN = Math.max(1, Number(topNEl?.value || 32));
     // The LLM needs more evidence than the UI table shows. ``llmTopN`` is
     // the working set we send to the language model for reranking and
@@ -1042,17 +1115,52 @@ function createCryptPanel({
           setProgress(`Building inter-key delays (${processed}/${total})…`);
         });
         const delays = delaysWithIdx.map((d) => d.delay);
-        if (summaryEl) {
-          summaryEl.textContent = `Building histogram (${delays.length} intervals)...`;
+        // Detect obfuscation-packet padding before the histogram/decoder
+        // stage. SSH servers sometimes insert filler packets on a fixed
+        // cadence to defeat keystroke-side analysis. The detector now
+        // finds the cadence on its own (via a first-difference
+        // histogram scan + refine), and returns three artefacts:
+        //   - snappedDelaysMs      : each delay with the nearest integer
+        //                            multiple of the cadence subtracted
+        //                            (preserves interval count)
+        //   - keystrokeDelaysMs    : same as above but with the filler
+        //                            intervals REMOVED so the decoder
+        //                            sees one delay per real keystroke
+        //   - paddedIntervals      : indices into the input array that
+        //                            were classified as filler (for
+        //                            diagnostics + the LLM brief)
+        const paddingResult = (typeof decoder.detect20msPadding === "function")
+          ? decoder.detect20msPadding(delays)
+          : { detected: false };
+        let effectiveDelays = delays;
+        if (paddingResult.detected) {
+          // Prefer keystrokeDelaysMs (filler intervals removed) so the
+          // decoder's Viterbi beam isn't polluted by extra low-delay
+          // samples. Fall back to snappedDelaysMs if the refined pass
+          // didn't produce keystroke delays (e.g. snap:false was set).
+          if (Array.isArray(paddingResult.keystrokeDelaysMs)) {
+            effectiveDelays = paddingResult.keystrokeDelaysMs;
+          } else if (Array.isArray(paddingResult.snappedDelaysMs)) {
+            effectiveDelays = paddingResult.snappedDelaysMs;
+          }
+          setProgress(
+            `Detected ${paddingResult.periodMs}ms padding cadence ` +
+            `(coverage ${(paddingResult.coverage * 100).toFixed(0)}%, ` +
+            `${paddingResult.paddedIntervals ? paddingResult.paddedIntervals.length : 0} filler intervals); peeling off…`,
+          );
+          await yieldToUi();
         }
-        setProgress(`Building histogram (${delays.length} intervals)…`);
+        if (summaryEl) {
+          summaryEl.textContent = `Building histogram (${effectiveDelays.length} intervals)...`;
+        }
+        setProgress(`Building histogram (${effectiveDelays.length} intervals)…`);
         await yieldToUi();
-        const series = await buildChartSeriesAsync(delays, decoder);
-        renderSshChartWithSeries(series, delays, decoder);
+        const series = await buildChartSeriesAsync(effectiveDelays, decoder);
+        renderSshChartWithSeries(series, effectiveDelays, decoder);
         if (summaryEl) {
-          summaryEl.textContent = `Decoding keystrokes (${delays.length} intervals)...`;
+          summaryEl.textContent = `Decoding keystrokes (${effectiveDelays.length} intervals)...`;
         }
-        setProgress(`Decoding keystrokes (${delays.length} intervals)…`);
+        setProgress(`Decoding keystrokes (${effectiveDelays.length} intervals)…`);
         await yieldToUi();
         let candidates;
         try {
@@ -1064,22 +1172,22 @@ function createCryptPanel({
               ? window.opensshapi
               : null;
           if (api && typeof api.decode === "function") {
-            const resp = await api.decode({ delays, topN, model });
+            const resp = await api.decode({ delays: effectiveDelays, topN, model });
             if (resp && resp.success && Array.isArray(resp.candidates)) {
               candidates = resp.candidates;
             } else {
               console.warn("[Crypt/OpenSSH] worker decode failed:", resp && resp.error);
-              candidates = decoder.decodeKeystrokes(delays, { topN, model });
+              candidates = decoder.decodeKeystrokes(effectiveDelays, { topN, model });
             }
           } else if (typeof decoder.decodeKeystrokesBatched === "function") {
             // Fallback: batched decoder runs on the main thread but yields.
-            candidates = await decoder.decodeKeystrokesBatched(delays, { topN, model, batchSize: 100 });
+            candidates = await decoder.decodeKeystrokesBatched(effectiveDelays, { topN, model, batchSize: 100 });
           } else {
-            candidates = decoder.decodeKeystrokes(delays, { topN, model });
+            candidates = decoder.decodeKeystrokes(effectiveDelays, { topN, model });
           }
         } catch (err) {
           console.warn("[Crypt/OpenSSH] decode failed, falling back:", err);
-          candidates = decoder.decodeKeystrokes(delays, { topN, model });
+          candidates = decoder.decodeKeystrokes(effectiveDelays, { topN, model });
         }
         if (summaryEl) {
           summaryEl.textContent = `Estimating command length (${delaysWithIdx.length} samples)...`;
@@ -1107,7 +1215,46 @@ function createCryptPanel({
             if (typeof window !== "undefined" && window.llmapi && typeof window.llmapi.generate === "function") {
               renderMode = "no-result";
               try {
-                const llmBundle = await assembleLlmPrimaryResult(delays, candidates, model, { estimatedCommandLength, delaysWithIdx, backspaceHints });
+                let s2cSummary = null;
+                if (
+                  sshExportModule &&
+                  typeof sshExportModule.summarizeS2cOutput === "function" &&
+                  flow && Array.isArray(flow.packets) && flow.packets.length > 0
+                ) {
+                  try {
+                    s2cSummary = sshExportModule.summarizeS2cOutput(flow.packets);
+                  } catch (err) {
+                    console.warn("[Crypt/OpenSSH] summarizeS2cOutput failed:", err);
+                    s2cSummary = { ok: false, reason: "exception" };
+                  }
+                }
+                // Pass the *peeled* delays (post-padding-removal) to the
+                // LLM brief. The raw delays still carry the 20 ms server
+                // obfuscation blip, which floods the brief's aggregate
+                // timing stats with artificial jitter and degrades
+                // decoder accuracy downstream. The padding detector
+                // already removed the cadence when ``detected`` is true.
+                let shellCorpus = null;
+                if (window.opensshapi && typeof window.opensshapi.loadShellCorpus === "function") {
+                  try {
+                    const corpusResult = await window.opensshapi.loadShellCorpus();
+                    if (corpusResult && corpusResult.success && typeof corpusResult.corpus === "string") {
+                      shellCorpus = corpusResult.corpus;
+                    }
+                  } catch (corpusErr) {
+                    console.warn("[Crypt/OpenSSH] shell corpus load failed:", corpusErr);
+                  }
+                }
+                const llmBundle = await assembleLlmPrimaryResult(effectiveDelays, candidates, model, {
+                  estimatedCommandLength,
+                  delaysWithIdx,
+                  backspaceHints,
+                  flow,
+                  direction,
+                  paddingDetection: paddingResult,
+                  s2cSummary,
+                  shellCorpus,
+                });
                 if (llmBundle && llmBundle.primary) {
                   primaryResult = llmBundle.primary;
                 }
@@ -1131,6 +1278,27 @@ function createCryptPanel({
           renderSshPrimary(primaryResult, insightResult, { mode: renderMode });
           renderSshCandidates(finalCandidates, delays, decoder);
           renderSshSummary(flow, delays, finalCandidates, estimatedCommandLength, backspaceHints);
+          // Cache the analysis so the user can export the keystroke
+          // timing trace (and re-pick a different flow without losing
+          // the prior flow's data). Keyed by flowKey.
+          if (delays && delays.length > 0 && flow && flow.flowKey) {
+            sshLastAnalysisByFlowKey.set(flow.flowKey, {
+              flow,
+              model,
+              direction,
+              delays,
+              delaysWithIdx,
+              candidates: finalCandidates,
+              primary: primaryResult,
+              insight: insightResult,
+              renderMode,
+              estimatedCommandLength,
+              backspaceHints,
+              paddingDetection: paddingResult,
+              analyzedAt: new Date().toISOString(),
+            });
+          }
+          refreshSshExportButton();
           clearProgress();
           if (analyzeBtn) analyzeBtn.disabled = false;
         })();
@@ -1142,6 +1310,9 @@ function createCryptPanel({
         }
         clearProgress();
         if (analyzeBtn) analyzeBtn.disabled = false;
+        // Restore the export button to whatever the cache allows. A prior
+        // successful analysis for this flow may still be exportable.
+        refreshSshExportButton();
       });
   }
 
@@ -1278,9 +1449,15 @@ function createCryptPanel({
       if (sourceEl) {
         sourceEl.textContent = primary.source || "decoder + LLM";
       }
-      if (rationaleEl) {
-        rationaleEl.textContent = primary.rationale || "";
+      // When the LLM couldn't recover exact characters but did produce
+      // a session-level interpretation, surface the sessionActivity in
+      // the rationale so the user sees the analysis even when the
+      // primary text is a label.
+      let rationale = primary.rationale || "";
+      if (!rationale && primary.sessionActivity) {
+        rationale = primary.sessionActivity;
       }
+      if (rationaleEl) rationaleEl.textContent = rationale;
     } else {
       // No primary result from the LLM. Show a diagnostic in the same
       // card so the user knows the prompt path was exercised.
@@ -1367,6 +1544,25 @@ function createCryptPanel({
       // ignore DOM indicator failures
     }
 
+    // Surface padding-packet detection (when present in the cache) so
+    // the analyst can see the decoder was compensating for obfuscation.
+    try {
+      const cached = sshSelectedFlowKey
+        ? sshLastAnalysisByFlowKey.get(sshSelectedFlowKey)
+        : null;
+      const pad = cached && cached.paddingDetection;
+      if (pad && pad.detected) {
+        const legendEl = document.getElementById("crypt-openssh-chart-legend");
+        if (legendEl && !new RegExp(`${pad.periodMs}ms padding`).test(legendEl.textContent || "")) {
+          const pct = Number.isFinite(pad.coverage) ? `${(pad.coverage * 100).toFixed(0)}%` : "—";
+          legendEl.textContent = (legendEl.textContent || "").trim() +
+            ` • ${pad.periodMs}ms padding detected (coverage ${pct}, peeled)`;
+        }
+      }
+    } catch (_err) {
+      // ignore DOM indicator failures
+    }
+
     candidates.forEach((cand, idx) => {
       const row = document.createElement("tr");
       if (idx === 0) row.className = "crypt-table-top";
@@ -1413,7 +1609,42 @@ function createCryptPanel({
     if (typeof window === "undefined" || !window.llmapi || typeof window.llmapi.generate !== "function") {
       return result;
     }
-    const evidence = buildLlmEvidence(delays, candidates, model, opts);
+    // Compute shell command priors from the seed corpus (e.g.
+    // src/data/shell_data). The corpus is a slice of the user's real
+    // shell history; the priors give the LLM frequency-weighted
+    // knowledge of which commands the user actually runs, so it can
+    // boost decoder candidates whose shape matches prior usage.
+    const o = opts || {};
+    let shellPriors = null;
+    const corpus =
+      typeof o.shellCorpus === "string" ? o.shellCorpus :
+        Array.isArray(o.shellCorpusLines) ? o.shellCorpusLines.join("\n") :
+          null;
+    if (
+      corpus &&
+      sshExportModule &&
+      typeof sshExportModule.buildShellCommandPriors === "function"
+    ) {
+      try {
+        shellPriors = sshExportModule.buildShellCommandPriors(corpus, o.shellPriorsOpts);
+      } catch (err) {
+        console.warn("[Crypt/OpenSSH] shell priors parse failed:", err);
+        shellPriors = { ok: false };
+      }
+    }
+    const evidence = buildLlmEvidence(delays, candidates, model, {
+      ...o,
+      shellPriors,
+    });
+    // Brief refused — sample too small for a meaningful guess. Skip the
+    // LLM round-trip entirely and let the decoder's logProb order the
+    // evidence table.
+    if (evidence && evidence.kind === "openssh-timing-too-small") {
+      result.llmSkippedReason = evidence.reason || "too_few_samples";
+      result.llmSampleCount = evidence.sampleCount;
+      result.llmMinSamples = evidence.minSamples;
+      return result;
+    }
 
     // ── Step 1: assemble the primary best-guess.
     let primary = null;
@@ -1454,80 +1685,308 @@ function createCryptPanel({
   // compact enough for a single Ollama call while still carrying the
   // decoder's top candidates, digraph priors, command-length estimate,
   // and backspace hints.
+  // Build the LLM-facing evidence packet from the cached analysis
+  // state. Prefers the same plain-text brief produced for the "Export
+  // keystrokes" file, but falls back to a compact JSON bag when:
+  //   * the export module isn't available (e.g. mid-load)
+  //   * the sample is too small for the brief (defaults: < 30 delays)
+  //   * the caller explicitly passed `format: "json"`
+  //
+  // The brief gives the LLM aggregate timing stats, burst/pause lists,
+  // a sampled delay head/tail, padding-detection summary, the top 12
+  // decoder candidates, and (optionally) any previous round-tripped
+  // primary guess — exactly what a human analyst would read.
   function buildLlmEvidence(delays, candidates, model, opts) {
-    const baselines = (model && model.baselines) || {};
-    const empirical = (model && model.empirical) || {};
-    const allowedAlphabet =
+    const o = opts || {};
+    const alphabet =
       (model && model.alphabet) ||
       "abcdefghijklmnopqrstuvwxyz0123456789 .,-_/:;=?!@#$%^&*()[]{}<>'\"|\\~`+";
     const presetSetting =
       typeof document !== "undefined" && document.getElementById("settings-llm-preset")
         ? document.getElementById("settings-llm-preset").value
         : "english";
-    const delaysWithIdx = Array.isArray(opts && opts.delaysWithIdx)
-      ? opts.delaysWithIdx.slice(0, 200)
-      : null;
-    const estimatedCommandLength = Number.isFinite(opts && opts.estimatedCommandLength)
-      ? opts.estimatedCommandLength
+
+    // If the export module is loaded, build the brief and let it decide
+    // whether the sample is large enough.
+    if (
+      o.format !== "json" &&
+      sshExportModule &&
+      typeof sshExportModule.buildSshTimingAnalysisBrief === "function"
+    ) {
+      const briefState = {
+        flow: o.flow,
+        model,
+        direction: o.direction,
+        delays,
+        delaysWithIdx: o.delaysWithIdx,
+        candidates,
+        primary: o.previousPrimary,
+        paddingDetection: o.paddingDetection,
+        s2cSummary: o.s2cSummary,
+        backspaceHints: o.backspaceHints,
+        shellPriors: o.shellPriors,
+      };
+      const brief = sshExportModule.buildSshTimingAnalysisBrief(briefState, {
+        minSamples: Number.isFinite(o.minSamples) ? o.minSamples : undefined,
+        maxSamples: Number.isFinite(o.maxSamples) ? o.maxSamples : undefined,
+      });
+      if (brief && brief.ok) {
+        return {
+          kind: "openssh-timing-brief",
+          source: "export-module",
+          brief: brief.text,
+          sampleCount: brief.sampleCount,
+          truncated: !!brief.truncated,
+          allowedAlphabet: alphabet,
+          languagePreset: presetSetting || "english",
+          estimatedCommandLength:
+            Number.isFinite(o.estimatedCommandLength) ? o.estimatedCommandLength : undefined,
+          backspaceHints: o.backspaceHints || undefined,
+        };
+      }
+      // Brief refused (too few samples). Bubble up a clear signal so
+      // the caller skips the LLM and returns a deterministic result.
+      if (brief && brief.ok === false && brief.reason === "too_few_samples") {
+        return {
+          kind: "openssh-timing-too-small",
+          source: "export-module",
+          sampleCount: brief.sampleCount,
+          minSamples: brief.minSamples,
+          reason: brief.reason,
+          allowedAlphabet: alphabet,
+          languagePreset: presetSetting || "english",
+        };
+      }
+    }
+
+    // JSON fallback (used when the export module isn't loaded yet, or
+    // the caller explicitly requested JSON).
+    const delaysWithIdx = Array.isArray(o.delaysWithIdx)
+      ? o.delaysWithIdx.slice(0, 200)
       : null;
     return {
       kind: "openssh-keystroke-timing",
+      source: "json-fallback",
       languagePreset: presetSetting || "english",
-      allowedAlphabet,
+      allowedAlphabet: alphabet,
       delays: delays.slice(0, 200),
       delaysWithIdx: delaysWithIdx || undefined,
-      estimatedCommandLength: estimatedCommandLength !== null ? estimatedCommandLength : undefined,
-      backspaceHints: (opts && opts.backspaceHints) || undefined,
+      estimatedCommandLength:
+        Number.isFinite(o.estimatedCommandLength) ? o.estimatedCommandLength : undefined,
+      backspaceHints: o.backspaceHints || undefined,
       candidates: candidates.map((c) => ({ text: c.text || "", logProb: c.logProb })),
-      baselines,
-      empiricalDigraphsSample: Object.keys(empirical || {}).slice(0, 40),
     };
   }
 
-  // Ask the LLM to pick a single best-guess string and label it.
+  // Ask the LLM to take a best-guess at what was typed *and* what was
+  // happening in the session. Encourages interpretation rather than a
+  // mechanical transcription, with explicit confidence.
   async function requestLlmPrimary(evidence) {
-    const prompt = `You are a specialist assistant that combines keystroke-timing likelihoods with shell-language priors to recover what was typed during an interactive SSH session. The user has provided an evidence packet from a QWERTY/digraph decoder and wants your single best reconstruction of the typed text.
+    // Brief refused to produce a summary — tell the caller no.
+    if (evidence && evidence.kind === "openssh-timing-too-small") {
+      return null;
+    }
+    const prompt = `You are a behavioural analyst interpreting a recovered SSH session. The user has provided an analysis brief (the same plain-text data that can be exported with the "Export keystrokes" button) covering BOTH sides of the conversation:
 
-Evidence JSON:
-${JSON.stringify(evidence)}
+- the client\u2192server timing of the keystrokes the user typed
+- the server\u2192client timing and byte sizes of the server's response packets
+
+Your job is to take a best-guess at:
+1. what the user typed (the candidate commands)
+2. which typed commands produced which server-output chunks
+3. what was logically happening in this session overall
+
+Analysis brief (same content as the export file):
+\`\`\`
+${evidence && evidence.brief ? evidence.brief : ""}
+\`\`\`
+
+Hints:
+- allowedAlphabet: ${evidence && evidence.allowedAlphabet ? evidence.allowedAlphabet : ""}
+- languagePreset: ${evidence && evidence.languagePreset ? evidence.languagePreset : "english"}
+- estimatedCommandLength: ${evidence && Number.isFinite(evidence.estimatedCommandLength) ? evidence.estimatedCommandLength : "unknown"}
+- backspaceHints: ${evidence && evidence.backspaceHints ? JSON.stringify(evidence.backspaceHints) : "none"}
+
+Interpretation tips:
+- Long pauses (>500 ms) in the c2s stream usually delimit commands or mark "thinking" gaps between steps.
+- Bursts (<30 ms) cluster within a single word or token; use them to guess word boundaries.
+- Multiple long pauses in close succession may mean a command was being composed in pieces or that the user copy-pasted across multiple lines.
+- Heavy backspacing implies typos and may shift confidence toward a shorter, common command.
+- The decoder's top candidates are an excellent language-model prior — but they're decoded from timing only, so they often get short tokens wrong.
+- The s2c output is FAR more informative than the c2s keystrokes when an obfuscator is running. A flat ~50 char/s over ~1 s is characteristic of \`cat\` of a small config file; a fast burst followed by silence is typical of \`systemctl status\` / \`ps aux | head\` / \`ip a\`. Pair each typed command to its output by timing + size.
+- Shell command priors: when the brief contains a "Shell command priors" section, BOOST candidates whose verb + argument shape match a prior the user actually runs. For example, if "git push" appears 12 times in the priors and a candidate is "git push origin main", it should outrank a candidate that the LLM likes but the user has never typed. Conversely, DOWNWEIGHT candidates whose command shape has zero prior support AND no s2c backing — they are unlikely.
+- Treat the priors as a frequency-weighted prior, not a hard filter: an unsuported candidate with strong timing or s2c evidence still survives, but it should rank below a prior-supported candidate of similar evidence strength.
+- Redactions in the priors: any run of 4+ consecutive 'A' characters (e.g. "AAAA", "AAAAAAAAAAAAA") in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/JSON-key was scrubbed from the corpus for privacy. When you see such a placeholder, treat it as an arbitrary string of that SAME LENGTH (because the brief's typing signal constrains how many characters were typed). Substitute any plausible value when reconstructing the command. The position and length of the placeholder still tells you WHERE the user typically embeds usernames, hostnames, paths, and keys; the specific letters are not informative.
+- When the c2s timing is heavily obfuscated (e.g. a 20 ms padding cadence), you CANNOT recover filenames or exact characters from typing alone — but you CAN often recover command *class* (cat/ls/ps/systemctl) and approximate output size from the s2c side.
+- Server-side SSH timing obfuscation: if the brief's "Padding detection" section reports a 20 ms / 40 ms cadence (or similar), the c2s delays you see have ALREADY been peeled by the local detector. Treat any residual sub-cadence jitter as noise from imperfect peeling — do NOT interpret it as an extra sub-keystroke clock or as bursts within a word. The remaining spread in inter-key delays reflects natural typing cadence, not the obfuscation period.
 
 Instructions:
-- Output a single, valid JSON object: {"text": string, "confidence": number in [0,1], "kind": "command" | "filename" | "path" | "argument" | "phrase" | "unknown", "rationale": string, "isCommand": boolean}.
-- "text" must be a single string composed only of characters from the allowedAlphabet. The decoder's top candidates are the most likely substrings, but you may also assemble variants (e.g. "git status" or "cat /etc/passwd") by combining the best pieces.
-- "confidence" is a number in [0,1] reflecting how likely this exact string was typed in this SSH session, given the timing and language priors.
-- "kind" describes the kind of text recovered (command, filename, etc.).
-- "isCommand" is true if the text looks like a shell command.
-- "rationale" is a 1–2 sentence explanation of why this text best matches the evidence.
-- If the evidence is too sparse to produce a meaningful guess, return {"text": "", "confidence": 0, "kind": "unknown", "rationale": "insufficient evidence", "isCommand": false}.
-- Return ONLY the JSON object, no other commentary.`;
+- Return a SINGLE valid JSON object, no other commentary. Schema:
+  {
+    "text": string,                                 // your best-guess at the most recent / central typed command (use allowedAlphabet)
+    "confidence": number in [0,1],                  // how likely this exact string was typed
+    "kind": "command" | "filename" | "path" | "argument" | "phrase" | "unknown",
+    "isCommand": boolean,
+    "rationale": string,                            // 1-2 sentence explanation grounded in the timing AND the s2c output
+    "sessionActivity": string,                      // 1-2 sentence narrative: what the user was likely doing across the WHOLE session, e.g. "inspected two config files then ran a status check"
+    "sessionCommands": [                             // ordered list pairing typed commands to their output chunks
+      {
+        "command": string,                          // best-guess at the typed command (use allowedAlphabet; "" if uncertain)
+        "commandConfidence": number in [0,1],       // confidence in this command
+        "producedChunk": number | null,             // 1-based index into the output chunks; null if no matching chunk
+        "producedKind": string,                     // e.g. "cat of small config", "systemctl status", "ps aux | head"
+        "rationale": string                         // 1 sentence explaining why this chunk matches
+      }
+    ],
+    "alternateInterpretations": [                   // optional; 0-2 alternatives for the primary 'text'
+      { "text": string, "confidence": number in [0,1], "reason": string }
+    ]
+  }
+- If the brief is too thin to guess, return {"text": "", "confidence": 0, "kind": "unknown", "isCommand": false, "rationale": "insufficient evidence", "sessionActivity": "unknown", "sessionCommands": [], "alternateInterpretations": []}.
+- Be honest about uncertainty. Confidence <= 0.5 is fine if the timing evidence is ambiguous. If the c2s timing is obfuscated but the s2c output is clean, you may still produce high-confidence command-class guesses for each chunk.
+- Output ONLY the JSON object.`;
 
-    const raw = await window.llmapi.generate(prompt);
+    const raw = await window.llmapi.generate(prompt, {
+      // Bump the response budget so the JSON schema (text + rationale +
+      // sessionActivity + sessionCommands + alternates) fits. The default
+      // 1024 tokens is too low for the s2c-aware brief — and the
+      // minimax-m3:cloud model is a thinking model that burns many
+      // tokens on internal reasoning before producing the JSON, so
+      // 4096 gives it headroom for both thinking AND response.
+      maxTokens: 4096,
+      temperature: 0.4,
+      // Disable thinking mode for structured-output prompts — Ollama
+      // cloud models emit `thinking` instead of `response` when
+      // thinking is enabled, leaving us nothing to parse.
+      think: false,
+    });
     const text = extractLlmText(raw);
-    if (!text) return null;
+    if (!text) {
+      console.warn("[Crypt/OpenSSH] LLM primary returned empty text. raw keys=",
+        raw && typeof raw === "object" ? Object.keys(raw).join(",") : "(non-object)");
+      return null;
+    }
     const obj = parseLlmJsonObject(text);
-    if (!obj || typeof obj !== "object") return null;
-    const cleaned = sanitizeTextForAlphabetShared(String(obj.text || "")).trim();
-    if (!cleaned) return null;
+    if (!obj || typeof obj !== "object") {
+      // Special-case: when the model emitted only thinking (no JSON
+      // response), surface that explicitly in the diagnostic so the
+      // user knows to bump maxTokens / try a non-thinking model.
+      const thinkingOnly = text.startsWith("[thinking-only");
+      console.warn(
+        "[Crypt/OpenSSH] LLM primary JSON parse failed. textLen=",
+        text.length,
+        "thinkingOnly=",
+        thinkingOnly,
+        "first300=",
+        text.slice(0, 300),
+      );
+      return null;
+    }
+    let cleaned = sanitizeTextForAlphabetShared(String(obj.text || "")).trim();
     const confidence = clamp01(obj.confidence);
     const kind = String(obj.kind || "command").toLowerCase();
     const rationale = String(obj.rationale || "").trim();
+    const sessionActivity = String(obj.sessionActivity || "").trim();
+    let sessionCommands = [];
+    if (Array.isArray(obj.sessionCommands)) {
+      sessionCommands = obj.sessionCommands
+        .slice(0, 32)
+        .map((entry) => {
+          const cmdText = sanitizeTextForAlphabetShared(String((entry && entry.command) || "")).trim();
+          const cmdConf = clamp01(entry && entry.commandConfidence);
+          return {
+            command: cmdText,
+            commandConfidence: Number.isFinite(cmdConf) ? cmdConf : 0,
+            producedChunk: Number.isFinite(entry && entry.producedChunk) ? entry.producedChunk : null,
+            producedKind: String((entry && entry.producedKind) || "").trim(),
+            rationale: String((entry && entry.rationale) || "").trim(),
+          };
+        })
+        .filter((entry) => entry.command || entry.producedKind);
+    }
+    let alternates = [];
+    if (Array.isArray(obj.alternateInterpretations)) {
+      alternates = obj.alternateInterpretations
+        .slice(0, 2)
+        .map((alt) => ({
+          text: sanitizeTextForAlphabetShared(String((alt && alt.text) || "")).trim(),
+          confidence: clamp01(alt && alt.confidence),
+          reason: String((alt && alt.reason) || "").trim(),
+        }))
+        .filter((alt) => alt.text && Number.isFinite(alt.confidence));
+    }
+
+    // When the LLM doesn't supply a top-level `text` (because the timing
+    // is heavily obfuscated and exact characters can't be recovered),
+    // but it DID provide session-level context (sessionCommands /
+    // sessionActivity), synthesize a "best guess" from the highest-
+    // confidence sessionCommands entry so the primary card still shows
+    // something useful. Confidence is capped at 0.5 to reflect the
+    // uncertainty. Without this fallback, the primary card would
+    // silently fall back to the "no usable result" diagnostic even
+    // though the LLM produced a meaningful session interpretation.
+    let synthesizedFromSession = false;
+    if (!cleaned && sessionCommands.length > 0) {
+      const bestCmd = sessionCommands
+        .slice()
+        .sort((a, b) => (b.commandConfidence || 0) - (a.commandConfidence || 0))[0];
+      if (bestCmd && bestCmd.command) {
+        cleaned = bestCmd.command;
+        synthesizedFromSession = true;
+      } else if (bestCmd && bestCmd.producedKind) {
+        cleaned = `[${bestCmd.producedKind}]`;
+        synthesizedFromSession = true;
+      }
+    }
+    if (!cleaned && sessionActivity) {
+      cleaned = `[session-only] ${sessionActivity}`;
+      synthesizedFromSession = true;
+    }
+    if (!cleaned) {
+      // Diagnostic: surface what the LLM actually returned so we can
+      // diagnose "no usable result" without spelunking in DevTools.
+      try {
+        const keys = obj && typeof obj === "object" ? Object.keys(obj).slice(0, 12) : [];
+        const textLen = (obj && obj.text && String(obj.text).length) || 0;
+        const snippet = JSON.stringify(obj).slice(0, 300);
+        console.warn(
+          "[Crypt/OpenSSH] LLM primary produced no usable text. Keys=",
+          keys,
+          "textLen=",
+          textLen,
+          "sessionActivityLen=",
+          sessionActivity.length,
+          "sessionCommandsCount=",
+          sessionCommands.length,
+          "snippet=",
+          snippet,
+        );
+      } catch (_e) { /* ignore */ }
+      return null;
+    }
+
     const isCommand = obj.isCommand === true || looksLikeShellCommandShared(cleaned);
     return {
       text: cleaned,
-      confidence: Number.isFinite(confidence) ? confidence : 0,
+      confidence: synthesizedFromSession
+        ? Math.min(0.5, Number.isFinite(confidence) ? confidence : 0)
+        : Number.isFinite(confidence) ? confidence : 0,
       kind,
       rationale,
+      sessionActivity,
+      synthesizedFromSession,
+      sessionCommands,
+      alternateInterpretations: alternates,
       isCommand,
-      source: "decoder + LLM",
+      source: "decoder + LLM (timing-analysis brief)",
     };
   }
 
-  // Ask the LLM to author a short insight paragraph that interprets the
-  // primary guess in context: what command it looks like, what file it
-  // touches, what the user was likely doing, and any security-relevant
-  // observations.
+  // Ask the LLM to author a 4-bullet analyst note that interprets the
+  // primary guess in context — what was typed, what was happening, what
+  // each server-output chunk was, and any security-relevant observations.
   async function requestLlmInsight(evidence, primary) {
-    const prompt = `You are a security-aware assistant interpreting a recovered SSH keystroke. The decoder + LLM produced the following best-guess text:
+    const prompt = `You are a security-aware behavioural analyst. A decoder + LLM just produced a session-level interpretation from a recovered SSH keystroke-timing trace that includes BOTH the client\u2192server typing cadence and the server\u2192client output packets. Your job is to write a concise, security-aware analyst note that interprets the session as a whole, using the same analysis brief the primary was based on.
 
 Primary guess JSON:
 ${JSON.stringify({
@@ -1536,32 +1995,78 @@ ${JSON.stringify({
       isCommand: primary.isCommand,
       confidence: primary.confidence,
       rationale: primary.rationale,
+      sessionActivity: primary.sessionActivity,
+      sessionCommands: primary.sessionCommands,
+      alternateInterpretations: primary.alternateInterpretations,
     })}
 
-Original evidence (top decoder candidates and timing priors):
-${JSON.stringify({
-      topCandidates: evidence.candidates.slice(0, 12),
-      estimatedCommandLength: evidence.estimatedCommandLength,
-      backspaceHints: evidence.backspaceHints,
-      languagePreset: evidence.languagePreset,
-    })}
+Analysis brief (same content as the export file):
+\`\`\`
+${evidence && evidence.brief ? evidence.brief : ""}
+\`\`\`
 
 Instructions:
-- Write a concise (3–6 sentence) analyst note explaining what was likely typed, what the user appears to have been doing, and whether the text contains anything security-relevant (file paths, credentials, network endpoints, dangerous commands, etc.).
-- If the primary guess is a shell command, mention what the command does and what artifacts it would leave behind.
-- If you can extract filenames, paths, hostnames, usernames, or other meaningful tokens, list them inline.
-- If the evidence is too weak to draw conclusions, say so explicitly.
-- Output a single string under the JSON key "text". No other keys, no other text.
-- Return ONLY the JSON object: {"text": "..."}.`;
+- Write exactly 4 short bullets (one sentence each is fine):
+    1. "What was likely typed" — restate or refine the primary guess and what it does.
+    2. "Session shape" — how the typed commands map to the server-output chunks; which typed command likely produced which chunk (by size + rate); what the user was probably doing across the whole session.
+    3. "What each output chunk was" — for each numbered chunk in the brief, name the most likely command class that produced it (e.g. \`cat\` of a config file, \`systemctl status\`, \`ps aux | grep\`, shell prompt echo). If a chunk is unidentified, say so explicitly.
+    4. "Security observations" — anything security-relevant (file paths, credentials, hostnames, dangerous commands, suspicious network endpoints, data exfil patterns, obfuscated-timing artefacts). If nothing stands out, say so explicitly.
+- If the c2s stream is heavily obfuscated (e.g. a 20 ms padding cadence) acknowledge that filenames/flags aren't recoverable from typing alone, but the s2c output rate is still highly informative.
+- If the evidence is too weak, say so in bullet 1 and avoid speculation.
+- Return ONLY a JSON object: {"text": "<the four bullets joined by '\\n\\n' (blank line between bullets)>"}.
 
-    const raw = await window.llmapi.generate(prompt);
+- Output ONLY the JSON object.`;
+
+    const raw = await window.llmapi.generate(prompt, {
+      maxTokens: 4096,
+      temperature: 0.5,
+      think: false,
+    });
     const text = extractLlmText(raw);
-    if (!text) return null;
+    if (!text) {
+      console.warn("[Crypt/OpenSSH] LLM insight returned empty text.");
+      return null;
+    }
     const obj = parseLlmJsonObject(text);
-    if (!obj || typeof obj !== "object") return null;
-    const insightText = String(obj.text || "").trim();
+    if (!obj || typeof obj !== "object") {
+      console.warn(
+        "[Crypt/OpenSSH] LLM insight JSON parse failed. textLen=",
+        text.length,
+        "first200=",
+        text.slice(0, 200),
+      );
+      return null;
+    }
+    let insightText = String(obj.text || "").trim();
+    // Fallback: if the LLM didn't return a `text` field but the primary
+    // had session-level context, surface that as a synthetic insight so
+    // the analyst card isn't blank.
+    if (!insightText && primary) {
+      const sessionActivity = String(primary.sessionActivity || "").trim();
+      const sessionCommands = Array.isArray(primary.sessionCommands) ? primary.sessionCommands : [];
+      if (sessionActivity || sessionCommands.length > 0) {
+        const lines = [];
+        if (sessionActivity) {
+          lines.push(`- Session activity: ${sessionActivity}`);
+        }
+        if (sessionCommands.length > 0) {
+          lines.push("- Best-guess command(s):");
+          for (const cmd of sessionCommands.slice(0, 4)) {
+            const text = cmd.command || `[${cmd.producedKind || "unknown"}]`;
+            const conf = Number.isFinite(cmd.commandConfidence)
+              ? ` (conf ${(cmd.commandConfidence * 100).toFixed(0)}%)`
+              : "";
+            const kind = cmd.producedKind ? ` — ${cmd.producedKind}` : "";
+            lines.push(`    - ${text}${conf}${kind}`);
+          }
+        }
+        if (lines.length > 0) {
+          insightText = lines.join("\n") + "\n- Security observations: see primary result rationale.";
+        }
+      }
+    }
     if (!insightText) return null;
-    return { text: insightText, source: "decoder + LLM" };
+    return { text: insightText, source: "decoder + LLM", synthesized: !obj.text };
   }
 
   // Ask the LLM to rerank the decoder candidates. Returns the same
@@ -1570,11 +2075,20 @@ Instructions:
   // logProb on any failure.
   async function requestLlmRerank(evidence, candidates) {
     if (!Array.isArray(candidates) || candidates.length === 0) return candidates;
-    const prompt = `You are re-ranking SSH keystroke-timing candidates using shell/file language priors. Each candidate is a string the decoder thinks the user may have typed, with a timing log-probability. Re-score them and return a JSON array of objects.
+    // No brief produced (too few samples) — the decoder's own logProb
+    // is the only signal we have. Skip the LLM round-trip.
+    if (evidence && evidence.kind === "openssh-timing-too-small") return candidates;
 
-Evidence JSON:
+    const prompt = `You are re-ranking SSH keystroke-timing candidates using shell/file language priors. Each candidate is a string the decoder thinks the user may have typed, with a timing log-probability. Re-score them and return a JSON array of objects. Use the analysis brief for context on session activity and cadence.
+
+Analysis brief (same content as the export file):
+\`\`\`
+${evidence && evidence.brief ? evidence.brief : ""}
+\`\`\`
+
+Candidates (in input order):
 ${JSON.stringify({
-      candidates: evidence.candidates,
+      candidates: evidence.candidates || [],
       languagePreset: evidence.languagePreset,
       estimatedCommandLength: evidence.estimatedCommandLength,
     })}
@@ -1583,11 +2097,17 @@ Instructions:
 - Output a JSON array of objects in the same order as the input candidates: [{"text": string, "score": number in [0,1], "isCommand": boolean}].
 - "score" is a combined probability in [0,1] that the text was typed in this session.
 - "isCommand" is true if the candidate is a shell command.
+- Shell command priors: if the brief's "Shell command priors" section is non-empty, use it as a frequency-weighted prior — boost candidates whose verb + argument shape matches a prior the user actually runs, and downweight candidates whose shape has zero prior support unless their timing is unusually strong. The priors reflect REAL usage, not generic shell knowledge; they should win ties.
+- Redactions in the priors: any run of 4+ consecutive 'A' characters in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/key was scrubbed from the corpus. Treat it as an arbitrary string of that SAME LENGTH when scoring candidates (because the timing constrains character count). Position and length still indicate WHERE such tokens typically appear.
 - Return ONLY the JSON array, no other commentary.`;
 
     let raw;
     try {
-      raw = await window.llmapi.generate(prompt);
+      raw = await window.llmapi.generate(prompt, {
+        maxTokens: 4096,
+        temperature: 0.3,
+        think: false,
+      });
     } catch (err) {
       console.warn("LLM rerank generate error:", err);
       return candidates;
@@ -1600,10 +2120,91 @@ Instructions:
   }
 
   // ── LLM response helpers ──────────────────────────────────────────────
+  // Walk a string to find the first balanced JSON object/array — used
+  // to recover a clean JSON payload when the LLM response includes
+  // surrounding prose or trailing truncation. Tracks nested braces /
+  // brackets and respects escaped quotes inside string literals.
+  function extractFirstBalancedJson(text) {
+    if (!text || typeof text !== "string") return null;
+    const start = text.search(/[\[{]/);
+    if (start < 0) return null;
+    const open = text[start];
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (inString) {
+        if (ch === "\\") { escape = true; continue; }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === open) depth += 1;
+      else if (ch === close) {
+        depth -= 1;
+        if (depth === 0) return text.slice(start, i + 1);
+      }
+    }
+    // Unbalanced (truncated response). Return whatever we have so the
+    // JSON parser can attempt a partial repair, but only if the depth
+    // is still positive — otherwise we never opened a structure.
+    if (depth > 0) return text.slice(start);
+    return null;
+  }
+
+  // When a thinking-mode model exhausts its response budget on internal
+  // reasoning, the final answer is often drafted inside the ``thinking``
+  // field but never emitted as ``response``. Walk the thinking text and
+  // pull out the last balanced JSON object — that's almost always the
+  // intended final answer.
+  function extractJsonFromThinking(text) {
+    if (!text || typeof text !== "string") return null;
+    // Try the standard balanced-walker from end-to-start, so we prefer
+    // the LAST JSON object (the model's most recent/final attempt).
+    let i = text.length;
+    while (i > 0) {
+      // Find the start of a balanced object ending at position i.
+      // Walk backwards from a closing brace to its matching opener.
+      const closeIdx = text.lastIndexOf("}", i - 1);
+      if (closeIdx < 0) return null;
+      const candidate = extractFirstBalancedJson(text.slice(0, closeIdx + 1));
+      if (candidate) {
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch (_e) {
+          // Try the next-backwards closing brace.
+          i = closeIdx;
+          continue;
+        }
+      }
+      i = closeIdx;
+    }
+    return null;
+  }
+
   function extractLlmText(raw) {
     if (typeof raw === "string") return raw;
     if (!raw || typeof raw !== "object") return "";
     try {
+      // Ollama cloud / ollama.js response shape: { response: "...", thinking: "..." }
+      // When ``response`` is non-empty, that's the model's final answer.
+      if (typeof raw.response === "string" && raw.response.length > 0) {
+        return raw.response;
+      }
+      // Thinking-only response: the model burned the entire num_predict
+      // budget on internal reasoning and emitted no final answer.
+      // Try to extract the final JSON from the thinking text — many
+      // models draft the answer in their reasoning and would have
+      // emitted it as ``response`` if there were room.
+      if (typeof raw.thinking === "string" && raw.thinking.length > 0) {
+        const extracted = extractJsonFromThinking(raw.thinking);
+        if (extracted) return extracted;
+        return `[thinking-only, no response emitted] ${raw.thinking}`;
+      }
       if (Array.isArray(raw.output) && raw.output.length > 0) {
         return raw.output.map((o) => o.content || "").join("\n");
       }
@@ -1620,13 +2221,25 @@ Instructions:
 
   function parseLlmJsonObject(text) {
     if (!text || typeof text !== "string") return null;
+    // Strip markdown code fences the LLM often wraps JSON in.
+    let cleaned = text
+      .replace(/^\s*```(?:json)?\s*\n/i, "")
+      .replace(/\n```\s*$/, "")
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch (_e) { /* fall through */ }
+    // Try direct parse on the original text too (covers simple cases).
     try {
       return JSON.parse(text);
     } catch (_e) { /* fall through to regex */ }
-    const m = text.match(/\{[\s\S]*\}/m);
+    // Extract the first balanced JSON object from the text. Walk
+    // braces to handle nested objects without grabbing trailing
+    // prose after a truncated response.
+    const m = extractFirstBalancedJson(text);
     if (!m) return null;
     try {
-      return JSON.parse(m[0]);
+      return JSON.parse(m);
     } catch (_e) {
       return null;
     }
@@ -1634,17 +2247,27 @@ Instructions:
 
   function parseLlmJsonArray(text) {
     if (!text || typeof text !== "string") return null;
+    let cleaned = text
+      .replace(/^\s*```(?:json)?\s*\n/i, "")
+      .replace(/\n```\s*$/, "")
+      .trim();
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_e) { /* fall through */ }
     try {
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) return parsed;
     } catch (_e) { /* fall through */ }
-    const m = text.match(/\[\s*\{[\s\S]*\}\s*\]/m);
+    const m = extractFirstBalancedJson(text);
     if (!m) return null;
     try {
-      return JSON.parse(m[0]);
+      const parsed = JSON.parse(m);
+      if (Array.isArray(parsed)) return parsed;
     } catch (_e) {
       return null;
     }
+    return null;
   }
 
   function clamp01(n) {
@@ -1720,7 +2343,11 @@ Instructions:
 - Output JSON array only, with objects: {\"text\": string, \"score\": number in [0,1], \"isCommand\": boolean}.`;
     let rawResp;
     try {
-      rawResp = await window.llmapi.generate(prompt);
+      rawResp = await window.llmapi.generate(prompt, {
+        maxTokens: 4096,
+        temperature: 0.3,
+        think: false,
+      });
     } catch (err) {
       console.warn("LLM generate error:", err);
       return candidates;
@@ -5585,6 +6212,33 @@ Instructions:
     refreshSshEncounteredFlows,
     selectSshEncounteredFlow,
     analyzeSelectedSshFlow,
+    // Keystroke-timing export — click handler is in scope; the pure
+    // text builder + stats helpers live in
+    // src/ui/decoders/ssh-keystrokes/export/index.js so they can be
+    // unit-tested without the DOM or IPC. Re-export them here as a
+    // convenience for callers / tests.
+    exportSshKeystrokes,
+    buildSshKeystrokeExport: (state, opts) =>
+      sshExportModule && typeof sshExportModule.buildSshKeystrokeExport === "function"
+        ? sshExportModule.buildSshKeystrokeExport(state, opts)
+        : "",
+    computeDelayStats: (delays) =>
+      sshExportModule && typeof sshExportModule.computeDelayStats === "function"
+        ? sshExportModule.computeDelayStats(delays)
+        : null,
+    formatNumber: (n) =>
+      sshExportModule && typeof sshExportModule.formatNumber === "function"
+        ? sshExportModule.formatNumber(n)
+        : "—",
+    wrapText: (text, width) =>
+      sshExportModule && typeof sshExportModule.wrapText === "function"
+        ? sshExportModule.wrapText(text, width)
+        : (typeof text === "string" ? text : ""),
+    directionLabel: (direction) =>
+      sshExportModule && typeof sshExportModule.directionLabel === "function"
+        ? sshExportModule.directionLabel(direction)
+        : "client \u2192 server",
+    refreshSshExportButton,
   };
 }
 
