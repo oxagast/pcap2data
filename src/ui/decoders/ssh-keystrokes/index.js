@@ -1186,13 +1186,56 @@ function autoTunePaddingThreshold(delaysMs, opts) {
         return Math.abs(a.coverage - userMinCoverage) - Math.abs(b.coverage - userMinCoverage);
     });
     // Minimum score gate — the chunk-shape blend has to clear this
-    // before the auto-tuner accepts the cadence. Below 0.0 the chunk
+    // before the auto-tuner accepts the cadence. Below this the chunk
     // shape is too far from "command-like" (giant single chunk, all
     // tiny chunks, wide variance, etc.) and we'd rather return
-    // no-detection than a misleading result.
-    const MIN_AUTOTUNE_SCORE = 0.0;
+    // no-detection than a misleading result. The threshold is
+    // deliberately lenient: heavily obfuscated streams with sparse
+    // real keystrokes (e.g. median 11ms, mostly filler, only a handful
+    // of 600ms Return gaps) score low even at the best coverage, but
+    // the cadence is real — accepting a slightly-negative score still
+    // gives the user a usable peeled stream.
+    const MIN_AUTOTUNE_SCORE = -2.0;
     const best = ranked[0];
     if (!best || !best.detected || best.score < MIN_AUTOTUNE_SCORE) {
+        // Best-effort fallback: when the chunk-shape gate rejected
+        // every threshold but pass-1 still found a confident period
+        // (strong peak ratio), run the basic detector with that
+        // period anyway. Heavily obfuscated streams with sparse
+        // real keystrokes have weak chunk-shape statistics even when
+        // the cadence is real; without this fallback, the user gets
+        // no peeling and the Viterbi decoder produces gibberish.
+        const fallbackPeakMin = 2.5; // pass1 peak must dominate the
+        // uniform-background noise by
+        // at least 2.5x to qualify
+        if (pass1 && Number.isFinite(pass1.periodMs)
+            && Number.isFinite(pass1.peakRatio)
+            && pass1.peakRatio >= fallbackPeakMin
+            && pass1.peakCount >= 8) {
+            const fallback = detect20msPadding(delays, {
+                ...o,
+                minCoverage: 0.05, // very lenient — peel any interval
+                // that aligns with the cadence
+                toleranceMs: Math.max(
+                    5,
+                    Math.round(pass1.periodMs * 0.4),
+                ),
+                stdTighteningFactor: Number.isFinite(o.stdTighteningFactor)
+                    ? o.stdTighteningFactor
+                    : tightenedFactor,
+            });
+            if (fallback && fallback.detected) {
+                return {
+                    ...fallback,
+                    autotuneSelected: "fallback",
+                    autotuneTolerance: fallback.toleranceMs,
+                    autotuneToleranceScale: null,
+                    autotuneCandidates: returnAll ? runs : ranked.slice(0, 5),
+                    autotuneChunkCount: 0,
+                    autotuneFallback: true,
+                };
+            }
+        }
         return {
             ...notDetected,
             autotuneCandidates: runs,

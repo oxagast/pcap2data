@@ -12,5 +12,7 @@
     "editor.selectionClipboard": false,
     "editor.copyWithSyntaxHighlighting": false,
     "ollama-autopilot.general.autopilotEnabled": true,
-    "ollama-autopilot.model.modelName": "minimax-m3:cloud"
+    "ollama-autopilot.model.modelName": "minimax-m3:cloud",
+    "ollama-autopilot.model.contextSize": 512000,
+    "ollama-autopilot.prompt.textBeforeCursorSize": 200000
 }

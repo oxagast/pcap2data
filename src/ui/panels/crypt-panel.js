@@ -609,6 +609,22 @@ function createCryptPanel({
   // candidate gap (not just the end-of-session one) so callers can
   // either pick the last chunk (existing behaviour) or render all
   // chunks (per-command guesses).
+  //
+  // Helper: convert a plain number array (e.g. `keystrokeDelaysMs`
+  // from the padding detector, which has no packetLength / index
+  // metadata) into the `{ delay, index, packetLength }` shape that
+  // ``findReturnChunks`` expects. Used by the markov background
+  // pass to re-chunk the PEELED stream.
+  function buildIndexedDelaysFromPeeled(peeledDelays) {
+    if (!Array.isArray(peeledDelays)) return [];
+    const out = [];
+    for (let i = 0; i < peeledDelays.length; i += 1) {
+      const d = peeledDelays[i];
+      if (!Number.isFinite(d)) continue;
+      out.push({ delay: d, index: i, packetLength: null });
+    }
+    return out;
+  }
   function findReturnChunks(delaysWithIdx) {
     if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return [];
     const vals = delaysWithIdx.map((d) => d.delay).filter((v) => Number.isFinite(v));
@@ -652,12 +668,33 @@ function createCryptPanel({
     }
 
     // Convert each chunk's packet range into a keystroke count.
+    // Three sources of truth, in priority order:
+    //   1. ``entry.keystrokeCount`` — explicitly-set count (used by
+    //      ``markovChunks`` to feed back per-chunk beam results)
+    //   2. ``packetLength`` known and small (<=100 B) — typical
+    //      single-keystroke SSH c2s payload
+    //   3. ``packetLength`` null (peeled stream) — every entry is a
+    //      keystroke, because the peeling already removed filler
     const SMALL_PACKET_BYTES = 100;
     for (const chunk of chunks) {
       let count = 0;
+      let sawEntry = false;
       for (let i = chunk.startIdx; i <= chunk.endIdx; i += 1) {
         const entry = delaysWithIdx[i];
         if (!entry) continue;
+        sawEntry = true;
+        if (Number.isFinite(entry.keystrokeCount) && entry.keystrokeCount > 0) {
+          count += entry.keystrokeCount;
+          continue;
+        }
+        // Peeled stream entries have `packetLength: null` (set by
+        // ``buildIndexedDelaysFromPeeled``). Each one represents a
+        // real keystroke — the peeling already filtered out filler.
+        // NOTE: check the raw field, not Number(null), which is 0.
+        if (entry.packetLength === null || entry.packetLength === undefined) {
+          count += 1;
+          continue;
+        }
         const len = Number(entry.packetLength);
         if (Number.isFinite(len) && len > 0 && len <= SMALL_PACKET_BYTES) {
           count += 1;
@@ -666,7 +703,7 @@ function createCryptPanel({
       // Always at least 1 — a chunk with no small packets is
       // counted as "one composite action" rather than zero, so the
       // markov beam never receives targetLen=0.
-      chunk.keystrokeCount = Math.max(1, count);
+      chunk.keystrokeCount = Math.max(1, count || (sawEntry ? 1 : 0));
     }
     return chunks;
   }
@@ -1225,7 +1262,14 @@ function createCryptPanel({
     }
     const chunks = findReturnChunks(delaysWithIdx);
     if (!chunks.length) return null;
-    return chunks[chunks.length - 1].keystrokeCount;
+    // Use the median chunk length across all chunks as the command
+    // length estimate, rather than just the last chunk. This is more
+    // robust because the last chunk may contain only a single
+    // keystroke (e.g. a trailing Return or partial command), while the
+    // median captures the typical command shape.
+    const lengths = chunks.map((c) => c.keystrokeCount).sort((a, b) => a - b);
+    const medianIdx = Math.floor(lengths.length / 2);
+    return lengths[medianIdx];
   }
 
   // Check the threshold of 100 packets at a time so that the rest of the
@@ -1490,7 +1534,10 @@ function createCryptPanel({
         try {
           // Prefer the worker-thread decoder when the preload bridge is
           // available — it runs the synchronous Viterbi on a worker so
-          // the renderer never blocks, even on very long sessions.
+          // the renderer never blocks, even on very long sessions. Speed
+          // is prioritized over progress reporting here: the worker
+          // decode is opaque (no per-interval count), which is an
+          // accepted trade-off because it's the fastest path.
           const api =
             typeof window !== "undefined" && window.opensshapi
               ? window.opensshapi
@@ -1518,7 +1565,20 @@ function createCryptPanel({
         }
         setProgress(`Estimating command length (${delaysWithIdx.length} samples)…`);
         await yieldToUi();
-        const estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx);
+        // Compute command length from the PEELED stream when the
+        // padding detector identified filler packets. With a
+        // heavily obfuscated session (median delay ~11ms) the raw
+        // stream's "small c2s packet" heuristic sees filler as
+        // keystrokes and reports 1 keystroke per Return; the peeled
+        // stream gives a real per-command length.
+        let estimatedCommandLength = null;
+        if (appliedPadding.detected && Array.isArray(appliedPadding.keystrokeDelaysMs)) {
+          const peeledIndexed = buildIndexedDelaysFromPeeled(appliedPadding.keystrokeDelaysMs);
+          estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(peeledIndexed);
+        }
+        if (!Number.isFinite(estimatedCommandLength)) {
+          estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx);
+        }
         const backspaceHints = await detectBackspaceHintsAsync(delaysWithIdx);
 
         // Run the LLM as the primary result builder. The decoder provides
@@ -1557,6 +1617,11 @@ function createCryptPanel({
                 // obfuscation blip, which floods the brief's aggregate
                 // timing stats with artificial jitter and degrades
                 // decoder accuracy downstream. The padding detector
+                // Pass the *peeled* delays (post-padding-removal) to the
+                // LLM brief. The raw delays still carry the 20 ms server
+                // obfuscation blip, which floods the brief's aggregate
+                // timing stats with artificial jitter and degrades
+                // decoder accuracy downstream. The padding detector
                 // already removed the cadence when ``detected`` is true.
                 let shellCorpus = null;
                 if (window.opensshapi && typeof window.opensshapi.loadShellCorpus === "function") {
@@ -1569,6 +1634,13 @@ function createCryptPanel({
                     console.warn("[Crypt/OpenSSH] shell corpus load failed:", corpusErr);
                   }
                 }
+                // Ask the LLM to assemble a single best-guess primary
+                // result and a short insight paragraph, and to rerank the
+                // decoder candidates so the evidence table below the
+                // primary card reflects the same confidence order. When
+                // the LLM is unavailable ``assembleLlmPrimaryResult``
+                // returns only ``rankedCandidates`` (the decoder's own
+                // order), so the timing evidence still renders.
                 const llmBundle = await assembleLlmPrimaryResult(effectiveDelays, candidates, model, {
                   estimatedCommandLength,
                   delaysWithIdx,
@@ -1599,12 +1671,20 @@ function createCryptPanel({
             console.warn("[Crypt/OpenSSH] LLM primary result path failed:", outerErr);
             renderMode = "error";
           }
+          // Render the primary/insight cards, the keystroke-timing
+          // evidence table (with the per-candidate Avg Δ column), and
+          // the summary line. These calls were dropped in a prior
+          // refactor which is why the timing results below the stats
+          // stopped appearing — and, because the analysis was never
+          // cached, the Markov stage bailed on ``!cached`` and never
+          // generated. Restored here.
           renderSshPrimary(primaryResult, insightResult, { mode: renderMode });
           renderSshCandidates(finalCandidates, delays, decoder);
           renderSshSummary(flow, delays, finalCandidates, estimatedCommandLength, backspaceHints);
-          // Cache the analysis so the user can export the keystroke
-          // timing trace (and re-pick a different flow without losing
-          // the prior flow's data). Keyed by flowKey.
+          // Cache the analysis so the Markov stage (below) can pick it
+          // up, and so the user can export the keystroke-timing trace
+          // and re-pick a different flow without losing the prior
+          // flow's data. Keyed by flowKey.
           if (delays && delays.length > 0 && flow && flow.flowKey) {
             sshLastAnalysisByFlowKey.set(flow.flowKey, {
               flow,
@@ -1620,9 +1700,7 @@ function createCryptPanel({
               backspaceHints,
               paddingDetection: paddingResult,
               analyzedAt: new Date().toISOString(),
-              markovCandidates: null, // populated by the background beam search below
             });
-            markStage("decoding", "done", `${finalCandidates?.length || 0} candidates`);
           }
           // Kick off the Markov beam search in the background. We're
           // not awaiting it because the user's analysis result is
@@ -1632,7 +1710,7 @@ function createCryptPanel({
             // Mark the markov stage as running up front so the user
             // sees the chain is in flight, not silently failing.
             markStage("markov", "running", "loading model…");
-            ensureShellMarkovReady().then((model) => {
+            ensureShellMarkovReady().then(async (model) => {
               if (!model) {
                 markStage("markov", "error", "model unavailable");
                 return;
@@ -1640,9 +1718,49 @@ function createCryptPanel({
               markStage("markov", "running", "generating…");
               const cached = sshLastAnalysisByFlowKey.get(flow.flowKey);
               if (!cached) return;
-              const targetLen = Number.isFinite(cached.estimatedCommandLength)
+              // The cache stores the RAW delays (needed for the
+              // markov export's "rawDelays" field). But the beam
+              // search and the chunk splitter should both see the
+              // PEELED stream — otherwise an obfuscated session
+              // (median delay ~11ms) makes the ranker fit timing
+              // to filler packets and the chunk splitter sees
+              // hundreds of "keystrokes" per "command". Pull the
+              // peeled delays out of the padding-detection cache
+              // when present, and use them as the primary input.
+              const pad = cached.paddingDetection;
+              const peeledDelays = (pad && Array.isArray(pad.keystrokeDelaysMs))
+                ? pad.keystrokeDelaysMs
+                : null;
+              const delaysForMarkov = (peeledDelays && peeledDelays.length > 0)
+                ? peeledDelays
+                : (cached.delaysWithIdx || []).map((d) => Number(d.delay)).filter(Number.isFinite);
+              // The estimated command length is computed from the
+              // RAW delay stream by findReturnChunks() — but with a
+              // heavily obfuscated session the chunk splitter sees
+              // filler as keystrokes and reports "1 keystroke per
+              // Return" which makes the beam target 1-char strings.
+              // Recompute the command length on the peeled stream
+              // for the beam target. Fall back to the cached value
+              // when peeling didn't run.
+              let targetLen = Number.isFinite(cached.estimatedCommandLength)
                 ? Math.max(1, Math.round(cached.estimatedCommandLength))
                 : null;
+              if (peeledDelays && peeledDelays.length > 1) {
+                const rebuilt = buildIndexedDelaysFromPeeled(peeledDelays);
+                const chunks = (typeof findReturnChunks === "function")
+                  ? findReturnChunks(rebuilt)
+                  : [];
+                if (chunks.length > 0) {
+                  // Use the median chunk length as the beam
+                  // target — this is the typical-command shape the
+                  // auto-tuner is also trying to recover. Falls
+                  // back to the last chunk (most recent command).
+                  const lengths = chunks.map((c) => c.keystrokeCount).sort((a, b) => a - b);
+                  const medianChunk = lengths[Math.floor(lengths.length / 2)];
+                  targetLen = Math.max(3, medianChunk || 1);
+                }
+              }
+              if (!targetLen) targetLen = 8;
               // Merge ciphertext-aware signals into the prior the
               // ranker sees. The JSON export we now produce carries
               // per-packet fields (ciphertextLength, seq) and the
@@ -1650,54 +1768,66 @@ function createCryptPanel({
               // those signals from the cached analysis and feed
               // them into the rerank so the chain's top-1 lines up
               // with the user's actual typing rhythm.
-              const delaysMs = (cached.delaysWithIdx || [])
-                .map((d) => Number(d.delay))
-                .filter(Number.isFinite);
-              // Build a structured "features" object that ranks
-              // candidates by how plausible they are given the
-              // observed ciphertext-length distribution around the
-              // entered keystrokes. We don't change the model's
-              // score here — chain.generateBeam() is still the
-              // corpus-trained prior — we only re-rank at the end.
               const packetLengths = (cached.delaysWithIdx || [])
                 .map((d) => Number(d.packetLength))
                 .filter((n) => Number.isFinite(n));
-              const beam = model.generateBeam(targetLen, 3, 300, 30, 30);
-              // Re-rank with timing for the top-N (≤30) using delays,
-              // so candidates that match the user's typing rhythm
-              // bubble up. This is what the python
+              const beam = model.generateBeam(targetLen, 3, 100, 30, 30);
+              // Re-rank with timing for the top-N (≤30) using the
+              // peeled delays so candidates that match the user's
+              // typing rhythm bubble up. This is what the python
               // `--timing-json` flag did.
               const reranked = model.rank(
                 beam.map(([, t]) => t),
-                delaysMs,
+                delaysForMarkov,
                 0.22,
               ).slice(0, 30);
 
-              // Per-Return chunk: for each command-shaped chunk the
-              // return-key detector found, run its own length-targeted
-              // beam and re-rank with that chunk's local delays. The
-              // results land in ``markovChunks`` (one entry per chunk)
-              // so the export + typewriter pane can show "what command
-              // per Return" instead of only one big guess.
+              // Per-Return chunk: split the PEELED stream into
+              // Return-shaped chunks and run one beam per chunk.
+              // Using peeled delays here is the difference between
+              // "9 chunks × 8 keystrokes" (a usable guess) and
+              // "hundreds of chunks × 1 keystroke" (gibberish).
+              const chunkSourceDelays = peeledDelays || delaysForMarkov;
+              const rebuiltIndexed = buildIndexedDelaysFromPeeled(chunkSourceDelays);
               const chunkList = (typeof findReturnChunks === "function")
-                ? findReturnChunks(cached.delaysWithIdx || [])
+                ? findReturnChunks(rebuiltIndexed)
                 : [];
-              const markovChunks = chunkList.map((ch) => {
-                const segDelays = (cached.delaysWithIdx || [])
+              // Process the per-Return chunks one at a time so we can
+              // surface a live "N/M chunks" counter in the markov stage
+              // note (letting the user estimate completion), and yield to
+              // the UI between chunks so the count actually paints.
+              const totalMarkovChunks = chunkList.length;
+              const markovChunks = [];
+              for (let ci = 0; ci < totalMarkovChunks; ci += 1) {
+                const ch = chunkList[ci];
+                markStage(
+                  "markov",
+                  "running",
+                  `generating… ${ci + 1}/${totalMarkovChunks} chunk(s)`,
+                );
+                const segDelays = rebuiltIndexed
                   .slice(ch.startIdx, ch.endIdx + 1)
                   .map((d) => Number(d.delay))
                   .filter(Number.isFinite);
-                const segBeam = model.generateBeam(ch.keystrokeCount, 2, 200, Math.max(40, ch.keystrokeCount + 10), 8);
+                const segBeam = model.generateBeam(
+                  Math.max(3, ch.keystrokeCount),
+                  2,
+                  50,  // reduced from 200
+                  Math.max(20, ch.keystrokeCount + 5),  // reduced from Math.max(40, ch.keystrokeCount + 10)
+                  8,
+                );
                 const segRanked = model
                   .rank(segBeam.map(([, t]) => t), segDelays, 0.22)
                   .slice(0, 3);
-                return {
+                markovChunks.push({
                   keystrokeCount: ch.keystrokeCount,
                   startIdx: ch.startIdx,
                   endIdx: ch.endIdx,
                   top: segRanked.map(([score, text]) => ({ score, text })),
-                };
-              });
+                });
+                // Yield so the stage-note repaint is visible mid-run.
+                await yieldToUi();
+              }
 
               sshLastAnalysisByFlowKey.set(flow.flowKey, {
                 ...cached,
@@ -1707,7 +1837,8 @@ function createCryptPanel({
                 // includes the same context the UI shows.
                 markovFeatures: {
                   targetLen,
-                  delayCount: delaysMs.length,
+                  delayCount: delaysForMarkov.length,
+                  peeledDelayCount: peeledDelays ? peeledDelays.length : null,
                   packetLengthMean: packetLengths.length
                     ? packetLengths.reduce((s, n) => s + n, 0) / packetLengths.length
                     : null,
@@ -1741,6 +1872,23 @@ function createCryptPanel({
                   "score:",
                   reranked[0] && reranked[0][0],
                 );
+              } catch (_e) { /* ignore */ }
+              // Surface the peeled-stream command length in the
+              // summary so the user can see whether peeling
+              // succeeded. With heavy obfuscation this number can
+              // be wildly different from the raw-stream estimate
+              // the analyzer pane shows.
+              try {
+                if (peeledDelays && peeledDelays.length > 1) {
+                  const chunkStats = computeChunkShapeStats(delaysForMarkov);
+                  console.log(
+                    "[Crypt/OpenSSH] markov: peeled chunks=",
+                    chunkStats.chunkCount,
+                    "median keystrokes=",
+                    chunkStats.median,
+                    "targetLen=", targetLen,
+                  );
+                }
               } catch (_e) { /* ignore */ }
               markStage(
                 "markov",
@@ -1937,11 +2085,32 @@ function createCryptPanel({
     else lines.push("Top candidate: (none)");
     const body = lines.join("\n");
 
-    // Type the body in. Use a small per-char delay (~6 ms) for a
-    // snappy typewriter effect. New analyses will overwrite while a
-    // previous one is still typing — clearSshOutputPanels() (called
-    // by Analyze) wipes the element so this call always starts
-    // from scratch.
+    // Diagnostic: surface the data shape that reached the renderer
+    // so we can verify the body construction when the user reports
+    // "no markov data on screen". Safe to keep on; it's a single
+    // console.log per Analyze click.
+    try {
+      console.log(
+        "[Crypt/OpenSSH] renderSshPrimaryFromMarkov:",
+        "chunks=", chunks && chunks.length,
+        "chunk0.top[0]=", chunks && chunks[0] && chunks[0].top && chunks[0].top[0],
+        "reranked[0]=", reranked && reranked[0],
+        "top=", JSON.stringify(top),
+        "body=", JSON.stringify(body),
+      );
+    } catch (_e) { /* ignore */ }
+
+    // Write the body IMMEDIATELY so the user sees the markov top-1
+    // the moment the chain finishes (no race with the typewriter).
+    // The typewriter below is purely cosmetic — it replaces the
+    // already-visible content character-by-character for the
+    // "snappy" effect, but the synchronous write guarantees the
+    // final state is on screen before any subsequent code runs.
+    if (textEl) textEl.textContent = body;
+    // Type the body in as a visual flourish. New analyses will
+    // overwrite while a previous one is still typing —
+    // clearSshOutputPanels() (called by Analyze) wipes the element
+    // so this call always starts from scratch.
     if (body) void typewriteIntoEl(textEl, body, { charMs: 6 });
 
     if (confEl) {
@@ -2479,6 +2648,43 @@ Instructions:
         "first300=",
         text.slice(0, 300),
       );
+      // When the model emitted thinking-only output, attempt to extract
+      // session commands from the raw text as a fallback. The LLM may
+      // have produced useful command interpretations during its thinking
+      // process even though it didn't emit a structured JSON response.
+      let sessionCommands = [];
+      if (thinkingOnly) {
+        // Try to find sessionCommands-like entries in the raw thinking text.
+        // The thinking output may contain command references; extract any
+        // quoted command strings that look like shell commands.
+        const cmdMatches = text.match(/["']([^"']{3,64})["']/g);
+        if (Array.isArray(cmdMatches) && cmdMatches.length > 0) {
+          sessionCommands = cmdMatches.map((m) => m.replace(/["']/g, "")).slice(0, 32);
+        }
+      }
+      // If we extracted any session commands, synthesize a primary result
+      // from the highest-confidence one so the UI still shows something
+      // useful rather than "LLM returned no usable result".
+      if (sessionCommands.length > 0) {
+        const bestCmd = sessionCommands
+          .slice()
+          .sort((a, b) => (b.length - a.length))[0]; // simple heuristic: longer = more specific
+        const cleaned = sanitizeTextForAlphabetShared(bestCmd).trim();
+        const confidence = 0.3; // low confidence for thinking-only fallback
+        const kind = "command";
+        const rationale = "Recovered from LLM thinking output (no structured JSON)";
+        const sessionActivity = "LLM thinking session";
+        // Build a primary result object that the UI can render
+        const primaryResult = {
+          text: cleaned || "",
+          confidence: confidence,
+          kind: kind,
+          rationale: rationale,
+          sessionActivity: sessionActivity,
+          sessionCommands: sessionCommands.map((c) => ({ command: c, commandConfidence: confidence })),
+        };
+        return { primary: primaryResult, rankedCandidates: [] };
+      }
       return null;
     }
     let cleaned = sanitizeTextForAlphabetShared(String(obj.text || "")).trim();
@@ -2821,13 +3027,123 @@ Instructions:
     }
   }
 
+  function stripLlmCodeFences(text) {
+    if (!text || typeof text !== "string") return "";
+    let cleaned = String(text);
+    // Strip a leading markdown fence (``` or ```json) followed by
+    // any whitespace (including \r\n). The previous pattern required
+    // a literal \n after the fence; some LLM outputs use \r\n or no
+    // newline at all between the fence and the JSON. We tolerate all
+    // three.
+    cleaned = cleaned.replace(/^\s*```(?:json|JSON)?\s*\r?\n?/, "");
+    // Strip a trailing fence: newline + ``` + optional whitespace.
+    // Some LLM outputs trim the closing \n, so we also accept ``` at
+    // end-of-string.
+    cleaned = cleaned.replace(/\r?\n```\s*$/, "");
+    cleaned = cleaned.replace(/```\s*$/, "");
+    return cleaned.trim();
+  }
+
+  // Strip raw control characters (LF, CR, TAB) that the LLM emitted
+  // inside JSON string literals instead of the JSON-escaped
+  // sequences. JSON.parse refuses raw newlines inside strings, so a
+  // truncated rationale containing a literal newline kills the parse.
+  // We walk character-by-character, tracking whether we're inside a
+  // string literal (handling escapes), and replace raw control bytes
+  // with a single space inside strings. Outside strings, we leave the
+  // text alone — JSON whitespace outside string values is fine.
+  //
+  // LF specifically is treated as a string terminator: the LLM was
+  // probably trying to end the string there but emitted a literal
+  // newline. CRLF together is replaced with a single space (we keep
+  // the string alive across the line break).
+  function repairLlmJsonStrings(text) {
+    if (!text || typeof text !== "string") return text;
+    let out = "";
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escape) {
+        out += ch;
+        escape = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === "\\") {
+          out += ch;
+          escape = true;
+          continue;
+        }
+        if (ch === '"') {
+          out += ch;
+          inString = false;
+          continue;
+        }
+        // CRLF: replace with a single space but keep the string open.
+        if (ch === "\r" && text[i + 1] === "\n") {
+          out += " ";
+          i += 1;
+          continue;
+        }
+        // LF alone: close the string and drop the newline. The LLM
+        // likely intended the LF as a string terminator.
+        if (ch === "\n") {
+          if (inString) {
+            out += '"';
+            inString = false;
+          }
+          continue;
+        }
+        // Other control characters: replace with space.
+        const code = ch.charCodeAt(0);
+        if (ch === "\r" || ch === "\t" || code < 0x20) {
+          out += " ";
+          continue;
+        }
+        out += ch;
+        continue;
+      }
+      // Outside a string: track state and copy.
+      if (ch === '"') {
+        inString = true;
+        out += ch;
+        continue;
+      }
+      out += ch;
+    }
+    // Close any string still open at EOF.
+    if (inString) out += '"';
+    return out;
+  }
+
+  // If the LLM response is truncated mid-object, close any open
+  // braces so JSON.parse can finish. Tracks string state to avoid
+  // miscounting braces inside string values.
+  function closeOpenJsonBraces(text) {
+    if (!text || typeof text !== "string") return text;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (inString) {
+        if (ch === "\\") { escape = true; continue; }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+    }
+    return depth > 0 ? text + "}".repeat(depth) : text;
+  }
+
   function parseLlmJsonObject(text) {
     if (!text || typeof text !== "string") return null;
     // Strip markdown code fences the LLM often wraps JSON in.
-    let cleaned = text
-      .replace(/^\s*```(?:json)?\s*\n/i, "")
-      .replace(/\n```\s*$/, "")
-      .trim();
+    let cleaned = stripLlmCodeFences(text);
     try {
       return JSON.parse(cleaned);
     } catch (_e) { /* fall through */ }
@@ -2835,6 +3151,20 @@ Instructions:
     try {
       return JSON.parse(text);
     } catch (_e) { /* fall through to regex */ }
+    // LLMs sometimes emit raw newlines / tabs inside JSON string
+    // values instead of the JSON-escaped sequences (`\n`, `\t`).
+    // That's invalid JSON per the spec. Strip those control characters
+    // so the parser can finish the string and produce a usable
+    // object. Without this, the user's reported 4405-char responses
+    // with truncated rationales fail to parse with "Bad control
+    // character in string literal".
+    const cleaned2 = repairLlmJsonStrings(cleaned);
+    // If the LLM response was truncated mid-object (e.g. token-limit
+    // cut), close any unclosed braces so JSON.parse can finish.
+    const cleaned3 = closeOpenJsonBraces(cleaned2);
+    try {
+      return JSON.parse(cleaned3);
+    } catch (_e) { /* fall through */ }
     // Extract the first balanced JSON object from the text. Walk
     // braces to handle nested objects without grabbing trailing
     // prose after a truncated response.
@@ -2849,16 +3179,21 @@ Instructions:
 
   function parseLlmJsonArray(text) {
     if (!text || typeof text !== "string") return null;
-    let cleaned = text
-      .replace(/^\s*```(?:json)?\s*\n/i, "")
-      .replace(/\n```\s*$/, "")
-      .trim();
+    let cleaned = stripLlmCodeFences(text);
     try {
       const parsed = JSON.parse(cleaned);
       if (Array.isArray(parsed)) return parsed;
     } catch (_e) { /* fall through */ }
     try {
       const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_e) { /* fall through */ }
+    // Strip raw control chars inside JSON string values (LLM emits
+    // literal newlines inside strings instead of `\n` sequences).
+    const cleaned2 = repairLlmJsonStrings(cleaned);
+    const cleaned3 = closeOpenJsonBraces(cleaned2);
+    try {
+      const parsed = JSON.parse(cleaned3);
       if (Array.isArray(parsed)) return parsed;
     } catch (_e) { /* fall through */ }
     const m = extractFirstBalancedJson(text);
