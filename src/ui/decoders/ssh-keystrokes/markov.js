@@ -1180,6 +1180,971 @@ function computeDelayStats(delaysMs) {
     };
 }
 
+// ============================================================================
+// Slot Detection and Filling
+// ============================================================================
+//
+// Functions to detect slot patterns in corpus commands and fill them
+// with actual artifacts from the capture.
+
+/**
+ * Detects slots in a corpus command and returns their positions and types.
+ * 
+ * Returns an array of: { 
+ *   type: "filename" | "user_at_host" | "hostname" | "path" | "url" | ...,
+ *   start: number,  // index in original string
+ *   end: number,    // index after last char
+ *   match: string,  // the actual matched text
+ * }
+ */
+function detectSlotsInCommand(cmd) {
+    const slots = [];
+    if (!cmd || typeof cmd !== "string") return slots;
+
+    // We need to find all slot matches without overlapping
+    // Sort patterns by match length (longer first) to prefer more specific matches
+    const allMatches = [];
+
+    for (const sp of SLOT_PATTERNS) {
+        const pattern = sp.pattern;
+        pattern.lastIndex = 0;
+
+        let match;
+        while ((match = pattern.exec(cmd)) !== null) {
+            allMatches.push({
+                type: sp.type,
+                start: match.index,
+                end: match.index + match[0].length,
+                match: match[0],
+                length: match[0].length,
+            });
+        }
+    }
+
+    // Sort by start position, then by length descending
+    allMatches.sort((a, b) => {
+        if (a.start !== b.start) return a.start - b.start;
+        return b.length - a.length;
+    });
+
+    // Remove overlaps
+    let lastEnd = -1;
+    for (const m of allMatches) {
+        if (m.start >= lastEnd) {
+            slots.push(m);
+            lastEnd = m.end;
+        }
+    }
+
+    return slots;
+}
+
+/**
+ * Given a corpus command (like "scp file.txt user@server:/path") and
+ * a SessionArtifactStore, generates filled variants by replacing slot
+ * patterns with actual artifacts from the capture.
+ * 
+ * Returns an array of { filledCommand, score, slotsUsed } where score
+ * is based on how well the artifacts match the slot requirements.
+ */
+function fillCommandSlots(cmd, artifactStore, options = {}) {
+    const results = [];
+    if (!artifactStore) return results;
+
+    const slots = detectSlotsInCommand(cmd);
+    if (slots.length === 0) {
+        // No slots to fill - return original with perfect score
+        results.push({
+            filledCommand: cmd,
+            score: 1.0,
+            slotsUsed: [],
+            originalCommand: cmd,
+        });
+        return results;
+    }
+
+    // Map slot type to artifact type and findBestSlotFill slotType
+    const slotTypeMap = {
+        filename: { artifactType: "filename", slotType: "filename" },
+        directory: { artifactType: "filename", slotType: "path" },
+        user_at_host: { artifactType: null, slotType: "user_at_host" },
+        hostname: { artifactType: "hostname", slotType: "hostname" },
+        path: { artifactType: "filename", slotType: "path" },
+        url: { artifactType: "http_url", slotType: "url" },
+        bucket: { artifactType: null, slotType: "url" },
+        s3path: { artifactType: null, slotType: "url" },
+    };
+
+    // Collect potential fills for each slot
+    const slotFills = [];
+
+    for (const slot of slots) {
+        const mapping = slotTypeMap[slot.type] || slotTypeMap.filename;
+        const fillsForSlot = [];
+
+        if (slot.type === "user_at_host") {
+            // Special: user@host combines username + hostname/IP
+            // Try to find best user_at_host slot fill
+            const userHostFill = artifactStore.findBestSlotFill("user_at_host", {
+                targetLength: slot.length,
+            });
+
+            if (userHostFill) {
+                fillsForSlot.push({
+                    slot,
+                    artifact: userHostFill.artifact,
+                    fillText: userHostFill.value,
+                    score: userHostFill.score,
+                });
+            }
+
+            // Also try to construct from separate username + hostname/IP
+            const usernames = artifactStore.getArtifactsByType("username");
+            const hosts = [
+                ...artifactStore.getArtifactsByType("hostname"),
+                ...artifactStore.getArtifactsByType("ip_address"),
+            ];
+
+            for (const u of usernames.slice(0, 3)) {
+                for (const h of hosts.slice(0, 5)) {
+                    const combined = `${u.value}@${h.value}`;
+                    const combinedScore = (u.confidence + h.confidence) / 2;
+                    fillsForSlot.push({
+                        slot,
+                        artifact: { from: [u, h] },
+                        fillText: combined,
+                        score: combinedScore,
+                    });
+                }
+            }
+
+            // If no username, try just IP/hostname as fallback
+            for (const h of hosts.slice(0, 5)) {
+                fillsForSlot.push({
+                    slot,
+                    artifact: h,
+                    fillText: `root@${h.value}`,
+                    score: h.confidence * 0.8,
+                });
+            }
+        } else {
+            // Regular slot type - use findBestSlotFill
+            const bestFill = artifactStore.findBestSlotFill(mapping.slotType, {
+                targetLength: slot.length,
+            });
+
+            if (bestFill) {
+                fillsForSlot.push({
+                    slot,
+                    artifact: bestFill.artifact,
+                    fillText: bestFill.value,
+                    score: bestFill.score,
+                });
+            }
+
+            // Also check similar artifacts
+            const similars = artifactStore.findSimilar(
+                slot.match,
+                mapping.artifactType,
+                0.2
+            );
+
+            for (const sim of similars.slice(0, 5)) {
+                fillsForSlot.push({
+                    slot,
+                    artifact: sim.artifact,
+                    fillText: sim.artifact.value,
+                    score: sim.score,
+                });
+            }
+        }
+
+        // Always include the original match as a fallback
+        fillsForSlot.push({
+            slot,
+            artifact: null,
+            fillText: slot.match,
+            score: 0.1,
+        });
+
+        // Deduplicate by fillText
+        const seen = new Set();
+        const uniqueFills = [];
+        for (const f of fillsForSlot) {
+            const key = `${f.slot.start}:${f.fillText}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueFills.push(f);
+            }
+        }
+        uniqueFills.sort((a, b) => b.score - a.score);
+
+        slotFills.push({
+            slot,
+            fills: uniqueFills.slice(0, 5),
+        });
+    }
+
+    // Generate combinations - simple case: use top fill for each slot
+    const topFills = [];
+    const slotsUsed = [];
+    let combinedScore = 1.0;
+
+    for (const sf of slotFills) {
+        if (sf.fills.length > 0) {
+            const topFill = sf.fills[0];
+            topFills.push(topFill);
+            slotsUsed.push({
+                slotType: sf.slot.type,
+                originalMatch: sf.slot.match,
+                fillText: topFill.fillText,
+                score: topFill.score,
+            });
+            combinedScore *= topFill.score;
+        } else {
+            // No fill - use original
+            topFills.push({
+                slot: sf.slot,
+                fillText: sf.slot.match,
+                score: 0.1,
+            });
+        }
+    }
+
+    // Build the filled command by replacing slots in reverse order
+    let filled = cmd;
+    const sortedFills = [...topFills].sort((a, b) => b.slot.end - a.slot.end);
+
+    for (const fill of sortedFills) {
+        filled = filled.slice(0, fill.slot.start) + fill.fillText + filled.slice(fill.slot.end);
+    }
+
+    results.push({
+        filledCommand: filled,
+        score: combinedScore,
+        slotsUsed,
+        originalCommand: cmd,
+        slotCount: slots.length,
+    });
+
+    return results;
+}
+
+/**
+ * Enhanced rankCorpus variant that also generates slot-filled variants.
+ * Uses artifacts from the session to fill template slots (file.txt → actual_filenames.log, etc.)
+ * 
+ * Returns [[score, command, originalTemplate, slotFillInfo], ...]
+ */
+function rankCorpusWithSlotFilling(model, artifactStore, targetLen = null, tolerance = 3, topn = 30) {
+    if (!model || typeof model.rankCorpus !== "function") {
+        return [];
+    }
+
+    // Get base ranking
+    const baseRanked = model.rankCorpus(targetLen, tolerance, topn * 2);
+    if (baseRanked.length === 0) {
+        return [];
+    }
+
+    const results = [];
+
+    for (const [baseScore, cmd] of baseRanked) {
+        // Add original command
+        results.push({
+            score: baseScore,
+            command: cmd,
+            originalTemplate: cmd,
+            isSlotFilled: false,
+            slotFillInfo: null,
+        });
+
+        // Try to fill slots if we have an artifact store
+        if (artifactStore) {
+            const filledVariants = fillCommandSlots(cmd, artifactStore);
+
+            for (const fv of filledVariants) {
+                if (fv.slotsUsed && fv.slotsUsed.length > 0) {
+                    // Score = base score + slot fill bonus
+                    const fillBonus = fv.score * 2.0;
+
+                    results.push({
+                        score: baseScore + fillBonus,
+                        command: fv.filledCommand,
+                        originalTemplate: cmd,
+                        isSlotFilled: true,
+                        slotFillInfo: fv,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by combined score
+    results.sort((a, b) => b.score - a.score);
+
+    // Return in the same format as rankCorpus for compatibility
+    return results.slice(0, topn).map((r) => [
+        r.score,
+        r.command,
+        r.originalTemplate,
+        { isSlotFilled: r.isSlotFilled, slotFillInfo: r.slotFillInfo },
+    ]);
+}
+
+// ============================================================================
+// SessionArtifactStore: fuzzy matching for IPs, hosts, filenames, domains
+// ============================================================================
+//
+// ssdeep-style Context Triggered Piecewise Hashing (CTPH) for artifact matching.
+// Combines:
+//   1. Traditional CTPH for file/artifact similarity
+//   2. Keyboard distance (QWERTY) for typed-string similarity
+//   3. IP/network-aware matching for CIDR and neighbor IPs
+//
+// Artifact types stored:
+//   - ip_address: IPv4, IPv6
+//   - mac_address: Ethernet addresses
+//   - hostname: From DNS, SSL CN, SSH key comment
+//   - domain: eTLD+1 (example.com, example.co.uk)
+//   - filename: Carved from TCP streams, FTP data
+//   - username: From auth, SSH key comment
+//   - command: Partial/full keystroke reconstructions
+//   - port_artifact: Port number with service metadata
+//   - http_url: URL path/query
+//   - dns_qname: DNS query name
+//   - ssl_cn: SSL certificate common name
+//   - keystroke_fragment: Partial keystream from timing analysis
+// ============================================================================
+//
+
+// Roll hash constants for CTPH (ssdeep-like)
+const ROLL_HASH_WINDOW = 7;
+const ROLL_HASH_MOD = 1 << 16;  // 65536
+const SPAMSUM_LENGTH = 64;
+const SPAMSUM_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// Roll hash (FNV-1a variant for CTPH)
+function _rollHashUpdate(h, c) {
+    return ((h << 5) - h + c) % ROLL_HASH_MOD;
+}
+
+// CTPH - compute fuzzy hash of arbitrary data/string
+// Returns { chunkHash: string, blockSize: number }
+// where chunkHash is "blockSize:hash1:hash2" like ssdeep
+function computeCtphHash(str, minBlockSize = 3) {
+    if (!str || str.length === 0) {
+        return { chunkHash: "0::", blockSize: 0, rawBytes: 0 };
+    }
+
+    // Convert string to bytes
+    const bytes = [];
+    for (let i = 0; i < str.length; i += 1) {
+        bytes.push(str.charCodeAt(i) & 0xFF);
+    }
+
+    // Choose block size based on length (like ssdeep)
+    // blockSize is a power of 2
+    let blockSize = minBlockSize;
+    while (blockSize * SPAMSUM_LENGTH < bytes.length) {
+        blockSize *= 2;
+    }
+
+    function _spamsumWithBlockSize(bs) {
+        let hash1 = "";  // blockSize
+        let hash2 = "";  // blockSize*2
+        let rh = 0;  // roll hash
+        let i = 0;
+
+        // Roll hash window
+        const window = [];
+
+        for (let bi = 0; bi < bytes.length; bi += 1) {
+            const b = bytes[bi];
+            window.push(b);
+            if (window.length > ROLL_HASH_WINDOW) window.shift();
+
+            rh = _rollHashUpdate(rh, b);
+
+            // Trigger point for blockSize
+            if (rh % bs === (bs - 1) && hash1.length < SPAMSUM_LENGTH) {
+                const ch = SPAMSUM_B64[rh & 63];
+                hash1 += ch;
+            }
+
+            // Trigger point for 2*blockSize
+            if (rh % (bs * 2) === (bs * 2 - 1) && hash2.length < SPAMSUM_LENGTH) {
+                const ch = SPAMSUM_B64[rh & 63];
+                hash2 += ch;
+            }
+        }
+
+        // Finalize: always add last partial block
+        if (hash1.length === 0 || bytes.length > 0) {
+            hash1 += SPAMSUM_B64[rh & 63];
+        }
+        if (hash2.length === 0 || bytes.length > 0) {
+            hash2 += SPAMSUM_B64[(rh * 2) & 63];
+        }
+
+        return `${bs}:${hash1}:${hash2}`;
+    }
+
+    return {
+        chunkHash: _spamsumWithBlockSize(blockSize),
+        blockSize,
+        rawBytes: bytes.length,
+        rawString: str,
+    };
+}
+
+// Compare two ssdeep-like hashes
+// Returns score 0.0 - 1.0 where 1.0 = identical
+function compareCtphHashes(hashA, hashB) {
+    if (!hashA || !hashB) return 0.0;
+
+    // Parse "blockSize:hash1:hash2"
+    function parse(h) {
+        if (typeof h === "string") {
+            const parts = h.split(":");
+            if (parts.length >= 3) {
+                return {
+                    blockSize: parseInt(parts[0], 10) || 0,
+                    h1: parts[1],
+                    h2: parts[2],
+                };
+            }
+        } else if (h && h.chunkHash) {
+            return parse(h.chunkHash);
+        }
+        return null;
+    }
+
+    const a = parse(hashA);
+    const b = parse(hashB);
+
+    if (!a || !b || !a.h1 || !b.h1) return 0.0;
+
+    // Block sizes must be within factor of 2
+    if (a.blockSize !== b.blockSize && a.blockSize !== b.blockSize * 2 && b.blockSize !== a.blockSize * 2) {
+        return 0.0;
+    }
+
+    // Simple edit-distance based scoring for the hash strings
+    function scoreEditDistance(s1, s2) {
+        if (s1 === s2) return 1.0;
+        if (!s1 || !s2) return 0.0;
+
+        const len1 = s1.length;
+        const len2 = s2.length;
+        const maxLen = Math.max(len1, len2);
+
+        // Count common substrings of length 4
+        let matches = 0;
+        const windowLen = 4;
+
+        const s2Windows = new Map();
+        for (let i = 0; i <= len2 - windowLen; i += 1) {
+            const w = s2.slice(i, i + windowLen);
+            s2Windows.set(w, (s2Windows.get(w) || 0) + 1);
+        }
+
+        for (let i = 0; i <= len1 - windowLen; i += 1) {
+            const w = s1.slice(i, i + windowLen);
+            const cnt = s2Windows.get(w);
+            if (cnt && cnt > 0) {
+                matches += 1;
+                s2Windows.set(w, cnt - 1);
+            }
+        }
+
+        const maxPossible = Math.max(1, maxLen - windowLen + 1);
+        return Math.min(1.0, matches / maxPossible);
+    }
+
+    // Try all relevant combinations
+    let bestScore = 0.0;
+    bestScore = Math.max(bestScore, scoreEditDistance(a.h1, b.h1));
+    bestScore = Math.max(bestScore, scoreEditDistance(a.h1, b.h2));
+    bestScore = Math.max(bestScore, scoreEditDistance(a.h2, b.h1));
+    bestScore = Math.max(bestScore, scoreEditDistance(a.h2, b.h2));
+
+    return bestScore;
+}
+
+// IP address utilities
+function _parseIp(ipStr) {
+    // IPv4: 192.168.1.1
+    if (ipStr.includes(".")) {
+        const parts = ipStr.split(".").map(Number);
+        if (parts.length === 4 && parts.every(n => n >= 0 && n <= 255)) {
+            const numeric = parts[0] * (256 ** 3) + parts[1] * (256 ** 2) + parts[2] * 256 + parts[3];
+            return { type: "ipv4", numeric, parts, raw: ipStr };
+        }
+    }
+    // IPv6: simplified (we just do string comparison for now)
+    if (ipStr.includes(":")) {
+        return { type: "ipv6", raw: ipStr, numeric: 0 };
+    }
+    return null;
+}
+
+// Score similarity between two IP addresses
+// Returns 0.0-1.0, where 1.0 = same IP
+function scoreIpSimilarity(ipA, ipB) {
+    if (ipA === ipB) return 1.0;
+
+    const a = _parseIp(ipA);
+    const b = _parseIp(ipB);
+
+    if (!a || !b || a.type !== b.type) return 0.0;
+
+    if (a.type === "ipv4") {
+        const diff = Math.abs(a.numeric - b.numeric);
+
+        // Same /24 subnet
+        if ((a.numeric >> 8) === (b.numeric >> 8)) {
+            return 0.85;
+        }
+        // Same /16 subnet
+        if ((a.numeric >> 16) === (b.numeric >> 16)) {
+            return 0.70;
+        }
+        // Same /8 subnet
+        if ((a.numeric >> 24) === (b.numeric >> 24)) {
+            return 0.50;
+        }
+        // Numerically close (within 255 IPs)
+        if (diff <= 255) {
+            return 0.40;
+        }
+        // Same private class
+        const isPrivateA = (a.numeric >> 24) === 10 ||  // 10/8
+            ((a.numeric >> 16) & 0xFFFF) === 0xC0A8 ||  // 192.168/16
+            ((a.numeric >> 20) & 0xFFF) === 0xAC1;     // 172.16/12
+        const isPrivateB = (b.numeric >> 24) === 10 ||
+            ((b.numeric >> 16) & 0xFFFF) === 0xC0A8 ||
+            ((b.numeric >> 20) & 0xFFF) === 0xAC1;
+        if (isPrivateA === isPrivateB) {
+            return 0.20;
+        }
+    }
+
+    return 0.10;
+}
+
+// Score similarity between two domains/hostnames using:
+// 1. String similarity (CTPH)
+// 2. Domain hierarchy match
+// 3. Keyboard distance (for typos/adjacent-key misobservations)
+function scoreDomainSimilarity(domA, domB) {
+    if (domA === domB) return 1.0;
+    if (!domA || !domB) return 0.0;
+
+    const a = domA.toLowerCase();
+    const b = domB.toLowerCase();
+
+    // Same eTLD+1 (example.com matches sub.example.com)
+    const aParts = a.split(".");
+    const bParts = b.split(".");
+
+    // Check for suffix match
+    if (a.endsWith("." + b) || b.endsWith("." + a)) {
+        return 0.80;
+    }
+
+    // Compute CTPH similarity
+    const hashA = computeCtphHash(a);
+    const hashB = computeCtphHash(b);
+    const ctphScore = compareCtphHashes(hashA, hashB);
+
+    // Compute keyboard-based QWERTY similarity
+    let keyboardScore = 0.0;
+    if (a.length === b.length) {
+        // Same length - compute per-char keyboard distance
+        let totalDist = 0;
+        let validPairs = 0;
+        for (let i = 0; i < a.length; i += 1) {
+            const d = keyDistance(a[i], b[i]);
+            if (d < 5) {  // Only count reasonable distances
+                totalDist += d;
+                validPairs += 1;
+            }
+        }
+        if (validPairs === a.length) {
+            const avgDist = totalDist / a.length;
+            keyboardScore = Math.max(0, 1.0 - avgDist * 0.15);
+        }
+    }
+
+    // Combined score
+    return Math.max(ctphScore * 0.8, keyboardScore * 0.9);
+}
+
+// Score similarity between two filenames/paths
+function scoreFilenameSimilarity(fnA, fnB) {
+    if (fnA === fnB) return 1.0;
+    if (!fnA || !fnB) return 0.0;
+
+    // Same basename
+    const aName = fnA.split(/[/\\]/).pop();
+    const bName = fnB.split(/[/\\]/).pop();
+
+    if (aName === bName) {
+        return 0.90;
+    }
+
+    // Same extension
+    const aExt = aName.includes(".") ? aName.slice(aName.lastIndexOf(".")) : "";
+    const bExt = bName.includes(".") ? bName.slice(bName.lastIndexOf(".")) : "";
+    let extBonus = 0.0;
+    if (aExt && bExt && aExt === bExt) {
+        extBonus = 0.20;
+    }
+
+    // CTPH for overall similarity
+    const hashA = computeCtphHash(fnA);
+    const hashB = computeCtphHash(fnB);
+    const ctphScore = compareCtphHashes(hashA, hashB);
+
+    return Math.min(1.0, ctphScore * 0.85 + extBonus);
+}
+
+// ============================================================================
+// SessionArtifactStore: Central registry for all artifacts seen in a capture
+// ============================================================================
+//
+
+class SessionArtifactStore {
+    constructor() {
+        // By type: Map<artifactKey, artifactInfo>
+        this.artifacts = new Map();
+        // By flowKey: Map<flowKey, artifactKey[]>
+        this.artifactsByFlow = new Map();
+        // Counter for unique IDs
+        this._nextId = 1;
+    }
+
+    // Artifact types:
+    //   ip_address, mac_address, hostname, domain, filename, username,
+    //   command, port_artifact, http_url, dns_qname, ssl_cn,
+    //   keystroke_fragment, slot_candidate
+
+    addArtifact(type, value, options = {}) {
+        const {
+            flowKey = null,
+            source = "unknown",  // "capture", "dns", "ssl", "keystroke", "inference"
+            confidence = 0.5,    // 0-1, how confident we are this is real
+            category = null,     // subtype: "private_ip", "public_ip", "txt_record", etc.
+            timestampMs = null,
+            metadata = {},
+        } = options;
+
+        // Create artifact key
+        const key = `${type}:${value}`;
+
+        let artifact = this.artifacts.get(key);
+
+        if (!artifact) {
+            artifact = {
+                id: this._nextId++,
+                type,
+                value,
+                category,
+                source,
+                firstSeenMs: timestampMs || Date.now(),
+                lastSeenMs: timestampMs || Date.now(),
+                confidence,
+                flowKeys: new Set(),
+                references: 1,
+                ctphHash: null,  // computed on-demand
+                metadata: { ...metadata },
+            };
+            this.artifacts.set(key, artifact);
+        } else {
+            artifact.lastSeenMs = timestampMs || Date.now();
+            artifact.references += 1;
+            artifact.confidence = Math.max(artifact.confidence, confidence);
+            if (source !== "unknown") {
+                artifact.metadata.sources = artifact.metadata.sources || [];
+                if (!artifact.metadata.sources.includes(source)) {
+                    artifact.metadata.sources.push(source);
+                }
+            }
+        }
+
+        if (flowKey) {
+            artifact.flowKeys.add(flowKey);
+            if (!this.artifactsByFlow.has(flowKey)) {
+                this.artifactsByFlow.set(flowKey, []);
+            }
+            const flowArtifacts = this.artifactsByFlow.get(flowKey);
+            if (!flowArtifacts.includes(key)) {
+                flowArtifacts.push(key);
+            }
+        }
+
+        return artifact;
+    }
+
+    // Convenience methods
+    addIpAddress(ip, options = {}) {
+        const parsed = _parseIp(ip);
+        const category = parsed ? (
+            parsed.type === "ipv4" ? (
+                ((parsed.numeric >> 24) === 10 ||
+                    ((parsed.numeric >> 16) & 0xFFFF) === 0xC0A8 ||
+                    ((parsed.numeric >> 20) & 0xFFF) === 0xAC1)
+                    ? "private_ipv4"
+                    : "public_ipv4"
+            ) : parsed.type
+        ) : null;
+
+        return this.addArtifact("ip_address", ip, { category, ...options });
+    }
+
+    addMacAddress(mac, options = {}) {
+        return this.addArtifact("mac_address", mac.toLowerCase(), options);
+    }
+
+    addHostname(hostname, options = {}) {
+        return this.addArtifact("hostname", hostname.toLowerCase(), options);
+    }
+
+    addDomain(domain, options = {}) {
+        return this.addArtifact("domain", domain.toLowerCase(), options);
+    }
+
+    addFilename(filename, options = {}) {
+        return this.addArtifact("filename", filename, options);
+    }
+
+    addUsername(username, options = {}) {
+        return this.addArtifact("username", username, options);
+    }
+
+    addCommand(command, options = {}) {
+        return this.addArtifact("command", command, options);
+    }
+
+    addKeystrokeFragment(fragment, options = {}) {
+        return this.addArtifact("keystroke_fragment", fragment, {
+            source: "keystroke",
+            ...options,
+        });
+    }
+
+    addSlotCandidate(candidateText, slotType, options = {}) {
+        // Slot candidates are potential fills for Markov template slots
+        return this.addArtifact("slot_candidate", candidateText, {
+            category: slotType,  // "filename", "user_at_host", "hostname", "path", etc.
+            source: "inference",
+            ...options,
+        });
+    }
+
+    // Query methods
+    getArtifactsByType(type) {
+        return Array.from(this.artifacts.values()).filter(a => a.type === type);
+    }
+
+    getArtifactsByFlow(flowKey) {
+        const keys = this.artifactsByFlow.get(flowKey) || [];
+        return keys.map(k => this.artifacts.get(k)).filter(Boolean);
+    }
+
+    getAllArtifacts() {
+        return Array.from(this.artifacts.values());
+    }
+
+    // Lazy CTPH computation
+    _getOrComputeHash(artifact) {
+        if (artifact.ctphHash) return artifact.ctphHash;
+        artifact.ctphHash = computeCtphHash(artifact.value);
+        return artifact.ctphHash;
+    }
+
+    // Find similar artifacts
+    findSimilar(value, type = null, minScore = 0.3) {
+        const results = [];
+
+        for (const artifact of this.artifacts.values()) {
+            if (type && artifact.type !== type) continue;
+
+            let score = 0.0;
+
+            // Exact match
+            if (artifact.value === value) {
+                score = 1.0;
+            }
+            // Type-specific scoring
+            else if (artifact.type === "ip_address" && type === "ip_address") {
+                score = scoreIpSimilarity(artifact.value, value);
+            }
+            else if (artifact.type === "hostname" || artifact.type === "domain") {
+                score = scoreDomainSimilarity(artifact.value, value);
+            }
+            else if (artifact.type === "filename" || type === "filename") {
+                score = scoreFilenameSimilarity(artifact.value, value);
+            }
+            else {
+                // Generic CTPH for everything else
+                const hashA = computeCtphHash(value);
+                const hashB = this._getOrComputeHash(artifact);
+                score = compareCtphHashes(hashA, hashB);
+            }
+
+            if (score >= minScore) {
+                results.push({
+                    artifact,
+                    score,
+                    matchedValue: value,
+                });
+            }
+        }
+
+        results.sort((a, b) => b.score - a.score);
+        return results;
+    }
+
+    // Find best slot fill for a Markov template slot
+    // slotType: "filename", "user_at_host", "hostname", "path", "ip", "url"
+    // constraints: { targetLength: number, prefixHint: string, suffixHint: string }
+    findBestSlotFill(slotType, constraints = {}) {
+        const { targetLength = null, prefixHint = null, suffixHint = null } = constraints;
+
+        // Map slotType to artifact types
+        const typeMap = {
+            filename: ["filename", "slot_candidate"],
+            user_at_host: ["username", "hostname", "ip_address", "slot_candidate"],
+            hostname: ["hostname", "domain", "ip_address", "slot_candidate"],
+            path: ["filename", "slot_candidate"],
+            ip: ["ip_address", "slot_candidate"],
+            url: ["http_url", "domain", "hostname", "slot_candidate"],
+        };
+
+        const artifactTypes = typeMap[slotType] || ["slot_candidate", "hostname", "ip_address"];
+
+        const candidates = [];
+
+        for (const artifact of this.artifacts.values()) {
+            if (!artifactTypes.includes(artifact.type)) continue;
+            if (artifact.type === "slot_candidate" && artifact.category !== slotType) continue;
+
+            let score = artifact.confidence * 0.5;  // Base score from confidence
+
+            // Length match bonus
+            if (targetLength != null) {
+                const lenDiff = Math.abs(artifact.value.length - targetLength);
+                const lenBonus = Math.max(0, 1.0 - lenDiff * 0.1);
+                score += lenBonus * 0.3;
+            }
+
+            // Prefix/suffix hints (from keystroke analysis)
+            if (prefixHint && artifact.value.startsWith(prefixHint)) {
+                score += 0.2;
+            }
+            if (suffixHint && artifact.value.endsWith(suffixHint)) {
+                score += 0.15;
+            }
+
+            // Keyboard distance to hints if available
+            if (prefixHint && prefixHint.length > 2 && artifact.value.length >= prefixHint.length) {
+                const artifactPrefix = artifact.value.slice(0, prefixHint.length);
+                let prefixDist = 0;
+                for (let i = 0; i < prefixHint.length; i += 1) {
+                    prefixDist += keyDistance(prefixHint[i], artifactPrefix[i]);
+                }
+                const avgDist = prefixDist / prefixHint.length;
+                if (avgDist < 2.0) {
+                    score += 0.15;
+                }
+            }
+
+            candidates.push({
+                artifact,
+                score,
+                value: artifact.value,
+                type: artifact.type,
+            });
+        }
+
+        // If no artifacts found, return empty
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0];
+    }
+
+    // Export/Import for persistence
+    toDict() {
+        const artifacts = [];
+        for (const [key, a] of this.artifacts) {
+            artifacts.push({
+                id: a.id,
+                type: a.type,
+                value: a.value,
+                category: a.category,
+                source: a.source,
+                firstSeenMs: a.firstSeenMs,
+                lastSeenMs: a.lastSeenMs,
+                confidence: a.confidence,
+                references: a.references,
+                flowKeys: Array.from(a.flowKeys),
+                metadata: a.metadata,
+            });
+        }
+        return {
+            nextId: this._nextId,
+            artifacts,
+            artifactsByFlow: Object.fromEntries(
+                Array.from(this.artifactsByFlow.entries()).map(([k, v]) => [k, v])
+            ),
+        };
+    }
+
+    static fromDict(d) {
+        const store = new SessionArtifactStore();
+        store._nextId = d.nextId || 1;
+
+        if (d.artifacts) {
+            for (const a of d.artifacts) {
+                const key = `${a.type}:${a.value}`;
+                store.artifacts.set(key, {
+                    ...a,
+                    flowKeys: new Set(a.flowKeys || []),
+                    ctphHash: null,
+                });
+            }
+        }
+
+        if (d.artifactsByFlow) {
+            for (const [k, v] of Object.entries(d.artifactsByFlow)) {
+                store.artifactsByFlow.set(k, v);
+            }
+        }
+
+        return store;
+    }
+}
+
+// Global singleton instance for the current capture
+let _globalArtifactStore = null;
+
+function getSessionArtifactStore() {
+    if (!_globalArtifactStore) {
+        _globalArtifactStore = new SessionArtifactStore();
+    }
+    return _globalArtifactStore;
+}
+
+function resetSessionArtifactStore() {
+    _globalArtifactStore = new SessionArtifactStore();
+    return _globalArtifactStore;
+}
+
 module.exports = {
     ShellMarkov,
     cleanLines,
@@ -1196,4 +2161,19 @@ module.exports = {
     computeLineConfidence,
     computeSessionConfidence,
     computeDelayStats,
+    // Session artifact store for fuzzy matching
+    SessionArtifactStore,
+    getSessionArtifactStore,
+    resetSessionArtifactStore,
+    // CTPH / ssdeep-like hashing
+    computeCtphHash,
+    compareCtphHashes,
+    // Type-specific similarity scoring
+    scoreIpSimilarity,
+    scoreDomainSimilarity,
+    scoreFilenameSimilarity,
+    // Slot detection and filling
+    detectSlotsInCommand,
+    fillCommandSlots,
+    rankCorpusWithSlotFilling,
 };
