@@ -1802,13 +1802,18 @@ function createCryptPanel({
               const packetLengths = (cached.delaysWithIdx || [])
                 .map((d) => Number(d.packetLength))
                 .filter((n) => Number.isFinite(n));
-              const beam = model.generateBeam(targetLen, 3, 100, 30, 30);
-              // Re-rank with timing for the top-N (≤30) using the
+
+              // Use rankCorpus instead of generateBeam:
+              // - Returns actual corpus lines, not generated garbage
+              // - Already sorted by frequency + Markov probability
+              // - Length-aware filtering with slot flexibility
+              const beam = model.rankCorpus(targetLen, 5, 100);
+
+              // Re-rank with timing for the top-N using the
               // peeled delays so candidates that match the user's
-              // typing rhythm bubble up. This is what the python
-              // `--timing-json` flag did.
-              const reranked = model.rank(
-                beam.map(([, t]) => t),
+              // typing rhythm bubble up.
+              const reranked = model.rankWithTiming(
+                beam,
                 delaysForMarkov,
                 0.22,
               ).slice(0, 30);
@@ -1840,15 +1845,15 @@ function createCryptPanel({
                   .slice(ch.startIdx, ch.endIdx + 1)
                   .map((d) => Number(d.delay))
                   .filter(Number.isFinite);
-                const segBeam = model.generateBeam(
+
+                // Use rankCorpus for per-chunk candidates too
+                const segBeam = model.rankCorpus(
                   Math.max(3, ch.keystrokeCount),
-                  2,
-                  50,  // reduced from 200
-                  Math.max(20, ch.keystrokeCount + 5),  // reduced from Math.max(40, ch.keystrokeCount + 10)
-                  8,
+                  3,  // tolerance
+                  20,  // top N
                 );
                 const segRanked = model
-                  .rank(segBeam.map(([, t]) => t), segDelays, 0.22)
+                  .rankWithTiming(segBeam, segDelays, 0.22)
                   .slice(0, 3);
                 markovChunks.push({
                   keystrokeCount: ch.keystrokeCount,
