@@ -178,14 +178,27 @@ class ShellMarkov:
         states=[(0.0, BOS*k, '')]
         finals=[]
         vocab=[c for c in self.alphabet if c not in (BOS,)]
+        # Track recent sequences to detect and break repeating patterns
+        recent_sequences = set()
+        repeat_threshold = 3  # Number of times a sequence can repeat before we break it
+        
         for _ in range(max_len+1):
             nxt=[]
             for score,ctx,text in states:
+                # Check for repeating patterns and skip if we've seen this sequence too many times
+                if len(text) >= 6 and text[-6:] in recent_sequences:
+                    continue
+                
                 cands=self.counts.get(ctx)
                 if not cands:
                     continue
                 # Limit branching to observed next chars, strongest first.
                 for ch,_ in cands.most_common(24):
+                    # Skip if this would create a repeating pattern
+                    new_text = text + ch
+                    if len(new_text) >= 6 and new_text[-3:] == new_text[-6:-3] and new_text[-6:] in recent_sequences:
+                        continue
+                    
                     ns=score+self.trans_logp(ctx,ch)
                     if ch==EOS:
                         L=len(text)
@@ -198,6 +211,25 @@ class ShellMarkov:
                         continue
                     nt=text+ch
                     nctx=(ctx+ch)[-k:]
+                    
+                    # Track recent sequences to detect repeating patterns
+                    if len(nt) >= 6:
+                        recent_sequences.add(nt[-6:])
+                    nxt.append((ns, nctx, nt))
+            
+            # Keep only the top beam states
+            states = sorted(nxt, key=lambda x: x[0], reverse=True)[:beam]
+        
+        # Return top unique results
+        seen = set()
+        unique_results = []
+        for score, text in sorted(finals, reverse=True):
+            if text not in seen:
+                seen.add(text)
+                unique_results.append((score, text))
+                if len(unique_results) >= topn:
+                    break
+        return unique_results
                     nxt.append((ns,nctx,nt))
             nxt.sort(reverse=True,key=lambda x:x[0]/max(1,len(x[2])))
             states=nxt[:beam]

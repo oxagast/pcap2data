@@ -1406,7 +1406,7 @@ describe("buildShellCommandPriors", () => {
         expect(priors.verbs.ls.count).toBe(1);
     });
 
-    test("handles a realistic shell-history dump (parses the actual src/data/shell_corpus.txt)", () => {
+    test("handles a realistic shell-history dump (parses the actual src/data/shell_corpus_sorted.txt)", () => {
         const fs = require("fs");
         const path = require("path");
         const filePath = path.join(__dirname, "..", "src", "data", "shell_corpus.txt");
@@ -1585,7 +1585,7 @@ describe("buildShellCommandPriors — redaction handling", () => {
         expect(priors.totalCommands).toBeGreaterThanOrEqual(1);
     });
 
-    test("parser handles the actual scrubbed src/data/shell_corpus.txt corpus", () => {
+    test("parser handles the actual scrubbed src/data/shell_corpus_sorted.txt corpus", () => {
         const fs = require("fs");
         const path = require("path");
         const filePath = path.join(__dirname, "..", "src", "data", "shell_corpus.txt");

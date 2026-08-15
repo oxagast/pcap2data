@@ -2331,15 +2331,15 @@ function resolveMarkovCorpusPath(fsys, pathMod) {
   const candidates = [
     // Packaged install: extraResource path
     process.resourcesPath
-      ? pathImpl.join(process.resourcesPath, "data", "shell_corpus.txt")
+      ? pathImpl.join(process.resourcesPath, "data", "shell_corpus_sorted.txt")
       : null,
     // Dev bundle (electron-forge): main.js lives at
     // .webpack/main/index.js when running `npm start`. The
-    // corpus ships under src/data/shell_corpus.txt in the source
+    // corpus ships under src/data/shell_corpus_sorted.txt in the source
     // tree, so try a couple of upward walks.
-    pathImpl.join(__dirname, "..", "..", "src", "data", "shell_corpus.txt"),
-    pathImpl.join(__dirname, "..", "data", "shell_corpus.txt"),
-    pathImpl.join(__dirname, "data", "shell_corpus.txt"),
+    pathImpl.join(__dirname, "..", "..", "src", "data", "shell_corpus_sorted.txt"),
+    pathImpl.join(__dirname, "..", "data", "shell_corpus_sorted.txt"),
+    pathImpl.join(__dirname, "data", "shell_corpus_sorted.txt"),
   ].filter(Boolean);
   for (const p of candidates) {
     try {

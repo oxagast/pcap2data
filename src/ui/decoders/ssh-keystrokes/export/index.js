@@ -562,7 +562,7 @@ function buildSshTimingAnalysisBrief(state, opts) {
 
     // ── Shell command priors (seed corpus) ───────────────────────────
     // Optional — only emitted when the caller precomputed `shellPriors`
-    // (e.g. from src/data/shell_corpus.txt). The priors tell the LLM which
+    // (e.g. from src/data/shell_corpus_sorted.txt). The priors tell the LLM which
     // commands and argument shapes the user *actually* runs, so it
     // can boost decoder candidates whose shape matches real prior
     // commands. Without this the model only knows generic shell
