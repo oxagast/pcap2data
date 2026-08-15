@@ -9,6 +9,201 @@
 const BOS = "\u0002";
 const EOS = "\u0003";
 
+// Slot marker: used to identify variable-length argument positions in templates.
+// When a command template has a slot, arguments matching that position can
+// be 1-64 chars without incurring a strict total-length mismatch penalty.
+const SLOT_MARKER = "\u25c6";  // ◆ - diamond marker for slots
+
+// Slot patterns: these define common placeholder patterns in the corpus.
+// During scoring, if a candidate matches the "skeleton" of a corpus command
+// but has different content in a slot position, it doesn't get penalized
+// for total-length mismatch (only the character transitions matter).
+const SLOT_PATTERNS = [
+    // Filename-like placeholders
+    { pattern: /\bfile\.(txt|log|conf|py|js|json|md|sh|bak)\b/gi, type: "filename" },
+    { pattern: /\b(file|filename|target|link|backup)\b/gi, type: "filename", wordOnly: true },
+    // Directory placeholders  
+    { pattern: /\b(directory|dir|src|build|logs|tmp)\b/gi, type: "directory", wordOnly: true },
+    // User@host placeholders
+    { pattern: /\b(user|root)@(server|host)\b/gi, type: "user_at_host" },
+    { pattern: /\b(user|root)@[\d\.]+/gi, type: "user_at_host" },  // user@192.168.1.1
+    // Hostname/IP placeholders
+    { pattern: /\b(server|host|localhost)\b/gi, type: "hostname", wordOnly: true },
+    { pattern: /\bexample\.com\b/gi, type: "hostname" },
+    // Path placeholders
+    { pattern: /~\/\.ssh\/[^ \t]+/gi, type: "path" },  // ~/.ssh/id_rsa
+    { pattern: /\/(var|tmp|etc|usr|opt|root|home)\//gi, type: "path" },
+    // URL placeholders
+    { pattern: /https?:\/\/[^\s]+/gi, type: "url" },
+    // Bucket/resource placeholders (AWS/S3)
+    { pattern: /\bbucket\b/gi, type: "bucket", wordOnly: true },
+    { pattern: /s3:\/\/[^\s]+/gi, type: "s3path" },
+];
+
+// Fixed structure tokens: these are part of the command "skeleton" that should match.
+// If these differ between corpus template and candidate, it's a different command.
+const FIXED_STRUCTURE_TOKENS = new Set([
+    // Commands
+    "ls", "cd", "cat", "grep", "find", "tail", "head", "less", "more",
+    "ssh", "scp", "rsync", "wget", "curl",
+    "git", "npm", "node", "python", "python3", "pip",
+    "sudo", "systemctl", "service", "journalctl",
+    "chmod", "chown", "ln", "mkdir", "rm", "cp", "mv", "touch",
+    "ps", "top", "htop", "df", "du", "free", "uname",
+    "which", "whoami", "id", "hostname", "echo", "history",
+    // Common subcommands/flags that are structural
+    "status", "start", "stop", "restart", "enable", "disable",
+    "clone", "push", "pull", "add", "commit", "checkout", "branch", "switch",
+    "diff", "log", "fetch", "stash", "remote",
+    "install", "run", "build", "test", "dev",
+    "-r", "-R", "-rf", "-f", "-v", "-h", "-n", "-m", "-i", "-a", "-av", "-avz",
+    "-p", "-P", "-L", "-R", "-D", "-X", "-d",
+    "--recursive", "--force", "--verbose", "--help",
+    // Special shell syntax
+    "|", ">", ">>", "<", "<<", "&&", "||", ";",
+    ".", "..", "~", "/", "./", "../",
+    // Quotes (content inside varies, but quotes are structure)
+    "'", "\"", "`",
+    // Common path roots
+    "/tmp", "/var", "/etc", "/usr", "/home", "/root", "/opt",
+]);
+
+// Extract a command template from a corpus command by replacing slot patterns
+// with the slot marker. This helps match variable arguments during scoring.
+function extractCommandTemplate(cmd) {
+    let template = cmd;
+    // Apply slot patterns - replace matches with slot marker
+    for (const sp of SLOT_PATTERNS) {
+        if (sp.wordOnly) {
+            // Word-boundary only replacement
+            template = template.replace(sp.pattern, SLOT_MARKER);
+        } else {
+            template = template.replace(sp.pattern, SLOT_MARKER);
+        }
+    }
+    // Collapse multiple adjacent slot markers
+    template = template.replace(new RegExp(`${SLOT_MARKER}+`, "g"), SLOT_MARKER);
+    return template;
+}
+
+// Check if a candidate command matches the "skeleton" of a template command.
+// The skeleton is the fixed structure (commands, flags, operators) - slots
+// can contain variable content.
+function matchesSkeleton(candidate, templateCmd) {
+    // Quick check: tokenize and compare non-slot tokens
+    const candTokens = tokenizeCommand(candidate);
+    const tmplTokens = tokenizeCommand(templateCmd);
+
+    // If they have wildly different token counts, it's not a match
+    if (Math.abs(candTokens.length - tmplTokens.length) > 3) {
+        return false;
+    }
+
+    // Check if the command (first non-flag token) matches
+    const candCmd = candTokens.find(t => !t.startsWith("-") && t.length > 0);
+    const tmplCmd = tmplTokens.find(t => !t.startsWith("-") && t.length > 0 && t !== SLOT_MARKER);
+
+    if (tmplCmd && candCmd !== tmplCmd) {
+        return false;
+    }
+
+    return true;
+}
+
+// Simple command tokenizer that respects quotes
+function tokenizeCommand(cmd) {
+    const tokens = [];
+    let current = "";
+    let inQuote = null;  // null, "'", or '"'
+
+    for (let i = 0; i < cmd.length; i += 1) {
+        const ch = cmd[i];
+
+        if (inQuote) {
+            if (ch === inQuote) {
+                inQuote = null;
+            }
+            current += ch;
+        } else if (ch === "'" || ch === '"') {
+            inQuote = ch;
+            current += ch;
+        } else if (/\s/.test(ch)) {
+            if (current.length > 0) {
+                tokens.push(current);
+                current = "";
+            }
+        } else if (/[|&;<>()]/.test(ch)) {
+            if (current.length > 0) {
+                tokens.push(current);
+                current = "";
+            }
+            // Check for 2-char operators like &&, ||, >>, <<
+            if (i + 1 < cmd.length && /[|&<>]/.test(ch) && cmd[i + 1] === ch) {
+                tokens.push(ch + ch);
+                i += 1;
+            } else {
+                tokens.push(ch);
+            }
+        } else {
+            current += ch;
+        }
+    }
+
+    if (current.length > 0) {
+        tokens.push(current);
+    }
+
+    return tokens;
+}
+
+// Calculate a "structure match score" between candidate and a corpus command.
+// Returns:
+//   - matchScore: 0-1, how well the structure matches
+//   - fixedLength: length of non-slot characters in template
+//   - hasSlots: whether the template has variable slots
+function compareToTemplate(candidate, corpusCmd) {
+    const candLen = candidate.length;
+    const corpusLen = corpusCmd.length;
+
+    // Check structure match
+    const skeletonMatch = matchesSkeleton(candidate, corpusCmd);
+
+    // Check for slot patterns in both
+    let hasSlots = false;
+    for (const sp of SLOT_PATTERNS) {
+        if (sp.pattern.test(corpusCmd)) {
+            hasSlots = true;
+            sp.pattern.lastIndex = 0;  // reset
+            break;
+        }
+    }
+
+    // Calculate expected fixed length (rough estimate)
+    let fixedLength = corpusLen;
+    if (hasSlots) {
+        // Subtract estimated slot lengths from corpus command
+        for (const sp of SLOT_PATTERNS) {
+            const matches = corpusCmd.match(sp.pattern);
+            if (matches) {
+                for (const m of matches) {
+                    fixedLength -= m.length;
+                }
+            }
+            sp.pattern.lastIndex = 0;
+        }
+        // Add back minimum slot content
+        fixedLength += 1;  // at least 1 char per slot
+    }
+
+    return {
+        skeletonMatch,
+        fixedLength,
+        hasSlots,
+        corpusLength: corpusLen,
+        candidateLength: candLen,
+    };
+}
+
 // Mirrors Python _ROWS / SHIFT tables byte-for-byte.
 const _ROWS = [
     ["`1234567890-=", 0.0],
@@ -103,6 +298,69 @@ class ShellMarkov {
         return Math.log((n + this.alpha) / (total + this.alpha * V));
     }
 
+    // Find the best matching corpus template for a candidate command.
+    // Returns { template, matchScore, fixedLength } or null if no good match.
+    _findBestMatchingTemplate(cmd) {
+        // If we have no commandCounts or it's empty, skip template matching
+        const corpusCommands = Object.keys(this.commandCounts);
+        if (!corpusCommands || corpusCommands.length === 0) {
+            return null;
+        }
+
+        const candTokens = tokenizeCommand(cmd);
+        const candCmdToken = candTokens.find(t => !t.startsWith("-") && t.length > 0);
+
+        if (!candCmdToken) return null;
+
+        let bestMatch = null;
+        let bestScore = -Infinity;
+
+        // Search through corpus commands for structure matches
+        for (const corpusCmd of corpusCommands) {
+            const tmplTokens = tokenizeCommand(corpusCmd);
+            const tmplCmdToken = tmplTokens.find(t => !t.startsWith("-") && t.length > 0);
+
+            // Must have same base command
+            if (!tmplCmdToken || tmplCmdToken !== candCmdToken) {
+                continue;
+            }
+
+            // Compare structure
+            const comparison = compareToTemplate(cmd, corpusCmd);
+
+            if (comparison.skeletonMatch) {
+                // Score based on:
+                // 1. Has slots (prefer templates with slots for variable args)
+                // 2. Token count similarity
+                const tokenDiff = Math.abs(candTokens.length - tmplTokens.length);
+                let score = 0;
+
+                if (comparison.hasSlots) {
+                    score += 10;  // Slots are good for variable matching
+                }
+                score -= tokenDiff * 2;  // Penalize token count differences
+
+                // If exact match (no length difference), boost
+                if (cmd === corpusCmd) {
+                    score += 100;
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = {
+                        template: corpusCmd,
+                        hasSlots: comparison.hasSlots,
+                        fixedLength: comparison.fixedLength,
+                        corpusLength: comparison.corpusLength,
+                        tokenMatchScore: score,
+                    };
+                }
+            }
+        }
+
+        return bestMatch;
+    }
+
     commandLogP(cmd, includeLength = true) {
         const k = this.order - 1;
         const seq = BOS.repeat(k) + cmd + EOS;
@@ -114,17 +372,71 @@ class ShellMarkov {
         }
         // length-normalised average, like Python
         lp /= Math.max(1, n);
+
         if (includeLength) {
             let total = 0;
             for (const k2 of Object.keys(this.lengths)) total += this.lengths[k2];
-            const lenKey = String(cmd.length);
-            lp += 0.35 * Math.log(
-                ((this.lengths[lenKey] || 0) + 1) / (total + Object.keys(this.lengths).length),
-            );
+
+            // Check for slot-aware length matching
+            let lenKey = String(cmd.length);
+            let useSlotAware = false;
+            let slotLengthBonus = 0;
+
+            const bestTemplate = this._findBestMatchingTemplate(cmd);
+
+            if (bestTemplate && bestTemplate.hasSlots) {
+                // This candidate matches a template that has slots.
+                // Use a more flexible length calculation:
+                // - The FIXED structure must match roughly
+                // - Slot content can vary (1-64 chars per slot)
+
+                const candLen = cmd.length;
+                const fixedLen = bestTemplate.fixedLength;
+                const corpusLen = bestTemplate.corpusLength;
+
+                // How much "extra" length does the candidate have beyond fixed?
+                // This is assumed to be slot content
+                const slotContentLen = Math.max(0, candLen - fixedLen);
+
+                // Slot content should be reasonable (1-64 chars per typical slot)
+                // We'll allow generous variation: 0-128 chars of slot content
+                if (slotContentLen <= 128 && slotContentLen >= 0) {
+                    useSlotAware = true;
+
+                    // For slot-aware matching:
+                    // 1. Use the corpus command's length as a baseline
+                    // 2. But add a bonus based on slot content reasonableness
+
+                    // Try both the actual length AND the corpus length, take the better one
+                    const corpusLenKey = String(corpusLen);
+                    const actualLenProb = Math.log(
+                        ((this.lengths[lenKey] || 0) + 1) / (total + Object.keys(this.lengths).length),
+                    );
+                    const corpusLenProb = Math.log(
+                        ((this.lengths[corpusLenKey] || 0) + 1) / (total + Object.keys(this.lengths).length),
+                    );
+
+                    // Use whichever length gives a better probability
+                    // Also add a small bonus for slot-aware matching being used
+                    slotLengthBonus = Math.max(actualLenProb, corpusLenProb) + 0.1;
+                }
+            }
+
+            if (useSlotAware) {
+                lp += 0.35 * slotLengthBonus;
+            } else {
+                // Original strict length matching
+                lp += 0.35 * Math.log(
+                    ((this.lengths[lenKey] || 0) + 1) / (total + Object.keys(this.lengths).length),
+                );
+            }
         }
+
+        // Exact match bonus (still valuable even with slots)
         if (this.commandCounts[cmd]) {
             lp += 0.25 * Math.log1p(this.commandCounts[cmd]);
         }
+
         return lp;
     }
 
@@ -174,36 +486,172 @@ class ShellMarkov {
     generateBeam(targetLen = null, tolerance = 3, beam = 500, maxLen = 120, topn = 30) {
         const k = this.order - 1;
         const vocabLen = Object.keys(this.vocab).length;
-        // initial states
-        let states = [[0.0, BOS.repeat(k), ""]];
+
+        // Calculate a typical bad transition log-prob for fallback scoring
+        // With alpha=0.05, unseen transitions get ~log(0.05 / (total + 0.05*V))
+        // We want fallback to be significantly WORSE than any real transition
+        const FALLBACK_LOG_P = Math.log(this.alpha / (1000 + this.alpha * vocabLen));  // ~-15 or worse
+
+        // initial states: [score, ctx, text, visitedContextsSet]
+        // visitedContextsSet tracks which (context + position_in_text) we've seen
+        // to prevent cycles: Markov order=4 means context is 3 chars, which is easy to cycle
+        let states = [[0.0, BOS.repeat(k), "", new Set()]];
         const finals = [];
-        for (let step = 0; step <= maxLen; step += 1) {
-            const next = [];
-            for (const [score, ctx, text] of states) {
-                // Prevent repeating patterns: if the last 3 chars are the same
-                // as the 3 chars before them, skip this state
-                if (text.length >= 6 && text.slice(-3) === text.slice(-6, -3)) {
-                    // Allow legitimate patterns like "user@server" but block
-                    // garbage like "ser@ser@ser@ser"
-                    const last6 = text.slice(-6);
-                    if (last6.includes("@") && last6.split("@").length > 2) {
-                        continue;
+        // Helper: detect pathological repeating patterns in generated text
+        function _isRepeatingGarbage(text) {
+            const len = text.length;
+            if (len < 10) return false;
+
+            // ========== APPROACH ==========
+            // Instead of just checking aligned repetition at the END, we need to:
+            // 1. Check for ANY repeating unit in the suffix (not just end-aligned)
+            // 2. Check units up to 48 chars (for patterns like "file.command . -type ")
+            // 3. Use entropy/density metrics to detect pathological behavior
+            // 4. Look for suspicious repetition counts of common placeholder words
+
+            // --- Check 1: End-aligned repetition with extended unit lengths ---
+            // Check units from 2 to 48 characters at the very end
+            for (let unitLen = 2; unitLen <= 48; unitLen += 1) {
+                const minReps = unitLen <= 8 ? 3 : 2;  // More reps needed for shorter units
+                if (len < unitLen * minReps) continue;
+
+                const lastUnit = text.slice(-unitLen);
+
+                // Check if this unit repeats backwards from the end
+                let consecutiveReps = 1;
+                for (let i = 1; i < minReps + 1; i += 1) {
+                    const startPos = len - unitLen * (i + 1);
+                    if (startPos < 0) break;
+                    const checkUnit = text.slice(startPos, startPos + unitLen);
+                    if (checkUnit === lastUnit) {
+                        consecutiveReps += 1;
+                    } else {
+                        break;
                     }
                 }
+
+                if (consecutiveReps >= minReps) {
+                    // This is definitely pathological - 2+ full repetitions at the end
+                    // For very short units, require more reps to avoid false positives
+
+                    // Extra check: allow legit repetition like "==========" (visual separators)
+                    const allSameInUnit = lastUnit.split("").every(c => c === lastUnit[0]);
+
+                    // But if it's 2+ different chars repeating, it's garbage
+                    if (!allSameInUnit || consecutiveReps >= 5) {
+                        return true;
+                    }
+                }
+            }
+
+            // --- Check 2: Find ANY repeating substring in the last 200 chars ---
+            // Patterns like "file.command . -type file.command . -type" may not align
+            // perfectly to the end if there's a partial tail
+
+            const suffixLen = Math.min(len, 200);
+            const suffix = text.slice(-suffixLen);
+
+            // Look for common pathological substrings that appear in your examples:
+            const pathologicalPatterns = [
+                /file\.command /g,
+                /file\.command \. -type /g,
+                /python3 -m /g,
+                /\.command \. -type /g,
+                /systemctl /g,  // if repeated 2x
+            ];
+
+            for (const pattern of pathologicalPatterns) {
+                const matches = suffix.match(pattern);
+                if (matches && matches.length >= 3) {
+                    // 3+ occurrences of the same pathological substring = garbage
+                    return true;
+                }
+            }
+
+            // --- Check 3: @ symbol density (original bug pattern) ---
+            const atCount = (suffix.match(/@/g) || []).length;
+            if (atCount >= 4 && suffixLen >= 20) {
+                // High @ density = repeating @ser pattern
+                return true;
+            }
+
+            // --- Check 4: Suspicious placeholder words repetition ---
+            const placeholders = ["file", "directory", "path", "target", "user", "server", "python3"];
+            let totalPlaceholderCount = 0;
+            for (const ph of placeholders) {
+                const phRegex = new RegExp(`\\b${ph}\\b`, "g");
+                const phCount = (suffix.match(phRegex) || []).length;
+                totalPlaceholderCount += phCount;
+            }
+            if (totalPlaceholderCount >= 8 && suffixLen >= 50) {
+                // 8+ placeholder words in short space = pathological beam loop
+                return true;
+            }
+
+            // --- Check 5: Repetition density heuristic ---
+            // Count how many times 6-gram substrings repeat in the suffix
+            // Normal text has low repetition; beam loops have very high repetition
+            const gramCounts = new Map();
+            const gramLen = 6;
+            if (suffixLen >= gramLen * 3) {
+                for (let i = 0; i <= suffixLen - gramLen; i += 1) {
+                    const gram = suffix.slice(i, i + gramLen);
+                    gramCounts.set(gram, (gramCounts.get(gram) || 0) + 1);
+                }
+
+                // Count grams that appear 4+ times
+                let highFreqGrams = 0;
+                for (const count of gramCounts.values()) {
+                    if (count >= 4) highFreqGrams += 1;
+                }
+
+                // If many grams repeat frequently, it's a loop
+                const uniqueGrams = gramCounts.size;
+                if (highFreqGrams >= 5 && uniqueGrams > 0) {
+                    const highFreqRatio = highFreqGrams / uniqueGrams;
+                    if (highFreqRatio > 0.15) {  // >15% of grams are high-freq
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        for (let step = 0; step <= maxLen; step += 1) {
+            const next = [];
+            for (const [score, ctx, text, visited] of states) {
+                // Block pathological repeating patterns: "@ser@ser@ser", "aaaaa", etc.
+                if (_isRepeatingGarbage(text)) {
+                    continue;
+                }
+
                 const cands = this.counts[ctx];
                 if (!cands) {
                     // Fallback: if no transition counts for this context,
-                    // use the model's vocabulary to continue generation.
-                    // This prevents the beam search from exiting early
-                    // when encountering unseen context patterns.
+                    // we use a random character BUT WITH A VERY NEGATIVE SCORE.
+                    //
+                    // ROOT CAUSE FIX #1: Previously this pushed [0.0, nctx, nt], but
+                    // transLogP() returns NEGATIVE values (log probs are always <= 0).
+                    // So 0.0 was actually BETTER than any real transition, causing
+                    // the beam to prefer fallback garbage over legitimate commands!
+
+                    // Use only a small number of fallbacks to avoid polluting the beam
                     const fallbackChars = Object.keys(this.vocab).filter(
                         c => c !== BOS && c !== EOS
                     );
-                    if (fallbackChars.length > 0) {
+                    if (fallbackChars.length > 0 && text.length < 30) {
+                        // Pick at most 1 random char per step, with very bad score
                         const rand = fallbackChars[Math.floor(Math.random() * fallbackChars.length)];
                         const nctx = (ctx + rand).slice(-k);
                         const nt = text + rand;
-                        next.push([0.0, nctx, nt]);
+
+                        // Create new visited set for this branch
+                        const newVisited = new Set(visited);
+                        newVisited.add(nctx + "|" + nt.length);
+
+                        // VERY NEGATIVE score for fallback - much worse than any real transition
+                        next.push([score + FALLBACK_LOG_P, nctx, nt, newVisited]);
                     }
                     continue;
                 }
@@ -218,9 +666,35 @@ class ShellMarkov {
                         continue;
                     }
                     if (targetLen !== null && text.length >= targetLen + tolerance) continue;
+
                     const nt = text + ch;
                     const nctx = (ctx + ch).slice(-k);
-                    next.push([ns, nctx, nt]);
+
+                    // ROOT CAUSE FIX #2: Prevent Markov cycles by tracking visited contexts.
+                    // Since the Markov model is order=4, the context is only 3 characters.
+                    // This makes it EASY to form cycles: ABC -> D, CDA -> B, etc.
+                    //
+                    // We track "context + text_length" to catch cycles where the same
+                    // context reappears at the same "position" in the generation.
+                    //
+                    // Example cycle that would be caught:
+                    //   "file " -> "." (ctx="le " -> "."), text now "file ."
+                    //   "." -> "-" (ctx="e ." -> "-"), text now "file .-"
+                    //   ... eventually cycles back to "le " -> "." at same relative position
+
+                    const visitKey = nctx + "|" + nt.length;
+
+                    if (visited.has(visitKey)) {
+                        // CYCLE DETECTED - we've been in this exact context at this length before
+                        // Skip this continuation - it would lead to infinite repetition
+                        continue;
+                    }
+
+                    // Create new visited set for this branch (copy parent's visited)
+                    const newVisited = new Set(visited);
+                    newVisited.add(visitKey);
+
+                    next.push([ns, nctx, nt, newVisited]);
                 }
             }
             if (next.length === 0) break;
@@ -237,6 +711,123 @@ class ShellMarkov {
             .map(([t, s]) => [s, t])
             .sort((a, b) => b[0] - a[0])
             .slice(0, topn);
+    }
+
+    // Return the N most frequent corpus lines, optionally filtered by target length.
+    // This is the PREFERRED method over generateBeam() because:
+    // 1. It returns actual known commands, not generated garbage
+    // 2. The corpus is already sorted by frequency (most common first)
+    // 3. You can then re-rank with timingScore() for rhythm matching
+    //
+    // Returns [[logPriorScore, command], ...] sorted by score descending
+    rankCorpus(targetLen = null, tolerance = 3, topn = 30) {
+        const entries = Object.entries(this.commandCounts);  // [command, count]
+
+        if (entries.length === 0) {
+            return [];
+        }
+
+        const scored = [];
+        for (const [cmd, count] of entries) {
+            const len = cmd.length;
+
+            // Length filter (if targetLen provided)
+            if (targetLen !== null) {
+                if (Math.abs(len - targetLen) > tolerance + 5) {
+                    // Allow more tolerance for slot-aware matching
+                    // Use the template matching to see if it's a slot-based match
+                    const template = this._findBestMatchingTemplate(cmd);
+                    if (!template || !template.hasSlots) {
+                        continue;  // No slots and wrong length = skip
+                    }
+                    // With slots, allow much wider variation
+                    if (len < 3 || len > 120) {
+                        continue;
+                    }
+                }
+            }
+
+            // Score = frequency bonus + commandLogP + length bonus (if applicable)
+            let score = this.commandLogP(cmd);
+
+            // Add length-based bonus if targetLen is provided
+            if (targetLen !== null) {
+                const lenDiff = Math.abs(len - targetLen);
+                if (lenDiff <= tolerance) {
+                    // Small bonus for exact-ish length match
+                    score += 0.5;
+                }
+
+                // Also check slot-aware matching
+                const template = this._findBestMatchingTemplate(cmd);
+                if (template && template.hasSlots) {
+                    // Command has slots - it's a template that can fit variable args
+                    // Give it a bonus since it's more flexible
+                    score += 1.0;
+                }
+            }
+
+            scored.push([score, cmd]);
+        }
+
+        // Sort by score descending
+        scored.sort((a, b) => b[0] - a[0]);
+
+        return scored.slice(0, topn);
+    }
+
+    // N-gram similarity between two strings (for partial matching)
+    // Returns a score 0-1 where 1 = exact match
+    ngramSimilarity(a, b, n = 3) {
+        if (a === b) return 1.0;
+        if (a.length < n || b.length < n) return 0.0;
+
+        const gramsA = new Map();
+        const gramsB = new Map();
+
+        for (let i = 0; i <= a.length - n; i += 1) {
+            const g = a.slice(i, i + n);
+            gramsA.set(g, (gramsA.get(g) || 0) + 1);
+        }
+        for (let i = 0; i <= b.length - n; i += 1) {
+            const g = b.slice(i, i + n);
+            gramsB.set(g, (gramsB.get(g) || 0) + 1);
+        }
+
+        // Compute intersection
+        let intersection = 0;
+        let union = 0;
+
+        const allGrams = new Set([...gramsA.keys(), ...gramsB.keys()]);
+        for (const gram of allGrams) {
+            const countA = gramsA.get(gram) || 0;
+            const countB = gramsB.get(gram) || 0;
+            intersection += Math.min(countA, countB);
+            union += Math.max(countA, countB);
+        }
+
+        return union === 0 ? 0.0 : intersection / union;
+    }
+
+    // Re-rank candidates using both timing and optionally a partial text hint
+    // hintText is optional partial keystroke data for ssdeep-like matching
+    rankWithTiming(candidates, delaysMs, timingWeight = 0.22, hintText = null) {
+        const out = [];
+        for (const [baseScore, cmd] of candidates) {
+            let score = baseScore;
+            if (delaysMs && delaysMs.length > 0) {
+                score += timingWeight * this.timingScore(cmd, delaysMs);
+            }
+            if (hintText && hintText.length > 0) {
+                // N-gram similarity bonus for partial text matching
+                // (simple alternative to ssdeep)
+                const sim = this.ngramSimilarity(cmd, hintText, 3);
+                score += sim * 2.0;  // Up to +2.0 for good match
+            }
+            out.push([score, cmd]);
+        }
+        out.sort((a, b) => b[0] - a[0]);
+        return out;
     }
 
     toDict() {
@@ -596,6 +1187,12 @@ module.exports = {
     keyDistance,
     BOS,
     EOS,
+    SLOT_MARKER,
+    SLOT_PATTERNS,
+    tokenizeCommand,
+    compareToTemplate,
+    matchesSkeleton,
+    extractCommandTemplate,
     computeLineConfidence,
     computeSessionConfidence,
     computeDelayStats,
