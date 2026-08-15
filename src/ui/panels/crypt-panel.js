@@ -332,6 +332,20 @@ function createCryptPanel({
       const [first, second] = [a, b].sort();
       return `tcp|${first}|${second}`;
     };
+    // Get session artifact store for collecting IPs/hosts seen in this capture.
+    // These artifacts can later be used for Markov template slot matching.
+    let artifactStore = null;
+    if (sshMarkovModule && typeof sshMarkovModule.getSessionArtifactStore === "function") {
+      try {
+        artifactStore = sshMarkovModule.getSessionArtifactStore();
+      } catch (e) {
+        console.warn("[Crypt/OpenSSH] artifact store unavailable:", e);
+        artifactStore = null;
+      }
+    }
+    // Track seen IPs/hosts to avoid spamming the artifact store with duplicates
+    const seenFlowKeys = new Set();
+    const seenHosts = new Set();
     let total = 0;
     for (const host of Object.keys(hostMap)) {
       const packets = hostMap[host];
@@ -361,6 +375,7 @@ function createCryptPanel({
               : dstPort === 22 || dstPort === 2222
                 ? "c2s"
                 : "?";
+          const flowKey = flowKeyByEndpoint(srcIp, srcPort, dstIp, dstPort);
           flows.push({
             host,
             packet,
@@ -371,8 +386,64 @@ function createCryptPanel({
             timestamp,
             packetIndex,
             direction,
-            flowKey: flowKeyByEndpoint(srcIp, srcPort, dstIp, dstPort),
+            flowKey,
           });
+          // Collect artifacts for slot matching: IPs, hosts from SSH flows
+          if (artifactStore && !seenFlowKeys.has(flowKey)) {
+            seenFlowKeys.add(flowKey);
+            // Add source and destination IPs as artifacts
+            if (srcIp && srcIp !== "?") {
+              artifactStore.addIpAddress(srcIp, {
+                flowKey,
+                source: "capture",
+                confidence: 1.0,
+                category: direction === "s2c" ? "server_ip" : "client_ip",
+                timestampMs: timestamp,
+              });
+            }
+            if (dstIp && dstIp !== "?") {
+              artifactStore.addIpAddress(dstIp, {
+                flowKey,
+                source: "capture",
+                confidence: 1.0,
+                category: direction === "c2s" ? "server_ip" : "client_ip",
+                timestampMs: timestamp,
+              });
+            }
+            // Add host from the capture's host map (could be a hostname)
+            if (host && !seenHosts.has(host)) {
+              seenHosts.add(host);
+              // Check if host looks like an IP or a hostname
+              const looksLikeIp = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host.includes(":");
+              if (looksLikeIp) {
+                artifactStore.addIpAddress(host, {
+                  flowKey,
+                  source: "capture",
+                  confidence: 1.0,
+                  category: "flow_host",
+                });
+              } else {
+                // Could be a hostname - add as both hostname and domain
+                artifactStore.addHostname(host, {
+                  flowKey,
+                  source: "capture",
+                  confidence: 0.9,
+                });
+                // Also extract eTLD+1 if it looks like a domain
+                if (host.includes(".")) {
+                  const domainParts = host.split(".");
+                  if (domainParts.length >= 2) {
+                    const domain = domainParts.slice(-2).join(".");
+                    artifactStore.addDomain(domain, {
+                      flowKey,
+                      source: "capture",
+                      confidence: 0.7,
+                    });
+                  }
+                }
+              }
+            }
+          }
         }
         processed += 1;
         if (processed % SSH_PACKET_CHUNK_SIZE === 0) {
@@ -953,6 +1024,16 @@ function createCryptPanel({
     // when they load a new capture, instead of stale results from
     // the previous pcap.
     clearSshOutputPanels();
+    // Reset the session artifact store when starting a fresh flow analysis
+    // on a potentially new capture. This ensures artifacts from different
+    // captures don't bleed into each other.
+    if (sshMarkovModule && typeof sshMarkovModule.resetSessionArtifactStore === "function") {
+      try {
+        sshMarkovModule.resetSessionArtifactStore();
+      } catch (e) {
+        console.warn("[Crypt/OpenSSH] failed to reset artifact store:", e);
+      }
+    }
     try {
       const flows = await collectSshEncounteredFlows();
       sshAllFlows = await aggregateSshFlowsAsync(flows);
