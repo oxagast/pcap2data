@@ -123,6 +123,37 @@ describe("detect20msPadding", () => {
     });
 });
 
+describe("detect20msPadding — raw input preservation", () => {
+    test("rawDelays + rawDelayCount are set on the not-detected path", () => {
+        // A short input that fails the minSampleCount gate.
+        const input = [20, 40, 60, 80];
+        const result = detect20msPadding(input);
+        expect(result.detected).toBe(false);
+        expect(Array.isArray(result.rawDelays)).toBe(true);
+        expect(result.rawDelays).toEqual([20, 40, 60, 80]);
+        expect(result.rawDelayCount).toBe(4);
+    });
+
+    test("rawDelays + rawDelayCount are set on the detected path", () => {
+        // Build a synthetic 20 ms-cadence stream that triggers detection.
+        const input = [];
+        for (let i = 0; i < 60; i += 1) {
+            input.push(20 * (1 + (i % 6)) + ((i * 7) % 3) - 1);
+        }
+        const result = detect20msPadding(input);
+        expect(result.detected).toBe(true);
+        expect(result.rawDelays).toEqual(input);
+        expect(result.rawDelayCount).toBe(input.length);
+    });
+
+    test("rawDelays are filter-stripped copies (no NaN/negative/zero entries)", () => {
+        const input = [NaN, -5, 0, 20, 40, 60, 80];
+        const result = detect20msPadding(input, { minSampleCount: 4 });
+        expect(result.rawDelays).toEqual([20, 40, 60, 80]);
+        expect(result.rawDelayCount).toBe(4);
+    });
+});
+
 // ── New two-pass + first-difference detector behaviour ─────────────────
 
 describe("detect20msPadding — first-difference detector", () => {
@@ -255,5 +286,66 @@ describe("detect20msPadding — first-difference detector", () => {
         const result = detect20msPadding(delays);
         expect(result.detected).toBe(true);
         expect(result.periodMs).toBeCloseTo(20, -1);
+    });
+});
+
+describe("autoTunePaddingThreshold", () => {
+    const { autoTunePaddingThreshold } = require("../src/ui/decoders/ssh-keystrokes");
+
+    test("returns no-detection when input is too small", () => {
+        const out = autoTunePaddingThreshold([20, 40, 60]);
+        expect(out.detected).toBe(false);
+    });
+
+    test("selects a coverage threshold that yields command-shape chunks on a synthetic padded stream", () => {
+        // Build a synthetic "typed commands" stream where each
+        // 'command' is 8 keystrokes, then a 600ms Return-shaped gap,
+        // and *between* each keystroke the server inserts 2 filler
+        // packets at multiples of 20ms. The detector should pick a
+        // coverage threshold that classifies the filler as filler
+        // and leaves us with one chunk per command (8 keystrokes).
+        const rng = seededRng(11);
+        const NUM_COMMANDS = 12;
+        const FILLER_PER_KEYSTROKE = 2;
+        const KEY_GAP_BASE = 110; // ms between keystrokes (real)
+        const COMMAND_GAP = 600; // ms between commands (Return-shaped)
+        const P = 20; // server pad cadence
+        const delays = [];
+        for (let cmd = 0; cmd < NUM_COMMANDS; cmd += 1) {
+            const ks = 8;
+            for (let k = 0; k < ks; k += 1) {
+                // Each keystroke is preceded by FILLER_PER_KEYSTROKE
+                // filler packets at integer multiples of P that look
+                // like inter-key delays.
+                for (let f = 1; f <= FILLER_PER_KEYSTROKE; f += 1) {
+                    delays.push(f * P + (rng() - 0.5) * 0.5);
+                }
+                delays.push(KEY_GAP_BASE + (rng() - 0.5) * 6);
+            }
+            delays.push(COMMAND_GAP + (rng() - 0.5) * 8);
+        }
+        const result = autoTunePaddingThreshold(delays);
+        expect(result.detected).toBe(true);
+        expect(result.periodMs).toBeGreaterThan(0);
+        // The picked coverage should be in the sweep range.
+        expect(result.autotuneSelected).toBeGreaterThan(0);
+        expect(result.autotuneSelected).toBeLessThanOrEqual(0.95);
+        // And the chunk count should be in the right ballpark — we
+        // tolerate a 3x range because the score blend is forgiving.
+        expect(result.autotuneChunkCount).toBeGreaterThanOrEqual(3);
+        expect(result.autotuneChunkCount).toBeLessThanOrEqual(NUM_COMMANDS * 3);
+    });
+
+    test("returns no-detection on realistic keystroke delays", () => {
+        const rng = seededRng(99);
+        const out = [];
+        for (let i = 0; i < 120; i += 1) {
+            const base = Math.exp(4.4 + (rng() - 0.5) * 0.9);
+            const phase = i * 7.31;
+            const skew = (Math.sin(phase) + Math.cos(phase * 0.7)) * 12;
+            out.push(base + skew);
+        }
+        const result = autoTunePaddingThreshold(out);
+        expect(result.detected).toBe(false);
     });
 });

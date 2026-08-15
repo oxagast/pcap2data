@@ -1023,10 +1023,50 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
     };
 }
 
-function detect20msPadding(delaysMs, opts) {
+// ── Auto-tuned padding detector ────────────────────────────────────────
+//
+// `autoTunePaddingThreshold(delaysMs, opts)` runs the two-pass detector
+// at a sweep of `minCoverage` values and picks the value whose peeled
+// keystroke stream yields chunks that look like shell commands. The
+// target shape is: a histogram of "keystrokes per Return-shaped gap"
+// that clusters in the 5–50 range (typical `ls -la` … `docker compose
+// logs --tail 200 -f api`) with a few outliers up to ~200.
+//
+// Scoring blend (higher is better):
+//   * median(chunkLen)        → 5–50  (peaks at ~15)
+//   * p90(chunkLen)           → 10–80 (peaks at ~40)
+//   * share of chunks < 3     → penalize (too-aggressive peeler stitches
+//                                multi-command runs into one giant chunk)
+//   * share of chunks > 200   → penalize (too-lax peeler leaves huge
+//                                fillers that look like a "command")
+//   * fraction of delays kept → penalize both extremes (kill switch:
+//                                0.05 means we threw everything out;
+//                                0.95 means we kept almost everything)
+//
+// `opts` keys (all optional):
+//   - `coverageCandidates` : array of minCoverage values to try
+//                             (default 0.20, 0.30, 0.40, 0.50, 0.60,
+//                             0.70, 0.80)
+//   - `fixedPeriodMs`      : if set, use this P instead of running pass 1
+//                             (once we've already locked onto a period)
+//   - `maxIterations`      : hard cap on candidate count (default 12)
+//   - `returnAll`          : if true, return { best, runs[] } so the
+//                             caller can show a sensitivity plot
+//
+// Returns a `detect20msPadding`-shaped result with extra fields:
+//   - `autotuneSelected`     : the chosen minCoverage
+//   - `autotuneCandidates`   : [{ coverage, score, chunkStats, ... }, ...]
+//   - `autotuneChunkCount`   : number of Return-shaped chunks at the
+//                                chosen threshold
+function autoTunePaddingThreshold(delaysMs, opts) {
     const o = opts || {};
-    const minSampleCount = Number.isFinite(o.minSampleCount) ? o.minSampleCount : 25;
-    const snap = o.snap !== false; // default true
+    const defaultCoverage = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80];
+    const requestedCandidates = Array.isArray(o.coverageCandidates)
+        ? o.coverageCandidates
+        : defaultCoverage;
+    const maxIterations = Math.max(1, Number.isFinite(o.maxIterations) ? o.maxIterations : 12);
+    const returnAll = o.returnAll === true;
+    const userMinCoverage = Number.isFinite(o.minCoverage) ? o.minCoverage : 0.5;
 
     const delays = Array.isArray(delaysMs)
         ? delaysMs.filter((d) => Number.isFinite(d) && d > 0)
@@ -1043,6 +1083,294 @@ function detect20msPadding(delaysMs, opts) {
         pass1Candidate: null,
         pass1PeakRatio: 0,
         candidateScores: [],
+        autotuneSelected: null,
+        autotuneCandidates: [],
+        autotuneChunkCount: 0,
+    };
+    if (delays.length < 25) return notDetected;
+
+    // Pass 1 once, ahead of the sweep — pass-1 is the most expensive
+    // step (linear scan over ~5–80 ms period range). Re-using the
+    // pass-1 winner across the threshold sweep is correct because
+    // pass-1 only depends on the delays, not on minCoverage.
+    const pass1 = findCadenceViaFirstDifference(delays, o);
+    if (!pass1) return notDetected;
+    const baseOpts = Object.assign({}, o, { periodMinMs: pass1.periodMs, periodMaxMs: pass1.periodMs });
+
+    // Build the candidate list. We sweep two axes:
+    //   (a) minCoverage — the gate threshold for the detector
+    //   (b) toleranceScale — the per-period residue window
+    //       (1.0 = max(2, period*0.15); 0.4 = much tighter; 1.6 = wider)
+    // The 2D sweep is needed because on a 20ms-cadence obfuscator any
+    // typing latency N * 20ms (e.g. 60ms, 100ms, 120ms) is exactly on
+    // a multiple of the period; without a tighter tolerance, the
+    // detector mistakes real keystrokes for filler and the peeled
+    // stream collapses to 0 keystrokes per chunk.
+    const toleranceScales = (Array.isArray(o.toleranceScales) && o.toleranceScales.length > 0)
+        ? o.toleranceScales
+        : [0.4, 0.6, 0.85, 1.0, 1.25];
+    const toleranceSeen = new Set();
+    const toleranceList = [];
+    for (const t of toleranceScales) {
+        const v = Number(t);
+        if (!Number.isFinite(v) || v <= 0) continue;
+        const key = Math.round(v * 100);
+        if (toleranceSeen.has(key)) continue;
+        toleranceSeen.add(key);
+        toleranceList.push(v);
+    }
+
+    // Pad the candidates list with the user's explicit minCoverage
+    // so the slider value is honored when nothing else wins.
+    const coverageSeen = new Set();
+    const coverageList = [];
+    for (const c of requestedCandidates) {
+        const v = Math.max(0.05, Math.min(0.95, Number(c)));
+        if (!Number.isFinite(v)) continue;
+        const key = Math.round(v * 100);
+        if (coverageSeen.has(key)) continue;
+        coverageSeen.add(key);
+        coverageList.push(key / 100);
+        if (coverageList.length >= maxIterations) break;
+    }
+    const userKey = Math.round(userMinCoverage * 100);
+    if (!coverageSeen.has(userKey)) {
+        coverageList.push(userMinCoverage);
+        coverageList.sort((a, b) => a - b);
+    }
+
+    const runs = [];
+    // The detector's stdThreshold is `min(maxResidualStd, uniformStd *
+    // stdTighteningFactor)`. To let the auto-tuner explore freely
+    // across tolerance scales, open the std floor for the duration
+    // of the sweep and rely on the chunk-shape score for selection.
+    const tightenedFactor = 1.5;
+    for (const tol of toleranceList) {
+        const tolBase = Math.max(1, pass1.periodMs * 0.15);
+        const tolerance = tolBase * tol;
+        for (const cov of coverageList) {
+            const refined = refineCadenceAtPeriod(delays, pass1.periodMs, {
+                ...baseOpts,
+                minCoverage: cov,
+                toleranceMs: tolerance,
+                stdTighteningFactor: Number.isFinite(o.stdTighteningFactor)
+                    ? o.stdTighteningFactor
+                    : tightenedFactor,
+            });
+            const stats = computeChunkShapeStats(delays, refined.paddedIntervals);
+            const score = scoreChunkShape(stats, refined.detected);
+            runs.push({
+                coverage: cov,
+                tolerance,
+                toleranceScale: tol,
+                detected: refined.detected,
+                periodMs: refined.periodMs,
+                foldedCoverage: refined.coverage,
+                residualStdMs: refined.residualStdMs,
+                padCount: refined.paddedIntervals ? refined.paddedIntervals.length : 0,
+                chunkCount: stats.chunkCount,
+                chunkMedian: stats.median,
+                chunkP90: stats.p90,
+                keepFraction: stats.keepFraction,
+                score,
+            });
+        }
+    }
+
+    // Pick the best-scoring run. Tie-break on chunkCount and then on
+    // closeness to the user's explicit minCoverage (slider value wins
+    // on equal scores).
+    const ranked = runs.slice().sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.chunkCount !== a.chunkCount) return b.chunkCount - a.chunkCount;
+        return Math.abs(a.coverage - userMinCoverage) - Math.abs(b.coverage - userMinCoverage);
+    });
+    // Minimum score gate — the chunk-shape blend has to clear this
+    // before the auto-tuner accepts the cadence. Below 0.0 the chunk
+    // shape is too far from "command-like" (giant single chunk, all
+    // tiny chunks, wide variance, etc.) and we'd rather return
+    // no-detection than a misleading result.
+    const MIN_AUTOTUNE_SCORE = 0.0;
+    const best = ranked[0];
+    if (!best || !best.detected || best.score < MIN_AUTOTUNE_SCORE) {
+        return {
+            ...notDetected,
+            autotuneCandidates: runs,
+            pass1Candidate: pass1.periodMs,
+            pass1PeakRatio: pass1.peakRatio,
+        };
+    }
+
+    // Re-run the chosen detector with the same options so the caller
+    // gets the full ``detect20msPadding`` shape (snappedDelaysMs,
+    // keystrokeDelaysMs, paddedIntervals, …). The same loosened
+    // stdTighteningFactor is required or the re-run will reject the
+    // cadence at tight tolerances even though the sweep accepted it.
+    const finalResult = detect20msPadding(delays, {
+        ...o,
+        minCoverage: best.coverage,
+        toleranceMs: best.tolerance,
+        stdTighteningFactor: Number.isFinite(o.stdTighteningFactor)
+            ? o.stdTighteningFactor
+            : tightenedFactor,
+    });
+    return {
+        ...finalResult,
+        autotuneSelected: best.coverage,
+        autotuneTolerance: best.tolerance,
+        autotuneToleranceScale: best.toleranceScale,
+        autotuneCandidates: returnAll ? runs : ranked.slice(0, 5),
+        autotuneChunkCount: best.chunkCount,
+    };
+}
+
+// Compute statistics on the "how many keystrokes per Return-shaped
+// gap" distribution. Used by the auto-tuner to score each candidate
+// threshold. Operates on the ORIGINAL `delays` (so Return-shaped gaps
+// are not collapsed by the snap step) and the candidate's
+// `paddedIntervals` (so we count only the kept intervals per chunk).
+//
+// Return-shaped gaps (>= 350ms) are always treated as chunk boundaries
+// even when the cadence detector classifies them as filler — at the
+// 20ms cadence used by SSH obfuscators, a 600ms gap coincidentally
+// lines up on an integer multiple and the detector would otherwise
+// mark it as padding, which hides the actual command structure.
+function computeChunkShapeStats(delays, paddedIntervals) {
+    const empty = {
+        chunkCount: 0,
+        median: 0,
+        p90: 0,
+        tinyShare: 0,
+        giantShare: 0,
+        keepFraction: 0,
+    };
+    if (!Array.isArray(delays) || delays.length < 2) return empty;
+    const paddedSet = (Array.isArray(paddedIntervals) && paddedIntervals.length > 0)
+        ? new Set(paddedIntervals)
+        : null;
+    const padCount = paddedSet ? paddedSet.size : 0;
+    const SPLIT_MS = 350;
+    const chunks = [];
+    let cur = 0;
+    let kept = 0;
+    for (let i = 0; i < delays.length; i += 1) {
+        const d = delays[i];
+        if (!Number.isFinite(d) || d <= 0) continue;
+        // A Return-shaped gap is ALWAYS a boundary, even when the
+        // cadence detector flagged it as filler. This keeps the
+        // command structure visible to the auto-tuner.
+        const isReturn = d >= SPLIT_MS;
+        if (!isReturn && paddedSet && paddedSet.has(i)) continue; // skip filler
+        kept += 1;
+        if (isReturn && cur > 0) {
+            chunks.push(cur);
+            cur = 0;
+            continue;
+        }
+        cur += 1;
+    }
+    if (cur > 0) chunks.push(cur);
+
+    const keepFraction = paddedSet
+        ? Math.min(1, kept / delays.length)
+        : 1;
+    if (chunks.length === 0) {
+        return { ...empty, keepFraction };
+    }
+    const sorted = chunks.slice().sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const p90Idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9));
+    const p90 = sorted[p90Idx];
+    const tiny = chunks.filter((c) => c < 3).length;
+    // "Giant" here means "this single chunk is too long to be a
+    // command" — anything above 50 keystrokes is unusual (the longest
+    // realistic shell line is a long curl/git command). 200 is too
+    // lenient; we want the auto-tuner to penalise giant single
+    // chunks that emerged because the peel didn't reduce anything.
+    const giant = chunks.filter((c) => c > 50).length;
+    return {
+        chunkCount: chunks.length,
+        median,
+        p90,
+        tinyShare: tiny / chunks.length,
+        giantShare: giant / chunks.length,
+        keepFraction,
+        padCount,
+    };
+}
+
+// Higher is better. Designed so:
+//   - median in 5–50 → +1 each side of 15 (triangular)
+//   - p90 in 10–80 → +1 each side of 40 (triangular)
+//   - tinyShare > 0.4 → -1 (too aggressive; stitched commands)
+//   - giantShare > 0.1 → -1 (too lax; giant filler "commands")
+//   - score is 0 (worst) when either chunkCount == 0 or keepFraction
+//     is 0; otherwise score is monotone in the shape blend.
+//   - +1 bonus when the detector actually classified some packets
+//     as filler (detected=true with at least one padded interval),
+//     so the auto-tuner prefers the peeled result over the raw
+//     stream when chunk shape is comparable.
+function scoreChunkShape(stats, detected) {
+    if (stats.chunkCount === 0) return -1;
+    let s = 0;
+    // Median: peak at 15, edge at 0 and 60. Triangular.
+    const med = stats.median;
+    if (med <= 0) s -= 0.5;
+    else if (med < 15) s += Math.max(0, (med - 3) / 12);
+    else if (med <= 30) s += Math.max(0, 1 - (med - 15) / 15);
+    else if (med <= 50) s -= 0.5;
+    else s -= 1.5;
+    // p90: peak at 40, edge at 0 and 100.
+    const p90 = stats.p90;
+    if (p90 < 10) s -= 0.3;
+    else if (p90 < 40) s += Math.max(0, (p90 - 10) / 30);
+    else if (p90 <= 80) s += Math.max(0, 1 - (p90 - 40) / 40);
+    else s -= Math.min(1, (p90 - 80) / 100);
+    // Tiny / giant penalize; we want a tightened, plausible shape.
+    if (stats.tinyShare > 0.4) s -= (stats.tinyShare - 0.4) * 2;
+    if (stats.giantShare > 0.1) s -= (stats.giantShare - 0.1) * 3;
+    // Chunk-count preference: too few (<3) or too many (>60) is fishy.
+    if (stats.chunkCount < 3) s -= 0.5;
+    if (stats.chunkCount > 60) s -= 0.3;
+    // KeepFraction penalizes both over-peel (we threw everything out)
+    // and under-peel (we kept all the filler). The sweet spot is
+    // 0.40–0.95 — peel at least 5% but no more than 60% of the input.
+    const kf = stats.keepFraction;
+    if (kf < 0.40) s -= (0.40 - kf) * 2;
+    if (kf > 0.95) s -= (kf - 0.95) * 4;
+    // Detection bonus: when the detector confidently classified
+    // some packets as filler, reward that outcome so the tuner
+    // doesn't prefer the "no peel" baseline.
+    if (detected && (stats.padCount || 0) > 0) s += 1.0;
+    return s;
+}
+
+function detect20msPadding(delaysMs, opts) {
+    const o = opts || {};
+    const minSampleCount = Number.isFinite(o.minSampleCount) ? o.minSampleCount : 25;
+    const snap = o.snap !== false; // default true
+
+    const delays = Array.isArray(delaysMs)
+        ? delaysMs.filter((d) => Number.isFinite(d) && d > 0)
+        : [];
+    // Preserve the ORIGINAL input so the LLM brief can compare
+    // "obfuscated stream" vs "peeled stream" side-by-side. Without
+    // this we lose the cadence fingerprint the moment we start peeling.
+    const rawDelays = delays.slice();
+    const notDetected = {
+        detected: false,
+        periodMs: null,
+        coverage: 0,
+        residualStdMs: NaN,
+        dominantResidueMs: NaN,
+        snappedDelaysMs: null,
+        keystrokeDelaysMs: null,
+        paddedIntervals: null,
+        pass1Candidate: null,
+        pass1PeakRatio: 0,
+        candidateScores: [],
+        rawDelays,
+        rawDelayCount: rawDelays.length,
     };
     if (delays.length < minSampleCount) return notDetected;
 
@@ -1076,6 +1404,8 @@ function detect20msPadding(delaysMs, opts) {
             if (b.coverage !== a.coverage) return b.coverage - a.coverage;
             return a.residualStdMs - b.residualStdMs;
         }),
+        rawDelays,
+        rawDelayCount: rawDelays.length,
     });
 }
 
@@ -1103,6 +1433,7 @@ module.exports = {
     buildChartSeries,
     // Obfuscation detection
     detect20msPadding,
+    autoTunePaddingThreshold,
     // Testing hooks
     _setModelForTesting(model) {
         CURRENT_MODEL = model;

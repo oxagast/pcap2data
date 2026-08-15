@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Scrub PII and problematic characters from shell_data."""
+"""Scrub PII and problematic characters from shell_corpus."""
 
 import re
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "r", encoding="utf-8", errors="replace") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "r", encoding="utf-8", errors="replace") as f:
     lines = f.readlines()
 
 stats = {
@@ -193,7 +193,7 @@ for k, v in sorted(stats.items()):
         print(f"  {k}: {v}")
 
 # Write result
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "w", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "w", encoding="utf-8") as f:
     for line in scrubbed:
         f.write(line + "\n")
 

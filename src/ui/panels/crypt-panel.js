@@ -598,60 +598,108 @@ function createCryptPanel({
     return out;
   }
 
-  // Heuristic to estimate where an Enter/Return keypress likely occurred.
-  // Uses robust statistics (median, MAD-like) and absolute thresholds to
-  // find a large inter-key gap that plausibly corresponds to the end of a
-  // typed command. Returns the estimated command length (number of
-  // characters) or null if no clear boundary is detected.
-  function estimateCommandLengthFromDelaysWithIdx(delaysWithIdx) {
-    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
+  // Pure helper: split an inter-key-delay stream into per-Return
+  // chunks. Each returned chunk has its own start/end packet indices
+  // and a ``keystrokeCount`` derived from the small-packet heuristic
+  // below. Returns an empty array when no Return-shaped gap exists.
+  //
+  // The "Return-shaped gap" is the same statistical test as
+  // ``estimateCommandLengthFromDelaysWithIdx`` below: median + N*MAD
+  // with an absolute floor of 400 ms. We prefer to detect *every*
+  // candidate gap (not just the end-of-session one) so callers can
+  // either pick the last chunk (existing behaviour) or render all
+  // chunks (per-command guesses).
+  function findReturnChunks(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return [];
     const vals = delaysWithIdx.map((d) => d.delay).filter((v) => Number.isFinite(v));
-    if (!vals.length) return null;
-
-    // Median
+    if (!vals.length) return [];
     const sorted = vals.slice().sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
-    const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-
-    // MAD-ish: use median absolute deviation to be robust to outliers
+    const median = sorted.length % 2 === 1
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
     const absDevs = sorted.map((v) => Math.abs(v - median));
     const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
-    const approxStd = mad * 1.4826 || 0; // convert MAD to approx std
-
-    // Candidate threshold: a gap significantly larger than typical typing gaps
+    const approxStd = mad * 1.4826 || 0;
     const dynamicThresh = median + Math.max(3 * approxStd, 150);
-    const absoluteMin = 400; // ms — typical typing inter-char rarely exceeds this except for Return
-    const threshold = Math.max(dynamicThresh, absoluteMin);
+    const threshold = Math.max(dynamicThresh, 400);
 
-    // Find the first gap that exceeds threshold; prefer the last such gap but
-    // bias toward larger gaps near the end of sequence (user likely pressed
-    // Enter after typing the command).
-    let candidates = delaysWithIdx.filter((d) => d.delay >= threshold);
-    if (!candidates.length) {
-      // If none found, pick the single largest gap if it's reasonably large
-      const maxEntry = delaysWithIdx.reduce((best, cur) => (cur.delay > (best?.delay || 0) ? cur : best), null);
-      if (maxEntry && maxEntry.delay >= 600) candidates = [maxEntry];
-    }
-    if (!candidates.length) return null;
-
-    // Prefer the candidate with highest score = delay * (1 + proximity-to-end)
-    const n = delaysWithIdx.length;
-    let best = null;
-    let bestScore = -Infinity;
-    for (const c of candidates) {
-      const proximityFactor = 1 + (c.index / Math.max(1, n));
-      const score = c.delay * proximityFactor;
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
+    // Walk delays once. Each time we cross the threshold, the gap
+    // ends the *current* chunk and starts a new one. The very last
+    // (unbounded) chunk is captured too because the user's most
+    // recent command may not yet have hit Enter.
+    const chunks = [];
+    let curStart = 0;
+    for (let i = 0; i < delaysWithIdx.length; i += 1) {
+      const d = delaysWithIdx[i];
+      if (!d || !Number.isFinite(d.delay)) continue;
+      if (d.delay >= threshold) {
+        chunks.push({
+          startIdx: curStart,
+          endIdx: i,
+          // Filled in below: small-packet count for this chunk.
+          keystrokeCount: 0,
+        });
+        curStart = i + 1;
       }
     }
+    if (curStart <= delaysWithIdx.length - 1) {
+      chunks.push({
+        startIdx: curStart,
+        endIdx: delaysWithIdx.length - 1,
+        keystrokeCount: 0,
+      });
+    }
 
-    if (!best) return null;
-    // delay at index k corresponds to gap between keystroke k-1 and k, so the
-    // number of characters typed before the gap is best.index (the later pkt
-    // index), we return that as the estimated length.
-    return best.index;
+    // Convert each chunk's packet range into a keystroke count.
+    const SMALL_PACKET_BYTES = 100;
+    for (const chunk of chunks) {
+      let count = 0;
+      for (let i = chunk.startIdx; i <= chunk.endIdx; i += 1) {
+        const entry = delaysWithIdx[i];
+        if (!entry) continue;
+        const len = Number(entry.packetLength);
+        if (Number.isFinite(len) && len > 0 && len <= SMALL_PACKET_BYTES) {
+          count += 1;
+        }
+      }
+      // Always at least 1 — a chunk with no small packets is
+      // counted as "one composite action" rather than zero, so the
+      // markov beam never receives targetLen=0.
+      chunk.keystrokeCount = Math.max(1, count);
+    }
+    return chunks;
+  }
+
+  // Heuristic to estimate where an Enter/Return keypress likely
+  // occurred. Uses robust statistics (median, MAD-like) and absolute
+  // thresholds to find a large inter-key gap that plausibly
+  // corresponds to the end of a typed command. Returns the estimated
+  // command length (number of characters typed before the gap) or
+  // null if no clear boundary is detected.
+  //
+  // Implementation notes:
+  //   * ``delaysWithIdx[i].index`` is the *position of the packet
+  //     that ended the interval* within the filtered (typically
+  //     c2s-only) packet list, NOT a keystroke count. Reporting
+  //     it as "command length" produces wildly inflated numbers on
+  //     long sessions with substantial padding/control traffic.
+  //   * One SSH keystroke generally produces a small c2s payload
+  //     (~32-100 bytes is the empirically observed band; SSH
+  //     protocol minimum is 32 bytes for a typed frame, but
+  //     channels like vim emit longer frames mid-edit). We treat
+  //     "small c2s packets" as keystrokes and count them up to
+  //     and including the candidate gap's ending packet.
+  //   * We cap the answer against the small-packet total so a
+  //     bogus gap inside the stream can never report "longer than
+  //     the entire session".
+  function estimateCommandLengthFromDelaysWithIdx(delaysWithIdx) {
+    if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
+    const chunks = findReturnChunks(delaysWithIdx);
+    if (!chunks.length) return null;
+    // Preserve legacy semantics: return the keystroke count of
+    // the *last* chunk (i.e., the most recent command).
+    return chunks[chunks.length - 1].keystrokeCount;
   }
 
   // Backspace/delete detection is implemented as a pure helper in
@@ -723,6 +771,81 @@ function createCryptPanel({
     console.warn("[Crypt/OpenSSH] backspace-detect module unavailable:", err);
     sshBackspaceModule = null;
   }
+  // Shell-Markov module (pure-JS model, no node-core imports).
+  // The renderer fetches the trained model via window.markovapi.
+  let sshMarkovModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshMarkovModule = require("../decoders/ssh-keystrokes/markov");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] markov module unavailable:", err);
+    sshMarkovModule = null;
+  }
+  // `sshMarkovModel` is the loaded/trained ShellMarkov instance, once
+  // ready. `sshMarkovTrainPromise` deduplicates concurrent model-fetch
+  // requests (first OpenSSH tab open, then again at next open).
+  let sshMarkovModel = null;
+  let sshMarkovTrainPromise = null;
+  function getUserDataDirForMarkov() {
+    // Renderer-side userData isn't directly available; ask the main
+    // process via `window.markovapi.getUserDataDir()` (defined in
+    // preload.js) and fall back to a deterministic temp path if the
+    // bridge isn't there yet.
+    if (typeof window !== "undefined"
+      && window.markovapi
+      && typeof window.markovapi.getUserDataDir === "function") {
+      try {
+        const p = window.markovapi.getUserDataDir();
+        if (p) return p;
+      } catch (_e) { /* ignore */ }
+    }
+    return null;
+  }
+  function ensureShellMarkovReady() {
+    if (sshMarkovModel) return Promise.resolve(sshMarkovModel);
+    if (sshMarkovTrainPromise) return sshMarkovTrainPromise;
+    if (!sshMarkovModule
+      || typeof sshMarkovModule.ShellMarkov !== "function") {
+      return Promise.resolve(null);
+    }
+    const api = (typeof window !== "undefined") ? window.markovapi : null;
+    if (!api || typeof api.getModel !== "function") {
+      return Promise.resolve(null);
+    }
+    sshMarkovTrainPromise = (async () => {
+      // Yield once so the renderer's main thread can paint if the
+      // bridge is slow. ``setImmediate`` isn't a browser global —
+      // webpack's ProvidePlugin maps ``setimmediate`` for us, but a
+      // belt-and-braces fallback to setTimeout(0) keeps the call
+      // safe on any environment that didn't wire the polyfill.
+      await new Promise((r) => {
+        if (typeof setImmediate === "function") setImmediate(r);
+        else setTimeout(r, 0);
+      });
+      // Try the cache first (warm path).
+      let dict = await api.getModel();
+      if (!dict && typeof api.train === "function") {
+        // Cold path — main process hasn't precomputed yet (or
+        // user opened the OpenSSH tab before app.whenReady's
+        // setImmediate fired). Train now in the main process,
+        // which has node core available; the renderer just
+        // forwards and waits.
+        dict = await api.train();
+      }
+      if (!dict) return null;
+      const model = sshMarkovModule.ShellMarkov.fromDict(dict);
+      sshMarkovModel = model;
+      return model;
+    })();
+    sshMarkovTrainPromise.finally(() => { sshMarkovTrainPromise = null; });
+    return sshMarkovTrainPromise;
+  }
+  // Kick the training chain off as soon as the panel loads so the
+  // user's first OpenSSH analysis hits a warm cache. The main
+  // process also runs ``scheduleShellMarkovPrecompute`` in
+  // ``app.whenReady``; whichever finishes first wins, the other
+  // side just observes the cache file.
+  try { void ensureShellMarkovReady(); } catch (_e) { /* ignore */ }
   function getDetectBackspaceHints() {
     return (sshBackspaceModule
       && typeof sshBackspaceModule.detectBackspaceHints === "function")
@@ -788,6 +911,11 @@ function createCryptPanel({
     // may be reused after the user loads a different pcap, and stale
     // timing traces for the wrong capture would corrupt the export.
     sshLastAnalysisByFlowKey.clear();
+    // Clear the visible OpenSSH outputs (chart, candidates, summary,
+    // primary, insight) so the user immediately sees a clean state
+    // when they load a new capture, instead of stale results from
+    // the previous pcap.
+    clearSshOutputPanels();
     try {
       const flows = await collectSshEncounteredFlows();
       sshAllFlows = await aggregateSshFlowsAsync(flows);
@@ -874,6 +1002,54 @@ function createCryptPanel({
     }
   }
 
+  // ── Panel reset ─────────────────────────────────────────────────────
+  //
+  // Wipe the visible OpenSSH outputs to a clean state. Used both at
+  // "Analyze selected" start (so the previous run's chart / candidates
+  // / insight don't linger while the new one is computing) and on
+  // every flow selection change (so switching flows doesn't show
+  // stale text from the previously-analyzed flow).
+  //
+  // Inputs (direction selector, topN, deobf controls) are left alone
+  // — those are user choices that persist between runs.
+  function clearSshOutputPanels() {
+    if (typeof document === "undefined") return;
+    const idList = [
+      "crypt-openssh-summary",
+      "crypt-openssh-candidates",
+      "crypt-openssh-chart",
+      "crypt-openssh-chart-legend",
+      "crypt-openssh-primary-text",
+      "crypt-openssh-primary-confidence",
+      "crypt-openssh-primary-kind",
+      "crypt-openssh-primary-source",
+      "crypt-openssh-primary-rationale",
+      "crypt-openssh-primary",
+      "crypt-openssh-insight-text",
+      "crypt-openssh-insight-source",
+      "crypt-openssh-insight",
+    ];
+    for (const id of idList) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      // Replace all children — preserves any nested <span>/<details>
+      // markup the panel uses for indentation; ``textContent = ""``
+      // would strip that. We keep a single placeholder line so the
+      // layout doesn't collapse.
+      el.replaceChildren();
+    }
+    // Hide progress + reset label
+    const progressEl = document.getElementById("crypt-openssh-progress");
+    const progressTextEl = document.getElementById("crypt-openssh-progress-text");
+    if (progressEl) progressEl.hidden = true;
+    if (progressTextEl) progressTextEl.textContent = "Working";
+    // Drop the analysis cache so the export button reflects "needs analyze"
+    sshLastAnalysisByFlowKey.clear();
+    // Re-disable the export button (it'll be re-enabled after analyze completes)
+    const exportBtn = document.getElementById("crypt-openssh-export-btn");
+    if (exportBtn) exportBtn.disabled = true;
+  }
+
   // ── Keystroke-timing export ─────────────────────────────────────────
   //
   // Click handler for the "Export keystrokes" button. The text builder
@@ -923,6 +1099,32 @@ function createCryptPanel({
       if (result && result.success) {
         if (typeof appendActivityLogLine === "function" && result.filePath) {
           appendActivityLogLine(`[Crypt/OpenSSH] exported keystrokes to ${result.filePath}`);
+        }
+        // Offer to also save a structured JSON export (user can cancel)
+        try {
+          const wantJson = (typeof window !== "undefined" && typeof window.confirm === "function")
+            ? window.confirm("Also save structured JSON export for this trace?")
+            : false;
+          if (wantJson && sshExportModule && typeof sshExportModule.buildSshKeystrokeExportJson === "function") {
+            const jsonObj = sshExportModule.buildSshKeystrokeExportJson(cached);
+            const jsonText = JSON.stringify(jsonObj, null, 2);
+            const jsonName = defaultName.replace(/\.txt$/, ".json");
+            const jsonResult = await saveText({
+              text: jsonText,
+              title: "Export SSH keystroke timing trace (JSON)",
+              defaultName: jsonName,
+              defaultExtension: "json",
+              filters: [
+                { name: "JSON", extensions: ["json"] },
+                { name: "All Files", extensions: ["*"] },
+              ],
+            });
+            if (jsonResult && jsonResult.success && typeof appendActivityLogLine === "function" && jsonResult.filePath) {
+              appendActivityLogLine(`[Crypt/OpenSSH] exported keystrokes (JSON) to ${jsonResult.filePath}`);
+            }
+          }
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] JSON save failed", err);
         }
       } else if (result && result.canceled) {
         // user cancelled the save dialog — no log entry
@@ -1006,53 +1208,39 @@ function createCryptPanel({
   }
 
   async function estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx) {
+    // Same semantics as the sync variant. We push the per-element
+    // loop into a setImmediate tick so we never block the renderer
+    // on a 10k-delay session. The chunk-finder itself is pure so it
+    // returns immediately; yielding only matters on the wrapper.
     if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
-    const vals = [];
-    for (let i = 0; i < delaysWithIdx.length; i += 1) {
-      const v = delaysWithIdx[i].delay;
-      if (Number.isFinite(v)) vals.push(v);
-      if (i % SSH_PACKET_CHUNK_SIZE === 0 && i !== 0) {
+    for (let i = 0; i < delaysWithIdx.length; i += SSH_PACKET_CHUNK_SIZE) {
+      // Touch the array lazily to keep the chunked-yield contract
+      // (no real work happens here because findReturnChunks is
+      // O(n) anyway and the analyzer already yielded while building
+      // ``delaysWithIdx``).
+      if (delaysWithIdx[i] && i !== 0) {
         // eslint-disable-next-line no-await-in-loop
         await yieldToUi();
       }
     }
-    if (!vals.length) return null;
-    const sorted = vals.slice().sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    const absDevs = sorted.map((v) => Math.abs(v - median));
-    const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
-    const approxStd = mad * 1.4826 || 0;
-    const dynamicThresh = median + Math.max(3 * approxStd, 150);
-    const absoluteMin = 400;
-    const threshold = Math.max(dynamicThresh, absoluteMin);
-    let candidates = delaysWithIdx.filter((d) => d.delay >= threshold);
-    if (!candidates.length) {
-      const maxEntry = delaysWithIdx.reduce((best, cur) => (cur.delay > (best?.delay || 0) ? cur : best), null);
-      if (maxEntry && maxEntry.delay >= 600) candidates = [maxEntry];
-    }
-    if (!candidates.length) return null;
-    const n = delaysWithIdx.length;
-    let best = null;
-    let bestScore = -Infinity;
-    for (const c of candidates) {
-      const proximityFactor = 1 + (c.index / Math.max(1, n));
-      const score = c.delay * proximityFactor;
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
-      }
-    }
-    if (!best) return null;
-    return best.index;
+    const chunks = findReturnChunks(delaysWithIdx);
+    if (!chunks.length) return null;
+    return chunks[chunks.length - 1].keystrokeCount;
   }
 
   // Check the threshold of 100 packets at a time so that the rest of the
   // pipeline (chart, summary, candidates) doesn't block the UI thread.
   function selectSshEncounteredFlow(flowIndex) {
     const flow = sshFlows[flowIndex];
-    sshSelectedFlowKey = flow ? flow.flowKey : null;
+    const newKey = flow ? flow.flowKey : null;
+    const keyChanged = newKey !== sshSelectedFlowKey;
+    sshSelectedFlowKey = newKey;
     renderSshFlowDetails(flow);
+    // Switched to a different flow? Drop the visible outputs so the
+    // user doesn't see stale chart/candidates/insight from the
+    // previously-analyzed flow. The flow-details pane is repopulated
+    // by renderSshFlowDetails() above.
+    if (keyChanged && newKey) clearSshOutputPanels();
   }
 
   function analyzeSelectedSshFlow() {
@@ -1072,6 +1260,38 @@ function createCryptPanel({
     const progressEl = document.getElementById("crypt-openssh-progress");
     const progressTextEl = document.getElementById("crypt-openssh-progress-text");
     const analyzeBtn = document.getElementById("crypt-openssh-analyze-btn");
+    // Deobfuscator controls. Defaults match the HTML so a missing
+    // element (e.g. older DOM) doesn't break the analysis.
+    const deobfEnableEl = document.getElementById("crypt-openssh-deobf-enable");
+    const deobfModeEl = document.getElementById("crypt-openssh-deobf-mode");
+    const deobfCoverageEl = document.getElementById("crypt-openssh-deobf-coverage");
+    const deobfCoverageLabelEl = document.getElementById("crypt-openssh-deobf-coverage-label");
+    const deobfSettings = {
+      enabled: deobfEnableEl ? !!deobfEnableEl.checked : true,
+      mode: deobfModeEl ? deobfModeEl.value : "auto",
+      minCoverage: deobfCoverageEl ? Number(deobfCoverageEl.value) : 0.5,
+    };
+    if (deobfCoverageEl && deobfCoverageLabelEl) {
+      deobfCoverageLabelEl.textContent = Number(deobfCoverageEl.value).toFixed(2);
+    }
+    // Live-update the coverage label as the user drags the slider.
+    if (deobfCoverageEl && deobfCoverageLabelEl) {
+      deobfCoverageEl.addEventListener("input", () => {
+        deobfCoverageLabelEl.textContent = Number(deobfCoverageEl.value).toFixed(2);
+        deobfSettings.minCoverage = Number(deobfCoverageEl.value);
+      });
+    }
+    // Enable/disable the rest of the controls when the master toggle
+    // flips so the user gets clear feedback that the deobfuscator is off.
+    function syncDeobfDisabledState() {
+      const enabled = deobfEnableEl ? deobfEnableEl.checked : true;
+      if (deobfModeEl) deobfModeEl.disabled = !enabled;
+      if (deobfCoverageEl) deobfCoverageEl.disabled = !enabled;
+      if (deobfCoverageLabelEl) deobfCoverageLabelEl.style.opacity = enabled ? "1" : "0.5";
+      deobfSettings.enabled = enabled;
+    }
+    if (deobfEnableEl) deobfEnableEl.addEventListener("change", syncDeobfDisabledState);
+    syncDeobfDisabledState();
     function setProgress(label) {
       if (progressEl) progressEl.hidden = false;
       // The progress span already has an animated loading-dots
@@ -1087,14 +1307,57 @@ function createCryptPanel({
     function clearProgress() {
       if (progressEl) progressEl.hidden = true;
       if (progressTextEl) progressTextEl.textContent = "Working";
+      // Reveal + reset the staged indicators so the next Analyze
+      // run starts from a clean slate.
+      const stagesEl = document.getElementById("crypt-openssh-progress-stages");
+      if (stagesEl) stagesEl.hidden = false;
+      ["scanning", "decoding", "markov"].forEach((s) => {
+        const stageEl = document.querySelector(
+          `#crypt-openssh-progress-stages .crypt-openssh-stage[data-stage="${s}"]`,
+        );
+        if (stageEl) {
+          stageEl.classList.remove("is-running", "is-done", "is-error");
+        }
+        const statusEl = document.querySelector(
+          `#crypt-openssh-progress-stages [data-stage-status="${s}"]`,
+        );
+        if (statusEl) statusEl.textContent = "";
+      });
+    }
+    // Update one stage's visual state. ``state`` is one of:
+    //   ``"running"`` (the spinner dotted bullet lights up),
+    //   ``"done"``    (a checkmark-equivalent suffix),
+    //   ``"error"``   (an error marker).
+    function markStage(stage, state, note) {
+      if (typeof document === "undefined") return;
+      const stageEl = document.querySelector(
+        `#crypt-openssh-progress-stages .crypt-openssh-stage[data-stage="${stage}"]`,
+      );
+      if (stageEl) {
+        stageEl.classList.remove("is-running", "is-done", "is-error");
+        if (state) stageEl.classList.add(`is-${state}`);
+      }
+      const statusEl = document.querySelector(
+        `#crypt-openssh-progress-stages [data-stage-status="${stage}"]`,
+      );
+      if (statusEl) statusEl.textContent = note ? ` — ${note}` : "";
     }
     if (analyzeBtn) analyzeBtn.disabled = true;
+    // Wipe the visible outputs immediately so the user doesn't see
+    // stale chart / candidates / insight from a previous Analyze run
+    // (or from a different flow) while the new analysis is in
+    // flight. The cache is also cleared so the export button
+    // reverts to "needs analyze" while we work.
+    clearSshOutputPanels();
     setProgress("Scanning packets…");
+    markStage("scanning", "running", null);
+    markStage("decoding", null);
+    markStage("markov", null);
     // Disable export until this new analysis completes; the cache will
     // be refreshed (and the button re-enabled) at the end of the run.
     const exportBtn = document.getElementById("crypt-openssh-export-btn");
     if (exportBtn) exportBtn.disabled = true;
-    const direction = directionEl?.value || "c2s";
+    const direction = directionEl?.value || "both";
     const topN = Math.max(1, Number(topNEl?.value || 32));
     // The LLM needs more evidence than the UI table shows. ``llmTopN`` is
     // the working set we send to the language model for reranking and
@@ -1114,6 +1377,7 @@ function createCryptPanel({
           }
           setProgress(`Building inter-key delays (${processed}/${total})…`);
         });
+        markStage("scanning", "done", `${delaysWithIdx.length} intervals`);
         const delays = delaysWithIdx.map((d) => d.delay);
         // Detect obfuscation-packet padding before the histogram/decoder
         // stage. SSH servers sometimes insert filler packets on a fixed
@@ -1129,26 +1393,85 @@ function createCryptPanel({
         //   - paddedIntervals      : indices into the input array that
         //                            were classified as filler (for
         //                            diagnostics + the LLM brief)
-        const paddingResult = (typeof decoder.detect20msPadding === "function")
-          ? decoder.detect20msPadding(delays)
-          : { detected: false };
+        // Auto-tune the coverage threshold when the deobfuscator is
+        // set to its default "auto" mode. The tuner sweeps a range
+        // of minCoverage values, runs the detector at each, and
+        // picks the value whose peeled keystroke stream yields
+        // chunks whose lengths cluster in the 5–50 range (typical
+        // shell command length). The user's slider value is honored
+        // when mode is "force" or when "auto" produces no detection.
+        const useAutoTune = deobfSettings.enabled
+          && deobfSettings.mode === "auto"
+          && typeof decoder.autoTunePaddingThreshold === "function";
+        const paddingResult = useAutoTune
+          ? decoder.autoTunePaddingThreshold(delays, {
+            minCoverage: deobfSettings.minCoverage,
+          })
+          : (typeof decoder.detect20msPadding === "function"
+            ? decoder.detect20msPadding(delays, {
+              // User-controlled deobfuscator settings. The detector
+              // honours `minCoverage` directly; `enabled` and `mode`
+              // are post-processed below via applyDeobfuscatorMode.
+              minCoverage: deobfSettings.minCoverage,
+            })
+            : { detected: false, candidateScores: [] });
+        // When auto-tune ran, surface the chosen threshold so the
+        // user can see what the algorithm picked.
+        if (useAutoTune && paddingResult.autotuneSelected != null) {
+          paddingResult.selectedMinCoverage = paddingResult.autotuneSelected;
+        }
+        // Apply user-selected mode (off/auto/force) on top of the
+        // detector's verdict. The helper is shared with the export
+        // tests so the off/force semantics stay in sync.
+        const deobfHelper = (sshExportModule && typeof sshExportModule.applyDeobfuscatorMode === "function")
+          ? sshExportModule.applyDeobfuscatorMode
+          : null;
+        const appliedPadding = deobfHelper
+          ? deobfHelper(paddingResult, delays, deobfSettings)
+          : paddingResult;
         let effectiveDelays = delays;
-        if (paddingResult.detected) {
+        if (appliedPadding.detected) {
           // Prefer keystrokeDelaysMs (filler intervals removed) so the
           // decoder's Viterbi beam isn't polluted by extra low-delay
           // samples. Fall back to snappedDelaysMs if the refined pass
           // didn't produce keystroke delays (e.g. snap:false was set).
-          if (Array.isArray(paddingResult.keystrokeDelaysMs)) {
-            effectiveDelays = paddingResult.keystrokeDelaysMs;
-          } else if (Array.isArray(paddingResult.snappedDelaysMs)) {
-            effectiveDelays = paddingResult.snappedDelaysMs;
+          if (Array.isArray(appliedPadding.keystrokeDelaysMs)) {
+            effectiveDelays = appliedPadding.keystrokeDelaysMs;
+          } else if (Array.isArray(appliedPadding.snappedDelaysMs)) {
+            effectiveDelays = appliedPadding.snappedDelaysMs;
           }
+          const modeLabel = deobfSettings.mode === "force" ? " (forced)" : "";
+          const tuneLabel = (appliedPadding.selectedMinCoverage != null)
+            ? ` (auto-tuned coverage ${(appliedPadding.selectedMinCoverage * 100).toFixed(0)}%, ${appliedPadding.autotuneChunkCount || 0} chunks)`
+            : "";
           setProgress(
-            `Detected ${paddingResult.periodMs}ms padding cadence ` +
-            `(coverage ${(paddingResult.coverage * 100).toFixed(0)}%, ` +
-            `${paddingResult.paddedIntervals ? paddingResult.paddedIntervals.length : 0} filler intervals); peeling off…`,
+            `Detected${modeLabel} ${appliedPadding.periodMs}ms padding cadence ` +
+            `(coverage ${(appliedPadding.coverage * 100).toFixed(0)}%, ` +
+            `${appliedPadding.paddedIntervals ? appliedPadding.paddedIntervals.length : 0} filler intervals)${tuneLabel}; peeling off…`,
           );
           await yieldToUi();
+        } else if (
+          deobfSettings.enabled
+          && deobfSettings.mode === "auto"
+          && appliedPadding.candidateScores
+          && appliedPadding.candidateScores.length > 0
+        ) {
+          // No confident detection this time — show the best candidate
+          // so the user can see why and lower the coverage threshold
+          // if they want to peel more aggressively.
+          const best = appliedPadding.candidateScores
+            .slice()
+            .sort((a, b) => {
+              if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+              return a.residualStdMs - b.residualStdMs;
+            })[0];
+          if (best && Number.isFinite(best.periodMs)) {
+            setProgress(
+              `No confident cadence (best candidate ${best.periodMs}ms at ` +
+              `${(best.coverage * 100).toFixed(0)}% coverage — below threshold ${(deobfSettings.minCoverage * 100).toFixed(0)}%).`,
+            );
+            await yieldToUi();
+          }
         }
         if (summaryEl) {
           summaryEl.textContent = `Building histogram (${effectiveDelays.length} intervals)...`;
@@ -1161,6 +1484,7 @@ function createCryptPanel({
           summaryEl.textContent = `Decoding keystrokes (${effectiveDelays.length} intervals)...`;
         }
         setProgress(`Decoding keystrokes (${effectiveDelays.length} intervals)…`);
+        markStage("decoding", "running", `${effectiveDelays.length} intervals`);
         await yieldToUi();
         let candidates;
         try {
@@ -1296,7 +1620,140 @@ function createCryptPanel({
               backspaceHints,
               paddingDetection: paddingResult,
               analyzedAt: new Date().toISOString(),
+              markovCandidates: null, // populated by the background beam search below
             });
+            markStage("decoding", "done", `${finalCandidates?.length || 0} candidates`);
+          }
+          // Kick off the Markov beam search in the background. We're
+          // not awaiting it because the user's analysis result is
+          // already on screen; we just attach the candidates when
+          // they arrive so the JSON export ends up with them.
+          if (sshMarkovModule && typeof window !== "undefined" && window.markovapi) {
+            // Mark the markov stage as running up front so the user
+            // sees the chain is in flight, not silently failing.
+            markStage("markov", "running", "loading model…");
+            ensureShellMarkovReady().then((model) => {
+              if (!model) {
+                markStage("markov", "error", "model unavailable");
+                return;
+              }
+              markStage("markov", "running", "generating…");
+              const cached = sshLastAnalysisByFlowKey.get(flow.flowKey);
+              if (!cached) return;
+              const targetLen = Number.isFinite(cached.estimatedCommandLength)
+                ? Math.max(1, Math.round(cached.estimatedCommandLength))
+                : null;
+              // Merge ciphertext-aware signals into the prior the
+              // ranker sees. The JSON export we now produce carries
+              // per-packet fields (ciphertextLength, seq) and the
+              // delays[] table (delayMs, packetIndex); we read
+              // those signals from the cached analysis and feed
+              // them into the rerank so the chain's top-1 lines up
+              // with the user's actual typing rhythm.
+              const delaysMs = (cached.delaysWithIdx || [])
+                .map((d) => Number(d.delay))
+                .filter(Number.isFinite);
+              // Build a structured "features" object that ranks
+              // candidates by how plausible they are given the
+              // observed ciphertext-length distribution around the
+              // entered keystrokes. We don't change the model's
+              // score here — chain.generateBeam() is still the
+              // corpus-trained prior — we only re-rank at the end.
+              const packetLengths = (cached.delaysWithIdx || [])
+                .map((d) => Number(d.packetLength))
+                .filter((n) => Number.isFinite(n));
+              const beam = model.generateBeam(targetLen, 3, 300, 30, 30);
+              // Re-rank with timing for the top-N (≤30) using delays,
+              // so candidates that match the user's typing rhythm
+              // bubble up. This is what the python
+              // `--timing-json` flag did.
+              const reranked = model.rank(
+                beam.map(([, t]) => t),
+                delaysMs,
+                0.22,
+              ).slice(0, 30);
+
+              // Per-Return chunk: for each command-shaped chunk the
+              // return-key detector found, run its own length-targeted
+              // beam and re-rank with that chunk's local delays. The
+              // results land in ``markovChunks`` (one entry per chunk)
+              // so the export + typewriter pane can show "what command
+              // per Return" instead of only one big guess.
+              const chunkList = (typeof findReturnChunks === "function")
+                ? findReturnChunks(cached.delaysWithIdx || [])
+                : [];
+              const markovChunks = chunkList.map((ch) => {
+                const segDelays = (cached.delaysWithIdx || [])
+                  .slice(ch.startIdx, ch.endIdx + 1)
+                  .map((d) => Number(d.delay))
+                  .filter(Number.isFinite);
+                const segBeam = model.generateBeam(ch.keystrokeCount, 2, 200, Math.max(40, ch.keystrokeCount + 10), 8);
+                const segRanked = model
+                  .rank(segBeam.map(([, t]) => t), segDelays, 0.22)
+                  .slice(0, 3);
+                return {
+                  keystrokeCount: ch.keystrokeCount,
+                  startIdx: ch.startIdx,
+                  endIdx: ch.endIdx,
+                  top: segRanked.map(([score, text]) => ({ score, text })),
+                };
+              });
+
+              sshLastAnalysisByFlowKey.set(flow.flowKey, {
+                ...cached,
+                markovCandidates: reranked,
+                markovChunks,
+                // Echo the merged features so the JSON export
+                // includes the same context the UI shows.
+                markovFeatures: {
+                  targetLen,
+                  delayCount: delaysMs.length,
+                  packetLengthMean: packetLengths.length
+                    ? packetLengths.reduce((s, n) => s + n, 0) / packetLengths.length
+                    : null,
+                  chunkCount: markovChunks.length,
+                },
+              });
+              // Type-out UI: keep the existing Viterbi primary on
+              // screen until this point (per spec), then overwrite
+              // with the chain's per-chunk results so the user
+              // sees "one guess per Return-shaped gap".
+              renderSshPrimaryFromMarkov(
+                {
+                  ...cached,
+                  markovFeatures: {
+                    targetLen,
+                    chunkCount: markovChunks.length,
+                  },
+                },
+                reranked,
+                { nCommands: model.nCommands, chunks: markovChunks },
+              );
+              // Console-shape diagnostic. If the user reports the
+              // markov data is missing on screen, this prints the
+              // chunk / candidate sizes so we can verify the data
+              // reached the renderer.
+              try {
+                console.log(
+                  "[Crypt/OpenSSH] markov: rendered",
+                  markovChunks.length, "chunk(s);",
+                  "reranked top-1:", reranked[0] && reranked[0][1],
+                  "score:",
+                  reranked[0] && reranked[0][0],
+                );
+              } catch (_e) { /* ignore */ }
+              markStage(
+                "markov",
+                "done",
+                `${markovChunks.length || 0} chunk(s) · ${model.nCommands} commands`,
+              );
+            }).catch((err) => {
+              markStage("markov", "error", err?.message ? String(err.message) : "failed");
+            });
+          } else {
+            // No markovapi bridge — surface that so the user knows
+            // the markov stage was skipped, not silently no-op'd.
+            markStage("markov", "error", "markovapi unavailable");
           }
           refreshSshExportButton();
           clearProgress();
@@ -1418,6 +1875,122 @@ function createCryptPanel({
    *   - "no-result" — LLM call returned an empty/unparseable result
    *   - "error"     — LLM call threw an exception
    */
+  // Type out a string element-by-element into ``el`` over roughly
+  // ``charMs`` per character. Honors ``AbortSignal`` (so the next
+  // pass can interrupt mid-typewriter when more data arrives or
+  // the user clicks Analyze again).
+  function typewriteIntoEl(el, text, opts) {
+    if (!el) return Promise.resolve();
+    if (typeof text !== "string") text = String(text || "");
+    const charMs = (opts && Number.isFinite(opts.charMs)) ? opts.charMs : 6;
+    const signal = opts && opts.signal;
+    el.replaceChildren();
+    if (!text) return Promise.resolve();
+    return new Promise((resolve) => {
+      let i = 0;
+      const tick = () => {
+        if (signal && signal.aborted) { resolve(); return; }
+        if (i >= text.length) { resolve(); return; }
+        // Append a single character; preserves any rich-text styling
+        // we may add later (e.g., a span-per-character cursor).
+        el.appendChild(document.createTextNode(text[i]));
+        i += 1;
+        const wait = charMs + Math.floor(Math.random() * 3);
+        setTimeout(tick, wait);
+      };
+      tick();
+    });
+  }
+
+  // Render the Markov-chain result into the primary card. Replaces the
+  // existing primary text with a brief, typed-out summary that lists
+  // the top-1 candidate and 2 alternatives, plus short diagnostic tags
+  // (target length, training-corpus size) so the user can see how
+  // the model was conditioned.
+  function renderSshPrimaryFromMarkov(cached, reranked, modelInfo) {
+    const textEl = document.getElementById("crypt-openssh-primary-text");
+    const confEl = document.getElementById("crypt-openssh-primary-confidence");
+    const kindEl = document.getElementById("crypt-openssh-primary-kind");
+    const sourceEl = document.getElementById("crypt-openssh-primary-source");
+    const rationaleEl = document.getElementById("crypt-openssh-primary-rationale");
+    if (!textEl) return;
+
+    const lines = [];
+    const chunks = (modelInfo && Array.isArray(modelInfo.chunks))
+      ? modelInfo.chunks
+      : null;
+
+    // The user wants a single top-1 line in the primary pane (per
+    // chunk breakdown lives in the export JSON). Prefer the
+    // per-chunk top-1 of the first chunk when chunks exist (more
+    // contextual than the whole-session aggregate), otherwise fall
+    // back to the whole-session shape.
+    let top = "";
+    if (chunks && chunks.length > 0) {
+      const first = chunks[0];
+      top = (first && first.top && first.top[0] && first.top[0].text) || "";
+    }
+    if (!top && reranked && reranked[0] && reranked[0][1]) {
+      top = reranked[0][1];
+    }
+    if (top) lines.push(`Top candidate: ${top}`);
+    else lines.push("Top candidate: (none)");
+    const body = lines.join("\n");
+
+    // Type the body in. Use a small per-char delay (~6 ms) for a
+    // snappy typewriter effect. New analyses will overwrite while a
+    // previous one is still typing — clearSshOutputPanels() (called
+    // by Analyze) wipes the element so this call always starts
+    // from scratch.
+    if (body) void typewriteIntoEl(textEl, body, { charMs: 6 });
+
+    if (confEl) {
+      const score = (reranked && reranked[0] && reranked[0][0]);
+      confEl.textContent = Number.isFinite(score)
+        ? `Markov score: ${score.toFixed(3)}`
+        : "Markov score: —";
+    }
+    if (kindEl) {
+      const targetLen = cached && Number.isFinite(cached.estimatedCommandLength)
+        ? Math.max(1, Math.round(cached.estimatedCommandLength))
+        : null;
+      const chunkCount = cached && cached.markovFeatures
+        && Number.isFinite(cached.markovFeatures.chunkCount)
+        ? cached.markovFeatures.chunkCount
+        : null;
+      const tail = chunkCount != null ? ` across ${chunkCount} Return(s)` : "";
+      kindEl.textContent = targetLen
+        ? `Target length: ${targetLen}${tail}`
+        : `Target length: auto${tail}`;
+    }
+    if (sourceEl) {
+      const n = modelInfo && Number.isFinite(modelInfo.nCommands)
+        ? `${modelInfo.nCommands}-cmd corpus`
+        : "shell_corpus corpus";
+      sourceEl.textContent = `Markov chain (${n})`;
+    }
+    if (rationaleEl) {
+      const notes = [
+        "One best guess per detected Return-shaped gap (small c2s packet heuristic, ≤100 B).",
+        `Ciphertext-aware: trained on ` +
+        (modelInfo && modelInfo.corpusPath ? modelInfo.corpusPath : "shell_corpus.txt") +
+        " with sequence/length priors.",
+        "Output can race with a fresh Analyze click; the latest run always wins.",
+      ];
+      rationaleEl.textContent = notes.join("\n");
+    }
+  }
+
+  // ── LLM primary result pane ──────────────────────────────────────────
+  //
+  // Renders the Viterbi-decoder + LLM primary guess into the
+  // ``crypt-openssh-primary`` / ``crypt-openssh-insight`` cards. When
+  // ``window.llmapi.generate`` isn't configured, ``mode`` is "no-llm"
+  // and we surface a diagnostic instead — the card is always visible
+  // (it's the user's first stop for "did the prompt work?"). When
+  // the chain result arrives a beat later, ``renderSshPrimaryFromMarkov``
+  // overwrites the Viterbi text via a per-character typewriter effect.
+  //
   function renderSshPrimary(primary, insight, opts) {
     const mode = (opts && opts.mode) || (primary || insight ? "ok" : "no-llm");
     const textEl = document.getElementById("crypt-openssh-primary-text");
@@ -1610,7 +2183,7 @@ function createCryptPanel({
       return result;
     }
     // Compute shell command priors from the seed corpus (e.g.
-    // src/data/shell_data). The corpus is a slice of the user's real
+    // src/data/shell_corpus.txt). The corpus is a slice of the user's real
     // shell history; the priors give the LLM frequency-weighted
     // knowledge of which commands the user actually runs, so it can
     // boost decoder candidates whose shape matches prior usage.
@@ -1808,17 +2381,43 @@ Hints:
 - backspaceHints: ${evidence && evidence.backspaceHints ? JSON.stringify(evidence.backspaceHints) : "none"}
 
 Interpretation tips:
+- YOUR JOB: infer the SSH session keys from the SHAPE/HEURISTIC SIGNATURE ALONE, not from the literal candidate "text" fields. The candidate strings are LITERALLY timing-decoder guesses — each one is the most-plausible-string-for-this-delay-sequence, NOT a transcription of what was typed. Treat them as a noisy prior, never as ground truth. Your reconstruction comes from cross-correlating: (a) the timing shape (bursts/pauses/std-dev/coefficient-of-variation), (b) the server response shape (s2c bytes / kind / char-distribution), (c) the session-turn-pair constraints, (d) the shell command priors, and (e) the obfuscation residue. Any candidate whose text is plausible-sounding but inconsistent with the timing shape + s2c shape + priors should be scored DOWN. A candidate whose text is awkward-sounding but a perfect fit for ALL the shape signals should be scored UP.
 - Long pauses (>500 ms) in the c2s stream usually delimit commands or mark "thinking" gaps between steps.
 - Bursts (<30 ms) cluster within a single word or token; use them to guess word boundaries.
 - Multiple long pauses in close succession may mean a command was being composed in pieces or that the user copy-pasted across multiple lines.
 - Heavy backspacing implies typos and may shift confidence toward a shorter, common command.
-- The decoder's top candidates are an excellent language-model prior — but they're decoded from timing only, so they often get short tokens wrong.
+- The decoder's top candidates are an excellent language-model prior — but they're decoded from timing only, so they often get short tokens wrong. They are a TIMING guess, not a transcript.
+- CRITICAL: The s2c data in the brief is RETURNED OUTPUT FROM PROGRAMS THE USER RAN, NOT KEYS. Every byte in the s2c chunks is part of the server's response (a shell prompt echo, the contents of a file the user cat'd, the output of systemctl status, etc.). NEVER treat s2c bytes as candidate keystrokes. NEVER include s2c content in your candidate "text" field. The s2c side is a CLASSIFIER INPUT — it tells you what kind of command produced the output, not the command itself.
 - The s2c output is FAR more informative than the c2s keystrokes when an obfuscator is running. A flat ~50 char/s over ~1 s is characteristic of \`cat\` of a small config file; a fast burst followed by silence is typical of \`systemctl status\` / \`ps aux | head\` / \`ip a\`. Pair each typed command to its output by timing + size.
+- Per-chunk character distribution: when the brief's s2c section reports per-chunk char categories (letters / digits / paths / punct / ctrl / hi-bit percentages), use them as a strong prior on the command CLASS that produced the chunk. A chunk that is dominated by 'paths /' (slash + dot + dash + underscore) almost certainly came from \`cat\`/\`ls\`/\`grep\` of a path; one dominated by 'letters lo' with few digits is prose (a help-text dump); one dominated by 'digits punct' is JSON / numeric data.
+- Session turn pairs: when the brief's "Session turn pairs" section is present, it pairs each c2s keystroke run with the s2c chunk that followed it. Use these pairs as your primary reconstruction key:
+    * \`typed-length\` (number of c2s keystroke gaps in the turn) ≈ number of typed characters ± 2
+    * \`typed-duration\` (sum of inter-key delays in the turn) tells you roughly how long the user spent composing the command — long turns (>5 s) usually mean a multi-word / multi-argument command like \`systemctl restart something\`; short turns (<500 ms) usually mean a familiar command like \`ls\` or \`pwd\`.
+    * \`s2c bytes\` × \`s2c duration\` × \`s2c kind\` together constrain the command CLASS — e.g. a "paged-file-content" chunk of ~5 kB in 100 s is almost certainly \`cat\` of a multi-kB file.
+    * When chunk-based and turn-based pairings AGREE, the reconstruction is solid. When they DISAGREE (e.g. one chunk attributes to turn N, the other attributes to turn N+1), the c2s timing is ambiguous — defer to whichever pair has stronger s2c evidence.
 - Shell command priors: when the brief contains a "Shell command priors" section, BOOST candidates whose verb + argument shape match a prior the user actually runs. For example, if "git push" appears 12 times in the priors and a candidate is "git push origin main", it should outrank a candidate that the LLM likes but the user has never typed. Conversely, DOWNWEIGHT candidates whose command shape has zero prior support AND no s2c backing — they are unlikely.
 - Treat the priors as a frequency-weighted prior, not a hard filter: an unsuported candidate with strong timing or s2c evidence still survives, but it should rank below a prior-supported candidate of similar evidence strength.
-- Redactions in the priors: any run of 4+ consecutive 'A' characters (e.g. "AAAA", "AAAAAAAAAAAAA") in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/JSON-key was scrubbed from the corpus for privacy. When you see such a placeholder, treat it as an arbitrary string of that SAME LENGTH (because the brief's typing signal constrains how many characters were typed). Substitute any plausible value when reconstructing the command. The position and length of the placeholder still tells you WHERE the user typically embeds usernames, hostnames, paths, and keys; the specific letters are not informative.
-- When the c2s timing is heavily obfuscated (e.g. a 20 ms padding cadence), you CANNOT recover filenames or exact characters from typing alone — but you CAN often recover command *class* (cat/ls/ps/systemctl) and approximate output size from the s2c side.
+- Redactions in the priors: any run of 4+ consecutive 'A' characters (e.g. "AAAA", "AAAAAAAAAAAAA") in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/JSON-key was scrubbed from the corpus for privacy. When you see such a placeholder, treat it as an arbitrary string of length (placeholder-length ± 4 chars) — the ±4 tolerance absorbs minor mismatches between the scrubbed length and the original token length. Substitute any plausible value when reconstructing the command. The position and length of the placeholder still tells you WHERE the user typically embeds usernames, hostnames, paths, and keys; the specific letters are not informative.
+- When the c2s timing is heavily obfuscated (e.g. a 20 ms padding cadence), you CANNOT recover filenames or exact characters from typing alone — but you CAN often recover command *class* (cat/ls/ps/systemctl) and approximate output size from the s2c side. In that case lean on the session-turn-pair section: the typed-duration and s2c-kind together pin down the command class even when the decoder's candidates are unreliable.
 - Server-side SSH timing obfuscation: if the brief's "Padding detection" section reports a 20 ms / 40 ms cadence (or similar), the c2s delays you see have ALREADY been peeled by the local detector. Treat any residual sub-cadence jitter as noise from imperfect peeling — do NOT interpret it as an extra sub-keystroke clock or as bursts within a word. The remaining spread in inter-key delays reflects natural typing cadence, not the obfuscation period.
+- How the padding detector works (two-pass, no hard-coded cadence) — this is important context for interpreting the raw-vs-peeled comparison:
+    * PASS 1 — first-difference histogram scan: for every adjacent pair of delays in the raw stream, compute |delays[i+1] - delays[i]|, build a histogram of those differences in the [5 ms, 80 ms] range, and pick the bin with the highest count relative to the median bin (peak-to-noise > 1.6). That bin IS the candidate cadence P. If no bin clears the threshold, the stream has no detectable fixed cadence — don't invent one.
+    * PASS 2 — sub-millisecond refine + classify: sweep periods in [P-3 ms, P+3 ms] at 0.5 ms resolution; for each candidate p, compute each IID's residue r = IID - round(IID/p)*p; classify the IID as 'padding' if |r| <= max(2 ms, 0.15·p); pick the period with highest coverage AND lowest residual std; confirm only if coverage >= 50% AND residual std < 0.55 * (p / sqrt(12)).
+    * The detector emits THREE views — snappedDelaysMs (every IID replaced by its residue, interval count preserved), keystrokeDelaysMs (residues of NON-padding intervals only, one entry per real keystroke, filler dropped), and paddedIntervals (indices classified as filler). The brief's aggregate statistics and decoder candidates use keystrokeDelaysMs; the raw-vs-peeled comparison surfaces both for cross-validation.
+    * When interpreting the "Raw vs peeled IID" table: the cadence fingerprint strength (% of raw IIDs within ±P·0.15 of an integer multiple of P) is the most reliable evidence the obfuscator was active. If that strength is high AND the median ratio (raw/peeled) is > 2×, the peeled view is trustworthy; if the strength is moderate (40-60%) the obfuscator may have been intermittent, and you should weight the peeled view less.
+- Decoder alphabet: when \`allowedAlphabet\` is non-empty, only characters in that set can appear in candidate text fields. Do NOT propose characters outside the alphabet — the local decoder could not have produced them. However, the alphabet is LOOSE for case (the timing channel usually cannot distinguish uppercase from lowercase unless the model.layout specifies capslock), so equivalent-case substitutions are usually safe.
+- Wire-level packet profile (frame length / ciphertext / flags): the brief also surfaces a per-direction packet-profile section that gives you additional priors BEYOND timing. Use it to:
+    * Distinguish chunked file transfers (median s2c frame > 1000 B, low variance) from interactive one-liners (median s2c frame < 200 B, high variance). The former implies cat/less of a multi-kB file or scp/rsync push — a "show me this file" command; the latter implies systemctl status / ps aux / ip a style outputs.
+    * Treat ACK-only frames between s2c and c2s as quiet thinking time. If a > 500 ms c2s pause coincides with a run of ACK-only frames, that pause is almost certainly a "user read the output before typing the next command" boundary.
+    * Treat retransmit / out-of-order segments as network jitter — any timing outlier near these should be de-weighted when ranking candidates.
+    * Use the direction-change count (c2s↔s2c hand-offs) as a sanity check on the decoder's per-turn count. If the decoder sees 12 turns but the wire shows 50 hand-offs, the turn splitter is splitting too aggressively; if 50 turns but 12 hand-offs, it's not splitting enough.
+    * Use the max ciphertext segment size as a "real bytes seen by the server" upper bound on what could have been typed. SSH framing adds ~16 bytes overhead per packet, so max_ciphertext_c2s ≈ typed-command-bytes + 16 × (number-of-typed-packets); a command whose typed-length estimate exceeds this bound is impossible.
+    * The PSH flag mix tells you whether the c2s stream is data-carrying (mostly PSH) or control-heavy (mostly ACK); if PSH counts are low, the c2s traffic is suspiciously quiet and the decoder is probably under-counting typed characters.
+- Return-key detection (turn terminators) — CRITICAL for command-length validation. Each pause boundary (>500 ms gap) is classified as either a Return keypress or a thinking pause. Detection combines four signals: (a) positional anchoring at the pause (the Return is always the last keystroke), (b) packet size (the c2s packet carrying a Return is small — ≤ 1 keystroke worth of ciphertext, on-wire size below 70% of the median c2s packet size), (c) pre-key gap (the gap BEFORE the Return is in the upper half of gaps within the same command — the user pauses briefly to "compose" before committing), and (d) post-key gap ratio (the gap AFTER the Return is ≥ 3× the command's median gap — the shell is now executing and the user is reading output).
+    * The detected Return positions are CANONICAL turn terminators. typed-length per command = next-Return-pos minus previous-Return-pos minus 1 (excluding the Return itself).
+    * When ranking candidates: STRONGLY prefer candidates whose text length matches the typed-length from Return detection. The wire-level keystroke count is HARD EVIDENCE — a candidate whose text is 12 chars long but the typed-length is 6 chars is physically impossible; a candidate whose text is 6 chars but typed-length is 12 chars is missing ~6 chars of argument content.
+    * When Return detection finds N turns but the turn-pair section shows N+M s2c chunks, M chunks came from previous commands (the user typed Return but the s2c response was still arriving) or from output that lagged by a turn — both are normal.
+    * When Return detection finds FEWER turns than the wire-level direction-change count suggests, the user probably typed multi-line input (a heredoc or a continuation line) before pressing Return — the typed-length estimate still applies, just to the multi-line block as a whole.
 
 Instructions:
 - Return a SINGLE valid JSON object, no other commentary. Schema:
@@ -2097,8 +2696,11 @@ Instructions:
 - Output a JSON array of objects in the same order as the input candidates: [{"text": string, "score": number in [0,1], "isCommand": boolean}].
 - "score" is a combined probability in [0,1] that the text was typed in this session.
 - "isCommand" is true if the candidate is a shell command.
+- YOUR JOB: score each candidate based on whether it fits the SHAPE/HEURISTIC SIGNATURE, NOT on whether the text string looks plausible in isolation. The candidate "text" fields are timing-decoder guesses (the most-likely-string-for-this-delay-sequence) — they are NOT a transcript of what was typed. A candidate that looks ugly but matches every shape signal should score high; a candidate that reads beautifully but contradicts the timing/s2c/priors shape should score low.
+- CRITICAL: the s2c data in the brief is RETURNED OUTPUT FROM PROGRAMS, NOT candidate keystrokes. Never include s2c content in any candidate "text" field. Use s2c shape (bytes / kind / char-distribution) and the session-turn-pair section only as a CLASSIFIER — they constrain which command CLASS produced each output, not the literal characters typed.
+- Session turn pairs: if the brief's "Session turn pairs" section is non-empty, use typed-length, typed-duration, and the paired s2c kind/char-distribution to score candidates. A candidate whose length matches the typed-length of a turn (within ±2 chars) and whose command class matches the paired s2c chunk kind scores higher than one that fits only the c2s timing.
 - Shell command priors: if the brief's "Shell command priors" section is non-empty, use it as a frequency-weighted prior — boost candidates whose verb + argument shape matches a prior the user actually runs, and downweight candidates whose shape has zero prior support unless their timing is unusually strong. The priors reflect REAL usage, not generic shell knowledge; they should win ties.
-- Redactions in the priors: any run of 4+ consecutive 'A' characters in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/key was scrubbed from the corpus. Treat it as an arbitrary string of that SAME LENGTH when scoring candidates (because the timing constrains character count). Position and length still indicate WHERE such tokens typically appear.
+- Redactions in the priors: any run of 4+ consecutive 'A' characters in a priors example is a REDACTION PLACEHOLDER — the real username/hostname/IP/path/key was scrubbed from the corpus. Treat it as an arbitrary string of length (placeholder-length ± 4 chars) when scoring candidates. Position and length still indicate WHERE such tokens typically appear.
 - Return ONLY the JSON array, no other commentary.`;
 
     let raw;
@@ -2672,6 +3274,26 @@ Instructions:
     }
     merged.sort((a, b) => b.combinedScore - a.combinedScore);
     return merged;
+  }
+
+  // Compat alias: the inner-block ``mergeLlmScoresIntoCandidatesLocal``
+  // and the outer-scope ``mergeLlmScoresIntoCandidatesShared`` exist
+  // for refactor-safe access, but four call sites in this file still
+  // reference the original signature ``mergeLlmScoresIntoCandidates(arr, candidates)``.
+  // Aliasing to the shared variant keeps those call sites working
+  // without changing their expected argument shape — neither variant
+  // uses ``allowedAlphabet``/``computedAlpha`` differently from the
+  // other, so the call sites can stay as-is. (This same logic lives
+  // in the local-nested copy as a fallback path for any older call
+  // shape that may reference it explicitly.)
+  function mergeLlmScoresIntoCandidatesLocal(arr, candidates) {
+    return mergeLlmScoresIntoCandidatesShared(arr, candidates, "", undefined);
+  }
+  // Captured at call sites that haven't migrated — keep them routed
+  // through the shared implementation so any later tweak applies
+  // uniformly.
+  function mergeLlmScoresIntoCandidates(arr, candidates) {
+    return mergeLlmScoresIntoCandidatesShared(arr, candidates, "", undefined);
   }
 
   function renderSshSummary(flow, delays, candidates, estimatedCommandLength, backspaceHints) {

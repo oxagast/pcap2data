@@ -281,6 +281,31 @@ function buildSshKeystrokeExport(state, opts) {
         lines.push("");
     }
 
+    // ── Return-key detection (turn anchors) ─────────────────────────
+    const delaysWithIdxForReturn = (state && Array.isArray(state.delaysWithIdx)) ? state.delaysWithIdx : null;
+    if (delaysWithIdxForReturn) {
+        const totalPauses = delaysWithIdxForReturn.filter((d) => Number.isFinite(d.delay) && d.delay >= 500).length;
+        const detected = [];
+        for (let i = 0; i < delaysWithIdxForReturn.length - 1; i += 1) {
+            const cur = delaysWithIdxForReturn[i];
+            const next = delaysWithIdxForReturn[i + 1];
+            if (!cur || !next) continue;
+            if (Number.isFinite(cur.delay) && Number.isFinite(next.delay)) {
+                if (cur.delay <= 30 && next.delay >= 500) {
+                    // Mark the later packet (next) as the RETURN anchor.
+                    detected.push(next.index != null ? next.index : i + 1);
+                }
+            }
+        }
+        lines.push("## Return-key detection");
+        lines.push(`Detected ${detected.length}/${totalPauses} Return keypress(es) at pause boundaries`);
+        // Detail lines for each detected anchor (annotated turn pair style)
+        for (const idx of detected) {
+            lines.push(`- RETURN at pos ${idx}: return-key detected at last keystroke; typed-length=${idx}; command-text-length=${idx}`);
+        }
+        lines.push("");
+    }
+
     // ── Notes ──────────────────────────────────────────────────────────
     lines.push("## Notes");
     lines.push(
@@ -438,6 +463,10 @@ function buildSshTimingAnalysisBrief(state, opts) {
     lines.push("#");
     lines.push("# ── Server output (s2c) summary ──");
     lines.push("#   The OUTBOUND side of the SSH conversation. Each chunk is a continuous run of");
+    lines.push("# ── Return-key detection (turn terminators) — CRITICAL for command-length validation. Each pause boundary (>500 ms gap) is classi");
+    lines.push("# The detector considers four signals: positional (near a boundary), small packet length, pre-key short gap, and post-key long pause.");
+    lines.push("# Use these signals together — positional + small packet + pre-key short gap + post-key long pause — to identify likely RETURN keystrokes.");
+    lines.push("#");
     lines.push("#   s2c packets; a gap of > 8 s between s2c packets starts a new chunk.");
     lines.push("#   • 'rate' (char/s)   : total bytes divided by chunk duration");
     lines.push("#   • 'flatness'        : 1 = evenly-spaced packets (paged file), 0 = bursty");
@@ -533,7 +562,7 @@ function buildSshTimingAnalysisBrief(state, opts) {
 
     // ── Shell command priors (seed corpus) ───────────────────────────
     // Optional — only emitted when the caller precomputed `shellPriors`
-    // (e.g. from src/data/shell_data). The priors tell the LLM which
+    // (e.g. from src/data/shell_corpus.txt). The priors tell the LLM which
     // commands and argument shapes the user *actually* runs, so it
     // can boost decoder candidates whose shape matches real prior
     // commands. Without this the model only knows generic shell
@@ -1180,7 +1209,7 @@ function renderShapeSignature(shape) {
 
 // ── Shell command priors from seed corpus ───────────────────────────
 //
-// The seed corpus (e.g. src/data/shell_data, a slice of zsh history
+// The seed corpus (e.g. src/data/shell_corpus.txt, a slice of zsh history
 // exported via `history -f`) is a ground-truth set of realistic shell
 // commands the user has actually typed. When the LLM is asked to
 // recover what was typed from a keystroke-timing trace, this prior
@@ -1494,8 +1523,179 @@ function renderShellPriors(priors, opts) {
     return lines.join("\n");
 }
 
+// ------------------------ JSON export helpers ------------------------
+
+const JSON_EXPORT_LLM_PROMPT =
+    "You are an assistant that helps reconstruct shell commands from keystroke timing data. " +
+    "Use the provided packet and delay metadata to reason about likely characters and command boundaries.";
+
+const JSON_EXPORT_PROTOCOL_HINTS =
+    "Fields:\n- packets: per-packet metadata (timestamp, direction, ciphertextLength, seq)\n" +
+    "- delays: inter-keystroke delays (ms) with packet indices\n" +
+    "- classifications: per-packet inferred classification such as keystroke/padding/return/data";
+
+function buildPaddedIndexSet(state) {
+    const set = new Set();
+    if (!state || !state.paddingDetection) return set;
+    const p = state.paddingDetection;
+    // Some callers store indices as `paddedIntervals` or `paddedIndices`.
+    const arr = Array.isArray(p.paddedIntervals) ? p.paddedIntervals : (Array.isArray(p.paddedIndices) ? p.paddedIndices : []);
+    for (const v of arr) {
+        if (Number.isFinite(v)) set.add(Number(v));
+    }
+    return set;
+}
+
+function buildReturnIndexSet(state) {
+    const set = new Set();
+    if (!state) return set;
+    // returnKeyDetection may provide indices or a map
+    const r = state.returnKeyDetection || state.returnKeyIndices || null;
+    if (Array.isArray(r)) {
+        for (const v of r) if (Number.isFinite(v)) set.add(Number(v));
+    } else if (r && Array.isArray(r.indices)) {
+        for (const v of r.indices) if (Number.isFinite(v)) set.add(Number(v));
+    }
+    return set;
+}
+
+function classifyPacket(pkt, idx, allPackets, paddedIndexSet, returnIndexSet) {
+    if (!pkt) return { classification: "unknown", confidence: 0 };
+    if (returnIndexSet && returnIndexSet.has(idx)) return { classification: "return", confidence: 0.95 };
+    if (paddedIndexSet && paddedIndexSet.has(idx)) return { classification: "padding", confidence: 0.95 };
+    const dir = pkt.direction || null;
+    const info = (pkt && pkt.packet && (pkt.packet["packet.info"] || pkt.packet["Packet Info"])) || {};
+    const pktLen = Number(info["packet.length"] ?? info["Packet Length"] ?? info["Length"] ?? info["len"] ?? 0);
+    if (dir === "c2s") {
+        // Heuristic: short client->server packets likely carry a keystroke
+        if (pktLen > 0 && pktLen <= 64) return { classification: "keystroke", confidence: 0.7 };
+        if (pktLen > 64 && pktLen <= 400) return { classification: "data", confidence: 0.6 };
+        return { classification: "c2s", confidence: 0.4 };
+    }
+    if (dir === "s2c") return { classification: "s2c", confidence: 0.6 };
+    return { classification: "unknown", confidence: 0.2 };
+}
+
+function buildSshKeystrokeExportJson(state, opts) {
+    const o = opts || {};
+    const now = (typeof o.now === "function" ? o.now() : new Date()).toISOString();
+    const flow = (state && state.flow) || null;
+    const packets = (flow && Array.isArray(flow.packets) ? flow.packets : []);
+    const paddedIdx = buildPaddedIndexSet(state);
+    const returnIdx = buildReturnIndexSet(state);
+
+    const pktObjs = packets.map((pkt, i) => {
+        const ts = Number.isFinite(pkt.timestamp) ? pkt.timestamp : null;
+        const info = (pkt && pkt.packet && (pkt.packet["packet.info"] || pkt.packet["Packet Info"])) || {};
+        const pktLen = Number(info["packet.length"] ?? info["Packet Length"] ?? info["Length"] ?? info["len"] ?? 0);
+        const seq = info["seq"] ?? info["sequence"] ?? null;
+        const cls = classifyPacket(pkt, i, packets, paddedIdx, returnIdx);
+        return {
+            idx: i,
+            timestamp: ts,
+            direction: pkt.direction || null,
+            ciphertextLength: pktLen,
+            seq: seq !== undefined ? seq : null,
+            classification: cls.classification,
+            classificationConfidence: cls.confidence,
+        };
+    });
+
+    // Delays: prefer delaysWithIdx if present
+    const delaysWithIdx = (state && Array.isArray(state.delaysWithIdx)) ? state.delaysWithIdx : null;
+    const rawDelays = (state && Array.isArray(state.delays)) ? state.delays : [];
+    const delays = [];
+    if (delaysWithIdx) {
+        for (let i = 0; i < delaysWithIdx.length; i += 1) {
+            const e = delaysWithIdx[i] || {};
+            delays.push({ idx: i, delayMs: Number.isFinite(e.delay) ? e.delay : null, packetIndex: Number.isFinite(e.index) ? e.index : null });
+        }
+    } else {
+        for (let i = 0; i < rawDelays.length; i += 1) {
+            delays.push({ idx: i, delayMs: Number.isFinite(rawDelays[i]) ? rawDelays[i] : null, packetIndex: null });
+        }
+    }
+
+    // Build the plain-text companion using a sanitized state so the
+    // text export's `delays.reduce(...)` doesn't crash when fed
+    // `delaysWithIdx` (objects) instead of plain numbers. If the
+    // caller only supplied `delaysWithIdx`, we derive a numeric
+    // `delays` array from it. Any failure is logged and the text
+    // export is set to `null` so we never block JSON serialization.
+    let rawTextExport = null;
+    try {
+        const stateForText = {
+            ...(state || {}),
+        };
+        const numericDelays = Array.isArray(state && state.delays) && state.delays.length > 0
+            ? state.delays.filter((d) => Number.isFinite(d))
+            : (Array.isArray(state && state.delaysWithIdx)
+                ? state.delaysWithIdx.map((d) => Number(d && d.delay)).filter(Number.isFinite)
+                : []);
+        stateForText.delays = numericDelays;
+        rawTextExport = buildSshKeystrokeExport(stateForText, o);
+    } catch (err) {
+        try {
+            console.warn(
+                "[buildSshKeystrokeExportJson] rawTextExport build failed:",
+                err && err.message ? err.message : err,
+            );
+        } catch (_e) { /* ignore */ }
+        rawTextExport = null;
+    }
+
+    const json = {
+        _meta: {
+            generator: "PacketSnitch",
+            generatedAt: now,
+            flow: flow ? { srcIp: flow.srcIp, srcPort: flow.srcPort, dstIp: flow.dstIp, dstPort: flow.dstPort } : null,
+        },
+        _llmPrompt: JSON_EXPORT_LLM_PROMPT,
+        _protocolHints: JSON_EXPORT_PROTOCOL_HINTS,
+        flow: flow ? { packets: packets.length, firstTimestamp: flow.firstTimestamp ?? null, lastTimestamp: flow.lastTimestamp ?? null } : null,
+        packets: pktObjs,
+        delays,
+        rawTextExport,
+    };
+    // Optional Markov shell-prior re-ranking (set by the analyzer
+    // after the background beam search completes).
+    // Surface only the top-1 to keep the export compact and the
+    // surrounding LLM prompt's context window focused on a single
+    // best guess per session. The full re-ranked list (≤30) stays
+    // available on `cached.markovCandidates` in-memory if needed.
+    if (state && Array.isArray(state.markovCandidates) && state.markovCandidates.length > 0) {
+        const top = state.markovCandidates[0];
+        if (Array.isArray(top) && top.length === 2) {
+            json.markovTopGuess = { score: top[0], text: top[1] };
+        }
+        if (Number.isFinite(state.estimatedCommandLength)) {
+            json.markovTargetLength = state.estimatedCommandLength;
+        }
+    }
+    // Per-Return chunked markov (added after the whole-session
+    // guess above). Each entry corresponds to one Return-shaped
+    // gap; ``keystrokeCount`` is the small-c2s-packet estimate of
+    // how many chars the user typed before that Return. ``best``
+    // is the chain's single best candidate for that chunk,
+    // re-ranked against that chunk's local delays. Other ranks are
+    // available in `cached.markovChunks[i].top` in-memory.
+    if (state && Array.isArray(state.markovChunks) && state.markovChunks.length > 0) {
+        json.markovChunks = state.markovChunks.map((ch) => ({
+            keystrokeCount: ch.keystrokeCount,
+            startIdx: ch.startIdx,
+            endIdx: ch.endIdx,
+            best: (ch.top && ch.top[0])
+                ? { score: ch.top[0].score, text: ch.top[0].text }
+                : null,
+        }));
+    }
+    return json;
+}
+
+
 module.exports = {
     buildSshKeystrokeExport,
+    buildSshKeystrokeExportJson,
     buildSshTimingAnalysisBrief,
     computeShapeSignature,
     renderShapeSignature,
@@ -1508,4 +1708,10 @@ module.exports = {
     formatNumber,
     wrapText,
     directionLabel,
+    // JSON helpers
+    classifyPacket,
+    buildPaddedIndexSet,
+    buildReturnIndexSet,
+    JSON_EXPORT_LLM_PROMPT,
+    JSON_EXPORT_PROTOCOL_HINTS,
 };

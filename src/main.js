@@ -2307,10 +2307,194 @@ ipcMain.handle("file-size", async () => {
   try {
     // Get file stats asynchronously
     const fileStats = await fs.promises.stat(selectedFilePath); // Using promises version of stat
-    return fileStats.size; // Send back the file size
+    return fileStats.size; // Send file stats back
   } catch (fileError) {
     console.log("Error getting file stats:", fileError);
     return 0; // Return 0 if there's an error
+  }
+});
+
+// Kick off the shell-Markov model precompute as soon as the main
+// process is ready — it's purely local (no IPC, no UI), so the
+// renderer's first paint is unaffected. The renderer can later
+// call `markov:get-status` to learn whether the cache is warm.
+// Resolve the bundled ``shell_corpus`` corpus regardless of whether
+// the main bundle is running from source (``src/main.js``),
+// from electron-forge's ``.webpack/main/`` dev bundle, or from a
+// packaged install. In production ``forge.config.js`` adds
+// ``src/data/shell_corpus.txt`` as an ``extraResource`` so the file ends
+// up in ``process.resourcesPath/data/shell_corpus.txt`` at runtime. In
+// dev we also fall back to the source tree for ``npm start``.
+function resolveMarkovCorpusPath(fsys, pathMod) {
+  const fsImpl = fsys || require("fs");
+  const pathImpl = pathMod || require("path");
+  const candidates = [
+    // Packaged install: extraResource path
+    process.resourcesPath
+      ? pathImpl.join(process.resourcesPath, "data", "shell_corpus.txt")
+      : null,
+    // Dev bundle (electron-forge): main.js lives at
+    // .webpack/main/index.js when running `npm start`. The
+    // corpus ships under src/data/shell_corpus.txt in the source
+    // tree, so try a couple of upward walks.
+    pathImpl.join(__dirname, "..", "..", "src", "data", "shell_corpus.txt"),
+    pathImpl.join(__dirname, "..", "data", "shell_corpus.txt"),
+    pathImpl.join(__dirname, "data", "shell_corpus.txt"),
+  ].filter(Boolean);
+  for (const p of candidates) {
+    try {
+      if (fsImpl.existsSync(p)) return p;
+    } catch (_e) { /* ignore */ }
+  }
+  // Return the first candidate so the loader can surface the real
+  // ENOENT path in its error message (helpful for diagnostics).
+  return candidates[candidates.length - 1];
+}
+
+function scheduleShellMarkovPrecompute() {
+  try {
+    const loader = require("./ui/decoders/ssh-keystrokes/markov-loader");
+    const pathMod = require("path");
+    const fsMod = require("fs");
+    const corpusPath = resolveMarkovCorpusPath(fsMod, pathMod);
+    const userDataDir = app.getPath("userData");
+    // Loader needs Node `path`/`fs` injected — the renderer bundle
+    // does not polyfill them.
+    const deps = { path: pathMod, fs: fsMod };
+    // Always defer with setImmediate so we never compete with the
+    // event-loop tick that delivers the first BrowserWindow to the
+    // renderer. The renderer's own UI thread stays responsive even
+    // if training takes a few hundred ms.
+    setImmediate(() => {
+      loader
+        .getCachedShellMarkov({ deps, userDataDir })
+        .then((cached) => {
+          if (cached) return null;
+          return loader.trainAndCacheShellMarkov({ deps, userDataDir, corpusPath });
+        })
+        .then((trained) => {
+          if (trained && typeof appendActivityLogLine === "function") {
+            appendActivityLogLine(
+              `[markov] precompute complete: ${trained.nCommands} commands ` +
+              `(${trained.alphabet.length} vocab chars)`,
+            );
+          }
+        })
+        .catch((err) => {
+          try {
+            console.warn("[markov] precompute failed:", err && err.message ? err.message : err);
+          } catch (_e) { /* ignore */ }
+        });
+    });
+  } catch (err) {
+    try {
+      console.warn("[markov] precompute init failed:", err && err.message ? err.message : err);
+    } catch (_e) { /* ignore */ }
+  }
+}
+
+// Resolve the per-user app data directory so the renderer can cache
+// long-lived files (e.g., the trained shell-Markov model).
+// Returning a plain string keeps the bridge surface minimal.
+ipcMain.handle("markov:get-user-data-dir", async () => {
+  try {
+    if (app && typeof app.getPath === "function") {
+      return app.getPath("userData");
+    }
+    return null;
+  } catch (err) {
+    try { console.warn("[markov] get-user-data-dir failed:", err); } catch (_e) { /* ignore */ }
+    return null;
+  }
+});
+
+// Returns the serialized, trained model so the renderer can run
+// beam search without bundling node core modules. Returns null when
+// the cache hasn't been built yet (the renderer falls back to
+// running without markov re-ranking). The renderer is the one
+// doing pure-JS work (rank, generateBeam); only this loader
+// touches the filesystem.
+ipcMain.handle("markov:get-model", async () => {
+  try {
+    if (!app || typeof app.getPath !== "function") {
+      return null;
+    }
+    const loader = require("./ui/decoders/ssh-keystrokes/markov-loader");
+    const pathMod = require("path");
+    const fsMod = require("fs");
+    const userDataDir = app.getPath("userData");
+    const cached = await loader.getCachedShellMarkov({
+      deps: { path: pathMod, fs: fsMod },
+      userDataDir,
+    });
+    if (!cached) return null;
+    return cached.toDict();
+  } catch (err) {
+    try {
+      console.warn("[markov] get-model failed:", err && err.message ? err.message : err);
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+});
+
+// Renderer-triggered training. The renderer's webpack bundle can't
+// pull node core (``path``/``fs``) so the actual train happens here
+// in the main process. Returns the freshly-trained model's toDict()
+// so the renderer can hydrate immediately. If a model is already
+// cached we'll skip retraining and return the cached one (keeps the
+// renderer snappy on warm caches; this is the cold-path escape
+// hatch).
+ipcMain.handle("markov:train", async () => {
+  try {
+    const loader = require("./ui/decoders/ssh-keystrokes/markov-loader");
+    const pathMod = require("path");
+    const fsMod = require("fs");
+    if (!app || typeof app.getPath !== "function") return null;
+    const userDataDir = app.getPath("userData");
+    const deps = { path: pathMod, fs: fsMod };
+    const cached = await loader.getCachedShellMarkov({ deps, userDataDir });
+    if (cached) return cached.toDict();
+    // Cold cache. The corpus ships with the package; resolve it
+    // through main.js's __dirname.
+    const corpusPath = pathMod.join(__dirname, "data", "shell_corpus.txt");
+    const model = await loader.trainAndCacheShellMarkov({
+      deps,
+      userDataDir,
+      corpusPath,
+    });
+    return model.toDict();
+  } catch (err) {
+    try {
+      console.warn("[markov] train failed:", err && err.message ? err.message : err);
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+});
+
+// Quick readiness probe so the renderer can render a "precompute
+// in progress…" hint without having to retry the loader itself.
+ipcMain.handle("markov:get-status", async () => {
+  try {
+    const loader = require("./ui/decoders/ssh-keystrokes/markov-loader");
+    if (!app || typeof app.getPath !== "function") {
+      return { ok: false, reason: "no_app" };
+    }
+    const userDataDir = app.getPath("userData");
+    const pathMod = require("path");
+    const fsMod = require("fs");
+    const deps = { path: pathMod, fs: fsMod };
+    const cached = await loader.getCachedShellMarkov({ deps, userDataDir });
+    if (!cached) {
+      return { ok: false, reason: "not_cached", userDataDir };
+    }
+    return {
+      ok: true,
+      userDataDir,
+      nCommands: cached.nCommands,
+      vocabSize: cached.alphabet.length,
+    };
+  } catch (err) {
+    return { ok: false, reason: "error", error: String(err && err.message ? err.message : err) };
   }
 });
 
@@ -5502,6 +5686,11 @@ app.whenReady().then(() => {
   void ensureThemeFilesExist().catch((error) => {
     console.warn("Unable to initialize theme directory:", error);
   });
+  // Kick off the shell-Markov precompute in the background so the
+  // OpenSSH analyzer doesn't pay the training cost when the user
+  // first opens the Crypt tab. The work runs in setImmediate and
+  // never blocks the renderer; an existing cache file is reused.
+  scheduleShellMarkovPrecompute();
   checkOllama().then(async (ollamaDiagnostics) => {
     cachedOllamaInstalled = Boolean(ollamaDiagnostics?.ollamaInstalled);
     cachedOllamaServerListening = Boolean(ollamaDiagnostics?.ollamaServerListening);
@@ -5828,7 +6017,7 @@ ipcMain.handle("openssh-load-qwerty-model", async () => {
   return { success: false, error: "qwerty-model.json not found" };
 });
 
-// Read the user's seed shell-history corpus from src/data/shell_data.
+// Read the user's seed shell-history corpus from src/data/shell_corpus.txt.
 // Used by the SSH keystroke decoder's LLM pipeline as a frequency-
 // weighted prior over which shell commands the user actually runs.
 // The file may not exist (first-run / user opted out), so this
@@ -5839,10 +6028,10 @@ async function readShellCorpus() {
   if (shellCorpusCacheAttempted) return shellCorpusCache;
   shellCorpusCacheAttempted = true;
   const candidates = [
-    path.join(process.resourcesPath || "", "data", "shell_data"),
-    path.join("src", "data", "shell_data"),
-    path.join(__dirname, "..", "data", "shell_data"),
-    path.join(__dirname, "..", "src", "data", "shell_data"),
+    path.join(process.resourcesPath || "", "data", "shell_corpus.txt"),
+    path.join("src", "data", "shell_corpus.txt"),
+    path.join(__dirname, "..", "data", "shell_corpus.txt"),
+    path.join(__dirname, "..", "src", "data", "shell_corpus.txt"),
   ];
   for (const candidate of candidates) {
     if (!candidate) continue;
@@ -5854,7 +6043,7 @@ async function readShellCorpus() {
       // try the next candidate
     }
   }
-  shellCorpusCache = { success: false, error: "shell_data not found" };
+  shellCorpusCache = { success: false, error: "shell_corpus not found" };
   return shellCorpusCache;
 }
 ipcMain.handle("ssh-shell-corpus", async () => {

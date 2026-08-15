@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Remove SSH key cat/nano/scp/cp lines from shell_data."""
+"""Remove SSH key cat/nano/scp/cp lines from shell_corpus."""
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "r", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "r", encoding="utf-8") as f:
     lines = f.readlines()
 
 target_prefixes = [
@@ -36,7 +36,7 @@ for line in lines:
 
 print(f"Removed {removed} lines")
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "w", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "w", encoding="utf-8") as f:
     for line in result:
         f.write(line)
 

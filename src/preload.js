@@ -1330,6 +1330,13 @@ contextBridge.exposeInMainWorld('getfileapi', {
   selectManualConvFile: () => ipcRenderer.invoke('select-manual-conv-file'),
 });
 
+contextBridge.exposeInMainWorld('markovapi', {
+  getUserDataDir: () => ipcRenderer.invoke('markov:get-user-data-dir'),
+  getStatus: () => ipcRenderer.invoke('markov:get-status'),
+  getModel: () => ipcRenderer.invoke('markov:get-model'),
+  train: () => ipcRenderer.invoke('markov:train'),
+});
+
 contextBridge.exposeInMainWorld('api', {
   onError: (callback) => {
     ipcRenderer.on('backend-error', (_event, message) => {

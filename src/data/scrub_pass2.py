@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Second-pass scrub: catch remaining PII in shell_data."""
+"""Second-pass scrub: catch remaining PII in shell_corpus."""
 
 import re
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "r", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "r", encoding="utf-8") as f:
     lines = f.readlines()
 
 stats = {}
@@ -85,7 +85,7 @@ for k, v in sorted(stats.items()):
     print(f"  {k}: {v}")
 
 print(f"\nWriting {len(scrubbed)} lines...")
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "w", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "w", encoding="utf-8") as f:
     for line in scrubbed:
         f.write(line + "\n")
 print("Done.")

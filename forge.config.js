@@ -161,7 +161,7 @@ module.exports = {
       // weighted prior for SSH keystroke decoder candidates. The main
       // process loads it via the ``ssh-shell-corpus`` IPC handler so
       // the renderer never needs fs access.
-      "src/data/shell_data",
+      "src/data/shell_corpus.txt",
       "config/models.json",
       // The app icon is embedded into ``PacketSnitch.exe`` by
       // ``primaryIcon`` below, but we also want the raw .ico file
