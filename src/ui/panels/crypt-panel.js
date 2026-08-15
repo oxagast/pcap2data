@@ -2142,7 +2142,7 @@ function createCryptPanel({
       const notes = [
         "One best guess per detected Return-shaped gap (small c2s packet heuristic, ≤100 B).",
         `Ciphertext-aware: trained on ` +
-        (modelInfo && modelInfo.corpusPath ? modelInfo.corpusPath : "shell_corpus.txt") +
+        (modelInfo && modelInfo.corpusPath ? modelInfo.corpusPath : "shell_corpus_sorted.txt") +
         " with sequence/length priors.",
         "Output can race with a fresh Analyze click; the latest run always wins.",
       ];

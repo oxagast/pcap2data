@@ -30,7 +30,7 @@ delays.push({ delay: 71, index: 12, packetLength: 50 });
 delays.push({ delay: 900, index: 13, packetLength: 80 });
 
 // Train Markov model
-const corpus = fs.readFileSync("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "utf8");
+const corpus = fs.readFileSync("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus_sorted.txt", "utf8");
 const model = new ShellMarkov(4, 0.05).train(cleanLines(corpus));
 console.log("model trained:", model.nCommands, "commands");
 
