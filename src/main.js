@@ -2498,6 +2498,30 @@ ipcMain.handle("markov:get-status", async () => {
   }
 });
 
+// Returns the cached shell Markov model for the renderer to use
+// for LLM priors. This is the same model used by the SSH keystroke
+// decoder but exposed for the LLM pipeline.
+ipcMain.handle("markov:get-cached-shell-markov", async () => {
+  try {
+    const loader = require("./ui/decoders/ssh-keystrokes/markov-loader");
+    if (!app || typeof app.getPath !== "function") {
+      return null;
+    }
+    const userDataDir = app.getPath("userData");
+    const pathMod = require("path");
+    const fsMod = require("fs");
+    const deps = { path: pathMod, fs: fsMod };
+    const cached = await loader.getCachedShellMarkov({ deps, userDataDir });
+    if (!cached) return null;
+    return cached.toDict();
+  } catch (err) {
+    try {
+      console.warn("[markov] get-cached-shell-markov failed:", err && err.message ? err.message : err);
+    } catch (_e) { /* ignore */ }
+    return null;
+  }
+});
+
 // ── Anonymous usage metrics transport ──────────────────────────────────────
 //
 // All network I/O for telemetry lives in the main process. The renderer holds

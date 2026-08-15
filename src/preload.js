@@ -1335,6 +1335,7 @@ contextBridge.exposeInMainWorld('markovapi', {
   getStatus: () => ipcRenderer.invoke('markov:get-status'),
   getModel: () => ipcRenderer.invoke('markov:get-model'),
   train: () => ipcRenderer.invoke('markov:train'),
+  getCachedShellMarkov: () => ipcRenderer.invoke('markov:get-cached-shell-markov'),
 });
 
 contextBridge.exposeInMainWorld('api', {
