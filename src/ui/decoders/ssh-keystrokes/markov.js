@@ -181,7 +181,22 @@ class ShellMarkov {
             const next = [];
             for (const [score, ctx, text] of states) {
                 const cands = this.counts[ctx];
-                if (!cands) continue;
+                if (!cands) {
+                    // Fallback: if no transition counts for this context,
+                    // use the model's vocabulary to continue generation.
+                    // This prevents the beam search from exiting early
+                    // when encountering unseen context patterns.
+                    const fallbackChars = Object.keys(this.vocab).filter(
+                        c => c !== BOS && c !== EOS
+                    );
+                    if (fallbackChars.length > 0) {
+                        const rand = fallbackChars[Math.floor(Math.random() * fallbackChars.length)];
+                        const nctx = (ctx + rand).slice(-k);
+                        const nt = text + rand;
+                        next.push([0.0, nctx, nt]);
+                    }
+                    continue;
+                }
                 const items = Object.entries(cands).sort((a, b) => b[1] - a[1]).slice(0, 24);
                 for (const [ch] of items) {
                     const ns = score + this.transLogP(ctx, ch);

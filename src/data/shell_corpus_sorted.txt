@@ -1,0 +1,1211 @@
+ls
+cd ..
+ls -l
+ls -la
+pwd
+clear
+cd ~
+ls -lah
+cat file.txt
+git status
+cd /
+ls -lh
+cd -
+history
+git diff
+git pull
+git push
+git add .
+cd /tmp
+grep error file.txt
+sudo apt update
+git log --oneline
+git branch
+git commit -m "update"
+cd src
+cd ..
+cat README.md
+less file.txt
+tail -f application.log
+cd build
+mkdir build
+rm file.txt
+rm -f file.txt
+cp file.txt backup.txt
+mv file.txt newname.txt
+touch file.txt
+vim file.txt
+nano file.txt
+git log
+git fetch
+git checkout main
+git switch main
+git add file.txt
+git add -A
+git diff --cached
+git stash
+git stash pop
+git remote -v
+git pull origin main
+git push origin main
+echo $PATH
+echo $?
+echo $HOME
+echo $USER
+echo $PWD
+whoami
+ps aux
+top
+htop
+df -h
+du -sh .
+free -h
+uname -a
+date
+uptime
+which python
+which python3
+which node
+which git
+command -v python3
+command -v git
+python3 script.py
+python3 main.py
+python3 app.py
+pip install -r requirements.txt
+npm install
+npm run start
+npm start
+npm run build
+npm run dev
+npm test
+npm run test
+node app.js
+node index.js
+node server.js
+curl https://example.com
+curl http://localhost:3000
+ssh user@server
+ssh root@server
+scp file.txt user@server:/tmp/
+sudo systemctl status ssh
+sudo systemctl status sshd
+sudo systemctl restart ssh
+sudo systemctl restart sshd
+sudo systemctl status nginx
+sudo systemctl status apache2
+sudo systemctl restart nginx
+sudo systemctl restart apache2
+systemctl status
+systemctl --failed
+journalctl -xe
+journalctl -f
+tail file.txt
+tail -n 50 file.txt
+tail -n 100 file.txt
+head file.txt
+head -n 20 file.txt
+head -n 50 file.txt
+grep -i error application.log
+grep -n error file.txt
+grep -r error .
+grep -R "TODO" .
+grep -rn "TODO" .
+find . -name "*.txt"
+find . -name "*.log"
+find . -type f
+find . -type d
+mkdir test
+mkdir tmp
+mkdir logs
+mkdir -p build/output
+rm -rf build
+rm -rf dist
+rm -rf directory
+rm -rf node_modules
+rm *.log
+rm -f *.log
+cp file.txt /tmp/
+cp -r directory backup/
+mv file.txt /tmp/
+mv *.log logs/
+chmod +x script.sh
+chmod 755 script.sh
+chmod 644 file.txt
+sudo chown -R user:user directory
+sudo chown user:user file.txt
+source venv/bin/activate
+source .venv/bin/activate
+source ~/.bashrc
+deactivate
+env
+printenv
+export PATH="$PATH:/usr/local/bin"
+export DEBUG=1
+unset DEBUG
+alias
+alias ll='ls -lah'
+jobs
+fg
+bg
+kill 1234
+kill -9 1234
+pkill process
+killall process
+ps -ef
+ps aux | grep python
+ps aux | grep node
+ps aux | grep ssh
+ps aux | grep nginx
+ps aux | grep docker
+history | tail
+history | grep ssh
+history | grep git
+echo hello
+echo "hello world"
+echo "$PATH"
+echo "test" > file.txt
+echo "test" >> file.txt
+cat package.json
+cat requirements.txt
+cat .env
+cat /etc/hosts
+cat /etc/os-release
+cat *.log
+less README.md
+less /var/log/syslog
+tail -f /var/log/syslog
+tail -f /var/log/messages
+tail -f access.log
+tail -f error.log
+grep -v "^#" file.txt
+grep -E "error|warning" application.log
+grep -i "failed" /var/log/syslog
+grep -r "functionName" src/
+grep -c error application.log
+sort file.txt
+sort -u file.txt
+wc -l file.txt
+wc file.txt
+uniq file.txt
+uniq -c file.txt
+cut -d: -f1 /etc/passwd
+awk '{print $1}' file.txt
+sed 's/foo/bar/g' file.txt
+sed -i 's/foo/bar/g' file.txt
+tee output.txt
+command | tee output.txt
+diff file1 file2
+diff -u file1 file2
+file filename
+stat file.txt
+readlink -f link
+realpath file.txt
+basename /path/to/file.txt
+dirname /path/to/file.txt
+tree
+tree -L 2
+tree src/
+ls -a
+ls -al
+ls -ltr
+ls -1
+ls -R
+ls /tmp
+ls /var/log
+ls ~/Downloads
+ls *.txt
+ls *.log
+ls -lah .
+ls -lah ..
+ls -lh /var/log
+cd ~/Downloads
+cd ~/Documents
+cd ~/projects
+cd /var/log
+cd /etc
+cd /var/www
+cd /opt
+cd /usr/local/bin
+cd ../..
+cd ../../..
+cd dist
+cd tests
+cat config.json
+cat /etc/passwd
+cat access.log
+cat error.log
+less /var/log/messages
+less access.log
+less error.log
+less +F application.log
+head -100 file.txt
+head access.log
+head -n 100 access.log
+tail -n 20 file.txt
+tail -100 file.txt
+tail -n 100 -f application.log
+grep -rin "password" .
+grep -n "localhost" /etc/hosts
+grep -o "pattern" file.txt
+history | tail -n 50
+history | grep docker
+history | grep sudo
+history | grep python
+history | grep npm
+echo $SHELL
+echo $$
+mkdir dist
+mkdir -p src/components
+mkdir -p /tmp/test
+mkdir -p ~/.config/app
+rm -r directory
+rm -rf /tmp/test
+rm -rf .cache
+rm -rf __pycache__
+rm -rf target
+cp -a directory backup/
+cp -v file.txt /tmp/
+cp config.json config.json.bak
+cp -r src/ /tmp/src/
+cp ~/.bashrc ~/.bashrc.bak
+mv oldname newname
+mv build build-old
+mv config.json config.json.bak
+touch test.txt
+touch .env
+touch application.log
+touch README.md
+nano README.md
+nano .env
+nano /etc/hosts
+nano config.json
+vim README.md
+vim .env
+vim config.json
+vim src/main.js
+vim /etc/hosts
+vim +100 file.txt
+vi file.txt
+vi /etc/hosts
+vi config.conf
+git diff --stat
+git log --oneline -10
+git log --graph --oneline --all
+git branch -a
+git branch -vv
+git add src/
+git commit -m "fix bug"
+git commit -am "update"
+git push origin master
+git pull origin master
+git fetch --all
+git checkout master
+git checkout develop
+git checkout -b feature/test
+git switch develop
+git switch -c feature/test
+git merge main
+git merge develop
+git rebase main
+git stash list
+git restore file.txt
+git restore .
+git reset HEAD file.txt
+git reset --hard
+git reset --hard HEAD
+git clone https://github.com/user/repo.git
+git clone git@github.com:user/repo.git
+git tag
+git show
+git show HEAD
+git blame file.txt
+git clean -fd
+git rev-parse HEAD
+sudo apt upgrade
+sudo apt install git
+sudo apt install curl
+sudo apt install vim
+sudo apt install build-essential
+sudo apt remove package
+sudo apt autoremove
+sudo apt update && sudo apt upgrade
+sudo apt-get update
+sudo apt-get install package
+sudo dnf update
+sudo dnf upgrade
+sudo dnf install git
+sudo dnf install gcc
+sudo dnf install make
+sudo dnf install python3
+sudo dnf remove package
+sudo yum update
+sudo yum install package
+sudo pacman -Syu
+sudo pacman -S package
+sudo pacman -R package
+sudo systemctl status docker
+sudo systemctl status NetworkManager
+sudo systemctl restart docker
+sudo systemctl start docker
+sudo systemctl stop docker
+sudo systemctl enable docker
+sudo systemctl disable service
+sudo systemctl daemon-reload
+systemctl list-units
+systemctl list-units --type=service
+ps aux | grep apache
+ps -ef | grep process
+kill -15 1234
+pkill -f process
+jobs -l
+fg %1
+bg %1
+disown
+nohup command &
+nohup python3 app.py &
+command &
+which npm
+which ssh
+which gcc
+which java
+whereis python
+whereis nginx
+whereis ssh
+type cd
+type ls
+type python
+command -v node
+python script.py
+python3 -m http.server
+python3 -m http.server 8000
+python3 -m venv venv
+python3 -m pip install requests
+python3 -m pip install -r requirements.txt
+python3 -m pytest
+python3 -m pytest -v
+python3 -m unittest
+python -m pip install package
+python -m pip install -r requirements.txt
+pip install requests
+pip install flask
+pip install numpy
+pip install pandas
+pip install .
+pip install -e .
+pip uninstall package
+pip list
+pip freeze
+pip freeze > requirements.txt
+pip show package
+source ~/.profile
+source /etc/profile
+npm i
+npm install package
+npm install --save package
+npm install --save-dev package
+npm install -g package
+npm uninstall package
+npm update
+npm run lint
+npm run make
+npm run package
+npm run publish
+npm audit
+npm audit fix
+npm list
+npm outdated
+npm init
+npm init -y
+npx jest
+npx jest --runInBand
+npx eslint .
+npx prettier --write .
+npx webpack
+npx electron-forge start
+node .
+node --version
+node -v
+curl -I https://example.com
+curl -L https://example.com
+curl -v https://example.com
+curl -s https://example.com
+curl -O https://example.com/file.tar.gz
+curl -o file.tar.gz https://example.com/file.tar.gz
+curl http://127.0.0.1:8000
+curl -X GET http://localhost:3000/api
+curl -X POST http://localhost:3000/api
+curl -H "Content-Type: application/json" http://localhost:3000/api
+curl -d '{"key":"value"}' http://localhost:3000/api
+curl -X POST -H "Content-Type: application/json" -d '{"key":"value"}' http://localhost:3000/api
+wget https://example.com/file.tar.gz
+wget -O file.tar.gz https://example.com/file.tar.gz
+wget -q https://example.com/file
+ssh user@192.168.1.10
+ssh root@192.168.1.10
+ssh -p 2222 user@server
+ssh -i ~/.ssh/id_rsa user@server
+ssh -i ~/.ssh/id_ed25519 user@server
+ssh -v user@server
+ssh -vv user@server
+ssh -L 8080:localhost:80 user@server
+ssh -R 8080:localhost:80 user@server
+ssh -D 1080 user@server
+scp user@server:/tmp/file.txt .
+scp -r directory user@server:/tmp/
+scp -P 2222 file.txt user@server:/tmp/
+scp -i ~/.ssh/id_ed25519 file.txt user@server:/tmp/
+rsync -av directory/ backup/
+rsync -avz directory/ user@server:/tmp/
+rsync -avz user@server:/tmp/data/ .
+rsync -av --delete src/ backup/
+chmod 600 ~/.ssh/id_rsa
+chmod 600 ~/.ssh/id_ed25519
+chmod 700 ~/.ssh
+chmod -R 755 directory
+chown user:user file.txt
+sudo chown -R www-data:www-data /var/www/html
+ln -s target link
+ln -s /path/to/file file
+ln -sf target link
+find . -name "*.js"
+find . -name "*.py"
+find . -type f -name "*.log"
+find . -type f | head
+find /var/log -type f
+find . -mtime -1
+find . -size +100M
+find . -name "*.tmp" -delete
+locate filename
+locate ssh_config
+du -sh *
+du -h --max-depth=1
+du -sh /var/log
+du -sh ~/Downloads
+df -Th
+df -i
+free -m
+uname -r
+uname -m
+id
+id user
+groups
+groups user
+who
+w
+last
+lastlog
+hostname
+hostname -I
+hostnamectl
+date +"%Y-%m-%d"
+date +"%Y-%m-%d %H:%M:%S"
+date -u
+printenv PATH
+printenv HOME
+export NODE_ENV=development
+export NODE_ENV=production
+export EDITOR=vim
+unset NODE_ENV
+set
+set -x
+set +x
+set -e
+alias grep='grep --color=auto'
+unalias ll
+wc -w file.txt
+wc -c file.txt
+cat file.txt | wc -l
+sort -n file.txt
+sort file.txt | uniq
+sort file.txt | uniq -c
+cut -d, -f1 file.csv
+cut -c1-20 file.txt
+awk '{print $2}' file.txt
+awk -F: '{print $1}' /etc/passwd
+awk '{print NR, $0}' file.txt
+sed -n '1,20p' file.txt
+sed '/^#/d' file.txt
+tr 'a-z' 'A-Z'
+tr -d '\r'
+tr ':' '\n'
+xargs
+xargs rm
+find . -name "*.tmp" -print0 | xargs -0 rm
+command | tee -a output.txt
+diff -r dir1 dir2
+cmp file1 file2
+file *
+file binary
+stat /tmp/file
+readlink link
+realpath .
+tar -czf archive.tar.gz directory/
+tar -xzf archive.tar.gz
+tar -tf archive.tar.gz
+tar -cvf archive.tar directory/
+tar -xvf archive.tar
+tar -xzf archive.tar.gz -C /tmp/
+gzip file
+gzip -d file.gz
+gunzip file.gz
+zip archive.zip file.txt
+zip -r archive.zip directory/
+unzip archive.zip
+unzip archive.zip -d output/
+7z a archive.7z directory/
+7z x archive.7z
+make
+make clean
+make install
+sudo make install
+make -j4
+make -j$(nproc)
+make all
+make test
+cmake .
+cmake ..
+cmake -B build
+cmake --build build
+cmake --build build -j4
+gcc main.c
+gcc main.c -o main
+gcc -Wall main.c -o main
+gcc -g main.c -o main
+gcc *.c -o program
+g++ main.cpp -o main
+g++ -std=c++17 main.cpp -o main
+g++ -Wall main.cpp -o main
+clang main.c -o main
+clang++ main.cpp -o main
+java -version
+javac Main.java
+java Main
+java -jar app.jar
+mvn clean
+mvn test
+mvn package
+mvn clean install
+gradle build
+gradle test
+./gradlew build
+./gradlew test
+cargo build
+cargo run
+cargo test
+cargo build --release
+cargo check
+cargo fmt
+go run main.go
+go build
+go test ./...
+go mod tidy
+go get package
+docker ps
+docker ps -a
+docker images
+docker pull ubuntu
+docker pull nginx
+docker build .
+docker build -t app .
+docker run ubuntu
+docker run -it ubuntu bash
+docker run --rm -it ubuntu bash
+docker run -d nginx
+docker run -p 8080:80 nginx
+docker stop container
+docker start container
+docker restart container
+docker rm container
+docker rm -f container
+docker rmi image
+docker logs container
+docker logs -f container
+docker exec -it container bash
+docker exec -it container sh
+docker inspect container
+docker stats
+docker system df
+docker system prune
+docker system prune -a
+docker volume ls
+docker network ls
+docker compose up
+docker compose up -d
+docker compose down
+docker compose build
+docker compose ps
+docker compose logs
+docker compose logs -f
+docker compose restart
+kubectl get pods
+kubectl get nodes
+kubectl get services
+kubectl get deployments
+kubectl get all
+kubectl describe pod podname
+kubectl logs podname
+kubectl logs -f podname
+kubectl exec -it podname -- bash
+kubectl exec -it podname -- sh
+kubectl apply -f deployment.yaml
+kubectl delete -f deployment.yaml
+kubectl config get-contexts
+kubectl config current-context
+ip addr
+ip a
+ip link
+ip route
+ip r
+ip neigh
+ip addr show eth0
+ip link set eth0 up
+ip link set eth0 down
+ifconfig
+ifconfig -a
+ifconfig eth0
+ping google.com
+ping 8.8.8.8
+ping -c 4 google.com
+ping -c 4 8.8.8.8
+ping 192.168.1.1
+traceroute google.com
+traceroute 8.8.8.8
+tracepath google.com
+nslookup example.com
+nslookup google.com
+dig example.com
+dig google.com
+dig +short example.com
+dig A example.com
+dig MX example.com
+dig TXT example.com
+host example.com
+host google.com
+ss -tulpn
+ss -lntp
+ss -tunap
+ss -ant
+ss -l
+netstat -tulpn
+netstat -ant
+netstat -rn
+netstat -i
+lsof
+lsof -i
+lsof -i :80
+lsof -i :443
+lsof -i :3000
+lsof -p 1234
+lsof /path/to/file
+nc -zv host 22
+nc -zv host 80
+nc -zv host 443
+nc -l 8080
+nc host 8080
+openssl version
+openssl s_client -connect example.com:443
+openssl x509 -in cert.pem -text -noout
+openssl rand -hex 32
+openssl sha256 file.txt
+ssh-keygen
+ssh-keygen -t ed25519
+ssh-keygen -t rsa -b 4096
+ssh-keygen -R hostname
+ssh-copy-id user@server
+journalctl
+journalctl -u ssh
+journalctl -u sshd
+journalctl -u nginx
+journalctl -u docker
+journalctl --since today
+journalctl --since "1 hour ago"
+dmesg
+dmesg | tail
+dmesg -w
+dmesg | grep -i error
+dmesg | grep -i usb
+mount
+mount | column -t
+sudo mount /dev/sdb1 /mnt
+sudo umount /mnt
+lsblk
+lsblk -f
+blkid
+fdisk -l
+sudo fdisk -l
+parted -l
+dd if=/dev/zero of=test.img bs=1M count=100
+dd if=input.img of=output.img bs=4M status=progress
+sync
+crontab -l
+crontab -e
+sudo crontab -l
+at now + 1 hour
+tmux
+tmux ls
+tmux new
+tmux new -s work
+tmux attach
+tmux attach -t work
+tmux kill-session -t work
+screen
+screen -ls
+screen -r
+watch ls
+watch -n 1 ls
+watch -n 1 'ps aux | grep process'
+watch -n 2 df -h
+time command
+time python3 script.py
+time make
+sleep 1
+sleep 5
+sleep 10
+sleep 60
+yes
+yes | command
+seq 1 10
+seq 1 100
+printf "hello\n"
+printf "%s\n" "$PATH"
+read variable
+read -p "Name: " name
+test -f file.txt
+test -d directory
+[ -f file.txt ] && echo yes
+[ -d directory ] && echo yes
+true
+false
+exit
+exit 0
+exit 1
+logout
+sudo -i
+sudo su
+sudo su -
+su -
+su user
+passwd
+sudo passwd user
+useradd user
+sudo useradd -m user
+sudo userdel user
+sudo usermod -aG sudo user
+sudo usermod -aG docker user
+groupadd group
+sudo groupadd group
+getent passwd
+getent passwd user
+getent group docker
+getent hosts example.com
+lsusb
+lspci
+lspci -nn
+lscpu
+lsmem
+dmidecode
+sudo dmidecode
+nproc
+ulimit -a
+ulimit -n
+ulimit -n 65535
+sysctl -a
+sysctl net.ipv4.ip_forward
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo sysctl -p
+service ssh status
+service ssh restart
+service apache2 restart
+service nginx restart
+apachectl configtest
+apachectl -S
+sudo apachectl configtest
+sudo systemctl reload apache2
+nginx -t
+sudo nginx -t
+sudo systemctl reload nginx
+mysql -u root -p
+mysql -h localhost -u root -p
+mysqladmin -u root -p status
+psql
+psql -U postgres
+psql -h localhost -U postgres
+createdb testdb
+dropdb testdb
+sqlite3 database.db
+sqlite3 database.db ".tables"
+redis-cli
+redis-cli ping
+redis-cli info
+mongosh
+mongosh mongodb://localhost:27017
+jq . file.json
+jq '.key' file.json
+jq -r '.key' file.json
+cat file.json | jq .
+curl -s https://example.com/api | jq .
+base64 file.txt
+base64 -d file.b64
+echo "hello" | base64
+echo "aGVsbG8=" | base64 -d
+xxd file.bin
+xxd -g 1 file.bin
+xxd -r file.hex file.bin
+hexdump -C file.bin
+od -An -tx1 file.bin
+strings binary
+strings binary | grep password
+sha256sum file
+sha1sum file
+md5sum file
+cksum file
+gpg --list-keys
+gpg --list-secret-keys
+gpg -c file.txt
+gpg -d file.txt.gpg
+tcpdump -i any
+tcpdump -i eth0
+tcpdump -i eth0 port 80
+tcpdump -i eth0 port 443
+tcpdump -i eth0 host 192.168.1.10
+tcpdump -i eth0 -nn
+tcpdump -i eth0 -w capture.pcap
+tcpdump -r capture.pcap
+tcpdump -nn -r capture.pcap
+tshark -i eth0
+tshark -r capture.pcap
+tshark -r capture.pcap -Y tcp
+tshark -r capture.pcap -Y http
+tshark -r capture.pcap -T fields -e ip.src -e ip.dst
+nmap localhost
+nmap 192.168.1.1
+nmap -sV 192.168.1.1
+nmap -p 22,80,443 192.168.1.1
+nmap -Pn 192.168.1.1
+nmap -sn 192.168.1.0/24
+strace command
+strace -f command
+strace -p 1234
+strace -o trace.txt command
+ltrace command
+gdb ./program
+gdb --args ./program arg1 arg2
+objdump -d binary
+objdump -x binary
+readelf -h binary
+readelf -a binary
+nm binary
+nm -C binary
+ldd binary
+ldconfig -p
+sudo ldconfig
+perf stat command
+perf top
+valgrind ./program
+valgrind --leak-check=full ./program
+systemd-analyze
+systemd-analyze blame
+loginctl
+loginctl list-sessions
+timedatectl
+timedatectl status
+localectl
+locale
+locale -a
+fc-list
+fc-cache -fv
+xdg-open file.pdf
+xdg-open https://example.com
+open file.txt
+open .
+pbcopy
+pbpaste
+xclip -selection clipboard
+xsel --clipboard
+git config --list
+git config --global user.name "User Name"
+git config --global user.email "user@example.com"
+git config --global core.editor vim
+git reflog
+git cherry-pick abc1234
+git revert abc1234
+git bisect start
+git submodule update --init --recursive
+gh auth status
+gh repo clone user/repo
+gh pr list
+gh pr create
+gh pr checkout 123
+gh issue list
+gh release list
+pipx install package
+pipx list
+poetry install
+poetry shell
+poetry run python app.py
+poetry add requests
+uv pip install requests
+uv sync
+uv run python app.py
+conda activate base
+conda activate environment
+conda deactivate
+conda env list
+conda install numpy
+ruby script.rb
+bundle install
+bundle exec rake
+bundle exec rails server
+php script.php
+php -S localhost:8000
+composer install
+composer update
+composer require package
+perl script.pl
+lua script.lua
+R
+Rscript script.R
+jupyter notebook
+jupyter lab
+ansible all -m ping
+ansible-playbook playbook.yml
+ansible-inventory --list
+terraform init
+terraform plan
+terraform apply
+terraform destroy
+terraform fmt
+terraform validate
+vagrant up
+vagrant halt
+vagrant ssh
+vagrant destroy
+virsh list
+virsh list --all
+virsh start vm
+virsh shutdown vm
+qemu-img info disk.qcow2
+aws configure
+aws sts get-caller-identity
+aws s3 ls
+aws s3 cp file s3://bucket/
+aws ec2 describe-instances
+gcloud auth list
+gcloud config list
+gcloud compute instances list
+az login
+az account show
+az vm list
+helm list
+helm repo update
+helm install app chart/
+helm upgrade app chart/
+iptables -L
+sudo iptables -L -n -v
+sudo iptables -S
+nft list ruleset
+sudo nft list ruleset
+ufw status
+sudo ufw status
+sudo ufw allow 22
+sudo ufw allow 80
+sudo ufw allow 443
+firewall-cmd --list-all
+sudo firewall-cmd --reload
+getenforce
+sestatus
+setenforce 0
+sudo setenforce 0
+aa-status
+fail2ban-client status
+sudo fail2ban-client status sshd
+certbot certificates
+sudo certbot renew
+sudo certbot --apache
+sudo certbot --nginx
+whois example.com
+curl ifconfig.me
+curl ipinfo.io
+curl -s ifconfig.me
+ipcalc 192.168.1.0/24
+ethtool eth0
+sudo ethtool eth0
+iwconfig
+iw dev
+iw dev wlan0 link
+nmcli device
+nmcli connection show
+nmcli device wifi list
+rfkill list
+sensors
+smartctl -a /dev/sda
+sudo smartctl -a /dev/nvme0
+iostat
+iostat -xz 1
+vmstat
+vmstat 1
+sar
+sar -u 1
+sar -n DEV 1
+iotop
+sudo iotop
+iftop
+sudo iftop
+nethogs
+sudo nethogs
+ncdu
+ncdu /
+column -t file.txt
+paste file1 file2
+join file1 file2
+comm file1 file2
+split -l 1000 file.txt chunk_
+csplit file.txt '/pattern/'
+sh script.sh
+bash script.sh
+bash -x script.sh
+bash -n script.sh
+zsh
+fish
+exec bash
+exec zsh
+env bash
+bash -c 'echo hello'
+sh -c 'echo hello'
+for f in *.txt; do echo "$f"; done
+for f in *.log; do grep -i error "$f"; done
+for i in {1..10}; do echo "$i"; done
+while true; do date; sleep 1; done
+find . -type f -exec grep -H "pattern" {} \;
+find . -type f -exec chmod 644 {} \;
+grep -RIl "pattern" .
+grep -RIl "pattern" . | xargs sed -i 's/foo/bar/g'
+cat /proc/cpuinfo
+cat /proc/meminfo
+cat /proc/version
+cat /proc/uptime
+cat /proc/net/tcp
+cat /etc/fstab
+cat /etc/resolv.conf
+cat /etc/hostname
+cat /etc/group
+cat /etc/shadow
+cat /etc/ssh/ssh_config
+cat /etc/ssh/sshd_config
+sudoedit /etc/hosts
+sudoedit /etc/ssh/sshd_config
+sudoedit /etc/nginx/nginx.conf
+update-alternatives --config editor
+sudo update-alternatives --config java
+dpkg -l
+dpkg -L package
+dpkg -i package.deb
+sudo dpkg -i package.deb
+apt list --installed
+apt search package
+apt show package
+rpm -qa
+rpm -qi package
+rpm -ql package
+sudo rpm -ivh package.rpm
+dnf search package
+dnf info package
+dnf list installed
+snap list
+sudo snap install package
+sudo snap remove package
+flatpak list
+flatpak install package
+flatpak run application
+brew update
+brew upgrade
+brew install package
+brew uninstall package
+brew list
+brew services list
+brew services restart service
+launchctl list
+system_profiler SPHardwareDataType
+sw_vers
+diskutil list
+diskutil info disk0
+defaults read
+defaults write domain key value
+say "hello"
+wsl --list
+wsl --shutdown
+wsl -d Ubuntu
+powershell.exe
+cmd.exe
+dos2unix file.txt
+unix2dos file.txt
+iconv -f ISO-8859-1 -t UTF-8 input.txt > output.txt
+patch < changes.patch
+patch -p1 < changes.patch
+git format-patch -1 HEAD
+git apply changes.patch
+rsync -avP file user@server:/tmp/
+scp -C file user@server:/tmp/
+ssh -o StrictHostKeyChecking=no user@server
+ssh -o ServerAliveInterval=60 user@server
+ssh-add ~/.ssh/id_ed25519
+ssh-add -l
+ssh-agent bash
+openssl req -new -newkey rsa:2048 -nodes -keyout key.pem -out request.csr
+openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 365
+python3 -c 'print("hello")'
+python3 -c 'import sys; print(sys.version)'
+python3 -c 'import os; print(os.getcwd())'
+node -e 'console.log("hello")'
+node -e 'console.log(process.version)'
+perl -e 'print "hello\n"'
+awk 'BEGIN {print "hello"}'
+printf '%s\n' * | sort
+find . | sort
+du -ah . | sort -h | tail
+ps aux --sort=-%mem | head
+ps aux --sort=-%cpu | head
+find . -type f -printf '%s %p\n' | sort -nr | head
+grep -Rni --exclude-dir=node_modules "TODO" .
+rg "TODO"
+rg -i "error"
+rg "functionName" src/
+rg --files
+rg --files | head
+fd pattern
+fd '\.js$'
+fd -t f
+fd -t d
+fzf
+history | fzf
+bat file.txt
+bat README.md
+exa -lah
+eza -lah
+jq -C . file.json | less -R
+curl -sS http://localhost:3000/health
+curl -fsS http://localhost:3000/health
+curl -s -o /dev/null -w '%{http_code}\n' https://example.com
+wget --spider https://example.com
+timeout 10 command
+timeout 5 curl https://example.com
+nice -n 10 command
+renice 10 -p 1234
+taskset -c 0 command
+chrt -p 1234
+flock /tmp/lockfile command
+mktemp
+mktemp -d
+mkfifo pipe
+fuser file.txt
+fuser -k 8080/tcp
+hostnamectl set-hostname server
+sudo reboot
+sudo shutdown -h now
+sudo shutdown -r now
+sudo poweroff
+sudo halt
+reboot
+poweroff
+shutdown now

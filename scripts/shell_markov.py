@@ -66,21 +66,33 @@ class ShellMarkov:
         self.n_commands = 0
 
     def train(self, commands):
+        """Train the model from an iterable of shell commands.
+
+        If ``commands`` is ordered by frequency (most-used first), each
+        command's n-gram contribution is weighted by ``1/log2(rank+2)``
+        (0-based ``rank``).  This lets a frequency-sorted corpus
+        dominate the transition counts while the long tail still
+        contributes weakly.  An unsorted iterable still works — every
+        command just gets weight 1.0 (rank 0 is the first item).
+        """
         k = self.order - 1
-        for cmd in commands:
+        for rank, cmd in enumerate(commands):
             self.n_commands += 1
-            self.command_counts[cmd] += 1
-            self.lengths[len(cmd)] += 1
+            # log2-spaced decay: rank 0 -> 1.0, rank 9 -> 0.30,
+            # rank 99 -> 0.15, rank 1210 -> 0.083
+            weight = 1.0 / math.log2(rank + 2)
+            self.command_counts[cmd] += weight
+            self.lengths[len(cmd)] += weight
             tok = cmd.strip().split(maxsplit=1)[0] if cmd.strip() else ''
             if tok:
-                self.first_tokens[tok] += 1
+                self.first_tokens[tok] += weight
             seq = BOS*k + cmd + EOS
             for i in range(k, len(seq)):
                 ctx = seq[i-k:i]
                 ch = seq[i]
-                self.counts[ctx][ch] += 1
-                self.context_totals[ctx] += 1
-                self.vocab[ch] += 1
+                self.counts[ctx][ch] += weight
+                self.context_totals[ctx] += weight
+                self.vocab[ch] += weight
         return self
 
     @property
@@ -231,7 +243,8 @@ def load_delays(path):
 
 def main():
     ap=argparse.ArgumentParser()
-    ap.add_argument('--corpus',default='/mnt/data/shell_corpus.txt(1)')
+    ap.add_argument('--corpus',default=str(Path(__file__).resolve().parent.parent / 'src/data/shell_corpus_sorted.txt'),
+                    help='path to a frequency-sorted corpus (one command per line, most-used first)')
     ap.add_argument('--order',type=int,default=4,help='n-gram order (default 4 = trigram context -> next char)')
     ap.add_argument('--save')
     ap.add_argument('--load')
@@ -265,7 +278,7 @@ def main():
     else:
         print('top command tokens:')
         for tok,n in model.first_tokens.most_common(30):
-            print(f'{n:5d}  {tok}')
+            print(f'{n:8.4f}  {tok}')
 
 if __name__=='__main__':
     main()
