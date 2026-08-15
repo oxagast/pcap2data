@@ -112,7 +112,7 @@ let _addHashReverseToKeystore = () => 0;
 let _recordHashesComLookupOutcome = () => { };
 
 // Initializes conv panel.
-function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub, addHashReverseToKeystore, recordHashesComLookupOutcome }) {
+function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurrentContextPacket, getActiveMainTab, callLargeLanguageModel, isLlmRuntimeEnabled, isBackgroundSummaryGenerationEnabled, appendAnalysisBlub, addHashReverseToKeystore, recordHashesComLookupOutcome, markovData }) {
   _writeLogEntry = writeLogEntry;
   _statusUpdate = statusUpdate;
   _setActiveMainTab = setActiveMainTab;
@@ -158,9 +158,19 @@ function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurre
     writeLogEntry: _writeLogEntry,
     appendAnalysisBlub: _appendAnalysisBlub,
   });
+  if (markovData) {
+    renderMarkovData(markovData);
+  }
 }
 
 // ── State accessors ───────────────────────────────────────────────────────────
+
+function renderMarkovData(data) {
+  const outputElement = document.getElementById("markov-output");
+  if (outputElement) {
+    outputElement.innerHTML = "<pre>" + JSON.stringify(data, null, 2) + "</pre>";
+  }
+}
 
 function getActiveConvSubtab() {
   return activeConvSubtab;

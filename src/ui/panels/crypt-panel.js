@@ -1051,6 +1051,12 @@ function createCryptPanel({
   // — those are user choices that persist between runs.
   function clearSshOutputPanels() {
     if (typeof document === "undefined") return;
+    // NOTE: Only include LEAF elements in this list (elements that contain
+    // only text/content, not other elements). Container elements like
+    // crypt-openssh-primary, crypt-openssh-insight, crypt-openssh-markov-section
+    // must NOT be included here because calling replaceChildren() on them
+    // would DESTROY their child elements (like #crypt-openssh-primary-text),
+    // which the render functions later need to populate.
     const idList = [
       "crypt-openssh-summary",
       "crypt-openssh-candidates",
@@ -1061,10 +1067,18 @@ function createCryptPanel({
       "crypt-openssh-primary-kind",
       "crypt-openssh-primary-source",
       "crypt-openssh-primary-rationale",
-      "crypt-openssh-primary",
       "crypt-openssh-insight-text",
       "crypt-openssh-insight-source",
-      "crypt-openssh-insight",
+      "crypt-openssh-markov-text",
+      "crypt-openssh-markov-confidence",
+      "crypt-openssh-markov-target",
+      "crypt-openssh-markov-source",
+      // Enhanced confidence elements
+      "crypt-openssh-session-confidence-value",
+      "crypt-openssh-session-confidence-interpretation",
+      "crypt-openssh-markov-candidates-list",
+      // Timeline elements
+      "crypt-openssh-markov-timeline",
     ];
     for (const id of idList) {
       const el = document.getElementById(id);
@@ -1080,6 +1094,23 @@ function createCryptPanel({
     const progressTextEl = document.getElementById("crypt-openssh-progress-text");
     if (progressEl) progressEl.hidden = true;
     if (progressTextEl) progressTextEl.textContent = "Working";
+    // Hide the primary and Markov sections
+    const primaryEl = document.getElementById("crypt-openssh-primary");
+    const markovSectionEl = document.getElementById("crypt-openssh-markov-section");
+    const sessionConfEl = document.getElementById("crypt-openssh-markov-session-confidence");
+    const candidatesListTitleEl = document.getElementById("crypt-openssh-markov-list-title");
+    const candidatesListEl = document.getElementById("crypt-openssh-markov-candidates-list");
+    const timelineTitleEl = document.getElementById("crypt-openssh-markov-timeline-title");
+    const timelineEl = document.getElementById("crypt-openssh-markov-timeline");
+    const markovOutputEl = document.getElementById("crypt-openssh-markov-output");
+    if (primaryEl) primaryEl.hidden = true;
+    if (markovSectionEl) markovSectionEl.hidden = true;
+    if (sessionConfEl) sessionConfEl.hidden = true;
+    if (candidatesListTitleEl) candidatesListTitleEl.hidden = true;
+    if (candidatesListEl) candidatesListEl.hidden = true;
+    if (timelineTitleEl) timelineTitleEl.hidden = true;
+    if (timelineEl) timelineEl.hidden = true;
+    if (markovOutputEl) markovOutputEl.hidden = true;
     // Drop the analysis cache so the export button reflects "needs analyze"
     sshLastAnalysisByFlowKey.clear();
     // Re-disable the export button (it'll be re-enabled after analyze completes)
@@ -2050,29 +2081,95 @@ function createCryptPanel({
     });
   }
 
-  // Render the Markov-chain result into the primary card. Replaces the
-  // existing primary text with a brief, typed-out summary that lists
-  // the top-1 candidate and 2 alternatives, plus short diagnostic tags
-  // (target length, training-corpus size) so the user can see how
-  // the model was conditioned.
+  // ── Enhanced confidence-scored Markov rendering ─────────────────────
+  //
+  // Helper: get color class for confidence value
+  function _confidenceColorClass(conf) {
+    if (conf >= 0.7) return "high";
+    if (conf >= 0.4) return "medium";
+    return "low";
+  }
+
+  // Render the Markov-chain result into the primary card. Enhanced with:
+  // - Session confidence score (overall signal quality)
+  // - Line confidence scores (per-candidate with all factors)
+  // - Multi-candidate list display with confidence on the left
+  // Helper: enhance a chunk's candidates with line confidence
+  function _enhanceChunkCandidates(chunk, chunkIdx, lineOptsBase, haveLineConf, sshMarkovModule) {
+    const enhanced = [];
+    const alternatives = (chunk && chunk.top) || [];
+
+    for (let i = 0; i < alternatives.length; i += 1) {
+      const alt = alternatives[i];
+      const text = alt && alt.text ? String(alt.text) : "";
+      const markovScore = Number.isFinite(alt.score) ? alt.score : null;
+
+      const entry = {
+        rank: i + 1,
+        markovScore: markovScore,
+        text: text,
+        lineConfidence: null,
+      };
+
+      if (haveLineConf && text && sshMarkovModule) {
+        const lineOpts = { ...lineOptsBase };
+        // If this chunk has its own keystroke count, use that for length
+        if (Number.isFinite(chunk.keystrokeCount)) {
+          lineOpts.estimatedLength = chunk.keystrokeCount;
+        }
+        entry.lineConfidence = sshMarkovModule.computeLineConfidence(text, lineOpts);
+      }
+
+      entry.sortKey = Number.isFinite(entry.lineConfidence)
+        ? entry.lineConfidence
+        : (Number.isFinite(markovScore) ? markovScore : -100);
+
+      enhanced.push(entry);
+    }
+
+    // Re-rank by line confidence if available
+    if (enhanced.some((c) => Number.isFinite(c.lineConfidence))) {
+      enhanced.sort((a, b) => b.sortKey - a.sortKey);
+      enhanced.forEach((c, idx) => { c.rank = idx + 1; });
+    }
+
+    return enhanced;
+  }
+
   function renderSshPrimaryFromMarkov(cached, reranked, modelInfo) {
+    const primaryEl = document.getElementById("crypt-openssh-primary");
     const textEl = document.getElementById("crypt-openssh-primary-text");
     const confEl = document.getElementById("crypt-openssh-primary-confidence");
     const kindEl = document.getElementById("crypt-openssh-primary-kind");
     const sourceEl = document.getElementById("crypt-openssh-primary-source");
     const rationaleEl = document.getElementById("crypt-openssh-primary-rationale");
-    if (!textEl) return;
+    // Markov output panel elements
+    const markovSectionEl = document.getElementById("crypt-openssh-markov-section");
+    const markovTextEl = document.getElementById("crypt-openssh-markov-text");
+    const markovConfEl = document.getElementById("crypt-openssh-markov-confidence");
+    const markovTargetEl = document.getElementById("crypt-openssh-markov-target");
+    const markovSourceEl = document.getElementById("crypt-openssh-markov-source");
+    // Session confidence elements
+    const sessionConfEl = document.getElementById("crypt-openssh-markov-session-confidence");
+    const sessionConfValueEl = document.getElementById("crypt-openssh-session-confidence-value");
+    const sessionConfInterpEl = document.getElementById("crypt-openssh-session-confidence-interpretation");
+    // Timeline elements
+    const timelineTitleEl = document.getElementById("crypt-openssh-markov-timeline-title");
+    const timelineEl = document.getElementById("crypt-openssh-markov-timeline");
+    // Fallback: candidates list elements (for single-chunk or legacy mode)
+    const candidatesListTitleEl = document.getElementById("crypt-openssh-markov-list-title");
+    const candidatesListEl = document.getElementById("crypt-openssh-markov-candidates-list");
 
-    const lines = [];
+    if (!textEl) return;
+    // Make panels visible
+    if (primaryEl) primaryEl.hidden = false;
+    if (markovSectionEl) markovSectionEl.hidden = false;
+
     const chunks = (modelInfo && Array.isArray(modelInfo.chunks))
       ? modelInfo.chunks
       : null;
 
-    // The user wants a single top-1 line in the primary pane (per
-    // chunk breakdown lives in the export JSON). Prefer the
-    // per-chunk top-1 of the first chunk when chunks exist (more
-    // contextual than the whole-session aggregate), otherwise fall
-    // back to the whole-session shape.
+    // Get top candidate for the primary card
     let top = "";
     if (chunks && chunks.length > 0) {
       const first = chunks[0];
@@ -2081,14 +2178,9 @@ function createCryptPanel({
     if (!top && reranked && reranked[0] && reranked[0][1]) {
       top = reranked[0][1];
     }
-    if (top) lines.push(`Top candidate: ${top}`);
-    else lines.push("Top candidate: (none)");
-    const body = lines.join("\n");
+    const body = top ? `Top candidate: ${top}` : "Top candidate: (none)";
 
-    // Diagnostic: surface the data shape that reached the renderer
-    // so we can verify the body construction when the user reports
-    // "no markov data on screen". Safe to keep on; it's a single
-    // console.log per Analyze click.
+    // Diagnostic log
     try {
       console.log(
         "[Crypt/OpenSSH] renderSshPrimaryFromMarkov:",
@@ -2096,57 +2188,494 @@ function createCryptPanel({
         "chunk0.top[0]=", chunks && chunks[0] && chunks[0].top && chunks[0].top[0],
         "reranked[0]=", reranked && reranked[0],
         "top=", JSON.stringify(top),
-        "body=", JSON.stringify(body),
       );
     } catch (_e) { /* ignore */ }
 
-    // Write the body IMMEDIATELY so the user sees the markov top-1
-    // the moment the chain finishes (no race with the typewriter).
-    // The typewriter below is purely cosmetic — it replaces the
-    // already-visible content character-by-character for the
-    // "snappy" effect, but the synchronous write guarantees the
-    // final state is on screen before any subsequent code runs.
+    // Immediate write + typewriter
     if (textEl) textEl.textContent = body;
-    // Type the body in as a visual flourish. New analyses will
-    // overwrite while a previous one is still typing —
-    // clearSshOutputPanels() (called by Analyze) wipes the element
-    // so this call always starts from scratch.
+    if (markovTextEl) markovTextEl.textContent = top || "(none)";
     if (body) void typewriteIntoEl(textEl, body, { charMs: 6 });
 
-    if (confEl) {
-      const score = (reranked && reranked[0] && reranked[0][0]);
-      confEl.textContent = Number.isFinite(score)
-        ? `Markov score: ${score.toFixed(3)}`
-        : "Markov score: —";
+    // ── Session confidence ──────────────────────────────────────────
+
+    let sessionConfidence = null;
+    const haveConfFunctions = sshMarkovModule
+      && typeof sshMarkovModule.computeSessionConfidence === "function"
+      && typeof sshMarkovModule.computeDelayStats === "function";
+
+    if (haveConfFunctions && cached) {
+      const pad = cached.paddingDetection;
+      const markovFeats = cached.markovFeatures || {};
+      const delaysForMarkov = (pad && Array.isArray(pad.keystrokeDelaysMs))
+        ? pad.keystrokeDelaysMs
+        : (cached.delaysWithIdx || []).map((d) => Number(d.delay)).filter(Number.isFinite);
+
+      const sessionOpts = {};
+
+      // Chunk count
+      if (Number.isFinite(markovFeats.chunkCount)) {
+        sessionOpts.chunkCount = markovFeats.chunkCount;
+      } else if (chunks && chunks.length > 0) {
+        sessionOpts.chunkCount = chunks.length;
+      }
+
+      // Clear gap count (chunk count is our proxy)
+      if (sessionOpts.chunkCount) {
+        sessionOpts.clearGapCount = sessionOpts.chunkCount;
+      }
+
+      // Delay stats
+      if (delaysForMarkov && delaysForMarkov.length >= 2) {
+        const stats = sshMarkovModule.computeDelayStats(delaysForMarkov);
+        if (stats.count >= 2) {
+          sessionOpts.delayMean = stats.mean;
+          sessionOpts.delayStd = stats.std;
+          sessionOpts.medianDelayMs = stats.median;
+        }
+      }
+
+      // Obfuscation
+      if (pad && pad.detected) {
+        sessionOpts.obfuscationDetected = true;
+        sessionOpts.obfuscationCoverage = Number.isFinite(pad.coverage)
+          ? pad.coverage
+          : 0.5;
+      }
+
+      sessionConfidence = sshMarkovModule.computeSessionConfidence(sessionOpts);
     }
+
+    // Render session confidence
+    if (sessionConfEl) {
+      if (sessionConfidence) {
+        sessionConfEl.hidden = false;
+        if (sessionConfValueEl) {
+          sessionConfValueEl.textContent = sessionConfidence.label;
+        }
+        if (sessionConfInterpEl) {
+          sessionConfInterpEl.textContent = sessionConfidence.interpretation;
+        }
+        console.log("[Crypt/OpenSSH] session confidence:", sessionConfidence);
+      } else {
+        sessionConfEl.hidden = true;
+      }
+    }
+
+    // ── Line confidence + Chronological Timeline ────────────────────
+
+    const haveLineConf = sshMarkovModule
+      && typeof sshMarkovModule.computeLineConfidence === "function";
+
+    const pad = cached && cached.paddingDetection;
+    const targetLen = cached && Number.isFinite(cached.estimatedCommandLength)
+      ? Math.max(1, Math.round(cached.estimatedCommandLength))
+      : null;
+    const delaysForMarkov = (pad && Array.isArray(pad.keystrokeDelaysMs))
+      ? pad.keystrokeDelaysMs
+      : (cached && cached.delaysWithIdx || []).map((d) => Number(d.delay)).filter(Number.isFinite);
+
+    // Base line options for confidence calculation
+    const lineOptsBase = {
+      estimatedLength: targetLen,
+      lengthTolerance: 2,
+    };
+    if (delaysForMarkov && delaysForMarkov.length >= 2) {
+      lineOptsBase.delaysMs = delaysForMarkov;
+    }
+    if (pad && pad.detected) {
+      lineOptsBase.obfuscationDetected = true;
+      lineOptsBase.obfuscationCoverage = Number.isFinite(pad.coverage)
+        ? pad.coverage
+        : 0.5;
+    }
+
+    // Kind/target length
     if (kindEl) {
-      const targetLen = cached && Number.isFinite(cached.estimatedCommandLength)
-        ? Math.max(1, Math.round(cached.estimatedCommandLength))
-        : null;
       const chunkCount = cached && cached.markovFeatures
         && Number.isFinite(cached.markovFeatures.chunkCount)
         ? cached.markovFeatures.chunkCount
-        : null;
+        : (chunks && chunks.length ? chunks.length : null);
       const tail = chunkCount != null ? ` across ${chunkCount} Return(s)` : "";
       kindEl.textContent = targetLen
         ? `Target length: ${targetLen}${tail}`
         : `Target length: auto${tail}`;
     }
+    if (markovTargetEl) {
+      const chunkCount = cached && cached.markovFeatures
+        && Number.isFinite(cached.markovFeatures.chunkCount)
+        ? cached.markovFeatures.chunkCount
+        : (chunks && chunks.length ? chunks.length : null);
+      const tail = chunkCount != null ? ` across ${chunkCount} Return(s)` : "";
+      markovTargetEl.textContent = targetLen
+        ? `Target length: ${targetLen}${tail}`
+        : `Target length: auto${tail}`;
+    }
+
+    // Source
     if (sourceEl) {
       const n = modelInfo && Number.isFinite(modelInfo.nCommands)
         ? `${modelInfo.nCommands}-cmd corpus`
         : "shell_corpus corpus";
       sourceEl.textContent = `Markov chain (${n})`;
     }
+    if (markovSourceEl) {
+      const n = modelInfo && Number.isFinite(modelInfo.nCommands)
+        ? `${modelInfo.nCommands}-cmd corpus`
+        : "shell_corpus corpus";
+      markovSourceEl.textContent = `Markov chain (${n})`;
+    }
+
+    // Rationale
     if (rationaleEl) {
       const notes = [
-        "One best guess per detected Return-shaped gap (small c2s packet heuristic, ≤100 B).",
-        `Ciphertext-aware: trained on ` +
-        (modelInfo && modelInfo.corpusPath ? modelInfo.corpusPath : "shell_corpus_sorted.txt") +
-        " with sequence/length priors.",
-        "Output can race with a fresh Analyze click; the latest run always wins.",
+        "Chronological timeline: one row per detected Return-shaped gap (small c2s packet heuristic, ≤100 B).",
+        "Click any row to expand alternative candidates for that command.",
+        "Confidence factors: QWERTY timing match, length similarity, first-token validity, obfuscation level.",
       ];
       rationaleEl.textContent = notes.join("\n");
+    }
+
+    // ── Render Chronological Timeline ──────────────────────────────
+    //
+    // If we have chunks (multiple commands detected), render them in
+    // chronological order with click-to-expand alternatives.
+
+    if (timelineEl) {
+      timelineEl.innerHTML = "";
+
+      // Check if we have multiple chunks (timeline mode)
+      const haveMultipleChunks = chunks && chunks.length > 0;
+
+      if (haveMultipleChunks) {
+        // Show timeline view
+        timelineEl.hidden = false;
+        if (timelineTitleEl) timelineTitleEl.hidden = false;
+
+        // Hide legacy candidates list
+        if (candidatesListEl) candidatesListEl.hidden = true;
+        if (candidatesListTitleEl) candidatesListTitleEl.hidden = true;
+
+        // Update primary confidence from first chunk's top candidate
+        const firstChunk = chunks[0];
+        const firstEnhanced = _enhanceChunkCandidates(
+          firstChunk, 0, lineOptsBase, haveLineConf, sshMarkovModule
+        );
+        const firstTop = firstEnhanced[0];
+
+        if (confEl) {
+          if (firstTop && Number.isFinite(firstTop.lineConfidence)) {
+            confEl.textContent = `Confidence: ${(firstTop.lineConfidence * 100).toFixed(1)}%`;
+          } else if (firstTop && Number.isFinite(firstTop.markovScore)) {
+            confEl.textContent = `Markov score: ${firstTop.markovScore.toFixed(3)}`;
+          } else {
+            confEl.textContent = "Markov score: —";
+          }
+        }
+        if (markovConfEl) {
+          if (firstTop && Number.isFinite(firstTop.lineConfidence)) {
+            markovConfEl.textContent = `Confidence: ${(firstTop.lineConfidence * 100).toFixed(1)}%`;
+          } else if (firstTop && Number.isFinite(firstTop.markovScore)) {
+            markovConfEl.textContent = `Markov score: ${firstTop.markovScore.toFixed(3)}`;
+          } else {
+            markovConfEl.textContent = "Confidence: —";
+          }
+        }
+
+        // Render each chunk in chronological order
+        for (let ci = 0; ci < chunks.length; ci += 1) {
+          const chunk = chunks[ci];
+          const enhanced = _enhanceChunkCandidates(
+            chunk, ci, lineOptsBase, haveLineConf, sshMarkovModule
+          );
+          const topCand = enhanced[0];
+
+          // Timeline item container
+          const itemEl = document.createElement("div");
+          itemEl.className = "crypt-openssh-markov-timeline-item";
+          itemEl.setAttribute("data-chunk-index", String(ci));
+          itemEl.setAttribute("data-expanded", "false");
+
+          // Timeline connector (left side)
+          const connectorEl = document.createElement("div");
+          connectorEl.className = "crypt-openssh-markov-timeline-connector";
+
+          // Command index badge
+          const indexBadge = document.createElement("div");
+          indexBadge.className = "crypt-openssh-markov-timeline-index";
+          indexBadge.textContent = String(ci + 1);
+          connectorEl.appendChild(indexBadge);
+
+          // Timeline dot and line
+          const dotEl = document.createElement("div");
+          dotEl.className = "crypt-openssh-markov-timeline-dot";
+          if (topCand && Number.isFinite(topCand.lineConfidence)) {
+            dotEl.setAttribute("data-confidence", _confidenceColorClass(topCand.lineConfidence));
+          }
+          connectorEl.appendChild(dotEl);
+
+          const lineEl = document.createElement("div");
+          lineEl.className = "crypt-openssh-markov-timeline-line";
+          // Don't draw line after last item
+          if (ci < chunks.length - 1) {
+            lineEl.style.height = "100%";
+          }
+          connectorEl.appendChild(lineEl);
+
+          itemEl.appendChild(connectorEl);
+
+          // Content area (header + alternatives)
+          const contentEl = document.createElement("div");
+          contentEl.className = "crypt-openssh-markov-timeline-content";
+
+          // Header row (clickable to expand)
+          const headerEl = document.createElement("div");
+          headerEl.className = "crypt-openssh-markov-timeline-header";
+
+          // Confidence/info on left
+          const infoEl = document.createElement("div");
+          infoEl.className = "crypt-openssh-markov-timeline-info";
+
+          if (topCand) {
+            if (Number.isFinite(topCand.lineConfidence)) {
+              const confPct = (topCand.lineConfidence * 100).toFixed(0);
+              const confLabel = document.createElement("span");
+              confLabel.className = "crypt-openssh-markov-timeline-confidence";
+              confLabel.setAttribute("data-confidence", _confidenceColorClass(topCand.lineConfidence));
+              confLabel.textContent = `${confPct}%`;
+              infoEl.appendChild(confLabel);
+            }
+            if (Number.isFinite(topCand.markovScore)) {
+              const scoreLabel = document.createElement("span");
+              scoreLabel.className = "crypt-openssh-markov-timeline-score";
+              scoreLabel.textContent = `Markov: ${topCand.markovScore.toFixed(2)}`;
+              infoEl.appendChild(scoreLabel);
+            }
+          }
+
+          // Keystroke count
+          if (Number.isFinite(chunk.keystrokeCount)) {
+            const ksLabel = document.createElement("span");
+            ksLabel.className = "crypt-openssh-markov-timeline-keystrokes";
+            ksLabel.textContent = `${chunk.keystrokeCount} chars`;
+            infoEl.appendChild(ksLabel);
+          }
+
+          headerEl.appendChild(infoEl);
+
+          // Chevron (right side, rotates on expand)
+          const chevronEl = document.createElement("div");
+          chevronEl.className = "crypt-openssh-markov-timeline-chevron";
+          if (enhanced.length > 1) {
+            // Only show chevron if there are alternatives
+            chevronEl.innerHTML = "▼";
+          }
+          headerEl.appendChild(chevronEl);
+
+          // Top command text (spans width below header info)
+          const cmdEl = document.createElement("div");
+          cmdEl.className = "crypt-openssh-markov-timeline-command";
+          cmdEl.textContent = (topCand && topCand.text) || "(no candidates)";
+          headerEl.appendChild(cmdEl);
+
+          contentEl.appendChild(headerEl);
+
+          // Alternatives dropdown (hidden by default)
+          if (enhanced.length > 1) {
+            const altsEl = document.createElement("div");
+            altsEl.className = "crypt-openssh-markov-timeline-alternatives";
+            altsEl.setAttribute("hidden", "");
+
+            // Alternatives header
+            const altsHeader = document.createElement("div");
+            altsHeader.className = "crypt-openssh-markov-timeline-alts-header";
+            altsHeader.textContent = `Alternative candidates (${enhanced.length - 1} more):`;
+            altsEl.appendChild(altsHeader);
+
+            // Alternative rows (skip #1 since it's the top)
+            for (let ai = 1; ai < enhanced.length; ai += 1) {
+              const alt = enhanced[ai];
+              const altRow = document.createElement("div");
+              altRow.className = "crypt-openssh-markov-timeline-alt-row";
+
+              const altInfo = document.createElement("div");
+              altInfo.className = "crypt-openssh-markov-timeline-alt-info";
+
+              if (Number.isFinite(alt.lineConfidence)) {
+                const altConf = document.createElement("span");
+                altConf.className = "crypt-openssh-markov-timeline-alt-confidence";
+                altConf.setAttribute("data-confidence", _confidenceColorClass(alt.lineConfidence));
+                altConf.textContent = `#${alt.rank} ${(alt.lineConfidence * 100).toFixed(0)}%`;
+                altInfo.appendChild(altConf);
+              } else {
+                const altRank = document.createElement("span");
+                altRank.className = "crypt-openssh-markov-timeline-alt-rank";
+                altRank.textContent = `#${alt.rank}`;
+                altInfo.appendChild(altRank);
+              }
+
+              if (Number.isFinite(alt.markovScore)) {
+                const altScore = document.createElement("span");
+                altScore.className = "crypt-openssh-markov-timeline-alt-score";
+                altScore.textContent = `Markov: ${alt.markovScore.toFixed(2)}`;
+                altInfo.appendChild(altScore);
+              }
+
+              altRow.appendChild(altInfo);
+
+              const altCmd = document.createElement("div");
+              altCmd.className = "crypt-openssh-markov-timeline-alt-command";
+              altCmd.textContent = alt.text || "(empty)";
+              altRow.appendChild(altCmd);
+
+              altsEl.appendChild(altRow);
+            }
+
+            contentEl.appendChild(altsEl);
+
+            // Click handler to toggle expansion
+            headerEl.style.cursor = "pointer";
+            headerEl.addEventListener("click", () => {
+              const isExpanded = itemEl.getAttribute("data-expanded") === "true";
+              const newState = isExpanded ? "false" : "true";
+              itemEl.setAttribute("data-expanded", newState);
+              if (isExpanded) {
+                altsEl.setAttribute("hidden", "");
+                chevronEl.innerHTML = "▼";
+              } else {
+                altsEl.removeAttribute("hidden");
+                chevronEl.innerHTML = "▲";
+              }
+            });
+          }
+
+          itemEl.appendChild(contentEl);
+          timelineEl.appendChild(itemEl);
+        }
+
+        console.log(
+          "[Crypt/OpenSSH] rendered chronological timeline:",
+          chunks.length, "chunk(s), line confidence available:",
+          haveLineConf
+        );
+      } else {
+        // No chunks: fall back to legacy candidates list from reranked
+        timelineEl.hidden = true;
+        if (timelineTitleEl) timelineTitleEl.hidden = true;
+
+        // Build legacy enhanced candidates list from reranked
+        let enhancedCandidates = [];
+        if (reranked && reranked.length > 0) {
+          for (let i = 0; i < reranked.length; i += 1) {
+            const [markovScore, text] = reranked[i];
+            const entry = {
+              source: "session",
+              rank: i + 1,
+              markovScore: markovScore,
+              text: text || "",
+              lineConfidence: null,
+            };
+
+            if (haveLineConf && text) {
+              const lineOpts = {
+                ...lineOptsBase,
+                markovScore: markovScore,
+              };
+              entry.lineConfidence = sshMarkovModule.computeLineConfidence(text, lineOpts);
+            }
+
+            entry.sortKey = Number.isFinite(entry.lineConfidence)
+              ? entry.lineConfidence
+              : (Number.isFinite(markovScore) ? markovScore : -100);
+
+            enhancedCandidates.push(entry);
+          }
+        }
+
+        // Re-rank by line confidence if we have it
+        if (enhancedCandidates.some((c) => Number.isFinite(c.lineConfidence))) {
+          enhancedCandidates.sort((a, b) => b.sortKey - a.sortKey);
+          enhancedCandidates.forEach((c, idx) => { c.rank = idx + 1; });
+        }
+
+        // Update confidence displays
+        const topEnhanced = enhancedCandidates[0];
+        if (confEl) {
+          if (topEnhanced && Number.isFinite(topEnhanced.lineConfidence)) {
+            confEl.textContent = `Confidence: ${(topEnhanced.lineConfidence * 100).toFixed(1)}%`;
+          } else {
+            const score = reranked && reranked[0] && reranked[0][0];
+            confEl.textContent = Number.isFinite(score)
+              ? `Markov score: ${score.toFixed(3)}`
+              : "Markov score: —";
+          }
+        }
+        if (markovConfEl) {
+          if (topEnhanced && Number.isFinite(topEnhanced.lineConfidence)) {
+            markovConfEl.textContent = `Confidence: ${(topEnhanced.lineConfidence * 100).toFixed(1)}%`;
+          } else {
+            const score = reranked && reranked[0] && reranked[0][0];
+            markovConfEl.textContent = Number.isFinite(score)
+              ? `Confidence: ${score.toFixed(3)}`
+              : "Confidence: —";
+          }
+        }
+
+        // Render legacy candidates list
+        if (candidatesListEl) {
+          candidatesListEl.innerHTML = "";
+          if (enhancedCandidates.length > 0) {
+            candidatesListEl.hidden = false;
+            if (candidatesListTitleEl) candidatesListTitleEl.hidden = false;
+
+            const toShow = enhancedCandidates.slice(0, 12);
+            for (const cand of toShow) {
+              const row = document.createElement("div");
+              row.className = "crypt-openssh-markov-candidate";
+              row.setAttribute("data-rank", String(cand.rank));
+
+              const rankDiv = document.createElement("div");
+              rankDiv.className = "crypt-openssh-markov-candidate-rank";
+
+              const confSpan = document.createElement("div");
+              confSpan.className = "crypt-openssh-markov-candidate-confidence";
+              if (Number.isFinite(cand.lineConfidence)) {
+                confSpan.textContent = `#${cand.rank}  ${(cand.lineConfidence * 100).toFixed(0)}%`;
+                confSpan.setAttribute("data-confidence", _confidenceColorClass(cand.lineConfidence));
+              } else {
+                confSpan.textContent = `#${cand.rank}`;
+              }
+
+              const markovSpan = document.createElement("div");
+              markovSpan.className = "crypt-openssh-markov-candidate-markov-score";
+              if (Number.isFinite(cand.markovScore)) {
+                markovSpan.textContent = `Markov: ${cand.markovScore.toFixed(2)}`;
+              }
+
+              rankDiv.appendChild(confSpan);
+              if (markovSpan.textContent) rankDiv.appendChild(markovSpan);
+
+              const cmdDiv = document.createElement("div");
+              cmdDiv.className = "crypt-openssh-markov-candidate-command";
+              cmdDiv.textContent = cand.text || "(empty)";
+
+              row.appendChild(rankDiv);
+              row.appendChild(cmdDiv);
+              candidatesListEl.appendChild(row);
+            }
+
+            console.log(
+              "[Crypt/OpenSSH] rendered",
+              toShow.length,
+              "legacy Markov candidates (line confidence:",
+              haveLineConf,
+              ")"
+            );
+          } else {
+            candidatesListEl.hidden = true;
+            if (candidatesListTitleEl) candidatesListTitleEl.hidden = true;
+          }
+        }
+      }
     }
   }
 

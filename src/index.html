@@ -992,6 +992,45 @@ No decrypted TLS/SSL output yet.</pre>
                 </div>
               </div>
 
+              <div class="crypt-section crypt-openssh-full" id="crypt-openssh-markov-section" hidden>
+                <div class="crypt-section-title">Markov chain output</div>
+                <!-- Session confidence badge -->
+                <div id="crypt-openssh-markov-session-confidence" class="crypt-openssh-session-confidence" hidden>
+                  <span class="crypt-openssh-session-confidence-label">Session confidence:</span>
+                  <span id="crypt-openssh-session-confidence-value"
+                    class="crypt-openssh-session-confidence-value"></span>
+                  <span id="crypt-openssh-session-confidence-interpretation"
+                    class="crypt-openssh-session-confidence-interpretation"></span>
+                </div>
+                <!-- Chronological commands timeline -->
+                <div class="crypt-section-title crypt-openssh-markov-timeline-title"
+                  id="crypt-openssh-markov-timeline-title" hidden>
+                  Reconstructed commands (chronological order)
+                </div>
+                <div id="crypt-openssh-markov-timeline" class="crypt-openssh-markov-timeline" hidden>
+                  <!-- Each command timeline item is dynamically inserted here -->
+                </div>
+                <!-- Old aggregate view (kept for now, but timeline is primary) -->
+                <div id="crypt-openssh-markov-output" class="crypt-openssh-markov-output" hidden>
+                  <div id="crypt-openssh-markov-top" class="crypt-openssh-markov-top">
+                    <span class="crypt-openssh-markov-label">Top guess</span>
+                    <span id="crypt-openssh-markov-confidence" class="crypt-openssh-markov-confidence"></span>
+                  </div>
+                  <div id="crypt-openssh-markov-text" class="crypt-openssh-markov-text"></div>
+                  <div id="crypt-openssh-markov-meta" class="crypt-openssh-markov-meta">
+                    <span id="crypt-openssh-markov-target"></span>
+                    <span id="crypt-openssh-markov-source"></span>
+                  </div>
+                </div>
+                <!-- Old candidates list (deprecated, using timeline instead) -->
+                <div class="crypt-section-title crypt-openssh-markov-list-title" id="crypt-openssh-markov-list-title"
+                  hidden>
+                  All Markov candidates (ranked by confidence)
+                </div>
+                <div id="crypt-openssh-markov-candidates-list" class="crypt-openssh-markov-candidates-list" hidden>
+                </div>
+              </div>
+
               <div class="crypt-section crypt-openssh-full">
                 <div class="crypt-section-title">Top-N decoded candidates</div>
                 <div class="crypt-actions-row">

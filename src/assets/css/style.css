@@ -1748,6 +1748,509 @@ strong {
   padding-top: 6px;
 }
 
+/* ── Markov chain output panel styles ────────────────────────────────── */
+
+.crypt-openssh-markov-output {
+  border: 1px solid var(--color-4);
+  border-left: 4px solid var(--color-3);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+  /* Solid background to prevent text bleed-through */
+  background: color-mix(in srgb, var(--color-3) 8%, var(--color-7));
+  position: relative;
+}
+
+.crypt-openssh-markov-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-6);
+  margin-bottom: 6px;
+}
+
+.crypt-openssh-markov-label {
+  font-weight: 600;
+  color: var(--color-2);
+}
+
+.crypt-openssh-markov-confidence {
+  font-size: 11px;
+  color: var(--color-6);
+}
+
+.crypt-openssh-markov-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-5);
+  word-break: break-word;
+  margin-bottom: 6px;
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+}
+
+.crypt-openssh-markov-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-6);
+}
+
+/* Session confidence badge */
+.crypt-openssh-session-confidence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin: 12px 0 0 0;
+  border-radius: 6px;
+  /* Solid background */
+  background: color-mix(in srgb, var(--color-6) 10%, var(--color-7));
+  border: 1px solid var(--color-6);
+  position: relative;
+}
+
+.crypt-openssh-session-confidence-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-6);
+}
+
+.crypt-openssh-session-confidence-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-2);
+}
+
+.crypt-openssh-session-confidence-interpretation {
+  font-size: 12px;
+  color: var(--color-6);
+  font-style: italic;
+  margin-left: 8px;
+}
+
+/* All candidates list */
+.crypt-openssh-markov-list-title {
+  margin-top: 20px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--color-6);
+}
+
+/* Ensure hidden attribute works properly with flex children */
+.crypt-openssh-markov-list-title[hidden],
+.crypt-openssh-markov-candidates-list[hidden],
+.crypt-openssh-markov-timeline[hidden],
+.crypt-openssh-markov-timeline-title[hidden],
+.crypt-openssh-session-confidence[hidden] {
+  display: none !important;
+}
+
+/* ── Chronological timeline view ────────────────────────────────────── */
+
+.crypt-openssh-markov-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+  /* Scrollable container - fixed height with scroll */
+  max-height: 450px;
+  min-height: 120px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  contain: layout paint;
+  border: 1px solid var(--color-3);
+  border-radius: 4px;
+  padding: 12px;
+  background: var(--color-7);
+  position: relative;
+  z-index: 1;
+  /* Prevent flex parent from shrinking this */
+  flex-shrink: 0;
+}
+
+/* Timeline item - each command in chronological order */
+.crypt-openssh-markov-timeline-item {
+  display: flex;
+  flex-direction: row;
+  border: 1px solid color-mix(in srgb, var(--color-3) 40%, var(--color-7));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-6) 8%, var(--color-7));
+  /* Critical: prevent items from being squished */
+  flex-shrink: 0;
+  min-height: 52px;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+/* First command in timeline gets special styling */
+.crypt-openssh-markov-timeline-item:first-child {
+  border-left: 3px solid var(--color-3);
+  background: color-mix(in srgb, var(--color-3) 10%, var(--color-7));
+}
+
+/* Timeline connector (left side with index, dot, and vertical line) */
+.crypt-openssh-markov-timeline-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 44px;
+  flex-shrink: 0;
+  padding: 8px 0;
+  position: relative;
+}
+
+/* Command number badge */
+.crypt-openssh-markov-timeline-index {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-5);
+  background: color-mix(in srgb, var(--color-3) 30%, var(--color-7));
+  border: 1px solid color-mix(in srgb, var(--color-3) 50%, var(--color-7));
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+/* Timeline dot (confidence-colored) */
+.crypt-openssh-markov-timeline-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-6);
+  border: 2px solid var(--color-3);
+  margin-top: 6px;
+  flex-shrink: 0;
+  z-index: 2;
+}
+
+.crypt-openssh-markov-timeline-dot[data-confidence="high"] {
+  background: #4ade80;
+  border-color: #22c55e;
+}
+
+.crypt-openssh-markov-timeline-dot[data-confidence="medium"] {
+  background: #fbbf24;
+  border-color: #f59e0b;
+}
+
+.crypt-openssh-markov-timeline-dot[data-confidence="low"] {
+  background: #f87171;
+  border-color: #ef4444;
+}
+
+/* Vertical line connecting dots */
+.crypt-openssh-markov-timeline-line {
+  position: absolute;
+  top: 40px;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: color-mix(in srgb, var(--color-3) 30%, var(--color-7));
+  transform: translateX(-50%);
+  z-index: 1;
+}
+
+/* Timeline content area (right of connector) */
+.crypt-openssh-markov-timeline-content {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-width: 0;
+}
+
+/* Timeline header - clickable to expand alternatives */
+.crypt-openssh-markov-timeline-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 10px 14px 10px 6px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s ease;
+  min-height: 48px;
+}
+
+.crypt-openssh-markov-timeline-header:hover {
+  background: color-mix(in srgb, var(--color-6) 15%, var(--color-7));
+}
+
+/* Chevron/expander */
+.crypt-openssh-markov-timeline-chevron {
+  font-size: 10px;
+  margin-left: 6px;
+  margin-right: 4px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+  color: var(--color-6);
+  display: flex;
+  align-items: center;
+  margin-top: 1px;
+}
+
+.crypt-openssh-markov-timeline-item[data-expanded="true"] .crypt-openssh-markov-timeline-chevron {
+  transform: rotate(180deg);
+}
+
+/* Info container (confidence, score, keystrokes) */
+.crypt-openssh-markov-timeline-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  margin-top: 1px;
+}
+
+/* Confidence badge */
+.crypt-openssh-markov-timeline-confidence {
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.crypt-openssh-markov-timeline-confidence[data-confidence="high"] {
+  color: #4ade80;
+}
+
+.crypt-openssh-markov-timeline-confidence[data-confidence="medium"] {
+  color: #fbbf24;
+}
+
+.crypt-openssh-markov-timeline-confidence[data-confidence="low"] {
+  color: #f87171;
+}
+
+/* Markov score */
+.crypt-openssh-markov-timeline-score {
+  font-size: 10px;
+  color: var(--color-6);
+  flex-shrink: 0;
+}
+
+/* Keystroke count */
+.crypt-openssh-markov-timeline-keystrokes {
+  font-size: 10px;
+  color: var(--color-6);
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+/* Primary command text - appears on its own line below meta */
+.crypt-openssh-markov-timeline-command {
+  font-size: 13px;
+  color: var(--color-5);
+  word-break: break-all;
+  width: 100%;
+  margin-top: 6px;
+  line-height: 1.5;
+  /* Push to new line in flex layout */
+  order: 3;
+}
+
+/* Keystroke count meta (legacy) */
+.crypt-openssh-markov-timeline-meta {
+  font-size: 10px;
+  color: var(--color-6);
+  margin-left: 10px;
+  flex-shrink: 0;
+}
+
+/* Alternatives dropdown (hidden by default) */
+.crypt-openssh-markov-timeline-alternatives {
+  display: none;
+  flex-direction: column;
+  border-top: 1px solid color-mix(in srgb, var(--color-3) 30%, var(--color-7));
+  background: color-mix(in srgb, var(--color-7) 95%, var(--color-6));
+  padding: 0;
+}
+
+.crypt-openssh-markov-timeline-item[data-expanded="true"] .crypt-openssh-markov-timeline-alternatives {
+  display: flex;
+}
+
+/* Alternatives header */
+.crypt-openssh-markov-timeline-alts-header {
+  font-size: 10px;
+  color: var(--color-6);
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-6) 10%, var(--color-7));
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* Alternative candidate row */
+.crypt-openssh-markov-timeline-alt-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-6) 15%, var(--color-7));
+  font-size: 12px;
+  gap: 6px;
+}
+
+.crypt-openssh-markov-timeline-alt-row:last-child {
+  border-bottom: none;
+}
+
+/* Alternative info container (rank, conf, score) */
+.crypt-openssh-markov-timeline-alt-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.crypt-openssh-markov-timeline-alt-rank {
+  color: var(--color-6);
+  font-size: 10px;
+}
+
+.crypt-openssh-markov-timeline-alt-confidence {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.crypt-openssh-markov-timeline-alt-confidence[data-confidence="high"] {
+  color: #4ade80;
+}
+
+.crypt-openssh-markov-timeline-alt-confidence[data-confidence="medium"] {
+  color: #fbbf24;
+}
+
+.crypt-openssh-markov-timeline-alt-confidence[data-confidence="low"] {
+  color: #f87171;
+}
+
+.crypt-openssh-markov-timeline-alt-score {
+  color: var(--color-6);
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.crypt-openssh-markov-timeline-alt-command {
+  color: var(--color-5);
+  word-break: break-all;
+  opacity: 0.85;
+  flex-grow: 1;
+  min-width: 150px;
+  line-height: 1.3;
+}
+
+/* "View alternatives" hint */
+.crypt-openssh-markov-timeline-hint {
+  font-size: 9px;
+  color: var(--color-6);
+  margin-left: 8px;
+  opacity: 0.6;
+}
+
+.crypt-openssh-markov-candidates-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+  /* Scrollable container - prevents overlap with content below */
+  max-height: 280px;
+  overflow-y: auto;
+  /* Critical: prevent any paint/overflow from leaking */
+  overflow-x: hidden;
+  contain: layout paint;
+  /* Add a subtle border to make it clear this is a scrollable region */
+  border: 1px solid var(--color-3);
+  border-radius: 4px;
+  padding: 6px;
+  /* Solid background to prevent text from showing through */
+  background: var(--color-7);
+  /* Ensure it doesn't shrink below a reasonable height */
+  min-height: 0;
+  flex-shrink: 0;
+  /* Ensure proper stacking */
+  position: relative;
+  z-index: 1;
+}
+
+.crypt-openssh-markov-candidate {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  /* Solid backgrounds to prevent text bleed-through */
+  background: color-mix(in srgb, var(--color-6) 15%, var(--color-7));
+  transition: background 0.15s ease;
+}
+
+.crypt-openssh-markov-candidate:hover {
+  background: color-mix(in srgb, var(--color-6) 25%, var(--color-7));
+}
+
+.crypt-openssh-markov-candidate-rank {
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.crypt-openssh-markov-candidate-confidence {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-2);
+}
+
+.crypt-openssh-markov-candidate-markov-score {
+  font-size: 9px;
+  color: var(--color-6);
+}
+
+.crypt-openssh-markov-candidate-command {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--color-5);
+  word-break: break-all;
+  padding: 2px 0;
+}
+
+/* Top candidate highlight */
+.crypt-openssh-markov-candidate[data-rank="1"] {
+  /* Solid background with color-3 tint */
+  background: color-mix(in srgb, var(--color-3) 15%, var(--color-7));
+  border-left: 3px solid var(--color-3);
+  padding-left: 7px;
+}
+
+.crypt-openssh-markov-candidate[data-rank="1"] .crypt-openssh-markov-candidate-confidence {
+  color: var(--color-1);
+}
+
+/* Confidence color coding */
+.crypt-openssh-markov-candidate-confidence[data-confidence="high"] {
+  color: #4ade80;
+  /* green-400 */
+}
+
+.crypt-openssh-markov-candidate-confidence[data-confidence="medium"] {
+  color: #fbbf24;
+  /* amber-400 */
+}
+
+.crypt-openssh-markov-candidate-confidence[data-confidence="low"] {
+  color: #f87171;
+  /* red-400 */
+}
+
 #keystore_box {
   display: none;
   border: 8px solid var(--color-3);

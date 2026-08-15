@@ -1,6 +1,7 @@
 // Orchestrates the main renderer UI, capture workflows, and cross-panel behavior.
 
 const threadName = "MainFrontend";
+let subnetCalculatorPanel;
 window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
 
 // ============================================================================
@@ -22089,57 +22090,7 @@ function wrapCurrentFilterWithParenthesesFromContextMenu() {
   writeLogEntry(`Context menu filter wrapped query = "${filterInputEl.value}"`);
 }
 
-initConvPanel({
-  writeLogEntry,
-  statusUpdate,
-  setActiveMainTab: (tab) => {
-    activeMainTab = tab;
-  },
-  getCurrentContextPacket,
-  getActiveMainTab: () => activeMainTab,
-  callLargeLanguageModel,
-  isLlmRuntimeEnabled,
-  isBackgroundSummaryGenerationEnabled,
-  appendAnalysisBlub,
-  // Persist successful hashes.com reverse lookups into the session
-  // keychain. Each plaintext becomes a ``secret``-typed entry so
-  // the user can find the reversal later without re-running the
-  // lookup. ``addSessionKeystoreEntry`` is idempotent — passing the
-  // same reversal twice is a safe no-op.
-  addHashReverseToKeystore: (entries) => {
-    if (!Array.isArray(entries) || entries.length === 0) return 0;
-    const addFn = keystorePanel?.addSessionKeystoreEntry;
-    if (typeof addFn !== "function") return 0;
-    let addedCount = 0;
-    for (const entry of entries) {
-      if (!entry || typeof entry !== "object") continue;
-      try {
-        addFn({
-          type: String(entry.type || "secret"),
-          label: String(entry.label || "").trim(),
-          source: String(entry.source || "hashes-com-reverse"),
-          content: String(entry.content || ""),
-          summary: String(entry.summary || ""),
-          packetIndex: entry.packetIndex ?? "?",
-        });
-        addedCount += 1;
-      } catch (entryError) {
-        writeLogEntry(
-          `[DataTools] Failed to persist reversed hash to keystore label="${entry.label}" message=${JSON.stringify(entryError?.message || String(entryError))}`,
-        );
-      }
-    }
-    return addedCount;
-  },
-  // Push the cost + success of every reverse lookup into the Settings
-  // "Last Cost" / "Last Lookup" pills. Failures here only affect
-  // indicator freshness, so we swallow and log.
-  recordHashesComLookupOutcome: (outcome) => {
-    recordHashesComLookupOutcome(outcome);
-  },
-});
-
-const subnetCalculatorPanel = createSubnetCalculatorPanel({
+subnetCalculatorPanel = createSubnetCalculatorPanel({
   statusUpdate,
   writeLogEntry,
   addNote,
@@ -26194,4 +26145,58 @@ onload = function () {
   }
   startupWindowLoaded = true;
   maybeHideStartupPreload();
+
+  // Initialize the Conv panel with Markov data after the window has loaded
+  // and all preload APIs are available.
+  (async () => {
+    try {
+      const markovData = await window.markovapi.getCachedShellMarkov();
+      initConvPanel({
+        writeLogEntry,
+        statusUpdate,
+        setActiveMainTab: (tab) => {
+          activeMainTab = tab;
+        },
+        getCurrentContextPacket,
+        getActiveMainTab: () => activeMainTab,
+        callLargeLanguageModel,
+        isLlmRuntimeEnabled,
+        isBackgroundSummaryGenerationEnabled,
+        appendAnalysisBlub,
+        addHashReverseToKeystore: (entries) => {
+          if (!Array.isArray(entries) || entries.length === 0) return 0;
+          const addFn = keystorePanel?.addSessionKeystoreEntry;
+          if (typeof addFn !== "function") return 0;
+          let addedCount = 0;
+          for (const entry of entries) {
+            if (!entry || typeof entry !== "object") continue;
+            try {
+              addFn({
+                type: String(entry.type || "secret"),
+                label: String(entry.label || "").trim(),
+                source: String(entry.source || "hashes-com-reverse"),
+                content: String(entry.content || ""),
+                summary: String(entry.summary || ""),
+                packetIndex: entry.packetIndex ?? "?",
+              });
+              addedCount += 1;
+            } catch (entryError) {
+              writeLogEntry(
+                `[DataTools] Failed to persist reversed hash to keystore label="${entry.label}" message=${JSON.stringify(entryError?.message || String(entryError))}`,
+              );
+            }
+          }
+          return addedCount;
+        },
+        recordHashesComLookupOutcome: (outcome) => {
+          recordHashesComLookupOutcome(outcome);
+        },
+        markovData,
+      });
+    } catch (err) {
+      try {
+        console.warn("[main-frontend] initConvPanel failed:", err && err.message ? err.message : err);
+      } catch (_e) { /* ignore */ }
+    }
+  })();
 };
