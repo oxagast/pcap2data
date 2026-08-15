@@ -1401,6 +1401,50 @@ strong {
   background-color: color-mix(in srgb, var(--surface-1, var(--crypt-panel-bg)) 92%, transparent);
 }
 
+.crypt-openssh-deobf-title {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.crypt-openssh-deobf-row {
+  align-items: center;
+}
+
+.crypt-openssh-deobf-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.crypt-openssh-deobf-check input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.crypt-openssh-deobf-row select,
+.crypt-openssh-deobf-row input[type="range"] {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-1);
+  padding: 3px 6px;
+}
+
+.crypt-openssh-deobf-row input[type="range"] {
+  width: 110px;
+  cursor: pointer;
+}
+
+.crypt-openssh-deobf-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 36px;
+  text-align: right;
+  color: var(--color-1);
+}
+
 .crypt-openssh-legend {
   font-size: 12px;
   color: var(--crypt-panel-text);
@@ -1562,6 +1606,88 @@ strong {
 
 .crypt-openssh-progress[hidden] {
   display: none;
+}
+
+.crypt-openssh-stages {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--color-6);
+  font-style: italic;
+  align-items: center;
+}
+
+.crypt-openssh-stages[hidden] {
+  display: none;
+}
+
+.crypt-openssh-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+  opacity: 0.55;
+  transition: opacity 120ms linear;
+}
+
+.crypt-openssh-stage.is-running,
+.crypt-openssh-stage.is-done,
+.crypt-openssh-stage.is-error {
+  opacity: 1;
+}
+
+.crypt-openssh-stage-bullet {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--color-6);
+}
+
+.crypt-openssh-stage.is-running .crypt-openssh-stage-bullet {
+  color: var(--color-4);
+  animation: crypt-openssh-bullet-pulse 1.1s ease-in-out infinite;
+}
+
+.crypt-openssh-stage.is-done .crypt-openssh-stage-bullet {
+  color: #2e7d32;
+}
+
+.crypt-openssh-stage.is-done .crypt-openssh-stage-bullet::before {
+  content: "✓";
+}
+
+.crypt-openssh-stage.is-running .crypt-openssh-stage-bullet::before {
+  content: "•";
+}
+
+.crypt-openssh-stage.is-error .crypt-openssh-stage-bullet {
+  color: #b00020;
+}
+
+.crypt-openssh-stage.is-error .crypt-openssh-stage-bullet::before {
+  content: "✗";
+}
+
+.crypt-openssh-stage .crypt-openssh-stage-bullet::before {
+  content: "•";
+}
+
+.crypt-openssh-stage-status {
+  font-style: normal;
+  color: var(--color-6);
+  opacity: 0.85;
+}
+
+@keyframes crypt-openssh-bullet-pulse {
+
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .crypt-openssh-primary {

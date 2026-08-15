@@ -59,6 +59,12 @@ module.exports = {
     new webpack.ProvidePlugin({
       Buffer: ['buffer', 'Buffer'],
       process: 'process/browser',
+      // ``setImmediate`` is used by background initialization helpers
+      // (e.g. markov model warmup) to yield to the renderer. Node
+      // has it built in; the renderer uses ``setImmediate-polyfill``,
+      // a 0-dependency shim that delegates to ``MessageChannel`` when
+      // available and falls back to ``setTimeout(0)``.
+      setImmediate: 'setimmediate',
     }),
   ],
 };

@@ -11,6 +11,21 @@ const {
     summarizeS2cOutput,
     buildShellCommandPriors,
     renderShellPriors,
+    hexToUint8Array,
+    extractPacketBytes,
+    computeShellOutputCharDistribution,
+    renderShellOutputCharDistribution,
+    buildSessionTurnPairs,
+    renderSessionTurnPairs,
+    detectReturnKeys,
+    renderReturnKeys,
+    renderReturnKeySummary,
+    computeRawVsPeeledIidStats,
+    renderRawVsPeeledIid,
+    computeFlowPacketProfile,
+    renderFlowPacketProfile,
+    applyDeobfuscatorMode,
+    REDACTION_AAA_LENGTH_TOLERANCE,
     BRIEF_MIN_SAMPLES,
     S2C_MIN_PACKETS,
     computeDelayStats,
@@ -47,10 +62,12 @@ describe("SSH keystroke export — pure helpers", () => {
         test("s2c renders the server → client arrow", () => {
             expect(directionLabel("s2c")).toBe("server \u2192 client");
         });
-        test("both / unknown defaults to client → server", () => {
-            expect(directionLabel("both")).toBe("client \u2192 server");
-            expect(directionLabel(undefined)).toBe("client \u2192 server");
-            expect(directionLabel("nonsense")).toBe("client \u2192 server");
+        test("both renders the bidirectional arrow", () => {
+            expect(directionLabel("both")).toBe("client \u2194 server (both directions)");
+        });
+        test("unknown values default to the bidirectional arrow", () => {
+            expect(directionLabel(undefined)).toBe("client \u2194 server (both directions)");
+            expect(directionLabel("nonsense")).toBe("client \u2194 server (both directions)");
         });
     });
 
@@ -131,6 +148,128 @@ describe("SSH keystroke export — pure helpers", () => {
             const out = wrapText("First paragraph here.\n\nSecond paragraph follows.", 80);
             expect(out).toContain("First paragraph here.\n");
             expect(out).toContain("\nSecond paragraph follows.");
+        });
+    });
+
+    describe("applyDeobfuscatorMode", () => {
+        function makePaddingResult(overrides) {
+            return Object.assign(
+                {
+                    detected: false,
+                    periodMs: null,
+                    coverage: 0,
+                    residualStdMs: NaN,
+                    dominantResidueMs: NaN,
+                    snappedDelaysMs: null,
+                    keystrokeDelaysMs: null,
+                    paddedIntervals: null,
+                    candidateScores: [],
+                },
+                overrides || {},
+            );
+        }
+        test('"off" mode forces detected=false and clears peel artefacts', () => {
+            const r = makePaddingResult({
+                detected: true,
+                periodMs: 20,
+                coverage: 0.8,
+                keystrokeDelaysMs: [100, 120, 110],
+                snappedDelaysMs: [3, -2, 7],
+                paddedIntervals: [1, 4],
+            });
+            const out = applyDeobfuscatorMode(r, [], { enabled: true, mode: "off" });
+            expect(out.detected).toBe(false);
+            expect(out.keystrokeDelaysMs).toBeNull();
+            expect(out.snappedDelaysMs).toBeNull();
+        });
+        test("enabled=false behaves like off", () => {
+            const r = makePaddingResult({
+                detected: true,
+                periodMs: 20,
+                coverage: 0.7,
+                keystrokeDelaysMs: [50],
+                snappedDelaysMs: [2],
+            });
+            const out = applyDeobfuscatorMode(r, [], { enabled: false, mode: "auto" });
+            expect(out.detected).toBe(false);
+            expect(out.keystrokeDelaysMs).toBeNull();
+        });
+        test('"auto" with a confident detection leaves the result untouched', () => {
+            const r = makePaddingResult({
+                detected: true,
+                periodMs: 20,
+                coverage: 0.9,
+                keystrokeDelaysMs: [101, 102, 103],
+                snappedDelaysMs: [1, 2, 3],
+                paddedIntervals: [0, 1],
+            });
+            const out = applyDeobfuscatorMode(r, [20, 21, 101, 102, 103], {
+                enabled: true,
+                mode: "auto",
+            });
+            expect(out.detected).toBe(true);
+            expect(out.periodMs).toBe(20);
+            expect(out.keystrokeDelaysMs).toEqual([101, 102, 103]);
+            expect(out.snappedDelaysMs).toEqual([1, 2, 3]);
+        });
+        test('"force" with no detection snaps using the best candidate', () => {
+            // Build a delay array dominated by 20ms intervals (with some
+            // noise) plus a few non-cadence real keystroke intervals.
+            const filler = [21, 19, 20, 22, 19, 20, 18, 21, 19, 20];
+            const real = [180, 145, 200, 165];
+            const delays = filler.concat(real);
+            const r = makePaddingResult({
+                candidateScores: [
+                    {
+                        periodMs: 20,
+                        coverage: 0.6,
+                        residualStdMs: 1.4,
+                    },
+                ],
+            });
+            const out = applyDeobfuscatorMode(r, delays, {
+                enabled: true,
+                mode: "force",
+            });
+            expect(out.detected).toBe(true);
+            expect(out.periodMs).toBe(20);
+            expect(out.forcedFromCandidate).toBe(true);
+            // snappedDelaysMs preserves interval count; all ~20ms inputs
+            // should become near-zero residues.
+            expect(out.snappedDelaysMs.length).toBe(delays.length);
+            for (let i = 0; i < filler.length; i += 1) {
+                expect(Math.abs(out.snappedDelaysMs[i])).toBeLessThanOrEqual(2);
+            }
+            // keystrokeDelaysMs drops the filler intervals.
+            expect(out.keystrokeDelaysMs.length).toBe(real.length);
+            for (const v of out.keystrokeDelaysMs) {
+                expect(Math.abs(v - filler[0])).toBeGreaterThan(10);
+            }
+            // paddedIntervals matches the dropped count.
+            expect(out.paddedIntervals.length).toBe(filler.length);
+        });
+        test('"force" with no candidates leaves the result undetected', () => {
+            const r = makePaddingResult({ candidateScores: [] });
+            const out = applyDeobfuscatorMode(r, [100, 200, 300], {
+                enabled: true,
+                mode: "force",
+            });
+            expect(out.detected).toBe(false);
+            expect(out.keystrokeDelaysMs).toBeNull();
+        });
+        test("passes through when settings is undefined", () => {
+            const r = makePaddingResult({ detected: true, periodMs: 20, coverage: 0.5 });
+            const out = applyDeobfuscatorMode(r, [], undefined);
+            // Default mode is "auto", confident detection is honoured.
+            expect(out.detected).toBe(true);
+        });
+        test("tolerates null paddingResult", () => {
+            const out = applyDeobfuscatorMode(null, [1, 2, 3], {
+                enabled: true,
+                mode: "off",
+            });
+            expect(out.detected).toBe(false);
+            expect(Array.isArray(out.candidateScores)).toBe(true);
         });
     });
 });
@@ -219,8 +358,13 @@ describe("SSH keystroke export — buildSshKeystrokeExport", () => {
             text: "Long insight " + "word ".repeat(40) + "tail.",
         };
         const text = buildSshKeystrokeExport(insightState, { now: () => FIXED_NOW });
-        const section = text.split("## LLM analyst insight")[1].split("## Notes")[0];
-        for (const line of section.split("\n")) {
+        // Pull the insight block by looking at lines after the insight
+        // header and stopping at the next '## ' section header (the
+        // section is followed by padding/raw-vs-peeled/etc. now, so
+        // we can't use a fixed terminator like '## Notes').
+        const after = text.split("## LLM analyst insight")[1] || "";
+        const block = after.split(/\n## /)[0] || "";
+        for (const line of block.split("\n")) {
             if (line.length === 0) continue;
             expect(line.length).toBeLessThanOrEqual(80);
         }
@@ -502,7 +646,30 @@ describe("buildSshTimingAnalysisBrief", () => {
             { maxSamples: 200 },
         );
         expect(brief.text).toContain("Keyboard layout: dvorak");
+        expect(brief.text).toContain("Decoder alphabet (3 chars): abc");
         expect(brief.text).toMatch(/Direction: s2c/);
+    });
+
+    test("decoder alphabet line is absent when no alphabet is provided", () => {
+        const brief = buildSshTimingAnalysisBrief(
+            makeBriefState({ model: { layout: "qwerty" } }),
+            { maxSamples: 200 },
+        );
+        expect(brief.text).toContain("Keyboard layout: qwerty");
+        // The data line says "Decoder alphabet (N chars): ...". When no
+        // alphabet was provided to the brief, that data line is
+        // omitted (the LEGEND entry still mentions "Decoder alphabet"
+        // by name).
+        expect(brief.text).not.toMatch(/^# Decoder alphabet \(\d+ chars\)/m);
+    });
+
+    test("LEGEND block describes the decoder alphabet field", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState(), { maxSamples: 200 });
+        expect(brief.ok).toBe(true);
+        const legendIdx = brief.text.indexOf("# LEGEND");
+        expect(legendIdx).toBeGreaterThan(0);
+        const tail = brief.text.slice(legendIdx);
+        expect(tail).toMatch(/Decoder alphabet|alphabet/);
     });
 
     test("returns a string with a single trailing newline", () => {
@@ -1239,10 +1406,10 @@ describe("buildShellCommandPriors", () => {
         expect(priors.verbs.ls.count).toBe(1);
     });
 
-    test("handles a realistic shell-history dump (parses the actual src/data/shell_data)", () => {
+    test("handles a realistic shell-history dump (parses the actual src/data/shell_corpus.txt)", () => {
         const fs = require("fs");
         const path = require("path");
-        const filePath = path.join(__dirname, "..", "src", "data", "shell_data");
+        const filePath = path.join(__dirname, "..", "src", "data", "shell_corpus.txt");
         if (!fs.existsSync(filePath)) {
             // Skip gracefully if the corpus file isn't shipped (CI may
             // not include it). Tests above still cover the parser.
@@ -1418,10 +1585,10 @@ describe("buildShellCommandPriors — redaction handling", () => {
         expect(priors.totalCommands).toBeGreaterThanOrEqual(1);
     });
 
-    test("parser handles the actual scrubbed src/data/shell_data corpus", () => {
+    test("parser handles the actual scrubbed src/data/shell_corpus.txt corpus", () => {
         const fs = require("fs");
         const path = require("path");
-        const filePath = path.join(__dirname, "..", "src", "data", "shell_data");
+        const filePath = path.join(__dirname, "..", "src", "data", "shell_corpus.txt");
         if (!fs.existsSync(filePath)) return;
         const corpus = fs.readFileSync(filePath, "utf8");
         const priors = buildShellCommandPriors(corpus);
@@ -1440,6 +1607,27 @@ describe("buildShellCommandPriors — redaction handling", () => {
         }
         expect(foundRedaction).toBe(true);
     });
+
+    test("shell_corpus corpus flows end-to-end into the analysis brief as Shell command priors", () => {
+        // Confirms the full pipeline: shell_corpus → buildShellCommandPriors
+        // → brief.shellPriors → brief.text contains "## Shell command
+        // priors". This is the same path the renderer takes via the
+        // ssh-shell-corpus IPC handler + assembleLlmPrimaryResult.
+        const fs = require("fs");
+        const path = require("path");
+        const filePath = path.join(__dirname, "..", "src", "data", "shell_corpus.txt");
+        if (!fs.existsSync(filePath)) return;
+        const corpus = fs.readFileSync(filePath, "utf8");
+        const shellPriors = buildShellCommandPriors(corpus);
+        expect(shellPriors.ok).toBe(true);
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({ shellPriors }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).toMatch(/## Shell command priors/);
+        // At least one prior verb should be referenced in the brief.
+        const verbFound = shellPriors.topVerbs.some((entry) =>
+            brief.text.includes(`- ${entry.verb}`));
+        expect(verbFound).toBe(true);
+    });
 });
 
 describe("renderShellPriors — redaction hint", () => {
@@ -1452,7 +1640,8 @@ describe("renderShellPriors — redaction hint", () => {
         const text = renderShellPriors(priors);
         expect(text).toMatch(/REDACTION PLACEHOLDER/i);
         expect(text).toMatch(/4\+|run of 4\+/i);
-        expect(text).toMatch(/SAME LENGTH/i);
+        // New wording: ± 4 chars (placeholder-length ± 4).
+        expect(text).toMatch(/±\s*4/);
     });
 
     test("always includes the redaction hint (even when no example contains AAAA runs)", () => {
@@ -1464,7 +1653,7 @@ describe("renderShellPriors — redaction hint", () => {
         const priors = buildShellCommandPriors(corpus);
         const text = renderShellPriors(priors);
         expect(text).toMatch(/REDACTION PLACEHOLDER/i);
-        expect(text).toMatch(/SAME LENGTH/i);
+        expect(text).toMatch(/±\s*4/);
     });
 
     test("redaction hint appears BEFORE the verb list so the LLM reads it first", () => {
@@ -1480,5 +1669,1001 @@ describe("renderShellPriors — redaction hint", () => {
         expect(hintIdx).toBeGreaterThan(0);
         expect(firstVerbIdx).toBeGreaterThan(0);
         expect(hintIdx).toBeLessThan(firstVerbIdx);
+    });
+});
+
+describe("hexToUint8Array", () => {
+    test("decodes a clean hex string into bytes", () => {
+        const u = hexToUint8Array("48656c6c6f21");
+        expect(u).toBeInstanceOf(Uint8Array);
+        expect(u.length).toBe(6);
+        expect(u[0]).toBe(0x48); // H
+        expect(u[5]).toBe(0x21); // !
+        expect(String.fromCharCode(...u)).toBe("Hello!");
+    });
+
+    test("strips a leading '0x' prefix", () => {
+        const u = hexToUint8Array("0xDEADBEEF");
+        expect(Array.from(u)).toEqual([0xde, 0xad, 0xbe, 0xef]);
+    });
+
+    test("tolerates whitespace between hex pairs", () => {
+        const u = hexToUint8Array("48 65 6c 6c 6f");
+        expect(String.fromCharCode(...u)).toBe("Hello");
+    });
+
+    test("returns null for empty / non-hex input", () => {
+        expect(hexToUint8Array("")).toBeNull();
+        expect(hexToUint8Array(null)).toBeNull();
+        expect(hexToUint8Array(undefined)).toBeNull();
+    });
+
+    test("truncates a trailing odd nibble", () => {
+        const u = hexToUint8Array("abc");
+        expect(u.length).toBe(1);
+        expect(u[0]).toBe(0xab);
+    });
+
+    test("returns null when the input is not valid hex", () => {
+        // Non-hex characters cause parseInt to fail.
+        expect(hexToUint8Array("zz")).toBeNull();
+    });
+});
+
+describe("extractPacketBytes", () => {
+    function packetWithRawHex(hex) {
+        // The actual shape: packet.packet["packet.info"]["Raw data"]["Payload"]["payload.hex"]
+        return {
+            packet: {
+                "packet.info": {
+                    "Raw data": {
+                        "Payload": {
+                            "payload.hex": hex,
+                        },
+                    },
+                },
+            },
+        };
+    }
+
+    test("returns the bytes via packet.packet['packet.info']", () => {
+        const pkt = packetWithRawHex("48656c6c6f");
+        const u = extractPacketBytes(pkt);
+        expect(u).toBeInstanceOf(Uint8Array);
+        expect(String.fromCharCode(...u)).toBe("Hello");
+    });
+
+    test("falls back to the capitalised 'Packet Info' alias", () => {
+        const pkt = {
+            packet: {
+                "Packet Info": {
+                    "Raw data": {
+                        "Payload": {
+                            "payload.hex": "48656c6c6f",
+                        },
+                    },
+                },
+            },
+        };
+        const u = extractPacketBytes(pkt);
+        expect(String.fromCharCode(...u)).toBe("Hello");
+    });
+
+    test("returns null when no recognized hex field is present", () => {
+        expect(extractPacketBytes({ packet: { something: "else" } })).toBeNull();
+        expect(extractPacketBytes({ packet: { "packet.info": {} } })).toBeNull();
+    });
+
+    test("returns null for null / undefined / non-object", () => {
+        expect(extractPacketBytes(null)).toBeNull();
+        expect(extractPacketBytes(undefined)).toBeNull();
+        expect(extractPacketBytes("not-an-object")).toBeNull();
+    });
+});
+
+describe("computeShellOutputCharDistribution + renderShellOutputCharDistribution", () => {
+    test("classifies paths dominated by '/' + dot + dash + underscore", () => {
+        // A path that's mostly separators and short tokens — the
+        // numbers tell the real story: slash+dot+dash+underscore
+        // outnumber letters. We deliberately avoid words like "home"
+        // / "user" / "ssh" which would dilute the path signal.
+        const path = "/a/b/.c/_d-.e/f-g.h_.i";
+        const bytes = path.split("").map(c => c.charCodeAt(0));
+        const dist = computeShellOutputCharDistribution(bytes);
+        // Path bucket is the sum of slash + dot + dash + underscore.
+        const paths = dist.slash + dist.dot + dist.dash + dist.underscore;
+        expect(paths).toBeGreaterThan(dist.letters);
+        const text = renderShellOutputCharDistribution(dist);
+        expect(text).toContain("paths");
+        expect(text).toContain("/");
+    });
+
+    test("classifies prose dominated by lowercase letters + spaces", () => {
+        const bytes = "the quick brown fox jumps over the lazy dog".split("").map(c => c.charCodeAt(0));
+        const dist = computeShellOutputCharDistribution(bytes);
+        expect(dist.lowercase).toBeGreaterThan(dist.digits);
+        expect(dist.letters).toBeGreaterThan(dist.digits);
+    });
+
+    test("classifies numeric/JSON output dominated by digits + punct", () => {
+        // Numeric-heavy output where digits clearly outnumber letters.
+        const bytes = "12 34 56 78 90 12 34 56 78 90".split("").map(c => c.charCodeAt(0));
+        const dist = computeShellOutputCharDistribution(bytes);
+        expect(dist.digits).toBeGreaterThanOrEqual(dist.letters);
+        expect(dist.whitespace).toBeGreaterThan(0);
+    });
+
+    test("returns zeroed distribution for empty input", () => {
+        const dist = computeShellOutputCharDistribution([]);
+        expect(dist.total).toBe(0);
+        expect(dist.letters).toBe(0);
+        expect(dist.digits).toBe(0);
+        expect(dist.slash).toBe(0);
+        expect(dist.dot).toBe(0);
+        expect(dist.dash).toBe(0);
+        expect(dist.underscore).toBe(0);
+        expect(dist.punct).toBeUndefined();
+        expect(dist.punctuation).toBe(0);
+    });
+
+    test("render returns '(no payload bytes)' for empty / all-zero distribution", () => {
+        expect(renderShellOutputCharDistribution({
+            total: 0, letters: 0, digits: 0, whitespace: 0,
+            slash: 0, dot: 0, dash: 0, underscore: 0,
+            uppercase: 0, lowercase: 0, punctuation: 0,
+            control: 0, highBit: 0,
+        })).toBe("(no payload bytes)");
+    });
+
+    test("render includes both letters up/lo split and paths sub-breakdown", () => {
+        const bytes = "/home/AAAA/test.txt".split("").map(c => c.charCodeAt(0));
+        const dist = computeShellOutputCharDistribution(bytes);
+        const text = renderShellOutputCharDistribution(dist);
+        expect(text).toContain("letters");
+        // The actual format is "(up 21% / lo 58%)" — look for the
+        // "up" / "lo" tokens with a digit immediately after, not for
+        // leading whitespace.
+        expect(text).toMatch(/up \d/);
+        expect(text).toMatch(/lo \d/);
+        expect(text).toContain("paths");
+        expect(text).toContain("("); // total bytes suffix
+    });
+});
+
+describe("buildSessionTurnPairs + renderSessionTurnPairs", () => {
+    test("returns empty pair arrays when there are no c2s delays and no s2c chunks", () => {
+        const result = buildSessionTurnPairs({
+            flow: { firstTimestamp: 1000 },
+            delays: [],
+            s2cSummary: { ok: true, chunks: [] },
+        });
+        expect(result.turnCount).toBe(0);
+        expect(result.chunkPairs).toEqual([]);
+        expect(result.turnPairs).toEqual([]);
+    });
+
+    test("identifies c2s turns split by pauses and pairs each with the following s2c chunk", () => {
+        // 6 fast bursts (one word), 600 ms pause (command boundary), 4 more keys, another 600 ms pause.
+        const delays = [50, 50, 50, 50, 50, 50, 600, 80, 80, 80, 80, 600];
+        const s2cSummary = {
+            ok: true,
+            totalChunks: 2,
+            totalBytes: 4096,
+            totalDurationMs: 5000,
+            chunks: [
+                {
+                    idx: 1, totalBytes: 1024, durationMs: 1500,
+                    rateCharPerSec: 683, kind: "paged-file-content",
+                    packetCount: 5, startTs: 2000, endTs: 3500,
+                },
+                {
+                    idx: 2, totalBytes: 3072, durationMs: 1500,
+                    rateCharPerSec: 2048, kind: "short-status-output",
+                    packetCount: 12, startTs: 4200, endTs: 5700,
+                },
+            ],
+        };
+        const result = buildSessionTurnPairs({
+            flow: { firstTimestamp: 1000 },
+            delays,
+            s2cSummary,
+        });
+        expect(result.ok).toBe(true);
+        expect(result.turnCount).toBe(2);
+        expect(result.c2sTimestampAvailable).toBe(true);
+        expect(result.chunkPairs.length).toBe(2);
+        expect(result.turnPairs.length).toBe(2);
+        // chunk-based: each chunk pairs to the preceding turn.
+        expect(result.chunkPairs[0].producedKind).toBe("paged-file-content");
+        expect(result.chunkPairs[1].producedKind).toBe("short-status-output");
+        // turn-based: each turn pairs to the next chunk.
+        expect(result.turnPairs[0].s2cChunkIdx).toBe(1);
+        expect(result.turnPairs[1].s2cChunkIdx).toBe(2);
+    });
+
+    test("marks turn-pair producedKind=no-matching-chunk when no s2c follows", () => {
+        const delays = [50, 50, 50, 600, 50, 50, 600];
+        const s2cSummary = {
+            ok: true, totalChunks: 0, totalBytes: 0, totalDurationMs: 0,
+            chunks: [],
+        };
+        const result = buildSessionTurnPairs({
+            flow: { firstTimestamp: 1000 },
+            delays,
+            s2cSummary,
+        });
+        expect(result.turnCount).toBe(2);
+        expect(result.turnPairs.every(p => p.producedKind === "no-matching-chunk")).toBe(true);
+    });
+
+    test("rendered section is present and references both pairings", () => {
+        const delays = [50, 50, 50, 50, 600, 80, 80, 600];
+        const s2cSummary = {
+            ok: true,
+            totalChunks: 1,
+            totalBytes: 1024,
+            totalDurationMs: 1500,
+            chunks: [
+                {
+                    idx: 1, totalBytes: 1024, durationMs: 1500,
+                    rateCharPerSec: 683, kind: "paged-file-content",
+                    packetCount: 5, startTs: 2200, endTs: 3700,
+                },
+            ],
+        };
+        const result = buildSessionTurnPairs({
+            flow: { firstTimestamp: 1000 },
+            delays,
+            s2cSummary,
+        });
+        const text = renderSessionTurnPairs(result);
+        expect(text).toContain("## Session turn pairs");
+        expect(text).toContain("Chunk-based pairs");
+        expect(text).toContain("Turn-based pairs");
+        expect(text).toContain("paged-file-content");
+        expect(text).toContain("typed-duration");
+    });
+
+    test("rendered section notes missing timestamps when flow.firstTimestamp is null", () => {
+        const result = buildSessionTurnPairs({
+            flow: null,
+            delays: [50, 50, 50],
+            s2cSummary: { ok: true, chunks: [] },
+        });
+        const text = renderSessionTurnPairs(result);
+        expect(text).toContain("flow.firstTimestamp missing");
+    });
+});
+
+describe("REDACTION_AAA_LENGTH_TOLERANCE", () => {
+    test("is exported and equals 4 (per design)", () => {
+        expect(typeof REDACTION_AAA_LENGTH_TOLERANCE).toBe("number");
+        expect(REDACTION_AAA_LENGTH_TOLERANCE).toBe(4);
+    });
+
+    test("renderShellPriors redaction hint advertises the ±4 tolerance", () => {
+        const corpus = [
+            "# 2026-08-13 14:02\nscp -i /home/AAAA/.ssh/id_rsa AAAA@AAAA:/srv/AAAA ./AAAA\n",
+        ].join("\n");
+        const priors = buildShellCommandPriors(corpus);
+        const text = renderShellPriors(priors);
+        expect(text).toContain("REDACTION PLACEHOLDER");
+        // The new wording explicitly says "± 4" (Unicode plus-minus, ASCII space, digit).
+        expect(text).toMatch(/±\s*4/);
+    });
+});
+
+describe("buildSshTimingAnalysisBrief — Session turn pairs integration", () => {
+    test("includes the Session turn pairs section when s2cSummary is present", () => {
+        const s2cSummary = {
+            ok: true,
+            totalChunks: 1,
+            totalBytes: 2048,
+            totalDurationMs: 2000,
+            chunks: [
+                {
+                    idx: 1, totalBytes: 2048, durationMs: 2000,
+                    rateCharPerSec: 1024, kind: "paged-file-content",
+                    packetCount: 10, startTs: 2200, endTs: 4200,
+                },
+            ],
+        };
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            s2cSummary,
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).toContain("## Session turn pairs");
+        expect(brief.text).toContain("Chunk-based pairs");
+        expect(brief.text).toContain("Turn-based pairs");
+        expect(brief.text).toContain("paged-file-content");
+    });
+
+    test("does NOT include the Session turn pairs section when s2cSummary is missing AND no Returns are detected", () => {
+        // When neither s2cSummary nor detected Returns are present, the
+        // section is omitted entirely (turnPairs and chunkPairs would
+        // both be empty). build a brief state with delays that don't
+        // have any >500ms pauses (so no Returns are detected).
+        const flatDelays = Array(40).fill(80);
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({ delays: flatDelays }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).not.toContain("## Session turn pairs");
+    });
+
+    test("LEGEND block mentions session turn pairs and redaction tolerance", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({}));
+        expect(brief.ok).toBe(true);
+        // LEGEND section is rendered as a comment-style heading at the top of the brief.
+        const legendIdx = brief.text.indexOf("LEGEND");
+        expect(legendIdx).toBeGreaterThan(0);
+        const tail = brief.text;
+        // Session-turn-pairs sub-section, plus redaction-tolerance language.
+        expect(tail).toContain("Session turn pairs");
+        expect(tail).toMatch(/±\s*4/);
+    });
+});
+
+describe("computeRawVsPeeledIidStats + renderRawVsPeeledIid", () => {
+    function syntheticRawStream(periodMs, jitterMs, count) {
+        // Generate a synthetic 20ms-cadence-obfuscated stream: each
+        // inter-key delay is N * periodMs + jitter, where N is chosen to
+        // look like "real typing inflated by the cadence".
+        const out = [];
+        for (let i = 0; i < count; i += 1) {
+            const N = 1 + (i % 6); // 1..6 packets per keystroke
+            const j = ((i * 17) % 5) - 2; // -2..+2 ms jitter
+            out.push(N * periodMs + j);
+        }
+        return out;
+    }
+    function syntheticPeeledStream(rawStream, periodMs) {
+        // The peeled stream removes the cadence: each residue (raw - N*P)
+        // is preserved, AND N*P filler intervals are dropped. We
+        // approximate that here by keeping residues whose absolute
+        // value < periodMs/2 (the "real keystroke" residuals).
+        const out = [];
+        for (const d of rawStream) {
+            const k = Math.round(d / periodMs);
+            const residue = d - k * periodMs;
+            if (Math.abs(residue) < periodMs / 2 && k > 0) {
+                out.push(residue);
+            }
+        }
+        return out;
+    }
+
+    test("returns null when padding was not detected", () => {
+        const comp = computeRawVsPeeledIidStats({ detected: false }, [50, 60, 70]);
+        expect(comp).toBeNull();
+    });
+
+    test("returns null when rawDelays is missing", () => {
+        const comp = computeRawVsPeeledIidStats({
+            detected: true,
+            keystrokeDelaysMs: [10, 12, 8],
+        }, []);
+        expect(comp).toBeNull();
+    });
+
+    test("computes a comparison object with both raw + peeled stats", () => {
+        const period = 20;
+        const raw = syntheticRawStream(period, 1, 60);
+        const peeled = syntheticPeeledStream(raw, period);
+        // Make sure the peeled stream has positive non-tiny values so
+        // medianDeltaRatio is finite (residues from a clean 20 ms stream
+        // collapse near 0 and would make the ratio NaN).
+        const peeledLifted = peeled.map(r => Math.abs(r) + 5);
+        const comp = computeRawVsPeeledIidStats({
+            detected: true,
+            periodMs: period,
+            coverage: 0.9,
+            residualStdMs: 1.5,
+            dominantResidueMs: 0.5,
+            rawDelays: raw,
+            keystrokeDelaysMs: peeledLifted,
+        });
+        expect(comp).not.toBeNull();
+        expect(comp.period).toBe(20);
+        expect(comp.rawCount).toBe(60);
+        expect(comp.peeledCount).toBe(peeledLifted.length);
+        expect(comp.fillerRemoved).toBe(60 - peeledLifted.length);
+        expect(comp.nearCadenceFraction).toBeGreaterThan(0.5);
+        // The raw median should be much larger than the peeled median.
+        expect(Number.isFinite(comp.medianDeltaRatio)).toBe(true);
+        expect(comp.medianDeltaRatio).toBeGreaterThan(1.5);
+    });
+
+    test("render produces a markdown table + cadence-fingerprint line", () => {
+        const period = 20;
+        const raw = syntheticRawStream(period, 1, 40);
+        const peeled = syntheticPeeledStream(raw, period);
+        const comp = computeRawVsPeeledIidStats({
+            detected: true,
+            periodMs: period,
+            coverage: 0.85,
+            residualStdMs: 1.0,
+            dominantResidueMs: 0.3,
+            rawDelays: raw,
+            keystrokeDelaysMs: peeled,
+        });
+        const text = renderRawVsPeeledIid(comp);
+        expect(text).toContain("## Raw IID vs peeled IID");
+        expect(text).toContain("20 ms");
+        expect(text).toContain("Raw (obfuscated)");
+        expect(text).toContain("Peeled (filler removed)");
+        expect(text).toContain("Sample count");
+        expect(text).toContain("Median IID");
+        expect(text).toContain("Std-dev IID");
+        expect(text).toContain("Interpretation:");
+        // The cadence-fingerprint strength line should mention the period.
+        expect(text).toMatch(/integer multiple of 20/);
+    });
+
+    test("render returns empty string when comparison object is null", () => {
+        expect(renderRawVsPeeledIid(null)).toBe("");
+    });
+
+    test("strong-peeling label fires when median ratio > 2x", () => {
+        const raw = [80, 100, 60, 90, 120, 70, 110, 95, 75, 105];
+        const peeled = [5, 8, 4, 7, 6, 9, 3, 8];
+        const comp = computeRawVsPeeledIidStats({
+            detected: true,
+            periodMs: 20,
+            coverage: 0.9,
+            residualStdMs: 1.5,
+            dominantResidueMs: 0,
+            rawDelays: raw,
+            keystrokeDelaysMs: peeled,
+        });
+        const text = renderRawVsPeeledIid(comp);
+        expect(text).toMatch(/strong peeling|moderate peeling|weak peeling/);
+    });
+});
+
+describe("buildSshTimingAnalysisBrief — Raw vs peeled IID integration", () => {
+    function makePadding(periodMs, rawDelays, peeledDelays) {
+        return {
+            detected: true,
+            periodMs,
+            coverage: 0.9,
+            residualStdMs: 1.2,
+            dominantResidueMs: 0.3,
+            paddedIntervals: rawDelays
+                .map((d, i) => ({ d, i }))
+                .filter(x => Math.abs(x.d % periodMs) < 2)
+                .map(x => x.i),
+            rawDelays,
+            keystrokeDelaysMs: peeledDelays,
+            snappedDelaysMs: peeledDelays,
+            pass1Candidate: periodMs,
+            pass1PeakRatio: 2.4,
+            candidateScores: [],
+        };
+    }
+
+    test("Raw vs peeled IID section appears in the brief when padding is detected", () => {
+        const period = 20;
+        const raw = [];
+        for (let i = 0; i < 50; i += 1) raw.push(period * (1 + (i % 5)) + ((i * 7) % 3 - 1));
+        const peeled = raw.filter((_, i) => i % 4 !== 0).map(d => d % period);
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            paddingDetection: makePadding(period, raw, peeled),
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).toContain("## Raw IID vs peeled IID");
+        expect(brief.text).toContain("Cadence fingerprint strength");
+        expect(brief.text).toContain("Median IID ratio");
+    });
+
+    test("Raw vs peeled IID section is absent when padding was not detected", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            paddingDetection: { detected: false },
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).not.toContain("## Raw IID vs peeled IID");
+    });
+
+    test("Raw vs peeled IID section is absent when paddingDetection is missing", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({}));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).not.toContain("## Raw IID vs peeled IID");
+    });
+
+    test("LEGEND block describes the two-pass padding detection algorithm", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({}));
+        expect(brief.ok).toBe(true);
+        const legendIdx = brief.text.indexOf("# LEGEND");
+        expect(legendIdx).toBeGreaterThan(0);
+        const tail = brief.text.slice(legendIdx);
+        // The new LEGEND entry should mention the algorithm by name.
+        expect(tail).toMatch(/two-pass|first-difference|pass 1|pass 2/i);
+    });
+});
+
+describe("computeFlowPacketProfile + renderFlowPacketProfile", () => {
+    function makePacket(direction, opts) {
+        const o = opts || {};
+        const pinfo = {
+            "packet.length": o.length != null ? o.length : 100,
+        };
+        if (o.cipherLen != null) pinfo.TCP = { "tcp.len": o.cipherLen };
+        if (o.flags) pinfo.TCP = Object.assign(pinfo.TCP || {}, { "tcp.flags.str": o.flags });
+        if (o.seq != null) pinfo.TCP = Object.assign(pinfo.TCP || {}, { "tcp.seq": o.seq });
+        if (o.retransmit) pinfo.TCP = Object.assign(pinfo.TCP || {}, {
+            "tcp.analysis": { retransmission: true },
+        });
+        if (o.outOfOrder) pinfo.TCP = Object.assign(pinfo.TCP || {}, {
+            "tcp.analysis": { out_of_order: true },
+        });
+        return {
+            direction,
+            packet: { "packet.info": pinfo },
+        };
+    }
+
+    test("returns null when there are no packets", () => {
+        expect(computeFlowPacketProfile({ flow: {} })).toBeNull();
+        expect(computeFlowPacketProfile({ flow: { packets: [] } })).toBeNull();
+        expect(computeFlowPacketProfile({})).toBeNull();
+    });
+
+    test("counts packets by direction and tallies direction changes", () => {
+        const packets = [
+            makePacket("c2s", { length: 80 }),
+            makePacket("c2s", { length: 90 }),
+            makePacket("s2c", { length: 500, cipherLen: 460 }),
+            makePacket("s2c", { length: 500, cipherLen: 460 }),
+            makePacket("c2s", { length: 80 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.totalPackets).toBe(5);
+        expect(profile.c2sCount).toBe(3);
+        expect(profile.s2cCount).toBe(2);
+        expect(profile.directionChanges).toBe(2); // c2s→s2c, s2c→c2s
+        expect(profile.firstDirection).toBe("c2s");
+        expect(profile.lastDirection).toBe("c2s");
+    });
+
+    test("tallies large packets (>= 1000 B) per direction", () => {
+        const packets = [
+            makePacket("s2c", { length: 1500, cipherLen: 1460 }),
+            makePacket("s2c", { length: 800, cipherLen: 760 }),
+            makePacket("c2s", { length: 100, cipherLen: 60 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.largePacketCount.s2c).toBe(1);
+        expect(profile.largePacketCount.c2s).toBe(0);
+    });
+
+    test("flags count is parsed from tcp.flags.str", () => {
+        const packets = [
+            makePacket("c2s", { length: 100, flags: "...A....", seq: 1000 }),
+            makePacket("c2s", { length: 100, flags: "...A....", seq: 1060 }),
+            makePacket("s2c", { length: 200, flags: "...AP...", seq: 2000 }),
+            makePacket("s2c", { length: 80, flags: "...A....", seq: 2160 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.flagCounts.ack).toBe(4);
+        expect(profile.flagCounts.psh).toBe(1);
+    });
+
+    test("detects retransmits via tcp.analysis and via seq backwards-jump", () => {
+        const packets = [
+            makePacket("c2s", { length: 100, seq: 1000 }),
+            makePacket("c2s", { length: 100, seq: 1060, retransmit: true }),
+            // Backwards seq jump (same direction) is also a retransmit.
+            makePacket("c2s", { length: 100, seq: 1120 }),
+            makePacket("c2s", { length: 100, seq: 1060 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        // First retransmit (explicit analysis), plus one from seq going backwards.
+        expect(profile.retransmitCount).toBeGreaterThanOrEqual(1);
+    });
+
+    test("captures ciphertext length per direction and max per direction", () => {
+        const packets = [
+            makePacket("c2s", { length: 80, cipherLen: 24 }),
+            makePacket("c2s", { length: 80, cipherLen: 32 }),
+            makePacket("s2c", { length: 1500, cipherLen: 1460 }),
+            makePacket("s2c", { length: 800, cipherLen: 760 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.maxCiphertextC2s).toBe(32);
+        expect(profile.maxCiphertextS2c).toBe(1460);
+        expect(profile.maxCiphertextOverall).toBe(1460);
+        expect(profile.ciphertextSample.c2s).toEqual([24, 32]);
+        expect(profile.ciphertextSample.s2c).toEqual([1460, 760]);
+    });
+
+    test("classifies ACK-only frames via the heuristic (small packet, no ciphertext)", () => {
+        const packets = [
+            makePacket("c2s", { length: 52 }), // no cipherLen, small → ACK-only heuristic
+            makePacket("c2s", { length: 52 }),
+            makePacket("s2c", { length: 1500, cipherLen: 1460 }), // real data
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.ackOnlyCount.c2s).toBe(2);
+        expect(profile.ackOnlyCount.s2c).toBe(0);
+    });
+
+    test("handles packets with no TCP layer gracefully", () => {
+        const packets = [
+            { direction: "c2s", packet: { "packet.info": { "packet.length": 80 } } },
+            { direction: "s2c", packet: { "packet.info": { "packet.length": 1500 } } },
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        expect(profile.totalPackets).toBe(2);
+        expect(profile.c2sCount).toBe(1);
+        expect(profile.s2cCount).toBe(1);
+        // No TCP layer → no ciphertext stats, no flag counts.
+        expect(profile.ciphertextLengths.c2s).toEqual([]);
+        expect(profile.maxCiphertextOverall).toBe(0);
+    });
+
+    test("renders a markdown section with key stats", () => {
+        const packets = [
+            makePacket("c2s", { length: 80, cipherLen: 24 }),
+            makePacket("c2s", { length: 80, cipherLen: 32, seq: 1000 }),
+            makePacket("s2c", { length: 1500, cipherLen: 1460, seq: 2000 }),
+            makePacket("s2c", { length: 800, cipherLen: 760, seq: 3460 }),
+        ];
+        const profile = computeFlowPacketProfile({ flow: { packets } });
+        const text = renderFlowPacketProfile(profile);
+        expect(text).toContain("## Wire-level packet profile");
+        expect(text).toContain("Packets: 4");
+        expect(text).toContain("Direction changes");
+        expect(text).toContain("TCP retransmits");
+        expect(text).toContain("ACK-only frames");
+        expect(text).toContain("Large packets");
+        expect(text).toContain("Max ciphertext segment size");
+        expect(text).toContain("TCP flag mix");
+        expect(text).toContain("Client → server (c2s)");
+        expect(text).toContain("Server → client (s2c)");
+        expect(text).toContain("Frame lengths (bytes)");
+        expect(text).toContain("Ciphertext sample");
+        expect(text).toContain("Interpretation:");
+    });
+
+    test("render returns empty string for null profile", () => {
+        expect(renderFlowPacketProfile(null)).toBe("");
+    });
+});
+
+describe("buildSshTimingAnalysisBrief — wire-level packet profile integration", () => {
+    function makePacket(direction, opts) {
+        const o = opts || {};
+        const pinfo = { "packet.length": o.length || 80 };
+        if (o.cipherLen != null) pinfo.TCP = { "tcp.len": o.cipherLen };
+        return { direction, packet: { "packet.info": pinfo } };
+    }
+
+    test("packet profile section appears when flow has packets", () => {
+        const packets = [
+            makePacket("c2s", { length: 80, cipherLen: 24 }),
+            makePacket("c2s", { length: 80, cipherLen: 24 }),
+            makePacket("s2c", { length: 1500, cipherLen: 1460 }),
+            makePacket("s2c", { length: 1500, cipherLen: 1460 }),
+        ];
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            flow: { ...makeBriefState().flow, packets },
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).toContain("## Wire-level packet profile");
+        expect(brief.text).toContain("Direction changes");
+        expect(brief.text).toContain("Ciphertext sample");
+    });
+
+    test("packet profile section is absent when flow has no packets", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            flow: { ...makeBriefState().flow, packets: [] },
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).not.toContain("## Wire-level packet profile");
+    });
+
+    test("packet profile section appears regardless of padding detection", () => {
+        const packets = [
+            makePacket("c2s", { length: 80 }),
+            makePacket("s2c", { length: 200 }),
+        ];
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            flow: { ...makeBriefState().flow, packets },
+            paddingDetection: { detected: false },
+        }));
+        expect(brief.ok).toBe(true);
+        expect(brief.text).toContain("## Wire-level packet profile");
+    });
+
+    test("LEGEND block describes the wire-level packet profile section", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({}));
+        expect(brief.ok).toBe(true);
+        const legendIdx = brief.text.indexOf("# LEGEND");
+        expect(legendIdx).toBeGreaterThan(0);
+        const tail = brief.text.slice(legendIdx);
+        expect(tail).toMatch(/Wire-level packet profile|packet\.length|tcp\.len/);
+    });
+});
+
+describe("detectReturnKeys + renderReturnKeySummary + renderReturnKeys", () => {
+    // A simple "two-command" synthetic trace:
+    //   command 1: 6 fast keystrokes (5 gaps, all < 200 ms)
+    //   a small packet carrying the Return key
+    //   a 700 ms pause (the user's response time + the shell starting)
+    //   command 2: 12 fast keystrokes (11 gaps, all < 200 ms)
+    //   a small packet carrying the Return key
+    //   a 900 ms pause (longer response)
+    function makeTwoCommandDelays() {
+        const delays = [];
+        // Command 1: 5 keystrokes (including the Return). The Return
+        // is just another keystroke — what makes it identifiable is
+        // (a) the small c2s packet carrying it and (b) the very large
+        // gap AFTER it (the shell is now executing).
+        for (let i = 0; i < 4; i += 1) delays.push(80 + (i * 7) % 30);
+        delays.push(250); // compose gap before the Return keypress
+        delays.push(700); // post-Return pause (shell is executing)
+        // Command 2: 11 keystrokes (including the Return).
+        for (let i = 0; i < 9; i += 1) delays.push(60 + (i * 11) % 40);
+        delays.push(280); // compose gap before the Return keypress
+        delays.push(900); // post-Return pause
+        return delays;
+    }
+    function makeTwoCommandDelaysWithIdx() {
+        const delays = makeTwoCommandDelays();
+        const out = [];
+        // The "Return" position is the LAST keystroke of each command.
+        // The detector identifies it via the big inter-command pause:
+        //   - delays[5]  = 700 → Return = keystroke 6 (1-based), packet index 5
+        //   - delays[16] = 900 → Return = keystroke 17 (1-based), packet index 16
+        // delaysWithIdx[i].index stores the LATER packet of the gap at
+        // delays[i]; we mark those packets small so the detector's
+        // "packet-size" signal fires.
+        for (let i = 0; i < delays.length; i += 1) {
+            const isReturn = (i + 1) === 5 || (i + 1) === 16;
+            out.push({
+                delay: delays[i],
+                index: i + 1,
+                packetLength: isReturn ? 70 : 120,
+            });
+        }
+        return out;
+    }
+
+    test("returns empty when there are no delays", () => {
+        const det = detectReturnKeys({ delays: [], delaysWithIdx: [] });
+        expect(det.returns).toEqual([]);
+        expect(det.turnBoundaries).toEqual([]);
+    });
+
+    test("detects Return keys at every > 500 ms pause boundary", () => {
+        const delays = makeTwoCommandDelays();
+        const delaysWithIdx = makeTwoCommandDelaysWithIdx();
+        const det = detectReturnKeys({ delays, delaysWithIdx }, { minConfidence: 0.4 });
+        // Should find 2 Returns at the two pause boundaries.
+        //   - delays[5]  = 700 → lastKeyIdx = 6  (the Return for command 1)
+        //   - delays[16] = 900 → lastKeyIdx = 17 (the Return for command 2)
+        expect(det.returns.length).toBeGreaterThanOrEqual(2);
+        const indices = det.returns.map((r) => r.index).sort((a, b) => a - b);
+        expect(indices).toContain(6);
+        expect(indices).toContain(17);
+        const accepted = det.turnBoundaries;
+        expect(accepted).toContain(6);
+        expect(accepted).toContain(17);
+    });
+
+    test("confidence drops when packet size is large (no small-packet signal)", () => {
+        const delays = makeTwoCommandDelays();
+        // Mark ALL packets as the same large size — Return signal 2 (packet
+        // size) won't fire, so confidence should drop.
+        const delaysWithIdxLarge = delays.map((d, i) => ({ delay: d, index: i + 1, packetLength: 200 }));
+        const det = detectReturnKeys({ delays, delaysWithIdx: delaysWithIdxLarge }, { minConfidence: 0.0 });
+        expect(det.returns.length).toBeGreaterThanOrEqual(2);
+        // Mark the Return-key packets as small (delaysWithIdx[4].index = 5
+        // for the first Return, delaysWithIdx[15].index = 16 for the
+        // second). With the small-packet signal firing, confidence
+        // should be higher than the all-large case.
+        const delaysWithIdxSmall = delays.map((d, i) => ({
+            delay: d,
+            index: i + 1,
+            packetLength: (i + 1) === 5 || (i + 1) === 16 ? 70 : 120,
+        }));
+        const detSmall = detectReturnKeys({ delays, delaysWithIdx: delaysWithIdxSmall }, { minConfidence: 0.0 });
+        const avgLarge = det.returns.reduce((s, r) => s + r.confidence, 0) / det.returns.length;
+        const avgSmall = detSmall.returns.reduce((s, r) => s + r.confidence, 0) / detSmall.returns.length;
+        expect(avgLarge).toBeLessThan(avgSmall);
+    });
+
+    test("returnDetection is attached to buildSessionTurnPairs output", () => {
+        const delays = makeTwoCommandDelays();
+        const delaysWithIdx = makeTwoCommandDelaysWithIdx();
+        const state = makeBriefState({ delays, delaysWithIdx });
+        const pairs = buildSessionTurnPairs(state);
+        expect(pairs.returnDetection).toBeDefined();
+        expect(Array.isArray(pairs.returnDetection.returns)).toBe(true);
+        expect(pairs.returnDetection.returns.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test("annotated turns carry endsWithReturn + typedLength + commandTextLength", () => {
+        const delays = makeTwoCommandDelays();
+        const delaysWithIdx = makeTwoCommandDelaysWithIdx();
+        const s2cSummary = {
+            ok: true,
+            totalChunks: 2, totalBytes: 1024, totalDurationMs: 1000,
+            chunks: [
+                {
+                    idx: 1, totalBytes: 512, durationMs: 500, rateCharPerSec: 1024,
+                    kind: "paged-file-content", packetCount: 4, startTs: 1000, endTs: 1500
+                },
+                {
+                    idx: 2, totalBytes: 512, durationMs: 500, rateCharPerSec: 1024,
+                    kind: "paged-file-content", packetCount: 4, startTs: 3000, endTs: 3500
+                },
+            ],
+        };
+        const state = makeBriefState({ delays, delaysWithIdx, s2cSummary });
+        const pairs = buildSessionTurnPairs(state);
+        // Find a turn whose end+2 (= Return 1-based keystroke position) is in turnBoundaries.
+        const accepted = new Set(pairs.returnDetection.turnBoundaries);
+        const annotatedTurns = pairs.turnPairs.map((p) => p.turn).filter((t) => t);
+        const detectedTurns = annotatedTurns.filter((t) => accepted.has(t.end + 2));
+        expect(detectedTurns.length).toBeGreaterThanOrEqual(2);
+        for (const t of detectedTurns) {
+            expect(t.endsWithReturn).toBe(true);
+            expect(Number.isFinite(t.returnConfidence)).toBe(true);
+            // typedLength = turn.length + 1 (one keystroke per gap, plus one).
+            expect(t.typedLength).toBe(t.length + 1);
+            // commandTextLength = typedLength - 1 (excluding the Return).
+            expect(t.commandTextLength).toBe(t.typedLength - 1);
+        }
+    });
+
+    test("renderReturnKeySummary emits a one-line detection summary", () => {
+        const delays = makeTwoCommandDelays();
+        const delaysWithIdx = makeTwoCommandDelaysWithIdx();
+        const det = detectReturnKeys({ delays, delaysWithIdx }, { minConfidence: 0.4 });
+        const text = renderReturnKeySummary(det);
+        expect(text).toContain("Return keypress(es)");
+        expect(text).toMatch(/2\/[2-9]/); // accepted/total
+    });
+
+    test("renderReturnKeySummary returns empty string when no returns detected", () => {
+        const text = renderReturnKeySummary({ returns: [], turnBoundaries: [] });
+        expect(text).toBe("");
+        expect(renderReturnKeySummary(null)).toBe("");
+    });
+
+    test("renderReturnKeys emits a markdown table with all signal columns", () => {
+        const delays = makeTwoCommandDelays();
+        const delaysWithIdx = makeTwoCommandDelaysWithIdx();
+        const det = detectReturnKeys({ delays, delaysWithIdx }, { minConfidence: 0.4 });
+        const text = renderReturnKeys(det);
+        expect(text).toContain("## Return-key detection");
+        expect(text).toContain("| Pos | Delay idx | Pre-gap (ms) | Post-gap (ms) | Packet (B) | Confidence |");
+        expect(text).toContain("RETURN");
+        expect(text).toContain("Accepted Returns");
+        expect(text).toContain("typed-length per command");
+    });
+
+    test("renderReturnKeys returns empty string when no returns", () => {
+        expect(renderReturnKeys({ returns: [], turnBoundaries: [] })).toBe("");
+        expect(renderReturnKeys(null)).toBe("");
+    });
+});
+
+describe("buildSshTimingAnalysisBrief — Return-key detection integration", () => {
+    // Build enough delays to clear BRIEF_MIN_SAMPLES (= 30). Each
+    // "command" is 5 sub-200ms gaps + a small-gap Return key packet +
+    // a big post-Return pause. 5 commands = 35 delays.
+    function makeReturnDelays() {
+        const delays = [];
+        for (let c = 0; c < 5; c += 1) {
+            for (let i = 0; i < 5; i += 1) delays.push(80 + (i * 7 + c * 13) % 30);
+            delays.push(20);
+            delays.push(700 + c * 200);
+        }
+        return delays;
+    }
+    function makeReturnDelaysWithIdx() {
+        return makeReturnDelays().map((d, i) => ({
+            delay: d,
+            index: i + 1,
+            // Each command produces 7 delays:
+            //   delays[i*7+0..4] = 5 compose gaps (6 typed chars)
+            //   delays[i*7+5]    = 20ms gap before Return
+            //   delays[i*7+6]    = 700+ms inter-command pause
+            // The Return is the LATER packet of delays[i*7+5], which is
+            // delaysWithIdx[i*7+5].index = (i*7+5) + 1 = i*7+6 (0-based
+            // packet position = keystroke 7, 1-based).
+            packetLength: (i % 7 === 5) ? 70 : 120,
+        }));
+    }
+
+    test("Return-key section appears in the brief when delaysWithIdx is provided", () => {
+        const delays = makeReturnDelays();
+        const delaysWithIdx = makeReturnDelaysWithIdx();
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({ delays, delaysWithIdx }));
+        expect(brief.ok).toBe(true);
+        // 5 commands × 1 Return each = 5 detected.
+        expect(brief.text).toContain("Detected 5/5 Return keypress(es) at pause boundaries");
+        expect(brief.text).toContain("## Return-key detection");
+        expect(brief.text).toContain("RETURN");
+    });
+
+    test("Return-key DETAIL table is absent when delaysWithIdx is missing", () => {
+        const delays = makeReturnDelays();
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({ delays }));
+        expect(brief.ok).toBe(true);
+        // The per-position detail table requires delaysWithIdx (it uses
+        // packet lengths to score each candidate). The one-line summary
+        // DOES render without delaysWithIdx (it only uses timing signals).
+        expect(brief.text).not.toContain("## Return-key detection (turn anchors)");
+        expect(brief.text).not.toContain("| Pos | Delay idx | Pre-gap");
+    });
+
+    test("LEGEND block explains Return-key detection algorithm", () => {
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({}));
+        expect(brief.ok).toBe(true);
+        const legendIdx = brief.text.indexOf("# LEGEND");
+        expect(legendIdx).toBeGreaterThan(0);
+        const tail = brief.text.slice(legendIdx);
+        expect(tail).toMatch(/Return-key detection|turn terminator/i);
+        // All four signals should be mentioned.
+        expect(tail).toMatch(/positional|small.*packet|pre-key|post-key/i);
+    });
+
+    test("annotated turn pair shows typedLength + commandTextLength", () => {
+        const delays = makeReturnDelays();
+        const delaysWithIdx = makeReturnDelaysWithIdx();
+        // Provide a synthetic s2cSummary so that turnPairs has at
+        // least one pairing to render the per-pair annotation lines.
+        const s2cSummary = {
+            ok: true,
+            totalChunks: 5,
+            totalBytes: 2048,
+            totalDurationMs: 5000,
+            chunks: [
+                {
+                    idx: 1, totalBytes: 1024, durationMs: 1000, rateCharPerSec: 1024,
+                    kind: "paged-file-content", packetCount: 8, startTs: 1000, endTs: 2000,
+                    charDistribution: {
+                        letters: 100, digits: 0, whitespace: 30, slash: 5,
+                        dot: 3, dash: 2, underscore: 1, uppercase: 5, lowercase: 95,
+                        punctuation: 5, control: 0, highBit: 0
+                    },
+                    payloadBytesClassified: 200
+                },
+                {
+                    idx: 2, totalBytes: 1024, durationMs: 1000, rateCharPerSec: 1024,
+                    kind: "paged-file-content", packetCount: 8, startTs: 3000, endTs: 4000,
+                    charDistribution: {
+                        letters: 100, digits: 0, whitespace: 30, slash: 5,
+                        dot: 3, dash: 2, underscore: 1, uppercase: 5, lowercase: 95,
+                        punctuation: 5, control: 0, highBit: 0
+                    },
+                    payloadBytesClassified: 200
+                },
+                {
+                    idx: 3, totalBytes: 0, durationMs: 0, rateCharPerSec: 0,
+                    kind: "prompt-or-echo", packetCount: 1, startTs: 5000, endTs: 5000
+                },
+                {
+                    idx: 4, totalBytes: 0, durationMs: 0, rateCharPerSec: 0,
+                    kind: "prompt-or-echo", packetCount: 1, startTs: 7000, endTs: 7000
+                },
+                {
+                    idx: 5, totalBytes: 0, durationMs: 0, rateCharPerSec: 0,
+                    kind: "prompt-or-echo", packetCount: 1, startTs: 9000, endTs: 9000
+                },
+            ],
+        };
+        const brief = buildSshTimingAnalysisBrief(makeBriefState({
+            delays,
+            delaysWithIdx,
+            flow: { ...makeBriefState().flow, firstTimestamp: 0, lastTimestamp: 15000 },
+            s2cSummary,
+        }));
+        expect(brief.ok).toBe(true);
+        // Per-pair annotation lines.
+        expect(brief.text).toContain("return-key detected at last keystroke");
+        expect(brief.text).toContain("typed-length=");
+        expect(brief.text).toContain("command-text-length=");
     });
 });

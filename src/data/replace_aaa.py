@@ -3,7 +3,7 @@
 
 import re
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "r", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "r", encoding="utf-8") as f:
     content = f.read()
 
 # All redaction placeholder patterns we used
@@ -38,7 +38,7 @@ for ph in placeholders:
 
 print(f"\nTotal replacements: {replaced}")
 
-with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_data", "w", encoding="utf-8") as f:
+with open("/home/marshall/Hacks/projects/packetsnitch/src/data/shell_corpus.txt", "w", encoding="utf-8") as f:
     f.write(content)
 
 print("Done.")

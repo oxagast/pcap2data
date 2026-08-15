@@ -966,6 +966,18 @@ No decrypted TLS/SSL output yet.</pre>
                     <span id="crypt-openssh-progress-text">Working…</span>
                     <span class="loading"></span>
                   </span>
+                  <span id="crypt-openssh-progress-stages" class="crypt-openssh-stages" hidden>
+                    <span class="crypt-openssh-stage" data-stage="scanning" title="Scan packets">
+                      <span class="crypt-openssh-stage-bullet">•</span> Scan
+                    </span>
+                    <span class="crypt-openssh-stage" data-stage="decoding" title="Decode keystrokes">
+                      <span class="crypt-openssh-stage-bullet">•</span> Decode
+                    </span>
+                    <span class="crypt-openssh-stage" data-stage="markov" title="Markov chain">
+                      <span class="crypt-openssh-stage-bullet">•</span> Markov
+                      <span class="crypt-openssh-stage-status" data-stage-status="markov"></span>
+                    </span>
+                  </span>
                 </div>
                 <div id="crypt-openssh-flow-details">
                   No SSH flows detected in the loaded capture.
@@ -996,10 +1008,34 @@ No decrypted TLS/SSL output yet.</pre>
                     Direction
                   </label>
                   <select id="crypt-openssh-direction">
-                    <option value="both">Both directions</option>
-                    <option value="c2s" selected>Client → Server only</option>
+                    <option value="both" selected>Both directions</option>
+                    <option value="c2s">Client → Server only</option>
                     <option value="s2c">Server → Client only</option>
                   </select>
+                </div>
+                <div class="crypt-section-title crypt-openssh-deobf-title">
+                  SSH obfuscation deobfuscator
+                </div>
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <label class="crypt-openssh-deobf-check" for="crypt-openssh-deobf-enable">
+                    <input type="checkbox" id="crypt-openssh-deobf-enable" checked>
+                    <span>Enable padding detector</span>
+                  </label>
+                  <label class="crypt-key-type-label" for="crypt-openssh-deobf-mode">
+                    Mode
+                  </label>
+                  <select id="crypt-openssh-deobf-mode"
+                    title="auto: detect + peel only when confidence is high. force: always assume obfuscation and snap the nearest cadence off every delay. off: run detection for diagnostics but leave delays untouched.">
+                    <option value="auto" selected>Auto (detect + peel if confident)</option>
+                    <option value="force">Force (always assume obfuscation)</option>
+                    <option value="off">Off (diagnostics only)</option>
+                  </select>
+                  <label class="crypt-key-type-label" for="crypt-openssh-deobf-coverage">
+                    Coverage threshold
+                  </label>
+                  <input type="range" id="crypt-openssh-deobf-coverage" min="0.30" max="0.90" step="0.05" value="0.50"
+                    title="Minimum cadence coverage (fraction of intervals matching the cadence) required before peeling kicks in. Lower = more aggressive peeling; higher = more conservative.">
+                  <span id="crypt-openssh-deobf-coverage-label" class="crypt-openssh-deobf-value">0.50</span>
                 </div>
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
                   <div class="crypt-openssh-insight-header">
