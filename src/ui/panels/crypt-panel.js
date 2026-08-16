@@ -2815,6 +2815,27 @@ function createCryptPanel({
       ? modelInfo.chunks
       : null;
 
+    // Check if a string looks like a bare artifact (just an IP, hostname, or filename
+    // without a command verb). These should NOT be shown as "Top candidate" because
+    // they are not valid shell commands on their own.
+    const looksLikeBareArtifact = (text) => {
+      if (!text || typeof text !== "string") return false;
+      const trimmed = text.trim();
+      if (!trimmed) return false;
+      // Bare IPv4 address
+      if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(trimmed)) return true;
+      // Bare IPv6 address
+      if (/^[0-9a-fA-F:]+$/.test(trimmed) && trimmed.includes(":")) return true;
+      // Bare hostname (e.g., "example.com", "server.local")
+      if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$/.test(trimmed)) return true;
+      // Bare user@host (no command prefix)
+      if (/^[^@\s]+@[^@\s]+$/.test(trimmed)) return true;
+      // Bare filename (looks like /path/to/file or ./file.txt)
+      if (/^[\/~]?[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,5}$/.test(trimmed) &&
+          !/^(ls|cd|cat|grep|find|rm|cp|mv)\s/i.test(trimmed)) return true;
+      return false;
+    };
+
     // Get top candidate for the primary card
     let top = "";
     if (chunks && chunks.length > 0) {
@@ -2823,6 +2844,21 @@ function createCryptPanel({
     }
     if (!top && reranked && reranked[0] && reranked[0][1]) {
       top = reranked[0][1];
+    }
+    // Skip bare artifacts as top candidate
+    if (looksLikeBareArtifact(top)) {
+      // Try to find a non-bare candidate from reranked
+      if (reranked) {
+        for (const [, cmd] of reranked) {
+          if (cmd && !looksLikeBareArtifact(cmd)) {
+            top = cmd;
+            break;
+          }
+        }
+        if (looksLikeBareArtifact(top)) top = "";  // Still bare, give up
+      } else {
+        top = "";
+      }
     }
     const body = top ? `Top candidate: ${top}` : "Top candidate: (none)";
 
