@@ -982,6 +982,29 @@ No decrypted TLS/SSL output yet.</pre>
                 <div id="crypt-openssh-flow-details">
                   No SSH flows detected in the loaded capture.
                 </div>
+                <!-- One-time notice for first-time OpenSSH panel visitors -->
+                <div id="crypt-openssh-first-notice" class="crypt-openssh-first-notice" hidden>
+                  <div class="crypt-openssh-first-notice-content">
+                    <strong>Experimental Feature Notice</strong>
+                    <p>The OpenSSH keystroke timing analysis is an experimental feature based on
+                      statistical timing analysis, not to mention being written by a crackhead
+                      living in a cramped apartment. Results are highly dependent on network conditions,
+                      client implementation, and configuration tuning. The default parameters are
+                      loose starting points and will likely need adjustment for your specific
+                      environment. Especially if your environment is like mine, a filthy den full of
+                      drug paraphanilia and use condoms ripe for tripping over. This analysis
+                      may produce inaccurate or misleading results without proper calibration.
+                      In hte event that I did actually break ssh, and cause some type of international
+                      incident, i'm not in the least bit sorry, but if you are a nation state actor,
+                      please for the love of god if you kidnap me in some kind of derranged effort
+                      at breaking into some type of whtatever-the-fuck secret shit, know this: i'll do it
+                      but i require an unlimited aily supply of redbull and bitches so i can do the
+                      swordfish scene irl. kthx.</p>
+                    <button id="crypt-openssh-dismiss-notice" class="crypt-openssh-dismiss-btn">
+                      Don't show again
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="crypt-section">

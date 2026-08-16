@@ -1678,6 +1678,51 @@ strong {
   opacity: 0.85;
 }
 
+/* One-time notice for first-time OpenSSH panel visitors */
+.crypt-openssh-first-notice {
+  border: 1px solid color-mix(in srgb, var(--color-4) 60%, transparent);
+  border-left: 4px solid var(--color-4);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--color-4) 5%, transparent);
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-first-notice[hidden] {
+  display: none;
+}
+
+.crypt-openssh-first-notice-content {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.crypt-openssh-first-notice-content strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--color-2);
+}
+
+.crypt-openssh-first-notice-content p {
+  margin: 0 0 10px 0;
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-dismiss-btn {
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-1);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.crypt-openssh-dismiss-btn:hover {
+  background-color: var(--color-3);
+}
+
 @keyframes crypt-openssh-bullet-pulse {
 
   0%,
