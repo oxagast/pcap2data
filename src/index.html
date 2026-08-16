@@ -988,7 +988,9 @@ No decrypted TLS/SSL output yet.</pre>
                     <strong>Experimental Feature Notice</strong>
                     <p>The OpenSSH keystroke timing analysis is an experimental feature based on
                       statistical timing analysis, not to mention being written by a crackhead
-                      living in a cramped apartment. Results are highly dependent on network conditions,
+                      living in a cramped apartment. It works best on low latency networks like LANs.
+                      The default setup is aggresive, and geared towards short commands, this needs
+                      more tuning for better accuracy. Results are highly dependent on network conditions,
                       client implementation, and configuration tuning. The default parameters are
                       loose starting points and will likely need adjustment for your specific
                       environment. Especially if your environment is like mine, a filthy den full of
@@ -1012,6 +1014,15 @@ No decrypted TLS/SSL output yet.</pre>
                 <div id="crypt-openssh-chart" class="crypt-openssh-chart"></div>
                 <div id="crypt-openssh-chart-legend" class="crypt-openssh-legend">
                   Select a flow and click <strong>Analyze selected</strong>.
+                </div>
+              </div>
+
+              <!-- Timeline Folding Chart - shows phase alignment of padding blips -->
+              <div class="crypt-section" id="crypt-openssh-folding-section" hidden>
+                <div class="crypt-section-title">Timeline Folding — Padding Phase Alignment</div>
+                <div id="crypt-openssh-folding-chart" class="crypt-openssh-chart"></div>
+                <div id="crypt-openssh-folding-legend" class="crypt-openssh-legend">
+                  Folding analysis shows where padding blips align in the timeline.
                 </div>
               </div>
 
@@ -1127,6 +1138,54 @@ No decrypted TLS/SSL output yet.</pre>
                     title="Multiplier for the length-matching bonuses (being within tolerance of target length, having slots for flexible length). Higher = length proximity is more important.">
                   <span id="crypt-openssh-markov-length-bonus-label" class="crypt-openssh-deobf-value">3.3x</span>
                 </div>
+
+                <!-- Calibration / Profile Management -->
+                <div class="crypt-section-title crypt-openssh-deobf-title">
+                  Calibration &amp; Profiles
+                </div>
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <label class="crypt-key-type-label" for="crypt-openssh-profile-select">
+                    Profile
+                  </label>
+                  <select id="crypt-openssh-profile-select">
+                    <option value="default">Default (built-in)</option>
+                  </select>
+                  <button id="crypt-openssh-calibrate-btn" title="Calibrate from a known transcript + PCAP">
+                    Calibrate from transcript…
+                  </button>
+                  <button id="crypt-openssh-save-profile-btn" title="Save current settings as a named profile">
+                    Save as profile
+                  </button>
+                  <button id="crypt-openssh-delete-profile-btn" title="Delete selected profile" disabled>
+                    Delete profile
+                  </button>
+                </div>
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <label class="crypt-key-type-label" for="crypt-openssh-transcript-file">
+                    Transcript file
+                  </label>
+                  <input type="file" id="crypt-openssh-transcript-file" accept=".txt,.log,.transcript" style="flex: 1;">
+                  <span id="crypt-openssh-calibration-status" class="crypt-openssh-calibration-status"></span>
+                </div>
+                <div id="crypt-openssh-calibration-details" class="crypt-openssh-calibration-details" hidden>
+                  <div class="crypt-openssh-calibration-detail-row">
+                    <span class="crypt-openssh-calibration-detail-label">Digraphs learned:</span>
+                    <span id="crypt-openssh-cal-digraphs" class="crypt-openssh-calibration-detail-value">—</span>
+                  </div>
+                  <div class="crypt-openssh-calibration-detail-row">
+                    <span class="crypt-openssh-calibration-detail-label">Alignments:</span>
+                    <span id="crypt-openssh-cal-alignments" class="crypt-openssh-calibration-detail-value">—</span>
+                  </div>
+                  <div class="crypt-openssh-calibration-detail-row">
+                    <span class="crypt-openssh-calibration-detail-label">Coverage threshold:</span>
+                    <span id="crypt-openssh-cal-coverage" class="crypt-openssh-calibration-detail-value">—</span>
+                  </div>
+                  <div class="crypt-openssh-calibration-detail-row">
+                    <span class="crypt-openssh-calibration-detail-label">Padding accuracy:</span>
+                    <span id="crypt-openssh-cal-accuracy" class="crypt-openssh-calibration-detail-value">—</span>
+                  </div>
+                </div>
+
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
                   <div class="crypt-openssh-insight-header">
                     <span class="crypt-openssh-insight-label">LLM insight</span>

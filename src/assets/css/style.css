@@ -1723,6 +1723,44 @@ strong {
   background-color: var(--color-3);
 }
 
+/* Calibration & Profile Management */
+.crypt-openssh-calibration-status {
+  font-size: 11px;
+  color: var(--color-6);
+  font-style: italic;
+  min-width: 200px;
+}
+
+.crypt-openssh-calibration-details {
+  border: 1px solid color-mix(in srgb, var(--color-2) 60%, transparent);
+  border-left: 4px solid var(--color-2);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  background: color-mix(in srgb, var(--color-2) 4%, transparent);
+  color: var(--crypt-panel-text);
+  font-size: 11px;
+}
+
+.crypt-openssh-calibration-details[hidden] {
+  display: none;
+}
+
+.crypt-openssh-calibration-detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.crypt-openssh-calibration-detail-label {
+  color: var(--color-6);
+}
+
+.crypt-openssh-calibration-detail-value {
+  font-family: var(--font-family-mono, "Menlo", "Consolas", monospace);
+  color: var(--color-1);
+}
+
 @keyframes crypt-openssh-bullet-pulse {
 
   0%,

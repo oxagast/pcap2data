@@ -887,6 +887,219 @@ function autocorrelationScore(delays, periodMs, stepMs) {
     return (autocorr / count) / (variance / n);
 }
 
+// ── Timeline folding for padding alignment ─────────────────────────────
+//
+// This is a new pass that "folds" the timeline to find where padding blips
+// align best. The insight is: if the server injects padding packets at
+// regular intervals (e.g., every 20ms), then when we slide the delay
+// sequence over itself by multiples of the period, the padding positions
+// will line up.
+//
+// Algorithm:
+//   1. For a candidate period P, consider shifts from 0 to P-1 ms
+//   2. For each shift S, "fold" the timeline by looking at each delay D
+//      and computing its position modulo P: pos = round(D / P) mod P
+//   3. Count how many delays fall into each modulo position
+//   4. The shift with the most concentrated count is where padding aligns
+//   5. Once we know the padding phase, we can strip delays that land in
+//      padding positions (i.e., delays that are exactly N*P + phase + jitter)
+//
+// This complements the existing first-difference approach by being robust
+// to:
+//   - Variable jitter on padding packets
+//   - Real keystrokes that coincidentally land near multiples of P
+//   - Non-uniform padding injection (some slots have more fillers than others)
+
+function foldTimelineForPaddingAlignment(delays, periodMs, opts) {
+    const o = opts || {};
+    const jitterTolerance = Number.isFinite(o.jitterToleranceMs) ? o.jitterToleranceMs : Math.max(2, periodMs * 0.2);
+    const minPaddingSlots = Number.isFinite(o.minPaddingSlots) ? o.minPaddingSlots : 2;
+    const foldResolution = Number.isFinite(o.foldResolutionMs) ? o.foldResolutionMs : 1;
+
+    const empty = {
+        aligned: false,
+        periodMs,
+        dominantPhaseMs: null,
+        phaseHistogram: null,
+        paddingPositions: null,
+        foldedKeystrokeDelaysMs: null,
+    };
+
+    if (!Array.isArray(delays) || delays.length < 10) return empty;
+
+    // Build the timeline: cumulative sum of delays gives us the time
+    // at which each packet arrives relative to the start.
+    let time = 0;
+    const arrivalTimes = [];
+    for (const d of delays) {
+        if (!Number.isFinite(d) || d <= 0) continue;
+        arrivalTimes.push(time);
+        time += d;
+    }
+    arrivalTimes.push(time); // include the final endpoint
+
+    if (arrivalTimes.length < 10) return empty;
+
+    // For each possible phase offset (from 0 to periodMs), count how
+    // many arrival times fall into that phase slot modulo periodMs.
+    //
+    // The phase slot is: phase = arrivalTime mod periodMs
+    // If padding is injected every periodMs, all padding packets will
+    // cluster in the same phase slot(s).
+    const phaseBins = Math.max(1, Math.ceil(periodMs / foldResolution));
+    const histogram = new Array(phaseBins).fill(0);
+    const binToDelays = new Map(); // bin index -> array of delay indices
+
+    for (let i = 0; i < arrivalTimes.length - 1; i += 1) {
+        const t = arrivalTimes[i];
+        const phase = t % periodMs;
+        const binIdx = Math.floor(phase / foldResolution);
+        const clampedBin = Math.max(0, Math.min(phaseBins - 1, binIdx));
+        histogram[clampedBin] += 1;
+        if (!binToDelays.has(clampedBin)) {
+            binToDelays.set(clampedBin, []);
+        }
+        binToDelays.get(clampedBin).push(i);
+    }
+
+    // Find the dominant phase(s) — bins with counts significantly above
+    // the uniform background.
+    const meanCount = arrivalTimes.length / phaseBins;
+    const paddingThreshold = meanCount * 1.5; // 50% above uniform is suspicious
+    const paddingBins = [];
+    let maxCount = 0;
+    let dominantBin = -1;
+
+    for (let i = 0; i < histogram.length; i += 1) {
+        const count = histogram[i];
+        if (count > maxCount) {
+            maxCount = count;
+            dominantBin = i;
+        }
+        if (count >= paddingThreshold) {
+            paddingBins.push({
+                binIndex: i,
+                phaseStartMs: i * foldResolution,
+                phaseEndMs: (i + 1) * foldResolution,
+                count,
+                delayIndices: binToDelays.get(i) || [],
+            });
+        }
+    }
+
+    // Sort padding bins by count descending
+    paddingBins.sort((a, b) => b.count - a.count);
+
+    // If we have at least minPaddingSlots padding bins, or one very dominant bin,
+    // we consider it aligned.
+    const hasStrongPadding =
+        paddingBins.length >= minPaddingSlots ||
+        (dominantBin >= 0 && maxCount >= meanCount * 2.0);
+
+    if (!hasStrongPadding) {
+        return {
+            ...empty,
+            phaseHistogram: histogram.map((count, idx) => ({
+                binIndex: idx,
+                phaseStartMs: idx * foldResolution,
+                count,
+            })),
+        };
+    }
+
+    // Collect all delay indices that fall into padding bins AND are
+    // SHORT delays. Filler packets are typically 1x or 2x the period
+    // (20-40ms for a 20ms cadence). Real keystrokes are longer and
+    // might coincidentally land in the same phase, but we shouldn't
+    // strip them.
+    //
+    // Heuristic: a delay is "padding-like" if it's <= maxPaddingDelayMultiplier * period.
+    // Default: 3x the period (e.g., 60ms for a 20ms cadence).
+    const maxPaddingDelayMultiplier = Number.isFinite(o.maxPaddingDelayMultiplier)
+        ? o.maxPaddingDelayMultiplier
+        : 3.0;
+    const maxPaddingDelay = periodMs * maxPaddingDelayMultiplier;
+
+    const paddingDelayIndices = new Set();
+    for (const pb of paddingBins) {
+        for (const idx of pb.delayIndices) {
+            const delay = delays[idx];
+            // Only mark SHORT delays in padding phases as actual padding.
+            // Long delays in the same phase are likely real keystrokes.
+            if (delay <= maxPaddingDelay) {
+                paddingDelayIndices.add(idx);
+            }
+        }
+    }
+
+    // Build the "folded" keystroke delays by removing padding delays
+    // and collapsing the timeline.
+    //
+    // When we remove a padding delay D_i, the next delay D_{i+1} should
+    // inherit the padding's timing contribution because real time still
+    // passes — we're just removing the padding *packet*, not the time.
+    //
+    // Actually, wait: the delay array represents inter-packet times.
+    // If we have: [20, 100, 20, 60] and the 20ms delays are padding,
+    // we want the result to be [140, 60] or [100, 80] depending on
+    // whether the padding is between keystrokes or part of a burst.
+    //
+    // Better approach: build the timeline of actual events, strip padding
+    // events, then recompute inter-event delays.
+    const eventTimes = [];
+    const isPaddingEvent = [];
+    let t = 0;
+
+    for (let i = 0; i < delays.length; i += 1) {
+        const d = delays[i];
+        if (!Number.isFinite(d) || d <= 0) continue;
+        eventTimes.push(t);
+        isPaddingEvent.push(paddingDelayIndices.has(i));
+        t += d;
+    }
+    // Add the final endpoint
+    eventTimes.push(t);
+    isPaddingEvent.push(false);
+
+    // Now keep only non-padding event times
+    const keptTimes = [];
+    for (let i = 0; i < eventTimes.length; i += 1) {
+        if (!isPaddingEvent[i]) {
+            keptTimes.push(eventTimes[i]);
+        }
+    }
+
+    // Recompute inter-event delays from the kept timeline
+    const foldedDelays = [];
+    for (let i = 1; i < keptTimes.length; i += 1) {
+        const delta = keptTimes[i] - keptTimes[i - 1];
+        if (delta > 0) {
+            foldedDelays.push(delta);
+        }
+    }
+
+    return {
+        aligned: true,
+        periodMs,
+        dominantPhaseMs: dominantBin >= 0 ? dominantBin * foldResolution : null,
+        dominantPhaseRatio: maxCount / Math.max(1, meanCount),
+        phaseHistogram: histogram.map((count, idx) => ({
+            binIndex: idx,
+            phaseStartMs: idx * foldResolution,
+            count,
+        })),
+        paddingBins,
+        paddingDelayIndices: Array.from(paddingDelayIndices).sort((a, b) => a - b),
+        foldedKeystrokeDelaysMs: foldedDelays,
+        foldStats: {
+            originalDelayCount: delays.length,
+            paddedDelayCount: paddingDelayIndices.size,
+            foldedDelayCount: foldedDelays.length,
+            compressionRatio: foldedDelays.length / Math.max(1, delays.length),
+        },
+    };
+}
+
 // Pass 2 — refine. Given a candidate period, sweep a small window
 // around it at sub-millisecond resolution and pick the exact period
 // whose residue std is lowest AND whose coverage is highest. Then
@@ -1392,6 +1605,7 @@ function detect20msPadding(delaysMs, opts) {
     const o = opts || {};
     const minSampleCount = Number.isFinite(o.minSampleCount) ? o.minSampleCount : 25;
     const snap = o.snap !== false; // default true
+    const useFolding = o.useFolding === true; // default false — preserve existing behavior
 
     const delays = Array.isArray(delaysMs)
         ? delaysMs.filter((d) => Number.isFinite(d) && d > 0)
@@ -1423,7 +1637,60 @@ function detect20msPadding(delaysMs, opts) {
         return Object.assign({}, notDetected);
     }
 
-    // Pass 2 — refine around the pass-1 winner.
+    // Pass 2 — try timeline folding first if enabled
+    if (useFolding) {
+        const folded = foldTimelineForPaddingAlignment(delays, pass1.periodMs, o);
+        if (folded.aligned) {
+            // Folding found strong padding alignment. Use its results.
+            // Convert folded result to the standard detect20msPadding shape.
+            const coverage = folded.foldStats
+                ? (folded.foldStats.paddedDelayCount / delays.length)
+                : 0;
+
+            // snappedDelaysMs: keep all delays but set padding ones to 0 (their residue)
+            // Actually, the existing snappedDelaysMs stores residues (delay - N*period)
+            // For folding, we don't have residues per se — we have phase alignment.
+            // Let's compute residues the same way as refineCadenceAtPeriod for consistency.
+            let snappedDelaysMs = null;
+            let keystrokeDelaysMs = null;
+            let paddedIntervals = folded.paddingDelayIndices || null;
+
+            if (snap) {
+                const periodMs = pass1.periodMs;
+                snappedDelaysMs = delays.map((d) => {
+                    const rounded = Math.round(d / periodMs);
+                    return d - rounded * periodMs;
+                });
+
+                // keystrokeDelaysMs from folding is already computed:
+                keystrokeDelaysMs = folded.foldedKeystrokeDelaysMs;
+            }
+
+            return {
+                detected: true,
+                periodMs: pass1.periodMs,
+                coverage,
+                residualStdMs: 0, // folding doesn't compute this; set to 0 to indicate confidence
+                dominantResidueMs: folded.dominantPhaseMs,
+                snappedDelaysMs,
+                keystrokeDelaysMs,
+                paddedIntervals,
+                pass1Candidate: pass1.periodMs,
+                pass1PeakRatio: pass1.peakRatio,
+                // Add folding-specific fields
+                foldingDominantPhaseMs: folded.dominantPhaseMs,
+                foldingDominantPhaseRatio: folded.dominantPhaseRatio,
+                foldingPaddingBins: folded.paddingBins,
+                foldingPhaseHistogram: folded.phaseHistogram,
+                foldingStats: folded.foldStats,
+                candidateScores: [],
+                rawDelays,
+                rawDelayCount: rawDelays.length,
+            };
+        }
+    }
+
+    // Fallback: Pass 2 — refine around the pass-1 winner using the original method.
     const refined = refineCadenceAtPeriod(delays, pass1.periodMs, o);
     if (!refined.detected) {
         return Object.assign({}, notDetected, {
@@ -1477,6 +1744,8 @@ module.exports = {
     // Obfuscation detection
     detect20msPadding,
     autoTunePaddingThreshold,
+    // Timeline folding for padding alignment
+    foldTimelineForPaddingAlignment,
     // Testing hooks
     _setModelForTesting(model) {
         CURRENT_MODEL = model;

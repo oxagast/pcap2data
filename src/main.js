@@ -6166,6 +6166,99 @@ ipcMain.handle("openssh-decode", async (_event, payload) => {
   });
 });
 
+// SSH Profile Management & Calibration IPC Handlers
+// (app, fs, path already imported at top of file)
+
+// Get the SSH profiles directory
+function getSshProfilesDir() {
+  const userDataPath = app.getPath("userData");
+  const profilesDir = path.join(userDataPath, "ssh-profiles");
+  if (!fs.existsSync(profilesDir)) {
+    fs.mkdirSync(profilesDir, { recursive: true });
+  }
+  return profilesDir;
+}
+
+// Load all SSH profiles
+ipcMain.handle("ssh-profiles-load", async () => {
+  try {
+    const profilesDir = getSshProfilesDir();
+    const profiles = [];
+    for (const file of fs.readdirSync(profilesDir)) {
+      if (file.endsWith(".json")) {
+        try {
+          const content = fs.readFileSync(path.join(profilesDir, file), "utf8");
+          const profile = JSON.parse(content);
+          profiles.push(profile);
+        } catch (e) {
+          console.warn(`Failed to load profile ${file}:`, e);
+        }
+      }
+    }
+    return { success: true, profiles };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Save an SSH profile
+ipcMain.handle("ssh-profiles-save", async (_event, profile) => {
+  try {
+    if (!profile || !profile.name) {
+      return { success: false, error: "Profile must have a name" };
+    }
+    const profilesDir = getSshProfilesDir();
+    const fileName = `${profile.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
+    const filePath = path.join(profilesDir, fileName);
+    fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+    return { success: true, path: filePath };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Delete an SSH profile
+ipcMain.handle("ssh-profiles-delete", async (_event, name) => {
+  try {
+    if (!name || name === "default") {
+      return { success: false, error: "Cannot delete default profile" };
+    }
+    const profilesDir = getSshProfilesDir();
+    const fileName = `${name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
+    const filePath = path.join(profilesDir, fileName);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return { success: true };
+    }
+    return { success: false, error: "Profile not found" };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Calibrate SSH from flow + transcript
+ipcMain.handle("ssh-calibrate", async (_event, payload) => {
+  try {
+    const { flow, transcriptText, clientName = "Custom" } = payload;
+    if (!flow || !transcriptText) {
+      return { success: false, error: "Flow and transcriptText are required" };
+    }
+
+    // Import the calibration module
+    const calibrationModule = require("./ui/decoders/ssh-keystrokes/calibration.js");
+
+    // Run calibration
+    const profile = await calibrationModule.calibrateFromFlowAndTranscript(flow, transcriptText, {
+      clientName,
+    });
+
+    return { success: true, profile };
+  } catch (e) {
+    console.error("[Main] SSH calibration failed:", e);
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle("quit-app", () => {
   app.quit();
 });

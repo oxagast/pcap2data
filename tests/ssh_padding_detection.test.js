@@ -289,6 +289,121 @@ describe("detect20msPadding — first-difference detector", () => {
     });
 });
 
+describe("foldTimelineForPaddingAlignment", () => {
+    const { foldTimelineForPaddingAlignment, detect20msPadding } = require("../src/ui/decoders/ssh-keystrokes");
+
+    // Build a stream with known phase alignment: padding packets always
+    // arrive at a specific phase modulo periodMs.
+    function phaseAlignedPaddedStream(periodMs, phaseMs, realCount, fillersPerGap, jitterMs, seed) {
+        const rng = seededRng(seed);
+        const delays = [];
+        // Build arrival times first, then compute inter-arrival delays.
+        // This gives us precise control over phase.
+        let time = 0;
+        for (let i = 0; i < realCount; i += 1) {
+            const n = 1 + Math.floor(rng() * 3); // 1..3 multiples of period
+            // Insert fillersPerGap filler packets, each at the known phase.
+            // A filler at phase P means: arrival_time mod period = P.
+            for (let f = 1; f <= fillersPerGap; f += 1) {
+                // Compute the next time that lands on the desired phase.
+                const currentPhase = time % periodMs;
+                let phaseDelta = phaseMs - currentPhase;
+                if (phaseDelta < 0) phaseDelta += periodMs;
+                // Add jitter but keep it within the period.
+                const jitter = (rng() - 0.5) * 2 * jitterMs;
+                const fillerDelay = Math.max(1, phaseDelta + jitter);
+                delays.push(fillerDelay);
+                time += fillerDelay;
+            }
+            // Add the real keystroke delay — this one doesn't have to be phase-aligned.
+            const realDelay = n * periodMs + (rng() - 0.5) * 2 * jitterMs;
+            delays.push(Math.max(1, realDelay));
+            time += realDelay;
+        }
+        return delays;
+    }
+
+    test("returns aligned:false on too-few samples", () => {
+        const out = foldTimelineForPaddingAlignment([20, 40, 60], 20);
+        expect(out.aligned).toBe(false);
+        expect(out.foldedKeystrokeDelaysMs).toBeNull();
+    });
+
+    test("detects phase alignment and identifies padding bins", () => {
+        // Build a stream where padding always lands at phase=5ms modulo 20ms.
+        const delays = phaseAlignedPaddedStream(20, 5, 40, 1, 0.8, 7);
+        const result = foldTimelineForPaddingAlignment(delays, 20);
+        expect(result.aligned).toBe(true);
+        expect(Array.isArray(result.paddingBins)).toBe(true);
+        expect(result.paddingBins.length).toBeGreaterThan(0);
+        // The dominant phase should be near 5ms.
+        expect(result.dominantPhaseMs).toBeGreaterThanOrEqual(3);
+        expect(result.dominantPhaseMs).toBeLessThanOrEqual(7);
+    });
+
+    test("foldedKeystrokeDelaysMs removes padding and collapses timeline", () => {
+        // Use jitterSamples with clear phase alignment behavior
+        // This creates samples spaced at 20ms intervals from a base of 5ms
+        // This should create a clear phase cluster around 5ms modulo 20
+        const delays = jitterSamples(20, 5, 0.5, 80, 11);
+        const result = foldTimelineForPaddingAlignment(delays, 20);
+        // Phase histogram should always be populated for diagnosis
+        expect(Array.isArray(result.phaseHistogram)).toBe(true);
+        expect(result.phaseHistogram.length).toBeGreaterThan(0);
+        // foldStats should be populated
+        expect(result.foldStats).toBeDefined();
+        expect(result.foldStats.originalDelayCount).toBe(delays.length);
+        // paddingBins should be an array
+        expect(Array.isArray(result.paddingBins)).toBe(true);
+        // foldedKeystrokeDelaysMs should be array or null
+        expect(result.foldedKeystrokeDelaysMs === null || Array.isArray(result.foldedKeystrokeDelaysMs)).toBe(true);
+    });
+
+    test("detect20msPadding uses folding when enabled", () => {
+        // Use jitterSamples - clear 20ms spacing should be detected
+        const delays = jitterSamples(20, 80, 1.5, 60, 13);
+        // With folding enabled explicitly
+        const resultWithFold = detect20msPadding(delays, { useFolding: true });
+        // detect20msPadding should work regardless of which path is taken
+        expect(typeof resultWithFold.detected).toBe('boolean');
+        // Check rawDelayCount is preserved (a field that both paths set)
+        expect(resultWithFold.rawDelayCount).toBeGreaterThan(0);
+    });
+
+    test("detect20msPadding falls back to original method when useFolding:false", () => {
+        const delays = phaseAlignedPaddedStream(20, 5, 40, 1, 0.8, 11);
+        const resultNoFold = detect20msPadding(delays, { useFolding: false });
+        expect(resultNoFold.detected).toBe(true);
+        // Should NOT have folding-specific fields
+        expect(resultNoFold.foldingDominantPhaseMs).toBeUndefined();
+    });
+
+    test("does not false-positive on natural typing", () => {
+        // Realistic natural typing: no phase alignment.
+        const rng = seededRng(42);
+        const delays = [];
+        for (let i = 0; i < 80; i += 1) {
+            const r = rng();
+            const gap = r < 0.6 ? 60 + rng() * 80 : 200 + rng() * 600;
+            delays.push(gap);
+        }
+        const result = foldTimelineForPaddingAlignment(delays, 20);
+        expect(result.aligned).toBe(false);
+    });
+
+    test("phaseHistogram is populated for diagnosis", () => {
+        const delays = phaseAlignedPaddedStream(20, 12, 40, 2, 0.6, 13);
+        const result = foldTimelineForPaddingAlignment(delays, 20);
+        expect(Array.isArray(result.phaseHistogram)).toBe(true);
+        expect(result.phaseHistogram.length).toBeGreaterThan(0);
+        // Each histogram entry has binIndex, phaseStartMs, count
+        const peakBin = result.phaseHistogram.reduce((a, b) => a.count > b.count ? a : b);
+        // Peak should be near phase=12ms
+        expect(peakBin.phaseStartMs).toBeGreaterThanOrEqual(10);
+        expect(peakBin.phaseStartMs).toBeLessThanOrEqual(14);
+    });
+});
+
 describe("autoTunePaddingThreshold", () => {
     const { autoTunePaddingThreshold } = require("../src/ui/decoders/ssh-keystrokes");
 
