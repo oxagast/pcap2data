@@ -1873,41 +1873,56 @@ function createCryptPanel({
         // Fallback calculation: if estimatedCommandLength is 1 or invalid,
         // use (total c2s keystrokes - backspaces) / number of chunks as average command length
         if (!Number.isFinite(estimatedCommandLength) || estimatedCommandLength <= 1) {
-          // Get number of chunks (commands) from findReturnChunks
-          let numChunks = 0;
+          // Get chunks (commands) from findReturnChunks
+          let chunks = [];
           if (peeledIndexed) {
-            const chunks = findReturnChunks(peeledIndexed);
-            numChunks = chunks.length;
+            chunks = findReturnChunks(peeledIndexed);
           }
-          if (numChunks <= 0) {
-            const chunks = findReturnChunks(delaysWithIdx);
-            numChunks = chunks.length;
+          if (chunks.length <= 0) {
+            chunks = findReturnChunks(delaysWithIdx);
           }
+          const numChunks = chunks.length;
 
           // Only use fallback if we have more than one chunk (single chunk works correctly)
           if (numChunks > 1) {
-            const SMALL_PACKET_BYTES = 100;
-            const c2sPackets = flow.packets.filter(p => p.direction === "c2s");
-            let totalC2sKeystrokes = 0;
+            // Define maximum command length threshold
+            const MAX_COMMAND_LENGTH = 100;
+            const NOISE_THRESHOLD_PERCENT = 75;
 
-            for (const pkt of c2sPackets) {
-              try {
-                const pinfo = getPacketInfo(pkt.packet);
-                const pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
-                if (Number.isFinite(pktLen) && pktLen > 0 && pktLen <= SMALL_PACKET_BYTES) {
-                  totalC2sKeystrokes += 1;
-                }
-              } catch (_e) {
-                // Ignore packets we can't parse
+            // Count how many chunks exceed the maximum length
+            let chunksOverMax = 0;
+            for (const chunk of chunks) {
+              if (chunk.keystrokeCount > MAX_COMMAND_LENGTH) {
+                chunksOverMax += 1;
               }
             }
 
-            // If we have c2s keystrokes, calculate average command length
-            if (totalC2sKeystrokes > 0) {
-              const netKeystrokes = Math.max(1, totalC2sKeystrokes - backspaceHints.count);
-              // Divide by number of chunks to get average command length, clamp to reasonable range (5-100)
-              const avgCmdLength = Math.max(5, Math.min(100, Math.round(netKeystrokes / numChunks)));
-              estimatedCommandLength = avgCmdLength;
+            // Check if over 75% of chunks are over maximum length (too much noise)
+            const percentOverMax = (chunksOverMax / numChunks) * 100;
+            if (percentOverMax <= NOISE_THRESHOLD_PERCENT) {
+              const SMALL_PACKET_BYTES = 100;
+              const c2sPackets = flow.packets.filter(p => p.direction === "c2s");
+              let totalC2sKeystrokes = 0;
+
+              for (const pkt of c2sPackets) {
+                try {
+                  const pinfo = getPacketInfo(pkt.packet);
+                  const pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
+                  if (Number.isFinite(pktLen) && pktLen > 0 && pktLen <= SMALL_PACKET_BYTES) {
+                    totalC2sKeystrokes += 1;
+                  }
+                } catch (_e) {
+                  // Ignore packets we can't parse
+                }
+              }
+
+              // If we have c2s keystrokes, calculate average command length
+              if (totalC2sKeystrokes > 0) {
+                const netKeystrokes = Math.max(1, totalC2sKeystrokes - backspaceHints.count);
+                // Divide by number of chunks to get average command length, clamp to reasonable range (5-100)
+                const avgCmdLength = Math.max(5, Math.min(MAX_COMMAND_LENGTH, Math.round(netKeystrokes / numChunks)));
+                estimatedCommandLength = avgCmdLength;
+              }
             }
           }
         }
