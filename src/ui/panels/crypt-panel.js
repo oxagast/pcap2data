@@ -2207,11 +2207,22 @@ function createCryptPanel({
                 }
               }
 
+              // Get Viterbi candidates as hintText for ngramSimilarity matching
+              // This lets Viterbi influence (but not dictate) Markov candidates
+              // by boosting corpus commands that share n-grams with the timing decode
+              const viterbiHintText = (cached.candidates || [])
+                .slice(0, 8)
+                .map((c) => (c && c.text) ? c.text : "")
+                .filter((t) => t.length > 0)
+                .join(" ");
+
               // Use rankCorpusWithSlotFilling instead of raw rankCorpus:
               // - Returns actual corpus lines, not generated garbage
               // - Already sorted by frequency + Markov probability
               // - Length-aware filtering with slot flexibility
               // - FILLS SLOTS: file.txt → actual filenames, example.com → actual hosts/IPs
+              // - Viterbi fallback: when no artifact matches a slot's length,
+              //   extract characters from the Viterbi decode at that position
               const beam = (
                 sshMarkovModule
                 && artifactStore
@@ -2222,18 +2233,10 @@ function createCryptPanel({
                   artifactStore,
                   targetLen,
                   5,  // tolerance
-                  100  // top N
+                  100,  // top N
+                  { viterbiText: viterbiHintText || null }
                 )
                 : model.rankCorpus(targetLen, 5, 100);
-
-              // Get Viterbi candidates as hintText for ngramSimilarity matching
-              // This lets Viterbi influence (but not dictate) Markov candidates
-              // by boosting corpus commands that share n-grams with the timing decode
-              const viterbiHintText = (cached.candidates || [])
-                .slice(0, 8)
-                .map((c) => (c && c.text) ? c.text : "")
-                .filter((t) => t.length > 0)
-                .join(" ");
 
               // Re-rank with timing + Viterbi hint for the top-N using the
               // peeled delays so candidates that match the user's
@@ -2303,7 +2306,9 @@ function createCryptPanel({
 
                 // Use rankCorpusWithSlotFilling for per-chunk candidates too
                 // This fills placeholders like "file.txt", "example.com" with
-                // actual artifacts from the capture (IPs, hostnames, filenames)
+                // actual artifacts from the capture (IPs, hostnames, filenames).
+                // When no artifact matches a slot's length, fall back to the
+                // per-chunk Viterbi decode characters (sanitized for shell-safety).
                 const segBeam = (
                   sshMarkovModule
                   && artifactStore
@@ -2314,7 +2319,8 @@ function createCryptPanel({
                     artifactStore,
                     Math.max(markovMinCommandLength, ch.keystrokeCount),
                     3,  // tolerance
-                    20  // top N
+                    20,  // top N
+                    { viterbiText: chunkHintText || null }
                   )
                   : model.rankCorpus(
                     Math.max(markovMinCommandLength, ch.keystrokeCount),
