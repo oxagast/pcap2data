@@ -895,7 +895,7 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
     const refineStep = Number.isFinite(opts.refineStepMs) ? opts.refineStepMs : 0.5;
     const refineWindow = Number.isFinite(opts.refineWindowMs) ? opts.refineWindowMs : 3;
     const toleranceBase = Number.isFinite(opts.toleranceMs) ? opts.toleranceMs : null;
-    const minCoverage = Number.isFinite(opts.minCoverage) ? opts.minCoverage : 0.5;
+    const minCoverage = Number.isFinite(opts.minCoverage) ? opts.minCoverage : 0.75;
     const stdTighteningFactor = Number.isFinite(opts.stdTighteningFactor)
         ? opts.stdTighteningFactor
         : 0.55;
@@ -1066,7 +1066,7 @@ function autoTunePaddingThreshold(delaysMs, opts) {
         : defaultCoverage;
     const maxIterations = Math.max(1, Number.isFinite(o.maxIterations) ? o.maxIterations : 12);
     const returnAll = o.returnAll === true;
-    const userMinCoverage = Number.isFinite(o.minCoverage) ? o.minCoverage : 0.5;
+    const userMinCoverage = Number.isFinite(o.minCoverage) ? o.minCoverage : 0.75;
 
     const delays = Array.isArray(delaysMs)
         ? delaysMs.filter((d) => Number.isFinite(d) && d > 0)

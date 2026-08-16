@@ -1078,9 +1078,9 @@ No decrypted TLS/SSL output yet.</pre>
                   <label class="crypt-key-type-label" for="crypt-openssh-deobf-coverage">
                     Coverage threshold
                   </label>
-                  <input type="range" id="crypt-openssh-deobf-coverage" min="0.30" max="0.90" step="0.05" value="0.50"
+                  <input type="range" id="crypt-openssh-deobf-coverage" min="0.30" max="0.90" step="0.05" value="0.75"
                     title="Minimum cadence coverage (fraction of intervals matching the cadence) required before peeling kicks in. Lower = more aggressive peeling; higher = more conservative. Only used when Auto-tune is disabled.">
-                  <span id="crypt-openssh-deobf-coverage-label" class="crypt-openssh-deobf-value">0.50</span>
+                  <span id="crypt-openssh-deobf-coverage-label" class="crypt-openssh-deobf-value">0.75</span>
                 </div>
                 <div class="crypt-section-title crypt-openssh-deobf-title">
                   Markov Command Ranking Tuning
@@ -1094,15 +1094,15 @@ No decrypted TLS/SSL output yet.</pre>
                   <label class="crypt-key-type-label" for="crypt-openssh-markov-conciseness">
                     Short command bonus
                   </label>
-                  <input type="range" id="crypt-openssh-markov-conciseness" min="0.8" max="4.0" step="0.1" value="1.7"
+                  <input type="range" id="crypt-openssh-markov-conciseness" min="0.8" max="4.0" step="0.1" value="3.6"
                     title="Multiplier for the conciseness bonus given to short slotless commands (ls, pwd, cd, etc.) vs slot-containing templates. Higher = short commands favored more.">
-                  <span id="crypt-openssh-markov-conciseness-label" class="crypt-openssh-deobf-value">1.7x</span>
+                  <span id="crypt-openssh-markov-conciseness-label" class="crypt-openssh-deobf-value">3.6x</span>
                   <label class="crypt-key-type-label" for="crypt-openssh-markov-length-bonus">
                     Length match bonus
                   </label>
-                  <input type="range" id="crypt-openssh-markov-length-bonus" min="0.5" max="4.0" step="0.1" value="2.6"
+                  <input type="range" id="crypt-openssh-markov-length-bonus" min="0.5" max="4.0" step="0.1" value="3.3"
                     title="Multiplier for the length-matching bonuses (being within tolerance of target length, having slots for flexible length). Higher = length proximity is more important.">
-                  <span id="crypt-openssh-markov-length-bonus-label" class="crypt-openssh-deobf-value">2.6x</span>
+                  <span id="crypt-openssh-markov-length-bonus-label" class="crypt-openssh-deobf-value">3.3x</span>
                 </div>
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
                   <div class="crypt-openssh-insight-header">

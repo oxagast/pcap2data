@@ -1515,7 +1515,7 @@ function createCryptPanel({
       enabled: deobfEnableEl ? !!deobfEnableEl.checked : true,
       autoTuneEnabled: deobfAutoTuneEl ? !!deobfAutoTuneEl.checked : true,
       mode: deobfModeEl ? deobfModeEl.value : "auto",
-      minCoverage: deobfCoverageEl ? Number(deobfCoverageEl.value) : 0.5,
+      minCoverage: deobfCoverageEl ? Number(deobfCoverageEl.value) : 0.75,
     };
     if (deobfCoverageEl && deobfCoverageLabelEl) {
       deobfCoverageLabelEl.textContent = Number(deobfCoverageEl.value).toFixed(2);

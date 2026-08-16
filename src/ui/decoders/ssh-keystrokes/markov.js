@@ -15,7 +15,7 @@ const _markovConfig = {
     // At 1.0 (default), very short commands (1-5 chars) get +1.2 bonus.
     // At 2.0, they'd get +2.4 bonus.
     // Tuned default: 1.7 (favors short commands moderately)
-    concisenessBonusMultiplier: 1.7,
+    concisenessBonusMultiplier: 3.6,
 
     // Length bonus multiplier for target-length proximity matching.
     // Applied to:
@@ -24,7 +24,7 @@ const _markovConfig = {
     // Default 1.0 means bonuses are applied as-is.
     // At 2.0, the bonuses are doubled, making length-matching more important.
     // Tuned default: 2.6 (strongly favors commands that match the target length)
-    lengthBonusMultiplier: 2.6,
+    lengthBonusMultiplier: 3.3,
 };
 
 const BOS = "\u0002";
