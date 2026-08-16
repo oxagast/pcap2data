@@ -35,6 +35,18 @@ const EOS = "\u0003";
 // be 1-64 chars without incurring a strict total-length mismatch penalty.
 const SLOT_MARKER = "\u25c6";  // ◆ - diamond marker for slots
 
+// Escape a string so it can be safely embedded in a RegExp pattern.
+// Artifact values (IPs, hostnames, filenames) often contain regex
+// metacharacters like `.` (literal period in 192.168.1.1), `-`, `+`,
+// `?`, `(`, `)`, etc. that would otherwise be interpreted as regex
+// syntax. Use this helper whenever building a RegExp from user-supplied
+// or capture-derived text (artifact values, corpus commands, etc.).
+function escapeRegex(str) {
+    if (typeof str !== "string") return "";
+    // Escape all regex metacharacters: . + ? ^ $ { } ( ) | [ ] \
+    return str.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // Slot patterns: these define common placeholder patterns in the corpus.
 // During scoring, if a candidate matches the "skeleton" of a corpus command
 // but has different content in a slot position, it doesn't get penalized
@@ -2385,6 +2397,9 @@ module.exports = {
     computeLineConfidence,
     computeSessionConfidence,
     computeDelayStats,
+    // Regex safety helper - escape user/capture-derived strings before
+    // embedding in a RegExp pattern (so "." in 192.168.1.1 stays literal).
+    escapeRegex,
     // Runtime config
     setMarkovConfig,
     getMarkovConfig,
