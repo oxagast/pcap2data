@@ -40,25 +40,29 @@ const SLOT_MARKER = "\u25c6";  // ◆ - diamond marker for slots
 // but has different content in a slot position, it doesn't get penalized
 // for total-length mismatch (only the character transitions matter).
 const SLOT_PATTERNS = [
-    // Filename-like placeholders
-    { pattern: /\bfile\.(txt|log|conf|py|js|json|md|sh|bak)\b/gi, type: "filename" },
-    { pattern: /\b(file|filename|target|link|backup)\b/gi, type: "filename", wordOnly: true },
-    // Directory placeholders  
-    { pattern: /\b(directory|dir|src|build|logs|tmp)\b/gi, type: "directory", wordOnly: true },
-    // User@host placeholders
-    { pattern: /\b(user|root)@(server|host)\b/gi, type: "user_at_host" },
-    { pattern: /\b(user|root)@[\d\.]+/gi, type: "user_at_host" },  // user@192.168.1.1
-    // Hostname/IP placeholders
-    { pattern: /\b(server|host|localhost)\b/gi, type: "hostname", wordOnly: true },
-    { pattern: /\bexample\.com\b/gi, type: "hostname" },
-    // Path placeholders
-    { pattern: /~\/\.ssh\/[^ \t]+/gi, type: "path" },  // ~/.ssh/id_rsa
-    { pattern: /\/(var|tmp|etc|usr|opt|root|home)\//gi, type: "path" },
+    // More specific patterns first to avoid overlapping issues
     // URL placeholders
     { pattern: /https?:\/\/[^\s]+/gi, type: "url" },
+    // S3 path placeholders
+    { pattern: /s3:\/\/[^\s]+/gi, type: "s3path" },
+    // SSH config path placeholders
+    { pattern: /~\/\.ssh\/[^ \t]+/gi, type: "path" },  // ~/.ssh/id_rsa
+    // User@host placeholders (more specific first)
+    { pattern: /\b(user|root)@[\d\.]+/gi, type: "user_at_host" },  // user@192.168.1.1
+    { pattern: /\b(user|root)@(server|host)\b/gi, type: "user_at_host" },
+    // Full filename placeholders with extensions (specific first)
+    { pattern: /\b(file|filename|target|link|backup)\.(txt|log|conf|config|py|js|json|md|sh|bak|yaml|yml|xml|html|css|csv|tsv|doc|docx|xls|xlsx|pdf|zip|tar|gz|bz2|7z|rar)\b/gi, type: "filename" },
+    // Arbitrary filename-like patterns (any word followed by common extension)
+    { pattern: /\b[a-zA-Z0-9_-]+\.(txt|log|conf|config|py|js|json|md|sh|bak|yaml|yml|xml|html|css|csv|tsv|doc|docx|xls|xlsx|pdf|zip|tar|gz|bz2|7z|rar)\b/gi, type: "filename" },
+    // Path placeholders with directory prefixes
+    { pattern: /\/(var|tmp|etc|usr|opt|root|home|srv|mnt|media|proc|sys|dev)\/[^ \t]*/gi, type: "path" },
+    // Hostname/IP placeholders
+    { pattern: /\bexample\.com\b/gi, type: "hostname" },
+    { pattern: /\b(server|host|localhost|hostname)\b/gi, type: "hostname", wordOnly: true },
+    // Directory placeholders (word only)
+    { pattern: /\b(directory|dir|src|build|logs|tmp|test|dist|node_modules|__pycache__|cache|config|data|lib|bin|include)\b/gi, type: "directory", wordOnly: true },
     // Bucket/resource placeholders (AWS/S3)
     { pattern: /\bbucket\b/gi, type: "bucket", wordOnly: true },
-    { pattern: /s3:\/\/[^\s]+/gi, type: "s3path" },
 ];
 
 // Fixed structure tokens: these are part of the command "skeleton" that should match.
@@ -189,32 +193,52 @@ function compareToTemplate(candidate, corpusCmd) {
     // Check structure match
     const skeletonMatch = matchesSkeleton(candidate, corpusCmd);
 
-    // Check for slot patterns in both
-    let hasSlots = false;
+    // First, detect all slots in corpusCmd without overlaps
+    // (using the same logic as detectSlotsInCommand)
+    const allMatches = [];
     for (const sp of SLOT_PATTERNS) {
-        if (sp.pattern.test(corpusCmd)) {
-            hasSlots = true;
-            sp.pattern.lastIndex = 0;  // reset
-            break;
+        const pattern = sp.pattern;
+        pattern.lastIndex = 0; // reset before each use
+
+        let match;
+        while ((match = pattern.exec(corpusCmd)) !== null) {
+            allMatches.push({
+                type: sp.type,
+                start: match.index,
+                end: match.index + match[0].length,
+                match: match[0],
+                length: match[0].length,
+            });
         }
     }
 
-    // Calculate expected fixed length (rough estimate)
-    let fixedLength = corpusLen;
-    if (hasSlots) {
-        // Subtract estimated slot lengths from corpus command
-        for (const sp of SLOT_PATTERNS) {
-            const matches = corpusCmd.match(sp.pattern);
-            if (matches) {
-                for (const m of matches) {
-                    fixedLength -= m.length;
-                }
-            }
-            sp.pattern.lastIndex = 0;
+    // Sort by start position, then by length descending
+    allMatches.sort((a, b) => {
+        if (a.start !== b.start) return a.start - b.start;
+        return b.length - a.length;
+    });
+
+    // Remove overlapping matches
+    const nonOverlappingSlots = [];
+    let lastEnd = -1;
+    for (const m of allMatches) {
+        if (m.start >= lastEnd) {
+            nonOverlappingSlots.push(m);
+            lastEnd = m.end;
         }
-        // Add back minimum slot content
-        fixedLength += 1;  // at least 1 char per slot
     }
+
+    const hasSlots = nonOverlappingSlots.length > 0;
+
+    // Calculate fixed length by subtracting only non-overlapping slot lengths
+    let fixedLength = corpusLen;
+    let numSlots = 0;
+    for (const slot of nonOverlappingSlots) {
+        fixedLength -= slot.length;
+        numSlots += 1;
+    }
+    // Add back minimum slot content (1 char per slot)
+    fixedLength += numSlots;
 
     return {
         skeletonMatch,
@@ -222,6 +246,7 @@ function compareToTemplate(candidate, corpusCmd) {
         hasSlots,
         corpusLength: corpusLen,
         candidateLength: candLen,
+        slotCount: numSlots,
     };
 }
 
