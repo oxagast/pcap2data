@@ -1166,6 +1166,8 @@ function createCryptPanel({
       "crypt-openssh-candidates",
       "crypt-openssh-chart",
       "crypt-openssh-chart-legend",
+      "crypt-openssh-folding-chart",
+      "crypt-openssh-folding-legend",
       "crypt-openssh-primary-text",
       "crypt-openssh-primary-confidence",
       "crypt-openssh-primary-kind",
@@ -1215,6 +1217,9 @@ function createCryptPanel({
     if (timelineTitleEl) timelineTitleEl.hidden = true;
     if (timelineEl) timelineEl.hidden = true;
     if (markovOutputEl) markovOutputEl.hidden = true;
+    // Hide the folding section too
+    const foldingSectionEl = document.getElementById("crypt-openssh-folding-section");
+    if (foldingSectionEl) foldingSectionEl.hidden = true;
     // Do NOT clear sshLastAnalysisByFlowKey() here — the cache should persist
     // when switching between flows so users don't have to re-analyze each time.
     // The cache is only cleared in refreshSshEncounteredFlows() when a new
@@ -1248,6 +1253,8 @@ function createCryptPanel({
       // Pass paddingDetection from cache for yellow obfuscation ticks
       const paddingFromCache = cached?.paddingDetection || null;
       renderSshChartWithSeries(series, delays, decoder, paddingFromCache);
+      // Also render the timeline folding chart
+      renderSshFoldingChart(delays, decoder, paddingFromCache);
     }
 
     // Re-render candidates
@@ -1584,6 +1591,274 @@ function createCryptPanel({
         lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
       });
     }
+
+    // ── Calibration & Profile Management ──────────────────────────────
+    const profileSelectEl = document.getElementById("crypt-openssh-profile-select");
+    const calibrateBtnEl = document.getElementById("crypt-openssh-calibrate-btn");
+    const saveProfileBtnEl = document.getElementById("crypt-openssh-save-profile-btn");
+    const deleteProfileBtnEl = document.getElementById("crypt-openssh-delete-profile-btn");
+    const transcriptFileEl = document.getElementById("crypt-openssh-transcript-file");
+    const calibrationStatusEl = document.getElementById("crypt-openssh-calibration-status");
+    const calibrationDetailsEl = document.getElementById("crypt-openssh-calibration-details");
+    const calDigraphsEl = document.getElementById("crypt-openssh-cal-digraphs");
+    const calAlignmentsEl = document.getElementById("crypt-openssh-cal-alignments");
+    const calCoverageEl = document.getElementById("crypt-openssh-cal-coverage");
+    const calAccuracyEl = document.getElementById("crypt-openssh-cal-accuracy");
+
+    let sshProfiles = []; // Loaded profiles
+    let currentProfile = null; // Currently selected profile
+
+    // Load profiles from disk
+    async function loadSshProfiles() {
+      try {
+        // In renderer, we need to use IPC to access filesystem
+        if (window.cryptapi && typeof window.cryptapi.loadSshProfiles === "function") {
+          const result = await window.cryptapi.loadSshProfiles();
+          sshProfiles = result.success ? result.profiles : [];
+        } else {
+          // Fallback: try to load from localStorage (for testing)
+          const stored = localStorage.getItem("ssh-profiles");
+          if (stored) sshProfiles = JSON.parse(stored);
+        }
+        refreshProfileSelect();
+      } catch (e) {
+        console.warn("[Crypt/OpenSSH] Failed to load profiles:", e);
+        sshProfiles = [];
+        refreshProfileSelect();
+      }
+    }
+
+    function refreshProfileSelect() {
+      if (!profileSelectEl) return;
+      const currentValue = profileSelectEl.value;
+      profileSelectEl.innerHTML = '<option value="default">Default (built-in)</option>';
+      for (const profile of sshProfiles) {
+        const opt = document.createElement("option");
+        opt.value = profile.name;
+        opt.textContent = `${profile.name} (${profile.clientName || "Unknown"})`;
+        profileSelectEl.appendChild(opt);
+      }
+      // Restore selection if possible
+      if (sshProfiles.some(p => p.name === currentValue)) {
+        profileSelectEl.value = currentValue;
+      } else {
+        profileSelectEl.value = "default";
+      }
+      updateDeleteButtonState();
+    }
+
+    function updateDeleteButtonState() {
+      if (deleteProfileBtnEl) {
+        deleteProfileBtnEl.disabled = profileSelectEl.value === "default";
+      }
+    }
+
+    // Apply a profile's settings to the UI controls
+    function applyProfile(profile) {
+      if (!profile) return;
+      currentProfile = profile;
+
+      // Apply runtime settings to UI
+      if (profile.runtime) {
+        if (deobfCoverageEl && profile.runtime.minCoverage !== undefined) {
+          deobfCoverageEl.value = profile.runtime.minCoverage;
+          if (deobfCoverageLabelEl) deobfCoverageLabelEl.textContent = profile.runtime.minCoverage.toFixed(2);
+          deobfSettings.minCoverage = profile.runtime.minCoverage;
+        }
+        if (markovConcisenessEl && profile.runtime.concisenessBonusMultiplier !== undefined) {
+          markovConcisenessEl.value = profile.runtime.concisenessBonusMultiplier;
+          if (markovConcisenessLabelEl) markovConcisenessLabelEl.textContent = `${profile.runtime.concisenessBonusMultiplier.toFixed(1)}x`;
+          markovSettings.concisenessBonusMultiplier = profile.runtime.concisenessBonusMultiplier;
+        }
+        if (markovLengthBonusEl && profile.runtime.lengthBonusMultiplier !== undefined) {
+          markovLengthBonusEl.value = profile.runtime.lengthBonusMultiplier;
+          if (markovLengthBonusLabelEl) markovLengthBonusLabelEl.textContent = `${profile.runtime.lengthBonusMultiplier.toFixed(1)}x`;
+          markovSettings.lengthBonusMultiplier = profile.runtime.lengthBonusMultiplier;
+        }
+      }
+
+      // Apply empirical digraphs to decoder model
+      if (profile.empirical && decoder && typeof decoder.loadQwertyModel === "function") {
+        const model = {
+          ...decoder.loadQwertyModel({}),
+          empirical: { ...decoder.loadQwertyModel({}).empirical, ...profile.empirical },
+        };
+        decoder.loadQwertyModel(model);
+      }
+
+      // Show calibration details if available
+      if (profile.calibration && calibrationDetailsEl) {
+        calibrationDetailsEl.hidden = false;
+        if (calDigraphsEl) calDigraphsEl.textContent = profile.calibration.digraphsLearned || "—";
+        if (calAlignmentsEl) calAlignmentsEl.textContent = profile.calibration.totalAlignments || "—";
+        if (calCoverageEl) calCoverageEl.textContent = profile.calibration.coverageThreshold ? profile.calibration.coverageThreshold.toFixed(2) : "—";
+        if (calAccuracyEl) calAccuracyEl.textContent = profile.calibration.paddingAccuracy ? (profile.calibration.paddingAccuracy * 100).toFixed(1) + "%" : "—";
+      } else if (calibrationDetailsEl) {
+        calibrationDetailsEl.hidden = true;
+      }
+    }
+
+    // Profile selection change
+    if (profileSelectEl) {
+      profileSelectEl.addEventListener("change", () => {
+        const selectedName = profileSelectEl.value;
+        if (selectedName === "default") {
+          currentProfile = null;
+          if (calibrationDetailsEl) calibrationDetailsEl.hidden = true;
+        } else {
+          const profile = sshProfiles.find(p => p.name === selectedName);
+          if (profile) applyProfile(profile);
+        }
+        updateDeleteButtonState();
+      });
+    }
+
+    // Calibrate button: load transcript, run calibration on selected flow
+    if (calibrateBtnEl) {
+      calibrateBtnEl.addEventListener("click", async () => {
+        const file = transcriptFileEl?.files?.[0];
+        if (!file) {
+          if (calibrationStatusEl) calibrationStatusEl.textContent = "Please select a transcript file first";
+          return;
+        }
+        if (!sshSelectedFlowKey) {
+          if (calibrationStatusEl) calibrationStatusEl.textContent = "Please select an SSH flow first";
+          return;
+        }
+
+        const flow = sshFlows.find(f => f.flowKey === sshSelectedFlowKey);
+        if (!flow) {
+          if (calibrationStatusEl) calibrationStatusEl.textContent = "Selected flow not found";
+          return;
+        }
+
+        if (calibrationStatusEl) calibrationStatusEl.textContent = "Reading transcript…";
+        const transcriptText = await file.text();
+
+        if (calibrationStatusEl) calibrationStatusEl.textContent = "Calibrating…";
+        try {
+          // Use the calibration module via IPC (main process has fs access)
+          if (window.cryptapi && typeof window.cryptapi.calibrateSsh === "function") {
+            const result = await window.cryptapi.calibrateSsh({
+              flow,
+              transcriptText,
+              clientName: "Custom",
+            });
+
+            if (!result.success) {
+              throw new Error(result.error || "Calibration failed");
+            }
+
+            const profile = result.profile;
+
+            // Save profile
+            if (window.cryptapi && typeof window.cryptapi.saveSshProfile === "function") {
+              await window.cryptapi.saveSshProfile(profile);
+            }
+
+            // Reload profiles and select the new one
+            await loadSshProfiles();
+            profileSelectEl.value = profile.name;
+            applyProfile(profile);
+
+            if (calibrationStatusEl) calibrationStatusEl.textContent = `Calibration complete: ${profile.calibration.digraphsLearned} digraphs learned, coverage=${profile.calibration.coverageThreshold.toFixed(2)}`;
+          } else {
+            // Fallback: run in renderer (limited)
+            if (calibrationStatusEl) calibrationStatusEl.textContent = "Calibration requires main process IPC (not available in this context)";
+          }
+        } catch (e) {
+          console.error("[Crypt/OpenSSH] Calibration failed:", e);
+          if (calibrationStatusEl) calibrationStatusEl.textContent = `Calibration failed: ${e.message}`;
+        }
+      });
+    }
+
+    // Save current settings as a profile
+    if (saveProfileBtnEl) {
+      saveProfileBtnEl.addEventListener("click", async () => {
+        const name = prompt("Enter profile name:");
+        if (!name) return;
+
+        const profile = {
+          version: 2,
+          name,
+          clientName: "Custom",
+          createdAt: new Date().toISOString(),
+          source: {
+            flowKey: sshSelectedFlowKey,
+            packetCount: sshFlows.find(f => f.flowKey === sshSelectedFlowKey)?.packets.length || 0,
+            commandCount: 0,
+            alignmentCount: 0,
+          },
+          layout: "qwerty",
+          baselines: decoder?.loadQwertyModel({})?.baselines || {},
+          empirical: decoder?.loadQwertyModel({})?.empirical || {},
+          coordinateIndex: decoder?.loadQwertyModel({})?.coordinateIndex || {},
+          alphabet: DECODER_ALPHABET,
+          calibration: {
+            digraphsLearned: 0,
+            totalAlignments: 0,
+            coverageThreshold: deobfSettings.minCoverage,
+            paddingAccuracy: 0,
+            markovBonuses: {
+              concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
+              lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+            },
+          },
+          runtime: {
+            minCoverage: deobfSettings.minCoverage,
+            concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
+            lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+          },
+        };
+
+        try {
+          if (window.cryptapi && typeof window.cryptapi.saveSshProfile === "function") {
+            const result = await window.cryptapi.saveSshProfile(profile);
+            if (!result.success) throw new Error(result.error || "Save failed");
+          } else {
+            // Fallback to localStorage
+            sshProfiles.push(profile);
+            localStorage.setItem("ssh-profiles", JSON.stringify(sshProfiles));
+          }
+          await loadSshProfiles();
+          profileSelectEl.value = name;
+          applyProfile(profile);
+          if (calibrationStatusEl) calibrationStatusEl.textContent = `Profile "${name}" saved`;
+        } catch (e) {
+          console.error("[Crypt/OpenSSH] Save profile failed:", e);
+          if (calibrationStatusEl) calibrationStatusEl.textContent = `Save failed: ${e.message}`;
+        }
+      });
+    }
+
+    // Delete profile
+    if (deleteProfileBtnEl) {
+      deleteProfileBtnEl.addEventListener("click", async () => {
+        const name = profileSelectEl.value;
+        if (name === "default") return;
+        if (!confirm(`Delete profile "${name}"?`)) return;
+
+        try {
+          if (window.cryptapi && typeof window.cryptapi.deleteSshProfile === "function") {
+            const result = await window.cryptapi.deleteSshProfile(name);
+            if (!result.success) throw new Error(result.error || "Delete failed");
+          } else {
+            sshProfiles = sshProfiles.filter(p => p.name !== name);
+            localStorage.setItem("ssh-profiles", JSON.stringify(sshProfiles));
+          }
+          await loadSshProfiles();
+          if (calibrationStatusEl) calibrationStatusEl.textContent = `Profile "${name}" deleted`;
+        } catch (e) {
+          console.error("[Crypt/OpenSSH] Delete profile failed:", e);
+          if (calibrationStatusEl) calibrationStatusEl.textContent = `Delete failed: ${e.message}`;
+        }
+      });
+    }
+
+    // Load profiles on panel init
+    loadSshProfiles();
+
     // Auto-tune toggle: update coverage slider disabled state
     function syncAutoTuneState() {
       const autoTune = deobfAutoTuneEl ? deobfAutoTuneEl.checked : true;
@@ -1813,6 +2088,8 @@ function createCryptPanel({
         const series = await buildChartSeriesAsync(effectiveDelays, decoder);
         // Pass padding detection result to chart renderer for yellow obfuscation markers
         renderSshChartWithSeries(series, effectiveDelays, decoder, appliedPadding);
+        // Also render the timeline folding chart if padding was detected
+        renderSshFoldingChart(delays, decoder, appliedPadding);
         if (summaryEl) {
           summaryEl.textContent = `Decoding keystrokes (${effectiveDelays.length} intervals)...`;
         }
@@ -1952,11 +2229,16 @@ function createCryptPanel({
           // mode drives the placeholder text inside the LLM cards when
           // the prompt ran but didn't yield a usable result.
           let renderMode = "no-llm";
+
+          // s2cSummary and shellCorpus need to be accessible in both the initial LLM call
+          // and the Markov-based LLM re-run, so declare them in the outer scope
+          let s2cSummary = null;
+          let shellCorpus = null;
+
           try {
             if (typeof window !== "undefined" && window.llmapi && typeof window.llmapi.generate === "function") {
               renderMode = "no-result";
               try {
-                let s2cSummary = null;
                 if (
                   sshExportModule &&
                   typeof sshExportModule.summarizeS2cOutput === "function" &&
@@ -1980,7 +2262,6 @@ function createCryptPanel({
                 // timing stats with artificial jitter and degrades
                 // decoder accuracy downstream. The padding detector
                 // already removed the cadence when ``detected`` is true.
-                let shellCorpus = null;
                 if (window.opensshapi && typeof window.opensshapi.loadShellCorpus === "function") {
                   try {
                     const corpusResult = await window.opensshapi.loadShellCorpus();
@@ -2273,6 +2554,33 @@ function createCryptPanel({
 
               for (let ci = 0; ci < totalMarkovChunks; ci += 1) {
                 const ch = chunkList[ci];
+
+                // Skip unreliable chunks (too many keystrokes)
+                // We cannot reliably decode these - they produce garbage strings
+                if (ch.isUnreliable) {
+                  console.log(
+                    `[Crypt/OpenSSH] Skipping chunk ${ci + 1}/${totalMarkovChunks} - marked unreliable: ${ch.reasonUnreliable}`,
+                  );
+                  markovChunks.push({
+                    startIdx: ch.startIdx,
+                    endIdx: ch.endIdx,
+                    keystrokeCount: ch.keystrokeCount,
+                    isUnreliable: true,
+                    reasonUnreliable: ch.reasonUnreliable,
+                    // Generate placeholder candidates
+                    top: [
+                      { text: `[unreliable: ${ch.reasonUnreliable}]`, score: 0 },
+                      { text: `[too many keystrokes: ${ch.keystrokeCount}]`, score: 0 },
+                      { text: "[cannot decode - SSH batching]", score: 0 },
+                    ],
+                    delays: rebuiltIndexed
+                      .slice(ch.startIdx, ch.endIdx + 1)
+                      .map((d) => Number(d.delay))
+                      .filter(Number.isFinite),
+                  });
+                  continue;
+                }
+
                 markStage(
                   "markov",
                   "running",
@@ -2748,6 +3056,378 @@ function createCryptPanel({
         `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
         `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms). ` +
         `Scaled: peak = 100, right edge ≈ 20.${paddingInfo}`;
+    }
+  }
+
+  // Render the timeline folding chart — shows phase alignment of padding blips
+  // and highlights which delays were classified as padding.
+  function renderSshFoldingChart(delays, decoder, paddingResult = null) {
+    const foldingSectionEl = document.getElementById("crypt-openssh-folding-section");
+    const chartEl = document.getElementById("crypt-openssh-folding-chart");
+    const legendEl = document.getElementById("crypt-openssh-folding-legend");
+
+    if (!foldingSectionEl || !chartEl) return;
+
+    // Always try to show the folding chart - it's a visualization tool
+    // First choice: detected period
+    // Second choice: best candidate from candidateScores
+    let periodMs = null;
+    let paddingIndices = [];
+    let dominantPhaseMs = null;
+    let dominantRatio = null;
+    let isCandidateOnly = false;
+
+    if (paddingResult) {
+      if (paddingResult.detected && Number.isFinite(paddingResult.periodMs)) {
+        // Confident detection - use this
+        periodMs = paddingResult.periodMs;
+        paddingIndices = paddingResult.paddedIntervals || paddingResult.paddingDelayIndices || [];
+        dominantPhaseMs = paddingResult.foldingDominantPhaseMs ?? paddingResult.dominantPhaseMs;
+        dominantRatio = paddingResult.foldingDominantPhaseRatio;
+      } else if (Array.isArray(paddingResult.candidateScores) && paddingResult.candidateScores.length > 0) {
+        // No confident detection, but we have candidates - use the best one
+        const sorted = paddingResult.candidateScores.slice().sort((a, b) => {
+          if (b.coverage !== a.coverage) return b.coverage - a.coverage;
+          return a.residualStdMs - b.residualStdMs;
+        });
+        const best = sorted[0];
+        if (best && Number.isFinite(best.periodMs)) {
+          periodMs = best.periodMs;
+          paddingIndices = []; // No padding indices when just a candidate
+          isCandidateOnly = true;
+        }
+      }
+    }
+
+    // If no period available, hide the section
+    if (!Number.isFinite(periodMs)) {
+      foldingSectionEl.hidden = true;
+      return;
+    }
+
+    // Show the section
+    foldingSectionEl.hidden = false;
+
+    // Get or compute phase histogram
+    let phaseHist = paddingResult.foldingPhaseHistogram || paddingResult.phaseHistogram;
+
+    // If no pre-computed phase histogram, compute it from delays
+    if (!Array.isArray(phaseHist) || phaseHist.length === 0) {
+      // Build arrival times and compute phase modulo periodMs
+      let time = 0;
+      const arrivalTimes = [];
+      for (const d of delays) {
+        if (!Number.isFinite(d) || d <= 0) continue;
+        arrivalTimes.push(time);
+        time += d;
+      }
+
+      // Build phase histogram with 1ms resolution
+      const foldResolution = 1;
+      const phaseBins = Math.max(1, Math.ceil(periodMs / foldResolution));
+      const histogram = new Array(phaseBins).fill(0);
+
+      for (const t of arrivalTimes) {
+        const phase = t % periodMs;
+        const binIdx = Math.floor(phase / foldResolution);
+        const clampedBin = Math.max(0, Math.min(phaseBins - 1, binIdx));
+        histogram[clampedBin] += 1;
+      }
+
+      // Convert to the expected format
+      phaseHist = histogram.map((count, idx) => ({
+        binIndex: idx,
+        phaseStartMs: idx * foldResolution,
+        count,
+      }));
+
+      // Find dominant phase
+      let maxCount = 0;
+      let dominantBin = -1;
+      for (let i = 0; i < histogram.length; i += 1) {
+        if (histogram[i] > maxCount) {
+          maxCount = histogram[i];
+          dominantBin = i;
+        }
+      }
+      if (dominantBin >= 0 && !Number.isFinite(dominantPhaseMs)) {
+        dominantPhaseMs = dominantBin * foldResolution;
+        const meanCount = arrivalTimes.length / phaseBins;
+        dominantRatio = maxCount / Math.max(1, meanCount);
+      }
+    }
+
+    if (!Array.isArray(phaseHist) || phaseHist.length === 0) {
+      foldingSectionEl.hidden = true;
+      return;
+    }
+
+    // Build the phase histogram bar chart
+    const histX = phaseHist.map(h => h.phaseStartMs);
+    const histY = phaseHist.map(h => h.count);
+
+    // Normalize for display
+    const histMax = histY.length > 0 ? Math.max(...histY) : 1;
+    const normalizedY = histMax > 0 ? histY.map(v => (v * 100) / histMax) : histY;
+
+    const plotData = [];
+
+    // Phase histogram bars
+    const histogramTrace = {
+      x: histX,
+      y: normalizedY,
+      type: "bar",
+      name: "Packet count by phase",
+      marker: {
+        color: "#1f77b4",
+      },
+    };
+    plotData.push(histogramTrace);
+
+    // Add vertical line at dominant phase if available
+    const shapes = [];
+    if (Number.isFinite(dominantPhaseMs)) {
+      shapes.push({
+        type: "line",
+        x0: dominantPhaseMs,
+        x1: dominantPhaseMs,
+        y0: 0,
+        y1: 1,
+        yref: "paper",
+        line: {
+          color: "#FF6B6B",  // Red
+          width: 3,
+          dash: "dash",
+        },
+      });
+
+      // Legend entry for dominant phase
+      const dominantTrace = {
+        x: [],
+        y: [],
+        mode: "lines",
+        name: `Dominant phase (${dominantPhaseMs.toFixed(0)}ms, ratio=${(dominantRatio || 0).toFixed(1)}x)`,
+        line: {
+          color: "#FF6B6B",
+          width: 3,
+          dash: "dash",
+        },
+        showlegend: true,
+      };
+      plotData.push(dominantTrace);
+    }
+
+    // Compute safe yaxis2 range
+    const finiteDelays = delays.filter(d => Number.isFinite(d) && d > 0);
+    const maxDelay = finiteDelays.length > 0 ? Math.max(...finiteDelays) : 100;
+
+    // If we have padding delay indices, add a scatter plot showing
+    // which delays were classified as padding on a second y-axis
+    // x-axis = arrival phase modulo periodMs, y-axis = delay value
+    const haveScatterData = Array.isArray(paddingIndices) && paddingIndices.length > 0;
+    if (haveScatterData) {
+      const paddingSet = new Set(paddingIndices);
+
+      // Build arrival times to compute phase
+      let time = 0;
+      const arrivalTimes = [];
+      for (const d of delays) {
+        if (!Number.isFinite(d) || d <= 0) {
+          arrivalTimes.push(null);
+          continue;
+        }
+        arrivalTimes.push(time);
+        time += d;
+      }
+
+      const padX = [];
+      const padY = [];
+      const padColors = [];
+      const padText = [];
+
+      for (let i = 0; i < delays.length; i += 1) {
+        const d = delays[i];
+        if (!Number.isFinite(d) || d <= 0) continue;
+        const arrTime = arrivalTimes[i];
+        if (arrTime === null) continue;
+
+        const phase = arrTime % periodMs;
+        padX.push(phase);
+        padY.push(d);
+
+        if (paddingSet.has(i)) {
+          padColors.push("#FFD700");  // Gold for padding
+          padText.push(`Delay ${i}: ${d.toFixed(1)}ms, phase=${phase.toFixed(1)}ms (PADDING)`);
+        } else {
+          padColors.push("#4CAF50");  // Green for real
+          padText.push(`Delay ${i}: ${d.toFixed(1)}ms, phase=${phase.toFixed(1)}ms (real)`);
+        }
+      }
+
+      const delayTrace = {
+        x: padX,
+        y: padY,
+        mode: "markers",
+        name: "Delays by phase (gold=padding, green=real)",
+        marker: {
+          color: padColors,
+          size: 8,
+          opacity: 0.8,
+        },
+        text: padText,
+        hoverinfo: "text",
+        yaxis: "y2",
+      };
+      plotData.push(delayTrace);
+    }
+
+    const layout = {
+      margin: { t: 20, r: 12, l: 40, b: 36 },
+      bargap: 0.05,
+      xaxis: {
+        title: { text: `Phase modulo ${periodMs}ms (0 to ${periodMs}ms)` },
+        range: [0, periodMs],
+      },
+      yaxis: {
+        title: { text: "Normalized phase count" },
+        range: [0, 105],
+      },
+      yaxis2: haveScatterData ? {
+        title: { text: "Delay value (ms)" },
+        overlaying: "y",
+        side: "right",
+        range: [0, maxDelay * 1.1],
+      } : undefined,
+      legend: { orientation: "h", y: -0.2 },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      shapes: shapes,
+    };
+
+    // Debug: Check if container already exists
+    console.log('Checking for existing chart container');
+    let foldingChartEl = document.getElementById('timeline-folding-chart');
+    console.log('Existing chart element:', foldingChartEl);
+
+    // Create container if it doesn't exist
+    if (!foldingChartEl) {
+      console.log('Creating new chart container');
+      foldingChartEl = document.createElement('div');
+      foldingChartEl.id = 'timeline-folding-chart';
+      foldingChartEl.className = 'chart-container';
+      foldingChartEl.style.border = '2px dashed red';
+      foldingChartEl.style.minHeight = '240px';
+      foldingChartEl.style.margin = '10px 0';
+      foldingChartEl.style.padding = '10px';
+      foldingChartEl.style.backgroundColor = 'rgba(255, 0, 0, 0.1)';
+
+      const chartContainer = document.getElementById('timeline-folding-container');
+      if (chartContainer) {
+        chartContainer.appendChild(foldingChartEl);
+        console.log('Added chart container to DOM');
+      } else {
+        console.error('Parent container timeline-folding-container not found');
+        return;
+      }
+    }
+
+    // Ensure container is visible and properly sized
+    chartEl.style.display = 'block';
+    chartEl.style.visibility = 'visible';
+    chartEl.style.opacity = '1';
+    chartEl.style.height = '240px';
+
+    // Add debug text to container
+    chartEl.innerHTML = '<div style="color: red; padding: 10px;">Folding Chart Container</div>';
+
+    // Verify Plotly is available
+    if (typeof window.Plotly === 'undefined') {
+      console.error('Plotly is not available');
+      chartEl.innerHTML += '<div style="color: red; padding: 10px;">Plotly not available</div>';
+      return;
+    }
+
+    console.log('Plotly is available, preparing to create chart');
+
+    // Create chart with error handling
+    try {
+      const layoutWithCrosshairs = {
+        ...layout,
+        hovermode: 'closest',
+        xaxis: {
+          ...layout.xaxis,
+          showspikes: true,
+          spikedash: 'solid',
+          spikecolor: '#999',
+          spikethickness: 1
+        },
+        yaxis: {
+          ...layout.yaxis,
+          showspikes: true,
+          spikedash: 'solid',
+          spikecolor: '#999',
+          spikethickness: 1
+        }
+      };
+
+      window.Plotly.newPlot(chartEl, plotData, layoutWithCrosshairs, { displayModeBar: false, responsive: true })
+        .then(() => {
+          console.log('Chart successfully created');
+          chartEl.innerHTML += '<div style="color: green; padding: 10px;">Chart loaded successfully</div>';
+        })
+        .catch(err => {
+          console.error('Error creating chart:', err);
+          chartEl.innerHTML += `<div style="color: red; padding: 10px;">Error: ${err.message}</div>`;
+        });
+    } catch (err) {
+      console.error('Unexpected error:', err);
+      chartEl.innerHTML += `<div style="color: red; padding: 10px;">Unexpected error: ${err.message}</div>`;
+    }
+
+    console.log("Folding chart data:", plotData, layout);
+    console.log("Chart element:", chartEl);
+
+    if (typeof window.Plotly !== "undefined") {
+      console.log("Creating Plotly chart...");
+      window.Plotly.newPlot(
+        chartEl,
+        plotData,
+        layout,
+        { displayModeBar: false, responsive: true },
+      ).then(() => {
+        console.log("Plotly chart created");
+        console.log('Post-creation container visibility:');
+        console.log('Display:', window.getComputedStyle(chartEl).display);
+        console.log('Visibility:', window.getComputedStyle(chartEl).visibility);
+        console.log('Opacity:', window.getComputedStyle(chartEl).opacity);
+        console.log('Height:', window.getComputedStyle(chartEl).height);
+        console.log('Width:', window.getComputedStyle(chartEl).width);
+        console.log('Hidden:', chartEl.hidden);
+      }).catch(err => {
+        console.error("Plotly error:", err);
+      });
+    } else if (legendEl) {
+      console.warn("Plotly not available");
+      legendEl.textContent =
+        "Plotly unavailable — folding chart skipped. Phase histogram peaks at " +
+        `${Number.isFinite(dominantPhaseMs) ? dominantPhaseMs.toFixed(0) : '?'}ms. ` +
+        `Period: ${periodMs}ms, padding: ${paddingIndices.length} intervals.`;
+    }
+
+    // Update legend
+    if (legendEl) {
+      const detectionLabel = isCandidateOnly ? " (CANDIDATE — not confidently detected)" : " (CONFIRMED)";
+      const dominantInfo = Number.isFinite(dominantPhaseMs)
+        ? ` Dominant phase: ${dominantPhaseMs.toFixed(0)}ms (${(dominantRatio || 0).toFixed(1)}x uniform).`
+        : "";
+      const padInfo = isCandidateOnly
+        ? " Lower the Coverage threshold in De-obfuscation Settings to confirm."
+        : ` ${paddingIndices.length} delays classified as padding.`;
+
+      legendEl.textContent =
+        `Timeline folding: ${periodMs}ms period${detectionLabel}. ${phaseHist.length} phase bins.` +
+        dominantInfo +
+        padInfo;
     }
   }
 
@@ -4465,6 +5145,22 @@ Instructions:
   // intended final answer.
   function extractJsonFromThinking(text) {
     if (!text || typeof text !== "string") return null;
+    // First, try to extract any JSON object from anywhere in the text
+    // (not just from the end, in case the model put it in the middle)
+    let jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      // Try to parse the matched text
+      try {
+        // Use extractFirstBalancedJson to get the properly balanced object
+        const balanced = extractFirstBalancedJson(jsonMatch[0]);
+        if (balanced) {
+          JSON.parse(balanced);
+          return balanced;
+        }
+      } catch (_e) {
+        // Ignore and continue with the original approach
+      }
+    }
     // Try the standard balanced-walker from end-to-start, so we prefer
     // the LAST JSON object (the model's most recent/final attempt).
     let i = text.length;

@@ -1688,3 +1688,10 @@ contextBridge.exposeInMainWorld("metricsapi", {
     return () => ipcRenderer.removeListener("metrics:flush-request", listener);
   },
 });
+
+contextBridge.exposeInMainWorld('cryptapi', {
+  loadSshProfiles: () => ipcRenderer.invoke('ssh-profiles-load'),
+  saveSshProfile: (profile) => ipcRenderer.invoke('ssh-profiles-save', profile),
+  deleteSshProfile: (name) => ipcRenderer.invoke('ssh-profiles-delete', name),
+  calibrateSsh: (payload) => ipcRenderer.invoke('ssh-calibrate', payload),
+});
