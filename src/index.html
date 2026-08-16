@@ -1060,6 +1060,10 @@ No decrypted TLS/SSL output yet.</pre>
                     <input type="checkbox" id="crypt-openssh-deobf-enable" checked>
                     <span>Enable padding detector</span>
                   </label>
+                  <label class="crypt-openssh-deobf-check" for="crypt-openssh-deobf-autotune">
+                    <input type="checkbox" id="crypt-openssh-deobf-autotune" checked>
+                    <span title="Auto-tune coverage threshold. When unchecked, uses manual Coverage slider value.">Auto-tune</span>
+                  </label>
                   <label class="crypt-key-type-label" for="crypt-openssh-deobf-mode">
                     Mode
                   </label>
@@ -1073,7 +1077,7 @@ No decrypted TLS/SSL output yet.</pre>
                     Coverage threshold
                   </label>
                   <input type="range" id="crypt-openssh-deobf-coverage" min="0.30" max="0.90" step="0.05" value="0.50"
-                    title="Minimum cadence coverage (fraction of intervals matching the cadence) required before peeling kicks in. Lower = more aggressive peeling; higher = more conservative.">
+                    title="Minimum cadence coverage (fraction of intervals matching the cadence) required before peeling kicks in. Lower = more aggressive peeling; higher = more conservative. Only used when Auto-tune is disabled.">
                   <span id="crypt-openssh-deobf-coverage-label" class="crypt-openssh-deobf-value">0.50</span>
                 </div>
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>

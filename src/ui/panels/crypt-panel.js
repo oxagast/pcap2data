@@ -1419,11 +1419,13 @@ function createCryptPanel({
     // Deobfuscator controls. Defaults match the HTML so a missing
     // element (e.g. older DOM) doesn't break the analysis.
     const deobfEnableEl = document.getElementById("crypt-openssh-deobf-enable");
+    const deobfAutoTuneEl = document.getElementById("crypt-openssh-deobf-autotune");
     const deobfModeEl = document.getElementById("crypt-openssh-deobf-mode");
     const deobfCoverageEl = document.getElementById("crypt-openssh-deobf-coverage");
     const deobfCoverageLabelEl = document.getElementById("crypt-openssh-deobf-coverage-label");
     const deobfSettings = {
       enabled: deobfEnableEl ? !!deobfEnableEl.checked : true,
+      autoTuneEnabled: deobfAutoTuneEl ? !!deobfAutoTuneEl.checked : true,
       mode: deobfModeEl ? deobfModeEl.value : "auto",
       minCoverage: deobfCoverageEl ? Number(deobfCoverageEl.value) : 0.5,
     };
@@ -1437,16 +1439,42 @@ function createCryptPanel({
         deobfSettings.minCoverage = Number(deobfCoverageEl.value);
       });
     }
+    // Auto-tune toggle: update coverage slider disabled state
+    function syncAutoTuneState() {
+      const autoTune = deobfAutoTuneEl ? deobfAutoTuneEl.checked : true;
+      deobfSettings.autoTuneEnabled = autoTune;
+      // When auto-tune is ON, disable the slider (auto-tune picks value)
+      // When auto-tune is OFF, enable the slider (user sets value manually)
+      if (deobfCoverageEl) {
+        deobfCoverageEl.disabled = autoTune;
+      }
+      if (deobfCoverageLabelEl) {
+        deobfCoverageLabelEl.style.opacity = autoTune ? "0.5" : "1";
+      }
+    }
     // Enable/disable the rest of the controls when the master toggle
     // flips so the user gets clear feedback that the deobfuscator is off.
     function syncDeobfDisabledState() {
       const enabled = deobfEnableEl ? deobfEnableEl.checked : true;
+      if (deobfAutoTuneEl) deobfAutoTuneEl.disabled = !enabled;
       if (deobfModeEl) deobfModeEl.disabled = !enabled;
-      if (deobfCoverageEl) deobfCoverageEl.disabled = !enabled;
-      if (deobfCoverageLabelEl) deobfCoverageLabelEl.style.opacity = enabled ? "1" : "0.5";
+      // Coverage slider also depends on auto-tune state
+      if (deobfCoverageEl) {
+        const autoTune = deobfAutoTuneEl ? deobfAutoTuneEl.checked : true;
+        deobfCoverageEl.disabled = !enabled || autoTune;
+      }
+      if (deobfCoverageLabelEl) {
+        const autoTune = deobfAutoTuneEl ? deobfAutoTuneEl.checked : true;
+        deobfCoverageLabelEl.style.opacity = (!enabled || autoTune) ? "0.5" : "1";
+      }
       deobfSettings.enabled = enabled;
     }
     if (deobfEnableEl) deobfEnableEl.addEventListener("change", syncDeobfDisabledState);
+    if (deobfAutoTuneEl) deobfAutoTuneEl.addEventListener("change", () => {
+      syncAutoTuneState();
+      syncDeobfDisabledState();
+    });
+    syncAutoTuneState();
     syncDeobfDisabledState();
     function setProgress(label) {
       if (progressEl) progressEl.hidden = false;
@@ -1549,15 +1577,18 @@ function createCryptPanel({
         //   - paddedIntervals      : indices into the input array that
         //                            were classified as filler (for
         //                            diagnostics + the LLM brief)
-        // Auto-tune the coverage threshold when the deobfuscator is
-        // set to its default "auto" mode. The tuner sweeps a range
-        // of minCoverage values, runs the detector at each, and
-        // picks the value whose peeled keystroke stream yields
-        // chunks whose lengths cluster in the 5–50 range (typical
-        // shell command length). The user's slider value is honored
-        // when mode is "force" or when "auto" produces no detection.
+        // Auto-tune the coverage threshold when the Auto-tune checkbox
+        // is checked (default: on). The tuner sweeps a range of minCoverage
+        // values, runs the detector at each, and picks the value whose
+        // peeled keystroke stream yields chunks whose lengths cluster in
+        // the 5–50 range (typical shell command length). When Auto-tune
+        // is OFF, use the manual Coverage slider value directly.
+        // The "mode" setting (auto/force/off) is now independent:
+        //   - mode=auto: detect + peel only when confident
+        //   - mode=force: always peel
+        //   - mode=off: detect for diagnostics only, don't peel
         const useAutoTune = deobfSettings.enabled
-          && deobfSettings.mode === "auto"
+          && deobfSettings.autoTuneEnabled
           && typeof decoder.autoTunePaddingThreshold === "function";
         const paddingResult = useAutoTune
           ? decoder.autoTunePaddingThreshold(delays, {
