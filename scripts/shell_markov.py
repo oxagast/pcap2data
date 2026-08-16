@@ -4,6 +4,10 @@
 This stuff is based on some frequency analylsis code, which is naturally
 shorten in these docs to  freqyanal.
 
+This is not entirely a markov gen, however, because it also uses a few simple
+priors: command length, first-token, and a weak frequency prior on the command
+itself.  The model is trained on a corpus of shell commands.
+
 Trains on one command per line.  The model stores n-gram transition counts,
 command length priors, first-token priors, and simple QWERTY key distances.
 It can rank supplied candidate commands or generate high-probability commands

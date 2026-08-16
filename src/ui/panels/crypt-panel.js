@@ -1444,6 +1444,7 @@ function createCryptPanel({
     // loop into a setImmediate tick so we never block the renderer
     // on a 10k-delay session. The chunk-finder itself is pure so it
     // returns immediately; yielding only matters on the wrapper.
+    // babe, you gonna back dat big ass up or wut?
     if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return null;
     for (let i = 0; i < delaysWithIdx.length; i += SSH_PACKET_CHUNK_SIZE) {
       // Touch the array lazily to keep the chunked-yield contract
@@ -7561,6 +7562,19 @@ Instructions:
     }
     if (opensshActive) {
       refreshSshEncounteredFlows();
+      // Show one-time notice for first-time OpenSSH panel visitors
+      const noticeEl = document.getElementById("crypt-openssh-first-notice");
+      const dismissBtn = document.getElementById("crypt-openssh-dismiss-notice");
+      if (noticeEl && dismissBtn) {
+        const dismissed = localStorage.getItem("crypt-openssh-notice-dismissed");
+        if (!dismissed) {
+          noticeEl.hidden = false;
+          dismissBtn.addEventListener("click", () => {
+            localStorage.setItem("crypt-openssh-notice-dismissed", "true");
+            noticeEl.hidden = true;
+          }, { once: true });
+        }
+      }
     }
   }
 
