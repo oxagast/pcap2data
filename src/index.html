@@ -985,7 +985,7 @@ No decrypted TLS/SSL output yet.</pre>
               </div>
 
               <div class="crypt-section">
-                <div class="crypt-section-title">Inter-key delay distribution</div>
+                <div class="crypt-section-title">Hybrid Gaussian-Eucledian Timing Data Keystroke Detection</div>
                 <div id="crypt-openssh-chart" class="crypt-openssh-chart"></div>
                 <div id="crypt-openssh-chart-legend" class="crypt-openssh-legend">
                   Select a flow and click <strong>Analyze selected</strong>.
@@ -993,7 +993,8 @@ No decrypted TLS/SSL output yet.</pre>
               </div>
 
               <div class="crypt-section crypt-openssh-full" id="crypt-openssh-markov-section" hidden>
-                <div class="crypt-section-title">Markov chain output</div>
+                <div class="crypt-section-title">Frequency Analysis Weighted Markov Data with Inherited Environmental
+                  Hint Deltas</div>
                 <!-- Session confidence badge -->
                 <div id="crypt-openssh-markov-session-confidence" class="crypt-openssh-session-confidence" hidden>
                   <span class="crypt-openssh-session-confidence-label">Session confidence:</span>
@@ -1025,7 +1026,7 @@ No decrypted TLS/SSL output yet.</pre>
                 <!-- Old candidates list (deprecated, using timeline instead) -->
                 <div class="crypt-section-title crypt-openssh-markov-list-title" id="crypt-openssh-markov-list-title"
                   hidden>
-                  All Markov candidates (ranked by confidence)
+                  All Frequency Analysis Weighted Markov Data candidates (ranked by confidence)
                 </div>
                 <div id="crypt-openssh-markov-candidates-list" class="crypt-openssh-markov-candidates-list" hidden>
                 </div>
@@ -1053,7 +1054,7 @@ No decrypted TLS/SSL output yet.</pre>
                   </select>
                 </div>
                 <div class="crypt-section-title crypt-openssh-deobf-title">
-                  SSH obfuscation deobfuscator
+                  Folding Obfuscation Blip Removal Function
                 </div>
                 <div class="crypt-actions-row crypt-openssh-deobf-row">
                   <label class="crypt-openssh-deobf-check" for="crypt-openssh-deobf-enable">
@@ -1062,7 +1063,8 @@ No decrypted TLS/SSL output yet.</pre>
                   </label>
                   <label class="crypt-openssh-deobf-check" for="crypt-openssh-deobf-autotune">
                     <input type="checkbox" id="crypt-openssh-deobf-autotune" checked>
-                    <span title="Auto-tune coverage threshold. When unchecked, uses manual Coverage slider value.">Auto-tune</span>
+                    <span
+                      title="Auto-tune coverage threshold. When unchecked, uses manual Coverage slider value.">Auto-tune</span>
                   </label>
                   <label class="crypt-key-type-label" for="crypt-openssh-deobf-mode">
                     Mode
@@ -1079,6 +1081,28 @@ No decrypted TLS/SSL output yet.</pre>
                   <input type="range" id="crypt-openssh-deobf-coverage" min="0.30" max="0.90" step="0.05" value="0.50"
                     title="Minimum cadence coverage (fraction of intervals matching the cadence) required before peeling kicks in. Lower = more aggressive peeling; higher = more conservative. Only used when Auto-tune is disabled.">
                   <span id="crypt-openssh-deobf-coverage-label" class="crypt-openssh-deobf-value">0.50</span>
+                </div>
+                <div class="crypt-section-title crypt-openssh-deobf-title">
+                  Markov Command Ranking Tuning
+                </div>
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <label class="crypt-key-type-label" for="crypt-openssh-markov-min-length">
+                    Min command length
+                  </label>
+                  <input type="number" id="crypt-openssh-markov-min-length" min="1" max="10" step="1" value="2"
+                    title="Minimum command length floor for Markov ranking. Lower values allow 1-2 char commands like 'ls', ':', '!'.">
+                  <label class="crypt-key-type-label" for="crypt-openssh-markov-conciseness">
+                    Short command bonus
+                  </label>
+                  <input type="range" id="crypt-openssh-markov-conciseness" min="0.8" max="4.0" step="0.1" value="1.7"
+                    title="Multiplier for the conciseness bonus given to short slotless commands (ls, pwd, cd, etc.) vs slot-containing templates. Higher = short commands favored more.">
+                  <span id="crypt-openssh-markov-conciseness-label" class="crypt-openssh-deobf-value">1.7x</span>
+                  <label class="crypt-key-type-label" for="crypt-openssh-markov-length-bonus">
+                    Length match bonus
+                  </label>
+                  <input type="range" id="crypt-openssh-markov-length-bonus" min="0.5" max="4.0" step="0.1" value="2.6"
+                    title="Multiplier for the length-matching bonuses (being within tolerance of target length, having slots for flexible length). Higher = length proximity is more important.">
+                  <span id="crypt-openssh-markov-length-bonus-label" class="crypt-openssh-deobf-value">2.6x</span>
                 </div>
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
                   <div class="crypt-openssh-insight-header">
@@ -1511,6 +1535,29 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">
                   Offloads snapshot serialization and incremental packet staging to renderer workers. Increase threads
                   for faster large-capture intake, or disable threading for compatibility testing.
+                </div>
+              </div>
+              <div class="settings-section">
+                <div class="settings-section-title">OpenSSH Keystroke Analysis</div>
+                <div class="settings-help-text">
+                  Tuning parameters for the Markov-based shell command recovery in the OpenSSH tab.
+                </div>
+
+                <label for="settings-keystroke-markov-min-command-length">Minimum command length</label>
+                <input id="settings-keystroke-markov-min-command-length" type="number" min="1" step="1" />
+                <div class="settings-help-text">
+                  Minimum command length considered by the Markov ranker. Default 2.
+                  Set to 1 to enable single-character commands like <code>:</code>, <code>!</code>, <code>w</code>.
+                  Previously hard-coded as 3 (blocking short commands).
+                </div>
+
+                <label for="settings-keystroke-conciseness-bonus-multiplier">Short command bonus multiplier</label>
+                <input id="settings-keystroke-conciseness-bonus-multiplier" type="number" min="0" step="0.1" />
+                <div class="settings-help-text">
+                  Multiplier for the conciseness bonus given to short slotless commands (ls, pwd, cd, etc.).
+                  These don't have placeholders like "file.txt" or "example.com", so they need a bonus to
+                  compete with slot-containing templates. Default 1.0. At 2.0, very short commands get
+                  double the bonus.
                 </div>
               </div>
             </div>

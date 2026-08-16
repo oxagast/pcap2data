@@ -3761,6 +3761,21 @@ function syncSettingsFormFromState() {
       settings.llm.analysisCompactionThresholdBlubs,
     );
   }
+
+  // OpenSSH keystroke analysis settings (new)
+  const keystrokeMinCommandLengthEl = document.getElementById("settings-keystroke-markov-min-command-length");
+  const keystrokeConcisenessBonusEl = document.getElementById("settings-keystroke-conciseness-bonus-multiplier");
+  if (keystrokeMinCommandLengthEl) {
+    keystrokeMinCommandLengthEl.value = String(
+      settings.keystroke?.markovMinCommandLength ?? DEFAULT_SETTINGS.keystroke.markovMinCommandLength,
+    );
+  }
+  if (keystrokeConcisenessBonusEl) {
+    keystrokeConcisenessBonusEl.value = String(
+      settings.keystroke?.concisenessBonusMultiplier ?? DEFAULT_SETTINGS.keystroke.concisenessBonusMultiplier,
+    );
+  }
+
   if (pluginFailureThresholdEl) {
     pluginFailureThresholdEl.value = String(
       settings.plugins?.autoDisableFailureThreshold
@@ -3905,6 +3920,9 @@ function readSettingsFormState() {
   const privacyMaxQueueSizeEl = document.getElementById(
     "settings-privacy-metrics-max-queue-size",
   );
+  // OpenSSH keystroke analysis settings
+  const keystrokeMinCommandLengthEl = document.getElementById("settings-keystroke-markov-min-command-length");
+  const keystrokeConcisenessBonusEl = document.getElementById("settings-keystroke-conciseness-bonus-multiplier");
   const trimmedVirusTotalApiKey = backendVirusTotalApiKeyEl
     ? backendVirusTotalApiKeyEl.value.trim()
     : "";
@@ -4019,9 +4037,28 @@ function readSettingsFormState() {
         ? analysisCompactionThresholdBlubsEl.value
         : DEFAULT_SETTINGS.llm.analysisCompactionThresholdBlubs,
       // New persisted LLM tuning fields
-      preset: presetEl ? (presetEl.value || DEFAULT_SETTINGS.llm.preset) : DEFAULT_SETTINGS.llm.preset,
-      llmWeightPercent: llmWeightEl ? Number(llmWeightEl.value) : DEFAULT_SETTINGS.llm.llmWeightPercent,
-      autotuneEnabled: autotuneEl ? Boolean(autotuneEl.checked) : Boolean(DEFAULT_SETTINGS.llm.autotuneEnabled),
+      preset: (() => {
+        const el = document.getElementById('settings-llm-preset');
+        return el ? (el.value || DEFAULT_SETTINGS.llm.preset) : DEFAULT_SETTINGS.llm.preset;
+      })(),
+      llmWeightPercent: (() => {
+        const el = document.getElementById('settings-llm-weight-percent');
+        return el ? Number(el.value) : DEFAULT_SETTINGS.llm.llmWeightPercent;
+      })(),
+      autotuneEnabled: (() => {
+        const el = document.getElementById('settings-llm-autotune');
+        return el ? Boolean(el.checked) : Boolean(DEFAULT_SETTINGS.llm.autotuneEnabled);
+      })(),
+    },
+
+    // OpenSSH keystroke analysis settings
+    keystroke: {
+      markovMinCommandLength: keystrokeMinCommandLengthEl
+        ? Number(keystrokeMinCommandLengthEl.value)
+        : DEFAULT_SETTINGS.keystroke.markovMinCommandLength,
+      concisenessBonusMultiplier: keystrokeConcisenessBonusEl
+        ? Number(keystrokeConcisenessBonusEl.value)
+        : DEFAULT_SETTINGS.keystroke.concisenessBonusMultiplier,
     },
 
     apiKeys: {
@@ -22687,6 +22724,20 @@ document
   .addEventListener("change", (event) => {
     writeLogEntry(`Settings updated analysisCompactionThresholdBlubs=${event?.target?.value}`);
   });
+
+// OpenSSH keystroke analysis settings change handlers
+const keystrokeMinEl = document.getElementById("settings-keystroke-markov-min-command-length");
+const keystrokeBonusEl = document.getElementById("settings-keystroke-conciseness-bonus-multiplier");
+if (keystrokeMinEl) {
+  keystrokeMinEl.addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated markovMinCommandLength=${event?.target?.value}`);
+  });
+}
+if (keystrokeBonusEl) {
+  keystrokeBonusEl.addEventListener("change", (event) => {
+    writeLogEntry(`Settings updated concisenessBonusMultiplier=${event?.target?.value}`);
+  });
+}
 
 document
   .getElementById("conv-subtab-conversions")

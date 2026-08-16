@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Character-level Markov model for probabilistic shell-command reconstruction.
 
+This stuff is based on some frequency analylsis code, which is naturally
+shorten in these docs to  freqyanal.
+
 Trains on one command per line.  The model stores n-gram transition counts,
 command length priors, first-token priors, and simple QWERTY key distances.
 It can rank supplied candidate commands or generate high-probability commands
