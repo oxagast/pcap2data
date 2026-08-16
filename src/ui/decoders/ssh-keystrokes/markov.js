@@ -2011,7 +2011,12 @@ class SessionArtifactStore {
     // slotType: "filename", "user_at_host", "hostname", "path", "ip", "url"
     // constraints: { targetLength: number, prefixHint: string, suffixHint: string }
     findBestSlotFill(slotType, constraints = {}) {
-        const { targetLength = null, prefixHint = null, suffixHint = null } = constraints;
+        const {
+            targetLength = null,
+            prefixHint = null,
+            suffixHint = null,
+            maxLengthVariance = 2,  // ±2 chars tolerance by default
+        } = constraints;
 
         // Map slotType to artifact types
         const typeMap = {
@@ -2022,7 +2027,6 @@ class SessionArtifactStore {
             ip: ["ip_address", "slot_candidate"],
             url: ["http_url", "domain", "hostname", "slot_candidate"],
         };
-
         const artifactTypes = typeMap[slotType] || ["slot_candidate", "hostname", "ip_address"];
 
         const candidates = [];
@@ -2031,39 +2035,40 @@ class SessionArtifactStore {
             if (!artifactTypes.includes(artifact.type)) continue;
             if (artifact.type === "slot_candidate" && artifact.category !== slotType) continue;
 
-            let score = artifact.confidence * 0.5;  // Base score from confidence
+            // HARD CONSTRAINT: Length must be within tolerance (default ±2 chars)
+            if (targetLength != null && maxLengthVariance != null) {
+                const lenDiff = Math.abs(artifact.value.length - targetLength);
+                if (lenDiff > maxLengthVariance) continue;  // Skip - too far from slot length
+            }
 
-            // Length match bonus
+            let baseScore = artifact.confidence * 0.5;  // Base score from confidence
+
+            // Length match bonus (within tolerance, closer = better)
             if (targetLength != null) {
                 const lenDiff = Math.abs(artifact.value.length - targetLength);
-                const lenBonus = Math.max(0, 1.0 - lenDiff * 0.1);
-                score += lenBonus * 0.3;
+                const maxVar = maxLengthVariance ?? 2;
+                baseScore += Math.max(0, 1.0 - (lenDiff / (maxVar + 1))) * 0.3;
             }
 
             // Prefix/suffix hints (from keystroke analysis)
             if (prefixHint && artifact.value.startsWith(prefixHint)) {
-                score += 0.2;
+                baseScore += 0.2;
             }
             if (suffixHint && artifact.value.endsWith(suffixHint)) {
-                score += 0.15;
+                baseScore += 0.15;
             }
 
             // Keyboard distance to hints if available
             if (prefixHint && prefixHint.length > 2 && artifact.value.length >= prefixHint.length) {
-                const artifactPrefix = artifact.value.slice(0, prefixHint.length);
-                let prefixDist = 0;
-                for (let i = 0; i < prefixHint.length; i += 1) {
-                    prefixDist += keyDistance(prefixHint[i], artifactPrefix[i]);
-                }
-                const avgDist = prefixDist / prefixHint.length;
-                if (avgDist < 2.0) {
-                    score += 0.15;
-                }
+                const p = artifact.value.slice(0, prefixHint.length);
+                let d = 0;
+                for (let i = 0; i < prefixHint.length; i++) d += keyDistance(prefixHint[i], p[i]);
+                if ((d / prefixHint.length) < 2.0) baseScore += 0.15;
             }
 
             candidates.push({
                 artifact,
-                score,
+                score: baseScore,
                 value: artifact.value,
                 type: artifact.type,
             });
@@ -2076,6 +2081,120 @@ class SessionArtifactStore {
 
         candidates.sort((a, b) => b.score - a.score);
         return candidates[0];
+    }
+
+    // =====================================================================
+    // Time-Aware Artifact Matching
+    // =====================================================================
+
+    findArtifactsNearTime(targetMs, windowMs = 30000, type = null) {
+        const results = [];
+        if (!Number.isFinite(targetMs)) return results;
+
+        for (const artifact of this.artifacts.values()) {
+            if (type && artifact.type !== type) continue;
+            const timeDiffMs = Math.abs(artifact.firstSeenMs - targetMs);
+
+            if (timeDiffMs <= windowMs) {
+                let temporalScore = 0.0;
+                if (timeDiffMs <= 1000) temporalScore = 1.0;
+                else if (timeDiffMs <= 5000) temporalScore = 0.8;
+                else if (timeDiffMs <= 15000) temporalScore = 0.5;
+                else if (timeDiffMs <= 30000) temporalScore = 0.2;
+
+                results.push({ artifact, timeDiffMs, temporalScore });
+            }
+        }
+
+        results.sort((a, b) => {
+            if (a.temporalScore !== b.temporalScore) return b.temporalScore - a.temporalScore;
+            return a.timeDiffMs - b.timeDiffMs;
+        });
+        return results;
+    }
+
+    findBestSlotFillTimeAware(slotType, constraints = {}) {
+        const {
+            targetLength = null, prefixHint = null, suffixHint = null,
+            commandTimeMs = null, slotTimeMs = null, temporalWeight = 0.4,
+            maxLengthVariance = 2,
+        } = constraints;
+
+        const targetTimeMs = slotTimeMs ?? commandTimeMs;
+
+        const typeMap = {
+            filename: ["filename", "slot_candidate"],
+            user_at_host: ["username", "hostname", "ip_address", "slot_candidate"],
+            hostname: ["hostname", "domain", "ip_address", "slot_candidate"],
+            path: ["filename", "slot_candidate"],
+            ip: ["ip_address", "slot_candidate"],
+            url: ["http_url", "domain", "hostname", "slot_candidate"],
+        };
+        const artifactTypes = typeMap[slotType] || ["slot_candidate", "hostname", "ip_address"];
+
+        let timeProximate = new Map();
+        if (Number.isFinite(targetTimeMs)) {
+            const nearTime = this.findArtifactsNearTime(targetTimeMs, 30000, null);
+            for (const nt of nearTime) timeProximate.set(nt.artifact.id, nt);
+        }
+
+        const candidates = [];
+        for (const artifact of this.artifacts.values()) {
+            if (!artifactTypes.includes(artifact.type)) continue;
+            if (artifact.type === "slot_candidate" && artifact.category !== slotType) continue;
+
+            // HARD CONSTRAINT: Length must be within ±maxLengthVariance chars
+            if (targetLength != null && maxLengthVariance != null) {
+                const lenDiff = Math.abs(artifact.value.length - targetLength);
+                if (lenDiff > maxLengthVariance) continue;
+            }
+
+            let baseScore = artifact.confidence * 0.5;
+
+            if (targetLength != null) {
+                const lenDiff = Math.abs(artifact.value.length - targetLength);
+                const maxVar = maxLengthVariance ?? 2;
+                baseScore += Math.max(0, 1.0 - (lenDiff / (maxVar + 1))) * 0.3;
+            }
+
+            if (prefixHint && artifact.value.startsWith(prefixHint)) baseScore += 0.2;
+            if (suffixHint && artifact.value.endsWith(suffixHint)) baseScore += 0.15;
+
+            if (prefixHint && prefixHint.length > 2 && artifact.value.length >= prefixHint.length) {
+                const p = artifact.value.slice(0, prefixHint.length);
+                let d = 0;
+                for (let i = 0; i < prefixHint.length; i++) d += keyDistance(prefixHint[i], p[i]);
+                if ((d / prefixHint.length) < 2.0) baseScore += 0.15;
+            }
+
+            let temporalScore = 0.0;
+            const ti = timeProximate.get(artifact.id);
+            if (ti) temporalScore = ti.temporalScore;
+
+            const finalScore = baseScore * (1.0 - temporalWeight) + temporalScore * temporalWeight;
+
+            candidates.push({
+                artifact, baseScore, temporalScore,
+                score: finalScore, value: artifact.value, type: artifact.type,
+            });
+        }
+
+        if (candidates.length === 0) return null;
+        candidates.sort((a, b) => b.score - a.score);
+        return candidates[0];
+    }
+
+    getArtifactsInTimeRange(startTimeMs, endTimeMs, type = null) {
+        const results = [];
+        for (const a of this.artifacts.values()) {
+            if (type && a.type !== type) continue;
+            if ((a.firstSeenMs >= startTimeMs && a.firstSeenMs <= endTimeMs) ||
+                (a.lastSeenMs >= startTimeMs && a.lastSeenMs <= endTimeMs)) {
+                results.push(a);
+            }
+        }
+        results.sort((a, b) => a.firstSeenMs - b.firstSeenMs);
+        return results;
     }
 
     // Export/Import for persistence
@@ -2145,6 +2264,20 @@ function resetSessionArtifactStore() {
     return _globalArtifactStore;
 }
 
+// Convenience wrappers using the singleton
+function findArtifactsNearTime(targetMs, windowMs = 30000, type = null) {
+    return getSessionArtifactStore().findArtifactsNearTime(targetMs, windowMs, type);
+}
+
+function findBestSlotFillTimeAware(slotType, constraints = {}) {
+    return getSessionArtifactStore().findBestSlotFillTimeAware(slotType, constraints);
+}
+
+function getArtifactsInTimeRange(startTimeMs, endTimeMs, type = null) {
+    return getSessionArtifactStore().getArtifactsInTimeRange(startTimeMs, endTimeMs, type);
+}
+
+// Deprecated/legacy convenience wrappers using singleton
 module.exports = {
     ShellMarkov,
     cleanLines,
@@ -2176,4 +2309,8 @@ module.exports = {
     detectSlotsInCommand,
     fillCommandSlots,
     rankCorpusWithSlotFilling,
+    // Time-Aware Artifact Matching
+    findArtifactsNearTime,
+    findBestSlotFillTimeAware,
+    getArtifactsInTimeRange,
 };
