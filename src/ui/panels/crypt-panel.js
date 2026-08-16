@@ -1869,13 +1869,41 @@ function createCryptPanel({
         }
         const backspaceHints = await detectBackspaceHintsAsync(delaysWithIdx);
 
+        // Fallback calculation: if estimatedCommandLength is 1 or invalid,
+        // use (total c2s keystrokes - backspaces) / 13 as average command length
+        if (!Number.isFinite(estimatedCommandLength) || estimatedCommandLength <= 1) {
+          const SMALL_PACKET_BYTES = 100;
+          const c2sPackets = flow.packets.filter(p => p.direction === "c2s");
+          let totalC2sKeystrokes = 0;
+
+          for (const pkt of c2sPackets) {
+            try {
+              const pinfo = getPacketInfo(pkt.packet);
+              const pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
+              if (Number.isFinite(pktLen) && pktLen > 0 && pktLen <= SMALL_PACKET_BYTES) {
+                totalC2sKeystrokes += 1;
+              }
+            } catch (_e) {
+              // Ignore packets we can't parse
+            }
+          }
+
+          // If we have c2s keystrokes, calculate average command length
+          if (totalC2sKeystrokes > 0) {
+            const netKeystrokes = Math.max(1, totalC2sKeystrokes - backspaceHints.count);
+            // Use average 13 chars per command, clamp to reasonable range (5-100)
+            const avgCmdLength = Math.max(5, Math.min(100, Math.round(netKeystrokes / 13)));
+            estimatedCommandLength = avgCmdLength;
+          }
+        }
+
         // Adjust command length for backspaces: each backspace removes
         // one previously typed character, so the actual text length is
         // (total keystrokes - backspace count). For example:
         //   - User types "hello" (5) + <BS> (1, removes 'o') + "world" (5)
         //   - Total keystrokes: 11
         //   - Actual text: "hellworld" (9 chars = 11 - 2 backspaces)
-        if (Number.isFinite(estimatedCommandLength) && backspaceHints.count > 0) {
+        if (Number.isFinite(estimatedCommandLength) && backspaceHints.count > 0 && estimatedCommandLength > 1) {
           estimatedCommandLength = Math.max(1, estimatedCommandLength - backspaceHints.count);
         }
 
