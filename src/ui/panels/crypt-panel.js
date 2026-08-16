@@ -1860,8 +1860,9 @@ function createCryptPanel({
         // keystrokes and reports 1 keystroke per Return; the peeled
         // stream gives a real per-command length.
         let estimatedCommandLength = null;
+        let peeledIndexed = null;
         if (appliedPadding.detected && Array.isArray(appliedPadding.keystrokeDelaysMs)) {
-          const peeledIndexed = buildIndexedDelaysFromPeeled(appliedPadding.keystrokeDelaysMs);
+          peeledIndexed = buildIndexedDelaysFromPeeled(appliedPadding.keystrokeDelaysMs);
           estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(peeledIndexed);
         }
         if (!Number.isFinite(estimatedCommandLength)) {
@@ -1870,30 +1871,44 @@ function createCryptPanel({
         const backspaceHints = await detectBackspaceHintsAsync(delaysWithIdx);
 
         // Fallback calculation: if estimatedCommandLength is 1 or invalid,
-        // use (total c2s keystrokes - backspaces) / 13 as average command length
+        // use (total c2s keystrokes - backspaces) / number of chunks as average command length
         if (!Number.isFinite(estimatedCommandLength) || estimatedCommandLength <= 1) {
-          const SMALL_PACKET_BYTES = 100;
-          const c2sPackets = flow.packets.filter(p => p.direction === "c2s");
-          let totalC2sKeystrokes = 0;
-
-          for (const pkt of c2sPackets) {
-            try {
-              const pinfo = getPacketInfo(pkt.packet);
-              const pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
-              if (Number.isFinite(pktLen) && pktLen > 0 && pktLen <= SMALL_PACKET_BYTES) {
-                totalC2sKeystrokes += 1;
-              }
-            } catch (_e) {
-              // Ignore packets we can't parse
-            }
+          // Get number of chunks (commands) from findReturnChunks
+          let numChunks = 0;
+          if (peeledIndexed) {
+            const chunks = findReturnChunks(peeledIndexed);
+            numChunks = chunks.length;
+          }
+          if (numChunks <= 0) {
+            const chunks = findReturnChunks(delaysWithIdx);
+            numChunks = chunks.length;
           }
 
-          // If we have c2s keystrokes, calculate average command length
-          if (totalC2sKeystrokes > 0) {
-            const netKeystrokes = Math.max(1, totalC2sKeystrokes - backspaceHints.count);
-            // Use average 13 chars per command, clamp to reasonable range (5-100)
-            const avgCmdLength = Math.max(5, Math.min(100, Math.round(netKeystrokes / 13)));
-            estimatedCommandLength = avgCmdLength;
+          // Only use fallback if we have more than one chunk (single chunk works correctly)
+          if (numChunks > 1) {
+            const SMALL_PACKET_BYTES = 100;
+            const c2sPackets = flow.packets.filter(p => p.direction === "c2s");
+            let totalC2sKeystrokes = 0;
+
+            for (const pkt of c2sPackets) {
+              try {
+                const pinfo = getPacketInfo(pkt.packet);
+                const pktLen = Number(pinfo?.["packet.length"] ?? pinfo?.["Packet Length"] ?? pinfo?.["Length"] ?? null);
+                if (Number.isFinite(pktLen) && pktLen > 0 && pktLen <= SMALL_PACKET_BYTES) {
+                  totalC2sKeystrokes += 1;
+                }
+              } catch (_e) {
+                // Ignore packets we can't parse
+              }
+            }
+
+            // If we have c2s keystrokes, calculate average command length
+            if (totalC2sKeystrokes > 0) {
+              const netKeystrokes = Math.max(1, totalC2sKeystrokes - backspaceHints.count);
+              // Divide by number of chunks to get average command length, clamp to reasonable range (5-100)
+              const avgCmdLength = Math.max(5, Math.min(100, Math.round(netKeystrokes / numChunks)));
+              estimatedCommandLength = avgCmdLength;
+            }
           }
         }
 
