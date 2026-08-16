@@ -1328,10 +1328,71 @@ function detectSlotsInCommand(cmd) {
  * Given a corpus command (like "scp file.txt user@server:/path") and
  * a SessionArtifactStore, generates filled variants by replacing slot
  * patterns with actual artifacts from the capture.
- * 
+ *
+ * Options:
+ *   - viterbiText: optional string of characters from the timing
+ *     decoder (Viterbi decode). When no artifact matches a slot's
+ *     length, we fall back to extracting characters from this string
+ *     at the slot's position. Wild unicode / control chars are
+ *     replaced with underscores so the result is shell-safe.
+ *
  * Returns an array of { filledCommand, score, slotsUsed } where score
  * is based on how well the artifacts match the slot requirements.
  */
+
+// Sanitize a single character for shell-safety. Wild unicode / control
+// chars are replaced with underscores so the result is shell-safe.
+// Printable ASCII (0x20-0x7E) and common shell punctuation pass through.
+function sanitizeShellChar(ch) {
+    if (typeof ch !== "string" || ch.length === 0) return "_";
+    const code = ch.charCodeAt(0);
+    // Printable ASCII range (space through tilde)
+    if (code >= 0x20 && code <= 0x7E) return ch;
+    // Common whitespace (tab, newline, carriage return) -> underscore
+    if (code === 0x09 || code === 0x0A || code === 0x0D) return "_";
+    // Everything else (control chars, high-bit, unicode) -> underscore
+    return "_";
+}
+
+// Extract a length-correct fill for a slot from the Viterbi decode text.
+// The slot's position in the corpus command maps to a position in the
+// Viterbi text (offset by the cumulative length of preceding slots).
+// Returns a sanitized string of the right length, or null if the
+// Viterbi text doesn't have enough characters.
+function extractViterbiSlotFill(viterbiText, slot, cmd) {
+    if (!viterbiText || typeof viterbiText !== "string") return null;
+    if (!slot || typeof slot.start !== "number") return null;
+
+    // Find the slot's position in the corpus command. The slot.start
+    // is the offset within cmd where the slot begins. We need to map
+    // this to a position in viterbiText by subtracting the lengths of
+    // any preceding slots (which would have been replaced by shorter
+    // or longer fills in the Viterbi text).
+    //
+    // Simple approach: use slot.start as a direct offset into
+    // viterbiText. This works when the corpus command and Viterbi text
+    // are roughly aligned (which they are when the corpus command was
+    // selected because its structure matches the Viterbi decode).
+    const startOffset = Math.max(0, Math.min(slot.start, viterbiText.length));
+    const endOffset = Math.min(startOffset + slot.length, viterbiText.length);
+
+    if (endOffset <= startOffset) return null;
+
+    const rawSlice = viterbiText.slice(startOffset, endOffset);
+    if (!rawSlice) return null;
+
+    // Sanitize each character: wild unicode / control chars become "_"
+    let sanitized = "";
+    for (let i = 0; i < rawSlice.length; i += 1) {
+        sanitized += sanitizeShellChar(rawSlice[i]);
+    }
+
+    // If the sanitized result is all underscores, it's not useful
+    if (/^_+$/.test(sanitized)) return null;
+
+    return sanitized;
+}
+
 function fillCommandSlots(cmd, artifactStore, options = {}) {
     const results = [];
     if (!artifactStore) return results;
@@ -1347,6 +1408,8 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
         });
         return results;
     }
+
+    const viterbiText = (typeof options.viterbiText === "string") ? options.viterbiText : null;
 
     // Map slot type to artifact type and findBestSlotFill slotType
     const slotTypeMap = {
@@ -1366,6 +1429,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
     for (const slot of slots) {
         const mapping = slotTypeMap[slot.type] || slotTypeMap.filename;
         const fillsForSlot = [];
+        let hasArtifactMatch = false;
 
         if (slot.type === "user_at_host") {
             // Special: user@host combines username + hostname/IP
@@ -1381,6 +1445,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
                     fillText: userHostFill.value,
                     score: userHostFill.score,
                 });
+                hasArtifactMatch = true;
             }
 
             // Also try to construct from separate username + hostname/IP
@@ -1400,6 +1465,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
                         fillText: combined,
                         score: combinedScore,
                     });
+                    hasArtifactMatch = true;
                 }
             }
 
@@ -1411,6 +1477,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
                     fillText: `root@${h.value}`,
                     score: h.confidence * 0.8,
                 });
+                hasArtifactMatch = true;
             }
         } else {
             // Regular slot type - use findBestSlotFill
@@ -1425,6 +1492,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
                     fillText: bestFill.value,
                     score: bestFill.score,
                 });
+                hasArtifactMatch = true;
             }
 
             // Also check similar artifacts
@@ -1440,6 +1508,27 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
                     artifact: sim.artifact,
                     fillText: sim.artifact.value,
                     score: sim.score,
+                });
+                hasArtifactMatch = true;
+            }
+        }
+
+        // Viterbi-based fallback: when no artifact matches the slot
+        // length, extract characters from the Viterbi decode at the
+        // slot's position. This gives us a length-correct fill using
+        // the timing-decoded characters (which are the most probable
+        // characters for that keystroke position). Wild unicode /
+        // control chars are replaced with underscores so the result
+        // is shell-safe.
+        if (!hasArtifactMatch && viterbiText && viterbiText.length > 0) {
+            const viterbiFill = extractViterbiSlotFill(viterbiText, slot, cmd);
+            if (viterbiFill) {
+                fillsForSlot.push({
+                    slot,
+                    artifact: null,
+                    fillText: viterbiFill,
+                    score: 0.15,  // Lower than artifact fills but higher than [unintelligible-N]
+                    source: "viterbi",
                 });
             }
         }
@@ -1522,7 +1611,7 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
  * 
  * Returns [[score, command, originalTemplate, slotFillInfo], ...]
  */
-function rankCorpusWithSlotFilling(model, artifactStore, targetLen = null, tolerance = 3, topn = 30) {
+function rankCorpusWithSlotFilling(model, artifactStore, targetLen = null, tolerance = 3, topn = 30, options = {}) {
     if (!model || typeof model.rankCorpus !== "function") {
         return [];
     }
@@ -1532,6 +1621,8 @@ function rankCorpusWithSlotFilling(model, artifactStore, targetLen = null, toler
     if (baseRanked.length === 0) {
         return [];
     }
+
+    const viterbiText = (typeof options.viterbiText === "string") ? options.viterbiText : null;
 
     const results = [];
 
@@ -1547,7 +1638,7 @@ function rankCorpusWithSlotFilling(model, artifactStore, targetLen = null, toler
 
         // Try to fill slots if we have an artifact store
         if (artifactStore) {
-            const filledVariants = fillCommandSlots(cmd, artifactStore);
+            const filledVariants = fillCommandSlots(cmd, artifactStore, { viterbiText });
 
             for (const fv of filledVariants) {
                 if (fv.slotsUsed && fv.slotsUsed.length > 0) {
