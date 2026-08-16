@@ -2499,6 +2499,71 @@ function createCryptPanel({
                   );
                 }
               } catch (_e) { /* ignore */ }
+
+              // ── Chain validation pass ──
+              // Now that we have a complete command chain from the
+              // per-chunk Markov beams, run one more LLM round-trip to
+              // sanity-check the chain. The LLM can swap a top-ranked
+              // candidate with an alt-list entry that fits the session
+              // flow better, OR replace gibberish/typo-heavy commands
+              // with `[unintelligible-N]` placeholders.
+              if (
+                typeof window !== "undefined" &&
+                window.llmapi &&
+                typeof window.llmapi.generate === "function" &&
+                markovChunks.length > 0
+              ) {
+                try {
+                  markStage(
+                    "markov",
+                    "running",
+                    `${markovChunks.length} chunk(s) · validating chain…`,
+                  );
+                  const validationResult = await requestLlmChainValidation(markovChunks);
+                  if (validationResult && !validationResult.skipped) {
+                    const { swappedCount = 0, replacedCount = 0 } = validationResult;
+                    console.log(
+                      "[Crypt/OpenSSH] markov: chain validation swapped",
+                      swappedCount,
+                      "command(s), replaced",
+                      replacedCount,
+                      "with [unintelligible-N]",
+                    );
+                    // Re-render with the validated chunks
+                    renderSshPrimaryFromMarkov(
+                      {
+                        ...cached,
+                        markovFeatures: {
+                          targetLen,
+                          chunkCount: markovChunks.length,
+                        },
+                      },
+                      reranked,
+                      { nCommands: model.nCommands, chunks: markovChunks },
+                    );
+                    // Update the cache so JSON export reflects validated chain
+                    const updatedCache = sshLastAnalysisByFlowKey.get(flow.flowKey);
+                    if (updatedCache) {
+                      updatedCache.markovChunks = markovChunks;
+                      sshLastAnalysisByFlowKey.set(flow.flowKey, updatedCache);
+                    }
+                    const stats = [];
+                    if (swappedCount > 0) stats.push(`${swappedCount} swapped`);
+                    if (replacedCount > 0) stats.push(`${replacedCount} replaced`);
+                    const statsText = stats.length > 0 ? ` · ${stats.join(", ")}` : "";
+                    markStage(
+                      "markov",
+                      "done",
+                      `${markovChunks.length || 0} chunk(s) · ${model.nCommands} commands${statsText}`,
+                    );
+                    return;  // Skip the "done" markStage below — we just set it with stats
+                  }
+                } catch (valErr) {
+                  console.warn("[Crypt/OpenSSH] LLM chain validation failed:", valErr);
+                  // Fall through to the normal "done" markStage below
+                }
+              }
+
               markStage(
                 "markov",
                 "done",
@@ -2832,7 +2897,7 @@ function createCryptPanel({
       if (/^[^@\s]+@[^@\s]+$/.test(trimmed)) return true;
       // Bare filename (looks like /path/to/file or ./file.txt)
       if (/^[\/~]?[a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]{1,5}$/.test(trimmed) &&
-          !/^(ls|cd|cat|grep|find|rm|cp|mv)\s/i.test(trimmed)) return true;
+        !/^(ls|cd|cat|grep|find|rm|cp|mv)\s/i.test(trimmed)) return true;
       return false;
     };
 
@@ -3157,6 +3222,23 @@ function createCryptPanel({
           const cmdEl = document.createElement("div");
           cmdEl.className = "crypt-openssh-markov-timeline-command";
           cmdEl.textContent = (topCand && topCand.text) || "(no candidates)";
+          // If the LLM validation marked this as unintelligible, attach
+          // the original text as a hover-to-peek tooltip. The user can
+          // hover for a few seconds and the underlying weird command
+          // "peeks" through so they can still see what was decoded.
+          if (
+            topCand
+            && topCand.text
+            && typeof topCand.text === "string"
+            && topCand.text.startsWith("[unintelligible-")
+            && topCand.originalText
+          ) {
+            cmdEl.classList.add("crypt-openssh-markov-timeline-command-unintelligible");
+            cmdEl.setAttribute("title", `Hover to peek: ${topCand.originalText}`);
+            cmdEl.setAttribute("data-peek-text", topCand.originalText);
+            cmdEl.setAttribute("data-placeholder-text", topCand.text);
+            cmdEl.setAttribute("data-peek-state", "hidden");
+          }
           headerEl.appendChild(cmdEl);
 
           contentEl.appendChild(headerEl);
@@ -3232,6 +3314,51 @@ function createCryptPanel({
 
           itemEl.appendChild(contentEl);
           timelineEl.appendChild(itemEl);
+        }
+
+        // ── Hover-to-peek behavior ──
+        // For commands the LLM marked as `[unintelligible-N]`, allow
+        // the user to hover for a few seconds and have the underlying
+        // "weird" command peek through. This preserves the original
+        // timing decoder guess while still surfacing the LLM's "this
+        // doesn't fit" verdict.
+        if (timelineEl && !timelineEl.dataset.peekWired) {
+          timelineEl.dataset.peekWired = "true";
+          let peekTimer = null;
+          const PEEK_DELAY_MS = 1500;  // ~1.5s hover before peeking
+          timelineEl.addEventListener("mouseover", (ev) => {
+            const target = ev.target.closest(".crypt-openssh-markov-timeline-command-unintelligible");
+            if (!target) return;
+            if (target.getAttribute("data-peek-state") === "shown") return;
+            peekTimer = window.setTimeout(() => {
+              const peekText = target.getAttribute("data-peek-text");
+              if (peekText) {
+                target.textContent = peekText;
+                target.setAttribute("data-peek-state", "shown");
+              }
+            }, PEEK_DELAY_MS);
+          });
+          timelineEl.addEventListener("mouseout", (ev) => {
+            const target = ev.target.closest(".crypt-openssh-markov-timeline-command-unintelligible");
+            if (!target) return;
+            if (peekTimer) {
+              window.clearTimeout(peekTimer);
+              peekTimer = null;
+            }
+            if (target.getAttribute("data-peek-state") === "shown") {
+              // Restore the placeholder. We can't recover the original
+              // "[unintelligible-N]" text directly from the DOM once we
+              // overwrote it, so re-derive from the title attribute.
+              const titleAttr = target.getAttribute("title") || "";
+              const m = titleAttr.match(/^Hover to peek: (.+)$/s);
+              // The placeholder text was the original cmdEl.textContent
+              // before we peeked it; we stashed it on the element via
+              // a sibling data attribute when we first rendered.
+              const placeholder = target.getAttribute("data-placeholder-text");
+              target.textContent = placeholder || "[unintelligible]";
+              target.setAttribute("data-peek-state", "hidden");
+            }
+          });
         }
 
         console.log(
@@ -4136,6 +4263,156 @@ Instructions:
     const arr = parseLlmJsonArray(text);
     if (!arr) return candidates;
     return mergeLlmScoresIntoCandidates(arr, candidates);
+  }
+
+  // ── LLM chain validation pass ─────────────────────────────────────────
+  // After the Markov beam has produced a per-chunk command chain, run
+  // one more LLM round-trip to sanity-check the chain as a whole. The
+  // LLM sees the full ordered list of candidate commands (one per
+  // Return-shaped chunk), plus each chunk's top-3 alternatives. For each
+  // chunk it returns:
+  //   - "selected": the index into top-3 it thinks is most likely the
+  //     correct command (0=top, 1=second, 2=third, -1="none of these")
+  //   - "rationale": a 1-sentence explanation
+  //
+  // This catches:
+  //   * The top-ranked candidate makes no sense in context (e.g. out of
+  //     order, wrong verb class) → swap with alt-list candidate the LLM
+  //     believes fits better
+  //   * The command is gibberish / made-up / contains a typo of an
+  //     obvious word (QORK instead of WORK) → replace with
+  //     `[unintelligible-N]` placeholder
+  //
+  // Returns the markovChunks array mutated in place (each chunk's
+  // `top[0]` may have been replaced with an alt candidate or the
+  // `[unintelligible-N]` placeholder). Also returns the validation
+  // diagnostics so callers can surface "LLM swapped N commands" stats.
+  async function requestLlmChainValidation(markovChunks, opts = {}) {
+    if (!Array.isArray(markovChunks) || markovChunks.length === 0) {
+      return { chunks: markovChunks, swappedCount: 0, replacedCount: 0, skipped: true };
+    }
+    if (typeof window === "undefined" || !window.llmapi || typeof window.llmapi.generate !== "function") {
+      return { chunks: markovChunks, swappedCount: 0, replacedCount: 0, skipped: true };
+    }
+
+    // Build the prompt payload: one entry per chunk with top-3 candidates
+    // and each chunk's keystroke count for length validation.
+    const chunkPayload = markovChunks.map((chunk, idx) => {
+      const topList = (chunk.top || []).slice(0, 3).map((t, i) => ({
+        idx: i,
+        text: (t && t.text) || "",
+        score: Number.isFinite(t && t.score) ? t.score : null,
+      }));
+      return {
+        chunkIdx: idx,
+        keystrokeCount: chunk.keystrokeCount,
+        candidates: topList,
+      };
+    });
+
+    const prompt = `You are a shell command chain validator. The user typed N commands across an SSH session. Each command was detected as a Return-shaped gap in the keystroke timing. For each chunk (in order), I've collected the top-3 candidates from the timing decoder + Markov model.
+
+Your job:
+1. Look at the WHOLE command chain and judge which candidate fits best at each position. A lower-ranked candidate might make more sense in context than the top-ranked one (e.g. if the user is in the middle of a vim session, the top candidate might be a generic command while an alt-list entry is "vi" or "less").
+2. Identify commands that make NO SENSE — gibberish, obvious typos of real words (e.g. "qorkey" instead of "workey", "ososos", random characters), bare artifacts that aren't commands (just an IP, just a hostname with no verb), or commands that contradict the typed-length. Replace these with "[unintelligible-N]" where N is the typed keystroke count.
+
+Commands (ordered list of chunks):
+${JSON.stringify(chunkPayload)}
+
+Instructions:
+- Output a JSON array of objects in the SAME ORDER as the input chunks: [{"chunkIdx": number, "selected": number, "rationale": string, "replaceWith": string|null}].
+- "selected": index 0/1/2 into the candidate list you think is correct. Use -1 if none of them are correct.
+- "rationale": 1 short sentence explaining your pick.
+- "replaceWith": a string to use instead of the selected candidate, OR null to keep the selected one. Use "[unintelligible-N]" (N = chunk's keystroke count) when the command is gibberish / makes no sense.
+- Consider the command CHAIN: a candidate that fits the session flow (e.g. "cd /tmp", "ls", "vim file.txt") should outrank one that's individually common but breaks the flow.
+- Be especially suspicious of: bare IPs, bare hostnames (without a verb like ssh/curl/ping), filenames with no command prefix, words with keyboard-typos (Q instead of W, K instead of J, etc.) when those typos produce non-words, and any candidate that looks like a random character salad.
+- Return ONLY the JSON array, no other commentary.`;
+
+    let raw;
+    try {
+      raw = await window.llmapi.generate(prompt, {
+        maxTokens: 4096,
+        temperature: 0.3,
+        think: false,
+      });
+    } catch (err) {
+      console.warn("[Crypt/OpenSSH] LLM chain validation generate error:", err);
+      return { chunks: markovChunks, swappedCount: 0, replacedCount: 0, skipped: false, error: err };
+    }
+
+    const text = extractLlmText(raw);
+    if (!text) {
+      return { chunks: markovChunks, swappedCount: 0, replacedCount: 0, skipped: false };
+    }
+    const arr = parseLlmJsonArray(text);
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return { chunks: markovChunks, swappedCount: 0, replacedCount: 0, skipped: false };
+    }
+
+    let swappedCount = 0;
+    let replacedCount = 0;
+
+    for (const validation of arr) {
+      const chunkIdx = Number(validation && validation.chunkIdx);
+      if (!Number.isInteger(chunkIdx) || chunkIdx < 0 || chunkIdx >= markovChunks.length) continue;
+      const chunk = markovChunks[chunkIdx];
+      if (!chunk || !Array.isArray(chunk.top)) continue;
+
+      const selectedIdx = Number(validation.selected);
+      const replaceWith = (typeof validation.replaceWith === "string") ? validation.replaceWith : null;
+      const originalText = (chunk.top[0] && chunk.top[0].text) || "";
+
+      // Case A: LLM wants to replace with [unintelligible-N]
+      if (replaceWith && replaceWith.startsWith("[unintelligible-")) {
+        // Keep the score for diagnostic purposes but swap the text.
+        // Preserve the originalText so the UI can offer a hover-to-peek
+        // tooltip that reveals the underlying "weird" command.
+        const originalScore = chunk.top[0] ? chunk.top[0].score : null;
+        chunk.top[0] = {
+          score: originalScore,
+          text: replaceWith,
+          originalText,
+          replaced: true,
+        };
+        replacedCount += 1;
+        continue;
+      }
+
+      // Case B: LLM picks a different index (1 or 2 from alt list)
+      if (Number.isInteger(selectedIdx) && selectedIdx >= 1 && selectedIdx < chunk.top.length) {
+        const altCandidate = chunk.top[selectedIdx];
+        if (altCandidate && altCandidate.text && altCandidate.text !== originalText) {
+          chunk.top[0] = {
+            score: altCandidate.score,
+            text: altCandidate.text,
+            swapped: true,
+            originalText,
+          };
+          swappedCount += 1;
+        }
+        continue;
+      }
+
+      // Case C: LLM picks -1 (none fit) but doesn't suggest a replacement
+      if (selectedIdx === -1) {
+        const keystrokeCount = chunk.keystrokeCount || (originalText ? originalText.length : 1);
+        chunk.top[0] = {
+          score: chunk.top[0] ? chunk.top[0].score : null,
+          text: `[unintelligible-${keystrokeCount}]`,
+          originalText,
+          replaced: true,
+        };
+        replacedCount += 1;
+      }
+      // Case D: selectedIdx === 0 → keep the top candidate as-is
+    }
+
+    return {
+      chunks: markovChunks,
+      swappedCount,
+      replacedCount,
+      skipped: false,
+    };
   }
 
   // ── LLM response helpers ──────────────────────────────────────────────
