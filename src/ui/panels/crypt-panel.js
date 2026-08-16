@@ -930,6 +930,29 @@ function createCryptPanel({
         if (typeof setImmediate === "function") setImmediate(r);
         else setTimeout(r, 0);
       });
+      // Load keystroke settings from settingsapi and configure Markov module
+      try {
+        if (
+          typeof window !== "undefined"
+          && window.settingsapi
+          && typeof window.settingsapi.get === "function"
+          && sshMarkovModule
+          && typeof sshMarkovModule.setMarkovConfig === "function"
+        ) {
+          const settings = await window.settingsapi.get();
+          const keystrokeSettings = settings && settings.keystroke;
+          if (keystrokeSettings) {
+            // Configure conciseness bonus multiplier
+            if (typeof keystrokeSettings.concisenessBonusMultiplier === "number") {
+              sshMarkovModule.setMarkovConfig({
+                concisenessBonusMultiplier: keystrokeSettings.concisenessBonusMultiplier,
+              });
+            }
+          }
+        }
+      } catch (_e) {
+        // Ignore settings load errors - use defaults
+      }
       // Try the cache first (warm path).
       let dict = await api.getModel();
       if (!dict && typeof api.train === "function") {
@@ -1192,11 +1215,71 @@ function createCryptPanel({
     if (timelineTitleEl) timelineTitleEl.hidden = true;
     if (timelineEl) timelineEl.hidden = true;
     if (markovOutputEl) markovOutputEl.hidden = true;
-    // Drop the analysis cache so the export button reflects "needs analyze"
-    sshLastAnalysisByFlowKey.clear();
-    // Re-disable the export button (it'll be re-enabled after analyze completes)
+    // Do NOT clear sshLastAnalysisByFlowKey() here — the cache should persist
+    // when switching between flows so users don't have to re-analyze each time.
+    // The cache is only cleared in refreshSshEncounteredFlows() when a new
+    // capture file is loaded.
+
+    // Re-disable the export button (it'll be re-enabled if the selected
+    // flow has a cached analysis, or after analyze completes for a new flow)
     const exportBtn = document.getElementById("crypt-openssh-export-btn");
     if (exportBtn) exportBtn.disabled = true;
+  }
+
+  // ── Re-render from cached analysis ──────────────────────────────────
+  //
+  // When the user selects a flow that was already analyzed, re-render
+  // all the UI elements from the cached result instead of requiring
+  // them to click "Analyze selected" again.
+  function renderSshFromCachedAnalysis(cached) {
+    if (!cached) return;
+    const decoder = getSshDecoderModule();
+    const flow = cached.flow;
+    const delays = cached.delays || [];
+    const candidates = cached.candidates || [];
+
+    // Re-enable export button
+    const exportBtn = document.getElementById("crypt-openssh-export-btn");
+    if (exportBtn) exportBtn.disabled = false;
+
+    // Re-render chart if we have delays and can build series
+    if (decoder && Array.isArray(delays) && delays.length > 0) {
+      const series = decoder.buildChartSeries(delays);
+      // Pass paddingDetection from cache for yellow obfuscation ticks
+      const paddingFromCache = cached?.paddingDetection || null;
+      renderSshChartWithSeries(series, delays, decoder, paddingFromCache);
+    }
+
+    // Re-render candidates
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      renderSshCandidates(candidates, delays, decoder);
+    }
+
+    // Re-render summary
+    renderSshSummary(
+      flow,
+      delays,
+      candidates,
+      cached.estimatedCommandLength,
+      cached.backspaceHints,
+    );
+
+    // Re-render primary/insight if available
+    if (cached.primary || cached.insight) {
+      renderSshPrimary(cached.primary, cached.insight, { mode: cached.renderMode || "ok" });
+    }
+
+    // Re-render Markov if available
+    if (cached.markovCandidates && cached.markovCandidates.length > 0) {
+      renderSshPrimaryFromMarkov(
+        cached,
+        cached.markovCandidates,
+        {
+          nCommands: cached.markovFeatures?.nCommands || 0,
+          chunks: cached.markovChunks || [],
+        },
+      );
+    }
   }
 
   // ── Keystroke-timing export ─────────────────────────────────────────
@@ -1392,11 +1475,16 @@ function createCryptPanel({
     const keyChanged = newKey !== sshSelectedFlowKey;
     sshSelectedFlowKey = newKey;
     renderSshFlowDetails(flow);
-    // Switched to a different flow? Drop the visible outputs so the
-    // user doesn't see stale chart/candidates/insight from the
-    // previously-analyzed flow. The flow-details pane is repopulated
-    // by renderSshFlowDetails() above.
-    if (keyChanged && newKey) clearSshOutputPanels();
+    // Switched to a different flow?
+    if (keyChanged && newKey) {
+      // First clear any stale outputs from the previous flow
+      clearSshOutputPanels();
+      // Then check if this flow has a cached analysis — if so, re-render
+      const cached = sshLastAnalysisByFlowKey.get(newKey);
+      if (cached) {
+        renderSshFromCachedAnalysis(cached);
+      }
+    }
   }
 
   function analyzeSelectedSshFlow() {
@@ -1437,6 +1525,62 @@ function createCryptPanel({
       deobfCoverageEl.addEventListener("input", () => {
         deobfCoverageLabelEl.textContent = Number(deobfCoverageEl.value).toFixed(2);
         deobfSettings.minCoverage = Number(deobfCoverageEl.value);
+      });
+    }
+    // Markov command ranking tuning controls.
+    const markovMinLengthEl = document.getElementById("crypt-openssh-markov-min-length");
+    const markovConcisenessEl = document.getElementById("crypt-openssh-markov-conciseness");
+    const markovConcisenessLabelEl = document.getElementById("crypt-openssh-markov-conciseness-label");
+    const markovLengthBonusEl = document.getElementById("crypt-openssh-markov-length-bonus");
+    const markovLengthBonusLabelEl = document.getElementById("crypt-openssh-markov-length-bonus-label");
+    const markovSettings = {
+      // Minimum command length floor (int, default 2, was hardcoded as 3)
+      // Controls Math.max(X, ...) in the Markov beam search.
+      minCommandLength: markovMinLengthEl ? Number(markovMinLengthEl.value) : 2,
+      // Conciseness bonus multiplier (float, 0.8-4.0, default 1.0)
+      // Scales the bonus for short slotless commands vs slot-containing templates.
+      concisenessBonusMultiplier: markovConcisenessEl ? Number(markovConcisenessEl.value) : 1.0,
+      // Length bonus multiplier (float, 0.5-4.0, default 1.0)
+      // Scales the length-matching bonuses (within tolerance, slots flexibility).
+      lengthBonusMultiplier: markovLengthBonusEl ? Number(markovLengthBonusEl.value) : 1.0,
+    };
+    // Initialize conciseness label
+    if (markovConcisenessEl && markovConcisenessLabelEl) {
+      markovConcisenessLabelEl.textContent = `${Number(markovConcisenessEl.value).toFixed(1)}x`;
+    }
+    // Live-update conciseness label as user drags
+    if (markovConcisenessEl && markovConcisenessLabelEl) {
+      markovConcisenessEl.addEventListener("input", () => {
+        markovConcisenessLabelEl.textContent = `${Number(markovConcisenessEl.value).toFixed(1)}x`;
+        markovSettings.concisenessBonusMultiplier = Number(markovConcisenessEl.value);
+      });
+    }
+    // Initialize length bonus label
+    if (markovLengthBonusEl && markovLengthBonusLabelEl) {
+      markovLengthBonusLabelEl.textContent = `${Number(markovLengthBonusEl.value).toFixed(1)}x`;
+    }
+    // Live-update length bonus label as user drags
+    if (markovLengthBonusEl && markovLengthBonusLabelEl) {
+      markovLengthBonusEl.addEventListener("input", () => {
+        markovLengthBonusLabelEl.textContent = `${Number(markovLengthBonusEl.value).toFixed(1)}x`;
+        markovSettings.lengthBonusMultiplier = Number(markovLengthBonusEl.value);
+      });
+    }
+    // Update minCommandLength when user changes it
+    if (markovMinLengthEl) {
+      markovMinLengthEl.addEventListener("change", () => {
+        markovSettings.minCommandLength = Number(markovMinLengthEl.value);
+      });
+    }
+    // Apply markov settings to the Markov module immediately so they're ready
+    // when the analysis runs. Also re-applied in ensureShellMarkovReady().
+    if (
+      sshMarkovModule
+      && typeof sshMarkovModule.setMarkovConfig === "function"
+    ) {
+      sshMarkovModule.setMarkovConfig({
+        concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
+        lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
       });
     }
     // Auto-tune toggle: update coverage slider disabled state
@@ -1666,7 +1810,8 @@ function createCryptPanel({
         setProgress(`Building histogram (${effectiveDelays.length} intervals)…`);
         await yieldToUi();
         const series = await buildChartSeriesAsync(effectiveDelays, decoder);
-        renderSshChartWithSeries(series, effectiveDelays, decoder);
+        // Pass padding detection result to chart renderer for yellow obfuscation markers
+        renderSshChartWithSeries(series, effectiveDelays, decoder, appliedPadding);
         if (summaryEl) {
           summaryEl.textContent = `Decoding keystrokes (${effectiveDelays.length} intervals)...`;
         }
@@ -1723,6 +1868,16 @@ function createCryptPanel({
           estimatedCommandLength = await estimateCommandLengthFromDelaysWithIdxAsync(delaysWithIdx);
         }
         const backspaceHints = await detectBackspaceHintsAsync(delaysWithIdx);
+
+        // Adjust command length for backspaces: each backspace removes
+        // one previously typed character, so the actual text length is
+        // (total keystrokes - backspace count). For example:
+        //   - User types "hello" (5) + <BS> (1, removes 'o') + "world" (5)
+        //   - Total keystrokes: 11
+        //   - Actual text: "hellworld" (9 chars = 11 - 2 backspaces)
+        if (Number.isFinite(estimatedCommandLength) && backspaceHints.count > 0) {
+          estimatedCommandLength = Math.max(1, estimatedCommandLength - backspaceHints.count);
+        }
 
         // Run the LLM as the primary result builder. The decoder provides
         // a working set of timing-derived candidate strings; the language
@@ -1859,6 +2014,66 @@ function createCryptPanel({
                 return;
               }
               markStage("markov", "running", "generating…");
+              // Load keystroke settings:
+              // 1. First use local controls from this OpenSSH tab (markovSettings)
+              // 2. Fall back to global Settings tab via settingsapi
+              // 3. Use hardcoded defaults if neither available
+              let markovMinCommandLength = 2;  // default
+              let concisenessBonusMultiplier = 1.0;  // default
+
+              // First check local markovSettings (from OpenSSH tab controls - highest priority)
+              if (markovSettings) {
+                if (typeof markovSettings.minCommandLength === "number") {
+                  markovMinCommandLength = markovSettings.minCommandLength;
+                }
+                if (typeof markovSettings.concisenessBonusMultiplier === "number") {
+                  concisenessBonusMultiplier = markovSettings.concisenessBonusMultiplier;
+                }
+              }
+
+              // Also apply local conciseness bonus to the Markov module for this analysis
+              if (
+                sshMarkovModule
+                && typeof sshMarkovModule.setMarkovConfig === "function"
+              ) {
+                sshMarkovModule.setMarkovConfig({
+                  concisenessBonusMultiplier: concisenessBonusMultiplier,
+                });
+              }
+
+              // Fall back to global settings tab (lower priority than local controls)
+              try {
+                if (
+                  typeof window !== "undefined"
+                  && window.settingsapi
+                  && typeof window.settingsapi.get === "function"
+                ) {
+                  const fullSettings = await window.settingsapi.get();
+                  const globalKeystroke = fullSettings?.keystroke;
+                  if (globalKeystroke) {
+                    // Only use global settings if we didn't get them from local controls
+                    if (!markovSettings || typeof markovSettings.minCommandLength !== "number") {
+                      if (typeof globalKeystroke.markovMinCommandLength === "number") {
+                        markovMinCommandLength = globalKeystroke.markovMinCommandLength;
+                      }
+                    }
+                    // If we didn't have local markovSettings, also use global conciseness
+                    if (!markovSettings && typeof globalKeystroke.concisenessBonusMultiplier === "number") {
+                      concisenessBonusMultiplier = globalKeystroke.concisenessBonusMultiplier;
+                      if (
+                        sshMarkovModule
+                        && typeof sshMarkovModule.setMarkovConfig === "function"
+                      ) {
+                        sshMarkovModule.setMarkovConfig({
+                          concisenessBonusMultiplier: concisenessBonusMultiplier,
+                        });
+                      }
+                    }
+                  }
+                }
+              } catch (_e) {
+                // Ignore - use the values we have
+              }
               const cached = sshLastAnalysisByFlowKey.get(flow.flowKey);
               if (!cached) return;
               // The cache stores the RAW delays (needed for the
@@ -1900,7 +2115,14 @@ function createCryptPanel({
                   // back to the last chunk (most recent command).
                   const lengths = chunks.map((c) => c.keystrokeCount).sort((a, b) => a - b);
                   const medianChunk = lengths[Math.floor(lengths.length / 2)];
-                  targetLen = Math.max(3, medianChunk || 1);
+                  targetLen = Math.max(markovMinCommandLength, medianChunk || 1);
+
+                  // Adjust for backspaces: each detected backspace removes
+                  // one previously typed character from the actual text
+                  const bsCount = cached.backspaceHints?.count || 0;
+                  if (bsCount > 0) {
+                    targetLen = Math.max(markovMinCommandLength, targetLen - bsCount);
+                  }
                 }
               }
               if (!targetLen) targetLen = 8;
@@ -1915,19 +2137,54 @@ function createCryptPanel({
                 .map((d) => Number(d.packetLength))
                 .filter((n) => Number.isFinite(n));
 
-              // Use rankCorpus instead of generateBeam:
+              // Get artifact store from the module for slot filling.
+              // This lets us replace placeholders like "file.txt", "example.com"
+              // with actual IPs, hostnames, filenames from the capture.
+              let artifactStore = null;
+              if (sshMarkovModule && typeof sshMarkovModule.getSessionArtifactStore === "function") {
+                try {
+                  artifactStore = sshMarkovModule.getSessionArtifactStore();
+                } catch (e) {
+                  console.warn("[Crypt/OpenSSH] artifact store unavailable:", e);
+                }
+              }
+
+              // Use rankCorpusWithSlotFilling instead of raw rankCorpus:
               // - Returns actual corpus lines, not generated garbage
               // - Already sorted by frequency + Markov probability
               // - Length-aware filtering with slot flexibility
-              const beam = model.rankCorpus(targetLen, 5, 100);
+              // - FILLS SLOTS: file.txt → actual filenames, example.com → actual hosts/IPs
+              const beam = (
+                sshMarkovModule
+                && artifactStore
+                && typeof sshMarkovModule.rankCorpusWithSlotFilling === "function"
+              )
+                ? sshMarkovModule.rankCorpusWithSlotFilling(
+                  model,
+                  artifactStore,
+                  targetLen,
+                  5,  // tolerance
+                  100  // top N
+                )
+                : model.rankCorpus(targetLen, 5, 100);
 
-              // Re-rank with timing for the top-N using the
+              // Get Viterbi candidates as hintText for ngramSimilarity matching
+              // This lets Viterbi influence (but not dictate) Markov candidates
+              // by boosting corpus commands that share n-grams with the timing decode
+              const viterbiHintText = (cached.candidates || [])
+                .slice(0, 8)
+                .map((c) => (c && c.text) ? c.text : "")
+                .filter((t) => t.length > 0)
+                .join(" ");
+
+              // Re-rank with timing + Viterbi hint for the top-N using the
               // peeled delays so candidates that match the user's
-              // typing rhythm bubble up.
+              // typing rhythm AND share n-grams with Viterbi decode bubble up.
               const reranked = model.rankWithTiming(
                 beam,
                 delaysForMarkov,
                 0.22,
+                viterbiHintText || null,  // Viterbi as hint for ngramSimilarity
               ).slice(0, 30);
 
               // Per-Return chunk: split the PEELED stream into
@@ -1946,6 +2203,12 @@ function createCryptPanel({
               // the UI between chunks so the count actually paints.
               const totalMarkovChunks = chunkList.length;
               const markovChunks = [];
+
+              // Build Viterbi-to-chunk mapping using indices for better alignment
+              // This lets each chunk's Markov beam get hints from the corresponding
+              // section of the Viterbi decode, accounting for backspaces and offsets.
+              const viterbiFullText = viterbiHintText;
+
               for (let ci = 0; ci < totalMarkovChunks; ci += 1) {
                 const ch = chunkList[ci];
                 markStage(
@@ -1958,14 +2221,55 @@ function createCryptPanel({
                   .map((d) => Number(d.delay))
                   .filter(Number.isFinite);
 
-                // Use rankCorpus for per-chunk candidates too
-                const segBeam = model.rankCorpus(
-                  Math.max(3, ch.keystrokeCount),
-                  3,  // tolerance
-                  20,  // top N
-                );
+                // Compute per-chunk hintText: extract the portion of Viterbi
+                // that corresponds to this chunk's keystroke count.
+                // If Viterbi has backspaces, the alignment uses approximate
+                // character positions with some overlap for context.
+                let chunkHintText = null;
+                if (viterbiFullText && viterbiFullText.length > 0) {
+                  // Calculate offset: sum of keystroke counts of previous chunks
+                  let prevKeystrokes = 0;
+                  for (let pi = 0; pi < ci; pi += 1) {
+                    prevKeystrokes += chunkList[pi].keystrokeCount;
+                  }
+                  // Extract a window from Viterbi that roughly aligns with this chunk
+                  // Add some context (±3 chars) for better ngram matching
+                  const startOffset = Math.max(0, prevKeystrokes - 3);
+                  const endOffset = Math.min(viterbiFullText.length, prevKeystrokes + ch.keystrokeCount + 3);
+                  chunkHintText = viterbiFullText.slice(startOffset, endOffset);
+                  // If chunk-specific extract is too short, fall back to full Viterbi
+                  if (chunkHintText.length < 3) {
+                    chunkHintText = viterbiFullText;
+                  }
+                }
+
+                // Use rankCorpusWithSlotFilling for per-chunk candidates too
+                // This fills placeholders like "file.txt", "example.com" with
+                // actual artifacts from the capture (IPs, hostnames, filenames)
+                const segBeam = (
+                  sshMarkovModule
+                  && artifactStore
+                  && typeof sshMarkovModule.rankCorpusWithSlotFilling === "function"
+                )
+                  ? sshMarkovModule.rankCorpusWithSlotFilling(
+                    model,
+                    artifactStore,
+                    Math.max(markovMinCommandLength, ch.keystrokeCount),
+                    3,  // tolerance
+                    20  // top N
+                  )
+                  : model.rankCorpus(
+                    Math.max(markovMinCommandLength, ch.keystrokeCount),
+                    3,  // tolerance
+                    20  // top N
+                  );
                 const segRanked = model
-                  .rankWithTiming(segBeam, segDelays, 0.22)
+                  .rankWithTiming(
+                    segBeam,
+                    segDelays,
+                    0.22,
+                    chunkHintText || null,  // Per-chunk Viterbi hint
+                  )
                   .slice(0, 3);
                 markovChunks.push({
                   keystrokeCount: ch.keystrokeCount,
@@ -2008,6 +2312,105 @@ function createCryptPanel({
                 reranked,
                 { nCommands: model.nCommands, chunks: markovChunks },
               );
+
+              // ── Re-run LLM insight with Markov candidates ──
+              // The original LLM ran on Viterbi candidates which are often
+              // gibberish (ososos...). Now that we have actual shell commands
+              // from Markov (per-chunk), re-run the LLM to get insight that
+              // correlates with what the user is actually seeing on screen.
+              if (
+                typeof window !== "undefined" &&
+                window.llmapi &&
+                typeof window.llmapi.generate === "function" &&
+                markovChunks.length > 0
+              ) {
+                try {
+                  markStage(
+                    "markov",
+                    "running",
+                    `${markovChunks.length} chunk(s) · updating insight…`,
+                  );
+
+                  // Build candidates from Markov chunks (top candidate per chunk)
+                  // These are the actual shell commands the user sees in the timeline
+                  const markovCandidatesForLlm = markovChunks.map((chunk, idx) => {
+                    const topCand = chunk.top && chunk.top[0];
+                    return {
+                      text: (topCand && topCand.text) || "",
+                      logProb: Number.isFinite(topCand && topCand.score) ? topCand.score : -1000,
+                      chunkIndex: idx,
+                      keystrokeCount: chunk.keystrokeCount,
+                    };
+                  }).filter((c) => c.text.length > 0);
+
+                  if (markovCandidatesForLlm.length > 0) {
+                    console.log(
+                      "[Crypt/OpenSSH] Re-running LLM with Markov candidates:",
+                      markovCandidatesForLlm.map((c) => c.text).join(" | "),
+                    );
+
+                    // Call assembleLlmPrimaryResult with Markov candidates
+                    // instead of Viterbi candidates. This gives the LLM actual
+                    // shell commands to work with instead of gibberish.
+                    const markovLlmBundle = await assembleLlmPrimaryResult(
+                      effectiveDelays,
+                      markovCandidatesForLlm,
+                      model,
+                      {
+                        estimatedCommandLength,
+                        delaysWithIdx,
+                        backspaceHints: cached.backspaceHints,
+                        flow,
+                        direction,
+                        paddingDetection: paddingResult,
+                        s2cSummary,
+                        shellCorpus,
+                      },
+                    );
+
+                    // Update cache with Markov-based LLM results
+                    const updatedCached = sshLastAnalysisByFlowKey.get(flow.flowKey);
+                    if (updatedCached) {
+                      let needReRender = false;
+
+                      if (markovLlmBundle && markovLlmBundle.primary) {
+                        updatedCached.primary = markovLlmBundle.primary;
+                        needReRender = true;
+                      }
+                      if (markovLlmBundle && markovLlmBundle.insight) {
+                        updatedCached.insight = markovLlmBundle.insight;
+                        needReRender = true;
+                      }
+
+                      sshLastAnalysisByFlowKey.set(flow.flowKey, updatedCached);
+
+                      // Update the insight element with Markov-based LLM results
+                      if (needReRender && markovLlmBundle.insight && markovLlmBundle.insight.text) {
+                        const insightEl = document.getElementById("crypt-openssh-insight");
+                        if (insightEl) {
+                          insightEl.hidden = false;
+                          const insightTextEl = document.getElementById("crypt-openssh-insight-text");
+                          const insightSourceEl = document.getElementById("crypt-openssh-insight-source");
+                          if (insightTextEl) {
+                            insightTextEl.textContent = markovLlmBundle.insight.text;
+                          }
+                          if (insightSourceEl) {
+                            insightSourceEl.textContent =
+                              markovLlmBundle.insight.source || "decoder + LLM (Markov-based)";
+                          }
+                          console.log(
+                            "[Crypt/OpenSSH] Updated LLM insight based on Markov candidates",
+                          );
+                        }
+                      }
+                    }
+                  }
+                } catch (llmErr) {
+                  console.warn("[Crypt/OpenSSH] Markov-based LLM re-run failed:", llmErr);
+                  // Don't fail the whole stage - just continue with original insight
+                }
+              }
+
               // Console-shape diagnostic. If the user reports the
               // markov data is missing on screen, this prints the
               // chunk / candidate sizes so we can verify the data
@@ -2069,7 +2472,7 @@ function createCryptPanel({
       });
   }
 
-  function renderSshChartWithSeries(series, delays, decoder) {
+  function renderSshChartWithSeries(series, delays, decoder, paddingResult = null) {
     const chartEl = document.getElementById("crypt-openssh-chart");
     const legendEl = document.getElementById("crypt-openssh-chart-legend");
     if (!chartEl) return;
@@ -2081,22 +2484,127 @@ function createCryptPanel({
       }
       return;
     }
+
+    // Normalize both histogram and reference curve so their peaks are at 100.
+    // This makes visual comparison easier regardless of sample size.
+    const histY = series.histogram.y;
+    const refY = series.reference.y;
+    const histMax = histY.length > 0 ? Math.max(...histY) : 1;
+    const refMax = refY.length > 0 ? Math.max(...refY) : 1;
+
+    const normalizedHistogram = {
+      ...series.histogram,
+      y: histMax > 0 ? histY.map((v) => (v * 100) / histMax) : histY,
+    };
+    const normalizedReference = {
+      ...series.reference,
+      y: refMax > 0 ? refY.map((v) => (v * 100) / refMax) : refY,
+    };
+
+    // Calculate x-axis range:
+    // - Left: 0
+    // - Right: where the reference Gaussian is at y=20 (20% of peak=100)
+    // For Gaussian: y = 100 * exp(-(x-μ)²/(2σ²))
+    // We want y=20, so: exp(-(x-μ)²/(2σ²)) = 0.2
+    // => (x-μ)²/(2σ²) = ln(5)
+    // => x = μ + σ * sqrt(2 * ln(5))
+    // sqrt(2 * ln(5)) ≈ sqrt(3.2189) ≈ 1.794
+    const mean = decoder.DEFAULT_DIGRAPH_PARAMS.mean;
+    const std = decoder.DEFAULT_DIGRAPH_PARAMS.std;
+    const zFor20 = Math.sqrt(2 * Math.log(5)); // ~1.794
+    const xRight20 = mean + std * zFor20;
+
+    // Also include any histogram bins that go beyond xRight20 (up to the 95th percentile of non-zero bins
+    // to avoid cutting off meaningful data
+    const nonZeroHistX = [];
+    for (let i = 0; i < normalizedHistogram.x.length; i += 1) {
+      if (normalizedHistogram.y[i] > 0) {
+        nonZeroHistX.push(normalizedHistogram.x[i]);
+      }
+    }
+    let xMax = xRight20;
+    if (nonZeroHistX.length > 0) {
+      // Use the rightmost non-zero histogram bin
+      xMax = Math.max(xRight20, Math.max(...nonZeroHistX) + series.binSize);
+    }
+
+    // Build the plot data array - start with histogram and reference
+    const plotData = [normalizedHistogram, normalizedReference];
+
+    // Add yellow obfuscation tick markers if padding was detected
+    // These appear as vertical dashed yellow lines at periodMs, 2*periodMs, 3*periodMs, etc.
+    const hasPadding = paddingResult
+      && paddingResult.detected
+      && Number.isFinite(paddingResult.periodMs)
+      && paddingResult.periodMs > 0;
+
+    const shapes = [];
+    let paddingInfo = "";
+
+    if (hasPadding) {
+      const periodMs = paddingResult.periodMs;
+      const coverage = paddingResult.coverage || 0;
+      const nFiller = Array.isArray(paddingResult.paddedIntervals)
+        ? paddingResult.paddedIntervals.length
+        : 0;
+
+      paddingInfo = ` — ${periodMs}ms padding cadence (${(coverage * 100).toFixed(0)}%, ${nFiller} filler)`;
+
+      // Add yellow vertical dashed lines at each multiple of the period up to xMax
+      // Plotly shapes for vertical lines
+      for (let p = periodMs; p <= xMax + periodMs; p += periodMs) {
+        shapes.push({
+          type: "line",
+          x0: p,
+          x1: p,
+          y0: 0,
+          y1: 1,
+          yref: "paper",  // 0 to 1 = full height
+          line: {
+            color: "#FFD700",  // Gold/yellow
+            width: 2,
+            dash: "dash",
+          },
+        });
+      }
+
+      // Also add a scatter trace for the legend entry (shapes don't appear in legend)
+      const legendTrace = {
+        x: [],
+        y: [],
+        mode: "lines",
+        name: `Padding cadence (${periodMs}ms)`,
+        line: {
+          color: "#FFD700",
+          width: 2,
+          dash: "dash",
+        },
+        showlegend: true,
+      };
+      plotData.push(legendTrace);
+    }
+
     const layout = {
       margin: { t: 20, r: 12, l: 40, b: 36 },
       bargap: 0.05,
       xaxis: {
         title: { text: "Inter-key delay (ms)" },
-        range: [0, Math.max(...series.histogram.x) + series.binSize],
+        range: [0, xMax],
       },
-      yaxis: { title: { text: "Count" } },
+      yaxis: {
+        title: { text: "Normalized count (peak = 100)" },
+        range: [0, 105], // Slightly above 100 to give headroom
+      },
       legend: { orientation: "h", y: -0.2 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
+      shapes: shapes,  // Yellow vertical lines for padding cadence
     };
+
     if (typeof window.Plotly !== "undefined") {
       window.Plotly.newPlot(
         chartEl,
-        [series.histogram, series.reference],
+        plotData,
         layout,
         { displayModeBar: false, responsive: true },
       );
@@ -2108,52 +2616,15 @@ function createCryptPanel({
     if (legendEl) {
       legendEl.textContent =
         `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
-        `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms).`;
+        `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms). ` +
+        `Scaled: peak = 100, right edge ≈ 20.${paddingInfo}`;
     }
   }
 
   function renderSshChart(delays, decoder) {
-    const chartEl = document.getElementById("crypt-openssh-chart");
-    const legendEl = document.getElementById("crypt-openssh-chart-legend");
-    if (!chartEl) return;
-    if (!delays.length) {
-      chartEl.replaceChildren();
-      if (legendEl) {
-        legendEl.textContent =
-          "Not enough packets in this direction to plot a distribution.";
-      }
-      return;
-    }
+    // Delegate to renderSshChartWithSeries which has the normalization logic
     const series = decoder.buildChartSeries(delays);
-    const layout = {
-      margin: { t: 20, r: 12, l: 40, b: 36 },
-      bargap: 0.05,
-      xaxis: {
-        title: { text: "Inter-key delay (ms)" },
-        range: [0, Math.max(...series.histogram.x) + series.binSize],
-      },
-      yaxis: { title: { text: "Count" } },
-      legend: { orientation: "h", y: -0.2 },
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-    };
-    if (typeof window.Plotly !== "undefined") {
-      window.Plotly.newPlot(
-        chartEl,
-        [series.histogram, series.reference],
-        layout,
-        { displayModeBar: false, responsive: true },
-      );
-    } else if (legendEl) {
-      legendEl.textContent =
-        "Plotly unavailable — chart skipped. Histogram: " +
-        JSON.stringify(series.histogram.y);
-    }
-    if (legendEl) {
-      legendEl.textContent =
-        `${delays.length} inter-key delays. ${series.binSize} ms bins. ` +
-        `Reference Gaussian (μ=${decoder.DEFAULT_DIGRAPH_PARAMS.mean} ms, σ=${decoder.DEFAULT_DIGRAPH_PARAMS.std} ms).`;
-    }
+    renderSshChartWithSeries(series, delays, decoder);
   }
 
   /**

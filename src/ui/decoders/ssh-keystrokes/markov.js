@@ -6,6 +6,27 @@
 // channel, length prior weight 0.35, exact-match bonus 0.25, beam branching
 // capped at 24 next-chars per context.
 
+// Runtime-configurable settings for keystroke analysis.
+// These can be set via the exported `setMarkovConfig()` function.
+const _markovConfig = {
+    // Conciseness bonus multiplier for short slotless commands.
+    // Short commands (ls, pwd, cd, etc.) don't have slots, so they get
+    // a bonus to compete with slot-containing templates like "cat file.txt".
+    // At 1.0 (default), very short commands (1-5 chars) get +1.2 bonus.
+    // At 2.0, they'd get +2.4 bonus.
+    // Tuned default: 1.7 (favors short commands moderately)
+    concisenessBonusMultiplier: 1.7,
+
+    // Length bonus multiplier for target-length proximity matching.
+    // Applied to:
+    // - The +0.5 bonus for being within tolerance of targetLen
+    // - The +1.0 bonus for slot-containing templates (flexible length)
+    // Default 1.0 means bonuses are applied as-is.
+    // At 2.0, the bonuses are doubled, making length-matching more important.
+    // Tuned default: 2.6 (strongly favors commands that match the target length)
+    lengthBonusMultiplier: 2.6,
+};
+
 const BOS = "\u0002";
 const EOS = "\u0003";
 
@@ -755,7 +776,9 @@ class ShellMarkov {
                 const lenDiff = Math.abs(len - targetLen);
                 if (lenDiff <= tolerance) {
                     // Small bonus for exact-ish length match
-                    score += 0.5;
+                    // Applied with lengthBonusMultiplier
+                    const lenMult = _markovConfig.lengthBonusMultiplier || 1.0;
+                    score += 0.5 * lenMult;
                 }
 
                 // Also check slot-aware matching
@@ -763,7 +786,32 @@ class ShellMarkov {
                 if (template && template.hasSlots) {
                     // Command has slots - it's a template that can fit variable args
                     // Give it a bonus since it's more flexible
-                    score += 1.0;
+                    // Applied with lengthBonusMultiplier
+                    const lenMult = _markovConfig.lengthBonusMultiplier || 1.0;
+                    score += 1.0 * lenMult;
+                } else {
+                    // Command has NO slots - these are typically short "atomic" commands
+                    // like `ls`, `pwd`, `cd ..`, `git status`, etc. that DON'T have
+                    // variable placeholders. Give them a "conciseness bonus" to
+                    // compete with slot-containing commands which get a +1.0 slot bonus.
+                    // Short commands are often MORE frequent in real shell history.
+                    //
+                    // The multiplier is configurable via setMarkovConfig().
+                    // At default 1.0: ls=+1.2, cd ..=+0.6, git status=+0.3
+                    // At 2.0: ls=+2.4, cd ..=+1.2, git status=+0.6
+                    const mult = _markovConfig.concisenessBonusMultiplier || 1.0;
+                    const len = cmd.length;
+                    if (len <= 5) {
+                        // Very short commands (1-5 chars): full bonus
+                        score += 1.2 * mult;
+                    } else if (len <= 10) {
+                        // Medium-short commands (6-10 chars): partial bonus
+                        score += 0.6 * mult;
+                    } else if (len <= 15) {
+                        // Moderate length (11-15 chars): small bonus
+                        score += 0.3 * mult;
+                    }
+                    // Longer commands without slots get no conciseness bonus
                 }
             }
 
@@ -1359,12 +1407,13 @@ function fillCommandSlots(cmd, artifactStore, options = {}) {
             }
         }
 
-        // Always include the original match as a fallback
+        // When no artifacts available, use [unintelligible-N] where N is character count
+        // Lower score than original fallback so it only shows when no artifacts match
         fillsForSlot.push({
             slot,
             artifact: null,
-            fillText: slot.match,
-            score: 0.1,
+            fillText: `[unintelligible-${slot.match.length}]`,
+            score: 0.05,
         });
 
         // Deduplicate by fillText
@@ -2277,6 +2326,23 @@ function getArtifactsInTimeRange(startTimeMs, endTimeMs, type = null) {
     return getSessionArtifactStore().getArtifactsInTimeRange(startTimeMs, endTimeMs, type);
 }
 
+// Config getter/setter for runtime adjustment of Markov behavior
+function setMarkovConfig(partialConfig) {
+    if (partialConfig && typeof partialConfig === "object") {
+        if (typeof partialConfig.concisenessBonusMultiplier === "number") {
+            _markovConfig.concisenessBonusMultiplier = partialConfig.concisenessBonusMultiplier;
+        }
+        if (typeof partialConfig.lengthBonusMultiplier === "number") {
+            _markovConfig.lengthBonusMultiplier = partialConfig.lengthBonusMultiplier;
+        }
+    }
+    return { ..._markovConfig };
+}
+
+function getMarkovConfig() {
+    return { ..._markovConfig };
+}
+
 // Deprecated/legacy convenience wrappers using singleton
 module.exports = {
     ShellMarkov,
@@ -2294,6 +2360,9 @@ module.exports = {
     computeLineConfidence,
     computeSessionConfidence,
     computeDelayStats,
+    // Runtime config
+    setMarkovConfig,
+    getMarkovConfig,
     // Session artifact store for fuzzy matching
     SessionArtifactStore,
     getSessionArtifactStore,

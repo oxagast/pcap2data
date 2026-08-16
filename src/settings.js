@@ -104,6 +104,21 @@ const DEFAULT_SETTINGS = Object.freeze({
         autoDisableFailureThreshold: 3,
         perPluginFailureThreshold: {},
     },
+    keystroke: {
+        // OpenSSH keystroke analysis settings
+        // Minimum command length floor for Markov ranking.
+        // Commands shorter than this won't be considered in the initial beam.
+        // Lower values (like 1 or 2) allow very short commands like "ls", "pwd".
+        markovMinCommandLength: 2,  // default 2 (was hardcoded as 3)
+
+        // Conciseness bonus multiplier for short slotless commands.
+        // Short commands (ls, pwd, cd, etc.) don't have slots, so they get
+        // a bonus to compete with slot-containing templates like "cat file.txt".
+        // This is a multiplier on the base bonus. Higher = short commands favored more.
+        //   Range: 0.0 (no bonus) to 3.0 (strong bonus)
+        //   At 2.0: very short commands (1-5 chars) get ~2.4x bonus
+        concisenessBonusMultiplier: 1.0,  // default 1.0 (normal bonus)
+    },
     privacy: {
         metricsEnabled: false,
         metricsConsentAsked: false,
