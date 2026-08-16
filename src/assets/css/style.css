@@ -2056,6 +2056,24 @@ strong {
   order: 3;
 }
 
+/* Unintelligible placeholder - LLM-marked "this doesn't fit" commands.
+ * Hover for ~1.5s and the underlying weird command peeks through so
+ * the user can still see what the timing decoder guessed. */
+.crypt-openssh-markov-timeline-command-unintelligible {
+  color: var(--color-6);
+  font-style: italic;
+  opacity: 0.7;
+  cursor: help;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-6) 50%, transparent);
+  transition: opacity 0.3s ease, color 0.3s ease;
+}
+
+.crypt-openssh-markov-timeline-command-unintelligible:hover {
+  opacity: 1;
+  color: var(--color-5);
+  font-style: normal;
+}
+
 /* Keystroke count meta (legacy) */
 .crypt-openssh-markov-timeline-meta {
   font-size: 10px;
