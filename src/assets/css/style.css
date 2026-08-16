@@ -1096,7 +1096,7 @@ strong {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  height: 100%;
+  min-height: 100%;
 }
 
 .crypt-section {
