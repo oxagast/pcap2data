@@ -1047,10 +1047,46 @@ function computeLineConfidence(cmd, opts) {
         // Normalize markov score to [0, 1] range
         // Typical scores range from -10 (low prob) to -1 (high prob)
         const normalized = Math.min(1.0, Math.max(0.3, (options.markovScore + 10) / 9));
-        factors.push({ name: "markovProb", weight: 0.20, value: normalized });
+        factors.push({ name: "markovProb", weight: 0.15, value: normalized });
     }
 
-    // 5. First token validity (shell command heuristic)
+    // 5. Viterbi-Markov agreement (decoder consensus)
+    if (Number.isFinite(options.viterbiMarkovAgreement)) {
+        const agreement = options.viterbiMarkovAgreement;
+        let agreeFactor;
+        if (agreement >= 0.9) {
+            agreeFactor = 1.0;
+        } else if (agreement >= 0.7) {
+            agreeFactor = 0.85;
+        } else if (agreement >= 0.5) {
+            agreeFactor = 0.65;
+        } else {
+            agreeFactor = 0.45;
+        }
+        factors.push({ name: "decoderAgreement", weight: 0.10, value: agreeFactor });
+    }
+
+    // 6. Per-chunk keystroke count plausibility
+    if (Number.isFinite(options.keystrokeCount) && options.keystrokeCount >= 0) {
+        const kc = options.keystrokeCount;
+        let countFactor;
+        if (kc === 0) {
+            countFactor = 0.3;
+        } else if (kc <= 2) {
+            countFactor = 0.6;
+        } else if (kc <= 8) {
+            countFactor = 0.9;
+        } else if (kc <= 20) {
+            countFactor = 1.0;
+        } else if (kc <= 40) {
+            countFactor = 0.85;
+        } else {
+            countFactor = 0.65;
+        }
+        factors.push({ name: "keystrokeCount", weight: 0.10, value: countFactor });
+    }
+
+    // 8. First token validity (shell command heuristic)
     if (cmd.trim()) {
         const firstToken = cmd.trim().split(/\s+/)[0] || "";
         // Check if first token looks like a typical shell command
@@ -1126,7 +1162,7 @@ function computeSessionConfidence(opts) {
         } else {
             chunkFactor = Math.min(1.0, 0.8 + (options.chunkCount - 3) * 0.05);
         }
-        factors.push({ name: "chunkCount", weight: 0.20, value: chunkFactor, label: `Detected ${options.chunkCount} command(s)` });
+        factors.push({ name: "chunkCount", weight: 0.15, value: chunkFactor, label: `Detected ${options.chunkCount} command(s)` });
     }
 
     // 2. Delay variability (CV = std/mean)
@@ -1145,7 +1181,7 @@ function computeSessionConfidence(opts) {
         } else {
             cvFactor = 0.7; // high variability - may be noise
         }
-        factors.push({ name: "delayVariability", weight: 0.25, value: cvFactor, label: `CV = ${cv.toFixed(2)}` });
+        factors.push({ name: "delayVariability", weight: 0.20, value: cvFactor, label: `CV = ${cv.toFixed(2)}` });
     }
 
     // 3. Obfuscation level
@@ -1163,9 +1199,9 @@ function computeSessionConfidence(opts) {
         } else {
             obfusFactor = 0.3; // heavy obfuscation
         }
-        factors.push({ name: "obfuscationLevel", weight: 0.25, value: obfusFactor, label: `${(coverage * 100).toFixed(0)}% padding` });
+        factors.push({ name: "obfuscationLevel", weight: 0.20, value: obfusFactor, label: `${(coverage * 100).toFixed(0)}% padding` });
     } else {
-        factors.push({ name: "obfuscationLevel", weight: 0.25, value: 1.0, label: "No padding detected" });
+        factors.push({ name: "obfuscationLevel", weight: 0.20, value: 1.0, label: "No padding detected" });
     }
 
     // 4. Signal quality (median delay and gap detection)
@@ -1182,7 +1218,7 @@ function computeSessionConfidence(opts) {
         } else {
             medianFactor = 0.6; // very slow - maybe noise
         }
-        factors.push({ name: "medianDelay", weight: 0.15, value: medianFactor, label: `Median = ${options.medianDelayMs.toFixed(0)}ms` });
+        factors.push({ name: "medianDelay", weight: 0.10, value: medianFactor, label: `Median = ${options.medianDelayMs.toFixed(0)}ms` });
     }
 
     // 5. Clear boundary detection (Return gaps)
@@ -1195,7 +1231,90 @@ function computeSessionConfidence(opts) {
         } else {
             gapFactor = Math.min(1.0, 0.7 + (options.clearGapCount - 1) * 0.1);
         }
-        factors.push({ name: "clearBoundaries", weight: 0.15, value: gapFactor, label: `${options.clearGapCount} clear gap(s)` });
+        factors.push({ name: "clearBoundaries", weight: 0.10, value: gapFactor, label: `${options.clearGapCount} clear gap(s)` });
+    }
+
+    // 6. Auto-tune chunk-shape quality (how command-like the peeled stream is)
+    if (Number.isFinite(options.autotuneChunkCount) && Number.isFinite(options.autotuneScore)) {
+        let shapeFactor;
+        if (options.autotuneScore >= 1.0) {
+            shapeFactor = 1.0;
+        } else if (options.autotuneScore >= 0.0) {
+            shapeFactor = 0.7 + options.autotuneScore * 0.3;
+        } else if (options.autotuneScore >= -1.0) {
+            shapeFactor = 0.5 + (options.autotuneScore + 1.0) * 0.2;
+        } else {
+            shapeFactor = 0.4;
+        }
+        factors.push({
+            name: "chunkShape",
+            weight: 0.10,
+            value: shapeFactor,
+            label: `Chunk shape score ${options.autotuneScore.toFixed(2)} (${options.autotuneChunkCount} chunks)`,
+        });
+    }
+
+    // 7. Folding strength (timeline alignment confidence for padding removal)
+    if (Number.isFinite(options.foldingDominantPhaseRatio)) {
+        const ratio = options.foldingDominantPhaseRatio;
+        let foldingFactor;
+        if (ratio >= 3.0) {
+            foldingFactor = 1.0;
+        } else if (ratio >= 1.5) {
+            foldingFactor = 0.7 + (ratio - 1.5) / (3.0 - 1.5) * 0.3;
+        } else {
+            foldingFactor = Math.max(0.4, 0.4 + (ratio - 1.0) * 0.6);
+        }
+        factors.push({
+            name: "foldingStrength",
+            weight: 0.05,
+            value: foldingFactor,
+            label: `Folding ratio ${ratio.toFixed(2)}`,
+        });
+    }
+
+    // 8. Backspace hint signal (deletions are evidence of real interactive typing)
+    if (Number.isFinite(options.backspaceHintCount)) {
+        const count = options.backspaceHintCount;
+        let backspaceFactor;
+        if (count === 0) {
+            backspaceFactor = 0.6; // neutral - no evidence either way
+        } else if (count <= 2) {
+            backspaceFactor = 0.85;
+        } else if (count <= 6) {
+            backspaceFactor = 1.0;
+        } else {
+            backspaceFactor = Math.max(0.7, 1.0 - (count - 6) * 0.03);
+        }
+        factors.push({
+            name: "backspaceHints",
+            weight: 0.05,
+            value: backspaceFactor,
+            label: `${count} backspace hint(s)`,
+        });
+    }
+
+    // 9. Packet-length mean (compression / batching indicator)
+    if (Number.isFinite(options.packetLengthMean)) {
+        const mean = options.packetLengthMean;
+        let packetFactor;
+        if (mean < 60) {
+            packetFactor = 0.4; // suspiciously small - compression or tiny packets
+        } else if (mean < 90) {
+            packetFactor = 0.85;
+        } else if (mean < 140) {
+            packetFactor = 1.0; // typical uncompressed single-keystroke SSH payload
+        } else if (mean < 250) {
+            packetFactor = 0.8; // possibly batched keystrokes
+        } else {
+            packetFactor = 0.5; // likely paste/batch, not individual keystrokes
+        }
+        factors.push({
+            name: "packetLength",
+            weight: 0.05,
+            value: packetFactor,
+            label: `Mean packet length ${mean.toFixed(0)} B`,
+        });
     }
 
     // Compute overall score
