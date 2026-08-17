@@ -1186,6 +1186,42 @@ No decrypted TLS/SSL output yet.</pre>
                   </div>
                 </div>
 
+                <!-- Auto-calibration: walks the OpenSSH tuning knobs and
+                     picks the combination that maximises the per-command
+                     ssdeep score against the typed transcript. See
+                     src/ui/decoders/ssh-keystrokes/auto-calibrate.js. -->
+                <div class="crypt-section-title crypt-openssh-deobf-title">
+                  Auto-calibrate
+                </div>
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <button id="crypt-openssh-auto-calibrate-btn"
+                    title="Coordinate-descent search over the OpenSSH tuning knobs to maximise the per-command ssdeep score against the typed transcript (the truth you provided above).">
+                    Auto-calibrate
+                  </button>
+                  <button id="crypt-openssh-auto-calibrate-cancel-btn" hidden
+                    title="Stop the search; the UI keeps the current best">
+                    Cancel
+                  </button>
+                  <span id="crypt-openssh-auto-calibrate-status"
+                    class="crypt-openssh-auto-calibrate-status"></span>
+                  <span id="crypt-openssh-auto-calibrate-progress"
+                    class="crypt-openssh-auto-calibrate-progress" hidden>
+                    <span id="crypt-openssh-auto-calibrate-progress-text"></span>
+                    <span class="loading"></span>
+                  </span>
+                </div>
+                <div id="crypt-openssh-auto-calibrate-report"
+                  class="crypt-openssh-auto-calibrate-report" hidden>
+                  <div class="crypt-openssh-auto-calibrate-summary"
+                    id="crypt-openssh-auto-calibrate-summary"></div>
+                  <div class="crypt-openssh-auto-calibrate-top"
+                    id="crypt-openssh-auto-calibrate-top"></div>
+                  <div class="crypt-openssh-auto-calibrate-percommand"
+                    id="crypt-openssh-auto-calibrate-percommand"></div>
+                  <div class="crypt-openssh-auto-calibrate-sensitivity"
+                    id="crypt-openssh-auto-calibrate-sensitivity"></div>
+                </div>
+
                 <div id="crypt-openssh-insight" class="crypt-openssh-insight" hidden>
                   <div class="crypt-openssh-insight-header">
                     <span class="crypt-openssh-insight-label">LLM insight</span>
