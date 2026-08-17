@@ -2256,8 +2256,14 @@ function createCryptPanel({
           }, (progress) => {
             if (progress && progress.phase === "trial") {
               if (autoCalibrateProgressTextEl) {
+                const total = progress.totalTrials > 0 ? `/${progress.totalTrials}` : "";
                 autoCalibrateProgressTextEl.textContent =
-                  `Trial ${progress.trial || "?"} · score ${((progress.score || 0) * 100).toFixed(1)}%`;
+                  `Trial ${progress.trial || "?"}${total} · score ${((progress.score || 0) * 100).toFixed(1)}%`;
+              }
+            } else if (progress && progress.phase === "init") {
+              if (autoCalibrateProgressTextEl) {
+                autoCalibrateProgressTextEl.textContent =
+                  `Starting ${progress.totalTrials || "?"} trials…`;
               }
             }
           }, { signal: autoCalibrateAbortController.signal });
@@ -2279,8 +2285,9 @@ function createCryptPanel({
           // Apply the best knob values to the live UI.
           applyKnobsToControls(result.best.knobs);
           if (autoCalibrateStatusEl) {
+            const nTrials = result.report?.nTrials || 0;
             autoCalibrateStatusEl.textContent =
-              `Auto-calibrate done · mean score ${(result.best.stats.mean * 100).toFixed(1)}% · Save as profile to preserve`;
+              `Auto-calibrate done · ${nTrials} trials · mean score ${(result.best.stats.mean * 100).toFixed(1)}% · Save as profile to preserve`;
           }
           renderAutoCalibrateReport(result);
         } else if (result && result.report && result.report.error) {

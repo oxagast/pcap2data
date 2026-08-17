@@ -1,0 +1,1538 @@
+{
+  "ls": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "pwd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "clear": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "git": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "git pull",
+      "git push",
+      "git fetch",
+      "git pull origin main"
+    ]
+  },
+  "history": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "grep": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "apt": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo apt update",
+      "sudo apt upgrade",
+      "sudo apt install git",
+      "sudo apt install curl"
+    ]
+  },
+  "less": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tail": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mkdir": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "rm": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cp": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mv": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "touch": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "vim": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nano": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "echo": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "whoami": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ps": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "top": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "htop": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "df": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "du": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "free": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "uname": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "date": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "uptime": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "which": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "command": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "python3": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "python3 -m http.server",
+      "python3 -m http.server 8000",
+      "python3 -m pip install requests",
+      "python3 -m pip install -r requirements.txt"
+    ]
+  },
+  "pip": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "pip install -r requirements.txt",
+      "pip install requests",
+      "pip install flask",
+      "pip install numpy"
+    ]
+  },
+  "npm": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "npm install",
+      "npm i",
+      "npm install package",
+      "npm install --save package"
+    ]
+  },
+  "node": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "curl": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "curl [endpoint]",
+      "curl -I [endpoint]",
+      "curl -L [endpoint]",
+      "curl -v [endpoint]"
+    ]
+  },
+  "ssh": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "ssh user@[endpoint]",
+      "ssh root@[endpoint]",
+      "ssh -p 2222 user@[endpoint]",
+      "ssh -i ~/.ssh/id_rsa user@[endpoint]"
+    ]
+  },
+  "scp": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "scp file.txt user@[endpoint]:/tmp/",
+      "scp user@[endpoint]:/tmp/file.txt .",
+      "scp -r directory user@[endpoint]:/tmp/",
+      "scp -P 2222 file.txt user@[endpoint]:/tmp/"
+    ]
+  },
+  "systemctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "journalctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "head": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "find": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "chmod": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "chown": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "source": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "deactivate": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "env": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "printenv": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "export": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "unset": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "alias": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "jobs": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "bg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "kill": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "pkill": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "killall": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sort": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "wc": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "uniq": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cut": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "awk": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sed": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tee": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "diff": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "file": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "stat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "readlink": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "realpath": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "basename": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dirname": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tree": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "vi": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "apt-get": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo apt-get update",
+      "sudo apt-get install package"
+    ]
+  },
+  "dnf": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo dnf update",
+      "sudo dnf upgrade",
+      "sudo dnf install git",
+      "sudo dnf install gcc"
+    ]
+  },
+  "yum": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo yum update",
+      "sudo yum install package"
+    ]
+  },
+  "pacman": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo pacman -Syu",
+      "sudo pacman -S package"
+    ]
+  },
+  "disown": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nohup": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "whereis": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "type": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "python": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "python -m pip install package",
+      "python -m pip install -r requirements.txt"
+    ]
+  },
+  "npx": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "npx jest",
+      "npx jest --runInBand",
+      "npx eslint .",
+      "npx prettier --write ."
+    ]
+  },
+  "wget": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "wget [endpoint]",
+      "wget -O file.tar.gz [endpoint]",
+      "wget -q [endpoint]",
+      "wget --spider [endpoint]"
+    ]
+  },
+  "rsync": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "rsync -av directory/ backup/",
+      "rsync -avz directory/ user@[endpoint]:/tmp/",
+      "rsync -avz user@[endpoint]:/tmp/data/ .",
+      "rsync -av --delete src/ backup/"
+    ]
+  },
+  "ln": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "locate": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "id": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "groups": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "who": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "w": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "last": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lastlog": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "hostname": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "hostnamectl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "set": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "unalias": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tr": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "xargs": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cmp": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tar": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gzip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gunzip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "zip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "unzip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "7z": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "make": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cmake": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gcc": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "g++": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "clang": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "clang++": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "java": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "javac": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mvn": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gradle": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "./gradlew": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cargo": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "go": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "docker": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "docker pull ubuntu",
+      "docker pull nginx",
+      "docker build .",
+      "docker build -t app ."
+    ]
+  },
+  "kubectl": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "kubectl get pods",
+      "kubectl get nodes",
+      "kubectl get services",
+      "kubectl get deployments"
+    ]
+  },
+  "ip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ifconfig": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ping": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "ping [endpoint]",
+      "ping -c 4 [endpoint]"
+    ]
+  },
+  "traceroute": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "traceroute [endpoint]"
+    ]
+  },
+  "tracepath": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "tracepath [endpoint]"
+    ]
+  },
+  "nslookup": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "nslookup [endpoint]"
+    ]
+  },
+  "dig": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "dig [endpoint]",
+      "dig +short [endpoint]",
+      "dig A [endpoint]",
+      "dig MX [endpoint]"
+    ]
+  },
+  "host": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "[endpoint] [endpoint]"
+    ]
+  },
+  "ss": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "netstat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lsof": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nc": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "nc -zv [endpoint] 22",
+      "nc -zv [endpoint] 80",
+      "nc -zv [endpoint] 443",
+      "nc -l 8080"
+    ]
+  },
+  "openssl": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "openssl version",
+      "openssl s_client -connect [endpoint]:443",
+      "openssl x509 -in cert.pem -text -noout",
+      "openssl rand -hex 32"
+    ]
+  },
+  "ssh-keygen": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ssh-copy-id": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "ssh-copy-id user@[endpoint]"
+    ]
+  },
+  "dmesg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mount": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "umount": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lsblk": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "blkid": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fdisk": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "parted": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sync": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "crontab": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "at": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tmux": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "screen": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "watch": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "time": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sleep": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "yes": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "seq": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "printf": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "read": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "test": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "[": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "true": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "false": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "exit": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "logout": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "-i": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "su": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "passwd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "useradd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "userdel": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "usermod": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "groupadd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "getent": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "getent hosts [endpoint]"
+    ]
+  },
+  "lsusb": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lspci": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lscpu": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lsmem": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dmidecode": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nproc": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ulimit": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sysctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "service": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "apachectl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nginx": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mysql": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "mysql -u root -p",
+      "mysql -h [endpoint] -u root -p"
+    ]
+  },
+  "mysqladmin": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "mysqladmin -u root -p status"
+    ]
+  },
+  "psql": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "psql",
+      "psql -U postgres",
+      "psql -h [endpoint] -U postgres"
+    ]
+  },
+  "createdb": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dropdb": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sqlite3": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "redis-cli": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "redis-cli",
+      "redis-cli ping",
+      "redis-cli info"
+    ]
+  },
+  "mongosh": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "mongosh",
+      "mongosh [endpoint]"
+    ]
+  },
+  "jq": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "base64": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "xxd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "hexdump": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "od": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "strings": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sha256sum": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sha1sum": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "md5sum": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cksum": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gpg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tcpdump": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "tshark": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nmap": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "nmap [endpoint]",
+      "nmap -sV [endpoint]",
+      "nmap -p 22,80,443 [endpoint]",
+      "nmap -Pn [endpoint]"
+    ]
+  },
+  "strace": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ltrace": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gdb": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "objdump": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "readelf": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nm": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ldd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ldconfig": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "perf": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "valgrind": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "systemd-analyze": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "loginctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "timedatectl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "localectl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "locale": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fc-list": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fc-cache": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "xdg-open": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "xdg-open [endpoint]"
+    ]
+  },
+  "open": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "pbcopy": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "pbpaste": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "xclip": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "xsel": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "gh": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "gh auth status",
+      "gh repo clone user/repo",
+      "gh pr list",
+      "gh pr create"
+    ]
+  },
+  "pipx": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "pipx install package"
+    ]
+  },
+  "poetry": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "poetry install",
+      "poetry add requests"
+    ]
+  },
+  "uv": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "uv pip install requests",
+      "uv sync"
+    ]
+  },
+  "conda": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "conda install numpy"
+    ]
+  },
+  "ruby": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "bundle": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "bundle install"
+    ]
+  },
+  "php": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "composer": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "composer install",
+      "composer update",
+      "composer require package"
+    ]
+  },
+  "perl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "lua": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "R": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "Rscript": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "jupyter": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "jupyter notebook",
+      "jupyter lab"
+    ]
+  },
+  "ansible": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "ansible all -m ping"
+    ]
+  },
+  "ansible-playbook": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "ansible-playbook playbook.yml"
+    ]
+  },
+  "ansible-inventory": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "terraform": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "terraform init",
+      "terraform plan",
+      "terraform apply",
+      "terraform destroy"
+    ]
+  },
+  "vagrant": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "vagrant up",
+      "vagrant ssh"
+    ]
+  },
+  "virsh": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "qemu-img": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "aws": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "aws configure",
+      "aws sts get-caller-identity",
+      "aws s3 ls",
+      "aws s3 cp file s3://bucket/"
+    ]
+  },
+  "gcloud": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "gcloud auth list",
+      "gcloud config list",
+      "gcloud compute instances list"
+    ]
+  },
+  "az": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "az login",
+      "az account show",
+      "az vm list"
+    ]
+  },
+  "helm": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "helm list",
+      "helm repo update",
+      "helm install app chart/",
+      "helm upgrade app chart/"
+    ]
+  },
+  "iptables": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nft": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ufw": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "firewall-cmd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "getenforce": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sestatus": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "setenforce": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "aa-status": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fail2ban-client": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "certbot": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo certbot renew",
+      "sudo certbot --apache",
+      "sudo certbot --nginx"
+    ]
+  },
+  "whois": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "whois [endpoint]"
+    ]
+  },
+  "ipcalc": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ethtool": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iwconfig": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iw": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nmcli": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "nmcli device wifi list"
+    ]
+  },
+  "rfkill": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sensors": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "smartctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iostat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "vmstat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sar": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iotop": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iftop": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "iftop",
+      "sudo iftop"
+    ]
+  },
+  "nethogs": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "nethogs",
+      "sudo nethogs"
+    ]
+  },
+  "ncdu": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "column": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "paste": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "join": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "comm": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "split": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "csplit": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sh": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "bash": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "zsh": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fish": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "exec": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "for": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "while": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sudoedit": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "update-alternatives": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dpkg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "rpm": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "snap": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "sudo snap install package"
+    ]
+  },
+  "flatpak": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "flatpak install package"
+    ]
+  },
+  "brew": {
+    "network_enabled": true,
+    "probable_network_usages": [
+      "brew update",
+      "brew upgrade",
+      "brew install package",
+      "brew uninstall package"
+    ]
+  },
+  "launchctl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "system_profiler": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "sw_vers": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "diskutil": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "defaults": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "say": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "wsl": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "powershell.exe": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "cmd.exe": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "dos2unix": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "unix2dos": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "iconv": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "patch": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ssh-add": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "ssh-agent": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "rg": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fd": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fzf": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "bat": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "exa": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "eza": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "timeout": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "nice": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "renice": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "taskset": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "chrt": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "flock": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mktemp": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "mkfifo": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "fuser": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "reboot": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "shutdown": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "poweroff": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  },
+  "halt": {
+    "network_enabled": false,
+    "probable_network_usages": []
+  }
+}
