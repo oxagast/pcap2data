@@ -2169,6 +2169,7 @@ function createCryptPanel({
     }
 
     let autoCalibrateAbortController = null;
+    let lastAutoCalibrateResult = null;  // Store the last auto-calibration result for profile building
     if (autoCalibrateBtnEl) {
       autoCalibrateBtnEl.addEventListener("click", async () => {
         if (!sshAutoCalibrateModule || !sshAutoCalibrateModule.autoCalibrate) {
@@ -2272,11 +2273,14 @@ function createCryptPanel({
         if (autoCalibrateCancelBtnEl) autoCalibrateCancelBtnEl.hidden = true;
         if (autoCalibrateProgressEl) autoCalibrateProgressEl.hidden = true;
         if (result && result.best) {
+          // Store the result for profile building
+          lastAutoCalibrateResult = result;
+
           // Apply the best knob values to the live UI.
           applyKnobsToControls(result.best.knobs);
           if (autoCalibrateStatusEl) {
             autoCalibrateStatusEl.textContent =
-              `Auto-calibrate done · mean score ${(result.best.stats.mean * 100).toFixed(1)}%`;
+              `Auto-calibrate done · mean score ${(result.best.stats.mean * 100).toFixed(1)}% · Save as profile to preserve`;
           }
           renderAutoCalibrateReport(result);
         } else if (result && result.report && result.report.error) {
@@ -4028,6 +4032,15 @@ function createCryptPanel({
         // If this chunk has its own keystroke count, use that for length
         if (Number.isFinite(chunk.keystrokeCount)) {
           lineOpts.estimatedLength = chunk.keystrokeCount;
+          lineOpts.keystrokeCount = chunk.keystrokeCount;
+        }
+        // Viterbi-Markov agreement: how well the top Markov candidate
+        // length matches the chunk's expected keystroke count.
+        if (Number.isFinite(chunk.keystrokeCount) && chunk.keystrokeCount > 0) {
+          const markovLen = text.length;
+          const expected = chunk.keystrokeCount;
+          const agreement = 1.0 - Math.min(1.0, Math.abs(markovLen - expected) / expected);
+          lineOpts.viterbiMarkovAgreement = agreement;
         }
         entry.lineConfidence = sshMarkovModule.computeLineConfidence(text, lineOpts);
       }
@@ -4188,6 +4201,33 @@ function createCryptPanel({
         sessionOpts.obfuscationCoverage = Number.isFinite(pad.coverage)
           ? pad.coverage
           : 0.5;
+      }
+
+      // Auto-tune chunk-shape quality (how command-like the peeled stream is)
+      if (Number.isFinite(pad.autotuneChunkCount)) {
+        sessionOpts.autotuneChunkCount = pad.autotuneChunkCount;
+      }
+      if (pad.autotuneCandidates && Array.isArray(pad.autotuneCandidates) && pad.autotuneCandidates.length > 0) {
+        const selected = pad.autotuneCandidates.find((r) => r.coverage === pad.autotuneSelected)
+          || pad.autotuneCandidates[0];
+        if (selected && Number.isFinite(selected.score)) {
+          sessionOpts.autotuneScore = selected.score;
+        }
+      }
+
+      // Folding strength (timeline alignment confidence for padding removal)
+      if (Number.isFinite(pad.foldingDominantPhaseRatio)) {
+        sessionOpts.foldingDominantPhaseRatio = pad.foldingDominantPhaseRatio;
+      }
+
+      // Backspace hints (deletions are evidence of real interactive typing)
+      if (cached.backspaceHints && Number.isFinite(cached.backspaceHints.count)) {
+        sessionOpts.backspaceHintCount = cached.backspaceHints.count;
+      }
+
+      // Packet-length mean (compression / batching indicator)
+      if (Number.isFinite(markovFeats.packetLengthMean)) {
+        sessionOpts.packetLengthMean = markovFeats.packetLengthMean;
       }
 
       sessionConfidence = sshMarkovModule.computeSessionConfidence(sessionOpts);

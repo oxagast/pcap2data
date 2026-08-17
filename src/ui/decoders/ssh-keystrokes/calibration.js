@@ -31,6 +31,14 @@ const {
     DECODER_ALPHABET,
 } = require("./index.js");
 
+// v2 weight-envelope helpers
+const {
+    isEnvelope,
+    effectiveSampleSize,
+    shrinkToPrior,
+    clamp01,
+} = require("./score-envelopes.js");
+
 // SSHniff-inspired constants
 const ENTER_KEY_THRESHOLD_MS = 2000;  // Large gap indicates Enter/Return
 const BACKSPACE_THRESHOLD_MS = 50;    // Very short gap may indicate backspace
@@ -391,10 +399,36 @@ function alignCommandsToDelays(commands, delays, direction = "c2s") {
 }
 
 /**
+ * Calculate weight for a digraph based on sample count and consistency.
+ * Higher count + lower variance = higher weight.
+ */
+function calculateDigraphWeight(count, std, baselineStd = DEFAULT_DIGRAPH_PARAMS.std) {
+    // Base weight from count: sigmoid curve
+    // - count < 5: very low weight
+    // - count 5-20: increasing weight
+    // - count > 20: high weight
+    const countFactor = Math.min(1, count / 30);
+
+    // Variance factor: compare to baseline std
+    // - std close to baseline: high weight
+    // - std much larger than baseline: lower weight (noisy)
+    const stdRatio = Math.min(3, std / Math.max(baselineStd, 20));
+    const varianceFactor = Math.max(0.3, 1 - (stdRatio - 1) * 0.3);
+
+    // Combine factors
+    const weight = clamp01(countFactor * varianceFactor);
+    return weight;
+}
+
+/**
  * Learn Gaussian parameters from aligned (char, delay) pairs.
  * Groups by digraph (prevChar -> char) and computes mean/std.
+ * 
+ * v2 weight envelope integration:
+ * - Adds weight, count, source, lastUpdated, variance, tags to each entry
+ * - Uses calculateDigraphWeight() to determine confidence based on sample quality
  */
-function learnDigraphParameters(alignments, layout = null) {
+function learnDigraphParameters(alignments, layout = null, options = {}) {
     const coordinateIndex = layout ? buildCoordinateIndex(layout) : null;
     const digraphStats = {}; // "prev|char" -> { delays: [], count: 0 }
 
@@ -422,8 +456,11 @@ function learnDigraphParameters(alignments, layout = null) {
 
     console.log(`[Calibration] Digraph stats collected: ${Object.keys(digraphStats).length} unique digraphs`);
 
-    // Compute mean/std for each digraph
+    // Compute mean/std for each digraph with v2 weight envelope
     const learnedParams = {};
+    const source = options.source || "calibrated";
+    const lastUpdated = new Date().toISOString().split('T')[0];
+
     for (const [key, stats] of Object.entries(digraphStats)) {
         if (stats.count < 3) continue; // Need minimum samples
 
@@ -432,7 +469,27 @@ function learnDigraphParameters(alignments, layout = null) {
         const variance = delays.reduce((a, b) => a + (b - mean) ** 2, 0) / delays.length;
         const std = Math.max(Math.sqrt(variance), 10); // Floor at 10ms
 
-        learnedParams[key] = { mean, std, count: stats.count };
+        // Calculate v2 weight envelope fields
+        const weight = calculateDigraphWeight(stats.count, std);
+
+        // Build tags based on characteristics
+        const tags = ["digraph", "calibrated"];
+        if (stats.count >= 20) tags.push("high_count");
+        if (stats.count < 10) tags.push("low_count");
+        if (std < 30) tags.push("low_variance");
+        if (std > 80) tags.push("high_variance");
+
+        learnedParams[key] = {
+            mean,
+            std,
+            // v2 weight envelope fields (flat schema per WEIGHT_SCHEMA.md)
+            weight,
+            count: stats.count,
+            source,
+            lastUpdated,
+            variance: Number.isFinite(variance) ? variance : null,
+            tags,
+        };
     }
 
     console.log(`[Calibration] Digraphs with >=3 samples: ${Object.keys(learnedParams).length}`);
@@ -480,15 +537,194 @@ function learnMarkovBonuses(alignments, commands) {
 }
 
 /**
+ * Detect SSH client type from flow characteristics.
+ * Looks at packet timing patterns, batching behavior, and other heuristics.
+ */
+function detectSshClientType(flow, delays, options = {}) {
+    const {
+        paddingResult = null,
+        commandCount = 0,
+    } = options;
+
+    // Default to generic
+    let clientType = "Generic SSH";
+    let clientVersion = "Unknown";
+    let confidence = 0.3;
+
+    // Heuristic 1: OpenSSH typically has very regular 20ms padding
+    if (paddingResult && paddingResult.detected) {
+        const periodMs = paddingResult.periodMs || 0;
+        if (Math.abs(periodMs - 20) < 3) {
+            // Very close to 20ms - strong OpenSSH indicator
+            clientType = "OpenSSH";
+            clientVersion = "6.0+";
+            confidence = 0.85;
+        } else if (Math.abs(periodMs - 10) < 2) {
+            // Some older clients use 10ms
+            clientType = "OpenSSH (legacy)";
+            clientVersion = "5.x";
+            confidence = 0.7;
+        }
+    }
+
+    // Heuristic 2: Look at delay distribution characteristics
+    if (delays && delays.length > 20) {
+        const meanDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+        const variance = delays.reduce((a, b) => a + (b - meanDelay) ** 2, 0) / delays.length;
+        const std = Math.sqrt(variance);
+
+        // PuTTY tends to have more variable delays
+        if (std > 100 && meanDelay > 80) {
+            if (clientType === "Generic SSH") {
+                clientType = "PuTTY";
+                confidence = 0.6;
+            }
+        }
+
+        // Very consistent delays suggest newer OpenSSH
+        if (std < 30 && meanDelay > 15 && meanDelay < 30) {
+            if (clientType === "OpenSSH") {
+                clientVersion = "7.0+";
+                confidence = Math.min(0.95, confidence + 0.1);
+            }
+        }
+    }
+
+    // Heuristic 3: Command count and pattern hints
+    if (commandCount > 10) {
+        // Interactive sessions with many commands are typical of OpenSSH
+        if (clientType === "Generic SSH") {
+            clientType = "OpenSSH";
+            confidence = 0.5;
+        }
+    }
+
+    return {
+        type: clientType,
+        version: clientVersion,
+        confidence,
+        detectedFeatures: {
+            has20msPadding: !!(paddingResult && paddingResult.detected && Math.abs((paddingResult.periodMs || 0) - 20) < 5),
+            paddingPeriodMs: paddingResult?.periodMs || null,
+            commandCount,
+        },
+    };
+}
+
+/**
+ * Build a profile from auto-calibration results.
+ * Takes the best knobs from autoCalibrate() and merges them with learned digraphs.
+ */
+function buildProfileFromAutoCalibration(flow, transcriptText, autoCalibrateResult, learnedDigraphs, options = {}) {
+    const {
+        direction = "c2s",
+        clientName = "Unknown",
+        profileName = null,
+        paddingResult = null,
+        commandCount = 0,
+        baseModel = null,
+    } = options;
+
+    // Use base model or load default
+    const model = baseModel || loadQwertyModel({});
+
+    // Detect client type from flow characteristics
+    const clientInfo = detectSshClientType(flow, [], {
+        paddingResult,
+        commandCount,
+    });
+
+    // Merge learned digraphs into empirical model
+    const empirical = { ...model.empirical };
+    for (const [key, params] of Object.entries(learnedDigraphs)) {
+        empirical[key] = params;
+    }
+
+    // Build profile with metadata
+    const bestKnobs = autoCalibrateResult?.best?.knobs || {};
+    const profile = {
+        version: 4,  // Version 4 includes weight envelopes and client detection
+        name: profileName || `${clientInfo.type}_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
+        displayName: profileName || `Auto-calibrated: ${clientInfo.type}`,
+
+        // SSH client information
+        clientInfo: {
+            type: clientInfo.type,
+            version: clientInfo.version,
+            detectionConfidence: clientInfo.confidence,
+            detectedFeatures: clientInfo.detectedFeatures,
+            userLabel: clientName !== "Unknown" ? clientName : null,
+        },
+
+        createdAt: new Date().toISOString(),
+        schemaVersion: 2,  // v2 weight envelope schema
+
+        source: {
+            flowKey: flow?.flowKey || "manual",
+            packetCount: flow?.packets?.length || 0,
+            commandCount: commandCount || 0,
+            calibrationMethod: "auto-calibrate",
+            bestScore: autoCalibrateResult?.best?.stats?.mean || 0,
+            exactMatchRate: autoCalibrateResult?.best?.stats?.exactMatchRate || 0,
+            trialsRun: autoCalibrateResult?.report?.nTrials || 0,
+        },
+
+        // Model geometry
+        layout: model.layout || "qwerty",
+        baselines: model.baselines,
+        empirical: empirical,
+        coordinateIndex: model.coordinateIndex,
+        alphabet: DECODER_ALPHABET,
+
+        // SSHniff-inspired features
+        commandRhythms: options.commandRhythms || {},
+        enterKeyThresholdMs: ENTER_KEY_THRESHOLD_MS,
+        backspaceThresholdMs: BACKSPACE_THRESHOLD_MS,
+
+        // Calibration-specific settings from auto-calibration
+        calibration: {
+            coverageThreshold: bestKnobs.minCoverage || (paddingResult?.coverage) || 0.5,
+            paddingAccuracy: paddingResult?.accuracy || 0,
+            digraphsLearned: Object.keys(learnedDigraphs).length,
+            totalAlignments: options.alignmentCount || 0,
+            markovBonuses: {
+                concisenessBonusMultiplier: bestKnobs.concisenessBonusMultiplier || 1.7,
+                lengthBonusMultiplier: bestKnobs.lengthBonusMultiplier || 2.6,
+            },
+            minCommandLength: bestKnobs.minCommandLength || 1,
+        },
+
+        // Runtime settings (can be overridden in UI)
+        runtime: {
+            minCoverage: bestKnobs.minCoverage || (paddingResult?.coverage) || 0.5,
+            minCommandLength: bestKnobs.minCommandLength || 1,
+            concisenessBonusMultiplier: bestKnobs.concisenessBonusMultiplier || 1.7,
+            lengthBonusMultiplier: bestKnobs.lengthBonusMultiplier || 2.6,
+        },
+
+        // Per-command results for debugging/review
+        perCommandResults: autoCalibrateResult?.best?.perCommand?.slice(0, 50) || [],  // Limit to 50 for size
+    };
+
+    return profile;
+}
+
+/**
  * Main calibration function.
  * Input: flow (from aggregateSshFlows), transcript text
  * Output: profile object ready to save
+ * 
+ * v4 updates:
+ * - Integrates weight envelope system (v2 schema)
+ * - Detects SSH client type automatically
+ * - Supports building profiles from auto-calibration results
  */
 async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}) {
     const {
         direction = "c2s",
         clientName = "Unknown",
         profileName = null,
+        autoCalibrateResult = null,  // Optional: result from autoCalibrate()
     } = options;
 
     console.log(`[Calibration] Starting calibration for flow ${flow.flowKey}, direction ${direction}`);
@@ -538,8 +774,10 @@ async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}
         throw new Error(`Insufficient alignments (${alignments.length}), need at least 10`);
     }
 
-    // Learn digraph parameters
-    const learnedDigraphs = learnDigraphParameters(alignments);
+    // Learn digraph parameters with v2 weight envelopes
+    const learnedDigraphs = learnDigraphParameters(alignments, null, {
+        source: "calibrated",
+    });
 
     // Extract SSHniff-inspired command profiles and rhythm signatures
     const commandProfiles = extractCommandProfiles(alignments);
@@ -570,7 +808,31 @@ async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}
     // Learn Markov bonuses (placeholder)
     const markovBonuses = learnMarkovBonuses(alignments, commands);
 
-    // Build profile
+    // Detect SSH client type
+    const clientInfo = detectSshClientType(flow, keystrokeDelays, {
+        paddingResult,
+        commandCount: commands.length,
+    });
+
+    console.log(`[Calibration] Detected SSH client: ${clientInfo.type} (confidence: ${(clientInfo.confidence * 100).toFixed(0)}%)`);
+    console.log(`[Calibration] Profile built with ${Object.keys(learnedDigraphs).length} learned digraphs`);
+
+    // If we have auto-calibration results, build enhanced profile
+    if (autoCalibrateResult) {
+        const baseModel = loadQwertyModel({});
+        return buildProfileFromAutoCalibration(flow, transcriptText, autoCalibrateResult, learnedDigraphs, {
+            direction,
+            clientName: clientName !== "Unknown" ? clientName : clientInfo.type,
+            profileName,
+            paddingResult,
+            commandCount: commands.length,
+            alignmentCount: alignments.length,
+            baseModel,
+            commandRhythms,
+        });
+    }
+
+    // Legacy profile building (no auto-calibration results)
     const baseModel = loadQwertyModel({});
 
     // Merge learned digraphs into empirical model
@@ -579,24 +841,38 @@ async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}
         empirical[key] = params;
     }
 
-    console.log(`[Calibration] Profile built with ${Object.keys(learnedDigraphs).length} learned digraphs`);
-
     const profile = {
-        version: 3,  // Version 3 includes SSHniff-inspired features
-        name: profileName || `${clientName}_${Date.now()}`,
-        clientName,
+        version: 4,  // Version 4 includes weight envelopes and client detection
+        name: profileName || `${clientInfo.type}_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '_'),
+        displayName: profileName || `Calibrated: ${clientInfo.type}`,
+
+        // SSH client information
+        clientInfo: {
+            type: clientInfo.type,
+            version: clientInfo.version,
+            detectionConfidence: clientInfo.confidence,
+            detectedFeatures: clientInfo.detectedFeatures,
+            userLabel: clientName !== "Unknown" ? clientName : null,
+        },
+
         createdAt: new Date().toISOString(),
+        schemaVersion: 2,  // v2 weight envelope schema
+
         source: {
             flowKey: flow.flowKey,
             packetCount: flow.packets.length,
             commandCount: commands.length,
             alignmentCount: alignments.length,
+            calibrationMethod: "manual",
         },
+
+        // Model geometry
         layout: baseModel.layout || "qwerty",
         baselines: baseModel.baselines,
         empirical: empirical,
         coordinateIndex: baseModel.coordinateIndex,
         alphabet: DECODER_ALPHABET,
+
         // SSHniff-inspired features
         commandRhythms: commandRhythms,
         enterKeyThresholdMs: ENTER_KEY_THRESHOLD_MS,
@@ -604,6 +880,7 @@ async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}
         detectedEnterIndices: enterIndices,
         detectedBackspaceIndices: backspaceIndices,
         commandSequences: commandSequences.map(seq => seq.length),
+
         // Calibration-specific settings
         calibration: {
             coverageThreshold: paddingResult.coverage,
@@ -612,9 +889,11 @@ async function calibrateFromFlowAndTranscript(flow, transcriptText, options = {}
             totalAlignments: alignments.length,
             markovBonuses,
         },
+
         // Runtime settings (can be overridden in UI)
         runtime: {
             minCoverage: paddingResult.coverage,
+            minCommandLength: 1,
             concisenessBonusMultiplier: markovBonuses.concisenessBonusMultiplier,
             lengthBonusMultiplier: markovBonuses.lengthBonusMultiplier,
         },
@@ -635,6 +914,10 @@ module.exports = {
     learnPaddingThreshold,
     learnMarkovBonuses,
     calibrateFromFlowAndTranscript,
+    // New v4 functions
+    calculateDigraphWeight,
+    detectSshClientType,
+    buildProfileFromAutoCalibration,
     // SSHniff-inspired functions
     dtwDistance,
     euclideanDistance,
