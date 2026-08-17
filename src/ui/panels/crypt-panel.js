@@ -1322,13 +1322,22 @@ function createCryptPanel({
     const exportBtn = document.getElementById("crypt-openssh-export-btn");
     if (exportBtn) exportBtn.disabled = false;
 
-    // Re-render chart if we have delays and can build series
-    if (decoder && Array.isArray(delays) && delays.length > 0) {
-      const series = decoder.buildChartSeries(delays);
-      // Pass paddingDetection from cache for yellow obfuscation ticks
-      const paddingFromCache = cached?.paddingDetection || null;
-      renderSshChartWithSeries(series, delays, decoder, paddingFromCache);
-      // Also render the timeline folding chart
+    // Re-render chart if we have delays and can build series.
+    // When the cached analysis detected obfuscation, prefer the peeled
+    // (keystroke-only) delays so the histogram doesn't show the
+    // padding blip — the decoder was already run on this peeled stream.
+    const paddingFromCache = cached?.paddingDetection || null;
+    const peeledDelays = (paddingFromCache && Array.isArray(paddingFromCache.keystrokeDelaysMs))
+      ? paddingFromCache.keystrokeDelaysMs
+      : null;
+    const histogramDelays = (peeledDelays && peeledDelays.length > 0) ? peeledDelays : delays;
+
+    if (decoder && Array.isArray(histogramDelays) && histogramDelays.length > 0) {
+      const series = decoder.buildChartSeries(histogramDelays);
+      renderSshChartWithSeries(series, histogramDelays, decoder, paddingFromCache);
+      // Folding chart still uses the raw delays so the phase alignment
+      // of filler packets is visible — the histogram is the only chart
+      // that gets peeled.
       renderSshFoldingChart(delays, decoder, paddingFromCache);
     }
 
