@@ -152,9 +152,12 @@ def migrate_qwerty_baselines(path: Path) -> tuple[dict, list[str]]:
             notes.append(f"category[{category}]: wrapped")
             changed = True
 
-    # Bump schema version once we touched the file.
-    if changed and data.get("schema_version") != 2:
+    # Bump schema version whenever the file is at v2 (envelopes present).
+    # This runs even when envelopes were already present so a legacy file
+    # without schema_version still gets stamped.
+    if data.get("schema_version") != 2:
         data["schema_version"] = 2
+        changed = True
 
     return data, notes, changed
 
@@ -168,6 +171,7 @@ def migrate_shell_markov(path: Path) -> tuple[dict, list[str], bool]:
     """
     data = load_json(path)
     notes: list[str] = []
+    changed = False
 
     transitions = data.get("transitions")
     if not isinstance(transitions, dict):
@@ -186,7 +190,8 @@ def migrate_shell_markov(path: Path) -> tuple[dict, list[str], bool]:
         notes.append("top-level: already wrapped (skipped)")
         if data.get("schema_version") != 2:
             data["schema_version"] = 2
-        return data, notes
+            changed = True
+        return data, notes, changed
 
     data["weight"] = {
         "confidence": 0.7,
@@ -204,16 +209,18 @@ def migrate_shell_markov(path: Path) -> tuple[dict, list[str], bool]:
         ),
     }
     data["schema_version"] = 2
+    changed = True
     notes.append(
         f"top-level: wrapped ({context_count} contexts, {bigram_count} pairs)"
     )
-    return data, notes
+    return data, notes, changed
 
 
-def migrate_ssh_timing_stats(path: Path) -> tuple[dict, list[str]]:
+def migrate_ssh_timing_stats(path: Path) -> tuple[dict, list[str], bool]:
     """Top-level envelope only; per-direction stats untouched."""
     data = load_json(path)
     notes: list[str] = []
+    changed = False
 
     directions = [k for k in data.keys() if isinstance(data.get(k), dict) and "deltas_ms" in data[k]]
     total_samples = sum(data[d].get("count", 0) for d in directions)
@@ -222,7 +229,8 @@ def migrate_ssh_timing_stats(path: Path) -> tuple[dict, list[str]]:
         notes.append("top-level: already wrapped (skipped)")
         if data.get("schema_version") != 2:
             data["schema_version"] = 2
-        return data, notes
+            changed = True
+        return data, notes, changed
 
     data["weight"] = {
         "confidence": 0.8 if total_samples >= 1000 else 0.5,
@@ -238,10 +246,11 @@ def migrate_ssh_timing_stats(path: Path) -> tuple[dict, list[str]]:
         ),
     }
     data["schema_version"] = 2
+    changed = True
     notes.append(
         f"top-level: wrapped ({len(directions)} directions, {total_samples} samples)"
     )
-    return data, notes
+    return data, notes, changed
 
 
 def check_qwerty_model(path: Path) -> tuple[bool, list[str]]:

@@ -16059,5 +16059,6 @@
     ],
     "last_updated": "2026-08-17T13:35:08+00:00",
     "notes": "Top-level envelope for the shell Markov model. transitions has 3820 non-empty contexts and 6716 total (context,next_char) observation pairs. Per-bigram weights are not stored; the empirical counts are the signal."
-  }
+  },
+  "schema_version": 2
 }
