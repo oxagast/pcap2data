@@ -712,6 +712,39 @@ function buildSshTimingAnalysisBrief(state, opts) {
         lines.push("");
     }
 
+    // ── Return-key detection (turn anchors) ─────────────────────────
+    // Same logic as the full export — the brief includes this so the
+    // LLM can validate command-length estimates against turn
+    // boundaries even when only the trimmed (80-sample) view is shown.
+    const delaysWithIdxForReturn = (state && Array.isArray(state.delaysWithIdx))
+        ? state.delaysWithIdx
+        : null;
+    if (delaysWithIdxForReturn) {
+        const totalPauses = delaysWithIdxForReturn.filter(
+            (d) => Number.isFinite(d.delay) && d.delay >= 500,
+        ).length;
+        const detected = [];
+        for (let i = 0; i < delaysWithIdxForReturn.length - 1; i += 1) {
+            const cur = delaysWithIdxForReturn[i];
+            const next = delaysWithIdxForReturn[i + 1];
+            if (!cur || !next) continue;
+            if (Number.isFinite(cur.delay) && Number.isFinite(next.delay)) {
+                if (cur.delay <= 30 && next.delay >= 500) {
+                    // Mark the later packet (next) as the RETURN anchor.
+                    detected.push(next.index != null ? next.index : i + 1);
+                }
+            }
+        }
+        lines.push("## Return-key detection");
+        lines.push(`Detected ${detected.length}/${totalPauses} Return keypress(es) at pause boundaries`);
+        for (const idx of detected) {
+            lines.push(
+                `- RETURN at pos ${idx}: return-key detected at last keystroke; typed-length=${idx}; command-text-length=${idx}`,
+            );
+        }
+        lines.push("");
+    }
+
     return {
         ok: true,
         text: lines.join("\n"),
@@ -1243,6 +1276,18 @@ const PRIOR_MAX_VERBS_IN_BRIEF = 20;
 const PRIOR_MAX_EXAMPLES_IN_BRIEF = 3;
 const PRIOR_MAX_TOTAL_EXAMPLES_IN_BRIEF = 30;
 
+// Tolerance (in characters) for "any run of 4+ consecutive 'A'
+// characters" redaction-placeholders in the shell-corpus scrubbed
+// examples. The corpus redaction is approximate: a 6- or 7-wide
+// run of 'A' may have started as a 5- or 8-wide real token. The
+// ± 4 tolerance tells the LLM "the original token length is roughly
+// the placeholder length, give or take 4 characters on either side";
+// the actual replacement should pick a plausible value in that
+// range, not assume the literal 'A' count is exact. Exported so the
+// helper that scans examples for placeholder positions and the LLM
+// guidance text can stay in sync.
+const REDACTION_AAA_LENGTH_TOLERANCE = 4;
+
 // A command line is "real" if it starts with an ASCII letter,
 // underscore, slash, dot, or common executable punctuation — OR if
 // it begins with a shell prompt (anything before a `$`, `#`, `%`,
@@ -1473,7 +1518,11 @@ function renderShellPriors(priors, opts) {
     // value is unknown. Tell the LLM to substitute any plausible
     // value of the same LENGTH (not just any string) when
     // reconstructing the command, because the timing signal in the
-    // brief constrains how many characters were typed.
+    // brief constrains how many characters were typed. The
+    // redaction is approximate: a 7-wide run of 'A' may have come
+    // from a 3- to 11-wide real token (see
+    // REDACTION_AAA_LENGTH_TOLERANCE = 4), so the LLM should pick
+    // anything in the ± 4 range, not the literal 'A' count.
     lines.push(
         "Note on redactions: any run of 4+ consecutive 'A' characters in an example",
     );
@@ -1484,22 +1533,28 @@ function renderShellPriors(priors, opts) {
         "was scrubbed out of the corpus for privacy. Treat each placeholder as an",
     );
     lines.push(
-        "arbitrary string of that SAME LENGTH when interpreting verb/argument shape,",
+        "arbitrary string of that SAME LENGTH (within ± 4 characters — the redaction",
     );
     lines.push(
-        "not as the literal letters 'A'. The verb bucket (cat, git push, etc.) is",
+        "is approximate, so a 7-wide 'A' run may have been a 3- to 11-wide real token)",
     );
     lines.push(
-        "still informative; the specific redacted token is NOT. Use the placeholder",
+        "when interpreting verb/argument shape, not as the literal letters 'A'. The",
     );
     lines.push(
-        "positions to learn WHERE the user typically embeds usernames, hostnames,",
+        "verb bucket (cat, git push, etc.) is still informative; the specific redacted",
     );
     lines.push(
-        "paths, and keys — but substitute any plausible value of matching length when",
+        "token is NOT. Use the placeholder positions to learn WHERE the user typically",
     );
     lines.push(
-        "reconstructing the command from a candidate.",
+        "embeds usernames, hostnames, paths, and keys — but substitute any plausible",
+    );
+    lines.push(
+        "value of matching length (within ± 4) when reconstructing the command from a",
+    );
+    lines.push(
+        "candidate.",
     );
     lines.push("");
     let totalExamples = 0;
@@ -1704,6 +1759,7 @@ module.exports = {
     summarizeS2cOutput,
     BRIEF_MIN_SAMPLES,
     S2C_MIN_PACKETS,
+    REDACTION_AAA_LENGTH_TOLERANCE,
     computeDelayStats,
     formatNumber,
     wrapText,
