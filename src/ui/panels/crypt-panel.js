@@ -38,6 +38,60 @@ function getKeyObjectKind(pem) {
   }
 }
 
+// Hard cap on the markov beam-search target length. A `targetLen` derived
+// from a long session (e.g. the final chunk of a 16 000-keystroke capture)
+// is almost certainly a "return" between two commands rather than a real
+// command, so we clamp the value before passing it to rankCorpus /
+// rankCorpusWithSlotFilling. The markov ranker uses `Math.abs(len -
+// targetLen) > tolerance + 5` to filter the corpus, so an over-large
+// targetLen silently drops *every* candidate.
+const MARKOV_TARGET_LEN_MAX = 40;
+const MARKOV_TARGET_LEN_DEFAULT = 8;
+
+/**
+ * Pick a beam target length for `rankCorpus` / `rankCorpusWithSlotFilling`.
+ *
+ * Why this exists: the auto-calibrate trial path was using the *last*
+ * `findReturnChunks` entry's `keystrokeCount` as the target, which on long
+ * sessions collapses to the whole session (e.g. 16 000 keystrokes) and
+ * causes the ranker to filter the entire corpus. The cached-analysis path
+ * already does the right thing — use the *median* chunk length, subtract
+ * backspaces, and clamp. This helper centralises that logic so both paths
+ * share it.
+ *
+ * @param {Array<{keystrokeCount:number}>|null|undefined} chunkList Output of
+ *   `findReturnChunks`. May be empty.
+ * @param {object} [opts]
+ * @param {number} [opts.minLength=2] Lower bound (e.g. `markovMinCommandLength`).
+ * @param {number} [opts.maxLength=MARKOV_TARGET_LEN_MAX] Upper bound.
+ * @param {number} [opts.backspaceCount=0] Backspace count to subtract.
+ * @param {number} [opts.fallback=8] Used when `chunkList` is empty.
+ * @returns {number}
+ */
+function computeBeamTargetLen(chunkList, opts) {
+  const minLength = Math.max(1, Number.isFinite(opts && opts.minLength) ? opts.minLength : 2);
+  const maxLength = Math.max(minLength, Number.isFinite(opts && opts.maxLength) ? opts.maxLength : MARKOV_TARGET_LEN_MAX);
+  const backspaceCount = Math.max(0, Number.isFinite(opts && opts.backspaceCount) ? opts.backspaceCount : 0);
+  const fallback = Math.max(minLength, Number.isFinite(opts && opts.fallback) ? opts.fallback : 8);
+
+  if (!Array.isArray(chunkList) || chunkList.length === 0) {
+    return fallback;
+  }
+  const lengths = chunkList
+    .map((c) => Number.isFinite(c && c.keystrokeCount) ? c.keystrokeCount : 0)
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b);
+  if (lengths.length === 0) {
+    return fallback;
+  }
+  const medianChunk = lengths[Math.floor(lengths.length / 2)];
+  let target = Math.max(minLength, Math.round(medianChunk));
+  if (backspaceCount > 0) {
+    target = Math.max(minLength, target - backspaceCount);
+  }
+  return Math.min(maxLength, target);
+}
+
 const TLS_CONTENT_TYPE_MIN = 20;
 const TLS_CONTENT_TYPE_MAX = 23;
 const TLS_RECORD_TYPE_HANDSHAKE = 22;
@@ -705,11 +759,20 @@ function createCryptPanel({
     const median = sorted.length % 2 === 1
       ? sorted[mid]
       : (sorted[mid - 1] + sorted[mid]) / 2;
+
     const absDevs = sorted.map((v) => Math.abs(v - median));
     const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
     const approxStd = mad * 1.4826 || 0;
+
+    // Use a dynamic threshold based on the delay distribution
     const dynamicThresh = median + Math.max(3 * approxStd, 150);
-    const threshold = Math.max(dynamicThresh, 400);
+    const minCommandBoundary = 500; // Minimum delay to consider as a command boundary
+    const threshold = Math.max(dynamicThresh, minCommandBoundary);
+
+    // Additional parameters for better pattern detection
+    const burstThreshold = 30; // Maximum delay to consider as part of a burst (within a command)
+    const minCommandLength = 1; // Minimum number of keystrokes to consider as a command
+    const motdPattern = /(?:Last login|Welcome to|Message of the Day|MOTD|Linux [\w\s]+ [\d.]+|Ubuntu [\w\s]+ [\d.]+|Debian [\w\s]+ [\d.]+)/i;
 
     // Walk delays once. Each time we cross the threshold, the gap
     // ends the *current* chunk and starts a new one. The very last
@@ -888,6 +951,18 @@ function createCryptPanel({
   } catch (err) {
     console.warn("[Crypt/OpenSSH] markov module unavailable:", err);
     sshMarkovModule = null;
+  }
+  // Auto-calibrate orchestrator (pure JS, no DOM). Walks the OpenSSH
+  // tuning knobs and finds the combination that maximises the per-
+  // command ssdeep score against the typed transcript. The score
+  // function lives in ssdeep.js; the orchestrator is just a search.
+  let sshAutoCalibrateModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshAutoCalibrateModule = require("../decoders/ssh-keystrokes/auto-calibrate");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] auto-calibrate module unavailable:", err);
+    sshAutoCalibrateModule = null;
   }
   // `sshMarkovModel` is the loaded/trained ShellMarkov instance, once
   // ready. `sshMarkovTrainPromise` deduplicates concurrent model-fetch
@@ -1734,6 +1809,9 @@ function createCryptPanel({
 
         if (calibrationStatusEl) calibrationStatusEl.textContent = "Reading transcript…";
         const transcriptText = await file.text();
+        // Cache the parsed transcript so the Auto-calibrate button can
+        // re-use it without forcing the user to re-pick the file.
+        await loadTranscriptForFlow(flow, file);
 
         if (calibrationStatusEl) calibrationStatusEl.textContent = "Calibrating…";
         try {
@@ -1769,6 +1847,440 @@ function createCryptPanel({
         } catch (e) {
           console.error("[Crypt/OpenSSH] Calibration failed:", e);
           if (calibrationStatusEl) calibrationStatusEl.textContent = `Calibration failed: ${e.message}`;
+        }
+      });
+    }
+
+    // ── Auto-calibrate ────────────────────────────────────────────────
+    //
+    // Walks the OpenSSH tuning knobs and finds the combination that
+    // maximises the per-command ssdeep score against the typed
+    // transcript. The orchestrator lives in
+    // src/ui/decoders/ssh-keystrokes/auto-calibrate.js.
+    const autoCalibrateBtnEl = document.getElementById("crypt-openssh-auto-calibrate-btn");
+    const autoCalibrateCancelBtnEl = document.getElementById("crypt-openssh-auto-calibrate-cancel-cancel-btn");
+    const autoCalibrateStatusEl = document.getElementById("crypt-openssh-auto-calibrate-status");
+    const autoCalibrateProgressEl = document.getElementById("crypt-openssh-auto-calibrate-progress");
+    const autoCalibrateProgressTextEl = document.getElementById("crypt-openssh-auto-calibrate-progress-text");
+    const autoCalibrateReportEl = document.getElementById("crypt-openssh-auto-calibrate-report");
+    const autoCalibrateSummaryEl = document.getElementById("crypt-openssh-auto-calibrate-summary");
+    const autoCalibrateTopEl = document.getElementById("crypt-openssh-auto-calibrate-top");
+    const autoCalibratePerCommandEl = document.getElementById("crypt-openssh-auto-calibrate-percommand");
+    const autoCalibrateSensitivityEl = document.getElementById("crypt-openssh-auto-calibrate-sensitivity");
+    // Per-flow parsed transcript cache. Keyed by flowKey. The transcript
+    // is loaded once and shared between the existing `Calibrate` button
+    // and the new `Auto-calibrate` button so the user doesn't have to
+    // re-pick the file. Set to the lines array so iterating gives
+    // `{ command, timestamp }` rows.
+    const sshTranscriptByFlow = new Map();
+    async function loadTranscriptForFlow(flow, file) {
+      if (!flow || !file) return null;
+      const text = await file.text();
+      const lines = String(text || "").split(/\r?\n/);
+      const commands = [];
+      let currentTime = 0;
+      for (const raw of lines) {
+        const trimmed = String(raw || "").trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        let timestamp = null;
+        let command = trimmed;
+        const colonIdx = trimmed.indexOf(":");
+        if (colonIdx > 0) {
+          const tsPart = trimmed.substring(0, colonIdx);
+          const cmdPart = trimmed.substring(colonIdx + 1);
+          const ts = parseFloat(tsPart);
+          if (!isNaN(ts) && ts > 1000000000 && ts < 2000000000) {
+            timestamp = ts * 1000;
+            command = cmdPart.trim();
+          }
+        }
+        if (timestamp === null) {
+          const parts = trimmed.split(/\s+/);
+          if (parts.length >= 2 && !isNaN(parseFloat(parts[0]))) {
+            const ts = parseFloat(parts[0]);
+            if (ts > 1000000000 && ts < 2000000000) timestamp = ts * 1000;
+            else timestamp = ts;
+            command = parts.slice(1).join(" ");
+          }
+        }
+        commands.push({ command, timestamp });
+      }
+      sshTranscriptByFlow.set(flow.flowKey, commands);
+      return commands;
+    }
+
+    // Apply a knob vector to the live settings + UI controls. Used by
+    // the auto-calibrate `runTrial` callback so each trial sees the
+    // exact knob values the orchestrator is testing. Returns a
+    // restore function that puts the UI back to the trial's starting
+    // state (we don't bother restoring since the next trial will
+    // overwrite anyway — but the function is useful for the final
+    // "best" application).
+    function applyKnobsToControls(knobs) {
+      if (!knobs || typeof knobs !== "object") return;
+      if (Number.isFinite(knobs.minCoverage) && deobfCoverageEl) {
+        deobfCoverageEl.value = String(knobs.minCoverage);
+        deobfSettings.minCoverage = knobs.minCoverage;
+        if (deobfCoverageLabelEl) deobfCoverageLabelEl.textContent = knobs.minCoverage.toFixed(2);
+      }
+      if (Number.isFinite(knobs.minCommandLength) && markovMinLengthEl) {
+        markovMinLengthEl.value = String(knobs.minCommandLength);
+        markovSettings.minCommandLength = knobs.minCommandLength;
+      }
+      if (Number.isFinite(knobs.concisenessBonusMultiplier) && markovConcisenessEl) {
+        markovConcisenessEl.value = String(knobs.concisenessBonusMultiplier);
+        markovSettings.concisenessBonusMultiplier = knobs.concisenessBonusMultiplier;
+        if (markovConcisenessLabelEl) {
+          markovConcisenessLabelEl.textContent = `${knobs.concisenessBonusMultiplier.toFixed(1)}x`;
+        }
+      }
+      if (Number.isFinite(knobs.lengthBonusMultiplier) && markovLengthBonusEl) {
+        markovLengthBonusEl.value = String(knobs.lengthBonusMultiplier);
+        markovSettings.lengthBonusMultiplier = knobs.lengthBonusMultiplier;
+        if (markovLengthBonusLabelEl) {
+          markovLengthBonusLabelEl.textContent = `${knobs.lengthBonusMultiplier.toFixed(1)}x`;
+        }
+      }
+      // Push the new bonus values into the Markov module so the
+      // next rankCorpus call picks them up.
+      if (sshMarkovModule && typeof sshMarkovModule.setMarkovConfig === "function") {
+        sshMarkovModule.setMarkovConfig({
+          concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
+          lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+        });
+      }
+    }
+
+    // Build a knob space from the current UI controls. Only knobs we
+    // know how to apply are included — matching the orchestrator's
+    // ssdeep scoring makes sense for the three bonus knobs plus the
+    // deobfuscator coverage (the only numbers that actually touch the
+    // per-command prediction).
+    function buildAutoCalibrateRanges() {
+      return {
+        minCoverage: { min: 0.30, max: 0.90, step: 0.10 },
+        minCommandLength: { values: [1, 2, 3, 4] },
+        concisenessBonusMultiplier: { min: 0.8, max: 4.0, step: 0.4 },
+        lengthBonusMultiplier: { min: 0.5, max: 4.0, step: 0.5 },
+      };
+    }
+
+    function captureAutoCalibrateKnobs() {
+      return {
+        minCoverage: deobfSettings.minCoverage,
+        minCommandLength: markovSettings.minCommandLength,
+        concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
+        lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+      };
+    }
+
+    // Build a `runTrial` callback suitable for the orchestrator. It
+    // applies the knob vector, runs the decoder + markov on the
+    // already-cached delays, and returns per-command predictions.
+    async function buildAutoCalibrateRunTrial(flow, cached) {
+      const decoder = getSshDecoderModule();
+      const direction = cached.direction || "both";
+      const model = cached.model || sshModel;
+      const delays = cached.delays || [];
+      const delaysWithIdx = cached.delaysWithIdx || [];
+      const peeledDelays = (cached.paddingDetection && Array.isArray(cached.paddingDetection.keystrokeDelaysMs))
+        ? cached.paddingDetection.keystrokeDelaysMs
+        : null;
+      const delaysForMarkov = (peeledDelays && peeledDelays.length > 0)
+        ? peeledDelays
+        : delays;
+      // Pre-compute the per-command chunks once so per-trial runs
+      // only have to pay for the decode + markov stages.
+      const rebuiltIndexed = buildIndexedDelaysFromPeeled(delaysForMarkov);
+      const chunkList = findReturnChunks(rebuiltIndexed);
+      // Pick a beam length from the *median* command, not the last
+      // one. Long sessions end on short commands ("exit", "logout")
+      // which would silently starve the markov ranker. The helper
+      // also clamps to MARKOV_TARGET_LEN_MAX so individual chunks
+      // like a 200-char heredoc can't break the ranker either.
+      const targetLen = computeBeamTargetLen(chunkList, {
+        minLength: 1,
+        fallback: MARKOV_TARGET_LEN_DEFAULT,
+      });
+      // Wait for the markov model to be ready so the ranker is
+      // available. The model is loaded once at panel init and
+      // cached on `sshMarkovModel`.
+      const markovModel = await ensureShellMarkovReady();
+      // Artifact store for slot filling (placeholders to IPs).
+      let artifactStore = null;
+      if (sshMarkovModule && typeof sshMarkovModule.getSessionArtifactStore === "function") {
+        try {
+          artifactStore = sshMarkovModule.getSessionArtifactStore();
+        } catch (_e) { /* ignore */ }
+      }
+      return async (knobs) => {
+        // Apply the trial's knob vector.
+        applyKnobsToControls(knobs);
+        // Run the decoder on the cached delays. Reusing the
+        // cached delays avoids the heaviest work in the
+        // pipeline (per-packet delay computation, padding
+        // detection, chunk splitting). Each trial is a Viterbi
+        // pass + markov ranker over the same input.
+        let candidates = [];
+        if (decoder && typeof decoder.decodeKeystrokes === "function") {
+          try {
+            candidates = decoder.decodeKeystrokes(delays, { topN: 5, model });
+          } catch (err) {
+            console.warn("[Crypt/OpenSSH] auto-calibrate trial decode failed:", err);
+          }
+        }
+        const viterbiHintText = (candidates || [])
+          .slice(0, 8)
+          .map((c) => (c && c.text) ? c.text : "")
+          .filter((t) => t.length > 0)
+          .join(" ");
+        // One markov ranker pass per trial.
+        let ranked = [];
+        if (markovModel && typeof markovModel.rankCorpus === "function") {
+          try {
+            const beam = (sshMarkovModule
+              && artifactStore
+              && typeof sshMarkovModule.rankCorpusWithSlotFilling === "function")
+              ? sshMarkovModule.rankCorpusWithSlotFilling(
+                markovModel, artifactStore, targetLen, 5, 100,
+                { viterbiText: viterbiHintText || null })
+              : markovModel.rankCorpus(targetLen, 5, 100);
+            ranked = (typeof markovModel.rankWithTiming === "function")
+              ? markovModel.rankWithTiming(beam, delaysForMarkov, 0.22, viterbiHintText || null).slice(0, 30)
+              : beam.slice(0, 30);
+          } catch (err) {
+            console.warn("[Crypt/OpenSSH] auto-calibrate trial markov failed:", err);
+          }
+        }
+        // Convert the ranked list into per-chunk predictions. We
+        // pair each chunk with the top-ranked candidate whose
+        // length is closest to the chunk's expected length. This
+        // is the same heuristic the live analysis uses; here it
+        // gives the score function a string per command to
+        // compare against the truth.
+        const perCommand = [];
+        for (let i = 0; i < chunkList.length; i += 1) {
+          const chunk = chunkList[i];
+          const wantLen = Math.max(1, Math.round(chunk.keystrokeCount || 0));
+          let best = "";
+          let bestDelta = Infinity;
+          for (const r of ranked) {
+            const text = (r && r.text) ? String(r.text) : "";
+            if (!text) continue;
+            const delta = Math.abs(text.length - wantLen);
+            if (delta < bestDelta) {
+              bestDelta = delta;
+              best = text;
+            }
+          }
+          perCommand.push({ idx: i, truth: "", predicted: best, score: 0 });
+        }
+        return { perCommand };
+      };
+    }
+
+    function renderAutoCalibrateReport(result) {
+      if (!result || !result.report) {
+        if (autoCalibrateReportEl) autoCalibrateReportEl.hidden = true;
+        return;
+      }
+      const report = result.report;
+      const best = result.best;
+      if (autoCalibrateReportEl) autoCalibrateReportEl.hidden = false;
+      if (autoCalibrateSummaryEl) {
+        const lines = [];
+        lines.push(`Trials: ${report.nTrials || 0}`);
+        if (report.bestStats) {
+          const s = report.bestStats;
+          lines.push(
+            `Best mean score: ${(s.mean * 100).toFixed(1)}% (n=${s.n}, ` +
+            `min=${(s.min * 100).toFixed(0)}%, max=${(s.max * 100).toFixed(0)}%, ` +
+            `σ=${(s.stddev * 100).toFixed(1)}%, exact=${(s.exactMatchRate * 100).toFixed(0)}%)`,
+          );
+        }
+        if (best && best.knobs) {
+          const k = best.knobs;
+          const fmt = (n) => Number.isFinite(n) ? (Math.round(n * 1000) / 1000).toFixed(2) : "—";
+          lines.push(
+            `Best knobs: minCoverage=${fmt(k.minCoverage)}, ` +
+            `minCommandLength=${fmt(k.minCommandLength)}, ` +
+            `conciseness=${fmt(k.concisenessBonusMultiplier)}x, ` +
+            `lengthBonus=${fmt(k.lengthBonusMultiplier)}x`,
+          );
+        }
+        if (Number.isFinite(report.delta) && report.delta > 0) {
+          lines.push(`Δ vs baseline: +${(report.delta * 100).toFixed(1)}%`);
+        }
+        autoCalibrateSummaryEl.textContent = lines.join("\n");
+      }
+      if (autoCalibrateTopEl) {
+        const top = report.top3 || [];
+        if (top.length === 0) {
+          autoCalibrateTopEl.textContent = "";
+        } else {
+          const fmt = (n) => Number.isFinite(n) ? (Math.round(n * 1000) / 1000).toFixed(2) : "—";
+          const rows = ["Top 3 trials:"];
+          for (const t of top) {
+            const k = t.knobs || {};
+            rows.push(
+              `  • mean=${(t.stats.mean * 100).toFixed(1)}%  ` +
+              `minCoverage=${fmt(k.minCoverage)}  ` +
+              `minCommandLength=${fmt(k.minCommandLength)}  ` +
+              `conciseness=${fmt(k.concisenessBonusMultiplier)}x  ` +
+              `lengthBonus=${fmt(k.lengthBonusMultiplier)}x`,
+            );
+          }
+          autoCalibrateTopEl.textContent = rows.join("\n");
+        }
+      }
+      if (autoCalibratePerCommandEl && best && Array.isArray(best.perCommand)) {
+        const lines = ["Per-command scores (best config):"];
+        for (const row of best.perCommand) {
+          const truthText = row.truth || "";
+          const predictedText = row.predicted || "(empty)";
+          lines.push(
+            `  #${row.idx + 1}  ${(row.score * 100).toFixed(0)}%  ` +
+            `truth="${truthText}"  pred="${predictedText}"`,
+          );
+        }
+        autoCalibratePerCommandEl.textContent = lines.join("\n");
+      }
+      if (autoCalibrateSensitivityEl && result.sensitivity) {
+        const lines = ["Per-knob sensitivity (mean score vs knob value):"];
+        for (const knob of Object.keys(result.sensitivity)) {
+          const points = result.sensitivity[knob] || [];
+          if (points.length === 0) continue;
+          const summary = points
+            .map((p) => `${p.value}=${(p.score * 100).toFixed(0)}%`)
+            .join("  ");
+          lines.push(`  ${knob}: ${summary}`);
+        }
+        autoCalibrateSensitivityEl.textContent = lines.join("\n");
+      }
+    }
+
+    let autoCalibrateAbortController = null;
+    if (autoCalibrateBtnEl) {
+      autoCalibrateBtnEl.addEventListener("click", async () => {
+        if (!sshAutoCalibrateModule || !sshAutoCalibrateModule.autoCalibrate) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = "Auto-calibrate module unavailable";
+          }
+          return;
+        }
+        const flow = sshFlows.find((f) => f.flowKey === sshSelectedFlowKey);
+        if (!flow) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = "Select an SSH flow first";
+          }
+          return;
+        }
+        const cached = sshLastAnalysisByFlowKey.get(flow.flowKey);
+        if (!cached) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = "Run 'Analyze selected' first — auto-calibrate needs the cached analysis";
+          }
+          return;
+        }
+        // Load the transcript (truth). Either reuse the cached
+        // version for this flow or load the currently-selected
+        // transcript file. If neither is available, abort.
+        let truth = sshTranscriptByFlow.get(flow.flowKey);
+        if (!truth || truth.length === 0) {
+          const file = transcriptFileEl?.files?.[0];
+          if (!file) {
+            if (autoCalibrateStatusEl) {
+              autoCalibrateStatusEl.textContent = "Load a transcript file first — auto-calibrate needs the typed commands to score against";
+            }
+            return;
+          }
+          try {
+            truth = await loadTranscriptForFlow(flow, file);
+          } catch (err) {
+            if (autoCalibrateStatusEl) {
+              autoCalibrateStatusEl.textContent = `Failed to read transcript: ${err.message}`;
+            }
+            return;
+          }
+        }
+        if (!truth || truth.length === 0) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = "Transcript is empty — nothing to calibrate against";
+          }
+          return;
+        }
+        // Truth has command + timestamp rows; the orchestrator
+        // accepts either field name.
+        const truthRows = truth.map((row) => ({
+          command: row.command || row.text || "",
+          timestamp: row.timestamp || null,
+        })).filter((row) => row.command);
+        if (truthRows.length === 0) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = "Transcript has no commands to score against";
+          }
+          return;
+        }
+        // Build the runTrial callback against the cached analysis.
+        const runTrial = await buildAutoCalibrateRunTrial(flow, cached);
+        const startingKnobs = captureAutoCalibrateKnobs();
+        const ranges = buildAutoCalibrateRanges();
+        // Wire up abort + UI.
+        autoCalibrateAbortController = new AbortController();
+        autoCalibrateBtnEl.disabled = true;
+        if (autoCalibrateCancelBtnEl) {
+          autoCalibrateCancelBtnEl.hidden = false;
+          autoCalibrateCancelBtnEl.disabled = false;
+        }
+        if (autoCalibrateProgressEl) autoCalibrateProgressEl.hidden = false;
+        if (autoCalibrateProgressTextEl) autoCalibrateProgressEl.textContent = "Starting auto-calibrate";
+        if (autoCalibrateStatusEl) autoCalibrateStatusEl.textContent = "Searching…";
+        // Start the orchestrator.
+        let result = null;
+        try {
+          result = await sshAutoCalibrateModule.autoCalibrate({
+            knobs: startingKnobs,
+            ranges,
+            runTrial,
+            truth: truthRows,
+          }, (progress) => {
+            if (progress && progress.phase === "trial") {
+              if (autoCalibrateProgressTextEl) {
+                autoCalibrateProgressTextEl.textContent =
+                  `Trial ${progress.trial || "?"} · score ${((progress.score || 0) * 100).toFixed(1)}%`;
+              }
+            }
+          }, { signal: autoCalibrateAbortController.signal });
+        } catch (err) {
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent = `Auto-calibrate failed: ${err.message}`;
+          }
+          console.error("[Crypt/OpenSSH] Auto-calibrate failed:", err);
+        }
+        // Done — restore UI.
+        autoCalibrateAbortController = null;
+        autoCalibrateBtnEl.disabled = false;
+        if (autoCalibrateCancelBtnEl) autoCalibrateCancelBtnEl.hidden = true;
+        if (autoCalibrateProgressEl) autoCalibrateProgressEl.hidden = true;
+        if (result && result.best) {
+          // Apply the best knob values to the live UI.
+          applyKnobsToControls(result.best.knobs);
+          if (autoCalibrateStatusEl) {
+            autoCalibrateStatusEl.textContent =
+              `Auto-calibrate done · mean score ${(result.best.stats.mean * 100).toFixed(1)}%`;
+          }
+          renderAutoCalibrateReport(result);
+        } else if (result && result.report && result.report.error) {
+          if (autoCalibrateStatusEl) autoCalibrateStatusEl.textContent = `Auto-calibrate: ${result.report.error}`;
+        }
+      });
+    }
+    if (autoCalibrateCancelBtnEl) {
+      autoCalibrateCancelBtnEl.addEventListener("click", () => {
+        if (autoCalibrateAbortController) {
+          autoCalibrateAbortController.abort();
+          if (autoCalibrateStatusEl) autoCalibrateStatusEl.textContent = "Cancelling…";
+          autoCalibrateCancelBtnEl.disabled = true;
         }
       });
     }
@@ -2440,32 +2952,25 @@ function createCryptPanel({
               // Recompute the command length on the peeled stream
               // for the beam target. Fall back to the cached value
               // when peeling didn't run.
-              let targetLen = Number.isFinite(cached.estimatedCommandLength)
-                ? Math.max(1, Math.round(cached.estimatedCommandLength))
-                : null;
+              // Cap the beam length at MARKOV_TARGET_LEN_MAX (40) so
+              // the markov ranker's length tolerance filter doesn't
+              // silently drop every candidate on long sessions. The
+              // helper consults the median chunk length (when peeling
+              // ran) and subtracts backspaces before clamping.
+              let chunksForBeam = [];
               if (peeledDelays && peeledDelays.length > 1) {
                 const rebuilt = buildIndexedDelaysFromPeeled(peeledDelays);
-                const chunks = (typeof findReturnChunks === "function")
+                chunksForBeam = (typeof findReturnChunks === "function")
                   ? findReturnChunks(rebuilt)
                   : [];
-                if (chunks.length > 0) {
-                  // Use the median chunk length as the beam
-                  // target — this is the typical-command shape the
-                  // auto-tuner is also trying to recover. Falls
-                  // back to the last chunk (most recent command).
-                  const lengths = chunks.map((c) => c.keystrokeCount).sort((a, b) => a - b);
-                  const medianChunk = lengths[Math.floor(lengths.length / 2)];
-                  targetLen = Math.max(markovMinCommandLength, medianChunk || 1);
-
-                  // Adjust for backspaces: each detected backspace removes
-                  // one previously typed character from the actual text
-                  const bsCount = cached.backspaceHints?.count || 0;
-                  if (bsCount > 0) {
-                    targetLen = Math.max(markovMinCommandLength, targetLen - bsCount);
-                  }
-                }
               }
-              if (!targetLen) targetLen = 8;
+              const targetLen = computeBeamTargetLen(chunksForBeam, {
+                minLength: markovMinCommandLength,
+                backspaceCount: cached.backspaceHints?.count || 0,
+                fallback: Number.isFinite(cached.estimatedCommandLength)
+                  ? Math.max(1, Math.round(cached.estimatedCommandLength))
+                  : MARKOV_TARGET_LEN_DEFAULT,
+              });
               // Merge ciphertext-aware signals into the prior the
               // ranker sees. The JSON export we now produce carries
               // per-packet fields (ciphertextLength, seq) and the
@@ -3701,9 +4206,16 @@ function createCryptPanel({
       && typeof sshMarkovModule.computeLineConfidence === "function";
 
     const pad = cached && cached.paddingDetection;
-    const targetLen = cached && Number.isFinite(cached.estimatedCommandLength)
-      ? Math.max(1, Math.round(cached.estimatedCommandLength))
-      : null;
+    // Same helper as the cached-analysis block above: cap at
+    // MARKOV_TARGET_LEN_MAX (40) so a noisy estimatedCommandLength
+    // can't produce an over-large beam target. Without chunks here
+    // we fall back to the cached estimate (or the default).
+    const targetLen = computeBeamTargetLen([], {
+      minLength: 1,
+      fallback: Number.isFinite(cached && cached.estimatedCommandLength)
+        ? Math.max(1, Math.round(cached.estimatedCommandLength))
+        : MARKOV_TARGET_LEN_DEFAULT,
+    });
     const delaysForMarkov = (pad && Array.isArray(pad.keystrokeDelaysMs))
       ? pad.keystrokeDelaysMs
       : (cached && cached.delaysWithIdx || []).map((d) => Number(d.delay)).filter(Number.isFinite);
@@ -5516,35 +6028,35 @@ Instructions:
           // non-fatal.
           try {
             const bestPrompt = `Given the same context and the candidate list, return a strict JSON object with the single most probable SSH command string that could have been typed and a confidence in [0,1]. Example: {"text":"ls -la","confidence":0.82}. Return ONLY the object.`;
-            const bestResp = await window.llmapi.generate(bestPrompt);
+            // Use the same Ollama call + response normalization as the rest
+            // of the LLM pathways in this file: pass `think: false` so we
+            // don't burn the budget on reasoning, then run the raw response
+            // through `extractLlmText`/`parseLlmJsonObject` so we handle the
+            // ollama.js shape (`{response, thinking}`) the same way.
+            const bestResp = await window.llmapi.generate(bestPrompt, {
+              maxTokens: 512,
+              temperature: 0.2,
+              think: false,
+            });
             let bestText = "";
             let bestConf = null;
-            if (typeof bestResp === "string") {
-              try {
-                const b = JSON.parse(bestResp);
-                bestText = b.text || "";
-                bestConf = Number.isFinite(b.confidence) ? b.confidence : null;
-              } catch (_e) {
-                // try to extract object from text
-                const m = bestResp.match(/\{[\s\S]*\}/m);
+            const bestTextRaw = extractLlmText(bestResp);
+            if (bestTextRaw) {
+              const bestObj = parseLlmJsonObject(bestTextRaw);
+              if (bestObj && typeof bestObj === "object") {
+                bestText = bestObj.text || "";
+                bestConf = Number.isFinite(bestObj.confidence) ? bestObj.confidence : null;
+              } else {
+                // Fallback: try to pull a {text,confidence}-shaped object
+                // out of any prose the LLM leaked around the JSON.
+                const m = bestTextRaw.match(/\{[\s\S]*\}/m);
                 if (m) {
                   try {
                     const b2 = JSON.parse(m[0]);
                     bestText = b2.text || "";
                     bestConf = Number.isFinite(b2.confidence) ? b2.confidence : null;
-                  } catch (_e2) { }
+                  } catch (_e2) { /* leave bestText empty */ }
                 }
-              }
-            } else if (bestResp && typeof bestResp === "object") {
-              if (bestResp?.text) {
-                bestText = bestResp.text;
-                bestConf = Number.isFinite(bestResp.confidence) ? bestResp.confidence : null;
-              } else if (bestResp?.content) {
-                try {
-                  const b3 = JSON.parse(bestResp.content);
-                  bestText = b3.text || "";
-                  bestConf = Number.isFinite(b3.confidence) ? b3.confidence : null;
-                } catch (_e) { }
               }
             }
 
