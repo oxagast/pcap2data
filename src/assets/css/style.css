@@ -1723,6 +1723,34 @@ strong {
   background-color: var(--color-3);
 }
 
+/* Persistent warning banner at the top of the OpenSSH panel */
+.crypt-openssh-warning-banner {
+  margin-bottom: 16px;
+  border: 1px solid color-mix(in srgb, #ff9800 60%, transparent);
+  border-left: 4px solid #ff9800;
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, #ff9800 8%, transparent);
+  color: var(--crypt-panel-text);
+}
+
+.crypt-openssh-warning-banner-content {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.crypt-openssh-warning-banner-content strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #b35c00;
+  font-size: 13px;
+}
+
+.crypt-openssh-warning-banner-content p {
+  margin: 0;
+  color: var(--crypt-panel-text);
+}
+
 /* Calibration & Profile Management */
 .crypt-openssh-calibration-status {
   font-size: 11px;
