@@ -31,6 +31,21 @@ const { computeSsdeep } = require("./ssdeep");
 // --- 1. Pure helpers ----------------------------------------------------
 
 /**
+ * Compute total number of expected trials for progress calculation.
+ * Passes x sum(sweep sizes per knob).
+ */
+function computeTotalTrials(ranges, maxPasses = 3) {
+    if (!ranges || typeof ranges !== "object") return 0;
+    const knobNames = Object.keys(ranges);
+    let totalPerPass = 0;
+    for (const name of knobNames) {
+        const sweep = buildSweep(ranges[name]);
+        totalPerPass += sweep.length;
+    }
+    return 1 + (maxPasses * totalPerPass); // 1 baseline + passes*sweeps
+}
+
+/**
  * Build the list of knob values to sweep for one coordinate-descent
  * step. Returns an array that includes the current best value so the
  * step is monotone (no worse than the current best).
@@ -224,9 +239,28 @@ async function autoCalibrate(setup, onProgress, options = {}) {
     }
     const signal = options.signal || null;
     const trials = [];
+    const maxPasses = Number.isFinite(options.maxPasses) ? options.maxPasses : 3;
+    const totalTrials = computeTotalTrials(ranges, maxPasses);
+
+    // Helper to yield to UI event loop to prevent freezing
+    async function yieldToUi() {
+        return new Promise((resolve) => {
+            if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+                window.requestAnimationFrame(() => resolve());
+            } else {
+                setTimeout(resolve, 0);
+            }
+        });
+    }
 
     // Run the baseline trial at the current knob values.
-    let best = await runTrialAndScore(startKnobs, ranges, runTrial, truth, trials, onProgress, signal);
+    if (typeof onProgress === "function") {
+        try {
+            onProgress({ phase: "init", totalTrials, currentTrial: 0, pass: 0 });
+        } catch (_e) { /* ignore */ }
+    }
+    await yieldToUi();
+    let best = await runTrialAndScore(startKnobs, ranges, runTrial, truth, trials, onProgress, signal, totalTrials);
     if (!best) return errorResult("baseline run failed");
 
     const knobNames = Object.keys(ranges || {});
@@ -236,7 +270,6 @@ async function autoCalibrate(setup, onProgress, options = {}) {
     // improvement. Two passes are enough on the small knob set we have.
     let improved = true;
     let pass = 0;
-    const maxPasses = Number.isFinite(options.maxPasses) ? options.maxPasses : 3;
     while (improved && pass < maxPasses) {
         improved = false;
         pass += 1;
@@ -245,8 +278,9 @@ async function autoCalibrate(setup, onProgress, options = {}) {
             const sweep = buildSweep(ranges[name]);
             for (let i = 0; i < sweep.length; i += 1) {
                 if (signal && signal.aborted) break;
+                await yieldToUi(); // Yield before each trial to keep UI responsive
                 const trialKnobs = applyKnob(best.knobs, name, sweep[i]);
-                const stats = await runTrialAndScore(trialKnobs, ranges, runTrial, truth, trials, onProgress, signal);
+                const stats = await runTrialAndScore(trialKnobs, ranges, runTrial, truth, trials, onProgress, signal, totalTrials, pass);
                 if (!stats) continue;
                 if (stats.stats.mean > best.stats.mean + 1e-6) {
                     best = stats;
@@ -264,6 +298,7 @@ async function autoCalibrate(setup, onProgress, options = {}) {
             if (signal && signal.aborted) break;
             const range = ranges[name];
             if (!range) continue;
+            await yieldToUi();
             const probe = await probeKnobSensitivity(name, range, best.knobs, truth, runTrial, onProgress, signal);
             sensitivity[name] = probe;
         }
@@ -274,7 +309,7 @@ async function autoCalibrate(setup, onProgress, options = {}) {
 
 // --- 3. Internal helpers ------------------------------------------------
 
-async function runTrialAndScore(knobs, ranges, runTrial, truth, trials, onProgress, signal) {
+async function runTrialAndScore(knobs, ranges, runTrial, truth, trials, onProgress, signal, totalTrials = 0, pass = 0) {
     if (signal && signal.aborted) return null;
     let result = null;
     try {
@@ -294,6 +329,8 @@ async function runTrialAndScore(knobs, ranges, runTrial, truth, trials, onProgre
             onProgress({
                 phase: "trial",
                 trial: trials.length,
+                totalTrials,
+                pass,
                 knobs,
                 score: stats.mean,
                 exactMatchRate: stats.exactMatchRate,
@@ -335,6 +372,7 @@ function errorResult(message) {
 
 module.exports = {
     autoCalibrate,
+    computeTotalTrials,
     // exported for unit tests
     aggregateScores,
     buildSweep,

@@ -2590,6 +2590,381 @@ function getMarkovConfig() {
     return { ..._markovConfig };
 }
 
+// ============================================================================
+// Network-Aware Command Correlation (shell_corpus_net_metadata.json)
+// ============================================================================
+//
+// This integrates the custom generated metadata corpus that maps commands
+// to their network access patterns. The scoring algorithm uses:
+//   1. Temporal vicinity: Are network artifacts (IPs, DNS, etc.) nearby?
+//   2. Command network behavior: Does this command actually use the network?
+//   3. Correlation bonus: Boost network commands when network artifacts exist.
+//
+// This helps better correlate artifacts from the artifact store with their
+// respective commands in SSH sessions.
+
+// Global cache for network metadata
+let _networkMetadataCache = null;
+
+/**
+ * Load network metadata from the shell_corpus_net_metadata.json file.
+ * The metadata maps command base names to their network behavior:
+ *   - network_enabled: boolean indicating if command can use network
+ *   - probable_network_usages: array of example usages
+ *
+ * @param {Object} options - { fs, path, metadataPath } - optional deps
+ * @returns {Object|null} The metadata object or null if loading fails
+ */
+function loadNetworkMetadata(options = {}) {
+    // Return cached if available
+    if (_networkMetadataCache) {
+        return _networkMetadataCache;
+    }
+
+    // Try to load from provided path or use default locations
+    const fs = options && options.fs;
+    const path = options && options.path;
+    const metadataPath = options && options.metadataPath;
+
+    // If no fs/path provided, we're in renderer - return empty for now
+    // (renderer should use IPC to get metadata from main process)
+    if (!fs || !path) {
+        // Return empty default metadata - will be populated via setNetworkMetadata()
+        _networkMetadataCache = Object.create(null);
+        return _networkMetadataCache;
+    }
+
+    try {
+        let jsonStr = null;
+
+        if (metadataPath && fs.existsSync(metadataPath)) {
+            jsonStr = fs.readFileSync(metadataPath, "utf8");
+        } else {
+            // Try default locations
+            const defaultPaths = [
+                // Packaged location (extraResource)
+                path.join(process.resourcesPath || "", "data", "shell_corpus_net_metadata.json"),
+                // Source tree locations
+                path.join(__dirname, "..", "..", "..", "data", "shell_corpus_net_metadata.json"),
+                path.join(__dirname, "..", "..", "data", "shell_corpus_net_metadata.json"),
+                path.join(__dirname, "..", "data", "shell_corpus_net_metadata.json"),
+            ];
+
+            for (const p of defaultPaths) {
+                if (fs.existsSync(p)) {
+                    jsonStr = fs.readFileSync(p, "utf8");
+                    break;
+                }
+            }
+        }
+
+        if (jsonStr) {
+            _networkMetadataCache = JSON.parse(jsonStr);
+            return _networkMetadataCache;
+        }
+    } catch (e) {
+        console.warn("[markov] Failed to load network metadata:", e.message);
+    }
+
+    // Fallback: empty metadata
+    _networkMetadataCache = Object.create(null);
+    return _networkMetadataCache;
+}
+
+/**
+ * Set network metadata directly (useful for renderer via IPC).
+ * @param {Object} metadata - The network metadata object
+ */
+function setNetworkMetadata(metadata) {
+    if (metadata && typeof metadata === "object") {
+        _networkMetadataCache = metadata;
+    }
+}
+
+/**
+ * Get the currently cached network metadata.
+ * @returns {Object|null}
+ */
+function getNetworkMetadata() {
+    return _networkMetadataCache;
+}
+
+/**
+ * Get network metadata for a specific command.
+ * Extracts the base command (first token) and looks it up.
+ *
+ * @param {string} cmd - Full command string
+ * @returns {Object|null} { network_enabled, probable_network_usages } or null
+ */
+function getCommandNetworkInfo(cmd) {
+    if (!cmd || typeof cmd !== "string") return null;
+
+    const metadata = _networkMetadataCache || loadNetworkMetadata();
+    if (!metadata) return null;
+
+    // Extract base command (first token, ignoring sudo, flags, etc.)
+    const trimmed = cmd.trim();
+    if (!trimmed) return null;
+
+    // Split into tokens, handling quotes roughly
+    const tokens = [];
+    let current = "";
+    let inQuote = null;
+    for (let i = 0; i < trimmed.length; i += 1) {
+        const ch = trimmed[i];
+        if (inQuote) {
+            if (ch === inQuote) inQuote = null;
+            current += ch;
+        } else if (ch === "'" || ch === '"') {
+            inQuote = ch;
+            current += ch;
+        } else if (/\s/.test(ch)) {
+            if (current) tokens.push(current);
+            current = "";
+        } else {
+            current += ch;
+        }
+    }
+    if (current) tokens.push(current);
+
+    // Find the actual command (skip sudo, env, etc.)
+    let baseCmd = null;
+    for (const tok of tokens) {
+        // Skip common prefix wrappers
+        if (tok === "sudo" || tok === "env" || tok === "time" ||
+            tok === "nice" || tok === "nohup" || tok === "exec") {
+            continue;
+        }
+        // Skip flags
+        if (tok.startsWith("-")) continue;
+        // Skip variable assignments like "FOO=bar"
+        if (/^[A-Z_][A-Z0-9_]*=/.test(tok)) continue;
+
+        // This is probably the command
+        baseCmd = tok;
+        break;
+    }
+
+    if (!baseCmd) return null;
+
+    // Look up in metadata
+    const info = metadata[baseCmd];
+    if (!info) return null;
+
+    return {
+        baseCommand: baseCmd,
+        networkEnabled: info.network_enabled === true,
+        probableNetworkUsages: info.probable_network_usages || [],
+    };
+}
+
+/**
+ * Calculate a network correlation score for a command based on:
+ *   1. Whether the command is network-enabled (from metadata)
+ *   2. Whether network artifacts exist near the target time
+ *   3. Temporal proximity of those artifacts
+ *
+ * This is used to boost/reduce command scores during ranking.
+ *
+ * @param {string} cmd - Command to evaluate
+ * @param {SessionArtifactStore|null} artifactStore - Artifact store
+ * @param {Object} options - { targetTimeMs, windowMs, temporalWeight }
+ * @returns {number} Network correlation score (-0.5 to +1.5 range)
+ */
+function calculateNetworkCorrelationScore(cmd, artifactStore, options = {}) {
+    const {
+        targetTimeMs = null,
+        windowMs = 30000,  // 30 second window by default
+        temporalWeight = 0.6,
+    } = options;
+
+    // Get command's network info
+    const netInfo = getCommandNetworkInfo(cmd);
+
+    // If no metadata available, return neutral score
+    if (!netInfo) {
+        return 0.0;
+    }
+
+    // Check for network artifacts if we have an artifact store
+    let hasNetworkArtifacts = false;
+    let maxTemporalScore = 0.0;
+
+    if (artifactStore && typeof artifactStore.getAllArtifacts === "function") {
+        // Types that indicate network activity
+        const networkArtifactTypes = [
+            "ip_address", "hostname", "domain", "http_url",
+            "dns_qname", "ssl_cn", "port_artifact",
+        ];
+
+        if (Number.isFinite(targetTimeMs)) {
+            // Time-aware: look for artifacts near target time
+            for (const type of networkArtifactTypes) {
+                const nearTime = artifactStore.findArtifactsNearTime(targetTimeMs, windowMs, type);
+                if (nearTime && nearTime.length > 0) {
+                    hasNetworkArtifacts = true;
+                    for (const nt of nearTime) {
+                        if (nt.temporalScore > maxTemporalScore) {
+                            maxTemporalScore = nt.temporalScore;
+                        }
+                    }
+                }
+            }
+        } else {
+            // No time provided: just check if any network artifacts exist
+            const allArtifacts = artifactStore.getAllArtifacts();
+            for (const a of allArtifacts) {
+                if (networkArtifactTypes.includes(a.type)) {
+                    hasNetworkArtifacts = true;
+                    maxTemporalScore = 0.5;  // Moderate score when no timing
+                    break;
+                }
+            }
+        }
+    }
+
+    // Calculate correlation score based on network-enabled status
+    let score = 0.0;
+
+    if (netInfo.networkEnabled) {
+        // Command CAN use network
+        if (hasNetworkArtifacts) {
+            // Positive correlation: network command + network artifacts
+            // Base bonus + temporal component
+            const baseBonus = 0.8;
+            const temporalBonus = maxTemporalScore * temporalWeight;
+            score = baseBonus + temporalBonus;
+        } else {
+            // Network command but no network artifacts - mild penalty
+            // (command might still be network-enabled but not using network in this case)
+            score = -0.2;
+        }
+    } else {
+        // Command does NOT use network
+        if (hasNetworkArtifacts) {
+            // Negative correlation: non-network command + network artifacts
+            // Penalize this - if there's network activity, the command
+            // is probably a network-enabled one
+            score = -0.4;
+        } else {
+            // Neutral: non-network command, no network artifacts
+            score = 0.1;  // Small bonus for consistency
+        }
+    }
+
+    // Clamp to reasonable range
+    return Math.max(-0.5, Math.min(1.5, score));
+}
+
+/**
+ * Enhanced version of rankCorpus that also considers network metadata.
+ * Uses temporal vicinity of network artifacts + command network behavior
+ * to better correlate artifacts with their respective commands.
+ *
+ * @param {ShellMarkov} model - The Markov model
+ * @param {SessionArtifactStore|null} artifactStore - Artifact store
+ * @param {number|null} targetLen - Target command length
+ * @param {number} tolerance - Length tolerance
+ * @param {number} topn - Number of results to return
+ * @param {Object} options - Additional options:
+ *   {
+ *     viterbiText: string,        // Viterbi decode hints
+ *     targetTimeMs: number,       // Target time for temporal correlation
+ *     windowMs: number,           // Temporal window (default 30000)
+ *     networkCorrelationWeight: number,  // Weight for network score (default 0.3)
+ *   }
+ * @returns {Array} Same format as rankCorpusWithSlotFilling
+ */
+function rankCorpusNetworkAware(model, artifactStore, targetLen = null, tolerance = 3, topn = 30, options = {}) {
+    if (!model || typeof model.rankCorpus !== "function") {
+        return [];
+    }
+
+    const {
+        viterbiText = null,
+        targetTimeMs = null,
+        windowMs = 30000,
+        networkCorrelationWeight = 0.3,
+    } = options;
+
+    // First get base ranking with slot filling
+    const baseRanked = rankCorpusWithSlotFilling(
+        model, artifactStore, targetLen, tolerance, topn * 2,
+        { viterbiText }
+    );
+
+    if (baseRanked.length === 0) {
+        return [];
+    }
+
+    // Re-score with network correlation
+    const reScored = [];
+
+    for (const entry of baseRanked) {
+        const [baseScore, command, originalTemplate, slotInfo] = entry;
+
+        // Calculate network correlation score
+        const netScore = calculateNetworkCorrelationScore(
+            command,
+            artifactStore,
+            { targetTimeMs, windowMs }
+        );
+
+        // Combine scores: base + (network_score * weight)
+        const combinedScore = baseScore + (netScore * networkCorrelationWeight);
+
+        reScored.push({
+            score: combinedScore,
+            baseScore,
+            networkScore: netScore,
+            command,
+            originalTemplate,
+            slotInfo,
+        });
+    }
+
+    // Sort by combined score
+    reScored.sort((a, b) => b.score - a.score);
+
+    // Return in compatible format, with network score in the info
+    return reScored.slice(0, topn).map((r) => [
+        r.score,
+        r.command,
+        r.originalTemplate,
+        {
+            ...(r.slotInfo || {}),
+            networkAware: true,
+            networkScore: r.networkScore,
+            baseScore: r.baseScore,
+        },
+    ]);
+}
+
+// ============================================================================
+// ShellMarkov class extensions for network-aware scoring
+// ============================================================================
+
+// Add network-aware method to ShellMarkov prototype
+ShellMarkov.prototype.rankNetworkAware = function (
+    artifactStore,
+    targetLen = null,
+    tolerance = 3,
+    topn = 30,
+    options = {}
+) {
+    return rankCorpusNetworkAware(this, artifactStore, targetLen, tolerance, topn, options);
+};
+
+// Add method to get command network info from model
+ShellMarkov.prototype.getCommandNetworkInfo = function (cmd) {
+    return getCommandNetworkInfo(cmd);
+};
+
+// Add method to calculate network correlation score
+ShellMarkov.prototype.calculateNetworkCorrelation = function (cmd, artifactStore, options) {
+    return calculateNetworkCorrelationScore(cmd, artifactStore, options);
+};
+
 // Deprecated/legacy convenience wrappers using singleton
 module.exports = {
     ShellMarkov,
@@ -2632,4 +3007,11 @@ module.exports = {
     findArtifactsNearTime,
     findBestSlotFillTimeAware,
     getArtifactsInTimeRange,
+    // Network-Aware Command Correlation (shell_corpus_net_metadata.json)
+    loadNetworkMetadata,
+    setNetworkMetadata,
+    getNetworkMetadata,
+    getCommandNetworkInfo,
+    calculateNetworkCorrelationScore,
+    rankCorpusNetworkAware,
 };
