@@ -24,6 +24,14 @@
 //   - Killourhy & Maxion, "Comparing Anomaly-Detection Algorithms for
 //     Keystroke Dynamics" (DSN 2009).
 
+// v2 weight-envelope helpers — see scripts/WEIGHT_SCHEMA.md and
+// ./score-envelopes.js. We keep the import inline rather than at the
+// top of the file so this module stays a single self-contained bundle
+// for the worker (which does its own `require`).
+const _scoreEnvelopes = (typeof require === "function" && typeof module !== "undefined")
+    ? require("./score-envelopes")
+    : null;
+
 // Characters the decoder will consider. Space (typed as one space char)
 // and common shell punctuation get included; upper-case letters are folded
 // to lower-case before scoring.
@@ -144,9 +152,61 @@ function resolveDigraphParams(a, b, empiricalSamples, baselines, coordinateIndex
 }
 
 function sanitizeParams(mean, std) {
-    const cleanMean = Number.isFinite(mean) ? mean : DEFAULT_DIGRAPH_PARAMS.mean;
-    const cleanStd = Number.isFinite(std) ? Math.max(std, MIN_STD_MS) : DEFAULT_DIGRAPH_PARAMS.std;
+    const cleanMean = Number.isFinite(Number(mean)) ? Number(mean) : DEFAULT_DIGRAPH_PARAMS.mean;
+    const cleanStd = Number.isFinite(Number(std)) ? Math.max(Number(std), MIN_STD_MS) : DEFAULT_DIGRAPH_PARAMS.std;
     return { mean: cleanMean, std: cleanStd };
+}
+
+/**
+ * Layer-1 digraph Gaussian scoring with optional v2 weight-envelope
+ * Bayesian shrinkage. The flow is:
+ *
+ *   1. Resolve the raw digraph params (empirical or category baseline).
+ *   2. Pick the category baseline that matches the digraph class
+ *      (so we always have a prior to shrink toward).
+ *   3. If the resolved entry carries a v2 weight envelope, blend the
+ *      empirical observation toward the prior using
+ *      `_scoreEnvelopes.shrinkToPrior(...)`. Low-confidence empirical
+ *      data regresses; high-confidence empirical dominates.
+ *   4. Sanitize the result so `std >= MIN_STD_MS`.
+ *
+ * Behaviour preservation: this is a strict extension of
+ * `resolveDigraphParams`. Legacy models (no envelopes) follow the
+ * exact same code path; v2 models simply get the extra shrinkage.
+ *
+ * Opt-out: pass `{ useEnvelopeShrinkage: false }` in `options` to
+ * force v1 behaviour (useful for snapshot tests that pin specific
+ * Gaussian params).
+ */
+function resolveDigraphParamsWithEnvelope(a, b, empiricalSamples, baselines, coordinateIndex, options) {
+    const raw = resolveDigraphParams(a, b, empiricalSamples, baselines, coordinateIndex);
+    if (!options || options.useEnvelopeShrinkage === false) {
+        return raw;
+    }
+    if (!_scoreEnvelopes) {
+        // Worker / browser without a `require` shim — skip shrinkage.
+        return raw;
+    }
+    // Look up the raw entry (with its envelope) so shrinkToPrior can
+    // see the v2 metadata. We have to do this manually because
+    // resolveDigraphParams already stripped/normalized.
+    const lowerA = String(a || "").toLowerCase();
+    const lowerB = String(b || "").toLowerCase();
+    const empirical = empiricalSamples || {};
+    const entry = empirical[`${lowerA}${lowerB}`] || empirical[`${lowerB}${lowerA}`] || null;
+    if (!entry || !entry.weight) {
+        // v1 surface — no envelope, no shrinkage.
+        return raw;
+    }
+    const cls = classifyDigraph(lowerA, lowerB, coordinateIndex);
+    const baseline = (cls && baselines && baselines[cls]) || DEFAULT_DIGRAPH_PARAMS;
+    const shrunken = _scoreEnvelopes.shrinkToPrior(
+        entry,
+        baseline,
+        options.envelopeOptions || undefined,
+    );
+    if (!shrunken) return raw;
+    return sanitizeParams(shrunken.mean, shrunken.std);
 }
 
 /**
@@ -215,13 +275,19 @@ function loadQwertyModel(parsedJson) {
     // Merge explicit empirical entries from the JSON (if any). These take
     // precedence over the sample-derived values. Keys are expected to be
     // two-character strings (e.g. "th", "a ") with numeric mean/std.
+    // We preserve the v2 weight envelope when present so the Bayesian
+    // shrinkage path in `resolveDigraphParamsWithEnvelope` can read it.
     if (parsed.empirical && typeof parsed.empirical === "object") {
         for (const k of Object.keys(parsed.empirical)) {
             if (typeof k !== "string" || k.length !== 2) continue;
             const entry = parsed.empirical[k];
             if (!entry || !Number.isFinite(Number(entry.mean))) continue;
             const sp = sanitizeParams(Number(entry.mean), Number(entry.std));
-            empirical[k.toLowerCase()] = { mean: sp.mean, std: sp.std };
+            const merged = { mean: sp.mean, std: sp.std };
+            if (entry.weight && typeof entry.weight === "object") {
+                merged.weight = entry.weight;
+            }
+            empirical[k.toLowerCase()] = merged;
         }
     }
 
@@ -251,8 +317,15 @@ function gaussianLogProbability(value, mean, std) {
  * The "previous character" anchors the digraph model. If `prevChar` is
  * null, every alphabet entry gets the same flat log-likelihood (the
  * decoder has no prior for the very first character).
+ *
+ * Layer-1 envelopes: when the model has `model.envelopeOptions`, each
+ * digraph lookup runs through `resolveDigraphParamsWithEnvelope` so
+ * empirical entries with v2 weight envelopes blend toward the
+ * category baseline via Bayesian shrinkage. Models without envelopes
+ * (legacy v1) hit the exact same code path with `effective_n = 0`,
+ * which short-circuits shrinkage — they keep v1 behaviour.
  */
-function scoreNextChar(prevChar, observedDelay, model) {
+function scoreNextChar(prevChar, observedDelay, model, options) {
     const out = {};
     const alphabet = model.alphabet;
     const defaultLogP = gaussianLogProbability(
@@ -267,14 +340,20 @@ function scoreNextChar(prevChar, observedDelay, model) {
         }
         return out;
     }
+    const envelopeOpts = Object.assign(
+        {},
+        model.envelopeOptions || {},
+        options || {},
+    );
     for (let i = 0; i < alphabet.length; i += 1) {
         const nextChar = alphabet[i];
-        const params = resolveDigraphParams(
+        const params = resolveDigraphParamsWithEnvelope(
             prevChar,
             nextChar,
             model.empirical,
             model.baselines,
             model.coordinateIndex,
+            envelopeOpts,
         );
         out[nextChar] = gaussianLogProbability(observedDelay, params.mean, params.std);
     }
@@ -1734,6 +1813,7 @@ module.exports = {
     // Model
     loadQwertyModel,
     resolveDigraphParams,
+    resolveDigraphParamsWithEnvelope,
     gaussianLogProbability,
     scoreNextChar,
     // Decoder

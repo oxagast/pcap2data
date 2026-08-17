@@ -40,30 +40,73 @@ NOW_ISO = (
 
 def make_weight(
     *,
-    confidence: float,
-    sample_size: int,
-    smoothing: str | None = "empirical",
-    source: str = "calibration",
+    weight: float,
+    count: int | None,
+    source: str,
     tags: list[str] | None = None,
+    last_updated: str | None = None,
+    variance: float | None = None,
     notes: str | None = None,
 ) -> dict:
-    """Build a weight envelope that conforms to scripts/WEIGHT_SCHEMA.md."""
+    """Build a v2 envelope block (FLAT shape per WEIGHT_SCHEMA.md §1).
+
+    The envelope is a dict with keys ``weight``, ``count``, ``source``,
+    ``lastUpdated``, plus optional ``variance`` and ``tags``. These
+    are SIBLING keys of the parent entry's ``mean``/``std`` —
+    callers should splat the envelope into the parent, e.g.
+    ``entry.update(envelope)``.
+
+    The decoder (``src/ui/decoders/ssh-keystrokes/score-envelopes.js``)
+    accepts both the flat shape (canonical) and the nested
+    ``{weight: {…}}`` shape (legacy v0.1). New writes should use the
+    flat shape so downstream tooling that introspects the schema
+    directly sees consistent keys.
+    """
     envelope: dict = {
-        "confidence": float(confidence),
-        "sample_size": int(sample_size),
-        "smoothing": smoothing,
+        "weight": clamp01(float(weight)),
+        "count": None if count is None else int(count),
         "source": source,
-        "tags": list(tags or []),
-        "last_updated": NOW_ISO,
+        "lastUpdated": last_updated or NOW_ISO,
     }
+    if variance is not None:
+        envelope["variance"] = float(variance)
+    if tags is not None:
+        envelope["tags"] = list(tags)
     if notes is not None:
         envelope["notes"] = notes
-    return {"weight": envelope}
+    return envelope
+
+
+def clamp01(x: float) -> float:
+    if x < 0.0:
+        return 0.0
+    if x > 1.0:
+        return 1.0
+    return float(x)
 
 
 def has_weight_envelope(node) -> bool:
-    """True if *node* is a dict that already carries a v2 ``weight`` block."""
-    return isinstance(node, dict) and "weight" in node and isinstance(node["weight"], dict)
+    """True if *node* is a dict that already carries v2 envelope keys.
+
+    Accepts both the flat shape (``weight`` is a number) and the
+    legacy nested shape (``weight`` is a dict) so re-running the
+    migrator on data written by an earlier version is a no-op.
+    """
+    if not isinstance(node, dict):
+        return False
+    if "weight" not in node:
+        return False
+    # Flat shape: ``weight`` is a number, ``count`` may be null.
+    if isinstance(node.get("weight"), (int, float)):
+        return "source" in node and "lastUpdated" in node
+    # Nested shape (legacy): ``weight`` is a dict with envelope fields.
+    if isinstance(node.get("weight"), dict):
+        w = node["weight"]
+        return (
+            "weight" in w and "count" in w and "source" in w
+            and ("lastUpdated" in w or "last_updated" in w)
+        )
+    return False
 
 
 def load_json(path: Path) -> dict:
