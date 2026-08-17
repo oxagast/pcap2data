@@ -2,22 +2,82 @@
   "version": 1,
   "baselines": {
     "sameKey": {
+      "weight": {
+        "confidence": 0.5,
+        "sample_size": 0,
+        "smoothing": "category_summary",
+        "source": "calibration",
+        "tags": [
+          "baseline",
+          "sameKey"
+        ],
+        "last_updated": "2026-08-17T13:35:08+00:00",
+        "notes": "Category-level envelope for 'sameKey'. The true empirical sample size for this category is the count of shell_corpus_sorted.txt digraphs that fall into it; tracked separately in scripts/derive_digraphs.py."
+      },
       "mean": 220,
       "std": 45
     },
     "adjacentKey": {
+      "weight": {
+        "confidence": 0.5,
+        "sample_size": 0,
+        "smoothing": "category_summary",
+        "source": "calibration",
+        "tags": [
+          "baseline",
+          "adjacentKey"
+        ],
+        "last_updated": "2026-08-17T13:35:08+00:00",
+        "notes": "Category-level envelope for 'adjacentKey'. The true empirical sample size for this category is the count of shell_corpus_sorted.txt digraphs that fall into it; tracked separately in scripts/derive_digraphs.py."
+      },
       "mean": 20.07,
       "std": 4.66
     },
     "nearbyKey": {
+      "weight": {
+        "confidence": 0.5,
+        "sample_size": 0,
+        "smoothing": "category_summary",
+        "source": "calibration",
+        "tags": [
+          "baseline",
+          "nearbyKey"
+        ],
+        "last_updated": "2026-08-17T13:35:08+00:00",
+        "notes": "Category-level envelope for 'nearbyKey'. The true empirical sample size for this category is the count of shell_corpus_sorted.txt digraphs that fall into it; tracked separately in scripts/derive_digraphs.py."
+      },
       "mean": 27.47,
       "std": 6.34
     },
     "farKey": {
+      "weight": {
+        "confidence": 0.5,
+        "sample_size": 0,
+        "smoothing": "category_summary",
+        "source": "calibration",
+        "tags": [
+          "baseline",
+          "farKey"
+        ],
+        "last_updated": "2026-08-17T13:35:08+00:00",
+        "notes": "Category-level envelope for 'farKey'. The true empirical sample size for this category is the count of shell_corpus_sorted.txt digraphs that fall into it; tracked separately in scripts/derive_digraphs.py."
+      },
       "mean": 36.97,
       "std": 8.45
     },
     "crossRow": {
+      "weight": {
+        "confidence": 0.5,
+        "sample_size": 0,
+        "smoothing": "category_summary",
+        "source": "calibration",
+        "tags": [
+          "baseline",
+          "crossRow"
+        ],
+        "last_updated": "2026-08-17T13:35:08+00:00",
+        "notes": "Category-level envelope for 'crossRow'. The true empirical sample size for this category is the count of shell_corpus_sorted.txt digraphs that fall into it; tracked separately in scripts/derive_digraphs.py."
+      },
       "mean": 42.25,
       "std": 10.56
     }
@@ -28,5 +88,18 @@
     "adjacent_empirical_mean_ms": 20.204786070096237,
     "adjacent_empirical_std_ms": 4.6560172055314855,
     "typing_sample_count": 4856
-  }
+  },
+  "weight": {
+    "confidence": 0.5,
+    "sample_size": 0,
+    "smoothing": "category_summary",
+    "source": "calibration",
+    "tags": [
+      "baseline",
+      "category_summary"
+    ],
+    "last_updated": "2026-08-17T13:35:08+00:00",
+    "notes": "Top-level envelope for the QWERTY baseline artifact. Per-category blocks carry their own weight envelope; this block records artifact-wide provenance."
+  },
+  "schema_version": 2
 }
