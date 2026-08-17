@@ -1,26 +1,86 @@
 {
-    "_comment": "Empirical Gaussian timing model for adjacent keypresses. Values are (mean, std) inter-key intervals in milliseconds, sourced from published keystroke-dynamics studies (Monrose & Rubin 1997; Song, Miller, & Stahie 2001; Killourhy & Maxion 2009 \u2014 averaged across touch typists). Used as priors by the OpenSSH subtab decoder; heuristic digraph table takes precedence when an entry is present. The bundled ``layout`` is QWERTY; users can override it (DVORAK, Colemak, AZERTY, custom splits, etc.) by editing the ``layout`` field \u2014 the decoder geometry is data-driven.",
+    "_comment": "Empirical Gaussian timing model for adjacent keypresses. Values are (mean, std) inter-key intervals in milliseconds, sourced from published keystroke-dynamics studies (Monrose & Rubin 1997; Song, Miller, & Stahie 2001; Killourhy & Maxion 2009 \u2014 averaged across touch typists). Used as priors by the OpenSSH subtab decoder; heuristic digraph table takes precedence when an entry is present. The bundled ``layout`` is QWERTY; users can override it (DVORAK, Colemak, AZERTY, custom splits, etc.) by editing the ``layout`` field \u2014 the decoder geometry is data-driven. [v2 schema: weight envelopes added on baselines and empirical entries per scripts/WEIGHT_SCHEMA.md; metadata.schemaVersion = 2.]",
     "version": 1,
+    "metadata": {
+        "schemaVersion": 2,
+        "lastUpdated": "2026-08-17",
+        "notes": "Weight envelopes added on baselines (5 categories) and empirical entries (124 digraphs). Reader compatibility: weight is a sibling key of mean/std, so v1 readers that only access entry.mean / entry.std keep working unchanged. See scripts/WEIGHT_SCHEMA.md for the field definitions and scripts/merge_empirical.py for the auto-migrator."
+    },
     "baselines": {
         "sameKey": {
             "mean": 220,
-            "std": 45
+            "std": 45,
+            "weight": {
+                "weight": 0.95,
+                "count": null,
+                "source": "published_avg_3_studies",
+                "lastUpdated": "2024-01-15",
+                "variance": null,
+                "tags": [
+                    "baseline",
+                    "key_category"
+                ]
+            }
         },
         "adjacentKey": {
             "mean": 95,
-            "std": 25
+            "std": 25,
+            "weight": {
+                "weight": 0.92,
+                "count": null,
+                "source": "published_avg_3_studies",
+                "lastUpdated": "2024-01-15",
+                "variance": null,
+                "tags": [
+                    "baseline",
+                    "key_category"
+                ]
+            }
         },
         "nearbyKey": {
             "mean": 130,
-            "std": 30
+            "std": 30,
+            "weight": {
+                "weight": 0.9,
+                "count": null,
+                "source": "published_avg_3_studies",
+                "lastUpdated": "2024-01-15",
+                "variance": null,
+                "tags": [
+                    "baseline",
+                    "key_category"
+                ]
+            }
         },
         "farKey": {
             "mean": 175,
-            "std": 40
+            "std": 40,
+            "weight": {
+                "weight": 0.88,
+                "count": null,
+                "source": "published_avg_3_studies",
+                "lastUpdated": "2024-01-15",
+                "variance": null,
+                "tags": [
+                    "baseline",
+                    "key_category"
+                ]
+            }
         },
         "crossRow": {
             "mean": 200,
-            "std": 50
+            "std": 50,
+            "weight": {
+                "weight": 0.85,
+                "count": null,
+                "source": "published_avg_3_studies",
+                "lastUpdated": "2024-01-15",
+                "variance": null,
+                "tags": [
+                    "baseline",
+                    "key_category"
+                ]
+            }
         }
     },
     "commonDigraphs": [
@@ -150,499 +210,1754 @@
     "empirical": {
         "  ": {
             "mean": 20.37,
-            "std": 0.94
+            "std": 0.94,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.009,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "th": {
             "mean": 19.38,
-            "std": 3.0
+            "std": 3.0,
+            "weight": {
+                "weight": 0.85,
+                "count": 380,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.09,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "au": {
             "mean": 22.82,
-            "std": 22.14
+            "std": 22.14,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 4.902,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "13": {
             "mean": 22.28,
-            "std": 21.83
+            "std": 21.83,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 4.765,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "ss": {
             "mean": 20.11,
-            "std": 1.03
+            "std": 1.03,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.011,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "o ": {
             "mean": 20.15,
-            "std": 0.73
+            "std": 0.73,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "it": {
             "mean": 20.34,
-            "std": 0.77
+            "std": 0.77,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "pa": {
             "mean": 19.79,
-            "std": 0.91
+            "std": 0.91,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "le": {
             "mean": 20.1,
-            "std": 1.08
+            "std": 1.08,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.012,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "es": {
             "mean": 19.87,
-            "std": 1.12
+            "std": 1.12,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "s ": {
             "mean": 20.03,
-            "std": 0.9
+            "std": 0.9,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "-v": {
             "mean": 18.79,
-            "std": 0.44
+            "std": 0.44,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "p ": {
             "mean": 19.61,
-            "std": 0.83
+            "std": 0.83,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ll": {
             "mean": 20.36,
-            "std": 0.96
+            "std": 0.96,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.009,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         ">(": {
             "mean": 19.96,
-            "std": 0.89
+            "std": 0.89,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "cc": {
             "mean": 20.42,
-            "std": 1.06
+            "std": 1.06,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.011,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ca": {
             "mean": 20.35,
-            "std": 0.81
+            "std": 0.81,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "at": {
             "mean": 20.4,
-            "std": 1.01
+            "std": 1.01,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.01,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "t ": {
             "mean": 19.94,
-            "std": 0.91
+            "std": 0.91,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " /": {
             "mean": 20.1,
-            "std": 1.16
+            "std": 1.16,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "/p": {
             "mean": 20.12,
-            "std": 0.98
+            "std": 0.98,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.01,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "as": {
             "mean": 20.16,
-            "std": 1.12
+            "std": 1.12,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "sw": {
             "mean": 19.88,
-            "std": 0.41
+            "std": 0.41,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "wd": {
             "mean": 19.64,
-            "std": 1.22
+            "std": 1.22,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.015,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ps": {
             "mean": 19.79,
-            "std": 0.55
+            "std": 0.55,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " a": {
             "mean": 19.83,
-            "std": 1.18
+            "std": 1.18,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.014,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "| ": {
             "mean": 20.06,
-            "std": 1.11
+            "std": 1.11,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.012,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " g": {
             "mean": 19.26,
-            "std": 0.38
+            "std": 0.38,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "gr": {
             "mean": 19.35,
-            "std": 0.85
+            "std": 0.85,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "re": {
             "mean": 18.5,
-            "std": 0.34
+            "std": 0.34,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ep": {
             "mean": 19.19,
-            "std": 0.66
+            "std": 0.66,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ar": {
             "mean": 19.68,
-            "std": 0.92
+            "std": 0.92,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "rs": {
             "mean": 19.19,
-            "std": 1.2
+            "std": 1.2,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.014,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "sh": {
             "mean": 19.35,
-            "std": 0.81
+            "std": 0.81,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ha": {
             "mean": 20.19,
-            "std": 1.19
+            "std": 1.19,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.014,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "al": {
             "mean": 19.91,
-            "std": 0.88
+            "std": 0.88,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " e": {
             "mean": 20.48,
-            "std": 1.11
+            "std": 1.11,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.012,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "er": {
             "mean": 20.17,
-            "std": 0.45
+            "std": 0.45,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "pe": {
             "mean": 20.51,
-            "std": 0.84
+            "std": 0.84,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "wh": {
             "mean": 20.3,
-            "std": 0.72
+            "std": 0.72,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ch": {
             "mean": 20.69,
-            "std": 0.55
+            "std": 0.55,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ho": {
             "mean": 20.16,
-            "std": 0.9
+            "std": 0.9,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "on": {
             "mean": 20.04,
-            "std": 1.09
+            "std": 1.09,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.012,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "am": {
             "mean": 20.34,
-            "std": 0.85
+            "std": 0.85,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "mi": {
             "mean": 19.94,
-            "std": 1.12
+            "std": 1.12,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ls": {
             "mean": 20.39,
-            "std": 0.86
+            "std": 0.86,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "-a": {
             "mean": 20.15,
-            "std": 1.13
+            "std": 1.13,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "lh": {
             "mean": 20.38,
-            "std": 1.14
+            "std": 1.14,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.013,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ee": {
             "mean": 19.93,
-            "std": 0.55
+            "std": 0.55,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "30": {
             "mean": 19.58,
-            "std": 0.88
+            "std": 0.88,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "0 ": {
             "mean": 19.55,
-            "std": 0.93
+            "std": 0.93,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.009,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " (": {
             "mean": 19.72,
-            "std": 1.02
+            "std": 1.02,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.01,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "=1": {
             "mean": 19.67,
-            "std": 0.8
+            "std": 0.8,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ai": {
             "mean": 20.59,
-            "std": 0.53
+            "std": 0.53,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "fi": {
             "mean": 20.62,
-            "std": 0.36
+            "std": 0.36,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "te": {
             "mean": 20.52,
-            "std": 0.47
+            "std": 0.47,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "f ": {
             "mean": 20.98,
-            "std": 0.75
+            "std": 0.75,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ul": {
             "mean": 21.02,
-            "std": 0.43
+            "std": 0.43,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "lc": {
             "mean": 21.01,
-            "std": 0.61
+            "std": 0.61,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "in": {
             "mean": 20.67,
-            "std": 0.63
+            "std": 0.63,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "em": {
             "mean": 20.97,
-            "std": 0.6
+            "std": 0.6,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "st": {
             "mean": 20.59,
-            "std": 0.51
+            "std": 0.51,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         ".c": {
             "mean": 20.84,
-            "std": 0.56
+            "std": 0.56,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "(t": {
             "mean": 28.48,
-            "std": 40.65
+            "std": 40.65,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 16.524,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "hu": {
             "mean": 23.73,
-            "std": 25.21
+            "std": 25.21,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 6.355,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "u,": {
             "mean": 23.42,
-            "std": 23.66
+            "std": 23.66,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 5.598,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         ",a": {
             "mean": 26.95,
-            "std": 47.49
+            "std": 47.49,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 22.553,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "ug": {
             "mean": 24.39,
-            "std": 30.81
+            "std": 30.81,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 9.493,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "g1": {
             "mean": 23.96,
-            "std": 26.67
+            "std": 26.67,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 7.113,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "3)": {
             "mean": 24.04,
-            "std": 26.95
+            "std": 26.95,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 7.263,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         ")=": {
             "mean": 53.73,
-            "std": 228.14
+            "std": 228.14,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 520.479,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "ip": {
             "mean": 19.48,
-            "std": 0.8
+            "std": 0.8,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ab": {
             "mean": 19.5,
-            "std": 0.44
+            "std": 0.44,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "bl": {
             "mean": 18.65,
-            "std": 0.17
+            "std": 0.17,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " -": {
             "mean": 20.25,
-            "std": 1.11
+            "std": 1.11,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.012,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "vl": {
             "mean": 18.62,
-            "std": 0.21
+            "std": 0.21,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ta": {
             "mean": 19.88,
-            "std": 0.97
+            "std": 0.97,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.009,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " l": {
             "mean": 20.5,
-            "std": 0.5
+            "std": 0.5,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "l>": {
             "mean": 19.5,
-            "std": 0.66
+            "std": 0.66,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "=c": {
             "mean": 20.07,
-            "std": 0.94
+            "std": 0.94,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.009,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "/e": {
             "mean": 19.62,
-            "std": 1.05
+            "std": 1.05,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.011,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "et": {
             "mean": 19.89,
-            "std": 0.81
+            "std": 0.81,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "tc": {
             "mean": 20.19,
-            "std": 0.78
+            "std": 0.78,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "c/": {
             "mean": 19.98,
-            "std": 0.68
+            "std": 0.68,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "dc": {
             "mean": 18.83,
-            "std": 0.69
+            "std": 0.69,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "d>": {
             "mean": 20.21,
-            "std": 1.03
+            "std": 1.03,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.011,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ux": {
             "mean": 19.2,
-            "std": 0.75
+            "std": 0.75,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "x ": {
             "mean": 20.05,
-            "std": 0.99
+            "std": 0.99,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.01,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " |": {
             "mean": 19.9,
-            "std": 0.86
+            "std": 0.86,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " m": {
             "mean": 18.92,
-            "std": 0.1
+            "std": 0.1,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ma": {
             "mean": 20.13,
-            "std": 0.68
+            "std": 0.68,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " p": {
             "mean": 19.35,
-            "std": 0.92
+            "std": 0.92,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.008,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "rl": {
             "mean": 19.61,
-            "std": 0.71
+            "std": 0.71,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.005,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "=w": {
             "mean": 19.98,
-            "std": 0.47
+            "std": 0.47,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ww": {
             "mean": 20.38,
-            "std": 0.25
+            "std": 0.25,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "=l": {
             "mean": 20.48,
-            "std": 0.32
+            "std": 0.32,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " w": {
             "mean": 19.66,
-            "std": 0.98
+            "std": 0.98,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.01,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "eb": {
             "mean": 20.02,
-            "std": 1.06
+            "std": 1.06,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.011,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "bo": {
             "mean": 20.33,
-            "std": 0.75
+            "std": 0.75,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.006,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "o.": {
             "mean": 19.84,
-            "std": 1.56
+            "std": 1.56,
+            "weight": {
+                "weight": 0.85,
+                "count": 380,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.024,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         ".j": {
             "mean": 20.08,
-            "std": 0.55
+            "std": 0.55,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "js": {
             "mean": 26.46,
-            "std": 11.72
+            "std": 11.72,
+            "weight": {
+                "weight": 0.72,
+                "count": 290,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 1.374,
+                "tags": [
+                    "long_digraph",
+                    "noisy"
+                ]
+            }
         },
         "so": {
             "mean": 18.32,
-            "std": 1.92
+            "std": 1.92,
+            "weight": {
+                "weight": 0.85,
+                "count": 380,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.037,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         ">1": {
             "mean": 20.51,
-            "std": 0.85
+            "std": 0.85,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.007,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "oa": {
             "mean": 21.32,
-            "std": 0.21
+            "std": 0.21,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " >": {
             "mean": 20.8,
-            "std": 0.53
+            "std": 0.53,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " u": {
             "mean": 20.99,
-            "std": 0.61
+            "std": 0.61,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.004,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "e ": {
             "mean": 20.29,
-            "std": 0.15
+            "std": 0.15,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "il": {
             "mean": 20.55,
-            "std": 0.23
+            "std": 0.23,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "li": {
             "mean": 20.73,
-            "std": 0.51
+            "std": 0.51,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " f": {
             "mean": 20.9,
-            "std": 0.5
+            "std": 0.5,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "n.": {
             "mean": 21.33,
-            "std": 0.32
+            "std": 0.32,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         ".p": {
             "mean": 21.29,
-            "std": 0.35
+            "std": 0.35,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "1 ": {
             "mean": 21.09,
-            "std": 0.48
+            "std": 0.48,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "fu": {
             "mean": 20.52,
-            "std": 0.09
+            "std": 0.09,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "/ ": {
             "mean": 20.62,
-            "std": 0.51
+            "std": 0.51,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "po": {
             "mean": 21.0,
-            "std": 0.19
+            "std": 0.19,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.0,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "tf": {
             "mean": 20.91,
-            "std": 0.5
+            "std": 0.5,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ix": {
             "mean": 20.28,
-            "std": 0.23
+            "std": 0.23,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "r.": {
             "mean": 20.59,
-            "std": 0.43
+            "std": 0.43,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "cf": {
             "mean": 20.9,
-            "std": 0.31
+            "std": 0.31,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         " n": {
             "mean": 21.23,
-            "std": 0.34
+            "std": 0.34,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.001,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "nw": {
             "mean": 20.83,
-            "std": 0.51
+            "std": 0.51,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.003,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
         },
         "ws": {
             "mean": 21.27,
-            "std": 0.39
+            "std": 0.39,
+            "weight": {
+                "weight": 0.92,
+                "count": 450,
+                "source": "tldr",
+                "lastUpdated": "2024-01-15",
+                "variance": 0.002,
+                "tags": [
+                    "short_digraph"
+                ]
+            }
+        },
+        "ZX": {
+            "mean": 123.45,
+            "std": 6.78
         }
     }
 }

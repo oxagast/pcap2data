@@ -9503,5 +9503,17 @@
       618.7059879302979
     ]
   },
-  "total_packets": 9492
+  "total_packets": 9492,
+  "weight": {
+    "confidence": 0.8,
+    "sample_size": 9490,
+    "smoothing": "empirical",
+    "source": "calibration",
+    "tags": [
+      "timing",
+      "keystroke"
+    ],
+    "last_updated": "2026-08-17T13:35:08+00:00",
+    "notes": "Top-level envelope for SSH keystroke timing stats. 2 directions: client_to_server, server_to_client. Per-direction count/mean_ms/std_ms/deltas_ms are raw observations."
+  }
 }
