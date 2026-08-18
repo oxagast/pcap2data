@@ -132,16 +132,29 @@ function scoreTrial(trialResult, truth) {
             }
         }
     }
+    // When a truth row carries a ``chunkIdx``, prefer that lookup
+    // over array-index matching. This is how timestamp-aligned
+    // transcript rows are scored against chunk predictions that
+    // may not line up 1:1 with truth rows (e.g. 5 chunks but 9
+    // transcript commands). Rows with ``chunkIdx === null`` fall
+    // back to the index lookup so callers that don't pass
+    // alignment keep working.
     const out = [];
     for (let i = 0; i < (truth || []).length; i += 1) {
         const truthRow = truth[i] || {};
         const truthText = truthRow.command || truthRow.text || "";
-        const predicted = predictionsByIdx.has(i)
-            ? predictionsByIdx.get(i)
-            : pickFallback(predictedTexts, truthText);
+        let predicted;
+        if (Number.isInteger(truthRow.chunkIdx) && predictionsByIdx.has(truthRow.chunkIdx)) {
+            predicted = predictionsByIdx.get(truthRow.chunkIdx);
+        } else if (predictionsByIdx.has(i)) {
+            predicted = predictionsByIdx.get(i);
+        } else {
+            predicted = pickFallback(predictedTexts, truthText);
+        }
         const { score } = computeSsdeep(String(predicted || ""), String(truthText || ""));
         out.push({
             idx: i,
+            chunkIdx: Number.isInteger(truthRow.chunkIdx) ? truthRow.chunkIdx : null,
             truth: truthText,
             predicted: predicted || "",
             score,

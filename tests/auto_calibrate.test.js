@@ -110,6 +110,66 @@ describe("scoreTrial", () => {
         expect(out[0].score).toBe(0);
         expect(out[1].score).toBe(0);
     });
+
+    test("honours truth[i].chunkIdx when provided", () => {
+        // 5 chunks but only 2 transcript commands; the truth rows
+        // carry chunkIdx 0 and 3 (out of order). scoreTrial should
+        // score each truth row against perCommand[chunkIdx] rather
+        // than perCommand[i].
+        const truth = [
+            { command: "ls -la", chunkIdx: 0 },
+            { command: "cd /tmp", chunkIdx: 3 },
+        ];
+        const trialResult = {
+            perCommand: [
+                { idx: 0, predicted: "ls -la" },
+                { idx: 1, predicted: "totally_wrong_1" },
+                { idx: 2, predicted: "totally_wrong_2" },
+                { idx: 3, predicted: "cd /tmp" },
+                { idx: 4, predicted: "totally_wrong_4" },
+            ],
+        };
+        const out = scoreTrial(trialResult, truth);
+        expect(out[0].predicted).toBe("ls -la");
+        expect(out[0].score).toBeGreaterThan(0.95);
+        expect(out[1].predicted).toBe("cd /tmp");
+        expect(out[1].score).toBeGreaterThan(0.95);
+        expect(out[0].chunkIdx).toBe(0);
+        expect(out[1].chunkIdx).toBe(3);
+    });
+
+    test("falls back to index lookup when chunkIdx is null", () => {
+        const truth = [
+            { command: "ls -la", chunkIdx: null },
+            { command: "cd /tmp", chunkIdx: null },
+        ];
+        const trialResult = {
+            perCommand: [
+                { idx: 0, predicted: "ls -la" },
+                { idx: 1, predicted: "cd /tmp" },
+            ],
+        };
+        const out = scoreTrial(trialResult, truth);
+        expect(out[0].score).toBeGreaterThan(0.95);
+        expect(out[1].score).toBeGreaterThan(0.95);
+        expect(out[0].chunkIdx).toBeNull();
+        expect(out[1].chunkIdx).toBeNull();
+    });
+
+    test("falls back to index lookup when chunkIdx points to missing prediction", () => {
+        // chunkIdx 9 has no perCommand entry; the scorer should
+        // try index 0 instead (since the truth row's i === 0).
+        const truth = [
+            { command: "ls -la", chunkIdx: 9 },
+        ];
+        const trialResult = {
+            perCommand: [
+                { idx: 0, predicted: "ls -la" },
+            ],
+        };
+        const out = scoreTrial(trialResult, truth);
+        expect(out[0].score).toBeGreaterThan(0.95);
+    });
 });
 
 describe("autoCalibrate", () => {
