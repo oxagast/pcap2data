@@ -734,7 +734,7 @@ function createCryptPanel({
   // candidate gap (not just the end-of-session one) so callers can
   // either pick the last chunk (existing behaviour) or render all
   // chunks (per-command guesses).
-  //
+  // Scrotal me ding dong
   // Helper: convert a plain number array (e.g. `keystrokeDelaysMs`
   // from the padding detector, which has no packetLength / index
   // metadata) into the `{ delay, index, packetLength }` shape that
@@ -750,6 +750,18 @@ function createCryptPanel({
     }
     return out;
   }
+  // Chunker settings (tunables live here so they can be auto-calibrated
+  // without touching every call site of findReturnChunks). Declared
+  // at factory scope so the outer ``findReturnChunks`` (which has no
+  // access to ``analyzeSelectedSshFlow`` locals) can read it. The
+  // auto-calibrate handler inside ``analyzeSelectedSshFlow`` mutates
+  // this same object per trial; the default of 150ms keeps
+  // ``dynamicThresh`` in charge for fast typists.
+  let chunkerSettings = {
+    // Minimum gap to count as a new command (int, default 150ms).
+    // Was hardcoded as 150 inside findReturnChunks.
+    minCommandBoundary: 150,
+  };
   function findReturnChunks(delaysWithIdx) {
     if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return [];
     const vals = delaysWithIdx.map((d) => d.delay).filter((v) => Number.isFinite(v));
@@ -773,10 +785,12 @@ function createCryptPanel({
     // approxStd ≈ 1–2ms) the dynamic threshold settles near 170ms;
     // adding a 300ms outer floor swallows real Return gaps at
     // 200–250ms and collapses a multi-command session into a single
-    // chunk. Keeping the outer floor at 150ms lets ``dynamicThresh``
-    // do its job without overriding it for fast typists.
+    // chunk. The outer floor is sourced from
+    // ``chunkerSettings.minCommandBoundary`` so it can be auto-
+    // calibrated from a transcript; the default of 150ms keeps
+    // ``dynamicThresh`` in charge for fast typists.
     const dynamicThresh = median + Math.max(3 * approxStd, 150);
-    const minCommandBoundary = 150;
+    const minCommandBoundary = chunkerSettings.minCommandBoundary;
     const threshold = Math.max(dynamicThresh, minCommandBoundary);
 
     // Additional parameters for better pattern detection
@@ -974,6 +988,49 @@ function createCryptPanel({
     console.warn("[Crypt/OpenSSH] auto-calibrate module unavailable:", err);
     sshAutoCalibrateModule = null;
   }
+  // Pure helpers that pick a narrow search window for the
+  // ``minCommandBoundary`` knob from cheap flow signals. See
+  // boundary-warmstart.js for the heuristic.
+  let sshBoundaryWarmstartModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshBoundaryWarmstartModule = require("../decoders/ssh-keystrokes/boundary-warmstart");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] boundary-warmstart module unavailable:", err);
+    sshBoundaryWarmstartModule = null;
+  }
+  // Pure helpers that align typed-transcript rows to chunker
+  // boundaries using absolute PCAP timestamps. See
+  // truth-align.js.
+  let sshTruthAlignModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshTruthAlignModule = require("../decoders/ssh-keystrokes/truth-align");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] truth-align module unavailable:", err);
+    sshTruthAlignModule = null;
+  }
+  // Pure helpers that detect + correct clock skew between the typed
+  // transcript and the captured PCAP. Transcript timestamps come
+  // from the SSH server (e.g. `script` output) while PCAP packets
+  // come from the client or a network tap; the two clocks routinely
+  // drift by seconds to minutes.
+  let sshClockSkewModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshClockSkewModule = require("../decoders/ssh-keystrokes/clock-skew");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] clock-skew module unavailable:", err);
+    sshClockSkewModule = null;
+  }
+  // Confidence floor below which we *don't* auto-correct — the
+  // alignment is too weak to trust. Caller can still show the status
+  // line so the user knows the skew check ran.
+  const CLOCK_SKEW_AUTO_CORRECT_MIN_CONFIDENCE = 0.3;
+  // Hard cap on rescan rounds so a pathological session can't run
+  // away. Each round adds at most 3 trials for ``minCommandBoundary``
+  // (window size) so the worst case is bounded.
+  const AUTO_CAL_RESCAN_MAX_ROUNDS = 2;
   // `sshMarkovModel` is the loaded/trained ShellMarkov instance, once
   // ready. `sshMarkovTrainPromise` deduplicates concurrent model-fetch
   // requests (first OpenSSH tab open, then again at next open).
@@ -1812,27 +1869,27 @@ function createCryptPanel({
       calibrateBtnEl.addEventListener("click", async () => {
         const file = transcriptFileEl?.files?.[0];
         if (!file) {
-          if (calibrationStatusEl) calibrationStatusEl.textContent = "Please select a transcript file first";
+          setCalibrationStatus("Please select a transcript file first");
           return;
         }
         if (!sshSelectedFlowKey) {
-          if (calibrationStatusEl) calibrationStatusEl.textContent = "Please select an SSH flow first";
+          setCalibrationStatus("Please select an SSH flow first");
           return;
         }
 
         const flow = sshFlows.find(f => f.flowKey === sshSelectedFlowKey);
         if (!flow) {
-          if (calibrationStatusEl) calibrationStatusEl.textContent = "Selected flow not found";
+          setCalibrationStatus("Selected flow not found");
           return;
         }
 
-        if (calibrationStatusEl) calibrationStatusEl.textContent = "Reading transcript…";
+        setCalibrationStatus("Reading transcript…", { busy: true });
         const transcriptText = await file.text();
         // Cache the parsed transcript so the Auto-calibrate button can
         // re-use it without forcing the user to re-pick the file.
         await loadTranscriptForFlow(flow, file);
 
-        if (calibrationStatusEl) calibrationStatusEl.textContent = "Calibrating…";
+        setCalibrationStatus("Calibrating…", { busy: true });
         try {
           // Use the calibration module via IPC (main process has fs access)
           if (window.cryptapi && typeof window.cryptapi.calibrateSsh === "function") {
@@ -1858,14 +1915,15 @@ function createCryptPanel({
             profileSelectEl.value = profile.name;
             applyProfile(profile);
 
-            if (calibrationStatusEl) calibrationStatusEl.textContent = `Calibration complete: ${profile.calibration.digraphsLearned} digraphs learned, coverage=${profile.calibration.coverageThreshold.toFixed(2)}`;
+            setCalibrationStatus(
+              `Calibration complete: ${profile.calibration.digraphsLearned} digraphs learned, coverage=${profile.calibration.coverageThreshold.toFixed(2)}`,
+            );
           } else {
-            // Fallback: run in renderer (limited)
-            if (calibrationStatusEl) calibrationStatusEl.textContent = "Calibration requires main process IPC (not available in this context)";
+            setCalibrationStatus("Calibration requires main process IPC (not available in this context)");
           }
         } catch (e) {
           console.error("[Crypt/OpenSSH] Calibration failed:", e);
-          if (calibrationStatusEl) calibrationStatusEl.textContent = `Calibration failed: ${e.message}`;
+          setCalibrationStatus(`Calibration failed: ${e.message}`);
         }
       });
     }
@@ -1892,6 +1950,55 @@ function createCryptPanel({
     // re-pick the file. Set to the lines array so iterating gives
     // `{ command, timestamp }` rows.
     const sshTranscriptByFlow = new Map();
+    // Per-flow clock-skew detection result (offset in seconds).
+    // Keyed by flow.flowKey; cleared when a new transcript is loaded
+    // for the same flow. Null = no detection run yet (or failed).
+    const sshClockSkewByFlow = new Map();
+    function getPcapTimestampsForFlow(flow) {
+      // Returns a sorted list of per-packet timestamps (ms) for the
+      // flow. Used by the skew detector to extract large gaps.
+      if (!flow || !Array.isArray(flow.packets) || flow.packets.length === 0) return [];
+      const out = [];
+      for (const p of flow.packets) {
+        const ts = (p && typeof p.timestamp === "number" && Number.isFinite(p.timestamp))
+          ? p.timestamp
+          : null;
+        if (ts !== null) out.push(ts);
+      }
+      out.sort((a, b) => a - b);
+      return out;
+    }
+    function renderClockSkewStatus(flow) {
+      if (!calibrationStatusEl) return;
+      const detection = sshClockSkewByFlow.get(flow.flowKey);
+      // Only override the status when the calibrator isn't busy —
+      // otherwise we'd clobber its progress text.
+      if (calibrationStatusEl.dataset.busy === "true") return;
+      const baseText = calibrationStatusEl.dataset.baseText || "";
+      const skewText = sshClockSkewModule
+        ? sshClockSkewModule.formatSkewStatus(detection || null)
+        : "Clock skew: unavailable";
+      calibrationStatusEl.textContent = baseText
+        ? `${baseText} · ${skewText}`
+        : skewText;
+    }
+    // Centralised setter so all writers preserve the skew suffix.
+    // Callers pass a "base" status string; the helper re-renders the
+    // skew info alongside it (when not busy).
+    function setCalibrationStatus(baseText, opts) {
+      if (!calibrationStatusEl) return;
+      const busy = opts && opts.busy === true;
+      calibrationStatusEl.dataset.busy = busy ? "true" : "false";
+      calibrationStatusEl.dataset.baseText = baseText || "";
+      if (busy) {
+        calibrationStatusEl.textContent = baseText || "";
+        return;
+      }
+      const flow = sshSelectedFlowKey
+        ? sshFlows.find((f) => f.flowKey === sshSelectedFlowKey)
+        : null;
+      renderClockSkewStatus(flow || { flowKey: null });
+    }
     async function loadTranscriptForFlow(flow, file) {
       if (!flow || !file) return null;
       const text = await file.text();
@@ -1925,7 +2032,46 @@ function createCryptPanel({
         commands.push({ command, timestamp });
       }
       sshTranscriptByFlow.set(flow.flowKey, commands);
-      return commands;
+
+      // Clock-skew detection: scan the transcript timestamps against
+      // the flow's gap sequence and pick the offset that aligns the
+      // most commands to large gaps. Auto-apply the offset to a
+      // corrected copy of the rows when confidence is high enough;
+      // always store the detection so the status line can show the
+      // result.
+      if (sshClockSkewModule && typeof sshClockSkewModule.detectClockSkew === "function") {
+        try {
+          const pcapTs = getPcapTimestampsForFlow(flow);
+          const detection = sshClockSkewModule.detectClockSkew({
+            transcriptRows: commands,
+            pcapTimestampsMs: pcapTs,
+            toleranceSec: 3,
+            minGapMs: 200,
+          });
+          if (detection) {
+            sshClockSkewByFlow.set(flow.flowKey, detection);
+            if (detection.confidence >= CLOCK_SKEW_AUTO_CORRECT_MIN_CONFIDENCE) {
+              // Apply the offset to a corrected copy and stash it
+              // alongside the raw rows. The auto-calibrate click
+              // handler reads the corrected copy when available.
+              const corrected = sshClockSkewModule.applySkew(commands, detection.offsetSec);
+              sshTranscriptByFlow.set(flow.flowKey, corrected);
+              sshClockSkewByFlow.set(flow.flowKey, Object.assign({}, detection, { applied: true }));
+            } else {
+              sshClockSkewByFlow.set(flow.flowKey, Object.assign({}, detection, { applied: false }));
+            }
+          } else {
+            sshClockSkewByFlow.set(flow.flowKey, null);
+          }
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] clock-skew detection failed:", err);
+          sshClockSkewByFlow.set(flow.flowKey, null);
+        }
+      }
+      renderClockSkewStatus(flow);
+      // Always return the (possibly corrected) rows that are now in
+      // the cache so the caller doesn't need a separate accessor.
+      return sshTranscriptByFlow.get(flow.flowKey);
     }
 
     // Apply a knob vector to the live settings + UI controls. Used by
@@ -1960,6 +2106,13 @@ function createCryptPanel({
           markovLengthBonusLabelEl.textContent = `${knobs.lengthBonusMultiplier.toFixed(1)}x`;
         }
       }
+      // Chunker floor: no UI slider — `findReturnChunks` reads the
+      // shared settings object directly at chunk time, so just update
+      // it here. The calibrated value flows through to subsequent
+      // chunking without needing to push config to any module.
+      if (Number.isFinite(knobs.minCommandBoundary)) {
+        chunkerSettings.minCommandBoundary = knobs.minCommandBoundary;
+      }
       // Push the new bonus values into the Markov module so the
       // next rankCorpus call picks them up.
       if (sshMarkovModule && typeof sshMarkovModule.setMarkovConfig === "function") {
@@ -1975,12 +2128,47 @@ function createCryptPanel({
     // ssdeep scoring makes sense for the three bonus knobs plus the
     // deobfuscator coverage (the only numbers that actually touch the
     // per-command prediction).
-    function buildAutoCalibrateRanges() {
+    //
+    // When `signals` is passed, the `minCommandBoundary` candidate
+    // set is narrowed to a 3-value sub-lattice centred on a
+    // heuristic pick — the auto-cal click handler passes the
+    // flow-level timing stats so the search doesn't have to brute-
+    // force the full 8-value lattice on every click. The rescan
+    // path then re-centres on the new best. See
+    // `decoders/ssh-keystrokes/boundary-warmstart.js` for the
+    // heuristic.
+    function buildAutoCalibrateRanges(signals) {
+      const lattice = (sshBoundaryWarmstartModule
+        && sshBoundaryWarmstartModule.COMMAND_BOUNDARY_LATTICE)
+        || [50, 80, 100, 120, 150, 200, 300, 500];
+      let boundaryValues = lattice;
+      if (signals && sshBoundaryWarmstartModule
+        && typeof sshBoundaryWarmstartModule.recommendCommandBoundaryRange === "function") {
+        try {
+          const window = sshBoundaryWarmstartModule.recommendCommandBoundaryRange(signals);
+          if (Array.isArray(window) && window.length > 0) {
+            // Filter the lattice to entries inside the recommended
+            // window so the orchestrator's sensitivity report covers
+            // exactly the candidates we want to score (no in-between
+            // lattice entries that aren't in the window).
+            const winSet = new Set(window);
+            boundaryValues = lattice.filter((v) => winSet.has(v));
+            if (boundaryValues.length === 0) boundaryValues = window;
+          }
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] warm-start range failed, falling back to full lattice:", err);
+        }
+      }
       return {
         minCoverage: { min: 0.30, max: 0.90, step: 0.10 },
         minCommandLength: { values: [1, 2, 3, 4] },
         concisenessBonusMultiplier: { min: 0.8, max: 4.0, step: 0.4 },
         lengthBonusMultiplier: { min: 0.5, max: 4.0, step: 0.5 },
+        // Floor for the chunker; honours the rationale comment in
+        // findReturnChunks (intended to stay relatively low so short
+        // inter-keystroke gaps are still treated as command breaks).
+        // Narrowed to a warm-start window when `signals` is provided.
+        minCommandBoundary: { values: boundaryValues },
       };
     }
 
@@ -1990,12 +2178,63 @@ function createCryptPanel({
         minCommandLength: markovSettings.minCommandLength,
         concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
         lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+        minCommandBoundary: chunkerSettings.minCommandBoundary,
       };
     }
 
-    // Build a `runTrial` callback suitable for the orchestrator. It
-    // applies the knob vector, runs the decoder + markov on the
-    // already-cached delays, and returns per-command predictions.
+    // Derive the timing-distribution signals used to warm-start the
+    // ``minCommandBoundary`` search. Reuses the same median/MAD math
+    // ``findReturnChunks`` runs internally (lines ~770–781) so we
+    // don't recompute it here. ``sessionSpanMs`` falls back to a
+    // rough keystroke-time heuristic if the flow doesn't carry
+    // timestamps directly — the heuristic only needs to put us in
+    // the right order of magnitude for the branch on
+    // ``packetCount < 20``.
+    function deriveAutoCalibrateFlowSignals(flow, cached) {
+      const peeledDelays = (cached && cached.paddingDetection
+        && Array.isArray(cached.paddingDetection.keystrokeDelaysMs))
+        ? cached.paddingDetection.keystrokeDelaysMs
+        : null;
+      const delays = (peeledDelays && peeledDelays.length > 0)
+        ? peeledDelays
+        : ((cached && Array.isArray(cached.delays)) ? cached.delays : []);
+      const vals = delays.filter((v) => Number.isFinite(v));
+      if (vals.length === 0) {
+        return null;
+      }
+      const sorted = vals.slice().sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 === 1
+        ? sorted[mid]
+        : (sorted[mid - 1] + sorted[mid]) / 2;
+      const absDevs = sorted.map((v) => Math.abs(v - median));
+      const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
+      const approxStd = mad * 1.4826 || 0;
+
+      let packetCount = 0;
+      if (flow && Array.isArray(flow.packets)) packetCount = flow.packets.length;
+      else if (cached && Number.isFinite(cached.packetCount)) packetCount = cached.packetCount;
+      else if (Number.isFinite(cached.delaysWithIdx) && Array.isArray(cached.delaysWithIdx)) {
+        packetCount = cached.delaysWithIdx.length;
+      }
+
+      let sessionSpanMs = null;
+      if (flow && Number.isFinite(flow.startTimestamp) && Number.isFinite(flow.endTimestamp)) {
+        sessionSpanMs = Math.max(0, flow.endTimestamp - flow.startTimestamp);
+      } else if (vals.length > 0) {
+        // Rough fallback: median × #keystrokes. Order-of-magnitude
+        // only — used as a cross-check on tiny captures.
+        sessionSpanMs = median * vals.length;
+      }
+
+      return {
+        median,
+        approxStd,
+        packetCount,
+        sessionSpanMs,
+      };
+    }
+
     async function buildAutoCalibrateRunTrial(flow, cached) {
       const decoder = getSshDecoderModule();
       const direction = cached.direction || "both";
@@ -2012,6 +2251,39 @@ function createCryptPanel({
       // only have to pay for the decode + markov stages.
       const rebuiltIndexed = buildIndexedDelaysFromPeeled(delaysForMarkov);
       const chunkList = findReturnChunks(rebuiltIndexed);
+      // Build a parallel "chunk timestamps" array by running the
+      // chunker on the UNPEELED ``delaysWithIdx`` (which carries
+      // packet indices) and resolving each chunk's startIdx back to
+      // an absolute PCAP timestamp via the flow's filtered packet
+      // list. The peeled and unpeeled chunkers produce identical
+      // boundary timing (the peeler only filters filler intervals,
+      // never shifts a Return-shaped gap), so the timestamps align
+      // 1:1 with the trial chunkList for truth-alignment purposes.
+      let chunkStartTimesMs = [];
+      if (sshTruthAlignModule
+        && typeof sshTruthAlignModule.chunkStartTimesFromDelays === "function"
+        && Array.isArray(delaysWithIdx)
+        && delaysWithIdx.length > 0) {
+        try {
+          const filteredPackets = (Array.isArray(flow.packets) && direction !== "both")
+            ? flow.packets.filter((p) => p && p.direction === direction)
+            : (Array.isArray(flow.packets) ? flow.packets : []);
+          const packetTimestampsMs = filteredPackets
+            .map((p) => (p && Number.isFinite(p.timestamp) ? p.timestamp : null));
+          // Re-chunk the unpeeled stream — chunks here are only used
+          // to extract timestamps; the trial itself uses the peeled
+          // chunkList above.
+          const referenceChunks = findReturnChunks(delaysWithIdx);
+          chunkStartTimesMs = sshTruthAlignModule.chunkStartTimesFromDelays(
+            referenceChunks,
+            delaysWithIdx,
+            packetTimestampsMs,
+          );
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] chunkStartTimesFromDelays failed:", err);
+          chunkStartTimesMs = [];
+        }
+      }
       // Pick a beam length from the *median* command, not the last
       // one. Long sessions end on short commands ("exit", "logout")
       // which would silently starve the markov ranker. The helper
@@ -2032,69 +2304,81 @@ function createCryptPanel({
           artifactStore = sshMarkovModule.getSessionArtifactStore();
         } catch (_e) { /* ignore */ }
       }
-      return async (knobs) => {
-        // Apply the trial's knob vector.
-        applyKnobsToControls(knobs);
-        // Run the decoder on the cached delays. Reusing the
-        // cached delays avoids the heaviest work in the
-        // pipeline (per-packet delay computation, padding
-        // detection, chunk splitting). Each trial is a Viterbi
-        // pass + markov ranker over the same input.
-        let candidates = [];
-        if (decoder && typeof decoder.decodeKeystrokes === "function") {
-          try {
-            candidates = decoder.decodeKeystrokes(delays, { topN: 5, model });
-          } catch (err) {
-            console.warn("[Crypt/OpenSSH] auto-calibrate trial decode failed:", err);
-          }
-        }
-        const viterbiHintText = (candidates || [])
-          .slice(0, 8)
-          .map((c) => (c && c.text) ? c.text : "")
-          .filter((t) => t.length > 0)
-          .join(" ");
-        // One markov ranker pass per trial.
-        let ranked = [];
-        if (markovModel && typeof markovModel.rankCorpus === "function") {
-          try {
-            const beam = (sshMarkovModule
-              && artifactStore
-              && typeof sshMarkovModule.rankCorpusWithSlotFilling === "function")
-              ? sshMarkovModule.rankCorpusWithSlotFilling(
-                markovModel, artifactStore, targetLen, 5, 100,
-                { viterbiText: viterbiHintText || null })
-              : markovModel.rankCorpus(targetLen, 5, 100);
-            ranked = (typeof markovModel.rankWithTiming === "function")
-              ? markovModel.rankWithTiming(beam, delaysForMarkov, 0.22, viterbiHintText || null).slice(0, 30)
-              : beam.slice(0, 30);
-          } catch (err) {
-            console.warn("[Crypt/OpenSSH] auto-calibrate trial markov failed:", err);
-          }
-        }
-        // Convert the ranked list into per-chunk predictions. We
-        // pair each chunk with the top-ranked candidate whose
-        // length is closest to the chunk's expected length. This
-        // is the same heuristic the live analysis uses; here it
-        // gives the score function a string per command to
-        // compare against the truth.
-        const perCommand = [];
-        for (let i = 0; i < chunkList.length; i += 1) {
-          const chunk = chunkList[i];
-          const wantLen = Math.max(1, Math.round(chunk.keystrokeCount || 0));
-          let best = "";
-          let bestDelta = Infinity;
-          for (const r of ranked) {
-            const text = (r && r.text) ? String(r.text) : "";
-            if (!text) continue;
-            const delta = Math.abs(text.length - wantLen);
-            if (delta < bestDelta) {
-              bestDelta = delta;
-              best = text;
+      return {
+        runTrial: async (knobs) => {
+          // Apply the trial's knob vector.
+          applyKnobsToControls(knobs);
+          // Run the decoder on the cached delays. Reusing the
+          // cached delays avoids the heaviest work in the
+          // pipeline (per-packet delay computation, padding
+          // detection, chunk splitting). Each trial is a Viterbi
+          // pass + markov ranker over the same input.
+          let candidates = [];
+          if (decoder && typeof decoder.decodeKeystrokes === "function") {
+            try {
+              candidates = decoder.decodeKeystrokes(delays, { topN: 5, model });
+            } catch (err) {
+              console.warn("[Crypt/OpenSSH] auto-calibrate trial decode failed:", err);
             }
           }
-          perCommand.push({ idx: i, truth: "", predicted: best, score: 0 });
-        }
-        return { perCommand };
+          const viterbiHintText = (candidates || [])
+            .slice(0, 8)
+            .map((c) => (c && c.text) ? c.text : "")
+            .filter((t) => t.length > 0)
+            .join(" ");
+          // One markov ranker pass per trial.
+          let ranked = [];
+          if (markovModel && typeof markovModel.rankCorpus === "function") {
+            try {
+              const beam = (sshMarkovModule
+                && artifactStore
+                && typeof sshMarkovModule.rankCorpusWithSlotFilling === "function")
+                ? sshMarkovModule.rankCorpusWithSlotFilling(
+                  markovModel, artifactStore, targetLen, 5, 100,
+                  { viterbiText: viterbiHintText || null })
+                : markovModel.rankCorpus(targetLen, 5, 100);
+              ranked = (typeof markovModel.rankWithTiming === "function")
+                ? markovModel.rankWithTiming(beam, delaysForMarkov, 0.22, viterbiHintText || null).slice(0, 30)
+                : beam.slice(0, 30);
+            } catch (err) {
+              console.warn("[Crypt/OpenSSH] auto-calibrate trial markov failed:", err);
+            }
+          }
+          // Convert the ranked list into per-chunk predictions. We
+          // pair each chunk with the top-ranked candidate whose
+          // length is closest to the chunk's expected length. This
+          // is the same heuristic the live analysis uses; here it
+          // gives the score function a string per command to
+          // compare against the truth.
+          const perCommand = [];
+          for (let i = 0; i < chunkList.length; i += 1) {
+            const chunk = chunkList[i];
+            const wantLen = Math.max(1, Math.round(chunk.keystrokeCount || 0));
+            let best = "";
+            let bestDelta = Infinity;
+            for (const r of ranked) {
+              const text = (r && r.text) ? String(r.text) : "";
+              if (!text) continue;
+              const delta = Math.abs(text.length - wantLen);
+              if (delta < bestDelta) {
+                bestDelta = delta;
+                best = text;
+              }
+            }
+            perCommand.push({ idx: i, truth: "", predicted: best, score: 0 });
+          }
+          // Surface chunk start timestamps so the orchestrator's
+          // truth-alignment stage can pin each transcript command to
+          // its corresponding chunk. Only emitted when the trial path
+          // successfully built timestamps; orchestrator falls back to
+          // index-based alignment when this is missing.
+          return { perCommand, chunkStartTimesMs };
+        },
+        // Expose the chunk timestamps computed once above so the
+        // orchestrator's truth-alignment stage can pin each transcript
+        // command to its corresponding chunk. Empty array means the
+        // click handler will fall back to index-based alignment.
+        chunkStartTimesMs,
       };
     }
 
@@ -2229,11 +2513,25 @@ function createCryptPanel({
           }
           return;
         }
-        // Truth has command + timestamp rows; the orchestrator
-        // accepts either field name.
-        const truthRows = truth.map((row) => ({
+        // Build the runTrial callback against the cached analysis.
+        // Also grabs ``chunkStartTimesMs`` so we can align each
+        // transcript row to its corresponding chunk before passing
+        // truth to the orchestrator.
+        const trialHandle = await buildAutoCalibrateRunTrial(flow, cached);
+        const runTrial = trialHandle.runTrial;
+        const chunkStartTimesMs = trialHandle.chunkStartTimesMs || [];
+        // Build aligned truth rows. Each row gets a ``chunkIdx``
+        // pointing at the chunk whose start timestamp window
+        // contains the (skew-corrected) command timestamp.
+        const alignedTruth = (chunkStartTimesMs.length > 0
+          && sshTruthAlignModule
+          && typeof sshTruthAlignModule.alignTruthToChunks === "function")
+          ? sshTruthAlignModule.alignTruthToChunks(truth, chunkStartTimesMs)
+          : truth.map((row) => Object.assign({}, row, { chunkIdx: null }));
+        const truthRows = alignedTruth.map((row) => ({
           command: row.command || row.text || "",
-          timestamp: row.timestamp || null,
+          timestamp: row.correctedTimestamp || row.timestamp || null,
+          chunkIdx: Number.isInteger(row.chunkIdx) ? row.chunkIdx : null,
         })).filter((row) => row.command);
         if (truthRows.length === 0) {
           if (autoCalibrateStatusEl) {
@@ -2241,10 +2539,15 @@ function createCryptPanel({
           }
           return;
         }
-        // Build the runTrial callback against the cached analysis.
-        const runTrial = await buildAutoCalibrateRunTrial(flow, cached);
         const startingKnobs = captureAutoCalibrateKnobs();
-        const ranges = buildAutoCalibrateRanges();
+        // Derive flow-level signals once and use them to seed the
+        // ``minCommandBoundary`` search window. The orchestrator runs
+        // hundreds of trials across the full lattice by default; the
+        // warm-start narrows it to a 3-value window centred on the
+        // heuristic. The rescan loop below re-centres if the best
+        // lands at a window edge with an outward gradient.
+        const flowSignals = deriveAutoCalibrateFlowSignals(flow, cached);
+        let ranges = buildAutoCalibrateRanges(flowSignals);
         // Wire up abort + UI.
         autoCalibrateAbortController = new AbortController();
         autoCalibrateBtnEl.disabled = true;
@@ -2255,28 +2558,65 @@ function createCryptPanel({
         if (autoCalibrateProgressEl) autoCalibrateProgressEl.hidden = false;
         if (autoCalibrateProgressTextEl) autoCalibrateProgressEl.textContent = "Starting auto-calibrate";
         if (autoCalibrateStatusEl) autoCalibrateStatusEl.textContent = "Searching…";
-        // Start the orchestrator.
+        // Run the orchestrator. If the warm-start window lands at an
+        // edge with an outward gradient, rescan up to
+        // AUTO_CAL_RESCAN_MAX_ROUNDS times with a re-centred window.
         let result = null;
+        let roundsCompleted = 0;
         try {
-          result = await sshAutoCalibrateModule.autoCalibrate({
-            knobs: startingKnobs,
-            ranges,
-            runTrial,
-            truth: truthRows,
-          }, (progress) => {
-            if (progress && progress.phase === "trial") {
-              if (autoCalibrateProgressTextEl) {
-                const total = progress.totalTrials > 0 ? `/${progress.totalTrials}` : "";
-                autoCalibrateProgressTextEl.textContent =
-                  `Trial ${progress.trial || "?"}${total} · score ${((progress.score || 0) * 100).toFixed(1)}%`;
+          for (let round = 1; round <= AUTO_CAL_RESCAN_MAX_ROUNDS + 1; round += 1) {
+            const currentWindow = (ranges.minCommandBoundary
+              && Array.isArray(ranges.minCommandBoundary.values))
+              ? ranges.minCommandBoundary.values.slice()
+              : [];
+            const runResult = await sshAutoCalibrateModule.autoCalibrate({
+              knobs: startingKnobs,
+              ranges,
+              runTrial,
+              truth: truthRows,
+            }, (progress) => {
+              if (!progress) return;
+              if (progress.phase === "trial") {
+                if (autoCalibrateProgressTextEl) {
+                  const total = progress.totalTrials > 0 ? `/${progress.totalTrials}` : "";
+                  const roundLabel = `R${round}/${AUTO_CAL_RESCAN_MAX_ROUNDS + 1}`;
+                  autoCalibrateProgressTextEl.textContent =
+                    `Trial ${progress.trial || "?"}${total} · ${roundLabel} · score ${((progress.score || 0) * 100).toFixed(1)}%`;
+                }
+              } else if (progress.phase === "init") {
+                if (autoCalibrateProgressTextEl) {
+                  const roundLabel = `R${round}/${AUTO_CAL_RESCAN_MAX_ROUNDS + 1}`;
+                  autoCalibrateProgressTextEl.textContent =
+                    `Starting round ${roundLabel} · ${progress.totalTrials || "?"} trials…`;
+                }
               }
-            } else if (progress && progress.phase === "init") {
-              if (autoCalibrateProgressTextEl) {
-                autoCalibrateProgressTextEl.textContent =
-                  `Starting ${progress.totalTrials || "?"} trials…`;
-              }
+            }, { signal: autoCalibrateAbortController.signal });
+            if (!runResult || !runResult.best) {
+              result = runResult;
+              break;
             }
-          }, { signal: autoCalibrateAbortController.signal });
+            roundsCompleted = round;
+            result = runResult;
+            // Decide whether to rescan. Only if there's room under
+            // the cap, the best is at a window edge, and the outward
+            // gradient justifies it.
+            if (round >= AUTO_CAL_RESCAN_MAX_ROUNDS + 1) break;
+            if (!sshBoundaryWarmstartModule
+              || typeof sshBoundaryWarmstartModule.recommendRescanWindow !== "function") break;
+            const rescan = sshBoundaryWarmstartModule.recommendRescanWindow({
+              best: runResult.best.knobs ? runResult.best.knobs.minCommandBoundary : null,
+              window: currentWindow,
+              sensitivity: (runResult.sensitivity
+                && Array.isArray(runResult.sensitivity.minCommandBoundary))
+                ? runResult.sensitivity.minCommandBoundary
+                : [],
+            });
+            if (!rescan) break;
+            // Re-centre: keep other knobs, swap only the boundary window.
+            ranges = Object.assign({}, ranges, {
+              minCommandBoundary: { values: rescan },
+            });
+          }
         } catch (err) {
           if (autoCalibrateStatusEl) {
             autoCalibrateStatusEl.textContent = `Auto-calibrate failed: ${err.message}`;
@@ -2366,10 +2706,10 @@ function createCryptPanel({
           await loadSshProfiles();
           profileSelectEl.value = name;
           applyProfile(profile);
-          if (calibrationStatusEl) calibrationStatusEl.textContent = `Profile "${name}" saved`;
+          setCalibrationStatus(`Profile "${name}" saved`);
         } catch (e) {
           console.error("[Crypt/OpenSSH] Save profile failed:", e);
-          if (calibrationStatusEl) calibrationStatusEl.textContent = `Save failed: ${e.message}`;
+          setCalibrationStatus(`Save failed: ${e.message}`);
         }
       });
     }
@@ -2390,10 +2730,10 @@ function createCryptPanel({
             localStorage.setItem("ssh-profiles", JSON.stringify(sshProfiles));
           }
           await loadSshProfiles();
-          if (calibrationStatusEl) calibrationStatusEl.textContent = `Profile "${name}" deleted`;
+          setCalibrationStatus(`Profile "${name}" deleted`);
         } catch (e) {
           console.error("[Crypt/OpenSSH] Delete profile failed:", e);
-          if (calibrationStatusEl) calibrationStatusEl.textContent = `Delete failed: ${e.message}`;
+          setCalibrationStatus(`Delete failed: ${e.message}`);
         }
       });
     }
