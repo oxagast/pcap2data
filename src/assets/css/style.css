@@ -1433,7 +1433,7 @@ strong {
 }
 
 .crypt-openssh-deobf-row input[type="range"] {
-  width: 110px;
+  width: 220px;
   cursor: pointer;
 }
 
@@ -1443,6 +1443,90 @@ strong {
   min-width: 36px;
   text-align: right;
   color: var(--color-1);
+}
+
+/* Chunker resolution: live chunk-count badge shown next to the
+   slider. Visually muted so it reads as a status indicator rather
+   than another primary value, and prefixed with a separator so it
+   doesn't blend into the preceding label. */
+.crypt-openssh-chunker-count {
+  color: var(--crypt-panel-text-muted, #888);
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 1px solid var(--crypt-panel-border, #444);
+}
+
+/* Live chunker preview: a small scrollable list that updates on every
+ * slider drag, showing the chunk index, start timestamp and keystroke
+ * count for the chunks the chunker would produce with the current
+ * floor. Keeps the slider responsive without forcing a full re-analysis. */
+.crypt-openssh-chunker-preview {
+  max-height: 130px;
+  overflow-y: auto;
+  margin: 4px 0 10px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--crypt-panel-border, #444);
+  border-radius: 4px;
+  background: var(--crypt-panel-surface, rgba(0, 0, 0, 0.15));
+  font-size: 12px;
+  color: var(--crypt-panel-text-muted, #aaa);
+  font-family: var(--crypt-mono-font, monospace);
+}
+
+.crypt-openssh-chunker-preview-empty {
+  color: var(--crypt-panel-text-muted, #666);
+  font-style: italic;
+}
+
+.crypt-openssh-chunker-preview-row {
+  display: grid;
+  grid-template-columns: 2em 8em 5em 1fr;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.04);
+}
+
+.crypt-openssh-chunker-preview-row:last-child {
+  border-bottom: none;
+}
+
+.crypt-openssh-chunker-preview-row.is-truncated {
+  color: var(--crypt-panel-text-muted, #888);
+}
+
+.crypt-openssh-chunker-preview-row .idx {
+  color: var(--color-2, #4ea1ff);
+  font-weight: bold;
+  text-align: right;
+}
+
+.crypt-openssh-chunker-preview-row .ts {
+  color: var(--crypt-panel-text, #ccc);
+}
+
+.crypt-openssh-chunker-preview-row .ks {
+  text-align: right;
+}
+
+.crypt-openssh-chunker-preview-row .label {
+  color: var(--crypt-panel-text-muted, #888);
+  font-style: italic;
+}
+
+.crypt-openssh-chunker-preview-overflow {
+  margin-top: 4px;
+  color: var(--crypt-panel-text-muted, #777);
+  font-style: italic;
+  text-align: center;
+}
+
+.crypt-openssh-chunker-preview-note {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+  color: var(--color-2, #4ea1ff);
+  font-size: 11px;
+  font-style: italic;
 }
 
 .crypt-openssh-legend {
@@ -2001,6 +2085,23 @@ strong {
 .crypt-openssh-markov-timeline-item:first-child {
   border-left: 3px solid var(--color-3);
   background: color-mix(in srgb, var(--color-3) 10%, var(--color-7));
+}
+
+/* Unreliable chunk: muted background, dashed border-left, lower
+ * opacity. Used when the per-chunk Markhov beam can't rank the
+ * chunk meaningfully (e.g. chunker floor too high → the whole
+ * session collapsed into one giant chunk). The user sees the
+ * chunk but can't be misled into thinking the placeholder text
+ * is a real guess. */
+.crypt-openssh-markov-timeline-item-unreliable {
+  opacity: 0.65;
+  border-left: 3px dashed var(--crypt-panel-text-muted, #888);
+  background: transparent;
+}
+
+.crypt-openssh-markov-timeline-item-unreliable .crypt-openssh-markov-timeline-command {
+  color: var(--crypt-panel-text-muted, #888);
+  font-style: italic;
 }
 
 /* Timeline connector (left side with index, dot, and vertical line) */

@@ -121,6 +121,28 @@ describe("detect20msPadding", () => {
         expect(detect20msPadding(null).detected).toBe(false);
         expect(detect20msPadding([NaN, -1, 0, 20, 40]).detected).toBe(false);
     });
+
+    test("maxFillerMultiplier keeps long real pauses out of filler", () => {
+        // A 20ms-cadence filler stream (40 short delays clustered on
+        // multiples of 20) plus a long 13s inter-command pause that
+        // happens to land on an integer multiple of 20 (650 × 20ms).
+        // The detector previously classified that pause as filler and
+        // squashed it to a 0ms residue, collapsing the
+        // multi-command session into a single chunk. With the
+        // maxFillerMultiplier ceiling, the long pause is excluded
+        // from the filler set so the peeled stream keeps its real
+        // length.
+        const filler = jitterSamples(20, 80, 1.5, 40, 7);
+        const longPause = 13_000; // 650 × 20ms — exact multiple of the cadence
+        const delays = filler.slice(0, 20).concat([longPause], filler.slice(20));
+        const result = detect20msPadding(delays);
+        expect(result.detected).toBe(true);
+        // The peeled stream should keep the long pause at its
+        // original magnitude, not its 0ms residue.
+        expect(Array.isArray(result.keystrokeDelaysMs)).toBe(true);
+        const hasLongPause = result.keystrokeDelaysMs.some((d) => d >= longPause * 0.99);
+        expect(hasLongPause).toBe(true);
+    });
 });
 
 describe("detect20msPadding — raw input preservation", () => {
