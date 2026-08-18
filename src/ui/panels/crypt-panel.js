@@ -765,13 +765,18 @@ function createCryptPanel({
     const approxStd = mad * 1.4826 || 0;
 
     // Use a dynamic threshold based on the delay distribution.
-    // The floor used to be 500ms but that swallows real command
-    // boundaries for fast typists (median ≈ 20ms), collapsing a
-    // multi-command session into a single chunk. 300ms is well
-    // above typical intra-command cadence (~50-200ms) and matches
-    // the autotune's SPLIT_MS=350 in computeChunkShapeStats.
+    // ``dynamicThresh`` already enforces a ``median + 150ms`` floor
+    // (the inner ``max(3 * approxStd, 150)``), so any further floor
+    // here only matters when the dynamic threshold is *lower* than
+    // that — which means the median is already 150ms+ and the user
+    // is a slow typist. For obfuscated sessions (median ≈ 20ms,
+    // approxStd ≈ 1–2ms) the dynamic threshold settles near 170ms;
+    // adding a 300ms outer floor swallows real Return gaps at
+    // 200–250ms and collapses a multi-command session into a single
+    // chunk. Keeping the outer floor at 150ms lets ``dynamicThresh``
+    // do its job without overriding it for fast typists.
     const dynamicThresh = median + Math.max(3 * approxStd, 150);
-    const minCommandBoundary = 300;
+    const minCommandBoundary = 150;
     const threshold = Math.max(dynamicThresh, minCommandBoundary);
 
     // Additional parameters for better pattern detection
