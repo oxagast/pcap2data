@@ -762,6 +762,13 @@ function createCryptPanel({
     // Was hardcoded as 150 inside findReturnChunks.
     minCommandBoundary: 150,
   };
+  // Most-recent dynamic threshold computed by findReturnChunks.
+  // Surfaced in the chunker preview so the user can see what the
+  // distribution-based heuristic picked vs. what their slider
+  // value is. Read-only — findReturnChunks writes here, the
+  // preview reads here. Cleared when the slider moves so a stale
+  // value doesn't linger from a previous flow.
+  let chunkerLastDynamicThresh = null;
   function findReturnChunks(delaysWithIdx) {
     if (!Array.isArray(delaysWithIdx) || delaysWithIdx.length === 0) return [];
     const vals = delaysWithIdx.map((d) => d.delay).filter((v) => Number.isFinite(v));
@@ -776,22 +783,38 @@ function createCryptPanel({
     const mad = absDevs.slice().sort((a, b) => a - b)[Math.floor(absDevs.length / 2)] || 0;
     const approxStd = mad * 1.4826 || 0;
 
-    // Use a dynamic threshold based on the delay distribution.
-    // ``dynamicThresh`` already enforces a ``median + 150ms`` floor
-    // (the inner ``max(3 * approxStd, 150)``), so any further floor
-    // here only matters when the dynamic threshold is *lower* than
-    // that — which means the median is already 150ms+ and the user
-    // is a slow typist. For obfuscated sessions (median ≈ 20ms,
-    // approxStd ≈ 1–2ms) the dynamic threshold settles near 170ms;
-    // adding a 300ms outer floor swallows real Return gaps at
-    // 200–250ms and collapses a multi-command session into a single
-    // chunk. The outer floor is sourced from
-    // ``chunkerSettings.minCommandBoundary`` so it can be auto-
-    // calibrated from a transcript; the default of 150ms keeps
-    // ``dynamicThresh`` in charge for fast typists.
+    // Compute two thresholds and let the user pick between them:
+    //
+    //   1. ``dynamicThresh`` = median + max(3σ, 150ms). A
+    //      distribution-based heuristic that handles the common
+    //      "fast typist" case automatically — the median keeps it
+    //      close to the typist's natural cadence and the 3σ cushion
+    //      prevents noise from fragmenting a single command.
+    //   2. The user-controlled ``minCommandBoundary`` slider. The
+    //      slider is authoritative: any value between 10 and 2000ms
+    //      is used directly as the threshold. This lets the user
+    //      find bimodal distributions the dynamic threshold misses
+    //      (e.g. calib3.pcap where the dynamic threshold lands above
+    //      the second histogram peak and finds zero boundaries).
+    //
+    // The dynamic threshold is still computed for the status line
+    // (so the user can compare "what auto picked" against "what I
+    // chose") but it no longer overrides the slider downward. To
+    // opt out of the dynamic threshold entirely and use a fixed
+    // floor, drag the slider to the value you want.
     const dynamicThresh = median + Math.max(3 * approxStd, 150);
     const minCommandBoundary = chunkerSettings.minCommandBoundary;
-    const threshold = Math.max(dynamicThresh, minCommandBoundary);
+    // Defensive: the slider-authoritative threshold must always be
+    // a positive number. If ``chunkerSettings.minCommandBoundary``
+    // is missing or NaN for any reason, fall back to the dynamic
+    // threshold so the chunker never returns an empty list
+    // (which would silently break the analysis pipeline).
+    const threshold = Number.isFinite(minCommandBoundary) && minCommandBoundary > 0
+      ? minCommandBoundary
+      : dynamicThresh;
+    // Stash the dynamic threshold so the preview can show it. This
+    // is a closure-scoped write — only the preview reads it.
+    chunkerLastDynamicThresh = dynamicThresh;
 
     // Additional parameters for better pattern detection
     const burstThreshold = 30; // Maximum delay to consider as part of a burst (within a command)
@@ -1022,6 +1045,32 @@ function createCryptPanel({
   } catch (err) {
     console.warn("[Crypt/OpenSSH] clock-skew module unavailable:", err);
     sshClockSkewModule = null;
+  }
+  // Pure helpers for the non-linear slider mapping. The slider's
+  // ``min/max/step`` attributes are linear (0-1000 / step=1) but
+  // the actual chunker threshold is computed from a piecewise
+  // curve so sub-100ms values get 1ms resolution and the rest
+  // get a coarser step. Keeping the curve in a pure module lets
+  // us unit-test the mapping without standing up the panel.
+  let sshChunkerSliderModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshChunkerSliderModule = require("../decoders/ssh-keystrokes/chunker-slider");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] chunker-slider module unavailable:", err);
+    sshChunkerSliderModule = null;
+  }
+  // Pure helpers for the chunker-preview list rendered when the user
+  // drags the min-gap-floor slider. Kept in their own module so the
+  // timestamp/label format is unit-testable without standing up the
+  // full panel.
+  let sshChunkLabelModule = null;
+  try {
+    // eslint-disable-next-line global-require
+    sshChunkLabelModule = require("../decoders/ssh-keystrokes/chunk-label");
+  } catch (err) {
+    console.warn("[Crypt/OpenSSH] chunk-label module unavailable:", err);
+    sshChunkLabelModule = null;
   }
   // Confidence floor below which we *don't* auto-correct — the
   // alignment is too weak to trust. Caller can still show the status
@@ -1643,6 +1692,12 @@ function createCryptPanel({
       if (cached) {
         renderSshFromCachedAnalysis(cached);
       }
+      // Refresh the chunker-resolution chunk-count badge so it
+      // reflects the new flow's cached analysis (or — if no cache —
+      // shows the placeholder "— chunks" string).
+      if (typeof updateChunkerPreview === "function") {
+        updateChunkerPreview();
+      }
     }
   }
 
@@ -1731,6 +1786,359 @@ function createCryptPanel({
         markovSettings.minCommandLength = Number(markovMinLengthEl.value);
       });
     }
+
+    // Chunker resolution slider. Lets the user manually override the
+    // ``minCommandBoundary`` floor used by ``findReturnChunks``. The
+    // slider's input event also re-runs the chunker against the
+    // cached delay stream so the user can immediately see the
+    // resulting chunk count in the count badge next to the label —
+    // useful for tuning when the dynamic threshold dominates and the
+    // floor has no effect.
+    const chunkerBoundaryEl = document.getElementById("crypt-openssh-chunker-min-boundary");
+    const chunkerBoundaryLabelEl = document.getElementById("crypt-openssh-chunker-min-boundary-label");
+    const chunkerChunkCountEl = document.getElementById("crypt-openssh-chunker-chunk-count");
+    const chunkerPreviewEl = document.getElementById("crypt-openssh-chunker-preview");
+    const chunkerApplyBtnEl = document.getElementById("crypt-openssh-chunker-apply-btn");
+    // Slider-position helpers. The slider's underlying attribute
+    // is a 0-1000 integer but the chunker threshold it maps to
+    // uses a non-linear curve (see chunker-slider.js). All reads
+    // and writes of the slider go through these helpers so the
+    // curve lives in exactly one place.
+    const sliderPosToMs = (pos) => (sshChunkerSliderModule
+      ? sshChunkerSliderModule.posToMs(pos)
+      : Math.max(1, Number(pos) || 1));
+    const sliderMsToPos = (ms) => (sshChunkerSliderModule
+      ? sshChunkerSliderModule.msToPos(ms)
+      : Math.max(0, Math.round(Number(ms) || 0)));
+    // Initial value: prefer the slider's HTML default so the slider
+    // and the chunkerSettings object agree on first render. (The
+    // chunkerSettings default of 150 is also the slider's default,
+    // but reading from the DOM keeps them coupled if the HTML
+    // default ever drifts.)
+    if (chunkerBoundaryEl) {
+      // The slider's value attribute holds a position (0-1000).
+      // Convert it to a millisecond threshold via the curve so
+      // chunkerSettings always carries a real ms value.
+      const initialPos = Number(chunkerBoundaryEl.value);
+      const initialMs = sliderPosToMs(initialPos);
+      if (Number.isFinite(initialMs) && initialMs > 0) {
+        chunkerSettings.minCommandBoundary = initialMs;
+      }
+    }
+    if (chunkerBoundaryLabelEl) {
+      chunkerBoundaryLabelEl.textContent =
+        `${chunkerSettings.minCommandBoundary}ms`;
+    }
+    // Cap how many rows we render into the live preview so dragging
+    // the slider stays smooth even for flows with hundreds of chunks.
+    const CHUNKER_PREVIEW_MAX_ROWS = 24;
+    // Build a single preview row (idx / start-ts / keystroke count /
+    // short label). Label is the cached top candidate's text when
+    // available; otherwise we hint at the gap that closed the chunk.
+    //
+    // `useRawIndexedStream` controls the timestamp column:
+    //   - true  (raw stream): delaysWithIdx[startIdx].index is a
+    //     position in flow.packets, so we can resolve a real
+    //     HH:MM:SS.mmm timestamp.
+    //   - false (peeled stream): delaysWithIdx[startIdx].index is
+    //     just the position within the peeled keystroke array,
+    //     which doesn't correspond to flow.packets. We fall back
+    //     to a delay-position label.
+    function buildChunkerPreviewRow(chunk, ci, chunkTopTexts, flow, opts) {
+      const useRawIndexedStream = !!(opts && opts.useRawIndexedStream);
+      const row = document.createElement("div");
+      row.className = "crypt-openssh-chunker-preview-row";
+      row.setAttribute("data-chunk-index", String(ci));
+      const idxCell = document.createElement("span");
+      idxCell.className = "idx";
+      idxCell.textContent = `${ci + 1}.`;
+      const tsCell = document.createElement("span");
+      tsCell.className = "ts";
+      // Delegate label formatting to the pure helper so the panel
+      // stays focused on DOM construction. We resolve the selected
+      // flow's packet list lazily (only when the row is being
+      // built) and pass it via the getFlowPackets accessor.
+      const startIdx = Number.isInteger(chunk && chunk.startIdx)
+        ? chunk.startIdx
+        : null;
+      const ksCell = document.createElement("span");
+      ksCell.className = "ks";
+      const ks = Number.isFinite(chunk && chunk.keystrokeCount)
+        ? chunk.keystrokeCount
+        : 0;
+      ksCell.textContent = `${ks} ks`;
+      const labelCell = document.createElement("span");
+      labelCell.className = "label";
+      const cachedTop = Array.isArray(chunkTopTexts) ? chunkTopTexts[ci] : null;
+      const gapMs = Number.isFinite(chunk && chunk.maxGapMs)
+        ? chunk.maxGapMs
+        : null;
+      const labelInfo = sshChunkLabelModule.formatChunkLabelCell({
+        cachedTopText: cachedTop,
+        maxGapMs: gapMs,
+      });
+      labelCell.textContent = labelInfo.text;
+      if (labelInfo.title) labelCell.title = labelInfo.title;
+      // Resolve timestamp label once we know whether the flow has
+      // packet timestamps available — keeps the no-flow branch fast.
+      const getFlowPackets = (key) => {
+        if (!flow || flow.flowKey !== key) return null;
+        return Array.isArray(flow.packets) ? flow.packets : null;
+      };
+      const tsLabel = useRawIndexedStream
+        ? sshChunkLabelModule.formatChunkStartLabel({
+          flowKey: sshSelectedFlowKey,
+          startDelayPos: startIdx,
+          delaysWithIdx: (function () {
+            const c = sshSelectedFlowKey
+              ? sshLastAnalysisByFlowKey.get(sshSelectedFlowKey)
+              : null;
+            return (c && Array.isArray(c.delaysWithIdx)) ? c.delaysWithIdx : null;
+          })(),
+          getFlowPackets,
+        })
+        : (Number.isInteger(startIdx) ? `d#${startIdx}` : "—");
+      tsCell.textContent = tsLabel;
+      row.appendChild(idxCell);
+      row.appendChild(tsCell);
+      row.appendChild(ksCell);
+      row.appendChild(labelCell);
+      return row;
+    }
+    // Re-chunk the cached delay stream for the currently-selected
+    // flow so the user sees the effect of their slider drag
+    // immediately. Falls back gracefully when no flow is selected
+    // or no analysis has been run yet. The preview is intentionally
+    // lightweight: it does NOT re-run the Markhov beam — it just
+    // shows what the chunker would produce with the current floor
+    // and cross-references the top candidate from the cached
+    // analysis (if any) so the user can spot mismatches.
+    //
+    // IMPORTANT: the chunker must be applied to the SAME stream the
+    // Markhov pipeline uses, otherwise the slider's preview will
+    // disagree with the "X Return(s)" counter. For obfuscated
+    // sessions the raw stream is full of filler intervals so a
+    // 460ms floor produces 10 chunks of ~1 keystroke each (mostly
+    // filler), while the peeled stream (one delay per real
+    // keystroke) at the same floor returns 1 chunk because every
+    // typing interval is <460ms. The slider's effect should match
+    // the analysis pipeline, so we prefer the peeled stream.
+    function updateChunkerPreview() {
+      if (!chunkerChunkCountEl) return;
+      const flowKey = sshSelectedFlowKey;
+      const cached = flowKey
+        ? sshLastAnalysisByFlowKey.get(flowKey)
+        : null;
+      // Pick the same stream the Markhov pipeline would use today.
+      // The cache's ``paddingDetection.keystrokeDelaysMs`` is the
+      // peeled real-keystroke stream; fall back to building it
+      // ourselves, then fall back to the raw indexed stream.
+      const peeledFlat = cached
+        && cached.paddingDetection
+        && Array.isArray(cached.paddingDetection.keystrokeDelaysMs)
+        ? cached.paddingDetection.keystrokeDelaysMs
+        : null;
+      const usePeeled = !!(peeledFlat && peeledFlat.length > 0);
+      const delaysWithIdx = (() => {
+        if (usePeeled) {
+          return buildIndexedDelaysFromPeeled(peeledFlat);
+        }
+        if (cached && Array.isArray(cached.delaysWithIdx)) {
+          return cached.delaysWithIdx;
+        }
+        return null;
+      })();
+      if (!delaysWithIdx || delaysWithIdx.length === 0) {
+        chunkerChunkCountEl.textContent = "— chunks";
+        if (chunkerPreviewEl) {
+          chunkerPreviewEl.replaceChildren();
+          const empty = document.createElement("em");
+          empty.className = "crypt-openssh-chunker-preview-empty";
+          empty.textContent = "Run an analysis to preview chunks here.";
+          chunkerPreviewEl.appendChild(empty);
+        }
+        return;
+      }
+      const chunks = findReturnChunks(delaysWithIdx);
+      const n = Array.isArray(chunks) ? chunks.length : 0;
+      chunkerChunkCountEl.textContent =
+        n === 1 ? "1 chunk" : `${n} chunks`;
+      if (chunkerPreviewEl) {
+        chunkerPreviewEl.replaceChildren();
+        // Surface the dynamic threshold so the user can compare
+        // what the heuristic picked vs. what their slider value is.
+        // Useful when the user is tuning a session where the
+        // dynamic threshold lands somewhere unhelpful (e.g. a
+        // bimodal distribution where median+3σ overshoots the
+        // second peak). When the dynamic threshold is close to the
+        // slider we suppress the line so it doesn't add noise.
+        if (Number.isFinite(chunkerLastDynamicThresh)) {
+          const dyn = Math.round(chunkerLastDynamicThresh);
+          const slider = Math.round(chunkerSettings.minCommandBoundary);
+          const ratio = dyn / Math.max(1, slider);
+          // Show the line only when the user has either matched
+          // the auto value (so they can confirm) or diverged from
+          // it (so they see what they're overriding). Suppress it
+          // when within 10% to avoid visual noise on happy-path
+          // sessions.
+          if (Math.abs(ratio - 1) > 0.1) {
+            const note = document.createElement("div");
+            note.className = "crypt-openssh-chunker-preview-note";
+            note.textContent = `Auto threshold (median + 3·MAD): ${dyn}ms — your slider is at ${slider}ms.`;
+            chunkerPreviewEl.appendChild(note);
+          }
+        }
+        // Cross-reference cached top candidates by chunk-index. If
+        // the new chunk count doesn't match the cached Markhov
+        // count, we just leave the label cell as a gap hint.
+        const cachedTopTexts = (() => {
+          const mc = cached && cached.markovChunks;
+          if (!Array.isArray(mc)) return null;
+          if (mc.length !== n) return null;
+          return mc.map((m) => {
+            const t = m && m.top && m.top[0] && m.top[0].text;
+            return typeof t === "string" && t.length > 0 ? t : null;
+          });
+        })();
+        // Look up the selected flow once so we can show packet
+        // timestamps. Falls back to delay-position labels when the
+        // flow can't be located.
+        const flow = (sshFlows && sshSelectedFlowKey)
+          ? sshFlows.find((f) => f.flowKey === sshSelectedFlowKey)
+          : null;
+        if (n === 0) {
+          const empty = document.createElement("em");
+          empty.className = "crypt-openssh-chunker-preview-empty";
+          empty.textContent = "No chunks — try lowering the floor.";
+          chunkerPreviewEl.appendChild(empty);
+        } else if (n === 1 && delaysWithIdx.length > 1) {
+          // 1-chunk case: surface the largest delay in the stream
+          // so the user knows where the next boundary would have
+          // to fall to produce a split. Without this, dragging the
+          // slider below 1 chunk's "no chunks possible" floor
+          // looks like the slider is broken. The max-gap hint
+          // tells the user exactly which value to drop below.
+          let maxGapMs = 0;
+          for (const d of delaysWithIdx) {
+            const v = d && Number.isFinite(d.delay) ? d.delay : null;
+            if (v !== null && v > maxGapMs) maxGapMs = v;
+          }
+          const hint = document.createElement("em");
+          hint.className = "crypt-openssh-chunker-preview-empty";
+          if (maxGapMs >= chunkerSettings.minCommandBoundary) {
+            // Boundary mis-detected at the data layer — should be
+            // impossible with the slider-authoritative threshold,
+            // but defend against it so the diagnostic never lies.
+            hint.textContent =
+              `Largest delay in stream: ${maxGapMs.toFixed(0)}ms. ` +
+              `Try the slider at or below this value to split.`;
+          } else {
+            hint.textContent =
+              `Largest delay in stream: ${maxGapMs.toFixed(0)}ms — ` +
+              `drop the slider below ${Math.ceil(maxGapMs)}ms to split.`;
+          }
+          chunkerPreviewEl.appendChild(hint);
+          // Render the single chunk in the row list too so the
+          // user has something visual to look at alongside the
+          // diagnostic. Without this the preview is just text.
+          const flow = (sshFlows && sshSelectedFlowKey)
+            ? sshFlows.find((f) => f.flowKey === sshSelectedFlowKey)
+            : null;
+          const cachedTopTexts = (() => {
+            const mc = cached && cached.markovChunks;
+            if (!Array.isArray(mc)) return null;
+            if (mc.length !== n) return null;
+            return mc.map((m) => {
+              const t = m && m.top && m.top[0] && m.top[0].text;
+              return typeof t === "string" && t.length > 0 ? t : null;
+            });
+          })();
+          for (let ci = 0; ci < n; ci += 1) {
+            chunkerPreviewEl.appendChild(
+              buildChunkerPreviewRow(chunks[ci], ci, cachedTopTexts, flow, {
+                useRawIndexedStream: !usePeeled,
+              })
+            );
+          }
+        } else {
+          const visible = Math.min(n, CHUNKER_PREVIEW_MAX_ROWS);
+          for (let ci = 0; ci < visible; ci += 1) {
+            chunkerPreviewEl.appendChild(
+              buildChunkerPreviewRow(chunks[ci], ci, cachedTopTexts, flow, {
+                useRawIndexedStream: !usePeeled,
+              })
+            );
+          }
+          if (n > visible) {
+            const more = document.createElement("div");
+            more.className = "crypt-openssh-chunker-preview-overflow";
+            more.textContent = `… ${n - visible} more chunk(s) hidden`;
+            chunkerPreviewEl.appendChild(more);
+          }
+        }
+      }
+    }
+    if (chunkerBoundaryEl) {
+      chunkerBoundaryEl.addEventListener("input", () => {
+        // Slider value is a position (0-1000). Map it through the
+        // non-linear curve to get the chunker threshold in ms.
+        // We deliberately do NOT trigger updateChunkerPreview() or
+        // scheduleAutoReanalyze() here — re-rendering the preview
+        // list on every input tick caused the page to jump around
+        // while the user was dragging the slider. The user clicks
+        // "Re-analyze" when they want the new value applied.
+        const pos = Number(chunkerBoundaryEl.value);
+        const ms = sliderPosToMs(pos);
+        if (Number.isFinite(ms) && ms > 0) {
+          chunkerSettings.minCommandBoundary = ms;
+        }
+        if (chunkerBoundaryLabelEl) {
+          chunkerBoundaryLabelEl.textContent = `${chunkerSettings.minCommandBoundary}ms`;
+        }
+      });
+    }
+    // Re-analyze button: the slider changes the chunker floor but
+    // does NOT re-run the Markhov beam (that runs per chunk in the
+    // cached analysis pipeline). When the user wants the new
+    // chunking to drive the full per-chunk ranking they click
+    // this, which triggers analyzeSelectedSshFlow() with the
+    // updated floor. The slider's live preview keeps the chunking
+    // feedback snappy in the meantime.
+    if (chunkerApplyBtnEl) {
+      chunkerApplyBtnEl.addEventListener("click", () => {
+        if (!sshSelectedFlowKey) return;
+        try {
+          chunkerApplyBtnEl.disabled = true;
+        } catch (_err) { /* ignore DOM failures */ }
+        // Refresh the lightweight chunker preview first so the
+        // user sees the chunk count change immediately at the
+        // current slider value (the slider itself doesn't update
+        // the preview during drag, by design). Then fire the full
+        // Markhov re-analysis so the timeline + candidates table
+        // pick up the new chunking.
+        try {
+          if (typeof updateChunkerPreview === "function") {
+            updateChunkerPreview();
+          }
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] chunker preview refresh failed:", err);
+        }
+        try {
+          analyzeSelectedSshFlow();
+        } catch (err) {
+          console.warn("[Crypt/OpenSSH] re-analyze failed:", err);
+        } finally {
+          // Re-enable on the next tick — the analysis is async so
+          // we don't want to lock the button until completion.
+          setTimeout(() => {
+            try { chunkerApplyBtnEl.disabled = false; } catch (_err) { /* ignore */ }
+          }, 0);
+        }
+      });
+    }
+    // Initial preview (in case the panel is opening with a flow
+    // already analysed).
+    updateChunkerPreview();
     // Apply markov settings to the Markov module immediately so they're ready
     // when the analysis runs. Also re-applied in ensureShellMarkovReady().
     if (
@@ -1825,6 +2233,17 @@ function createCryptPanel({
           markovLengthBonusEl.value = profile.runtime.lengthBonusMultiplier;
           if (markovLengthBonusLabelEl) markovLengthBonusLabelEl.textContent = `${profile.runtime.lengthBonusMultiplier.toFixed(1)}x`;
           markovSettings.lengthBonusMultiplier = profile.runtime.lengthBonusMultiplier;
+        }
+        if (chunkerBoundaryEl && profile.runtime.minCommandBoundary !== undefined) {
+          // ``profile.runtime.minCommandBoundary`` is a millisecond
+          // threshold; the slider holds a position. Map ms → pos
+          // so the slider lands on the matching tick.
+          const ms = profile.runtime.minCommandBoundary;
+          const pos = sliderMsToPos(ms);
+          chunkerBoundaryEl.value = String(pos);
+          if (chunkerBoundaryLabelEl) chunkerBoundaryLabelEl.textContent = `${ms}ms`;
+          chunkerSettings.minCommandBoundary = ms;
+          if (typeof updateChunkerPreview === "function") updateChunkerPreview();
         }
       }
 
@@ -2106,12 +2525,27 @@ function createCryptPanel({
           markovLengthBonusLabelEl.textContent = `${knobs.lengthBonusMultiplier.toFixed(1)}x`;
         }
       }
-      // Chunker floor: no UI slider — `findReturnChunks` reads the
-      // shared settings object directly at chunk time, so just update
-      // it here. The calibrated value flows through to subsequent
-      // chunking without needing to push config to any module.
+      // Chunker floor: user-adjustable via the slider. The calibrated
+      // value from auto-calibrate is written back into both
+      // ``chunkerSettings`` (so the chunker picks it up) and the
+      // slider/label so the UI reflects the new state.
       if (Number.isFinite(knobs.minCommandBoundary)) {
-        chunkerSettings.minCommandBoundary = knobs.minCommandBoundary;
+        // ``knobs.minCommandBoundary`` is a millisecond threshold;
+        // the slider holds a position. Convert before writing the
+        // slider's value attribute.
+        const ms = knobs.minCommandBoundary;
+        chunkerSettings.minCommandBoundary = ms;
+        if (chunkerBoundaryEl) {
+          chunkerBoundaryEl.value = String(sliderMsToPos(ms));
+        }
+        if (chunkerBoundaryLabelEl) {
+          chunkerBoundaryLabelEl.textContent = `${ms}ms`;
+        }
+        // Refresh the live chunk-count badge so the user sees the
+        // effect of the auto-calibrated value immediately.
+        if (typeof updateChunkerPreview === "function") {
+          updateChunkerPreview();
+        }
       }
       // Push the new bonus values into the Markov module so the
       // next rankCorpus call picks them up.
@@ -2691,6 +3125,7 @@ function createCryptPanel({
             minCoverage: deobfSettings.minCoverage,
             concisenessBonusMultiplier: markovSettings.concisenessBonusMultiplier,
             lengthBonusMultiplier: markovSettings.lengthBonusMultiplier,
+            minCommandBoundary: chunkerSettings.minCommandBoundary,
           },
         };
 
@@ -3430,6 +3865,26 @@ function createCryptPanel({
               for (let ci = 0; ci < totalMarkovChunks; ci += 1) {
                 const ch = chunkList[ci];
 
+                // Mark chunks the per-chunk Markhov beam can't
+                // meaningfully rank. A chunk with too many
+                // keystrokes (e.g. the whole session collapsed into
+                // one chunk because the chunker floor was set too
+                // high) produces a beam of near-zero candidates and
+                // the ranker falls back to garbage. Without this
+                // guard, every chunk with keystrokeCount >=
+                // MARKOV_TARGET_LEN_MAX + tolerance pollutes the
+                // timeline with a useless "Top guess: ..." row that
+                // overwrites the meaningful chunks above and below
+                // it.
+                if (
+                  !ch.isUnreliable
+                  && Number.isFinite(ch.keystrokeCount)
+                  && ch.keystrokeCount > (MARKOV_TARGET_LEN_MAX + 8)
+                ) {
+                  ch.isUnreliable = true;
+                  ch.reasonUnreliable = `chunk spans ${ch.keystrokeCount} keystrokes (>${MARKOV_TARGET_LEN_MAX + 8}); chunker floor is too high to find Return-shaped gaps`;
+                }
+
                 // Skip unreliable chunks (too many keystrokes)
                 // We cannot reliably decode these - they produce garbage strings
                 if (ch.isUnreliable) {
@@ -3493,6 +3948,27 @@ function createCryptPanel({
                 // actual artifacts from the capture (IPs, hostnames, filenames).
                 // When no artifact matches a slot's length, fall back to the
                 // per-chunk Viterbi decode characters (sanitized for shell-safety).
+                //
+                // Per-chunk target length cap. The chunker can produce
+                // a single chunk containing every keystroke of the
+                // session when no inter-key gap crosses the floor (e.g.
+                // a user typing one long command, or a capture where
+                // the chunker floor is set too high). Passing that
+                // keystroke count straight to the Markhov ranker as
+                // ``targetLen`` filters out almost every corpus entry
+                // (most shell commands are 5-40 chars) and the beam
+                // collapses to a tiny handful of long-tail commands
+                // — or to nothing at all when the corpus has none.
+                // Cap at MARKOV_TARGET_LEN_MAX (40) so the per-chunk
+                // beam gets a sensible search window even when the
+                // chunker's keystrokeCount is huge. The ``max(...,
+                // ch.keystrokeCount)`` floor still applies so very
+                // short chunks (1-3 keystrokes) get the small-string
+                // part of the corpus, just like before.
+                const segTargetLen = Math.min(
+                  MARKOV_TARGET_LEN_MAX,
+                  Math.max(markovMinCommandLength, ch.keystrokeCount),
+                );
                 const segBeam = (
                   sshMarkovModule
                   && artifactStore
@@ -3501,13 +3977,13 @@ function createCryptPanel({
                   ? sshMarkovModule.rankCorpusWithSlotFilling(
                     model,
                     artifactStore,
-                    Math.max(markovMinCommandLength, ch.keystrokeCount),
+                    segTargetLen,
                     3,  // tolerance
                     20,  // top N
                     { viterbiText: chunkHintText || null }
                   )
                   : model.rankCorpus(
-                    Math.max(markovMinCommandLength, ch.keystrokeCount),
+                    segTargetLen,
                     3,  // tolerance
                     20  // top N
                   );
@@ -3769,6 +4245,14 @@ function createCryptPanel({
           }
           refreshSshExportButton();
           clearProgress();
+          // Refresh the chunker preview so the cached top-candidate
+          // cross-references stay in sync with the freshly-rebuilt
+          // markovChunks array. Without this the preview would still
+          // show "→ (no cached top)" after the slider-triggered
+          // re-analysis completes.
+          if (typeof updateChunkerPreview === "function") {
+            updateChunkerPreview();
+          }
           if (analyzeBtn) analyzeBtn.disabled = false;
         })();
       })
@@ -3782,6 +4266,9 @@ function createCryptPanel({
         // Restore the export button to whatever the cache allows. A prior
         // successful analysis for this flow may still be exportable.
         refreshSshExportButton();
+        if (typeof updateChunkerPreview === "function") {
+          updateChunkerPreview();
+        }
       });
   }
 
@@ -4746,6 +5233,17 @@ function createCryptPanel({
           itemEl.className = "crypt-openssh-markov-timeline-item";
           itemEl.setAttribute("data-chunk-index", String(ci));
           itemEl.setAttribute("data-expanded", "false");
+          // Mark unreliable chunks (e.g. when the chunker floor
+          // is so high that the whole session collapses into one
+          // chunk and the per-chunk Markhov beam can't rank it
+          // meaningfully) so the timeline renders them with a
+          // muted style and an explanatory tooltip.
+          if (chunk && chunk.isUnreliable) {
+            itemEl.classList.add("crypt-openssh-markov-timeline-item-unreliable");
+            if (chunk.reasonUnreliable) {
+              itemEl.title = String(chunk.reasonUnreliable);
+            }
+          }
 
           // Timeline connector (left side)
           const connectorEl = document.createElement("div");

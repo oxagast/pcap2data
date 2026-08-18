@@ -1139,6 +1139,41 @@ No decrypted TLS/SSL output yet.</pre>
                   <span id="crypt-openssh-markov-length-bonus-label" class="crypt-openssh-deobf-value">3.3x</span>
                 </div>
 
+                <!-- Chunker resolution: lets the user manually adjust the
+                     minimum-gap floor that the chunker uses to split a
+                     keystroke stream into per-Return commands. The
+                     dynamic threshold (median + 3*MAD) sits on top of
+                     this floor, so the slider's effect is most visible
+                     when the dynamic threshold is below the floor
+                     (slow typists). Live: dragging re-chunks immediately
+                     and updates the visible chunk count + chunk
+                     preview list. -->
+                <div class="crypt-actions-row crypt-openssh-deobf-row">
+                  <label class="crypt-key-type-label" for="crypt-openssh-chunker-min-boundary">
+                    Chunk min-gap floor
+                  </label>
+                  <input type="range" id="crypt-openssh-chunker-min-boundary" min="0" max="1000" step="1" value="100"
+                    title="Minimum inter-keystroke gap (ms) the chunker treats as a Return boundary. The slider uses a non-linear curve so sub-100ms values have 1ms resolution (where it matters for distinguishing typing pauses from keystroke bursts) and 100-2000ms values use ~2ms resolution. This slider is authoritative — any value you set is used directly as the threshold. The slider does NOT update the analysis panel while you drag (that caused the page to jump around); click 'Re-analyze' to apply the slider's value to the full Markhov pipeline.">
+                  <span id="crypt-openssh-chunker-min-boundary-label" class="crypt-openssh-deobf-value">150ms</span>
+                  <span id="crypt-openssh-chunker-chunk-count"
+                    class="crypt-openssh-deobf-value crypt-openssh-chunker-count"></span>
+                  <button id="crypt-openssh-chunker-apply-btn" class="crypt-btn crypt-btn-small"
+                    title="Re-run the full analysis using this chunker floor so the per-chunk Markhov beam picks it up.">
+                    Re-analyze
+                  </button>
+                </div>
+                <!-- Live chunk preview: lightweight list that re-renders
+                     when the user clicks 'Re-analyze', showing each
+                     chunk's start timestamp and keystroke count at
+                     the current slider value. The slider itself
+                     does not update this list while dragging (that
+                     caused the page to jump around). -->
+                <div id="crypt-openssh-chunker-preview" class="crypt-openssh-chunker-preview" aria-live="polite"
+                  aria-label="Live chunker preview">
+                  <em class="crypt-openssh-chunker-preview-empty">Click "Re-analyze" to preview chunks at the current
+                    slider value.</em>
+                </div>
+
                 <!-- Calibration / Profile Management -->
                 <div class="crypt-section-title crypt-openssh-deobf-title">
                   Calibration &amp; Profiles

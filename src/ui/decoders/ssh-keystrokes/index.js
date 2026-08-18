@@ -860,6 +860,21 @@ function buildChartSeries(observedDelays, options = {}) {
 //                                           (default 1.4)
 //   - `minSampleCount`    : number  - minimum delays before the detector
 //                                           runs (default 25)
+//   - `maxFillerMultiplier`: number  - upper bound on a single filler
+//                                           sequence as a multiple of the
+//                                           period. A delay longer than
+//                                           `maxFillerMultiplier × period`
+//                                           is never classified as filler
+//                                           even if it sits exactly on a
+//                                           multiple of the cadence
+//                                           (default 50). Prevents long
+//                                           real pauses (e.g. a 13s gap
+//                                           between commands at a 20ms
+//                                           cadence) from being squashed
+//                                           to their 0ms residue while
+//                                           still allowing realistic
+//                                           filler sequences (up to ~40×
+//                                           the period).
 //   - `snap`              : boolean - when true, populate
 //                                           `snappedDelaysMs` and
 //                                           `keystrokeDelaysMs` (default true)
@@ -1196,6 +1211,25 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
         : null;
     const snap = opts.snap !== false;
 
+    // Upper bound on what counts as a single filler run. A delay of
+    // `maxFillerMultiplier × period` corresponds to `maxFillerMultiplier`
+    // consecutive filler packets at the cadence. Larger gaps are
+    // overwhelmingly likely to be real inter-keystroke pauses or
+    // command boundaries, not stretched filler sequences — the
+    // detector previously classified those as filler whenever the gap
+    // happened to be near an integer multiple of the period (e.g. a
+    // 13s pause = 650 × 20ms with a 20ms cadence), which silently
+    // collapsed multi-command sessions into a single chunk. The
+    // threshold scales with the period so longer cadences get a
+    // proportionally larger ceiling. Default 50× covers realistic
+    // filler sequences (the largest I've ever observed is ~40× the
+    // period) while still excluding long real pauses between
+    // commands (typically 100-1000× the period). Anything past 50×
+    // is overwhelmingly likely to be a real pause.
+    const maxFillerMultiplier = Number.isFinite(opts.maxFillerMultiplier)
+        ? opts.maxFillerMultiplier
+        : 50;
+
     const low = Math.max(1, candidatePeriodMs - refineWindow);
     const high = candidatePeriodMs + refineWindow;
     let best = null;
@@ -1204,6 +1238,9 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
         const tolerance = toleranceBase !== null
             ? toleranceBase
             : Math.max(2, p * 0.15);
+        // Per-period filler ceiling: anything above this is too long
+        // to be a filler sequence and must be a real pause.
+        const maxFillerMs = p * maxFillerMultiplier;
         let matches = 0;
         const residues = [];
         const paddedIdx = [];
@@ -1211,7 +1248,13 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
             const d = delays[i];
             const rounded = Math.round(d / p);
             const distanceMs = Math.abs(d - rounded * p);
-            if (distanceMs <= tolerance) {
+            // Two conditions must BOTH hold for a delay to count as
+            // filler: it's within tolerance of a cadence multiple AND
+            // it's short enough to plausibly be a filler sequence. A
+            // 13s delay at a 20ms cadence is within 0ms of a
+            // multiple, but 650 consecutive filler packets is not a
+            // realistic obfuscator output — so we skip it.
+            if (distanceMs <= tolerance && d <= maxFillerMs) {
                 matches += 1;
                 paddedIdx.push(i);
             }
@@ -1280,13 +1323,23 @@ function refineCadenceAtPeriod(delays, candidatePeriodMs, opts) {
 
     const periodMs = best.periodMs;
     const paddedIndices = best.paddedIndices;
+    // Mirror of the filler ceiling we applied inside the refine loop.
+    // We need it again here when building keystrokeDelaysMs so a
+    // long-but-not-filler delay keeps its original magnitude
+    // instead of being squashed to its 0ms residue.
+    const maxFillerMs = periodMs * maxFillerMultiplier;
     let snappedDelaysMs = null;
     let keystrokeDelaysMs = null;
     if (snap) {
         // snappedDelaysMs preserves interval count: each input delay
-        // becomes its residue (delay - round(delay/period)*period). The
-        // decoder can still consume it, but the values are now small.
+        // becomes its residue (delay - round(delay/period)*period).
+        // Long real pauses that exceed the filler ceiling are kept at
+        // their original magnitude — their residue is meaningless
+        // (a 13s gap = 0ms residue) and would silently collapse the
+        // boundary. The decoder downstream expects to see the real
+        // pause length so it can split on it.
         snappedDelaysMs = delays.map((d) => {
+            if (d > maxFillerMs) return d;
             const rounded = Math.round(d / periodMs);
             return d - rounded * periodMs;
         });
