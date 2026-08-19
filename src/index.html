@@ -1155,6 +1155,21 @@ No decrypted TLS/SSL output yet.</pre>
                   <input type="range" id="crypt-openssh-chunker-min-boundary" min="0" max="1000" step="1" value="100"
                     title="Minimum inter-keystroke gap (ms) the chunker treats as a Return boundary. The slider uses a non-linear curve so sub-100ms values have 1ms resolution (where it matters for distinguishing typing pauses from keystroke bursts) and 100-2000ms values use ~2ms resolution. This slider is authoritative — any value you set is used directly as the threshold. The slider does NOT update the analysis panel while you drag (that caused the page to jump around); click 'Re-analyze' to apply the slider's value to the full Markhov pipeline.">
                   <span id="crypt-openssh-chunker-min-boundary-label" class="crypt-openssh-deobf-value">150ms</span>
+                  <!-- Max keystroke packet: largest c2s packet size
+                       (bytes) the chunker still treats as a single
+                       keystroke. SSH packets in the 50–100 byte range
+                       often hold terminal escape sequences / control
+                       codes that aren't real keystrokes; lower the
+                       slider to filter them out. Range 10–150B with
+                       1B step. Only affects the raw indexed stream
+                       (peeled streams bypass this knob because the
+                       padding detector already filtered filler). -->
+                  <label class="crypt-key-type-label" for="crypt-openssh-chunker-max-packet">
+                    Max keystroke packet
+                  </label>
+                  <input type="range" id="crypt-openssh-chunker-max-packet" min="10" max="150" step="1" value="100"
+                    title="Largest c2s packet (bytes) the chunker still counts as a single keystroke. SSH packets in the 50–100 byte range often hold terminal escape sequences or control codes rather than real keystrokes — lower this slider to filter them out. Only affects the raw indexed stream; peeled streams bypass this knob because the padding detector has already removed filler.">
+                  <span id="crypt-openssh-chunker-max-packet-label" class="crypt-openssh-deobf-value">100B</span>
                   <span id="crypt-openssh-chunker-chunk-count"
                     class="crypt-openssh-deobf-value crypt-openssh-chunker-count"></span>
                   <button id="crypt-openssh-chunker-apply-btn" class="crypt-btn crypt-btn-small"

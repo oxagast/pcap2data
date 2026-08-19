@@ -594,6 +594,15 @@ function createCryptPanel({
     const out = [];
     let prevTs = null;
     let idx = 0;
+    // Cap on packet length before pushing to the delay stream.
+    // SSH packets larger than this are presumed to be terminal
+    // escape sequences or control codes (not real keystrokes) and
+    // are filtered out. The cap is the chunker's
+    // ``maxKeystrokePacket`` knob; peeled streams bypass this and
+    // push every entry unchanged because the padding detector has
+    // already removed filler there. ``pktLenMax`` is read once
+    // here so the inner loop avoids the closure lookup.
+    const pktLenMax = Math.max(0, Number(chunkerSettings.maxKeystrokePacket) || 0);
     for (let i = 0; i < filtered.length; i += 1) {
       const pkt = filtered[i];
       if (pkt.timestamp === null || pkt.timestamp === undefined) {
@@ -609,6 +618,19 @@ function createCryptPanel({
               if (!Number.isFinite(pktLen)) pktLen = null;
             } catch (_e) {
               pktLen = null;
+            }
+            // Apply the max-keystroke-packet cap. If the cap is
+            // 0 or missing we leave the entry alone (defensive —
+            // a 0 cap would otherwise drop every packet). We
+            // keep the entry's packetLength value as captured so
+            // downstream consumers can still see the raw size
+            // when they need it; the filter only removes the
+            // entry from the delay stream.
+            if (pktLenMax > 0 && Number.isFinite(pktLen) && pktLen > pktLenMax) {
+              prevTs = pkt.timestamp;
+              idx += 1;
+              // eslint-disable-next-line no-continue
+              continue;
             }
             out.push({ delay: d, index: idx, packetLength: pktLen });
           }
@@ -697,6 +719,14 @@ function createCryptPanel({
     const out = [];
     let prevTs = null;
     let idx = 0;
+    // Read the max-keystroke-packet cap once per call so the
+    // inner loop avoids the closure lookup on every packet.
+    // The cap only filters the raw indexed stream; peeled
+    // streams bypass it because the padding detector has
+    // already removed filler (so packetLength is not
+    // meaningful there). A cap of 0 or missing means "no
+    // filtering" — defensive against an unset slider.
+    const pktLenMax = Math.max(0, Number(chunkerSettings.maxKeystrokePacket) || 0);
     for (const pkt of packets) {
       if (pkt.timestamp === null || pkt.timestamp === undefined) {
         idx += 1;
@@ -713,6 +743,19 @@ function createCryptPanel({
             if (!Number.isFinite(pktLen)) pktLen = null;
           } catch (_e) {
             pktLen = null;
+          }
+          // Apply the max-keystroke-packet cap. The packet's
+          // measured length must be a real, finite number
+          // greater than the cap for the entry to be dropped;
+          // null / unknown lengths (which usually mean the
+          // backend didn't surface a packet.info blob for this
+          // packet) pass through untouched so we don't lose
+          // coverage when the metadata is missing.
+          if (pktLenMax > 0 && Number.isFinite(pktLen) && pktLen > pktLenMax) {
+            prevTs = pkt.timestamp;
+            idx += 1;
+            // eslint-disable-next-line no-continue
+            continue;
           }
           out.push({ delay: d, index: idx, packetLength: pktLen });
         }
@@ -761,6 +804,17 @@ function createCryptPanel({
     // Minimum gap to count as a new command (int, default 150ms).
     // Was hardcoded as 150 inside findReturnChunks.
     minCommandBoundary: 150,
+    // Largest c2s packet (bytes) the chunker still counts as a
+    // single keystroke. SSH packets in the 50–100 byte range often
+    // hold terminal escape sequences / control codes that aren't
+    // real keystrokes; dropping packets whose length exceeds this
+    // cap keeps those packets out of the delay stream. Default 100
+    // matches the historical v2 behaviour (no filtering). The
+    // slider in the OpenSSH panel mutates this live. Only
+    // affects the raw indexed stream — peeled streams bypass
+    // this knob because the padding detector has already removed
+    // filler, so packet lengths are not meaningful there.
+    maxKeystrokePacket: 100,
   };
   // Most-recent dynamic threshold computed by findReturnChunks.
   // Surfaced in the chunker preview so the user can see what the
@@ -2094,6 +2148,37 @@ function createCryptPanel({
         }
         if (chunkerBoundaryLabelEl) {
           chunkerBoundaryLabelEl.textContent = `${chunkerSettings.minCommandBoundary}ms`;
+        }
+      });
+    }
+    // Max-keystroke-packet slider. Unlike the min-gap-floor
+    // slider this one is linear (the slider's underlying range
+    // attribute is already the byte cap, no curve). The cap is
+    // applied at the delaysWithIdx push sites below; it filters
+    // out packets whose measured length exceeds the cap, which
+    // are assumed to be terminal escape sequences / control codes
+    // rather than real keystrokes. Range 10–150 bytes with 1B
+    // step. The slider itself does not retrigger the analysis —
+    // the user clicks "Re-analyze" to apply the new value.
+    const chunkerMaxPacketEl = document.getElementById("crypt-openssh-chunker-max-packet");
+    const chunkerMaxPacketLabelEl = document.getElementById("crypt-openssh-chunker-max-packet-label");
+    if (chunkerMaxPacketEl) {
+      const initialMax = Number(chunkerMaxPacketEl.value);
+      if (Number.isFinite(initialMax) && initialMax >= 10 && initialMax <= 150) {
+        chunkerSettings.maxKeystrokePacket = Math.round(initialMax);
+      }
+    }
+    if (chunkerMaxPacketLabelEl) {
+      chunkerMaxPacketLabelEl.textContent = `${chunkerSettings.maxKeystrokePacket}B`;
+    }
+    if (chunkerMaxPacketEl) {
+      chunkerMaxPacketEl.addEventListener("input", () => {
+        const bytes = Number(chunkerMaxPacketEl.value);
+        if (Number.isFinite(bytes) && bytes >= 10 && bytes <= 150) {
+          chunkerSettings.maxKeystrokePacket = Math.round(bytes);
+        }
+        if (chunkerMaxPacketLabelEl) {
+          chunkerMaxPacketLabelEl.textContent = `${chunkerSettings.maxKeystrokePacket}B`;
         }
       });
     }
