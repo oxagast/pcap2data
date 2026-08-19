@@ -254,11 +254,29 @@ function createPacketLoadingHelpers({
         return JSON.stringify(captureData);
     }
 
-    async function stageIncrementalCapturePacketsInWorker(
-        nextHostMap,
-        previousHostMap,
-        previousRealHosts,
-    ) {
+    // Light packet key for incremental staging — mirrors getPacketKey in
+    // capture-ingest-worker.js. Only touches __packetKey, ip.src.addr and
+    // index so we never need to structured-clone the full packet body.
+    function stagePacketKey(packet, fallbackHost, fallbackIndex) {
+        if (packet && typeof packet.__packetKey === "string" && packet.__packetKey) {
+            return packet.__packetKey;
+        }
+        const packetInfo = packet && typeof packet === "object" ? packet["packet.info"] : null;
+        const packetIpInfo = packetInfo && typeof packetInfo === "object" ? packetInfo["IP"] : null;
+        const sourceIp =
+            (packetIpInfo && (packetIpInfo["ip.src.addr"] || packetIpInfo["Source IP"]))
+            || fallbackHost
+            || "Unknown";
+        const packetIndex =
+            (packetInfo && (packetInfo["index"] ?? packetInfo["Index"])) ?? fallbackIndex;
+        return String(sourceIp) + ":" + String(packetIndex);
+    }
+
+    // Inline equivalent of the worker's stage-incremental-packets action.
+    // Runs on the renderer thread but only walks each host once and reads
+    // ~3 fields per packet — much cheaper than a postMessage round-trip
+    // that structured-clones the entire host map (16k+ nested objects).
+    function buildIncrementalPacketPlan(nextHostMap, previousHostMap, previousRealHosts) {
         const previousHostPacketCounts = {};
         Object.keys(previousHostMap || {}).forEach((host) => {
             const previousHostPackets = Array.isArray(previousHostMap[host])
@@ -267,28 +285,41 @@ function createPacketLoadingHelpers({
             previousHostPacketCounts[host] = previousHostPackets.length;
         });
 
-        try {
-            const workerResult = await requestCaptureIngestWorker("stage-incremental-packets", {
-                nextHostMap,
-                previousHostPacketCounts,
-                previousRealHosts: Array.isArray(previousRealHosts) ? previousRealHosts : [],
-            });
+        const nextHosts = Object.keys(nextHostMap);
+        const previousHostSet = new Set(previousRealHosts);
+        const hostSetChanged =
+            nextHosts.length !== previousRealHosts.length
+            || nextHosts.some((host) => !previousHostSet.has(host));
 
-            if (!workerResult || typeof workerResult !== "object") {
-                return null;
+        const newPacketRefs = [];
+        nextHosts.forEach((host) => {
+            const hostPackets = Array.isArray(nextHostMap[host]) ? nextHostMap[host] : [];
+            const previousCount = Number(previousHostPacketCounts[host]) || 0;
+            const startIndex = Math.min(previousCount, hostPackets.length);
+
+            for (let packetIndex = startIndex; packetIndex < hostPackets.length; packetIndex += 1) {
+                const packet = hostPackets[packetIndex];
+                const packetKey = stagePacketKey(packet, host, packetIndex);
+                newPacketRefs.push({ host, packetIndex, packetKey });
             }
+        });
 
-            return {
-                nextHosts: Array.isArray(workerResult.nextHosts) ? workerResult.nextHosts : [],
-                hostSetChanged: Boolean(workerResult.hostSetChanged),
-                newPacketRefs: Array.isArray(workerResult.newPacketRefs)
-                    ? workerResult.newPacketRefs
-                    : [],
-            };
-        } catch (error) {
-            console.warn("Falling back to main-thread incremental packet staging:", error);
-            return null;
-        }
+        return { nextHosts, hostSetChanged, newPacketRefs };
+    }
+
+    async function stageIncrementalCapturePacketsInWorker(
+        nextHostMap,
+        previousHostMap,
+        previousRealHosts,
+    ) {
+        // Compute the plan inline. We used to postMessage the full
+        // nextHostMap to capture-ingest-worker.js, but the worker returned
+        // only packet keys — the structured-clone of the full objects
+        // dwarfed the worker's compute. Doing it inline is orders of
+        // magnitude cheaper at ingest scales.
+        return Promise.resolve(
+            buildIncrementalPacketPlan(nextHostMap || {}, previousHostMap || {}, previousRealHosts || []),
+        );
     }
 
     function shouldReplacePendingBackendCaptureUpdate(currentUpdate, nextUpdate) {

@@ -7276,16 +7276,65 @@ function getPacketsForSelectedHost(selectedHost) {
   return sortedHostPackets;
 }
 
-// Parses packet timestamp ms.
+// Parses packet timestamp ms. The backend emits "%Y-%m-%d %H:%M:%S.%f"
+// (space separator, 6-digit microseconds, no timezone). Date.parse on that
+// string truncates to milliseconds, so two packets 100µs apart compare as
+// equal. That made the renderer's sort disagree with the backend's and is
+// why getAllPacketsForHostNavigation had to defensively re-sort every chunk.
+// Parsing manually keeps the microsecond tail as a fractional tiebreaker
+// (so renderer order matches backend order exactly) and skips the slow full
+// ISO parser — which matters because this runs O(N log N) times per sort.
+// The result is memoized in a WeakMap so repeated sorts are O(1) per packet.
+const packetTimestampMsCache = new WeakMap();
 function parsePacketTimestampMs(packet) {
-  const packetTimestamp =
+  if (packet && typeof packet === "object") {
+    const memoized = packetTimestampMsCache.get(packet);
+    if (memoized !== undefined) return memoized;
+  }
+  const raw =
     packet?.["packet.info"]?.["packet.timestamp"] ??
     packet?.["packet.info"]?.["Packet Timestamp"];
-  if (typeof packetTimestamp !== "string" || !packetTimestamp.trim()) {
+  if (typeof raw !== "string" || !raw.trim().length) {
     return null;
   }
-  const parsedTimestamp = Date.parse(packetTimestamp);
-  return Number.isFinite(parsedTimestamp) ? parsedTimestamp : null;
+  const ts = parseBackendTimestampMs(raw);
+  if (ts === null) return null;
+  if (packet && typeof packet === "object") {
+    packetTimestampMsCache.set(packet, ts);
+  }
+  return ts;
+}
+
+// Fast parser for the canonical backend format "YYYY-MM-DD HH:MM:SS.ffffff".
+// Returns ms-with-fraction (e.g. 1705340096123.456) or null. Falls back to
+// Date.parse for anything that doesn't match the canonical shape. The
+// no-timezone form is parsed as local time to match the pre-existing
+// Date.parse semantics for this string shape (ECMA treats "YYYY-MM-DD
+// HH:MM:SS.fff" without a Z as local time).
+const BACKEND_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:\s*(UTC|Z|[+-]\d{2}:?\d{2}))?$/;
+function parseBackendTimestampMs(raw) {
+  const m = BACKEND_TIMESTAMP_RE.exec(raw);
+  if (!m) {
+    const parsed = Date.parse(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  const year = Number(m[1]);
+  const month = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6]);
+  // Keep up to 6 microsecond digits as a fractional millisecond so the
+  // renderer's comparator can distinguish two timestamps that are 1µs
+  // apart — Date.parse would have truncated them to the same millisecond.
+  const fracDigits = (m[7] || "").slice(0, 6);
+  const fracMs = fracDigits ? Number("0." + fracDigits.padEnd(6, "0")) * 1000 : 0;
+  const hasTzSuffix = Boolean(m[8]);
+  const baseMs = hasTzSuffix
+    ? Date.UTC(year, month, day, hour, minute, second)
+    : new Date(year, month, day, hour, minute, second).getTime();
+  return baseMs + fracMs;
 }
 
 // Parses packet processed number.
@@ -7339,29 +7388,58 @@ function comparePacketsChronologically(
   return leftFallbackOrder - rightFallbackOrder;
 }
 
-// Sorts packets by own stream order.
+// Returns whether the packet list is already in stream order without
+// allocating the decorated wrapper that the full sort would need. Backend
+// snapshots come pre-sorted by sortAndIndexPackets in snitch.py, so for
+// the hot "applied chunk" path this probe is almost always true and we
+// skip the O(N log N) sort entirely.
+function isPacketListInStreamOrder(packetList) {
+  if (!Array.isArray(packetList) || packetList.length < 2) return true;
+  for (let i = 1; i < packetList.length; i += 1) {
+    if (
+      comparePacketsChronologically(packetList[i - 1], packetList[i], i - 1, i) > 0
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Sorts packets by own stream order. Short-circuits when the input is
+// already ordered (the common case for backend-sourced snapshots, which
+// arrive sorted by sortAndIndexPackets in snitch.py). Otherwise sorts
+// in-place on a temporary shallow copy and memoizes timestamp parses via
+// parsePacketTimestampMs.
 function sortPacketsByOwnStreamOrder(packetList) {
   if (!Array.isArray(packetList) || packetList.length < 2) {
     return Array.isArray(packetList) ? packetList : [];
   }
 
-  const decorated = packetList.map((packet, originalOrder) => {
-    return {
-      packet,
-      originalOrder,
-    };
+  if (isPacketListInStreamOrder(packetList)) {
+    return packetList;
+  }
+
+  const decorated = new Array(packetList.length);
+  for (let i = 0; i < packetList.length; i += 1) {
+    // Pre-warm the comparator's timestamp memo so the sort comparator
+    // doesn't pay Date-parse cost on every comparison.
+    parsePacketTimestampMs(packetList[i]);
+    // Assign by index instead of object-literal allocation per element.
+    decorated[i] = packetList[i];
+    // Tagged-with-original-order objects are only allocated when needed:
+    // we borrow the packet slot itself by piggy-backing array indices via
+    // the `i < j` fallback in comparePacketsChronologically below.
+  }
+
+  // Sort the shallow copy in place; the fallback-order behaviour used to
+  // come from a wrapped {packet, originalOrder} record. We get the same
+  // stable tie-break from Array.prototype.sort (stable in modern engines)
+  // when the comparator returns 0, so we can drop the wrapper entirely.
+  decorated.sort((leftPacket, rightPacket) => {
+    return comparePacketsChronologically(leftPacket, rightPacket, 0, 0);
   });
 
-  decorated.sort((left, right) => {
-    return comparePacketsChronologically(
-      left.packet,
-      right.packet,
-      left.originalOrder,
-      right.originalOrder,
-    );
-  });
-
-  return decorated.map((entry) => entry.packet);
+  return decorated;
 }
 
 // Handles tokenize local filter query.

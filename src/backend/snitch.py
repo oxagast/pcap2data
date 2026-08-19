@@ -82,6 +82,21 @@ if not EARLY_VERSION_ONLY_MODE:
     warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
         f"[Main] {cat.__name__} {msg}\n"
     )
+    # Suppress known ssl deprecation noise: getServBanner() runs per-host-per-port in
+    # a ThreadPoolExecutor, and Python's "module" warning filter re-emits across
+    # threads, spamming the renderer's activity log once per chunk. These specific
+    # ssl.* deprecations are pinned API choices in this codebase — log them once
+    # at startup, then silence.
+    warnings.filterwarnings(
+        "once",
+        message=r".*ssl\.PROTOCOL_TLSv1_2 is deprecated.*",
+        category=DeprecationWarning,
+    )
+    warnings.filterwarnings(
+        "once",
+        message=r".*ssl\.OP_NO_SSL.*/ssl\.OP_NO_TLS. options are deprecated.*",
+        category=DeprecationWarning,
+    )
 stopEvent = threading.Event()
 
 
