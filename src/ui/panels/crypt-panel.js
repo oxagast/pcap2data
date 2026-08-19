@@ -4416,8 +4416,10 @@ function createCryptPanel({
     // Build the plot data array - start with histogram and reference
     const plotData = [normalizedHistogram, normalizedReference];
 
-    // Add yellow obfuscation tick markers if padding was detected
-    // These appear as vertical dashed yellow lines at periodMs, 2*periodMs, 3*periodMs, etc.
+    // Add translucent gold band markers if padding was detected.
+    // Each band is centered on a multiple of the cadence (periodMs, 2*periodMs, ...)
+    // and is rendered below the histogram + reference traces so it reads as a
+    // soft backdrop rather than opaque tick lines.
     const hasPadding = paddingResult
       && paddingResult.detected
       && Number.isFinite(paddingResult.periodMs)
@@ -4435,34 +4437,36 @@ function createCryptPanel({
 
       paddingInfo = ` — ${periodMs}ms padding cadence (${(coverage * 100).toFixed(0)}%, ${nFiller} filler)`;
 
-      // Add yellow vertical dashed lines at each multiple of the period up to xMax
-      // Plotly shapes for vertical lines
+      // Add translucent yellow bands at each multiple of the period up to xMax.
+      // We use rect shapes (filled, near-transparent) rather than solid lines so the
+      // shading reads as a soft backdrop for the histogram/reference curves, and we
+      // pin them to layer="below" so they render UNDER both data traces instead of
+      // obscuring them.
+      const padHalfWidth = Math.max(1, periodMs * 0.15); // band width: 30% of period
       for (let p = periodMs; p <= xMax + periodMs; p += periodMs) {
         shapes.push({
-          type: "line",
-          x0: p,
-          x1: p,
+          type: "rect",
+          x0: p - padHalfWidth,
+          x1: p + padHalfWidth,
           y0: 0,
           y1: 1,
           yref: "paper",  // 0 to 1 = full height
-          line: {
-            color: "#FFD700",  // Gold/yellow
-            width: 2,
-            dash: "dash",
-          },
+          fillcolor: "rgba(255, 215, 0, 0.18)",  // gold, translucent
+          line: { width: 0 },                     // no border
+          layer: "below",                         // behind histogram + reference trace
         });
       }
 
-      // Also add a scatter trace for the legend entry (shapes don't appear in legend)
+      // Also add a scatter trace for the legend entry (shapes don't appear in legend).
+      // Match the legend swatch to the shaded band so the user sees the same gold tone.
       const legendTrace = {
         x: [],
         y: [],
         mode: "lines",
         name: `Padding cadence (${periodMs}ms)`,
         line: {
-          color: "#FFD700",
-          width: 2,
-          dash: "dash",
+          color: "rgba(255, 215, 0, 0.85)",
+          width: 6,
         },
         showlegend: true,
       };
@@ -4483,7 +4487,7 @@ function createCryptPanel({
       legend: { orientation: "h", y: -0.2 },
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
-      shapes: shapes,  // Yellow vertical lines for padding cadence
+      shapes: shapes,  // Translucent yellow bands behind traces (layer="below")
     };
 
     if (typeof window.Plotly !== "undefined") {
