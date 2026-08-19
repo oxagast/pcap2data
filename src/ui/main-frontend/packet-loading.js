@@ -348,25 +348,16 @@ function createPacketLoadingHelpers({
     }
 
     function shouldApplyIncrementalBackendSnapshot(payload) {
+        // Once the first chunk is loaded, defer all intermediate snapshots
+        // until the backend signals completion. The renderer shows the
+        // early-yield partial session and waits for the backend to finish,
+        // then does a single clean full swap. This avoids the per-chunk
+        // incremental-merge cost that caused the choke around 16k packets.
         if (!backendProgressState.firstChunkLoaded || payload?.complete) {
             return true;
         }
 
-        const processedPackets = Number(payload?.processedPackets) || 0;
-        const packetThreshold = Math.max(
-            (Number(payload?.chunkSize) || getBackendPacketChunkSize()) * 8,
-            getBackendIncrementalRefreshMinPackets(),
-        );
-        const packetDelta = Math.max(
-            0,
-            processedPackets - state.backendLastAppliedSnapshotProcessedPackets,
-        );
-        const elapsedMs = Math.max(0, performance.now() - state.backendLastAppliedSnapshotAtMs);
-
-        return (
-            packetDelta >= packetThreshold
-            || elapsedMs >= getBackendIncrementalRefreshMinIntervalMs()
-        );
+        return false;
     }
 
     function markAppliedBackendSnapshot(payload) {

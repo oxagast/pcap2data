@@ -72,6 +72,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendJsonDataEmitMinIntervalMs: 800,
         backendIncrementalRefreshMinIntervalMs: 1500,
         backendIncrementalRefreshMinPackets: 4000,
+        // Minimum packet count before the renderer loads the first backend
+        // snapshot. ~12000 packets gives the user meaningful data to explore
+        // while the backend finishes. When the backend completes, the
+        // renderer does a clean full swap — no expensive incremental merge.
+        backendEarlyYieldPacketThreshold: 12000,
         frontendIngestThreadingEnabled: true,
         frontendIngestWorkerThreads: DEFAULT_FRONTEND_INGEST_WORKER_THREADS,
         mapProjectionZoomX: MAP_PROJECTION_CALIBRATION.zoomX,
@@ -343,6 +348,11 @@ function normalizeSettings(rawSettings = {}) {
                 debug.backendIncrementalRefreshMinPackets,
                 debugDefaults.backendIncrementalRefreshMinPackets,
                 100,
+            ),
+            backendEarlyYieldPacketThreshold: toPositiveInteger(
+                debug.backendEarlyYieldPacketThreshold,
+                debugDefaults.backendEarlyYieldPacketThreshold,
+                1,
             ),
             frontendIngestThreadingEnabled:
                 typeof debug.frontendIngestThreadingEnabled === "boolean"

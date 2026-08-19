@@ -568,6 +568,7 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
         listEntries,
         captureData: {
             host: hostObject,
+            listEntries,
             "final.summary": finalSummary,
         },
         sessionState,
@@ -661,6 +662,7 @@ async function buildStoreFromSource(sourcePath) {
         listEntries,
         captureData: {
             host: hostObject,
+            listEntries,
             "final.summary": finalSummary,
         },
         sessionState,
@@ -770,6 +772,7 @@ async function buildStoreFromJsonText(jsonText) {
         listEntries,
         captureData: {
             host: hostObject,
+            listEntries,
             "final.summary": finalSummary,
         },
         sessionState,
