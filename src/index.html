@@ -1989,6 +1989,19 @@ No keystore entries saved.</pre>
                   Experimental hybrid transport. Backend sends incremental JSON snapshots over HTTP response payloads
                   instead of writing hosts-*.json files to disk.
                 </div>
+
+                <label for="settings-backend-http-progress-log-interval-ms">
+                  HTTP progress log throttle:
+                  <output id="settings-backend-http-progress-log-interval-ms-display"
+                    for="settings-backend-http-progress-log-interval-ms">0 ms (every chunk)</output>
+                </label>
+                <input id="settings-backend-http-progress-log-interval-ms" type="range" min="0" max="5000" step="100" />
+                <div class="settings-help-text">
+                  Minimum time between emitted <code>[Bridge] HTTP progress</code> log lines.
+                  Lower values log more often; higher values reduce activity-log traffic during long
+                  captures. <code>0 ms</code> = log every chunk (default behavior). Renderer data flow
+                  is unaffected — this only throttles the log line.
+                </div>
                 <div class="settings-help-text">
                   <em>Note:</em> The VirusTotal API key has moved to the
                   <strong>API Keys</strong> subtab.

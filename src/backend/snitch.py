@@ -82,21 +82,6 @@ if not EARLY_VERSION_ONLY_MODE:
     warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
         f"[Main] {cat.__name__} {msg}\n"
     )
-    # Suppress known ssl deprecation noise: getServBanner() runs per-host-per-port in
-    # a ThreadPoolExecutor, and Python's "module" warning filter re-emits across
-    # threads, spamming the renderer's activity log once per chunk. These specific
-    # ssl.* deprecations are pinned API choices in this codebase — log them once
-    # at startup, then silence.
-    warnings.filterwarnings(
-        "once",
-        message=r".*ssl\.PROTOCOL_TLSv1_2 is deprecated.*",
-        category=DeprecationWarning,
-    )
-    warnings.filterwarnings(
-        "once",
-        message=r".*ssl\.OP_NO_SSL.*/ssl\.OP_NO_TLS. options are deprecated.*",
-        category=DeprecationWarning,
-    )
 stopEvent = threading.Event()
 
 
@@ -1015,7 +1000,15 @@ def buildFallbackPacketEntry(p, packetIndex, errorMessage=""):
             "network.proto": getPacketNetworkProtocolLabel(networkLayer),
         }
     elif (p.haslayer("ICMP") or getPacketNetworkProtocolNumber(networkLayer) == 58) and networkLayer is not None:
-        icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
+        # Guard the layer access: ICMPv6 can report haslayer("ICMP") True
+        # yet raise on p["ICMP"] (see the main packetLoop ICMP branch).
+        try:
+            if p.haslayer("ICMP"):
+                icmpLayer = p["ICMP"]
+            else:
+                icmpLayer = networkLayer.payload
+        except Exception:
+            icmpLayer = networkLayer.payload
         rawPayload = bytes(icmpLayer)
         protocolKey = "ICMP"
         dstPortStr = "icmp"
@@ -3700,8 +3693,18 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 transportSection = sctpSection
                 protocolKey = "SCTP"
             elif isIcmp:
-                # ICMP transport section
-                icmpLayer = p["ICMP"] if p.haslayer("ICMP") else networkLayer.payload
+                # ICMP transport section. Match the guarded access used
+                # earlier (see ~line 3254): ICMPv6 packets can report
+                # haslayer("ICMP") True yet raise on p["ICMP"], so fall
+                # back to networkLayer.payload in that case.
+                try:
+                    if p.haslayer("ICMP"):
+                        icmpLayer = p["ICMP"]
+                    else:
+                        icmpLayer = networkLayer.payload
+                except Exception:
+                    icmpLayer = networkLayer.payload
+                icmpWireLen = len(bytes(icmpLayer))
                 icmpTypeMap = {
                     0: "Echo Reply",
                     3: "Destination Unreachable",
@@ -3751,9 +3754,9 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     "transport.icmp.id": icmpId,
                     "transport.icmp.seq": icmpSeq,
                     "transport.icmp.chksum": icmpChksum,
-                    "Wire length": len(p["ICMP"]),
-                    "wire.len": len(p["ICMP"]),
-                    "transport.len": len(p["ICMP"]),
+                    "Wire length": icmpWireLen,
+                    "wire.len": icmpWireLen,
+                    "transport.len": icmpWireLen,
                     "transport.proto": "ICMP",
                 }
                 protocolKey = "ICMP"
