@@ -59,6 +59,11 @@ const DEFAULT_SETTINGS = Object.freeze({
         tcpHost: "127.0.0.1",
         tcpPort: 9020,
         forceLegacySpawn: false,
+        // Minimum milliseconds between emitted "[Bridge] HTTP progress ..." log lines.
+        // 0 = log every chunk (current default behavior). Higher values throttle
+        // the activity-log spam for long captures. Data flow to the renderer is
+        // unaffected — this only gates the log line.
+        httpProgressLogMinIntervalMs: 0,
     },
     debug: {
         bsonGzipSessionEnabled: true,
@@ -305,6 +310,11 @@ function normalizeSettings(rawSettings = {}) {
                 typeof backend.forceLegacySpawn === "boolean"
                     ? backend.forceLegacySpawn
                     : backendDefaults.forceLegacySpawn,
+            httpProgressLogMinIntervalMs: toPositiveInteger(
+                backend.httpProgressLogMinIntervalMs,
+                backendDefaults.httpProgressLogMinIntervalMs,
+                0,
+            ),
         },
         debug: {
             bsonGzipSessionEnabled:

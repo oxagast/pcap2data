@@ -5679,6 +5679,14 @@ console.log = (...args) => {
   );
 };
 
+// Set of "[Main] DeprecationWarning ..."-style backend warning signatures already
+// logged this session. The backend emits one of these per chunk (the warnings
+// module re-fires under ThreadPoolExecutor contention), so we keep only the
+// first occurrence of each unique signature and drop repeats before they reach
+// the activity log. Lives at module scope so it survives across backend
+// (re)spawns in this GUI session.
+const seenBackendDeprecationWarnings = new Set();
+
 global.logBackend = (...args) => {
   const message = formatConsoleArgs(args);
   if (!message) return;
@@ -5695,6 +5703,16 @@ global.logBackend = (...args) => {
     }
     if (line.includes("warnings.warn")) {
       return;
+    }
+    // Dedupe "[Main] <WarningCategory> <message>" backend warnings — log the
+    // first of each unique signature, drop subsequent repeats.
+    const deprecationMatch = line.match(/^\[Main\]\s+([A-Za-z]+Warning)\s+(.*)$/);
+    if (deprecationMatch) {
+      const warningKey = `${deprecationMatch[1]}:${deprecationMatch[2]}`;
+      if (seenBackendDeprecationWarnings.has(warningKey)) {
+        return;
+      }
+      seenBackendDeprecationWarnings.add(warningKey);
     }
     appendActivityLogLine(`[${timestamp}] [Console][Snitch]${line}`);
   });

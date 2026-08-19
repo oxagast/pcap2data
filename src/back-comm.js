@@ -20,6 +20,7 @@ let entries = [];
 const DEFAULT_HOST_CHUNK_SIZE = 250;
 const VALID_HOST_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000]);
 const DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS = 800;
+const DEFAULT_HTTP_PROGRESS_LOG_MIN_INTERVAL_MS = 0;
 const JSON_DATA_EMIT_MIN_PACKET_DELTA = 2000;
 const BACKEND_HTTP_HOST = "127.0.0.1";
 const BACKEND_HTTP_PORT = 9020;
@@ -53,6 +54,7 @@ const jsonDataEmitTimerByJob = new Map();
 const lastJsonDataEmitAtMsByJob = new Map();
 const lastJsonDataEmitProcessedPacketsByJob = new Map();
 let currentJsonDataEmitMinIntervalMs = DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
+let currentHttpProgressLogMinIntervalMs = DEFAULT_HTTP_PROGRESS_LOG_MIN_INTERVAL_MS;
 const bridgeProgressLogStateByKey = new Map();
 let activeBackendRunCount = 0;
 
@@ -77,6 +79,7 @@ function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete,
   const state = bridgeProgressLogStateByKey.get(progressKey) || {
     lastPercent: -1,
     lastProcessed: 0,
+    lastEmittedAtMs: 0,
   };
   bridgeProgressLogStateByKey.set(progressKey, state);
   const processed = Math.max(0, Number(processedPackets) || 0);
@@ -86,7 +89,19 @@ function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete,
   if (isComplete) {
     state.lastPercent = -1;
     state.lastProcessed = processed;
+    state.lastEmittedAtMs = Date.now();
     return true;
+  }
+
+  // Optional time-based throttle for "[Bridge] HTTP progress" logs. 0 means
+  // "log every chunk" (legacy default); higher values dedupe lines emitted
+  // within the throttle window. Renderer data flow is unaffected.
+  const throttleMs = Math.max(0, Number(currentHttpProgressLogMinIntervalMs) || 0);
+  if (throttleMs > 0 && state.lastEmittedAtMs > 0) {
+    const elapsedSinceLastEmit = Date.now() - state.lastEmittedAtMs;
+    if (elapsedSinceLastEmit < throttleMs) {
+      return false;
+    }
   }
 
   if (total > 0) {
@@ -96,6 +111,7 @@ function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete,
     }
     state.lastPercent = percent;
     state.lastProcessed = processed;
+    state.lastEmittedAtMs = Date.now();
     return true;
   }
 
@@ -103,6 +119,7 @@ function shouldLogBridgeProgress(kind, processedPackets, totalPackets, complete,
     return false;
   }
   state.lastProcessed = processed;
+  state.lastEmittedAtMs = Date.now();
   return true;
 }
 
@@ -1278,12 +1295,21 @@ function normalizeBackendTransportOptions(rawOptions = {}) {
     Number.isFinite(parsedJsonDataEmitMinIntervalMs) && parsedJsonDataEmitMinIntervalMs >= 250
       ? parsedJsonDataEmitMinIntervalMs
       : DEFAULT_JSON_DATA_EMIT_MIN_INTERVAL_MS;
+  const parsedHttpProgressLogMinIntervalMs = Number.parseInt(
+    String(source.httpProgressLogMinIntervalMs ?? currentHttpProgressLogMinIntervalMs),
+    10,
+  );
+  const httpProgressLogMinIntervalMs =
+    Number.isFinite(parsedHttpProgressLogMinIntervalMs) && parsedHttpProgressLogMinIntervalMs >= 0
+      ? parsedHttpProgressLogMinIntervalMs
+      : DEFAULT_HTTP_PROGRESS_LOG_MIN_INTERVAL_MS;
   return {
     tcpHost: host,
     tcpPort: port,
     forceLegacySpawn,
     useHttpDataSnapshots,
     jsonDataEmitMinIntervalMs,
+    httpProgressLogMinIntervalMs,
   };
 }
 
@@ -1297,6 +1323,7 @@ function applyBackendTransportOptions(options = {}) {
     currentBackendHttpPort = normalized.tcpPort;
   }
   currentJsonDataEmitMinIntervalMs = normalized.jsonDataEmitMinIntervalMs;
+  currentHttpProgressLogMinIntervalMs = normalized.httpProgressLogMinIntervalMs;
   return normalized;
 }
 

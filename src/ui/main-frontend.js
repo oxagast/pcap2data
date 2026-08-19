@@ -3453,6 +3453,12 @@ function syncSettingsFormFromState() {
   const backendHttpDataModeEnabledEl = document.getElementById(
     "settings-backend-http-data-mode-enabled",
   );
+  const backendHttpProgressLogIntervalMsEl = document.getElementById(
+    "settings-backend-http-progress-log-interval-ms",
+  );
+  const backendHttpProgressLogIntervalMsDisplayEl = document.getElementById(
+    "settings-backend-http-progress-log-interval-ms-display",
+  );
   const backendRefreshIntervalMsEl = document.getElementById(
     "settings-debug-backend-refresh-interval-ms",
   );
@@ -3613,6 +3619,21 @@ function syncSettingsFormFromState() {
     backendHttpDataModeEnabledEl.checked = Boolean(
       settings.debug.backendHttpDataModeEnabled,
     );
+  }
+  if (backendHttpProgressLogIntervalMsEl) {
+    const httpProgressLogIntervalMs = Number(
+      settings.backend?.httpProgressLogMinIntervalMs ??
+        DEFAULT_SETTINGS.backend.httpProgressLogMinIntervalMs,
+    );
+    backendHttpProgressLogIntervalMsEl.value = String(
+      Math.max(0, httpProgressLogIntervalMs),
+    );
+    if (backendHttpProgressLogIntervalMsDisplayEl) {
+      backendHttpProgressLogIntervalMsDisplayEl.textContent =
+        httpProgressLogIntervalMs === 0
+          ? "0 ms (every chunk)"
+          : `${httpProgressLogIntervalMs} ms`;
+    }
   }
   if (backendRefreshIntervalMsEl) {
     backendRefreshIntervalMsEl.value = String(
@@ -3873,6 +3894,9 @@ function readSettingsFormState() {
   const backendHttpDataModeEnabledEl = document.getElementById(
     "settings-backend-http-data-mode-enabled",
   );
+  const backendHttpProgressLogIntervalMsEl = document.getElementById(
+    "settings-backend-http-progress-log-interval-ms",
+  );
   const backendRefreshIntervalMsEl = document.getElementById(
     "settings-debug-backend-refresh-interval-ms",
   );
@@ -3980,6 +4004,9 @@ function readSettingsFormState() {
       forceLegacySpawn: backendForceLegacySpawnEl
         ? backendForceLegacySpawnEl.checked
         : DEFAULT_SETTINGS.backend.forceLegacySpawn,
+      httpProgressLogMinIntervalMs: backendHttpProgressLogIntervalMsEl
+        ? Number.parseInt(backendHttpProgressLogIntervalMsEl.value, 10) || 0
+        : DEFAULT_SETTINGS.backend.httpProgressLogMinIntervalMs,
     },
     debug: {
       bsonGzipSessionEnabled: bsonGzipSessionEnabledEl
@@ -4770,6 +4797,11 @@ function buildSettingsChangeSummaries(previousSettings, nextSettings) {
     "backendForceLegacySpawn",
     previousBackend.forceLegacySpawn,
     nextBackend.forceLegacySpawn,
+  );
+  pushChange(
+    "backendHttpProgressLogMinIntervalMs",
+    previousBackend.httpProgressLogMinIntervalMs,
+    nextBackend.httpProgressLogMinIntervalMs,
   );
   pushChange(
     "ungroupedListVirtualizationEnabled",
@@ -22692,6 +22724,32 @@ document
       `Settings updated backendHttpDataModeEnabled=${Boolean(event?.target?.checked)}`,
     );
   });
+
+{
+  const httpProgressLogIntervalSlider = document.getElementById(
+    "settings-backend-http-progress-log-interval-ms",
+  );
+  const httpProgressLogIntervalDisplay = document.getElementById(
+    "settings-backend-http-progress-log-interval-ms-display",
+  );
+  if (httpProgressLogIntervalSlider && httpProgressLogIntervalDisplay) {
+    const formatHttpProgressLogInterval = (value) => {
+      const ms = Math.max(0, Number.parseInt(String(value), 10) || 0);
+      return ms === 0 ? "0 ms (every chunk)" : `${ms} ms`;
+    };
+    // Live-update the displayed value as the user drags; only log on release.
+    httpProgressLogIntervalSlider.addEventListener("input", (event) => {
+      httpProgressLogIntervalDisplay.textContent = formatHttpProgressLogInterval(
+        event?.target?.value,
+      );
+    });
+    httpProgressLogIntervalSlider.addEventListener("change", (event) => {
+      const ms = Math.max(0, Number.parseInt(String(event?.target?.value), 10) || 0);
+      httpProgressLogIntervalDisplay.textContent = formatHttpProgressLogInterval(ms);
+      writeLogEntry(`Settings updated backendHttpProgressLogMinIntervalMs=${ms}`);
+    });
+  }
+}
 
 document
   .getElementById("settings-debug-backend-refresh-interval-ms")
