@@ -475,17 +475,6 @@ function writePacketLineSync(packetDataFd, writeOffset, packet) {
 }
 
 async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = null) {
-    ensureStoreDir();
-
-    const storeId = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}`;
-    const packetDataPath = path.join(CAPTURE_STORE_DIR, `${storeId}.packets.ndjson`);
-    const packetDataFd = fs.openSync(packetDataPath, "w+");
-
-    const refsByKey = new Map();
-    const hostPackets = new Map();
-    const listEntries = [];
-    let writeOffset = 0;
-
     const normalizedCaptureData = isObject(captureDataInput)
         ? isObject(captureDataInput["capture.data"])
             ? captureDataInput["capture.data"]
@@ -513,6 +502,10 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
             ? captureDataInput["session.state"]
             : null;
 
+    const refsByKey = new Map();
+    const hostPackets = new Map();
+    const listEntries = [];
+
     Object.keys(hostMap).forEach((host) => {
         const sourcePackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
         const packetStubs = [];
@@ -536,19 +529,10 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
                 length: -1,
             });
 
-            const result = writePacketLineSync(packetDataFd, writeOffset, value);
-            writeOffset += result.length;
-            const ref = refsByKey.get(packetKey);
-            if (ref) {
-                ref.offset = result.offset;
-                ref.length = result.length;
-            }
-
             listEntries.push(derivePacketListSummary(value, packetKey, host, hostPacketIndex));
         });
     });
 
-    fs.fsyncSync(packetDataFd);
     listEntries.sort(compareListEntries);
     applyStreamOrdering(listEntries);
 
@@ -558,10 +542,10 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
     });
 
     return {
-        storeId,
+        storeId: `mem-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`,
         sourcePath: "[capture-data]",
-        packetDataPath,
-        packetDataFd,
+        packetDataPath: null,
+        packetDataFd: null,
         refsByKey,
         hostPackets,
         packetCache: new Map(),
@@ -781,12 +765,14 @@ async function buildStoreFromJsonText(jsonText) {
 
 async function closeStore(store) {
     if (!store) return;
-    try {
-        fs.closeSync(store.packetDataFd);
-    } catch {
-        // Ignore close errors during replacement/cleanup.
+    if (store.packetDataFd) {
+        try {
+            fs.closeSync(store.packetDataFd);
+        } catch {
+            // Ignore close errors during replacement/cleanup.
+        }
+        fs.promises.rm(store.packetDataPath, { force: true }).catch(() => { });
     }
-    fs.promises.rm(store.packetDataPath, { force: true }).catch(() => { });
 }
 
 async function activateStore(nextStore) {
@@ -809,6 +795,16 @@ async function readPacketByKey(packetKey) {
 
     const cached = touchCachedPacket(store, packetKey);
     if (cached) return cached;
+
+    // In-memory store: no disk file, return the stub directly.
+    // The stub has all metadata; payload hex is not available (stripped at build time).
+    if (!store.packetDataFd) {
+        const packetList = store.hostPackets.get(ref.host);
+        if (!packetList || !packetList[ref.packetListIndex]) return null;
+        const stub = packetList[ref.packetListIndex];
+        addPacketToCache(store, packetKey, stub);
+        return stub;
+    }
 
     const buffer = Buffer.alloc(ref.length);
     fs.readSync(store.packetDataFd, buffer, 0, ref.length, ref.offset);
@@ -856,6 +852,7 @@ async function buildMaterializedCaptureData() {
                 packetStub && typeof packetStub.__packetKey === "string"
                     ? packetStub.__packetKey
                     : "";
+            // In-memory store: no disk file, use the stub directly.
             const packet = packetKey ? await readPacketByKey(packetKey) : null;
             materializedPackets.push(packet || packetStub);
         }
