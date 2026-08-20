@@ -25522,7 +25522,7 @@ async function processBackendJsonPathPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
+      `Backend final swap received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
     );
     logIngestionChunkTiming("path", "final-chunk-applied", payload, performance.now() - chunkStartTime);
   }
@@ -25709,7 +25709,7 @@ async function processBackendJsonDataPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
+      `Backend final swap received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
     );
     logIngestionChunkTiming("data", "final-chunk-applied", payload, performance.now() - chunkStartTime, {
       label: payload.label,
@@ -25768,14 +25768,26 @@ async function processBackendJsonDataPayload(payload) {
 
 // when the main.js returns the capture path from snitch.py
 window.jsonapi.onJsonPath((rawPayload) => {
+  // we need to ensure the frontend does not continue to consume
+  // packets after the threshold, to avoid cippling the UI performance
   const payload = normalizeBackendJsonPathPayload(rawPayload);
+  const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
+  // Always allow the final complete payload through — it's the "last swap"
+  // that replaces the early-yield partial session with the full data.
+  if (payload.processedPackets > 0 && pProcessed >= getBackendEarlyYieldPacketThreshold() && !payload.complete) return
+
   if (!payload || !payload.path) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("path", payload);
 });
 
 window.jsonapi.onJsonData((rawPayload) => {
+  // same here as above about the ui performance
   const payload = normalizeBackendJsonDataPayload(rawPayload);
+  const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
+  // Always allow the final complete payload through — it's the "last swap"
+  // that replaces the early-yield partial session with the full data.
+  if (payload.processedPackets > 0 && pProcessed >= getBackendEarlyYieldPacketThreshold() && !payload.complete) return
   if (!payload || !payload.captureData) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("data", payload);
@@ -25838,6 +25850,7 @@ function runSnitch(file, options = {}) {
   const backendOptions = {
     ...backendTransportOptions,
     allowUnknownMagicLoad: forceUnknownMagicLoad,
+    earlyYieldPacketThreshold: getBackendEarlyYieldPacketThreshold(),
   };
   // Pull the current wifi keystore entries so they ride along with the
   // backend run. The backend then decrypts 802.11 frames as they're
