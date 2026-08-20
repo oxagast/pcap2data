@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         themeId: "snitchbitch",
         convJsonIndentSpaces: 2,
         statusResetSeconds: 10,
-        backendPacketChunkSize: 2000,
+        backendPacketChunkSize: 500,
         backendWorkerThreads: DEFAULT_BACKEND_WORKER_THREADS,
         streamContextWarnPacketThreshold: 20,
         manualConvImportMaxBytes: 2 * 1024 * 1024,
@@ -73,10 +73,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         backendIncrementalRefreshMinIntervalMs: 1500,
         backendIncrementalRefreshMinPackets: 4000,
         // Minimum packet count before the renderer loads the first backend
-        // snapshot. ~12000 packets gives the user meaningful data to explore
+        // snapshot. ~5000 packets gives the user meaningful data to explore
         // while the backend finishes. When the backend completes, the
         // renderer does a clean full swap — no expensive incremental merge.
-        backendEarlyYieldPacketThreshold: 12000,
+        backendEarlyYieldPacketThreshold: 5000,
         frontendIngestThreadingEnabled: true,
         frontendIngestWorkerThreads: DEFAULT_FRONTEND_INGEST_WORKER_THREADS,
         mapProjectionZoomX: MAP_PROJECTION_CALIBRATION.zoomX,
