@@ -6550,9 +6550,8 @@ strong {
 .settings-themes-preview {
   width: 100%;
   height: 100%;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
+  object-fit: cover;
+  object-position: center;
   background-color: transparent;
 }
 
@@ -6567,6 +6566,10 @@ strong {
   font-family: "Courier New", Courier, monospace;
   pointer-events: none;
   background-color: var(--input-bg-color);
+}
+
+.settings-themes-preview-fallback[hidden] {
+  display: none !important;
 }
 
 .settings-themes-catalog-list {

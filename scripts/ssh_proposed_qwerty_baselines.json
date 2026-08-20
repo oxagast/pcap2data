@@ -98,7 +98,7 @@
       "baseline",
       "category_summary"
     ],
-    "last_updated": "2026-08-20T15:07:26+00:00",
+    "last_updated": "2026-08-20T17:17:12+00:00",
     "notes": "Top-level envelope for the QWERTY baseline artifact. Per-category blocks carry their own weight envelope; this block records artifact-wide provenance."
   },
   "schema_version": 2

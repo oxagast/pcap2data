@@ -9,7 +9,7 @@ const {
     calculateNetworkCorrelationScore,
     rankCorpusNetworkAware,
     SessionArtifactStore
-} = require('./src/ui/decoders/ssh-keystrokes/markov');
+} = require('../src/ui/decoders/ssh-keystrokes/markov');
 
 console.log('========================================');
 console.log('Testing Network Metadata Integration');
