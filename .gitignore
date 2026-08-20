@@ -4,6 +4,7 @@ dist
 out
 .npmrc
 src/PacketSnitch-Pro
+docs/PacketSnitch-Website
 src/backend/snitch
 src/backend/snitch.exe
 src/backend/snitch-extract

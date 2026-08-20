@@ -8,7 +8,7 @@ const desc =
 const vendor = "oxasploits, llc";
 const author = "Marshall Whittaker";
 const copyright = `Copyright (c) 2026 ${vendor}`;
-const homepage = "https://oxasploits.github.io/PacketSnitch/";
+const homepage = "https://packetsnitch.com/";
 const maintainer = "Marshall Whittaker <marshall@oxasploit.com>";
 
 function detectPlatformFamily() {
@@ -161,7 +161,7 @@ module.exports = {
       // weighted prior for SSH keystroke decoder candidates. The main
       // process loads it via the ``ssh-shell-corpus`` IPC handler so
       // the renderer never needs fs access.
-      "src/data/shell_corpus.txt",
+      "src/data/shell_corpus_sorted.txt",
       "config/models.json",
       // The app icon is embedded into ``PacketSnitch.exe`` by
       // ``primaryIcon`` below, but we also want the raw .ico file

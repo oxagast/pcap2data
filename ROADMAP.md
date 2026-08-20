@@ -391,9 +391,13 @@ in days, not weeks.
 - [🟡] TCP payload reconstruction — ships via the stream stack.
 - [🟡] Ordered stream view — pagination + "load more" ship.
 - [🟡] Missing packet handling — out-of-order / retransmission keys ship
+
 > (see 1.7.935); explicit "show gaps" UI is still TODO.
+
 - [✅] Protocol reconstruction foundation — used by HTTP, FTP, SIP, SMB
+
 > decoders.
+
 - **Priority:** P0 · **Complexity:** High · **Est. remaining:** 2–4 days
 
 ### HTTP Object Extraction
@@ -823,6 +827,7 @@ Add phase timers inside packet processing (not just threading) for:
 - [📋] `reverseDnsLookup` — instrument per-call latency.
 - [📋] `getServBanner` — instrument per-call latency.
 - [🟡] GeoIP lookup — cached (see 1.1.195 "O(1) lookups, GeoIP cache"),
+
 > per-call instrumentation still TODO.
 
 Already shipped (so we don't redo them):
@@ -849,6 +854,121 @@ Already shipped (so we don't redo them):
 
 > Short mirror of `RELEASE_NOTES.md` so this single file is enough to
 > skim. The full per-version notes still live in `RELEASE_NOTES.md`.
+
+### v2.6.1629 — 2026-08-20
+
+- **Features**
+  - **OpenSSH keystroke-timing decoder (Crypt → OpenSSH sub-tab)** —
+    full keystroke-reconstruction engine under
+    `src/ui/decoders/ssh-keystrokes/` (`index.js` + `markov.js`,
+    `calibration.js`, `auto-calibrate.js`, `boundary-warmstart.js`,
+    `chunk-label.js`, `chunker-slider.js`, `clock-skew.js`,
+    `backspace-detect.js`, `compression-heuristic.js`,
+    `padding-detection.js`, `session-confidence.js`, `ssdeep.js`,
+    `truth-align.js`, `score-envelopes.js`, `markov-loader.js`,
+    `worker.js`, `export/`). Scores inter-packet delays against a
+    per-QWERTY-digraph Gaussian model (`src/data/qwerty-model.json`),
+    runs an N-best Viterbi over printable ASCII, and renders a Plotly
+    delay histogram. The bundled `shell_corpus_sorted.txt` is
+    precomputed at startup in a `worker_threads` worker and cached in
+    `userData`; the renderer pulls it via the new `markovapi` preload
+    bridge. New `opensshapi` (`loadQwertyModel` / `decode`) and
+    `llmapi.generate` (per-call `{ maxTokens, temperature, think }`
+    overrides) preload bridges ship. The OpenSSH sub-tab has a full
+    settings surface wired through the new `keystroke` settings block
+    (`markovMinCommandLength`, `concisenessBonusMultiplier`) and the
+    extended `llm` block (`language`, `llmWeightPercent`, `preset`,
+    `autotuneEnabled`).
+  - **hashes.com reverse-lookup integration (Conv → Hashes)** — a
+    dedicated **Hash Reverse** section (`#data-tools-hash-reverse-*`)
+    lets the analyst POST an MD5/SHA-1/SHA-256/… hash to hashes.com
+    `/en/api/search` and render plaintext matches, or GET the
+    `/en/api/identifier` endpoint to list candidate algorithms. Three
+    new IPC handlers (`hashes-com:search`, `hashes-com:identify`,
+    `hashes-com:diagnostics`) coalesce concurrent callers and cache a
+    recent successful probe for 30s; the Settings tab renders four
+    pills (reachability, key validity, last cost, last lookup result)
+    with a `cachedHashesComLastLookup` tracker so the zero-credit
+    diagnostic probe is never conflated with a real reverse. The API
+    key lives in `settings.apiKeys.hashesComApiKey`.
+  - **Crypt → Hashes sub-tab** — the Crypt workspace now opens on a
+    dedicated **Hashes** sub-tab (`#crypt-hashes-panel`,
+    `CRYPT_HASHES_SUBTAB`) that mirrors the Conv → Hashes panel via the
+    new `renderCryptHashesFromConvInput` helper, so analysts can inspect
+    digests without flipping workspaces. Hashes is the default Crypt
+    sub-tab on a fresh install.
+  - **Lazy packet hydration + backend reuse at startup** — the
+    renderer no longer materialises the full capture into memory up
+    front (`capture-store.js` builds an in-memory store; the
+    `.packets.ndjson` disk write is gone). A new
+    `backendEarlyYieldPacketThreshold` (~5000 packets) tells the
+    renderer to load the first backend snapshot, defer, then do a
+    clean full swap when the backend completes. On GUI startup the
+    bridge now **reuses** an already-running backend on the
+    configured HTTP port instead of spawning a conflicting one
+    (`reusedExistingBackendAtStartup` in `src/back-comm.js`),
+    eliminating the port-conflict respawn loop that churned on large
+    captures. `backendPacketChunkSize` default dropped 2000 → 500 for
+    smoother progressive pushes.
+  - **Per-call LLM overrides + thinking-mode bypass** —
+    `ollama:generate` now accepts a second `options` argument
+    (`{ maxTokens, temperature, think }`) that overrides the user's
+    `maxSummaryTokens` / temperature per call. The renderer can pass
+    `think: false` to disable the model's internal-reasoning channel —
+    Ollama cloud models like `minimax-m3:cloud` use thinking mode by
+    default and can consume the entire response budget in reasoning
+    with nothing emitted as `response`. The new `llmapi.generate`
+    preload bridge exposes this to the renderer.
+  - **Website moved to its own submodule** — the docs site is now a
+    git submodule at `docs/PacketSnitch-Website` (added to
+    `.gitignore`), the app homepage in `forge.config.js` and
+    `package.json` points at `https://packetsnitch.com/`, and the
+    bundled `shell_corpus.txt` extraResource in `forge.config.js`
+    now references the sorted corpus (`src/data/shell_corpus_sorted.txt`).
+- **Fixes**
+  - **Theme preview loading** — the theme catalog's 400×250 preview
+    fetch now retries once on a transient undici failure and surfaces
+    a "preview unavailable" state instead of leaving a broken image
+    card; the sandbox-banner logic correctly reads `paddleEnv` (with
+    the legacy `sandbox` flag fallback) so test purchases can never be
+    mistaken for real ones.
+  - **Heatmap convergence animation + backend reuse** — the heatmap's
+    convergence leader lines now animate, and the backend is reused
+    across animation passes instead of being continuously respawned.
+    The vendored Plotly (`src/assets/vendor/plotly-2.35.2.min.js`) is
+    loaded only on the OpenSSH sub-tab so it doesn't slow the main
+    render path.
+  - **Backend reclaim no longer drops data on re-runs** — the startup
+    reclaim path now stops any current jobs and reuses the running
+    service rather than spawning a conflicting backend; previously
+    the port was held by a stale process and the new backend silently
+    failed to bind.
+  - **Session-bound state survives wifi-keys reruns** — a
+    `pendingSessionRerunSnapshot` (current session name, filter query,
+    selected host) is taken at the start of a wifi-keys rerun and
+    re-applied when the rerun completes, so the user's session
+    identity and view state survive the silent background re-run. A
+    `sessionExplicitlyClosed` flag distinguishes a user-initiated "new
+    capture" from a background rerun so the Save-Session flow prompts
+    for a fresh name only when the user actually closed the session.
+- **Tests**
+  - `tests/openssh_keystrokes.test.js`
+  - `tests/{auto_calibrate,boundary_warmstart,chunk_label,chunker_max_packet_wiring,chunker_slider,clock_skew,score_envelopes,ssh_backspace_detection,ssh_keystroke_markov,ssh_keystrokes_compression_heuristic,ssh_padding_detection,ssh_session_confidence,ssh_timing,truth_align,weight_envelope_migration}.test.js`
+  - `tests/hash_reverse_helpers.test.js`,
+    `tests/hashes_com_diagnostics.test.js`,
+    `tests/hashes_com_identifier.test.js`
+  - `tests/listentries_fast_path.test.js`,
+    `tests/test_network_metadata.test.js`
+  - `tests/wifi_keys_rerun_session_following.test.js`
+  - `tests/test_regex_issue.test.js`,
+    `tests/packet_timestamp_parse.test.js`,
+    `tests/decoder_layer1_envelope.test.js`,
+    `tests/ssdeep.test.js`
+- **Build & packaging**
+  - Website moved to its own submodule at
+    `docs/PacketSnitch-Website`; app homepage now
+    `https://packetsnitch.com/`; bundled corpus references
+    `src/data/shell_corpus_sorted.txt`.
 
 ### Unreleased
 
@@ -990,7 +1110,7 @@ Already shipped (so we don't redo them):
   - Heatmap map projection calibration consolidated into
     `MAP_PROJECTION_CALIBRATION` constant in `src/settings.js`.
   - VirusTotal startup diagnostic coalesced with a 30s dedupe window
-    + `invalidateVirusTotalDiagnosticsCache()` hook.
+    - `invalidateVirusTotalDiagnosticsCache()` hook.
   - Privacy block in `settings-update` is now deep-merged.
   - Metrics flush loop now actually fires (paired renderer listener +
     `beforeunload` final-flush).
@@ -1121,7 +1241,9 @@ Already shipped (so we don't redo them):
 
 - **Removed:** `models.txt` references, test auto-run, map crosshair.
 - **Fixes:** MAC address IP bleed, backend kickoff, map updates,
+
 > crosshair removal, smoother map animations.
+
 - **Improvements:** map animation, frontend streamlining, stream
   payload caches, frontend optimizations, creds uniqing, backend
   chunk size arbitrary, sidebars widened, test auto-run removed,
@@ -1184,7 +1306,7 @@ Already shipped (so we don't redo them):
 - **Fixes:** array-type guards, zero-packets warnings, clear-on-zero
   flow, valid-key check on zero-packet filter, license link.
 - **Improvements:** initial frontend LLM test, per-packet/key filter
-  + group, Total Traffic fix, beginning of heatmap.
+  - group, Total Traffic fix, beginning of heatmap.
 
 ### v1.7.969 — 2026-06-24
 
@@ -1205,7 +1327,7 @@ Already shipped (so we don't redo them):
 - **Features:** SIP and FTP decoders (with keychain auto-populate),
   `tcp.retransmission` key + retransmission/out-of-order keys,
   retransmission stats in Stats, data type guesses for endpoints
-  + MAC, date/time type identifiers, single byte data type guessing,
+  - MAC, date/time type identifiers, single byte data type guessing,
   Save Raw Conv data via context menu, streamlined protocol matching,
   HTTP following (full body to Conv + export), decompression-aware
   context menu, more sample data, preliminary IGMP backend, non-TCP
@@ -1282,7 +1404,7 @@ Already shipped (so we don't redo them):
     sync, guard conv output expand handlers, conv output expand/
     collapse interaction, Conv text type heuristics, refine Conv
     guess scan + context-menu derive, chunked Conv guess scanning
-    + context derive, sanitize host target filter query terms,
+    - context derive, sanitize host target filter query terms,
     `guessDataType` refactor (UUID/JWT regex constants, base64
     score constants), sync target host selection with filter bar,
     tighten JWT regex, data type guessing (hashes, base64, PGP,
@@ -1333,7 +1455,7 @@ Already shipped (so we don't redo them):
     SMTP decoders in Conv, Crypt tab with SSL workspace + persistent
     keystore, filter validation + error reporting, context menu
     explicit parens, no double-wrapping negated clauses, unary `!`
-    + is-not actions, explicit `&&`/`||` filter-append, Clear and...
+    - is-not actions, explicit `&&`/`||` filter-append, Clear and...
     submenu, no double `[Console]`, backend logs `[Console][Backend]`,
     backend errors `[Console][Backend]`, UI logs `[GUI][UI]`, log
     console output to activity log, tab bar width + Prev/Next
@@ -1395,7 +1517,7 @@ Already shipped (so we don't redo them):
     `dns.qname`, capture stats page, query highlight polish, query-
     history empty-state, query syntax UI accessibility/keys,
     empty query-history dropdown, syntax highlighting for filter
-    + history, query history dropdown, cached host value, error
+    - history, query history dropdown, cached host value, error
     log helpers, log all frontend error paths, activity timeframe
     hardening, IPC placement, activity log UI + persistence,
     simplified `packetsForHost` fallback, hex grid cell rule +
@@ -1447,7 +1569,7 @@ Already shipped (so we don't redo them):
     target host selection with filter readout, Save JSON with
     save-as, reloading with optimized backend, removed .exe,
     removed useless icons, nollm call fix, LLM enable/disable
-    + `--no-llm` flag, dev install, README with images/usage,
+    - `--no-llm` flag, dev install, README with images/usage,
     version, bookmark fixes, off-by-one, horizontal scroll
     disabled, remove `dns.hostnames` non-leaf, Searchable
     Attributes, README update, new screenshot, version, fixed
@@ -1459,7 +1581,7 @@ Already shipped (so we don't redo them):
     filtering, index fix, better filter, more filter, filter
     almost working, starting filter functions, better
     compression, better DNS host + catchall error, better error
-    + blink, summary box tweaks, encryption undefined fix, error
+    - blink, summary box tweaks, encryption undefined fix, error
     message, squirrel install, failsafes, screenshot, version,
     data box bug + new data points, new extra info pane, loading
     screen, backend dead on quit, installer/exe icons, first
