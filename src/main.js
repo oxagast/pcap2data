@@ -2779,7 +2779,7 @@ async function reclaimPreExistingBackendAtStartup() {
     });
     if (result?.detected) {
       appendActivityLogLine(
-        `[${new Date().toISOString()}] [GUI][Main] Startup backend reclaim action=${result.action} host=${result.host || "n/a"} port=${result.port || "n/a"}`,
+        `[${new Date().toISOString()}] [GUI][Main] Startup backend reclaim action=${result.action} host=${result.host || "n/a"} port=${result.port || "n/a"}${result.reused ? " reused=true" : ""}`,
       );
     }
   } catch (error) {

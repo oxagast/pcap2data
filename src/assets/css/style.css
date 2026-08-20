@@ -4866,6 +4866,37 @@ strong {
   cursor: crosshair;
 }
 
+.stats-heatmap-leader-lines {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* Per-path animation timing is set inline by renderStatsLeaderLines so
+   that lines of different lengths converge on the box at the same instant. */
+.stats-heatmap-leader-lines path {
+  fill: none;
+  stroke: var(--color-3);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-opacity: 0.7;
+}
+
+@keyframes leaderLineDraw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.stats-heatmap-leader-lines path.perpendicular {
+  animation-delay: 0.9s;
+  animation-duration: 0.3s;
+}
+
 .stats-heatmap-point {
   position: absolute;
   border-radius: 999px;

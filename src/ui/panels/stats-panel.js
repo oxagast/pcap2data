@@ -1389,6 +1389,105 @@ function renderStatsHeatmap(
   );
 }
 
+// Draws leader lines converging on the inner location box from the outer edges.
+function renderStatsLeaderLines(
+  leaderLinesEl,
+  mapBounds,
+  selectionRect,
+  viewState = {},
+  projectionCalibration = null,
+) {
+  if (!leaderLinesEl || !mapBounds || !selectionRect) {
+    leaderLinesEl.hidden = true;
+    return;
+  }
+
+  console.log("renderStatsLeaderLines called with:", { mapBounds, selectionRect });
+
+  // The selectionRect coordinates are already in the mapEl's coordinate space.
+  // The SVG should match the parent container's dimensions (mapEl/clientWidth etc).
+  const parentWidth = mapBounds.left + mapBounds.width;
+  const parentHeight = mapBounds.top + mapBounds.height;
+
+  // Stop 35px before the edge of the box
+  const stopBeforeEdge = 35;
+  // Perpendicular line length
+  const perpendicularLength = 50;
+
+  // selectionRect coords are in parent (mapEl) space.
+  const topY = selectionRect.top - stopBeforeEdge;
+  const bottomY = selectionRect.top + selectionRect.height + stopBeforeEdge;
+  const leftX = selectionRect.left - stopBeforeEdge;
+  const rightX = selectionRect.left + selectionRect.width + stopBeforeEdge;
+
+  const midX = selectionRect.left + selectionRect.width / 2;
+  const midY = selectionRect.top + selectionRect.height / 2;
+
+  // Build raw line specs: { d, length, kind }
+  const lineSpecs = [];
+
+  // Outer converging lines
+  lineSpecs.push({ d: `M${midX} 0 L${midX} ${topY}`, length: topY, kind: "converge" });
+  lineSpecs.push({ d: `M${midX} ${parentHeight} L${midX} ${bottomY}`, length: parentHeight - bottomY, kind: "converge" });
+  lineSpecs.push({ d: `M0 ${midY} L${leftX} ${midY}`, length: leftX, kind: "converge" });
+  lineSpecs.push({ d: `M${parentWidth} ${midY} L${rightX} ${midY}`, length: parentWidth - rightX, kind: "converge" });
+
+  // Inner perpendicular lines at stop position, drawn at constant time
+  const perpendicularDurationMs = 200;
+  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${topY} L${midX + perpendicularLength / 2} ${topY}`, length: perpendicularLength, kind: "perpendicular" });
+  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${bottomY} L${midX + perpendicularLength / 2} ${bottomY}`, length: perpendicularLength, kind: "perpendicular" });
+  lineSpecs.push({ d: `M${leftX} ${midY - perpendicularLength / 2} L${leftX} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "perpendicular" });
+  lineSpecs.push({ d: `M${rightX} ${midY - perpendicularLength / 2} L${rightX} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "perpendicular" });
+
+  // All "converge" lines must reach the box at the same time.
+  // That means a line with length L must take time T such that velocity v is constant:
+  // v = L / T → T = L / v. With v chosen so the longest line takes LEADER_DURATION_MS,
+  // every other line's duration = (L / maxL) * LEADER_DURATION_MS.
+  // LEADER_DURATION_MS must match HEATMAP_SELECTION_DRAW_MS so the lines
+  // finish converging as the box finishes drawing and starts blinking.
+  const LEADER_DURATION_MS = 320;
+  const maxConvergeLength = Math.max(
+    ...lineSpecs.filter((s) => s.kind === "converge").map((s) => s.length),
+    1,
+  );
+
+  // Build paths with per-line animation timing so all lines arrive simultaneously.
+  const pathElements = [];
+  for (const spec of lineSpecs) {
+    let durationMs;
+    let delayMs = 0;
+    if (spec.kind === "converge") {
+      durationMs = Math.max(50, (spec.length / maxConvergeLength) * LEADER_DURATION_MS);
+    } else {
+      // Perpendiculars arrive AFTER converging lines, at once together.
+      durationMs = perpendicularDurationMs;
+      delayMs = LEADER_DURATION_MS;
+    }
+    const lengthCeil = Math.ceil(spec.length) + 1;
+    pathElements.push(
+      `<path d="${spec.d}" style="stroke-dasharray:${lengthCeil};stroke-dashoffset:${lengthCeil};animation:leaderLineDraw ${durationMs.toFixed(0)}ms ease-out ${delayMs}ms forwards;" />`,
+    );
+  }
+
+  leaderLinesEl.innerHTML = `
+    <svg width="${parentWidth}" height="${parentHeight}" viewBox="0 0 ${parentWidth} ${parentHeight}" style="position:absolute;top:0;left:0;width:${parentWidth}px;height:${parentHeight}px;pointer-events:none;">
+      <g fill="none" stroke="var(--color-3)" stroke-width="2" stroke-linecap="round" stroke-opacity="0.7">
+        ${pathElements.join("\n        ")}
+      </g>
+    </svg>
+  `;
+  leaderLinesEl.hidden = false;
+  console.log("Leader lines rendered", { maxConvergeLength, LEADER_DURATION_MS });
+
+  // Hide the lines as the box finishes drawing and begins to blink.
+  // Box draw completes at LEADER_DURATION_MS (matches HEATMAP_SELECTION_DRAW_MS).
+  // Hide immediately when the box starts blinking.
+  setTimeout(() => {
+    leaderLinesEl.hidden = true;
+    console.log("Leader lines hidden in sync with box blink");
+  }, LEADER_DURATION_MS);
+}
+
 // Creates stats heatmap section.
 function createStatsHeatmapSection({
   documentRef,
@@ -1679,6 +1778,11 @@ function createStatsHeatmapSection({
   });
   mapEl.appendChild(pixelMaskEl);
 
+  const leaderLinesEl = documentRef.createElement("div");
+  leaderLinesEl.className = "stats-heatmap-leader-lines";
+  leaderLinesEl.hidden = true;
+  mapEl.appendChild(leaderLinesEl);
+
   shell.appendChild(mapEl);
 
   const summaryEl = documentRef.createElement("div");
@@ -1962,6 +2066,9 @@ function createStatsHeatmapSection({
     );
     zoomTintEl.classList.remove("stats-heatmap-zoom-tint-pass");
     mapEl.classList.remove("stats-heatmap-selecting", "stats-heatmap-selection-animating");
+    if (leaderLinesEl) {
+      leaderLinesEl.hidden = true;
+    }
   };
 
   const updatePixelMask = (selectionRect) => {
@@ -2312,6 +2419,12 @@ function createStatsHeatmapSection({
     const centerX = bounds.left + projected.x;
     const centerY = bounds.top + projected.y;
     const selectionRect = buildLocationSelectionRect(bounds, centerX, centerY);
+
+    // Render leader lines BEFORE the zoom starts
+    if (leaderLinesEl) {
+      renderStatsLeaderLines(leaderLinesEl, bounds, selectionRect, mapViewState, getProjectionControlState());
+    }
+
     const focus = getSelectionFocusFromRect(bounds, selectionRect);
     const hasCity = normalizeStatsTextValue(locationPoint.city) !== null;
     const targetZoomPercent = hasCity
@@ -2430,6 +2543,9 @@ function createStatsHeatmapSection({
       setAimPosition(hoverAimState.x, hoverAimState.y, true);
     }
     lastRenderedZoomPercent = nextZoomPercent;
+
+    // Leader lines are now rendered in focusHeatmapLocation before the zoom starts
+    // This ensures the animation sequence: lines converge -> lines disappear -> box blinks/zooms
 
     if (zoomChanged) {
       void waitForMapZoomTransition().then(() => {
