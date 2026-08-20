@@ -1,9 +1,49 @@
 # Release Notes
 
-## v2.5.2304 - 2026-08-09
+## v2.6.1629 - 2026-08-20
+
 **Type:** minor
 
 ### ✨ Features
+
+- **OpenSSH keystroke-timing decoder (Crypt → OpenSSH sub-tab)** — a full keystroke-reconstruction engine now lives under `src/ui/decoders/ssh-keystrokes/` (`index.js` + `markov.js`, `calibration.js`, `auto-calibrate.js`, `boundary-warmstart.js`, `chunk-label.js`, `chunker-slider.js`, `clock-skew.js`, `backspace-detect.js`, `compression-heuristic.js`, `padding-detection.js`, `session-confidence.js`, `ssdeep.js`, `truth-align.js`, `score-envelopes.js`, `markov-loader.js`, `worker.js`, plus an `export/` barrel). Given a sequence of inter-packet delays from a TCP stream on port 22/2222 the decoder scores each delay against a per-QWERTY-digraph Gaussian model (`src/data/qwerty-model.json`, sourced from Monrose & Rubin / Song, Miller & Stahie / Killourhy & Maxion), runs an N-best Viterbi over printable ASCII to produce the most likely keystroke strings, and renders a Plotly delay histogram. The pipeline is pure (no DOM, no Plotly, no fs/path) so it exercises from Jest and bundles cleanly through webpack. The bundled `shell_corpus_sorted.txt` (a sorted, de-identified shell command corpus) is loaded by the main process at startup via `worker_threads` and pre-cached into `userData`; the renderer pulls it through the new `markovapi` preload bridge (`getUserDataDir` / `getStatus` / `getModel` / `train` / `getCachedShellMarkov`) and the corpus path is resolved across source, dev-bundle, and packaged-install layouts in `resolveMarkovCorpusPath` (`src/main.js`). The new `opensshapi` preload bridge exposes `loadQwertyModel` + `decode`, and `llmapi.generate` lets the renderer ask the main process to forward prompts to the configured Ollama backend with per-call `{ maxTokens, temperature, think }` overrides. The OpenSSH sub-tab ships a full settings surface (`#crypt-openssh-*` controls in `src/index.html`) wired through the new `keystroke` settings block (`markovMinCommandLength`, `concisenessBonusMultiplier`) and the `llm` block (`language`, `llmWeightPercent`, `preset`, `autotuneEnabled`), so the analyst can tune the Markov ranking floor, the short-command bonus, and the LLM re-ranking weight without a restart. Covered by `tests/openssh_keystrokes.test.js`, `tests/{auto_calibrate,boundary_warmstart,chunk_label,chunker_max_packet_wiring,chunker_slider,clock_skew,score_envelopes,ssh_backspace_detection,ssh_keystroke_markov,ssh_keystrokes_compression_heuristic,ssh_padding_detection,ssh_session_confidence,ssh_timing,truth_align,weight_envelope_migration}.test.js`.
+- **hashes.com reverse-lookup integration (Conv → Hashes)** — the Hashes sub-tab now has a dedicated **Hash Reverse** section (`#data-tools-hash-reverse-*` in `src/index.html`): paste an MD5/SHA-1/SHA-256/… hash and click **Reverse Hash** to POST it to hashes.com `/en/api/search` and render any plaintext matches, or click **Identify Hash Types** to GET the `/en/api/identifier` endpoint and list candidate algorithms. The main process exposes three new IPC handlers — `hashes-com:search`, `hashes-com:identify`, `hashes-com:diagnostics` — coalescing concurrent callers and caching a recent successful probe for 30s (mirroring the VirusTotal diagnostics path), and the preload bridge exposes `extractapi.hashesComSearch` / `hashesComIdentify` / `hashesComDiagnostics`. The Settings tab renders four pills for the endpoint: reachability, key validity, last cost, and last lookup result, with a `cachedHashesComLastLookup` tracker so the diagnostic probe (zero-credit) never gets conflated with a real reverse. The API key lives in `settings.apiKeys.hashesComApiKey`. Covered by `tests/hash_reverse_helpers.test.js`, `tests/hashes_com_diagnostics.test.js`, and `tests/hashes_com_identifier.test.js`.
+- **Crypt → Hashes sub-tab** — the Crypt workspace now opens on a dedicated **Hashes** sub-tab (`#crypt-hashes-panel`, `CRYPT_HASHES_SUBTAB` in `src/ui/main-frontend.js`) that mirrors the Conv → Hashes panel: it reads the current value of `#data-tools-hash-input-reading` and renders all nine digests (MD5 / SHA-1 / SHA-256 / SHA-384 / SHA-512 + SHA3-256 / SHA3-512, RIPEMD-160, Whirlpool) via the new `renderCryptHashesFromConvInput` helper, so analysts can inspect digests without flipping workspaces. Hashes is now the default Crypt sub-tab on a fresh install. The reverse-lookup UI also gained a **Cross Reference Hash** button alongside the existing one.
+- **Lazy packet hydration + backend reuse at startup** — the renderer no longer materialises the full capture into memory up front. `capture-store.js` was refactored to build an in-memory store (`storeId` now `mem-<ts>-<rand>`, no disk write of the `.packets.ndjson` file), and a new `backendEarlyYieldPacketThreshold` setting (~5000 packets) tells the renderer to load the first backend snapshot and then defer until the backend completes, at which point it does a clean full swap — no expensive incremental merge. On GUI startup the bridge now **reuses** an already-running backend on the configured HTTP port instead of spawning a new one (tracked by `reusedExistingBackendAtStartup` in `src/back-comm.js`), eliminating the port-conflict respawn loop that previously churned on large captures. The `backendPacketChunkSize` default dropped 2000 → 500 for smoother progressive pushes. Covered by `tests/listentries_fast_path.test.js`, `tests/test_network_metadata.test.js`, and `tests/wifi_keys_rerun_session_following.test.js`.
+- **Per-call LLM overrides + thinking-mode bypass** — `ipcMain.handle('ollama:generate', ...)` now accepts a second `options` argument (`{ maxTokens, temperature, think }`) that overrides the user's `maxSummaryTokens` / temperature defaults per call. The renderer can pass `think: false` to disable the model's internal-reasoning channel — Ollama cloud models like `minimax-m3:cloud` use thinking mode by default and can consume the entire response budget in reasoning with nothing emitted as `response`; disabling thinking is the most reliable way to get a structured answer back. The new `llmapi.generate(prompt, options)` preload bridge exposes this to the renderer. The OpenSSH decoder uses the override path for its multi-field JSON interpretation.
+- **Website moved to its own submodule** — the docs site is now a git submodule at `docs/PacketSnitch-Website` (added to `.gitignore` so the submodule pointer doesn't pollute the tree), the app homepage in `forge.config.js` and `package.json` points at `https://packetsnitch.com/`, and the bundled `shell_corpus.txt` extraResource in `forge.config.js` now references the sorted corpus (`src/data/shell_corpus_sorted.txt`).
+
+### 🐛 Fixes
+
+- **Theme preview loading** — the theme catalog's 400×250 preview fetch now retries once on a transient undici failure and surfaces a "preview unavailable" state instead of leaving a broken image card; the sandbox-banner logic correctly reads `paddleEnv` (with the legacy `sandbox` flag fallback) so test purchases can never be mistaken for real ones.
+- **Heatmap convergence animation + backend reuse** — the heatmap's convergence leader lines now animate, and the backend is reused across animation passes instead of being continuously respawned (which never took). The Plotly vendored under `src/assets/vendor/plotly-2.35.2.min.js` is loaded only on the OpenSSH sub-tab so it doesn't slow the main render path.
+- **Backend reclaim no longer drops data on re-runs** — the startup reclaim path now stops any current jobs and reuses the running service rather than spawning a conflicting backend; previously the port was held by a stale process and the new backend silently failed to bind.
+- **Session-bound state survives wifi-keys reruns** — a `pendingSessionRerunSnapshot` (current session name, filter query, selected host) is taken at the start of a wifi-keys rerun and re-applied when the rerun completes, so the user's session identity and view state survive the silent background re-run. A `sessionExplicitlyClosed` flag distinguishes a user-initiated "new capture" from a background rerun so the Save-Session flow prompts for a fresh name only when the user actually closed the session. Covered by `tests/wifi_keys_rerun_session_following.test.js`.
+
+### 🧪 Tests
+
+- `tests/openssh_keystrokes.test.js` — end-to-end wiring of the OpenSSH sub-tab, `loadQwertyModel`, `decode`, and the `openssh-decode` IPC payload shape.
+- `tests/{auto_calibrate,boundary_warmstart,chunk_label,chunker_max_packet_wiring,chunker_slider,clock_skew,score_envelopes,ssh_backspace_detection,ssh_keystroke_markov,ssh_keystrokes_compression_heuristic,ssh_padding_detection,ssh_session_confidence,ssh_timing,truth_align,weight_envelope_migration}.test.js` — per-module coverage of the ssh-keystrokes engine.
+- `tests/hash_reverse_helpers.test.js`, `tests/hashes_com_diagnostics.test.js`, `tests/hashes_com_identifier.test.js` — hashes.com search / identify / diagnostics wiring, pill rendering, and the zero-credit diagnostic-vs-real-lookup distinction.
+- `tests/listentries_fast_path.test.js`, `tests/test_network_metadata.test.js` — lazy packet hydration + in-memory capture-store refactor.
+- `tests/wifi_keys_rerun_session_following.test.js` — session-bound state survives a wifi-keys background rerun.
+- `tests/test_regex_issue.test.js`, `tests/packet_timestamp_parse.test.js`, `tests/decoder_layer1_envelope.test.js`, `tests/metrics_tab_tracking.test.js` (extension), `tests/ssdeep.test.js`, `tests/hash_reverse_helpers.test.js` — assorted regressions.
+
+### 🔧 Improvements
+
+- `src/settings.js` now carries the `keystroke` block (`markovMinCommandLength`, `concisenessBonusMultiplier`), the extended `llm` block (`language`, `llmWeightPercent`, `preset`, `autotuneEnabled`), `backend.httpProgressLogMinIntervalMs`, `debug.backendEarlyYieldPacketThreshold`, `backend.backendPacketChunkSize` (2000 → 500), and `apiKeys.hashesComApiKey` — all normalised through `normalizeSettings` so legacy/corrupt values round-trip safely.
+- `src/back-comm.js` honours `backend.httpProgressLogMinIntervalMs` to throttle `[Bridge] HTTP progress ...` activity-log lines without affecting renderer data flow, and reuses an existing backend at startup instead of spawning a conflicting one.
+- `src/main.js` resolves the bundled Markov corpus across source, dev-bundle, and packaged-install layouts; precomputes the shell-Markov model at startup in a `worker_threads` worker; and exposes the `markov:*`, `hashes-com:*`, and `openssh-*` IPC surfaces.
+- `src/preload.js` adds the `markovapi`, `llmapi`, and `opensshapi` bridges, extends `extractapi` with `hashesComSearch` / `hashesComIdentify` / `hashesComDiagnostics`, and extends `themeapi` with `getLicenseTier`.
+
+---
+
+## v2.5.2304 - 2026-08-09
+
+**Type:** minor
+
+### ✨ Features
+
 - **Configurable post-load landing tab (Settings → General)** — a new "Open after capture load" preference lets the user pick which workspace opens after a capture finishes loading. Three options are exposed in the **General** sub-tab as a `<select>` (with help text describing each): **Host Data** (drills into the first packet's hex/ASCII + protocol tree), **Stats** (the at-a-glance Capture Statistics / Map / Anomalies overview), and **List** (the sortable, pcap-ordered packet list). The default is **Stats**, so a fresh install lands on the overview without forcing the user to click a tab — but every choice is one click away on the General settings panel. Stored as `general.defaultTab` in the persisted settings (see `src/settings.js`), normalized against a new `VALID_DEFAULT_TABS` whitelist so a corrupt or stale value can never strand the user on a blank workspace, and read by the new `resolveDefaultLandingTab()` / `openDefaultLandingTab()` helpers in `src/ui/main-frontend.js`. The existing session-state restoration path now also falls back to this preference instead of the hard-coded tab, so a session saved before the default was changed still honors the saved choice while a brand-new capture honors the new preference. The new setting is reflected back into the `<select>` on every `syncSettingsFormFromState()` pass, logs a `Settings updated defaultTab=…` line to the activity log on change (matching the other General settings), and goes through the existing `persistSettingsFromForm()` pipeline so the VirusTotal diagnostics cache invalidation, capture-worker resync, theme re-apply, and metrics-save instrumentation all keep working unchanged.
 - **In-app theme catalog (Settings → Themes)** — a full storefront experience now lives inside PacketSnitch. The Themes sub-tab auto-fetches a live catalog from the catalog server (default `https://oxasploits.com:9021/`) on first open, renders a responsive card grid (name, description, price, 400×250 preview), and exposes a "Buy" button that opens the Paddle-hosted checkout in the user's default browser via `shell.openExternal`. Successful purchases deep-link back into PacketSnitch through a new `packetsnitch://checkout-success` deeplink (handler in `src/main.js`), where the main process calls `reconcileThemeLicenses({ force: true })` to pull the newly-licensed theme(s), pre-caches them under `userData/theme-cache/<id>/theme.json` so they work offline, and broadcasts `deeplink:checkout-success` to the renderer with the unlocked theme ids. A 72-hour background recache timer keeps owned-but-not-yet-installed themes warm. The "Sandbox mode" banner above the catalog grid lights up automatically when the server returns `paddleEnv: "sandbox"` (or the legacy `sandbox: true` flag) so test purchases can never be mistaken for real ones.
 - **Catalog & purchase hardening** — the catalog server URL, recache interval, and `allowInsecureTlsEndpoints` flag are now hard-coded constants in `src/main.js` (mirrored in `src/settings.js`) so the purchase path can't be redirected or neutralized via settings edits. HTTPS calls to the catalog server (and the metrics endpoint, which shares the same self-signed cert) attach an undici dispatcher with `rejectUnauthorized: false` via a cached `getInsecureThemeServerDispatcher` helper. The `themes-catalog` IPC handler now translates undici's generic `fetch failed` into an actionable hint — plain-`http://` URLs pointing at an HTTPS-only server get a "change the URL to https://" hint, self-signed cert failures with the insecure-TLS flag off get a "enable 'Allow self-signed certificates for the theme server' in Settings → Themes" hint, and unreachable hosts get a "verify the URL and your network" hint. `fetchWithTimeout` now logs `begin / ok / fail` lines (with elapsed-ms, abort status, and a sanitized cause message) to the activity log so transient catalog outages are diagnosable from `activity-log.txt`. The settings-endpoint URL is built with `buildThemeServerUrl(..., { force: "1" })` so a "Refresh Catalog" click bypasses the 60-second license-check cache.
@@ -36,6 +76,7 @@
 - **Wifi keys round-trip through sessions** — saved sessions now carry the 802.11 wifi keys alongside the rest of the keystore, and on session restore the bridge re-sends them to the backend so re-opening a wifi capture still decrypts 802.11 frames without manual re-entry. The renderer-side state machine (`wifiKeysRerunInFlight` flag in [src/ui/main-frontend.js](src/ui/main-frontend.js)) plus the bridge-side `--wifi-keys-file` placement fix in [src/back-comm.js](src/back-comm.js) ensure the silent re-rerun after a successful `setBackendWifiKeys` actually triggers a fresh backend pass and that pass actually produces decrypted output. Covered end-to-end by the new `tests/wifi_keys_rerun_path_mode.test.js` and `tests/wifi_keys_legacy_spawn_placement.test.js`.
 
 ### 🐛 Fixes
+
 - **"Restore defaults" button is now confirmable, not destructive** — clicking the **Restore defaults** button in Settings no longer immediately wipes every setting. It opens a new in-app confirmation dialog (`#settings-reset-confirm-dialog` in `src/index.html`) styled like the other confirm overlays ("Restore Defaults" title + descriptive copy: *"This will reset all settings to their default values. Any unsaved changes will be lost. Continue?"*) with explicit `Restore` / `Cancel` buttons, focus auto-moved to `Restore` on open, and full keyboard support (Enter = continue, Escape = cancel) via the new `requestSettingsResetConfirm` / `resolveSettingsResetConfirm` helpers in `src/ui/main-frontend.js`. If the DOM nodes are missing (e.g. very old markup) the helper transparently falls back to `window.confirm` so the destructive action can never silently fail to confirm. The status line now reads `Restore defaults canceled.` when the user backs out, and `Defaults restored.` (plus an activity-log entry `Settings restored defaults`) on success; both branches go through the existing `persistSettingsFromForm({ resetToDefaults })` path that invalidates the VirusTotal diagnostics cache when the saved key changes, re-syncs capture workers, re-applies the theme, and persists the cloned `DEFAULT_SETTINGS` snapshot. A new `resetToDefaults: true|false` metric field is included on every settings-save event so analytics can distinguish a real save from a defaults restore. CSS for the dialog lives alongside the other confirm overlays in `src/assets/css/style.css` (`#settings-reset-confirm-dialog` / `#settings-reset-confirm-description`).
 - Fixed decoders bug for single block decodes: when a stream contains exactly one reassembly block, Conv **Decodes** now correctly feeds that block through the decoder pipeline instead of bailing out. Covered by `tests/conv_decodes_stream_stack.test.js`.
 - Inline decoder wiring (`src/ui/main-frontend.js`) now matches the dropdown entries — picking a protocol from the inline switch honours the same detection and hints path as the Conv Decodes subtab.
@@ -45,6 +86,7 @@
 - **Aggressive dedupe in the Summary distillation + compaction LLM prompts** — the export-time distillation pass (`buildSummaryDistillPrompt` in [src/ui/main-frontend.js](src/ui/main-frontend.js)) and every analysis-compaction run (`runAnalysisCompaction`) used to ask the LLM to "deduplicate" in a single short sentence, which the LLM interpreted as "remove exact duplicates" — so the same fact restated in slightly different words (e.g. "the host at 10.0.0.1 reached out to example.com" vs. "10.0.0.1 talked to example.com") survived into the running summary and the saved report, and the same observation accumulated rewrites every time a new blurb was folded into the compacted summary. The fix promotes dedupe to the **most important** rule in the distillation prompt (`AGGRESSIVE DEDUPE`) and adds explicit sub-bullets: collapse every duplicate into a single canonical statement, delete the rest of the copies entirely (don't rephrase them), and — when a fact is summarised at a high level in the Capture Statistics section AND described in an LLM blurb — keep the more detailed version in the LLM-blurb / per-stream section and remove the high-level restatement from the Capture Statistics section. The compaction prompt now carries its own `DEDUPLICATE` rule that covers both (a) within the previously compacted summary and (b) across the new blurbs, and the per-stream `writeSummaryFromLLM` prompt carries a closing "Never rephrase a fact that is already in the running summary" instruction so the blurbs that feed compaction are already deduped before they ever reach `runAnalysisCompaction`. A reader should never feel that the same observation is being repeated in the consolidated Summary tab or in the exported report. Locked in by five new test cases in [tests/summary_stats_weaving.test.js](tests/summary_stats_weaving.test.js) under the new `aggressive dedupe in summary LLM prompts` `describe` block.
 
 ### 🧪 Tests
+
 - New `tests/themes_subtab.test.js` exercises the renderer-side theme catalog surface: the `settings-themes-catalog-{list,status,sandbox-banner}` DOM wiring, `themesCatalogIsSandbox` / `themesCatalogPaddleEnv` state, the `setThemesCatalogSandboxBanner` reducer (legacy `sandbox` flag → new `paddleEnv` field), the `themes-catalog` IPC handler shape (returns `sandbox` + `paddleEnv` on success), `reconcileThemeLicenses`'s paddleEnv capture, `fetchWithTimeout` abort semantics, `fetchThemeServerJson` / `fetchThemeServerBuffer` routing through `fetchWithTimeout`, and the preload bridge exposing `listCatalog` over `themes-catalog`.
 - Extended `tests/test_catalog_server.py` now drives the full end-to-end purchase round-trip (catalog fetch → Paddle redirect → `checkout-success?transaction_id=…` → `packetsnitch://checkout-success?installUuid=…&themeId=…` deeplink → license reconcile → theme cache write) plus the production vs. sandbox paddleEnv assertion on every catalog response.
 - New `tests/kerberos_conv_decoder.test.js` exercises wiring, registry, hints, and AS-REQ/AS-REP round-trips through both the data-tools panel and main-frontend inline paths using hand-built ASN.1 fixtures.
@@ -65,6 +107,7 @@
 - New `tests/list_panel_app_protocol.test.js` is a structural regression for the `WIFI`-relabelling bug: it loads the real `src/ui/panels/list-panel.js` source via `vm.runInContext`, extracts `collectDecodedProtocolNames` (and the helpers `isLinkLayerProtocolName` / `LINK_LAYER_PROTOCOL_NAMES`), and pins down both halves of the fix — a decrypted TCP frame whose `decoded_protocols` still contains a legacy `WIFI` token must not be surfaced as `WIFI` in the App Protocol column, and a fresh backend payload whose `decoded_protocols` is `{WIFI, TCP, HTTP}` must report `TCP` / `HTTP` (and never `WIFI`) as the application-layer label.
 
 ### ✨ Features
+
 - **Extraction panel now handles archives & compressed bundles** — the extractor (`src/backend/extractor.py` + the new helpers under `src/ui/panels/extraction-panel.js`) now natively unpacks `cab`, `7zip`, `zip`, `tar`, `gz`, `bzip2`, and `zstd` archives and compression, so an analyst can drop a captured package bundle onto the panel and the contents surface under their own sub-entries instead of being dumped as a single opaque blob. Archive / compression detection runs on file magic first and falls back to extension matching, and the panel keeps the per-entry carve context menu (load into Extraction / Decoders, send to VirusTotal) consistent across nested entries.
 - **Image, executable, and hash extraction complete the framework** — the extraction panel now covers the rest of the practical artifact classes: PNG / JPEG / GIF / WEBP image bytes are auto-classified via `inferMimeType` in [src/ui/main-frontend.js](src/ui/main-frontend.js), generic PE / ELF executables are detected via the same magic-byte pipeline, and the SMB / NFS / FTP file-carve context menu (`carveCurrentStreamToFileFromContextMenu`) plus the manual-carve row in the Data Tools panel surface those bytes for save. Loading any extracted artifact — archive entry, carved file, or manual carve — into the Conv input auto-populates the full hash grid in the Hashes sub-tab via `computeDataToolsHashes`: MD5 / SHA-1 / SHA-256 / SHA-384 / SHA-512 + SHA3-256 / SHA3-512, RIPEMD-160, and Whirlpool, with the `buildConvHashesMarkdownTable` helper available for report export. PDFs already detected; Office documents, scripts, and the unified "extract all" bulk-export workflow remain TODO.
 - **Statically linked backend for hostile / unknown environments** — the snitch Python backend is now repackaged through `staticx` so the shipped binary no longer needs a co-located Python or system libraries to launch. The post-pyinstaller pipeline (`scripts/build-backend.js` + the new `scripts/with-libs-path.js` env wrapper) runs the `snitch` binary with the host's dynamic loader path so the in-test backend boots cleanly on Kali, fresh containers, and minimal CI images, and the standalone `snitch-extract` binary gets the same treatment via `src/backend/requirements-extract.txt`. The `tests/test_backend_{compile,json,server}.py` suites now run through the staticx-wrapped binary by default and `conftest.py` is the single source of truth for staging the build.
@@ -80,9 +123,11 @@
 ---
 
 ## v2.4.2169 - 2026-07-27
+
 **Type:** minor
 
 ### ✨ Features
+
 - Halfed exe/rpm/deb installer sizes
 - Anonymous, opt-in usage metrics: new `src/metrics.js` module + `metricsapi` IPC bridge ship tab/subtab usage, action timing, and error reports to a user-configurable HTTP endpoint (default `http://143.198.179.97:8088/mhook`)
 - First-run consent overlay: clean installs now show a dedicated Yes/No dialog before any metrics can be collected; decision is recorded via `settings.privacy.metricsConsentAsked` and can be changed any time in Settings → Privacy
@@ -94,6 +139,7 @@
 - Backend port reclaim: on GUI startup we look for a stale snitch HTTP backend on the configured port and shut it down gracefully (with OS-level kill fallback) before launching our own
 
 ### 🐛 Fixes
+
 - Heatmap map projection calibration is now sourced from a single `MAP_PROJECTION_CALIBRATION` constant in `src/settings.js`; the previously hard-coded values in `stats-panel.js` (and persisted debug settings defaults) now agree
 - VirusTotal startup diagnostic is coalesced: eager + persisted-settings + backend-ready callers share a single in-flight probe with a 30s "last successful fetch" dedupe window, and a new `invalidateVirusTotalDiagnosticsCache()` hook refreshes immediately when the API key changes
 - Privacy block in `settings-update` IPC is now deep-merged so a partial write (e.g. the metrics service writing back a fresh install UUID) can no longer wipe the user's `metricsEnabled` toggle or custom endpoint URL
@@ -103,9 +149,11 @@
 - Context menu layout: "Open in Heatmap" and the new carvable/extraction entries are no longer orphaned by misplaced `<hr>` dividers
 
 ### 🗑️ Removed
+
 - Duplicated `0.55 / 0.95 / -0.53 / 0` heatmap calibration constants in `src/settings.js` and `src/ui/panels/stats-panel.js` (consolidated into `MAP_PROJECTION_CALIBRATION`)
 
 ### 🔧 Improvements
+
 - New `tests/consent_overlay.test.js`, `tests/metrics_privacy.test.js`, `tests/metrics_tab_tracking.test.js`, and `tests/test_metrics_server.py` cover the new consent overlay, privacy settings, tab-tracking path, and the Python metrics server end-to-end
 - New `tests/heatmap_projection_calibration.test.js` locks the shared calibration constants so future tweaks do not silently regress the heatmap alignment
 - Settings schema expanded with a normalized `privacy` block (`metricsEnabled`, `metricsConsentAsked`, `metricsEndpointUrl`, `metricsFlushIntervalSeconds`, `metricsMaxQueueSize`, `metricsInstallId`)
@@ -118,9 +166,11 @@
 ---
 
 ## v2.4.2115 - 2026-07-26
+
 **Type:** minor
 
 ### ✨ Features
+
 - Threat Intel sub-tab under Conv (VirusTotal lookup, hash cross-reference button, auto-select in VirusTotal)
 - Subnet calculator panel in Conv (queries backend HTTP server for GeoIP and IP reputation data)
 - Nmap scan support and IP/Subnet analyzer rearrangements
@@ -135,6 +185,7 @@
 - More info for LLM
 
 ### 🐛 Fixes
+
 - File importing no longer errors on successful load, now also shows in Stats panel
 - Stats tab Total Traffic indicator
 - Path validation fix in `snitch.py` (security fix for path traversal)
@@ -144,9 +195,11 @@
 - Filter autocomplete
 
 ### 🗑️ Removed
+
 - Lots of old dead code removed during major code cleanup
 
 ### 🔧 Improvements
+
 - Major code cleanup; lots of old dead code removed, function organization improved
 - Streamlined the frontend with stream payload caches
 - Frontend processing optimizations
@@ -170,25 +223,31 @@
 ---
 
 ## v2.3.1694 - 2026-07-23
+
 **Type:** patch
 
 ### 🗑️ Removed
+
 - `patchall` from `make` (under Windows)
 
 ### 🐛 Fixes
+
 - Removed `patchall` from `make` for Windows so it completes under Windows
 - Quieted noisy backend HTTP error on stop
 
 ### 🔧 Improvements
+
 - Took out `--icon` from PyInstaller and added to `.spec` for backend icon
 - Backend ICO of the snitch
 
 ---
 
 ## v2.2.1638 - 2026-07-18
+
 **Type:** minor
 
 ### ✨ Features
+
 - IPv6 support improvements (brackets on port usage, fixed delimiter issues)
 - Threat Intel sub-tab under Conv (VirusTotal)
 - Backend HTTP server (refined)
@@ -198,15 +257,18 @@
 - Filter autocomplete
 
 ### 🐛 Fixes
+
 - List panel blank bug
 - Big-endian nanosecond resolution pcap support
 - `ports.json` removal from samples (no longer needed)
 
 ### 🗑️ Removed
+
 - `ports.json` from samples (no longer needed)
 - Screenshots from frontend docs
 
 ### 🔧 Improvements
+
 - Removed screenshots from frontend docs
 - Backend pushes packets in chunks for more responsive frontend
 - Lazyload packets; call everything from drive instead of loading entire capture into memory
@@ -227,9 +289,11 @@
 ---
 
 ## v2.1.1606 - 2026-07-16
+
 **Type:** minor
 
 ### ✨ Features
+
 - Soulseek, Bittorrent, and SMPP support
 - Better PPP, PPPoE, and LLDP support
 - Improved plugin capabilities with new internal interaction APIs
@@ -241,13 +305,16 @@
 - GitHub workflow fixes (repo stats)
 
 ### 🐛 Fixes
+
 - List panel blank bug
 - Big-endian nanosecond resolution pcaps
 
 ### 🗑️ Removed
+
 - Non-clickable password badge from UI
 
 ### 🔧 Improvements
+
 - Plugin enforcement tests
 - Widened settings panels
 - Improved plugin UI handler
@@ -263,13 +330,16 @@
 ---
 
 ## v2.0.1573 - 2026-07-15
+
 **Type:** major
 
 ### ⚠️ Breaking Changes
+
 - Version 2.0 represents a major version bump with substantial architecture changes
 - New session save file format (gzipped BSON) replaces the previous format; old session saves are not compatible
 
 ### ✨ Features
+
 - `.psb` is on by default in debug mode
 - New session save file format based on gzipped BSON (binary JSON)
 - Multi-job processing on backend and frontend with job IDs
@@ -293,6 +363,7 @@
 - Updated Python spec file for snitch.py
 
 ### 🐛 Fixes
+
 - SIP handling under Conv tab decoders
 - Better pagination for large streams loaded into Conv
 - Better formatting in Conv tab
@@ -306,9 +377,11 @@
 - Backend bug finding common/
 
 ### 🗑️ Removed
+
 - Unnecessary testcases dir creation in HTTP mode
 
 ### 🔧 Improvements
+
 - Version bump
 - Updated python spec file for snitch.py
 - Increased fade out sec
@@ -331,9 +404,11 @@
 ---
 
 ## v2.0.1566 - 2026-07-14
+
 **Type:** minor
 
 ### ✨ Features
+
 - `.psb` is on by default in debug mode
 - Backend's `common/` library bug fix
 - Multi-job processing on backend and frontend with job IDs
@@ -346,14 +421,17 @@
 ---
 
 ## v1.9.1518 - 2026-07-11
+
 **Type:** minor
 
 ### 🗑️ Removed
+
 - References to `models.txt` from code
 - Test automatic run (left tests manual)
 - Map crosshair
 
 ### 🐛 Fixes
+
 - Removed references to `models.txt` in code, left `modes.json` support
 - MAC address pulling IP into field bug on backend
 - Backend kickoff improvements
@@ -361,6 +439,7 @@
 - Map animations smoother
 
 ### 🔧 Improvements
+
 - Updated map animations for smoother zoom
 - Streamlined the frontend
 - Stream payload caches
@@ -386,9 +465,11 @@
 ---
 
 ## v1.9.1442 - 2026-07-05
+
 **Type:** minor
 
 ### ✨ Features
+
 - Worldmap
 - Backend HTTP server
 - PGP workspace in the Crypt tab
@@ -411,6 +492,7 @@
 - Better filter bar logic
 
 ### 🐛 Fixes
+
 - Removed duplicates in the backend JSON
 - Preprocessor's legacy keys cleaned up; removed all non dot-notation keys
 - This can be a breaking change on session saves; you may need to remove old saves or use them with the previous version of PacketSnitch
@@ -422,15 +504,18 @@
 - Backend now pulls the number of available CPU cores dynamically
 
 ### ⚠️ Breaking Changes
+
 - Saved sessions need to be discarded and rebuilt from their pcap
 - Old session saves may not work due to legacy key removal
 
 ### 🗑️ Removed
+
 - All non dot-notation (legacy) keys from the preprocessor output
 - Need for `threads` var in backend config (now pulled dynamically from available CPU cores)
 - Duplicates in the backend JSON
 
 ### 🔧 Improvements
+
 - New themes: pastels and Sub7
 - Tweaked the light theme
 - New ico location
@@ -461,15 +546,18 @@
 ---
 
 ## v1.8.1384 - 2026-07-01
+
 **Type:** patch
 
 ### 🗑️ Removed
+
 - Unneeded reqs in `requirements.txt`
 - Ollama dep from backend (LLM moved to frontend)
 - LLM references and calls from backend
 - `_dirname` and `_filename` patches (replaced with DefinePlugin and fallback)
 
 ### 🐛 Fixes
+
 - Removed unneeded reqs in `requirements.txt`; let pip handle that
 - Windows cPyInstaller should be able to use Linux forward slashes in spec file for snitch.py
 - Pushing startup hardening to the backend loader
@@ -479,6 +567,7 @@
 - Tried to fix ollama compile issue
 
 ### 🔧 Improvements
+
 - Ver bump and removed ollama dep in backend
 - Does a check to see if LLM Ollama backend is running before exposing it in UI
 - Updated LLM with a longer default timeout for slow models
@@ -511,9 +600,11 @@
 ---
 
 ## v1.8.1332 - 2026-06-28
+
 **Type:** minor
 
 ### 🐛 Fixes
+
 - Try checking the type and returning if not an arr
 - Fixed for zero packets warning
 - Correction so it doesn't return before clearing the old packet data
@@ -521,6 +612,7 @@
 - Added link to license
 
 ### 🔧 Improvements
+
 - Initial test of LLM in frontend
 - Per-packet/key filtering and grouping
 - Stats tab Total Traffic indicator fixed
@@ -529,9 +621,11 @@
 ---
 
 ## v1.7.969 - 2026-06-24
+
 **Type:** minor
 
 ### ✨ Features
+
 - Globbing-style regex support in filter (now supports `?` and `*`)
 - Brotli detection
 - Help button tied to new window that loads the documentation from the internet
@@ -542,6 +636,7 @@
 - New filter keys added to docs
 
 ### 🐛 Fixes
+
 - Backend clobbering bug when a new session was loaded before the backend was done
 - Some corrections in backend to what layer a proto returns as
 - Sets user agent to PacketSnitch and version for web reqs
@@ -552,6 +647,7 @@
 - Repositioned the Overview in the Stats tab form one to three columns
 
 ### 🔧 Improvements
+
 - Added `link.proto` context menu filter options
 - Relabeled transport and application filters in context menu
 - Added some proper protocol keys to backend for more descriptive filtering (e.g., `transport.proto: tcp`, or `link.proto: ethernet`)
@@ -560,9 +656,11 @@
 ---
 
 ## v1.7.935 - 2026-06-21
+
 **Type:** minor
 
 ### ✨ Features
+
 - Decoders: SIP and FTP (with keychain credential autopopulation)
 - New filter keys: `tcp.retransmission`, retransmission/out-of-order packet keys
 - Statistics to Stats tab for retransmission
@@ -585,19 +683,23 @@
 - Table coloring
 
 ### 🐛 Fixes
+
 - Data types frame auto hides if it doesn't make sense to have it there
 - Renamed exploit pcap
 
 ### 🔧 Improvements
+
 - Better and more targeted context menu
 - Uppercased application layer protocols in Stats tab for congruence
 
 ---
 
 ## v1.7.848 - 2026-06-17
+
 **Type:** minor
 
 ### ✨ Features
+
 - Backend now pushes packets into frontend in chunks for more responsive frontend
 - Code can lazyload packets and call everything from drive instead of loading entire capture into memory
 - Increased the number of seconds status update stays on to 10
@@ -617,10 +719,12 @@
 - Removed stray IP addresses from `dns.qname` in Stats page
 
 ### 🗑️ Removed
+
 - Stray IP addresses from `dns.qname` in Stats page
 - Divider above Exports submenu
 
 ### 🐛 Fixes
+
 - Backend handles packet array sync up properly with guards
 - Now only runs autosave if a real session is opened, discards a dummy session (<5000 bytes)
 - Autosave function triggers on exit and on log write
@@ -633,6 +737,7 @@
 - [Snitch] entries in log no longer have unary space near beginning
 
 ### 🔧 Improvements
+
 - Moved save button to the very bottom
 - Removed divider above Exports submenu
 - Edited some context menu items to shorten them
@@ -659,16 +764,20 @@
 ---
 
 ## v1.6.807 - 2026-06-14
+
 **Type:** minor
 
 ### ✨ Features
+
 - Autosave function that triggers on exit and on log write
 - New session file format (compressed)
 
 ### 🗑️ Removed
+
 - Dependency on manually saving session on exit (now handled by autosave)
 
 ### 🐛 Fixes
+
 - Now only runs autosave if a real session is opened
 - Discards a dummy session (any session less than 5000 bytes)
 - Added check to see if a session is even open before asking to save it on quit
@@ -681,9 +790,11 @@
 ---
 
 ## v1.5.731 - 2026-06-07
+
 **Type:** minor
 
 ### ✨ Features
+
 - Encodings as a hidden import for the python backend .deb builds
 - Swapped snitch binary location due to earlier breaking change in forge config
 - Conditional forge config builds based on building OS
@@ -692,6 +803,7 @@
 - Installer splash
 
 ### 🐛 Fixes
+
 - Windows installer icons fixed
 - Stripped some unnecessary stuff out of backend package
 - Added things to make deb build correctly under Kali
@@ -699,6 +811,7 @@
 - Updated that compression block with a notice
 
 ### 🔧 Improvements
+
 - Updated metadata for the builds
 - Updated description and uninstaller ico
 - Added installer loop gif with installer written on it
@@ -708,14 +821,17 @@
 - Some keywords and the terminal explicit false to the .desktop metadata
 
 ### 🗑️ Removed
+
 - Unnecessary stuff from backend package
 
 ---
 
 ## v1.5.705 - 2026-06-03
+
 **Type:** minor
 
 ### ✨ Features
+
 - New width/height config so it better fits smaller screens
 - Removed need for `threads` var in backend config
 - Now pulls the number of available CPU cores dynamically
@@ -758,9 +874,11 @@
 - Modified Python requirements.txt setup slightly so it doesn't bork on linux
 
 ### 🗑️ Removed
+
 - Need for `threads` var in backend config (now pulled from available CPU cores dynamically)
 
 ### 🔧 Improvements
+
 - Normalizing and removing some duplicated things
 - Got most of the logging stuff congruent
 - Add build from source instructions to README
@@ -777,22 +895,27 @@
 ---
 
 ## v1.5.618 - 2026-05-30
+
 **Type:** patch
 
 ### ✨ Features
+
 - Added the frontend to the installed screen
 - Fixed path for installed files locator
 
 ---
 
 ## v1.5.610 - 2026-05-29
+
 **Type:** minor
 
 ### 🗑️ Removed
+
 - Compiled backend dir
 - Patchup build from regular `npm run make` (so it completes under Windows)
 
 ### 🔧 Improvements
+
 - Updated `ps_views.gif`
 - Removed compiled backend dir, added tagline logo
 - Added tagline purple
@@ -803,9 +926,11 @@
 ---
 
 ## v1.4.508 - 2026-05-26
+
 **Type:** minor
 
 ### ✨ Features
+
 - Stream filter to when selecting packet from List or Stats screens
 - Hash algorithm outputs (MD5, SHA-1, SHA-256/384/512, SHA3-256/512, RIPEMD-160, Whirlpool) to Conv tab
 - `@noble/hashes` and `whirlpool-js` for Conv tab hash outputs
@@ -887,6 +1012,7 @@
 - Preserve active filter and packet on Host Data reopen
 
 ### 🐛 Fixes
+
 - Fixed Prev Next positioning to something sane
 - Some UI tweaks with more error messages
 - Fixed tabs opacity
@@ -916,6 +1042,7 @@
 - Keep hex payload grid cells square at all zoom levels
 
 ### 🔧 Improvements
+
 - Edit author line
 - Removed eslint backup
 - Added chardet to backend's requirements.txt
@@ -926,9 +1053,11 @@
 ---
 
 ## v1.3.353 - 2026-05-24
+
 **Type:** minor
 
 ### ✨ Features
+
 - Updated some electron forge stuff
 - Updated python requirements.txt
 - Fixed log search box positioning
@@ -956,20 +1085,24 @@
 - Added chardet to backend's requirements.txt
 
 ### 🔧 Improvements
+
 - Removed eslint backup
 - Some minor changes to themes
 - Update screenshot in README for main view
 - Added screenshot 24
 
 ### 🗑️ Removed
+
 - `eslint` backup
 
 ---
 
 ## v1.2.310 - 2026-04-23
+
 **Type:** minor
 
 ### ✨ Features
+
 - Fix frontend to safely read MAC fields when Ethernet Frame may be N/A
 - Show MAC address info when one IP is private and other is internet
 - Save JSON from in-memory data instead of copying backend temp file
@@ -996,6 +1129,7 @@
 - Rewrite README.md to focus on frontend and full tool overview
 
 ### 🔧 Improvements
+
 - Hide menu bar
 - Fix images so they load from files
 - Update reference to Filters documentation
@@ -1004,9 +1138,11 @@
 ---
 
 ## v1.2.254 - 2026-04-16
+
 **Type:** minor
 
 ### ✨ Features
+
 - Add Filters.md link to main README
 - Add comprehensive Filters.md documentation page
 - Update README with donation options and installation steps
@@ -1098,6 +1234,7 @@
 - Initial commit
 
 ### 🐛 Fixes
+
 - Make all boxes resize relative to window size using flexbox and CSS variables
 - Add parenthesis grouping support to packet filter query parser
 - Use Unix-style path for non-Windows platforms in back-comm.js
@@ -1107,10 +1244,12 @@
 - Fix some things with eslint
 
 ### 🗑️ Removed
+
 - Window frame (frameless window)
 - A few old unworking samples
 
 ### 🔧 Improvements
+
 - Various UI improvements
 - Updated version number
 - Updated screenshot
@@ -1121,9 +1260,11 @@
 ---
 
 ## v1.2.227 - 2026-04-15
+
 **Type:** minor
 
 ### ✨ Features
+
 - Add HTTP protocol decoder to backend and frontend
 - Changed `packet.protocol` to `packet.proto` for uniformity
 - Add SNMP, ICMP, SIP, DHCP, and NTP protocol support
@@ -1170,23 +1311,28 @@
 - Initial commit
 
 ### 🐛 Fixes
+
 - Make all boxes resize relative to window size using flexbox and CSS variables
 - Add parenthesis grouping support to packet filter query parser
 - Various UI fixes
 
 ### 🗑️ Removed
+
 - Window frame (frameless window)
 - A few old unworking samples
 
 ---
 
 ## v1.1.195 - 2026-04-13
+
 **Type:** minor
 
 ### 🗑️ Removed
+
 - Useless icons
 
 ### ✨ Features
+
 - Removed useless icons
 - Added new ver
 - Add LLM enable/disable checkbox to frontend; add `--no-llm` backend flag
@@ -1199,15 +1345,18 @@
 - Fixed horizontal scroll on packet payload pane (disabled)
 
 ### 🔧 Improvements
+
 - Optimized snitch.py backend - O(1) lookups, GeoIP cache, thread safety, fix bugs
 - Backed off threads again
 
 ---
 
 ## v1.1.184 - 2026-04-12
+
 **Type:** minor
 
 ### ✨ Features
+
 - Updated version
 - Fixed part of bookmark code that isn't available if host pointer is incorrect
 - Fixed off by one in bookmark code
@@ -1238,9 +1387,11 @@
 - Initial commit
 
 ### 🗑️ Removed
+
 - A few old unworking samples
 
 ### 🔧 Improvements
+
 - Made all boxes resize relative to window size using flexbox and CSS variables
 - Add parenthesis grouping support to packet filter query parser
 - Various UI improvements
@@ -1248,12 +1399,15 @@
 ---
 
 ## v1.0.175 - 2026-04-13
+
 **Type:** patch
 
 ### 🗑️ Removed
+
 - Useless icons
 
 ### 🔧 Improvements
+
 - Removed useless icons
 - Version bump
 - Updated version
@@ -1261,12 +1415,15 @@
 ---
 
 ## v1.0.158 - 2026-04-01
+
 **Type:** major
 
 ### 🗑️ Removed
+
 - Window frame (frameless window)
 
 ### ✨ Features
+
 - First stable 1.0 release
 - Initial application framework
 - Backend Python service integration
@@ -1289,6 +1446,7 @@
 - LLM integration in backend
 
 ### 🐛 Fixes
+
 - Fixed many initial display bugs
 - Filter improvements
 - Bookmark logic improvements
@@ -1298,9 +1456,11 @@
 ---
 
 ## v0.9.130alpha - 2026-03-24
+
 **Type:** major (alpha)
 
 ### ✨ Features
+
 - Alpha release
 - Initial working binaries (Windows, Linux, macOS)
 - Application framework
@@ -1321,9 +1481,11 @@
 ---
 
 ## Initial Development - 2026-02-17 to 2026-03-24
+
 **Type:** pre-alpha
 
 ### ✨ Features
+
 - Initial project commit
 - Project scaffolding
 - Basic Electron + Python backend architecture
@@ -1394,4 +1556,3 @@
 - Modified colorscheme, added transparent byline and logo
 - Fixed bookmark logic so it doesn't get stuck on undefined host. Changed some icons
 - Update funding usernames in FUNDING.yml
-
