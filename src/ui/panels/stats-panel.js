@@ -1496,9 +1496,10 @@ function renderStatsLeaderLines(
       delayMs = lineDuration;
     } else if (spec.kind === "inner") {
       // Inner ticks wait until ALL converging lines have finished arriving
-      // at the stop point, then draw together.
+      // at the stop point, then draw together and FINISH at the same instant
+      // the convergence lines complete (LEADER_DURATION_MS).
       durationMs = perpendicularDurationMs;
-      delayMs = LEADER_DURATION_MS;
+      delayMs = Math.max(0, LEADER_DURATION_MS - perpendicularDurationMs);
     }
     const lengthCeil = Math.ceil(spec.length) + 1;
     pathElements.push(
@@ -1526,7 +1527,7 @@ function renderStatsLeaderLines(
       .filter((s) => s.kind === "corner" || s.kind === "inner")
       .map((s) => (s.kind === "corner"
         ? convergeDurationByIndex[s.pairIndex] + CORNER_DURATION_MS
-        : LEADER_DURATION_MS + perpendicularDurationMs)),
+        : LEADER_DURATION_MS)),
   );
   setTimeout(() => {
     leaderLinesEl.hidden = true;
