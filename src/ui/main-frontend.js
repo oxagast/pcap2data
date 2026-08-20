@@ -3465,6 +3465,9 @@ function syncSettingsFormFromState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const backendEarlyYieldThresholdEl = document.getElementById(
+    "settings-debug-backend-early-yield-packet-threshold",
+  );
   const backendJsonDataEmitIntervalMsEl = document.getElementById(
     "settings-debug-backend-json-data-emit-interval-ms",
   );
@@ -3623,7 +3626,7 @@ function syncSettingsFormFromState() {
   if (backendHttpProgressLogIntervalMsEl) {
     const httpProgressLogIntervalMs = Number(
       settings.backend?.httpProgressLogMinIntervalMs ??
-        DEFAULT_SETTINGS.backend.httpProgressLogMinIntervalMs,
+      DEFAULT_SETTINGS.backend.httpProgressLogMinIntervalMs,
     );
     backendHttpProgressLogIntervalMsEl.value = String(
       Math.max(0, httpProgressLogIntervalMs),
@@ -3643,6 +3646,11 @@ function syncSettingsFormFromState() {
   if (backendRefreshMinPacketsEl) {
     backendRefreshMinPacketsEl.value = String(
       settings.debug.backendIncrementalRefreshMinPackets,
+    );
+  }
+  if (backendEarlyYieldThresholdEl) {
+    backendEarlyYieldThresholdEl.value = String(
+      settings.debug.backendEarlyYieldPacketThreshold,
     );
   }
   if (backendJsonDataEmitIntervalMsEl) {
@@ -3903,6 +3911,9 @@ function readSettingsFormState() {
   const backendRefreshMinPacketsEl = document.getElementById(
     "settings-debug-backend-refresh-min-packets",
   );
+  const backendEarlyYieldThresholdEl = document.getElementById(
+    "settings-debug-backend-early-yield-packet-threshold",
+  );
   const backendJsonDataEmitIntervalMsEl = document.getElementById(
     "settings-debug-backend-json-data-emit-interval-ms",
   );
@@ -4024,6 +4035,9 @@ function readSettingsFormState() {
       backendIncrementalRefreshMinPackets: backendRefreshMinPacketsEl
         ? backendRefreshMinPacketsEl.value
         : DEFAULT_SETTINGS.debug.backendIncrementalRefreshMinPackets,
+      backendEarlyYieldPacketThreshold: backendEarlyYieldThresholdEl
+        ? backendEarlyYieldThresholdEl.value
+        : DEFAULT_SETTINGS.debug.backendEarlyYieldPacketThreshold,
       backendJsonDataEmitMinIntervalMs: backendJsonDataEmitIntervalMsEl
         ? backendJsonDataEmitIntervalMsEl.value
         : DEFAULT_SETTINGS.debug.backendJsonDataEmitMinIntervalMs,
@@ -5013,6 +5027,16 @@ function getBackendPacketChunkSize() {
   );
 }
 
+// Returns the minimum packet count before the renderer loads the first
+// backend snapshot. Configurable via Settings → Debug.
+function getBackendEarlyYieldPacketThreshold() {
+  return Math.max(
+    1,
+    Number(getCurrentSettings()?.debug?.backendEarlyYieldPacketThreshold) ||
+    DEFAULT_SETTINGS.debug.backendEarlyYieldPacketThreshold,
+  );
+}
+
 // Returns backend worker threads.
 function getBackendWorkerThreads() {
   return Math.max(
@@ -5525,7 +5549,9 @@ function updateBackendProcessingWarning() {
   warningEl.innerHTML =
     "Warning: packets are still being processed." +
     "<br>" +
-    etaText;
+    etaText +
+    "<br>" +
+    "<em>Note: the session shown is partial. The complete session will replace this view when processing finishes.</em>";
   warningEl.style.display = "block";
 }
 
@@ -7253,7 +7279,10 @@ function evaluateOutOfOrderFilterExpression(expression) {
   });
 }
 
-// Returns all packets for host navigation.
+// Returns all packets for host navigation. When the capture-store provides
+// listEntries (pre-sorted by pcapOrder), we use them as the sort index and
+// collect stubs in that order — no spread, no re-sort. The result is cached
+// and only invalidated when the cache version bumps (new chunk applied).
 function getAllPacketsForHostNavigation() {
   if (
     allHostsNavigationPacketsCache
@@ -7266,6 +7295,30 @@ function getAllPacketsForHostNavigation() {
     capturedPackets && typeof capturedPackets["host"] === "object"
       ? capturedPackets["host"]
       : {};
+
+  // Fast path: use pre-sorted listEntries from capture-store as a sort
+  // index. Each entry has {packetKey, host, pktIdx} — we look up the stub
+  // from hostMap[host][pktIdx]. This is O(N) but with no sort, no spread,
+  // and no timestamp parsing.
+  const listEntries = Array.isArray(capturedPackets?.listEntries)
+    ? capturedPackets.listEntries
+    : null;
+
+  if (listEntries && listEntries.length > 0) {
+    const allPackets = new Array(listEntries.length);
+    for (let i = 0; i < listEntries.length; i += 1) {
+      const entry = listEntries[i];
+      const hostPackets = hostMap[entry.host];
+      allPackets[i] = Array.isArray(hostPackets) ? hostPackets[entry.pktIdx] : null;
+    }
+    allHostsNavigationPacketsCache = {
+      version: packetNavigationCacheVersion,
+      packets: allPackets,
+    };
+    return allPackets;
+  }
+
+  // Fallback: no listEntries (e.g. legacy JSON load). Spread + sort.
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
@@ -7300,7 +7353,12 @@ function getPacketsForSelectedHost(selectedHost) {
   const hostPackets = Array.isArray(capturedPackets?.["host"]?.[selectedHost])
     ? capturedPackets["host"][selectedHost]
     : [];
-  const sortedHostPackets = sortPacketsByOwnStreamOrder([...hostPackets]);
+  // Backend-sourced host arrays are already sorted by timestamp. The
+  // isPacketListInStreamOrder probe inside sortPacketsByOwnStreamOrder
+  // will detect this and return the input without copying. We still pass
+  // the original array (not a spread copy) so the short-circuit returns
+  // the same reference — no allocation at all for the common case.
+  const sortedHostPackets = sortPacketsByOwnStreamOrder(hostPackets);
   hostNavigationPacketsCache.set(normalizedHost, {
     version: packetNavigationCacheVersion,
     packets: sortedHostPackets,
@@ -10254,6 +10312,15 @@ async function buildSessionFilePayload() {
     } catch (error) {
       logErrorEntry("session-export-materialize", error);
     }
+  }
+
+  // Strip listEntries from the saved payload — they're a renderer-side sort
+  // index derived from the host map, not data the session file needs to
+  // persist. Including them would bloat the file with redundant per-packet
+  // summaries that the capture store rebuilds on load anyway.
+  if (captureDataForSave && typeof captureDataForSave === "object" && captureDataForSave.listEntries) {
+    captureDataForSave = { ...captureDataForSave };
+    delete captureDataForSave.listEntries;
   }
 
   return JSON.stringify(
@@ -16637,6 +16704,16 @@ const INGESTION_INDEX_YIELD_INTERVAL_BASE = 2000;
 const INGESTION_INDEX_YIELD_INTERVAL_BACKLOG = 8000;
 const INGESTION_DEFERRED_BACKLOG_THRESHOLD = 3;
 const INGESTION_DEFERRED_BACKLOG_DECAY_MS = 15000;
+
+// Minimum packet count before the renderer loads the first backend snapshot.
+// The backend yields the first chunk early so the user has data to explore,
+// but we don't want to load a tiny snapshot (e.g. 200 packets) and then
+// immediately swap it out. ~12k packets is enough to populate the Summary,
+// Stats, and List tabs with meaningful data while the backend keeps
+// processing. When the backend finishes, we do a clean full swap with the
+// complete session — no expensive incremental merge. Captures that complete
+// under this threshold bypass the gate and load immediately. The threshold
+// is configurable via Settings → Debug (backendEarlyYieldPacketThreshold).
 
 // Handles yield to renderer.
 function yieldToRenderer() {
@@ -25424,20 +25501,18 @@ async function processBackendJsonPathPayload(payload) {
     }
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
-    // Force a full reindex on the final chunk of a wifi-keys rerun so
-    // the decrypted packet content becomes visible. The path-mode
-    // handler doesn't have a separate "first chunk" branch like the
-    // in-memory handler does, so we have to do the full reindex here
-    // for both intermediate and final chunks. Without this, the
-    // incremental merge sees equal old/new packet counts (same 1093
-    // packets, just decrypted instead of encrypted) and skips
-    // reindexing — leaving the UI stuck on pre-decryption content.
-    const forceFullReindexForWifiKeys =
+    // Final chunk: the backend has finished processing. Do a clean full
+    // swap (incrementalUpdate: false) so the renderer replaces the early-
+    // yield partial session with the complete data in one shot — no
+    // expensive incremental merge. The only exception is a wifi-keys rerun,
+    // which must preserve bookmarks/notes/heatmap via the incremental path
+    // with a forced full reindex so decrypted content becomes visible.
+    const isWifiKeysRerun =
       backendProgressState.wifiKeysRerunInFlight === true;
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
-      incrementalUpdate: true,
-      finalUpdate: forceFullReindexForWifiKeys,
+      incrementalUpdate: isWifiKeysRerun,
+      finalUpdate: isWifiKeysRerun,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-path-final",
@@ -25447,7 +25522,7 @@ async function processBackendJsonPathPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
+      `Backend final swap received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
     );
     logIngestionChunkTiming("path", "final-chunk-applied", payload, performance.now() - chunkStartTime);
   }
@@ -25521,10 +25596,18 @@ async function processBackendJsonDataPayload(payload) {
     updateBackendProgressStatus();
   }
 
-  const minimumChunkSize = payload.chunkSize || getBackendPacketChunkSize();
+  const minimumChunkSize = Math.max(
+    payload.chunkSize || getBackendPacketChunkSize(),
+    getBackendEarlyYieldPacketThreshold(),
+  );
   const payloadHasPackets = backendProgressState.firstChunkLoaded
     ? false
     : hasAnyCaptureDataPackets(payload.captureData);
+  // For small captures that finish before reaching the early-yield threshold,
+  // load immediately on the complete payload. For larger captures, wait until
+  // at least the threshold number of packets are ready before loading the
+  // first chunk — this gives the user meaningful data to explore without the
+  // churn of loading a tiny snapshot and then swapping it out.
   const hasUsableChunk =
     payload.complete
     || payload.processedPackets >= minimumChunkSize
@@ -25605,15 +25688,18 @@ async function processBackendJsonDataPayload(payload) {
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
     await yieldToRenderer();
-    // Force a full reindex on the final chunk of a wifi-keys rerun so
-    // the decrypted packet content becomes visible. Intermediate chunks
-    // skip this to avoid wasted work during the rerun.
-    const forceFullReindexForWifiKeys =
+    // Final chunk: the backend has finished processing. Do a clean full
+    // swap (incrementalUpdate: false) so the renderer replaces the early-
+    // yield partial session with the complete data in one shot — no
+    // expensive incremental merge. The only exception is a wifi-keys rerun,
+    // which must preserve bookmarks/notes/heatmap via the incremental path
+    // with a forced full reindex so decrypted content becomes visible.
+    const isWifiKeysRerun =
       backendProgressState.wifiKeysRerunInFlight === true;
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
-      incrementalUpdate: true,
-      finalUpdate: forceFullReindexForWifiKeys,
+      incrementalUpdate: isWifiKeysRerun,
+      finalUpdate: isWifiKeysRerun,
     });
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-final",
@@ -25623,7 +25709,7 @@ async function processBackendJsonDataPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
+      `Backend final swap received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} wifi_keys_rerun = ${backendProgressState.wifiKeysRerunInFlight}`,
     );
     logIngestionChunkTiming("data", "final-chunk-applied", payload, performance.now() - chunkStartTime, {
       label: payload.label,
@@ -25682,14 +25768,26 @@ async function processBackendJsonDataPayload(payload) {
 
 // when the main.js returns the capture path from snitch.py
 window.jsonapi.onJsonPath((rawPayload) => {
+  // we need to ensure the frontend does not continue to consume
+  // packets after the threshold, to avoid cippling the UI performance
   const payload = normalizeBackendJsonPathPayload(rawPayload);
+  const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
+  // Always allow the final complete payload through — it's the "last swap"
+  // that replaces the early-yield partial session with the full data.
+  if (payload.processedPackets > 0 && pProcessed >= getBackendEarlyYieldPacketThreshold() && !payload.complete) return
+
   if (!payload || !payload.path) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("path", payload);
 });
 
 window.jsonapi.onJsonData((rawPayload) => {
+  // same here as above about the ui performance
   const payload = normalizeBackendJsonDataPayload(rawPayload);
+  const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
+  // Always allow the final complete payload through — it's the "last swap"
+  // that replaces the early-yield partial session with the full data.
+  if (payload.processedPackets > 0 && pProcessed >= getBackendEarlyYieldPacketThreshold() && !payload.complete) return
   if (!payload || !payload.captureData) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("data", payload);
@@ -25752,6 +25850,7 @@ function runSnitch(file, options = {}) {
   const backendOptions = {
     ...backendTransportOptions,
     allowUnknownMagicLoad: forceUnknownMagicLoad,
+    earlyYieldPacketThreshold: getBackendEarlyYieldPacketThreshold(),
   };
   // Pull the current wifi keystore entries so they ride along with the
   // backend run. The backend then decrypts 802.11 frames as they're

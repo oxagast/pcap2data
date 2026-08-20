@@ -258,6 +258,8 @@ allPacketInfoLock = threading.Lock()
 hostOutputFile = "hosts.json"
 DEFAULT_HOST_CHUNK_SIZE = 2000
 hostChunkSize = DEFAULT_HOST_CHUNK_SIZE
+DEFAULT_EARLY_YIELD_PACKET_THRESHOLD = 5000
+earlyYieldPacketThreshold = DEFAULT_EARLY_YIELD_PACKET_THRESHOLD
 emitJsonSnapshots = False
 progressLinePrefix = "[Bridge]"
 progressEventCallback = None
@@ -379,6 +381,7 @@ def _getRuntimeConfigSnapshot():
         return {
             "hostChunkSize": int(hostChunkSize),
             "workerThreads": int(numWorkerThreads),
+            "earlyYieldPacketThreshold": int(earlyYieldPacketThreshold),
         }
 
 
@@ -407,6 +410,7 @@ def _setActiveWifiKeys(entries):
 def _applyRuntimeConfigUpdate(request):
     global hostChunkSize
     global numWorkerThreads
+    global earlyYieldPacketThreshold
 
     updates = {}
     if "hostChunkSize" in request:
@@ -418,6 +422,11 @@ def _applyRuntimeConfigUpdate(request):
         updates["workerThreads"] = _coercePositiveInt(
             request.get("workerThreads"),
             numWorkerThreads,
+        )
+    if "earlyYieldPacketThreshold" in request:
+        updates["earlyYieldPacketThreshold"] = _coercePositiveInt(
+            request.get("earlyYieldPacketThreshold"),
+            earlyYieldPacketThreshold,
         )
     if "wifiKeys" in request:
         _setActiveWifiKeys(request.get("wifiKeys"))
@@ -434,6 +443,8 @@ def _applyRuntimeConfigUpdate(request):
             hostChunkSize = updates["hostChunkSize"]
         if "workerThreads" in updates:
             numWorkerThreads = updates["workerThreads"]
+        if "earlyYieldPacketThreshold" in updates:
+            earlyYieldPacketThreshold = updates["earlyYieldPacketThreshold"]
 
     return {
         "success": True,
@@ -497,6 +508,7 @@ def _buildBackendStatusPayload(server=None):
         + f"uptime_s={uptimeSeconds:.3f} "
         + f"workerThreads={runtimeConfig['workerThreads']} "
         + f"hostChunkSize={runtimeConfig['hostChunkSize']} "
+        + f"earlyYieldPacketThreshold={runtimeConfig.get('earlyYieldPacketThreshold', DEFAULT_EARLY_YIELD_PACKET_THRESHOLD)} "
         + f"runningJobs={len(runningJobs)} "
         + f"jobsProcessed={jobsProcessedSinceStart}"
     )
@@ -3997,7 +4009,12 @@ def startThreading():
                             allPacketInfoSnapshot = list(allPacketInfo)
                             processedPacketCount = len(allPacketInfoSnapshot)
 
-                        while processedPacketCount >= nextSnapshotPacketCount:
+                        # we need to get a variable containing the cutoff threshold
+                        # from the frontend, so we don't keep emitting packets after
+                        # the frontend starts deferring everything left.
+                        # Use earlyYieldPacketThreshold to stop emitting snapshots
+                        # once the frontend would defer them anyway.
+                        while processedPacketCount >= nextSnapshotPacketCount and processedPacketCount < earlyYieldPacketThreshold:
                             snapshotStart = time.perf_counter()
                             if emitJsonSnapshots:
                                 captureData = buildHostsPayload(allPacketInfoSnapshot, "")
@@ -4147,6 +4164,12 @@ with additional network and server information.
         default=DEFAULT_HOST_CHUNK_SIZE,
     )
     parser.add_argument(
+        "--early-yield-packet-threshold",
+        help="Minimum packets before first incremental snapshot is emitted (default: 12000).",
+        type=int,
+        default=12000,
+    )
+    parser.add_argument(
         "--worker-threads",
         help="Number of backend worker threads (default: 2x CPU cores).",
         type=int,
@@ -4271,6 +4294,11 @@ def runCaptureFromArgs(runArgs):
     hostChunkSize = _coercePositiveInt(
         getattr(runArgs, "host_chunk_size", DEFAULT_HOST_CHUNK_SIZE),
         DEFAULT_HOST_CHUNK_SIZE,
+    )
+    global earlyYieldPacketThreshold
+    earlyYieldPacketThreshold = _coercePositiveInt(
+        getattr(runArgs, "early_yield_packet_threshold", DEFAULT_EARLY_YIELD_PACKET_THRESHOLD),
+        DEFAULT_EARLY_YIELD_PACKET_THRESHOLD,
     )
     emitJsonSnapshots = bool(getattr(runArgs, "emit_json_snapshots", False))
     stopEvent.clear()
@@ -4987,6 +5015,10 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
                 host_chunk_size=_coercePositiveInt(
                     request.get("hostChunkSize"),
                     _getRuntimeConfigSnapshot()["hostChunkSize"],
+                ),
+                early_yield_packet_threshold=_coercePositiveInt(
+                    request.get("earlyYieldPacketThreshold"),
+                    DEFAULT_EARLY_YIELD_PACKET_THRESHOLD,
                 ),
                 worker_threads=int(
                     request.get("workerThreads") or _getRuntimeConfigSnapshot()["workerThreads"]

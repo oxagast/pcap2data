@@ -1899,6 +1899,15 @@ No keystore entries saved.</pre>
                   Higher values reduce UI overhead but delay partial data updates.
                 </div>
 
+                <label for="settings-debug-backend-early-yield-packet-threshold">Early yield packet threshold</label>
+                <input id="settings-debug-backend-early-yield-packet-threshold" type="number" min="1" step="500" />
+                <div class="settings-help-text">
+                  Minimum packet count before the renderer loads the first backend snapshot. The backend yields
+                  early so you can start exploring partial data, then does a clean full swap when processing
+                  completes. Lower values load sooner but may swap more data later. Set to 1 to load the first
+                  chunk immediately.
+                </div>
+
                 <label for="settings-plugins-auto-disable-failure-threshold">
                   Plugin Auto-Disable failure threshold (critical failures).
                 </label>
