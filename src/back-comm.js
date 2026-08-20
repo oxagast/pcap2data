@@ -27,8 +27,8 @@ const BACKEND_HTTP_PORT = 9020;
 const BACKEND_HTTP_READY_TIMEOUT_MS = 4000;
 const BACKEND_HTTP_REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 // Startup reclaim: when the GUI launches, look for an already-running backend
-// on the configured HTTP port and try to shut it down gracefully before falling
-// back to a hard kill.
+// on the configured HTTP port. If found, stop any current jobs and reuse the
+// service instead of spawning a new backend (which would cause port conflicts).
 const STARTUP_RECLAIM_GRACEFUL_TIMEOUT_MS = 5000;
 const STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS = 150;
 const STARTUP_RECLAIM_KILL_TIMEOUT_MS = 4000;
@@ -49,6 +49,7 @@ let currentBackendHttpPort = BACKEND_HTTP_PORT;
 let backendHttpShutdownExpected = false;
 let backendHttpRespawnAttempts = 0;
 let backendHttpRespawnTimer = null;
+let reusedExistingBackendAtStartup = false;
 const pendingJsonDataPayloadByJob = new Map();
 const jsonDataEmitTimerByJob = new Map();
 const lastJsonDataEmitAtMsByJob = new Map();
@@ -655,96 +656,125 @@ async function reclaimExistingBackendService(options = {}) {
     `[Bridge] Startup reclaim: detected existing snitch HTTP backend on ${host}:${port}`,
   );
 
-  // 1) Try graceful shutdown via the /control endpoint.
-  const shutdownResult = await sendBackendControlCommand("shutdown", Math.max(1500, Math.min(gracefulTimeoutMs, 4000)));
-  const shutdownAccepted = Boolean(shutdownResult?.success || shutdownResult?.noop);
-  if (!shutdownAccepted) {
+  // 1) Stop any current processing jobs via /control endpoint.
+  //    This leaves the backend service running so we can reuse it.
+  const stopResult = await sendBackendControlCommand("stop-processing", Math.max(1500, Math.min(gracefulTimeoutMs, 4000)));
+  const stopAccepted = Boolean(stopResult?.success || stopResult?.noop);
+  if (!stopAccepted) {
     global.logBackend?.(
-      "[Bridge] Startup reclaim: graceful shutdown was not accepted; proceeding to hard kill",
-      shutdownResult?.error || "",
+      "[Bridge] Startup reclaim: stop-processing was not accepted; proceeding to graceful shutdown",
+      stopResult?.error || "",
+    );
+  } else {
+    global.logBackend?.(
+      "[Bridge] Startup reclaim: stopped current processing jobs on existing backend",
     );
   }
 
-  // 2) Wait for the port to be released.
-  const release = await waitForBackendPortFree(
-    host,
-    port,
-    Math.max(500, gracefulTimeoutMs),
-    STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
-  );
-  if (release.released) {
-    global.logBackend?.(
-      `[Bridge] Startup reclaim: existing backend on ${host}:${port} stopped gracefully`,
-    );
-    return {
-      detected: true,
-      action: shutdownAccepted ? "graceful-shutdown" : "graceful-shutdown-fallback",
-      host,
-      port,
-    };
-  }
-
-  // 3) Port still bound — fall back to OS-level kill of whatever process is
-  //    listening on the port. This handles orphans from a previous GUI crash
-  //    as well as the case where the graceful shutdown did not run cleanly.
-  const listeningPids = await findListeningProcessIdsForPort(port);
-  if (!listeningPids.length) {
-    global.logBackend?.(
-      `[Bridge] Startup reclaim: port ${port} still reports busy but no listening PID could be resolved; will rely on spawn-time re-probe`,
-    );
-    return {
-      detected: true,
-      action: "no-pid-found",
-      host,
-      port,
-      gracefulShutdownAccepted: shutdownAccepted,
-    };
-  }
-
-  global.logBackend?.(
-    `[Bridge] Startup reclaim: forcing kill of process(es) bound to ${host}:${port}: ${listeningPids.join(", ")}`,
-  );
-
-  const killResults = [];
-  for (const pid of listeningPids) {
-    const result = await killProcessById(pid);
-    killResults.push({ pid, ...result });
-  }
-
-  const recheck = await waitForBackendPortFree(
-    host,
-    port,
-    Math.max(500, killTimeoutMs),
-    STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
-  );
-
-  // 4) If the port is STILL bound after SIGTERM, escalate to SIGKILL.
-  if (!recheck.released) {
-    for (const pid of listeningPids) {
-      const prior = killResults.find((entry) => entry.pid === pid);
-      if (prior && (prior.killed || prior.reason === "already-gone")) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const escalated = await forceKillProcessById(pid);
-      killResults.push({ pid, ...escalated, escalated: true });
+  // 2) If stop-processing wasn't accepted, try graceful shutdown as a fallback.
+  if (!stopAccepted) {
+    const shutdownResult = await sendBackendControlCommand("shutdown", Math.max(1500, Math.min(gracefulTimeoutMs, 4000)));
+    const shutdownAccepted = Boolean(shutdownResult?.success || shutdownResult?.noop);
+    if (!shutdownAccepted) {
+      global.logBackend?.(
+        "[Bridge] Startup reclaim: graceful shutdown was not accepted; proceeding to hard kill",
+        shutdownResult?.error || "",
+      );
     }
-    const finalRecheck = await waitForBackendPortFree(
+
+    // 3) Wait for the port to be released.
+    const release = await waitForBackendPortFree(
       host,
       port,
-      Math.max(500, killTimeoutMs / 2),
+      Math.max(500, gracefulTimeoutMs),
       STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
     );
-    if (!finalRecheck.released) {
+    if (release.released) {
       global.logBackend?.(
-        `[Bridge] Startup reclaim: failed to free port ${host}:${port} after kill; subsequent spawn may report address-in-use`,
+        `[Bridge] Startup reclaim: existing backend on ${host}:${port} stopped gracefully`,
       );
-    } else {
-      global.logBackend?.(
-        `[Bridge] Startup reclaim: forced kill cleared port ${host}:${port}`,
-      );
+      return {
+        detected: true,
+        action: shutdownAccepted ? "graceful-shutdown" : "graceful-shutdown-fallback",
+        host,
+        port,
+      };
     }
+
+    // 4) Port still bound — fall back to OS-level kill of whatever process is
+    //    listening on the port. This handles orphans from a previous GUI crash
+    //    as well as the case where the graceful shutdown did not run cleanly.
+    const listeningPids = await findListeningProcessIdsForPort(port);
+    if (!listeningPids.length) {
+      global.logBackend?.(
+        `[Bridge] Startup reclaim: port ${port} still reports busy but no listening PID could be resolved; will rely on spawn-time re-probe`,
+      );
+      return {
+        detected: true,
+        action: "no-pid-found",
+        host,
+        port,
+        gracefulShutdownAccepted: shutdownAccepted,
+      };
+    }
+
+    global.logBackend?.(
+      `[Bridge] Startup reclaim: forcing kill of process(es) bound to ${host}:${port}: ${listeningPids.join(", ")}`,
+    );
+
+    const killResults = [];
+    for (const pid of listeningPids) {
+      const result = await killProcessById(pid);
+      killResults.push({ pid, ...result });
+    }
+
+    const recheck = await waitForBackendPortFree(
+      host,
+      port,
+      Math.max(500, killTimeoutMs),
+      STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+    );
+
+    // 5) If the port is STILL bound after SIGTERM, escalate to SIGKILL.
+    if (!recheck.released) {
+      for (const pid of listeningPids) {
+        const prior = killResults.find((entry) => entry.pid === pid);
+        if (prior && (prior.killed || prior.reason === "already-gone")) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const escalated = await forceKillProcessById(pid);
+        killResults.push({ pid, ...escalated, escalated: true });
+      }
+      const finalRecheck = await waitForBackendPortFree(
+        host,
+        port,
+        Math.max(500, killTimeoutMs / 2),
+        STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+      );
+      if (!finalRecheck.released) {
+        global.logBackend?.(
+          `[Bridge] Startup reclaim: failed to free port ${host}:${port} after kill; subsequent spawn may report address-in-use`,
+        );
+      } else {
+        global.logBackend?.(
+          `[Bridge] Startup reclaim: forced kill cleared port ${host}:${port}`,
+        );
+      }
+      return {
+        detected: true,
+        action: "force-kill",
+        host,
+        port,
+        gracefulShutdownAccepted: shutdownAccepted,
+        killedPids: killResults,
+      };
+    }
+
+    global.logBackend?.(
+      `[Bridge] Startup reclaim: killed process(es) on ${host}:${port}; port is now free`,
+    );
     return {
       detected: true,
-      action: "force-kill",
+      action: "kill",
       host,
       port,
       gracefulShutdownAccepted: shutdownAccepted,
@@ -752,16 +782,18 @@ async function reclaimExistingBackendService(options = {}) {
     };
   }
 
+  // stop-processing was accepted — the existing backend is still running,
+  // we just stopped any current jobs. Return with reused flag.
   global.logBackend?.(
-    `[Bridge] Startup reclaim: killed process(es) on ${host}:${port}; port is now free`,
+    `[Bridge] Startup reclaim: existing backend on ${host}:${port} is healthy; reusing service`,
   );
+  reusedExistingBackendAtStartup = true;
   return {
     detected: true,
-    action: "kill",
+    action: "reuse",
     host,
     port,
-    gracefulShutdownAccepted: shutdownAccepted,
-    killedPids: killResults,
+    reused: true,
   };
 }
 
@@ -1376,6 +1408,12 @@ async function primeBackendHttpServer(options = {}) {
   const normalizedTransport = applyBackendTransportOptions(options);
   if (normalizedTransport.forceLegacySpawn) {
     return false;
+  }
+  // If we detected and reused an existing backend at startup, skip spawning
+  // and just verify the backend is ready.
+  if (reusedExistingBackendAtStartup) {
+    reusedExistingBackendAtStartup = false; // reset for next time
+    return ensureBackendHttpServerReady();
   }
   return ensureBackendHttpServerReady();
 }
@@ -2937,6 +2975,7 @@ module.exports = {
   requestSnitchHttpBackendIpsum,
   requestSnitchHttpBackendTor,
   requestSnitchHttpBackendVirusTotal,
+  getReusedExistingBackendAtStartup: () => reusedExistingBackendAtStartup,
   // Backward-compatible aliases for existing imports in main process code.
   shutdownTcpBackendService: shutdownHttpBackendService,
   ensureBackendTcpServerReady: ensureBackendHttpServerReady,
