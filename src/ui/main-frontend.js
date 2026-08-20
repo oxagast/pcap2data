@@ -3005,7 +3005,7 @@ function resetThemesPreview() {
   const previewEl = getThemesPreviewElement();
   const fallbackEl = getThemesPreviewFallbackElement();
   if (previewEl) {
-    previewEl.style.removeProperty("background-image");
+    previewEl.src = "";
     previewEl.hidden = true;
   }
   if (fallbackEl) {
@@ -3021,7 +3021,43 @@ function showThemesPreviewFromDataUri(dataUri) {
     resetThemesPreview();
     return;
   }
-  previewEl.style.setProperty("background-image", `url(${dataUri})`);
+
+  // Add error handler to debug image loading issues
+  previewEl.onerror = (e) => {
+    console.error("[Themes] Image load error:", e);
+    console.error("[Themes] dataUri length:", dataUri.length);
+    console.error("[Themes] dataUri prefix:", dataUri.substring(0, 60));
+  };
+
+  previewEl.onload = () => {
+    console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+  };
+
+  previewEl.src = dataUri;
+  previewEl.hidden = false;
+  fallbackEl.hidden = true;
+}
+
+function showThemesPreviewFromUrl(url) {
+  const previewEl = getThemesPreviewElement();
+  const fallbackEl = getThemesPreviewFallbackElement();
+  if (!previewEl || !fallbackEl) return;
+  if (!url) {
+    resetThemesPreview();
+    return;
+  }
+
+  // Add error handler to debug image loading issues
+  previewEl.onerror = (e) => {
+    console.error("[Themes] Image load error:", e);
+    console.error("[Themes] url:", url);
+  };
+
+  previewEl.onload = () => {
+    console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+  };
+
+  previewEl.src = url;
   previewEl.hidden = false;
   fallbackEl.hidden = true;
 }
@@ -3079,6 +3115,7 @@ async function fetchThemesPreviewFromUrl(previewUrl) {
   const requestToken = ++themesPreviewInFlight;
   try {
     const result = await window.themeapi.fetchPreview({ url: previewUrl });
+    console.log("[Themes] fetchPreview result:", result ? { success: result.success, error: result.error, dataUriLength: result.dataUri?.length, dataUriPrefix: result.dataUri?.substring(0, 60) } : "null");
     if (requestToken !== themesPreviewInFlight) {
       // A newer request superseded us; discard this one to avoid races.
       if (result && result.dataUri && result.dataUri.startsWith("blob:")) {
@@ -3195,19 +3232,15 @@ function renderThemesCatalog() {
     const previewBtn = document.createElement("button");
     previewBtn.type = "button";
     previewBtn.textContent = "Preview";
-    previewBtn.addEventListener("click", () => {
-      showThemesPreviewFromDataUri(buildThemesPreviewDataUri(entry.previewImage));
+    previewBtn.addEventListener("click", async () => {
+      // Use previewUrl directly - bypass data URI conversion
+      if (entry.previewUrl) {
+        showThemesPreviewFromUrl(entry.previewUrl);
+      } else {
+        showThemesPreviewFromDataUri(null);
+      }
     });
     actionsEl.appendChild(previewBtn);
-
-    const buyBtn = document.createElement("button");
-    buyBtn.type = "button";
-    buyBtn.textContent = entry.owned ? "Open in Browser" : "Buy";
-    buyBtn.disabled = !entry.owned && !entry.checkoutUrl;
-    buyBtn.addEventListener("click", () => {
-      void startThemeCheckout(entry);
-    });
-    actionsEl.appendChild(buyBtn);
 
     cardEl.appendChild(actionsEl);
     listEl.appendChild(cardEl);

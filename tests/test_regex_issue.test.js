@@ -7,7 +7,7 @@ const {
     extractCommandTemplate,
     tokenizeCommand,
     SLOT_PATTERNS,
-} = require("./src/ui/decoders/ssh-keystrokes/markov");
+} = require("../src/ui/decoders/ssh-keystrokes/markov");
 
 const SLOT_MARKER = "\u25c6";
 
@@ -100,7 +100,7 @@ testCommands.forEach((tc, idx) => {
 });
 
 console.log("\n=== Testing compareToTemplate and fixedLength calculation ===");
-const { compareToTemplate } = require("./src/ui/decoders/ssh-keystrokes/markov");
+const { compareToTemplate } = require("../src/ui/decoders/ssh-keystrokes/markov");
 
 const compareTestCases = [
     { candidate: "cat mydata.txt", corpus: "cat file.txt" },
@@ -122,7 +122,7 @@ compareTestCases.forEach((tc, idx) => {
 });
 
 console.log("\n=== Testing detectSlotsInCommand ===");
-const { detectSlotsInCommand } = require("./src/ui/decoders/ssh-keystrokes/markov");
+const { detectSlotsInCommand } = require("../src/ui/decoders/ssh-keystrokes/markov");
 
 const detectTestCases = [
     "cat file.txt",

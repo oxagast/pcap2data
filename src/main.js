@@ -7132,7 +7132,9 @@ ipcMain.handle("themes-fetch-preview", async (_event, payload = {}) => {
     const mimeMatch = contentType.match(/^image\/(png|jpe?g)/i);
     const mime = mimeMatch ? `image/${mimeMatch[1].toLowerCase().replace("jpg", "jpeg")}` : "image/png";
     const base64 = Buffer.from(arrayBuffer).toString("base64");
-    return { success: true, dataUri: `data:${mime};base64,${base64}` };
+    const dataUri = `data:${mime};base64,${base64}`;
+    console.log("[Themes] Main process: fetchPreview returning dataUri length:", dataUri.length);
+    return { success: true, dataUri };
   } catch (error) {
     if (error && error.name === "AbortError") {
       return { success: false, error: "Preview request timed out" };
