@@ -57,7 +57,7 @@ const MAX_HEATMAP_MAP_ZOOM = 2500;
 const HEATMAP_MAP_ZOOM_SLIDER_STEP = 1;
 const HEATMAP_SELECTION_ZOOM_LARGE_AREA_PERCENT = 200;
 const HEATMAP_SELECTION_ZOOM_MID_AREA_PERCENT = 450;
-const HEATMAP_SELECTION_ZOOM_TINY_AREA_PERCENT = 800;
+const HEATMAP_SELECTION_ZOOM_TINY_AREA_PERCENT = 2000;
 const HEATMAP_SELECTION_AREA_TINY_RATIO = 0.001;
 const HEATMAP_SELECTION_AREA_MID_RATIO = 0.02;
 const HEATMAP_SELECTION_AREA_LARGE_RATIO = 0.4;
@@ -67,7 +67,7 @@ const HEATMAP_LOCATION_SELECTION_ASPECT_WIDTH = 16;
 const HEATMAP_LOCATION_SELECTION_ASPECT_HEIGHT = 9;
 const HEATMAP_LOCATION_SELECTION_SIZE_SCALE = 0.5;
 const HEATMAP_SELECTION_MIN_PIXELS = 12;
-const HEATMAP_SELECTION_DRAW_MS = 320;
+const HEATMAP_SELECTION_DRAW_MS = 640;
 const HEATMAP_SELECTION_BLINK_MS = 360;
 const HEATMAP_ZOOM_SETTLE_MS = 420;
 const HEATMAP_SELECTION_RUSH_MS = 420;
@@ -1411,8 +1411,6 @@ function renderStatsLeaderLines(
 
   // Stop 35px before the edge of the box
   const stopBeforeEdge = 35;
-  // Perpendicular line length
-  const perpendicularLength = 50;
 
   // selectionRect coords are in parent (mapEl) space.
   const topY = selectionRect.top - stopBeforeEdge;
@@ -1423,21 +1421,40 @@ function renderStatsLeaderLines(
   const midX = selectionRect.left + selectionRect.width / 2;
   const midY = selectionRect.top + selectionRect.height / 2;
 
-  // Build raw line specs: { d, length, kind }
+  // Build raw line specs: { d, length, kind, pairIndex }
   const lineSpecs = [];
 
-  // Outer converging lines
-  lineSpecs.push({ d: `M${midX} 0 L${midX} ${topY}`, length: topY, kind: "converge" });
-  lineSpecs.push({ d: `M${midX} ${parentHeight} L${midX} ${bottomY}`, length: parentHeight - bottomY, kind: "converge" });
-  lineSpecs.push({ d: `M0 ${midY} L${leftX} ${midY}`, length: leftX, kind: "converge" });
-  lineSpecs.push({ d: `M${parentWidth} ${midY} L${rightX} ${midY}`, length: parentWidth - rightX, kind: "converge" });
+  // Outer converging lines. Each is paired (by push order) with a "corner"
+  // tick at its inner end (the stop point), 10px on each side.
+  const convergeSpecs = [
+    { d: `M${midX} 0 L${midX} ${topY}`, length: topY },
+    { d: `M${midX} ${parentHeight} L${midX} ${bottomY}`, length: parentHeight - bottomY },
+    { d: `M0 ${midY} L${leftX} ${midY}`, length: leftX },
+    { d: `M${parentWidth} ${midY} L${rightX} ${midY}`, length: parentWidth - rightX },
+  ];
+  convergeSpecs.forEach((spec, index) => lineSpecs.push({ ...spec, kind: "converge", pairIndex: index }));
 
-  // Inner perpendicular lines at stop position, drawn at constant time
-  const perpendicularDurationMs = 200;
-  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${topY} L${midX + perpendicularLength / 2} ${topY}`, length: perpendicularLength, kind: "perpendicular" });
-  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${bottomY} L${midX + perpendicularLength / 2} ${bottomY}`, length: perpendicularLength, kind: "perpendicular" });
-  lineSpecs.push({ d: `M${leftX} ${midY - perpendicularLength / 2} L${leftX} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "perpendicular" });
-  lineSpecs.push({ d: `M${rightX} ${midY - perpendicularLength / 2} L${rightX} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "perpendicular" });
+  // Corner ticks: ~10px on each side of the INNER stop point of each
+  // converging line (where it ends, near the box), perpendicular to the
+  // line, same color. They draw in sync with their paired line.
+  const cornerHalf = 10;
+  const cornerSpecs = [
+    { d: `M${midX - cornerHalf} ${topY} L${midX + cornerHalf} ${topY}`, length: cornerHalf * 2 },
+    { d: `M${midX - cornerHalf} ${bottomY} L${midX + cornerHalf} ${bottomY}`, length: cornerHalf * 2 },
+    { d: `M${leftX} ${midY - cornerHalf} L${leftX} ${midY + cornerHalf}`, length: cornerHalf * 2 },
+    { d: `M${rightX} ${midY - cornerHalf} L${rightX} ${midY + cornerHalf}`, length: cornerHalf * 2 },
+  ];
+  cornerSpecs.forEach((spec, index) => lineSpecs.push({ ...spec, kind: "corner", pairIndex: index }));
+
+  // Inner perpendicular ticks at the stop position, drawn at constant time.
+  // Each tick sits entirely on the INSIDE (box side) of its stop point
+  // rather than straddling it, so it reads as a bracket hugging the box.
+  const perpendicularLength = 50;
+  const perpOffset = perpendicularLength / 2;
+  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${topY + perpOffset} L${midX + perpendicularLength / 2} ${topY + perpOffset}`, length: perpendicularLength, kind: "inner" });
+  lineSpecs.push({ d: `M${midX - perpendicularLength / 2} ${bottomY - perpOffset} L${midX + perpendicularLength / 2} ${bottomY - perpOffset}`, length: perpendicularLength, kind: "inner" });
+  lineSpecs.push({ d: `M${leftX + perpOffset} ${midY - perpendicularLength / 2} L${leftX + perpOffset} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "inner" });
+  lineSpecs.push({ d: `M${rightX - perpOffset} ${midY - perpendicularLength / 2} L${rightX - perpOffset} ${midY + perpendicularLength / 2}`, length: perpendicularLength, kind: "inner" });
 
   // All "converge" lines must reach the box at the same time.
   // That means a line with length L must take time T such that velocity v is constant:
@@ -1445,11 +1462,24 @@ function renderStatsLeaderLines(
   // every other line's duration = (L / maxL) * LEADER_DURATION_MS.
   // LEADER_DURATION_MS must match HEATMAP_SELECTION_DRAW_MS so the lines
   // finish converging as the box finishes drawing and starts blinking.
-  const LEADER_DURATION_MS = 320;
+  const LEADER_DURATION_MS = 640;
   const maxConvergeLength = Math.max(
     ...lineSpecs.filter((s) => s.kind === "converge").map((s) => s.length),
     1,
   );
+
+  // Pre-compute each converge line's duration so its paired corner tick
+  // can wait for the line to arrive, then draw quickly.
+  const convergeDurationByIndex = {};
+  lineSpecs
+    .filter((s) => s.kind === "converge")
+    .forEach((spec) => {
+      convergeDurationByIndex[spec.pairIndex] = Math.max(50, (spec.length / maxConvergeLength) * LEADER_DURATION_MS);
+    });
+  // Corner ticks draw briskly (100ms) once their line has reached them.
+  const CORNER_DURATION_MS = 100;
+  // Inner ticks draw briskly once all converging lines have arrived.
+  const perpendicularDurationMs = 100;
 
   // Build paths with per-line animation timing so all lines arrive simultaneously.
   const pathElements = [];
@@ -1458,8 +1488,15 @@ function renderStatsLeaderLines(
     let delayMs = 0;
     if (spec.kind === "converge") {
       durationMs = Math.max(50, (spec.length / maxConvergeLength) * LEADER_DURATION_MS);
-    } else {
-      // Perpendiculars arrive AFTER converging lines, at once together.
+    } else if (spec.kind === "corner") {
+      // Corner ticks wait until their paired converging line has finished
+      // drawing (reached the stop point) before they start.
+      const lineDuration = convergeDurationByIndex[spec.pairIndex];
+      durationMs = CORNER_DURATION_MS;
+      delayMs = lineDuration;
+    } else if (spec.kind === "inner") {
+      // Inner ticks wait until ALL converging lines have finished arriving
+      // at the stop point, then draw together.
       durationMs = perpendicularDurationMs;
       delayMs = LEADER_DURATION_MS;
     }
@@ -1471,7 +1508,7 @@ function renderStatsLeaderLines(
 
   leaderLinesEl.innerHTML = `
     <svg width="${parentWidth}" height="${parentHeight}" viewBox="0 0 ${parentWidth} ${parentHeight}" style="position:absolute;top:0;left:0;width:${parentWidth}px;height:${parentHeight}px;pointer-events:none;">
-      <g fill="none" stroke="var(--color-3)" stroke-width="2" stroke-linecap="round" stroke-opacity="0.7">
+      <g fill="none" stroke="var(--color-1)" stroke-width="3" stroke-linecap="round">
         ${pathElements.join("\n        ")}
       </g>
     </svg>
@@ -1482,10 +1519,19 @@ function renderStatsLeaderLines(
   // Hide the lines as the box finishes drawing and begins to blink.
   // Box draw completes at LEADER_DURATION_MS (matches HEATMAP_SELECTION_DRAW_MS).
   // Hide immediately when the box starts blinking.
+  // Hide once every tick has finished drawing so none are cut off mid-animation.
+  const leaderHideMs = Math.max(
+    LEADER_DURATION_MS,
+    ...lineSpecs
+      .filter((s) => s.kind === "corner" || s.kind === "inner")
+      .map((s) => (s.kind === "corner"
+        ? convergeDurationByIndex[s.pairIndex] + CORNER_DURATION_MS
+        : LEADER_DURATION_MS + perpendicularDurationMs)),
+  );
   setTimeout(() => {
     leaderLinesEl.hidden = true;
     console.log("Leader lines hidden in sync with box blink");
-  }, LEADER_DURATION_MS);
+  }, leaderHideMs);
 }
 
 // Creates stats heatmap section.
@@ -2266,6 +2312,12 @@ function createStatsHeatmapSection({
 
     selectionAnimating = true;
     showSelectionRect(bounds, selectionRect);
+    // Render converging leader lines BEFORE the box starts drawing so the
+    // lines arrive in sync with the box. This is shared by both manual drag
+    // selections and location-click selections.
+    if (leaderLinesEl) {
+      renderStatsLeaderLines(leaderLinesEl, bounds, selectionRect, mapViewState, getProjectionControlState());
+    }
     mapEl.classList.add("stats-heatmap-selection-animating");
     mapEl.classList.remove("stats-heatmap-selecting");
     selectionLayerEl.classList.add("stats-heatmap-selection-capture");
@@ -2419,11 +2471,6 @@ function createStatsHeatmapSection({
     const centerX = bounds.left + projected.x;
     const centerY = bounds.top + projected.y;
     const selectionRect = buildLocationSelectionRect(bounds, centerX, centerY);
-
-    // Render leader lines BEFORE the zoom starts
-    if (leaderLinesEl) {
-      renderStatsLeaderLines(leaderLinesEl, bounds, selectionRect, mapViewState, getProjectionControlState());
-    }
 
     const focus = getSelectionFocusFromRect(bounds, selectionRect);
     const hasCity = normalizeStatsTextValue(locationPoint.city) !== null;
@@ -3044,19 +3091,33 @@ function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
       const transportData = packetInfo["TCP"] || {};
       const sourceIp = (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || "";
       const destinationIp = (packetInfo?.["IP"]?.["ip.dst.addr"] ?? packetInfo?.["IP"]?.["Destination IP"]) || "";
-      const sourcePort = transportData?.["tcp.src.port"] ?? transportData?.["Source port"] ?? "";
-      const destinationPort = transportData?.["tcp.dst.port"] ?? transportData?.["Destination port"] ?? "";
-      const directionKey = `${sourceIp}:${sourcePort}>${destinationIp}:${destinationPort}`;
+      const sourcePort =
+        transportData?.["tcp.src.port"] ??
+        transportData?.["udp.src.port"] ??
+        transportData?.["sctp.src.port"] ??
+        transportData?.["Source port"] ??
+        "";
+      const destinationPort =
+        transportData?.["tcp.dst.port"] ??
+        transportData?.["udp.dst.port"] ??
+        transportData?.["sctp.dst.port"] ??
+        transportData?.["Destination port"] ??
+        "";
+
+      const endpointA = `${sourceIp}:${sourcePort}`;
+      const endpointB = `${destinationIp}:${destinationPort}`;
+      const [firstEndpoint, secondEndpoint] = [endpointA, endpointB].sort();
+      const streamKey = `${protocol}|${firstEndpoint}|${secondEndpoint}`;
       const sequenceNumber = parseStatsTcpSequenceNumber(transportData);
       const segmentLength = getStatsTcpSegmentLength(packetInfo, transportData);
 
-      const state = streamStateByDirection.get(directionKey) || {
+      const state = streamStateByDirection.get(streamKey) || {
         seenRanges: [],
         maxStartObserved: null,
       };
 
       if (sequenceNumber === null || segmentLength <= 0) {
-        streamStateByDirection.set(directionKey, state);
+        streamStateByDirection.set(streamKey, state);
         return;
       }
 
@@ -3077,7 +3138,7 @@ function computeTcpStreamAnomalyCounts(streamPacketsByKey) {
       state.maxStartObserved = Number.isFinite(state.maxStartObserved)
         ? Math.max(state.maxStartObserved, sequenceNumber)
         : sequenceNumber;
-      streamStateByDirection.set(directionKey, state);
+      streamStateByDirection.set(streamKey, state);
     });
   });
 

@@ -4880,21 +4880,16 @@ strong {
    that lines of different lengths converge on the box at the same instant. */
 .stats-heatmap-leader-lines path {
   fill: none;
-  stroke: var(--color-3);
-  stroke-width: 2;
+  stroke: var(--color-1);
+  stroke-width: 3;
   stroke-linecap: round;
-  stroke-opacity: 0.7;
+  stroke-opacity: 1;
 }
 
 @keyframes leaderLineDraw {
   to {
     stroke-dashoffset: 0;
   }
-}
-
-.stats-heatmap-leader-lines path.perpendicular {
-  animation-delay: 0.9s;
-  animation-duration: 0.3s;
 }
 
 .stats-heatmap-point {
