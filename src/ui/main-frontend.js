@@ -3242,6 +3242,16 @@ function renderThemesCatalog() {
     });
     actionsEl.appendChild(previewBtn);
 
+    // Only show a Buy button for themes that aren't already owned by
+    // this install. Owned themes surface their license URL instead.
+    if (!entry.owned) {
+      const buyBtn = document.createElement("button");
+      buyBtn.type = "button";
+      buyBtn.textContent = "Buy";
+      buyBtn.addEventListener("click", () => startThemeCheckout(entry));
+      actionsEl.appendChild(buyBtn);
+    }
+
     cardEl.appendChild(actionsEl);
     listEl.appendChild(cardEl);
   });
