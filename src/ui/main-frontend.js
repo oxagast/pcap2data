@@ -1340,6 +1340,51 @@ function renderMetricsDiagnosticIndicator(elementId, label, value, stateClass) {
   element.className = `settings-status-pill ${stateClass}`;
 }
 
+// Syncs license tier badge in the General settings panel.
+async function syncLicenseTierBadge() {
+  const badgeEl = document.getElementById("settings-license-tier-badge");
+  if (!badgeEl) return;
+
+  if (!window.themeapi || typeof window.themeapi.getLicenseTier !== "function") {
+    badgeEl.textContent = "License: Unavailable";
+    badgeEl.className = "settings-status-pill status-neutral";
+    return;
+  }
+
+  try {
+    const result = await window.themeapi.getLicenseTier();
+    const tier = result?.licenseTier || "free";
+
+    let displayText = "";
+    let stateClass = "status-neutral";
+
+    switch (tier) {
+      case "free":
+        displayText = "License: Free";
+        stateClass = "status-neutral";
+        break;
+      case "professional":
+        displayText = "License: Professional";
+        stateClass = "status-ok";
+        break;
+      case "enterprise":
+        displayText = "License: Enterprise";
+        stateClass = "status-ok";
+        break;
+      default:
+        displayText = `License: ${tier}`;
+        stateClass = "status-neutral";
+    }
+
+    badgeEl.textContent = displayText;
+    badgeEl.className = `settings-status-pill ${stateClass}`;
+  } catch (error) {
+    console.warn("Failed to fetch license tier:", error);
+    badgeEl.textContent = "License: Error";
+    badgeEl.className = "settings-status-pill status-error";
+  }
+}
+
 // Syncs metrics diagnostics indicators.
 function syncMetricsDiagnosticsIndicators() {
   const diagnostics = cachedMetricsDiagnostics || {};
@@ -3424,6 +3469,8 @@ async function checkThemesLicense() {
       await refreshThemesPreviewForSelected();
       await refreshThemesCatalog({ force: true });
     }
+    // Refresh the license tier badge in the General settings panel
+    await syncLicenseTierBadge();
   } catch (error) {
     setThemesCatalogStatus(
       `Unable to check license: ${error?.message || error || "unknown error"}`,
@@ -5296,6 +5343,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   }
   if (nextTab === SETTINGS_SUBTAB_ABOUT) {
     void loadSettingsAboutReleaseInfo();
+  }
+  if (nextTab === SETTINGS_SUBTAB_GENERAL) {
+    void syncLicenseTierBadge();
   }
 }
 
@@ -26440,6 +26490,7 @@ onload = function () {
   setConvSubtab(CONV_CONVERSIONS_SUBTAB);
   setSettingsSubtab(SETTINGS_SUBTAB_GENERAL);
   syncSettingsFormFromState();
+  void syncLicenseTierBadge();
   renderPluginErrorPanel();
   updateDataToolsHexHighlights();
   syncDataToolsHighlightScroll(
