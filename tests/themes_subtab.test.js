@@ -499,6 +499,184 @@ describe('main.js theme helpers', () => {
         expect(preload).toMatch(/refreshLicenses: \(payload\) => ipcRenderer\.invoke\('themes-refresh-licenses'/);
         expect(preload).toMatch(/download: \(payload\) => ipcRenderer\.invoke\('themes-download'/);
     });
+
+    test('normalizeThemeCachePayload unwraps the catalog server themeJson envelope', () => {
+        // Lift the helper into a vm. It only depends on JSON, so a
+        // bare context is sufficient.
+        const helperSource = loadMainFunction('normalizeThemeCachePayload');
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const inner = {
+            id: 'weebo',
+            name: 'Weebo',
+            description: 'test',
+            variables: { '--app-bg': '#000000' },
+        };
+        const envelope = JSON.stringify({
+            id: 'weebo',
+            name: 'Weebo',
+            priceCents: 299,
+            priceLabel: '$2.99',
+            paddle: { productId: 'pro_x', priceId: 'pri_y' },
+            previewImage: '',
+            themeJson: inner,
+        });
+        const out = context.normalizeThemeCachePayload(envelope);
+        expect(out.unwrapped).toBe(true);
+        // The cache file should be the inner object, not the envelope.
+        const reparsed = JSON.parse(out.text);
+        expect(reparsed).toEqual(inner);
+        expect(reparsed).not.toHaveProperty('priceCents');
+        expect(reparsed).not.toHaveProperty('paddle');
+    });
+
+    test('normalizeThemeCachePayload unwraps a string-encoded inner JSON', () => {
+        const helperSource = loadMainFunction('normalizeThemeCachePayload');
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const inner = { id: 'weebo', name: 'Weebo', variables: { '--app-bg': '#000' } };
+        const envelope = JSON.stringify({
+            id: 'weebo',
+            priceCents: 299,
+            themeJson: JSON.stringify(inner),
+        });
+        const out = context.normalizeThemeCachePayload(envelope);
+        expect(out.unwrapped).toBe(true);
+        const reparsed = JSON.parse(out.text);
+        expect(reparsed).toEqual(inner);
+    });
+
+    test('normalizeThemeCachePayload leaves a metadata-only body unchanged', () => {
+        // Legacy catalogs that never received the themeJson field will
+        // still serve the metadata envelope. The cache file then fails
+        // validation downstream and is silently skipped — same as
+        // before the envelope existed. We assert the helper doesn't
+        // try to invent an inner object.
+        const helperSource = loadMainFunction('normalizeThemeCachePayload');
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const legacy = JSON.stringify({
+            id: 'weebo',
+            name: 'Weebo',
+            priceCents: 299,
+            priceLabel: '$2.99',
+            paddle: { productId: 'pro_x', priceId: 'pri_y' },
+        });
+        const out = context.normalizeThemeCachePayload(legacy);
+        expect(out.unwrapped).toBe(false);
+        expect(out.text).toBe(legacy);
+    });
+
+    test('normalizeThemeCachePayload tolerates non-JSON bodies', () => {
+        const helperSource = loadMainFunction('normalizeThemeCachePayload');
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const out = context.normalizeThemeCachePayload('not json at all');
+        expect(out.unwrapped).toBe(false);
+        expect(out.text).toBe('not json at all');
+    });
+
+    test('normalizeThemeCachePayload passes the upstream inner-JSON contract through', () => {
+        // Upstream PacketSnitch-Pro (schema v3) serves the
+        // PacketSnitch theme JSON directly from the ``theme_json``
+        // DB column, with no envelope wrapper. The desktop client's
+        // ``normalizeThemeCachePayload`` must accept that body as-is
+        // so the cache file is exactly the inner JSON
+        // ``listCachedThemes`` expects to parse. We pin the contract
+        // here so a future "helpful" transformation can't start
+        // double-unwrapping or strip fields the renderer needs.
+        const helperSource = loadMainFunction('normalizeThemeCachePayload');
+        const context = { console };
+        vm.createContext(context);
+        vm.runInContext(helperSource, context);
+        const inner = {
+            id: 'matrix-theme',
+            name: 'Matrix',
+            description: 'Green-phosphor hacker vibe',
+            variables: {
+                '--app-bg': '#000000',
+                '--accent': '#00ff66',
+            },
+            previewImage: { format: 'png', base64: 'iVBORw0KGgo=' },
+        };
+        const body = JSON.stringify(inner);
+        const out = context.normalizeThemeCachePayload(body);
+        expect(out.unwrapped).toBe(false);
+        // Cache file equals the request body byte-for-byte (after
+        // JSON.parse round-trip), so downstream parsers see the
+        // exact shape the catalog server produced.
+        expect(JSON.parse(out.text)).toEqual(inner);
+        // Guard against an accidental second-wrap that would put the
+        // JSON inside a new ``themeJson`` envelope.
+        const reparsed = JSON.parse(out.text);
+        expect(reparsed).not.toHaveProperty('themeJson');
+        expect(reparsed).toHaveProperty('variables');
+    });
+
+    test('writeThemeToCache calls normalizeThemeCachePayload', () => {
+        // The cache write must go through the unwrap helper so the
+        // catalog's ``themeJson`` envelope is transparent to the rest
+        // of the renderer. We grep rather than executing because
+        // writeThemeToCache depends on Node fs + Electron paths.
+        const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+        const writeFn = extractFunctionSource(sourceText, 'writeThemeToCache');
+        expect(writeFn).toMatch(/normalizeThemeCachePayload\(/);
+        expect(writeFn).toMatch(/unwrapped/);
+    });
+
+    test('ps-catalog.py stores the PacketSnitch theme definition in a theme_json column', () => {
+        // Upstream PacketSnitch-Pro stores the actual PacketSnitch
+        // theme JSON in a ``theme_json`` DB column (schema v3) and
+        // serves it from ``/themes/<id>/download``. The desktop
+        // client must tolerate BOTH:
+        //
+        //   1. The new contract: download body == inner PacketSnitch
+        //      theme JSON ({id, name, variables, ...}).
+        //   2. The legacy envelope: download body == admin metadata
+        //      with a top-level ``themeJson`` key whose value is the
+        //      inner JSON.
+        //
+        // This test pins the upstream contract so a future catalog
+        // refactor doesn't quietly break the unwrap path on the
+        // client.
+        const pySource = fs.readFileSync(
+            path.join(PROJECT_ROOT, 'src', 'PacketSnitch-Pro', 'Servers', 'Catalog', 'ps-catalog.py'),
+            'utf8',
+        );
+        // Schema v3 introduces a theme_json column on the themes table.
+        expect(pySource).toMatch(/SCHEMA_VERSION\s*=\s*3/);
+        expect(pySource).toMatch(/theme_json TEXT NOT NULL DEFAULT ''/);
+        // The download endpoint must prefer the DB column over the
+        // on-disk file. This is the contract the desktop client's
+        // ``normalizeThemeCachePayload`` is built around.
+        const downloadHandler = pySource.match(
+            /def _handle_theme_download[\s\S]+?cache_control="private, max-age=60"/,
+        );
+        expect(downloadHandler).not.toBeNull();
+        expect(downloadHandler[0]).toMatch(/if theme\["theme_json"\]/);
+        expect(downloadHandler[0]).toMatch(/body = theme\["theme_json"\]\.encode\("utf-8"\)/);
+        // The admin upsert handler must accept a top-level
+        // ``themeJson`` field and persist it to the DB column. The
+        // CLI path is independent of the admin API and shares the
+        // same ``db.upsert_theme(..., theme_json=...)`` call.
+        const adminHandler = pySource.match(
+            /def _handle_admin_themes_upsert_post[\s\S]+?return self\._write_envelope_json\(200, \{"ok": True, "themeId": theme_id\}\)/,
+        );
+        expect(adminHandler).not.toBeNull();
+        expect(adminHandler[0]).toMatch(/payload\.get\("themeJson"\)/);
+        expect(adminHandler[0]).toMatch(/theme_json=theme_json/);
+        // The CLI ``cmd_add_theme`` must also persist the field.
+        const cliAddTheme = pySource.match(
+            /def cmd_add_theme[\s\S]+?^def cmd_remove_theme/m,
+        );
+        expect(cliAddTheme).not.toBeNull();
+        expect(cliAddTheme[0]).toMatch(/raw\.get\("themeJson"\)/);
+        expect(cliAddTheme[0]).toMatch(/theme_json=theme_json/);
+    });
 });
 
 describe('settings.js schema additions', () => {

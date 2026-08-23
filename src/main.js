@@ -4951,13 +4951,76 @@ async function ensureThemeCacheDir() {
   await fs.promises.mkdir(getThemeCacheDir(), { recursive: true });
 }
 
+// Resolves the actual PacketSnitch theme JSON to write to the cache
+// file from whatever the catalog server returned. The catalog serves
+// a metadata envelope at ``/themes/<id>/download`` (priceCents, paddle
+// ids, preview image, etc.); when the operator registered a theme
+// with a real PacketSnitch definition, the response also carries a
+// top-level ``themeJson`` key containing the {id, name, variables,
+// …} object the desktop client actually installs. Older catalogs
+// only returned the envelope, in which case ``normalizeThemeCachePayload``
+// returns the body unchanged so the cache file ends up invalid and
+// is silently skipped by ``listCachedThemes`` (same as before the
+// envelope existed — the theme simply doesn't appear).
+//
+// The function is deliberately tolerant: a malformed body parses to
+// ``null`` and the caller writes the original text to disk, which
+// fails validation downstream. We log a warning so operators can
+// spot a broken cache write without crashing the reconcile loop.
+function normalizeThemeCachePayload(rawText) {
+  if (typeof rawText !== "string" || !rawText.trim()) {
+    return { text: rawText || "", unwrapped: false };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch (_error) {
+    return { text: rawText, unwrapped: false };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { text: rawText, unwrapped: false };
+  }
+  const inner = parsed.themeJson;
+  if (inner === undefined || inner === null) {
+    // No envelope; legacy metadata-only file. Leave it on disk and
+    // let the validator reject it. ``listCachedThemes`` will simply
+    // skip the directory.
+    return { text: rawText, unwrapped: false };
+  }
+  if (typeof inner === "string") {
+    // The server may also embed the inner JSON as a string (matches
+    // what ``_normalize_theme_json_payload`` accepts on the way in).
+    // If it parses to an object, use the parsed form; otherwise
+    // write the string verbatim.
+    try {
+      const reparsed = JSON.parse(inner);
+      if (reparsed && typeof reparsed === "object" && !Array.isArray(reparsed)) {
+        return { text: JSON.stringify(reparsed, null, 2), unwrapped: true };
+      }
+    } catch (_error) {
+      // fall through and write the string as-is
+    }
+    return { text: inner, unwrapped: true };
+  }
+  if (typeof inner !== "object" || Array.isArray(inner)) {
+    return { text: rawText, unwrapped: false };
+  }
+  return { text: JSON.stringify(inner, null, 2), unwrapped: true };
+}
+
 async function writeThemeToCache(themeId, rawThemeJsonText) {
   await ensureThemeCacheDir();
   const normalizedId = sanitizeThemeId(themeId, "custom");
   const targetDir = path.join(getThemeCacheDir(), normalizedId);
   await fs.promises.mkdir(targetDir, { recursive: true });
   const filePath = path.join(targetDir, "theme.json");
-  await fs.promises.writeFile(filePath, rawThemeJsonText, "utf8");
+  const { text: cacheText, unwrapped } = normalizeThemeCachePayload(rawThemeJsonText);
+  if (unwrapped) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] writeThemeToCache unwrapped themeJson envelope themeId=${normalizedId}`,
+    );
+  }
+  await fs.promises.writeFile(filePath, cacheText, "utf8");
   return filePath;
 }
 

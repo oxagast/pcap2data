@@ -3295,11 +3295,135 @@ function renderThemesCatalog() {
       buyBtn.textContent = "Buy";
       buyBtn.addEventListener("click", () => startThemeCheckout(entry));
       actionsEl.appendChild(buyBtn);
+    } else if (!entry.installed) {
+      // Owned but not yet downloaded into the local theme cache. The
+      // automatic backfill in ``refreshThemesCatalog`` will usually
+      // catch this, but the user can also trigger a download manually
+      // if the auto-backfill lost a race (e.g. a transient network
+      // blip). The button surfaces the existing ``themes-download``
+      // IPC and then re-renders the catalog + theme list.
+      const downloadBtn = document.createElement("button");
+      downloadBtn.type = "button";
+      downloadBtn.textContent = "Download";
+      downloadBtn.addEventListener("click", async () => {
+        if (!window.themeapi || typeof window.themeapi.download !== "function") {
+          setThemesCatalogStatus("Theme download is not available in this build.", { isError: true });
+          return;
+        }
+        setThemesCatalogStatus(`Downloading theme "${entry.id}"...`);
+        try {
+          const result = await window.themeapi.download({ themeId: entry.id });
+          if (result && result.success) {
+            setThemesCatalogStatus(`Downloaded theme "${entry.id}" into the local cache. Reloading...`);
+            await loadAvailableThemes();
+            await refreshThemesPreviewForSelected();
+            // Mutate the entry so the button disappears without a
+            // round-trip back to the catalog server; ``renderThemesCatalog``
+            // will pick up the change on the next paint.
+            entry.installed = true;
+            renderThemesCatalog();
+          } else {
+            setThemesCatalogStatus(
+              `Unable to download theme "${entry.id}": ${result?.error || "unknown error"}`,
+              { isError: true },
+            );
+          }
+        } catch (error) {
+          setThemesCatalogStatus(
+            `Unable to download theme "${entry.id}": ${error?.message || error || "unknown error"}`,
+            { isError: true },
+          );
+        }
+      });
+      actionsEl.appendChild(downloadBtn);
     }
 
     cardEl.appendChild(actionsEl);
     listEl.appendChild(cardEl);
   });
+}
+
+// Backfills any owned-but-not-yet-installed themes into the local
+// theme cache (userData/theme-cache/<id>/theme.json). The license
+// reconcile path already calls fetchAndCacheTheme for each owned
+// theme, but a deeplink can fire before the server has propagated
+// the license — or a network blip can drop the download mid-flight —
+// in which case the catalog will report owned=true / installed=false.
+// Without a backfill, the theme would never surface in the active
+// theme dropdown even though the license is valid. ``themes-download``
+// re-issues the authenticated GET against the catalog server and
+// writes the result through ``writeThemeToCache``, which is the same
+// path ``reconcileThemeLicenses`` takes. We then re-run
+// ``loadAvailableThemes()`` so ``listThemeDefinitions`` picks up the
+// newly-cached file on its next call.
+//
+// Returns a summary { downloaded, skipped, failed } so callers can
+// surface progress in the catalog status line.
+async function backfillMissingOwnedThemes() {
+  if (!window.themeapi || typeof window.themeapi.download !== "function") {
+    return { downloaded: [], skipped: [], failed: [] };
+  }
+  if (!Array.isArray(themesCatalogEntries) || themesCatalogEntries.length === 0) {
+    return { downloaded: [], skipped: [], failed: [] };
+  }
+  const installedIds = new Set(await readAvailableThemeIds());
+  const targets = themesCatalogEntries.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (!entry.owned) return false;
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!id) return false;
+    return !installedIds.has(id);
+  });
+  if (targets.length === 0) {
+    return { downloaded: [], skipped: [], failed: [] };
+  }
+  const downloaded = [];
+  const failed = [];
+  for (const entry of targets) {
+    const id = String(entry.id || "").trim();
+    if (!id) continue;
+    try {
+      const result = await window.themeapi.download({ themeId: id });
+      if (result && result.success) {
+        downloaded.push(id);
+      } else {
+        failed.push({ id, error: result?.error || "unknown error" });
+      }
+    } catch (error) {
+      failed.push({ id, error: error?.message || String(error || "unknown error") });
+    }
+  }
+  return { downloaded, skipped: [], failed };
+}
+
+// Reads the IDs of all themes currently surfaced in the dropdown
+// (i.e. ``listThemeDefinitions``). The renderer keeps ``availableThemes``
+// in module scope but a freshly-loaded helper context may not, so we
+// also accept the optional pre-fetched list to avoid a redundant IPC
+// round-trip when the caller already has it.
+async function readAvailableThemeIds(prefetchedList) {
+  const list = Array.isArray(prefetchedList)
+    ? prefetchedList
+    : (Array.isArray(availableThemes) && availableThemes.length > 0
+      ? availableThemes
+      : null);
+  if (list) {
+    return list
+      .map((theme) => (theme && typeof theme.id === "string" ? theme.id.trim() : ""))
+      .filter((id) => Boolean(id));
+  }
+  if (!window.themeapi || typeof window.themeapi.list !== "function") {
+    return [];
+  }
+  try {
+    const fetched = await window.themeapi.list();
+    if (!Array.isArray(fetched)) return [];
+    return fetched
+      .map((theme) => (theme && typeof theme.id === "string" ? theme.id.trim() : ""))
+      .filter((id) => Boolean(id));
+  } catch (_error) {
+    return [];
+  }
 }
 
 async function refreshThemesCatalog({ force = false } = {}) {
@@ -3339,6 +3463,38 @@ async function refreshThemesCatalog({ force = false } = {}) {
       );
     }
     renderThemesCatalog();
+    // After a successful catalog fetch, look for owned themes that
+    // haven't been downloaded into the local cache yet. This is the
+    // backup path for purchases whose primary cache write was lost
+    // (e.g. a network blip between the deeplink and
+    // ``reconcileThemeLicenses``). We deliberately run this AFTER
+    // ``renderThemesCatalog`` so the user sees the "owned" badge
+    // immediately even while downloads are in flight.
+    if (themesCatalogEntries.length > 0) {
+      try {
+        const backfill = await backfillMissingOwnedThemes();
+        if (backfill.downloaded.length > 0) {
+          setThemesCatalogStatus(
+            `Downloaded ${backfill.downloaded.length} owned theme(s) into the local cache: ${backfill.downloaded.join(", ")}.`,
+          );
+          // Refresh the active-theme dropdown so the cached file is
+          // picked up by ``listThemeDefinitions`` on its next call.
+          await loadAvailableThemes();
+          await refreshThemesPreviewForSelected();
+          renderThemesCatalog();
+        } else if (backfill.failed.length > 0) {
+          const failedSummary = backfill.failed
+            .map((entry) => `${entry.id} (${entry.error})`)
+            .join("; ");
+          setThemesCatalogStatus(
+            `Some owned themes could not be downloaded: ${failedSummary}. Click Check License to retry.`,
+            { isError: true },
+          );
+        }
+      } catch (error) {
+        console.warn("Theme cache backfill failed:", error);
+      }
+    }
   } catch (error) {
     console.warn("Unable to load theme catalog:", error);
     setThemesCatalogStatus(
