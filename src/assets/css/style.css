@@ -864,7 +864,7 @@ strong {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
-  height: 100%;
+  min-height: 100%;
 }
 
 .settings-section {
@@ -876,13 +876,12 @@ strong {
   flex-direction: column;
   gap: 8px;
   max-width: 1200px;
-  height: 110%;
   width: 1100px;
 }
 
 .settings-about-section {
   max-width: none;
-  height: 100%;
+  min-height: 100%;
 }
 
 .settings-about-terminal-wrap {
