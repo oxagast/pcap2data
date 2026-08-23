@@ -2979,7 +2979,16 @@ let themesCatalogPaddleEnv = null;
 let themesCatalogLoading = false;
 let themesPreviewObjectUrl = null;
 let themesPreviewInFlight = 0;
+// Last dimensions of a successfully-loaded preview image (natural size,
+// capped at display max). Used to keep the wrap from collapsing between
+// previews and to give the next image a sensible box before it loads.
+let themesPreviewLastSize = null;
 const themesEmbeddedPreviewCache = new Map();
+
+// Hard cap so a huge source image never blows out the settings panel.
+// Only width is capped — height is left to follow the natural aspect
+// ratio so tall images aren't squashed.
+const THEMES_PREVIEW_MAX_WIDTH = 400;
 
 function getThemesPreviewElement() {
   return document.getElementById("settings-themes-preview");
@@ -3045,6 +3054,28 @@ function clearThemesPreviewObjectUrl() {
   }
 }
 
+function applyThemesPreviewSize(el) {
+  if (!el) return;
+  if (!themesPreviewLastSize) return;
+  el.style.width = `${themesPreviewLastSize.width}px`;
+  el.style.height = `${themesPreviewLastSize.height}px`;
+}
+
+function recordThemesPreviewNaturalSize(el) {
+  if (!el) return;
+  const naturalWidth = Number(el.naturalWidth) || 0;
+  const naturalHeight = Number(el.naturalHeight) || 0;
+  if (naturalWidth <= 0 || naturalHeight <= 0) return;
+  // Only cap by width — height follows the natural aspect ratio so the
+  // preview box always fits the image rather than clipping it.
+  const scale = Math.min(1, THEMES_PREVIEW_MAX_WIDTH / naturalWidth);
+  themesPreviewLastSize = {
+    width: Math.max(1, Math.round(naturalWidth * scale)),
+    height: Math.max(1, Math.round(naturalHeight * scale)),
+  };
+  applyThemesPreviewSize(el);
+}
+
 function resetThemesPreview() {
   clearThemesPreviewObjectUrl();
   const previewEl = getThemesPreviewElement();
@@ -3052,6 +3083,9 @@ function resetThemesPreview() {
   if (previewEl) {
     previewEl.src = "";
     previewEl.hidden = true;
+    // Preserve the last known size so the wrap does not collapse to 0x0
+    // while the next preview is loading.
+    applyThemesPreviewSize(previewEl);
   }
   if (fallbackEl) {
     fallbackEl.hidden = false;
@@ -3076,8 +3110,10 @@ function showThemesPreviewFromDataUri(dataUri) {
 
   previewEl.onload = () => {
     console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+    recordThemesPreviewNaturalSize(previewEl);
   };
 
+  applyThemesPreviewSize(previewEl);
   previewEl.src = dataUri;
   previewEl.hidden = false;
   fallbackEl.hidden = true;
@@ -3100,8 +3136,10 @@ function showThemesPreviewFromUrl(url) {
 
   previewEl.onload = () => {
     console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+    recordThemesPreviewNaturalSize(previewEl);
   };
 
+  applyThemesPreviewSize(previewEl);
   previewEl.src = url;
   previewEl.hidden = false;
   fallbackEl.hidden = true;
