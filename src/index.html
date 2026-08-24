@@ -1603,6 +1603,9 @@ No keystore entries saved.</pre>
         <div id="settings_box">
           <div class="settings-workspace-header">Settings</div>
           <div class="settings-subtab-row">
+            <button id="settings-subtab-storefront" class="settings-subtab-btn">
+              The Storefront
+            </button>
             <button id="settings-subtab-general" class="settings-subtab-btn active">
               Frontend
             </button>
@@ -1634,6 +1637,39 @@ No keystore entries saved.</pre>
 
           <div class="settings-status-row" aria-label="License status" id="settings-license-badge-container">
             <span id="settings-license-tier-badge" class="settings-status-pill status-neutral">License: Free</span>
+          </div>
+
+          <div id="settings-storefront-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">The Storefront</div>
+                <div class="settings-help-text">
+                  Browse themes, preview each one, then click
+                  <strong>Buy</strong> to open the secure Paddle checkout
+                  in your default browser. After payment, click
+                  <strong>Check License</strong> to unlock the theme for
+                  this install, then pick it from the
+                  <em>Active theme</em> dropdown in the Themes subtab.
+                </div>
+
+                <div id="settings-storefront-preview-wrap" class="settings-themes-preview-wrap">
+                  <img id="settings-storefront-preview" class="settings-themes-preview" aria-label="Theme preview"
+                    hidden>
+                  <div id="settings-storefront-preview-fallback" class="settings-themes-preview-fallback">
+                    No preview available
+                  </div>
+                </div>
+
+                <div class="settings-actions-row">
+                  <button id="settings-themes-refresh-catalog-btn" type="button">Refresh Catalog</button>
+                  <button id="settings-themes-check-license-btn" type="button">Check License</button>
+                </div>
+                <div id="settings-themes-catalog-status" class="settings-help-text" aria-live="polite"></div>
+                <div id="settings-themes-catalog-sandbox-banner" class="settings-themes-catalog-sandbox-banner"
+                  role="note" hidden></div>
+                <div id="settings-themes-catalog-list" class="settings-themes-catalog-list" role="list"></div>
+              </div>
+            </div>
           </div>
 
           <div id="settings-general-panel" class="settings-subtab-panel">
@@ -2132,25 +2168,6 @@ No keystore entries saved.</pre>
                     No preview available
                   </div>
                 </div>
-
-                <div class="settings-section-title" style="margin-top: 1rem;">Browse &amp; Purchase</div>
-                <div class="settings-help-text">
-                  Browse themes, preview each one, then click
-                  <strong>Buy</strong> to open the secure Paddle checkout
-                  in your default browser. After payment, click
-                  <strong>Check License</strong> to unlock the theme for
-                  this install, then pick it from the
-                  <em>Active theme</em> dropdown above.
-                </div>
-
-                <div class="settings-actions-row">
-                  <button id="settings-themes-refresh-catalog-btn" type="button">Refresh Catalog</button>
-                  <button id="settings-themes-check-license-btn" type="button">Check License</button>
-                </div>
-                <div id="settings-themes-catalog-status" class="settings-help-text" aria-live="polite"></div>
-                <div id="settings-themes-catalog-sandbox-banner" class="settings-themes-catalog-sandbox-banner"
-                  role="note" hidden></div>
-                <div id="settings-themes-catalog-list" class="settings-themes-catalog-list" role="list"></div>
               </div>
             </div>
           </div>

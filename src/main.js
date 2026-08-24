@@ -548,6 +548,54 @@ function logLlmDiagnostics(prefix, diagnostics) {
   );
 }
 
+// Look up the install's account-level license tier at startup and
+// log it to the activity log. The tier is sourced from the cached
+// in-memory value (already populated by a prior reconcile) but
+// this helper performs a fresh ``GET /license-check`` round-trip so
+// the operator can see the canonical server-reported tier without
+// having to wait for the next reconcile cycle. The endpoint mirrors
+// the operator flow documented in ps-catalog.py: the server replies
+// with ``{"licenseTier": "...", "known": true|false}``.
+//
+// Errors are non-fatal: a missing installUuid, an unconfigured theme
+// server, or a network blip only means we don't have a fresh tier to
+// log this run. ``cachedLicenseTier`` is updated as a side effect so
+// any UI that calls ``themes-get-license-tier`` between this lookup
+// and the next reconcile sees the fresh value.
+async function logStartupInstallTier({ installUuid, themeServerUrl }) {
+  if (!installUuid) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Startup install tier installUuid=<empty> tier=${cachedLicenseTier} source=cached reason=no_install_uuid`,
+    );
+    return;
+  }
+  if (!themeServerUrl) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Startup install tier installUuidPrefix=${installUuid.slice(0, 8)} tier=${cachedLicenseTier} source=cached reason=theme_server_unconfigured`,
+    );
+    return;
+  }
+  let payload;
+  try {
+    payload = await fetchThemeServerJson("/license-check", { params: { installUuid } });
+  } catch (error) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] Startup install tier installUuidPrefix=${installUuid.slice(0, 8)} tier=${cachedLicenseTier} source=cached reason=fetch_failed error=${JSON.stringify(error?.message || String(error))}`,
+    );
+    return;
+  }
+  const rawTier = typeof payload?.licenseTier === "string"
+    ? payload.licenseTier.trim().toLowerCase()
+    : "";
+  const known = payload?.known === true;
+  if (rawTier === "free" || rawTier === "professional" || rawTier === "enterprise" || rawTier === "developer") {
+    cachedLicenseTier = rawTier;
+  }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] Startup install tier installUuidPrefix=${installUuid.slice(0, 8)} tier=${cachedLicenseTier} source=server known=${known ? "true" : "false"}`,
+  );
+}
+
 let mainWindow;
 let selectedFilePath;
 let activityLogFilePath;
@@ -4740,7 +4788,7 @@ const THEME_SERVER_HTTP_TIMEOUT_MS = 5000;
 const ALLOWED_THEME_PREVIEW_HOSTS = new Set();
 let cachedPurchasedThemeIds = new Set();
 let cachedThemeServerPaddleEnv = null; // "sandbox" | "production" | null
-let cachedLicenseTier = "free"; // "free" | "professional" | "enterprise"
+let cachedLicenseTier = "free"; // "free" | "professional" | "enterprise" | "developer"
 let lastThemeLicenseCheckAtMs = 0;
 let themeRecacheTimer = null;
 let themeRecacheInFlight = false;
@@ -5147,7 +5195,7 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   const rawTier = typeof payload?.licenseTier === "string"
     ? payload.licenseTier.trim().toLowerCase()
     : "";
-  if (rawTier === "free" || rawTier === "professional" || rawTier === "enterprise") {
+  if (rawTier === "free" || rawTier === "professional" || rawTier === "enterprise" || rawTier === "developer") {
     cachedLicenseTier = rawTier;
   } else {
     cachedLicenseTier = "free";
@@ -5590,6 +5638,17 @@ function createWindow() {
       appendActivityLogLine(
         `[${new Date().toISOString()}] [GUI][Main] Startup connections summary installUuidPresent=${Boolean(startupInstallId)} installUuidPrefix=${startupInstallId ? startupInstallId.slice(0, 8) : "n/a"} metricsEnabled=${startupMetricsEnabled} themeServerConfigured=${Boolean(startupThemeUrl)} themeServerUrl=${startupThemeUrl || "<empty>"} metricsEndpointConfigured=${Boolean(startupMetricsUrl)} metricsEndpointUrl=${startupMetricsUrl || "<empty>"}`,
       );
+      // Look up the install's account-level tier so a developer / pro
+      // user sees their tier logged at startup. The call is best-effort:
+      // if the theme server isn't reachable or the install uuid isn't
+      // known yet, the previous (default "free") value stays and the
+      // failure is logged so support can see why the lookup didn't
+      // resolve. The reconcile path inside ``reconcileThemeLicenses``
+      // overwrites ``cachedLicenseTier`` once it returns, so this is a
+      // one-shot check rather than a poll.
+      logStartupInstallTier({ installUuid: startupInstallId, themeServerUrl: startupThemeUrl }).catch((error) => {
+        console.warn("Unable to log startup install tier:", error);
+      });
     }
     installMetricsFlushTimer();
     requestMetricsFlushFromRenderer();
