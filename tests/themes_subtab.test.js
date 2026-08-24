@@ -116,14 +116,17 @@ function makePreviewVm() {
 }
 
 describe('Settings → Themes subtab plumbing', () => {
-    test('renderer defines SETTINGS_SUBTAB_THEMES and SETTINGS_SUBTAB_PLUGINS', () => {
+    test('renderer defines SETTINGS_SUBTAB_STOREFRONT, SETTINGS_SUBTAB_THEMES and SETTINGS_SUBTAB_PLUGINS', () => {
         const sourceText = fs.readFileSync(RENDERER_PATH, 'utf8');
-        const consts = loadRendererConstants(['SETTINGS_SUBTAB_THEMES', 'SETTINGS_SUBTAB_PLUGINS']);
+        const consts = loadRendererConstants(['SETTINGS_SUBTAB_STOREFRONT', 'SETTINGS_SUBTAB_THEMES', 'SETTINGS_SUBTAB_PLUGINS']);
         const context = { console };
         vm.createContext(context);
         vm.runInContext(consts, context);
         // `const` declarations live in script scope; access them via
         // another runInContext rather than the context object directly.
+        expect(
+            vm.runInContext('SETTINGS_SUBTAB_STOREFRONT', context),
+        ).toBe('storefront');
         expect(
             vm.runInContext('SETTINGS_SUBTAB_THEMES', context),
         ).toBe('themes');
@@ -132,10 +135,12 @@ describe('Settings → Themes subtab plumbing', () => {
         ).toBe('plugins');
     });
 
-    test('renderer setSettingsSubtab branch chain includes the themes tab', () => {
+    test('renderer setSettingsSubtab branch chain includes the storefront and themes tabs', () => {
         const source = fs.readFileSync(RENDERER_PATH, 'utf8');
         expect(source).toMatch(/tabName === SETTINGS_SUBTAB_THEMES\s*\?\s*SETTINGS_SUBTAB_THEMES/);
+        expect(source).toMatch(/tabName === SETTINGS_SUBTAB_GENERAL\s*\?\s*SETTINGS_SUBTAB_GENERAL/);
         expect(source).toMatch(/settings-themes-panel/);
+        expect(source).toMatch(/settings-storefront-panel/);
     });
 
     test('startup bootstrap chain does NOT block on refreshThemesCatalog', () => {

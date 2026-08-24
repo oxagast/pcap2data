@@ -1015,6 +1015,7 @@ function formatNetworkEndpointDisplay(ip, port) {
   return `${normalizedIp}:${normalizedPort}`;
 }
 
+const SETTINGS_SUBTAB_STOREFRONT = "storefront";
 const SETTINGS_SUBTAB_GENERAL = "general";
 const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_API_KEYS = "api-keys";
@@ -1369,6 +1370,10 @@ async function syncLicenseTierBadge() {
         break;
       case "enterprise":
         displayText = "License: Enterprise";
+        stateClass = "status-ok";
+        break;
+      case "developer":
+        displayText = "License: Developer";
         stateClass = "status-ok";
         break;
       default:
@@ -2990,12 +2995,48 @@ const themesEmbeddedPreviewCache = new Map();
 // ratio so tall images aren't squashed.
 const THEMES_PREVIEW_MAX_WIDTH = 400;
 
+function getThemesPreviewElements() {
+  const el = document.getElementById("settings-themes-preview");
+  return el ? [el] : [];
+}
+
+function getStorefrontPreviewElements() {
+  const el = document.getElementById("settings-storefront-preview");
+  return el ? [el] : [];
+}
+
+function getAllPreviewElements() {
+  const elements = [];
+  const themesEl = document.getElementById("settings-themes-preview");
+  if (themesEl) elements.push(themesEl);
+  const storefrontEl = document.getElementById("settings-storefront-preview");
+  if (storefrontEl) elements.push(storefrontEl);
+  return elements;
+}
+
+function getAllPreviewFallbackElements() {
+  const elements = [];
+  const themesFallback = document.getElementById("settings-themes-preview-fallback");
+  if (themesFallback) elements.push(themesFallback);
+  const storefrontFallback = document.getElementById("settings-storefront-preview-fallback");
+  if (storefrontFallback) elements.push(storefrontFallback);
+  return elements;
+}
+
 function getThemesPreviewElement() {
   return document.getElementById("settings-themes-preview");
 }
 
 function getThemesPreviewFallbackElement() {
   return document.getElementById("settings-themes-preview-fallback");
+}
+
+function getStorefrontPreviewElement() {
+  return document.getElementById("settings-storefront-preview");
+}
+
+function getStorefrontPreviewFallbackElement() {
+  return document.getElementById("settings-storefront-preview-fallback");
 }
 
 function getThemesCatalogListElement() {
@@ -3076,73 +3117,80 @@ function recordThemesPreviewNaturalSize(el) {
   applyThemesPreviewSize(el);
 }
 
-function resetThemesPreview() {
+function resetThemesPreview(fallbackMessage = "No preview available") {
   clearThemesPreviewObjectUrl();
-  const previewEl = getThemesPreviewElement();
-  const fallbackEl = getThemesPreviewFallbackElement();
-  if (previewEl) {
+  const previewEls = getAllPreviewElements();
+  const fallbackEls = getAllPreviewFallbackElements();
+  previewEls.forEach((previewEl) => {
     previewEl.src = "";
     previewEl.hidden = true;
-    // Preserve the last known size so the wrap does not collapse to 0x0
-    // while the next preview is loading.
     applyThemesPreviewSize(previewEl);
-  }
-  if (fallbackEl) {
+  });
+  fallbackEls.forEach((fallbackEl) => {
+    fallbackEl.textContent = fallbackMessage;
     fallbackEl.hidden = false;
-  }
+  });
 }
 
-function showThemesPreviewFromDataUri(dataUri) {
-  const previewEl = getThemesPreviewElement();
-  const fallbackEl = getThemesPreviewFallbackElement();
-  if (!previewEl || !fallbackEl) return;
+function showThemesPreviewFromDataUri(dataUri, fallbackMessage = "No preview available") {
+  const previewEls = getAllPreviewElements();
+  const fallbackEls = getAllPreviewFallbackElements();
+  if (previewEls.length === 0 && fallbackEls.length === 0) return;
   if (!dataUri) {
-    resetThemesPreview();
+    resetThemesPreview(fallbackMessage);
     return;
   }
 
-  // Add error handler to debug image loading issues
-  previewEl.onerror = (e) => {
-    console.error("[Themes] Image load error:", e);
-    console.error("[Themes] dataUri length:", dataUri.length);
-    console.error("[Themes] dataUri prefix:", dataUri.substring(0, 60));
-  };
+  previewEls.forEach((previewEl) => {
+    previewEl.onerror = (e) => {
+      console.error("[Themes] Image load error:", e);
+      console.error("[Themes] dataUri length:", dataUri.length);
+      console.error("[Themes] dataUri prefix:", dataUri.substring(0, 60));
+    };
 
-  previewEl.onload = () => {
-    console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
-    recordThemesPreviewNaturalSize(previewEl);
-  };
+    previewEl.onload = () => {
+      console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+      recordThemesPreviewNaturalSize(previewEl);
+    };
 
-  applyThemesPreviewSize(previewEl);
-  previewEl.src = dataUri;
-  previewEl.hidden = false;
-  fallbackEl.hidden = true;
+    applyThemesPreviewSize(previewEl);
+    previewEl.src = dataUri;
+    previewEl.hidden = false;
+  });
+
+  fallbackEls.forEach((fallbackEl) => {
+    fallbackEl.hidden = true;
+  });
 }
 
-function showThemesPreviewFromUrl(url) {
-  const previewEl = getThemesPreviewElement();
-  const fallbackEl = getThemesPreviewFallbackElement();
-  if (!previewEl || !fallbackEl) return;
+function showThemesPreviewFromUrl(url, fallbackMessage = "No preview available") {
+  const previewEls = getAllPreviewElements();
+  const fallbackEls = getAllPreviewFallbackElements();
+  if (previewEls.length === 0 && fallbackEls.length === 0) return;
   if (!url) {
-    resetThemesPreview();
+    resetThemesPreview(fallbackMessage);
     return;
   }
 
-  // Add error handler to debug image loading issues
-  previewEl.onerror = (e) => {
-    console.error("[Themes] Image load error:", e);
-    console.error("[Themes] url:", url);
-  };
+  previewEls.forEach((previewEl) => {
+    previewEl.onerror = (e) => {
+      console.error("[Themes] Image load error:", e);
+      console.error("[Themes] url:", url);
+    };
 
-  previewEl.onload = () => {
-    console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
-    recordThemesPreviewNaturalSize(previewEl);
-  };
+    previewEl.onload = () => {
+      console.log("[Themes] Image loaded successfully, naturalWidth:", previewEl.naturalWidth, "naturalHeight:", previewEl.naturalHeight);
+      recordThemesPreviewNaturalSize(previewEl);
+    };
 
-  applyThemesPreviewSize(previewEl);
-  previewEl.src = url;
-  previewEl.hidden = false;
-  fallbackEl.hidden = true;
+    applyThemesPreviewSize(previewEl);
+    previewEl.src = url;
+    previewEl.hidden = false;
+  });
+
+  fallbackEls.forEach((fallbackEl) => {
+    fallbackEl.hidden = true;
+  });
 }
 
 function buildThemesPreviewDataUri(themeConfig) {
@@ -3266,15 +3314,37 @@ function renderThemesCatalog() {
   if (!Array.isArray(themesCatalogEntries) || themesCatalogEntries.length === 0) {
     return;
   }
+
+  // Split into Licenses vs. Themes
+  const licenseEntries = [];
+  const themeEntries = [];
+
   themesCatalogEntries.forEach((entry) => {
     if (!entry || typeof entry !== "object") return;
+    const entryType = String(entry.type || "").toLowerCase();
+    const nameLower = String(entry.name || entry.id || "").toLowerCase();
+    const idLower = String(entry.id || "").toLowerCase();
+    if (
+      entryType === "license"
+      || nameLower.includes("license")
+      || idLower.includes("license")
+      || idLower.includes("pro")
+      || idLower.includes("enterprise")
+    ) {
+      licenseEntries.push(entry);
+    } else {
+      themeEntries.push(entry);
+    }
+  });
+
+  const renderCard = (entry, isLicense = false) => {
     const cardEl = document.createElement("div");
     cardEl.className = "settings-themes-catalog-card";
     cardEl.setAttribute("role", "listitem");
 
     const nameEl = document.createElement("div");
     nameEl.className = "settings-themes-catalog-name";
-    nameEl.textContent = String(entry.name || entry.id || "Theme");
+    nameEl.textContent = String(entry.name || entry.id || (isLicense ? "License" : "Theme"));
     cardEl.appendChild(nameEl);
 
     if (entry.description) {
@@ -3312,34 +3382,37 @@ function renderThemesCatalog() {
     actionsEl.className = "settings-actions-row";
     actionsEl.style.marginTop = "0.4rem";
 
-    const previewBtn = document.createElement("button");
-    previewBtn.type = "button";
-    previewBtn.textContent = "Preview";
-    previewBtn.addEventListener("click", async () => {
-      // Use previewUrl directly - bypass data URI conversion
-      if (entry.previewUrl) {
-        showThemesPreviewFromUrl(entry.previewUrl);
-      } else {
-        showThemesPreviewFromDataUri(null);
-      }
-    });
-    actionsEl.appendChild(previewBtn);
+    if (isLicense) {
+      // Licenses do not carry a preview
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.textContent = "Preview";
+      previewBtn.addEventListener("click", () => {
+        resetThemesPreview("No preview for license types");
+      });
+      actionsEl.appendChild(previewBtn);
+    } else {
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.textContent = "Preview";
+      previewBtn.addEventListener("click", async () => {
+        if (entry.previewUrl) {
+          showThemesPreviewFromUrl(entry.previewUrl);
+        } else {
+          showThemesPreviewFromDataUri(null);
+        }
+      });
+      actionsEl.appendChild(previewBtn);
+    }
 
-    // Only show a Buy button for themes that aren't already owned by
-    // this install. Owned themes surface their license URL instead.
+    // Only show a Buy button for entries that aren't already owned
     if (!entry.owned) {
       const buyBtn = document.createElement("button");
       buyBtn.type = "button";
       buyBtn.textContent = "Buy";
       buyBtn.addEventListener("click", () => startThemeCheckout(entry));
       actionsEl.appendChild(buyBtn);
-    } else if (!entry.installed) {
-      // Owned but not yet downloaded into the local theme cache. The
-      // automatic backfill in ``refreshThemesCatalog`` will usually
-      // catch this, but the user can also trigger a download manually
-      // if the auto-backfill lost a race (e.g. a transient network
-      // blip). The button surfaces the existing ``themes-download``
-      // IPC and then re-renders the catalog + theme list.
+    } else if (!isLicense && !entry.installed) {
       const downloadBtn = document.createElement("button");
       downloadBtn.type = "button";
       downloadBtn.textContent = "Download";
@@ -3355,9 +3428,6 @@ function renderThemesCatalog() {
             setThemesCatalogStatus(`Downloaded theme "${entry.id}" into the local cache. Reloading...`);
             await loadAvailableThemes();
             await refreshThemesPreviewForSelected();
-            // Mutate the entry so the button disappears without a
-            // round-trip back to the catalog server; ``renderThemesCatalog``
-            // will pick up the change on the next paint.
             entry.installed = true;
             renderThemesCatalog();
           } else {
@@ -3377,8 +3447,41 @@ function renderThemesCatalog() {
     }
 
     cardEl.appendChild(actionsEl);
-    listEl.appendChild(cardEl);
-  });
+    return cardEl;
+  };
+
+  // 1. Licenses at the top
+  if (licenseEntries.length > 0) {
+    const licenseTitle = document.createElement("div");
+    licenseTitle.className = "settings-storefront-group-title";
+    licenseTitle.textContent = "Licenses";
+    listEl.appendChild(licenseTitle);
+
+    licenseEntries.forEach((entry) => {
+      listEl.appendChild(renderCard(entry, true));
+    });
+  }
+
+  // 2. Divider between licenses and themes if both exist
+  if (licenseEntries.length > 0 && themeEntries.length > 0) {
+    const divider = document.createElement("hr");
+    divider.className = "settings-storefront-divider";
+    listEl.appendChild(divider);
+  }
+
+  // 3. Themes below it
+  if (themeEntries.length > 0) {
+    if (licenseEntries.length > 0) {
+      const themesTitle = document.createElement("div");
+      themesTitle.className = "settings-storefront-group-title";
+      themesTitle.textContent = "Themes";
+      listEl.appendChild(themesTitle);
+    }
+
+    themeEntries.forEach((entry) => {
+      listEl.appendChild(renderCard(entry, false));
+    });
+  }
 }
 
 // Backfills any owned-but-not-yet-installed themes into the local
@@ -5413,27 +5516,30 @@ async function initializeBackendServiceFromSettings(settings = getCurrentSetting
 }
 
 // Sets settings subtab.
-function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
+function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   const nextTab =
-    tabName === SETTINGS_SUBTAB_LLM
-      ? SETTINGS_SUBTAB_LLM
-      : tabName === SETTINGS_SUBTAB_API_KEYS
-        ? SETTINGS_SUBTAB_API_KEYS
-        : tabName === SETTINGS_SUBTAB_BACKEND
-          ? SETTINGS_SUBTAB_BACKEND
-          : tabName === SETTINGS_SUBTAB_DEBUG
-            ? SETTINGS_SUBTAB_DEBUG
-            : tabName === SETTINGS_SUBTAB_PLUGINS
-              ? SETTINGS_SUBTAB_PLUGINS
-              : tabName === SETTINGS_SUBTAB_THEMES
-                ? SETTINGS_SUBTAB_THEMES
-                : tabName === SETTINGS_SUBTAB_PRIVACY
-                  ? SETTINGS_SUBTAB_PRIVACY
-                  : tabName === SETTINGS_SUBTAB_ABOUT
-                    ? SETTINGS_SUBTAB_ABOUT
-                    : SETTINGS_SUBTAB_GENERAL;
+    tabName === SETTINGS_SUBTAB_GENERAL
+      ? SETTINGS_SUBTAB_GENERAL
+      : tabName === SETTINGS_SUBTAB_LLM
+        ? SETTINGS_SUBTAB_LLM
+        : tabName === SETTINGS_SUBTAB_API_KEYS
+          ? SETTINGS_SUBTAB_API_KEYS
+          : tabName === SETTINGS_SUBTAB_BACKEND
+            ? SETTINGS_SUBTAB_BACKEND
+            : tabName === SETTINGS_SUBTAB_DEBUG
+              ? SETTINGS_SUBTAB_DEBUG
+              : tabName === SETTINGS_SUBTAB_PLUGINS
+                ? SETTINGS_SUBTAB_PLUGINS
+                : tabName === SETTINGS_SUBTAB_THEMES
+                  ? SETTINGS_SUBTAB_THEMES
+                  : tabName === SETTINGS_SUBTAB_PRIVACY
+                    ? SETTINGS_SUBTAB_PRIVACY
+                    : tabName === SETTINGS_SUBTAB_ABOUT
+                      ? SETTINGS_SUBTAB_ABOUT
+                      : SETTINGS_SUBTAB_STOREFRONT;
   activeSettingsSubtab = nextTab;
   metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
+  const storefrontBtn = document.getElementById("settings-subtab-storefront");
   const generalBtn = document.getElementById("settings-subtab-general");
   const llmBtn = document.getElementById("settings-subtab-llm");
   const apiKeysBtn = document.getElementById("settings-subtab-api-keys");
@@ -5443,6 +5549,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const themesBtn = document.getElementById("settings-subtab-themes");
   const privacyBtn = document.getElementById("settings-subtab-privacy");
   const aboutBtn = document.getElementById("settings-subtab-about");
+  const storefrontPanel = document.getElementById("settings-storefront-panel");
   const generalPanel = document.getElementById("settings-general-panel");
   const llmPanel = document.getElementById("settings-llm-panel");
   const apiKeysPanel = document.getElementById("settings-api-keys-panel");
@@ -5452,6 +5559,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   const themesPanel = document.getElementById("settings-themes-panel");
   const privacyPanel = document.getElementById("settings-privacy-panel");
   const aboutPanel = document.getElementById("settings-about-panel");
+  if (storefrontBtn) {
+    storefrontBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_STOREFRONT);
+  }
   if (generalBtn) {
     generalBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_GENERAL);
   }
@@ -5479,6 +5589,21 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
   if (aboutBtn) {
     aboutBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_ABOUT);
   }
+  if (storefrontPanel) {
+    storefrontPanel.hidden = nextTab !== SETTINGS_SUBTAB_STOREFRONT;
+    if (!storefrontPanel.hidden) {
+      // Auto-fetch the online catalog on first open if the user has a
+      // theme server configured. The IPC handler returns a friendly
+      // "not configured" message when the base URL is empty, so we
+      // surface that as a status hint rather than a hard error.
+      if (
+        !themesCatalogLoading
+        && themesCatalogEntries.length === 0
+      ) {
+        void refreshThemesCatalog({ force: false });
+      }
+    }
+  }
   if (generalPanel) {
     generalPanel.hidden = nextTab !== SETTINGS_SUBTAB_GENERAL;
   }
@@ -5501,10 +5626,6 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_GENERAL) {
     themesPanel.hidden = nextTab !== SETTINGS_SUBTAB_THEMES;
     if (!themesPanel.hidden) {
       void refreshThemesPreviewForSelected();
-      // Auto-fetch the online catalog on first open if the user has a
-      // theme server configured. The IPC handler returns a friendly
-      // "not configured" message when the base URL is empty, so we
-      // surface that as a status hint rather than a hard error.
       if (
         !themesCatalogLoading
         && themesCatalogEntries.length === 0
@@ -22945,6 +23066,10 @@ document.getElementById("settings-reset-btn").addEventListener("click", async ()
     return;
   }
   await persistSettingsFromForm({ resetToDefaults: true });
+});
+
+document.getElementById("settings-subtab-storefront")?.addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_STOREFRONT);
 });
 
 document.getElementById("settings-subtab-general").addEventListener("click", () => {
