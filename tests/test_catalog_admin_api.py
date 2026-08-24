@@ -134,6 +134,8 @@ def running_server(tmp_path: Path, *, admin_api_key: str = "test-admin-key-do-no
         log_dir=tmp_path / "logs",
         log_file="catalog.log",
         log_rotate=False,
+        paddle_poll_enabled=False,
+        paddle_poll_interval=0,
     )
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     db = _catalog.CatalogDB(db_path)
@@ -737,3 +739,215 @@ def test_admin_failed_call_still_emits_audit_log(tmp_path, caplog):
         if "admin auth failure" in record.getMessage()
     ]
     assert warnings, "Expected an admin auth failure warning"
+
+
+# ---------------------------------------------------------------------------
+# Tier-grant download tests
+# ---------------------------------------------------------------------------
+# The catalog server ships a "tier grants every theme" feature so an
+# install on the ``professional`` or ``enterprise`` plan is treated
+# as owning every theme in the catalog. These HTTP-level tests cover
+# the end-to-end download flow that the desktop client's
+# ``fetchAndCacheTheme`` drives:
+#
+#   1. Register a theme via ``POST /admin/themes`` so the catalog
+#      has something to enumerate.
+#   2. Without granting a per-theme license, attempt the download
+#      as a free install — must 403 (the legacy auth gate).
+#   3. Upgrade the install to ``professional`` via
+#      ``POST /admin/installs`` — same download must now succeed.
+#   4. Free the install (re-register with tier=free, no customer
+#      id) — download must 403 again so the entitlement is
+#      observably tier-driven, not sticky from a stale row.
+#
+# The tests use the in-process ``ThreadingHTTPServer`` fixture so
+# they exercise the real HTTP routing, real DB writes, and real
+# auth gate — not a unit-test stub. The renderer relies on this
+# exact flow to backfill Pro/Enterprise themes into the local
+# cache, so a regression here would manifest as "themes are
+# reported as owned but never download" in the storefront.
+
+
+def _register_theme(port: int, theme_id: str, theme_json: str = "{}") -> None:
+    """Helper: register a theme via the admin API and write the
+    canonical ``themes_dir/<id>.json`` file the download endpoint
+    serves. The admin API already writes the on-disk file as part
+    of ``add-theme`` so we just need to provide a body that
+    includes an embedded ``themeJson`` — otherwise the server
+    refuses the upsert for a new row (see
+    ``cmd_add_theme``'s theme_json guard)."""
+    import json as _json
+    status, payload, _ = _http(
+        port, "POST", "/admin/themes",
+        headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+        body={
+            "id": theme_id,
+            "name": theme_id,
+            "priceCents": 100,
+            "themeJson": _json.dumps({"id": theme_id, "variables": {}}),
+        },
+    )
+    assert status == 200, payload
+
+
+def test_download_403_for_free_install_without_per_theme_license(tmp_path):
+    """Baseline: a free install with no per-theme ``licenses`` row
+    must still be rejected by ``/themes/<id>/download``. The
+    tier-grant feature must not silently lower the auth gate for
+    free users — only paid tiers (Pro/Enterprise) get the
+    implicit grant."""
+    with running_server(tmp_path) as port:
+        _register_theme(port, "matrix-theme")
+        free_uuid = str(uuid.uuid4())
+        # Register the install at the free tier so the licenses
+        # endpoint can find it, but never grant a per-theme
+        # license for matrix-theme.
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={"installUuid": free_uuid, "tier": "free"},
+        )
+        status, payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={free_uuid}",
+        )
+        assert status == 403, payload
+        assert payload.get("themeId") == "matrix-theme"
+
+
+def test_download_200_for_professional_install_without_per_theme_license(tmp_path):
+    """Headline HTTP-level test: a Pro install is allowed to
+    download any theme in the catalog even though no per-theme
+    ``licenses`` row exists. This is the auth gate the renderer's
+    ``backfillMissingOwnedThemes`` walks through when a Pro user
+    upgrades and the next catalog refresh reports every theme
+    as ``owned: true`` — if this 403s, the upgrade is
+    unobservable on the wire."""
+    with running_server(tmp_path) as port:
+        _register_theme(port, "matrix-theme")
+        pro_uuid = str(uuid.uuid4())
+        # Upgrade to professional, no per-theme license row.
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={"installUuid": pro_uuid, "tier": "professional"},
+        )
+        status, payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={pro_uuid}",
+        )
+        assert status == 200, payload
+        # The download response is a JSON theme definition, not
+        # an envelope. Sanity-check that the id round-tripped so
+        # a future refactor that returns the wrong theme is
+        # caught here.
+        assert payload.get("id") == "matrix-theme"
+
+
+def test_download_200_for_enterprise_install_with_fanned_out_seat(tmp_path):
+    """Enterprise multi-seat parity: a free seat that shares a
+    ``paddle_customer_id`` with an enterprise primary must
+    inherit the download grant via the customer-fan-out path —
+    the same code path that drives the fanned-out tier in
+    ``/license-check``. Without this, an enterprise customer's
+    extra laptops (the common "analyst seats" pattern) would
+    be locked out of theme downloads even though the catalog
+    says they own everything."""
+    with running_server(tmp_path) as port:
+        _register_theme(port, "matrix-theme")
+        primary = str(uuid.uuid4())
+        seat = str(uuid.uuid4())
+        # Primary on enterprise, with a customer id. Seat on
+        # free, with the same customer id. ``POST /admin/installs``
+        # upserts the row so this also creates the seat's
+        # ``installs`` row.
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={
+                "installUuid": primary,
+                "tier": "enterprise",
+                "paddleCustomerId": "ctm_acme",
+            },
+        )
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={
+                "installUuid": seat,
+                "tier": "free",
+                "paddleCustomerId": "ctm_acme",
+            },
+        )
+        status, payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={seat}",
+        )
+        assert status == 200, payload
+        assert payload.get("id") == "matrix-theme"
+
+
+def test_download_403_after_downgrade_to_free(tmp_path):
+    """A Pro install that is then downgraded back to free must
+    lose the download grant — the entitlement comes from the
+    tier, not from a sticky cache. The renderer relies on this
+    to keep the storefront honest if a customer cancels
+    (the Paddle webhook would revoke the per-theme licenses
+    too, but the tier-grant path doesn't depend on the
+    webhook)."""
+    with running_server(tmp_path) as port:
+        _register_theme(port, "matrix-theme")
+        install_uuid = str(uuid.uuid4())
+        # Pro upgrade via the admin API.
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={"installUuid": install_uuid, "tier": "professional"},
+        )
+        # Confirm the Pro install can download.
+        status, _payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={install_uuid}",
+        )
+        assert status == 200
+        # Downgrade back to free (with an empty customer id so
+        # the fan-out path is closed off too).
+        _http(
+            port, "POST", f"/admin/installs/{install_uuid}/tier",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={"tier": "free", "paddleCustomerId": ""},
+        )
+        # Same download must now 403.
+        status, payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={install_uuid}",
+        )
+        assert status == 403, payload
+
+
+def test_download_200_for_developer_tier(tmp_path):
+    """A ``developer`` install is treated like Pro/Enterprise for
+    catalog access. The operator assigns ``developer`` deliberately
+    to a known dev / build / QA machine (the tier is
+    ``manual-only`` — the Paddle webhook and lazy registration
+    can never set it), so a build agent that can't download the
+    production themes it's supposed to test is the wrong default.
+    The HTTP-level download must succeed without a per-theme
+    ``licenses`` row, mirroring the Pro/Enterprise path."""
+    with running_server(tmp_path) as port:
+        _register_theme(port, "matrix-theme")
+        dev_uuid = str(uuid.uuid4())
+        _http(
+            port, "POST", "/admin/installs",
+            headers={"Authorization": "Bearer test-admin-key-do-not-use"},
+            body={"installUuid": dev_uuid, "tier": "developer"},
+        )
+        status, payload, _ = _http(
+            port, "GET",
+            f"/themes/matrix-theme/download?installUuid={dev_uuid}",
+        )
+        assert status == 200, payload
+        # Sanity-check the response body is the actual theme JSON
+        # (not an error envelope) so a future refactor that
+        # returns the wrong shape is caught here.
+        assert payload.get("id") == "matrix-theme"

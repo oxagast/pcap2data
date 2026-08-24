@@ -9513,7 +9513,7 @@
       "timing",
       "keystroke"
     ],
-    "last_updated": "2026-08-24T01:56:15+00:00",
+    "last_updated": "2026-08-24T21:30:11+00:00",
     "notes": "Top-level envelope for SSH keystroke timing stats. 2 directions: client_to_server, server_to_client. Per-direction count/mean_ms/std_ms/deltas_ms are raw observations."
   },
   "schema_version": 2
