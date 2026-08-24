@@ -3383,12 +3383,36 @@ function renderThemesCatalog() {
     actionsEl.style.marginTop = "0.4rem";
 
     if (isLicense) {
-      // Licenses do not carry a preview
+      // Licenses use the same preview-resolution path as themes: the
+      // catalog server already embeds ``previewImage`` (and supplies
+      // ``previewUrl``) on every entry it returns, including license
+      // SKUs. Earlier this branch hard-coded "No preview for license
+      // types" because the operator-managed ``themes_dir/<id>.json``
+      // files only existed for cosmetic themes — but a license entry
+      // that has its own preview (e.g. a marketing screenshot of the
+      // pro / enterprise feature set) should render just like a
+      // theme preview. Fall back to the same "No preview" message
+      // when neither source is populated so the button still works
+      // for bare license SKUs.
       const previewBtn = document.createElement("button");
       previewBtn.type = "button";
       previewBtn.textContent = "Preview";
       previewBtn.addEventListener("click", () => {
-        resetThemesPreview("No preview for license types");
+        // License preview resolution: same priority as the theme
+        // branch — embedded ``previewImage`` wins, then
+        // ``previewUrl``, then a graceful "no preview" message
+        // whose wording is unique to the license branch so the
+        // empty-state placeholder is recognisable in the DOM.
+        const embeddedDataUri = getThemeEmbeddedPreviewDataUri(entry);
+        if (embeddedDataUri) {
+          showThemesPreviewFromDataUri(embeddedDataUri);
+          return;
+        }
+        if (entry.previewUrl) {
+          showThemesPreviewFromUrl(entry.previewUrl);
+          return;
+        }
+        showThemesPreviewFromDataUri(null, "No preview available for this license");
       });
       actionsEl.appendChild(previewBtn);
     } else {

@@ -280,3 +280,261 @@ def test_set_install_tier_preserves_existing_customer_id(fanout_db):
     # clear it. OR-merge is the right semantic for an idempotent
     # "re-apply the same command" workflow.
     assert row["paddle_customer_id"] == "ctm_keep"
+
+
+# ---------------------------------------------------------------------------
+# Tier-grant ownership tests
+# ---------------------------------------------------------------------------
+# The catalog server ships a "tier grants every theme" feature so an
+# install on the ``professional`` or ``enterprise`` plan is treated as
+# owning every theme in the catalog without needing per-theme
+# ``licenses`` rows. These tests cover the two new
+# ``CatalogDB`` helpers that back the feature:
+#
+#   * ``effective_owned_theme_ids(install_uuid)`` — returns the full
+#     union of (per-theme licenses) ∪ (every theme in the catalog)
+#     for a Pro/Enterprise install, and just the per-theme licenses
+#     otherwise. Drives ``/catalog`` and ``/licenses``.
+#   * ``theme_is_effectively_owned(install_uuid, theme_id)`` — single-
+#     theme equivalent that ``/themes/<id>/download`` uses to gate
+#     the actual file fetch.
+#
+# Both helpers resolve the tier via ``resolve_install_tier_with_customer_fanout``
+# so a free enterprise seat that shares a ``paddle_customer_id``
+# with an enterprise primary also gets the grant — a single
+# subscription can unlock every analyst's laptop, exactly the
+# "primary + seats" model the customer-fanout feature supports.
+
+
+def _seed_themes(db, theme_ids):
+    """Bulk-insert a handful of theme rows so the tier-grant tests
+    have a non-empty catalog to enumerate. ``upsert_theme`` is the
+    same helper the CLI ``add-theme`` command uses, so the schema
+    (and the ``paddle_*`` columns it expects) line up."""
+    for theme_id in theme_ids:
+        db.upsert_theme(
+            theme_id=theme_id,
+            name=theme_id,
+            description="",
+            price_cents=100,
+            price_label="$1.00/month",
+            paddle_product_id=f"prod_{theme_id}",
+            paddle_price_id=f"pri_{theme_id}",
+            preview_image="",
+            preview_filename="",
+            checkout_url="",
+            hosted_checkout_url="",
+            license_url="",
+            theme_json="{}",
+        )
+
+
+@pytest.fixture
+def tier_grant_db(tmp_path):
+    """CatalogDB preloaded with a handful of theme rows. Tests
+    that need a known catalog shape use this instead of the bare
+    ``fanout_db`` fixture above so they can exercise the
+    tier-grant path without juggling theme inserts inline."""
+    db, _path = _fresh_db(tmp_path)
+    try:
+        _seed_themes(
+            db,
+            [
+                "matrix-theme",
+                "nilla-horizon-theme",
+                "weebo-theme",
+                "sub7-theme",
+            ],
+        )
+        yield db
+    finally:
+        db.close()
+
+
+def test_effective_owned_empty_for_free_install(tier_grant_db):
+    """A free install with no per-theme licenses owns nothing —
+    ``effective_owned_theme_ids`` must collapse to the legacy
+    ``list_owned_theme_ids`` answer so the storefront shows every
+    theme as ``owned: false`` and the operator doesn't see a
+    surprise jump after the upgrade."""
+    free_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, free_uuid, "free")
+    owned = tier_grant_db.effective_owned_theme_ids(free_uuid)
+    assert owned == []
+
+
+def test_effective_owned_grants_every_theme_for_developer(tier_grant_db):
+    """A ``developer`` install is treated like Pro/Enterprise for
+    catalog access: every theme in the catalog is reported as
+    owned. The operator assigns ``developer`` deliberately to a
+    known dev / build / QA machine (the tier is ``manual-only`` —
+    the Paddle webhook and lazy registration can never set it, see
+    ``LICENSE_TIER_DEVELOPER`` in ps-catalog.py), and a dev
+    machine that can't see the production storefront is the wrong
+    default. The storefront shows the same Owned / Download
+    affordances a Pro install sees, so build agents can install
+    and exercise every theme without per-theme grant work."""
+    dev_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, dev_uuid, "developer")
+    owned = tier_grant_db.effective_owned_theme_ids(dev_uuid)
+    assert sorted(owned) == [
+        "matrix-theme",
+        "nilla-horizon-theme",
+        "sub7-theme",
+        "weebo-theme",
+    ]
+
+
+def test_effective_owned_developer_still_dedupes_with_explicit_license(tier_grant_db):
+    """Adding ``developer`` to the tier-grant set must not
+    double-count: a dev install that ALSO holds an explicit
+    per-theme ``licenses`` row (legal, e.g. a free-trial row from
+    before the upgrade) should still see each id exactly once.
+    The dedup guarantees the renderer's
+    ``reconcileThemeLicenses`` cache write doesn't double-fetch
+    the same theme file."""
+    dev_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, dev_uuid, "developer")
+    tier_grant_db.grant_license(dev_uuid, "matrix-theme")
+    owned = tier_grant_db.effective_owned_theme_ids(dev_uuid)
+    assert sorted(owned) == owned
+    assert owned.count("matrix-theme") == 1
+    assert len(owned) == 4
+
+
+def test_effective_owned_grants_every_theme_for_professional(tier_grant_db):
+    """Headline case: a ``professional`` install owns every theme
+    in the catalog even if no per-theme ``licenses`` row exists.
+    The renderer's ``reconcileThemeLicenses`` consumes this list
+    to pre-populate the local theme cache, so a Pro upgrade
+    lights up the whole storefront on the next refresh."""
+    pro_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, pro_uuid, "professional")
+    owned = tier_grant_db.effective_owned_theme_ids(pro_uuid)
+    assert sorted(owned) == [
+        "matrix-theme",
+        "nilla-horizon-theme",
+        "sub7-theme",
+        "weebo-theme",
+    ]
+
+
+def test_effective_owned_grants_every_theme_for_enterprise(tier_grant_db):
+    """Same headline case for ``enterprise`` — the storefront
+    surfaces every theme as owned, regardless of which one the
+    buyer actually clicked through Paddle to upgrade."""
+    ent_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, ent_uuid, "enterprise")
+    owned = tier_grant_db.effective_owned_theme_ids(ent_uuid)
+    assert sorted(owned) == [
+        "matrix-theme",
+        "nilla-horizon-theme",
+        "sub7-theme",
+        "weebo-theme",
+    ]
+
+
+def test_effective_owned_fan_out_for_enterprise_seat(tier_grant_db):
+    """Enterprise multi-seat support: the operator upgrades the
+    primary install to ``enterprise`` and stamps the same
+    ``paddle_customer_id`` on every additional seat. The
+    fan-out logic that already feeds ``/licenses`` must also
+    apply here, so a free seat that shares the customer id gets
+    the same "all themes owned" answer the primary does."""
+    primary = str(uuid.uuid4())
+    seat = str(uuid.uuid4())
+    _register(tier_grant_db, primary, "enterprise", customer_id="ctm_acme")
+    _register(tier_grant_db, seat, "free", customer_id="ctm_acme")
+    owned_seat = tier_grant_db.effective_owned_theme_ids(seat)
+    assert sorted(owned_seat) == [
+        "matrix-theme",
+        "nilla-horizon-theme",
+        "sub7-theme",
+        "weebo-theme",
+    ]
+
+
+def test_effective_owned_unknown_install_is_empty(tier_grant_db):
+    """An installUuid the catalog has never seen (no row in
+    ``installs``) must not raise — the desktop client often polls
+    ``/licenses`` before the install has registered. Returns an
+    empty list so the storefront shows no owned themes until the
+    first registration round-trip lands."""
+    unknown = str(uuid.uuid4())
+    assert tier_grant_db.effective_owned_theme_ids(unknown) == []
+    # Empty / missing installUuid also short-circuits cleanly.
+    assert tier_grant_db.effective_owned_theme_ids("") == []
+
+
+def test_effective_owned_dedupes_license_plus_tier(tier_grant_db):
+    """A Pro install that ALSO holds an explicit per-theme
+    ``licenses`` row (legal, e.g. a free-trial row from before
+    the upgrade) must still return each id exactly once. The
+    sort + dedupe is the source of truth for the storefront's
+    ``reconcileThemeLicenses`` cache, and a duplicate id would
+    double-count the file write."""
+    pro_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, pro_uuid, "professional")
+    tier_grant_db.grant_license(pro_uuid, "matrix-theme")
+    owned = tier_grant_db.effective_owned_theme_ids(pro_uuid)
+    # Each id appears once; sort order is the canonical answer
+    # so two back-to-back calls produce byte-identical lists.
+    assert sorted(owned) == owned
+    assert owned.count("matrix-theme") == 1
+    assert len(owned) == 4
+
+
+def test_theme_is_effectively_owned_grants_for_pro(tier_grant_db):
+    """The single-theme helper is the auth gate on
+    ``/themes/<id>/download``. A Pro install must be allowed
+    through even though no per-theme ``licenses`` row exists —
+    otherwise the catalog endpoint would report ``owned: true``
+    and the download endpoint would 403 in the same session."""
+    pro_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, pro_uuid, "professional")
+    assert (
+        tier_grant_db.theme_is_effectively_owned(pro_uuid, "matrix-theme")
+        is True
+    )
+    # The theme must exist in the catalog — an unknown theme id
+    # must NOT be silently "owned" just because the install is
+    # on a paid tier.
+    assert (
+        tier_grant_db.theme_is_effectively_owned(pro_uuid, "no-such-theme")
+        is False
+    )
+
+
+def test_theme_is_effectively_owned_free_install_needs_license(tier_grant_db):
+    """A free install with no per-theme ``licenses`` row must
+    get ``False`` for every theme — preserves the legacy
+    auth-gate behaviour so the upgrade is observably the thing
+    that flipped the answer from False to True."""
+    free_uuid = str(uuid.uuid4())
+    _register(tier_grant_db, free_uuid, "free")
+    assert (
+        tier_grant_db.theme_is_effectively_owned(free_uuid, "matrix-theme")
+        is False
+    )
+    # Granting the license changes the answer — sanity check
+    # that the helper is reading the licenses table, not just
+    # caching a single False.
+    tier_grant_db.grant_license(free_uuid, "matrix-theme")
+    assert (
+        tier_grant_db.theme_is_effectively_owned(free_uuid, "matrix-theme")
+        is True
+    )
+
+
+def test_theme_is_effectively_owned_rejects_empty_inputs(tier_grant_db):
+    """Defensive: an empty installUuid or theme id must return
+    ``False`` rather than raising, because the request handlers
+    in ``_handle_theme_download`` and friends treat the helper
+    as a boolean gate and shouldn't crash on a malformed query
+    string."""
+    assert (
+        tier_grant_db.theme_is_effectively_owned("", "matrix-theme") is False
+    )
+    assert (
+        tier_grant_db.theme_is_effectively_owned(str(uuid.uuid4()), "") is False
+    )
