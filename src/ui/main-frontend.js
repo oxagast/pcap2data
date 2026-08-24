@@ -3396,11 +3396,24 @@ function renderThemesCatalog() {
       previewBtn.type = "button";
       previewBtn.textContent = "Preview";
       previewBtn.addEventListener("click", async () => {
+        // Priority matches the theme-picker path in
+        // ``refreshThemesPreviewForSelected``: the embedded data URI
+        // (``entry.previewImage``) wins when present, then the
+        // external URL (``entry.previewUrl``), and finally we
+        // gracefully fall back to a "no preview" message. The
+        // embedded path is the one that lights up for the
+        // freshly-bundled themes now that each ``*.json`` ships with
+        // a 30%-resized jpg under ``previewImage``.
+        const embeddedDataUri = getThemeEmbeddedPreviewDataUri(entry);
+        if (embeddedDataUri) {
+          showThemesPreviewFromDataUri(embeddedDataUri);
+          return;
+        }
         if (entry.previewUrl) {
           showThemesPreviewFromUrl(entry.previewUrl);
-        } else {
-          showThemesPreviewFromDataUri(null);
+          return;
         }
+        showThemesPreviewFromDataUri(null, "No preview available for this theme");
       });
       actionsEl.appendChild(previewBtn);
     }
