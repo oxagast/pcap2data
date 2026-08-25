@@ -449,7 +449,7 @@ describe("settings.js self-signed-cert defaults", () => {
 
 describe("normalizeEndpointUrl preserves the user's chosen scheme", () => {
     // The default metrics endpoint is plain HTTP
-    // (``http://143.198.179.97:8088/mhook``). Self-hosters also
+    // (``http://64.227.4.43:8088/mhook``). Self-hosters also
     // commonly run the open-source collector over plain HTTP on
     // their own box. ``normalizeEndpointUrl`` must not silently
     // rewrite ``http://`` to ``https://`` for non-loopback hosts,
@@ -459,7 +459,7 @@ describe("normalizeEndpointUrl preserves the user's chosen scheme", () => {
     // it.
     const settings = require(SETTINGS_PATH);
     const { normalizeEndpointUrl } = settings;
-    const fallback = "http://143.198.179.97:8088/mhook";
+    const fallback = "http://64.227.4.43:8088/mhook";
 
     test("the default endpoint is plain HTTP", () => {
         expect(settings.DEFAULT_SETTINGS.privacy.metricsEndpointUrl).toBe(fallback);
@@ -467,7 +467,7 @@ describe("normalizeEndpointUrl preserves the user's chosen scheme", () => {
 
     test("preserves HTTP for the default non-loopback host", () => {
         const result = normalizeEndpointUrl(
-            "http://143.198.179.97:8088/mhook",
+            "http://64.227.4.43:8088/mhook",
             fallback,
         );
         expect(result.startsWith("http://")).toBe(true);
