@@ -269,6 +269,14 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
               complete,
               chunkSize: DEFAULT_HOST_CHUNK_SIZE,
             });
+            return;
+          }
+          if (event?.progressOnly) {
+            sendBackendProgressOnly({
+              jobId: normalizeBackendJobId(event?.jobId),
+              processedPackets,
+              totalPackets,
+            });
           }
         };
 
@@ -957,6 +965,74 @@ function requestSnitchHttpBackendVersion(
   });
 }
 
+// Fetch live backend processing status (active job progress counters).
+// Returns processedPackets/totalPackets from the backend's /status endpoint,
+// which the renderer can poll when the early-yield threshold has starved
+// the bridge's regular progress events.
+function requestSnitchHttpBackendStatus(
+  host = BACKEND_HTTP_HOST,
+  port = BACKEND_HTTP_PORT,
+  timeoutMs = 1500,
+) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host,
+        port,
+        path: "/status",
+        method: "GET",
+        timeout: timeoutMs,
+        headers: buildSnitchHttpHeaders({
+          Accept: "application/json",
+        }),
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => {
+          body += chunk.toString();
+        });
+        res.on("end", () => {
+          try {
+            const payload = JSON.parse(body || "{}");
+            resolve({
+              ok: res.statusCode === 200 && payload?.type === "status",
+              runtime: payload?.runtime || null,
+              runningJobs: Array.isArray(payload?.runningJobs) ? payload.runningJobs : [],
+              processedPackets: Number(payload?.runtime?.processedPackets) || 0,
+              totalPackets: Number(payload?.runtime?.totalPackets) || 0,
+              processing: Boolean(payload?.runtime?.processing),
+            });
+          } catch (_err) {
+            resolve({
+              ok: false,
+              runtime: null,
+              runningJobs: [],
+              processedPackets: 0,
+              totalPackets: 0,
+              processing: false,
+            });
+          }
+        });
+      },
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("HTTP status request timed out"));
+    });
+    req.on("error", () => {
+      resolve({
+        ok: false,
+        runtime: null,
+        runningJobs: [],
+        processedPackets: 0,
+        totalPackets: 0,
+        processing: false,
+      });
+    });
+    req.end();
+  });
+}
+
 function requestSnitchHttpBackendGeoip(
   ipAddress,
   {
@@ -1431,6 +1507,13 @@ async function getBackendServiceDiagnostics(options = {}) {
     )
     : { ok: false, service: null, version: null };
 
+  const statusResult = backendWebserverUp
+    ? await requestSnitchHttpBackendStatus(
+      currentBackendHttpHost,
+      currentBackendHttpPort,
+    )
+    : { ok: false, runtime: null, runningJobs: [], processedPackets: 0, totalPackets: 0, processing: false };
+
   const managedProcessAlive = Boolean(
     backendHttpServerProc && !backendHttpServerProc.killed,
   );
@@ -1447,6 +1530,11 @@ async function getBackendServiceDiagnostics(options = {}) {
     backendVersion: versionResult.version,
     backendVersionService: versionResult.service,
     backendVersionReachable: Boolean(versionResult.ok),
+    // Live progress counters from /status — used by the renderer to
+    // poll the backend when the bridge has starved the warning banner.
+    processing: Boolean(statusResult.processing),
+    processedPackets: Number(statusResult.processedPackets) || 0,
+    totalPackets: Number(statusResult.totalPackets) || 0,
     checkedAt: new Date().toISOString(),
   };
 }
@@ -1718,6 +1806,24 @@ async function runBackendCommandViaHttp(filename, options = {}) {
           totalPackets,
           complete,
           chunkSize: hostChunkSize,
+        });
+        return;
+      }
+      // Lightweight progress-only update (no capture data, no snapshot
+      // path) — emitted by the backend after the early-yield threshold
+      // so the renderer's warning banner keeps ticking. Forward via the
+      // json-path channel; the renderer updates progress counts before
+      // bailing out on the missing `path` field.
+      if (event?.progressOnly) {
+        if (shouldLogBridgeProgress("json-path", processedPackets, totalPackets, complete, eventJobId)) {
+          global.logBackend(
+            `[Bridge] HTTP progress jobId=${eventJobId} progress-only processed=${processedPackets} total=${totalPackets} complete=${complete ? 1 : 0}`,
+          );
+        }
+        sendBackendProgressOnly({
+          jobId: eventJobId,
+          processedPackets,
+          totalPackets,
         });
       }
     };
@@ -2050,6 +2156,26 @@ function sendJsonPathPayload(payload) {
   mainWin.webContents.send("json-path", nextPayload);
 }
 
+// Forward a lightweight progress-only update (no capture data, no snapshot
+// path) to the renderer so the backend-processing-warning banner keeps
+// ticking after the early-yield threshold suspends full snapshot emission.
+// Sent via the "json-path" channel because the renderer's onJsonPath
+// handler calls updateBackendProgressFromPayload() *before* bailing out
+// on the missing `path` field, so the count/ETA refresh even though the
+// payload carries no ingestable snapshot.
+function sendBackendProgressOnly(payload) {
+  const mainWin = getMainWindow();
+  if (!mainWin) return;
+  const nextPayload = {
+    jobId: normalizeBackendJobId(payload?.jobId),
+    processedPackets: Number(payload?.processedPackets) || 0,
+    totalPackets: Number(payload?.totalPackets) || 0,
+    complete: false,
+    progressOnly: true,
+  };
+  mainWin.webContents.send("json-path", nextPayload);
+}
+
 function sendJsonDataPayload(payload) {
   if (!payload || typeof payload !== "object") return;
 
@@ -2205,7 +2331,22 @@ function parseBridgeProgressLine(line, hostChunkSize = DEFAULT_HOST_CHUNK_SIZE) 
   const totalMatch = line.match(/total=(\d+)/);
   const finalMatch = line.match(/final=(\d+)/);
   const jobIdMatch = line.match(/jobId=([^\s]+)/);
-  if (!pathMatch) return null;
+  if (!pathMatch) {
+    // Lightweight progress-only line (no path=, has progressOnly=1).
+    // Return a payload flagged progressOnly so the caller can forward
+    // it via sendBackendProgressOnly instead of sendJsonPathPayload.
+    const progressOnlyMatch = line.match(/progressOnly=1/);
+    if (!progressOnlyMatch || !processedMatch) return null;
+    return {
+      path: "",
+      progressOnly: true,
+      jobId: jobIdMatch ? String(jobIdMatch[1] || "").trim() : "",
+      processedPackets: processedMatch ? Number(processedMatch[1]) : 0,
+      totalPackets: totalMatch ? Number(totalMatch[1]) : 0,
+      complete: finalMatch ? finalMatch[1] === "1" : false,
+      chunkSize: hostChunkSize,
+    };
+  }
 
   return {
     path: pathMatch[1],
@@ -2569,6 +2710,16 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
             latestProcessedPackets,
             progressPayload.processedPackets || 0,
           );
+          if (progressPayload.progressOnly) {
+            // No snapshot path — forward as a lightweight progress-only
+            // update so the renderer's warning banner keeps ticking.
+            sendBackendProgressOnly({
+              jobId: progressPayload.jobId,
+              processedPackets: progressPayload.processedPackets,
+              totalPackets: progressPayload.totalPackets,
+            });
+            return;
+          }
           sentSnapshotPaths.add(progressPayload.path);
           sendJsonPathPayload(progressPayload);
           return;

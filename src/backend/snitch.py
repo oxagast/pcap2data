@@ -152,6 +152,11 @@ processingJobInfo = {
     "jobId": None,
     "startedAtEpoch": None,
     "pcapPath": None,
+    # Live progress counters written by the ingest loop so that the
+    # /status endpoint can expose them even when the bridge has been
+    # starved by the early-yield threshold gate.
+    "processedPackets": 0,
+    "totalPackets": 0,
 }
 backendJobsProcessedSinceStart = 0
 
@@ -458,6 +463,8 @@ def _setActiveProcessingJob(jobId, pcapPath):
         processingJobInfo["jobId"] = str(jobId)
         processingJobInfo["startedAtEpoch"] = float(time.time())
         processingJobInfo["pcapPath"] = str(pcapPath or "")
+        processingJobInfo["processedPackets"] = 0
+        processingJobInfo["totalPackets"] = 0
 
 
 def _clearActiveProcessingJob():
@@ -465,6 +472,8 @@ def _clearActiveProcessingJob():
         processingJobInfo["jobId"] = None
         processingJobInfo["startedAtEpoch"] = None
         processingJobInfo["pcapPath"] = None
+        processingJobInfo["processedPackets"] = 0
+        processingJobInfo["totalPackets"] = 0
 
 
 def _buildBackendStatusPayload(server=None):
@@ -477,6 +486,8 @@ def _buildBackendStatusPayload(server=None):
         startedAtEpoch = processingJobInfo.get("startedAtEpoch")
         pcapPath = processingJobInfo.get("pcapPath")
         jobsProcessedSinceStart = int(backendJobsProcessedSinceStart)
+        processedPacketsNow = int(processingJobInfo.get("processedPackets") or 0)
+        totalPacketsNow = int(processingJobInfo.get("totalPackets") or 0)
 
     runningJobs = []
     if processingLock.locked():
@@ -491,6 +502,8 @@ def _buildBackendStatusPayload(server=None):
                 "elapsedSeconds": round(max(0.0, nowEpoch - float(startedAtEpoch)), 3)
                 if isinstance(startedAtEpoch, (int, float))
                 else None,
+                "processedPackets": processedPacketsNow,
+                "totalPackets": totalPacketsNow,
             }
         )
 
@@ -509,6 +522,8 @@ def _buildBackendStatusPayload(server=None):
         + f"workerThreads={runtimeConfig['workerThreads']} "
         + f"hostChunkSize={runtimeConfig['hostChunkSize']} "
         + f"earlyYieldPacketThreshold={runtimeConfig.get('earlyYieldPacketThreshold', DEFAULT_EARLY_YIELD_PACKET_THRESHOLD)} "
+        + f"processedPackets={processedPacketsNow} "
+        + f"totalPackets={totalPacketsNow} "
         + f"runningJobs={len(runningJobs)} "
         + f"jobsProcessed={jobsProcessedSinceStart}"
     )
@@ -536,6 +551,8 @@ def _buildBackendStatusPayload(server=None):
             "processing": bool(processingLock.locked()),
             "stopRequested": bool(stopEvent.is_set()),
             "jobsProcessedSinceStart": jobsProcessedSinceStart,
+            "processedPackets": processedPacketsNow,
+            "totalPackets": totalPacketsNow,
         },
         "jobsProcessedSinceStart": jobsProcessedSinceStart,
         "runningJobs": runningJobs,
@@ -1353,6 +1370,45 @@ def emitBridgeProgress(
                 payload["jobId"] = normalizedJobId
             if isinstance(captureData, dict):
                 payload["captureData"] = captureData
+            progressEventCallback(payload)
+        except Exception:
+            # Progress callback failures should not interrupt capture processing.
+            pass
+
+
+def emitBridgeProgressOnly(processedPackets, totalPackets, jobId=None):
+    """
+    Emit a lightweight progress-only update (no capture data, no snapshot
+    path) so the frontend can keep the processing-warning banner ticking
+    after the early-yield threshold has been reached and full snapshot
+    emission is suspended.
+
+    The stderr line uses the same ``[Bridge]`` prefix as
+    :func:`emitBridgeProgress` but omits ``path=`` so the legacy
+    file-based bridge (which only forwards events that carry a path)
+    will skip it while the HTTP/NDJSON bridge forwards the structured
+    payload to the renderer.
+    """
+
+    line = (
+        f"{progressLinePrefix} processed={processedPackets} "
+        + f"total={totalPackets} final=0 progressOnly=1"
+    )
+    normalizedJobId = str(jobId or "").strip()
+    if normalizedJobId:
+        line += f" jobId={normalizedJobId}"
+    print(line, file=sys.stderr)
+
+    if callable(progressEventCallback):
+        try:
+            payload = {
+                "processedPackets": int(processedPackets),
+                "totalPackets": int(totalPackets),
+                "complete": False,
+                "progressOnly": True,
+            }
+            if normalizedJobId:
+                payload["jobId"] = normalizedJobId
             progressEventCallback(payload)
         except Exception:
             # Progress callback failures should not interrupt capture processing.
@@ -4002,6 +4058,13 @@ def startThreading():
                     with allPacketInfoLock:
                         processedPacketCount = len(allPacketInfo)
 
+                    # Mirror live progress into the shared job-info dict so
+                    # the /status endpoint can report it even while the
+                    # bridge's early-yield gate stops emitting snapshots.
+                    with processingJobLock:
+                        processingJobInfo["processedPackets"] = processedPacketCount
+                        processingJobInfo["totalPackets"] = totalPackets
+
                     if processedPacketCount >= nextSnapshotPacketCount:
                         with allPacketInfoLock:
                             # Snapshot only when we are actually emitting progress,
@@ -4044,6 +4107,22 @@ def startThreading():
                             perfSnapshotSeconds += time.perf_counter() - snapshotStart
                             perfSnapshotCount += 1
                             nextSnapshotPacketCount += hostChunkSize
+
+                        # Once the early-yield threshold has been reached the
+                        # while-loop above stops emitting full snapshots, which
+                        # starves the frontend's processing-warning banner — the
+                        # processed-packet count would freeze at the threshold
+                        # until the final ``complete`` payload.  Emit a cheap
+                        # progress-only update (no capture data) on every
+                        # completed batch so the renderer can keep the count and
+                        # ETA ticking without paying for an O(n) snapshot copy.
+                        if processedPacketCount >= earlyYieldPacketThreshold:
+                            currentJobId = str(getattr(args, "job_id", "") or "").strip()
+                            emitBridgeProgressOnly(
+                                processedPacketCount,
+                                totalPackets,
+                                jobId=currentJobId,
+                            )
                 except Exception as exc:
                     if verbose >= 0:
                         print(
@@ -4495,6 +4574,11 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         self.send_response(int(statusCode))
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # Disable keep-alive so the server doesn't try to read another
+        # request after the client closes the connection. This avoids
+        # "ConnectionResetError: [Errno 104] Connection reset by peer"
+        # when the client disconnects after receiving the response.
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
         self.wfile.flush()
@@ -4504,6 +4588,11 @@ class SnitchHttpHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
+        # Disable keep-alive so the server doesn't try to read another
+        # request after the client closes the NDJSON stream. This avoids
+        # "ConnectionResetError: [Errno 104] Connection reset by peer"
+        # when the client disconnects after receiving the complete event.
+        self.send_header("Connection", "close")
         self.end_headers()
 
     def sendNdjsonLine(self, payload):
