@@ -6348,6 +6348,63 @@ if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "f
   });
 }
 
+// Listen for Ollama rate limit (429) or payment required (402) errors from the main process.
+// When this happens, show a dialog and disable LLM context menu entries until Ollama is available again.
+let ollamaRateLimitDialogShown = false;
+if (window.installapi && typeof window.installapi.onOllamaRateLimitOrPaymentRequired === "function") {
+  console.log("[MainFrontend] Registering onOllamaRateLimitOrPaymentRequired listener");
+  window.installapi.onOllamaRateLimitOrPaymentRequired((detail) => {
+    console.log("[MainFrontend] Received ollama-rate-limit-or-payment-required event:", detail);
+    if (!detail || typeof detail !== "object") {
+      return;
+    }
+    const statusCode = detail.statusCode;
+    const message = detail.message || "";
+    const isPaymentRequired = statusCode === 402;
+    const isRateLimit = statusCode === 429;
+
+    // Show the dialog only once per session (until Ollama becomes available again)
+    if (!ollamaRateLimitDialogShown) {
+      ollamaRateLimitDialogShown = true;
+      const title = isPaymentRequired
+        ? "Ollama Payment Required"
+        : "Ollama Rate Limit Exceeded";
+      const body = isPaymentRequired
+        ? "Your Ollama cloud account has reached its usage limit. Please check your Ollama cloud subscription or switch to a local Ollama model."
+        : "Ollama API rate limit exceeded. Please wait a moment before making more requests, or check your Ollama cloud plan.";
+      console.log("[MainFrontend] Showing info dialog for Ollama error");
+      showInfoDialog(title, [{ label: "Status", value: `${statusCode} ${isPaymentRequired ? "(Payment Required)" : "(Rate Limit)"}` }, { label: "Details", value: message }]);
+    }
+
+    // Disable LLM runtime so context menu entries are hidden
+    console.log("[MainFrontend] Setting ollamaVersionCheckPassed = false");
+    ollamaVersionCheckPassed = false;
+    syncLlmDiagnosticsIndicators();
+
+    // Re-render the Session Threat Score card so the LLM "Get Assessment" button disables
+    if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+      subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+    }
+  });
+}
+
+// Listen for Ollama diagnostics updates to re-enable LLM when it becomes available again
+if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "function") {
+  window.installapi.onLlmDiagnosticsUpdated((diagnostics) => {
+    cachedLlmDiagnostics = diagnostics || null;
+    const wasPassed = ollamaVersionCheckPassed;
+    ollamaVersionCheckPassed = Boolean(
+      cachedLlmDiagnostics?.ollamaInstalled && cachedLlmDiagnostics?.ollamaServerListening,
+    );
+    syncLlmDiagnosticsIndicators();
+
+    // If Ollama became available again, reset the dialog flag so it can show again if needed
+    if (!wasPassed && ollamaVersionCheckPassed) {
+      ollamaRateLimitDialogShown = false;
+    }
+  });
+}
+
 
 
 // ============================================================================

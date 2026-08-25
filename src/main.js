@@ -2333,11 +2333,22 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
     );
     return response;
   } catch (error) {
-    const resultCode = Number.isInteger(error?.status)
-      ? error.status
-      : Number.isInteger(error?.code)
-        ? error.code
-        : 1;
+    // Ollama's ResponseError uses status_code, not status
+    const resultCode = Number.isInteger(error?.status_code)
+      ? error.status_code
+      : Number.isInteger(error?.status)
+        ? error.status
+        : Number.isInteger(error?.code)
+          ? error.code
+          : 1;
+    console.log("[Main] Ollama error object:", JSON.stringify({
+      status: error?.status,
+      status_code: error?.status_code,
+      code: error?.code,
+      message: error?.message,
+      name: error?.name,
+      stack: error?.stack
+    }, null, 2));
     setLlmDiagnostics({
       lastCallResultCode: resultCode,
       lastCallAt: new Date().toISOString(),
@@ -2347,6 +2358,18 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
       `[${new Date().toISOString()}] [GUI][Main] Ollama LLM request failed resultCode=${resultCode} message=${JSON.stringify(error?.message || String(error))}`,
     );
     console.error("Error generating response from Ollama:", error);
+
+    // If the error is a 402 (payment required) or 429 (rate limit), notify the renderer
+    // so it can show a dialog and disable LLM context menu entries until Ollama is available again.
+    if (resultCode === 402 || resultCode === 429) {
+      console.log("[Main] Sending ollama-rate-limit-or-payment-required event, resultCode:", resultCode);
+      // Use _event.sender.send to target the specific renderer that made the request
+      _event.sender.send("ollama-rate-limit-or-payment-required", {
+        statusCode: resultCode,
+        message: error?.message || String(error),
+      });
+    }
+
     throw error;
   }
 });
@@ -2915,13 +2938,17 @@ async function checkOllamaCloudApi() {
       cloudApiError: ok ? "" : (parsedResponse?.error || response.statusText || responseText || "Cloud ping failed"),
     };
   } catch (error) {
-    return {
-      cloudApiReachable: false,
-      cloudApiResultCode: Number.isInteger(error?.status)
+    // Ollama's ResponseError uses status_code, not status
+    const resultCode = Number.isInteger(error?.status_code)
+      ? error.status_code
+      : Number.isInteger(error?.status)
         ? error.status
         : Number.isInteger(error?.code)
           ? error.code
-          : 1,
+          : 1;
+    return {
+      cloudApiReachable: false,
+      cloudApiResultCode: resultCode,
       cloudApiCheckedAt: new Date().toISOString(),
       cloudApiError: error?.message || String(error),
     };
