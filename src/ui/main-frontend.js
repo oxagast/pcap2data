@@ -1149,6 +1149,9 @@ const backendProgressState = {
   etaLastSampleAtMs: 0,
   etaLastSampleProcessedPackets: 0,
   etaPacketsPerSecond: 0,
+  // Timestamp when backend processing started (set in runSnitch).
+  // Used to estimate total backend time for swap ETA calculation.
+  etaStartAtMs: 0,
   // True for the duration of a "send wifi keys -> background rerun" so the
   // onJsonData handler forces a full packet-stub reindex on the first
   // chunk. Without this the incremental merge skips reindexing when the
@@ -1176,6 +1179,73 @@ let sessionPcapSource = null;
 // because the threshold gate drops all subsequent progress events.
 let backendProgressHeartbeatId = null;
 const BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
+// Fallback progress poll timer — when the early-yield threshold starves
+// the bridge's regular progress events, this queries /status directly so
+// the warning banner still gets fresh processed/total counts.
+let backendProgressPollTimerId = null;
+const BACKEND_PROGRESS_POLL_INTERVAL_MS = 2000;
+// Tracks the last processedPackets seen from the bridge so the poll
+// fallback only fires when bridge progress is genuinely stalled (avoids
+// an extra HTTP round-trip on every tick while the bridge is alive).
+let backendProgressPollStaleSinceMs = 0;
+
+// Polls the backend's /status endpoint for progress counters and applies
+// any advance to backendProgressState so the warning banner ticks even
+// when the bridge has stopped forwarding per-batch progress events.
+async function pollBackendProgressFallback() {
+  if (!backendProgressState.processing && !backendProgressState.finalizingSwap) {
+    stopBackendProgressPoll();
+    return;
+  }
+  if (!window.snitchapi || typeof window.snitchapi.getBackendDiagnostics !== "function") {
+    return;
+  }
+  // If the bridge emitted fresh progress within the last poll interval,
+  // skip the HTTP round-trip.
+  const staleMs = performance.now() - backendProgressPollStaleSinceMs;
+  if (backendProgressPollStaleSinceMs > 0 && staleMs < BACKEND_PROGRESS_POLL_INTERVAL_MS) {
+    return;
+  }
+  try {
+    const diag = await window.snitchapi.getBackendDiagnostics({
+      backendOptions: getBackendTransportOptionsFromSettings(),
+    });
+    if (!diag || !diag.success) return;
+    const nextProcessed = Number(diag.processedPackets) || 0;
+    const nextTotal = Number(diag.totalPackets) || 0;
+    if (nextProcessed > backendProgressState.processedPackets) {
+      backendProgressState.processedPackets = nextProcessed;
+      backendProgressPollStaleSinceMs = performance.now();
+    }
+    if (nextTotal > backendProgressState.totalPackets) {
+      backendProgressState.totalPackets = nextTotal;
+    }
+    if (diag.processing) {
+      updateBackendProcessingWarning();
+    }
+  } catch (error) {
+    console.warn("Backend progress fallback poll failed:", error);
+  }
+}
+
+// Starts the fallback poll timer alongside the heartbeat.
+function startBackendProgressPoll() {
+  stopBackendProgressPoll();
+  backendProgressPollTimerId = window.setInterval(pollBackendProgressFallback, BACKEND_PROGRESS_POLL_INTERVAL_MS);
+}
+
+// Stops the fallback poll timer.
+function stopBackendProgressPoll() {
+  if (backendProgressPollTimerId !== null) {
+    window.clearInterval(backendProgressPollTimerId);
+    backendProgressPollTimerId = null;
+  }
+}
+
+// Records fresh bridge progress so the fallback poll backs off.
+function noteBackendProgressBridgeUpdate() {
+  backendProgressPollStaleSinceMs = performance.now();
+}
 
 // ============================================================================
 // Settings, diagnostics, and backend option helpers
@@ -5922,6 +5992,10 @@ function updateBackendProgressFromPayload(payload) {
   if (nextTotal > backendProgressState.totalPackets) {
     backendProgressState.totalPackets = nextTotal;
   }
+  if (nextProcessed > 0) {
+    // Bridge emitted fresh progress — let the fallback poll back off.
+    noteBackendProgressBridgeUpdate();
+  }
   if (backendProgressState.firstChunkLoaded && !payload.complete) {
     updateBackendProcessingWarning();
   }
@@ -5939,6 +6013,9 @@ function startBackendProgressHeartbeat() {
     }
     updateBackendProcessingWarning();
   }, BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS);
+  // Start the fallback poll — it queries /status every 2s so the banner
+  // keeps ticking even when the bridge has starved intermediate events.
+  startBackendProgressPoll();
 }
 
 // Stops the heartbeat timer.
@@ -5947,6 +6024,7 @@ function stopBackendProgressHeartbeat() {
     window.clearInterval(backendProgressHeartbeatId);
     backendProgressHeartbeatId = null;
   }
+  stopBackendProgressPoll();
 }
 
 // Resets backend progress state.
@@ -5959,6 +6037,7 @@ function resetBackendProgressState() {
   backendProgressState.etaLastSampleAtMs = 0;
   backendProgressState.etaLastSampleProcessedPackets = 0;
   backendProgressState.etaPacketsPerSecond = 0;
+  backendProgressState.etaStartAtMs = 0;
   backendProgressState.wifiKeysRerunInFlight = false;
   backendProgressState.pendingSessionRerunSnapshot = null;
   backendProgressState.finalizingSwap = false;
@@ -5992,6 +6071,8 @@ function formatBackendEtaLabel(etaSeconds) {
 }
 
 // Estimates remaining ingestion seconds from smoothed packet throughput.
+// Includes an estimate for the frontend swap phase, which empirically
+// takes ~50% of the backend processing time.
 function estimateBackendRemainingSeconds(processedPackets, totalPackets) {
   const nowMs = performance.now();
   const previousSampleAtMs = Number(backendProgressState.etaLastSampleAtMs) || 0;
@@ -6019,11 +6100,19 @@ function estimateBackendRemainingSeconds(processedPackets, totalPackets) {
     return null;
   }
 
-  const etaSeconds = remainingPackets / smoothedPps;
-  if (!Number.isFinite(etaSeconds) || etaSeconds < 0) {
+  // Backend processing ETA
+  const backendEtaSeconds = remainingPackets / smoothedPps;
+  if (!Number.isFinite(backendEtaSeconds) || backendEtaSeconds < 0) {
     return null;
   }
-  return etaSeconds;
+
+  // Frontend swap typically takes ~50% of the total backend processing time.
+  // Estimate total backend time from current progress, then add 50% for swap.
+  const elapsedBackendSeconds = (nowMs - (backendProgressState.etaStartAtMs || nowMs)) / 1000;
+  const estimatedTotalBackendSeconds = elapsedBackendSeconds + backendEtaSeconds;
+  const swapEtaSeconds = estimatedTotalBackendSeconds * 0.5;
+
+  return backendEtaSeconds + swapEtaSeconds;
 }
 
 // Returns backend progress percent.
@@ -26515,6 +26604,7 @@ function runSnitch(file, options = {}) {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
   backendProgressState.processing = true;
+  backendProgressState.etaStartAtMs = performance.now();
   // Start the heartbeat so the warning banner keeps refreshing progress/ETA
   // even when the threshold gate drops intermediate payloads.
   startBackendProgressHeartbeat();
