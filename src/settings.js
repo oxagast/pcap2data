@@ -132,7 +132,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     privacy: {
         metricsEnabled: false,
         metricsConsentAsked: false,
-        metricsEndpointUrl: "http://143.198.179.97:8088/mhook",
+        metricsEndpointUrl: "http://64.227.4.43:8088/mhook",
         metricsFlushIntervalSeconds: 60,
         metricsMaxQueueSize: 500,
         metricsInstallId: "",
