@@ -264,6 +264,24 @@ const {
   setDataToolsHashReverseInput,
   normalizeDataToolsHashForReverseLookup,
   decodeHttpFromBytes,
+  extractHttpBodyHex,
+  findHttpHeaderBodySeparators,
+  looksLikeHttpStartLine,
+  sliceHttpMessageSegments,
+  httpHeadersHaveExplicitFraming,
+  collectHttpMessageBodiesFromStream,
+  HTTP_FILENAME_EXT_BY_MIME,
+  getHttpBodyFilenameExtension,
+  extractFilenameFromContentDisposition,
+  extractMultipartBoundaryFromContentType,
+  extractMultipartFilenameFromBodyBytes,
+  findMultipartFileByteRange,
+  findMultipartFileByteRanges,
+  sliceCompleteChunkedHttpBodyHex,
+  hexToAsciiString,
+  isChunkedTransferEncodingHeader,
+  parseContentLengthFromHeaderAscii,
+  splitHttpMessageHeaders,
   decodeJpegFromBytes,
   decodePngFromBytes,
   decodeGifFromBytes,
@@ -1144,9 +1162,20 @@ const backendProgressState = {
   // See triggerWifiKeysRerun / processBackendJsonDataPayload /
   // processBackendJsonPathPayload.
   pendingSessionRerunSnapshot: null,
+  // True while the final swap (full re-index + tail DOM work) is in
+  // progress. Keeps the backend-processing-warning banner visible with
+  // a "Finalizing..." message so the user knows the UI is busy but not
+  // frozen. Cleared after finalizeLoadedCapture completes.
+  finalizingSwap: false,
 };
 let activeBackendJobId = "";
 let sessionPcapSource = null;
+// Heartbeat timer that keeps the backend-processing-warning banner's
+// progress/ETA fresh while the frontend defers intermediate payloads.
+// Without this the banner freezes at the last-accepted payload's counts
+// because the threshold gate drops all subsequent progress events.
+let backendProgressHeartbeatId = null;
+const BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
 
 // ============================================================================
 // Settings, diagnostics, and backend option helpers
@@ -3315,7 +3344,11 @@ function renderThemesCatalog() {
     return;
   }
 
-  // Split into Licenses vs. Themes
+  // Split into Licenses vs. Themes using the server-provided ``type``
+  // tag. The catalog server tags each entry with ``type: "theme" | "license"
+  // | "plugin"`` (defaulting to ``"theme"`` for backwards compatibility).
+  // We classify by the explicit type tag first, then fall back to name/id
+  // heuristics for older catalog servers that don't emit ``type``.
   const licenseEntries = [];
   const themeEntries = [];
 
@@ -3324,14 +3357,20 @@ function renderThemesCatalog() {
     const entryType = String(entry.type || "").toLowerCase();
     const nameLower = String(entry.name || entry.id || "").toLowerCase();
     const idLower = String(entry.id || "").toLowerCase();
-    if (
+    const isLicense =
       entryType === "license"
       || nameLower.includes("license")
       || idLower.includes("license")
       || idLower.includes("pro")
-      || idLower.includes("enterprise")
-    ) {
+      || idLower.includes("enterprise");
+    const isPlugin = entryType === "plugin";
+    if (isLicense) {
       licenseEntries.push(entry);
+    } else if (isPlugin) {
+      // Plugins are not themes — don't render them in the theme
+      // catalog. They have a separate install path (local zip).
+      // Skip silently; the catalog server's ``/plugins/<id>/download``
+      // route is a 501 stub anyway.
     } else {
       themeEntries.push(entry);
     }
@@ -3450,37 +3489,43 @@ function renderThemesCatalog() {
       buyBtn.addEventListener("click", () => startThemeCheckout(entry));
       actionsEl.appendChild(buyBtn);
     } else if (!isLicense && !entry.installed) {
-      const downloadBtn = document.createElement("button");
-      downloadBtn.type = "button";
-      downloadBtn.textContent = "Download";
-      downloadBtn.addEventListener("click", async () => {
-        if (!window.themeapi || typeof window.themeapi.download !== "function") {
-          setThemesCatalogStatus("Theme download is not available in this build.", { isError: true });
-          return;
-        }
-        setThemesCatalogStatus(`Downloading theme "${entry.id}"...`);
-        try {
-          const result = await window.themeapi.download({ themeId: entry.id });
-          if (result && result.success) {
-            setThemesCatalogStatus(`Downloaded theme "${entry.id}" into the local cache. Reloading...`);
-            await loadAvailableThemes();
-            await refreshThemesPreviewForSelected();
-            entry.installed = true;
-            renderThemesCatalog();
-          } else {
+      // The Download button only appears for theme entries that are
+      // owned but not yet installed. Licenses don't have a downloadable
+      // theme payload, and plugins use a separate install path.
+      const entryType = String(entry.type || "theme").toLowerCase();
+      if (entryType === "theme") {
+        const downloadBtn = document.createElement("button");
+        downloadBtn.type = "button";
+        downloadBtn.textContent = "Download";
+        downloadBtn.addEventListener("click", async () => {
+          if (!window.themeapi || typeof window.themeapi.download !== "function") {
+            setThemesCatalogStatus("Theme download is not available in this build.", { isError: true });
+            return;
+          }
+          setThemesCatalogStatus(`Downloading theme "${entry.id}"...`);
+          try {
+            const result = await window.themeapi.download({ themeId: entry.id });
+            if (result && result.success) {
+              setThemesCatalogStatus(`Downloaded theme "${entry.id}" into the local cache. Reloading...`);
+              await loadAvailableThemes();
+              await refreshThemesPreviewForSelected();
+              entry.installed = true;
+              renderThemesCatalog();
+            } else {
+              setThemesCatalogStatus(
+                `Unable to download theme "${entry.id}": ${result?.error || "unknown error"}`,
+                { isError: true },
+              );
+            }
+          } catch (error) {
             setThemesCatalogStatus(
-              `Unable to download theme "${entry.id}": ${result?.error || "unknown error"}`,
+              `Unable to download theme "${entry.id}": ${error?.message || error || "unknown error"}`,
               { isError: true },
             );
           }
-        } catch (error) {
-          setThemesCatalogStatus(
-            `Unable to download theme "${entry.id}": ${error?.message || error || "unknown error"}`,
-            { isError: true },
-          );
-        }
-      });
-      actionsEl.appendChild(downloadBtn);
+        });
+        actionsEl.appendChild(downloadBtn);
+      }
     }
 
     cardEl.appendChild(actionsEl);
@@ -3547,6 +3592,14 @@ async function backfillMissingOwnedThemes() {
   const installedIds = new Set(await readAvailableThemeIds());
   const targets = themesCatalogEntries.filter((entry) => {
     if (!entry || typeof entry !== "object") return false;
+    // Only attempt to download entries tagged as themes. Licenses
+    // and plugins don't have a ``/themes/<id>/download`` endpoint
+    // that returns valid theme JSON — attempting the download would
+    // waste a network round-trip and log a rejection. Entries
+    // without a ``type`` field default to "theme" for backwards
+    // compatibility with older catalog servers.
+    const entryType = String(entry.type || "theme").toLowerCase();
+    if (entryType !== "theme") return false;
     if (!entry.owned) return false;
     const id = typeof entry.id === "string" ? entry.id.trim() : "";
     if (!id) return false;
@@ -5855,6 +5908,47 @@ function setSessionPcapSource(source, options = {}) {
   }
 }
 
+// Updates backend progress counts from a payload without queuing an
+// ingestion. Called from the onJsonData/onJsonPath gate handlers before
+// the threshold gate so the warning banner keeps ticking even when the
+// frontend defers intermediate payloads until the final swap.
+function updateBackendProgressFromPayload(payload) {
+  if (!payload) return;
+  const nextProcessed = Number(payload.processedPackets) || 0;
+  const nextTotal = Number(payload.totalPackets) || 0;
+  if (nextProcessed > backendProgressState.processedPackets) {
+    backendProgressState.processedPackets = nextProcessed;
+  }
+  if (nextTotal > backendProgressState.totalPackets) {
+    backendProgressState.totalPackets = nextTotal;
+  }
+  if (backendProgressState.firstChunkLoaded && !payload.complete) {
+    updateBackendProcessingWarning();
+  }
+}
+
+// Starts the heartbeat timer that periodically refreshes the
+// backend-processing-warning banner. This keeps the ETA ticking even
+// when the threshold gate drops all intermediate progress payloads.
+function startBackendProgressHeartbeat() {
+  stopBackendProgressHeartbeat();
+  backendProgressHeartbeatId = window.setInterval(() => {
+    if (!backendProgressState.processing && !backendProgressState.finalizingSwap) {
+      stopBackendProgressHeartbeat();
+      return;
+    }
+    updateBackendProcessingWarning();
+  }, BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS);
+}
+
+// Stops the heartbeat timer.
+function stopBackendProgressHeartbeat() {
+  if (backendProgressHeartbeatId !== null) {
+    window.clearInterval(backendProgressHeartbeatId);
+    backendProgressHeartbeatId = null;
+  }
+}
+
 // Resets backend progress state.
 function resetBackendProgressState() {
   backendProgressState.firstChunkLoaded = false;
@@ -5867,6 +5961,7 @@ function resetBackendProgressState() {
   backendProgressState.etaPacketsPerSecond = 0;
   backendProgressState.wifiKeysRerunInFlight = false;
   backendProgressState.pendingSessionRerunSnapshot = null;
+  backendProgressState.finalizingSwap = false;
   pendingBackendCaptureUpdate = null;
   backendLastAppliedSnapshotProcessedPackets = 0;
   backendLastAppliedSnapshotAtMs = 0;
@@ -5874,6 +5969,7 @@ function resetBackendProgressState() {
   deferredIngestionBacklogState.active = false;
   deferredIngestionBacklogState.deferredCount = 0;
   deferredIngestionBacklogState.lastDeferredAtMs = 0;
+  stopBackendProgressHeartbeat();
   updateBackendProcessingWarning();
 }
 
@@ -5969,6 +6065,27 @@ function updateBackendProcessingWarning() {
   updateReprocessButtonState();
   const warningEl = document.getElementById("backend-processing-warning");
   if (!warningEl) return;
+
+  // Finalizing swap: show a "Finalizing..." banner so the user knows
+  // the UI is busy but not frozen. This runs after the backend signals
+  // completion but before the renderer finishes the full re-index and
+  // tab rebuild.
+  if (backendProgressState.finalizingSwap) {
+    const processedText = backendProgressState.processedPackets > 0
+      ? String(backendProgressState.processedPackets)
+      : "0";
+    const totalText = backendProgressState.totalPackets > 0
+      ? String(backendProgressState.totalPackets)
+      : "?";
+    warningEl.innerHTML =
+      "Finalizing session swap..." +
+      "<br>" +
+      `(${processedText} / ${totalText} packets)` +
+      "<br>" +
+      "<em>Indexing packets and rebuilding view — UI will respond shortly.</em>";
+    warningEl.style.display = "block";
+    return;
+  }
 
   if (!backendProgressState.firstChunkLoaded || !backendProgressState.processing) {
     warningEl.style.display = "none";
@@ -10592,7 +10709,9 @@ async function finalizeLoadedCapture(sessionState) {
   if (keystorePanel && typeof keystorePanel.clearSessionScanCaches === "function") {
     keystorePanel.clearSessionScanCaches();
   }
-  for (const host in capturedPackets["host"]) {
+  const hostNames = Object.keys(capturedPackets["host"] || {});
+  for (let i = 0; i < hostNames.length; i++) {
+    const host = hostNames[i];
     hostsList.push(host);
     const newhost = document.createElement("option");
     newhost.textContent = host;
@@ -10603,6 +10722,11 @@ async function finalizeLoadedCapture(sessionState) {
       : [];
     await cachePacketStubsForHost(host, hostPackets);
     isFileLoaded = true;
+    // Yield between hosts so the "Finalizing..." banner can paint and
+    // the UI stays responsive during large captures.
+    if (i < hostNames.length - 1) {
+      await yieldToRenderer();
+    }
   }
 
   if (hostsList.length > 1) {
@@ -10622,6 +10746,11 @@ async function finalizeLoadedCapture(sessionState) {
   clearFilterQuery();
   syncFilterHighlight();
   isFileLoaded = true;
+
+  // Defer the heavy tail DOM work (Conv reset + landing tab render /
+  // session restore) to the next frame so the indexing yields above
+  // can paint the "Finalizing..." banner first.
+  await yieldToRenderer();
 
   // Always reset Conv to freshly-opened defaults before restoring or starting
   // a new session so data from a previous capture/session does not carry over.
@@ -12272,7 +12401,14 @@ function updateDataToolsCursorReadout(fieldId) {
   if (!offsetEl || !lineEl || !colEl || !posEl || !selLenEl || !endRemainingEl) return;
   const el = document.getElementById(fieldId);
   const map = dataToolsSelectionState.maps[fieldId];
-  const streamLen = dataToolsSelectionState.bytes?.length ?? 0;
+  // The "End:" chip must always reflect the full data-stream length so the
+  // user can carve to the end of the stream even when the output panes only
+  // show a paginated prefix (see renderDataToolsOutputPage). The selection
+  // maps themselves are still built from the rendered prefix below.
+  const streamLen =
+    dataToolsLastConversionBytes instanceof Uint8Array
+      ? dataToolsLastConversionBytes.length
+      : 0;
   if (!el || !map) {
     setDataToolsCursorValue(offsetEl, 0, "0x00000000");
     setDataToolsCursorValue(lineEl, 1, "1");
@@ -15570,6 +15706,7 @@ const convertContextButtons = {
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
+  fileCarvePayload: getCachedElement("ctx-file-carve-payload"),
   llmBranch: getCachedElement("ctx-llm-branch"),
   llmQuestion: getCachedElement("ctx-llm-question"),
   llmSubnetHostSummary: getCachedElement("ctx-llm-subnet-host-summary"),
@@ -16415,6 +16552,7 @@ function showConvertContextMenu(
   const hasStatsCarvableAction = Boolean(statsCarvableTag);
   const hasFileCarveActions =
     hasHttpBody ||
+    hasPayloadToExport ||
     canCarveSmbStream ||
     canCarveNfsStream ||
     canCarveFtpStream ||
@@ -16496,6 +16634,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.fileCarveFtp.style.display = canCarveFtpStream
+    ? "block"
+    : "none";
+  convertContextButtons.fileCarvePayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
   convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
@@ -19156,179 +19297,17 @@ async function carveCurrentStreamToFileFromContextMenu(protocolName) {
   });
 }
 
-const HTTP_FILENAME_EXT_BY_MIME = Object.freeze({
-  "application/json": "json",
-  "application/pdf": "pdf",
-  "application/zip": "zip",
-  "application/gzip": "gz",
-  "application/x-7z-compressed": "7z",
-  "application/x-rar-compressed": "rar",
-  "application/xml": "xml",
-  "text/plain": "txt",
-  "text/html": "html",
-  "text/css": "css",
-  "text/javascript": "js",
-  "text/csv": "csv",
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/gif": "gif",
-  "image/webp": "webp",
-  "audio/mpeg": "mp3",
-  "video/mp4": "mp4",
-});
-
-// Extracts filename from content disposition.
-function extractFilenameFromContentDisposition(dispositionValue) {
-  const rawValue = String(dispositionValue || "").trim();
-  if (!rawValue) return "";
-
-  const utf8Match = rawValue.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return sanitizeCarveFilename(decodeURIComponent(utf8Match[1]));
-    } catch {
-      return sanitizeCarveFilename(utf8Match[1]);
-    }
-  }
-
-  const quotedMatch = rawValue.match(/filename\s*=\s*"([^"]+)"/i);
-  if (quotedMatch?.[1]) {
-    return sanitizeCarveFilename(quotedMatch[1]);
-  }
-
-  const bareMatch = rawValue.match(/filename\s*=\s*([^;\s]+)/i);
-  if (bareMatch?.[1]) {
-    return sanitizeCarveFilename(bareMatch[1]);
-  }
-
-  return "";
-}
-
-// Returns http body filename extension.
-function getHttpBodyFilenameExtension(contentTypeValue) {
-  const normalizedType = String(contentTypeValue || "")
-    .split(";")[0]
-    .trim()
-    .toLowerCase();
-  if (!normalizedType) return "bin";
-  return HTTP_FILENAME_EXT_BY_MIME[normalizedType] || "bin";
-}
-
-// Extracts the multipart boundary token from a Content-Type header value.
-function extractMultipartBoundaryFromContentType(contentTypeValue) {
-  const rawValue = String(contentTypeValue || "").trim();
-  if (!rawValue) return "";
-  if (!rawValue.toLowerCase().includes("multipart")) return "";
-  const boundaryMatch = rawValue.match(
-    /\bboundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i,
-  );
-  return boundaryMatch?.[1] || boundaryMatch?.[2] || "";
-}
-
-// Extracts a filename from the first Content-Disposition header inside a
-// multipart boundary block. The boundary parameter must include the leading
-// "--" per RFC 2046.
-function extractMultipartFilenameFromBodyBytes(bodyBytes, boundaryToken) {
-  if (!bodyBytes || !(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) {
-    return "";
-  }
-  if (!boundaryToken || typeof boundaryToken !== "string") return "";
-
-  const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
-  const searchLimit = Math.min(bodyBytes.length, 8192);
-  let boundaryIndex = -1;
-  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
-    let match = true;
-    for (let j = 0; j < boundaryBytes.length; j += 1) {
-      if (bodyBytes[i + j] !== boundaryBytes[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      boundaryIndex = i;
-      break;
-    }
-  }
-  if (boundaryIndex === -1) return "";
-
-  const headerEndLimit = Math.min(
-    bodyBytes.length,
-    boundaryIndex + 4096,
-  );
-  const headerBytes = bodyBytes.slice(boundaryIndex, headerEndLimit);
-  const headerText = new TextDecoder("utf-8", { fatal: false }).decode(
-    headerBytes,
-  );
-  const firstCrlfCrlf = headerText.indexOf("\r\n\r\n");
-  const dispositionText =
-    firstCrlfCrlf !== -1 ? headerText.slice(0, firstCrlfCrlf) : headerText;
-
-  const dispositionMatch = dispositionText.match(
-    /Content-Disposition\s*:([^\r\n]*)/i,
-  );
-  if (!dispositionMatch?.[1]) return "";
-
-  return extractFilenameFromContentDisposition(dispositionMatch[1].trim());
-}
-
-// Returns the byte range of the first multipart file payload inside a
-// multipart body. The returned range is [start, end) where end points to the
-// byte before the closing boundary marker.
-function findMultipartFileByteRange(bodyBytes, boundaryToken) {
-  if (!bodyBytes || !(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) {
-    return null;
-  }
-  if (!boundaryToken || typeof boundaryToken !== "string") return null;
-
-  const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
-  const searchLimit = Math.min(bodyBytes.length, 8192);
-  let boundaryIndex = -1;
-  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
-    let match = true;
-    for (let j = 0; j < boundaryBytes.length; j += 1) {
-      if (bodyBytes[i + j] !== boundaryBytes[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      boundaryIndex = i;
-      break;
-    }
-  }
-  if (boundaryIndex === -1) return null;
-
-  const headerEndLimit = Math.min(bodyBytes.length, boundaryIndex + 4096);
-  const headerBytes = bodyBytes.slice(boundaryIndex, headerEndLimit);
-  const headerText = new TextDecoder("utf-8", { fatal: false }).decode(
-    headerBytes,
-  );
-  const firstCrlfCrlf = headerText.indexOf("\r\n\r\n");
-  if (firstCrlfCrlf === -1) return null;
-
-  const payloadStart = boundaryIndex + firstCrlfCrlf + 4;
-  if (payloadStart >= bodyBytes.length) return null;
-
-  const closeBoundaryBytes = new TextEncoder().encode(`\r\n--${boundaryToken}`);
-  let endBoundaryIndex = -1;
-  for (let i = payloadStart; i <= bodyBytes.length - closeBoundaryBytes.length; i += 1) {
-    let match = true;
-    for (let j = 0; j < closeBoundaryBytes.length; j += 1) {
-      if (bodyBytes[i + j] !== closeBoundaryBytes[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      endBoundaryIndex = i;
-      break;
-    }
-  }
-
-  const payloadEnd = endBoundaryIndex !== -1 ? endBoundaryIndex : bodyBytes.length;
-  return { start: payloadStart, end: payloadEnd };
-}
+// NOTE: HTTP body-boundary detection helpers (extractHttpBodyHex,
+// findHttpHeaderBodySeparators, sliceHttpMessageSegments,
+// httpHeadersHaveExplicitFraming, collectHttpMessageBodiesFromStream,
+// HTTP_FILENAME_EXT_BY_MIME, getHttpBodyFilenameExtension,
+// extractFilenameFromContentDisposition, extractMultipartBoundaryFromContentType,
+// extractMultipartFilenameFromBodyBytes, findMultipartFileByteRange,
+// findMultipartFileByteRanges, sliceCompleteChunkedHttpBodyHex,
+// hexToAsciiString) now live in src/ui/decoders/conv/http.js and are
+// consumed via the data-tools-panel destructure import at the top of this
+// file. The carve pipeline below uses those imports directly — do not
+// reintroduce inline duplicates here.
 
 // Extracts path filename from http data.
 function extractPathFilenameFromHttpData(httpData) {
@@ -19539,6 +19518,220 @@ async function loadManualFileIntoConvTabFromContextMenu() {
   }
 }
 
+// Per-packet helpers that read HTTP framing from the renderer-side
+// `getCurrentHttpData(packet)` view. These are thin orchestrator wrappers
+// that exist solely so the pure HTTP decoder in src/ui/decoders/conv/http.js
+// doesn't have to know about the renderer's packet shape — `collectHttpMessageBodiesFromStream`
+// gets these as injected callbacks.
+
+// Returns packet identity.
+function getPacketIdentity(packet) {
+  return (
+    packet?.__packetKey ||
+    packet?.["packet.info"]?.["index"] ||
+    packet?.["packet.info"]?.["Index"] ||
+    null
+  );
+}
+
+function parseHttpContentLength(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  const rawLength = String(httpData?.["Content-Length"] || "").trim();
+  if (!/^\d+$/.test(rawLength)) return null;
+  const contentLength = Number.parseInt(rawLength, 10);
+  return Number.isFinite(contentLength) && contentLength >= 0
+    ? contentLength
+    : null;
+}
+
+function isChunkedHttpTransfer(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  return String(httpData?.["Transfer-Encoding"] || "")
+    .toLowerCase()
+    .includes("chunked");
+}
+
+// Returns a copy of `name` annotated with `(n)` (matching the
+// filesystem-upload convention used by browsers / curl) so that two parts
+// with the same filename in a multipart upload don't collapse into one
+// carvable candidate.
+function ensureUniqueCarveName(name, partIdx, allEntries) {
+  const safe = sanitizeCarveFilename(name) || `part-${partIdx + 1}.bin`;
+  let priorCount = 0;
+  for (let i = 0; i < partIdx; i += 1) {
+    if (sanitizeCarveFilename(allEntries[i].fileName) === safe) priorCount += 1;
+  }
+  if (priorCount === 0) return safe;
+  const dotIdx = safe.lastIndexOf(".");
+  if (dotIdx <= 0) return `${safe} (${priorCount + 1})`;
+  return `${safe.slice(0, dotIdx)} (${priorCount + 1})${safe.slice(dotIdx)}`;
+}
+
+// Filename inference for a single HTTP message body, expressed in terms of
+// the decoder primitives. Lives here (the orchestrator) because it threads
+// multiple renderer-side concerns (packet HTTP view, sanitizer, path
+// inference). The decoder itself only does pure byte-level parsing.
+function guessHttpBodyFilenameFromHttpMessage({
+  message,
+  bodyBytes,
+  contentType,
+  dispositionValue,
+  startLine,
+  fallbackName,
+}) {
+  const dispositionName = extractFilenameFromContentDisposition(
+    dispositionValue || "",
+    sanitizeCarveFilename,
+  );
+  if (dispositionName) return dispositionName;
+
+  const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
+  if (multipartBoundary && bodyBytes instanceof Uint8Array) {
+    const multipartName = extractMultipartFilenameFromBodyBytes(
+      bodyBytes,
+      multipartBoundary,
+      sanitizeCarveFilename,
+    );
+    if (multipartName) return multipartName;
+  }
+
+  const requestLineMatch = startLine.match(
+    /^(GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE|CONNECT)\s+(\S+)/i,
+  );
+  if (requestLineMatch) {
+    const pathName = extractPathFilenameFromHttpData({ "Request URI": requestLineMatch[2] });
+    if (pathName) {
+      if (pathName.includes(".")) return pathName;
+      const extension = getHttpBodyFilenameExtension(contentType);
+      if (extension === "html") return `${pathName}.html`;
+      if (extension !== "bin") return `${pathName}.${extension}`;
+    }
+  }
+
+  const extension = getHttpBodyFilenameExtension(contentType);
+  const safeFallback = sanitizeCarveFilename(fallbackName) || "http-body";
+  if (extension && extension !== "bin") return `${safeFallback}.${extension}`;
+  return `${safeFallback}.bin`;
+}
+
+// Walks the same-direction HTTP message bodies for a stream and emits one
+// carvable candidate per:
+//
+//   * HTTP message with a meaningful body (skips empty bodies — typical
+//     for 204 / 304 responses — and bodies shorter than 1 byte).
+//   * Multipart part inside a multipart/* body that carries a
+//     Content-Disposition with a filename. Each such part becomes its own
+//     carvable entity so the user can explore a single uploaded file
+//     without having to manually slice the multipart envelope.
+//
+// Returns an array of `{ fileName, bytes, packetHint, message,
+// multipartPart, contentType }`. The carving pipeline consumes these via
+// `appendEntry({ protocol: "http", candidate: { fileName, bytes } })`.
+function buildHttpCarveEntriesForStream(deps) {
+  const {
+    streamPackets,
+    referencePacket,
+    httpData,
+    getPacketIdentity: getIdentity,
+    getPacketPayloadHex,
+    isSameDirectionalStreamPacket: sameDirection,
+    getHttpContentLengthFromPacket,
+    isChunkedHttpTransferForPacket,
+    parseDataToolsInput: parseInput,
+    extractMultipartBoundaryFromContentType: extractBoundary,
+    extractMultipartFilenameFromBodyBytes: extractMultipartName,
+    findMultipartFileByteRanges: findMultipartRanges,
+    extractFilenameFromContentDisposition: extractDispositionName,
+    getHttpBodyFilenameExtension: getExtension,
+    extractPathFilenameFromHttpData: extractPathName,
+    sanitizeCarveFilename: sanitize,
+    guessHttpBodyFilenameFromPacket: guessFromPacket,
+  } = deps;
+
+  const messages = collectHttpMessageBodiesFromStream({
+    streamPackets,
+    referencePacket,
+    getPacketIdentity: getIdentity,
+    getPacketPayloadHex,
+    isSameDirectionalStreamPacket: sameDirection,
+    getHttpContentLengthFromPacket,
+    isChunkedHttpTransferForPacket,
+  });
+  if (!messages.length) return [];
+
+  const referenceContentType = String(httpData?.["Content-Type"] || "");
+  const referenceDisposition = String(httpData?.["Content-Disposition"] || "");
+  const entries = [];
+
+  messages.forEach((message) => {
+    const headerAscii = hexToAsciiString(message.headerHex || "");
+    const headerContentTypeMatch = headerAscii.match(/\r?\nContent-Type\s*:\s*([^\r\n]+)/i);
+    const headerDispositionMatch = headerAscii.match(/\r?\nContent-Disposition\s*:\s*([^\r\n]+)/i);
+    const headerStartLineMatch = headerAscii.match(/^([^\r\n]+)/);
+    const startLine = headerStartLineMatch ? headerStartLineMatch[1] : "";
+
+    const contentType = (headerContentTypeMatch?.[1] || referenceContentType || "").trim();
+    const dispositionValue = headerDispositionMatch?.[1] || referenceDisposition;
+
+    let bodyBytes;
+    try {
+      bodyBytes = parseInput("hex", message.bodyHex);
+    } catch {
+      return;
+    }
+    if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
+
+    const multipartBoundary = extractBoundary(contentType);
+
+    if (multipartBoundary) {
+      const partEntries = findMultipartRanges(bodyBytes, multipartBoundary, sanitize);
+      if (partEntries.length) {
+        const firstFileContentType = partEntries[0].contentType || "";
+        partEntries.forEach((partEntry, partIdx) => {
+          if (!(partEntry.range.start < partEntry.range.end)) return;
+          const fileBytes = bodyBytes.slice(partEntry.range.start, partEntry.range.end);
+          if (!fileBytes.length) return;
+          const disambiguatedName = partEntries.length > 1
+            ? ensureUniqueCarveName(partEntry.fileName, partIdx, partEntries)
+            : partEntry.fileName;
+          entries.push({
+            fileName: disambiguatedName,
+            bytes: fileBytes,
+            packetHint: message.sourcePacket,
+            message,
+            multipartPart: partEntry,
+            contentType: firstFileContentType,
+            startLine,
+          });
+        });
+        return;
+      }
+    }
+
+    if (bodyBytes.length === 0) return;
+
+    const guessedName = guessHttpBodyFilenameFromHttpMessage({
+      message,
+      bodyBytes,
+      contentType,
+      dispositionValue,
+      startLine,
+      fallbackName: `http-body-msg${message.messageIndex}`,
+    });
+
+    entries.push({
+      fileName: guessedName,
+      bytes: bodyBytes,
+      packetHint: message.sourcePacket,
+      message,
+      contentType,
+      startLine,
+    });
+  });
+
+  return entries;
+}
+
 async function listCarvableFilesForStats() {
   const allPackets = getAllPacketsForHostNavigation();
   if (!Array.isArray(allPackets) || allPackets.length === 0) {
@@ -19618,6 +19811,21 @@ async function listCarvableFilesForStats() {
     });
 
     const seenHttpDirectionKeys = new Set();
+    const appendHttpEntries = (entries) => {
+      if (!Array.isArray(entries)) return;
+      entries.forEach((entry) => {
+        appendEntry({
+          protocol: "http",
+          streamKey,
+          packetHint: entry?.packetHint || contextPacket,
+          candidate: {
+            fileName: entry.fileName,
+            bytes: entry.bytes,
+          },
+        });
+      });
+    };
+
     hydratedStreamPackets.forEach((packet) => {
       const httpData = getCurrentHttpData(packet);
       if (!httpData || typeof httpData !== "object") return;
@@ -19630,50 +19838,26 @@ async function listCarvableFilesForStats() {
       if (seenHttpDirectionKeys.has(directionKey)) return;
       seenHttpDirectionKeys.add(directionKey);
 
-      const bodyHex = collectHttpBodyHexFromStream(hydratedStreamPackets, packet);
-      if (!bodyHex) return;
-      let bodyBytes;
-      try {
-        bodyBytes = parseDataToolsInput("hex", bodyHex);
-      } catch {
-        return;
-      }
-      if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
-
-      const currentHttpData = getCurrentHttpData(packet) || {};
-      const contentType = currentHttpData["Content-Type"];
-      const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
-      let candidateFileName;
-      let candidateBytes = bodyBytes;
-      if (multipartBoundary) {
-        const fileRange = findMultipartFileByteRange(bodyBytes, multipartBoundary);
-        const multipartName = extractMultipartFilenameFromBodyBytes(
-          bodyBytes,
-          multipartBoundary,
-        );
-        candidateFileName = multipartName || "";
-        if (fileRange) {
-          candidateBytes = bodyBytes.slice(fileRange.start, fileRange.end);
-        }
-      }
-
-      const packetIndex =
-        packet?.["packet.info"]?.["index"] ??
-        packet?.["packet.info"]?.["Index"] ??
-        "stream";
-      const guessedName = candidateFileName || guessHttpBodyFilenameFromPacket(
-        packet,
-        `http-body-${packetIndex}`,
-      );
-      appendEntry({
-        protocol: "http",
-        streamKey,
-        packetHint: packet,
-        candidate: {
-          fileName: guessedName,
-          bytes: candidateBytes,
-        },
+      const entries = buildHttpCarveEntriesForStream({
+        streamPackets: hydratedStreamPackets,
+        referencePacket: packet,
+        httpData,
+        getPacketIdentity,
+        getPacketPayloadHex: getCurrentRawPayloadHex,
+        isSameDirectionalStreamPacket,
+        getHttpContentLengthFromPacket: parseHttpContentLength,
+        isChunkedHttpTransferForPacket: isChunkedHttpTransfer,
+        parseDataToolsInput,
+        extractMultipartBoundaryFromContentType,
+        extractMultipartFilenameFromBodyBytes,
+        findMultipartFileByteRanges,
+        extractFilenameFromContentDisposition,
+        getHttpBodyFilenameExtension,
+        extractPathFilenameFromHttpData,
+        sanitizeCarveFilename,
+        guessHttpBodyFilenameFromPacket,
       });
+      appendHttpEntries(entries);
     });
   }
 
@@ -20864,92 +21048,8 @@ function getCurrentHttpData(packet = null) {
   return transportData?.["HTTP"] || null;
 }
 
-// Extracts http body hex.
-function extractHttpBodyHex(payloadHex) {
-  if (!payloadHex) return "";
-  // Locate the HTTP header/body separator in hex space.
-  // RFC 7230 mandates \r\n\r\n which encodes as "0d0a0d0a".
-  const normalized = payloadHex.replace(/\s+/g, "");
-  const lower = normalized.toLowerCase();
-  const sepIdx = lower.indexOf("0d0a0d0a");
-  if (sepIdx === -1) return "";
-  const bodyStart = sepIdx + 8; // skip past the 4-byte CRLFCRLF separator
-  if (bodyStart >= normalized.length) return "";
-  return normalized.slice(bodyStart);
-}
-
-// Parses http content length.
-function parseHttpContentLength(packet = null) {
-  const httpData = getCurrentHttpData(packet);
-  const rawLength = String(httpData?.["Content-Length"] || "").trim();
-  if (!/^\d+$/.test(rawLength)) return null;
-  const contentLength = Number.parseInt(rawLength, 10);
-  return Number.isFinite(contentLength) && contentLength >= 0
-    ? contentLength
-    : null;
-}
-
-// Returns whether chunked http transfer.
-function isChunkedHttpTransfer(packet = null) {
-  const httpData = getCurrentHttpData(packet);
-  return String(httpData?.["Transfer-Encoding"] || "")
-    .toLowerCase()
-    .includes("chunked");
-}
-
-// Handles hex to ascii string.
-function hexToAsciiString(hex) {
-  const normalized = typeof hex === "string" ? hex.replace(/\s+/g, "") : "";
-  let result = "";
-  for (let idx = 0; idx + 1 < normalized.length; idx += 2) {
-    result += String.fromCharCode(Number.parseInt(normalized.slice(idx, idx + 2), 16));
-  }
-  return result;
-}
-
-// Handles slice complete chunked http body hex.
-function sliceCompleteChunkedHttpBodyHex(bodyHex) {
-  const normalized = typeof bodyHex === "string" ? bodyHex.replace(/\s+/g, "") : "";
-  let cursor = 0;
-  while (cursor < normalized.length) {
-    const lineEnd = normalized.indexOf("0d0a", cursor);
-    if (lineEnd === -1) return null;
-    const chunkSizeLine = hexToAsciiString(normalized.slice(cursor, lineEnd)).trim();
-    const chunkSizeToken = chunkSizeLine.split(";", 1)[0].trim();
-    if (!/^[0-9a-fA-F]+$/.test(chunkSizeToken)) return null;
-    const chunkSize = Number.parseInt(chunkSizeToken, 16);
-    if (!Number.isFinite(chunkSize) || chunkSize < 0) return null;
-    cursor = lineEnd + 4;
-    const chunkDataEnd = cursor + chunkSize * 2;
-    if (chunkDataEnd > normalized.length) return null;
-    cursor = chunkDataEnd;
-    if (normalized.slice(cursor, cursor + 4).toLowerCase() !== "0d0a") return null;
-    cursor += 4;
-    if (chunkSize === 0) {
-      let trailerCursor = cursor;
-      while (trailerCursor <= normalized.length) {
-        const trailerEnd = normalized.indexOf("0d0a", trailerCursor);
-        if (trailerEnd === -1) return null;
-        if (trailerEnd === trailerCursor) {
-          return normalized.slice(0, trailerEnd + 4);
-        }
-        trailerCursor = trailerEnd + 4;
-      }
-      return null;
-    }
-  }
-  return null;
-}
-
-// Returns packet identity.
-function getPacketIdentity(packet) {
-  return (
-    packet?.__packetKey ||
-    packet?.["packet.info"]?.["index"] ||
-    packet?.["packet.info"]?.["Index"] ||
-    null
-  );
-}
+// NOTE: HTTP body-boundary detection helpers moved to src/ui/decoders/conv/http.js.
+// They are imported via the data-tools-panel destructure at the top of this file.
 
 // Returns whether same directional stream packet.
 function isSameDirectionalStreamPacket(packet, referencePacket) {
@@ -22517,6 +22617,122 @@ function getHttpContentTypeForCurrentPacket(packet = null) {
 // Saves http body from context menu.
 function saveHttpBodyFromContextMenu() {
   void saveHttpBodyFromContextMenuImpl(false);
+}
+
+// Saves the raw payload of the current context packet to a file. When the
+// packet is part of an HTTP stream (i.e. `getCurrentHttpData` returns a
+// non-null view and the payload contains a CRLFCRLF header terminator), the
+// function respects the HTTP body boundary — it extracts only the body
+// portion (after the headers), using the same boundary-detection helpers
+// that power the Stats carvable-files path. This means a data packet
+// carrying a BMP image inside a multipart upload can be carved out as a
+// standalone file without also including the HTTP request/response headers
+// or trailing bytes from the next message.
+//
+// When the packet has no HTTP framing, the entire raw payload is saved.
+async function saveRawPayloadFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
+  hideConvertContextMenu();
+  if (!contextPacket) {
+    statusUpdate("Status: No packet selected for payload extraction");
+    return;
+  }
+
+  const payloadHex = getCurrentRawPayloadHex(contextPacket);
+  if (!payloadHex) {
+    statusUpdate("Status: No payload available to extract");
+    return;
+  }
+
+  // Try HTTP body boundary detection first — this gives the user just the
+  // body bytes when the packet carries an HTTP message, rather than the
+  // full payload including headers.
+  let outputHex = "";
+  let extractionLabel = "raw payload";
+
+  const httpData = getCurrentHttpData(contextPacket);
+  const hasHttpHeaders = Boolean(extractHttpBodyHex(payloadHex));
+  if (httpData && hasHttpHeaders) {
+    try {
+      const bodyHex = await getCurrentHttpBodyHex(contextPacket);
+      if (bodyHex) {
+        outputHex = bodyHex;
+        extractionLabel = "HTTP body";
+      }
+    } catch {
+      // Fall through to raw payload below.
+    }
+  }
+
+  // Fallback: use the full raw payload when no HTTP body could be extracted.
+  if (!outputHex) {
+    outputHex = payloadHex.replace(/\s+/g, "");
+    extractionLabel = "raw payload";
+  }
+
+  if (!outputHex) {
+    statusUpdate("Status: No payload bytes available to extract");
+    return;
+  }
+
+  // Guard: if the bytes to be saved look like HTTP header data (the payload
+  // starts with an HTTP request method or a response status line), warn the
+  // user and ask for confirmation. This catches the case where the fallback
+  // path is used on a packet whose payload is actually HTTP headers — the
+  // user probably wants "HTTP body to file" instead, and saving raw headers
+  // to disk is rarely the intent.
+  const outputPreview = hexToAsciiString(outputHex.slice(0, 200));
+  const looksLikeHttpHeaders = looksLikeHttpStartLine(outputPreview);
+  if (looksLikeHttpHeaders) {
+    const confirmMessage =
+      `The data to be extracted appears to contain HTTP headers (starts with "${outputPreview.split(/\r?\n/)[0].trim()}").\n\n` +
+      `This will save the raw headers as a file, which is rarely useful.\n\n` +
+      `Consider using "HTTP body to file" from the File Carving menu instead.\n\n` +
+      `Do you want to save anyway?`;
+    if (!window.confirm(confirmMessage)) {
+      statusUpdate("Status: Extraction cancelled — data looks like HTTP headers");
+      return;
+    }
+  }
+
+  // Infer a filename from the HTTP view when available, otherwise use a
+  // generic name with the packet index.
+  const packetIndex =
+    contextPacket?.["packet.info"]?.["index"] ??
+    contextPacket?.["packet.info"]?.["Index"] ??
+    "packet";
+  let fileNameGuess = `payload-${packetIndex}.bin`;
+  if (httpData) {
+    const guessed = guessHttpBodyFilenameFromPacket(
+      contextPacket,
+      `payload-${packetIndex}`,
+    );
+    if (guessed) fileNameGuess = guessed;
+  }
+
+  window.saveapi.savePayload(outputHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Extraction cancelled");
+    } else if (result.success) {
+      const byteCount = outputHex.length / 2;
+      statusUpdate(
+        `Status: ${extractionLabel.charAt(0).toUpperCase() + extractionLabel.slice(1)} extracted (${byteCount} bytes)`,
+      );
+      writeLogEntry(
+        `Context menu ${extractionLabel} extraction completed bytes=${byteCount} file="${fileNameGuess}"`,
+      );
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError(`${extractionLabel} extraction failed`);
+      logErrorEntry("payload-extract", errorMessage || "unknown");
+      statusUpdate(
+        `Status: ${extractionLabel} extraction failed – ${errorMessage || "unknown error"}`,
+      );
+    }
+  });
 }
 
 async function saveHttpBodyFromContextMenuImpl(decompress = false) {
@@ -24695,6 +24911,10 @@ convertContextButtons.fileCarveNfs.addEventListener("click", () =>
 convertContextButtons.fileCarveFtp.addEventListener("click", () =>
   carveCurrentStreamToFileFromContextMenu("ftp"),
 );
+convertContextButtons.fileCarvePayload.addEventListener(
+  "click",
+  saveRawPayloadFromContextMenu,
+);
 convertContextButtons.followStreamConv.addEventListener(
   "click",
   followStreamToConv,
@@ -25958,11 +26178,17 @@ async function processBackendJsonPathPayload(payload) {
     // with a forced full reindex so decrypted content becomes visible.
     const isWifiKeysRerun =
       backendProgressState.wifiKeysRerunInFlight === true;
+    // Signal that the final swap is in progress so the warning banner
+    // shows "Finalizing..." instead of hiding. This keeps the user
+    // informed while the full re-index and tab rebuild run.
+    backendProgressState.finalizingSwap = true;
+    updateBackendProcessingWarning();
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
       incrementalUpdate: isWifiKeysRerun,
       finalUpdate: isWifiKeysRerun,
     });
+    backendProgressState.finalizingSwap = false;
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-path-final",
       processedPackets: payload.processedPackets,
@@ -25978,6 +26204,7 @@ async function processBackendJsonPathPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    stopBackendProgressHeartbeat();
     if (backendProgressState.wifiKeysRerunInFlight) {
       backendProgressState.wifiKeysRerunInFlight = false;
       // Re-apply session-bound state at the end of a path-mode
@@ -26145,11 +26372,17 @@ async function processBackendJsonDataPayload(payload) {
     // with a forced full reindex so decrypted content becomes visible.
     const isWifiKeysRerun =
       backendProgressState.wifiKeysRerunInFlight === true;
+    // Signal that the final swap is in progress so the warning banner
+    // shows "Finalizing..." instead of hiding. This keeps the user
+    // informed while the full re-index and tab rebuild run.
+    backendProgressState.finalizingSwap = true;
+    updateBackendProcessingWarning();
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
       incrementalUpdate: isWifiKeysRerun,
       finalUpdate: isWifiKeysRerun,
     });
+    backendProgressState.finalizingSwap = false;
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-final",
       processedPackets: payload.processedPackets,
@@ -26167,6 +26400,7 @@ async function processBackendJsonDataPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    stopBackendProgressHeartbeat();
     if (backendProgressState.wifiKeysRerunInFlight) {
       backendProgressState.wifiKeysRerunInFlight = false;
       // Re-apply the session-bound state we snapshotted at the start
@@ -26220,6 +26454,10 @@ window.jsonapi.onJsonPath((rawPayload) => {
   // we need to ensure the frontend does not continue to consume
   // packets after the threshold, to avoid cippling the UI performance
   const payload = normalizeBackendJsonPathPayload(rawPayload);
+  // Always update progress counts even if we're about to drop the
+  // payload for ingestion — the warning banner needs to keep ticking
+  // while the frontend defers intermediate payloads until the final swap.
+  updateBackendProgressFromPayload(payload);
   const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
   // Always allow the final complete payload through — it's the "last swap"
   // that replaces the early-yield partial session with the full data.
@@ -26233,6 +26471,10 @@ window.jsonapi.onJsonPath((rawPayload) => {
 window.jsonapi.onJsonData((rawPayload) => {
   // same here as above about the ui performance
   const payload = normalizeBackendJsonDataPayload(rawPayload);
+  // Always update progress counts even if we're about to drop the
+  // payload for ingestion — the warning banner needs to keep ticking
+  // while the frontend defers intermediate payloads until the final swap.
+  updateBackendProgressFromPayload(payload);
   const pProcessed = Math.max(backendProgressState.processedPackets, payload.processedPackets || 0);
   // Always allow the final complete payload through — it's the "last swap"
   // that replaces the early-yield partial session with the full data.
@@ -26273,6 +26515,9 @@ function runSnitch(file, options = {}) {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
   backendProgressState.processing = true;
+  // Start the heartbeat so the warning banner keeps refreshing progress/ETA
+  // even when the threshold gate drops intermediate payloads.
+  startBackendProgressHeartbeat();
   if (!silent) {
     document.getElementById("loading-screen").style.display = "block";
     document.getElementById("loading-container").style.display = "block";
@@ -26389,6 +26634,7 @@ function runSnitch(file, options = {}) {
         );
       }
       backendProgressState.processing = false;
+      stopBackendProgressHeartbeat();
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });

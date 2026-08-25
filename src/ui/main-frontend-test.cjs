@@ -922,9 +922,18 @@ const backendProgressState = {
   etaLastSampleAtMs: 0,
   etaLastSampleProcessedPackets: 0,
   etaPacketsPerSecond: 0,
+  // True while the final swap (full re-index + tail DOM work) is in
+  // progress. Keeps the backend-processing-warning banner visible with
+  // a "Finalizing..." message so the user knows the UI is busy but not
+  // frozen. Cleared after finalizeLoadedCapture completes.
+  finalizingSwap: false,
 };
 let activeBackendJobId = "";
 let sessionPcapSource = null;
+// Heartbeat timer that keeps the backend-processing-warning banner's
+// progress/ETA fresh while the frontend defers intermediate payloads.
+let backendProgressHeartbeatId = null;
+const BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS = 1000;
 
 // ============================================================================
 // Settings, diagnostics, and backend option helpers
@@ -4078,6 +4087,47 @@ function setSessionPcapSource(source, options = {}) {
   }
 }
 
+// Updates backend progress counts from a payload without queuing an
+// ingestion. Called from the onJsonData/onJsonPath gate handlers before
+// the threshold gate so the warning banner keeps ticking even when the
+// frontend defers intermediate payloads until the final swap.
+function updateBackendProgressFromPayload(payload) {
+  if (!payload) return;
+  const nextProcessed = Number(payload.processedPackets) || 0;
+  const nextTotal = Number(payload.totalPackets) || 0;
+  if (nextProcessed > backendProgressState.processedPackets) {
+    backendProgressState.processedPackets = nextProcessed;
+  }
+  if (nextTotal > backendProgressState.totalPackets) {
+    backendProgressState.totalPackets = nextTotal;
+  }
+  if (backendProgressState.firstChunkLoaded && !payload.complete) {
+    updateBackendProcessingWarning();
+  }
+}
+
+// Starts the heartbeat timer that periodically refreshes the
+// backend-processing-warning banner. This keeps the ETA ticking even
+// when the threshold gate drops all intermediate progress payloads.
+function startBackendProgressHeartbeat() {
+  stopBackendProgressHeartbeat();
+  backendProgressHeartbeatId = window.setInterval(() => {
+    if (!backendProgressState.processing && !backendProgressState.finalizingSwap) {
+      stopBackendProgressHeartbeat();
+      return;
+    }
+    updateBackendProcessingWarning();
+  }, BACKEND_PROGRESS_HEARTBEAT_INTERVAL_MS);
+}
+
+// Stops the heartbeat timer.
+function stopBackendProgressHeartbeat() {
+  if (backendProgressHeartbeatId !== null) {
+    window.clearInterval(backendProgressHeartbeatId);
+    backendProgressHeartbeatId = null;
+  }
+}
+
 // Resets backend progress state.
 function resetBackendProgressState() {
   backendProgressState.firstChunkLoaded = false;
@@ -4088,6 +4138,7 @@ function resetBackendProgressState() {
   backendProgressState.etaLastSampleAtMs = 0;
   backendProgressState.etaLastSampleProcessedPackets = 0;
   backendProgressState.etaPacketsPerSecond = 0;
+  backendProgressState.finalizingSwap = false;
   pendingBackendCaptureUpdate = null;
   backendLastAppliedSnapshotProcessedPackets = 0;
   backendLastAppliedSnapshotAtMs = 0;
@@ -4095,6 +4146,7 @@ function resetBackendProgressState() {
   deferredIngestionBacklogState.active = false;
   deferredIngestionBacklogState.deferredCount = 0;
   deferredIngestionBacklogState.lastDeferredAtMs = 0;
+  stopBackendProgressHeartbeat();
   updateBackendProcessingWarning();
 }
 
@@ -4191,6 +4243,27 @@ function updateBackendProcessingWarning() {
   const warningEl = document.getElementById("backend-processing-warning");
   if (!warningEl) return;
 
+  // Finalizing swap: show a "Finalizing..." banner so the user knows
+  // the UI is busy but not frozen. This runs after the backend signals
+  // completion but before the renderer finishes the full re-index and
+  // tab rebuild.
+  if (backendProgressState.finalizingSwap) {
+    const processedText = backendProgressState.processedPackets > 0
+      ? String(backendProgressState.processedPackets)
+      : "0";
+    const totalText = backendProgressState.totalPackets > 0
+      ? String(backendProgressState.totalPackets)
+      : "?";
+    warningEl.innerHTML =
+      "Finalizing session swap..." +
+      "<br>" +
+      `(${processedText} / ${totalText} packets)` +
+      "<br>" +
+      "<em>Indexing packets and rebuilding view — UI will respond shortly.</em>";
+    warningEl.style.display = "block";
+    return;
+  }
+
   if (!backendProgressState.firstChunkLoaded || !backendProgressState.processing) {
     warningEl.style.display = "none";
     warningEl.textContent = "";
@@ -4215,7 +4288,9 @@ function updateBackendProcessingWarning() {
   warningEl.innerHTML =
     "Warning: packets are still being processed." +
     "<br>" +
-    etaText;
+    etaText +
+    "<br>" +
+    "<em>Note: the session shown is partial. The complete session will replace this view when processing finishes.</em>";
   warningEl.style.display = "block";
 }
 
@@ -8214,7 +8289,9 @@ async function finalizeLoadedCapture(sessionState) {
   if (keystorePanel && typeof keystorePanel.clearSessionScanCaches === "function") {
     keystorePanel.clearSessionScanCaches();
   }
-  for (const host in capturedPackets["host"]) {
+  const hostNames = Object.keys(capturedPackets["host"] || {});
+  for (let i = 0; i < hostNames.length; i++) {
+    const host = hostNames[i];
     hostsList.push(host);
     const newhost = document.createElement("option");
     newhost.textContent = host;
@@ -8225,6 +8302,11 @@ async function finalizeLoadedCapture(sessionState) {
       : [];
     await cachePacketStubsForHost(host, hostPackets);
     isFileLoaded = true;
+    // Yield between hosts so the "Finalizing..." banner can paint and
+    // the UI stays responsive during large captures.
+    if (i < hostNames.length - 1) {
+      await yieldToRenderer();
+    }
   }
 
   if (hostsList.length > 1) {
@@ -8244,6 +8326,11 @@ async function finalizeLoadedCapture(sessionState) {
   clearFilterQuery();
   syncFilterHighlight();
   isFileLoaded = true;
+
+  // Defer the heavy tail DOM work (Conv reset + landing tab render /
+  // session restore) to the next frame so the indexing yields above
+  // can paint the "Finalizing..." banner first.
+  await yieldToRenderer();
 
   // Always reset Conv to freshly-opened defaults before restoring or starting
   // a new session so data from a previous capture/session does not carry over.
@@ -9762,7 +9849,14 @@ function updateDataToolsCursorReadout(fieldId) {
   if (!offsetEl || !lineEl || !colEl || !posEl || !selLenEl || !endRemainingEl) return;
   const el = document.getElementById(fieldId);
   const map = dataToolsSelectionState.maps[fieldId];
-  const streamLen = dataToolsSelectionState.bytes?.length ?? 0;
+  // The "End:" chip must always reflect the full data-stream length so the
+  // user can carve to the end of the stream even when the output panes only
+  // show a paginated prefix (see renderDataToolsOutputPage). The selection
+  // maps themselves are still built from the rendered prefix below.
+  const streamLen =
+    dataToolsLastConversionBytes instanceof Uint8Array
+      ? dataToolsLastConversionBytes.length
+      : 0;
   if (!el || !map) {
     setDataToolsCursorValue(offsetEl, 0, "0x00000000");
     setDataToolsCursorValue(lineEl, 1, "1");
@@ -15277,6 +15371,7 @@ const convertContextButtons = {
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
+  fileCarvePayload: getCachedElement("ctx-file-carve-payload"),
   llmBranch: getCachedElement("ctx-llm-branch"),
   llmQuestion: getCachedElement("ctx-llm-question"),
   llmSubnetHostSummary: getCachedElement("ctx-llm-subnet-host-summary"),
@@ -16045,6 +16140,7 @@ function showConvertContextMenu(
   const hasStatsCarvableAction = Boolean(statsCarvableTag);
   const hasFileCarveActions =
     hasHttpBody ||
+    hasPayloadToExport ||
     canCarveSmbStream ||
     canCarveNfsStream ||
     canCarveFtpStream ||
@@ -16120,6 +16216,9 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.fileCarveFtp.style.display = canCarveFtpStream
+    ? "block"
+    : "none";
+  convertContextButtons.fileCarvePayload.style.display = hasPayloadToExport
     ? "block"
     : "none";
   convertContextButtons.loadCarvableExtraction.style.display = hasStatsCarvableAction
@@ -18817,9 +18916,12 @@ function extractMultipartFilenameFromBodyBytes(bodyBytes, boundaryToken) {
   if (!boundaryToken || typeof boundaryToken !== "string") return "";
 
   const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
-  const searchLimit = Math.min(bodyBytes.length, 8192);
+  // Scan the full body — not just the first 8 KiB. Real-world multipart
+  // uploads may sit well past 8 KiB before the first boundary when a
+  // gateway prepends a preamble, and the original 8192-byte cap silently
+  // dropped any file the user actually cared about.
   let boundaryIndex = -1;
-  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
+  for (let i = 0; i <= bodyBytes.length - boundaryBytes.length; i += 1) {
     let match = true;
     for (let j = 0; j < boundaryBytes.length; j += 1) {
       if (bodyBytes[i + j] !== boundaryBytes[j]) {
@@ -18858,15 +18960,42 @@ function extractMultipartFilenameFromBodyBytes(bodyBytes, boundaryToken) {
 // multipart body. The returned range is [start, end) where end points to the
 // byte before the closing boundary marker.
 function findMultipartFileByteRange(bodyBytes, boundaryToken) {
+  const ranges = findMultipartFileByteRanges(bodyBytes, boundaryToken);
+  return ranges.length ? ranges[0].range : null;
+}
+
+// Walks every multipart part inside a body and returns one entry per part
+// that carries a `Content-Disposition` with a filename. Each entry has the
+// shape:
+//   {
+//     range:     { start, end },   // byte offsets inside bodyBytes
+//     fileName:  string,           // sanitized via extractFilenameFromContentDisposition
+//     partIndex: number,           // 0-based index among ALL parts (not just file parts)
+//     contentType: string,         // from the part's Content-Type header, or ''
+//   }
+//
+// Boundaries inside a multipart body come in two flavors:
+//   * `--<boundary>\r\n`     — opens a part (followed by part headers + body)
+//   * `--<boundary>--`       — closing marker; everything after it is the
+//                              epilogue and is ignored
+//
+// The returned byte ranges cover only the part payload (after the blank line
+// that terminates the part headers), so callers can hand them straight to
+// `bodyBytes.slice(start, end)` to get the file bytes.
+function findMultipartFileByteRanges(bodyBytes, boundaryToken) {
   if (!bodyBytes || !(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) {
-    return null;
+    return [];
   }
-  if (!boundaryToken || typeof boundaryToken !== "string") return null;
+  if (!boundaryToken || typeof boundaryToken !== "string") return [];
 
   const boundaryBytes = new TextEncoder().encode(`--${boundaryToken}`);
-  const searchLimit = Math.min(bodyBytes.length, 8192);
-  let boundaryIndex = -1;
-  for (let i = 0; i <= searchLimit - boundaryBytes.length; i += 1) {
+
+  // Locate every part boundary by scanning the full body.
+  // We collect all boundary marker positions and then classify each one as
+  // an opener (`--<boundary>\r\n`), a closer (`--<boundary>--`), or noise
+  // (boundary token appears inside a body payload as raw bytes).
+  const markerPositions = [];
+  for (let i = 0; i <= bodyBytes.length - boundaryBytes.length; i += 1) {
     let match = true;
     for (let j = 0; j < boundaryBytes.length; j += 1) {
       if (bodyBytes[i + j] !== boundaryBytes[j]) {
@@ -18874,42 +19003,148 @@ function findMultipartFileByteRange(bodyBytes, boundaryToken) {
         break;
       }
     }
-    if (match) {
-      boundaryIndex = i;
-      break;
+    if (!match) continue;
+    const afterBoundary = i + boundaryBytes.length;
+    if (
+      afterBoundary < bodyBytes.length &&
+      bodyBytes[afterBoundary] === 0x2d /* '-' */ &&
+      afterBoundary + 1 < bodyBytes.length &&
+      bodyBytes[afterBoundary + 1] === 0x2d
+    ) {
+      // Closing boundary `--<boundary>--`
+      markerPositions.push({ offset: i, kind: "close" });
+      i = afterBoundary + 1; // skip past the trailing dashes
+      continue;
+    }
+    // An opener must be followed by CRLF or LF (otherwise the token is just
+    // a substring coincidence). Anything else is treated as body noise.
+    if (
+      afterBoundary < bodyBytes.length &&
+      (bodyBytes[afterBoundary] === 0x0d /* \r */ ||
+        bodyBytes[afterBoundary] === 0x0a /* \n */)
+    ) {
+      markerPositions.push({ offset: i, kind: "open" });
+      i = afterBoundary; // skip past the \r or \n that follows
     }
   }
-  if (boundaryIndex === -1) return null;
+  if (!markerPositions.length) return [];
 
-  const headerEndLimit = Math.min(bodyBytes.length, boundaryIndex + 4096);
-  const headerBytes = bodyBytes.slice(boundaryIndex, headerEndLimit);
-  const headerText = new TextDecoder("utf-8", { fatal: false }).decode(
-    headerBytes,
-  );
-  const firstCrlfCrlf = headerText.indexOf("\r\n\r\n");
-  if (firstCrlfCrlf === -1) return null;
+  const openerIndices = markerPositions
+    .map((marker, index) => (marker.kind === "open" ? index : -1))
+    .filter((idx) => idx !== -1);
+  if (!openerIndices.length) return [];
 
-  const payloadStart = boundaryIndex + firstCrlfCrlf + 4;
-  if (payloadStart >= bodyBytes.length) return null;
+  const fileRanges = [];
+  for (let openerCursor = 0; openerCursor < openerIndices.length; openerCursor += 1) {
+    const openerIdx = openerIndices[openerCursor];
+    const opener = markerPositions[openerIdx];
+    const openerEnd = opener.offset + boundaryBytes.length;
+    // Skip the line terminator that immediately follows the opener marker.
+    let headerStart = openerEnd;
+    if (headerStart < bodyBytes.length && bodyBytes[headerStart] === 0x0d) {
+      headerStart += 1;
+    }
+    if (headerStart < bodyBytes.length && bodyBytes[headerStart] === 0x0a) {
+      headerStart += 1;
+    }
 
-  const closeBoundaryBytes = new TextEncoder().encode(`\r\n--${boundaryToken}`);
-  let endBoundaryIndex = -1;
-  for (let i = payloadStart; i <= bodyBytes.length - closeBoundaryBytes.length; i += 1) {
-    let match = true;
-    for (let j = 0; j < closeBoundaryBytes.length; j += 1) {
-      if (bodyBytes[i + j] !== closeBoundaryBytes[j]) {
-        match = false;
+    // Find the blank line (\r\n\r\n or \n\n) that terminates part headers.
+    const headerWindowEnd = Math.min(bodyBytes.length, headerStart + 8192);
+    let headerTerminatorEnd = -1;
+    let headerTerminatorLength = 0;
+    for (let i = headerStart; i <= headerWindowEnd - 4; i += 1) {
+      if (
+        bodyBytes[i] === 0x0d && bodyBytes[i + 1] === 0x0a &&
+        bodyBytes[i + 2] === 0x0d && bodyBytes[i + 3] === 0x0a
+      ) {
+        headerTerminatorEnd = i + 4;
+        headerTerminatorLength = 4;
         break;
       }
     }
-    if (match) {
-      endBoundaryIndex = i;
-      break;
+    if (headerTerminatorEnd === -1) {
+      // No blank line found within the part-header window — try a LF-only
+      // terminator (lenient fallback for non-conformant bodies).
+      for (let i = headerStart; i <= headerWindowEnd - 2; i += 1) {
+        if (bodyBytes[i] === 0x0a && bodyBytes[i + 1] === 0x0a) {
+          headerTerminatorEnd = i + 2;
+          headerTerminatorLength = 2;
+          break;
+        }
+      }
     }
+    if (headerTerminatorEnd === -1) continue;
+
+    const headerBytes = bodyBytes.slice(headerStart, headerTerminatorEnd - headerTerminatorLength);
+    const headerText = new TextDecoder("utf-8", { fatal: false }).decode(headerBytes);
+
+    const dispositionMatch = headerText.match(
+      /Content-Disposition\s*:([^\r\n]*)/i,
+    );
+    if (!dispositionMatch?.[1]) continue;
+    const dispositionValue = dispositionMatch[1].trim();
+    const isFormField = /\bform-data\s*;/i.test(dispositionValue) &&
+      !/filename\s*=\s*"?[^";]+"?/i.test(dispositionValue);
+    if (isFormField) continue;
+    const fileName = extractFilenameFromContentDisposition(dispositionValue);
+    if (!fileName) continue;
+
+    const contentTypeMatch = headerText.match(/Content-Type\s*:\s*([^\r\n]+)/i);
+    const partContentType = contentTypeMatch ? contentTypeMatch[1].trim() : "";
+
+    // The payload ends at the next boundary marker (opener or closer), or
+    // at end-of-body if no further marker is present.
+    const nextOpenerIdx = openerIndices[openerCursor + 1];
+    const endSearchStart = headerTerminatorEnd;
+    let payloadEnd = bodyBytes.length;
+
+    const limitByMarker = (nextMarkerIdx) => {
+      if (nextMarkerIdx === undefined) return;
+      const marker = markerPositions[nextMarkerIdx];
+      const candidateEnd = marker.offset;
+      // Part bodies end with CRLF immediately before the boundary, so the
+      // payload we want to keep stops just before the \r\n that precedes
+      // the marker. We do a tiny scan back from `candidateEnd` to strip a
+      // trailing \r\n (and an extra trailing \n for LF-only terminators).
+      let trimEnd = candidateEnd;
+      while (trimEnd > endSearchStart) {
+        const b = bodyBytes[trimEnd - 1];
+        if (b === 0x0a || b === 0x0d) {
+          trimEnd -= 1;
+          continue;
+        }
+        break;
+      }
+      if (trimEnd < candidateEnd) {
+        payloadEnd = Math.min(payloadEnd, trimEnd);
+      } else {
+        payloadEnd = Math.min(payloadEnd, candidateEnd);
+      }
+    };
+
+    // The closer marker terminates the final part, but only if no further
+    // opener comes between this opener and the closer. We always check the
+    // next marker regardless of kind, since opacities in the wire order
+    // would otherwise leave dangling bytes.
+    const nextMarkerIdx = nextOpenerIdx !== undefined
+      ? nextOpenerIdx
+      : (() => {
+        const afterIdx = openerIdx + 1;
+        return afterIdx < markerPositions.length ? afterIdx : undefined;
+      })();
+    limitByMarker(nextMarkerIdx);
+
+    if (payloadEnd <= headerTerminatorEnd) continue;
+
+    fileRanges.push({
+      range: { start: headerTerminatorEnd, end: payloadEnd },
+      fileName,
+      partIndex: openerCursor,
+      contentType: partContentType,
+    });
   }
 
-  const payloadEnd = endBoundaryIndex !== -1 ? endBoundaryIndex : bodyBytes.length;
-  return { start: payloadStart, end: payloadEnd };
+  return fileRanges;
 }
 
 // Extracts path filename from http data.
@@ -19119,6 +19354,197 @@ async function loadManualFileIntoConvTabFromContextMenu() {
   }
 }
 
+// Per-packet helpers that read HTTP framing from the renderer-side
+// `getCurrentHttpData(packet)` view. These are thin orchestrator wrappers
+// that exist solely so the pure HTTP decoder helpers don't have to know
+// about the renderer's packet shape — `collectHttpMessageBodiesFromStream`
+// gets these as injected callbacks.
+
+function parseHttpContentLength(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  const rawLength = String(httpData?.["Content-Length"] || "").trim();
+  if (!/^\d+$/.test(rawLength)) return null;
+  const contentLength = Number.parseInt(rawLength, 10);
+  return Number.isFinite(contentLength) && contentLength >= 0
+    ? contentLength
+    : null;
+}
+
+function isChunkedHttpTransfer(packet = null) {
+  const httpData = getCurrentHttpData(packet);
+  return String(httpData?.["Transfer-Encoding"] || "")
+    .toLowerCase()
+    .includes("chunked");
+}
+
+// Returns a copy of `name` annotated with `(n)` so that two parts with the
+// same filename in a multipart upload don't collapse into one carvable
+// candidate.
+function ensureUniqueCarveName(name, partIdx, allEntries) {
+  const safe = sanitizeCarveFilename(name) || `part-${partIdx + 1}.bin`;
+  let priorCount = 0;
+  for (let i = 0; i < partIdx; i += 1) {
+    if (sanitizeCarveFilename(allEntries[i].fileName) === safe) priorCount += 1;
+  }
+  if (priorCount === 0) return safe;
+  const dotIdx = safe.lastIndexOf(".");
+  if (dotIdx <= 0) return `${safe} (${priorCount + 1})`;
+  return `${safe.slice(0, dotIdx)} (${priorCount + 1})${safe.slice(dotIdx)}`;
+}
+
+// Filename inference for a single HTTP message body, expressed in terms of
+// the decoder primitives.
+function guessHttpBodyFilenameFromHttpMessage({
+  message,
+  bodyBytes,
+  contentType,
+  dispositionValue,
+  startLine,
+  fallbackName,
+}) {
+  const dispositionName = extractFilenameFromContentDisposition(
+    dispositionValue || "",
+    sanitizeCarveFilename,
+  );
+  if (dispositionName) return dispositionName;
+
+  const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
+  if (multipartBoundary && bodyBytes instanceof Uint8Array) {
+    const multipartName = extractMultipartFilenameFromBodyBytes(
+      bodyBytes,
+      multipartBoundary,
+      sanitizeCarveFilename,
+    );
+    if (multipartName) return multipartName;
+  }
+
+  const requestLineMatch = startLine.match(
+    /^(GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE|CONNECT)\s+(\S+)/i,
+  );
+  if (requestLineMatch) {
+    const pathName = extractPathFilenameFromHttpData({ "Request URI": requestLineMatch[2] });
+    if (pathName) {
+      if (pathName.includes(".")) return pathName;
+      const extension = getHttpBodyFilenameExtension(contentType);
+      if (extension === "html") return `${pathName}.html`;
+      if (extension !== "bin") return `${pathName}.${extension}`;
+    }
+  }
+
+  const extension = getHttpBodyFilenameExtension(contentType);
+  const safeFallback = sanitizeCarveFilename(fallbackName) || "http-body";
+  if (extension && extension !== "bin") return `${safeFallback}.${extension}`;
+  return `${safeFallback}.bin`;
+}
+
+// Walks the same-direction HTTP message bodies for a stream and emits one
+// carvable candidate per HTTP message, and per multipart part with a
+// filename. Mirrors buildHttpCarveEntriesForStream in main-frontend.js.
+function buildHttpCarveEntriesForStream(deps) {
+  const {
+    streamPackets,
+    referencePacket,
+    httpData,
+    getPacketIdentity: getIdentity,
+    getPacketPayloadHex,
+    isSameDirectionalStreamPacket: sameDirection,
+    getHttpContentLengthFromPacket,
+    isChunkedHttpTransferForPacket,
+    parseDataToolsInput: parseInput,
+    extractMultipartBoundaryFromContentType: extractBoundary,
+    extractMultipartFilenameFromBodyBytes: extractMultipartName,
+    findMultipartFileByteRanges: findMultipartRanges,
+    extractFilenameFromContentDisposition: extractDispositionName,
+    getHttpBodyFilenameExtension: getExtension,
+    extractPathFilenameFromHttpData: extractPathName,
+    sanitizeCarveFilename: sanitize,
+    guessHttpBodyFilenameFromPacket: guessFromPacket,
+  } = deps;
+
+  const messages = collectHttpMessageBodiesFromStream({
+    streamPackets,
+    referencePacket,
+    getPacketIdentity: getIdentity,
+    getPacketPayloadHex,
+    isSameDirectionalStreamPacket: sameDirection,
+    getHttpContentLengthFromPacket,
+    isChunkedHttpTransferForPacket,
+  });
+  if (!messages.length) return [];
+
+  const referenceContentType = String(httpData?.["Content-Type"] || "");
+  const referenceDisposition = String(httpData?.["Content-Disposition"] || "");
+  const entries = [];
+
+  messages.forEach((message) => {
+    const headerAscii = hexToAsciiString(message.headerHex || "");
+    const headerContentTypeMatch = headerAscii.match(/\r?\nContent-Type\s*:\s*([^\r\n]+)/i);
+    const headerDispositionMatch = headerAscii.match(/\r?\nContent-Disposition\s*:\s*([^\r\n]+)/i);
+    const headerStartLineMatch = headerAscii.match(/^([^\r\n]+)/);
+    const startLine = headerStartLineMatch ? headerStartLineMatch[1] : "";
+
+    const contentType = (headerContentTypeMatch?.[1] || referenceContentType || "").trim();
+    const dispositionValue = headerDispositionMatch?.[1] || referenceDisposition;
+
+    let bodyBytes;
+    try {
+      bodyBytes = parseInput("hex", message.bodyHex);
+    } catch {
+      return;
+    }
+    if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
+
+    const multipartBoundary = extractBoundary(contentType);
+
+    if (multipartBoundary) {
+      const partEntries = findMultipartRanges(bodyBytes, multipartBoundary, sanitize);
+      if (partEntries.length) {
+        const firstFileContentType = partEntries[0].contentType || "";
+        partEntries.forEach((partEntry, partIdx) => {
+          if (!(partEntry.range.start < partEntry.range.end)) return;
+          const fileBytes = bodyBytes.slice(partEntry.range.start, partEntry.range.end);
+          if (!fileBytes.length) return;
+          const disambiguatedName = partEntries.length > 1
+            ? ensureUniqueCarveName(partEntry.fileName, partIdx, partEntries)
+            : partEntry.fileName;
+          entries.push({
+            fileName: disambiguatedName,
+            bytes: fileBytes,
+            packetHint: message.sourcePacket,
+            message,
+            multipartPart: partEntry,
+            contentType: firstFileContentType,
+            startLine,
+          });
+        });
+        return;
+      }
+    }
+
+    if (bodyBytes.length === 0) return;
+
+    const guessedName = guessHttpBodyFilenameFromHttpMessage({
+      message,
+      bodyBytes,
+      contentType,
+      dispositionValue,
+      startLine,
+      fallbackName: `http-body-msg${message.messageIndex}`,
+    });
+
+    entries.push({
+      fileName: guessedName,
+      bytes: bodyBytes,
+      packetHint: message.sourcePacket,
+      message,
+      contentType,
+      startLine,
+    });
+  });
+
+  return entries;
+}
+
 async function listCarvableFilesForStats() {
   const allPackets = getAllPacketsForHostNavigation();
   if (!Array.isArray(allPackets) || allPackets.length === 0) {
@@ -19221,39 +19647,38 @@ async function listCarvableFilesForStats() {
       if (!(bodyBytes instanceof Uint8Array) || bodyBytes.length === 0) return;
 
       const currentHttpData = getCurrentHttpData(packet) || {};
-      const contentType = currentHttpData["Content-Type"];
-      const multipartBoundary = extractMultipartBoundaryFromContentType(contentType);
-      let candidateFileName;
-      let candidateBytes = bodyBytes;
-      if (multipartBoundary) {
-        const fileRange = findMultipartFileByteRange(bodyBytes, multipartBoundary);
-        const multipartName = extractMultipartFilenameFromBodyBytes(
-          bodyBytes,
-          multipartBoundary,
-        );
-        candidateFileName = multipartName || "";
-        if (fileRange) {
-          candidateBytes = bodyBytes.slice(fileRange.start, fileRange.end);
-        }
-      }
-
-      const packetIndex =
-        packet?.["packet.info"]?.["index"] ??
-        packet?.["packet.info"]?.["Index"] ??
-        "stream";
-      const guessedName = candidateFileName || guessHttpBodyFilenameFromPacket(
-        packet,
-        `http-body-${packetIndex}`,
-      );
-      appendEntry({
-        protocol: "http",
-        streamKey,
-        packetHint: packet,
-        candidate: {
-          fileName: guessedName,
-          bytes: candidateBytes,
-        },
+      const entries = buildHttpCarveEntriesForStream({
+        streamPackets: hydratedStreamPackets,
+        referencePacket: packet,
+        httpData: currentHttpData,
+        getPacketIdentity,
+        getPacketPayloadHex: getCurrentRawPayloadHex,
+        isSameDirectionalStreamPacket,
+        getHttpContentLengthFromPacket: parseHttpContentLength,
+        isChunkedHttpTransferForPacket: isChunkedHttpTransfer,
+        parseDataToolsInput,
+        extractMultipartBoundaryFromContentType,
+        extractMultipartFilenameFromBodyBytes,
+        findMultipartFileByteRanges,
+        extractFilenameFromContentDisposition,
+        getHttpBodyFilenameExtension,
+        extractPathFilenameFromHttpData,
+        sanitizeCarveFilename,
+        guessHttpBodyFilenameFromPacket,
       });
+      if (Array.isArray(entries)) {
+        entries.forEach((entry) => {
+          appendEntry({
+            protocol: "http",
+            streamKey,
+            packetHint: entry?.packetHint || packet,
+            candidate: {
+              fileName: entry.fileName,
+              bytes: entry.bytes,
+            },
+          });
+        });
+      }
     });
   }
 
@@ -20239,6 +20664,137 @@ function extractHttpBodyHex(payloadHex) {
   return normalized.slice(bodyStart);
 }
 
+// Returns every CRLFCRLF position (in hex chars) inside a payload. Used to
+// detect HTTP/1.x message boundaries — including pipelined requests /
+// responses packed into a single TCP segment. Each returned position is the
+// index of the "0d0a0d0a" separator; the body of the message immediately
+// preceding it starts at `position + 8`.
+function findHttpHeaderBodySeparators(payloadHex) {
+  if (!payloadHex) return [];
+  const normalized = payloadHex.replace(/\s+/g, "");
+  const lower = normalized.toLowerCase();
+  const SEP_HEX = "0d0a0d0a";
+  const SEP_LEN = SEP_HEX.length;
+  if (normalized.length < SEP_LEN) return [];
+
+  const positions = [];
+  let cursor = 0;
+  while (cursor <= lower.length - SEP_LEN) {
+    const nextIdx = lower.indexOf(SEP_HEX, cursor);
+    if (nextIdx === -1) break;
+    positions.push(nextIdx);
+    cursor = nextIdx + SEP_LEN;
+  }
+  return positions;
+}
+
+// Heuristic: does a slice of decoded HTTP-ish text look like the start of a
+// new HTTP/1.x message? We accept a request line ("GET / HTTP/1.1\r") or
+// response status line ("HTTP/1.1 200 OK\r"). This is intentionally lenient —
+// the carve path is best-effort and falls back gracefully when it is wrong.
+function looksLikeHttpStartLine(asciiText) {
+  const head = String(asciiText || "").slice(0, 4096);
+  if (!head) return false;
+  // Response status line — accept HTTP/<digits> or HTTP/<digits>.<digits>
+  if (/^HTTP\/\d+(?:\.\d+)?\s+\d{3}[^\r\n]*/.test(head)) return true;
+  // Common request methods
+  const requestLineMatch = head.match(/^(GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE|CONNECT)\s+\S+\s+HTTP\/\d(?:\.\d)?\r?\n/);
+  return Boolean(requestLineMatch);
+}
+
+// Splits a payload hex string into the individual HTTP/1.x message segments
+// it carries. Returns an array of `{ headerHex, bodyHex, bodyStart, bodyEnd,
+// index }` describing each message. `bodyStart` / `bodyEnd` are hex offsets
+// relative to the start of the input (NOT byte offsets), suitable for
+// slicing the original hex string. Returns an empty array when the payload
+// has no recognizable HTTP framing.
+//
+// A segment is included only when:
+//   1. A CRLFCRLF separator is found (mandatory per RFC 7230).
+//   2. The text preceding the separator (the start line + headers) decodes
+//      as something that looks like an HTTP start line. This filters out
+//      accidental CRLFCRLF occurrences inside binary body data.
+//
+// For pipelined responses (HTTP/1.1 keep-alive with multiple responses per
+// TCP segment), each response becomes a separate segment.
+function sliceHttpMessageSegments(payloadHex) {
+  const normalized = typeof payloadHex === "string" ? payloadHex.replace(/\s+/g, "") : "";
+  if (normalized.length < 8) return [];
+
+  const separators = findHttpHeaderBodySeparators(normalized);
+  if (!separators.length) return [];
+
+  let fullAscii = "";
+  try {
+    fullAscii = hexToAsciiString(normalized);
+  } catch {
+    fullAscii = "";
+  }
+
+  const findNextStartLineByteOffset = (fromByteOffset) => {
+    if (!fullAscii) return -1;
+    const searchStart = Math.max(fromByteOffset, 0);
+    const startLineRe = /(?:HTTP\/\d+(?:\.\d+)?\s+\d{3}|(?:GET|HEAD|POST|PUT|DELETE|PATCH|OPTIONS|TRACE|CONNECT)\s+\S+\s+HTTP\/\d(?:\.\d)?)/g;
+    startLineRe.lastIndex = searchStart;
+    const match = startLineRe.exec(fullAscii);
+    return match ? match.index : -1;
+  };
+
+  const segments = [];
+  let headerStartHex = 0;
+  for (let i = 0; i < separators.length; i += 1) {
+    const separatorPos = separators[i];
+    const headerHex = normalized.slice(headerStartHex, separatorPos);
+    const headerBytesLength = separatorPos - headerStartHex;
+    if (headerBytesLength <= 0) continue;
+    let headerText = "";
+    try {
+      headerText = hexToAsciiString(headerHex).slice(0, 4096);
+    } catch {
+      headerText = "";
+    }
+    if (!looksLikeHttpStartLine(headerText)) continue;
+    const bodyStartHex = separatorPos + 8;
+    const bodyStartByte = bodyStartHex / 2;
+    let bodyEndHex = normalized.length;
+    // If the header block has a Content-Length, the body extends exactly
+    // that many bytes — no start-line scanning needed (prevents false
+    // matches inside binary body data like BMP pixels containing "HTTP/").
+    const clMatch = headerText.toLowerCase().match(/\r?\ncontent-length\s*:\s*(\d+)/);
+    if (clMatch) {
+      const cl = Number.parseInt(clMatch[1], 10);
+      if (Number.isFinite(cl) && cl >= 0) {
+        bodyEndHex = Math.min(normalized.length, bodyStartHex + cl * 2);
+      }
+    } else {
+      const nextStartLineByte = findNextStartLineByteOffset(bodyStartByte);
+      if (nextStartLineByte !== -1) {
+        bodyEndHex = nextStartLineByte * 2;
+      }
+    }
+    const bodyHex = normalized.slice(bodyStartHex, bodyEndHex);
+    segments.push({
+      headerHex,
+      bodyHex,
+      bodyStart: bodyStartHex,
+      bodyEnd: bodyEndHex,
+      index: segments.length,
+    });
+    headerStartHex = bodyEndHex;
+  }
+  return segments;
+}
+
+// Returns whether a Content-Length or Transfer-Encoding header appears in a
+// header hex slice. Used to distinguish a definitive length from an
+// implicit "until next message" framing when detecting message boundaries.
+function httpHeadersHaveExplicitFraming(headerHex) {
+  const headerText = hexToAsciiString(headerHex).toLowerCase();
+  if (!headerText) return false;
+  return /\r?\ncontent-length\s*:/.test(headerText) ||
+    /\r?\ntransfer-encoding\s*:\s*[^\r\n]*chunked\b/.test(headerText);
+}
+
 // Parses http content length.
 function parseHttpContentLength(packet = null) {
   const httpData = getCurrentHttpData(packet);
@@ -20281,11 +20837,6 @@ function sliceCompleteChunkedHttpBodyHex(bodyHex) {
     const chunkSize = Number.parseInt(chunkSizeToken, 16);
     if (!Number.isFinite(chunkSize) || chunkSize < 0) return null;
     cursor = lineEnd + 4;
-    const chunkDataEnd = cursor + chunkSize * 2;
-    if (chunkDataEnd > normalized.length) return null;
-    cursor = chunkDataEnd;
-    if (normalized.slice(cursor, cursor + 4).toLowerCase() !== "0d0a") return null;
-    cursor += 4;
     if (chunkSize === 0) {
       let trailerCursor = cursor;
       while (trailerCursor <= normalized.length) {
@@ -20298,6 +20849,11 @@ function sliceCompleteChunkedHttpBodyHex(bodyHex) {
       }
       return null;
     }
+    const chunkDataEnd = cursor + chunkSize * 2;
+    if (chunkDataEnd > normalized.length) return null;
+    cursor = chunkDataEnd;
+    if (normalized.slice(cursor, cursor + 4).toLowerCase() !== "0d0a") return null;
+    cursor += 4;
   }
   return null;
 }
@@ -20357,6 +20913,111 @@ function collectHttpBodyHexFromStream(streamPackets, referencePacket) {
     return sliceCompleteChunkedHttpBodyHex(combinedBodyHex) || combinedBodyHex;
   }
   return combinedBodyHex;
+}
+
+// Returns every HTTP/1.x message body carried by the same-direction packets
+// in a TCP stream starting at `referencePacket`. Mirrors the
+// `collectHttpMessageBodiesFromStream` helper in src/ui/decoders/conv/http.js
+// but uses the test mirror's inlined helpers and accepts injected callbacks
+// for the packet-identity / payload / direction primitives so it stays
+// unit-testable.
+function collectHttpMessageBodiesFromStream({
+  streamPackets,
+  referencePacket,
+  getPacketIdentity: getIdentity,
+  getPacketPayloadHex,
+  isSameDirectionalStreamPacket: sameDirection,
+  getHttpContentLengthFromPacket,
+  isChunkedHttpTransferForPacket,
+}) {
+  if (
+    !Array.isArray(streamPackets) ||
+    !streamPackets.length ||
+    !referencePacket ||
+    typeof getPacketPayloadHex !== "function" ||
+    typeof sameDirection !== "function"
+  ) {
+    return [];
+  }
+  const referenceIdentity =
+    typeof getIdentity === "function" ? getIdentity(referencePacket) : null;
+  const referenceIndex = streamPackets.findIndex((packet) => {
+    return typeof getIdentity === "function" && getIdentity(packet) === referenceIdentity;
+  });
+  if (referenceIndex === -1) return [];
+
+  const firstPacket = streamPackets[referenceIndex];
+  const firstPayload = getPacketPayloadHex(firstPacket);
+  if (!firstPayload) return [];
+
+  const payloadParts = [];
+  for (let packetIndex = referenceIndex; packetIndex < streamPackets.length; packetIndex += 1) {
+    const packet = streamPackets[packetIndex];
+    if (!sameDirection(packet, firstPacket)) continue;
+    const payloadHex = getPacketPayloadHex(packet).replace(/\s+/g, "");
+    if (payloadHex) payloadParts.push(payloadHex);
+  }
+  if (!payloadParts.length) return [];
+  const combinedHex = payloadParts.join("");
+
+  let segments = sliceHttpMessageSegments(combinedHex);
+
+  if (!segments.length) {
+    const fallbackHex = extractHttpBodyHex(firstPayload);
+    if (!fallbackHex) return [];
+    return [{
+      bodyHex: fallbackHex,
+      headerHex: "",
+      messageIndex: 0,
+      sourcePacket: firstPacket,
+      framing:
+        typeof isChunkedHttpTransferForPacket === "function" &&
+          isChunkedHttpTransferForPacket(firstPacket)
+          ? "chunked"
+          : "until-next-message",
+      declaredContentLength:
+        typeof getHttpContentLengthFromPacket === "function"
+          ? getHttpContentLengthFromPacket(firstPacket)
+          : null,
+    }];
+  }
+
+  const framed = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i];
+    let { bodyHex } = segment;
+    let framing = "until-next-message";
+    let declaredContentLength = null;
+
+    if (httpHeadersHaveExplicitFraming(segment.headerHex)) {
+      const headerText = hexToAsciiString(segment.headerHex).toLowerCase();
+      const clMatch = headerText.match(/\r?\ncontent-length\s*:\s*(\d+)/);
+      if (clMatch) {
+        const contentLength = Number.parseInt(clMatch[1], 10);
+        if (Number.isFinite(contentLength) && contentLength >= 0) {
+          declaredContentLength = contentLength;
+          framing = "content-length";
+          bodyHex = bodyHex.slice(0, contentLength * 2);
+        }
+      } else if (/\r?\ntransfer-encoding\s*:\s*[^\r\n]*chunked\b/.test(headerText)) {
+        framing = "chunked";
+        const decoded = sliceCompleteChunkedHttpBodyHex(bodyHex);
+        if (decoded !== null) bodyHex = decoded;
+      }
+    }
+
+    if (!bodyHex) continue;
+    framed.push({
+      bodyHex,
+      headerHex: segment.headerHex,
+      messageIndex: i,
+      sourcePacket: firstPacket,
+      framing,
+      declaredContentLength,
+    });
+  }
+
+  return framed;
 }
 
 async function getCurrentHttpBodyHex(packet = null) {
@@ -20936,6 +21597,105 @@ function getHttpContentTypeForCurrentPacket(packet = null) {
 // Saves http body from context menu.
 function saveHttpBodyFromContextMenu() {
   void saveHttpBodyFromContextMenuImpl(false);
+}
+
+// Saves the raw payload of the current context packet to a file. Respects
+// HTTP body boundaries when the packet is part of an HTTP stream — extracts
+// only the body portion. Falls back to the full raw payload when no HTTP
+// framing is available.
+async function saveRawPayloadFromContextMenu() {
+  const contextPacket = getCurrentContextPacket();
+  hideConvertContextMenu();
+  if (!contextPacket) {
+    statusUpdate("Status: No packet selected for payload extraction");
+    return;
+  }
+
+  const payloadHex = getCurrentRawPayloadHex(contextPacket);
+  if (!payloadHex) {
+    statusUpdate("Status: No payload available to extract");
+    return;
+  }
+
+  let outputHex = "";
+  let extractionLabel = "raw payload";
+
+  const httpData = getCurrentHttpData(contextPacket);
+  const hasHttpHeaders = Boolean(extractHttpBodyHex(payloadHex));
+  if (httpData && hasHttpHeaders) {
+    try {
+      const bodyHex = await getCurrentHttpBodyHex(contextPacket);
+      if (bodyHex) {
+        outputHex = bodyHex;
+        extractionLabel = "HTTP body";
+      }
+    } catch {
+      // Fall through to raw payload below.
+    }
+  }
+
+  if (!outputHex) {
+    outputHex = payloadHex.replace(/\s+/g, "");
+    extractionLabel = "raw payload";
+  }
+
+  if (!outputHex) {
+    statusUpdate("Status: No payload bytes available to extract");
+    return;
+  }
+
+  // Guard: if the bytes to be saved look like HTTP header data, warn the
+  // user and ask for confirmation.
+  const outputPreview = hexToAsciiString(outputHex.slice(0, 200));
+  const looksLikeHttpHeaders = looksLikeHttpStartLine(outputPreview);
+  if (looksLikeHttpHeaders) {
+    const confirmMessage =
+      `The data to be extracted appears to contain HTTP headers (starts with "${outputPreview.split(/\r?\n/)[0].trim()}").\n\n` +
+      `This will save the raw headers as a file, which is rarely useful.\n\n` +
+      `Consider using "HTTP body to file" from the File Carving menu instead.\n\n` +
+      `Do you want to save anyway?`;
+    if (!window.confirm(confirmMessage)) {
+      statusUpdate("Status: Extraction cancelled — data looks like HTTP headers");
+      return;
+    }
+  }
+
+  const packetIndex =
+    contextPacket?.["packet.info"]?.["index"] ??
+    contextPacket?.["packet.info"]?.["Index"] ??
+    "packet";
+  let fileNameGuess = `payload-${packetIndex}.bin`;
+  if (httpData) {
+    const guessed = guessHttpBodyFilenameFromPacket(
+      contextPacket,
+      `payload-${packetIndex}`,
+    );
+    if (guessed) fileNameGuess = guessed;
+  }
+
+  window.saveapi.savePayload(outputHex).then((result) => {
+    if (result.canceled) {
+      statusUpdate("Status: Extraction cancelled");
+    } else if (result.success) {
+      const byteCount = outputHex.length / 2;
+      statusUpdate(
+        `Status: ${extractionLabel.charAt(0).toUpperCase() + extractionLabel.slice(1)} extracted (${byteCount} bytes)`,
+      );
+      writeLogEntry(
+        `Context menu ${extractionLabel} extraction completed bytes=${byteCount} file="${fileNameGuess}"`,
+      );
+    } else {
+      const errorMessage =
+        result && typeof result === "object" && "error" in result
+          ? result.error
+          : "unknown";
+      doError(`${extractionLabel} extraction failed`);
+      logErrorEntry("payload-extract", errorMessage || "unknown");
+      statusUpdate(
+        `Status: ${extractionLabel} extraction failed – ${errorMessage || "unknown error"}`,
+      );
+    }
+  });
 }
 
 async function saveHttpBodyFromContextMenuImpl(decompress = false) {
@@ -22776,6 +23536,10 @@ convertContextButtons.fileCarveNfs.addEventListener("click", () =>
 convertContextButtons.fileCarveFtp.addEventListener("click", () =>
   carveCurrentStreamToFileFromContextMenu("ftp"),
 );
+convertContextButtons.fileCarvePayload.addEventListener(
+  "click",
+  saveRawPayloadFromContextMenu,
+);
 convertContextButtons.followStreamConv.addEventListener(
   "click",
   followStreamToConv,
@@ -24023,11 +24787,20 @@ async function processBackendJsonPathPayload(payload) {
     }
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
+    // Final chunk: the backend has finished processing. Do a clean full
+    // swap (incrementalUpdate: false) so the renderer replaces the early-
+    // yield partial session with the complete data in one shot — no
+    // expensive incremental merge.
+    // Signal that the final swap is in progress so the warning banner
+    // shows "Finalizing..." instead of hiding. This keeps the user
+    // informed while the full re-index and tab rebuild run.
+    backendProgressState.finalizingSwap = true;
+    updateBackendProcessingWarning();
     await processCapturePath(payload.path, {
       suppressLoadingOverlay: true,
-      incrementalUpdate: true,
-      finalUpdate: false,
+      incrementalUpdate: false,
     });
+    backendProgressState.finalizingSwap = false;
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-path-final",
       processedPackets: payload.processedPackets,
@@ -24036,13 +24809,14 @@ async function processBackendJsonPathPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
+      `Backend final swap received path = "${payload.path}" processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete} `,
     );
     logIngestionChunkTiming("path", "final-chunk-applied", payload, performance.now() - chunkStartTime);
   }
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    stopBackendProgressHeartbeat();
     if (payload.jobId && payload.jobId === activeBackendJobId) {
       activeBackendJobId = "";
     }
@@ -24164,11 +24938,20 @@ async function processBackendJsonDataPayload(payload) {
     hideLoadingOverlay();
     updateBackendProgressStatus({ force: true });
     await yieldToRenderer();
+    // Final chunk: the backend has finished processing. Do a clean full
+    // swap (incrementalUpdate: false) so the renderer replaces the early-
+    // yield partial session with the complete data in one shot — no
+    // expensive incremental merge.
+    // Signal that the final swap is in progress so the warning banner
+    // shows "Finalizing..." instead of hiding. This keeps the user
+    // informed while the full re-index and tab rebuild run.
+    backendProgressState.finalizingSwap = true;
+    updateBackendProcessingWarning();
     await processCaptureData(payload.captureData, {
       suppressLoadingOverlay: true,
-      incrementalUpdate: true,
-      finalUpdate: false,
+      incrementalUpdate: false,
     });
+    backendProgressState.finalizingSwap = false;
     subnetCalculatorPanel.maybeAutoStartCaptureNmapScan({
       reason: "backend-data-final",
       processedPackets: payload.processedPackets,
@@ -24177,7 +24960,7 @@ async function processBackendJsonDataPayload(payload) {
     });
     markAppliedBackendSnapshot(payload);
     writeLogEntry(
-      `Backend in-memory incremental update processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
+      `Backend final swap received label=${JSON.stringify(payload.label)} processed = ${payload.processedPackets} total = ${payload.totalPackets} complete = ${payload.complete}`,
     );
     logIngestionChunkTiming("data", "final-chunk-applied", payload, performance.now() - chunkStartTime, {
       label: payload.label,
@@ -24186,6 +24969,7 @@ async function processBackendJsonDataPayload(payload) {
 
   if (payload.complete) {
     backendProgressState.processing = false;
+    stopBackendProgressHeartbeat();
     if (payload.jobId && payload.jobId === activeBackendJobId) {
       activeBackendJobId = "";
     }
@@ -24213,6 +24997,7 @@ async function processBackendJsonDataPayload(payload) {
 // when the main.js returns the capture path from snitch.py
 window.jsonapi.onJsonPath((rawPayload) => {
   const payload = normalizeBackendJsonPathPayload(rawPayload);
+  updateBackendProgressFromPayload(payload);
   if (!payload || !payload.path) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("path", payload);
@@ -24220,6 +25005,7 @@ window.jsonapi.onJsonPath((rawPayload) => {
 
 window.jsonapi.onJsonData((rawPayload) => {
   const payload = normalizeBackendJsonDataPayload(rawPayload);
+  updateBackendProgressFromPayload(payload);
   if (!payload || !payload.captureData) return;
   if (!shouldAcceptBackendPayloadForActiveJob(payload)) return;
   queueBackendCaptureUpdate("data", payload);
@@ -24240,6 +25026,7 @@ function runSnitch(file, options = {}) {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
   backendProgressState.processing = true;
+  startBackendProgressHeartbeat();
   document.getElementById("loading-screen").style.display = "block";
   document.getElementById("loading-container").style.display = "block";
   document.getElementById("loading-text").textContent = "Loading packets...";
@@ -24303,6 +25090,7 @@ function runSnitch(file, options = {}) {
         return;
       }
       backendProgressState.processing = false;
+      stopBackendProgressHeartbeat();
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });

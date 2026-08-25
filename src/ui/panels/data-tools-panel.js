@@ -1217,6 +1217,29 @@ const decodeImapFromBytes = convDecoders.decodeImapFromBytes;
 const decodeSmtpFromBytes = convDecoders.decodeSmtpFromBytes;
 const decodeFtpFromBytes = convDecoders.decodeFtpFromBytes;
 
+// HTTP body-boundary detection helpers (Phase 2.5 of the decoder refactor).
+// These are consumed by the file-carver path in main-frontend.js — they used
+// to live inline in main-frontend.js but were moved here so the protocol
+// decoder module owns all of the HTTP surface.
+const extractHttpBodyHex = convDecoders.extractHttpBodyHex;
+const findHttpHeaderBodySeparators = convDecoders.findHttpHeaderBodySeparators;
+const looksLikeHttpStartLine = convDecoders.looksLikeHttpStartLine;
+const sliceHttpMessageSegments = convDecoders.sliceHttpMessageSegments;
+const httpHeadersHaveExplicitFraming = convDecoders.httpHeadersHaveExplicitFraming;
+const collectHttpMessageBodiesFromStream = convDecoders.collectHttpMessageBodiesFromStream;
+const HTTP_FILENAME_EXT_BY_MIME = convDecoders.HTTP_FILENAME_EXT_BY_MIME;
+const getHttpBodyFilenameExtension = convDecoders.getHttpBodyFilenameExtension;
+const extractFilenameFromContentDisposition = convDecoders.extractFilenameFromContentDisposition;
+const extractMultipartBoundaryFromContentType = convDecoders.extractMultipartBoundaryFromContentType;
+const extractMultipartFilenameFromBodyBytes = convDecoders.extractMultipartFilenameFromBodyBytes;
+const findMultipartFileByteRange = convDecoders.findMultipartFileByteRange;
+const findMultipartFileByteRanges = convDecoders.findMultipartFileByteRanges;
+const sliceCompleteChunkedHttpBodyHex = convDecoders.sliceCompleteChunkedHttpBodyHex;
+const hexToAsciiString = convDecoders.hexToAsciiString;
+const isChunkedTransferEncodingHeader = convDecoders.isChunkedTransferEncodingHeader;
+const parseContentLengthFromHeaderAscii = convDecoders.parseContentLengthFromHeaderAscii;
+const splitHttpMessageHeaders = convDecoders.splitHttpMessageHeaders;
+
 // parseAsn1Length is consumed by decodeLdapFromBytes below; the implementation
 // now lives in src/ui/decoders/conv/asn1.js.
 const parseAsn1Length = convDecoders.parseAsn1Length;
@@ -1872,6 +1895,24 @@ module.exports = {
   parseDataToolsInput,
   bytesToPrintableAscii,
   decodeHttpFromBytes,
+  extractHttpBodyHex,
+  findHttpHeaderBodySeparators,
+  looksLikeHttpStartLine,
+  sliceHttpMessageSegments,
+  httpHeadersHaveExplicitFraming,
+  collectHttpMessageBodiesFromStream,
+  HTTP_FILENAME_EXT_BY_MIME,
+  getHttpBodyFilenameExtension,
+  extractFilenameFromContentDisposition,
+  extractMultipartBoundaryFromContentType,
+  extractMultipartFilenameFromBodyBytes,
+  findMultipartFileByteRange,
+  findMultipartFileByteRanges,
+  sliceCompleteChunkedHttpBodyHex,
+  hexToAsciiString,
+  isChunkedTransferEncodingHeader,
+  parseContentLengthFromHeaderAscii,
+  splitHttpMessageHeaders,
   decodeTelnetFromBytes,
   decodeSshFromBytes,
   decodePop3FromBytes,

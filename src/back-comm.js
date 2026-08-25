@@ -647,10 +647,57 @@ async function reclaimExistingBackendService(options = {}) {
 
   // The /ping probe only matches a real snitch-http service. If nothing is
   // listening, or the port is held by something that isn't our backend,
-  // there's nothing to reclaim.
+  // there's nothing to reclaim — unless forcePortFree is set, in which case
+  // we fall through to the OS-level kill path to clear a stale socket.
   const detected = await probeSnitchHttpBackendReady(host, port, 800);
   if (!detected) {
-    return { detected: false, action: "none", host, port };
+    if (!source.forcePortFree) {
+      return { detected: false, action: "none", host, port };
+    }
+
+    // The backend isn't responding to /ping, but the port might still be
+    // held by a dying process.  Try to find and kill whatever has it.
+    const listeningPids = await findListeningProcessIdsForPort(port);
+    if (!listeningPids.length) {
+      // No process holds the port — it's probably in TIME_WAIT, which
+      // SO_REUSEADDR handles.  Nothing to do.
+      return { detected: false, action: "none", host, port };
+    }
+    global.logBackend?.(
+      `[Bridge] Port reclaim: port ${port} held by non-responsive process(es) ${listeningPids.join(", ")}; killing`,
+    );
+    const killResults = [];
+    for (const pid of listeningPids) {
+      const result = await killProcessById(pid);
+      killResults.push({ pid, ...result });
+    }
+    const recheck = await waitForBackendPortFree(
+      host,
+      port,
+      Math.max(500, killTimeoutMs),
+      STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+    );
+    if (!recheck.released) {
+      for (const pid of listeningPids) {
+        const prior = killResults.find((entry) => entry.pid === pid);
+        if (prior && (prior.killed || prior.reason === "already-gone")) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const escalated = await forceKillProcessById(pid);
+        killResults.push({ pid, ...escalated, escalated: true });
+      }
+      const finalRecheck = await waitForBackendPortFree(
+        host,
+        port,
+        Math.max(500, killTimeoutMs / 2),
+        STARTUP_RECLAIM_PORT_POLL_INTERVAL_MS,
+      );
+      if (!finalRecheck.released) {
+        global.logBackend?.(
+          `[Bridge] Port reclaim: failed to free port ${host}:${port} after kill`,
+        );
+      }
+    }
+    return { detected: false, action: "force-port-free", host, port, killedPids: killResults };
   }
   global.logBackend?.(
     `[Bridge] Startup reclaim: detected existing snitch HTTP backend on ${host}:${port}`,
@@ -1944,9 +1991,28 @@ function scheduleBackendHttpRespawn(reason) {
     `[Bridge] Scheduling HTTP backend respawn in ${delayMs}ms (attempt ${backendHttpRespawnAttempts})${reason ? `: ${reason}` : ""}`,
   );
   sendBackendServiceState({ ready: false, respawnPending: true, attempts: backendHttpRespawnAttempts });
-  backendHttpRespawnTimer = setTimeout(() => {
+  backendHttpRespawnTimer = setTimeout(async () => {
     backendHttpRespawnTimer = null;
     global.logBackend("[Bridge] Respawning HTTP backend after unexpected exit");
+
+    // Before spawning a new backend, reclaim the port from any stale
+    // process that may still be holding it.  Without this, the respawned
+    // backend crashes with OSError (address already in use) and the
+    // bridge enters an infinite crash loop.
+    try {
+      await reclaimExistingBackendService({
+        host: currentBackendHttpHost,
+        port: currentBackendHttpPort,
+        gracefulTimeoutMs: 3000,
+        killTimeoutMs: 4000,
+        forcePortFree: true,
+      });
+    } catch (reclaimError) {
+      global.logBackend(
+        `[Bridge] Respawn port reclaim failed: ${reclaimError?.message || String(reclaimError)}`,
+      );
+    }
+
     // Reset the promise guard so ensureBackendHttpServerReady can spawn again.
     backendHttpReadyPromise = null;
     ensureBackendHttpServerReady()

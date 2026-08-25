@@ -7,6 +7,26 @@ const { decodeHtmlFromBytes } = require("./html");
 const { decodeYamlFromBytes } = require("./yaml");
 
 const { decodeHttpFromBytes } = require("./http");
+const {
+    extractHttpBodyHex,
+    findHttpHeaderBodySeparators,
+    looksLikeHttpStartLine,
+    sliceHttpMessageSegments,
+    httpHeadersHaveExplicitFraming,
+    collectHttpMessageBodiesFromStream,
+    HTTP_FILENAME_EXT_BY_MIME,
+    getHttpBodyFilenameExtension,
+    extractFilenameFromContentDisposition,
+    extractMultipartBoundaryFromContentType,
+    extractMultipartFilenameFromBodyBytes,
+    findMultipartFileByteRange,
+    findMultipartFileByteRanges,
+    sliceCompleteChunkedHttpBodyHex,
+    hexToAsciiString,
+    isChunkedTransferEncodingHeader,
+    parseContentLengthFromHeaderAscii,
+    splitHttpMessageHeaders,
+} = require("./http");
 const { decodeTelnetFromBytes } = require("./telnet");
 const { decodeSshFromBytes } = require("./ssh");
 const { decodePop3FromBytes } = require("./pop3");
@@ -100,6 +120,24 @@ module.exports = {
     decodeHtmlFromBytes,
     decodeYamlFromBytes,
     decodeHttpFromBytes,
+    extractHttpBodyHex,
+    findHttpHeaderBodySeparators,
+    looksLikeHttpStartLine,
+    sliceHttpMessageSegments,
+    httpHeadersHaveExplicitFraming,
+    collectHttpMessageBodiesFromStream,
+    HTTP_FILENAME_EXT_BY_MIME,
+    getHttpBodyFilenameExtension,
+    extractFilenameFromContentDisposition,
+    extractMultipartBoundaryFromContentType,
+    extractMultipartFilenameFromBodyBytes,
+    findMultipartFileByteRange,
+    findMultipartFileByteRanges,
+    sliceCompleteChunkedHttpBodyHex,
+    hexToAsciiString,
+    isChunkedTransferEncodingHeader,
+    parseContentLengthFromHeaderAscii,
+    splitHttpMessageHeaders,
     decodeTelnetFromBytes,
     decodeSshFromBytes,
     decodePop3FromBytes,

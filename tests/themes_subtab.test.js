@@ -104,6 +104,44 @@ function loadMainFunction(functionName, { isAsync = false } = {}) {
     return extractFunctionSource(sourceText, functionName, { isAsync });
 }
 
+// Loads a const declaration from main.js that may be a Set(...) literal,
+// which the existing ``loadConstant`` (semicolon-scoped) cannot handle.
+function loadMainConst(constName) {
+    const sourceText = fs.readFileSync(MAIN_PATH, 'utf8');
+    const startToken = `const ${constName} = `;
+    const startIndex = sourceText.indexOf(startToken);
+    if (startIndex === -1) {
+        throw new Error(`Could not find constant ${constName}`);
+    }
+    let cursor = startIndex + startToken.length;
+    let depth = 0;
+    let inSingle = false;
+    let inDouble = false;
+    let inBack = false;
+    for (; cursor < sourceText.length; cursor += 1) {
+        const char = sourceText[cursor];
+        if (char === "'" && !inDouble && !inBack) inSingle = !inSingle;
+        else if (char === '"' && !inSingle && !inBack) inDouble = !inDouble;
+        else if (char === '`' && !inSingle && !inDouble) inBack = !inBack;
+        else if (char === '(' && !inSingle && !inDouble && !inBack) depth += 1;
+        else if (char === ')' && !inSingle && !inDouble && !inBack) {
+            depth -= 1;
+            if (depth === 0) {
+                cursor += 1;
+                break;
+            }
+        } else if (char === ';' && !inSingle && !inDouble && !inBack && depth === 0) {
+            return sourceText.slice(startIndex, cursor + 1);
+        }
+    }
+    for (; cursor < sourceText.length; cursor += 1) {
+        if (sourceText[cursor] === ';') {
+            return sourceText.slice(startIndex, cursor + 1);
+        }
+    }
+    return sourceText.slice(startIndex, cursor);
+}
+
 function makePreviewVm() {
     const context = {
         URL: { revokeObjectURL: () => { } },
@@ -435,7 +473,13 @@ describe('main.js theme helpers', () => {
         const helperSource = [
             loadMainFunction('sanitizeThemeId'),
             loadMainFunction('normalizeThemeEmbeddedImage'),
+            loadMainFunction('getArtifactType'),
+            loadMainFunction('isNonThemeArtifact'),
             loadMainFunction('normalizeThemeDefinition'),
+            loadMainConst('THEME_ARTIFACT_TYPE_THEME'),
+            loadMainConst('THEME_ARTIFACT_TYPE_LICENSE'),
+            loadMainConst('THEME_ARTIFACT_TYPE_PLUGIN'),
+            loadMainConst('KNOWN_ARTIFACT_TYPES'),
         ].join('\n\n');
         // normalizeThemeDefinition references `metadata.sourcePath` only,
         // so the rest of the file is not required.
