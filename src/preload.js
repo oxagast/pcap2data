@@ -1536,6 +1536,15 @@ contextBridge.exposeInMainWorld('installapi', {
     ipcRenderer.on('llm-diagnostics-updated', listener);
     return () => ipcRenderer.removeListener('llm-diagnostics-updated', listener);
   },
+  onOllamaRateLimitOrPaymentRequired: (callback) => {
+    console.log("[Preload] Registering ollama-rate-limit-or-payment-required listener");
+    const listener = (_event, payload) => {
+      console.log("[Preload] Received ollama-rate-limit-or-payment-required event:", payload);
+      callback(payload);
+    };
+    ipcRenderer.on('ollama-rate-limit-or-payment-required', listener);
+    return () => ipcRenderer.removeListener('ollama-rate-limit-or-payment-required', listener);
+  },
 });
 
 contextBridge.exposeInMainWorld('logapi', {
