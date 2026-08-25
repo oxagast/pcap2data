@@ -5145,7 +5145,34 @@ def runHttpServer(serverHost, serverPort):
     class ThreadedHttpServer(ThreadingHTTPServer):
         allow_reuse_address = True
 
-    with ThreadedHttpServer((serverHost, int(serverPort)), SnitchHttpHandler) as server:
+    # Retry the bind a few times — the previous backend process may have
+    # just exited and the OS may need a moment to release the TCP socket.
+    maxBindAttempts = 5
+    bindRetryDelaySeconds = 1.0
+    httpServer = None
+    for bindAttempt in range(1, maxBindAttempts + 1):
+        try:
+            httpServer = ThreadedHttpServer((serverHost, int(serverPort)), SnitchHttpHandler)
+            break
+        except OSError as bindError:
+            errnoStr = getattr(bindError, "errno", None)
+            if bindAttempt < maxBindAttempts:
+                print(
+                    f"[BridgeServer] Bind attempt {bindAttempt}/{maxBindAttempts} failed"
+                    f" host={serverHost} port={int(serverPort)}"
+                    f" (errno={errnoStr}): {bindError}; retrying in {bindRetryDelaySeconds:.1f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(bindRetryDelaySeconds)
+            else:
+                print(
+                    f"[BridgeServer] Failed to bind host={serverHost} port={int(serverPort)}"
+                    f" (errno={errnoStr}): {bindError}",
+                    file=sys.stderr,
+                )
+                return "bind-failed", 1
+
+    with httpServer as server:
         setattr(server, "snitch_shutdown_reason", "server-stop")
         print(
             f"[BridgeServer] Listening host={serverHost} port={int(serverPort)}",
@@ -5203,6 +5230,17 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         backendShutdownReason = "keyboard-interrupt"
         exitCode = 130
+    except Exception as fatalError:
+        # Catch-all so that any unhandled exception (e.g. OSError from a
+        # bind failure in runHttpServer) produces a clean diagnostic line
+        # with the correct shutdown reason, instead of a raw traceback
+        # that leaves the bridge guessing about what happened.
+        backendShutdownReason = "fatal-error"
+        exitCode = 1
+        print(
+            f"[Main] Fatal error: {fatalError}\n{traceback.format_exc()}",
+            file=sys.stderr,
+        )
     finally:
         if geoIpReader is not None:
             try:

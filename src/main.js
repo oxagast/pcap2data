@@ -4481,8 +4481,95 @@ function sanitizeThemeId(value, fallback = "snitchbitch") {
   return normalized || safeFallback;
 }
 
+// Artifact type tags used by the catalog server to distinguish
+// themes from licenses, plugins, and other downloadable artifacts.
+// The catalog ``entries`` array may contain a ``type`` field whose
+// value is one of these. The theme engine must only process entries
+// tagged as ``"theme"`` (or untagged, for backwards compatibility).
+const THEME_ARTIFACT_TYPE_THEME = "theme";
+const THEME_ARTIFACT_TYPE_LICENSE = "license";
+const THEME_ARTIFACT_TYPE_PLUGIN = "plugin";
+const KNOWN_ARTIFACT_TYPES = new Set([
+  THEME_ARTIFACT_TYPE_THEME,
+  THEME_ARTIFACT_TYPE_LICENSE,
+  THEME_ARTIFACT_TYPE_PLUGIN,
+]);
+
+// Returns the lowercased artifact type tag from a catalog entry or
+// theme object. Falls back to ``"theme"`` when the field is missing
+// (backwards compatibility: older catalog entries omitted ``type``).
+function getArtifactType(raw) {
+  if (!raw || typeof raw !== "object") return THEME_ARTIFACT_TYPE_THEME;
+  const rawType = typeof raw.type === "string" ? raw.type.trim().toLowerCase() : "";
+  return rawType || THEME_ARTIFACT_TYPE_THEME;
+}
+
+// Returns ``true`` when the artifact is tagged as a non-theme type
+// (license or plugin). The theme engine must never try to download,
+// cache, or apply such entries as themes — they don't carry CSS
+// variables and would be silently dropped by
+// ``normalizeThemeDefinition`` anyway, but this guard prevents the
+// wasted network round-trip and cache write in the first place.
+function isNonThemeArtifact(raw) {
+  const artifactType = getArtifactType(raw);
+  return artifactType === THEME_ARTIFACT_TYPE_LICENSE
+    || artifactType === THEME_ARTIFACT_TYPE_PLUGIN;
+}
+
+// Looks up the cached artifact type tag for a given catalog entry ID.
+// Returns the type string (e.g. ``"license"``, ``"plugin"``) or
+// ``null`` when the ID is not in the cache. The cache is populated
+// by the ``themes-catalog`` IPC handler on each successful fetch.
+function findCatalogEntryTypeById(id) {
+  const normalizedId = sanitizeThemeId(id, "");
+  if (!normalizedId) return null;
+  return cachedCatalogEntryTypes.get(normalizedId) || null;
+}
+
+// Validates a theme definition before it is written to the cache or
+// applied to the UI. Returns ``{ valid: boolean, reason: string }``.
+// This is a structural check — it ensures the theme has the minimum
+// fields needed for ``applyThemeVariables`` to do anything useful and
+// that it is not mis-tagged as a different artifact type (license or
+// plugin). ``normalizeThemeDefinition`` remains the canonical
+// normalizer; this validator runs before the cache write so a bad
+// payload never reaches disk in the first place.
+function validateThemeDefinition(rawTheme) {
+  if (!rawTheme || typeof rawTheme !== "object") {
+    return { valid: false, reason: "theme payload is not an object" };
+  }
+  if (isNonThemeArtifact(rawTheme)) {
+    return {
+      valid: false,
+      reason: `artifact type is "${getArtifactType(rawTheme)}", not "theme"`,
+    };
+  }
+  const id = typeof rawTheme.id === "string" ? rawTheme.id.trim() : "";
+  if (!id) {
+    return { valid: false, reason: "theme id is missing or empty" };
+  }
+  if (!rawTheme.variables || typeof rawTheme.variables !== "object" || Array.isArray(rawTheme.variables)) {
+    return { valid: false, reason: "theme variables object is missing" };
+  }
+  const variableCount = Object.entries(rawTheme.variables).filter(
+    ([key, value]) =>
+      String(key).startsWith("--")
+      && typeof value === "string"
+      && value.trim(),
+  ).length;
+  if (variableCount === 0) {
+    return { valid: false, reason: "theme has no valid CSS custom properties (--*)" };
+  }
+  return { valid: true, reason: "" };
+}
+
 function normalizeThemeDefinition(rawTheme, fallbackId = "custom", metadata = {}) {
   if (!rawTheme || typeof rawTheme !== "object") return null;
+  // Reject non-theme artifacts (license/plugin payloads) before
+  // attempting to normalize them as themes. This prevents the theme
+  // cache from being polluted with non-theme JSON downloaded from
+  // the catalog server.
+  if (isNonThemeArtifact(rawTheme)) return null;
   const id = sanitizeThemeId(rawTheme.id, fallbackId);
   const name = typeof rawTheme.name === "string" && rawTheme.name.trim()
     ? rawTheme.name.trim()
@@ -4792,6 +4879,10 @@ let cachedLicenseTier = "free"; // "free" | "professional" | "enterprise" | "dev
 let lastThemeLicenseCheckAtMs = 0;
 let themeRecacheTimer = null;
 let themeRecacheInFlight = false;
+// Cache of { id -> type } from the most recent ``/catalog`` response.
+// Used by ``reconcileThemeLicenses`` to skip non-theme artifacts
+// (licenses/plugins) when deciding which owned IDs to download.
+let cachedCatalogEntryTypes = new Map();
 
 function getThemeCacheDir() {
   return path.join(app.getPath("userData"), THEME_CACHE_DIR_NAME);
@@ -5122,6 +5213,52 @@ async function fetchAndCacheTheme(themeId) {
   );
   const rawBuffer = await fetchThemeServerBuffer(`/themes/${encodeURIComponent(normalizedId)}/download`);
   const rawText = rawBuffer.toString("utf8");
+
+  // Validate the downloaded payload before writing it to the theme
+  // cache. The catalog server may serve non-theme artifacts
+  // (licenses, plugins) under the same ``/themes/<id>/download``
+  // endpoint in the future; this guard ensures only valid theme JSON
+  // reaches disk. A payload that fails validation is logged and
+  // dropped — the caller (``reconcileThemeLicenses`` or the
+  // ``themes-download`` IPC) sees a null return and treats it as a
+  // failed download, which is the correct user-facing behavior.
+  let parsedPayload;
+  try {
+    parsedPayload = JSON.parse(rawText);
+  } catch (parseError) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] fetchAndCacheTheme invalid themeId=${normalizedId} reason=JSON parse failed: ${parseError?.message || String(parseError)}`,
+    );
+    return null;
+  }
+  // Unwrap the ``themeJson`` envelope if present (the server wraps
+  // download responses). ``normalizeThemeCachePayload`` does this
+  // too, but we need the unwrapped object for validation *before* the
+  // cache write, not after.
+  let themePayload = parsedPayload;
+  if (parsedPayload && typeof parsedPayload === "object" && !Array.isArray(parsedPayload)) {
+    const inner = parsedPayload.themeJson;
+    if (typeof inner === "string") {
+      try {
+        const reparsed = JSON.parse(inner);
+        if (reparsed && typeof reparsed === "object" && !Array.isArray(reparsed)) {
+          themePayload = reparsed;
+        }
+      } catch (_e) {
+        // leave themePayload as the outer object
+      }
+    } else if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+      themePayload = inner;
+    }
+  }
+  const validation = validateThemeDefinition(themePayload);
+  if (!validation.valid) {
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] fetchAndCacheTheme rejected themeId=${normalizedId} reason=${validation.reason}`,
+    );
+    return null;
+  }
+
   const filePath = await writeThemeToCache(normalizedId, rawText);
   appendActivityLogLine(
     `[${new Date().toISOString()}] [GUI][Main] fetchAndCacheTheme ok themeId=${normalizedId} bytes=${rawBuffer.length} filePath=${filePath}`,
@@ -5175,6 +5312,24 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   const newlyUnlocked = sanitizedOwned.filter((id) => !previouslyOwned.has(id));
   for (const themeId of sanitizedOwned) {
     try {
+      // The catalog server may tag some owned IDs as non-theme
+      // artifacts (licenses, plugins). Those don't have a
+      // /themes/<id>/download endpoint that returns valid theme
+      // JSON — skip them so we don't waste a network round-trip
+      // and pollute the theme cache with a rejection log line.
+      // ``ownedThemeIds`` from ``/licenses`` only carries IDs, not
+      // type tags, so we rely on the cached catalog entries (if
+      // any) to filter. When no catalog entry is found for an ID,
+      // we conservatively attempt the download — the
+      // ``fetchAndCacheTheme`` validator will reject it if it
+      // turns out to be a non-theme payload.
+      const catalogEntry = findCatalogEntryTypeById(themeId);
+      if (catalogEntry && isNonThemeArtifact({ type: catalogEntry })) {
+        appendActivityLogLine(
+          `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses skipping non-theme artifact themeId=${themeId} type=${catalogEntry}`,
+        );
+        continue;
+      }
       await fetchAndCacheTheme(themeId);
     } catch (error) {
       console.warn(`Unable to refresh cached theme ${themeId}:`, error);
@@ -7137,8 +7292,14 @@ ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
         if (!id) return null;
         const owned = ownedIds.has(id);
         const installed = cachedIds.has(id);
+        // Preserve the artifact type tag so the renderer can
+        // distinguish themes from licenses/plugins. Defaults to
+        // "theme" for backwards compatibility with older catalog
+        // servers that omit the field.
+        const artifactType = getArtifactType(entry);
         return {
           id,
+          type: artifactType,
           name: String(entry.name || id),
           description: String(entry.description || ""),
           priceCents: Number.isFinite(Number(entry.priceCents)) ? Number(entry.priceCents) : null,
@@ -7152,6 +7313,14 @@ ipcMain.handle("themes-catalog", async (_event, payload = {}) => {
         };
       })
       .filter(Boolean);
+    // Cache the artifact type for each entry so ``reconcileThemeLicenses``
+    // can skip non-theme owned IDs without a separate network call.
+    cachedCatalogEntryTypes = new Map();
+    entries.forEach((entry) => {
+      if (entry && typeof entry.id === "string" && typeof entry.type === "string") {
+        cachedCatalogEntryTypes.set(entry.id, entry.type);
+      }
+    });
     // Propagate the server's Paddle environment to the renderer so it
     // can show a non-fatal warning when the catalog is in sandbox mode
     // and purchases won't actually be charged. The server may signal
