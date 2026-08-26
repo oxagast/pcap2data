@@ -137,6 +137,33 @@ const DEFAULT_SETTINGS = Object.freeze({
         metricsMaxQueueSize: 500,
         metricsInstallId: "",
     },
+    // Account-level fields captured the first time the user buys a
+    // non-owned theme (or paid license). The desktop client never
+    // asks for an email up-front — PacketSnitch is free / open
+    // source and most installs never buy anything — but the moment
+    // a buyer clicks "Buy" on a theme they don't already own, we
+    // pop a one-time modal asking for their email. We use the
+    // captured address for two things:
+    //
+    //   * Forward to the catalog via ``?customerEmail=...`` on the
+    //     checkout URL so Paddle pre-fills the hosted checkout form
+    //     and the catalog can stamp the email onto the install row
+    //     (which is how the customer-centric portal will recognize
+    //     the buyer).
+    //   * Surface in the Settings ⇄ Themes tab as a "Manage my
+    //     subscription on packetsnitch.com" link, so the buyer can
+    //     later cancel / change card / switch plan via the website.
+    //
+    // ``paddleCustomerId`` is the *account-level* Paddle customer
+    // id the catalog hands back from the most recent successful
+    // license check. It is written by the main process after a
+    // successful ``reconcileThemeLicenses`` call and read by the
+    // renderer to decide whether the "Manage subscription" button
+    // should be visible.
+    account: {
+        email: "",
+        paddleCustomerId: "",
+    },
 });
 
 const VALID_BACKEND_CHUNK_SIZES = new Set([25, 100, 250, 500, 2000, 8000]);
@@ -236,6 +263,7 @@ function normalizeSettings(rawSettings = {}) {
     const apiKeys = source.apiKeys && typeof source.apiKeys === "object" ? source.apiKeys : {};
     const plugins = source.plugins && typeof source.plugins === "object" ? source.plugins : {};
     const privacy = source.privacy && typeof source.privacy === "object" ? source.privacy : {};
+    const account = source.account && typeof source.account === "object" ? source.account : {};
     const generalDefaults = DEFAULT_SETTINGS.general;
     const backendDefaults = DEFAULT_SETTINGS.backend;
     const debugDefaults = DEFAULT_SETTINGS.debug;
@@ -244,6 +272,7 @@ function normalizeSettings(rawSettings = {}) {
     const apiKeysDefaults = DEFAULT_SETTINGS.apiKeys;
     const pluginDefaults = DEFAULT_SETTINGS.plugins;
     const privacyDefaults = DEFAULT_SETTINGS.privacy;
+    const accountDefaults = DEFAULT_SETTINGS.account;
 
     const normalizedBackendChunkSize = toPositiveInteger(
         general.backendPacketChunkSize,
@@ -503,6 +532,23 @@ function normalizeSettings(rawSettings = {}) {
                 typeof privacy.metricsInstallId === "string"
                     ? privacy.metricsInstallId.trim()
                     : privacyDefaults.metricsInstallId,
+        },
+        account: {
+            // Email is intentionally permissive: we only check it's a
+            // bounded-length string. Full RFC-5322 validation lives
+            // on the catalog side (ps-catalog._is_valid_buyer_email)
+            // so the renderer never has to maintain its own regex.
+            email: typeof account.email === "string"
+                ? account.email.trim().slice(0, 320)
+                : accountDefaults.email,
+            // ``paddleCustomerId`` is written by the main process,
+            // not the user. Empty string by default; once the catalog
+            // reports a customer id via ``reconcileThemeLicenses``,
+            // we surface it here so the renderer can show the
+            // "Manage subscription" affordance.
+            paddleCustomerId: typeof account.paddleCustomerId === "string"
+                ? account.paddleCustomerId.trim()
+                : accountDefaults.paddleCustomerId,
         },
     };
 }
