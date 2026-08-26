@@ -336,6 +336,12 @@ def _fake_config(db, *, paddle_api_key: str = "fake_key") -> "_catalog.Config":
         log_rotate=False,
         paddle_poll_enabled=True,
         paddle_poll_interval=600,
+        smtp_host="",
+        smtp_port=25,
+        smtp_username=None,
+        smtp_password=None,
+        smtp_from="noreply@packetsnitch.test",
+        smtp_use_tls=False,
     )
 
 

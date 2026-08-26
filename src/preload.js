@@ -1637,6 +1637,16 @@ contextBridge.exposeInMainWorld('themeapi', {
   startCheckout: (payload) => ipcRenderer.invoke('themes-start-checkout', payload),
   refreshLicenses: (payload) => ipcRenderer.invoke('themes-refresh-licenses', payload),
   getLicenseTier: () => ipcRenderer.invoke('themes-get-license-tier'),
+  // Open the customer-facing "Manage subscription" page on the
+  // public website in the system browser. ``email`` is optional and
+  // is used to pre-fill the magic-link request form. Returns
+  // ``{ success, portalUrl }`` or ``{ success: false, error }``.
+  openPortal: (payload) => ipcRenderer.invoke('themes-open-portal', payload || {}),
+  // Request a magic-link sign-in email to be sent to ``email``.
+  // Opens the website's "request a link" form with the address
+  // pre-filled so the buyer just clicks "Send me a link". Returns
+  // ``{ success, url }`` or ``{ success: false, error }``.
+  requestMagicLink: (payload) => ipcRenderer.invoke('themes-request-magic-link', payload || {}),
   download: (payload) => ipcRenderer.invoke('themes-download', payload),
   openExternalUrl: (url) => ipcRenderer.invoke('open-external-url', url),
   // Listen for ``packetsnitch://checkout-success?...`` deeplinks that

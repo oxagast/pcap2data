@@ -113,6 +113,12 @@ def _make_config(
         log_rotate=False,
         paddle_poll_enabled=False,
         paddle_poll_interval=0,
+        smtp_host="",
+        smtp_port=25,
+        smtp_username=None,
+        smtp_password=None,
+        smtp_from="noreply@packetsnitch.test",
+        smtp_use_tls=False,
     )
 
 

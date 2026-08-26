@@ -1487,6 +1487,18 @@ async function syncLicenseTierBadge() {
     badgeEl.textContent = "License: Error";
     badgeEl.className = "settings-status-pill status-error";
   }
+  // The catalog surfaces the install's Paddle customer id +
+  // customer email via ``refreshLicenses`` (which ``checkThemesLicense``
+  // also calls). The manage-subscription affordance in the
+  // storefront panel re-renders whenever ``checkThemesLicense``
+  // succeeds, so the cheap cached tier fetch here only needs to
+  // re-render the manage row to pick up state changes triggered
+  // by other paths (settings save, app boot, etc.).
+  try {
+    renderAccountManageSection();
+  } catch (_error) {
+    // ignore
+  }
 }
 
 // Syncs metrics diagnostics indicators.
@@ -3868,16 +3880,50 @@ async function startThemeCheckout(catalogEntry) {
     }
     return;
   }
+  // Capture the buyer's email the first time they buy a
+  // non-owned theme. We deliberately don't ask every install —
+  // PacketSnitch is free / open source and most installs never
+  // buy anything — so a passive settings field would be
+  // intrusive. Instead the prompt only fires when (a) the buyer
+  // is initiating a real purchase and (b) we don't already have
+  // an email on file (settings.account.email may have been
+  // populated by a prior purchase or by reconcileThemeLicenses
+  // learning it from the catalog). The buyer can dismiss the
+  // prompt by clicking Cancel — checkout still proceeds without
+  // an email, the catalog will simply create the Paddle
+  // transaction without one and the buyer can type one on the
+  // hosted form.
+  const currentSettings = getCurrentSettings();
+  const settingsAccount = currentSettings?.account || {};
+  let customerEmail =
+    typeof settingsAccount.email === "string"
+      ? settingsAccount.email.trim()
+      : "";
+  if (!customerEmail) {
+    const promptText =
+      "Enter the email address you'd like to use for this purchase.\n\n" +
+      "PacketSnitch uses this to recognize your subscription later, " +
+      "so you can manage it from packetsnitch.com without re-entering " +
+      "your install UUID. Leave blank to skip.";
+    const typed = window.prompt(promptText, "");
+    if (typeof typed === "string" && typed.trim()) {
+      customerEmail = typed.trim();
+    }
+  }
   setThemesCatalogStatus(
     themesCatalogIsSandbox
       ? "Opening checkout in your default browser. Sandbox mode is active — no real payment will be taken."
       : "Opening checkout in your default browser...",
   );
   try {
-    const result = await window.themeapi.startCheckout({
+    const payload = {
       themeId: catalogEntry.id,
       checkoutUrl: catalogEntry.checkoutUrl || "",
-    });
+    };
+    if (customerEmail) {
+      payload.customerEmail = customerEmail;
+    }
+    const result = await window.themeapi.startCheckout(payload);
     if (result?.success) {
       setThemesCatalogStatus(
         result.openedExternally
@@ -3926,6 +3972,11 @@ async function checkThemesLicense() {
       await refreshThemesPreviewForSelected();
       await refreshThemesCatalog({ force: true });
     }
+    // Refresh the manage-subscription row in the storefront
+    // panel — ``refreshLicenses`` returns the install's Paddle
+    // customer id + email and the main process has just persisted
+    // those into settings.account.*, so re-rendering picks them up.
+    renderAccountManageSection();
     // Refresh the license tier badge in the General settings panel
     await syncLicenseTierBadge();
   } catch (error) {
@@ -3954,6 +4005,91 @@ function bindThemesSubtabEvents() {
     selectEl.addEventListener("change", () => {
       void refreshThemesPreviewForSelected();
     });
+  }
+  // Manage subscription on packetsnitch.com — opens the public
+  // portal in the system browser. The button is hidden until the
+  // catalog reports a non-empty ``paddleCustomerId`` (see
+  // ``renderAccountManageSection`` below), which is written into
+  // settings.account.paddleCustomerId by ``reconcileThemeLicenses``.
+  const manageLink = document.getElementById("settings-themes-account-manage-link");
+  if (manageLink) {
+    manageLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      const settings = getCurrentSettings();
+      const email = settings?.account?.email || "";
+      if (window.themeapi && typeof window.themeapi.openPortal === "function") {
+        void window.themeapi.openPortal({ email });
+      } else {
+        // No bridge in this build (e.g. a test render) — fall back to
+        // opening the portal directly via window.open so the click
+        // still does something useful.
+        try {
+          window.open("https://packetsnitch.com/store/manage", "_blank");
+        } catch (_error) {
+          // ignore
+        }
+      }
+    });
+  }
+  // Magic-link request — same as Manage but goes to the website's
+  // "request a link" form with the email pre-filled, which triggers
+  // an outbound email from the public site so the buyer can sign in
+  // even if they've forgotten which email they used at checkout.
+  const magicLinkBtn = document.getElementById("settings-themes-account-magic-link-btn");
+  if (magicLinkBtn) {
+    magicLinkBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      const settings = getCurrentSettings();
+      const email = settings?.account?.email || "";
+      if (!email) {
+        // The buyer hasn't typed an email yet — pop the same prompt
+        // startThemeCheckout uses so they can enter one inline.
+        const typed = window.prompt(
+          "Enter the email address you used at checkout:",
+          "",
+        );
+        if (typeof typed === "string" && typed.trim()) {
+          if (window.themeapi && typeof window.themeapi.requestMagicLink === "function") {
+            void window.themeapi.requestMagicLink({ email: typed.trim() });
+          }
+          return;
+        }
+        setThemesCatalogStatus(
+          "Please enter the email address you used at checkout to receive a sign-in link.",
+          { isError: true },
+        );
+        return;
+      }
+      if (window.themeapi && typeof window.themeapi.requestMagicLink === "function") {
+        void window.themeapi.requestMagicLink({ email });
+      }
+    });
+  }
+}
+
+// Show / hide the "Manage subscription on packetsnitch.com" row in
+// the storefront panel based on whether the catalog has paired this
+// install with a Paddle customer. A non-empty customer id means the
+// buyer has actually paid (or is about to), so the portal link is
+// meaningful. Free installs stay quiet — the row is hidden.
+function renderAccountManageSection() {
+  const row = document.getElementById("settings-themes-account-manage");
+  if (!row) return;
+  const settings = getCurrentSettings();
+  const paddleCustomerId = settings?.account?.paddleCustomerId || "";
+  const accountEmail = settings?.account?.email || "";
+  const isPaired = Boolean(paddleCustomerId);
+  if (!isPaired) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  // The magic-link sub-row only makes sense when we actually have
+  // an email to forward. Hide it for enterprise seats registered
+  // by the operator (the buyer may not even know the address).
+  const magicRow = document.getElementById("settings-themes-account-magic-link");
+  if (magicRow) {
+    magicRow.hidden = !accountEmail;
   }
 }
 

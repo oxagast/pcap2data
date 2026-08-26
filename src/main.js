@@ -4947,6 +4947,18 @@ function buildThemeServerUrl(relativePath, params = {}) {
   if (installUuid) {
     query.set("installUuid", installUuid);
   }
+  // Auto-append the buyer's email when the renderer has captured
+  // one in settings.account.email. The catalog reads the value via
+  // ``?customerEmail=`` on /checkout/<id> and forwards it to
+  // Paddle as both top-level ``customer_email`` (for hosted-checkout
+  // pre-fill) and ``custom_data.customerEmail`` (for webhook
+  // round-trip). Empty / non-string values are skipped so an
+  // unconfigured settings file produces the same URL it always
+  // did before this feature shipped.
+  const accountEmail = readAccountEmailFromSettings();
+  if (accountEmail) {
+    query.set("customerEmail", accountEmail);
+  }
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null) return;
     const stringValue = String(value);
@@ -4957,6 +4969,24 @@ function buildThemeServerUrl(relativePath, params = {}) {
     urlString += `?${queryString}`;
   }
   return urlString;
+}
+
+// Cheap read of ``settings.account.email`` without paying the cost
+// of a full settings load + disk round-trip. ``appSettings`` is the
+// module-level cache that ``loadSettingsFromDisk`` populates at
+// boot and that ``saveSettingsToDisk`` updates whenever the
+// renderer persists a change. We deliberately don't fail when the
+// settings module is in a half-loaded state (e.g. during shutdown)
+// — an empty string is a perfectly fine default that produces the
+// same URL the renderer was sending before the email capture
+// feature.
+function readAccountEmailFromSettings() {
+  try {
+    const email = appSettings?.account?.email;
+    return typeof email === "string" ? email.trim() : "";
+  } catch (_err) {
+    return "";
+  }
 }
 
 function isThemeServerConfigured() {
@@ -5395,12 +5425,75 @@ async function reconcileThemeLicenses({ force = false } = {}) {
   cachedThemeServerPaddleEnv = sandboxFlag === true || paddleEnvFlag === "sandbox"
     ? "sandbox"
     : (paddleEnvFlag || (sandboxFlag === false ? "production" : null));
+  // Capture the catalog's Paddle customer id for the install (and
+  // the buyer's email) so the renderer can render the "Manage
+  // subscription" affordance without a second IPC call. The
+  // catalog only reports these when the install is associated
+  // with a Paddle customer — an unknown UUID always yields
+  // ``paddleCustomerId: ""`` so the renderer can render a "Buy
+  // first" state. We also persist the customer id into settings
+  // so the Settings ⇄ Themes tab can decide whether the manage
+  // button should be visible without an additional IPC round-trip.
+  const responsePaddleCustomerId =
+    typeof payload?.paddleCustomerId === "string"
+      ? payload.paddleCustomerId.trim()
+      : "";
+  const responseCustomerEmail =
+    typeof payload?.customerEmail === "string"
+      ? payload.customerEmail.trim()
+      : "";
+  if (
+    responsePaddleCustomerId &&
+    responsePaddleCustomerId !== (appSettings?.account?.paddleCustomerId || "")
+  ) {
+    try {
+      const current = appSettings || normalizeSettings(DEFAULT_SETTINGS);
+      await saveSettingsToDisk({
+        ...current,
+        account: {
+          ...(current.account || {}),
+          paddleCustomerId: responsePaddleCustomerId,
+        },
+      });
+    } catch (err) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses persistCustomerId error=${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+  // When the catalog reports a non-empty customer email and the
+  // user hasn't typed one locally, mirror it back into settings.
+  // This covers the case where the buyer paid via the website
+  // (no email was ever typed into the desktop) and then opens
+  // PacketSnitch — the desktop learns the email from the catalog
+  // rather than re-prompting on the next purchase.
+  if (
+    responseCustomerEmail &&
+    responseCustomerEmail !== (appSettings?.account?.email || "")
+  ) {
+    try {
+      const current = appSettings || normalizeSettings(DEFAULT_SETTINGS);
+      await saveSettingsToDisk({
+        ...current,
+        account: {
+          ...(current.account || {}),
+          email: responseCustomerEmail,
+        },
+      });
+    } catch (err) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] reconcileThemeLicenses persistEmail error=${err && err.message ? err.message : err}`,
+      );
+    }
+  }
   return {
     unlockedThemeIds: newlyUnlocked,
     purchased: sanitizedOwned,
     paddleEnv: cachedThemeServerPaddleEnv,
     sandbox: cachedThemeServerPaddleEnv === "sandbox",
     licenseTier: cachedLicenseTier,
+    paddleCustomerId: responsePaddleCustomerId,
+    customerEmail: responseCustomerEmail,
   };
 }
 
@@ -7469,9 +7562,42 @@ ipcMain.handle("themes-start-checkout", async (_event, payload = {}) => {
   if (!isThemeServerConfigured()) {
     return { success: false, error: "Theme server URL is not configured" };
   }
+  // Capture the buyer's email from the payload — the renderer pops
+  // a one-time prompt the first time a non-owned theme is bought
+  // and passes the typed address here. We also fall back to the
+  // email that's already in settings (so a buyer who previously
+  // entered it doesn't get re-prompted on every purchase). When
+  // neither source has a value we still build the checkout URL —
+  // the catalog will create a Paddle transaction without an email
+  // and the buyer can type one on the hosted checkout form. This
+  // is intentional: blocking the checkout on a missing email
+  // would frustrate buyers who would rather not pair their
+  // account at all.
+  const payloadEmail = typeof payload?.customerEmail === "string"
+    ? payload.customerEmail.trim()
+    : "";
+  const settingsEmail = readAccountEmailFromSettings();
+  const customerEmail = payloadEmail || settingsEmail;
+  if (payloadEmail) {
+    // Validate here too so a renderer typo never reaches the
+    // catalog / Paddle. The catalog performs the same validation
+    // independently, but doing it in the main process too gives us
+    // an early 400-style response we can surface as a toast without
+    // an extra round-trip to Paddle.
+    if (!isLikelyBuyerEmail(payloadEmail)) {
+      return {
+        success: false,
+        error: "That doesn't look like a valid email address.",
+      };
+    }
+  }
   let checkoutUrl = typeof payload?.checkoutUrl === "string" ? payload.checkoutUrl.trim() : "";
   if (!checkoutUrl) {
-    checkoutUrl = buildThemeServerUrl(`/checkout/${encodeURIComponent(themeId)}`);
+    const params = {};
+    if (customerEmail) {
+      params.customerEmail = customerEmail;
+    }
+    checkoutUrl = buildThemeServerUrl(`/checkout/${encodeURIComponent(themeId)}`, params);
   }
   if (!checkoutUrl) {
     return { success: false, error: "Unable to build checkout URL" };
@@ -7487,6 +7613,24 @@ ipcMain.handle("themes-start-checkout", async (_event, payload = {}) => {
   } catch (_error) {
     return { success: false, error: "Invalid checkout URL" };
   }
+  // Persist the email into settings so subsequent purchases
+  // (and the post-checkout "Manage subscription" link) find it
+  // without a re-prompt. Done before opening the browser so a
+  // later renderer refresh (which re-renders the tier badge) sees
+  // the value. We swallow write errors — the buyer is about to
+  // complete checkout regardless of whether we could persist, and
+  // the catalog will still learn the email from the URL we just
+  // built. A noisy console warning is enough to flag the
+  // persistence failure for an operator.
+  if (payloadEmail && payloadEmail !== settingsEmail) {
+    try {
+      await saveAccountEmailToSettings(payloadEmail);
+    } catch (err) {
+      appendActivityLogLine(
+        `[${new Date().toISOString()}] [GUI][Main] themes-start-checkout persistEmail error=${err && err.message ? err.message : err}`,
+      );
+    }
+  }
   try {
     await shell.openExternal(checkoutUrl);
     return { success: true, openedExternally: true, checkoutUrl };
@@ -7494,6 +7638,33 @@ ipcMain.handle("themes-start-checkout", async (_event, payload = {}) => {
     return { success: false, error: error?.message || String(error || "Unknown error") };
   }
 });
+
+// Local mirror of the catalog's email-shape check. We deliberately
+// stay loose here (any address that looks like ``local@domain.tld``)
+// because the catalog performs the authoritative validation on
+// receipt and we don't want to maintain two divergent regexes.
+const LIKELY_BUYER_EMAIL_RE = /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
+
+function isLikelyBuyerEmail(value) {
+  if (typeof value !== "string" || !value) return false;
+  if (value.length > 320) return false;
+  return LIKELY_BUYER_EMAIL_RE.test(value);
+}
+
+async function saveAccountEmailToSettings(email) {
+  // Lazy-load the settings module so this helper doesn't pull in
+  // the disk reader until it's actually needed (avoids an
+  // import-cycle risk during early main-process boot).
+  const currentSettings = appSettings || normalizeSettings(DEFAULT_SETTINGS);
+  const nextSettings = {
+    ...currentSettings,
+    account: {
+      ...(currentSettings.account || {}),
+      email: email,
+    },
+  };
+  await saveSettingsToDisk(nextSettings);
+}
 
 ipcMain.handle("themes-refresh-licenses", async (_event, payload = {}) => {
   try {
@@ -7520,6 +7691,77 @@ ipcMain.handle("themes-refresh-licenses", async (_event, payload = {}) => {
 // background reconcile is in flight.
 ipcMain.handle("themes-get-license-tier", async () => {
   return { success: true, licenseTier: cachedLicenseTier };
+});
+
+// Open the customer-facing "Manage subscription" page on the
+// public website in the system browser. The site is the canonical
+// place to cancel, change card, switch plan, see invoices — Paddle
+// hosts the underlying billing portal and the site just embeds the
+// management_urls we get back from ``GET /subscriptions/{id}``.
+// We keep this handler deliberately thin: no remote call, no
+// auth, no rate limiting. A failed ``shell.openExternal`` simply
+// bubbles the error back so the renderer can show a toast.
+const PACKETSNITCH_PORTAL_BASE_URL = "https://packetsnitch.com/store/manage";
+ipcMain.handle("themes-open-portal", async (_event, payload = {}) => {
+  const email = typeof payload?.email === "string" ? payload.email.trim() : "";
+  let portalUrl = PACKETSNITCH_PORTAL_BASE_URL;
+  // Pre-fill the magic-link request form so the buyer doesn't have
+  // to retype their address. The site is HTTPS so the value travels
+  // through the URL safely; we only set the param when an email is
+  // known (either the user typed one at checkout, or the catalog
+  // surfaced one via ``/licenses``) so a stranger can't pre-fill
+  // someone else's address via a shared link.
+  if (email && isLikelyBuyerEmail(email)) {
+    portalUrl = `${portalUrl}?email=${encodeURIComponent(email)}`;
+  }
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] themes-open-portal url=${portalUrl}`,
+  );
+  try {
+    await shell.openExternal(portalUrl);
+    return { success: true, portalUrl };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || String(error || "Unknown error"),
+    };
+  }
+});
+
+// Request a magic-link sign-in email for the supplied address. The
+// desktop client doesn't send the mail itself — that lives on the
+// public website (or, behind the scenes, the Cloudflare Worker in
+// front of it) so the catalog doesn't have to ship SMTP
+// credentials. We open the site's "request a link" URL with the
+// email pre-filled so the buyer just clicks "Send me a link" and
+// gets the same one-shot flow a fresh visitor would.
+ipcMain.handle("themes-request-magic-link", async (_event, payload = {}) => {
+  const email = typeof payload?.email === "string" ? payload.email.trim() : "";
+  if (!email) {
+    return {
+      success: false,
+      error: "Please enter the email address you used at checkout.",
+    };
+  }
+  if (!isLikelyBuyerEmail(email)) {
+    return {
+      success: false,
+      error: "That doesn't look like a valid email address.",
+    };
+  }
+  const url = `${PACKETSNITCH_PORTAL_BASE_URL}?email=${encodeURIComponent(email)}&action=request-link`;
+  appendActivityLogLine(
+    `[${new Date().toISOString()}] [GUI][Main] themes-request-magic-link url=${url}`,
+  );
+  try {
+    await shell.openExternal(url);
+    return { success: true, url };
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || String(error || "Unknown error"),
+    };
+  }
 });
 
 ipcMain.handle("themes-download", async (_event, payload = {}) => {

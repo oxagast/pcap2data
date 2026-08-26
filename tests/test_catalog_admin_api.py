@@ -136,6 +136,12 @@ def running_server(tmp_path: Path, *, admin_api_key: str = "test-admin-key-do-no
         log_rotate=False,
         paddle_poll_enabled=False,
         paddle_poll_interval=0,
+        smtp_host="",
+        smtp_port=25,
+        smtp_username=None,
+        smtp_password=None,
+        smtp_from="noreply@packetsnitch.test",
+        smtp_use_tls=False,
     )
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     db = _catalog.CatalogDB(db_path)
