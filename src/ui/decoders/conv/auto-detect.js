@@ -33,6 +33,7 @@ const { decodeNbdgmFromBytes } = require("./nbdgm");
 const { decodeSnmpFromBytes } = require("./snmp");
 const { decodeDhcpFromBytes } = require("./dhcp");
 const { decodeDhcpv6FromBytes } = require("./dhcpv6");
+const { decodeIso8583FromBytes } = require("./iso8583");
 
 // Extracts a decoder hint for a packet from its application protocol and
 // transport ports. The result can be passed to autoDetectProtoFromBytes as
@@ -165,6 +166,15 @@ function autoDetectProtoFromBytes(bytes, options) {
     if (trimmedText.startsWith("<") && decodeXmlFromBytes(bytes)) return "xml";
     if (decodeHtmlFromBytes(bytes)) return "html";
     if (decodeBsonFromBytes(bytes)) return "bson";
+    // ISO 8583 binary messages can look like msgpack (binary length
+    // prefixes, non-ASCII bytes), so check ISO 8583 before msgpack.
+    try {
+        if (typeof decodeIso8583FromBytes === "function" && decodeIso8583FromBytes(bytes)) {
+            return "iso8583";
+        }
+    } catch {
+        // resilient — keep going
+    }
     if (decodeMessagePackFromBytes(bytes)) return "msgpack";
     if (decodeProtobufFromBytes(bytes)) return "protobuf";
     if (decodeBerFromBytes(bytes)) return "ber";
@@ -237,6 +247,9 @@ function autoDetectProtoFromBytes(bytes, options) {
         }
         if (typeof decodeDhcpv6FromBytes === "function" && decodeDhcpv6FromBytes(bytes)) {
             return "dhcpv6";
+        }
+        if (typeof decodeIso8583FromBytes === "function" && decodeIso8583FromBytes(bytes)) {
+            return "iso8583";
         }
     } catch {
         // Keep auto-detect resilient; one decoder failure must not abort the whole chain.

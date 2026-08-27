@@ -98,6 +98,7 @@ const SUPPORTED_DECODER_PROTOS = new Set([
     "snmp",
     "dhcp",
     "dhcpv6",
+    "iso8583",
     "jpeg",
     "png",
     "gif",

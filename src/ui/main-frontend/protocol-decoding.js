@@ -31,6 +31,7 @@ const {
     decodeSnmpFromBytes,
     decodeDhcpFromBytes,
     decodeDhcpv6FromBytes,
+    decodeIso8583FromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -99,7 +100,15 @@ function createProtocolDecodingHelpers({
             const tdName = document.createElement("td");
             tdName.textContent = field.name;
             const tdVal = document.createElement("td");
-            tdVal.textContent = field.value;
+            // ISO 8583 field values are often BCD-packed or binary; render
+            // them as hex so the user sees the actual bytes, not garbled
+            // ASCII. Field names like "Field 2 (PAN)" match this pattern.
+            if (/^Field \d+/.test(field.name)) {
+                tdVal.textContent = field.value;
+                tdVal.className = "data-tools-proto-hex";
+            } else {
+                tdVal.textContent = field.value;
+            }
             tr.appendChild(tdName);
             tr.appendChild(tdVal);
             table.appendChild(tr);
@@ -163,6 +172,8 @@ function createProtocolDecodingHelpers({
                 return decodeDhcpFromBytes(bytes);
             case "dhcpv6":
                 return decodeDhcpv6FromBytes(bytes);
+            case "iso8583":
+                return decodeIso8583FromBytes(bytes);
             case "jpeg":
                 return decodeJpegFromBytes(bytes);
             case "png":

@@ -55,6 +55,7 @@ const { decodeNbdgmFromBytes } = require("./nbdgm");
 const { decodeSnmpFromBytes } = require("./snmp");
 const { decodeDhcpFromBytes } = require("./dhcp");
 const { decodeDhcpv6FromBytes } = require("./dhcpv6");
+const { decodeIso8583FromBytes } = require("./iso8583");
 
 const { decodeJpegFromBytes } = require("./jpeg");
 const { decodePngFromBytes } = require("./png");
@@ -164,6 +165,7 @@ module.exports = {
     decodeSnmpFromBytes,
     decodeDhcpFromBytes,
     decodeDhcpv6FromBytes,
+    decodeIso8583FromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
