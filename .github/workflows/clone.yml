@@ -56,7 +56,7 @@ jobs:
       - name: update clone.json
         run: |
           curl \
-            https://raw.githubusercontent.com/MShawon/github-clone-count-badge/master/main.py \
+            https://raw.githubusercontent.com/oxasploits/PacketSnitch/refs/heads/main/.github/workflows/clonecounter.py \
             > main.py
 
           python3 main.py
