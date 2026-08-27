@@ -219,6 +219,7 @@ import decoders.http2 as dec_http2
 import decoders.igmp as dec_igmp
 import decoders.imap as dec_imap
 import decoders.irc as dec_irc
+import decoders.iso8583 as dec_iso8583
 import decoders.kerberos as dec_kerberos
 import decoders.ldap as dec_ldap
 import decoders.mqtt as dec_mqtt
@@ -3540,6 +3541,16 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     smppSection = dec_smpp.decodeSMPP(rawPayload)
                     if smppSection is not None:
                         transportSection["SMPP"] = smppSection
+                # Decode ISO 8583 financial messages on common ports
+                if streamLabelPort in (8583, 5000, 5001, 14401) or srcPort in (
+                    8583,
+                    5000,
+                    5001,
+                    14401,
+                ):
+                    iso8583Section = dec_iso8583.decodeISO8583(rawPayload)
+                    if iso8583Section is not None:
+                        transportSection["ISO8583"] = iso8583Section
                 # Decode Soulseek message envelopes on common TCP ports
                 if streamLabelPort in (2234, 2240, 2242) or srcPort in (2234, 2240, 2242):
                     soulseekSection = dec_soulseek.decodeSoulseek(rawPayload)

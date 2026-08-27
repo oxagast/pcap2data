@@ -1272,6 +1272,7 @@ const decodeNbdgmFromBytes = convDecoders.decodeNbdgmFromBytes;
 const decodeSnmpFromBytes = convDecoders.decodeSnmpFromBytes;
 const decodeDhcpFromBytes = convDecoders.decodeDhcpFromBytes;
 const decodeDhcpv6FromBytes = convDecoders.decodeDhcpv6FromBytes;
+const decodeIso8583FromBytes = convDecoders.decodeIso8583FromBytes;
 
 // Phase 3 of the decoder refactor: ASN.1 helpers + BER/DER/Protobuf/MessagePack/
 // BSON now live under src/ui/decoders/conv/. The local names below keep the
@@ -1492,6 +1493,8 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeDhcpFromBytes(bytes);
     case "dhcpv6":
       return decodeDhcpv6FromBytes(bytes);
+    case "iso8583":
+      return decodeIso8583FromBytes(bytes);
     case "plaintext":
       return decodePlainTextFromBytes(bytes);
     case "jpeg":

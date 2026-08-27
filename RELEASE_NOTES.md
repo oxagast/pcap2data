@@ -1,5 +1,11 @@
 # Release Notes
 
+## Unreleased
+
+### ✨ Features
+
+- **ISO 8583 financial protocol decoder (Conv → Decodes)** — a new ISO 8583 decoder ships in both the backend (`src/backend/decoders/iso8583.py`) and the Conv decoder (`src/ui/decoders/conv/iso8583.js`). It decodes the standard ISO 8583 message structure: MTI (4 ASCII digits or 2 BCD bytes), primary/secondary bitmap (ASCII-hex or binary), and data elements per the ISO 8583:1987/1993 field definitions. Supports LLVAR/LLLVAR length prefixes in both ASCII and binary modes, transparently strips 2- or 4-byte TPDU/message-length framing prefixes common in ISO 8583 over TCP, and rejects false positives (e.g. HTTP text that happens to start with 4 ASCII digits) by validating the BCD MTI against the known MTI table and requiring the first data field to parse. Auto-detect routes matching traffic (ports 8583, 5000, 5001, 14401) to the new decoder, and the Decodes dropdown now offers "ISO 8583 (Financial)". Field values that are BCD-packed or otherwise non-printable render as hex in the conv decoder table via the new `readAsciiOrHex` helper and the `data-tools-proto-hex` CSS class in `renderProtoDecoderOutput`. Two sample captures ship for quick smoke-testing: `samples/pcaps/iso8583_ascii_sample.pcapng` (port 14401, ASCII-hex bitmap) and `samples/pcaps/iso8583_bin_sample.pcapng` (port 14401, binary bitmap). Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and `tests/test_backend_iso8583_decoder.py` (6 tests).
+
 ## v2.6.1629 - 2026-08-20
 
 **Type:** minor

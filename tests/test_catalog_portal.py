@@ -129,6 +129,8 @@ def running_server(tmp_path):
         smtp_password=None,
         smtp_from="noreply@packetsnitch.test",
         smtp_use_tls=False,
+        admin_portal_enabled=True,
+        admin_session_ttl_hours=12,
     )
     cfg.log_dir.mkdir(parents=True, exist_ok=True)
     db = _catalog.CatalogDB(db_path)

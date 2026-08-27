@@ -365,13 +365,13 @@ function createSubnetCalculatorPanel({
             const entropy = scoreResult.entropy || {};
             const ipTop = (ind.ips?.topPublic || []).slice(0, 3).map((p) => p.ip).join(", ");
             const lines = [
-                `Public IPs observed: ${ind.ips?.publicCount ?? 0}${ipTop ? ` (top: ${ipTop})` : ""}`,
+                `Public IPs observed: ${ind.ips?.publicCount ?? 0}`,
                 `Unique domains observed: ${ind.domains?.total ?? 0}`,
                 `URLs observed: ${ind.urls?.total ?? 0}`,
                 `File hashes registered: ${ind.hashes?.total ?? 0}`,
                 `Reputation lookups completed: ${ind.reputationLookups ?? 0}`,
                 `Protocol anomalies: ${ind.anomalies ?? 0}`,
-                `Current Conv input entropy: ${entropy.value ?? "?"} bits/byte (${entropy.label || "Unknown"})`,
+                `Current Conv input entropy: ${entropy.value ?? "?"} (${entropy.label || "Unknown"})`,
             ];
             threatScoreFootprintEl.innerHTML = "";
             for (const line of lines) {
@@ -482,7 +482,7 @@ function createSubnetCalculatorPanel({
                     .concat(grouped.embeddedContent || []);
                 debugLog(
                     "collector result",
-                    `protocolAnomalies=${(grouped.protocolAnomalies||[]).length} portscans=${(grouped.portscans||[]).length} bruteForce=${(grouped.bruteForce||[]).length} baselineOutliers=${(grouped.baselineOutliers||[]).length} embeddedContent=${(grouped.embeddedContent||[]).length} total=${extraAnomalies.length}`,
+                    `protocolAnomalies=${(grouped.protocolAnomalies || []).length} portscans=${(grouped.portscans || []).length} bruteForce=${(grouped.bruteForce || []).length} baselineOutliers=${(grouped.baselineOutliers || []).length} embeddedContent=${(grouped.embeddedContent || []).length} total=${extraAnomalies.length}`,
                 );
                 if (extraAnomalies.length > 0) {
                     debugLog(
@@ -520,7 +520,7 @@ function createSubnetCalculatorPanel({
         if (score) {
             debugLog(
                 "score computed",
-                `score=${score.score} band=${score.band} components=${(score.components||[]).length} statsAnomalies=${(score.statsAnomalies||[]).length} indicators.statsAnomalies=${score.indicators?.statsAnomalies}`,
+                `score=${score.score} band=${score.band} components=${(score.components || []).length} statsAnomalies=${(score.statsAnomalies || []).length} indicators.statsAnomalies=${score.indicators?.statsAnomalies}`,
             );
             const statsAnomComponents = (score.components || []).filter((c) => c.source === "stats-anomalies");
             if (statsAnomComponents.length > 0) {

@@ -342,6 +342,8 @@ def _fake_config(db, *, paddle_api_key: str = "fake_key") -> "_catalog.Config":
         smtp_password=None,
         smtp_from="noreply@packetsnitch.test",
         smtp_use_tls=False,
+        admin_portal_enabled=True,
+        admin_session_ttl_hours=12,
     )
 
 

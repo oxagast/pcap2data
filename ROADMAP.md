@@ -549,6 +549,24 @@ in days, not weeks.
 
 ## Protocol support
 
+### ISO 8583 (Financial)
+
+> **Status:** ✅ Shipped.
+
+ISO 8583 financial protocol decoder added to both the backend
+(`src/backend/decoders/iso8583.py`) and the Conv decoder
+(`src/ui/decoders/conv/iso8583.js`). Decodes MTI, primary/secondary
+bitmap, and standard data elements from ISO 8583 messages over TCP.
+Supports both ASCII-hex and binary bitmap encodings, ASCII and binary
+variable-length field prefixes, and transparently strips 2- or 4-byte
+TPDU/message-length framing prefixes common in ISO 8583 over TCP.
+Auto-detect routes matching traffic (ports 8583, 5000, 5001, 14401)
+to the new decoder. Sample captures
+`samples/pcaps/iso8583_ascii_sample.pcapng` and
+`samples/pcaps/iso8583_bin_sample.pcapng` ship for quick smoke-testing.
+Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
+`tests/test_backend_iso8583_decoder.py` (6 tests).
+
 ### QUIC Support
 
 > **Status:** 📋 Planned.
@@ -585,14 +603,15 @@ in days, not weeks.
 > SMTP, POP3, IMAP, Telnet, IRC, MTP, LDAP, MySQL, PostgreSQL, XMPP,
 > SMB, MQTT, RTSP, TFTP, BGP, NNTP, RADIUS, SNMP, ICMP, DHCP, NTP,
 > Kerberos 5, Soulseek, BitTorrent, SMPP, SIGTRAN, IGMP, LLDP, PPP,
-> PPPoE, Brotli detection, HTTP decompression, DNS, DHCPv6.
+> PPPoE, Brotli detection, HTTP decompression, DNS, DHCPv6, ISO 8583.
 >
 > The Conv **Decodes** subtab also has front-end stream decoders for
 > HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH, POP3, IMAP, SMTP, DNS,
 > SNMP, DHCP, DHCPv6, EPMAP, LLMNR, NBNS, NBDGM, LDAP (upgraded for
 > search/filters/entries + typed attribute tree), SIP, SMPP, Soulseek,
-> BitTorrent, Kerberos (krb5), and generic JSON / XML / YAML /
-> Protobuf / MessagePack / BSON / ASN.1 BER / ASN.1 DER.
+> BitTorrent, Kerberos (krb5), ISO 8583 (financial), and generic
+> JSON / XML / YAML / Protobuf / MessagePack / BSON / ASN.1 BER /
+> ASN.1 DER.
 
 ---
 
