@@ -17,11 +17,13 @@
 
 ---
 
+## What is it?
+
+What would happen if Wireshark, BurpSuite, and Graylog got together and had a super-mutant-orgy-baby.  It's that. Of protocol aware, stream centric, network analysis tools.
+
 ## Why use PacketSnitch?
 
 PacketSnitch transforms raw network traffic into actionable intelligence, enabling security professionals, developers, and researchers to rapidly uncover hidden patterns, threats, and insights from packet captures. Whether you're investigating breaches, analyzing protocols, or building network monitoring tools, PacketSnitch provides the comprehensive analysis capabilities you need to turn data into understanding.
-
-![PacketSnitch Demo](https://packetsnitch.oxasploits.com/assets/images/demo-thumbnail.jpg)
 
 **Analyze. Investigate. Understand.**
 
