@@ -365,13 +365,13 @@ function createSubnetCalculatorPanel({
             const entropy = scoreResult.entropy || {};
             const ipTop = (ind.ips?.topPublic || []).slice(0, 3).map((p) => p.ip).join(", ");
             const lines = [
-                `Public IPs observed: ${ind.ips?.publicCount ?? 0}`,
-                `Unique domains observed: ${ind.domains?.total ?? 0}`,
+                `Public IPs: ${ind.ips?.publicCount ?? 0}`,
+                `Unique domains: ${ind.domains?.total ?? 0}`,
                 `URLs observed: ${ind.urls?.total ?? 0}`,
-                `File hashes registered: ${ind.hashes?.total ?? 0}`,
-                `Reputation lookups completed: ${ind.reputationLookups ?? 0}`,
-                `Protocol anomalies: ${ind.anomalies ?? 0}`,
-                `Current Conv input entropy: ${entropy.value ?? "?"} (${entropy.label || "Unknown"})`,
+                `File hashes: ${ind.hashes?.total ?? 0}`,
+                `Reputation lookups: ${ind.reputationLookups ?? 0}`,
+                `Anomalies: ${ind.anomalies ?? 0}`,
+                `Current entropy: ${entropy.value ?? "?"} (${entropy.label || "Unknown"})`,
             ];
             threatScoreFootprintEl.innerHTML = "";
             for (const line of lines) {
