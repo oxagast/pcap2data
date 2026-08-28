@@ -301,10 +301,10 @@ def test_portal_request_link_mints_token_and_calls_send_email(tmp_path, running_
     assert len(sent) == 1
     sent_kwargs = sent[0]
     assert sent_kwargs["to_email"] == buyer_email
-    # The sign-in URL must reference our redeem endpoint and
-    # include both the token and the installUuid so a click from
-    # the desktop carries the desktop's UUID.
-    assert "/portal/redeem" in sent_kwargs["sign_in_url"]
+# The sign-in URL must reference the manage page (not the API
+        # directly) so the buyer lands on a human-friendly page
+        # that auto-submits the redeem POST via JavaScript.
+        assert "/manage/" in sent_kwargs["sign_in_url"]
     parsed = urllib.parse.urlparse(sent_kwargs["sign_in_url"])
     qs = urllib.parse.parse_qs(parsed.query)
     assert "token" in qs and qs["token"][0]
