@@ -20,7 +20,7 @@ over TCP or HTTP; the backend talks to a separate **catalog server** for
 themes, licenses, and metrics.
 
 | Layer | Where | Role |
-|---|---|---|
+| --- | --- | --- |
 | Main process | [`src/main.js`](src/main.js) | IPC, settings, Ollama/Cloud, plugins, themes, archive extraction, metrics transport |
 | Preload | [`src/preload.js`](src/preload.js) | `contextBridge` — `modelsapi`, `captureapi`, `validkeysapi`, etc. |
 | Renderer | [`src/ui/main-frontend.js`](src/ui/main-frontend.js) (and `src/ui/main-frontend/*`) | UI orchestrator + sub-factories |
@@ -42,7 +42,7 @@ Use the npm scripts (workspace tasks at the top of the editor mirror
 these). Run from the repo root.
 
 | Task | Command | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Install (JS) | `npm install` | |
 | Install (Python deps) | `pip3 install -r src/backend/requirements.txt --break-system-packages` | see [pep668 note](memories/repo/pep668_externally_managed.md) |
 | Build backend | `npm run build:backend` | Produces `src/backend/snitch` (+ `snitch-extract`) via PyInstaller; rebuild after editing `src/backend/**/*.py` |
@@ -121,15 +121,19 @@ ensureModelsLibraryFileExists()                          .getOllamaModels()
                                           <select id="settings-llm-model"> in Settings tab
 ```
 
-`ipcMain.handle('ollama:generate', ...)` (in [`src/main.js`](src/main.js))
-is a separate surface that **consumes** `settings.llm.ollamaModel` and
-calls `Ollama().generate({ model, prompt, options })`. It does **not**
-read from the models catalog — the catalog only feeds the dropdown.
+`ipcMain.handle('llm:generate', ...)` (in [`src/main.js`](src/main.js))
+is a separate surface that **consumes** `settings.llm.provider` and
+dispatches to the active provider's registered handler in
+[`src/llm.js`](src/llm.js) (Ollama for `provider === "ollama"`,
+OpenRouter for `provider === "openrouter"`). It does **not** read from
+the models catalog — the catalog only feeds the dropdown. A backward-
+compat alias `'ollama:generate'` is also registered; new code should
+call the canonical `'llm:generate'` channel.
 
 ### 4.2 Files involved
 
 | Concern | File | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Bundled catalog (seed) | [`config/models.json`](config/models.json) | Single-entry shape: `{ "models": [{ "name", "label" }] }`. Add new defaults here. |
 | Bundled read + normalization | `getBundledOllamaModels` in [`src/main.js`](src/main.js) (~line 5089) | Reads `config/models.json`, runs `normalizeOllamaModelsLibrary` |
 | User-file write | `ensureModelsLibraryFileExists` in [`src/main.js`](src/main.js) (~line 5098) | On first run, seeds `<userData>/config/models.json` from the bundled catalog |
@@ -138,7 +142,7 @@ read from the models catalog — the catalog only feeds the dropdown.
 | Preload bridge | [`src/preload.js`](src/preload.js) (`modelsapi` block, ~line 1589) | Exposes `getOllamaModels` + `invalidateOllamaModelsCache` |
 | Renderer wiring | [`src/ui/main-frontend/themes-catalog.js`](src/ui/main-frontend/themes-catalog.js) (`createThemesCatalogHelpers`, `loadAvailableOllamaModels`, `renderLlmModelOptions`, `normalizeOllamaModelEntry`) | State stored in `state.availableOllamaModels`; dropdown re-renders on each `loadAvailableOllamaModels()` |
 | Settings form | [`src/ui/main-frontend/settings-form.js`](src/ui/main-frontend/settings-form.js) | Reads `settings.llm.ollamaModel` and `settings.apiKeys.ollamaApiKey`; calls `renderLlmModelOptions` |
-| Generate call | `ipcMain.handle('ollama:generate', ...)` (~line 2227) | Uses `settings.llm.ollamaModel`, `maxSummaryTokens`, `ollamaRequestTimeoutSeconds` |
+| Generate call | `ipcMain.handle('llm:generate', ...)` + backward-compat `ipcMain.handle('ollama:generate', ...)` (~line 2313) | Reads `settings.llm.provider` and dispatches via `generateLlm` in [`src/llm.js`](src/llm.js) (Ollama for `provider === "ollama"`, OpenRouter for `provider === "openrouter"`). |
 | Cloud ping | `checkOllamaCloudApi` + `refreshOllamaCloudApiDiagnostics` | Hits `https://ollama.com/api/generate` with `gpt-oss:120b` for reachability |
 | Local list | `fetchLocalOllamaModels` (~line 148) | `new Ollama().list()` — only consulted via the bundled `ollama` package |
 
@@ -187,10 +191,11 @@ that start with `#` are filtered out by `normalizeOllamaModelName`).
 - `ollamaFetch` wraps `undici` with a per-timeout dispatcher cache.
   New fetch paths that need a different timeout should reuse
   `getOllamaFetch(timeoutMs)` instead of re-rolling their own.
-- The `ollama:generate` IPC handler is currently the **only** path
-  that issues a generate call. If you add a streaming variant, model
-  it on the existing handler (try/catch around `setLlmDiagnostics`,
-  `appendActivityLogLine`) so diagnostics stay consistent.
+- The `llm:generate` IPC handler (and its `ollama:generate` alias)
+  is currently the **only** path that issues a generate call. If
+  you add a streaming variant, model it on the existing handler
+  (try/catch around `setLlmDiagnostics`, `appendActivityLogLine`)
+  so diagnostics stay consistent.
 
 ### 4.6 Testing the models subsystem
 
@@ -265,11 +270,11 @@ keep new Python-side tests in `tests/test_backend_*.py`.
 ## 7. Where to look first
 
 | If you're changing… | Start at |
-|---|---|
+| --- | --- |
 | Bundled model list | [`config/models.json`](config/models.json) |
 | Model dropdown UI | [`src/ui/main-frontend/themes-catalog.js`](src/ui/main-frontend/themes-catalog.js) |
 | LLM settings form fields | [`src/ui/main-frontend/settings-form.js`](src/ui/main-frontend/settings-form.js) |
-| IPC + cache + `ollama:generate` | [`src/main.js`](src/main.js) — search `ollamaModelsCache`, `ollama:generate` |
+| IPC + cache + `llm:generate` (alias `ollama:generate`) | [`src/main.js`](src/main.js) — search `ollamaModelsCache`, `llm:generate` |
 | Ollama cloud API key | `settings.apiKeys.ollamaApiKey` + `checkOllamaCloudApi` |
 | LLM-related tests | `tests/**/*.test.js` (none currently); consider `tests/test_ollama_catalog.test.js` |
 | Theme catalog (sibling subsystem) | [`src/ui/main-frontend/themes-catalog.js`](src/ui/main-frontend/themes-catalog.js) — the models helpers live in the same factory |

@@ -105,14 +105,24 @@
           <!--   </form>  -->
           <!-- Dropdown menus -->
           <label for="target_hosts" class="menu-btns left">Target Host</label>
-          <select id="target_hosts" hidden class="menu-btns left"></select>
+          <div id="target_hosts" class="dropdown-container menu-btns left" role="combobox" aria-haspopup="listbox"
+            aria-expanded="false" tabindex="0">
+            <div class="dropdown-selected" id="target_hosts-selected-label">
+              <span class="dropdown-label-text"></span>
+              <span class="dropdown-arrow">&#x25BC;</span>
+            </div>
+            <div class="dropdown-list" id="target_hosts-options" role="listbox"></div>
+          </div>
           <br />
           <input type="button" id="setBookmark" value="Bookmark" class="menu-btns left" />
-          <select id="selectBookmark" class="menu-btns left">
-            <option class="menu-btns left" value="" disabled selected>
-              Select a bookmark
-            </option>
-          </select>
+          <div id="selectBookmark" class="dropdown-container menu-btns left" role="combobox" aria-haspopup="listbox"
+            aria-expanded="false" tabindex="0">
+            <div class="dropdown-selected" id="selectBookmark-selected-label">
+              <span class="dropdown-label-text">Select a bookmark</span>
+              <span class="dropdown-arrow">&#x25BC;</span>
+            </div>
+            <div class="dropdown-list" id="selectBookmark-options" role="listbox"></div>
+          </div>
           <input type="button" id="save-json-btn" value="Save Session" class="menu-btns left" />
           <input type="button" id="export-session-btn" value="Export Session" title="Export session to a file"
             class="menu-btns left" />
@@ -203,13 +213,14 @@
               <div class="data-tools-section">
                 <div class="data-tools-title">Input</div>
                 <label for="data-tools-format">Input format</label>
-                <select id="data-tools-format">
-                  <option value="base64">Base64</option>
-                  <option value="binary">Binary</option>
-                  <option value="hex" selected>Hex</option>
-                  <option value="ascii">ASCII / UTF-8</option>
-                  <option value="decimal">Decimal bytes</option>
-                </select>
+                <div id="data-tools-format" class="dropdown-container" role="combobox" aria-haspopup="listbox"
+                  aria-expanded="false" tabindex="0">
+                  <div class="dropdown-selected" id="data-tools-format-selected-label">
+                    <span class="dropdown-label-text"></span>
+                    <span class="dropdown-arrow">&#x25BC;</span>
+                  </div>
+                  <div class="dropdown-list" id="data-tools-format-options" role="listbox"></div>
+                </div>
                 <div class="data-tools-highlight-wrap">
                   <textarea id="data-tools-input-offsets" class="data-tools-offsets" readonly aria-hidden="true"
                     tabindex="-1"></textarea>
@@ -1417,7 +1428,7 @@ No decrypted TLS/SSL output yet.</pre>
 
             <div class="crypt-section">
               <div class="crypt-section-title">Saved Entries</div>
-              <select id="crypt-keystore-list" size="10"></select>
+              <div id="crypt-keystore-list" class="keystore-list-container"></div>
               <div class="crypt-actions-row">
                 <button id="crypt-load-keystore-entry-btn">
                   Load selected
@@ -1728,11 +1739,14 @@ No keystore entries saved.</pre>
                 </div>
 
                 <label for="settings-general-default-tab">Open after capture load</label>
-                <select id="settings-general-default-tab">
-                  <option value="data">Host Data</option>
-                  <option value="stats">Stats</option>
-                  <option value="list">List</option>
-                </select>
+                <div id="settings-general-default-tab" class="dropdown-container" role="combobox"
+                  aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                  <div class="dropdown-selected" id="settings-general-default-tab-selected-label">
+                    <span class="dropdown-label-text"></span>
+                    <span class="dropdown-arrow">&#x25BC;</span>
+                  </div>
+                  <div class="dropdown-list" id="settings-general-default-tab-options" role="listbox"></div>
+                </div>
                 <div class="settings-help-text">
                   Choose which workspace opens first once a capture finishes loading.
                   Stats gives a high-level overview; List shows every packet in
@@ -1791,21 +1805,39 @@ No keystore entries saved.</pre>
                 </div>
 
                 <label for="settings-llm-provider">LLM provider</label>
-                <select id="settings-llm-provider">
-                  <option value="ollama">Ollama (local or cloud)</option>
-                  <option value="openrouter">OpenRouter (remote models)</option>
-                </select>
+                <div id="settings-llm-provider" class="dropdown-container" role="combobox" aria-haspopup="listbox"
+                  aria-expanded="false" tabindex="0">
+                  <div class="dropdown-selected" id="settings-llm-provider-selected-label">
+                    <span class="dropdown-label-text"></span>
+                    <span class="dropdown-arrow">&#x25BC;</span>
+                  </div>
+                  <div class="dropdown-list" id="settings-llm-provider-options" role="listbox"></div>
+                </div>
                 <div class="settings-help-text">Choose which LLM backend to use for generation.</div>
 
                 <div id="settings-llm-ollama-section">
                   <label for="settings-llm-model">Ollama model</label>
-                  <select id="settings-llm-model"></select>
+                  <div id="settings-llm-model" class="dropdown-container" role="combobox" aria-haspopup="listbox"
+                    aria-expanded="false" tabindex="0">
+                    <div class="dropdown-selected" id="settings-llm-model-selected-label">
+                      <span class="dropdown-label-text"></span>
+                      <span class="dropdown-arrow">&#x25BC;</span>
+                    </div>
+                    <div class="dropdown-list" id="settings-llm-model-options" role="listbox"></div>
+                  </div>
                   <div class="settings-help-text">Includes local and cloud variants for common models.</div>
                 </div>
 
                 <div id="settings-llm-openrouter-section" hidden>
                   <label for="settings-llm-openrouter-model">OpenRouter model</label>
-                  <select id="settings-llm-openrouter-model"></select>
+                  <div id="settings-llm-openrouter-model" class="dropdown-container" role="combobox"
+                    aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                    <div class="dropdown-selected" id="settings-llm-openrouter-model-selected-label">
+                      <span class="dropdown-label-text"></span>
+                      <span class="dropdown-arrow">&#x25BC;</span>
+                    </div>
+                    <div class="dropdown-list" id="settings-llm-openrouter-model-options" role="listbox"></div>
+                  </div>
                   <div class="settings-help-text">Remote models via OpenRouter. Requires an API key configured in the
                     API Keys subtab.</div>
 
@@ -2039,14 +2071,14 @@ No keystore entries saved.</pre>
                 </div>
 
                 <label for="settings-backend-chunk-size">Default backend packet chunk size</label>
-                <select id="settings-backend-chunk-size">
-                  <option value="25">25</option>
-                  <option value="100">100</option>
-                  <option value="250">250</option>
-                  <option value="500">500</option>
-                  <option value="2000" selected>2000</option>
-                  <option value="8000">8000</option>
-                </select>
+                <div id="settings-backend-chunk-size" class="dropdown-container" role="combobox" aria-haspopup="listbox"
+                  aria-expanded="false" tabindex="0">
+                  <div class="dropdown-selected" id="settings-backend-chunk-size-selected-label">
+                    <span class="dropdown-label-text"></span>
+                    <span class="dropdown-arrow">&#x25BC;</span>
+                  </div>
+                  <div class="dropdown-list" id="settings-backend-chunk-size-options" role="listbox"></div>
+                </div>
                 <div class="settings-help-text">Used when backend chunk metadata is unavailable.</div>
 
                 <label for="settings-backend-worker-threads">Backend worker threads</label>
@@ -2195,7 +2227,16 @@ No keystore entries saved.</pre>
                 <div class="settings-section-title">Theme</div>
 
                 <label for="settings-themes-select">Active theme</label>
-                <select id="settings-themes-select"></select>
+                <div id="settings-themes-select" class="themes-dropdown-container" role="combobox"
+                  aria-haspopup="listbox" aria-expanded="false" tabindex="0">
+                  <div class="themes-dropdown-selected" id="settings-themes-selected-label">
+                    <span class="themes-dropdown-label-text"></span>
+                    <span class="themes-dropdown-arrow">&#x25BC;</span>
+                  </div>
+                  <div class="themes-dropdown-list" id="settings-themes-options" role="listbox"
+                    aria-label="Available themes">
+                  </div>
+                </div>
                 <div class="settings-help-text" id="settings-themes-source-note" hidden></div>
                 <div class="settings-help-text" id="settings-themes-directory-hint">
                   Add custom theme JSON files in your themes folder to create your own styles.

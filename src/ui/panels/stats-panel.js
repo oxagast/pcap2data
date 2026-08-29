@@ -4296,6 +4296,7 @@ function createStatsPanel(options) {
     setPacketsForHost,
     getBookmarkCount,
     listCarvableFilesForStats,
+    listDownloadedFilesForStats,
     openCarvedFileInConv,
   } = options;
   let disposeHeatmapResize = null;
@@ -4381,6 +4382,50 @@ function createStatsPanel(options) {
       section,
       loadFiles,
     };
+  }
+
+  function createDownloadedFilesSection() {
+    const section = documentRef.createElement("div");
+    section.className = "stats-section";
+    const heading = documentRef.createElement("div");
+    heading.className = "stats-section-title";
+    heading.textContent = "Downloaded Files";
+    section.appendChild(heading);
+    const refreshBtn = documentRef.createElement("button");
+    refreshBtn.type = "button";
+    refreshBtn.textContent = "Refresh";
+    refreshBtn.className = "stats-carvable-refresh-btn";
+    section.appendChild(refreshBtn);
+    const noteEl = documentRef.createElement("div");
+    noteEl.className = "stats-inline-note";
+    section.appendChild(noteEl);
+    const listEl = documentRef.createElement("div");
+    listEl.className = "stats-tag-list";
+    section.appendChild(listEl);
+    const loadFiles = () => {
+      const items = typeof listDownloadedFilesForStats === "function"
+        ? listDownloadedFilesForStats()
+        : [];
+      listEl.replaceChildren();
+      if (!items.length) {
+        noteEl.textContent = "No files have been downloaded from HTTP/HTTPS objects.";
+        return;
+      }
+      noteEl.textContent = "Click a downloaded file to load it into Conv.";
+      items.forEach((item) => {
+        const tag = documentRef.createElement("span");
+        tag.className = "stats-tag";
+        tag.textContent = String(item?.label || "Unknown downloaded file");
+        tag.title = `Load into Conv (${String(item?.sourceDetail || "downloaded object")})`;
+        tag.dataset.downloadedFileId = String(item?.id || "");
+        tag.addEventListener("click", () => {
+          if (typeof openCarvedFileInConv === "function") openCarvedFileInConv(item);
+        });
+        listEl.appendChild(tag);
+      });
+    };
+    refreshBtn.addEventListener("click", loadFiles);
+    return { section, loadFiles };
   }
 
   async function applyStatsQuery(query) {
@@ -4637,6 +4682,10 @@ function createStatsPanel(options) {
       const carvableFilesSection = createCarvableFilesSection();
       statisticsPanel.appendChild(carvableFilesSection.section);
       void carvableFilesSection.loadFiles();
+
+      const downloadedFilesSection = createDownloadedFilesSection();
+      statisticsPanel.appendChild(downloadedFilesSection.section);
+      downloadedFilesSection.loadFiles();
 
       const credsSec = makeStatsSection({
         documentRef,

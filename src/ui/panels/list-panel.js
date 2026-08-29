@@ -358,6 +358,7 @@ function createListPanel({
   statusUpdate,
   writeLogEntry,
   hostFilterEl,
+  setTargetHost,
   filterInputEl,
   syncFilterHighlight,
   runFilterQuery,
@@ -557,7 +558,9 @@ function createListPanel({
       tr.classList.add("packet-list-selected");
 
       hostFilterEl.value = row.host;
-      document.getElementById("target_hosts").value = row.host;
+      if (typeof setTargetHost === "function") {
+        setTargetHost(row.host);
+      }
       setCurrentIp(row.srcIp);
       setCurrentPacketKey(row.packetKey);
       syncBookmarkDropdown(row.packetKey);

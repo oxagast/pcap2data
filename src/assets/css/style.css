@@ -3,6 +3,62 @@
   --sidebar-width: 300px;
   --dropdown-bg-color: color-mix(in srgb, var(--input-bg-color, #000000) 94%, transparent);
   --dropdown-text-color: var(--input-text-color, #ffffff);
+
+  /* Primary action button (session picker "New Session", "Save" rename
+   * confirm, metrics consent "OK", etc.). These are intentionally
+   * separated from `--color-1` because `--color-1` doubles as the
+   * primary text color in many themes — when it's near-black, painting
+   * a button with it produced a black-on-black button (e.g. Corporate
+   * Blue, brushed, smokeshow). Default to the accent / border color
+   * (`--color-3`) with the body-text color (`--color-5`) for contrast,
+   * which is what the existing `:hover` rules already used. Themes can
+   * override either variable to fine-tune the button look. */
+  --button-primary-bg: var(--color-3);
+  --button-primary-text: var(--color-5);
+
+  /* Conv data-tools sub-block surface (Manual Carve row, Search +
+   * Replace panels). Extracted from `--data-tools-frame-bg` /
+   * `--color-3` so themes can give these blocks a distinct tint
+   * without disturbing the surrounding frame. Defaults preserve the
+   * previous look. */
+  --data-tools-block-bg: var(--data-tools-frame-bg);
+  --data-tools-block-border: var(--color-3);
+
+  /* Checkbox / radio accent color. Maps to the browser's accent-color
+   * property so themes can control the checked-box fill using their
+   * existing color tokens. Default matches the existing range-slider
+   * accent so existing dark themes aren't surprised. */
+  --checkbox-accent: var(--color-3);
+
+  /* Focus ring color for keyboard-navigated elements (plugin rows,
+   * sortable column headers, hovered packet-list rows). Default mirrors
+   * --checkbox-accent so focus rings stay coordinated with the
+   * theme's accent palette. */
+  --focus-ring-color: var(--checkbox-accent);
+}
+
+/* Theme-native checkbox styling — all checkboxes respect the theme's
+ * --checkbox-accent token so they don't flash white/blue on dark themes.
+ * Also applied to <select> so the native option-highlight on hover
+ * respects the theme accent. */
+input[type="checkbox"],
+input[type="range"],
+select {
+  accent-color: var(--checkbox-accent);
+}
+
+/* Global focus ring for buttons — only on keyboard navigation (:focus-visible)
+ * so mouse clicks don't produce rings. Individual button rules that already
+ * set their own outline are preserved; this catches any that don't. */
+button:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+
+/* Global focus ring for inputs — same :focus-visible approach. */
+input:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: 2px;
 }
 
 /* Page background */
@@ -49,6 +105,16 @@ select,
 option {
   background-color: var(--dropdown-bg-color);
   color: var(--dropdown-text-color);
+}
+
+/* Hovered or selected option in native <select> dropdowns.
+ * accent-color alone doesn't control option-hover on Linux GTK;
+ * explicit background-color on :hover/:checked is needed.
+ * !important needed to override GTK user-agent stylesheet. */
+select option:checked,
+select option:hover {
+  background-color: var(--checkbox-accent) !important;
+  color: var(--color-1) !important;
 }
 
 /* Outer container */
@@ -410,6 +476,10 @@ hr {
   width: 100%;
 }
 
+.sidebar select:hover {
+  border-color: var(--checkbox-accent);
+}
+
 /* Main panel */
 .main_panel {
   background-color: color-mix(in srgb, var(--surface-1) var(--panel-bg-opacity), transparent);
@@ -493,7 +563,7 @@ strong {
 .menu-btns:hover,
 .menu-btns:focus {
   background-color: var(--color-2);
-  border-color: black;
+  border-color: var(--focus-ring-color);
   cursor: pointer;
 }
 
@@ -522,7 +592,7 @@ strong {
 .custom-btns:hover,
 .custom-btns:focus {
   background-color: var(--color-2);
-  border-color: dark-gray;
+  border-color: var(--focus-ring-color);
   cursor: pointer;
 }
 
@@ -973,6 +1043,11 @@ strong {
   padding: 6px;
 }
 
+.settings-section select:hover,
+.settings-section select:focus {
+  border-color: var(--checkbox-accent);
+}
+
 .settings-help-text {
   font-size: 12px;
   color: var(--color-6);
@@ -1040,7 +1115,7 @@ strong {
 
 .settings-plugin-row.selected {
   background-color: color-mix(in srgb, var(--color-2) 68%, transparent);
-  outline: 1px solid var(--color-1);
+  outline: 1px solid var(--focus-ring-color);
   outline-offset: -1px;
 }
 
@@ -1171,8 +1246,287 @@ strong {
   min-height: 180px;
 }
 
-#crypt-keystore-list {
+/* Replaces native <select> for keystore entries — rendered as a scrollable
+ * <div> so theme CSS variables control colors on all platforms (native
+ * <option> elements ignore CSS vars on Linux GTK). */
+.keystore-list-container {
   min-height: 120px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--color-3);
+  background-color: var(--input-bg-color);
+}
+
+.keystore-list-item {
+  padding: 5px 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--input-text-color);
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-3) 40%, transparent);
+}
+
+.keystore-list-item:last-child {
+  border-bottom: none;
+}
+
+.keystore-list-item:hover {
+  background-color: color-mix(in srgb, var(--checkbox-accent) 60%, transparent);
+}
+
+.keystore-list-item.keystore-list-selected {
+  background-color: var(--checkbox-accent);
+  color: var(--color-1);
+}
+
+.keystore-list-empty {
+  padding: 5px 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--input-text-color);
+  opacity: 0.6;
+  font-style: italic;
+}
+
+/* ── Themes-settings dropdown ───────────────────────────────────────────────
+ * Replaces native <select id="settings-themes-select"> with a <div>-based
+ * dropdown so the option-hover highlight is fully themeable via CSS vars
+ * (Linux GTK ignores CSS on native <option> elements). */
+
+.themes-dropdown-container {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.themes-dropdown-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border: 1px solid var(--color-3);
+  border-radius: 0;
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 38px;
+  box-sizing: border-box;
+  gap: 8px;
+}
+
+.themes-dropdown-selected:hover {
+  border-color: var(--checkbox-accent);
+}
+
+.themes-dropdown-arrow {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--input-text-color);
+  transition: transform 120ms ease;
+  line-height: 1;
+}
+
+.themes-dropdown-container.themes-dropdown-open .themes-dropdown-arrow {
+  transform: rotate(180deg);
+}
+
+.themes-dropdown-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--color-3);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  z-index: 10000;
+  box-sizing: border-box;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.themes-dropdown-container.themes-dropdown-open .themes-dropdown-list {
+  display: block;
+}
+
+.themes-dropdown-option {
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-3) 40%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.themes-dropdown-option:last-child {
+  border-bottom: none;
+}
+
+.themes-dropdown-option:hover {
+  background-color: color-mix(in srgb, var(--checkbox-accent) 60%, transparent);
+}
+
+.themes-dropdown-option.themes-dropdown-option-selected {
+  background-color: var(--checkbox-accent);
+  color: var(--color-1);
+}
+
+.themes-dropdown-option:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: -2px;
+}
+
+.themes-dropdown-empty {
+  padding: 6px 10px;
+  font-style: italic;
+  opacity: 0.6;
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+/* ── /Themes-settings dropdown ────────────────────────────────────────────── */
+
+/* ── Generic div-dropdown (shared by all converted <select> elements) ─────── */
+.dropdown-container {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dropdown-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border: 1px solid var(--color-3);
+  border-radius: 0;
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 38px;
+  box-sizing: border-box;
+  gap: 8px;
+}
+
+.dropdown-selected:hover {
+  border-color: var(--checkbox-accent);
+}
+
+.dropdown-arrow {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--input-text-color);
+  transition: transform 120ms ease;
+  line-height: 1;
+}
+
+.dropdown-container.dropdown-open .dropdown-arrow {
+  transform: rotate(180deg);
+}
+
+.dropdown-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--color-3);
+  background-color: var(--input-bg-color);
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  z-index: 10000;
+  box-sizing: border-box;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.dropdown-container.dropdown-open .dropdown-list {
+  display: block;
+}
+
+.dropdown-option {
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-3) 40%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.dropdown-option:last-child {
+  border-bottom: none;
+}
+
+.dropdown-option:hover {
+  background-color: color-mix(in srgb, var(--checkbox-accent) 60%, transparent);
+}
+
+.dropdown-option.dropdown-option-selected {
+  background-color: var(--checkbox-accent);
+  color: var(--color-1);
+}
+
+.dropdown-option:focus-visible {
+  outline: 2px solid var(--focus-ring-color);
+  outline-offset: -2px;
+}
+
+.dropdown-empty {
+  padding: 6px 10px;
+  font-style: italic;
+  opacity: 0.6;
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+/* ── /Generic div-dropdown ────────────────────────────────────────────────── */
+
+.keystore-list-item {
+  padding: 5px 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--input-text-color);
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-3) 40%, transparent);
+}
+
+.keystore-list-item:last-child {
+  border-bottom: none;
+}
+
+.keystore-list-item:hover {
+  background-color: color-mix(in srgb, var(--checkbox-accent) 60%, transparent);
+}
+
+.keystore-list-item.keystore-list-selected {
+  background-color: var(--checkbox-accent);
+  color: var(--color-1);
+}
+
+.keystore-list-empty {
+  padding: 5px 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  color: var(--input-text-color);
+  opacity: 0.6;
+  font-style: italic;
 }
 
 #crypt-keystore-label {
@@ -2547,6 +2901,12 @@ strong {
 
 #rightside-conv-insights .data-tools-insights-sidebar {
   margin-top: 0;
+  color: var(--conv-insights-text-color, inherit);
+}
+
+#rightside-conv-insights .data-tools-kv,
+#rightside-conv-insights .data-tools-kv * {
+  color: var(--conv-insights-text-color, inherit);
 }
 
 .data-tools-title {
@@ -2795,8 +3155,8 @@ strong {
 
 .data-tools-manual-carve-row {
   margin-top: 13px;
-  border: 1px solid var(--color-3);
-  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  border: 1px solid var(--data-tools-block-border);
+  background-color: var(--data-tools-block-bg);
   padding: 8px;
 }
 
@@ -3209,8 +3569,8 @@ strong {
 
 .data-tools-find-replace-section {
   margin-top: 26px;
-  border: 1px solid var(--color-3);
-  background-color: color-mix(in srgb, var(--data-tools-frame-bg) 78%, #000 22%);
+  border: 1px solid var(--data-tools-block-border);
+  background-color: var(--data-tools-block-bg);
   padding: 8px;
 }
 
@@ -4348,7 +4708,7 @@ strong {
 }
 
 .packet-list-table thead th.packet-list-sortable-header:focus {
-  outline: 1px solid var(--color-5);
+  outline: 1px solid var(--focus-ring-color);
   outline-offset: -1px;
 }
 
@@ -4389,7 +4749,7 @@ strong {
 }
 
 .packet-list-table tbody tr.packet-list-hovered:not(.packet-list-selected) {
-  outline: 1px solid var(--color-3);
+  outline: 1px solid var(--focus-ring-color);
   outline-offset: -1px;
 }
 
@@ -4421,8 +4781,8 @@ strong {
 .stats-section-title {
   font-size: 16px;
   font-weight: bold;
-  color: var(--header-text-color);
-  background-color: var(--color-2);
+  color: var(--stats-section-title-text-color, var(--header-text-color));
+  background-color: var(--stats-section-title-bg-color, var(--color-2));
   padding: 4px 8px;
   margin-bottom: 6px;
 }
@@ -4540,7 +4900,6 @@ strong {
 
 .stats-heatmap-control input[type="range"] {
   width: 100%;
-  accent-color: var(--color-1);
 }
 
 .stats-heatmap-control select {
@@ -5335,7 +5694,7 @@ strong {
 .griditem:focus {
   background-color: var(--color-3);
   /* Highlight color */
-  border-color: white;
+  border-color: var(--focus-ring-color);
   cursor: pointer;
 }
 
@@ -5746,8 +6105,8 @@ strong {
 }
 
 .session-picker-primary-btn {
-  background-color: var(--color-1);
-  color: black;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   border: none;
   border-radius: 5px;
   padding: 7px 16px;
@@ -5759,7 +6118,10 @@ strong {
 }
 
 .session-picker-primary-btn:hover {
-  background-color: var(--color-3);
+  /* Slight dim of the primary fill on hover — keep the contrast text
+   * the same so the label never disappears. Falls back to `--color-2`
+   * for themes that don't override `--button-primary-bg-hover`. */
+  background-color: var(--button-primary-bg-hover, var(--color-2));
 }
 
 .session-picker-secondary-btn {
@@ -5899,7 +6261,7 @@ strong {
 
 .session-open-btn:hover {
   background-color: var(--color-1);
-  color: black;
+  color: var(--button-primary-text);
 }
 
 .session-rename-btn {
@@ -5909,7 +6271,7 @@ strong {
 
 .session-rename-btn:hover {
   background-color: var(--color-3);
-  color: black;
+  color: var(--button-primary-text);
 }
 
 .session-delete-btn {
@@ -5919,7 +6281,7 @@ strong {
 
 .session-delete-btn:hover {
   background-color: #e06b6b;
-  color: black;
+  color: var(--button-primary-text);
 }
 
 .session-export-btn {
@@ -5929,7 +6291,7 @@ strong {
 
 .session-export-btn:hover {
   background-color: var(--color-6);
-  color: black;
+  color: var(--button-primary-text);
 }
 
 .session-picker-loading,
@@ -6042,14 +6404,14 @@ strong {
 }
 
 #session-name-confirm-btn {
-  background-color: var(--color-1);
-  color: black;
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
   border: none;
   font-weight: bold;
 }
 
 #session-name-confirm-btn:hover {
-  background-color: var(--color-3);
+  background-color: var(--button-primary-bg-hover, var(--color-2));
 }
 
 #session-name-cancel-btn {
@@ -6525,12 +6887,12 @@ strong {
 }
 
 .metrics-consent-btn-primary {
-  background-color: var(--color-1);
-  color: var(--color-4);
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
 }
 
 .metrics-consent-btn-primary:hover {
-  background-color: var(--color-2);
+  background-color: var(--button-primary-bg-hover, var(--color-2));
 }
 
 .metrics-consent-btn-secondary {

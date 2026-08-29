@@ -493,27 +493,43 @@ function createKeystorePanel({
     updateCryptKeystoreWorkspaceState(entry);
   }
 
+  // Tracks the selected keystore list index for the <div> renderer.
+  let cryptKeystoreSelectedIndex = 0;
+
   function renderCryptKeystoreList(listEntries = null) {
     const listEl = document.getElementById("crypt-keystore-list");
     const activeEntries = listEntries || getActiveCryptKeystoreEntries();
     cryptRenderedKeystoreEntries = activeEntries;
+    cryptKeystoreSelectedIndex = 0;
     listEl.replaceChildren();
+
     if (!activeEntries.length) {
-      const option = document.createElement("option");
-      option.textContent = `No entries in ${getActiveKeystoreLabel()}.`;
-      option.disabled = true;
-      listEl.appendChild(option);
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "keystore-list-empty";
+      emptyEl.textContent = `No entries in ${getActiveKeystoreLabel()}.`;
+      listEl.appendChild(emptyEl);
       renderCryptKeystoreDetails(null);
       return;
     }
 
     activeEntries.forEach((entry, index) => {
-      const option = document.createElement("option");
-      option.value = String(index);
-      option.textContent = `[${entry.type}] ${entry.label}`;
-      listEl.appendChild(option);
+      const itemEl = document.createElement("div");
+      itemEl.className = "keystore-list-item";
+      itemEl.dataset.index = String(index);
+      itemEl.textContent = `[${entry.type}] ${entry.label}`;
+      if (index === 0) itemEl.classList.add("keystore-list-selected");
+
+      itemEl.addEventListener("click", () => {
+        listEl.querySelectorAll(".keystore-list-item")
+          .forEach((el) => el.classList.remove("keystore-list-selected"));
+        itemEl.classList.add("keystore-list-selected");
+        cryptKeystoreSelectedIndex = index;
+        renderCryptKeystoreDetails(activeEntries[index]);
+      });
+
+      listEl.appendChild(itemEl);
     });
-    listEl.selectedIndex = 0;
+
     renderCryptKeystoreDetails(activeEntries[0]);
   }
 
@@ -2711,9 +2727,8 @@ function createKeystorePanel({
   }
 
   async function loadSelectedCryptKeystoreEntry() {
-    const listEl = document.getElementById("crypt-keystore-list");
-    const selectedIndex = Number(listEl.value);
     const activeEntries = cryptRenderedKeystoreEntries;
+    const selectedIndex = cryptKeystoreSelectedIndex;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       statusUpdate("Status: Select a keystore entry first");
       return;
@@ -2764,8 +2779,7 @@ function createKeystorePanel({
       statusUpdate("Status: Session keychain entries are auto-managed");
       return;
     }
-    const listEl = document.getElementById("crypt-keystore-list");
-    const selectedIndex = Number(listEl.value);
+    const selectedIndex = cryptKeystoreSelectedIndex;
     if (
       !Number.isFinite(selectedIndex) ||
       !cryptRenderedKeystoreEntries[selectedIndex]
@@ -2817,8 +2831,7 @@ function createKeystorePanel({
       doError("Persistent keychain is locked. Reopen keychain with password.");
       return;
     }
-    const listEl = document.getElementById("crypt-keystore-list");
-    const selectedIndex = Number(listEl.value);
+    const selectedIndex = cryptKeystoreSelectedIndex;
     if (
       !Number.isFinite(selectedIndex) ||
       !cryptRenderedKeystoreEntries[selectedIndex]
@@ -2884,8 +2897,7 @@ function createKeystorePanel({
   // would otherwise need to know about keystore-panel just to switch
   // tabs).
   function getSelectedSessionEntryForHashes() {
-    const listEl = document.getElementById("crypt-keystore-list");
-    const selectedIndex = Number(listEl?.value);
+    const selectedIndex = cryptKeystoreSelectedIndex;
     if (
       !Number.isFinite(selectedIndex) ||
       !cryptRenderedKeystoreEntries[selectedIndex]
@@ -3304,9 +3316,8 @@ function createKeystorePanel({
   }
 
   async function openSelectedKeystoreLinkInBrowser() {
-    const listEl = document.getElementById("crypt-keystore-list");
-    const selectedIndex = Number(listEl.value);
     const activeEntries = cryptRenderedKeystoreEntries;
+    const selectedIndex = cryptKeystoreSelectedIndex;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
       statusUpdate("Status: Select a keystore entry first");
       return;

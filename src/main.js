@@ -2310,12 +2310,19 @@ if (runSquirrelStartupGate({})) {
 
 
 
-ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
+// Provider-agnostic LLM IPC handler. The active provider is read from
+// ``settings.llm.provider`` (``"ollama"`` or ``"openrouter"``) and
+// ``generateLlm`` in ``./llm`` dispatches via its provider registry.
+// Exposed under the canonical ``llm:generate`` channel and aliased
+// to the legacy ``ollama:generate`` channel for backward compatibility
+// with any existing renderer/plugin callers that still use the old name.
+async function handleLlmGenerateRequest(_event, prompt, options) {
+  let settings = null;
   try {
     if (!appSettings) {
       await loadSettingsFromDisk();
     }
-    const settings = getAppSettings();
+    settings = getAppSettings();
     const provider = settings.llm?.provider || "ollama";
 
     const response = await generateLlm(prompt, options);
@@ -2351,7 +2358,7 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
       lastCallAt: new Date().toISOString(),
       lastCallError: error?.message || String(error),
     });
-    const provider = settings.llm?.provider || "ollama";
+    const provider = settings?.llm?.provider || "ollama";
     appendActivityLogLine(
       `[${new Date().toISOString()}] [GUI][Main] ${provider} LLM request failed resultCode=${resultCode} message=${JSON.stringify(error?.message || String(error))}`,
     );
@@ -2371,7 +2378,13 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
 
     throw error;
   }
-});
+}
+
+ipcMain.handle('llm:generate', handleLlmGenerateRequest);
+// Backward-compat alias for callers that still use the legacy channel name.
+// New code should call ``llm:generate`` so the channel name reflects the
+// provider-agnostic gateway.
+ipcMain.handle('ollama:generate', handleLlmGenerateRequest);
 
 ipcMain.handle("file-size", async () => {
   try {
@@ -6871,6 +6884,94 @@ ipcMain.handle("save-payload", async (_event, payloadHex, options = {}) => {
   } catch (err) {
     console.error("Payload export error:", err);
     return { success: false, error: err.message };
+  }
+});
+
+// Replays an HTTP request captured in the current packet context. The
+// renderer deliberately sends the original URI and headers; the response is
+// returned as base64 so it can be registered in the renderer's current-data
+// file store without writing to disk.
+ipcMain.handle("download-http-object", async (_event, request = {}) => {
+  const requestUrl = typeof request?.url === "string" ? request.url.trim() : "";
+  if (!/^https?:\/\//i.test(requestUrl)) {
+    return { success: false, error: "Only absolute HTTP/HTTPS URLs can be downloaded" };
+  }
+  const headers = {};
+  const replayExcludedHeaders = new Set([
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]);
+  if (request?.headers && typeof request.headers === "object") {
+    for (const [name, value] of Object.entries(request.headers)) {
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) continue;
+      const text = String(value ?? "").trim();
+      if (text && !replayExcludedHeaders.has(name.toLowerCase())) {
+        headers[name] = text;
+      }
+    }
+  }
+  // Some captured requests omit a useful user agent or contain a browser UA
+  // that is not appropriate for a replay. Wikimedia and similar hosts may
+  // reject anonymous/default clients, especially after an HTTP→HTTPS
+  // redirect, so always provide the application's descriptive UA.
+  if (!Object.keys(headers).some((name) => name.toLowerCase() === "user-agent")) {
+    headers["User-Agent"] = userAgent;
+  }
+  if (!Object.keys(headers).some((name) => name.toLowerCase() === "accept")) {
+    headers.Accept = "*/*";
+  }
+  const maxBytes = 64 * 1024 * 1024;
+  try {
+    const fetchOptions = {
+      method: "GET",
+      redirect: "follow",
+      headers,
+    };
+    let response;
+    try {
+      response = await fetchWithTimeout(requestUrl, fetchOptions, 120000);
+    } catch (firstError) {
+      // A number of public sites, including Wikipedia, redirect plain HTTP
+      // before serving the object. Retry the equivalent HTTPS URI when the
+      // redirecting HTTP connection itself fails at the transport layer.
+      if (!requestUrl.toLowerCase().startsWith("http://")) throw firstError;
+      const secureUrl = `https://${requestUrl.slice("http://".length)}`;
+      console.warn(`[HTTP object download] retrying HTTPS URL after HTTP failure: ${secureUrl}`);
+      response = await fetchWithTimeout(secureUrl, fetchOptions, 120000);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      return { success: false, error: `Response exceeded ${maxBytes} byte limit` };
+    }
+    return {
+      success: response.ok,
+      status: response.status,
+      error: response.ok ? "" : `HTTP ${response.status} ${response.statusText || ""}`.trim(),
+      contentType: response.headers.get("content-type") || "application/octet-stream",
+      fileName: response.headers.get("content-disposition") || "",
+      responseUrl: response.url || requestUrl,
+      bytesBase64: buffer.toString("base64"),
+    };
+  } catch (error) {
+    const cause = error?.cause;
+    const diagnostics = [
+      error?.name || "Error",
+      error?.message || "HTTP object download failed",
+      cause?.code ? `code=${cause.code}` : "",
+      cause?.message ? `cause=${cause.message}` : "",
+    ].filter(Boolean).join(" ");
+    console.error(`[HTTP object download] ${diagnostics} url=${requestUrl}`);
+    appendActivityLogLine(
+      `[${new Date().toISOString()}] [GUI][Main] HTTP object download failed url=${requestUrl} details=${JSON.stringify(diagnostics)}`,
+    );
+    return { success: false, error: diagnostics };
   }
 });
 
