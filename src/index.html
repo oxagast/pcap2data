@@ -1789,9 +1789,30 @@ No keystore entries saved.</pre>
                   <span id="settings-llm-last-result-status" class="settings-status-pill status-neutral">Last call
                     result: —</span>
                 </div>
-                <label for="settings-llm-model">Ollama model</label>
-                <select id="settings-llm-model"></select>
-                <div class="settings-help-text">Includes local and cloud variants for common models.</div>
+
+                <label for="settings-llm-provider">LLM provider</label>
+                <select id="settings-llm-provider">
+                  <option value="ollama">Ollama (local or cloud)</option>
+                  <option value="openrouter">OpenRouter (remote models)</option>
+                </select>
+                <div class="settings-help-text">Choose which LLM backend to use for generation.</div>
+
+                <div id="settings-llm-ollama-section">
+                  <label for="settings-llm-model">Ollama model</label>
+                  <select id="settings-llm-model"></select>
+                  <div class="settings-help-text">Includes local and cloud variants for common models.</div>
+                </div>
+
+                <div id="settings-llm-openrouter-section" hidden>
+                  <label for="settings-llm-openrouter-model">OpenRouter model</label>
+                  <select id="settings-llm-openrouter-model"></select>
+                  <div class="settings-help-text">Remote models via OpenRouter. Requires an API key configured in the
+                    API Keys subtab.</div>
+
+                  <label for="settings-llm-openrouter-timeout-seconds">OpenRouter request timeout (seconds)</label>
+                  <input id="settings-llm-openrouter-timeout-seconds" type="number" min="1" step="1" />
+                  <div class="settings-help-text">Applies to OpenRouter headers and body reads.</div>
+                </div>
 
                 <label class="settings-checkbox-row" for="settings-llm-active-by-default">
                   <input id="settings-llm-active-by-default" type="checkbox" />
@@ -1812,7 +1833,7 @@ No keystore entries saved.</pre>
                 <label for="settings-llm-max-tokens">Max tokens for stream summary</label>
                 <input id="settings-llm-max-tokens" type="number" min="1" step="1" />
 
-                <label for="settings-llm-timeout-seconds">LLM request timeout (seconds)</label>
+                <label for="settings-llm-timeout-seconds">Ollama request timeout (seconds)</label>
                 <input id="settings-llm-timeout-seconds" type="number" min="1" step="1" />
                 <div class="settings-help-text">Applies to Ollama headers and body reads.</div>
 
@@ -1825,7 +1846,7 @@ No keystore entries saved.</pre>
                 <div class="settings-help-text">After this many new analysis blurbs are appended, the LLM will compact
                   the recent history into a summary at the top of the Analysis panel.</div>
                 <div class="settings-help-text">
-                  <em>Note:</em> The Ollama API key has moved to the
+                  <em>Note:</em> The Ollama and OpenRouter API keys have moved to the
                   <strong>API Keys</strong> subtab.
                 </div>
               </div>
@@ -1852,6 +1873,13 @@ No keystore entries saved.</pre>
                 <input id="settings-llm-api-key" type="password" autocomplete="off" spellcheck="false"
                   placeholder="Leave blank to keep the stored key" />
                 <div class="settings-help-text">Stored locally in the settings file. Leave blank to keep the current
+                  key.</div>
+
+                <label for="settings-llm-openrouter-api-key" style="margin-top: 0.5rem;">OpenRouter API key</label>
+                <input id="settings-llm-openrouter-api-key" type="password" autocomplete="off" spellcheck="false"
+                  placeholder="Leave blank to keep the stored key" />
+                <div class="settings-help-text">Get an API key at <a href="https://openrouter.ai/keys" target="_blank"
+                    rel="noreferrer noopener">openrouter.ai/keys</a>. Leave blank to keep the current
                   key.</div>
               </div>
               <div class="settings-section">

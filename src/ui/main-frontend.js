@@ -1097,6 +1097,7 @@ let keystoreAutoPopulateGeneration = 0;
 let lastLLMSummaryPacketKey = null;
 let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
+let openRouterVersionCheckPassed = false;
 let cachedLlmDiagnostics = null;
 let startupWindowLoaded = false;
 let startupSettingsInitialized = false;
@@ -1310,14 +1311,45 @@ function getAnalysisCompactionThresholdBlubs() {
   return Math.floor(threshold);
 }
 
+// Returns the configured LLM provider id (e.g. "ollama", "openrouter").
+function getLlmProviderId() {
+  const provider = getCurrentSettings()?.llm?.provider;
+  if (typeof provider === "string" && provider.trim()) {
+    return provider.trim().toLowerCase();
+  }
+  return "ollama";
+}
+
+// Returns whether the configured LLM provider's runtime is reachable.
+// Provider-agnostic: each provider tracks its own availability via a
+// separately cached boolean (e.g. ``ollamaVersionCheckPassed`` for
+// Ollama, ``openRouterVersionCheckPassed`` for OpenRouter).
+function isLlmProviderRuntimeReachable() {
+  const provider = getLlmProviderId();
+  if (provider === "openrouter") {
+    return openRouterVersionCheckPassed;
+  }
+  if (provider === "ollama") {
+    return ollamaVersionCheckPassed;
+  }
+  // Unknown provider — fail open so callers can still issue a request
+  // and surface a friendly error from the provider handler itself.
+  return true;
+}
+
 // Returns whether llm runtime enabled.
+// The runtime is considered enabled when:
+//   * The user has "LLM active by default" turned on in settings, AND
+//   * The currently configured provider's runtime is reachable
+//     (Ollama daemon listening, or OpenRouter API key + endpoint OK).
 function isLlmRuntimeEnabled() {
-  return isLlmEnabledInSettings() && ollamaVersionCheckPassed;
+  return isLlmEnabledInSettings() && isLlmProviderRuntimeReachable();
 }
 
 async function refreshOllamaStartupAvailability() {
   if (!window.installapi || typeof window.installapi.getLlmDiagnostics !== "function") {
     ollamaVersionCheckPassed = false;
+    openRouterVersionCheckPassed = false;
     cachedLlmDiagnostics = null;
     return ollamaVersionCheckPassed;
   }
@@ -1327,19 +1359,42 @@ async function refreshOllamaStartupAvailability() {
     ollamaVersionCheckPassed = Boolean(
       diagnostics?.ollamaInstalled && diagnostics?.ollamaServerListening,
     );
+    // OpenRouter is considered reachable when the user has configured an
+    // API key — there is no local daemon to ping. The actual reachability
+    // is verified the first time we issue a request.
+    const settings = getCurrentSettings();
+    openRouterVersionCheckPassed = Boolean(
+      settings?.apiKeys?.openrouterApiKey && settings.apiKeys.openrouterApiKey.trim(),
+    );
     syncLlmDiagnosticsIndicators();
   } catch (error) {
     console.warn("Unable to resolve Ollama startup availability:", error);
     ollamaVersionCheckPassed = false;
+    openRouterVersionCheckPassed = false;
     cachedLlmDiagnostics = null;
     syncLlmDiagnosticsIndicators();
   }
   // Re-render the Session Threat Score card so the LLM "Get Assessment"
-  // button enables/disables to track Ollama availability.
+  // button enables/disables to track LLM availability.
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
     subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
   }
   return ollamaVersionCheckPassed;
+}
+
+// Refreshes OpenRouter availability from the current settings. Cheap
+// to call — does not hit the network unless we later add a real
+// /models ping here.
+function refreshOpenRouterAvailabilityFromSettings() {
+  const settings = getCurrentSettings();
+  openRouterVersionCheckPassed = Boolean(
+    settings?.apiKeys?.openrouterApiKey && settings.apiKeys.openrouterApiKey.trim(),
+  );
+  syncLlmDiagnosticsIndicators();
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
+  return openRouterVersionCheckPassed;
 }
 
 // Returns llm diagnostic element.
@@ -2671,6 +2726,16 @@ function getLlmModelSelectElement() {
   return document.getElementById("settings-llm-model");
 }
 
+// Returns llm provider select element.
+function getLlmProviderSelectElement() {
+  return document.getElementById("settings-llm-provider");
+}
+
+// Returns llm openrouter model select element.
+function getLlmOpenRouterModelSelectElement() {
+  return document.getElementById("settings-llm-openrouter-model");
+}
+
 // Returns configured ollama models.
 function getConfiguredOllamaModels() {
   if (Array.isArray(availableOllamaModels) && availableOllamaModels.length > 0) {
@@ -2746,6 +2811,42 @@ async function loadAvailableOllamaModels() {
   return [...availableOllamaModels];
 }
 
+// Available OpenRouter models cache (maintain separately from Ollama).
+let availableOpenRouterModels = [];
+
+async function loadAvailableOpenRouterModels() {
+  if (!window.modelsapi || typeof window.modelsapi.getOpenRouterModels !== "function") {
+    availableOpenRouterModels = [{
+      value: DEFAULT_SETTINGS.llm.openrouterModel,
+      label: DEFAULT_SETTINGS.llm.openrouterModel,
+    }];
+    renderOpenRouterModelOptions(getCurrentSettings()?.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel);
+    return availableOpenRouterModels;
+  }
+
+  try {
+    const models = await window.modelsapi.getOpenRouterModels();
+    availableOpenRouterModels = Array.isArray(models)
+      ? models
+        .map((entry) => normalizeOllamaModelEntry(entry))
+        .filter(Boolean)
+      : [];
+  } catch (error) {
+    console.warn("Unable to load available OpenRouter models:", error);
+    availableOpenRouterModels = [];
+  }
+
+  if (availableOpenRouterModels.length === 0) {
+    availableOpenRouterModels = [{
+      value: DEFAULT_SETTINGS.llm.openrouterModel,
+      label: DEFAULT_SETTINGS.llm.openrouterModel,
+    }];
+  }
+
+  renderOpenRouterModelOptions(getCurrentSettings()?.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel);
+  return [...availableOpenRouterModels];
+}
+
 // Returns ollama model dropdown options.
 function getOllamaModelDropdownOptions() {
   return getConfiguredOllamaModels().map((modelEntry) => ({
@@ -2784,6 +2885,56 @@ function renderLlmModelOptions(selectedModelValue = "") {
   });
 
   modelSelectEl.value = normalizedSelectedValue;
+}
+
+// Renders OpenRouter model options.
+function renderOpenRouterModelOptions(selectedModelValue = "") {
+  const modelSelectEl = getLlmOpenRouterModelSelectElement();
+  if (!modelSelectEl) return;
+
+  const normalizedSelectedValue =
+    typeof selectedModelValue === "string" && selectedModelValue.trim()
+      ? selectedModelValue.trim()
+      : DEFAULT_SETTINGS.llm.openrouterModel;
+
+  const options = Array.isArray(availableOpenRouterModels) && availableOpenRouterModels.length > 0
+    ? availableOpenRouterModels.map((entry) => ({ ...entry }))
+    : [{ value: DEFAULT_SETTINGS.llm.openrouterModel, label: DEFAULT_SETTINGS.llm.openrouterModel }];
+
+  const hasSelectedValue = options.some(
+    (option) => option.value === normalizedSelectedValue,
+  );
+
+  if (!hasSelectedValue) {
+    options.unshift({
+      value: normalizedSelectedValue,
+      label: `${normalizedSelectedValue} (Custom)`,
+    });
+  }
+
+  modelSelectEl.innerHTML = "";
+  options.forEach((optionDefinition) => {
+    const optionEl = document.createElement("option");
+    optionEl.value = optionDefinition.value;
+    optionEl.textContent = optionDefinition.label;
+    modelSelectEl.appendChild(optionEl);
+  });
+
+  modelSelectEl.value = normalizedSelectedValue;
+}
+
+// Updates visibility of provider-specific sections.
+function updateProviderVisibility(provider) {
+  const ollamaSection = document.getElementById("settings-llm-ollama-section");
+  const openrouterSection = document.getElementById("settings-llm-openrouter-section");
+  const selectedProvider = provider || "ollama";
+
+  if (ollamaSection) {
+    ollamaSection.hidden = selectedProvider !== "ollama";
+  }
+  if (openrouterSection) {
+    openrouterSection.hidden = selectedProvider !== "openrouter";
+  }
 }
 
 // Returns theme by id from list.
@@ -4166,6 +4317,10 @@ function syncSettingsFormFromState() {
   const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
+  const providerEl = document.getElementById("settings-llm-provider");
+  const openrouterModelEl = document.getElementById("settings-llm-openrouter-model");
+  const openrouterApiKeyEl = document.getElementById("settings-llm-openrouter-api-key");
+  const openrouterTimeoutSecondsEl = document.getElementById("settings-llm-openrouter-timeout-seconds");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const backgroundSummaryGenerationEnabledEl = document.getElementById(
     "settings-llm-background-summary-generation-enabled",
@@ -4368,6 +4523,24 @@ function syncSettingsFormFromState() {
   }
   if (modelEl) {
     renderLlmModelOptions(settings.llm.ollamaModel);
+  }
+  if (providerEl) {
+    providerEl.value = settings.llm?.provider || DEFAULT_SETTINGS.llm.provider;
+    updateProviderVisibility(providerEl.value);
+  }
+  if (openrouterModelEl) {
+    renderOpenRouterModelOptions(settings.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel);
+  }
+  if (openrouterApiKeyEl) {
+    openrouterApiKeyEl.value = "";
+    openrouterApiKeyEl.placeholder = settings.apiKeys?.openrouterApiKey
+      ? "Stored key present; leave blank to keep it"
+      : "Leave blank to keep the stored key";
+  }
+  if (openrouterTimeoutSecondsEl) {
+    openrouterTimeoutSecondsEl.value = String(
+      settings.llm?.openrouterRequestTimeoutSeconds || DEFAULT_SETTINGS.llm.openrouterRequestTimeoutSeconds,
+    );
   }
   // New UI sync for LLM preset/weight/autotune — create controls dynamically if missing
   try {
@@ -4612,6 +4785,10 @@ function readSettingsFormState() {
   const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
   const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
+  const providerEl = document.getElementById("settings-llm-provider");
+  const openrouterModelEl = document.getElementById("settings-llm-openrouter-model");
+  const openrouterApiKeyEl = document.getElementById("settings-llm-openrouter-api-key");
+  const openrouterTimeoutSecondsEl = document.getElementById("settings-llm-openrouter-timeout-seconds");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
   const backgroundSummaryGenerationEnabledEl = document.getElementById(
     "settings-llm-background-summary-generation-enabled",
@@ -4648,6 +4825,7 @@ function readSettingsFormState() {
     ? backendHashesComApiKeyEl.value.trim()
     : "";
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
+  const trimmedOpenRouterApiKey = openrouterApiKeyEl ? openrouterApiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   return normalizeSettings({
     general: {
@@ -4744,7 +4922,11 @@ function readSettingsFormState() {
         : DEFAULT_SETTINGS.debug.mapProjectionOffsetY,
     },
     llm: {
+      provider: providerEl ? providerEl.value : (DEFAULT_SETTINGS.llm.provider || "ollama"),
       ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
+      openrouterModel: openrouterModelEl
+        ? openrouterModelEl.value
+        : (currentSettings.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel),
       activeByDefault: activeByDefaultEl
         ? activeByDefaultEl.checked
         : DEFAULT_SETTINGS.llm.activeByDefault,
@@ -4756,6 +4938,9 @@ function readSettingsFormState() {
       ollamaRequestTimeoutSeconds: timeoutSecondsEl
         ? timeoutSecondsEl.value
         : DEFAULT_SETTINGS.llm.ollamaRequestTimeoutSeconds,
+      openrouterRequestTimeoutSeconds: openrouterTimeoutSecondsEl
+        ? openrouterTimeoutSecondsEl.value
+        : (currentSettings.llm?.openrouterRequestTimeoutSeconds || DEFAULT_SETTINGS.llm.openrouterRequestTimeoutSeconds),
       retryCount: retryCountEl ? retryCountEl.value : DEFAULT_SETTINGS.llm.retryCount,
       analysisCompactionThresholdBlubs: analysisCompactionThresholdBlubsEl
         ? analysisCompactionThresholdBlubsEl.value
@@ -4787,6 +4972,8 @@ function readSettingsFormState() {
 
     apiKeys: {
       ollamaApiKey: trimmedApiKey || currentSettings.apiKeys?.ollamaApiKey || "",
+      openrouterApiKey:
+        trimmedOpenRouterApiKey || currentSettings.apiKeys?.openrouterApiKey || "",
       virusTotalApiKey:
         trimmedVirusTotalApiKey || currentSettings.apiKeys?.virusTotalApiKey || "",
       hashesComApiKey:
@@ -5639,6 +5826,11 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
   syncRuntimeLlmToggleFromSettings();
+  // Re-evaluate provider-agnostic LLM availability from the freshly
+  // saved settings. A changed provider, OpenRouter API key, or timeout
+  // must immediately flip the runtime gate so context-menu entries
+  // and the Session Threat Score card stay in sync.
+  refreshOpenRouterAvailabilityFromSettings();
   // Re-render the Session Threat Score card so the LLM "Get Assessment"
   // button tracks the current LLM toggle state.
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
@@ -5665,6 +5857,7 @@ async function loadPersistedSettings() {
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(loadedSettings);
   syncRuntimeLlmToggleFromSettings();
+  refreshOpenRouterAvailabilityFromSettings();
   await applyThemeById(loadedSettings.general.themeId);
   syncSettingsFormFromState();
   return getCurrentSettings();
@@ -6480,41 +6673,55 @@ if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "f
     ollamaVersionCheckPassed = Boolean(
       cachedLlmDiagnostics?.ollamaInstalled && cachedLlmDiagnostics?.ollamaServerListening,
     );
+    const settings = getCurrentSettings();
+    openRouterVersionCheckPassed = Boolean(
+      settings?.apiKeys?.openrouterApiKey && settings.apiKeys.openrouterApiKey.trim(),
+    );
     syncLlmDiagnosticsIndicators();
   });
 }
 
-// Listen for Ollama rate limit (429) or payment required (402) errors from the main process.
-// When this happens, show a dialog and disable LLM context menu entries until Ollama is available again.
-let ollamaRateLimitDialogShown = false;
-if (window.installapi && typeof window.installapi.onOllamaRateLimitOrPaymentRequired === "function") {
-  console.log("[MainFrontend] Registering onOllamaRateLimitOrPaymentRequired listener");
-  window.installapi.onOllamaRateLimitOrPaymentRequired((detail) => {
-    console.log("[MainFrontend] Received ollama-rate-limit-or-payment-required event:", detail);
+// Listen for LLM rate limit (429) or payment required (402) errors from the main process.
+// When this happens, show a dialog and disable LLM context menu entries until the provider is available again.
+let llmRateLimitDialogShown = false;
+if (window.installapi && typeof window.installapi.onLlmRateLimitOrPaymentRequired === "function") {
+  console.log("[MainFrontend] Registering onLlmRateLimitOrPaymentRequired listener");
+  window.installapi.onLlmRateLimitOrPaymentRequired((detail) => {
+    console.log("[MainFrontend] Received llm-rate-limit-or-payment-required event:", detail);
     if (!detail || typeof detail !== "object") {
       return;
     }
     const statusCode = detail.statusCode;
     const message = detail.message || "";
+    const provider = typeof detail.provider === "string" && detail.provider.trim()
+      ? detail.provider.trim()
+      : "LLM";
     const isPaymentRequired = statusCode === 402;
     const isRateLimit = statusCode === 429;
 
-    // Show the dialog only once per session (until Ollama becomes available again)
-    if (!ollamaRateLimitDialogShown) {
-      ollamaRateLimitDialogShown = true;
+    // Show the dialog only once per session (until the provider becomes available again)
+    if (!llmRateLimitDialogShown) {
+      llmRateLimitDialogShown = true;
       const title = isPaymentRequired
-        ? "Ollama Payment Required"
-        : "Ollama Rate Limit Exceeded";
+        ? `${provider} Payment Required`
+        : `${provider} Rate Limit Exceeded`;
       const body = isPaymentRequired
-        ? "Your Ollama cloud account has reached its usage limit. Please check your Ollama cloud subscription or switch to a local Ollama model."
-        : "Ollama API rate limit exceeded. Please wait a moment before making more requests, or check your Ollama cloud plan.";
-      console.log("[MainFrontend] Showing info dialog for Ollama error");
+        ? `Your ${provider} account has reached its usage limit. Please check your subscription or switch to another LLM provider.`
+        : `${provider} API rate limit exceeded. Please wait a moment before making more requests, or check your ${provider} plan.`;
+      console.log("[MainFrontend] Showing info dialog for LLM error");
       showInfoDialog(title, [{ label: "Status", value: `${statusCode} ${isPaymentRequired ? "(Payment Required)" : "(Rate Limit)"}` }, { label: "Details", value: message }]);
     }
 
-    // Disable LLM runtime so context menu entries are hidden
-    console.log("[MainFrontend] Setting ollamaVersionCheckPassed = false");
-    ollamaVersionCheckPassed = false;
+    // Disable the LLM runtime so context menu entries are hidden. The
+    // gate is provider-aware via ``isLlmProviderRuntimeReachable()`` —
+    // for Ollama we mark the local daemon as unavailable; for
+    // OpenRouter we mark the remote endpoint as unavailable.
+    console.log("[MainFrontend] Disabling LLM runtime due to rate-limit/payment event");
+    if (provider === "openrouter") {
+      openRouterVersionCheckPassed = false;
+    } else {
+      ollamaVersionCheckPassed = false;
+    }
     syncLlmDiagnosticsIndicators();
 
     // Re-render the Session Threat Score card so the LLM "Get Assessment" button disables
@@ -6524,19 +6731,23 @@ if (window.installapi && typeof window.installapi.onOllamaRateLimitOrPaymentRequ
   });
 }
 
-// Listen for Ollama diagnostics updates to re-enable LLM when it becomes available again
+// Listen for LLM diagnostics updates to re-enable LLM when the active provider becomes available again
 if (window.installapi && typeof window.installapi.onLlmDiagnosticsUpdated === "function") {
   window.installapi.onLlmDiagnosticsUpdated((diagnostics) => {
     cachedLlmDiagnostics = diagnostics || null;
-    const wasPassed = ollamaVersionCheckPassed;
+    const wasPassed = isLlmProviderRuntimeReachable();
     ollamaVersionCheckPassed = Boolean(
       cachedLlmDiagnostics?.ollamaInstalled && cachedLlmDiagnostics?.ollamaServerListening,
     );
+    const settings = getCurrentSettings();
+    openRouterVersionCheckPassed = Boolean(
+      settings?.apiKeys?.openrouterApiKey && settings.apiKeys.openrouterApiKey.trim(),
+    );
     syncLlmDiagnosticsIndicators();
 
-    // If Ollama became available again, reset the dialog flag so it can show again if needed
-    if (!wasPassed && ollamaVersionCheckPassed) {
-      ollamaRateLimitDialogShown = false;
+    // If the active provider became available again, reset the dialog flag so it can show again if needed
+    if (!wasPassed && isLlmProviderRuntimeReachable()) {
+      llmRateLimitDialogShown = false;
     }
   });
 }
@@ -20214,7 +20425,11 @@ function callLargeLanguageModel(content) {
   if (!isLlmEnabledInSettings()) {
     throw new Error("LLM is disabled in settings");
   }
-  if (!ollamaVersionCheckPassed) {
+  const provider = getLlmProviderId();
+  if (!isLlmProviderRuntimeReachable()) {
+    if (provider === "openrouter") {
+      throw new Error("OpenRouter is unavailable — configure an API key in Settings → API Keys");
+    }
     throw new Error("Ollama is unavailable (startup version check failed)");
   }
   if (!window.llmapi || typeof window.llmapi.generate !== "function") {
@@ -23838,6 +24053,37 @@ document.getElementById("settings-llm-model").addEventListener("change", (event)
   writeLogEntry(`Settings updated ollamaModel=${JSON.stringify(event?.target?.value || "")}`);
 });
 
+document.getElementById("settings-llm-provider").addEventListener("change", (event) => {
+  const newProvider = event?.target?.value || "ollama";
+  updateProviderVisibility(newProvider);
+  writeLogEntry(`Settings updated llmProvider=${newProvider}`);
+  // When switching to OpenRouter, lazily load its model list so the dropdown
+  // is populated if the user hadn't visited the LLM tab yet.
+  if (newProvider === "openrouter" && availableOpenRouterModels.length === 0) {
+    void loadAvailableOpenRouterModels();
+  }
+});
+
+document.getElementById("settings-llm-openrouter-model").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated openrouterModel=${JSON.stringify(event?.target?.value || "")}`);
+});
+
+document.getElementById("settings-llm-openrouter-api-key").addEventListener("change", () => {
+  writeLogEntry("Settings updated openrouterApiKey=updated");
+  if (window.modelsapi && typeof window.modelsapi.invalidateOpenRouterModelsCache === "function") {
+    window.modelsapi.invalidateOpenRouterModelsCache().then(() => loadAvailableOpenRouterModels());
+  } else {
+    void loadAvailableOpenRouterModels();
+  }
+  // Re-evaluate the LLM runtime gate so the OpenRouter API key change
+  // immediately enables/disables LLM features in the UI.
+  refreshOpenRouterAvailabilityFromSettings();
+});
+
+document.getElementById("settings-llm-openrouter-timeout-seconds").addEventListener("change", (event) => {
+  writeLogEntry(`Settings updated openrouterRequestTimeoutSeconds=${event?.target?.value}`);
+});
+
 document.getElementById("settings-llm-api-key").addEventListener("change", () => {
   writeLogEntry("Settings updated ollamaApiKey=updated");
   if (window.modelsapi && typeof window.modelsapi.invalidateOllamaModelsCache === "function") {
@@ -27337,6 +27583,7 @@ if (window.snitchapi && typeof window.snitchapi.onBackendServiceState === "funct
 void loadAvailableThemes()
   .then(() => updateThemeDirectoryHint())
   .then(() => loadAvailableOllamaModels())
+  .then(() => loadAvailableOpenRouterModels())
   .then(() => loadPersistedSettings())
   .then(() => refreshPluginRegistryView())
   .then(() => {

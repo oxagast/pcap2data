@@ -1,8 +1,34 @@
 {
-    "models": [
-        {
-            "name": "minimax-m3:cloud",
-            "label": "Minimax (Cloud)"
-        }
-    ]
+    "ollama": {
+        "models": [
+            {
+                "name": "minimax-m3:cloud",
+                "label": "Minimax (Cloud)"
+            }
+        ]
+    },
+    "openrouter": {
+        "defaultModels": [
+            {
+                "value": "openai/gpt-4o-mini",
+                "label": "GPT-4o Mini (OpenAI)"
+            },
+            {
+                "value": "openai/gpt-4o",
+                "label": "GPT-4o (OpenAI)"
+            },
+            {
+                "value": "anthropic/claude-3.5-sonnet",
+                "label": "Claude 3.5 Sonnet (Anthropic)"
+            },
+            {
+                "value": "google/gemini-pro-1.5",
+                "label": "Gemini Pro 1.5 (Google)"
+            },
+            {
+                "value": "meta-llama/llama-3.1-405b-instruct",
+                "label": "Llama 3.1 405B (Meta)"
+            }
+        ]
+    }
 }
