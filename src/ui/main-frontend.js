@@ -9,6 +9,7 @@ window.__PACKETSNITCH_MAIN_FRONTEND_LOADED__ = true;
 // ============================================================================
 import { bookmarkList } from '../state';
 import "../assets/css/style.css";
+const { makeDropdown } = require("./common-frontend");
 const CryptoJS = require("crypto-js");
 const { marked } = require("marked");
 const { sha3_256, sha3_512 } = require("js-sha3");
@@ -2721,6 +2722,76 @@ function getThemeSelectElement() {
   return document.getElementById("settings-themes-select");
 }
 
+// Tracks selected index for the div-based themes dropdown.
+let selectedThemeDropdownIndex = -1;
+
+// Chunk-size dropdown options (matches values historically in the <select>).
+const CHUNK_SIZE_OPTIONS = [
+  { value: "25", label: "25" },
+  { value: "100", label: "100" },
+  { value: "250", label: "250" },
+  { value: "500", label: "500" },
+  { value: "2000", label: "2000" },
+  { value: "8000", label: "8000" },
+];
+const backendChunkSizeDropdown = makeDropdown("settings-backend-chunk-size", (value) => {
+  writeLogEntry(`Settings updated backendPacketChunkSize=${value}`);
+});
+
+// ── Default-tab dropdown ──────────────────────────────────────────────────────
+const DEFAULT_TAB_OPTIONS = [
+  { value: "data", label: "Host Data" },
+  { value: "stats", label: "Stats" },
+  { value: "list", label: "List" },
+];
+const defaultTabDropdown = makeDropdown("settings-general-default-tab", (value) => {
+  writeLogEntry(`Settings updated defaultTab=${JSON.stringify(value)}`);
+});
+
+// ── LLM provider dropdown ─────────────────────────────────────────────────────
+const LLM_PROVIDER_OPTIONS = [
+  { value: "ollama", label: "Ollama (local or cloud)" },
+  { value: "openrouter", label: "OpenRouter (remote models)" },
+];
+const llmProviderDropdown = makeDropdown("settings-llm-provider", (value) => {
+  const newProvider = value || "ollama";
+  updateProviderVisibility(newProvider);
+  writeLogEntry(`Settings updated llmProvider=${newProvider}`);
+  if (newProvider === "openrouter" && availableOpenRouterModels.length === 0) {
+    void loadAvailableOpenRouterModels();
+  }
+});
+
+// ── LLM model dropdowns (dynamically populated via renderLlmModelOptions / renderOpenRouterModelOptions) ─
+const llmModelDropdown = makeDropdown("settings-llm-model");
+const openRouterModelDropdown = makeDropdown("settings-llm-openrouter-model");
+
+// ── Data-tools format dropdown ────────────────────────────────────────────────
+const DATA_FORMAT_OPTIONS = [
+  { value: "base64", label: "Base64" },
+  { value: "binary", label: "Binary" },
+  { value: "hex", label: "Hex" },
+  { value: "ascii", label: "ASCII / UTF-8" },
+  { value: "decimal", label: "Decimal bytes" },
+];
+const dataFormatDropdown = makeDropdown("data-tools-format", (value) => {
+  dataToolsHistorySelectEl.value = "";
+  if (value === "hex") {
+    normalizeDataToolsHexInputFormatting();
+    return;
+  }
+  updateDataToolsConvertedOutputVisibility();
+  updateDataToolsHexHighlights();
+  updateDataToolsInputEditedState();
+});
+
+const targetHostsDropdown = makeDropdown("target_hosts", (value) => {
+  handleTargetHostChange(value);
+});
+const bookmarkDropdown = makeDropdown("selectBookmark", (value) => {
+  handleBookmarkSelection(value);
+});
+
 // Returns llm model select element.
 function getLlmModelSelectElement() {
   return document.getElementById("settings-llm-model");
@@ -2857,9 +2928,6 @@ function getOllamaModelDropdownOptions() {
 
 // Renders llm model options.
 function renderLlmModelOptions(selectedModelValue = "") {
-  const modelSelectEl = getLlmModelSelectElement();
-  if (!modelSelectEl) return;
-
   const normalizedSelectedValue =
     typeof selectedModelValue === "string" && selectedModelValue.trim()
       ? selectedModelValue.trim()
@@ -2876,22 +2944,11 @@ function renderLlmModelOptions(selectedModelValue = "") {
     });
   }
 
-  modelSelectEl.innerHTML = "";
-  optionDefinitions.forEach((optionDefinition) => {
-    const optionEl = document.createElement("option");
-    optionEl.value = optionDefinition.value;
-    optionEl.textContent = optionDefinition.label;
-    modelSelectEl.appendChild(optionEl);
-  });
-
-  modelSelectEl.value = normalizedSelectedValue;
+  llmModelDropdown.render(optionDefinitions, normalizedSelectedValue);
 }
 
 // Renders OpenRouter model options.
 function renderOpenRouterModelOptions(selectedModelValue = "") {
-  const modelSelectEl = getLlmOpenRouterModelSelectElement();
-  if (!modelSelectEl) return;
-
   const normalizedSelectedValue =
     typeof selectedModelValue === "string" && selectedModelValue.trim()
       ? selectedModelValue.trim()
@@ -2912,15 +2969,7 @@ function renderOpenRouterModelOptions(selectedModelValue = "") {
     });
   }
 
-  modelSelectEl.innerHTML = "";
-  options.forEach((optionDefinition) => {
-    const optionEl = document.createElement("option");
-    optionEl.value = optionDefinition.value;
-    optionEl.textContent = optionDefinition.label;
-    modelSelectEl.appendChild(optionEl);
-  });
-
-  modelSelectEl.value = normalizedSelectedValue;
+  openRouterModelDropdown.render(options, normalizedSelectedValue);
 }
 
 // Updates visibility of provider-specific sections.
@@ -2969,27 +3018,197 @@ function updateSelectedThemeSourceNote(themeId) {
 function renderThemeOptions() {
   const themeSelectEl = getThemeSelectElement();
   if (!themeSelectEl) return;
-  const currentValue = sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID);
+
   const settingsThemeId = sanitizeThemeId(
     getCurrentSettings()?.general?.themeId,
     FALLBACK_THEME_ID,
   );
-  const selectedThemeId = availableThemes.some((theme) => theme.id === settingsThemeId)
-    ? settingsThemeId
-    : currentValue;
+  const listEl = document.getElementById("settings-themes-options");
+  if (!listEl) return;
 
-  themeSelectEl.innerHTML = "";
-  availableThemes.forEach((theme) => {
-    const option = document.createElement("option");
-    option.value = theme.id;
-    option.textContent = `${theme.name}${getThemeSourceSuffix(theme)}`;
-    themeSelectEl.appendChild(option);
+  // Remove old option elements.
+  while (listEl.firstChild) {
+    listEl.removeChild(listEl.firstChild);
+  }
+
+  const themes = Array.from(availableThemes);
+  let selectedIndex = themes.findIndex((t) => t.id === settingsThemeId);
+  if (selectedIndex < 0) selectedIndex = 0;
+  selectedThemeDropdownIndex = selectedIndex;
+
+  if (themes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "themes-dropdown-empty";
+    empty.textContent = "No themes available";
+    listEl.appendChild(empty);
+  } else {
+    themes.forEach((theme, i) => {
+      const item = document.createElement("div");
+      item.className = "themes-dropdown-option";
+      item.setAttribute("role", "option");
+      item.setAttribute("tabindex", "-1");
+      item.dataset.index = String(i);
+      item.textContent = `${theme.name}${getThemeSourceSuffix(theme)}`;
+      if (i === selectedIndex) {
+        item.classList.add("themes-dropdown-option-selected");
+        item.setAttribute("aria-selected", "true");
+      }
+      listEl.appendChild(item);
+    });
+  }
+
+  setThemesDropdownLabel(selectedIndex);
+  updateSelectedThemeSourceNote(themes[selectedIndex]?.id ?? FALLBACK_THEME_ID);
+}
+
+// Sets the selected index and updates the label + aria state.
+function setThemesDropdownSelection(index) {
+  const listEl = document.getElementById("settings-themes-options");
+  const themes = Array.from(availableThemes);
+  if (!listEl || themes.length === 0) return;
+  if (index < 0 || index >= themes.length) return;
+
+  selectedThemeDropdownIndex = index;
+  const selectedId = themes[index].id;
+
+  // Update option aria/classes.
+  const options = listEl.querySelectorAll(".themes-dropdown-option");
+  options.forEach((opt, i) => {
+    const isSelected = i === index;
+    opt.classList.toggle("themes-dropdown-option-selected", isSelected);
+    opt.setAttribute("aria-selected", isSelected ? "true" : "false");
   });
 
-  if (themeSelectEl.options.length > 0) {
-    themeSelectEl.value = selectedThemeId || FALLBACK_THEME_ID;
+  setThemesDropdownLabel(index);
+  updateSelectedThemeSourceNote(selectedId);
+  closeThemesDropdown();
+}
+
+// Opens the themes dropdown list.
+function openThemesDropdown() {
+  const themeSelectEl = getThemeSelectElement();
+  const listEl = document.getElementById("settings-themes-options");
+  if (!themeSelectEl || !listEl) return;
+  themeSelectEl.classList.add("themes-dropdown-open");
+  themeSelectEl.setAttribute("aria-expanded", "true");
+  // Scroll selected option into view.
+  const selected = listEl.querySelector(".themes-dropdown-option-selected");
+  if (selected) selected.scrollIntoView({ block: "nearest" });
+}
+
+// Closes the themes dropdown list.
+function closeThemesDropdown() {
+  const themeSelectEl = getThemeSelectElement();
+  if (!themeSelectEl) return;
+  themeSelectEl.classList.remove("themes-dropdown-open");
+  themeSelectEl.setAttribute("aria-expanded", "false");
+}
+
+// Returns the current selected theme id from the dropdown.
+function getSelectedThemeIdFromDropdown() {
+  const themes = Array.from(availableThemes);
+  if (selectedThemeDropdownIndex >= 0 && selectedThemeDropdownIndex < themes.length) {
+    return themes[selectedThemeDropdownIndex].id;
   }
-  updateSelectedThemeSourceNote(themeSelectEl.value);
+  return FALLBACK_THEME_ID;
+}
+
+// Handles keyboard navigation in the themes dropdown.
+function handleThemesDropdownKeydown(e) {
+  const themes = Array.from(availableThemes);
+  if (themes.length === 0) return;
+
+  const themeSelectEl = getThemeSelectElement();
+  if (!themeSelectEl) return;
+
+  switch (e.key) {
+    case "Enter":
+    case " ":
+      e.preventDefault();
+      if (themeSelectEl.classList.contains("themes-dropdown-open")) {
+        closeThemesDropdown();
+      } else {
+        openThemesDropdown();
+      }
+      break;
+    case "Escape":
+      e.preventDefault();
+      closeThemesDropdown();
+      break;
+    case "ArrowDown":
+      e.preventDefault();
+      if (!themeSelectEl.classList.contains("themes-dropdown-open")) {
+        openThemesDropdown();
+      } else {
+        const next = Math.min(selectedThemeDropdownIndex + 1, themes.length - 1);
+        setThemesDropdownSelection(next);
+      }
+      break;
+    case "ArrowUp":
+      e.preventDefault();
+      if (!themeSelectEl.classList.contains("themes-dropdown-open")) {
+        openThemesDropdown();
+      } else {
+        const prev = Math.max(selectedThemeDropdownIndex - 1, 0);
+        setThemesDropdownSelection(prev);
+      }
+      break;
+    case "Tab":
+      closeThemesDropdown();
+      break;
+    default:
+      break;
+  }
+}
+
+// Sets the visible label inside the themes dropdown selected bar.
+function setThemesDropdownLabel(index) {
+  const themes = Array.from(availableThemes);
+  const labelEl = document.querySelector("#settings-themes-selected-label .themes-dropdown-label-text");
+  if (!labelEl) return;
+  if (themes.length === 0) {
+    labelEl.textContent = "No themes available";
+  } else if (index >= 0 && index < themes.length) {
+    labelEl.textContent = `${themes[index].name}${getThemeSourceSuffix(themes[index])}`;
+  }
+}
+
+// Sets up click and keyboard handlers on the themes dropdown.
+function setupThemesDropdownHandlers() {
+  const themeSelectEl = getThemeSelectElement();
+  if (!themeSelectEl) return;
+
+  // Toggle on click of the selected bar.
+  themeSelectEl.addEventListener("click", (e) => {
+    const target = e.target;
+    // If click is on an option, select it.
+    if (target.classList.contains("themes-dropdown-option")) {
+      const idx = parseInt(target.dataset.index ?? "-1", 10);
+      if (idx >= 0) {
+        setThemesDropdownSelection(idx);
+        void refreshThemesPreviewForSelected();
+      }
+      return;
+    }
+    // Otherwise toggle the list.
+    if (themeSelectEl.classList.contains("themes-dropdown-open")) {
+      closeThemesDropdown();
+    } else {
+      openThemesDropdown();
+    }
+  });
+
+  // Keyboard navigation.
+  themeSelectEl.addEventListener("keydown", (e) => {
+    handleThemesDropdownKeydown(e);
+  });
+
+  // Close when clicking outside.
+  document.addEventListener("click", (e) => {
+    if (!themeSelectEl.contains(e.target)) {
+      closeThemesDropdown();
+    }
+  });
 }
 
 function parseHexColorToRgb(colorValue) {
@@ -3051,7 +3270,11 @@ function applyThemeDropdownColors(theme) {
   const rootStyle = document.documentElement.style;
   const themeVariables = theme && typeof theme === "object" ? theme.variables : null;
   const lightTheme = isThemeLight(themeVariables);
-  const dropdownBackgroundColor = lightTheme ? "#ffffff" : "#000000";
+  // Use --input-bg-color when available so native <option> elements in
+  // dark-themed selects (e.g. keystore list in Meadow Dark) blend with
+  // the theme surface instead of rendering as pure #000000.
+  const inputBg = themeVariables && themeVariables["--input-bg-color"] ? themeVariables["--input-bg-color"] : (lightTheme ? "#ffffff" : "#000000");
+  const dropdownBackgroundColor = lightTheme ? "#ffffff" : inputBg;
   const dropdownTextColor = lightTheme ? "#000000" : "#ffffff";
 
   rootStyle.setProperty("--dropdown-bg-color", dropdownBackgroundColor);
@@ -3544,7 +3767,7 @@ async function fetchThemesPreviewFromUrl(previewUrl) {
 async function refreshThemesPreviewForSelected() {
   const themeSelectEl = getThemeSelectElement();
   if (!themeSelectEl) return;
-  const selectedId = sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID);
+  const selectedId = getSelectedThemeIdFromDropdown();
   const theme = getThemeByIdFromList(selectedId);
   if (!theme) {
     resetThemesPreview();
@@ -4151,12 +4374,7 @@ function bindThemesSubtabEvents() {
       void checkThemesLicense();
     });
   }
-  const selectEl = getThemeSelectElement();
-  if (selectEl) {
-    selectEl.addEventListener("change", () => {
-      void refreshThemesPreviewForSelected();
-    });
-  }
+  setupThemesDropdownHandlers();
   // Manage subscription on packetsnitch.com — opens the public
   // portal in the system browser. The button is hidden until the
   // catalog reports a non-empty ``paddleCustomerId`` (see
@@ -4250,7 +4468,6 @@ function syncSettingsFormFromState() {
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
-  const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
   const backendWorkerThreadsEl = document.getElementById(
     "settings-backend-worker-threads",
   );
@@ -4266,7 +4483,6 @@ function syncSettingsFormFromState() {
   const checkForNewReleasesOnStartupEl = document.getElementById(
     "settings-general-check-for-new-releases-on-startup",
   );
-  const defaultTabEl = document.getElementById("settings-general-default-tab");
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendVirusTotalApiKeyEl = document.getElementById(
@@ -4315,10 +4531,7 @@ function syncSettingsFormFromState() {
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
   const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
-  const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
-  const providerEl = document.getElementById("settings-llm-provider");
-  const openrouterModelEl = document.getElementById("settings-llm-openrouter-model");
   const openrouterApiKeyEl = document.getElementById("settings-llm-openrouter-api-key");
   const openrouterTimeoutSecondsEl = document.getElementById("settings-llm-openrouter-timeout-seconds");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -4355,7 +4568,6 @@ function syncSettingsFormFromState() {
   );
   if (themeSelectEl) {
     renderThemeOptions();
-    themeSelectEl.value = sanitizeThemeId(settings.general.themeId, FALLBACK_THEME_ID);
   }
   if (convJsonIndentEl) {
     convJsonIndentEl.value = String(settings.general.convJsonIndentSpaces);
@@ -4363,9 +4575,7 @@ function syncSettingsFormFromState() {
   if (statusResetSecondsEl) {
     statusResetSecondsEl.value = String(settings.general.statusResetSeconds);
   }
-  if (backendChunkSizeEl) {
-    backendChunkSizeEl.value = String(settings.general.backendPacketChunkSize);
-  }
+  backendChunkSizeDropdown.render(CHUNK_SIZE_OPTIONS, String(settings.general.backendPacketChunkSize));
   if (backendWorkerThreadsEl) {
     backendWorkerThreadsEl.value = String(settings.general.backendWorkerThreads);
   }
@@ -4385,14 +4595,7 @@ function syncSettingsFormFromState() {
       settings?.general?.checkForNewReleasesOnStartup,
     );
   }
-  if (defaultTabEl) {
-    const resolvedDefaultTab = VALID_DEFAULT_TABS.has(
-      settings?.general?.defaultTab,
-    )
-      ? settings.general.defaultTab
-      : DEFAULT_SETTINGS.general.defaultTab;
-    defaultTabEl.value = resolvedDefaultTab;
-  }
+  defaultTabDropdown.render(DEFAULT_TAB_OPTIONS, settings?.general?.defaultTab || DEFAULT_SETTINGS.general.defaultTab);
   // Theme catalog base URL, self-signed-cert allowance, and recache
   // interval are hard-coded — there are no UI controls for them any
   // more. The defensive lookups below tolerate older bundles that may
@@ -4521,16 +4724,10 @@ function syncSettingsFormFromState() {
   if (mapProjectionOffsetYEl) {
     mapProjectionOffsetYEl.value = String(settings.debug.mapProjectionOffsetY);
   }
-  if (modelEl) {
-    renderLlmModelOptions(settings.llm.ollamaModel);
-  }
-  if (providerEl) {
-    providerEl.value = settings.llm?.provider || DEFAULT_SETTINGS.llm.provider;
-    updateProviderVisibility(providerEl.value);
-  }
-  if (openrouterModelEl) {
-    renderOpenRouterModelOptions(settings.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel);
-  }
+  renderLlmModelOptions(settings.llm.ollamaModel);
+  llmProviderDropdown.render(LLM_PROVIDER_OPTIONS, settings.llm?.provider || DEFAULT_SETTINGS.llm.provider);
+  updateProviderVisibility(settings.llm?.provider || DEFAULT_SETTINGS.llm.provider);
+  renderOpenRouterModelOptions(settings.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel);
   if (openrouterApiKeyEl) {
     openrouterApiKeyEl.value = "";
     openrouterApiKeyEl.placeholder = settings.apiKeys?.openrouterApiKey
@@ -4545,7 +4742,7 @@ function syncSettingsFormFromState() {
   // New UI sync for LLM preset/weight/autotune — create controls dynamically if missing
   try {
     // Ensure a container reference — place new controls near the model select if possible
-    const modelWrapper = modelEl ? modelEl.parentNode : null;
+    const modelWrapper = llmModelDropdown.getContainer();
 
     // Preset select
     let presetNode = document.getElementById('settings-llm-preset');
@@ -4559,8 +4756,8 @@ function syncSettingsFormFromState() {
       presetNode.appendChild(optCmd);
       presetNode.appendChild(optVim);
       if (modelWrapper && modelWrapper.parentNode) {
-        // insert after modelEl if modelEl exists, otherwise append to settings panel
-        modelWrapper.insertBefore(presetNode, modelEl.nextSibling);
+        // insert after the model dropdown container
+        modelWrapper.parentNode.insertBefore(presetNode, modelWrapper.nextSibling);
       } else {
         document.body.appendChild(presetNode);
       }
@@ -4721,7 +4918,6 @@ function readSettingsFormState() {
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
-  const backendChunkSizeEl = document.getElementById("settings-backend-chunk-size");
   const backendWorkerThreadsEl = document.getElementById(
     "settings-backend-worker-threads",
   );
@@ -4737,7 +4933,6 @@ function readSettingsFormState() {
   const checkForNewReleasesOnStartupEl = document.getElementById(
     "settings-general-check-for-new-releases-on-startup",
   );
-  const defaultTabEl = document.getElementById("settings-general-default-tab");
   const backendTcpHostEl = document.getElementById("settings-backend-tcp-host");
   const backendTcpPortEl = document.getElementById("settings-backend-tcp-port");
   const backendVirusTotalApiKeyEl = document.getElementById(
@@ -4783,10 +4978,7 @@ function readSettingsFormState() {
   const mapProjectionZoomYEl = document.getElementById("settings-debug-map-projection-zoom-y");
   const mapProjectionOffsetXEl = document.getElementById("settings-debug-map-projection-offset-x");
   const mapProjectionOffsetYEl = document.getElementById("settings-debug-map-projection-offset-y");
-  const modelEl = document.getElementById("settings-llm-model");
   const apiKeyEl = document.getElementById("settings-llm-api-key");
-  const providerEl = document.getElementById("settings-llm-provider");
-  const openrouterModelEl = document.getElementById("settings-llm-openrouter-model");
   const openrouterApiKeyEl = document.getElementById("settings-llm-openrouter-api-key");
   const openrouterTimeoutSecondsEl = document.getElementById("settings-llm-openrouter-timeout-seconds");
   const activeByDefaultEl = document.getElementById("settings-llm-active-by-default");
@@ -4830,7 +5022,7 @@ function readSettingsFormState() {
   return normalizeSettings({
     general: {
       themeId: themeSelectEl
-        ? sanitizeThemeId(themeSelectEl.value, FALLBACK_THEME_ID)
+        ? getSelectedThemeIdFromDropdown()
         : DEFAULT_SETTINGS.general.themeId,
       convJsonIndentSpaces: convJsonIndentEl
         ? convJsonIndentEl.value
@@ -4838,9 +5030,7 @@ function readSettingsFormState() {
       statusResetSeconds: statusResetSecondsEl
         ? statusResetSecondsEl.value
         : DEFAULT_SETTINGS.general.statusResetSeconds,
-      backendPacketChunkSize: backendChunkSizeEl
-        ? backendChunkSizeEl.value
-        : DEFAULT_SETTINGS.general.backendPacketChunkSize,
+      backendPacketChunkSize: backendChunkSizeDropdown.getValue(),
       backendWorkerThreads: backendWorkerThreadsEl
         ? backendWorkerThreadsEl.value
         : DEFAULT_SETTINGS.general.backendWorkerThreads,
@@ -4856,9 +5046,7 @@ function readSettingsFormState() {
       checkForNewReleasesOnStartup: checkForNewReleasesOnStartupEl
         ? checkForNewReleasesOnStartupEl.checked
         : DEFAULT_SETTINGS.general.checkForNewReleasesOnStartup,
-      defaultTab: defaultTabEl
-        ? defaultTabEl.value
-        : DEFAULT_SETTINGS.general.defaultTab,
+      defaultTab: defaultTabDropdown.getValue(),
       // Theme catalog base URL, self-signed-cert allowance, and recache
       // interval are hard-coded — never read from the UI, even if
       // older bundles still expose the inputs.
@@ -4922,11 +5110,9 @@ function readSettingsFormState() {
         : DEFAULT_SETTINGS.debug.mapProjectionOffsetY,
     },
     llm: {
-      provider: providerEl ? providerEl.value : (DEFAULT_SETTINGS.llm.provider || "ollama"),
-      ollamaModel: modelEl ? modelEl.value : DEFAULT_SETTINGS.llm.ollamaModel,
-      openrouterModel: openrouterModelEl
-        ? openrouterModelEl.value
-        : (currentSettings.llm?.openrouterModel || DEFAULT_SETTINGS.llm.openrouterModel),
+      provider: llmProviderDropdown.getValue(),
+      ollamaModel: llmModelDropdown.getValue(),
+      openrouterModel: openRouterModelDropdown.getValue(),
       activeByDefault: activeByDefaultEl
         ? activeByDefaultEl.checked
         : DEFAULT_SETTINGS.llm.activeByDefault,
@@ -6793,6 +6979,7 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
   },
   getBookmarkCount: () => bookmarkList.length,
   listCarvableFilesForStats,
+  listDownloadedFilesForStats,
   openCarvedFileInConv: loadCarvedFileCandidateIntoConvTab,
 });
 
@@ -7943,9 +8130,9 @@ function isLocationFilterQuery(filterQuery) {
 function chooseTargetHostFromPacketMatches(matches) {
   if (!Array.isArray(matches) || matches.length === 0) return "";
 
-  const targetHostsEl = getCachedElement("target_hosts");
   const availableHosts = new Set(
-    Array.from(targetHostsEl.options || [])
+    targetHostsDropdown
+      .getOptions()
       .map((option) => String(option.value || "").trim())
       .filter(Boolean),
   );
@@ -7991,14 +8178,13 @@ function syncTargetHostSelection(selectedHost) {
     typeof selectedHost === "string" ? selectedHost.trim() : "";
   if (!normalizedHost) return false;
 
-  const targetHostsEl = getCachedElement("target_hosts");
-  const hostExists = Array.from(targetHostsEl.options || []).some(
-    (option) => option.value === normalizedHost,
-  );
+  const hostExists = targetHostsDropdown
+    .getOptions()
+    .some((option) => option.value === normalizedHost);
   if (!hostExists) return false;
 
-  if (targetHostsEl.value !== normalizedHost) {
-    targetHostsEl.value = normalizedHost;
+  if (targetHostsDropdown.getValue() !== normalizedHost) {
+    targetHostsDropdown.setValue(normalizedHost);
   }
   if (hostFilterEl.value !== normalizedHost) {
     hostFilterEl.value = normalizedHost;
@@ -11174,26 +11360,20 @@ function normalizeLoadedSessionPayload(parsedPayload) {
 }
 
 async function finalizeLoadedCapture(sessionState) {
-  getCachedElement("target_hosts").hidden = false;
+  const targetHostOptions = [
+    { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
+    { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
+  ];
+  targetHostsDropdown.getContainer()?.removeAttribute("hidden");
   getCachedElement("summary-btn").style.display = "block";
   hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST];
-
-  const targetHostsDropdown = getCachedElement("target_hosts");
-  while (targetHostsDropdown.options.length > 0) {
-    targetHostsDropdown.remove(0);
-  }
-  appendAllHostsOption(targetHostsDropdown);
-  appendBookmarkedOption(targetHostsDropdown);
   bookmarkList.splice(0, bookmarkList.length);
   notesList = [];
   selectedNoteId = null;
   currentPacketToConvJson();
   renderNotesList();
 
-  const selectBookmarkEl = document.getElementById("selectBookmark");
-  while (selectBookmarkEl.options.length > 1) {
-    selectBookmarkEl.remove(1);
-  }
+  bookmarkDropdown.render([], "");
 
   packetStubByKey.clear();
   hydratedPacketCache.clear();
@@ -11206,10 +11386,7 @@ async function finalizeLoadedCapture(sessionState) {
   for (let i = 0; i < hostNames.length; i++) {
     const host = hostNames[i];
     hostsList.push(host);
-    const newhost = document.createElement("option");
-    newhost.textContent = host;
-    newhost.value = host;
-    targetHostsDropdown.appendChild(newhost);
+    targetHostOptions.push({ value: host, label: host });
     const hostPackets = Array.isArray(capturedPackets["host"][host])
       ? capturedPackets["host"][host]
       : [];
@@ -11221,6 +11398,8 @@ async function finalizeLoadedCapture(sessionState) {
       await yieldToRenderer();
     }
   }
+
+  targetHostsDropdown.render(targetHostOptions, DUMMY_ALL_HOST);
 
   if (hostsList.length > 1) {
     writeLogEntry(`Hosts targeted discovered count=${hostsList.length - 1}`);
@@ -11266,13 +11445,10 @@ async function finalizeLoadedCapture(sessionState) {
 
 // Handles rebuild bookmark dropdown.
 function rebuildBookmarkDropdown() {
-  const selectBookmarkEl = document.getElementById("selectBookmark");
-  while (selectBookmarkEl.options.length > 1) {
-    selectBookmarkEl.remove(1);
-  }
-  bookmarkList.forEach((bookmarkKey) => {
-    selectBookmarkEl.appendChild(new Option(bookmarkKey, bookmarkKey));
-  });
+  bookmarkDropdown.render(
+    bookmarkList.map((bookmarkKey) => ({ value: bookmarkKey, label: bookmarkKey })),
+    "",
+  );
 }
 
 // Returns session packet view mode.
@@ -11301,7 +11477,7 @@ function buildSessionStateSnapshot() {
     activePacketCursor: getActivePacketCursor(),
     packetViewMode: getSessionPacketViewMode(),
     selectedHost:
-      document.getElementById("target_hosts")?.value ||
+      targetHostsDropdown.getValue() ||
       hostFilterEl.value ||
       "",
     bookmarkList: [...bookmarkList],
@@ -11835,18 +12011,12 @@ async function restoreSessionState(sessionState) {
       capturedPackets?.["host"]?.[selectedHost]
     )
   ) {
-    const targetHostsEl = document.getElementById("target_hosts");
-    if (targetHostsEl) {
-      targetHostsEl.value = selectedHost;
-    }
+    targetHostsDropdown.setValue(selectedHost);
     hostFilterEl.value = selectedHost;
   } else {
     const fallbackHost = DUMMY_ALL_HOST;
     if (fallbackHost) {
-      const targetHostsEl = document.getElementById("target_hosts");
-      if (targetHostsEl) {
-        targetHostsEl.value = fallbackHost;
-      }
+      targetHostsDropdown.setValue(fallbackHost);
       hostFilterEl.value = fallbackHost;
     }
   }
@@ -12004,8 +12174,7 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
   bumpPacketNavigationCacheVersion();
   jsonCapture = "[lazy-capture-store]";
 
-  const targetHostsDropdown = getCachedElement("target_hosts");
-  const previousHost = targetHostsDropdown?.value || hostFilterEl.value || "";
+  const previousHost = targetHostsDropdown.getValue() || hostFilterEl.value || "";
   const hostMap =
     capturedPackets && typeof capturedPackets["host"] === "object"
       ? capturedPackets["host"]
@@ -12036,17 +12205,14 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
 
   if (hostSetChanged) {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
-    while (targetHostsDropdown.options.length > 0) {
-      targetHostsDropdown.remove(0);
-    }
-    appendAllHostsOption(targetHostsDropdown);
-    appendBookmarkedOption(targetHostsDropdown);
-    nextHosts.forEach((host) => {
-      const optionEl = document.createElement("option");
-      optionEl.textContent = host;
-      optionEl.value = host;
-      targetHostsDropdown.appendChild(optionEl);
-    });
+    targetHostsDropdown.render(
+      [
+        { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
+        { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
+        ...nextHosts.map((host) => ({ value: host, label: host })),
+      ],
+      previousHost,
+    );
   } else {
     hostsList = [DUMMY_ALL_HOST, DUMMY_BOOKMARKED_HOST, ...nextHosts];
   }
@@ -12103,7 +12269,7 @@ async function applyIncrementalCaptureSnapshot(nextCaptureData, options = {}) {
       ? previousHost
       : DUMMY_ALL_HOST;
   if (selectedHost) {
-    targetHostsDropdown.value = selectedHost;
+    targetHostsDropdown.setValue(selectedHost);
     hostFilterEl.value = selectedHost;
     p = getPacketsForSelectedHost(selectedHost);
   }
@@ -12301,8 +12467,7 @@ function buildHostTargetFilterQuery(selectedHost) {
 }
 
 // Update host and apply associated filter when a new host is selected from dropdown
-getCachedElement("target_hosts").addEventListener("change", function () {
-  const selected = getCachedElement("target_hosts").value;
+function handleTargetHostChange(selected) {
   writeLogEntry(`Host target changed host=${selected}`);
   if (hostFilterEl.value !== selected) {
     hostFilterEl.value = selected;
@@ -12311,7 +12476,7 @@ getCachedElement("target_hosts").addEventListener("change", function () {
   filterInputEl.value = hostFilterQuery;
   syncFilterHighlight();
   void runFilterQuery(hostFilterQuery, { trackHistory: false });
-});
+}
 
 // Parses data tools input.
 function parseDataToolsInput(format, rawInput) {
@@ -16045,6 +16210,7 @@ const listPanel = createListPanel({
   statusUpdate,
   writeLogEntry,
   hostFilterEl,
+  setTargetHost: (host) => targetHostsDropdown.setValue(host),
   filterInputEl,
   syncFilterHighlight,
   runFilterQuery,
@@ -16196,6 +16362,7 @@ const convertContextButtons = {
   httpFilePreviewDecompressed: getCachedElement(
     "ctx-http-file-preview-decompressed",
   ),
+  httpDownloadObject: getCachedElement("ctx-http-download-object"),
   fileCarveSmb: getCachedElement("ctx-file-carve-smb"),
   fileCarveNfs: getCachedElement("ctx-file-carve-nfs"),
   fileCarveFtp: getCachedElement("ctx-file-carve-ftp"),
@@ -17027,6 +17194,8 @@ function showConvertContextMenu(
     hasConvHashesToExport ||
     hasConvDecodesToExport;
   const hasHttpBody = Boolean(extractHttpBodyHex(getCurrentRawPayloadHex()));
+  const httpDownloadRequest = getKeystoreHttpDownloadRequest(target) ||
+    getCurrentHttpReplayRequest(activeContextPacket);
   const canCarveSmbStream = canCarveCurrentStreamForProtocol(
     "smb",
     activeContextPacket,
@@ -17120,6 +17289,9 @@ function showConvertContextMenu(
     hasHttpBody && activeContextHttpBodyDecompressionHint
       ? "block"
       : "none";
+  convertContextButtons.httpDownloadObject.style.display = httpDownloadRequest
+    ? "block"
+    : "none";
   convertContextButtons.fileCarveSmb.style.display = canCarveSmbStream
     ? "block"
     : "none";
@@ -20371,6 +20543,59 @@ async function listCarvableFilesForStats() {
 // Shared registry for extracted/decompressed results surfaced in Stats.
 let extractionCarvableRegistry = [];
 
+// Registry for objects downloaded via the "Download object to File Store"
+// context-menu action. They are surfaced as a separate bucket in the Stats
+// panel so users can distinguish carved artefacts from things they fetched
+// out of band.
+let downloadedFilesRegistry = [];
+
+// Returns a shallow copy of the downloaded-files registry for the Stats panel.
+function listDownloadedFilesForStats() {
+  return downloadedFilesRegistry.slice();
+}
+
+// Looks up a downloaded file candidate by its registry id. The handler returns
+// a snapshot (the same shape as the carvable candidate list) so the Stats
+// panel can route clicks through the same Conv-loader pipeline.
+async function getDownloadedFileCandidateById(candidateId) {
+  if (!candidateId) return null;
+  const match = downloadedFilesRegistry.find((entry) => entry?.id === candidateId);
+  if (!match) return null;
+  return {
+    ...match,
+    bytes: match.bytes instanceof Uint8Array ? match.bytes.slice() : null,
+  };
+}
+
+// Adds a downloaded object to the bucket. The bytes are kept as a Uint8Array
+// so the Stats panel can hydrate them into the Conv tab.
+function registerDownloadedFileForStats(fileName, bytes, sourceUri = "") {
+  if (!bytes || !(bytes instanceof Uint8Array) || bytes.length === 0) return null;
+  const safeName = sanitizeCarveFilename(fileName) || "downloaded-object.bin";
+  const id = `download:${safeName}:${bytes.length}:${Date.now()}`;
+  const entry = {
+    id,
+    protocol: "DOWNLOAD",
+    fileName: safeName,
+    bytes,
+    byteLength: bytes.length,
+    label: `DOWNLOAD: ${safeName} (${bytes.length} bytes)`,
+    sourceDetail: sourceUri || "downloaded object",
+  };
+  downloadedFilesRegistry.unshift(entry);
+  downloadedFilesRegistry = downloadedFilesRegistry.slice(0, 50);
+  if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
+    subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
+  }
+  return entry;
+}
+
+// Clears the downloaded-files registry. Used by reset paths so the bucket
+// doesn't outlive the capture.
+function clearDownloadedFilesForStats() {
+  downloadedFilesRegistry = [];
+}
+
 // Looks up a carvable candidate by its id from the cached Stats carvable list.
 async function getCarvableCandidateById(candidateId) {
   if (!candidateId) return null;
@@ -21543,6 +21768,66 @@ function getCurrentHttpData(packet = null) {
   const protocol = getTransportProtocolName(packetInfo);
   const transportData = getTransportDataForPacketInfo(packetInfo, protocol);
   return transportData?.["HTTP"] || null;
+}
+
+function getCurrentHttpReplayRequest(packet = null) {
+  const contextPacket = packet || getCurrentContextPacket();
+  const httpData = getCurrentHttpData(contextPacket);
+  if (!httpData || String(httpData.Type || "").toLowerCase() !== "request") return null;
+  const payloadHex = getCurrentRawPayloadHex(contextPacket).replace(/\s+/g, "");
+  if (!payloadHex) return null;
+  let headerText;
+  try { headerText = hexToAsciiString(payloadHex).split(/\r?\n\r?\n/, 1)[0]; } catch { return null; }
+  const lines = headerText.split(/\r?\n/);
+  const requestLine = lines.shift() || "";
+  const match = requestLine.match(/^[A-Z]+\s+(\S+)\s+HTTP\/\d(?:\.\d)?$/i);
+  if (!match) return null;
+  const headers = {};
+  for (const line of lines) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    const name = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (name && value) headers[name] = value;
+  }
+  let url = match[1];
+  if (!/^https?:\/\//i.test(url)) {
+    const host = headers.Host || headers.host || httpData.Host || httpData.host;
+    if (!host) return null;
+    url = `http://${host}${url.startsWith("/") ? url : `/${url}`}`;
+  }
+  try { new URL(url); } catch { return null; }
+  return { url, headers };
+}
+
+// Returns a download request for a URL entry when the context menu was opened
+// directly on a specific Keystore entry. This deliberately does not consult
+// the current packet: a Keystore URL is its own context.
+function getKeystoreHttpDownloadRequest(target = activeContextTarget) {
+  if (activeMainTab !== MAIN_TAB_KEYSTORE || !target?.closest?.("#keystore_box")) {
+    return null;
+  }
+  const listEl = document.getElementById("crypt-keystore-list");
+  const entries = keystorePanel?.getRenderedCryptKeystoreEntries?.() || [];
+  const targetText = String(target.textContent || target.value || "").trim();
+  const selectedIndex = Number(target?.value ?? listEl?.value ?? listEl?.selectedIndex);
+  const entry = Number.isInteger(selectedIndex) &&
+    (target.tagName === "OPTION" || target.tagName === "SELECT")
+    ? entries[selectedIndex]
+    : entries.find((candidate) => {
+      if (!/^(url|uri)$/i.test(String(candidate?.type || ""))) return false;
+      const value = String(candidate?.content || "").trim();
+      return value && targetText.includes(value);
+    });
+  if (!entry || !/^(url|uri)$/i.test(String(entry.type || ""))) return null;
+  const value = String(entry.content || "").trim();
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return { url: parsed.href, headers: {} };
+  } catch {
+    return null;
+  }
 }
 
 // NOTE: HTTP body-boundary detection helpers moved to src/ui/decoders/conv/http.js.
@@ -23280,6 +23565,83 @@ async function saveHttpBodyFromContextMenuImpl(decompress = false) {
   });
 }
 
+function isPotentiallyExecutableHttpObject(fileName, contentType) {
+  const name = String(fileName || "").toLowerCase();
+  const type = String(contentType || "").toLowerCase();
+  return /\.(exe|msi|dll|com|scr|bat|cmd|ps1|vbs|js|jar|apk|deb|rpm|sh|run|bin|elf)(?:$|[?#])/.test(name)
+    || /application\/(x-msdownload|x-dosexec|x-executable|java-archive|vnd\.android\.package-archive)/.test(type);
+}
+
+function getDownloadedHttpObjectFileName(result, requestUrl) {
+  const dispositionName = extractFilenameFromContentDisposition(result?.fileName || "");
+  if (dispositionName) return dispositionName;
+  const responseUrl = String(result?.responseUrl || requestUrl || "").trim();
+  try {
+    const pathname = new URL(responseUrl).pathname;
+    const basename = pathname.split("/").filter(Boolean).pop() || "";
+    if (basename) {
+      const decoded = decodeURIComponent(basename);
+      if (decoded && decoded !== "." && decoded !== "..") return sanitizeCarveFilename(decoded);
+    }
+  } catch {
+    // Fall through to a MIME-derived generic filename.
+  }
+  const extension = getHttpBodyFilenameExtension(result?.contentType) || "bin";
+  const randomHex = Math.floor(Math.random() * 0x1000000)
+    .toString(16)
+    .padStart(6, "0");
+  return `unknown-${randomHex}.${extension}`;
+}
+
+async function downloadCurrentHttpObjectToFileStore() {
+  const isKeystoreContext = activeMainTab === MAIN_TAB_KEYSTORE &&
+    activeContextTarget?.closest?.("#keystore_box");
+  const request = isKeystoreContext
+    ? getKeystoreHttpDownloadRequest()
+    : getCurrentHttpReplayRequest(activeContextPacket);
+  hideConvertContextMenu();
+  if (!request || !window.saveapi?.downloadHttpObject) {
+    statusUpdate("Status: HTTP object download is unavailable for this packet");
+    return;
+  }
+
+  let result;
+  try {
+    result = await window.saveapi.downloadHttpObject(request);
+  } catch (error) {
+    logErrorEntry("http-object-download-ipc", error);
+    writeLogEntry(`HTTP object download IPC failed uri="${request.url}" details="${error?.message || String(error)}"`);
+    statusUpdate(`Status: HTTP object download failed - ${error?.message || String(error)}`);
+    return;
+  }
+  if (!result?.success || !result.bytesBase64) {
+    logErrorEntry("http-object-download", result?.error || "empty response");
+    writeLogEntry(`HTTP object download failed uri="${request.url}" status=${result?.status ?? "unknown"} details="${result?.error || "empty response"}"`);
+    statusUpdate(`Status: HTTP object download failed - ${result?.error || "unknown error"}`);
+    return;
+  }
+
+  const bytes = base64ToUint8Array(result.bytesBase64);
+  const fileName = isKeystoreContext
+    ? getDownloadedHttpObjectFileName(result, request.url)
+    : (extractFilenameFromContentDisposition(result.fileName || "") ||
+      guessHttpBodyFilenameFromPacket(activeContextPacket, "downloaded-http-object"));
+  if (isPotentiallyExecutableHttpObject(fileName, result.contentType) && !window.confirm(
+    `The downloaded object "${fileName}" is potentially dangerous and may trigger your virus scan. Continue?`,
+  )) {
+    statusUpdate("Status: HTTP object download cancelled");
+    return;
+  }
+
+  const entry = registerDownloadedFileForStats(fileName, bytes, request.url);
+  if (!entry) {
+    statusUpdate("Status: HTTP object download was empty");
+    return;
+  }
+  statusUpdate(`Status: Downloaded ${fileName} into current data (${bytes.length} bytes)`);
+  writeLogEntry(`HTTP object downloaded into current data file="${fileName}" bytes=${bytes.length} uri="${request.url}"`);
+}
+
 // Loads http body into conv tab from context menu.
 function loadHttpBodyIntoConvTabFromContextMenu() {
   void loadHttpBodyIntoConvTabFromContextMenuImpl(false);
@@ -23892,10 +24254,6 @@ document.getElementById("settings-plugins-clear-errors-btn").addEventListener("c
   clearPluginErrors();
 });
 
-document.getElementById("settings-backend-chunk-size").addEventListener("change", (event) => {
-  writeLogEntry(`Settings updated backendPacketChunkSize=${event?.target?.value}`);
-});
-
 document
   .getElementById("settings-backend-worker-threads")
   .addEventListener("change", (event) => {
@@ -23921,14 +24279,6 @@ document
   .addEventListener("change", (event) => {
     writeLogEntry(
       `Settings updated checkForNewReleasesOnStartup=${Boolean(event?.target?.checked)}`,
-    );
-  });
-
-document
-  .getElementById("settings-general-default-tab")
-  ?.addEventListener("change", (event) => {
-    writeLogEntry(
-      `Settings updated defaultTab=${JSON.stringify(event?.target?.value || "")}`,
     );
   });
 
@@ -24047,25 +24397,6 @@ document.getElementById("settings-debug-map-projection-offset-x").addEventListen
 
 document.getElementById("settings-debug-map-projection-offset-y").addEventListener("change", (event) => {
   writeLogEntry(`Settings updated mapProjectionOffsetY=${event?.target?.value}`);
-});
-
-document.getElementById("settings-llm-model").addEventListener("change", (event) => {
-  writeLogEntry(`Settings updated ollamaModel=${JSON.stringify(event?.target?.value || "")}`);
-});
-
-document.getElementById("settings-llm-provider").addEventListener("change", (event) => {
-  const newProvider = event?.target?.value || "ollama";
-  updateProviderVisibility(newProvider);
-  writeLogEntry(`Settings updated llmProvider=${newProvider}`);
-  // When switching to OpenRouter, lazily load its model list so the dropdown
-  // is populated if the user hadn't visited the LLM tab yet.
-  if (newProvider === "openrouter" && availableOpenRouterModels.length === 0) {
-    void loadAvailableOpenRouterModels();
-  }
-});
-
-document.getElementById("settings-llm-openrouter-model").addEventListener("change", (event) => {
-  writeLogEntry(`Settings updated openrouterModel=${JSON.stringify(event?.target?.value || "")}`);
 });
 
 document.getElementById("settings-llm-openrouter-api-key").addEventListener("change", () => {
@@ -24709,15 +25040,11 @@ document.getElementById("data-tools-input").addEventListener("blur", () => {
     normalizeDataToolsHexInputFormatting();
   });
 });
-document.getElementById("data-tools-format").addEventListener("change", () => {
-  dataToolsHistorySelectEl.value = "";
-  if (document.getElementById("data-tools-format")?.value === "hex") {
-    normalizeDataToolsHexInputFormatting();
-    return;
-  }
-  updateDataToolsConvertedOutputVisibility();
-  updateDataToolsHexHighlights();
-  updateDataToolsInputEditedState();
+document.getElementById("data-tools-hex-output").addEventListener("scroll", () => {
+  syncDataToolsHighlightScroll(
+    "data-tools-hex-output",
+    "data-tools-hex-output-highlight",
+  );
 });
 document.getElementById("data-tools-input").addEventListener("scroll", () => {
   syncDataToolsHighlightScroll(
@@ -25430,6 +25757,9 @@ convertContextButtons.httpFilePreviewDecompressed.addEventListener(
     void previewHttpBodyInBrowserFromContextMenuImpl(true);
   },
 );
+convertContextButtons.httpDownloadObject.addEventListener("click", () => {
+  void downloadCurrentHttpObjectToFileStore();
+});
 convertContextButtons.fileCarveSmb.addEventListener("click", () =>
   carveCurrentStreamToFileFromContextMenu("smb"),
 );
@@ -25468,39 +25798,34 @@ convertContextButtons.llmSubnetHostSummary.addEventListener("click", () => {
 });
 
 // Handle bookmark selection from dropdown
-document
-  .getElementById("selectBookmark")
-  .addEventListener("change", function () {
-    const selectedBookmarkKey = document.getElementById("selectBookmark").value;
-    const { host: bookmarkHost, packetIndex: bookmarkPacketIndex } = parsePacketKey(selectedBookmarkKey);
-    if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
-      statusUpdate("Invalid bookmark selection, missing host or packet index");
-      doError("Invalid bookmark selection, missing host or packet index!");
-      return;
-    }
-    index = bookmarkPacketIndex;
-    setActivePacketCursor(index);
-    p = capturedPackets["host"][bookmarkHost];
-    activeBookmark["host"] = bookmarkHost;
-    activeBookmark["Packet"] = index;
-    hostFilterEl.value = bookmarkHost;
-    if (bookmarkHost == undefined || index == undefined) {
-      statusUpdate("Invalid bookmark selection, missing host or packet index");
-      doError("Invalid bookmark selection, missing host or packet index!");
-    } else {
-      document.getElementById("target_hosts").value = bookmarkHost;
-    }
-    void handlePacketNavigation("bookmark", activeBookmark);
-  });
+function handleBookmarkSelection(selectedBookmarkKey) {
+  const { host: bookmarkHost, packetIndex: bookmarkPacketIndex } = parsePacketKey(selectedBookmarkKey);
+  if (!Number.isInteger(bookmarkPacketIndex) || bookmarkPacketIndex < 0) {
+    statusUpdate("Invalid bookmark selection, missing host or packet index");
+    doError("Invalid bookmark selection, missing host or packet index!");
+    return;
+  }
+  index = bookmarkPacketIndex;
+  setActivePacketCursor(index);
+  p = capturedPackets["host"][bookmarkHost];
+  activeBookmark["host"] = bookmarkHost;
+  activeBookmark["Packet"] = index;
+  hostFilterEl.value = bookmarkHost;
+  if (bookmarkHost == undefined || index == undefined) {
+    statusUpdate("Invalid bookmark selection, missing host or packet index");
+    doError("Invalid bookmark selection, missing host or packet index!");
+  } else {
+    targetHostsDropdown.setValue(bookmarkHost);
+  }
+  void handlePacketNavigation("bookmark", activeBookmark);
+}
 
 // Add current packet as a bookmark
 document.getElementById("setBookmark").addEventListener("click", function () {
   if (!bookmarkList.includes(currentPacketKey)) {
     if (currentPacketKey != undefined) {
       bookmarkList.push(currentPacketKey);
-      document
-        .getElementById("selectBookmark")
-        .appendChild(new Option(currentPacketKey, currentPacketKey));
+      rebuildBookmarkDropdown();
       writeLogEntry(`Bookmark added key = ${currentPacketKey}`);
       syncPluginRuntimeData({ includeStats: true });
     }
@@ -25509,11 +25834,7 @@ document.getElementById("setBookmark").addEventListener("click", function () {
 
 // Syncs the bookmark dropdown to reflect whether the given packet key is bookmarked
 function syncBookmarkDropdown(packetKey) {
-  document.getElementById("selectBookmark").value = bookmarkList.includes(
-    packetKey,
-  )
-    ? packetKey
-    : "";
+  bookmarkDropdown.setValue(bookmarkList.includes(packetKey) ? packetKey : "");
 }
 
 // function that returns the total number of packets in the entire capture
@@ -27177,7 +27498,6 @@ function runSnitch(file, options = {}) {
 // incremental-merge code path; this is the small set of fields that
 // the renderer's normal "fresh capture" payload handler wipes.
 function captureSessionBoundStateForRerun() {
-  const targetHostsEl = document.getElementById("target_hosts");
   return {
     currentSessionName:
       typeof currentSessionName === "string" && currentSessionName.trim()
@@ -27186,11 +27506,10 @@ function captureSessionBoundStateForRerun() {
     filterQuery:
       typeof filterInputEl?.value === "string" ? filterInputEl.value : "",
     selectedHost:
-      targetHostsEl && typeof targetHostsEl.value === "string"
-        ? targetHostsEl.value
-        : (typeof hostFilterEl?.value === "string"
-          ? hostFilterEl.value
-          : ""),
+      targetHostsDropdown.getValue() ||
+      (typeof hostFilterEl?.value === "string"
+        ? hostFilterEl.value
+        : ""),
   };
 }
 
@@ -27216,10 +27535,7 @@ function restoreSessionBoundStateFromRerun(snapshot) {
     }
   }
   if (typeof snapshot.selectedHost === "string" && snapshot.selectedHost) {
-    const targetHostsEl = document.getElementById("target_hosts");
-    if (targetHostsEl) {
-      targetHostsEl.value = snapshot.selectedHost;
-    }
+    targetHostsDropdown.setValue(snapshot.selectedHost);
     if (hostFilterEl) {
       hostFilterEl.value = snapshot.selectedHost;
     }

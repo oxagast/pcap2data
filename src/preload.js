@@ -1362,6 +1362,8 @@ contextBridge.exposeInMainWorld('saveapi', {
     ipcRenderer.invoke('save-cookie-jar', cookieJarText),
   saveHttpBody: (bodyHex, contentType) =>
     ipcRenderer.invoke('save-http-body', bodyHex, contentType),
+  downloadHttpObject: (request) =>
+    ipcRenderer.invoke('download-http-object', request),
   saveNotes: (notesText) => ipcRenderer.invoke('save-notes', notesText),
   savePdfReport: (options) => ipcRenderer.invoke('save-pdf-report', options),
 });
@@ -1625,8 +1627,10 @@ contextBridge.exposeInMainWorld('modelsapi', {
 // forward prompts to the configured LLM backend (Ollama or OpenRouter).
 // Keep this tiny — the main process already enforces timeouts, API keys,
 // diagnostics, and logging. The renderer should provide prompts and handle parsing.
+// ``llm:generate`` is the provider-agnostic gateway; the main process
+// dispatches to the active provider based on ``settings.llm.provider``.
 contextBridge.exposeInMainWorld('llmapi', {
-  generate: (prompt, options = {}) => ipcRenderer.invoke('ollama:generate', prompt, options),
+  generate: (prompt, options = {}) => ipcRenderer.invoke('llm:generate', prompt, options),
   getProvider: () => ipcRenderer.invoke('llm:get-provider'),
   getModel: () => ipcRenderer.invoke('llm:get-model'),
 });

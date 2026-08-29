@@ -190,6 +190,7 @@ const convertContextMenuMarkup = `
       <button id="ctx-http-file-preview-decompressed" type="button">Browser preview (decompressed)</button>
     </div>
   </div>
+  <button id="ctx-http-download-object" type="button">Download object to File Store</button>
   <div id="ctx-file-carve-submenu" class="ctx-submenu">
     <button id="ctx-file-carve-branch" class="ctx-branch" type="button">File Carving...</button>
     <div class="ctx-submenu-panel">
