@@ -91,12 +91,16 @@ const DEFAULT_SETTINGS = Object.freeze({
         columnOrder: [],
     },
     llm: {
+        // Provider selection: "ollama" or "openrouter"
+        provider: "ollama",
         ollamaModel: "minimax-m3:cloud",
+        openrouterModel: "openai/gpt-4o-mini",
         activeByDefault: false,
         backgroundSummaryGenerationEnabled: true,
         triggerDelaySeconds: 5,
         maxSummaryTokens: 1024,
         ollamaRequestTimeoutSeconds: 300,
+        openrouterRequestTimeoutSeconds: 300,
         retryCount: 2,
         analysisCompactionThresholdBlubs: 6,
         // New LLM UI controls
@@ -107,6 +111,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     },
     apiKeys: {
         ollamaApiKey: "",
+        openrouterApiKey: "",
         virusTotalApiKey: "",
         hashesComApiKey: "",
     },
@@ -431,10 +436,16 @@ function normalizeSettings(rawSettings = {}) {
             columnOrder: normalizeStringArray(list.columnOrder || listDefaults.columnOrder),
         },
         llm: {
+            // Provider selection: "ollama" or "openrouter"
+            provider: typeof llm.provider === "string" && llm.provider.trim() ? llm.provider.trim() : defaults.provider,
             ollamaModel:
                 typeof llm.ollamaModel === "string" && llm.ollamaModel.trim()
                     ? llm.ollamaModel.trim()
                     : defaults.ollamaModel,
+            openrouterModel:
+                typeof llm.openrouterModel === "string" && llm.openrouterModel.trim()
+                    ? llm.openrouterModel.trim()
+                    : defaults.openrouterModel,
             activeByDefault:
                 typeof llm.activeByDefault === "boolean"
                     ? llm.activeByDefault
@@ -456,6 +467,11 @@ function normalizeSettings(rawSettings = {}) {
             ollamaRequestTimeoutSeconds: toPositiveInteger(
                 llm.ollamaRequestTimeoutSeconds,
                 defaults.ollamaRequestTimeoutSeconds,
+                1,
+            ),
+            openrouterRequestTimeoutSeconds: toPositiveInteger(
+                llm.openrouterRequestTimeoutSeconds,
+                defaults.openrouterRequestTimeoutSeconds,
                 1,
             ),
             retryCount: toPositiveInteger(
@@ -484,6 +500,10 @@ function normalizeSettings(rawSettings = {}) {
                 typeof apiKeys.ollamaApiKey === "string" && apiKeys.ollamaApiKey.trim()
                     ? apiKeys.ollamaApiKey.trim()
                     : apiKeysDefaults.ollamaApiKey,
+            openrouterApiKey:
+                typeof apiKeys.openrouterApiKey === "string" && apiKeys.openrouterApiKey.trim()
+                    ? apiKeys.openrouterApiKey.trim()
+                    : apiKeysDefaults.openrouterApiKey,
             virusTotalApiKey:
                 typeof apiKeys.virusTotalApiKey === "string" && apiKeys.virusTotalApiKey.trim()
                     ? apiKeys.virusTotalApiKey.trim()
@@ -593,6 +613,29 @@ function normalizeDefaultTab(value, fallback) {
     return VALID_DEFAULT_TABS.has(trimmed) ? trimmed : fallback;
 }
 
+// In-process holder for the live settings. The main process assigns to
+// this via ``setAppSettings`` whenever the disk-backed settings change.
+// Modules that need to read the active settings (e.g. ``./llm.js``) call
+// ``getAppSettings()`` which falls back to ``DEFAULT_SETTINGS`` if no
+// live settings have been wired in yet (e.g. when the bundle is loaded
+// in the renderer where live settings aren't applicable).
+let liveAppSettings = null;
+
+function getAppSettings() {
+    if (liveAppSettings) {
+        return liveAppSettings;
+    }
+    return normalizeSettings(DEFAULT_SETTINGS);
+}
+
+function setAppSettings(nextSettings) {
+    if (nextSettings && typeof nextSettings === "object") {
+        liveAppSettings = nextSettings;
+    } else {
+        liveAppSettings = null;
+    }
+}
+
 module.exports = {
     DEFAULT_SETTINGS,
     MAP_PROJECTION_CALIBRATION,
@@ -601,4 +644,6 @@ module.exports = {
     normalizeSettings,
     normalizeEndpointUrl,
     normalizeDefaultTab,
+    getAppSettings,
+    setAppSettings,
 };

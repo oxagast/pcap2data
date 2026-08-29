@@ -22,7 +22,11 @@ const { Agent, fetch: undiciFetch } = require("undici");
 const {
   DEFAULT_SETTINGS,
   normalizeSettings,
+  setAppSettings,
 } = require("./settings");
+const {
+  generate: generateLlm,
+} = require("./llm");
 
 let Ollama = null;
 try {
@@ -104,6 +108,7 @@ const EXTRACTION_SYSTEM_TIMEOUT_MS = 30_000;
 const CONSOLE_INSPECT_DEPTH = 6;
 const CONSOLE_MAX_ARRAY_LENGTH = 50;
 const ollamaDispatcherCache = new Map();
+const openrouterDispatcherCache = new Map();
 const activeNmapScans = new Set();
 
 function getOllamaDispatcher(timeoutMs) {
@@ -123,6 +128,23 @@ function getOllamaDispatcher(timeoutMs) {
   return ollamaDispatcherCache.get(cacheKey);
 }
 
+function getOpenRouterDispatcher(timeoutMs) {
+  const normalizedTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : 5 * 60 * 1000;
+  const cacheKey = String(normalizedTimeoutMs);
+  if (!openrouterDispatcherCache.has(cacheKey)) {
+    openrouterDispatcherCache.set(
+      cacheKey,
+      new Agent({
+        headersTimeout: normalizedTimeoutMs,
+        bodyTimeout: normalizedTimeoutMs,
+      }),
+    );
+  }
+  return openrouterDispatcherCache.get(cacheKey);
+}
+
 function getOllamaFetch(timeoutMs) {
   const dispatcher = getOllamaDispatcher(timeoutMs);
   return (input, init = {}) =>
@@ -131,6 +153,21 @@ function getOllamaFetch(timeoutMs) {
       headers: (() => {
         const headers = new Headers(init.headers || {});
         headers.set("User-Agent", userAgent);
+        return headers;
+      })(),
+      dispatcher,
+    });
+}
+
+function getOpenRouterFetch(timeoutMs) {
+  const dispatcher = getOpenRouterDispatcher(timeoutMs);
+  return (input, init = {}) =>
+    undiciFetch(input, {
+      ...init,
+      headers: (() => {
+        const headers = new Headers(init.headers || {});
+        headers.set("User-Agent", userAgent);
+        headers.set("Content-Type", "application/json");
         return headers;
       })(),
       dispatcher,
@@ -2275,61 +2312,21 @@ if (runSquirrelStartupGate({})) {
 
 ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
   try {
-    if (!isOllamaClientModuleAvailable()) {
-      throw new Error("Ollama client module is unavailable");
-    }
     if (!appSettings) {
       await loadSettingsFromDisk();
     }
     const settings = getAppSettings();
-    const ollamaFetch = getOllamaFetch(
-      Number(settings.llm.ollamaRequestTimeoutSeconds) * 1000,
-    );
-    const ollamaClient = settings.apiKeys.ollamaApiKey
-      ? new Ollama({
-        fetch: ollamaFetch,
-        headers: {
-          Authorization: settings.apiKeys.ollamaApiKey.startsWith("Bearer ")
-            ? settings.apiKeys.ollamaApiKey
-            : `Bearer ${settings.apiKeys.ollamaApiKey}`,
-        },
-      })
-      : new Ollama({ fetch: ollamaFetch });
-    // Per-call options override the user's defaults. The renderer passes
-    // { maxTokens, temperature } for prompts that need a larger response
-    // budget than the user-configured maxSummaryTokens (e.g. the OpenSSH
-    // session-level interpretation, which returns a multi-field JSON).
-    const overrideTokens = Number(options && options.maxTokens);
-    const numPredict = Number.isFinite(overrideTokens) && overrideTokens > 0
-      ? Math.max(settings.llm.maxSummaryTokens, overrideTokens)
-      : settings.llm.maxSummaryTokens;
-    const overrideTemp = Number(options && options.temperature);
-    const temperature = Number.isFinite(overrideTemp) ? overrideTemp : 0.5;
-    // Per-call think override. The renderer can pass ``think: false`` to
-    // disable the model's internal-reasoning channel — Ollama cloud
-    // models like ``minimax-m3:cloud`` use thinking mode by default,
-    // and the entire response budget can be consumed by reasoning with
-    // nothing emitted as ``response``. Disabling thinking is the most
-    // reliable way to get a structured answer back.
-    const overrideThink = options && Object.prototype.hasOwnProperty.call(options, "think")
-      ? options.think
-      : false;
-    const response = await ollamaClient.generate({
-      model: settings.llm.ollamaModel,
-      prompt,
-      think: overrideThink === false ? false : Boolean(overrideThink),
-      options: {
-        temperature,
-        num_predict: numPredict,
-      },
-    });
+    const provider = settings.llm?.provider || "ollama";
+
+    const response = await generateLlm(prompt, options);
+
     setLlmDiagnostics({
       lastCallResultCode: 0,
       lastCallAt: new Date().toISOString(),
       lastCallError: "",
     });
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] Ollama LLM request completed resultCode=0 model=${settings.llm.ollamaModel}`,
+      `[${new Date().toISOString()}] [GUI][Main] ${provider} LLM request completed resultCode=0 model=${provider === "openrouter" ? settings.llm.openrouterModel : settings.llm.ollamaModel}`,
     );
     return response;
   } catch (error) {
@@ -2341,7 +2338,7 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
         : Number.isInteger(error?.code)
           ? error.code
           : 1;
-    console.log("[Main] Ollama error object:", JSON.stringify({
+    console.log("[Main] LLM error object:", JSON.stringify({
       status: error?.status,
       status_code: error?.status_code,
       code: error?.code,
@@ -2354,19 +2351,21 @@ ipcMain.handle('ollama:generate', async (_event, prompt, options) => {
       lastCallAt: new Date().toISOString(),
       lastCallError: error?.message || String(error),
     });
+    const provider = settings.llm?.provider || "ollama";
     appendActivityLogLine(
-      `[${new Date().toISOString()}] [GUI][Main] Ollama LLM request failed resultCode=${resultCode} message=${JSON.stringify(error?.message || String(error))}`,
+      `[${new Date().toISOString()}] [GUI][Main] ${provider} LLM request failed resultCode=${resultCode} message=${JSON.stringify(error?.message || String(error))}`,
     );
-    console.error("Error generating response from Ollama:", error);
+    console.error(`Error generating response from ${provider}:`, error);
 
     // If the error is a 402 (payment required) or 429 (rate limit), notify the renderer
-    // so it can show a dialog and disable LLM context menu entries until Ollama is available again.
+    // so it can show a dialog and disable LLM context menu entries until LLM is available again.
     if (resultCode === 402 || resultCode === 429) {
-      console.log("[Main] Sending ollama-rate-limit-or-payment-required event, resultCode:", resultCode);
+      console.log("[Main] Sending llm-rate-limit-or-payment-required event, resultCode:", resultCode);
       // Use _event.sender.send to target the specific renderer that made the request
-      _event.sender.send("ollama-rate-limit-or-payment-required", {
+      _event.sender.send("llm-rate-limit-or-payment-required", {
         statusCode: resultCode,
         message: error?.message || String(error),
+        provider,
       });
     }
 
@@ -5538,12 +5537,14 @@ async function loadSettingsFromDisk() {
     const rawText = await fs.promises.readFile(settingsFilePath, "utf8");
     const parsedSettings = normalizeSettings(JSON.parse(rawText));
     appSettings = parsedSettings;
+    setAppSettings(parsedSettings);
     return parsedSettings;
   } catch (error) {
     if (error && error.code !== "ENOENT") {
       console.warn("Failed to load PacketSnitch settings, using defaults:", error);
     }
     appSettings = normalizeSettings(DEFAULT_SETTINGS);
+    setAppSettings(appSettings);
     await ensureSettingsFileExists(appSettings);
     return appSettings;
   }
@@ -5552,6 +5553,7 @@ async function loadSettingsFromDisk() {
 async function saveSettingsToDisk(nextSettings) {
   const normalizedSettings = normalizeSettings(nextSettings);
   appSettings = normalizedSettings;
+  setAppSettings(normalizedSettings);
   ollamaModelsCache = null;
   await ensureSettingsFileExists(normalizedSettings);
   return normalizedSettings;
@@ -5687,7 +5689,9 @@ function normalizeOllamaModelsLibrary(rawLibrary) {
     ? rawLibrary
     : Array.isArray(rawLibrary?.models)
       ? rawLibrary.models
-      : [];
+      : Array.isArray(rawLibrary?.ollama?.models)
+        ? rawLibrary.ollama.models
+        : [];
   const seen = new Set();
   const normalized = [];
 
@@ -5696,6 +5700,29 @@ function normalizeOllamaModelsLibrary(rawLibrary) {
     if (!normalizedEntry || seen.has(normalizedEntry.value)) continue;
     seen.add(normalizedEntry.value);
     normalized.push(normalizedEntry);
+  }
+
+  return normalized;
+}
+
+function normalizeOpenRouterModelsLibrary(rawLibrary) {
+  const entries = Array.isArray(rawLibrary)
+    ? rawLibrary
+    : Array.isArray(rawLibrary?.openrouter?.defaultModels)
+      ? rawLibrary.openrouter.defaultModels
+      : [];
+  const seen = new Set();
+  const normalized = [];
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const value = typeof entry.value === "string" && entry.value.trim() ? entry.value.trim() : null;
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    normalized.push({
+      value,
+      label: typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : value,
+    });
   }
 
   return normalized;
@@ -5717,18 +5744,43 @@ async function getBundledOllamaModels() {
   return [];
 }
 
+async function getBundledOpenRouterModels() {
+  const bundledModelsPath = getBundledModelsLibraryFilePath();
+  try {
+    const rawText = await fs.promises.readFile(bundledModelsPath, "utf8");
+    const parsed = JSON.parse(rawText);
+    const models = normalizeOpenRouterModelsLibrary(parsed);
+    if (models.length > 0) {
+      return models;
+    }
+  } catch (error) {
+    console.warn("Unable to load bundled OpenRouter models library from config/models.json:", error);
+  }
+
+  return [];
+}
+
 async function ensureModelsLibraryFileExists() {
   const filePath = getModelsLibraryFilePath();
   try {
     await fs.promises.access(filePath, fs.constants.F_OK);
     return filePath;
   } catch {
-    const defaultModels = await getBundledOllamaModels();
+    const defaultOllamaModels = await getBundledOllamaModels();
+    const defaultOpenRouterModels = await getBundledOpenRouterModels();
     const initialPayload = {
-      models: defaultModels.map((entry) => ({
-        name: entry.value,
-        label: entry.label,
-      })),
+      ollama: {
+        models: defaultOllamaModels.map((entry) => ({
+          name: entry.value,
+          label: entry.label,
+        })),
+      },
+      openrouter: {
+        defaultModels: defaultOpenRouterModels.map((entry) => ({
+          value: entry.value,
+          label: entry.label,
+        })),
+      },
     };
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await fs.promises.writeFile(
@@ -5754,6 +5806,22 @@ async function loadOllamaModelsFromDisk() {
   }
 
   return getBundledOllamaModels();
+}
+
+async function loadOpenRouterModelsFromDisk() {
+  const filePath = await ensureModelsLibraryFileExists();
+  try {
+    const rawText = await fs.promises.readFile(filePath, "utf8");
+    const parsed = JSON.parse(rawText);
+    const models = normalizeOpenRouterModelsLibrary(parsed);
+    if (models.length > 0) {
+      return models;
+    }
+  } catch (error) {
+    console.warn("Failed to load config/models.json; falling back to bundled defaults:", error);
+  }
+
+  return getBundledOpenRouterModels();
 }
 
 async function upsertSavedFilter(label, query) {
@@ -7089,6 +7157,94 @@ ipcMain.handle("get-ollama-models", async () => {
 
   ollamaModelsCache = models;
   return models;
+});
+
+// OpenRouter models - fetched from OpenRouter API
+let openrouterModelsCache = null;
+
+ipcMain.handle("invalidate-openrouter-models-cache", () => {
+  openrouterModelsCache = null;
+  return true;
+});
+
+ipcMain.handle("get-openrouter-models", async () => {
+  if (openrouterModelsCache) {
+    return openrouterModelsCache;
+  }
+
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const settings = getAppSettings();
+  const apiKey = settings?.apiKeys?.openrouterApiKey;
+
+  if (!apiKey || !apiKey.trim()) {
+    // Return default models if no API key
+    return [
+      { value: "openai/gpt-4o-mini", label: "GPT-4o Mini (OpenAI)" },
+      { value: "openai/gpt-4o", label: "GPT-4o (OpenAI)" },
+      { value: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet (Anthropic)" },
+      { value: "google/gemini-pro-1.5", label: "Gemini Pro 1.5 (Google)" },
+      { value: "meta-llama/llama-3.1-405b-instruct", label: "Llama 3.1 405B (Meta)" },
+    ];
+  }
+
+  try {
+    const fetch = getOpenRouterFetch(30000);
+    const response = await fetch("https://openrouter.ai/api/v1/models", {
+      method: "GET",
+      headers: {
+        Authorization: apiKey.startsWith("Bearer ") ? apiKey : `Bearer ${apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      console.warn("Failed to fetch OpenRouter models:", response.status, response.statusText);
+      return getDefaultOpenRouterModels();
+    }
+
+    const data = await response.json();
+    const models = (data.data || []).map((model) => ({
+      value: model.id,
+      label: model.name || model.id,
+    }));
+
+    openrouterModelsCache = models.length > 0 ? models : getDefaultOpenRouterModels();
+    return openrouterModelsCache;
+  } catch (error) {
+    console.warn("Error fetching OpenRouter models:", error);
+    return getDefaultOpenRouterModels();
+  }
+});
+
+function getDefaultOpenRouterModels() {
+  return [
+    { value: "openai/gpt-4o-mini", label: "GPT-4o Mini (OpenAI)" },
+    { value: "openai/gpt-4o", label: "GPT-4o (OpenAI)" },
+    { value: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet (Anthropic)" },
+    { value: "google/gemini-pro-1.5", label: "Gemini Pro 1.5 (Google)" },
+    { value: "meta-llama/llama-3.1-405b-instruct", label: "Llama 3.1 405B (Meta)" },
+  ];
+}
+
+// LLM provider and model getters
+ipcMain.handle("llm:get-provider", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const settings = getAppSettings();
+  return settings.llm?.provider || "ollama";
+});
+
+ipcMain.handle("llm:get-model", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  const settings = getAppSettings();
+  const provider = settings.llm?.provider || "ollama";
+  return provider === "openrouter"
+    ? settings.llm?.openrouterModel || "openai/gpt-4o-mini"
+    : settings.llm?.ollamaModel || "minimax-m3:cloud";
 });
 
 ipcMain.handle("save-notes", async (_event, notesText) => {

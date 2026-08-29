@@ -1536,8 +1536,20 @@ contextBridge.exposeInMainWorld('installapi', {
     ipcRenderer.on('llm-diagnostics-updated', listener);
     return () => ipcRenderer.removeListener('llm-diagnostics-updated', listener);
   },
+  // Provider-agnostic rate-limit / payment-required notification. The
+  // payload includes ``provider`` (e.g. "ollama" or "openrouter"),
+  // ``statusCode`` (402 or 429), and ``message``. Replaces the old
+  // ``onOllamaRateLimitOrPaymentRequired``; the old event name is
+  // kept as a backward-compat alias.
+  onLlmRateLimitOrPaymentRequired: (callback) => {
+    const listener = (_event, payload) => {
+      callback(payload);
+    };
+    ipcRenderer.on('llm-rate-limit-or-payment-required', listener);
+    return () => ipcRenderer.removeListener('llm-rate-limit-or-payment-required', listener);
+  },
   onOllamaRateLimitOrPaymentRequired: (callback) => {
-    console.log("[Preload] Registering ollama-rate-limit-or-payment-required listener");
+    console.log("[Preload] Registering ollama-rate-limit-or-payment-required listener (legacy)");
     const listener = (_event, payload) => {
       console.log("[Preload] Received ollama-rate-limit-or-payment-required event:", payload);
       callback(payload);
@@ -1606,14 +1618,17 @@ contextBridge.exposeInMainWorld('validkeysapi', {
 contextBridge.exposeInMainWorld('modelsapi', {
   getOllamaModels: () => ipcRenderer.invoke('get-ollama-models'),
   invalidateOllamaModelsCache: () => ipcRenderer.invoke('invalidate-ollama-models-cache'),
+  getOpenRouterModels: () => ipcRenderer.invoke('get-openrouter-models'),
 });
 
 // Lightweight LLM bridge for the renderer to ask the main process to
-// forward prompts to the configured Ollama backend. Keep this tiny — the
-// main process already enforces timeouts, API keys, diagnostics, and
-// logging. The renderer should provide prompts and handle parsing.
+// forward prompts to the configured LLM backend (Ollama or OpenRouter).
+// Keep this tiny — the main process already enforces timeouts, API keys,
+// diagnostics, and logging. The renderer should provide prompts and handle parsing.
 contextBridge.exposeInMainWorld('llmapi', {
   generate: (prompt, options = {}) => ipcRenderer.invoke('ollama:generate', prompt, options),
+  getProvider: () => ipcRenderer.invoke('llm:get-provider'),
+  getModel: () => ipcRenderer.invoke('llm:get-model'),
 });
 
 contextBridge.exposeInMainWorld('opensshapi', {
