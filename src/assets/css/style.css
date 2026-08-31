@@ -6535,6 +6535,15 @@ strong {
   flex: 1 1 auto;
 }
 
+#conv-threat-intel-panel .subnet-ti-virustotal-card {
+  grid-column: 1 / -1;
+}
+
+#conv-threat-intel-panel #subnet-ti-ipsum-card,
+#conv-threat-intel-panel #subnet-ti-tor-card {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 1200px) {
   #conv-threat-intel-panel .subnet-calc-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

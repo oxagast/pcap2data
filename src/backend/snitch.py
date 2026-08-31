@@ -2191,6 +2191,8 @@ def _normalizeVirusTotalLookupType(rawLookupType):
         return "url"
     if lookupType in {"hash", "file", "file-hash", "file_hash"}:
         return "hash"
+    if lookupType in {"analysis", "file-analysis", "file_analysis"}:
+        return "analysis"
     raise ValueError("Unsupported VirusTotal lookup type. Use ip, url, or hash.")
 
 
@@ -2211,6 +2213,11 @@ def _buildVirusTotalTargetPath(lookupType, lookupValue):
         if not urlId:
             raise ValueError("Invalid URL value")
         return f"/urls/{quote(urlId)}", normalizedValue
+
+    if normalizedType == "analysis":
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", normalizedValue):
+            raise ValueError("Analysis ID contains invalid characters.")
+        return f"/analyses/{quote(normalizedValue)}", normalizedValue
 
     normalizedHash = normalizedValue.lower()
     if not re.fullmatch(r"[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64}", normalizedHash):
@@ -2323,7 +2330,8 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
     if not isinstance(dataSection, dict):
         dataSection = {}
     attributes = dataSection.get("attributes") if isinstance(dataSection.get("attributes"), dict) else {}
-    stats = attributes.get("last_analysis_stats") if isinstance(attributes.get("last_analysis_stats"), dict) else {}
+    stats = attributes.get("last_analysis_stats") or attributes.get("stats")
+    stats = stats if isinstance(stats, dict) else {}
     maliciousCount = int(stats.get("malicious") or 0)
     suspiciousCount = int(stats.get("suspicious") or 0)
     harmlessCount = int(stats.get("harmless") or 0)
@@ -2334,12 +2342,14 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
         if normalizedType == "ip"
         else f"/url/{quote(str(dataSection.get('id') or ''))}"
         if normalizedType == "url"
+        else f"/file-analysis/{quote(normalizedValue)}"
+        if normalizedType == "analysis"
         else f"/file/{quote(normalizedValue)}"
     )
 
     return {
         "success": True,
-        "lookupType": normalizedType,
+        "lookupType": "hash" if normalizedType == "analysis" else normalizedType,
         "lookupValue": normalizedValue,
         "recordId": str(dataSection.get("id") or ""),
         "analysis": {
@@ -2348,13 +2358,39 @@ def buildVirusTotalLookupResponse(lookupType, lookupValue, apiKey, diagnosticOnl
             "harmless": harmlessCount,
             "undetected": undetectedCount,
             "timeout": int(stats.get("timeout") or 0),
+            "confirmed_timeout": int(stats.get("confirmed-timeout") or 0),
+            "failure": int(stats.get("failure") or 0),
+            "type_unsupported": int(stats.get("type-unsupported") or 0),
         },
         "attributes": {
             "meaningful_name": attributes.get("meaningful_name"),
-            "names": attributes.get("names") if isinstance(attributes.get("names"), list) else None,
+            # The UI only needs a small representative sample. Keeping the
+            # complete names array here made older renderers show hundreds of
+            # aliases as if they were separate technical findings.
+            "names": attributes.get("names")[:3] if isinstance(attributes.get("names"), list) else [],
+            "size": attributes.get("size"),
+            "type_description": attributes.get("type_description"),
+            "type_extension": attributes.get("type_extension"),
+            "type_tag": attributes.get("type_tag"),
+            "magic": attributes.get("magic"),
+            "tags": attributes.get("tags") if isinstance(attributes.get("tags"), list) else [],
+            "type_tags": attributes.get("type_tags") if isinstance(attributes.get("type_tags"), list) else [],
+            "magika": attributes.get("magika"),
+            "filecondis": attributes.get("filecondis") if isinstance(attributes.get("filecondis"), dict) else {},
+            "times_submitted": attributes.get("times_submitted"),
+            "first_submission_date": attributes.get("first_submission_date"),
+            "last_submission_date": attributes.get("last_submission_date"),
+            "last_modification_date": attributes.get("last_modification_date"),
+            "last_analysis_results": attributes.get("last_analysis_results")
+                if isinstance(attributes.get("last_analysis_results"), dict) else {},
+            "sigma_analysis_results": attributes.get("sigma_analysis_results")
+                if isinstance(attributes.get("sigma_analysis_results"), list) else [],
+            "sigma_analysis_stats": attributes.get("sigma_analysis_stats")
+                if isinstance(attributes.get("sigma_analysis_stats"), dict) else {},
         },
         "reputation": attributes.get("reputation"),
         "lastAnalysisDate": attributes.get("last_analysis_date"),
+        "raw": payload,
         "sourceUrl": VIRUSTOTAL_API_BASE_URL,
         "guiUrl": f"{VIRUSTOTAL_GUI_BASE_URL}{guiPath}",
     }
@@ -2381,6 +2417,9 @@ def buildVirusTotalUploadResponseSummary(payload):
             "undetected": int(stats.get("undetected") or 0),
             "timeout": int(stats.get("timeout") or 0),
         },
+        "attributes": attributes,
+        "recordId": analysisId,
+        "raw": payload,
         "sourceUrl": VIRUSTOTAL_API_BASE_URL,
         "guiUrl": f"{VIRUSTOTAL_GUI_BASE_URL}/file-analysis/{quote(analysisId)}" if analysisId else None,
         "raw": payload,

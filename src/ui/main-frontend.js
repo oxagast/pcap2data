@@ -15875,7 +15875,7 @@ async function uploadExtractionResultToVirusTotal(bytes, fileNameHint) {
     });
     if (lookupResponse?.success) {
       statusUpdate(`Status: VirusTotal report found for ${fileNameHint || "file"}`);
-      showVirusTotalResultModal(lookupResponse, fileNameHint);
+      showVirusTotalResultInThreatIntel(lookupResponse, fileNameHint);
       return;
     }
     const uploadResponse = await window.extractapi.uploadVirusTotal({
@@ -15888,11 +15888,18 @@ async function uploadExtractionResultToVirusTotal(bytes, fileNameHint) {
       return;
     }
     statusUpdate(`Status: Uploaded to VirusTotal; analysis ID ${uploadResponse.analysisId || ""}`);
-    showVirusTotalResultModal(uploadResponse, fileNameHint);
+    showVirusTotalResultInThreatIntel(uploadResponse, fileNameHint);
   } catch (err) {
     setExtractionError(err?.message || String(err));
   } finally {
     hideExtractionProgress();
+  }
+}
+
+function showVirusTotalResultInThreatIntel(response, fileNameHint = "") {
+  showDataTools(CONV_THREAT_INTEL_SUBTAB);
+  if (typeof subnetCalculatorPanel?.showVirusTotalResult === "function") {
+    subnetCalculatorPanel.showVirusTotalResult(response, fileNameHint);
   }
 }
 
@@ -20701,7 +20708,8 @@ function buildMarkdownResponseInstruction() {
   return [
     "Return your response as valid Markdown (.md compatible).",
     "Use clear headings and include Markdown tables when they improve readability.",
-    "Prefer concise bullets for key findings, and avoid HTML.",
+    "Be concise: capture the key points, state each fact once, and never repeat or rephrase the same information.",
+    "Prefer short bullets for key findings, and avoid HTML.",
   ].join(" ");
 }
 
@@ -21547,7 +21555,7 @@ function writeSummaryFromLLM() {
     const captureOverviewBlock = captureOverviewParts.length
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a summary of the following network data, including any protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate two paragraphs, paragraph one should be on hard data that is available, and the second paragraph should be anything inferrable from the data points available. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}.  Please do not repeat any of the summary data that has already been written.  Only provide new summary data that has not already been written.  When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -21672,7 +21680,7 @@ async function runAnalysisCompaction() {
     : "";
 
   const previousCompactedBlock = previousCompacted
-    ? `The following is the previously compacted summary of earlier analysis for this context. Preserve and merge its important facts into the new compacted summary. Do not remove key data points; only add new information or refine existing details. Keep the result detailed and reference-quality.\n\n${previousCompacted}\n\n---\n\n`
+    ? `The following is the previously compacted summary of earlier analysis for this context. Preserve its important facts and merge in genuinely new details, but keep each fact in one canonical location. Do not remove key data points, repeat them, or restate them in different words. Keep the result concise and reference-quality.\n\n${previousCompacted}\n\n---\n\n`
     : "";
 
   const combinedInput = `${captureOverview}${previousCompactedBlock}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
@@ -21684,7 +21692,7 @@ async function runAnalysisCompaction() {
 - Adds new blurbs to the existing analysis rather than replacing it. Keep prior key analysis points and extend them with the new data.
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
 - SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip lookups.
-- Is detailed and reference-quality; aim for several paragraphs and use Markdown tables or bullet lists when they make the data easier to scan.
+- Is concise and reference-quality; prefer 3-6 short bullets or paragraphs containing only the key points. Use Markdown tables only when they make distinct data easier to scan, never to repeat prose.
 
 ${chronologicalBlurbs}`;
 
@@ -24977,7 +24985,7 @@ document
       });
       if (lookupResponse?.success) {
         statusUpdate(`Status: VirusTotal report found for ${fileNameHint}`);
-        showVirusTotalResultModal(lookupResponse, fileNameHint);
+        showVirusTotalResultInThreatIntel(lookupResponse, fileNameHint);
         return;
       }
       statusUpdate("Status: Uploading converted data to VirusTotal…");
@@ -24991,7 +24999,7 @@ document
         return;
       }
       statusUpdate(`Status: Uploaded to VirusTotal; analysis ID ${uploadResponse.analysisId || ""}`);
-      showVirusTotalResultModal(uploadResponse, fileNameHint);
+      showVirusTotalResultInThreatIntel(uploadResponse, fileNameHint);
     } catch (err) {
       statusUpdate(`Status: VirusTotal lookup/upload failed — ${err?.message || String(err)}`);
     }
