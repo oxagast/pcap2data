@@ -33,11 +33,11 @@ PacketSnitch delivers comprehensive network analysis through five core capabilit
 
 ### Integrated Intelligence & LLM Workflow
 
-PacketSnitch combines advanced protocol decoding with AI-powered analysis. The integrated intelligence aggregation engine works in tandem with LLM (Ollama) to provide contextual summaries, anomaly detection, and automated reporting. Researchers can leverage both traditional analysis tools and AI insights for comprehensive investigation.
+PacketSnitch combines advanced protocol decoding with AI-powered analysis. The integrated intelligence aggregation engine works in tandem with a provider-agnostic LLM layer — choose **Ollama** (local, default model `minimax-m3:cloud`) or **OpenRouter** (`openrouter.ai`, with five shipped defaults: `openai/gpt-4o-mini`, `openai/gpt-4o`, `anthropic/claude-3.5-sonnet`, `google/gemini-pro-1.5`, `meta-llama/llama-3.1-405b-instruct`) from Settings → LLM — for contextual summaries, anomaly detection, and automated reporting. An in-app inactive-LLM dialog surfaces when the active provider fails its reachability probe. Researchers can leverage both traditional analysis tools and AI insights for comprehensive investigation.
 
 ### Stream Reconstruction to Protocol-Aware Analysis
 
-Transform raw packet streams into fully reconstructed protocol conversations. PacketSnitch performs deep stream reassembly, allowing you to see complete HTTP exchanges, TLS handshakes, DNS queries, and other protocol interactions in their natural context. This protocol-aware analysis reveals relationships and patterns that are invisible in raw packet dumps.
+Transform raw packet streams into fully reconstructed protocol conversations. PacketSnitch performs deep stream reassembly, allowing you to see complete HTTP exchanges, TLS handshakes, DNS queries, and other protocol interactions in their natural context. The **Conv** workspace ships dedicated stream decoders for HTTP, FTP, SMB/Samba, Telnet, SSH/OpenSSH (with keystroke-timing reconstruction), POP3, IMAP, SMTP, DNS, SNMP, DHCP, DHCPv6, EPMAP, LLMNR, NBNS, NBDGM, LDAP (typed attribute tree), SIP, SMPP, Soulseek, BitTorrent, Kerberos (krb5), ISO 8583 (financial), and generic JSON / XML / YAML / Protobuf / MessagePack / BSON / ASN.1 BER / ASN.1 DER. This protocol-aware analysis reveals relationships and patterns that are invisible in raw packet dumps.
 
 ### Powerful Search Architecture
 
@@ -49,7 +49,7 @@ From stream dissection to geolocation heatmaps, PacketSnitch provides comprehens
 
 ### Threat Intel Aggregation & Anomoly Evaluation
 
-PacketSnitch's threat intelligence module aggregates and evaluates security indicators across your network traffic. It correlates known threat feeds, behavioral patterns, and anomaly detection to provide actionable security insights. The system scores and prioritizes threats based on severity, confidence levels, and potential impact, enabling security teams to focus on the most critical risks first.
+PacketSnitch's threat intelligence module aggregates and evaluates security indicators across your network traffic. It correlates known threat feeds, behavioral patterns, and anomaly detection to provide actionable security insights. The **Session Threat Score** card (0-100 score with `Clean` / `Low` / `Medium` / `High` / `Critical` banded pill, color-graded weight breakdown of every contributing indicator, and a **Capture Footprint** summary) leads the Threat Intel sub-tab. The VirusTotal results panel keeps every lookup as a stacked result card across the session, with the full VirusTotal attribute surface and a new `analysis`-id lookup type. The **Stats → Anomalies** sub-tab runs four structured detectors (portscan, brute-force login bursts, baseline packet-length / per-minute outliers, high-entropy cleartext payloads) that share the same engine as the Session Threat Score, so the two views never disagree. The system scores and prioritizes threats based on severity, confidence levels, and potential impact, enabling security teams to focus on the most critical risks first.
 
 ## What is PacketSnitch?
 
@@ -66,10 +66,11 @@ PacketSnitch is a network analysis platform that transforms packet captures into
 - **Powerful filtering** — Filter by port, country, entropy, MIME type, and more using dot-notation expressions
 - **Full IPv6 support** — Native IPv6 parsing, shared `ip.*` filter keys (with `network.proto` / `ip.proto.num` for family disambiguation), bracketed endpoint display, BigInt-backed subnet math, and IPv6 enrichment for GeoIP, WHOIS, Tor, Shodan, and VirusTotal
 - **GeoIP integration** — See source/destination locations with country, city, and timezone
-- **Payload analysis** — Shannon entropy visualization, MIME type detection, hex dump with ASCII view
-- **LLM summaries** — Generate AI-powered analysis reports using Ollama
-- **Protocol decoding** — DNS, HTTP, SSL/TLS, DHCP, NTP, SIP, IPv6, ICMPv6, DHCPv6, and more
+- **Payload analysis** — Shannon entropy visualization, MIME type detection, hex dump with ASCII view, and a dedicated **Data Transformations** block in Conv (Invert / 16- or 32-bit Endianness swap / Bit-order reversal / Transpose row-major → column-major) with non-destructive **Reset Output**
+- **LLM summaries** — Generate AI-powered analysis reports using the provider-agnostic `llm:generate` IPC channel. Choose **Ollama** or **OpenRouter** in Settings → LLM; per-call `{ maxTokens, temperature, think }` overrides flow through both providers
+- **Protocol decoding** — DNS, HTTP, SSL/TLS, DHCP, DHCPv6, NTP, SIP, IPv6, ICMPv6, Kerberos 5 (krb5), ISO 8583 (financial), EPMAP, LLMNR, NBNS, NBDGM, SNMP, LDAP (typed attribute tree), and more — backed by dedicated backend decoders and a Conv Decodes sub-tab with front-end stream decoders
 - **Plugin engine** — Install zip plugins, manage runtime safety thresholds, and extend UI workflows from the built-in Plugins manager
+- **Theme storefront (Settings → Themes)** — in-app catalog with per-theme previews, license-tier badges, developer / standard / pro licensing, Paddle checkout, and a `packetsnitch://checkout-success` deeplink that re-conciles your licenses and pre-caches newly-owned themes
 
 ---
 
@@ -89,7 +90,7 @@ Launch the app with `packetsnitch` or click the desktop icon.
 1. **Load PCAP** — Click **Load PCAP** to run the backend on a `.pcap` file
 2. **Browse packets** — Use **Prev / Next** buttons or select a host from the dropdown
 3. **Filter** — Type expressions like `tcp.dst.port:443` and press **Enter**
-4. **Summarize** — Click **Summary** for LLM-generated analysis (requires Ollama)
+4. **Summarize** — Click **Summary** for LLM-generated analysis (set your provider under Settings → LLM: Ollama or OpenRouter)
 
 ## Documentation
 

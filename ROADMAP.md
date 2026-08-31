@@ -434,6 +434,44 @@ in days, not weeks.
 - [ ] Traffic weighting
 - **Priority:** P2 · **Complexity:** High · **Est. dev time:** 2–4 days
 
+### Conv Data Transformations
+
+> **Status:** ✅ Shipped (v2.7.1657). The Conv output panel now
+> exposes a dedicated **Data Transformations** block
+> (`#data-tools-transform-row` in
+> [src/index.html](src/index.html)) with four composable
+> transformations, applied in this order: **Invert data** (full
+> byte-sequence reversal), **Endianness swap** (16-bit or 32-bit
+> word reversal — chosen via a Word radio), **Bit order** (reversal
+> of every bit within every byte), and **Transpose** (read bytes
+> row-major into a matrix with the user-specified column count,
+> then emit column-major). A **Reset Output** button restores the
+> untransformed Conv input bytes; **Apply to Output** re-renders
+> the panel and writes a
+> `Conv output transforms applied transforms=…` line to the
+> activity log. The transformations are pure functions in
+> [src/ui/data-transformations.js](src/ui/data-transformations.js)
+> (`reverseBytes`, `reverseBitOrder`, `swapEndianness`,
+> `transposeBytes`, plus the composed `applyDataToolsTransforms`
+> runner), exposed to the renderer via `applyDataToolsTransformsToOutput`
+> / `resetDataToolsTransforms` in
+> [src/ui/main-frontend.js](src/ui/main-frontend.js). The Conv
+> input itself is never modified — only the displayed output.
+> Covered by `tests/data_transformations.test.js` (reverse,
+> swap, bit-order, transpose, error guards, composed runner).
+
+- [✅] Invert (byte reversal) — ships.
+- [✅] Endianness swap (16-bit / 32-bit) — ships.
+- [✅] Bit-order reversal — ships.
+- [✅] Transpose (row-major → column-major) — ships.
+- [✅] Non-destructive reset — ships; **Reset Output** restores
+  the untransformed Conv input bytes.
+- [📋] Drag-to-reorder transformation list (so analysts can pick
+  the order without the current fixed inversion → endianness →
+  bit-order → transposition pipeline).
+- **Priority:** P2 · **Complexity:** Low · **Est. remaining:**
+  0.5 day
+
 ---
 
 ## Detection & analysis
@@ -617,14 +655,47 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 
 ## AI features
 
+### OpenRouter / Multi-Provider LLM
+
+> **Status:** 🟡 Partial — the provider-agnostic `llm:generate` IPC
+> channel ships with **Ollama** (local, default model
+> `minimax-m3:cloud`) and **OpenRouter** (`openrouter.ai`, ships
+> with five defaults: `openai/gpt-4o-mini`, `openai/gpt-4o`,
+> `anthropic/claude-3.5-sonnet`, `google/gemini-pro-1.5`,
+> `meta-llama/llama-3.1-405b-instruct`) as first-class providers.
+> The Settings → LLM tab exposes a Provider dropdown that drives
+> the rest of the UI (model catalog, generation IPC, diagnostics).
+> Per-call `{ maxTokens, temperature, think }` overrides flow
+> through both providers, and the `openrouter-api` preload bridge
+> (`listModels` / `getModel` / `getStatus`) is wired alongside the
+> Ollama bridge. An in-app inactive-LLM dialog surfaces when the
+> active provider fails the reachability probe. A third provider
+> (Anthropic-direct, Azure OpenAI, local vLLM, etc.) is a
+> one-line `registerProviderHandler(name, fn)` call away.
+
+- [✅] Ollama provider — ships.
+- [✅] OpenRouter provider — ships with five defaults.
+- [✅] Provider-agnostic IPC channel (`llm:generate`) — ships;
+  `ollama:generate` kept as a backward-compat alias.
+- [✅] Per-call model overrides (maxTokens / temperature / think) —
+  ships.
+- [✅] Inactive-LLM dialog — ships.
+- [📋] Custom provider registration from a plugin
+- [📋] Bring-your-own-API-key per model
+- **Priority:** P0 · **Complexity:** Medium · **Est. remaining:**
+  0.5–1 day (per additional provider)
+
 ### Ask The Capture
 
-> **Status:** 🟡 Partial — the LLM is in the frontend (Ollama, default
-> model `minimax-m3:cloud`), with per-stream and per-distill prompts.
-> The right-click context menu's **Ask PacketSnitch...** submenu ships
-> for Ask a question / Explain this data / Summarize this packet, and
-> the **Session Threat Score** card adds a Get LLM Assessment action.
-> Free-form natural-language "ask the capture" UI is still TODO.
+> **Status:** 🟡 Partial — the LLM is in the frontend (provider
+> chosen via Settings → LLM → Provider; defaults to Ollama
+> `minimax-m3:cloud`, OpenRouter also wired). Per-stream and
+> per-distill prompts go through the provider-agnostic
+> `llm:generate` channel. The right-click context menu's **Ask
+> PacketSnitch...** submenu ships for Ask a question / Explain
+> this data / Summarize this packet, and the **Session Threat
+> Score** card adds a Get LLM Assessment action. Free-form
+> natural-language "ask the capture" UI is still TODO.
 
 - [🟡] Packet-aware prompting — Ask PacketSnitch... submenu ships.
 - [🟡] Host summaries — LLM distillation on the Summary tab; Session
@@ -772,8 +843,20 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 > baseline outliers from the Stats → Anomalies sub-tab, public-IP /
 > domain / URL / hash counts, and the current Conv input entropy), and
 > a **Capture Footprint** summary. **Recompute** / **Get LLM
-> Assessment** / **Send to Notes** actions live on the card. Per-host
-> and per-conversation risk scores are still TODO.
+> Assessment** / **Send to Notes** actions live on the card. The
+> VirusTotal results panel (v2.7.1657) now keeps every lookup
+> across the session as stacked result cards
+> (`virustotalResults[]` plumbed through session save/load) and
+> exposes the full VirusTotal attribute surface (size,
+> type_description, magic, tags, type_tags, last_analysis_results,
+> sigma_analysis_results, sigma_analysis_stats, plus the raw
+> payload), and the `analysis` lookup type routes
+> `GET /analyses/{id}` so analysts can walk the full analysis
+> chain. IPSum / Tor cards are now hidden by default
+> (`#subnet-ti-ipsum-card` / `#subnet-ti-tor-card` with
+> `setOptionalThreatIntelCardVisibility`) so the panel only
+> shows reputation sources the analyst actually consulted.
+> Per-host and per-conversation risk scores are still TODO.
 
 ### Automatic Report Generator
 
@@ -873,6 +956,81 @@ Already shipped (so we don't redo them):
 
 > Short mirror of `RELEASE_NOTES.md` so this single file is enough to
 > skim. The full per-version notes still live in `RELEASE_NOTES.md`.
+
+### v2.7.1657 — 2026-08-31
+
+- **Features**
+  - **OpenRouter LLM provider (Settings → LLM)** — the
+    `llm:generate` IPC channel now dispatches to both Ollama and
+    OpenRouter. The Settings → LLM tab exposes a **Provider**
+    dropdown and ships five OpenRouter defaults
+    (`openai/gpt-4o-mini`, `openai/gpt-4o`,
+    `anthropic/claude-3.5-sonnet`, `google/gemini-pro-1.5`,
+    `meta-llama/llama-3.1-405b-instruct`) in
+    `config/models.json` under a new `openrouter.defaultModels`
+    block. The `openrouter-api` preload bridge
+    (`listModels` / `getModel` / `getStatus`) is wired alongside
+    the Ollama bridge, and an in-app inactive-LLM dialog surfaces
+    when the active provider fails the reachability probe.
+    `ollama:generate` is kept as a backward-compat alias.
+  - **Theme engine overhaul (Settings → Themes + storefront)** —
+    shared `src/ui/common-frontend.js` helpers, license-tier
+    badges, fixed-aspect-ratio per-theme previews, developer-tier
+    first-launch path, grouped-by-license storefront, sandbox-
+    banner `paddleEnv`/`sandbox` fallback, and the
+    `tests/test_catalog_listable_gate.py` listable-only gate.
+  - **ISO 8583 financial protocol decoder (Conv → Decodes)** —
+    MTI / primary+secondary bitmap / data elements per ISO
+    8583:1987/1993; ASCII-hex and binary bitmap encodings; ASCII
+    and binary LLVAR/LLLVAR; 2- or 4-byte TPDU stripping;
+    false-positive rejection via MTI table + first-field parse;
+    auto-detect routes ports 8583, 5000, 5001, 14401. Sample
+    pcaps + 14 tests ship.
+  - **Data transformations in Conv (`Invert / Endian / Bit-order /
+    Transpose`)** — composable transformations in
+    `src/ui/data-transformations.js`, wired through a dedicated
+    **Data Transformations** block in the Conv output panel
+    (`#data-tools-transform-row`). **Reset Output** is
+    non-destructive; the Conv input is never modified. Covered
+    by `tests/data_transformations.test.js`.
+  - **Threat Intel → VirusTotal results panel (history + multi-
+    result cards)** — `virustotalResults[]` plumbed through
+    session save/load; IPSum / Tor cards hidden by default;
+    full attribute surface (size, type_description, magic, tags,
+    type_tags, last_analysis_results, sigma_analysis_results,
+    sigma_analysis_stats); new `analysis` lookup type routes
+    `GET /analyses/{id}`; `confirmed_timeout` / `failure` /
+    `type_unsupported` stats fields; truncated
+    `attributes.names` cap to keep the card readable.
+  - **Provider-agnostic `llm:generate` IPC channel** — canonical
+    channel reads `settings.llm.provider` and dispatches to the
+    registered handler; `ollama:generate` kept as alias.
+  - **Inactive-LLM dialog** — surfaces when the active provider
+    fails the reachability probe, with a link to Settings → LLM.
+- **Fixes**
+  - **Threat Intel → shorter labels fit smaller windows**.
+  - **Theme-engine UX plumbing** — fixed-aspect-ratio previews,
+    consistent license-tier badge, end-to-end developer-license
+    first-launch path.
+  - **Host Data info-pane grouping** — `current-stream-packet`,
+    `current-filtered-packet`, and `timestamp` readouts moved
+    into a dedicated **General Information** block at the top of
+    the active-recon scroll so the analyst never loses the
+    timestamp when the toolbar overflows.
+  - **ETA countdown, backend respawn, and frontend ingestion**.
+  - **UI lag reduced on theme engine + periodic backend
+    crashes**.
+  - **Metrics endpoint + clone counter**.
+- **Tests**
+  - `tests/data_transformations.test.js`,
+    `tests/test_catalog_listable_gate.py`,
+    `tests/test_catalog_admin_portal.py`,
+    `tests/test_catalog_schema_migration.py`,
+    `tests/test_catalog_smtp_use_tls.py`,
+    `tests/threat_intel_virustotal_ui.test.js` (extended),
+    `tests/test_backend_iso8583_decoder.py`,
+    `tests/iso8583_conv_decoder.test.js`,
+    `tests/themes_subtab.test.js` (extended).
 
 ### v2.6.1629 — 2026-08-20
 

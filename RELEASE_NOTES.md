@@ -1,11 +1,285 @@
 # Release Notes
 
-## Unreleased
+## v2.7.1657 - 2026-08-31
+
+**Type:** minor
+
+> Theme engine overhaul, OpenRouter LLM provider, Conv data
+> transformations, ISO 8583 decoder, and a VirusTotal results panel
+> that remembers every lookup — plus the usual round of polish.
 
 ### ✨ Features
 
-- **ISO 8583 financial protocol decoder (Conv → Decodes)** — a new ISO 8583 decoder ships in both the backend (`src/backend/decoders/iso8583.py`) and the Conv decoder (`src/ui/decoders/conv/iso8583.js`). It decodes the standard ISO 8583 message structure: MTI (4 ASCII digits or 2 BCD bytes), primary/secondary bitmap (ASCII-hex or binary), and data elements per the ISO 8583:1987/1993 field definitions. Supports LLVAR/LLLVAR length prefixes in both ASCII and binary modes, transparently strips 2- or 4-byte TPDU/message-length framing prefixes common in ISO 8583 over TCP, and rejects false positives (e.g. HTTP text that happens to start with 4 ASCII digits) by validating the BCD MTI against the known MTI table and requiring the first data field to parse. Auto-detect routes matching traffic (ports 8583, 5000, 5001, 14401) to the new decoder, and the Decodes dropdown now offers "ISO 8583 (Financial)". Field values that are BCD-packed or otherwise non-printable render as hex in the conv decoder table via the new `readAsciiOrHex` helper and the `data-tools-proto-hex` CSS class in `renderProtoDecoderOutput`. Two sample captures ship for quick smoke-testing: `samples/pcaps/iso8583_ascii_sample.pcapng` (port 14401, ASCII-hex bitmap) and `samples/pcaps/iso8583_bin_sample.pcapng` (port 14401, binary bitmap). Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and `tests/test_backend_iso8583_decoder.py` (6 tests).
-- **Provider-agnostic `llm:generate` IPC channel** — the LLM generation IPC handler is now exposed under the canonical `llm:generate` channel name, with the legacy `ollama:generate` channel kept as a backward-compat alias. The handler reads `settings.llm.provider` and dispatches to the active provider's registered handler in `src/llm.js` (Ollama for `provider === "ollama"`, OpenRouter for `provider === "openrouter"`), so the channel name no longer falsely implies an Ollama-only path when OpenRouter is selected. The `llmapi.generate` preload bridge in `src/preload.js` now calls `llm:generate`; the handler in `src/main.js` is a shared `handleLlmGenerateRequest` function registered under both channel names.
+- **OpenRouter LLM provider (Settings → LLM)** — PacketSnitch now ships a
+  first-class OpenRouter.com integration alongside the existing Ollama
+  surface. The Settings → LLM sub-tab exposes a **Provider** dropdown
+  (Ollama / OpenRouter) that drives the rest of the UI: choose a
+  provider, then pick a model from that provider's bundled catalog.
+  OpenRouter ships with five defaults (`openai/gpt-4o-mini`,
+  `openai/gpt-4o`, `anthropic/claude-3.5-sonnet`,
+  `google/gemini-pro-1.5`, `meta-llama/llama-3.1-405b-instruct`) in
+  `config/models.json` under a new `openrouter.defaultModels` block,
+  the main process seeds `<userData>/config/models.json` on first run
+  via the new `ensureModelsLibraryFileExists` openrouter branch, and
+  the renderer reads it through the new `openrouter-api` preload
+  bridge (`listModels` / `getModel` / `getStatus` + a 30s
+  `cachedOpenRouterLastLookup` diagnostic probe so the zero-cost
+  reachability check never gets conflated with a real generation).
+  Generation routes through a dedicated `generateOpenRouter` handler
+  in [src/llm.js](src/llm.js) that talks to
+  `https://openrouter.ai/api/v1/chat/completions`, normalises the
+  OpenAI-compatible response back into the Ollama shape the rest of
+  the renderer already speaks, and reuses `getFetchForProvider` so
+  the per-timeout dispatcher cache (`openrouterDispatcherCache` in
+  [src/main.js](src/main.js)) lines up with the existing Ollama
+  surface. The API key lives in `settings.apiKeys.openrouterApiKey`,
+  the selected model in `settings.llm.openrouterModel`, the timeout
+  in `settings.llm.openrouterRequestTimeoutSeconds`, and the
+  per-call `{ maxTokens, temperature, think }` overrides from the
+  2.6 cycle flow through the same provider-agnostic channel.
+- **Theme engine overhaul (Settings → Themes + storefront)** — the
+  theme engine was rebuilt around a new shared `src/ui/common-frontend.js`
+  helpers module plus a unified theming surface in
+  [src/main.js](src/main.js). The catalog now renders license tiers
+  (developer / standard / pro) inline with badges and supports
+  in-storefront previews sourced from per-theme `theme.json` previews
+  with a fixed 400×250 aspect ratio (`themes/smokeshow.json` and the
+  other theme JSONs were updated to drop the legacy `preview`
+  workaround). A new `themeapi.getLicenseTier` preload bridge ships
+  on top of the existing `themes-catalog` IPC, the keystore panel
+  surfaces the new tier badge, and the developer tier is wired end
+  to end so a developer-licensed theme unlocks correctly on first
+  launch. Themes now group consistently in the storefront (by
+  license, not by raw `theme.json` key), the Sandbox-mode banner
+  reads `paddleEnv` with the legacy `sandbox` flag fallback, and the
+  400×250 preview fetch retries once on a transient undici failure
+  with a "preview unavailable" fallback. Tests:
+  `tests/themes_subtab.test.js`, `tests/test_catalog_portal.py`,
+  `tests/test_catalog_admin_api.py`, `tests/test_catalog_list_themes.py`,
+  `tests/test_catalog_paddle_poller.py`. The new
+  `tests/test_catalog_listable_gate.py` lock-in prevents a theme
+  that the catalog hasn't marked as listable from appearing in the
+  storefront at all.
+- **ISO 8583 financial protocol decoder (Conv → Decodes)** — a new ISO
+  8583 decoder ships in both the backend
+  (`src/backend/decoders/iso8583.py`) and the Conv decoder
+  (`src/ui/decoders/conv/iso8583.js`). It decodes the standard ISO
+  8583 message structure: MTI (4 ASCII digits or 2 BCD bytes),
+  primary/secondary bitmap (ASCII-hex or binary), and data elements
+  per the ISO 8583:1987/1993 field definitions. Supports
+  LLVAR/LLLVAR length prefixes in both ASCII and binary modes,
+  transparently strips 2- or 4-byte TPDU/message-length framing
+  prefixes common in ISO 8583 over TCP, and rejects false positives
+  (e.g. HTTP text that happens to start with 4 ASCII digits) by
+  validating the BCD MTI against the known MTI table and requiring
+  the first data field to parse. Auto-detect routes matching traffic
+  (ports 8583, 5000, 5001, 14401) to the new decoder, and the
+  Decodes dropdown now offers "ISO 8583 (Financial)". Field values
+  that are BCD-packed or otherwise non-printable render as hex in
+  the conv decoder table via the new `readAsciiOrHex` helper and
+  the `data-tools-proto-hex` CSS class in `renderProtoDecoderOutput`.
+  Two sample captures ship for quick smoke-testing:
+  `samples/pcaps/iso8583_ascii_sample.pcapng` (port 14401, ASCII-hex
+  bitmap) and `samples/pcaps/iso8583_bin_sample.pcapng` (port 14401,
+  binary bitmap). Coverage: `tests/iso8583_conv_decoder.test.js` (8
+  tests) and `tests/test_backend_iso8583_decoder.py` (6 tests).
+- **Data transformations in Conv (`Invert / Endian / Bit-order /
+  Transpose`)** — the Conv output panel now exposes a dedicated
+  **Data Transformations** block (`#data-tools-transform-row` in
+  [src/index.html](src/index.html), wired through
+  [src/ui/data-transformations.js](src/ui/data-transformations.js)
+  plus new `applyDataToolsTransformsToOutput` /
+  `resetDataToolsTransforms` handlers in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js)). Four
+  composable transformations are supported, applied in order:
+  **Invert data** (full byte-sequence reversal), **Endianness swap**
+  (16-bit or 32-bit word reversal — chosen via a Word radio), **Bit
+  order** (reversal of every bit within every byte), and **Transpose**
+  (read the bytes row-major into a matrix with the user-specified
+  column count and emit them column-major). A **Reset Output**
+  button restores the untransformed Conv input bytes; **Apply to
+  Output** re-renders the panel and writes a
+  `Conv output transforms applied transforms=…` line to the activity
+  log. The transformations are pure functions, exported and tested
+  in `tests/data_transformations.test.js` (covers reverse, swap,
+  bit-order, transpose, error paths, and the composed
+  `applyDataToolsTransforms` runner). The Conv input itself is
+  never modified — only the displayed output.
+- **Threat Intel → VirusTotal results panel (history + multi-result
+  cards)** — the Threat Intel sub-tab in
+  [src/ui/panels/subnet-calculator-panel.js](src/ui/panels/subnet-calculator-panel.js)
+  now keeps every VirusTotal lookup across the session and renders
+  them as stacked result cards instead of overwriting a single
+  card. The new `virustotalResults[]` array is plumbed through the
+  session save/load round-trip (new
+  `virustotalResults` key on the threat-intel snapshot), seeded
+  from a single historical `threatIntelState.virustotal` value when
+  a legacy session is restored, and the IPSum / Tor cards are now
+  hidden by default (`#subnet-ti-ipsum-card` / `#subnet-ti-tor-card`
+  with `setOptionalThreatIntelCardVisibility`) so the panel only
+  shows reputation sources the analyst actually consulted. The
+  VirusTotal response object also now exposes the full attribute
+  surface (`size`, `type_description`, `type_extension`,
+  `type_tag`, `magic`, `tags`, `type_tags`, `magika`, `filecondis`,
+  `times_submitted`, `first_submission_date`, `last_submission_date`,
+  `last_modification_date`, `last_analysis_results`,
+  `sigma_analysis_results`, `sigma_analysis_stats`) plus the
+  `raw` payload so the renderer never has to guess. The stats block
+  also surfaces `confirmed_timeout` and `failure` / `type_unsupported`
+  counters that older builds dropped, and `attributes.names` is
+  truncated to a 3-entry sample so legacy renderers don't explode
+  the card with hundreds of aliases. The new
+  `analysis` lookup type routes `GET /analyses/{id}` and
+  `GUI: /file-analysis/{id}` so analysts can walk the full analysis
+  chain after uploading a sample. Coverage: the extended
+  `tests/threat_intel_virustotal_ui.test.js` plus the new
+  analysis-id branch in `tests/test_backend_compile.py` /
+  `tests/test_backend_json.py`.
+- **Provider-agnostic `llm:generate` IPC channel** — the LLM
+  generation IPC handler is now exposed under the canonical
+  `llm:generate` channel name, with the legacy `ollama:generate`
+  channel kept as a backward-compat alias. The handler reads
+  `settings.llm.provider` and dispatches to the active provider's
+  registered handler in [src/llm.js](src/llm.js) (Ollama for
+  `provider === "ollama"`, OpenRouter for `provider === "openrouter"`),
+  so the channel name no longer falsely implies an Ollama-only path
+  when OpenRouter is selected. The `llmapi.generate` preload bridge
+  in [src/preload.js](src/preload.js) now calls `llm:generate`; the
+  handler in [src/main.js](src/main.js) is a shared
+  `handleLlmGenerateRequest` function registered under both channel
+  names.
+
+### 🐛 Fixes
+
+- **Threat Intel → shorter labels fit smaller windows** — the
+  Threat Intel sub-tab's IPSum / Tor / VirusTotal card titles were
+  shortened so the three reputation cards no longer overflow on
+  default window widths. Wired through
+  [src/ui/panels/subnet-calculator-panel.js](src/ui/panels/subnet-calculator-panel.js)
+  and [src/index.html](src/index.html).
+- **Theme-engine UX plumbing** — the theme engine now controls the
+  storefront UX more directly: per-theme `theme.json` previews are
+  loaded with a fixed aspect-ratio container (no more stretched
+  thumbnails), the license-tier badge in Settings is consistent
+  with the storefront rendering, and the developer-license path
+  works end-to-end on first launch.
+- **Host Data info-pane grouping** — the `current-stream-packet`,
+  `current-filtered-packet`, and `timestamp` readouts moved out of
+  the top toolbar / `welcome` pane and now live under a dedicated
+  **General Information** block (`#general-info-head` +
+  `#packet-readouts.packet-readouts` in [src/index.html](src/index.html))
+  inside the active-recon scroll, so the analyst no longer loses
+  the timestamp when the toolbar overflows. CSS in
+  [src/assets/css/style.css](src/assets/css/style.css) (`#packet-readouts.packet-readouts`)
+  styles the new block consistently with the existing
+  `#protocols` / `#compression` groups.
+- **ETA countdown, backend respawn, and frontend ingestion** — the
+  load-time ETA in the toolbar now adjusts correctly when the
+  backend is reused across progress passes; the renderer no longer
+  triggers a backend respawn loop on the HTTP port; and the
+  frontend ingestion chain no longer drops packets or double-counts
+  on rerun. Wired through
+  [src/back-comm.js](src/back-comm.js) +
+  [src/backend/snitch.py](src/backend/snitch.py) +
+  [src/ui/main-frontend.js](src/ui/main-frontend.js).
+- **UI lag reduced on theme engine + periodic backend crashes** —
+  the renderer validates theme JSON shape before applying it (no
+  more "applied a corrupt theme, then crashed on the next paint"
+  loop), and the recurring backend crash under heavy captures is
+  gone. `themes/smokeshow.json` was updated; storefront rendering
+  is the source of truth and the renderer no longer crashes when
+  the bundled copy is shaped differently than a freshly downloaded
+  one.
+- **Inactive-LLM dialog** — when the active LLM provider fails the
+  reachability probe, the renderer now raises an in-app dialog
+  (new `showInactiveLlmDialog` helper wired in
+  [src/ui/main-frontend.js](src/ui/main-frontend.js) +
+  [src/main.js](src/main.js) +
+  [src/preload.js](src/preload.js)) instead of letting a stale
+  generation hang in the activity log. The dialog surfaces the
+  provider name, the failure reason, and a link to the Settings →
+  LLM tab so the user can fix the key, swap the model, or disable
+  the LLM entirely.
+- **Metrics endpoint + clone counter** — the metrics sink in
+  [src/backend/snitch.py](src/backend/snitch.py) emits the new
+  schema, and the GitHub Actions `clone.yml` workflow now tracks
+  clone counts via `scripts/clonecounter.py` so the README badge
+  updates on every push.
+
+### 🧪 Tests
+
+- `tests/data_transformations.test.js` — covers `reverseBytes`,
+  `swapEndianness` (16- and 32-bit), `reverseBitOrder`,
+  `transposeBytes`, the composed `applyDataToolsTransforms` runner,
+  and the error guards on bad widths / column counts.
+- `tests/test_catalog_listable_gate.py` — locks in the storefront
+  visibility gate so themes not flagged listable in the catalog
+  never appear in the renderer.
+- `tests/test_catalog_admin_portal.py` — admin-portal login +
+  license reconcile path.
+- `tests/test_catalog_schema_migration.py` — catalog server schema
+  upgrade path.
+- `tests/test_catalog_smtp_use_tls.py` — SMTP `use_tls` config
+  round-trip in the catalog server.
+- `tests/threat_intel_virustotal_ui.test.js` — extended for the
+  multi-result `virustotalResults[]` history, the new
+  `analysis`-id lookup branch, the `confirmed_timeout` /
+  `failure` / `type_unsupported` stats fields, the truncated
+  `attributes.names` cap, and the hidden-by-default IPSum / Tor
+  cards.
+- `tests/test_backend_iso8583_decoder.py` + `tests/iso8583_conv_decoder.test.js`
+  — ISO 8583 decoder coverage (ASCII + binary bitmap, MTI
+  validation, TPDU stripping, false-positive rejection).
+- `tests/themes_subtab.test.js` extensions — `getLicenseTier`
+  bridge, developer-tier first-launch path, fixed-aspect-ratio
+  preview container, sandbox-banner `paddleEnv`/`sandbox`
+  fallback.
+
+### 🔧 Improvements
+
+- [src/settings.js](src/settings.js) now carries the OpenRouter
+  block (`llm.openrouterModel`, `llm.openrouterRequestTimeoutSeconds`,
+  `llm.provider`) and `apiKeys.openrouterApiKey` — all normalised
+  through `normalizeSettings` so a legacy config without the
+  OpenRouter keys round-trips safely to the new defaults.
+- [src/llm.js](src/llm.js) ships the new `generateOpenRouter` /
+  `registerProviderHandler` surface, the OpenAI-compatible
+  response-to-Ollama-shape normaliser, and the
+  `getFetchForProvider` shared dispatcher lookup so adding a third
+  provider later is a one-line `registerProviderHandler` call.
+- [src/main.js](src/main.js) caches `openrouterDispatcherCache`,
+  exposes `getOpenRouterDispatcher` /
+  `getOpenRouterFetch`, registers
+  `ipcMain.handle('llm:generate')` as the canonical channel,
+  extends `ensureModelsLibraryFileExists` with the openrouter
+  branch, exposes `ipcMain.handle('invalidate-openrouter-models-cache')`,
+  and surfaces the inactive-LLM IPC. The new
+  `buildVirusTotalLookupResponse` now returns the full VirusTotal
+  attribute surface and the `analysis`-id lookup branch.
+- [src/preload.js](src/preload.js) gains the `openrouter-api`
+  preload bridge (`listModels` / `getModel` / `getStatus`),
+  `themeapi.getLicenseTier`, and the inactive-LLM notification
+  surface.
+- [src/ui/main-frontend.js](src/ui/main-frontend.js) wires the
+  Provider/Model dropdown in the Settings → LLM tab, plumbs
+  `applyDataToolsTransformsToOutput` /
+  `resetDataToolsTransforms` through the Conv output panel, and
+  keeps the `dataToolsLastRawConversionBytes` snapshot so
+  **Reset Output** is non-destructive. Threat Intel renders the
+  new `virustotalResults[]` history (session-round-trip safe) and
+  calls `setOptionalThreatIntelCardVisibility` to gate the
+  IPSum / Tor cards on actual data.
+- [src/ui/common-frontend.js](src/ui/common-frontend.js) is the
+  new shared helpers module for the theme engine, license-tier
+  badge, and storefront previews.
+- The **General Information** block now lives at the top of the
+  Host Data active-recon scroll (`#general-info-head` +
+  `#packet-readouts.packet-readouts` in
+  [src/index.html](src/index.html)) so the timestamp, current-
+  stream-packet, and current-filtered-packet readouts always
+  appear in the same place regardless of toolbar overflow.
+
+---
 
 ## v2.6.1629 - 2026-08-20
 
