@@ -56,6 +56,8 @@ function createSubnetCalculatorPanel({
     const reputationIpsumEl = document.getElementById("subnet-calc-reputation-ipsum");
     const reputationVirustotalEl = document.getElementById("subnet-calc-reputation-virustotal");
     const reputationTorEl = document.getElementById("subnet-calc-reputation-tor");
+    const reputationIpsumCardEl = document.getElementById("subnet-ti-ipsum-card");
+    const reputationTorCardEl = document.getElementById("subnet-ti-tor-card");
     const geoEl = document.getElementById("subnet-calc-geo");
     const shodanEl = document.getElementById("subnet-calc-shodan");
     let threatIntelState = {
@@ -63,6 +65,10 @@ function createSubnetCalculatorPanel({
         tor: null,
         virustotal: null,
     };
+    let virustotalResults = [];
+    let virusTotalPollTimer = null;
+    let virusTotalPollInFlight = false;
+    const VIRUS_TOTAL_POLL_INTERVAL_MS = 3 * 60 * 1000;
     // Session-wide cache of threat intel records that have ever been
     // looked up for this capture. The score engine consumes this list in
     // addition to the live threatIntelState so the Session Threat Score
@@ -161,6 +167,7 @@ function createSubnetCalculatorPanel({
                 input: getThreatIntelQueryInputValue(),
                 type: getThreatIntelQueryTypeValue(),
                 state: clonePlainData(threatIntelState, null),
+                virustotalResults: clonePlainData(virustotalResults, []),
                 sessionRecords: clonePlainData(sessionThreatIntelRecords, []),
                 lastScore: lastThreatScoreResult
                     ? {
@@ -186,6 +193,9 @@ function createSubnetCalculatorPanel({
         if (restoredTiState.state) {
             threatIntelState = clonePlainData(restoredTiState.state, null) || { ipsum: null, tor: null, virustotal: null };
         }
+        virustotalResults = Array.isArray(restoredTiState.virustotalResults)
+            ? clonePlainData(restoredTiState.virustotalResults, []) || []
+            : (threatIntelState.virustotal ? [clonePlainData(threatIntelState.virustotal, null)] : []);
         if (restoredTiState.type && threatIntelTypeEl) {
             threatIntelTypeEl.value = normalizeThreatIntelQueryType(String(restoredTiState.type));
         }
@@ -1714,6 +1724,11 @@ function createSubnetCalculatorPanel({
         });
     }
 
+    function setOptionalThreatIntelCardVisibility() {
+        if (reputationIpsumCardEl) reputationIpsumCardEl.hidden = !threatIntelState.ipsum;
+        if (reputationTorCardEl) reputationTorCardEl.hidden = !threatIntelState.tor;
+    }
+
     function renderThreatIntelCard(container, title, projectLabel, projectUrl, renderFn) {
         if (!container) return;
         container.innerHTML = "";
@@ -1735,32 +1750,13 @@ function createSubnetCalculatorPanel({
 
     function renderThreatIntelResult(analysis) {
         clearThreatIntelCards();
+        setOptionalThreatIntelCardVisibility();
 
         const ipsumResult = threatIntelState.ipsum;
         const torResult = threatIntelState.tor;
         const virustotalResult = threatIntelState.virustotal;
-        if (!ipsumResult && !torResult && !virustotalResult) {
-            renderThreatIntelCard(
-                reputationIpsumEl,
-                "IPSum",
-                "Open IPSum project",
-                "https://github.com/stamparm/ipsum",
-                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
-            );
-            renderThreatIntelCard(
-                reputationVirustotalEl,
-                "VirusTotal",
-                "Open VirusTotal",
-                "https://www.virustotal.com/",
-                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
-            );
-            renderThreatIntelCard(
-                reputationTorEl,
-                "Tor",
-                "Open Tor Project",
-                "https://www.torproject.org/",
-                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
-            );
+        if (!ipsumResult && !torResult && !virustotalResult && virustotalResults.length === 0) {
+            setPlaceholder(reputationVirustotalEl, "VirusTotal file results will appear here.");
             return;
         }
 
@@ -1819,159 +1815,257 @@ function createSubnetCalculatorPanel({
                     }
                 },
             );
-        } else {
-            renderThreatIntelCard(
-                reputationIpsumEl,
-                "IPSum",
-                "Open IPSum project",
-                "https://github.com/stamparm/ipsum",
-                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
-            );
         }
 
-        if (virustotalResult) {
-            renderThreatIntelCard(
-                reputationVirustotalEl,
-                "VirusTotal",
-                "Open VirusTotal",
-                "https://www.virustotal.com/",
-                (container) => {
-                    const section = document.createElement("div");
-                    if (virustotalResult.success === false) {
-                        setPlaceholder(section, virustotalResult.error || "VirusTotal lookup failed.");
-                    } else {
-                        const vtAnalysis = virustotalResult.analysis && typeof virustotalResult.analysis === "object"
-                            ? virustotalResult.analysis
-                            : {};
-                        const makeCountBadge = (count, kind) => {
-                            const value = Number.isFinite(Number(count)) ? Number(count) : 0;
-                            const badge = document.createElement("span");
-                            badge.className = `subnet-calc-grade-badge subnet-calc-vt-${kind}-${value > 0 ? "positive" : "zero"}`;
-                            badge.textContent = String(value);
-                            return badge;
-                        };
+        if (virustotalResults.length > 0 || virustotalResult) {
+            const results = virustotalResults.length > 0 ? virustotalResults : [virustotalResult];
+            results.forEach((result) => {
+                const card = document.createElement("div");
+                card.className = "subnet-ti-virustotal-result";
+                renderThreatIntelCard(
+                    card,
+                    "VirusTotal",
+                    "Open VirusTotal",
+                    result.guiUrl || "https://www.virustotal.com/",
+                    (container) => {
+                        const section = document.createElement("div");
+                        if (result.success === false) {
+                            setPlaceholder(section, result.error || "VirusTotal lookup failed.");
+                        } else {
+                            const rawVtData = result.data && typeof result.data === "object"
+                                ? result.data
+                                : result.raw?.data && typeof result.raw.data === "object"
+                                    ? result.raw.data
+                                    : {};
+                            const rawVtAttributes = rawVtData.attributes && typeof rawVtData.attributes === "object"
+                                ? rawVtData.attributes
+                                : {};
+                            const vtAnalysis = result.analysis && typeof result.analysis === "object"
+                                ? result.analysis
+                                : rawVtAttributes.last_analysis_stats && typeof rawVtAttributes.last_analysis_stats === "object"
+                                    ? rawVtAttributes.last_analysis_stats
+                                    : {};
+                            const makeCountBadge = (count, kind) => {
+                                const value = Number.isFinite(Number(count)) ? Number(count) : 0;
+                                const badge = document.createElement("span");
+                                badge.className = `subnet-calc-grade-badge subnet-calc-vt-${kind}-${value > 0 ? "positive" : "zero"}`;
+                                badge.textContent = String(value);
+                                return badge;
+                            };
 
-                        const makeReputationBadge = (reputation) => {
-                            const value = Number.isFinite(Number(reputation)) ? Number(reputation) : 0;
-                            const badge = document.createElement("span");
-                            if (value > 0) {
-                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-positive";
-                            } else if (value < 0) {
-                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-negative";
-                            } else {
-                                badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-zero";
+                            const makeReputationBadge = (reputation) => {
+                                const value = Number.isFinite(Number(reputation)) ? Number(reputation) : 0;
+                                const badge = document.createElement("span");
+                                if (value > 0) {
+                                    badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-positive";
+                                } else if (value < 0) {
+                                    badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-negative";
+                                } else {
+                                    badge.className = "subnet-calc-grade-badge subnet-calc-vt-reputation-zero";
+                                }
+                                badge.textContent = String(value);
+                                return badge;
+                            };
+
+                            const rows = [
+                                { name: "File", value: String(result.fileName || "Unknown") },
+                                { name: "Query Type", value: String(result.lookupType || "Unknown") },
+                                {
+                                    name: "Lookup Target",
+                                    value: String(
+                                        result.lookupValue
+                                        || analysis.lookupTargetIp
+                                        || getThreatIntelQueryInputValue()
+                                        || "Unknown",
+                                    ),
+                                },
+                                { name: "Record ID", value: String(result.recordId || result.analysisId || "Unknown") },
+                                { name: "Malicious", valueElement: makeCountBadge(vtAnalysis.malicious, "malicious") },
+                                { name: "Suspicious", valueElement: makeCountBadge(vtAnalysis.suspicious, "suspicious") },
+                                {
+                                    name: "Harmless",
+                                    valueElement: makeCountBadge(
+                                        vtAnalysis.harmless,
+                                        typeof vtAnalysis.harmless === "number" && vtAnalysis.harmless === 0
+                                            ? "harmless-zero"
+                                            : "harmless",
+                                    ),
+                                },
+                                { name: "Undetected", value: String(vtAnalysis.undetected ?? 0) },
+                            ];
+
+                            if (Number.isFinite(Number(result.reputation))) {
+                                rows.push({
+                                    name: "Reputation",
+                                    valueElement: makeReputationBadge(result.reputation),
+                                });
                             }
-                            badge.textContent = String(value);
-                            return badge;
-                        };
 
-                        const rows = [
-                            { name: "Query Type", value: String(virustotalResult.lookupType || "Unknown") },
-                            {
-                                name: "Lookup Target",
-                                value: String(
-                                    virustotalResult.lookupValue
-                                    || analysis.lookupTargetIp
-                                    || getThreatIntelQueryInputValue()
-                                    || "Unknown",
-                                ),
-                            },
-                            { name: "Record ID", value: String(virustotalResult.recordId || "Unknown") },
-                            { name: "Malicious", valueElement: makeCountBadge(vtAnalysis.malicious, "malicious") },
-                            { name: "Suspicious", valueElement: makeCountBadge(vtAnalysis.suspicious, "suspicious") },
-                            {
-                                name: "Harmless",
-                                valueElement: makeCountBadge(
-                                    vtAnalysis.harmless,
-                                    typeof vtAnalysis.harmless === "number" && vtAnalysis.harmless === 0
-                                        ? "harmless-zero"
-                                        : "harmless",
-                                ),
-                            },
-                            { name: "Undetected", value: String(vtAnalysis.undetected ?? 0) },
-                        ];
-
-                        if (Number.isFinite(Number(virustotalResult.reputation))) {
-                            rows.push({
-                                name: "Reputation",
-                                valueElement: makeReputationBadge(virustotalResult.reputation),
-                            });
-                        }
-
-                        const vtAttributes = virustotalResult.attributes && typeof virustotalResult.attributes === "object"
-                            ? virustotalResult.attributes
-                            : {};
-                        const recordName = virustotalResult.recordName
-                            || vtAttributes.meaningful_name
-                            || vtAnalysis.meaningful_name;
-                        const recordDescription = virustotalResult.recordDescription
-                            || (Array.isArray(vtAttributes.names) && vtAttributes.names.length > 0
-                                ? vtAttributes.names.join(", ")
-                                : "")
-                            || (Array.isArray(vtAnalysis.names) && vtAnalysis.names.length > 0
-                                ? vtAnalysis.names.join(", ")
-                                : "");
-                        if (recordName) {
-                            rows.push({ name: "Record Name", value: String(recordName) });
-                        }
-                        if (recordDescription) {
-                            rows.push({ name: "Record Description", value: String(recordDescription) });
-                        }
-
-                        if (virustotalResult.lastAnalysisDate) {
-                            let analysisDate = virustotalResult.lastAnalysisDate;
-                            if (typeof analysisDate === "number" || /^\d+$/.test(String(analysisDate))) {
-                                const epoch = Number(analysisDate);
-                                // VirusTotal returns epoch seconds; epoch ms would be > year 50000
-                                const dateObj = epoch > 1e12 ? new Date(epoch) : new Date(epoch * 1000);
-                                analysisDate = dateObj.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+                            const vtAttributes = {
+                                ...rawVtAttributes,
+                                ...(result.attributes && typeof result.attributes === "object"
+                                    ? result.attributes
+                                    : {}),
+                            };
+                            const formatVtDate = (value) => {
+                                if (value === undefined || value === null || value === "") return "Unknown";
+                                const numberValue = Number(value);
+                                if (Number.isFinite(numberValue)) {
+                                    const date = new Date(numberValue > 1e12 ? numberValue : numberValue * 1000);
+                                    if (!Number.isNaN(date.getTime())) return `${date.toISOString().replace("T", " ").slice(0, 19)} UTC`;
+                                }
+                                return String(value);
+                            };
+                            const formatVtList = (value, maxItems = Number.POSITIVE_INFINITY) => Array.isArray(value) && value.length > 0
+                                ? value.slice(0, maxItems).map((entry) => String(entry)).join(", ")
+                                : "None";
+                            const metadataRows = [
+                                ...((Array.isArray(vtAttributes.names) ? vtAttributes.names : [])
+                                    .slice(0, 3)
+                                    .map((name, index) => ({
+                                        name: `Dataset Name ${index + 1}`,
+                                        value: String(name),
+                                    }))),
+                                { name: "Size", value: vtAttributes.size ? `${vtAttributes.size} bytes` : "Unknown" },
+                                { name: "Type", value: vtAttributes.type_description || vtAttributes.type_tag },
+                                { name: "Extension", value: vtAttributes.type_extension },
+                                { name: "Type Tags", value: formatVtList(vtAttributes.type_tags, 3) },
+                                { name: "Magika Classification", value: vtAttributes.magika },
+                                { name: "Magic", value: vtAttributes.magic },
+                                { name: "Tags", value: formatVtList(vtAttributes.tags, 3) },
+                                { name: "Times Submitted", value: vtAttributes.times_submitted },
+                                { name: "First Submitted", value: formatVtDate(vtAttributes.first_submission_date) },
+                                { name: "Last Submitted", value: formatVtDate(vtAttributes.last_submission_date) },
+                                { name: "Last Modified", value: formatVtDate(vtAttributes.last_modification_date) },
+                            ].filter((row) => row.value !== undefined && row.value !== null && row.value !== "");
+                            const metadataSection = document.createElement("div");
+                            renderKeyValueTable(metadataSection, "VirusTotal File Metadata", metadataRows);
+                            section.appendChild(metadataSection);
+                            const recordName = result.recordName
+                                || vtAttributes.meaningful_name
+                                || vtAnalysis.meaningful_name;
+                            const recordDescription = result.recordDescription
+                                || vtAnalysis.recordDescription
+                                || "";
+                            if (recordName) {
+                                rows.push({ name: "Record Name", value: String(recordName) });
                             }
-                            rows.push({ name: "Last Analysis Date", value: String(analysisDate) });
+                            if (recordDescription) {
+                                rows.push({ name: "Record Description", value: String(recordDescription) });
+                            }
+
+                            if (result.lastAnalysisDate) {
+                                let analysisDate = result.lastAnalysisDate;
+                                if (typeof analysisDate === "number" || /^\d+$/.test(String(analysisDate))) {
+                                    const epoch = Number(analysisDate);
+                                    // VirusTotal returns epoch seconds; epoch ms would be > year 50000
+                                    const dateObj = epoch > 1e12 ? new Date(epoch) : new Date(epoch * 1000);
+                                    analysisDate = dateObj.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+                                }
+                                rows.push({ name: "Last Analysis Date", value: String(analysisDate) });
+                            }
+
+                            const overviewSection = document.createElement("div");
+                            renderKeyValueTable(overviewSection, "VirusTotal Overview", rows);
+                            section.appendChild(overviewSection);
+
+                            const technicalRows = [];
+                            const sigmaStats = vtAttributes.sigma_analysis_stats;
+                            if (sigmaStats && typeof sigmaStats === "object") {
+                                const sigmaSummary = Object.entries(sigmaStats)
+                                    .filter(([, count]) => Number(count) > 0)
+                                    .map(([level, count]) => `${level}: ${count}`)
+                                    .join(", ");
+                                if (sigmaSummary) technicalRows.push({ name: "Sigma Severity", value: sigmaSummary });
+                            }
+                            const fileConditions = vtAttributes.filecondis;
+                            if (fileConditions && typeof fileConditions === "object") {
+                                Object.entries(fileConditions).forEach(([name, value]) => {
+                                    if (value !== undefined && value !== null && value !== "") {
+                                        technicalRows.push({ name: `File ${name}`, value: String(value) });
+                                    }
+                                });
+                            }
+                            if (technicalRows.length > 0) {
+                                const technicalSection = document.createElement("div");
+                                renderKeyValueTable(technicalSection, "Technical File Details", technicalRows);
+                                section.appendChild(technicalSection);
+                            }
+
+                            const sigmaResults = Array.isArray(vtAttributes.sigma_analysis_results)
+                                ? vtAttributes.sigma_analysis_results : [];
+                            if (sigmaResults.length > 0) {
+                                const sigmaRows = sigmaResults.map((rule) => ({
+                                    name: `${rule.rule_level || "Rule"}: ${rule.rule_title || rule.rule_id || "Unnamed"}`,
+                                    value: [
+                                        rule.rule_description,
+                                        rule.rule_source,
+                                        ...(Array.isArray(rule.match_context)
+                                            ? rule.match_context.flatMap((context) => Object.values(context?.values || {}))
+                                            : []),
+                                    ].filter(Boolean).join(" — ") || "Sigma rule matched",
+                                }));
+                                const sigmaSection = document.createElement("div");
+                                renderKeyValueTable(sigmaSection, "Sigma Detections", sigmaRows);
+                                section.appendChild(sigmaSection);
+                            }
+
+                            const engineResults = vtAttributes.last_analysis_results;
+                            if (engineResults && typeof engineResults === "object") {
+                                const engineRows = Object.entries(engineResults).map(([engineName, engineResult]) => ({
+                                    name: engineName,
+                                    value: [engineResult.category, engineResult.result, engineResult.engine_version]
+                                        .filter((value) => value !== undefined && value !== null && value !== "")
+                                        .join(" — ") || "No result",
+                                }));
+                                const engineSection = document.createElement("div");
+                                renderKeyValueTable(engineSection, "Antivirus Engine Results", engineRows);
+                                section.appendChild(engineSection);
+                            }
+
+                            if (result.guiUrl) {
+                                const virustotalActionRow = document.createElement("div");
+                                virustotalActionRow.className = "data-tools-actions subnet-calc-map-actions";
+                                const guiButton = document.createElement("button");
+                                guiButton.type = "button";
+                                guiButton.textContent = "Open VirusTotal Record";
+                                guiButton.addEventListener("click", async () => {
+                                    if (typeof window.browserapi?.openExternalUrl !== "function") {
+                                        return;
+                                    }
+                                    await window.browserapi.openExternalUrl(String(result.guiUrl));
+                                });
+                                virustotalActionRow.appendChild(guiButton);
+
+                                const sendToNotesButton = document.createElement("button");
+                                sendToNotesButton.type = "button";
+                                sendToNotesButton.textContent = "Send Link to Notes";
+                                sendToNotesButton.addEventListener("click", async () => {
+                                    const linkText = String(result.guiUrl).trim();
+                                    if (!linkText) {
+                                        statusUpdate("Status: No VirusTotal link available to add");
+                                        return;
+                                    }
+                                    const noteText = `VirusTotal record: ${linkText}`;
+                                    const didAdd = addNote(noteText, "#4caf50", "virustotal-link", false);
+                                    if (didAdd) {
+                                        showNotesWorkspace();
+                                        statusUpdate("Status: VirusTotal link added to Notes");
+                                        writeLogEntry(`VirusTotal link added to notes link=${JSON.stringify(linkText)}`);
+                                    }
+                                });
+                                virustotalActionRow.appendChild(sendToNotesButton);
+                                section.appendChild(virustotalActionRow);
+                            }
                         }
-
-                        renderKeyValueTable(section, "VirusTotal", rows);
-
-                        if (virustotalResult.guiUrl) {
-                            const virustotalActionRow = document.createElement("div");
-                            virustotalActionRow.className = "data-tools-actions subnet-calc-map-actions";
-                            const guiButton = document.createElement("button");
-                            guiButton.type = "button";
-                            guiButton.textContent = "Open VirusTotal Record";
-                            guiButton.addEventListener("click", async () => {
-                                if (typeof window.browserapi?.openExternalUrl !== "function") {
-                                    return;
-                                }
-                                await window.browserapi.openExternalUrl(String(virustotalResult.guiUrl));
-                            });
-                            virustotalActionRow.appendChild(guiButton);
-
-                            const sendToNotesButton = document.createElement("button");
-                            sendToNotesButton.type = "button";
-                            sendToNotesButton.textContent = "Send Link to Notes";
-                            sendToNotesButton.addEventListener("click", async () => {
-                                const linkText = String(virustotalResult.guiUrl).trim();
-                                if (!linkText) {
-                                    statusUpdate("Status: No VirusTotal link available to add");
-                                    return;
-                                }
-                                const noteText = `VirusTotal record: ${linkText}`;
-                                const didAdd = addNote(noteText, "#4caf50", "virustotal-link", false);
-                                if (didAdd) {
-                                    showNotesWorkspace();
-                                    statusUpdate("Status: VirusTotal link added to Notes");
-                                    writeLogEntry(`VirusTotal link added to notes link=${JSON.stringify(linkText)}`);
-                                }
-                            });
-                            virustotalActionRow.appendChild(sendToNotesButton);
-                            section.appendChild(virustotalActionRow);
+                        container.appendChild(section);
+                        if (typeof onSummaryRequested === "function") {
+                            onSummaryRequested();
                         }
-                    }
-                    container.appendChild(section);
-                    if (typeof onSummaryRequested === "function") {
-                        onSummaryRequested();
-                    }
-                },
-            );
+                    },
+                );
+                reputationVirustotalEl.appendChild(card);
+            });
         } else {
             renderThreatIntelCard(
                 reputationVirustotalEl,
@@ -2021,14 +2115,6 @@ function createSubnetCalculatorPanel({
                         onSummaryRequested();
                     }
                 },
-            );
-        } else {
-            renderThreatIntelCard(
-                reputationTorEl,
-                "Tor",
-                "Open Tor Project",
-                "https://www.torproject.org/",
-                (container) => setPlaceholder(container, "Threat intelligence data will appear here."),
             );
         }
     }
@@ -2091,9 +2177,72 @@ function createSubnetCalculatorPanel({
                     || (target && String(target).includes(":") ? "ip" : "ip");
                 recordSessionThreatIntel("virustotal", target, queryType, virustotalResult);
             }
+            const recordKey = String(
+                virustotalResult.recordId
+                || virustotalResult.analysisId
+                || virustotalResult.lookupValue
+                || target,
+            ).toLowerCase();
+            const existingIndex = virustotalResults.findIndex((entry) => String(
+                entry?.recordId || entry?.analysisId || entry?.lookupValue || "",
+            ).toLowerCase() === recordKey);
+            if (existingIndex >= 0) {
+                virustotalResults[existingIndex] = clonePlainData(virustotalResult, null);
+            } else {
+                virustotalResults.push(clonePlainData(virustotalResult, null));
+            }
         }
         renderThreatIntelResult(analysis);
         recomputeSessionThreatScore({ silent: true });
+    }
+
+    async function refreshVirusTotalResults() {
+        if (virusTotalPollInFlight || !window.snitchapi?.lookupVirusTotal) return;
+        const apiKey = getVirusTotalApiKey();
+        if (!apiKey || virustotalResults.length === 0) return;
+        virusTotalPollInFlight = true;
+        try {
+            const updates = await Promise.all(virustotalResults.map(async (result) => {
+                const target = result?.recordId || result?.analysisId || result?.lookupValue;
+                if (!target) return result;
+                const lookupType = result.analysisId && !result.lookupValue ? "analysis" : "hash";
+                const refreshed = await window.snitchapi.lookupVirusTotal(target, {
+                    lookupType,
+                    apiKey,
+                    backendOptions: getBackendTransportOptions(),
+                });
+                return refreshed?.success
+                    ? { ...result, ...refreshed, fileName: result.fileName }
+                    : result;
+            }));
+            virustotalResults = updates;
+            if (virustotalResults.length > 0) {
+                threatIntelState.virustotal = virustotalResults[virustotalResults.length - 1];
+                renderThreatIntelResult({ lookupTargetIp: threatIntelState.virustotal.lookupValue });
+                recomputeSessionThreatScore({ silent: true });
+            }
+        } finally {
+            virusTotalPollInFlight = false;
+        }
+    }
+
+    function startVirusTotalPolling() {
+        if (virusTotalPollTimer) return;
+        virusTotalPollTimer = setInterval(() => void refreshVirusTotalResults(), VIRUS_TOTAL_POLL_INTERVAL_MS);
+    }
+
+    // File carve/download actions finish outside this panel. Keep their
+    // VirusTotal response in the same state and renderer as manual lookups
+    // so the user can inspect it in the Threat Intel tab instead of a modal.
+    function showVirusTotalResult(virustotalResult, fileName = "") {
+        const result = clonePlainData(virustotalResult, null);
+        if (!result) return;
+        if (fileName && !result.fileName) result.fileName = String(fileName);
+        const target = result.lookupValue || result.analysisId || result.recordId || "";
+        if (threatIntelTypeEl) threatIntelTypeEl.value = "hash";
+        if (threatIntelInputEl && target) threatIntelInputEl.value = String(target);
+        renderVirusTotalResult({ lookupTargetIp: target }, result);
+        startVirusTotalPolling();
     }
 
     function renderWhoisResult(analysis, whoisResult) {
@@ -2952,6 +3101,8 @@ function createSubnetCalculatorPanel({
         }
     });
 
+    startVirusTotalPolling();
+
     renderEmptyState();
     setPanelStatus("Enter an IPv4 or IPv6 address/network to analyze.");
 
@@ -2970,6 +3121,7 @@ function createSubnetCalculatorPanel({
         restoreSessionState,
         runThreatIntelHashLookup,
         runThreatIntelIpLookup,
+        showVirusTotalResult,
         runThreatScoreLlmAssessment,
         sendThreatScoreToNotes,
         setAnalysisInput,
