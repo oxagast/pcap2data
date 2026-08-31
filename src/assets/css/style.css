@@ -5514,8 +5514,27 @@ strong {
   color: #721c24 !important;
 }
 
+#packet-readouts.packet-readouts {
+  padding: 5px;
+  margin-bottom: 0;
+  color: var(--color-5);
+  word-break: break-word;
+}
+
+#packet-readouts.packet-readouts>div {
+  margin-bottom: 2px;
+}
+
+#packet-readouts.packet-readouts>div:last-child {
+  margin-bottom: 0;
+}
+
 #timestamp {
-  font-size: 14px;
+  color: var(--color-5);
+}
+
+#current-stream-packet,
+#current-filtered-packet {
   color: var(--color-5);
 }
 
