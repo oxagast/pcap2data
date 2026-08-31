@@ -134,9 +134,6 @@
             <div id="load-time">Load time:</div>
             <div id="backend-processing-warning" role="status" aria-live="polite"></div>
             <div id="total-packets">Total Packets: 0</div>
-            <div id="current-stream-packet">Current Stream Packet: 0 / 0</div>
-            <div id="current-filtered-packet">Current Filtered Packet: 0 / 0</div>
-            <div id="timestamp"></div>
           </div>
         </div>
       </div>
@@ -2315,8 +2312,6 @@ No keystore entries saved.</pre>
           <div id="settings-status" role="status" aria-live="polite"></div>
         </div>
         <div id="packetInfoPane">
-          <div id="timestamp"></div>
-
           <div id="welcome">Processing packets...</div>
           <div id="ip2ip"></div>
           <div id="moredata"></div>
@@ -2353,6 +2348,12 @@ No keystore entries saved.</pre>
               <input type="button" id="next-btn" value="Next" class="custom-btns" style="display: none" />
             </div>
             <div id="active-recon-scroll">
+              <div id="general-info-head" class="PHead">General Information</div>
+              <div id="packet-readouts" class="packet-readouts">
+                <div id="timestamp"></div>
+                <div id="current-stream-packet">Current Stream Packet: 0 / 0</div>
+                <div id="current-filtered-packet">Current Filtered Packet: 0 / 0</div>
+              </div>
               <div id="protcols-head" class="PHead">Protcols Used</div>
               <div id="protocols" class="active">Unavilable</div>
               <div id="comp-head" class="PHead">Compression Information</div>
