@@ -16,6 +16,7 @@ const { sha3_256, sha3_512 } = require("js-sha3");
 const whirlpool = require("whirlpool-js");
 const { activityLogPanelMarkup } = require("./fragments/activity-log-panel");
 const { convertContextMenuMarkup } = require("./fragments/convert-context-menu");
+const { applyDataToolsTransforms } = require("./data-transformations");
 const { validateFilterSyntax } = require("../filter");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
@@ -906,6 +907,7 @@ const DATA_TOOLS_CONVERTED_OUTPUT_IDS = [
 let dataToolsCommittedInputValue = "";
 let dataToolsCommittedInputFormat = "hex";
 let dataToolsLastConversionBytes = new Uint8Array();
+let dataToolsLastRawConversionBytes = null;
 let dataToolsOriginalInputBytes = null;
 let dataToolsInputEditedFlag = false;
 let dataToolsContextPacket = null;
@@ -14148,6 +14150,7 @@ function outputIdToFormat(outputId) {
 // Resets data tools outputs.
 function resetDataToolsOutputs() {
   dataToolsLastConversionBytes = new Uint8Array();
+  dataToolsLastRawConversionBytes = null;
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = false;
   dataToolsLastRenderedOutputBytes = 0;
@@ -15337,6 +15340,83 @@ function getCurrentDataToolsInputBytes() {
   }
 }
 
+function getDataToolsTransformOptions() {
+  const endianWidth = document.querySelector(
+    'input[name="data-tools-endian-width"]:checked',
+  )?.value;
+  const transposeColumns = parseDataToolsManualCarveNumber(
+    document.getElementById("data-tools-transform-columns")?.value,
+  );
+  return {
+    reverse: Boolean(document.getElementById("data-tools-transform-reverse")?.checked),
+    endianSwap: Boolean(document.getElementById("data-tools-transform-endian")?.checked),
+    endianWidth: Number(endianWidth || 2),
+    bitOrder: Boolean(document.getElementById("data-tools-transform-bit-order")?.checked),
+    transpose: Boolean(document.getElementById("data-tools-transform-transpose")?.checked),
+    transposeColumns: transposeColumns || 4,
+  };
+}
+
+function resetDataToolsTransforms() {
+  const sourceBytes = dataToolsLastRawConversionBytes;
+  if (!(sourceBytes instanceof Uint8Array) || sourceBytes.length === 0) {
+    statusUpdate("Status: No converted bytes available to reset");
+    return;
+  }
+  dataToolsLastConversionBytes = Uint8Array.from(sourceBytes);
+  dataToolsLastConversionDisplay = {
+    decimalInteger:
+      sourceBytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
+        ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
+        : bytesToBigIntDecimal(sourceBytes),
+  };
+  clearDataToolsSelectionState();
+  renderDataToolsOutputPage({ reset: true });
+  statusUpdate("Status: Display reset to the untransformed data");
+}
+
+function applyDataToolsTransformsToOutput() {
+  const currentInputBytes = getCurrentDataToolsInputBytes();
+  const sourceBytes =
+    currentInputBytes instanceof Uint8Array
+      ? currentInputBytes
+      : dataToolsLastRawConversionBytes;
+  if (!(sourceBytes instanceof Uint8Array) || sourceBytes.length === 0) {
+    statusUpdate("Status: No converted bytes available to transform");
+    return;
+  }
+
+  try {
+    const options = getDataToolsTransformOptions();
+    const transformedBytes = applyDataToolsTransforms(sourceBytes, options);
+    dataToolsLastConversionBytes = transformedBytes;
+    dataToolsLastConversionDisplay = {
+      decimalInteger:
+        transformedBytes.length > DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES
+          ? `Input exceeds ${DATA_TOOLS_MAX_DECIMAL_INTEGER_BYTES} bytes for decimal integer display`
+          : bytesToBigIntDecimal(transformedBytes),
+    };
+    clearDataToolsSelectionState();
+    renderDataToolsOutputPage({ reset: true });
+    const selectedTransforms = [];
+    if (options.reverse) selectedTransforms.push("inversion");
+    if (options.endianSwap) selectedTransforms.push(`${options.endianWidth}-byte endian swap`);
+    if (options.bitOrder) selectedTransforms.push("bit-order reversal");
+    if (options.transpose) selectedTransforms.push(`transpose (${options.transposeColumns} columns)`);
+    statusUpdate(
+      selectedTransforms.length
+        ? `Status: Applied ${selectedTransforms.join(", ")} to the displayed output`
+        : "Status: Display reset to the untransformed data",
+    );
+    writeLogEntry(
+      `Conv output transforms applied transforms=${selectedTransforms.join("+") || "none"}`,
+    );
+  } catch (error) {
+    const errorEl = document.getElementById("data-tools-error");
+    if (errorEl) errorEl.textContent = error?.message || String(error);
+  }
+}
+
 // Runs data tools conversion.
 async function runDataToolsConversion(options = {}) {
   const suppressHistory = Boolean(options?.suppressHistory);
@@ -15379,6 +15459,7 @@ async function runDataToolsConversion(options = {}) {
         : bytesToBigIntDecimal(bytes);
 
     dataToolsLastConversionBytes = bytes;
+    dataToolsLastRawConversionBytes = Uint8Array.from(bytes);
     dataToolsLastConversionDisplay = {
       decimalInteger,
     };
@@ -15795,6 +15876,7 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
+  dataToolsLastRawConversionBytes = Uint8Array.from(bytes);
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(fileNameHint || "");
@@ -25099,6 +25181,12 @@ document.addEventListener("selectionchange", () => {
 document
   .getElementById("data-tools-manual-carve-btn")
   ?.addEventListener("click", performDataToolsManualCarve);
+document
+  .getElementById("data-tools-apply-transforms-btn")
+  ?.addEventListener("click", applyDataToolsTransformsToOutput);
+document
+  .getElementById("data-tools-reset-transforms-btn")
+  ?.addEventListener("click", resetDataToolsTransforms);
 document
   .getElementById("data-tools-manual-carve-load-conv-btn")
   ?.addEventListener("click", loadDataToolsManualCarveIntoConv);

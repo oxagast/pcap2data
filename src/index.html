@@ -343,6 +343,47 @@
                   <button id="data-tools-load-more-output-btn" type="button">Load more output</button>
                   <span id="data-tools-output-pagination-status"></span>
                 </div>
+                <div id="data-tools-transform-row" class="data-tools-transform-row">
+                  <div class="data-tools-transform-title">Data Transformations</div>
+                  <div class="data-tools-transform-options">
+                    <label title="Reverse the complete byte sequence">
+                      <input id="data-tools-transform-reverse" type="checkbox" />
+                      Invert data
+                    </label>
+                    <label title="Reverse bytes within fixed-width words">
+                      <input id="data-tools-transform-endian" type="checkbox" />
+                      Endianness swap
+                    </label>
+                    <span class="data-tools-transform-choice-label">Word:</span>
+                    <label>
+                      <input type="radio" name="data-tools-endian-width" value="2" checked />
+                      16-bit
+                    </label>
+                    <label>
+                      <input type="radio" name="data-tools-endian-width" value="4" />
+                      32-bit
+                    </label>
+                    <label title="Reverse the bit order within every byte">
+                      <input id="data-tools-transform-bit-order" type="checkbox" />
+                      Bit order
+                    </label>
+                    <label title="Read bytes into rows and emit them column by column">
+                      <input id="data-tools-transform-transpose" type="checkbox" />
+                      Transpose
+                    </label>
+                    <label for="data-tools-transform-columns">Columns</label>
+                    <input id="data-tools-transform-columns" type="text" inputmode="numeric" value="4"
+                      title="Number of columns for transposition" />
+                  </div>
+                  <div class="data-tools-transform-actions">
+                    <button id="data-tools-apply-transforms-btn" type="button">Apply to Output</button>
+                    <button id="data-tools-reset-transforms-btn" type="button">Reset Output</button>
+                  </div>
+                  <div class="data-tools-transform-note">
+                    Transformations are applied in this order: inversion, endianness, bit order, then transposition.
+                    The Conv input remains unchanged.
+                  </div>
+                </div>
                 <div id="data-tools-manual-carve-row" class="data-tools-manual-carve-row">
                   <div class="data-tools-manual-carve-title">Manual Carve</div>
                   <div id="data-tools-output-cursor-row" class="data-tools-cursor-row">
