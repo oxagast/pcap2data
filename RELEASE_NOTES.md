@@ -1,6 +1,40 @@
 # Release Notes
 
-## v2.7.1657 - 2026-08-31
+## v2.7.1736 - 2026-09-01
+
+**Type:** minor
+
+> Session library import — bring exported sessions back into the
+> picker without hunting for the sessions directory.
+
+### ✨ Features
+
+- **Session picker → Import** — the saved-sessions picker now has an
+  **Import** button next to **New Session**. Clicking it opens a file
+  dialog, validates the selected file against the expected
+  PacketSnitch session structure, prompts for a destination name, and
+  writes the session into the library so it shows up in the list and
+  can be opened like any other saved session. This replaces the
+  manual "find the sessions directory and copy the file in" workflow.
+  The canonical import format is the gzipped-BSON `.psb` produced by
+  the existing **Export** action; legacy `.pss` / `.pss.gz` / `.json`
+  exports are still accepted for backward compatibility but surface a
+  deprecation notice prompting the user to re-export as `.psb`. The
+  validation lives in a new dependency-free module
+  ([src/session-format.js](src/session-format.js)) that both the
+  main-process import handler
+  ([src/main.js](src/main.js) `session-import` IPC) and the renderer's
+  session-name prompt round-trip consume, so an invalid file is
+  rejected with a precise error (missing `host` map, empty host map,
+  non-array host entry, non-object packet, etc.) before anything is
+  written to disk. The preload bridge exposes
+  `window.sessionsapi.importFromFile()`,
+  `onImportPromptName(callback)`, and `sendImportNameResult(name)`,
+  and the picker panel
+  ([src/ui/panels/session-picker.js](src/ui/panels/session-picker.js))
+  reuses the existing session-name dialog for the destination prompt.
+
+## v2.7.1735 - 2026-08-31
 
 **Type:** minor
 
@@ -88,7 +122,7 @@
   **Data Transformations** block (`#data-tools-transform-row` in
   [src/index.html](src/index.html), wired through
   [src/ui/data-transformations.js](src/ui/data-transformations.js)
-  plus new `applyDataToolsTransformsToOutput` /
+  - new `applyDataToolsTransformsToOutput` /
   `resetDataToolsTransforms` handlers in
   [src/ui/main-frontend.js](src/ui/main-frontend.js)). Four
   composable transformations are supported, applied in order:
@@ -173,113 +207,6 @@
   [src/assets/css/style.css](src/assets/css/style.css) (`#packet-readouts.packet-readouts`)
   styles the new block consistently with the existing
   `#protocols` / `#compression` groups.
-- **ETA countdown, backend respawn, and frontend ingestion** — the
-  load-time ETA in the toolbar now adjusts correctly when the
-  backend is reused across progress passes; the renderer no longer
-  triggers a backend respawn loop on the HTTP port; and the
-  frontend ingestion chain no longer drops packets or double-counts
-  on rerun. Wired through
-  [src/back-comm.js](src/back-comm.js) +
-  [src/backend/snitch.py](src/backend/snitch.py) +
-  [src/ui/main-frontend.js](src/ui/main-frontend.js).
-- **UI lag reduced on theme engine + periodic backend crashes** —
-  the renderer validates theme JSON shape before applying it (no
-  more "applied a corrupt theme, then crashed on the next paint"
-  loop), and the recurring backend crash under heavy captures is
-  gone. `themes/smokeshow.json` was updated; storefront rendering
-  is the source of truth and the renderer no longer crashes when
-  the bundled copy is shaped differently than a freshly downloaded
-  one.
-- **Inactive-LLM dialog** — when the active LLM provider fails the
-  reachability probe, the renderer now raises an in-app dialog
-  (new `showInactiveLlmDialog` helper wired in
-  [src/ui/main-frontend.js](src/ui/main-frontend.js) +
-  [src/main.js](src/main.js) +
-  [src/preload.js](src/preload.js)) instead of letting a stale
-  generation hang in the activity log. The dialog surfaces the
-  provider name, the failure reason, and a link to the Settings →
-  LLM tab so the user can fix the key, swap the model, or disable
-  the LLM entirely.
-- **Metrics endpoint + clone counter** — the metrics sink in
-  [src/backend/snitch.py](src/backend/snitch.py) emits the new
-  schema, and the GitHub Actions `clone.yml` workflow now tracks
-  clone counts via `scripts/clonecounter.py` so the README badge
-  updates on every push.
-
-### 🧪 Tests
-
-- `tests/data_transformations.test.js` — covers `reverseBytes`,
-  `swapEndianness` (16- and 32-bit), `reverseBitOrder`,
-  `transposeBytes`, the composed `applyDataToolsTransforms` runner,
-  and the error guards on bad widths / column counts.
-- `tests/test_catalog_listable_gate.py` — locks in the storefront
-  visibility gate so themes not flagged listable in the catalog
-  never appear in the renderer.
-- `tests/test_catalog_admin_portal.py` — admin-portal login +
-  license reconcile path.
-- `tests/test_catalog_schema_migration.py` — catalog server schema
-  upgrade path.
-- `tests/test_catalog_smtp_use_tls.py` — SMTP `use_tls` config
-  round-trip in the catalog server.
-- `tests/threat_intel_virustotal_ui.test.js` — extended for the
-  multi-result `virustotalResults[]` history, the new
-  `analysis`-id lookup branch, the `confirmed_timeout` /
-  `failure` / `type_unsupported` stats fields, the truncated
-  `attributes.names` cap, and the hidden-by-default IPSum / Tor
-  cards.
-- `tests/test_backend_iso8583_decoder.py` + `tests/iso8583_conv_decoder.test.js`
-  — ISO 8583 decoder coverage (ASCII + binary bitmap, MTI
-  validation, TPDU stripping, false-positive rejection).
-- `tests/themes_subtab.test.js` extensions — `getLicenseTier`
-  bridge, developer-tier first-launch path, fixed-aspect-ratio
-  preview container, sandbox-banner `paddleEnv`/`sandbox`
-  fallback.
-
-### 🔧 Improvements
-
-- [src/settings.js](src/settings.js) now carries the OpenRouter
-  block (`llm.openrouterModel`, `llm.openrouterRequestTimeoutSeconds`,
-  `llm.provider`) and `apiKeys.openrouterApiKey` — all normalised
-  through `normalizeSettings` so a legacy config without the
-  OpenRouter keys round-trips safely to the new defaults.
-- [src/llm.js](src/llm.js) ships the new `generateOpenRouter` /
-  `registerProviderHandler` surface, the OpenAI-compatible
-  response-to-Ollama-shape normaliser, and the
-  `getFetchForProvider` shared dispatcher lookup so adding a third
-  provider later is a one-line `registerProviderHandler` call.
-- [src/main.js](src/main.js) caches `openrouterDispatcherCache`,
-  exposes `getOpenRouterDispatcher` /
-  `getOpenRouterFetch`, registers
-  `ipcMain.handle('llm:generate')` as the canonical channel,
-  extends `ensureModelsLibraryFileExists` with the openrouter
-  branch, exposes `ipcMain.handle('invalidate-openrouter-models-cache')`,
-  and surfaces the inactive-LLM IPC. The new
-  `buildVirusTotalLookupResponse` now returns the full VirusTotal
-  attribute surface and the `analysis`-id lookup branch.
-- [src/preload.js](src/preload.js) gains the `openrouter-api`
-  preload bridge (`listModels` / `getModel` / `getStatus`),
-  `themeapi.getLicenseTier`, and the inactive-LLM notification
-  surface.
-- [src/ui/main-frontend.js](src/ui/main-frontend.js) wires the
-  Provider/Model dropdown in the Settings → LLM tab, plumbs
-  `applyDataToolsTransformsToOutput` /
-  `resetDataToolsTransforms` through the Conv output panel, and
-  keeps the `dataToolsLastRawConversionBytes` snapshot so
-  **Reset Output** is non-destructive. Threat Intel renders the
-  new `virustotalResults[]` history (session-round-trip safe) and
-  calls `setOptionalThreatIntelCardVisibility` to gate the
-  IPSum / Tor cards on actual data.
-- [src/ui/common-frontend.js](src/ui/common-frontend.js) is the
-  new shared helpers module for the theme engine, license-tier
-  badge, and storefront previews.
-- The **General Information** block now lives at the top of the
-  Host Data active-recon scroll (`#general-info-head` +
-  `#packet-readouts.packet-readouts` in
-  [src/index.html](src/index.html)) so the timestamp, current-
-  stream-packet, and current-filtered-packet readouts always
-  appear in the same place regardless of toolbar overflow.
-
----
 
 ## v2.6.1629 - 2026-08-20
 

@@ -109,6 +109,8 @@ function _buildDataToolsSummaryPrompt(context) {
         "",
         "SQUELCH NO-OP DATA: do NOT report entries that produced no usable output. If a decoder was opened but failed, returned an error, decoded to nothing, or only produced placeholder/empty content, omit it entirely instead of describing what it did not find. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip lookups. Only describe operations that actually surfaced data. Silence is preferable to a paragraph that just says 'nothing was found'.",
         "",
+        "PROVENANCE: when the context includes a `provenance` object, use it to qualify the summary. `currentFormat` is the active input encoding (hex, base64, binary, decimal, ascii); `inputEdited` means the input was manually modified from the original captured data; `inputTruncated` means the input buffer only contains a display-truncated prefix and the full capture is NOT present; `transformationsApplied` lists operations applied to the converted output (inversion, endian swap, bit-order reversal, transposition); `searchReplace` records any find/replace operations performed on the input. Mention these only when they materially affect the data being summarized.",
+        "",
         "Workspace context (JSON):",
         JSON.stringify({ ...context, timestamp: new Date().toISOString() }, null, 2),
     ].join("\n");
@@ -259,27 +261,118 @@ function _collectPacketJsonContext() {
     };
 }
 
+// Collects Conv workspace provenance metadata that qualifies the data
+// being summarized: the active input format, whether the input was manually
+// edited, whether the input buffer contains display-truncated data, what
+// data transformations were applied to the converted output, and any
+// search/replace operations performed on the input.
+//
+// Truncation is only reported when the truncated prefix was reinserted into
+// the input buffer (the textarea contains the "[Input truncated for display]"
+// marker). Internal _truncate() calls that cap LLM context size are a
+// collection artifact, not a data transformation, and are NOT reported.
+function _collectConvProvenanceContext() {
+    const formatEl = document.getElementById("data-tools-format");
+    const inputEl = document.getElementById("data-tools-input");
+    const inputValue = String(inputEl?.value || "");
+
+    const currentFormat = formatEl?.value || "unknown";
+
+    const editedIndicator = document.getElementById("data-tools-input-edited-indicator");
+    const inputEdited = /edited/i.test(editedIndicator?.textContent || "");
+
+    const inputTruncated = /\[Input truncated for display/.test(inputValue);
+
+    const transformationsApplied = [];
+    if (document.getElementById("data-tools-transform-reverse")?.checked) {
+        transformationsApplied.push("inversion");
+    }
+    const endianWidth = document.querySelector(
+        'input[name="data-tools-endian-width"]:checked',
+    )?.value;
+    if (document.getElementById("data-tools-transform-endian")?.checked) {
+        transformationsApplied.push(`${endianWidth || 2}-byte endian swap`);
+    }
+    if (document.getElementById("data-tools-transform-bit-order")?.checked) {
+        transformationsApplied.push("bit-order reversal");
+    }
+    const transposeCols = document.getElementById("data-tools-transform-columns")?.value;
+    if (document.getElementById("data-tools-transform-transpose")?.checked) {
+        transformationsApplied.push(`transpose (${transposeCols || 4} columns)`);
+    }
+
+    const searchReplace = {};
+    const simpleSearch = document.getElementById("data-tools-simple-search")?.value || "";
+    const simpleReplace = document.getElementById("data-tools-simple-replace")?.value || "";
+    const simpleStatus = document.getElementById("data-tools-simple-replace-status")?.textContent || "";
+    if (simpleSearch || simpleReplace || simpleStatus.trim()) {
+        searchReplace.simple = {
+            find: _truncate(simpleSearch, 200),
+            replaceWith: _truncate(simpleReplace, 200),
+            matchCase: Boolean(document.getElementById("data-tools-simple-match-case")?.checked),
+            status: _truncate(simpleStatus.trim(), 300),
+        };
+    }
+    const pcreSearch = document.getElementById("data-tools-pcre-search")?.value || "";
+    const pcreReplace = document.getElementById("data-tools-pcre-replace")?.value || "";
+    const pcreStatus = document.getElementById("data-tools-pcre-status")?.textContent || "";
+    const pcreFlags = [
+        document.getElementById("data-tools-pcre-flag-i")?.checked ? "i" : "",
+        document.getElementById("data-tools-pcre-flag-m")?.checked ? "m" : "",
+        document.getElementById("data-tools-pcre-flag-s")?.checked ? "s" : "",
+        document.getElementById("data-tools-pcre-flag-u")?.checked ? "u" : "",
+    ].filter(Boolean).join("");
+    if (pcreSearch || pcreReplace || pcreStatus.trim()) {
+        searchReplace.pcre = {
+            pattern: _truncate(pcreSearch, 200),
+            replaceWith: _truncate(pcreReplace, 200),
+            flags: pcreFlags,
+            status: _truncate(pcreStatus.trim(), 300),
+        };
+    }
+
+    return {
+        currentFormat,
+        inputEdited,
+        ...(inputTruncated
+            ? {
+                inputTruncated: true,
+                truncationNote:
+                    "Input buffer contains a display-truncated prefix; bytes beyond the display cap are not present in the input.",
+            }
+            : {}),
+        transformationsApplied,
+        searchReplace,
+    };
+}
+
 function _collectSummaryContext(activeSubtab) {
     // Note: the hash used for duplicate suppression is computed from this
     // object, so only include stable workspace data here. Do not add
     // timestamps or other volatile fields.
+    //
+    // Provenance metadata (format, edit state, truncation, transformations,
+    // search/replace) is attached to subtabs that operate on the shared Conv
+    // input buffer. Subnet and threat-intel use their own separate inputs and
+    // do not carry Conv provenance.
+    const provenance = _collectConvProvenanceContext();
     switch (activeSubtab) {
         case "conversions":
-            return { activeSubtab, ..._collectConversionContext() };
+            return { activeSubtab, provenance, ..._collectConversionContext() };
         case "extraction":
-            return { activeSubtab, ..._collectExtractionContext() };
+            return { activeSubtab, provenance, ..._collectExtractionContext() };
         case "packet-json":
-            return { activeSubtab, ..._collectPacketJsonContext() };
+            return { activeSubtab, provenance, ..._collectPacketJsonContext() };
         case "hashes":
-            return { activeSubtab, ..._collectHashesContext() };
+            return { activeSubtab, provenance, ..._collectHashesContext() };
         case "decodes":
-            return { activeSubtab, ..._collectProtoDecoderContext() };
+            return { activeSubtab, provenance, ..._collectProtoDecoderContext() };
         case "subnet":
             return { activeSubtab, ..._collectSubnetContext() };
         case "threat-intel":
             return { activeSubtab, ..._collectThreatIntelContext() };
         default:
-            return { activeSubtab, ..._collectConversionContext(), subtab: activeSubtab };
+            return { activeSubtab, provenance, ..._collectConversionContext(), subtab: activeSubtab };
     }
 }
 

@@ -796,6 +796,7 @@ describe('summary stats weaving', () => {
                         loadFunction('resetSummaryDistillCache'),
                         loadFunction('buildSummaryDistillCacheFingerprint'),
                         loadFunction('buildSummaryDistillPrompt'),
+                        loadFunction('stripLlmThinkingText'),
                         loadAsyncFunction('distillSummaryMarkdownWithLLM'),
                     ].join('\n\n')}
                         globalThis.hashSummaryInputForDistillCache = hashSummaryInputForDistillCache;

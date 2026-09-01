@@ -108,6 +108,31 @@ function createSummaryPanel({
     });
   }
 
+  // The "Major Events Report" button asks the LLM to condense everything
+  // already in the Summary tab into a short 3–4 paragraph report, then
+  // opens the result as a self-contained HTML page in the user's default
+  // browser. This is separate from the main summary content — the running
+  // summary tab is not modified.
+  const summaryMajorEventsBtnEl = documentRef.getElementById("summary-major-events-btn");
+  if (summaryMajorEventsBtnEl) {
+    summaryMajorEventsBtnEl.addEventListener("click", () => {
+      const exportBridge =
+        typeof globalThis !== "undefined" &&
+          globalThis.__PACKETSNITCH_SUMMARY_EXPORT__
+          ? globalThis.__PACKETSNITCH_SUMMARY_EXPORT__
+          : typeof window !== "undefined" && window.__PACKETSNITCH_SUMMARY_EXPORT__
+            ? window.__PACKETSNITCH_SUMMARY_EXPORT__
+            : null;
+      const dispatcher =
+        exportBridge && typeof exportBridge.generateMajorEventsReport === "function"
+          ? exportBridge.generateMajorEventsReport
+          : null;
+      if (dispatcher) {
+        void dispatcher();
+      }
+    });
+  }
+
   return {
     showSummary,
     showSummaryLoading,

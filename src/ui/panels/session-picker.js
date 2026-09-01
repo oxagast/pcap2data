@@ -65,6 +65,7 @@ function initializeSessionPicker({
   const listEl = documentRef.getElementById("session-picker-list");
   const statusEl = documentRef.getElementById("session-picker-status");
   const newBtn = documentRef.getElementById("session-picker-new-btn");
+  const importBtn = documentRef.getElementById("session-picker-import-btn");
   const closeBtn = documentRef.getElementById("session-picker-close-btn");
   const refreshBtn = documentRef.getElementById("session-picker-refresh-btn");
 
@@ -367,6 +368,65 @@ function initializeSessionPicker({
     }
   }
 
+  async function handleImport() {
+    clearStatus();
+    if (!sessionsapi || typeof sessionsapi.importFromFile !== "function") {
+      showStatus("Import is not available in this build.", true);
+      return;
+    }
+    showStatus("Importing session…");
+    try {
+      const result = await sessionsapi.importFromFile();
+      if (result && result.canceled) {
+        clearStatus();
+        return;
+      }
+      if (!result || !result.success) {
+        showStatus(
+          "Import failed: " + ((result && result.error) || "unknown error"),
+          true,
+        );
+        return;
+      }
+      // Surface deprecation/legacy-format warnings returned by the main
+      // process so the user knows to re-export legacy sessions as .psb.
+      if (result.warning) {
+        showStatus(
+          'Session "' + result.name + '" imported. ' + result.warning,
+          false,
+        );
+      } else {
+        showStatus('Session "' + result.name + '" imported.');
+      }
+      await loadSessions();
+    } catch (err) {
+      showStatus("Import failed: " + (err && err.message ? err.message : String(err)), true);
+    }
+  }
+
+  // The main process requests a destination name for an imported session via
+  // 'session-import-prompt-name'. Reuse the existing session-name dialog and
+  // send the result back through sessionsapi.sendImportNameResult. A warning
+  // (e.g. legacy-format deprecation notice) may be shown in the dialog status
+  // line.
+  if (sessionsapi && typeof sessionsapi.onImportPromptName === "function") {
+    sessionsapi.onImportPromptName(async (payload) => {
+      const defaultName =
+        payload && typeof payload.defaultName === "string" ? payload.defaultName : "";
+      const warning =
+        payload && typeof payload.warning === "string" ? payload.warning : "";
+      const chosen = await promptSessionName("Import Session", defaultName);
+      if (warning && nameDialogStatus) {
+        // Show the deprecation warning after the dialog closes so it is
+        // visible in the picker status line context too.
+        nameDialogStatus.textContent = warning;
+      }
+      if (typeof sessionsapi.sendImportNameResult === "function") {
+        sessionsapi.sendImportNameResult(chosen || "");
+      }
+    });
+  }
+
   function show() {
     if (screen) screen.style.display = "flex";
     loadSessions();
@@ -381,6 +441,10 @@ function initializeSessionPicker({
       hide();
       if (onNewSession) onNewSession();
     });
+  }
+
+  if (importBtn) {
+    importBtn.addEventListener("click", () => handleImport());
   }
 
   if (closeBtn) {

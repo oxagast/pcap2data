@@ -835,6 +835,7 @@ strong {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  margin-right: 70px;
 }
 
 .summary-workspace-header-actions {
