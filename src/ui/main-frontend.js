@@ -861,6 +861,55 @@ let helpWin = null;
 let llmSummaryTimeout = null;
 let summary = "";
 let analysisBlubHistory = [];
+// Chronological history of every piece of information sent through the
+// summarizer pipeline (per-stream summary + compaction passes). Each entry
+// is { prompt, response, type, timestamp }. This is persisted in the session
+// file so the summary can be recomputed at any time by replaying the history
+// through the LLM without re-running the entire capture session.
+let summarizerHistory = [];
+// Response cache for the summarizer pipeline. Maps a prompt hash (FNV-1a
+// of the trimmed prompt) to the cleaned LLM response. This lets us skip
+// the LLM call entirely when the same prompt is re-issued — e.g. when the
+// user revisits a stream that was already summarized, or when recompute
+// encounters a prompt that matches a prior entry's recorded response.
+// The cache is renderer-scoped and not persisted (the per-entry
+// `response` field in `summarizerHistory` serves as the persisted cache
+// for the recompute path).
+let summarizerResponseCache = new Map();
+// Maximum number of entries in the response cache. Each entry is a
+// prompt hash + response string, so this is bounded to prevent
+// unbounded memory growth in very long sessions.
+const SUMMARIZER_RESPONSE_CACHE_MAX = 128;
+// Minimum Jaccard similarity (over character 4-grams) for a fuzzy cache
+// match. A value of 1.0 means exact-match only (falls back to the hash
+// cache). Values below this threshold are too dissimilar to reuse. The
+// 0.85 default means ~85% of the prompt's character 4-grams must overlap
+// with a cached prompt for the cached response to be reused. This
+// catches near-duplicate prompts where only a small portion of the
+// stream data differs (e.g. a re-captured stream with slightly different
+// timestamps but the same protocol/content shape).
+const SUMMARIZER_FUZZY_THRESHOLD = 0.85;
+// Maximum number of cached prompts to compare against during a fuzzy
+// scan. The cache is bounded to SUMMARIZER_RESPONSE_CACHE_MAX entries,
+// so this is at most that many Jaccard comparisons. Each comparison is
+// O(n) where n is the number of unique 4-grams — fast enough for the
+// cache sizes involved.
+const SUMMARIZER_FUZZY_SCAN_MAX = 32;
+// Size of the character n-gram used for fuzzy matching. 4-grams give a
+// good balance between sensitivity (catches meaningful differences) and
+// robustness (ignores trivial whitespace/punctuation changes).
+const SUMMARIZER_FUZZY_NGRAM_SIZE = 4;
+// Stricter Jaccard similarity threshold applied specifically to the
+// stream-data portion of the prompt (the JSON between "Here is the
+// stream data:" and the "Note that" suffix). This guard prevents a
+// high overall prompt similarity from skipping the analysis of a
+// different packet/stream — two different streams may produce
+// structurally similar prompts (same boilerplate, same protocol,
+// similar capture overview) but the stream data itself must be nearly
+// identical for the cached response to be reused. The 0.95 default is
+// deliberately stricter than the overall prompt threshold so that even
+// small differences in the stream payload trigger a fresh LLM call.
+const SUMMARIZER_FUZZY_STREAM_GUARD_THRESHOLD = 0.95;
 // Context-scoped compacted analysis summaries. Each entry represents a distinct
 // analysis context (e.g. a packet stream or Data Tools workspace) so the summary
 // panel can show multiple, additive, in-depth summaries in chronological order.
@@ -1327,13 +1376,26 @@ function getLlmProviderId() {
 // Provider-agnostic: each provider tracks its own availability via a
 // separately cached boolean (e.g. ``ollamaVersionCheckPassed`` for
 // Ollama, ``openRouterVersionCheckPassed`` for OpenRouter).
+//
+// For Ollama, a cloud model (model name ending in ``:cloud``) does not
+// require the local Ollama daemon to be running — it routes through
+// ollama.com. So for cloud models we consider the runtime reachable
+// when the cloud API is reachable (``cachedLlmDiagnostics.cloudApiReachable``)
+// even if ``ollamaServerListening`` is false. For local (non-cloud)
+// models we still require the daemon to be listening.
 function isLlmProviderRuntimeReachable() {
   const provider = getLlmProviderId();
   if (provider === "openrouter") {
     return openRouterVersionCheckPassed;
   }
   if (provider === "ollama") {
-    return ollamaVersionCheckPassed;
+    if (ollamaVersionCheckPassed) return true;
+    // Cloud models don't need the local daemon — check cloud API reachability.
+    const model = getCurrentSettings()?.llm?.ollamaModel || "";
+    if (typeof model === "string" && model.trim().toLowerCase().endsWith(":cloud")) {
+      return Boolean(cachedLlmDiagnostics?.cloudApiReachable);
+    }
+    return false;
   }
   // Unknown provider — fail open so callers can still issue a request
   // and surface a friendly error from the provider handler itself.
@@ -7127,6 +7189,8 @@ async function clearCurrentSession() {
   summary = "";
   compactedAnalysisSummaries = [];
   analysisBlubHistory.length = 0;
+  summarizerHistory = [];
+  resetSummarizerResponseCache();
   analysisCompactionInProgress = false;
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
@@ -9512,6 +9576,68 @@ function normalizeSummaryMarkdownHeadings(markdownText) {
   return normalizedLines.join("\n").trim();
 }
 
+
+// Strips leading "thinking text" that some LLM models emit before their
+// actual Markdown response. Models with reasoning/thinking mode often
+// prefix their output with their chain-of-thought wrapped in a fenced
+// code block, an inline code span, or XML-style thinking tags. The
+// actual summary content follows after that block.
+//
+// This helper detects and removes only the LEADING thinking block(s) so
+// the clean final Markdown is what gets rendered. It is conservative:
+// it only strips a leading block when it is at the very start of the
+// text and there is meaningful content after it. Code blocks that are
+// interspersed within the actual summary content are left untouched.
+function stripLlmThinkingText(text) {
+  let source = String(text || "").replace(/\r\n?/g, "\n").trim();
+  if (!source) return source;
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 5) {
+    changed = false;
+    iterations += 1;
+
+    // 1. XML-style leading thinking tags.
+    const thinkTagMatch = source.match(
+      /^\s*<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1\s*>\s*/i,
+    );
+    if (thinkTagMatch) {
+      source = source.slice(thinkTagMatch[0].length).trim();
+      changed = true;
+      continue;
+    }
+
+    // 2. Leading fenced code block.
+    const fenceMatch = source.match(
+      /^\s*(```|~~~)([^\n]*)\n([\s\S]*?)\1[ \t]*\n?/,
+    );
+    if (fenceMatch) {
+      const afterBlock = source.slice(fenceMatch[0].length).trim();
+      if (afterBlock) {
+        source = afterBlock;
+        changed = true;
+        continue;
+      }
+    }
+
+    // 3. Leading inline code span that spans multiple lines.
+    const inlineMatch = source.match(
+      /^\s*`([^`\n]*(?:\n[^`\n]*)+)`\s*/,
+    );
+    if (inlineMatch) {
+      const afterSpan = source.slice(inlineMatch[0].length).trim();
+      if (afterSpan) {
+        source = afterSpan;
+        changed = true;
+        continue;
+      }
+    }
+  }
+
+  return source;
+}
+
 // Renders summary markdown preview.
 function renderSummaryMarkdownPreview(summaryText) {
   const summaryPreviewEl = document.getElementById("summary_content");
@@ -11510,6 +11636,37 @@ function buildSessionStateSnapshot() {
       }))
       : [],
     analysisBlubHistory: [...analysisBlubHistory],
+    // Persist the chronological history of every summarizer prompt and
+    // response so the summary can be recomputed at any time by replaying
+    // the prompts through the LLM (Settings → LLM → "Recompute Summary").
+    summarizerHistory: Array.isArray(summarizerHistory)
+      ? summarizerHistory.map((entry) => ({
+        type: String(entry?.type || "stream"),
+        prompt: String(entry?.prompt || ""),
+        response: String(entry?.response || ""),
+        timestamp: String(entry?.timestamp || new Date().toISOString()),
+      }))
+      : [],
+    // Persist the export-time distillation cache so a reloaded session
+    // can short-circuit the LLM distillation pass when nothing has
+    // changed. The fingerprint inputs (compactedAnalysisSummaries,
+    // notes) are already persisted above, and the stats section is
+    // recomputed from the restored capture data. Saving the cache
+    // itself (hash + distilled text) lets the first save after a
+    // reload skip the LLM call when the fingerprint matches.
+    summaryDistillCache: summaryDistillCache
+      && typeof summaryDistillCache === "object"
+      ? {
+        inputHash: String(summaryDistillCache.inputHash || ""),
+        inputLength: Number.isFinite(summaryDistillCache.inputLength)
+          ? summaryDistillCache.inputLength
+          : 0,
+        distilledText: String(summaryDistillCache.distilledText || ""),
+        distilledAt: Number.isFinite(summaryDistillCache.distilledAt)
+          ? summaryDistillCache.distilledAt
+          : 0,
+      }
+      : { inputHash: "", inputLength: 0, distilledText: "", distilledAt: 0 },
     keystoreMode: keystorePanel.getKeystoreMode(),
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
@@ -11935,6 +12092,54 @@ async function restoreSessionState(sessionState) {
         (item) => item && typeof item === "string",
       ),
     );
+  }
+
+  // Restore the chronological summarizer history so the summary can be
+  // recomputed at any time via Settings → LLM → "Recompute Summary".
+  // Older sessions without this field default to an empty array (the
+  // recompute button will report "no history available").
+  if (Array.isArray(sessionState.summarizerHistory)) {
+    summarizerHistory = sessionState.summarizerHistory
+      .filter(
+        (entry) => entry && typeof entry === "object" && String(entry.prompt || "").trim(),
+      )
+      .map((entry) => ({
+        type: String(entry.type || "stream"),
+        prompt: String(entry.prompt || ""),
+        response: String(entry.response || ""),
+        timestamp: String(entry.timestamp || new Date().toISOString()),
+      }));
+  } else {
+    summarizerHistory = [];
+  }
+
+  // Restore the export-time distillation cache so a reloaded session
+  // can short-circuit the LLM distillation pass when nothing has
+  // changed since the last save. The cache's fingerprint is computed
+  // from compactedAnalysisSummaries (restored below), notesList
+  // (restored below), and buildStatsMarkdownSection() (recomputed from
+  // the restored capture data). All three inputs are available after
+  // the full restore, so the restored cache hash will match if the
+  // analyst-visible content is unchanged. Older sessions without this
+  // field default to an empty cache (forces a fresh distillation on
+  // the first save after reload — the original behaviour).
+  if (
+    sessionState.summaryDistillCache
+    && typeof sessionState.summaryDistillCache === "object"
+    && sessionState.summaryDistillCache.distilledText
+  ) {
+    summaryDistillCache = {
+      inputHash: String(sessionState.summaryDistillCache.inputHash || ""),
+      inputLength: Number.isFinite(sessionState.summaryDistillCache.inputLength)
+        ? sessionState.summaryDistillCache.inputLength
+        : 0,
+      distilledText: String(sessionState.summaryDistillCache.distilledText || ""),
+      distilledAt: Number.isFinite(sessionState.summaryDistillCache.distilledAt)
+        ? sessionState.summaryDistillCache.distilledAt
+        : 0,
+    };
+  } else {
+    resetSummaryDistillCache();
   }
 
   // Load context-scoped compacted analysis summaries. Older sessions only saved
@@ -21637,13 +21842,13 @@ function writeSummaryFromLLM() {
     const captureOverviewBlock = captureOverviewParts.length
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
-    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary.`;
+    let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary. Do NOT include, quote, echo, or restate any portion of the previously written summary in your response — your response must contain ONLY the new key points that are not already covered. Do not wrap your response in a code block or put any of your output inside code fences; return plain Markdown only.`;
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
     try {
-      const llmResponse = await callLargeLanguageModel(prompt);
-      const summPart = llmResponse?.response || "";
+      const summPart = await callLlmWithResponseCache(prompt, { useRetry: false });
+      recordSummarizerHistoryEntry("stream", prompt, summPart);
       summary = summary + "\n\n" + summPart;
       if (summPart.length > 0) {
         appendAnalysisBlub(summPart);
@@ -21676,6 +21881,491 @@ function appendAnalysisBlub(blubText) {
     analysisBlubHistory.length >= threshold
   ) {
     void runAnalysisCompaction();
+  }
+}
+
+// Computes a cache key (FNV-1a hash) for a summarizer prompt. Reuses
+// the same hash function as the distillation cache for consistency.
+// The hash is of the trimmed prompt — whitespace-only differences do
+// not produce cache misses.
+function summarizerPromptCacheKey(prompt) {
+  return hashSummaryInputForDistillCache(String(prompt || "").trim());
+}
+
+// Computes a set of character n-grams from a string for Jaccard
+// similarity comparison. Uses the SUMMARIZER_FUZZY_NGRAM_SIZE default
+// of 4, which is small enough to be sensitive to real content changes
+// but large enough to ignore trivial whitespace/punctuation noise.
+function buildPromptNgramSet(text) {
+  const source = String(text || "");
+  if (source.length < SUMMARIZER_FUZZY_NGRAM_SIZE) return new Set([source]);
+  const ngrams = new Set();
+  for (let i = 0; i <= source.length - SUMMARIZER_FUZZY_NGRAM_SIZE; i += 1) {
+    ngrams.add(source.slice(i, i + SUMMARIZER_FUZZY_NGRAM_SIZE));
+  }
+  return ngrams;
+}
+
+// Computes the Jaccard similarity between two sets: |intersection| / |union|.
+// Returns 0 for empty sets, 1.0 for identical sets.
+function jaccardSimilarity(setA, setB) {
+  if (!setA || !setB || setA.size === 0 || setB.size === 0) return 0;
+  let intersectionCount = 0;
+  const smaller = setA.size <= setB.size ? setA : setB;
+  const larger = setA.size <= setB.size ? setB : setA;
+  for (const item of smaller) {
+    if (larger.has(item)) intersectionCount += 1;
+  }
+  const unionCount = setA.size + setB.size - intersectionCount;
+  return unionCount === 0 ? 0 : intersectionCount / unionCount;
+}
+
+// Extracts the stream-specific data portion from a summarizer prompt.
+// The per-stream prompt has the structure:
+//   ...boilerplate...\n\n{captureOverview}Here is the stream data:\n\n{jsonOfPacketStream}.\n\nNote that...
+// The stream data (the JSON between "Here is the stream data:" and the
+// "Note that" suffix) is the part that uniquely identifies which packet
+// stream is being analyzed. Two prompts with the same stream data are
+// analyzing the same content; two prompts with different stream data
+// are analyzing different streams and must NOT be fuzzy-matched even
+// if the boilerplate + running summary makes the overall prompt
+// similarity high.
+//
+// For compaction prompts (which don't have "Here is the stream data:"),
+// this returns the full prompt — compaction prompts are already
+// context-specific enough that the overall n-gram comparison is
+// sufficient.
+function extractStreamDataFromPrompt(prompt) {
+  const source = String(prompt || "");
+  const startMarker = "Here is the stream data:\n\n";
+  const endMarker = ".\n\nNote that";
+  const startIndex = source.indexOf(startMarker);
+  if (startIndex === -1) return source;
+  const dataStart = startIndex + startMarker.length;
+  const endIndex = source.indexOf(endMarker, dataStart);
+  if (endIndex === -1) return source.slice(dataStart);
+  return source.slice(dataStart, endIndex);
+}
+
+// Scans the response cache for a fuzzy match. Compares the given prompt's
+// n-gram set against each cached entry's n-gram set using Jaccard
+// similarity. Returns the best match if it meets the threshold, or null.
+//
+// GUARD: Before accepting a fuzzy match, the function verifies that the
+// stream-specific data portion of the new prompt matches the cached
+// prompt's stream data. This prevents skipping the analysis of a
+// different packet/stream whose prompt is structurally similar (e.g.
+// same protocol, same boilerplate, different payload) just because the
+// overall prompt similarity is high. If the stream data portions differ
+// by more than a small margin, the fuzzy match is rejected — the LLM
+// is called to produce a fresh analysis.
+function findFuzzyCacheMatch(promptNgrams, promptText) {
+  if (!promptNgrams || promptNgrams.size === 0) return null;
+  const newStreamData = extractStreamDataFromPrompt(promptText);
+  let bestKey = null;
+  let bestScore = 0;
+  let scanned = 0;
+  // Iterate in reverse (most recently used = end of Map) so we scan the
+  // most likely candidates first and stop early if we hit the scan cap.
+  const entries = Array.from(summarizerResponseCache.entries()).reverse();
+  for (const [key, entry] of entries) {
+    if (scanned >= SUMMARIZER_FUZZY_SCAN_MAX) break;
+    scanned += 1;
+    if (!entry || !entry.ngrams) continue;
+    const score = jaccardSimilarity(promptNgrams, entry.ngrams);
+    if (score < bestScore) continue;
+    // GUARD: If this entry has a stored stream-data hash, verify the
+    // stream-specific content matches. This prevents a high overall
+    // prompt similarity from skipping the analysis of a different
+    // packet stream. The guard uses a separate, stricter Jaccard
+    // comparison on just the stream data — if the stream data
+    // similarity is below the strict threshold, reject this match even
+    // if the overall prompt similarity is high.
+    if (entry.streamDataNgrams && newStreamData) {
+      const newStreamNgrams = buildPromptNgramSet(newStreamData);
+      const streamScore = jaccardSimilarity(newStreamNgrams, entry.streamDataNgrams);
+      if (streamScore < SUMMARIZER_FUZZY_STREAM_GUARD_THRESHOLD) {
+        // Different stream data — do not reuse this cache entry.
+        continue;
+      }
+    }
+    bestScore = score;
+    bestKey = key;
+  }
+  if (bestScore >= SUMMARIZER_FUZZY_THRESHOLD) {
+    return { key: bestKey, score: bestScore };
+  }
+  return null;
+}
+
+// Calls the LLM with a response cache. If the prompt hash matches a
+// prior cached response (exact match), returns the cached response without
+// making an LLM call. If no exact match is found, performs a fuzzy scan
+// of recent cached prompts using Jaccard similarity over character
+// n-grams — if a cached prompt is similar enough (>= the configured
+// threshold), its response is reused. This catches near-duplicate prompts
+// where only a small portion of the stream data differs. On a complete
+// cache miss, calls the LLM (with retry), caches the cleaned response
+// along with its n-gram set, and returns it.
+//
+// This is used by the live summarizer path (writeSummaryFromLLM,
+// runAnalysisCompaction) so revisiting a stream that was already
+// summarized in the current session does not cost a second LLM call.
+async function callLlmWithResponseCache(prompt, { useRetry = true } = {}) {
+  const cacheKey = summarizerPromptCacheKey(prompt);
+  if (summarizerResponseCache.has(cacheKey)) {
+    const cached = summarizerResponseCache.get(cacheKey);
+    // LRU: move to end by re-inserting.
+    summarizerResponseCache.delete(cacheKey);
+    summarizerResponseCache.set(cacheKey, cached);
+    writeLogEntry(`Summarizer response cache HIT (exact, key=${cacheKey}, length=${cached.text?.length || 0})`);
+    return cached.text || "";
+  }
+  // Fuzzy match: scan recent cache entries for a similar prompt.
+  const promptNgrams = buildPromptNgramSet(prompt);
+  const fuzzyMatch = findFuzzyCacheMatch(promptNgrams, prompt);
+  if (fuzzyMatch) {
+    const cached = summarizerResponseCache.get(fuzzyMatch.key);
+    if (cached) {
+      // LRU: move to end.
+      summarizerResponseCache.delete(fuzzyMatch.key);
+      summarizerResponseCache.set(fuzzyMatch.key, cached);
+      writeLogEntry(`Summarizer response cache HIT (fuzzy, key=${fuzzyMatch.key}, score=${fuzzyMatch.score.toFixed(3)}, length=${cached.text?.length || 0})`);
+      return cached.text || "";
+    }
+  }
+  const llmResponse = useRetry
+    ? await callLargeLanguageModelWithRetry(prompt)
+    : await callLargeLanguageModel(prompt);
+  const cleaned = stripLlmThinkingText(llmResponse?.response || "");
+  // Evict the oldest entry if the cache is full.
+  if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+    const oldestKey = summarizerResponseCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      summarizerResponseCache.delete(oldestKey);
+    }
+  }
+  summarizerResponseCache.set(cacheKey, {
+    text: cleaned,
+    ngrams: promptNgrams,
+    streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(prompt)),
+  });
+  return cleaned;
+}
+
+// Resets the summarizer response cache. Called on session reset and
+// at the start of recomputeSummaryFromHistory so stale responses
+// from a prior model/settings are never reused.
+function resetSummarizerResponseCache() {
+  summarizerResponseCache = new Map();
+}
+
+// Records a summarizer pipeline entry to the chronological history. Each
+// entry captures the prompt sent to the LLM and the (cleaned) response
+// received, along with the entry type ("stream" for per-stream summaries,
+// "compaction" for compaction passes) and a timestamp. The history is
+// persisted in the session file so the summary can be recomputed later
+// by replaying the prompts through the LLM without re-running the capture.
+function recordSummarizerHistoryEntry(type, prompt, response) {
+  if (!prompt || typeof prompt !== "string") return;
+  if (!response || typeof response !== "string") return;
+  // Cap stored prompt/response size to avoid unbounded session file growth.
+  // Most prompts are well under the LLM_MAX_CONTENT_LENGTH cap, but
+  // defensive truncation prevents a single pathological entry from
+  // bloating the session.
+  const MAX_ENTRY_CHARS = 200000;
+  const trimmedPrompt = prompt.length > MAX_ENTRY_CHARS
+    ? prompt.slice(0, MAX_ENTRY_CHARS) + "\n[TRUNCATED]"
+    : prompt;
+  const trimmedResponse = response.length > MAX_ENTRY_CHARS
+    ? response.slice(0, MAX_ENTRY_CHARS) + "\n[TRUNCATED]"
+    : response;
+  summarizerHistory.push({
+    type: String(type || "stream"),
+    prompt: trimmedPrompt,
+    response: trimmedResponse,
+    timestamp: new Date().toISOString(),
+  });
+  // Also populate the response cache so a subsequent live summarizer
+  // call with the same prompt (e.g. user revisits the same stream) gets
+  // a cache hit without an LLM call. Store the n-gram set alongside the
+  // response so the fuzzy matcher can compare future prompts.
+  const cacheKey = summarizerPromptCacheKey(trimmedPrompt);
+  if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+    const oldestKey = summarizerResponseCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      summarizerResponseCache.delete(oldestKey);
+    }
+  }
+  summarizerResponseCache.set(cacheKey, {
+    text: trimmedResponse,
+    ngrams: buildPromptNgramSet(trimmedPrompt),
+    streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(trimmedPrompt)),
+  });
+}
+
+// Recomputes the entire summary by replaying the stored summarizer history
+// through the LLM in chronological order. For each history entry, the original
+// prompt is sent to the LLM fresh — the response is discarded and replaced
+// with the new LLM output. This lets the user regenerate the summary with a
+// different model or updated settings without re-running the capture.
+//
+// The function rebuilds `summary`, `analysisBlubHistory`, and
+// `compactedAnalysisSummaries` from scratch, then renders the result.
+async function recomputeSummaryFromHistory() {
+  if (!Array.isArray(summarizerHistory) || summarizerHistory.length === 0) {
+    statusUpdate("Status: No summarizer history to recompute from.");
+    return;
+  }
+
+  const totalEntries = summarizerHistory.length;
+  statusUpdate(`Status: Recomputing summary from ${totalEntries} history entries...`);
+  writeLogEntry(`Summary recompute started: ${totalEntries} history entries`);
+
+  // Reset all summary state so the replay builds it fresh.
+  summary = "";
+  analysisBlubHistory = [];
+  compactedAnalysisSummaries = [];
+  analysisCompactionInProgress = false;
+  resetSummaryDistillCache();
+  // Clear the response cache so the recompute does not reuse responses
+  // from the prior model/settings run — only entries we process during
+  // this recompute are cached.
+  resetSummarizerResponseCache();
+  renderSummaryMarkdownPreview(summary);
+
+  let processed = 0;
+  let failed = 0;
+  let cacheHits = 0;
+
+  // Prompt packing: consecutive "stream" entries are batched into a
+  // single combined prompt to reduce the number of LLM calls during
+  // recompute. The batch prompt asks the LLM to summarize each stream
+  // separately, delimited by numbered markers, so the responses can be
+  // split back into individual stream summaries. The batch size is
+  // capped so the combined prompt stays under LLM_MAX_CONTENT_LENGTH.
+  const STREAM_BATCH_SIZE = 4;
+  let i = 0;
+  while (i < summarizerHistory.length) {
+    const entry = summarizerHistory[i];
+    if (!entry || typeof entry !== "object" || !String(entry.prompt || "").trim()) {
+      i += 1;
+      continue;
+    }
+    const entryType = String(entry.type || "stream");
+    const prompt = String(entry.prompt || "");
+
+    // Compaction entries are processed one at a time (they already pack
+    // multiple blurbs and have their own context-scoped semantics).
+    if (entryType === "compaction") {
+      try {
+        // Check the response cache first — if this exact prompt was
+        // already processed during this recompute (e.g. a duplicate
+        // compaction entry), reuse the cached response.
+        const cacheKey = summarizerPromptCacheKey(prompt);
+        let compacted;
+        if (summarizerResponseCache.has(cacheKey)) {
+          compacted = summarizerResponseCache.get(cacheKey).text || "";
+          cacheHits += 1;
+          writeLogEntry(`Recompute compaction cache HIT (key=${cacheKey})`);
+        } else {
+          const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+          compacted = stripLlmThinkingText(llmResponse?.response || "");
+          if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+            const oldestKey = summarizerResponseCache.keys().next().value;
+            if (oldestKey !== undefined) summarizerResponseCache.delete(oldestKey);
+          }
+          summarizerResponseCache.set(cacheKey, { text: compacted, ngrams: buildPromptNgramSet(prompt), streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(prompt)) });
+        }
+        if (compacted.trim()) {
+          compactedAnalysisSummaries.push({
+            signature: `recomputed-${processed}`,
+            summary: compacted.trim(),
+            lastUpdatedAt: Date.now(),
+          });
+          summary = summary + "\n\n" + compacted.trim();
+        }
+        processed += 1;
+      } catch (error) {
+        failed += 1;
+        writeLogEntry(`Recompute compaction ${processed} failed: ${error?.message || error}`);
+        const fallbackResponse = String(entry.response || "").trim();
+        if (fallbackResponse) {
+          summary = summary + "\n\n" + fallbackResponse;
+          compactedAnalysisSummaries.push({
+            signature: `recomputed-${processed}`,
+            summary: fallbackResponse,
+            lastUpdatedAt: Date.now(),
+          });
+        }
+      }
+      renderSummaryMarkdownPreview(summary);
+      statusUpdate(`Status: Recomputing summary... ${processed}/${totalEntries} entries processed.`);
+      i += 1;
+      continue;
+    }
+
+    // Stream entries: pack consecutive ones into a batch.
+    const batch = [];
+    let batchChars = 0;
+    while (
+      i + batch.length < summarizerHistory.length
+      && batch.length < STREAM_BATCH_SIZE
+    ) {
+      const nextEntry = summarizerHistory[i + batch.length];
+      if (!nextEntry || typeof nextEntry !== "object") break;
+      if (String(nextEntry.type || "stream") !== "stream") break;
+      const nextPrompt = String(nextEntry.prompt || "");
+      if (!nextPrompt.trim()) break;
+      // Stop if adding this entry would exceed the LLM context limit.
+      if (batchChars + nextPrompt.length > LLM_MAX_CONTENT_LENGTH * 0.8) break;
+      batch.push(nextEntry);
+      batchChars += nextPrompt.length;
+    }
+
+    if (batch.length <= 1) {
+      // Single entry — process directly (with cache check).
+      try {
+        const cacheKey = summarizerPromptCacheKey(prompt);
+        let summPart;
+        if (summarizerResponseCache.has(cacheKey)) {
+          summPart = summarizerResponseCache.get(cacheKey).text || "";
+          cacheHits += 1;
+          writeLogEntry(`Recompute stream cache HIT (key=${cacheKey})`);
+        } else {
+          const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+          summPart = stripLlmThinkingText(llmResponse?.response || "");
+          if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+            const oldestKey = summarizerResponseCache.keys().next().value;
+            if (oldestKey !== undefined) summarizerResponseCache.delete(oldestKey);
+          }
+          summarizerResponseCache.set(cacheKey, { text: summPart, ngrams: buildPromptNgramSet(prompt), streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(prompt)) });
+        }
+        if (summPart.trim()) {
+          summary = summary + "\n\n" + summPart;
+          appendAnalysisBlub(summPart);
+        }
+        processed += 1;
+      } catch (error) {
+        failed += 1;
+        writeLogEntry(`Recompute stream ${processed} failed: ${error?.message || error}`);
+        const fallbackResponse = String(entry.response || "").trim();
+        if (fallbackResponse) {
+          summary = summary + "\n\n" + fallbackResponse;
+          appendAnalysisBlub(fallbackResponse);
+        }
+      }
+      renderSummaryMarkdownPreview(summary);
+      statusUpdate(`Status: Recomputing summary... ${processed}/${totalEntries} entries processed.`);
+      i += 1;
+      continue;
+    }
+
+    // Multiple consecutive stream entries: pack into a single batch prompt.
+    const batchPrompts = batch.map(
+      (b, idx) => `<<<STREAM_${idx + 1}_START>>>\n${String(b.prompt || "")}\n<<<STREAM_${idx + 1}_END>>>`,
+    );
+    const batchPrompt = [
+      "You are PacketSnitch, a network forensics assistant.",
+      `You are about to receive ${batch.length} stream summaries to reprocess.`,
+      "For EACH stream, produce a concise summary of the key protocols, file transfers, URLs, credentials, or other notable content.",
+      "Output format: for each stream, print the summary on its own, separated by a line containing exactly '<<<SUMMARY_SPLIT>>>'.",
+      "Do NOT include any preamble, thinking text, or explanation — only the summaries separated by the split marker.",
+      "",
+      ...batchPrompts,
+    ].join("\n");
+
+    // If the batch prompt is too long, fall back to individual processing.
+    if (batchPrompt.length >= LLM_MAX_CONTENT_LENGTH) {
+      // Process each entry individually instead.
+      for (const b of batch) {
+        try {
+          const bPrompt = String(b.prompt || "");
+          const cacheKey = summarizerPromptCacheKey(bPrompt);
+          let summPart;
+          if (summarizerResponseCache.has(cacheKey)) {
+            summPart = summarizerResponseCache.get(cacheKey).text || "";
+            cacheHits += 1;
+          } else {
+            const llmResponse = await callLargeLanguageModelWithRetry(bPrompt);
+            summPart = stripLlmThinkingText(llmResponse?.response || "");
+            if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+              const oldestKey = summarizerResponseCache.keys().next().value;
+              if (oldestKey !== undefined) summarizerResponseCache.delete(oldestKey);
+            }
+            summarizerResponseCache.set(cacheKey, { text: summPart, ngrams: buildPromptNgramSet(bPrompt), streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(bPrompt)) });
+          }
+          if (summPart.trim()) {
+            summary = summary + "\n\n" + summPart;
+            appendAnalysisBlub(summPart);
+          }
+          processed += 1;
+        } catch (error) {
+          failed += 1;
+          writeLogEntry(`Recompute stream ${processed} failed: ${error?.message || error}`);
+          const fallbackResponse = String(b.response || "").trim();
+          if (fallbackResponse) {
+            summary = summary + "\n\n" + fallbackResponse;
+            appendAnalysisBlub(fallbackResponse);
+          }
+        }
+        renderSummaryMarkdownPreview(summary);
+        statusUpdate(`Status: Recomputing summary... ${processed}/${totalEntries} entries processed.`);
+      }
+      i += batch.length;
+      continue;
+    }
+
+    // Send the batch prompt.
+    try {
+      const llmResponse = await callLargeLanguageModelWithRetry(batchPrompt);
+      const batchResult = stripLlmThinkingText(llmResponse?.response || "");
+      const parts = batchResult.split(/<<<SUMMARY_SPLIT>>>/).map((p) => p.trim());
+      for (let j = 0; j < batch.length; j += 1) {
+        const summPart = (parts[j] || "").trim() || String(batch[j].response || "").trim();
+        if (summPart) {
+          summary = summary + "\n\n" + summPart;
+          appendAnalysisBlub(summPart);
+          // Cache the individual stream's response.
+          const cacheKey = summarizerPromptCacheKey(String(batch[j].prompt || ""));
+          if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+            const oldestKey = summarizerResponseCache.keys().next().value;
+            if (oldestKey !== undefined) summarizerResponseCache.delete(oldestKey);
+          }
+          summarizerResponseCache.set(cacheKey, { text: summPart, ngrams: buildPromptNgramSet(String(batch[j].prompt || "")), streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(String(batch[j].prompt || ""))) });
+        }
+        processed += 1;
+      }
+      writeLogEntry(`Recompute batch: ${batch.length} streams packed into 1 LLM call`);
+    } catch (error) {
+      failed += 1;
+      writeLogEntry(`Recompute batch failed: ${error?.message || error}`);
+      // Fall back to the recorded responses so no data is lost.
+      for (const b of batch) {
+        const fallbackResponse = String(b.response || "").trim();
+        if (fallbackResponse) {
+          summary = summary + "\n\n" + fallbackResponse;
+          appendAnalysisBlub(fallbackResponse);
+        }
+        processed += 1;
+      }
+    }
+    renderSummaryMarkdownPreview(summary);
+    statusUpdate(`Status: Recomputing summary... ${processed}/${totalEntries} entries processed.`);
+    i += batch.length;
+  }
+
+  analysisCompactionInProgress = false;
+  renderCombinedAnalysisSummary();
+  resetSummaryDistillCache();
+
+  const cacheLabel = cacheHits > 0 ? `, ${cacheHits} cache hits` : "";
+  if (failed > 0) {
+    statusUpdate(`Status: Summary recomputed — ${processed} entries processed, ${failed} failed${cacheLabel}.`);
+    writeLogEntry(`Summary recompute completed: ${processed} processed, ${failed} failed, ${cacheHits} cache hits`);
+  } else {
+    statusUpdate(`Status: Summary recomputed from ${processed} history entries.`);
+    writeLogEntry(`Summary recompute completed: ${processed} entries processed`);
   }
 }
 
@@ -21775,6 +22465,7 @@ async function runAnalysisCompaction() {
 - Drops only redundant or low-value observations; do not drop details that a security analyst might want to refer back to.
 - SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip lookups.
 - Is concise and reference-quality; prefer 3-6 short bullets or paragraphs containing only the key points. Use Markdown tables only when they make distinct data easier to scan, never to repeat prose.
+- OUTPUT FORMAT: return your response as plain Markdown only. Do not wrap any portion of your response in code fences or code blocks. Do not echo or quote the previously compacted summary in your response — produce only the final merged summary.
 
 ${chronologicalBlurbs}`;
 
@@ -21786,8 +22477,10 @@ ${chronologicalBlurbs}`;
   let compacted = "";
   try {
     if (isLlmRuntimeEnabled()) {
-      const llmResponse = await callLargeLanguageModelWithRetry(prompt);
-      compacted = llmResponse?.response || "";
+      compacted = await callLlmWithResponseCache(prompt, { useRetry: true });
+      if (compacted.trim()) {
+        recordSummarizerHistoryEntry("compaction", prompt, compacted);
+      }
     }
   } catch (error) {
     writeLogEntry(`[AnalysisCompact] Compaction failed: ${error?.message || error}`);
@@ -22655,7 +23348,7 @@ async function distillSummaryMarkdownWithLLM(summaryMarkdown) {
   );
   try {
     const llmResponse = await callLargeLanguageModelWithRetry(prompt);
-    const distilled = String(llmResponse?.response || "").trim();
+    const distilled = stripLlmThinkingText(String(llmResponse?.response || "").trim());
     if (!distilled) {
       const reason = "LLM returned an empty response";
       writeLogEntry(`Summary distill skipped: ${reason}`);
@@ -23168,6 +23861,194 @@ ${bodyHtml}
   );
 }
 
+// Builds the prompt that asks the LLM to produce a short, human-readable
+// "major events" narrative report from the full summary. Unlike the
+// distillation prompt (which reorganises the full report), this one asks
+// for a concise 3–4 paragraph executive summary detailing the major
+// events of the capture. The LLM is told to deduplicate everything
+// already in the summary and write prose (not bullet lists).
+function buildMajorEventsPrompt(reportMarkdown) {
+  return [
+    "You are PacketSnitch, a network forensics assistant.",
+    "You are about to receive the full analysis summary for a captured pcap.",
+    "Your job is to produce a DETAILED EXECUTIVE REPORT — a human-readable narrative of the MAJOR EVENTS in this capture.",
+    "This is NOT a re-organisation of the full report. It is a condensed but thorough standalone summary that an analyst can read to quickly understand what happened in this capture.",
+    "",
+    "Rules:",
+    "1. DEDUPLICATE: collapse every duplicate observation into a single mention. The source summary was assembled from multiple LLM passes and frequently restates the same fact. The reader should never see the same fact twice.",
+    "2. LENGTH: write at least 5 paragraphs. Each paragraph should be 4–8 sentences. There is no upper limit — if the capture has many notable events, write as many paragraphs as needed to cover them all. Do not artificially compress or omit important events to stay within a paragraph count.",
+    "3. CONTENT — cover each of the following in its own paragraph (or more if warranted):",
+    "   - Overview: what kind of capture this is (duration, packet count, protocols seen, top talkers / hosts).",
+    "   - Traffic patterns: who was talking to whom, over what protocols and ports, and any notable session flows or connection sequences.",
+    "   - Credentials & sensitive data: any credentials, tokens, cookies, keys, personal data, or other sensitive payloads that were captured. Name the protocol, the credential type, and the masked value where available.",
+    "   - Anomalies & security findings: any suspicious patterns, misconfigurations, cleartext exposure, unusual ports, unexpected hosts, or otherwise security-relevant observations.",
+    "   - Notable payloads / extracted artifacts: any files, images, DNS lookups, HTTP requests/responses, or other decoded content that stood out.",
+    "   - Wrap-up: a concise assessment of the overall character of the capture — is it benign background traffic, a targeted attack, a credential leak, a misconfiguration probe, etc.",
+    "4. STYLE: write as prose (paragraphs). You MAY use inline Markdown for emphasis (e.g. **bold** for IPs, hostnames, or credential types) and inline `code` for technical tokens, but do NOT use bullet lists, tables, or headings. The output should read as connected paragraphs of narrative.",
+    "5. NO INVENTION: only report facts that are present in the source summary. Do not invent or extrapolate. If the source does not mention something, do not write about it.",
+    "6. SPECIFICITY: be concrete. Mention actual IP addresses, ports, protocol names, hostnames, credential types, file names, and URLs when they appear in the source. Vague statements like 'some traffic was observed' are not useful — say what was observed.",
+    "",
+    "Here is the source summary:",
+    "",
+    "<<<SOURCE_SUMMARY_START>>>",
+    reportMarkdown,
+    "<<<SOURCE_SUMMARY_END>>>",
+    "",
+    "Now return the major events report. No preamble, no explanation — just the paragraphs of the report.",
+  ].join("\n");
+}
+
+// Generates a short "major events" report by feeding the entire current
+// summary through the LLM with a prompt that asks for a 3–4 paragraph
+// executive narrative. The result is rendered as a self-contained HTML
+// page and opened in the user's default browser via a temp file. This is
+// separate from the main summary content — the running Summary tab is
+// not modified.
+//
+// If the LLM is unavailable or disabled, the function falls back to a
+// local heuristic condensation (first 2000 chars of the stripped summary)
+// so the user still gets a report rather than a silent failure.
+async function generateMajorEventsReport() {
+  const rawSummaryMarkdown = getSummaryMarkdownForExport();
+  if (!rawSummaryMarkdown.trim()) {
+    statusUpdate("Status: No summary available to generate a major events report");
+    return;
+  }
+
+  const summaryBaseName = getSummaryExportBaseName();
+  const generatedDate = new Date().toLocaleString();
+
+  let reportText = "";
+  let usedLlm = false;
+
+  // Attempt the LLM call directly rather than gating on
+  // ``isLlmRuntimeEnabled()``, which requires the local Ollama daemon
+  // to be listening. Cloud models (e.g. ``minimax-m3:cloud``) and
+  // OpenRouter work without a local daemon, so the strict gate would
+  // falsely report "LLM unavailable" even though the user's background
+  // summaries are being generated fine. Instead we try the call and
+  // fall back to local condensation only if it actually fails — the
+  // same pattern the background summary compaction uses.
+  statusUpdate("Status: Generating major events report via LLM...");
+  let truncatedInput = rawSummaryMarkdown.trim();
+  if (truncatedInput.length > SUMMARY_DISTILL_INPUT_MAX_CHARS) {
+    truncatedInput =
+      truncatedInput.slice(0, SUMMARY_DISTILL_INPUT_MAX_CHARS) +
+      "\n\n[INPUT TRUNCATED: source summary too long for major events prompt]";
+  }
+  const prompt = buildMajorEventsPrompt(truncatedInput);
+  if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    writeLogEntry(
+      `Major events report skipped: prompt length ${prompt.length} exceeds LLM_MAX_CONTENT_LENGTH ${LLM_MAX_CONTENT_LENGTH}`,
+    );
+    statusUpdate("Status: Major events report skipped (summary too long for LLM). Using local condensation.");
+  } else {
+    try {
+      const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+      const responseText = stripLlmThinkingText(String(llmResponse?.response || "").trim());
+      if (responseText) {
+        reportText = responseText;
+        usedLlm = true;
+        writeLogEntry(
+          `Major events report generated via LLM: input=${rawSummaryMarkdown.trim().length} chars output=${reportText.length} chars`,
+        );
+      } else {
+        writeLogEntry("Major events report: LLM returned empty response, using local condensation");
+      }
+    } catch (error) {
+      writeLogEntry(
+        `Major events report LLM call failed, using local condensation: ${error?.message || error}`,
+      );
+    }
+  }
+
+  // Fallback: local heuristic condensation. Strip Markdown headings and
+  // take the first ~4000 chars of the summary body as plain text, split
+  // into rough paragraphs. This is NOT as good as the LLM pass but gives
+  // the user something useful when the LLM is unavailable.
+  if (!reportText) {
+    const stripped = rawSummaryMarkdown
+      .replace(/^#{1,6}\s+.*$/gm, "")
+      .replace(/^\s*[-*]\s+/gm, "")
+      .replace(/\*\*(.+?)\*\*/g, "$1")
+      .replace(/`(.+?)`/g, "$1")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const truncated = stripped.slice(0, 4000);
+    reportText = truncated || "No major events could be extracted from the current summary.";
+    statusUpdate("Status: Major events report generated (local condensation — LLM unavailable).");
+  } else {
+    statusUpdate("Status: Major events report generated and opened in browser.");
+  }
+
+  // Convert the report text (which may contain inline Markdown like
+  // **bold**, `code`, etc.) to HTML using the same renderer the Summary
+  // tab uses. The browser is not Markdown-aware, so we must convert
+  // before embedding in the HTML page.
+  const reportBodyHtml = renderMarkdownToHtml(reportText, {
+    emptyPlaceholder: "No major events could be extracted from the current summary.",
+  });
+
+  const llmBadge = usedLlm
+    ? ""
+    : '<p class="report-source-note">Generated via local condensation (LLM unavailable).</p>';
+
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PacketSnitch — Major Events Report (${escapeHtml(summaryBaseName)})</title>
+<style>
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.7; max-width: 760px; margin: 2rem auto; padding: 0 1.5rem; color: #1a1a1a; background: #fff; }
+.report-header { text-align: center; margin-bottom: 2rem; border-bottom: 2px solid #0066cc; padding-bottom: 1rem; }
+.report-header h1 { font-size: 1.5rem; color: #0066cc; margin-bottom: 0.25rem; }
+.report-meta { color: #666; font-size: 0.85rem; margin: 0; }
+.report-meta a { color: #0066cc; text-decoration: none; }
+.report-meta a:hover { text-decoration: underline; }
+.report-body { font-size: 1.02rem; }
+.report-body p { margin-bottom: 1.4rem; text-align: justify; }
+.report-body strong { color: #0066cc; }
+.report-body code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+.report-body em { font-style: italic; }
+.report-body a { color: #0066cc; }
+.report-source-note { color: #888; font-size: 0.8rem; font-style: italic; text-align: center; margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<div class="report-header">
+  <h1>Major Events Report</h1>
+  <p class="report-meta">Capture: ${escapeHtml(summaryBaseName)} — Generated by PacketSnitch ${PACKETSNITCH_VERSION} on ${generatedDate} — <a href="https://packetsnitch.com" target="_blank" rel="noopener noreferrer">packetsnitch.com</a></p>
+</div>
+<div class="report-body">
+${reportBodyHtml}
+</div>
+${llmBadge}
+</body>
+</html>`;
+
+  // Send the HTML to the main process to be written to a temp file and
+  // opened in the default browser via shell.openExternal.
+  if (window.saveapi && typeof window.saveapi.openReportInBrowser === "function") {
+    try {
+      const result = await window.saveapi.openReportInBrowser(htmlContent);
+      if (result?.success) {
+        writeLogEntry("Major events report opened in default browser");
+      } else {
+        const errMsg = result?.error || "unknown error";
+        logErrorEntry("major-events-report-open", errMsg);
+        statusUpdate(`Status: Major events report generated but could not open browser — ${errMsg}`);
+      }
+    } catch (err) {
+      const errMsg = err?.message || String(err);
+      logErrorEntry("major-events-report-open", errMsg);
+      statusUpdate(`Status: Major events report generated but could not open browser — ${errMsg}`);
+    }
+  } else {
+    statusUpdate("Status: Major events report generated but browser bridge is unavailable.");
+    writeLogEntry("Major events report: window.saveapi.openReportInBrowser is not available");
+  }
+}
+
 // Expose the Summary export entry points on globalThis so other
 // webpack-bundled modules (e.g. summary-panel.js) can reach them
 // without needing to grow factory-injected dependencies. The panel
@@ -23188,6 +24069,7 @@ if (typeof globalThis !== "undefined") {
     saveSummaryFromHeaderButton,
     saveSummaryAsPdf,
     saveSummaryFromContextMenu,
+    generateMajorEventsReport,
   };
 }
 
@@ -24551,6 +25433,32 @@ document
   .addEventListener("change", (event) => {
     writeLogEntry(`Settings updated analysisCompactionThresholdBlubs=${event?.target?.value}`);
   });
+
+// "Recompute Summary" button — replays the stored summarizer history
+// through the LLM to rebuild the summary from scratch. This lets the
+// user regenerate the summary with a different model or settings without
+// re-running the capture.
+const settingsLlmRecomputeBtnEl = document.getElementById("settings-llm-recompute-summary-btn");
+if (settingsLlmRecomputeBtnEl) {
+  settingsLlmRecomputeBtnEl.addEventListener("click", async () => {
+    if (!Array.isArray(summarizerHistory) || summarizerHistory.length === 0) {
+      setSettingsStatus("No summarizer history available to recompute from.");
+      return;
+    }
+    // Disable the button during the recompute to prevent double-clicks.
+    settingsLlmRecomputeBtnEl.disabled = true;
+    setSettingsStatus(`Recomputing summary from ${summarizerHistory.length} history entries...`);
+    try {
+      await recomputeSummaryFromHistory();
+      setSettingsStatus("Summary recomputed. Switch to the Analysis tab to view.");
+    } catch (error) {
+      setSettingsStatus(`Recompute failed: ${error?.message || error}`);
+      writeLogEntry(`Summary recompute failed: ${error?.message || error}`);
+    } finally {
+      settingsLlmRecomputeBtnEl.disabled = false;
+    }
+  });
+}
 
 // OpenSSH keystroke analysis settings change handlers
 const keystrokeMinEl = document.getElementById("settings-keystroke-markov-min-command-length");

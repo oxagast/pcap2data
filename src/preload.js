@@ -1366,6 +1366,8 @@ contextBridge.exposeInMainWorld('saveapi', {
     ipcRenderer.invoke('download-http-object', request),
   saveNotes: (notesText) => ipcRenderer.invoke('save-notes', notesText),
   savePdfReport: (options) => ipcRenderer.invoke('save-pdf-report', options),
+  openReportInBrowser: (htmlContent) =>
+    ipcRenderer.invoke('open-report-in-browser', htmlContent),
 });
 
 contextBridge.exposeInMainWorld('extractapi', {
@@ -1581,6 +1583,13 @@ contextBridge.exposeInMainWorld('sessionsapi', {
   rename: (oldName, newName) => ipcRenderer.invoke('session-rename', oldName, newName),
   remove: (name) => ipcRenderer.invoke('session-delete', name),
   exportToFile: (name, jsonData) => ipcRenderer.invoke('session-export', name, jsonData),
+  importFromFile: () => ipcRenderer.invoke('session-import'),
+  onImportPromptName: (callback) => {
+    ipcRenderer.on('session-import-prompt-name', (_event, payload) => {
+      callback(payload);
+    });
+  },
+  sendImportNameResult: (name) => ipcRenderer.send('session-import-name-result', { name }),
   onRefreshed: (callback) => {
     ipcRenderer.on('sessions-list-refreshed', (_event, result) => {
       callback(result);

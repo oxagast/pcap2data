@@ -164,6 +164,10 @@
                 title="Save the analysis summary as a PDF document">
                 Save as PDF
               </button>
+              <button id="summary-major-events-btn" class="summary-workspace-header-btn" type="button"
+                title="Deduplicate and summarise everything into a short report, then open it in your browser">
+                Major Events Report
+              </button>
             </span>
           </div>
           <div id="summary-compaction-status" class="summary-compaction-status" aria-live="polite" hidden>
@@ -1915,6 +1919,16 @@ No keystore entries saved.</pre>
                 <input id="settings-llm-analysis-compaction-threshold-blubs" type="number" min="1" step="1" />
                 <div class="settings-help-text">After this many new analysis blurbs are appended, the LLM will compact
                   the recent history into a summary at the top of the Analysis panel.</div>
+
+                <div class="settings-actions-row" style="margin-top: 1rem;">
+                  <button id="settings-llm-recompute-summary-btn" type="button"
+                    title="Replay every summarizer prompt through the LLM to rebuild the summary from scratch">
+                    Recompute Summary
+                  </button>
+                </div>
+                <div class="settings-help-text">Replays the chronological history of every summarizer prompt through the
+                  current LLM model to rebuild the summary. Useful when switching models or settings. This may take a
+                  while for large sessions.</div>
                 <div class="settings-help-text">
                   <em>Note:</em> The Ollama and OpenRouter API keys have moved to the
                   <strong>API Keys</strong> subtab.
@@ -2959,6 +2973,10 @@ No keystore entries saved.</pre>
       <div id="session-picker-toolbar">
         <button id="session-picker-new-btn" class="session-picker-primary-btn">
           New Session
+        </button>
+        <button id="session-picker-import-btn" class="session-picker-secondary-btn"
+          title="Import an exported session file into the library">
+          Import
         </button>
         <button id="session-picker-refresh-btn" class="session-picker-secondary-btn">
           Refresh

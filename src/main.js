@@ -27,6 +27,9 @@ const {
 const {
   generate: generateLlm,
 } = require("./llm");
+const {
+  validateSessionJsonString,
+} = require("./session-format");
 
 let Ollama = null;
 try {
@@ -7462,6 +7465,32 @@ ipcMain.handle("preview-http-body", async (_event, bodyHex, contentType) => {
   }
 });
 
+// Opens a self-contained HTML report in the user's default browser by
+// writing it to a temp file and calling shell.openExternal on the file://
+// URL. This mirrors the preview-http-body handler's pattern. The temp file
+// is cleaned up after 60 seconds — long enough for the browser to read it.
+ipcMain.handle("open-report-in-browser", async (_event, htmlContent) => {
+  if (typeof htmlContent !== "string" || !htmlContent.trim()) {
+    return { success: false, error: "Invalid report content" };
+  }
+  try {
+    const tmpDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "ps-report-"),
+    );
+    const tmpFile = path.join(tmpDir, `packetsnitch-major-events-${Date.now()}.html`);
+    await fs.promises.writeFile(tmpFile, htmlContent, "utf8");
+    const fileUrl = pathToFileURL(tmpFile).href;
+    await shell.openExternal(fileUrl);
+    setTimeout(() => {
+      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => { });
+    }, 60000);
+    return { success: true };
+  } catch (err) {
+    console.error("open-report-in-browser error:", err);
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle("open-external-url", async (_event, rawUrl) => {
   if (typeof rawUrl !== "string" || !rawUrl.trim()) {
     return { success: false, error: "Invalid URL" };
@@ -9181,6 +9210,193 @@ ipcMain.handle("session-export", async (_event, name, jsonData) => {
 
 ipcMain.handle("sessions-list-refresh", async () => {
   return refreshSessionLibraryCacheAndNotify();
+});
+
+/**
+ * Import an exported session file into the sessions directory so it appears in
+ * the session picker library. The canonical format is gzipped BSON (.psb);
+ * legacy formats (.pss / .pss.gz / .json) are accepted for backward
+ * compatibility but surface a deprecation warning to the user. The file is
+ * decompressed (if necessary), the payload is validated against the expected
+ * session structure, the user is prompted for a destination name, and the
+ * session is written using the same save path as `session-save` so the imported
+ * session is immediately listable and openable.
+ *
+ * Returns { success, name?, canceled?, error?, deprecated?, warning? }.
+ */
+ipcMain.handle("session-import", async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: "Import PacketSnitch Session",
+      properties: ["openFile"],
+      filters: [
+        { name: "PacketSnitch BSON Session (.psb)", extensions: ["psb"] },
+        { name: "Legacy PacketSnitch Session (.pss, .pss.gz, .json)", extensions: ["pss", "pss.gz", "json"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+    if (canceled || !filePaths || !filePaths[0]) {
+      return { success: false, canceled: true };
+    }
+    const sourcePath = filePaths[0];
+    const lowerPath = sourcePath.toLowerCase();
+    const ext = path.extname(sourcePath).toLowerCase();
+    const isPsb = ext === ".psb";
+    const isPssXz = ext === ".pss" && !lowerPath.endsWith(".pss.gz");
+    const isPssGz = lowerPath.endsWith(".pss.gz") || ext === ".gz";
+    const isJson = ext === ".json";
+    const isLegacyFormat = !isPsb;
+
+    if (!isPsb && !isPssXz && !isPssGz && !isJson) {
+      return {
+        success: false,
+        error: "Unrecognised session file extension: " + (ext || "(none)") +
+          ". The recommended format is .psb (PacketSnitch BSON Session).",
+      };
+    }
+
+    // Decompress/decode the source file into a JSON string.
+    let jsonData;
+    try {
+      const fileBuffer = await fs.promises.readFile(sourcePath);
+
+      if (isPsb) {
+        if (!BSON) {
+          return { success: false, error: "Cannot import BSON session (.psb) without the bson module" };
+        }
+        const bsonBuffer = await gunzipAsync(fileBuffer);
+        const doc = BSON.deserialize(bsonBuffer);
+        jsonData = JSON.stringify(doc);
+      } else if (isPssGz) {
+        const decompressed = await gunzipAsync(fileBuffer);
+        jsonData = decompressed.toString("utf8");
+      } else if (isPssXz) {
+        if (!lzmaNative) {
+          return { success: false, error: "Cannot import xz-compressed session (.pss) without Node xz compression support" };
+        }
+        const decompressed = await lzmaNative.decompress(fileBuffer);
+        jsonData = decompressed.toString("utf8");
+      } else if (isJson) {
+        jsonData = fileBuffer.toString("utf8");
+      } else {
+        return { success: false, error: "Unrecognised session file extension: " + (ext || "(none)") };
+      }
+    } catch (readErr) {
+      console.error("session-import read/decompress error:", readErr);
+      return { success: false, error: readErr?.message || "Failed to read or decompress session file" };
+    }
+
+    if (typeof jsonData !== "string" || jsonData.trim() === "") {
+      return { success: false, error: "Imported session file is empty or could not be parsed" };
+    }
+
+    // Validate the JSON structure against the expected session format before
+    // importing anything into the library.
+    const validation = validateSessionJsonString(jsonData);
+    if (!validation.valid) {
+      return {
+        success: false,
+        error: "Imported file is not a valid PacketSnitch session: " + validation.error,
+      };
+    }
+
+    // Build a deprecation warning for legacy (non-.psb) formats.
+    let warning = null;
+    if (isLegacyFormat) {
+      warning =
+        "Imported a legacy session format (" + ext + "). Legacy formats are " +
+        "supported for backward compatibility only and will be phased out in a " +
+        "future release. Re-export this session as .psb (PacketSnitch BSON " +
+        "Session) to keep it on the supported path.";
+    }
+    if (validation.legacy) {
+      const legacyNote =
+        "The session uses the pre-\"capture.data\" wrapper format and will be " +
+        "normalized on save.";
+      warning = warning ? warning + " " + legacyNote : legacyNote;
+    }
+
+    // Derive a default name from the file name (strip known extensions).
+    const baseName = path.basename(sourcePath);
+    let defaultName = baseName;
+    for (const suffix of [".pss.gz", ".pss", ".psb", ".json", ".gz"]) {
+      if (defaultName.toLowerCase().endsWith(suffix)) {
+        defaultName = defaultName.slice(0, defaultName.length - suffix.length);
+        break;
+      }
+    }
+    defaultName = sanitizeSessionName(defaultName) || "imported-session";
+
+    // Ask the renderer for a destination name via the session-name dialog.
+    // The renderer listens on 'session-import-prompt-name' and replies with
+    // 'session-import-name-result'.
+    let chosenName = null;
+    try {
+      chosenName = await new Promise((resolve) => {
+        const responseChannel = "session-import-name-result";
+        const cleanup = () => {
+          ipcMain.removeAllListeners(responseChannel);
+        };
+        ipcMain.once(responseChannel, (_event, result) => {
+          cleanup();
+          resolve(result && typeof result.name === "string" && result.name.trim() ? result.name.trim() : null);
+        });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("session-import-prompt-name", { defaultName, warning });
+        } else {
+          cleanup();
+          resolve(null);
+        }
+      });
+    } catch (_promptErr) {
+      chosenName = null;
+    }
+
+    if (!chosenName) {
+      return { success: false, canceled: true };
+    }
+
+    const sanitizedName = sanitizeSessionName(chosenName);
+    if (!sanitizedName) {
+      return { success: false, error: "Imported session name is invalid after sanitization" };
+    }
+
+    // Write using the same save path as session-save so the imported session
+    // is immediately listable and openable.
+    try {
+      await ensureSessionsDir();
+      const format = await getPreferredSaveFormat();
+      if (format === SESSION_FORMAT_BSON_GZIP) {
+        try {
+          await saveBsonGzipSession(sanitizedName, jsonData);
+        } catch (bsonErr) {
+          console.warn(
+            "session-import bson fallback triggered:",
+            bsonErr?.message || bsonErr,
+          );
+          const fallbackCompression = await getPreferredSaveCompression();
+          const filePath = sessionFilePath(sanitizedName);
+          await fs.promises.writeFile(filePath, jsonData, "utf8");
+          await compressSessionJson(sanitizedName, fallbackCompression);
+        }
+      } else {
+        const filePath = sessionFilePath(sanitizedName);
+        await fs.promises.writeFile(filePath, jsonData, "utf8");
+        await compressSessionJson(sanitizedName, format);
+      }
+      writeSessionLibraryCache(await buildSessionList());
+      return { success: true, name: sanitizedName, deprecated: isLegacyFormat, warning };
+    } catch (writeErr) {
+      if (writeErr && writeErr.code === "COMPRESSION_FALLBACK_DECLINED") {
+        return { success: false, canceled: true, error: writeErr.message };
+      }
+      console.error("session-import write error:", writeErr);
+      return { success: false, error: writeErr?.message || "Failed to write imported session" };
+    }
+  } catch (err) {
+    console.error("session-import error:", err);
+    return { success: false, error: err?.message || "Failed to import session" };
+  }
 });
 
 app.on("before-quit", (event) => {
