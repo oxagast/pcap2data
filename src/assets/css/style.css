@@ -1,7 +1,7 @@
 :root {
   --stats-heatmap-selection-active-highlight-color: color-mix(in srgb, var(--color-1) 36%, transparent);
   --sidebar-width: 300px;
-  --dropdown-bg-color: color-mix(in srgb, var(--input-bg-color, #000000) 94%, transparent);
+  --dropdown-bg-color: color-mix(in srgb, var(--input-bg-color, #000000) 40%, #000000);
   --dropdown-text-color: var(--input-text-color, #ffffff);
 
   /* Primary action button (session picker "New Session", "Save" rename
@@ -1308,7 +1308,7 @@ strong {
   padding: 6px 10px;
   border: 1px solid var(--color-3);
   border-radius: 0;
-  background-color: var(--input-bg-color);
+  background-color: color-mix(in srgb, var(--input-bg-color, #000000) 40%, #000000);
   color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
@@ -1344,7 +1344,7 @@ strong {
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--color-3);
-  background-color: var(--input-bg-color);
+  background-color: color-mix(in srgb, var(--input-bg-color, #000000) 40%, #000000);
   color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
@@ -1411,7 +1411,7 @@ strong {
   padding: 6px 10px;
   border: 1px solid var(--color-3);
   border-radius: 0;
-  background-color: var(--input-bg-color);
+  background-color: color-mix(in srgb, var(--input-bg-color, #000000) 40%, #000000);
   color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
@@ -1447,7 +1447,7 @@ strong {
   max-height: 300px;
   overflow-y: auto;
   border: 1px solid var(--color-3);
-  background-color: var(--input-bg-color);
+  background-color: color-mix(in srgb, var(--input-bg-color, #000000) 40%, #000000);
   color: var(--input-text-color);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
