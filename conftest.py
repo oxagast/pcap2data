@@ -93,3 +93,45 @@ if sys.platform == "linux":
         os.environ["LD_LIBRARY_PATH"] = (
             f"{merged}:{existing}" if existing else merged
         )
+
+
+def pytest_configure(config):
+    """Register warning filters that match snitch.py's runtime filters.
+
+    pytest installs its own warning filters at session start. snitch.py
+    re-registers the same filters after ``warnings.simplefilter("module")``
+    so they are honored at runtime, but pytest's session-level filter is
+    the one that actually drives the warning summary at the end of a test
+    run. Without these filters here, every test run prints the scapy /
+    cryptography TripleDES deprecation twice, which is noise.
+
+    We deliberately keep the filter list narrow (only the categories the
+    production code already suppresses) so any *new* deprecation warnings
+    still surface in test output and can be triaged.
+    """
+    warnings_filter = config.builtin_settings.filters if hasattr(config, "builtin_settings") else []
+    try:
+        from cryptography.utils import CryptographyDeprecationWarning
+    except Exception:  # pragma: no cover - cryptography is a hard dep
+        CryptographyDeprecationWarning = None
+
+    if CryptographyDeprecationWarning is not None:
+        config.addinivalue_line(
+            "filterwarnings",
+            "ignore:TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms:"
+            f"{CryptographyDeprecationWarning.__module__}.{CryptographyDeprecationWarning.__qualname__}",
+        )
+        config.addinivalue_line(
+            "filterwarnings",
+            "ignore:ARC4 has been moved to cryptography.hazmat.decrepit.ciphers.algorithms:"
+            f"{CryptographyDeprecationWarning.__module__}.{CryptographyDeprecationWarning.__qualname__}",
+        )
+    try:
+        from urllib3.exceptions import InsecureRequestWarning
+        config.addinivalue_line(
+            "filterwarnings",
+            "ignore::urllib3.exceptions.InsecureRequestWarning",
+        )
+    except Exception:  # pragma: no cover - urllib3 is a hard dep
+        pass
+    del warnings_filter

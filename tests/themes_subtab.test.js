@@ -696,8 +696,9 @@ describe('main.js theme helpers', () => {
             path.join(PROJECT_ROOT, 'src', 'PacketSnitch-Pro', 'Servers', 'Catalog', 'ps-catalog.py'),
             'utf8',
         );
-        // Schema v3 introduces a theme_json column on the themes table.
-        expect(pySource).toMatch(/SCHEMA_VERSION\s*=\s*3/);
+        // Schema v3 introduced the theme_json column on the themes table.
+        // Current schema version is v6.
+        expect(pySource).toMatch(/SCHEMA_VERSION\s*=\s*6/);
         expect(pySource).toMatch(/theme_json TEXT NOT NULL DEFAULT ''/);
         // The download endpoint must prefer the DB column over the
         // on-disk file. This is the contract the desktop client's

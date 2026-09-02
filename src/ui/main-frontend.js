@@ -1188,6 +1188,15 @@ let alreadySummarizedPacketKeys = new Set();
 let ollamaVersionCheckPassed = false;
 let openRouterVersionCheckPassed = false;
 let cachedLlmDiagnostics = null;
+// True while the renderer is tearing down the previous session and loading
+// the blank session template (``clearCurrentSession`` → ``processFile``).
+// While set, every diagnostic helper (VirusTotal, hashes.com, metrics,
+// backend /status poll, Ollama startup probe, OpenRouter availability)
+// short-circuits so we don't burn API credits or spam the log during a
+// deliberate clear. ``finalizeLoadedCapture`` unsets it once the new (empty)
+// capture has been indexed. ``setLogEntrySuppressed`` is flipped in parallel
+// so the in-memory + on-disk logs stay quiet for the whole async gap.
+let sessionClearInProgress = false;
 let startupWindowLoaded = false;
 let startupSettingsInitialized = false;
 let startupPreloadHidden = false;
@@ -1283,6 +1292,9 @@ let backendProgressPollStaleSinceMs = 0;
 // any advance to backendProgressState so the warning banner ticks even
 // when the bridge has stopped forwarding per-batch progress events.
 async function pollBackendProgressFallback() {
+  // Skip the /status poll during a deliberate session clear — there is
+  // no backend progress to report against the empty template.
+  if (sessionClearInProgress) return;
   if (!backendProgressState.processing && !backendProgressState.finalizingSwap) {
     stopBackendProgressPoll();
     return;
@@ -1449,6 +1461,10 @@ function isLlmRuntimeEnabled() {
 }
 
 async function refreshOllamaStartupAvailability() {
+  // Skip the Ollama daemon probe during a deliberate session clear — the
+  // result would be logged against the empty template and the call is
+  // unnecessary until a real capture is loaded.
+  if (sessionClearInProgress) return ollamaVersionCheckPassed;
   if (!window.installapi || typeof window.installapi.getLlmDiagnostics !== "function") {
     ollamaVersionCheckPassed = false;
     openRouterVersionCheckPassed = false;
@@ -1488,6 +1504,9 @@ async function refreshOllamaStartupAvailability() {
 // to call — does not hit the network unless we later add a real
 // /models ping here.
 function refreshOpenRouterAvailabilityFromSettings() {
+  // Skip during a deliberate session clear — no value in re-probing the
+  // API key state against an empty template.
+  if (sessionClearInProgress) return openRouterVersionCheckPassed;
   const settings = getCurrentSettings();
   openRouterVersionCheckPassed = Boolean(
     settings?.apiKeys?.openrouterApiKey && settings.apiKeys.openrouterApiKey.trim(),
@@ -1784,6 +1803,10 @@ function formatRelativeTimestamp(isoString) {
 
 // Refreshes metrics diagnostics by probing the configured endpoint.
 async function refreshMetricsDiagnostics({ force = false } = {}) {
+  // Skip the metrics endpoint ping during a deliberate session clear —
+  // the empty template has no metrics to flush and the call just adds
+  // log noise.
+  if (sessionClearInProgress) return cachedMetricsDiagnostics;
   if (!window.metricsapi || typeof window.metricsapi.getStatus !== "function") {
     cachedMetricsDiagnostics = null;
     syncMetricsDiagnosticsIndicators();
@@ -1969,6 +1992,12 @@ function syncBackendDiagnosticsIndicators() {
 }
 
 async function refreshVirusTotalDiagnostics({ force = false } = {}) {
+  // Skip the VirusTotal diagnostic probe during a deliberate session
+  // clear. The probe issues a real lookup (``8.8.8.8``) which costs
+  // VirusTotal API credits and only produces log noise against the
+  // empty template. ``finalizeLoadedCapture`` re-enables diagnostics
+  // once the real capture is indexed.
+  if (sessionClearInProgress) return cachedVirusTotalDiagnostics;
   if (!window.snitchapi || typeof window.snitchapi.lookupVirusTotal !== "function") {
     cachedVirusTotalDiagnostics = null;
     syncVirusTotalDiagnosticsIndicators();
@@ -2134,6 +2163,10 @@ function syncHashesComDiagnosticsIndicators() {
 }
 
 async function refreshHashesComDiagnostics({ force = false } = {}) {
+  // Skip the hashes.com diagnostic probe during a deliberate session
+  // clear — it costs API credits and produces only log noise against
+  // the empty template.
+  if (sessionClearInProgress) return cachedHashesComDiagnostics;
   if (
     !window.extractapi
     || typeof window.extractapi.hashesComDiagnostics !== "function"
@@ -2209,6 +2242,11 @@ function recordHashesComLookupOutcome({ success, cost, error }) {
 }
 
 async function refreshBackendDiagnostics({ ensureReady = false } = {}) {
+  // Skip the backend /status probe during a deliberate session clear.
+  // The empty template has no backend progress to report and the
+  // HTTP round-trip just adds log noise (``pollBackendProgressFallback``
+  // is also gated, below).
+  if (sessionClearInProgress) return cachedBackendDiagnostics;
   if (!window.snitchapi || typeof window.snitchapi.getBackendDiagnostics !== "function") {
     cachedBackendDiagnostics = null;
     syncBackendDiagnosticsIndicators();
@@ -4874,7 +4912,12 @@ function syncSettingsFormFromState() {
       weightNode.id = 'settings-llm-weight-percent';
       weightNode.min = 0; weightNode.max = 100; weightNode.step = 1;
       if (modelWrapper && modelWrapper.parentNode) {
-        modelWrapper.insertBefore(weightNode, presetNode.nextSibling);
+        // Insert into the same parent as the preset node so the new
+        // control sits as a sibling of the dropdown container. Inserting
+        // directly into ``modelWrapper`` would throw HierarchyRequestError
+        // because ``presetNode.nextSibling`` is not a child of the
+        // dropdown wrapper div.
+        modelWrapper.parentNode.insertBefore(weightNode, presetNode.nextSibling);
       } else {
         document.body.appendChild(weightNode);
       }
@@ -4912,7 +4955,9 @@ function syncSettingsFormFromState() {
       if (weightDisplay && weightDisplay.parentNode) {
         weightDisplay.parentNode.insertBefore(label, weightDisplay.nextSibling);
       } else if (modelWrapper && modelWrapper.parentNode) {
-        modelWrapper.insertBefore(label, presetNode.nextSibling);
+        // Same parent as the preset node — see weight slider above for
+        // why ``modelWrapper.insertBefore`` would throw HierarchyRequestError.
+        modelWrapper.parentNode.insertBefore(label, presetNode.nextSibling);
       } else {
         document.body.appendChild(label);
       }
@@ -7061,6 +7106,7 @@ const {
   writeLogEntry,
   writeBackendErrorLogEntry,
   logErrorEntry,
+  setLogEntrySuppressed,
 } = initializeLogging({
   logapi: window.logapi,
   documentRef: document,
@@ -7256,12 +7302,26 @@ async function clearCurrentSession() {
   clearSummaryContent();
   renderFilterHistory();
 
+  // Entering the session-clear window. Suppress log writes and skip all
+  // diagnostic / status / version / ping probes (VirusTotal, hashes.com,
+  // metrics, backend /status poll, Ollama startup) so we don't burn API
+  // credits or spam the log with "0 packets" noise while the blank
+  // template is being loaded. ``finalizeLoadedCapture`` unsets both
+  // flags once the new (empty) capture has been indexed. The flags are
+  // also unset on every early-return / catch path below so a template
+  // fetch failure can't leave the renderer permanently silent.
+  sessionClearInProgress = true;
+  setLogEntrySuppressed(true);
+  writeLogEntry("Clearing session: loading blank template (logs suppressed)");
+
   // Load the baseline session template through the preload bridge.
   // this basically zeroed/nulls everything out but keeps the overall structure
   // of the JSON intact.
   try {
     const templateResult = await window.templateapi.getNewSessionTemplate();
     if (!templateResult || !templateResult.success || !templateResult.data) {
+      sessionClearInProgress = false;
+      setLogEntrySuppressed(false);
       doError(
         "Unable to load new session template" +
         (templateResult && templateResult.error
@@ -7294,6 +7354,8 @@ async function clearCurrentSession() {
 
 
   } catch (err) {
+    sessionClearInProgress = false;
+    setLogEntrySuppressed(false);
     doError(
       "Unable to load new session template: " +
       (err && err.message ? err.message : String(err)),
@@ -11642,6 +11704,17 @@ async function finalizeLoadedCapture(sessionState) {
   }
   document.getElementById("loading-screen").style.display = "none";
   document.getElementById("loading-container").style.display = "none";
+  // End of the session-clear window. Re-enable log writes and diagnostic
+  // probes (VirusTotal, hashes.com, metrics, backend /status, Ollama) so
+  // the freshly-loaded capture can drive the normal indicator refresh
+  // cycle. Order matters: clear the flags BEFORE ``syncPluginRuntimeData``
+  // so that call (which fans out into stats / summary / plugin runtime
+  // refreshes) is allowed to log normally.
+  if (sessionClearInProgress) {
+    sessionClearInProgress = false;
+    setLogEntrySuppressed(false);
+    writeLogEntry("Session cleared: blank template loaded, logs re-enabled");
+  }
   syncPluginRuntimeData({ includeStats: true });
 }
 
