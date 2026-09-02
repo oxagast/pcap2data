@@ -77,10 +77,47 @@ from cryptography.utils import CryptographyDeprecationWarning
 
 
 if not EARLY_VERSION_ONLY_MODE:
+    # Apply the legacy module-default behavior so any user code or third
+    # party that triggers a DeprecationWarning surfaces it in the Snitch
+    # log. ``simplefilter`` inserts a match-all entry at the FRONT of the
+    # filter list; the targeted ``ignore`` rules we add immediately
+    # below are also inserted at the front (so they win against the
+    # catch-all default), which is why the order matters here.
     warnings.simplefilter("module")
     os.environ["PYTHONWARNINGS"] = "module"
     warnings.formatwarning = lambda msg, cat, fname, ln, file=None, line=None: (
         f"[Main] {cat.__name__} {msg}\n"
+    )
+
+    # Re-suppress urllib3's InsecureRequestWarning now that the
+    # ``simplefilter`` reset would otherwise un-ignore it. The VirusTotal
+    # upload path and several GeoIP / banner probes intentionally call
+    # unverified HTTPS endpoints; surfacing the warning once per call
+    # adds noise without value, and the trade-off is already explicit in
+    # the corresponding ``requests.get(..., verify=False)`` / ``undici
+    # dispatcher`` decision.
+    warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
+    # Silence the third-party deprecation noise that fires at import
+    # time from scapy / cryptography 49+. ``scapy.layers.ipsec`` imports
+    # ``algorithms.TripleDES`` from the legacy location
+    # (``cryptography.hazmat.primitives.ciphers.algorithms``) which is
+    # deprecated in cryptography 43+ and will be removed in 48.0.0. The
+    # warning is harmless and the algorithm still works; suppressing it
+    # keeps the Snitch startup log focused on actionable diagnostics.
+    # Other CryptographyDeprecationWarning categories (e.g. future
+    # algorithm moves) are intentionally NOT silenced so we notice them.
+    warnings.filterwarnings(
+        "ignore",
+        category=CryptographyDeprecationWarning,
+        message=r"TripleDES has been moved to cryptography\.hazmat\.decrepit\.ciphers\.algorithms",
+    )
+    # Same story for ARC4 — scapy's WEP decrypt path imports ARC4 from
+    # the legacy location until cryptography 48.0.0 removes it.
+    warnings.filterwarnings(
+        "ignore",
+        category=CryptographyDeprecationWarning,
+        message=r"ARC4 has been moved to cryptography\.hazmat\.decrepit\.ciphers\.algorithms",
     )
 stopEvent = threading.Event()
 

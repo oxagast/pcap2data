@@ -3,6 +3,20 @@
 let lastViewMode = "";
 const CONSOLE_DUPLICATE_WINDOW_MS = 5000;
 
+// When true, ``addActivityLogEntry`` short-circuits so neither the in-memory
+// log panel nor the on-disk log file receives new entries. Used by the
+// session-clear / blank-template load path in ``main-frontend.js`` to avoid
+// spamming the log with "0 packets" / "User opened X view" noise while the
+// renderer tears down the previous session and indexes the empty template.
+// Genuine errors raised inside the suppressed window still reach the console
+// via the un-hooked ``consoleRef`` calls — only the redirected log panel/file
+// writes are gated.
+let logEntrySuppressed = false;
+
+function setLogEntrySuppressed(value) {
+  logEntrySuppressed = Boolean(value);
+}
+
 function initializeLogging({
   logapi = null,
   documentRef = document,
@@ -43,6 +57,7 @@ function initializeLogging({
   }
 
   function addActivityLogEntry(message, writeToFile = true) {
+    if (logEntrySuppressed) return;
     if (typeof message !== "string" || message.trim() === "") return;
     const normalizedMessage = message.trim();
     activityLogEntries.unshift({ message: normalizedMessage });
@@ -208,9 +223,11 @@ function initializeLogging({
     writeLogEntry,
     writeBackendErrorLogEntry,
     logErrorEntry,
+    setLogEntrySuppressed,
   };
 }
 
 module.exports = {
   initializeLogging,
+  setLogEntrySuppressed,
 };
