@@ -1,17 +1,72 @@
 // Controls the keystore workspace UI and session-secret extraction workflows.
 
 const CRYPT_KEYSTORE_DB_NAME = "packetsnitch-crypt-keystore";
-const CRYPT_KEYSTORE_DB_VERSION = 1;
+const CRYPT_KEYSTORE_DB_VERSION = 2;
 const CRYPT_KEYSTORE_STORE_NAME = "entries";
+const CRYPT_KEYSTORE_FILES_STORE_NAME = "files";
 const CRYPT_KEYSTORE_RECORD_KEY = "default";
 const CRYPT_KEYSTORE_SCHEMA_VERSION = 2;
-const CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH = 8;
 const threadName = "Keystore";
-const CRYPT_KEYSTORE_RESET_CONFIRMATION_MESSAGE =
-  "Resetting the keychain password will wipe your current persistent keychain entries. Continue?";
+// The persistent keychain is encrypted at rest in IndexedDB with a fixed
+// app-wide passphrase. The keystore only holds secrets that were already
+// present in the loaded pcap, so there is no real security boundary being
+// enforced by a user-chosen password — the encryption merely avoids
+// writing plaintext credentials to disk. Keeping it automatic removes
+// the unlock friction without changing the storage format.
+const CRYPT_KEYSTORE_FIXED_PASSPHRASE =
+  "packetsnitch-persistent-keystore-v2-fixed-passphrase";
 const CRYPT_KEYSTORE_MODE_SESSION = "session";
 const CRYPT_KEYSTORE_MODE_PERSISTENT = "persistent";
 const SESSION_KEYCHAIN_LABEL = "session keychain";
+
+// ── Artifact Store categories ─────────────────────────────────────────
+// The user-facing tab is labeled "Artifact Store" but all internal
+// naming (keystore, keystorePanel, DOM IDs, CSS classes, plugin
+// capabilities, IndexedDB db name) stays unchanged.  Categories are a
+// pure UI filter dimension layered on top of the existing flat ``type``
+// field — legacy sessions without a category still render under "all".
+const ARTIFACT_CATEGORY_ALL = "all";
+const ARTIFACT_CATEGORY_SECRETS = "secrets";
+const ARTIFACT_CATEGORY_ITEMS = "items";
+const ARTIFACT_CATEGORY_FILES = "files";
+const ARTIFACT_CATEGORY_MISC = "misc";
+const ARTIFACT_CATEGORIES = [
+  ARTIFACT_CATEGORY_ALL,
+  ARTIFACT_CATEGORY_SECRETS,
+  ARTIFACT_CATEGORY_ITEMS,
+  ARTIFACT_CATEGORY_FILES,
+  ARTIFACT_CATEGORY_MISC,
+];
+
+// Map a flat entry ``type`` string to one of the major categories.
+// Unrecognized types fall back to ``misc`` so legacy/unknown entries are
+// always visible somewhere.
+const ARTIFACT_TYPE_TO_CATEGORY = {
+  secret: ARTIFACT_CATEGORY_SECRETS,
+  password: ARTIFACT_CATEGORY_SECRETS,
+  "private-key": ARTIFACT_CATEGORY_SECRETS,
+  cookie: ARTIFACT_CATEGORY_SECRETS,
+  "aws-access-key": ARTIFACT_CATEGORY_SECRETS,
+  "aws-secret-key": ARTIFACT_CATEGORY_SECRETS,
+  "github-token": ARTIFACT_CATEGORY_SECRETS,
+  "discord-token": ARTIFACT_CATEGORY_SECRETS,
+  "jwt-token": ARTIFACT_CATEGORY_SECRETS,
+  "oauth-token": ARTIFACT_CATEGORY_SECRETS,
+  "api-token": ARTIFACT_CATEGORY_SECRETS,
+  "azure-key": ARTIFACT_CATEGORY_SECRETS,
+  certificate: ARTIFACT_CATEGORY_ITEMS,
+  email: ARTIFACT_CATEGORY_ITEMS,
+  url: ARTIFACT_CATEGORY_ITEMS,
+  uri: ARTIFACT_CATEGORY_ITEMS,
+  file: ARTIFACT_CATEGORY_FILES,
+  goodie: ARTIFACT_CATEGORY_MISC,
+};
+
+function categoryForType(type) {
+  const normalized = String(type || "").toLowerCase().trim();
+  return ARTIFACT_TYPE_TO_CATEGORY[normalized] || ARTIFACT_CATEGORY_MISC;
+}
+
 const SESSION_SECRET_KEY_HINTS = [
   "password",
   "passwd",
@@ -85,18 +140,26 @@ function createKeystorePanel({
   callLargeLanguageModel,
   isLlmRuntimeEnabled,
   isBackgroundSummaryGenerationEnabled,
+  listCarvableFilesForStats,
+  listDownloadedFilesForStats,
+  openCarvedFileInConv,
 }) {
   let cryptPersistentKeystoreEntries = [];
   let cryptSessionKeystoreEntries = [];
   let cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
+  let cryptActiveCategory = ARTIFACT_CATEGORY_ALL;
   let cryptKeystoreUnlockKeyMaterial = null;
-  let cryptKeystoreUnlockDialogResolver = null;
-  let cryptKeystoreUnlockDialogMode = "unlock";
   let cryptManualUriDialogResolver = null;
   let cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
   let sessionRebuildGeneration = 0;
   const sessionScanHydratedPacketCache = new Map();
   let cryptRenderedKeystoreEntries = [];
+  // In-memory mirror of persisted file artifacts, kept in sync on every
+  // persistFileArtifact call so getFileArtifactSnapshot() stays synchronous
+  // (buildSessionStateSnapshot is sync — making it async would require
+  // auditing all 3 call sites). Each entry: {id, protocol, fileName,
+  // bytesBase64, byteLength, label, sourceDetail}.
+  let cryptFileArtifactMirror = [];
   // The public API surface of this panel. It must be assigned before the
   // panel returns so that the keystore-llm-summarizer callback (registered
   // above) can resolve the panel methods lazily without triggering a
@@ -269,6 +332,11 @@ function createKeystorePanel({
         if (!db.objectStoreNames.contains(CRYPT_KEYSTORE_STORE_NAME)) {
           db.createObjectStore(CRYPT_KEYSTORE_STORE_NAME);
         }
+        // v2: add the files store for persisted file artifacts. The
+        // existing entries store (persistent secrets) is left intact.
+        if (!db.objectStoreNames.contains(CRYPT_KEYSTORE_FILES_STORE_NAME)) {
+          db.createObjectStore(CRYPT_KEYSTORE_FILES_STORE_NAME);
+        }
       };
       request.onsuccess = () => resolve(request.result);
     });
@@ -318,7 +386,7 @@ function createKeystorePanel({
       db.close();
     } catch (error) {
       logErrorEntry("crypt-keystore-save", error);
-      doError("Could not save the persistent local keystore.");
+      doError("Could not save the persistent local store.");
     }
   }
 
@@ -394,6 +462,142 @@ function createKeystorePanel({
     });
   }
 
+  // ── File artifact persistence (IndexedDB files store) ───────────────
+  // File artifacts are persisted to a dedicated IndexedDB object store
+  // (``files``, keyed by candidate.id) and also serialized into
+  // ``session.state.fileArtifacts`` as ``bytesBase64`` strings so they
+  // survive session save/load AND cross-machine moves.
+
+  function toBase64Local(bytes) {
+    return window.btoa(
+      Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""),
+    );
+  }
+
+  function fromBase64Local(base64) {
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  async function persistFileArtifact(candidate) {
+    if (!candidate || typeof candidate !== "object") return;
+    const bytes = candidate.bytes;
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+    const fileId = candidate.id || `${candidate.protocol}|${candidate.fileName}|${bytes.length}`;
+    const bytesBase64 = toBase64Local(bytes);
+    const record = {
+      id: fileId,
+      protocol: candidate.protocol || "FILE",
+      fileName: candidate.fileName || "",
+      bytesBase64,
+      byteLength: bytes.length,
+      label: candidate.label || "",
+      sourceDetail: candidate.sourceDetail || "",
+      savedAt: new Date().toISOString(),
+    };
+    // Update the in-memory mirror synchronously.
+    const mirrorIndex = cryptFileArtifactMirror.findIndex(
+      (entry) => entry.id === fileId,
+    );
+    if (mirrorIndex >= 0) {
+      cryptFileArtifactMirror[mirrorIndex] = record;
+    } else {
+      cryptFileArtifactMirror.push(record);
+    }
+    // Best-effort IndexedDB write.
+    try {
+      const db = await openCryptKeystoreDb();
+      const transaction = db.transaction(
+        CRYPT_KEYSTORE_FILES_STORE_NAME,
+        "readwrite",
+      );
+      const store = transaction.objectStore(CRYPT_KEYSTORE_FILES_STORE_NAME);
+      store.put(record, fileId);
+      await waitForIdbTransaction(transaction);
+      db.close();
+    } catch (error) {
+      logErrorEntry("artifact-store-file-persist", error);
+    }
+  }
+
+  function getFileArtifactSnapshot() {
+    return cryptFileArtifactMirror.map((entry) => ({
+      id: entry.id,
+      protocol: entry.protocol,
+      fileName: entry.fileName,
+      bytesBase64: entry.bytesBase64,
+      byteLength: entry.byteLength,
+      label: entry.label,
+      sourceDetail: entry.sourceDetail,
+    }));
+  }
+
+  async function restoreFileArtifacts(entries) {
+    if (!Array.isArray(entries)) return [];
+    const restored = [];
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object" || !entry.id) continue;
+      let bytes = null;
+      if (entry.bytesBase64) {
+        try {
+          bytes = fromBase64Local(entry.bytesBase64);
+        } catch (error) {
+          logErrorEntry("artifact-store-file-restore-decode", error);
+        }
+      }
+      const record = {
+        id: entry.id,
+        protocol: entry.protocol || "FILE",
+        fileName: entry.fileName || "",
+        bytesBase64: entry.bytesBase64 || "",
+        byteLength: entry.byteLength || (bytes ? bytes.length : 0),
+        label: entry.label || "",
+        sourceDetail: entry.sourceDetail || "",
+        savedAt: entry.savedAt || new Date().toISOString(),
+      };
+      restored.push(record);
+      // Write back to IndexedDB so the live session is consistent.
+      if (bytes) {
+        try {
+          const db = await openCryptKeystoreDb();
+          const transaction = db.transaction(
+            CRYPT_KEYSTORE_FILES_STORE_NAME,
+            "readwrite",
+          );
+          const store = transaction.objectStore(CRYPT_KEYSTORE_FILES_STORE_NAME);
+          store.put(record, record.id);
+          await waitForIdbTransaction(transaction);
+          db.close();
+        } catch (error) {
+          logErrorEntry("artifact-store-file-restore-idb", error);
+        }
+      }
+    }
+    cryptFileArtifactMirror = restored;
+    return restored;
+  }
+
+  async function clearFileArtifactStore() {
+    cryptFileArtifactMirror = [];
+    try {
+      const db = await openCryptKeystoreDb();
+      const transaction = db.transaction(
+        CRYPT_KEYSTORE_FILES_STORE_NAME,
+        "readwrite",
+      );
+      const store = transaction.objectStore(CRYPT_KEYSTORE_FILES_STORE_NAME);
+      store.clear();
+      await waitForIdbTransaction(transaction);
+      db.close();
+    } catch (error) {
+      logErrorEntry("artifact-store-file-clear", error);
+    }
+  }
+
   function getActiveCryptKeystoreEntries() {
     return cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION
       ? cryptSessionKeystoreEntries
@@ -407,7 +611,25 @@ function createKeystorePanel({
   function getActiveKeystoreLabel() {
     return cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION
       ? SESSION_KEYCHAIN_LABEL
-      : "persistent keychain";
+      : "persistent store";
+  }
+
+  // Filter an entries array by the active category.  ``"all"`` returns
+  // the array unchanged.  Used by ``renderCryptKeystoreList`` and the
+  // text-filter handler so category + search compose correctly.
+  function filterEntriesByCategory(entries, category) {
+    if (!Array.isArray(entries)) return [];
+    if (!category || category === ARTIFACT_CATEGORY_ALL) return entries;
+    return entries.filter(
+      (entry) => categoryForType(entry?.type) === category,
+    );
+  }
+
+  function getActiveCategoryEntries() {
+    return filterEntriesByCategory(
+      getActiveCryptKeystoreEntries(),
+      cryptActiveCategory,
+    );
   }
 
   function normalizeOpenableLink(value) {
@@ -431,6 +653,7 @@ function createKeystorePanel({
   function updateCryptKeystoreWorkspaceState(activeEntry = null) {
     const isPersistentMode =
       cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT;
+    const isFilesCategory = cryptActiveCategory === ARTIFACT_CATEGORY_FILES;
     const saveCertBtn = document.getElementById("crypt-save-cert-keystore-btn");
     const saveKeyBtn = document.getElementById("crypt-save-key-keystore-btn");
     const saveSecretBtn = document.getElementById(
@@ -448,10 +671,12 @@ function createKeystorePanel({
       document.getElementById("keystore-filter-block").style.display = "none";
     }
     const openLinkBtn = document.getElementById("crypt-open-link-btn");
-    saveCertBtn.disabled = !isPersistentMode;
-    saveKeyBtn.disabled = !isPersistentMode;
-    saveSecretBtn.disabled = !isPersistentMode;
-    sendToPersistentBtn.disabled = isPersistentMode;
+    // When the Files category is active, disable the secret/cert/key save
+    // buttons and send-to-persistent — file entries are session-only mirrors.
+    saveCertBtn.disabled = !isPersistentMode || isFilesCategory;
+    saveKeyBtn.disabled = !isPersistentMode || isFilesCategory;
+    saveSecretBtn.disabled = !isPersistentMode || isFilesCategory;
+    sendToPersistentBtn.disabled = isPersistentMode || isFilesCategory;
     deleteBtn.disabled = !isPersistentMode;
     if (openLinkBtn) {
       openLinkBtn.disabled = !canEntryOpenInBrowser(activeEntry);
@@ -460,8 +685,8 @@ function createKeystorePanel({
       "crypt-keystore-unlock-status",
     );
     unlockStatusEl.textContent = isPersistentMode
-      ? "Persistent keychain is unlocked for this app session."
-      : "Session keychain is auto-populated from decodable packet secrets and cert-tab imports.";
+      ? "Persistent store is auto-unlocked for this app session."
+      : "Session artifacts are auto-populated from decodable packet secrets and cert-tab imports.";
   }
 
   function renderCryptKeystoreDetails(entry) {
@@ -471,12 +696,33 @@ function createKeystorePanel({
       updateCryptKeystoreWorkspaceState(null);
       return;
     }
+
+    // File-type entries show file-specific metadata instead of content.
+    if (entry.type === "file" && entry.__fileArtifact) {
+      const fa = entry.__fileArtifact;
+      detailsEl.textContent = [
+        `Store: ${getActiveKeystoreLabel()}`,
+        `Type: ${entry.type}`,
+        `Label: ${entry.label}`,
+        `Source: ${entry.source}`,
+        `Protocol: ${fa.protocol}`,
+        `File name: ${fa.fileName}`,
+        `File size: ${fa.byteLength} bytes`,
+        entry.summary ? `Summary: ${entry.summary}` : "Summary: n/a",
+        `Saved: ${entry.createdAt}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      updateCryptKeystoreWorkspaceState(entry);
+      return;
+    }
+
     const normalizedContent = normalizeSessionSecretValue(entry.content);
     const contentPreview = normalizedContent
       ? normalizedContent.replace(/\r?\n/g, " ").slice(0, 140)
       : "";
     detailsEl.textContent = [
-      `Keychain: ${getActiveKeystoreLabel()}`,
+      `Store: ${getActiveKeystoreLabel()}`,
       `Type: ${entry.type}`,
       `Label: ${entry.label}`,
       `Source: ${entry.source}`,
@@ -498,7 +744,10 @@ function createKeystorePanel({
 
   function renderCryptKeystoreList(listEntries = null) {
     const listEl = document.getElementById("crypt-keystore-list");
-    const activeEntries = listEntries || getActiveCryptKeystoreEntries();
+    // When the caller passes an explicit filtered array (e.g. from the
+    // text-filter handler), use it as-is.  Otherwise apply the active
+    // category filter on top of the mode's entries.
+    const activeEntries = listEntries || getActiveCategoryEntries();
     cryptRenderedKeystoreEntries = activeEntries;
     cryptKeystoreSelectedIndex = 0;
     listEl.replaceChildren();
@@ -2050,20 +2299,17 @@ function createKeystorePanel({
 
   document.getElementById("crypt-keystore-filter").addEventListener("input", (event) => {
     const filterValue = event.target.value.trim();
-    let typeEntriesGrep = grepSessionKeystoreEntriesByType(filterValue);
-    let contentEntriesGrep = grepSessionKeystoreEntriesByContent(filterValue);
-    let labelEntriesGrep = grepSessionKeystoreEntriesByLabel(filterValue);
-    //let typeEntriesGrep = [];
-    //let contentEntriesGrep = [];
-    //if (filterValue) {
-    //  typeEntriesGrep = grepSessionKeystoreEntries(filterValue, "type");
-    //  contentEntriesGrep = grepSessionKeystoreEntries(filterValue, "content");
-    //}
+    // Apply the category filter first, then run the text grep over the
+    // category-filtered set so category + search compose correctly.
+    const categoryFilteredEntries = getActiveCategoryEntries();
+    let typeEntriesGrep = grepSessionKeystoreEntriesByType(filterValue, categoryFilteredEntries);
+    let contentEntriesGrep = grepSessionKeystoreEntriesByContent(filterValue, categoryFilteredEntries);
+    let labelEntriesGrep = grepSessionKeystoreEntriesByLabel(filterValue, categoryFilteredEntries);
     let newEntries = [];
     if (filterValue) {
       newEntries = [...typeEntriesGrep, ...contentEntriesGrep, ...labelEntriesGrep];
     } else {
-      newEntries = cryptSessionKeystoreEntries.slice();
+      newEntries = categoryFilteredEntries.slice();
     }
 
     // now to make sure we dont have dupes in newEntries, we can use a Set to track unique IDs
@@ -2174,6 +2420,126 @@ function createKeystorePanel({
         chunkSize: SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE,
       });
     });
+  }
+
+  // Build file-type entries from the carved/downloaded file registries.
+  // These are "mirror" entries — the Stats tab keeps its own inline
+  // Carvable/Downloaded Files sections; the Artifact Store Files category
+  // is an additional surface fed from the same registries.  File entries
+  // carry ``__fileArtifact`` metadata so ``loadSelectedCryptKeystoreEntry``
+  // can open them in Conv via the injected ``openCarvedFileInConv`` callback.
+  async function buildFileArtifactEntries() {
+    const fileEntries = [];
+    const seenIds = new Set();
+    const addCandidate = (candidate) => {
+      if (!candidate || typeof candidate !== "object") return;
+      const fileId = candidate.id || `${candidate.protocol}|${candidate.fileName}|${candidate.byteLength}`;
+      if (seenIds.has(fileId)) return;
+      seenIds.add(fileId);
+      fileEntries.push({
+        id: generateCryptEntryId(),
+        type: "file",
+        label: candidate.label || `${candidate.protocol || "FILE"}: ${candidate.fileName || "unknown"}`,
+        source: `session-auto-file-${String(candidate.protocol || "file").toLowerCase()}`,
+        content: "",
+        summary: candidate.sourceDetail || "",
+        packetIndex: "?",
+        protocol: candidate.protocol || "FILE",
+        createdAt: new Date().toISOString(),
+        __fileArtifact: {
+          id: fileId,
+          protocol: candidate.protocol || "FILE",
+          fileName: candidate.fileName || "",
+          byteLength: candidate.byteLength || (candidate.bytes ? candidate.bytes.length : 0),
+          bytes: candidate.bytes || null,
+        },
+      });
+    };
+    if (typeof listCarvableFilesForStats === "function") {
+      try {
+        const carvables = await listCarvableFilesForStats();
+        if (Array.isArray(carvables)) {
+          carvables.forEach(addCandidate);
+        }
+      } catch (error) {
+        logErrorEntry("artifact-store-carvable-mirror", error);
+      }
+    }
+    if (typeof listDownloadedFilesForStats === "function") {
+      try {
+        const downloaded = listDownloadedFilesForStats();
+        if (Array.isArray(downloaded)) {
+          downloaded.forEach(addCandidate);
+        }
+      } catch (error) {
+        logErrorEntry("artifact-store-downloaded-mirror", error);
+      }
+    }
+    // Also include file artifacts restored from a saved session (the
+    // in-memory mirror).  These may overlap with live-registry entries
+    // (deduped by file id) or be the only source of file bytes when the
+    // live registries have been cleared (e.g. after a session reload).
+    cryptFileArtifactMirror.forEach((record) => {
+      let bytes = null;
+      if (record.bytesBase64) {
+        try {
+          bytes = fromBase64Local(record.bytesBase64);
+        } catch {
+          // ignore decode errors — bytes stay null
+        }
+      }
+      addCandidate({
+        id: record.id,
+        protocol: record.protocol,
+        fileName: record.fileName,
+        bytes,
+        byteLength: record.byteLength,
+        label: record.label,
+        sourceDetail: record.sourceDetail,
+      });
+    });
+    return fileEntries;
+  }
+
+  // Lightweight refresh that only re-derives file entries from the live
+  // registries and merges them into the existing session keystore —
+  // without re-scanning all packets for secrets (which
+  // ``rebuildSessionEntries`` does).  Called after a carve/download
+  // so newly registered files appear immediately in the Files category.
+  async function refreshFileArtifacts() {
+    const fileEntries = await buildFileArtifactEntries();
+    const newFileIds = new Set(fileEntries.map((e) => e.__fileArtifact.id));
+    // Remove existing file entries that are stale (no bytes or no longer
+    // in the registries) and merge in fresh ones with bytes from the
+    // live registries + the restored mirror.
+    const nonFileEntries = cryptSessionKeystoreEntries.filter(
+      (entry) => entry.type !== "file",
+    );
+    const existingFileEntries = cryptSessionKeystoreEntries.filter(
+      (entry) => entry.type === "file" && entry.__fileArtifact,
+    );
+    // Keep existing file entries that aren't in the new set (they may
+    // have been restored from a saved session with bytes).
+    const keptFileEntries = existingFileEntries.filter(
+      (entry) => !newFileIds.has(entry.__fileArtifact.id),
+    );
+    let added = 0;
+    fileEntries.forEach((fileEntry) => {
+      // Skip if the new entry has no bytes AND an existing one already
+      // has bytes for the same id — prefer the one with bytes.
+      const existing = existingFileEntries.find(
+        (e) => e.__fileArtifact.id === fileEntry.__fileArtifact.id,
+      );
+      if (existing && existing.__fileArtifact.bytes && !fileEntry.__fileArtifact.bytes) {
+        return; // keep the existing one with bytes
+      }
+      added += 1;
+    });
+    cryptSessionKeystoreEntries = [...fileEntries, ...keptFileEntries, ...nonFileEntries];
+    if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+      renderCryptKeystoreList();
+    }
+    return added;
   }
 
   async function buildSessionAutoKeystoreEntries() {
@@ -2477,6 +2843,16 @@ function createKeystorePanel({
       pushSessionEntry(tokenEntry);
     });
 
+    // Surface carved + downloaded files as file-type entries in the Files
+    // category.  These are mirrors of the Stats-tab inline sections.
+    const fileEntries = await buildFileArtifactEntries();
+    fileEntries.forEach((fileEntry) => {
+      const fingerprint = `file|${fileEntry.__fileArtifact.id}`;
+      if (dedupe.has(fingerprint)) return;
+      dedupe.add(fingerprint);
+      generatedEntries.push(fileEntry);
+    });
+
     return generatedEntries.sort((a, b) => {
       const aPacketNumber = Number(a.packetIndex);
       const bPacketNumber = Number(b.packetIndex);
@@ -2680,15 +3056,20 @@ function createKeystorePanel({
     { type, label, source, content, summary },
     { force = false } = {},
   ) {
+    // File-type entries are session-only mirrors of the carved/downloaded
+    // file registries — they are never persisted to the persistent store.
+    if (type === "file") {
+      statusUpdate("Status: File artifacts are session-only and cannot be saved to the persistent store");
+      return;
+    }
     if (!force && cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
-      statusUpdate("Status: Switch to persistent keychain to save entries");
+      statusUpdate("Status: Switch to persistent store to save entries");
       return;
     }
     if (!cryptKeystoreUnlockKeyMaterial) {
-      doError(
-        "Persistent keychain is locked. Reopen the keychain tab with password.",
+      cryptKeystoreUnlockKeyMaterial = await importCryptKeyMaterial(
+        CRYPT_KEYSTORE_FIXED_PASSPHRASE,
       );
-      return;
     }
     const normalizedContent = (content || "").trim();
     if (!normalizedContent) {
@@ -2715,11 +3096,11 @@ function createKeystorePanel({
       );
     } catch (error) {
       logErrorEntry("crypt-keystore-save", error);
-      doError("Could not save the persistent keychain.");
+      doError("Could not save the persistent store.");
       return;
     }
     renderCryptKeystoreList();
-    statusUpdate(`Status: Saved ${type} in persistent keychain`);
+    statusUpdate(`Status: Saved ${type} in persistent store`);
     writeLogEntry(
       `[${threadName}] Crypt keystore entry added type=${type} label="${entry.label}"`,
     );
@@ -2730,11 +3111,41 @@ function createKeystorePanel({
     const activeEntries = cryptRenderedKeystoreEntries;
     const selectedIndex = cryptKeystoreSelectedIndex;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
-      statusUpdate("Status: Select a keystore entry first");
+      statusUpdate("Status: Select an artifact entry first");
       return;
     }
 
     const selectedEntry = activeEntries[selectedIndex];
+
+    // File-type entries open in Conv via the injected callback instead
+    // of loading text into the credential textarea.
+    if (selectedEntry.type === "file" && selectedEntry.__fileArtifact) {
+      const fileArtifact = selectedEntry.__fileArtifact;
+      if (typeof openCarvedFileInConv === "function") {
+        const candidate = {
+          id: fileArtifact.id,
+          protocol: fileArtifact.protocol,
+          fileName: fileArtifact.fileName,
+          bytes: fileArtifact.bytes instanceof Uint8Array
+            ? fileArtifact.bytes
+            : null,
+          byteLength: fileArtifact.byteLength,
+          label: selectedEntry.label,
+          sourceDetail: selectedEntry.summary,
+        };
+        if (candidate.bytes) {
+          openCarvedFileInConv(candidate);
+          statusUpdate(`Status: Opened file "${selectedEntry.label}" in Conv`);
+        } else {
+          statusUpdate("Status: File bytes are unavailable (re-carve to restore)");
+        }
+      } else {
+        statusUpdate("Status: File opening is unavailable in this environment");
+      }
+      renderCryptKeystoreDetails(selectedEntry);
+      return;
+    }
+
     let loadedContent = normalizeSessionSecretValue(selectedEntry.content);
     if (
       !loadedContent &&
@@ -2742,20 +3153,18 @@ function createKeystorePanel({
       selectedEntry.salt &&
       selectedEntry.iv
     ) {
-      if (!cryptKeystoreUnlockKeyMaterial) {
-        doError(
-          "Persistent keychain is locked. Reopen keychain with password.",
-        );
-        return;
-      }
       try {
+        const keyMaterial =
+          cryptKeystoreUnlockKeyMaterial ||
+          (await importCryptKeyMaterial(CRYPT_KEYSTORE_FIXED_PASSPHRASE));
+        cryptKeystoreUnlockKeyMaterial = keyMaterial;
         loadedContent = await decryptCryptContent(
           selectedEntry,
-          cryptKeystoreUnlockKeyMaterial,
+          keyMaterial,
         );
       } catch (error) {
         logErrorEntry("crypt-keystore-decrypt", error);
-        doError("Could not decrypt keystore entry with current password.");
+        doError("Could not decrypt artifact entry.");
         return;
       }
     }
@@ -2771,12 +3180,12 @@ function createKeystorePanel({
     } else if (selectedEntry.type === "private-key") {
       getApplyCryptPrivateKeyText()(loadedContent, getActiveKeystoreLabel());
     }
-    statusUpdate(`Status: Loaded keystore entry "${selectedEntry.label}"`);
+    statusUpdate(`Status: Loaded artifact entry "${selectedEntry.label}"`);
   }
 
   async function deleteSelectedCryptKeystoreEntry() {
     if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_PERSISTENT) {
-      statusUpdate("Status: Session keychain entries are auto-managed");
+      statusUpdate("Status: Session artifacts are auto-managed");
       return;
     }
     const selectedIndex = cryptKeystoreSelectedIndex;
@@ -2784,7 +3193,7 @@ function createKeystorePanel({
       !Number.isFinite(selectedIndex) ||
       !cryptRenderedKeystoreEntries[selectedIndex]
     ) {
-      statusUpdate("Status: Select a keystore entry first");
+      statusUpdate("Status: Select an artifact entry first");
       return;
     }
     const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
@@ -2796,8 +3205,9 @@ function createKeystorePanel({
       return;
     }
     if (!cryptKeystoreUnlockKeyMaterial) {
-      doError("Persistent keychain is locked. Reopen keychain with password.");
-      return;
+      cryptKeystoreUnlockKeyMaterial = await importCryptKeyMaterial(
+        CRYPT_KEYSTORE_FIXED_PASSPHRASE,
+      );
     }
     const [removedEntry] = cryptPersistentKeystoreEntries.splice(
       persistentIndex,
@@ -2810,11 +3220,11 @@ function createKeystorePanel({
       );
     } catch (error) {
       logErrorEntry("crypt-keystore-save", error);
-      doError("Could not save the persistent keychain.");
+      doError("Could not save the persistent store.");
       return;
     }
     renderCryptKeystoreList();
-    statusUpdate(`Status: Deleted keystore entry "${removedEntry.label}"`);
+    statusUpdate(`Status: Deleted artifact entry "${removedEntry.label}"`);
     writeLogEntry(
       `[${threadName}] Crypt keystore entry deleted type=${removedEntry.type} label="${removedEntry.label}"`,
     );
@@ -2823,24 +3233,33 @@ function createKeystorePanel({
   async function sendSelectedSessionEntryToPersistent() {
     if (cryptActiveKeystoreMode !== CRYPT_KEYSTORE_MODE_SESSION) {
       statusUpdate(
-        "Status: Switch to session keychain to send temporary entries",
+        "Status: Switch to session artifacts to send temporary entries",
       );
       return;
     }
     if (!cryptKeystoreUnlockKeyMaterial) {
-      doError("Persistent keychain is locked. Reopen keychain with password.");
-      return;
+      cryptKeystoreUnlockKeyMaterial = await importCryptKeyMaterial(
+        CRYPT_KEYSTORE_FIXED_PASSPHRASE,
+      );
     }
     const selectedIndex = cryptKeystoreSelectedIndex;
     if (
       !Number.isFinite(selectedIndex) ||
       !cryptRenderedKeystoreEntries[selectedIndex]
     ) {
-      statusUpdate("Status: Select a session keychain entry first");
+      statusUpdate("Status: Select a session artifact entry first");
       return;
     }
 
     const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
+
+    // File-type entries are session-only mirrors — they can't be sent to
+    // the persistent store.
+    if (selectedEntry.type === "file") {
+      statusUpdate("Status: File artifacts are session-only and cannot be persisted");
+      return;
+    }
+
     const normalizedContent = normalizeSessionSecretValue(
       selectedEntry.content,
     );
@@ -2856,7 +3275,7 @@ function createKeystorePanel({
         normalizeSessionSecretValue(entry.content) === normalizedContent,
     );
     if (alreadyStored) {
-      statusUpdate("Status: Entry is already stored in persistent keychain");
+      statusUpdate("Status: Entry is already stored in persistent store");
       return;
     }
 
@@ -2866,7 +3285,7 @@ function createKeystorePanel({
       label: selectedEntry.label,
       source: `bookmarked from ${selectedEntry.source || "session-auto"}`,
       content: normalizedContent,
-      summary: selectedEntry.summary || "Bookmarked from session keychain",
+      summary: selectedEntry.summary || "Bookmarked from session artifacts",
       createdAt: new Date().toISOString(),
     });
     try {
@@ -2876,11 +3295,11 @@ function createKeystorePanel({
       );
     } catch (error) {
       logErrorEntry("crypt-keystore-save", error);
-      doError("Could not save selected entry to persistent keychain.");
+      doError("Could not save selected entry to persistent store.");
       return;
     }
     statusUpdate(
-      `Status: Sent "${selectedEntry.label}" to persistent keychain`,
+      `Status: Sent "${selectedEntry.label}" to persistent store`,
     );
     writeLogEntry(
       `[${threadName}] Session keychain entry persisted label="${selectedEntry.label}"`,
@@ -2905,6 +3324,24 @@ function createKeystorePanel({
       return null;
     }
     const selectedEntry = cryptRenderedKeystoreEntries[selectedIndex];
+    // For file-type entries, ``content`` is empty by design (bytes are in
+    // ``__fileArtifact``).  Return the file bytes as a hex string so the
+    // "Send to Hashes" handler can compute a hash from the file content.
+    if (selectedEntry.type === "file" && selectedEntry.__fileArtifact) {
+      const bytes = selectedEntry.__fileArtifact.bytes;
+      let hexContent = "";
+      if (bytes instanceof Uint8Array && bytes.length > 0) {
+        hexContent = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      }
+      return {
+        label: String(selectedEntry.label || ""),
+        type: String(selectedEntry.type || ""),
+        source: String(selectedEntry.source || ""),
+        content: hexContent,
+        normalizedContent: hexContent,
+        summary: String(selectedEntry.summary || ""),
+      };
+    }
     return {
       label: String(selectedEntry.label || ""),
       type: String(selectedEntry.type || ""),
@@ -2915,11 +3352,9 @@ function createKeystorePanel({
     };
   }
 
-  function grepSessionKeystoreEntriesByContent(content) {
+  function grepSessionKeystoreEntriesByContent(content, entries) {
     const normalizedContent = content.trim().toLowerCase();
-    // get the session keystore entries from from the keystore-panel.js aray
-    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
-    const keystoreEntries = cryptSessionKeystoreEntries;
+    const keystoreEntries = entries || cryptSessionKeystoreEntries;
     if (!normalizedContent) return keystoreEntries;
     return keystoreEntries.filter((entry) => {
       const entryContent = entry.content || "";
@@ -2927,11 +3362,9 @@ function createKeystorePanel({
     });
   }
 
-  function grepSessionKeystoreEntriesByType(type) {
+  function grepSessionKeystoreEntriesByType(type, entries) {
     const normalizedType = type.trim().toLowerCase();
-    // get the session keystore entries from from the keystore-panel.js aray
-    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
-    const keystoreEntries = cryptSessionKeystoreEntries;
+    const keystoreEntries = entries || cryptSessionKeystoreEntries;
     if (!normalizedType) return keystoreEntries;
     return keystoreEntries.filter((entry) => {
       const entryType = entry.type || "";
@@ -2939,112 +3372,13 @@ function createKeystorePanel({
     });
   }
 
-  function grepSessionKeystoreEntriesByLabel(label) {
+  function grepSessionKeystoreEntriesByLabel(label, entries) {
     const normalizedLabel = label.trim().toLowerCase();
-    // get the session keystore entries from from the keystore-panel.js aray
-    // getActiveCryptKeystoreEntries() is not available in this context, so we access the global variable directly
-    const keystoreEntries = cryptSessionKeystoreEntries;
+    const keystoreEntries = entries || cryptSessionKeystoreEntries;
     if (!normalizedLabel) return keystoreEntries;
     return keystoreEntries.filter((entry) => {
       const entryLabel = entry.label || "";
       return entryLabel.toLowerCase().includes(normalizedLabel);
-    });
-  }
-
-  function configureKeystoreUnlockDialog(mode) {
-    cryptKeystoreUnlockDialogMode = mode === "setup" ? "setup" : "unlock";
-    const isSetup = cryptKeystoreUnlockDialogMode === "setup";
-    const titleEl = document.getElementById("crypt-keystore-unlock-title");
-    const descriptionEl = document.getElementById(
-      "crypt-keystore-unlock-description",
-    );
-    const passwordEl = document.getElementById(
-      "crypt-keystore-unlock-password",
-    );
-    const confirmEl = document.getElementById(
-      "crypt-keystore-unlock-password-confirm",
-    );
-    const confirmBtn = document.getElementById(
-      "crypt-keystore-unlock-confirm-btn",
-    );
-    const resetBtn = document.getElementById("crypt-keystore-unlock-reset-btn");
-    if (titleEl) {
-      titleEl.textContent = isSetup
-        ? "Set Keychain Password"
-        : "Unlock Keychain";
-    }
-    if (descriptionEl) {
-      descriptionEl.textContent = isSetup
-        ? `Create the initial password for the persistent keychain (minimum ${CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH} characters). You will only be asked when selecting the keychain tab.`
-        : "Enter password to unlock the persistent keychain.";
-    }
-    if (passwordEl) {
-      passwordEl.placeholder = isSetup
-        ? "Create keychain password"
-        : "Enter keychain password";
-    }
-    if (confirmEl) {
-      confirmEl.hidden = !isSetup;
-      confirmEl.placeholder = "Confirm keychain password";
-    }
-    if (confirmBtn) {
-      confirmBtn.textContent = isSetup ? "Set password" : "Unlock";
-    }
-    if (resetBtn) {
-      resetBtn.hidden = isSetup;
-    }
-  }
-
-  function requestKeystoreUnlockPassword(mode = "unlock") {
-    const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
-    const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById(
-      "crypt-keystore-unlock-password-confirm",
-    );
-    if (!dialogEl || !inputEl || !confirmEl) return Promise.resolve(null);
-    configureKeystoreUnlockDialog(mode);
-    dialogEl.hidden = false;
-    inputEl.value = "";
-    confirmEl.value = "";
-    inputEl.focus();
-    return new Promise((resolve) => {
-      cryptKeystoreUnlockDialogResolver = resolve;
-    });
-  }
-
-  function resolveKeystoreUnlockPassword(value) {
-    const dialogEl = document.getElementById("crypt-keystore-unlock-dialog");
-    const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById(
-      "crypt-keystore-unlock-password-confirm",
-    );
-    if (dialogEl) dialogEl.hidden = true;
-    if (inputEl) inputEl.value = "";
-    if (confirmEl) confirmEl.value = "";
-    if (!cryptKeystoreUnlockDialogResolver) return;
-    const resolve = cryptKeystoreUnlockDialogResolver;
-    cryptKeystoreUnlockDialogResolver = null;
-    resolve(value);
-  }
-
-  function submitKeystoreUnlockDialog() {
-    const inputEl = document.getElementById("crypt-keystore-unlock-password");
-    const confirmEl = document.getElementById(
-      "crypt-keystore-unlock-password-confirm",
-    );
-    resolveKeystoreUnlockPassword({
-      password: inputEl?.value || "",
-      confirmPassword: confirmEl?.value || "",
-      mode: cryptKeystoreUnlockDialogMode,
-    });
-  }
-
-  function requestPersistentKeystoreReset() {
-    if (cryptKeystoreUnlockDialogMode !== "unlock") {
-      return;
-    }
-    resolveKeystoreUnlockPassword({
-      action: "reset",
     });
   }
 
@@ -3066,8 +3400,8 @@ function createKeystorePanel({
         : CRYPT_KEYSTORE_MODE_SESSION;
     const modeLabel =
       cryptManualUriDialogMode === CRYPT_KEYSTORE_MODE_PERSISTENT
-        ? "persistent keychain"
-        : "session keychain";
+        ? "persistent store"
+        : "session artifacts";
     descriptionEl.textContent = `Enter URI/URL to add to the ${modeLabel}.`;
     dialogEl.hidden = false;
     inputEl.value = "";
@@ -3096,114 +3430,73 @@ function createKeystorePanel({
     resolveManualUriFromContextMenuDialog(inputEl?.value || "");
   }
 
-  async function resetPersistentKeystorePassword() {
+  async function resetPersistentKeystoreEntries() {
     if (!(window.crypto && window.crypto.subtle)) {
-      doError("WebCrypto API is unavailable; cannot reset keychain password.");
+      doError("WebCrypto API is unavailable; cannot reset persistent store.");
       return false;
     }
-
-    const shouldReset = window.confirm(CRYPT_KEYSTORE_RESET_CONFIRMATION_MESSAGE);
-    if (!shouldReset) {
-      statusUpdate("Status: Keychain password reset cancelled");
-      return false;
-    }
-
-    const dialogResult = await requestKeystoreUnlockPassword("setup");
-    if (dialogResult?.action === "reset") {
-      statusUpdate("Status: Keychain password reset cancelled");
-      return false;
-    }
-    const normalizedPassword = (dialogResult?.password || "").trim();
-    if (!normalizedPassword) {
-      statusUpdate("Status: Keychain password reset cancelled");
-      return false;
-    }
-    if (normalizedPassword.length < CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH) {
-      doError(
-        `Keychain password must be at least ${CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH} characters.`,
-      );
-      return false;
-    }
-    const normalizedConfirmPassword = String(
-      dialogResult?.confirmPassword || "",
-    ).trim();
-    if (normalizedPassword !== normalizedConfirmPassword) {
-      doError("Keychain password confirmation does not match.");
-      return false;
-    }
-
     try {
-      const keyMaterial = await importCryptKeyMaterial(normalizedPassword);
+      const keyMaterial = await importCryptKeyMaterial(
+        CRYPT_KEYSTORE_FIXED_PASSPHRASE,
+      );
       await savePersistentCryptKeystoreEntries([], keyMaterial);
       cryptPersistentKeystoreEntries = [];
       cryptKeystoreUnlockKeyMaterial = keyMaterial;
       renderCryptKeystoreList();
-      statusUpdate("Status: Keychain password reset and persistent keychain wiped");
-      writeLogEntry(`[${threadName}] Persistent keychain password reset; entries wiped`);
+      statusUpdate("Status: Persistent store wiped");
+      writeLogEntry(`[${threadName}] Persistent keychain wiped`);
       return true;
     } catch (error) {
-      logErrorEntry("crypt-keystore-reset-password", error);
-      doError("Could not reset persistent keychain password.");
+      logErrorEntry("crypt-keystore-reset", error);
+      doError("Could not reset the persistent store.");
       return false;
     }
   }
 
   async function unlockPersistentKeystoreAndLoad() {
     if (!(window.crypto && window.crypto.subtle)) {
-      doError("WebCrypto API is unavailable; cannot unlock keychain.");
+      doError("WebCrypto API is unavailable; cannot unlock store.");
       return false;
     }
     if (cryptKeystoreUnlockKeyMaterial) return true;
-
-    const storedRecord = await loadCryptKeystore();
-    const isInitialSetup = !storedRecord;
-    const dialogResult = await requestKeystoreUnlockPassword(
-      isInitialSetup ? "setup" : "unlock",
-    );
-    if (dialogResult?.action === "reset") {
-      return resetPersistentKeystorePassword();
-    }
-    const normalizedPassword = (dialogResult?.password || "").trim();
-    if (!normalizedPassword) {
-      statusUpdate("Status: Keychain remains locked");
-      return false;
-    }
-    if (normalizedPassword.length < CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH) {
-      doError(
-        `Keychain password must be at least ${CRYPT_KEYSTORE_MIN_PASSWORD_LENGTH} characters.`,
-      );
-      return false;
-    }
-    if (
-      isInitialSetup &&
-      normalizedPassword !== String(dialogResult?.confirmPassword || "").trim()
-    ) {
-      doError("Keychain password confirmation does not match.");
-      return false;
-    }
     try {
-      const keyMaterial = await importCryptKeyMaterial(normalizedPassword);
-      if (isInitialSetup) {
+      const keyMaterial = await importCryptKeyMaterial(
+        CRYPT_KEYSTORE_FIXED_PASSPHRASE,
+      );
+      const storedRecord = await loadCryptKeystore();
+      if (!storedRecord) {
         cryptPersistentKeystoreEntries = [];
         await savePersistentCryptKeystoreEntries([], keyMaterial);
-        statusUpdate("Status: Keychain password set");
-        writeLogEntry(`[${threadName}] Persistent keychain password initialized`);
+        statusUpdate("Status: Persistent store initialized");
+        writeLogEntry(`[${threadName}] Persistent keychain initialized`);
       } else {
-        cryptPersistentKeystoreEntries =
-          await loadPersistentCryptKeystoreEntries(keyMaterial, storedRecord);
-        statusUpdate("Status: Keychain unlocked");
-        writeLogEntry(`[${threadName}] Persistent keychain unlocked`);
+        try {
+          cryptPersistentKeystoreEntries =
+            await loadPersistentCryptKeystoreEntries(keyMaterial, storedRecord);
+          statusUpdate("Status: Store unlocked");
+          writeLogEntry(`[${threadName}] Persistent keychain unlocked`);
+        } catch (loadError) {
+          // The stored record was encrypted with an older user-chosen
+          // password that the fixed passphrase cannot decrypt. Since the
+          // keystore now runs password-free, wipe the stale record and
+          // start fresh rather than locking the user out of the tab.
+          logErrorEntry("crypt-keystore-legacy-decrypt", loadError);
+          cryptPersistentKeystoreEntries = [];
+          await savePersistentCryptKeystoreEntries([], keyMaterial);
+          statusUpdate(
+            "Status: Persistent store reinitialized (old entries could not be decrypted and were wiped)",
+          );
+          writeLogEntry(
+            `[${threadName}] Persistent keychain reinitialized; undecryptable legacy entries wiped`,
+          );
+        }
       }
       cryptKeystoreUnlockKeyMaterial = keyMaterial;
       requestKeystoreReviewNow();
       return true;
     } catch (error) {
       logErrorEntry("crypt-keystore-unlock", error);
-      doError(
-        isInitialSetup
-          ? "Could not initialize persistent keychain."
-          : "Could not unlock persistent keychain. Verify password.",
-      );
+      doError("Could not unlock persistent store.");
       return false;
     }
   }
@@ -3212,18 +3505,11 @@ function createKeystorePanel({
     setActiveMainTab(MAIN_TAB_KEYSTORE);
     if (getJsonCapture() === "") {
       statusUpdate("Status: No JSON file loaded, please upload a file first");
-      doError("Please upload a JSON file before accessing the keystore.");
+      doError("Please upload a JSON file before accessing the artifact store.");
       return;
     }
 
-    if (
-      cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT &&
-      !cryptKeystoreUnlockKeyMaterial
-    ) {
-      doError("Please unlock the keychain with password first.");
-      return;
-    }
-    statusUpdate("Status: Displaying keychain manager");
+    statusUpdate("Status: Displaying artifact store");
     writeLogEntry(`[${threadName}] User opened keystore workspace view`);
     document.getElementById("prev-btn").style.display = "none";
     document.getElementById("next-btn").style.display = "none";
@@ -3251,7 +3537,7 @@ function createKeystorePanel({
     ).trim();
     hideConvertContextMenu();
     if (!text) {
-      statusUpdate("Status: No text to add to keystore");
+      statusUpdate("Status: No text to add to artifact store");
       return;
     }
     if (keystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
@@ -3262,7 +3548,7 @@ function createKeystorePanel({
         content: text,
         summary: "",
       });
-      statusUpdate(`Status: Saved ${type} in session keychain`);
+      statusUpdate(`Status: Saved ${type} in session artifacts`);
       writeLogEntry(
         `[${threadName}] Context menu keystore entry added type=${type} mode=session`,
       );
@@ -3307,7 +3593,7 @@ function createKeystorePanel({
 
     if (dialogResult.mode === CRYPT_KEYSTORE_MODE_SESSION) {
       addSessionKeystoreEntry(entry);
-      statusUpdate(`Status: Saved ${uriType} in session keychain`);
+      statusUpdate(`Status: Saved ${uriType} in session artifacts`);
       writeLogEntry(`[${threadName}] Manual context URI saved mode=session type=${uriType}`);
       return;
     }
@@ -3319,7 +3605,7 @@ function createKeystorePanel({
     const activeEntries = cryptRenderedKeystoreEntries;
     const selectedIndex = cryptKeystoreSelectedIndex;
     if (!Number.isFinite(selectedIndex) || !activeEntries[selectedIndex]) {
-      statusUpdate("Status: Select a keystore entry first");
+      statusUpdate("Status: Select an artifact entry first");
       return;
     }
 
@@ -3368,10 +3654,7 @@ function createKeystorePanel({
     addManualUriToKeystoreFromContextMenu,
     openSelectedKeystoreLinkInBrowser,
     unlockPersistentKeystoreAndLoad,
-    resetPersistentKeystorePassword,
-    submitKeystoreUnlockDialog,
-    requestPersistentKeystoreReset,
-    resolveKeystoreUnlockPassword,
+    resetPersistentKeystoreEntries,
     submitManualUriFromContextMenuDialog,
     resolveManualUriFromContextMenuDialog,
     importManualDataIntoSessionKeystore,
@@ -3381,6 +3664,18 @@ function createKeystorePanel({
       cryptActiveKeystoreMode = mode;
       renderCryptKeystoreList();
     },
+    setActiveCategory(category) {
+      if (ARTIFACT_CATEGORIES.includes(category)) {
+        cryptActiveCategory = category;
+      }
+      renderCryptKeystoreList();
+    },
+    getActiveCategory() {
+      return cryptActiveCategory;
+    },
+    getCategories() {
+      return ARTIFACT_CATEGORIES.slice();
+    },
     getSessionKeychainEntries() {
       return cryptSessionKeystoreEntries;
     },
@@ -3388,7 +3683,10 @@ function createKeystorePanel({
       return cryptActiveKeystoreMode;
     },
     isUnlocked() {
-      return !!cryptKeystoreUnlockKeyMaterial;
+      // The persistent keychain no longer requires a user password; it
+      // auto-unlocks with the fixed app-wide passphrase. This stays true
+      // so callers that gate on "is the keychain ready" keep working.
+      return true;
     },
     restoreSessionState(sessionKeychainEntries, keystoreMode) {
       sessionRebuildGeneration += 1;
@@ -3399,6 +3697,13 @@ function createKeystorePanel({
         keystoreMode === CRYPT_KEYSTORE_MODE_PERSISTENT
       ) {
         cryptActiveKeystoreMode = keystoreMode;
+      }
+    },
+    restoreArtifactCategory(category) {
+      if (ARTIFACT_CATEGORIES.includes(category)) {
+        cryptActiveCategory = category;
+      } else {
+        cryptActiveCategory = ARTIFACT_CATEGORY_ALL;
       }
     },
     async rebuildSessionEntries() {
@@ -3417,18 +3722,23 @@ function createKeystorePanel({
       sessionRebuildGeneration += 1;
       clearSessionScanCaches();
       cryptActiveKeystoreMode = CRYPT_KEYSTORE_MODE_SESSION;
+      cryptActiveCategory = ARTIFACT_CATEGORY_ALL;
       cryptSessionKeystoreEntries = [];
       cryptPersistentKeystoreEntries = [];
       cryptKeystoreUnlockKeyMaterial = null;
-      cryptKeystoreUnlockDialogResolver = null;
-      cryptKeystoreUnlockDialogMode = "unlock";
       cryptManualUriDialogResolver = null;
       cryptManualUriDialogMode = CRYPT_KEYSTORE_MODE_SESSION;
       renderCryptKeystoreList();
       clearKeystoreSummary();
       stopKeystoreReviewTimer();
+      clearFileArtifactStore();
     },
     clearSessionScanCaches,
+    persistFileArtifact,
+    getFileArtifactSnapshot,
+    restoreFileArtifacts,
+    clearFileArtifactStore,
+    refreshFileArtifacts,
   };
 
   return panelApi;
@@ -3443,4 +3753,11 @@ module.exports = {
   CRYPT_KEYSTORE_MODE_SESSION,
   CRYPT_KEYSTORE_MODE_PERSISTENT,
   SESSION_KEYCHAIN_LABEL,
+  ARTIFACT_CATEGORIES,
+  ARTIFACT_CATEGORY_ALL,
+  ARTIFACT_CATEGORY_SECRETS,
+  ARTIFACT_CATEGORY_ITEMS,
+  ARTIFACT_CATEGORY_FILES,
+  ARTIFACT_CATEGORY_MISC,
+  categoryForType,
 };

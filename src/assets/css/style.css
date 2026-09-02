@@ -3813,6 +3813,29 @@ strong {
   color: var(--color-5);
 }
 
+.data-tools-proto-hide-noop-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  margin-bottom: 8px;
+  color: var(--color-5);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.data-tools-proto-hide-noop-label input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+.data-tools-proto-stream-summary-hidden {
+  color: var(--color-3);
+  font-style: italic;
+  margin-left: 6px;
+}
+
 .data-tools-proto-table {
   width: 100%;
   border-collapse: collapse;
@@ -6550,6 +6573,21 @@ strong {
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
   width: 100%;
+}
+
+#artifact-category-select {
+  padding: 4px 6px;
+  background-color: var(--input-bg-color);
+  border: 1px solid var(--color-3);
+  color: var(--input-text-color);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+}
+
+.artifact-category-label {
+  font-size: 13px;
+  color: var(--color-5);
+  white-space: nowrap;
 }
 
 #data-tools-packet-json-current-packet {

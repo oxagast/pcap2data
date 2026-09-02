@@ -114,7 +114,7 @@ const convertContextMenuMarkup = `
     </div>
   </div>
   <div id="ctx-keystore-submenu" class="ctx-submenu">
-    <button id="ctx-keystore-branch" class="ctx-branch" type="button">Add to Keystore...</button>
+    <button id="ctx-keystore-branch" class="ctx-branch" type="button">Add to Artifact Store...</button>
     <div class="ctx-submenu-panel">
       <div id="ctx-keystore-password-submenu" class="ctx-submenu">
         <button id="ctx-keystore-password-branch" class="ctx-branch" type="button">As Password</button>

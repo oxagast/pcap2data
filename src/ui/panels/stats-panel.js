@@ -4694,7 +4694,7 @@ function createStatsPanel(options) {
         itemTitle: (item) =>
           item === "No credentials found"
             ? ""
-            : "Click to open the keychain manager",
+            : "Click to open the artifact store",
         onItemClick: (item) => {
           if (item === "No credentials found") return;
           const activeKeystorePanel = resolveKeystorePanel();
@@ -4702,8 +4702,7 @@ function createStatsPanel(options) {
 
           (async () => {
             if (typeof activeKeystorePanel.unlockPersistentKeystoreAndLoad === "function") {
-              const unlocked = await activeKeystorePanel.unlockPersistentKeystoreAndLoad();
-              if (!unlocked) return;
+              await activeKeystorePanel.unlockPersistentKeystoreAndLoad();
             }
 
             if (typeof activeKeystorePanel.showKeystoreWorkspace === "function") {
