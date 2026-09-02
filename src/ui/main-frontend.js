@@ -99,7 +99,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 
 // One-shot tab and subtab tracking.
 //
-// Each main tab (Analysis, Host Data, Conv, Crypt, Keystore, Stats,
+// Each main tab (Analysis, Host Data, Conv, Crypt, Artifact Store, Stats,
 // List, Notes, Settings) and every subtab inside those workspaces
 // is wired to its own click handler in a different file.  Rather
 // than touch every panel we listen for clicks here at the document
@@ -296,6 +296,8 @@ const {
   setDataToolsStreamPackets,
   getDataToolsStreamPackets,
   clearDataToolsStreamPackets,
+  getConvDecodesHideNoOp,
+  setConvDecodesHideNoOp,
   EXIF_FILE_TYPE_TO_PROTO,
   getImageTypeFromExifReader,
   clearDataToolsSummary,
@@ -753,7 +755,10 @@ async function applyTabFilterKeyAutocomplete() {
 // "0.0.0.0" sentinel to the non-IP-shaped "__ALL_HOSTS__" sentinel.
 // Older sessions that saved selectedHost="0.0.0.0" (meaning "All
 // Hosts") need to be translated to the new sentinel on load.
-const SESSION_FILE_SCHEMA_VERSION = 2;
+// v3 adds ``artifactCategory`` and ``fileArtifacts`` to ``session.state``.
+// Both are additive — v2 sessions simply lack the keys and default to
+// category="all" / no file artifacts on restore. No data migration needed.
+const SESSION_FILE_SCHEMA_VERSION = 3;
 const PACKETSNITCH_VERSION = String(psVer || "").trim() || "unknown";
 const SESSION_CAPTURE_KEY = "capture.data";
 const SESSION_STATE_KEY = "session.state";
@@ -861,6 +866,38 @@ let helpWin = null;
 let llmSummaryTimeout = null;
 let summary = "";
 let analysisBlubHistory = [];
+// Tracks the number of times the Analysis tab has been visited since
+// the last full-summary restructure pass. The restructure runs every
+// SUMMARIZER_RESTRUCTURE_TAB_VISITS tab visits (not every visit) to
+// avoid overworking the LLM.
+let summaryTabVisitCountSinceRestructure = 0;
+// Timestamp (ms) of the last full-summary restructure pass. Used to
+// enforce a minimum time gap between restructure passes even if the
+// tab-visit counter has been reached.
+let lastSummaryRestructureAt = 0;
+// Whether a restructure pass is currently in progress. Prevents
+// overlapping restructure calls.
+let summaryRestructureInProgress = false;
+// Count of new summarizer pipeline entries (stream summaries +
+// compaction passes) recorded since the last restructure. The
+// restructure only runs if this is > 0 — if no new analysis has
+// entered the pipeline since the last restructure, there is nothing
+// new to reorganize and the LLM call is skipped.
+let summarizerEntriesSinceRestructure = 0;
+// The value of `summarizerEntriesSinceRestructure` at the time of the
+// last restructure. If the current counter equals this, no new
+// pipeline activity has happened and the restructure is skipped.
+let summarizerEntriesAtLastRestructure = 0;
+// Number of Analysis tab visits before a full-summary restructure pass
+// is triggered. This throttles the restructure so it only runs every few
+// visits rather than every time the user clicks the Analysis tab.
+const SUMMARIZER_RESTRUCTURE_TAB_VISITS = 3;
+// Minimum time (ms) between restructure passes. Even if the tab-visit
+// counter is reached, the restructure won't run if the last one was
+// less than this many milliseconds ago. 60 seconds is a reasonable
+// floor — it prevents rapid-fire restructures while still allowing
+// the summary to stay current.
+const SUMMARIZER_RESTRUCTURE_MIN_INTERVAL_MS = 60000;
 // Chronological history of every piece of information sent through the
 // summarizer pipeline (per-stream summary + compaction passes). Each entry
 // is { prompt, response, type, timestamp }. This is persisted in the session
@@ -6416,6 +6453,16 @@ function scheduleSessionKeychainAutoPopulate(reason = "startup") {
       );
       statusUpdate("Status: Session keychain auto-populated");
       syncPluginRuntimeData();
+      // Stream-carved files (HTTP/FTP/NFS/SMB) are built on-demand by
+      // listCarvableFilesForStats, which may not have all stream data
+      // available at the time rebuildSessionEntries runs.  Do a delayed
+      // second pass to pick up any carvables that weren't ready earlier.
+      if (typeof keystorePanel.refreshFileArtifacts === "function") {
+        window.setTimeout(() => {
+          if (generation !== keystoreAutoPopulateGeneration) return;
+          keystorePanel.refreshFileArtifacts().catch(() => { });
+        }, 3000);
+      }
     } catch (error) {
       if (generation !== keystoreAutoPopulateGeneration) return;
       logErrorEntry("session-keystore-autopopulate", error);
@@ -7191,6 +7238,11 @@ async function clearCurrentSession() {
   analysisBlubHistory.length = 0;
   summarizerHistory = [];
   resetSummarizerResponseCache();
+  summaryTabVisitCountSinceRestructure = 0;
+  lastSummaryRestructureAt = 0;
+  summarizerEntriesSinceRestructure = 0;
+  summarizerEntriesAtLastRestructure = 0;
+  summaryRestructureInProgress = false;
   analysisCompactionInProgress = false;
   setSessionPcapSource(null, { skipLog: true });
   filterHistory.length = 0;
@@ -9996,6 +10048,28 @@ function getCurrentCompactedAnalysisSummary() {
   if (summaries.length === 0) {
     return summary;
   }
+  // If a restructure is in progress, show only the most recent
+  // completed restructure entry (if one exists) and suppress any
+  // intermediate compaction/stream entries that were added while the
+  // restructure was running. This ensures the user always sees the
+  // last restructured version — not the intermediate steps that the
+  // LLM is still building on. When the in-progress restructure completes,
+  // it replaces all entries with the new restructured version.
+  if (summaryRestructureInProgress) {
+    let lastRestructured = null;
+    for (let i = summaries.length - 1; i >= 0; i -= 1) {
+      if (summaries[i]?.signature === "__restructured__") {
+        lastRestructured = summaries[i];
+        break;
+      }
+    }
+    if (lastRestructured) {
+      return String(lastRestructured.summary || "");
+    }
+    // No prior restructure exists yet — fall through to show the
+    // accumulated state (this only happens before the very first
+    // restructure completes).
+  }
   return summaries
     .map((entry) => entry?.summary || "")
     .filter(Boolean)
@@ -11668,6 +11742,16 @@ function buildSessionStateSnapshot() {
       }
       : { inputHash: "", inputLength: 0, distilledText: "", distilledAt: 0 },
     keystoreMode: keystorePanel.getKeystoreMode(),
+    artifactCategory: keystorePanel.getActiveCategory
+      ? keystorePanel.getActiveCategory()
+      : "all",
+    // Persist file artifacts (carved/downloaded files) with raw bytes as
+    // bytesBase64 so they survive session save/load AND cross-machine
+    // moves. Stored at the top level (not under deepCloneSessionData) to
+    // avoid the extra JSON.parse(JSON.stringify()) cost on MB-scale data.
+    fileArtifacts: keystorePanel.getFileArtifactSnapshot
+      ? keystorePanel.getFileArtifactSnapshot()
+      : [],
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
       typeof subnetCalculatorPanel?.getSessionState === "function"
@@ -12057,6 +12141,36 @@ async function restoreSessionState(sessionState) {
     deepCloneSessionData(loadedSessionEntries, []),
     sessionState.keystoreMode,
   );
+  if (
+    typeof keystorePanel.restoreArtifactCategory === "function" &&
+    sessionState.artifactCategory
+  ) {
+    keystorePanel.restoreArtifactCategory(sessionState.artifactCategory);
+  }
+  // Restore persisted file artifacts (carved/downloaded files with raw
+  // bytes as bytesBase64).  This writes them back to IndexedDB and
+  // rebuilds the in-memory mirror so the Files category shows them.
+  if (
+    typeof keystorePanel.restoreFileArtifacts === "function" &&
+    Array.isArray(sessionState.fileArtifacts)
+  ) {
+    try {
+      await keystorePanel.restoreFileArtifacts(sessionState.fileArtifacts);
+    } catch (error) {
+      logErrorEntry("session-restore-file-artifacts", error);
+    }
+  }
+  // Merge the restored file mirror (with bytes) into the session keystore
+  // entries, replacing any stale file entries that were saved with
+  // ``bytes: null``.  Also picks up stream-carved files from the live
+  // capture data.
+  if (typeof keystorePanel.refreshFileArtifacts === "function") {
+    try {
+      await keystorePanel.refreshFileArtifacts();
+    } catch (error) {
+      logErrorEntry("session-restore-file-refresh", error);
+    }
+  }
 
   // Now that the keystore panel is repopulated, refresh the crypt panel's
   // wifi key list (it reads through getWifiKeychainEntries) and auto-push
@@ -12201,13 +12315,17 @@ async function restoreSessionState(sessionState) {
   // picked "All Hosts" would silently re-select the real "0.0.0.0" host
   // (which contains all undecrypted wifi management/control frames) and
   // the user would only see that host's packets.  Only translate when
-  // the session was saved with the legacy schema (v1) — sessions saved
-  // with v2+ use the new sentinel intentionally.
+  // the session was saved with the legacy v1 schema — sessions saved
+  // with v2+ use the new sentinel intentionally.  The v2→v3 bump is
+  // additive (artifactCategory/fileArtifacts) and does not change the
+  // sentinel, so we hard-code the v1 threshold here instead of using
+  // SESSION_FILE_SCHEMA_VERSION.
   const LEGACY_ALL_HOST_SENTINEL = "0.0.0.0";
+  const V1_SENTINEL_SCHEMA_THRESHOLD = 2;
   const sessionSchemaVersion = Number(sessionState?.schemaVersion) || 0;
   const rawSelectedHost = String(sessionState.selectedHost || "").trim();
   const isLegacyAllHostSelection =
-    sessionSchemaVersion < SESSION_FILE_SCHEMA_VERSION
+    sessionSchemaVersion < V1_SENTINEL_SCHEMA_THRESHOLD
     && rawSelectedHost === LEGACY_ALL_HOST_SENTINEL;
   const selectedHost = isLegacyAllHostSelection ? DUMMY_ALL_HOST : rawSelectedHost;
   if (
@@ -16128,6 +16246,16 @@ function loadExtractionResultIntoHashesSubtab(bytes, fileNameHint) {
     statusUpdate("Status: Conv input fields are unavailable");
     return false;
   }
+  // Clear the reverse-lookup section below so stale results don't
+  // mislead the user when file bytes are loaded from another tab.
+  const reverseInputEl = document.getElementById("data-tools-hash-reverse-input");
+  const reverseStatusEl = document.getElementById("data-tools-hash-reverse-status");
+  const reverseResultEl = document.getElementById("data-tools-hash-reverse-result");
+  const identifyResultEl = document.getElementById("data-tools-hash-identify-result");
+  if (reverseInputEl) reverseInputEl.value = "";
+  if (reverseStatusEl) reverseStatusEl.textContent = "Enter a hash and click Reverse Hash. The request is sent to hashes.com; cost is deducted from your account.";
+  if (reverseResultEl) reverseResultEl.textContent = "No reverse-lookup has been run yet.";
+  if (identifyResultEl) identifyResultEl.textContent = "No identifier-lookup has been run yet.";
   dataToolsOriginalInputBytes = bytes;
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
@@ -17270,6 +17398,9 @@ keystorePanel = createKeystorePanel({
   getApplyCryptCertificateText: () => applyCryptCertificateText,
   getApplyCryptPrivateKeyText: () => applyCryptPrivateKeyText,
   openExternalUrl: (url) => window.browserapi.openExternalUrl(url),
+  listCarvableFilesForStats: () => listCarvableFilesForStats(),
+  listDownloadedFilesForStats: () => listDownloadedFilesForStats(),
+  openCarvedFileInConv: (candidate) => loadCarvedFileCandidateIntoConvTab(candidate),
 });
 
 
@@ -20878,6 +21009,16 @@ function registerDownloadedFileForStats(fileName, bytes, sourceUri = "") {
   };
   downloadedFilesRegistry.unshift(entry);
   downloadedFilesRegistry = downloadedFilesRegistry.slice(0, 50);
+  // Persist the file artifact to the Artifact Store (IndexedDB + session save).
+  if (keystorePanel && typeof keystorePanel.persistFileArtifact === "function") {
+    keystorePanel.persistFileArtifact(entry).catch((error) =>
+      logErrorEntry("artifact-store-download-persist", error),
+    );
+  }
+  // Refresh the Artifact Store Files category so the new file appears immediately.
+  if (keystorePanel && typeof keystorePanel.refreshFileArtifacts === "function") {
+    keystorePanel.refreshFileArtifacts().catch(() => { });
+  }
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
     subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
   }
@@ -20920,6 +21061,19 @@ function registerExtractionResultForStats(fileName, bytes) {
     sourceDetail: "Conv Extraction",
   });
   extractionCarvableRegistry = extractionCarvableRegistry.slice(0, 50);
+  // Persist the file artifact to the Artifact Store (IndexedDB + session save).
+  if (keystorePanel && typeof keystorePanel.persistFileArtifact === "function") {
+    const extractEntry = extractionCarvableRegistry[0];
+    if (extractEntry) {
+      keystorePanel.persistFileArtifact(extractEntry).catch((error) =>
+        logErrorEntry("artifact-store-extract-persist", error),
+      );
+    }
+  }
+  // Refresh the Artifact Store Files category so the new file appears immediately.
+  if (keystorePanel && typeof keystorePanel.refreshFileArtifacts === "function") {
+    keystorePanel.refreshFileArtifacts().catch(() => { });
+  }
   // New carve may change the Session Threat Score (file-hash indicators).
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
     subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
@@ -21824,7 +21978,7 @@ function writeSummaryFromLLM() {
     const statsContextMarkdown = buildStatsMarkdownSection();
     if (statsContextMarkdown) {
       captureOverviewParts.push(
-        `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your answer so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, masked credentials, etc.).\n\n${statsContextMarkdown}`,
+        `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your answer so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, credentials, etc.).\n\n${statsContextMarkdown}`,
       );
     }
     const keystoreSummary =
@@ -22069,6 +22223,7 @@ function resetSummarizerResponseCache() {
 function recordSummarizerHistoryEntry(type, prompt, response) {
   if (!prompt || typeof prompt !== "string") return;
   if (!response || typeof response !== "string") return;
+  const entryType = String(type || "stream");
   // Cap stored prompt/response size to avoid unbounded session file growth.
   // Most prompts are well under the LLM_MAX_CONTENT_LENGTH cap, but
   // defensive truncation prevents a single pathological entry from
@@ -22081,11 +22236,18 @@ function recordSummarizerHistoryEntry(type, prompt, response) {
     ? response.slice(0, MAX_ENTRY_CHARS) + "\n[TRUNCATED]"
     : response;
   summarizerHistory.push({
-    type: String(type || "stream"),
+    type: entryType,
     prompt: trimmedPrompt,
     response: trimmedResponse,
     timestamp: new Date().toISOString(),
   });
+  // Track new pipeline activity for the restructure scheduler. Only
+  // stream and compaction entries count — restructure entries don't
+  // represent new analysis, they represent reorganization of existing
+  // analysis.
+  if (entryType === "stream" || entryType === "compaction") {
+    summarizerEntriesSinceRestructure += 1;
+  }
   // Also populate the response cache so a subsequent live summarizer
   // call with the same prompt (e.g. user revisits the same stream) gets
   // a cache hit without an LLM call. Store the n-gram set alongside the
@@ -22154,6 +22316,59 @@ async function recomputeSummaryFromHistory() {
     }
     const entryType = String(entry.type || "stream");
     const prompt = String(entry.prompt || "");
+
+    // Restructure entries replace the entire accumulated summary state
+    // with the restructured version (Executive Summary / Major Events /
+    // Peripheral Events / Conclusion). Process them individually.
+    if (entryType === "restructure") {
+      try {
+        const cacheKey = summarizerPromptCacheKey(prompt);
+        let restructured;
+        if (summarizerResponseCache.has(cacheKey)) {
+          restructured = summarizerResponseCache.get(cacheKey).text || "";
+          cacheHits += 1;
+          writeLogEntry(`Recompute restructure cache HIT (key=${cacheKey})`);
+        } else {
+          const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+          restructured = stripLlmThinkingText(llmResponse?.response || "");
+          if (summarizerResponseCache.size >= SUMMARIZER_RESPONSE_CACHE_MAX) {
+            const oldestKey = summarizerResponseCache.keys().next().value;
+            if (oldestKey !== undefined) summarizerResponseCache.delete(oldestKey);
+          }
+          summarizerResponseCache.set(cacheKey, { text: restructured, ngrams: buildPromptNgramSet(prompt), streamDataNgrams: buildPromptNgramSet(extractStreamDataFromPrompt(prompt)) });
+        }
+        if (restructured.trim()) {
+          // The restructure replaces all prior accumulated state.
+          compactedAnalysisSummaries = [{
+            signature: "__restructured__",
+            summary: restructured.trim(),
+            lastUpdatedAt: Date.now(),
+          }];
+          summary = restructured.trim();
+          analysisBlubHistory.length = 0;
+          resetSummaryDistillCache();
+        }
+        processed += 1;
+      } catch (error) {
+        failed += 1;
+        writeLogEntry(`Recompute restructure ${processed} failed: ${error?.message || error}`);
+        const fallbackResponse = String(entry.response || "").trim();
+        if (fallbackResponse) {
+          compactedAnalysisSummaries = [{
+            signature: "__restructured__",
+            summary: fallbackResponse,
+            lastUpdatedAt: Date.now(),
+          }];
+          summary = fallbackResponse;
+          analysisBlubHistory.length = 0;
+          resetSummaryDistillCache();
+        }
+      }
+      renderSummaryMarkdownPreview(summary);
+      statusUpdate(`Status: Recomputing summary... ${processed}/${totalEntries} entries processed.`);
+      i += 1;
+      continue;
+    }
 
     // Compaction entries are processed one at a time (they already pack
     // multiple blurbs and have their own context-scoped semantics).
@@ -22432,7 +22647,7 @@ async function runAnalysisCompaction() {
   const statsContextMarkdown = buildStatsMarkdownSection();
   if (statsContextMarkdown) {
     captureOverviewParts.push(
-      `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your compacted summary so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, masked credentials, etc.).\n\n${statsContextMarkdown}`,
+      `## Capture Statistics (from the Stats panel)\n\nThe following is the current capture-level statistics summary. These facts describe the entire pcap and MUST be woven into your compacted summary so the analyst has a complete view of the traffic (top talkers, protocols, traffic volume, geographic footprint, MIME types, heatmap hits, credentials, etc.).\n\n${statsContextMarkdown}`,
     );
   }
   const keystoreSummary =
@@ -22458,7 +22673,7 @@ async function runAnalysisCompaction() {
   const combinedInput = `${captureOverview}${previousCompactedBlock}The following are new analysis blurbs generated from network traffic, in chronological order. Read them carefully, then produce a single in-depth summary that:
 - Treats the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into the output so the compacted summary covers both the LLM blurbs AND the capture-level picture.
 - DEDUPLICATE — both within the previously compacted summary and across the new blurbs. The same fact, IP, port, credential, hostname, file name, URL, hash, protocol, or finding must not appear more than once in reworded form. If the previous compacted summary already mentions an IP that a new blurb describes, keep the more detailed / more concrete version and drop the restatement. If two new blurbs describe the same observation in different words, merge them into a single canonical sentence. A reader should never feel that the same thing is being reworded over and over.
-- Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference.
+- Preserves the most important concrete data points (e.g. IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags) verbatim or with minimal rephrasing so they remain usable as reference. When credentials are available in both full and redacted/masked forms, ALWAYS prefer the full unredacted form (e.g. the actual password, not *** or REDACTED).
 - Preserves the chronological order of significant events where it matters.
 - Merges related facts instead of listing every blurb separately; organize by protocol, host, credential, or file transfer where appropriate.
 - Adds new blurbs to the existing analysis rather than replacing it. Keep prior key analysis points and extend them with the new data.
@@ -23075,7 +23290,7 @@ function buildSummaryDistillPrompt(reportMarkdown) {
     "   - Do NOT keep a sentence that simply rewords another sentence already in the report, even if the wording is technically different. A reader should never feel that the same observation is being repeated.",
     "2. CHRONOLOGICAL ORDER: re-sort the ENTIRE report in chronological order, using timestamps from the source data, packet indices, or session order as the anchor. When an event has no explicit timestamp, fall back to its position in the source. The Capture Statistics section stays at the top as the high-level overview, but everything below it should be in chronological order.",
     "3. SECTION HIGHLIGHTS: inside every main section, list the items that stand out as most important (security-relevant, anomalous, credential-bearing, or otherwise noteworthy) FIRST. Lesser findings follow.",
-    "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, masked credential values, etc.). Drop only redundant or low-value observations, and especially drop restatements of facts that already appear elsewhere in the report.",
+    "4. PRESERVE: keep all concrete data points the analyst may want to refer back to (IP addresses, ports, protocols, credentials, file names, URLs, hostnames, hashes, notable flags, credential values, etc.). When credentials are available in both full and redacted/masked forms, ALWAYS prefer the full unredacted form (e.g. the actual password, not `***` or `REDACTED`). Drop only redundant or low-value observations, and especially drop restatements of facts that already appear elsewhere in the report.",
     "5. STRUCTURE: keep valid Markdown headings, lists, and tables. Do not switch to HTML. Do not wrap the entire response in a single code fence. Do not print the report's top-level heading ('PacketSnitch's Summary') more than once — it is added automatically when the analyst reads the consolidated report, so any h1 in the source should be promoted to h2 or omitted.",
     "6. LENGTH: aim for a noticeably more compact report than the input. The aggressive dedupe in rule 1 should produce a shorter output, not a longer one. If the source is already fully deduplicated, return it largely unchanged.",
     "7. SQUELCH NO-OP DATA: do not report decoders, parsers, extractors, lookups, or conversions that were attempted but failed, returned errors, or produced no usable output. If a decoder was opened but the operation did not yield data, omit it entirely from the distilled report instead of mentioning its absence. The same applies to empty hash fields, blank conversions, no-op extraction results, and failed subnet/whois/geoip/threat-intel lookups. Only describe activity that actually surfaced real content. Silence is preferable to a paragraph that just says 'nothing was found'.",
@@ -23880,7 +24095,7 @@ function buildMajorEventsPrompt(reportMarkdown) {
     "3. CONTENT — cover each of the following in its own paragraph (or more if warranted):",
     "   - Overview: what kind of capture this is (duration, packet count, protocols seen, top talkers / hosts).",
     "   - Traffic patterns: who was talking to whom, over what protocols and ports, and any notable session flows or connection sequences.",
-    "   - Credentials & sensitive data: any credentials, tokens, cookies, keys, personal data, or other sensitive payloads that were captured. Name the protocol, the credential type, and the masked value where available.",
+    "   - Credentials & sensitive data: any credentials, tokens, cookies, keys, personal data, or other sensitive payloads that were captured. Name the protocol, the credential type, and the full unredacted value when available. When both the full password and a masked/redacted version are present in the source, ALWAYS use the full unredacted password.",
     "   - Anomalies & security findings: any suspicious patterns, misconfigurations, cleartext exposure, unusual ports, unexpected hosts, or otherwise security-relevant observations.",
     "   - Notable payloads / extracted artifacts: any files, images, DNS lookups, HTTP requests/responses, or other decoded content that stood out.",
     "   - Wrap-up: a concise assessment of the overall character of the capture — is it benign background traffic, a targeted attack, a credential leak, a misconfiguration probe, etc.",
@@ -24049,6 +24264,193 @@ ${llmBadge}
   }
 }
 
+// Builds the prompt that asks the LLM to restructure the entire running
+// summary into a well-organized report with fixed sections. This is the
+// "periodic restructure" pass that keeps the summary current — it fixes
+// the problem where early parts of the summary contradict later parts
+// (e.g. the summary says "no credentials found" early on, then finds
+// credentials later and leaves the earlier false statement in place).
+//
+// The LLM is told to:
+//   1. Read the ENTIRE summary and produce a single coherent document.
+//   2. Reorganize into four fixed sections: Executive Summary, Major
+//      Events, Peripheral Events, Conclusion.
+//   3. Remove any statements that are contradicted by later findings —
+//      if the summary says "no X found" early but then finds X later,
+//      the restructured version must NOT include the "no X found" claim.
+//   4. Deduplicate aggressively — the same fact must appear exactly once.
+//   5. Keep all concrete data points (IPs, ports, credentials, etc.).
+//   6. Preserve chronological order within each section.
+function buildSummaryRestructurePrompt(summaryMarkdown) {
+  return [
+    "You are PacketSnitch, a network forensics assistant.",
+    "You are about to receive the full running summary of a captured pcap.",
+    "This summary was built incrementally — new analysis was appended as the analyst navigated through packet streams.",
+    "Because of this incremental approach, early parts of the summary may contradict later parts (e.g. the summary may claim something is absent early on, then find it later and leave the earlier false claim in place).",
+    "Your job is to produce a RESTRUCTURED version of the entire summary that is internally consistent, current, and well-organized.",
+    "",
+    "Output sections — use these exact headings:",
+    "## Executive Summary",
+    "A 2-3 paragraph overview of the capture: what it is, the overall traffic character, and the most important findings at a glance.",
+    "",
+    "## Major Events",
+    "The security-relevant or otherwise significant events in chronological order: credentials captured, sensitive data exposed, suspicious traffic, notable protocol activity, file transfers, etc. Each event should be a concise paragraph or bullet. Include concrete data (IPs, ports, protocols, credential types, full unredacted passwords when available, file names, URLs). When both the full and masked/redacted forms of a credential are present, ALWAYS use the full unredacted form.",
+    "",
+    "## Peripheral Events",
+    "Lesser findings that are worth recording but not critical: background traffic patterns, minor protocol observations, non-security-relevant decoded content, etc. Be concise.",
+    "",
+    "## Conclusion",
+    "A 1-2 paragraph wrap-up assessing the overall character of the capture. Is it benign, an attack, a credential leak, a misconfiguration probe, etc.? What should the analyst focus on next?",
+    "",
+    "Rules:",
+    "1. CONSISTENCY: Remove any statement that is contradicted by later findings in the summary. If the summary says 'no X found' early but then finds X later, the restructured version must NOT include the 'no X found' claim — only the accurate, later finding.",
+    "2. DEDUPLICATE: The same fact must appear exactly once. Collapse every duplicate into a single canonical statement.",
+    "3. PRESERVE DATA: Keep all concrete data points (IPs, ports, protocols, credentials, file names, URLs, hostnames, hashes). Do not invent new facts.",
+    "4. CHRONOLOGICAL: Within each section, list events in chronological order.",
+    "5. NO REPETITION ACROSS SECTIONS: A fact that appears in Major Events must NOT also appear in Peripheral Events. Each fact belongs in exactly one section.",
+    "6. SQUELCH NO-OP DATA: Do not mention decoders, parsers, or lookups that were attempted but failed or produced no output.",
+    "7. MARKDOWN: Return valid Markdown. Do not wrap in code fences. Do not include a top-level h1 — the section headings above (h2) are the only headings needed.",
+    "",
+    "Here is the full running summary to restructure:",
+    "",
+    "<<<RUNNING_SUMMARY_START>>>",
+    summaryMarkdown,
+    "<<<RUNNING_SUMMARY_END>>>",
+    "",
+    "Now return the restructured summary with the four sections. No preamble, no explanation — just the restructured report.",
+  ].join("\n");
+}
+
+// Runs a full-summary restructure pass. This takes the entire current
+// summary (all compactedAnalysisSummaries + notes), sends it through the
+// LLM with the restructure prompt, and replaces the summary state with
+// the restructured version. The restructured version has four fixed
+// sections (Executive Summary, Major Events, Peripheral Events,
+// Conclusion) and is internally consistent — early claims that are
+// contradicted by later findings are removed.
+//
+// This is recorded in the summarizer history as a "restructure" entry
+// so it can be replayed during recompute.
+//
+// The function is throttled by the caller (triggerSummaryRestructureIfDue)
+// so it only runs every few Analysis tab visits, not every visit.
+async function runSummaryRestructure() {
+  if (summaryRestructureInProgress) return;
+  summaryRestructureInProgress = true;
+
+  const rawSummaryMarkdown = getCurrentSummaryReportMarkdown();
+  if (!rawSummaryMarkdown || !rawSummaryMarkdown.trim()) {
+    summaryRestructureInProgress = false;
+    return;
+  }
+
+  // Don't restructure very short summaries — there's not enough content
+  // to warrant the LLM call.
+  if (rawSummaryMarkdown.trim().length < SUMMARY_DISTILL_MIN_LENGTH) {
+    summaryRestructureInProgress = false;
+    writeLogEntry("Summary restructure skipped: summary too short");
+    return;
+  }
+
+  statusUpdate("Status: Restructuring summary...");
+  writeLogEntry(`Summary restructure started: input length=${rawSummaryMarkdown.length}`);
+
+  let truncatedInput = rawSummaryMarkdown.trim();
+  if (truncatedInput.length > SUMMARY_DISTILL_INPUT_MAX_CHARS) {
+    truncatedInput =
+      truncatedInput.slice(0, SUMMARY_DISTILL_INPUT_MAX_CHARS) +
+      "\n\n[INPUT TRUNCATED: summary too long for restructure prompt]";
+  }
+  const prompt = buildSummaryRestructurePrompt(truncatedInput);
+
+  if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    writeLogEntry(
+      `Summary restructure skipped: prompt length ${prompt.length} exceeds LLM_MAX_CONTENT_LENGTH`,
+    );
+    summaryRestructureInProgress = false;
+    return;
+  }
+
+  let restructured = "";
+  try {
+    const llmResponse = await callLargeLanguageModelWithRetry(prompt);
+    restructured = stripLlmThinkingText(llmResponse?.response || "");
+  } catch (error) {
+    writeLogEntry(`Summary restructure failed: ${error?.message || error}`);
+    statusUpdate("Status: Summary restructure failed.");
+    summaryRestructureInProgress = false;
+    return;
+  }
+
+  if (!restructured.trim()) {
+    writeLogEntry("Summary restructure: LLM returned empty response");
+    statusUpdate("Status: Summary restructure produced no output.");
+    summaryRestructureInProgress = false;
+    return;
+  }
+
+  // Record in the summarizer history so recompute can replay it.
+  recordSummarizerHistoryEntry("restructure", prompt, restructured);
+
+  // Replace the compactedAnalysisSummaries with the restructured version
+  // as a single entry. The restructured text already has the four sections,
+  // so it replaces the multi-entry accumulated state.
+  compactedAnalysisSummaries = [
+    {
+      signature: "__restructured__",
+      summary: restructured.trim(),
+      lastUpdatedAt: Date.now(),
+    },
+  ];
+
+  // Reset the blub history and distill cache since the summary content
+  // has fundamentally changed.
+  analysisBlubHistory.length = 0;
+  resetSummaryDistillCache();
+
+  renderCombinedAnalysisSummary();
+  lastSummaryRestructureAt = Date.now();
+  summarizerEntriesAtLastRestructure = summarizerEntriesSinceRestructure;
+  summaryRestructureInProgress = false;
+
+  statusUpdate("Status: Summary restructured into Executive Summary, Major Events, Peripheral Events, and Conclusion.");
+  writeLogEntry(`Summary restructure completed: output length=${restructured.length}`);
+}
+
+// Called when the user accesses the Analysis tab. Increments the visit
+// counter and triggers a full-summary restructure pass if:
+//   1. Enough tab visits have accumulated since the last restructure,
+//   2. Enough time has passed since the last restructure, AND
+//   3. New summarizer pipeline activity (stream summaries or compaction
+//      passes) has occurred since the last restructure.
+// The third guard ensures the LLM is not called to restructure a
+// summary that hasn't changed — if the user is just re-visiting the
+// Analysis tab without navigating to any new packet streams, there is
+// nothing new to reorganize.
+function triggerSummaryRestructureIfDue() {
+  if (summaryRestructureInProgress) return;
+  // Guard: skip if no new pipeline activity since the last restructure.
+  // This prevents re-running the restructure when the user hasn't done
+  // anything that would have changed the summary content.
+  if (summarizerEntriesSinceRestructure <= summarizerEntriesAtLastRestructure) {
+    return;
+  }
+  summaryTabVisitCountSinceRestructure += 1;
+  if (summaryTabVisitCountSinceRestructure < SUMMARIZER_RESTRUCTURE_TAB_VISITS) {
+    return;
+  }
+  const now = Date.now();
+  if (now - lastSummaryRestructureAt < SUMMARIZER_RESTRUCTURE_MIN_INTERVAL_MS) {
+    return;
+  }
+  // Reset the counter so we count visits since this trigger.
+  summaryTabVisitCountSinceRestructure = 0;
+  // Fire and forget — the restructure runs in the background while the
+  // user sees the current summary. The restructured version replaces the
+  // summary state when it completes.
+  void runSummaryRestructure();
+}
+
 // Expose the Summary export entry points on globalThis so other
 // webpack-bundled modules (e.g. summary-panel.js) can reach them
 // without needing to grow factory-injected dependencies. The panel
@@ -24070,6 +24472,7 @@ if (typeof globalThis !== "undefined") {
     saveSummaryAsPdf,
     saveSummaryFromContextMenu,
     generateMajorEventsReport,
+    triggerSummaryRestructureIfDue,
   };
 }
 
@@ -24931,37 +25334,9 @@ document
       doError("Please upload a JSON file before accessing the keystore.");
       return;
     }
-    if (
-      keystorePanel.getKeystoreMode() === CRYPT_KEYSTORE_MODE_PERSISTENT &&
-      !keystorePanel.isUnlocked()
-    ) {
-      const unlocked = await keystorePanel.unlockPersistentKeystoreAndLoad();
-      if (!unlocked) return;
-    }
+    const unlocked = await keystorePanel.unlockPersistentKeystoreAndLoad();
+    if (!unlocked) return;
     keystorePanel.showKeystoreWorkspace();
-  });
-document
-  .getElementById("crypt-keystore-unlock-confirm-btn")
-  .addEventListener("click", keystorePanel.submitKeystoreUnlockDialog);
-document
-  .getElementById("crypt-keystore-unlock-reset-btn")
-  .addEventListener("click", keystorePanel.requestPersistentKeystoreReset);
-document
-  .getElementById("crypt-keystore-unlock-cancel-btn")
-  .addEventListener("click", () =>
-    keystorePanel.resolveKeystoreUnlockPassword(null),
-  );
-document
-  .getElementById("crypt-keystore-unlock-password")
-  .addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    keystorePanel.submitKeystoreUnlockDialog();
-  });
-document
-  .getElementById("crypt-keystore-unlock-password-confirm")
-  .addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    keystorePanel.submitKeystoreUnlockDialog();
   });
 document
   .getElementById("crypt-keystore-manual-uri-confirm-btn")
@@ -25807,6 +26182,14 @@ document
     );
   });
 document
+  .getElementById("artifact-category-select")
+  .addEventListener("change", function () {
+    const selectedCategory = String(this.value || "all");
+    if (typeof keystorePanel.setActiveCategory === "function") {
+      keystorePanel.setActiveCategory(selectedCategory);
+    }
+  });
+document
   .getElementById("crypt-keystore-list")
   .addEventListener("change", function () {
     const activeEntries = keystorePanel.getRenderedCryptKeystoreEntries();
@@ -25828,10 +26211,32 @@ document
   });
 document
   .getElementById("crypt-send-to-hashes-btn")
-  .addEventListener("click", () => {
+  .addEventListener("click", async () => {
     const entry = keystorePanel.getSelectedSessionEntryForHashes?.();
     if (!entry) {
       statusUpdate("Status: Select a keystore entry first to send to Hashes");
+      return;
+    }
+    // For file-type entries, load the raw file bytes into the Hashes
+    // subtab input so the user can compute hashes (SHA-256, MD5, etc.)
+    // and cross-reference them — not reverse-lookup a pre-computed hash.
+    if (entry.type === "file" && entry.content) {
+      try {
+        const fileBytes = parseDataToolsInput("hex", entry.content);
+        if (fileBytes && fileBytes.length > 0) {
+          loadExtractionResultIntoHashesSubtab(fileBytes, entry.label);
+          statusUpdate(
+            `Status: Sent file "${entry.label}" to Hashes for hash computation`,
+          );
+          writeLogEntry(
+            `[Keystore] File artifact sent to Hashes for hashing label="${entry.label}" bytes=${fileBytes.length}`,
+          );
+          return;
+        }
+      } catch (error) {
+        logErrorEntry("artifact-store-send-to-hashes-file", error);
+      }
+      statusUpdate("Status: File bytes are unavailable for hashing");
       return;
     }
     const content = String(entry.normalizedContent || entry.content || "").trim();
@@ -25855,6 +26260,13 @@ document
     if (typeof setDataToolsHashReverseInput === "function") {
       setDataToolsHashReverseInput(reverseValue);
     }
+    // Auto-run hash type detection (hashes.com /en/api/identifier) so
+    // the user immediately sees what algorithm the hash appears to be.
+    // This does NOT reverse the hash — it only identifies the type, so
+    // no reverse-lookup credits are spent.
+    if (typeof runDataToolsHashIdentify === "function") {
+      void runDataToolsHashIdentify();
+    }
     statusUpdate(
       `Status: Sent "${entry.label}" to Hashes reverse-lookup`,
     );
@@ -25873,7 +26285,7 @@ document.getElementById("crypt-open-link-btn").addEventListener("click", () => {
 document
   .getElementById("crypt-reset-keystore-password-btn")
   .addEventListener("click", () => {
-    void keystorePanel.resetPersistentKeystorePassword();
+    void keystorePanel.resetPersistentKeystoreEntries();
   });
 
 document
@@ -26215,6 +26627,30 @@ document
       const bytes = dataToolsLastConversionBytes;
       if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
       runProtoDecoder(bytes);
+    } catch {
+      // ignore failures and preserve existing decoder output
+    }
+  });
+// Toggle: hide packets whose bytes fail to decode in the Conv Decodes
+// stacked view. Mirrors the dropdown handler so flipping the checkbox
+// re-runs the decoder immediately against the current bytes — we don't
+// need a separate render path because runProtoDecoder routes through
+// runProtoDecoderForStreamPackets whenever a per-packet stream is loaded,
+// and the per-packet loop reads the filter from module state.
+document
+  .getElementById("data-tools-decodes-hide-noop")
+  .addEventListener("change", (event) => {
+    try {
+      const isChecked = Boolean(event && event.target && event.target.checked);
+      setConvDecodesHideNoOp(isChecked);
+      const bytes = dataToolsLastConversionBytes;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) return;
+      // Only re-render when we're on the Decodes subtab — otherwise the
+      // dropdown handler above already covers the path and we don't want
+      // a stray render to clobber an unrelated subtab's output.
+      if (getActiveConvSubtab() === CONV_DECODES_SUBTAB) {
+        runProtoDecoder(bytes);
+      }
     } catch {
       // ignore failures and preserve existing decoder output
     }

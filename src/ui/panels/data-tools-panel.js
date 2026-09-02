@@ -97,6 +97,14 @@ const MAX_DECODED_IMAGE_REGISTRY_SIZE = 50;
 let dataToolsStreamPackets = null;
 const MAX_DATA_TOOLS_STREAM_PACKETS = 512;
 
+// User-toggleable filter for the Conv Decodes stacked view. When true,
+// packets whose bytes do not produce a decoder result (or are skipped by
+// the per-packet filter for being empty/unsupported) are not rendered as
+// blocks in the stacked list. The toggle is renderer-only state and is
+// intentionally NOT persisted to settings.json — it is a per-session
+// convenience for analysts triaging a stream with many no-op packets.
+let convDecodesHideNoOp = false;
+
 // ── Injected dependencies (set via initConvPanel) ─────────────────────────────
 
 let _writeLogEntry = () => { };
@@ -213,6 +221,22 @@ function setDataToolsStreamPackets(packets) {
 // underlying input or loads a fresh non-stream source.
 function clearDataToolsStreamPackets() {
   dataToolsStreamPackets = null;
+}
+
+// Returns whether the Conv Decodes stacked view is configured to suppress
+// packets whose bytes fail to decode. The renderer reads this inside the
+// stacked-render loop and skips appending the corresponding block when
+// true. False by default — analysts see every packet in capture order
+// until they explicitly opt in to the filter.
+function getConvDecodesHideNoOp() {
+  return convDecodesHideNoOp === true;
+}
+
+// Sets the hide-no-op filter toggle. The change is reflected on the next
+// stacked render; the caller is responsible for triggering a re-render
+// (typically via runProtoDecoder on the active bytes).
+function setConvDecodesHideNoOp(nextValue) {
+  convDecodesHideNoOp = nextValue === true;
 }
 
 // ── Input parsing ─────────────────────────────────────────────────────────────
@@ -640,6 +664,16 @@ function runDataToolsHashesFromInput() {
   const hashInput = document.getElementById("data-tools-hash-input-reading").value;
   const bytes = parseHashInputReadingBytes(hashInput);
   computeDataToolsHashes(bytes);
+  // Clear the reverse-lookup section below so the user isn't misled
+  // by stale results from a previous hash.
+  const reverseInputEl = document.getElementById("data-tools-hash-reverse-input");
+  const reverseStatusEl = document.getElementById("data-tools-hash-reverse-status");
+  const reverseResultEl = document.getElementById("data-tools-hash-reverse-result");
+  const identifyResultEl = document.getElementById("data-tools-hash-identify-result");
+  if (reverseInputEl) reverseInputEl.value = "";
+  if (reverseStatusEl) reverseStatusEl.textContent = "Enter a hash and click Reverse Hash. The request is sent to hashes.com; cost is deducted from your account.";
+  if (reverseResultEl) reverseResultEl.textContent = "No reverse-lookup has been run yet.";
+  if (identifyResultEl) identifyResultEl.textContent = "No identifier-lookup has been run yet.";
   if (activeConvSubtab === CONV_HASHES_SUBTAB) {
     requestDataToolsBackgroundSummary(CONV_HASHES_SUBTAB);
   }
@@ -717,6 +751,9 @@ async function runDataToolsHashReverseLookup() {
   if (!inputEl || !statusEl || !resultEl) {
     return;
   }
+  // Clear the hash computation section above so the user isn't misled
+  // by stale hash outputs from a previous input.
+  resetHashOutputs();
   const rawHash = String(inputEl.value || "").trim();
   if (!rawHash) {
     statusEl.textContent = "Enter a hash to reverse.";
@@ -901,6 +938,9 @@ async function runDataToolsHashIdentify() {
     _statusUpdate("Status: Enter a hash to identify.");
     return;
   }
+  // Clear the hash computation section above so the user isn't misled
+  // by stale hash outputs from a previous input.
+  resetHashOutputs();
   const setResult = (text) => {
     resultEl.textContent = text;
   };
@@ -1062,6 +1102,9 @@ function setDataToolsHashReverseInput(value) {
   const inputEl = document.getElementById("data-tools-hash-reverse-input");
   if (!inputEl) return false;
   inputEl.value = String(value || "").trim();
+  // Clear the hash computation section above so stale hash outputs
+  // don't mislead the user when a hash is sent from another tab.
+  resetHashOutputs();
   return true;
 }
 
@@ -1629,7 +1672,10 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   // Render newest-first: walk the list in reverse so the most recent packet
   // appears at the top of the panel. We capture the first non-null result
   // (oldest in iteration order) for activeDataToolsProtoResult so the
-  // existing single-result export helpers keep working.
+  // existing single-result export helpers keep working. When the user has
+  // toggled the hide-no-op filter, packets whose bytes do not produce a
+  // decoder result are skipped here so the stack only shows packets with
+  // decodable data.
   protoOutput.innerHTML = "";
   delete protoOutput.dataset.decodedResult;
   const summary = document.createElement("div");
@@ -1641,7 +1687,10 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   protoOutput.appendChild(summary);
 
   let firstSuccessfulResult = null;
+  let renderedCount = 0;
+  let hiddenCount = 0;
   const totalCount = packets.length;
+  const hideNoOp = convDecodesHideNoOp === true;
   for (let reverseIndex = 0; reverseIndex < totalCount; reverseIndex += 1) {
     const packetIndex = totalCount - 1 - reverseIndex;
     const entry = packets[packetIndex] || {};
@@ -1652,6 +1701,10 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
       ? decodeWithSelectedProtocol(bytes, resolvedProtocol)
       : decodeWithSelectedProtocol(bytes, autoDetectProtoFromBytes(bytes));
     if (!firstSuccessfulResult) firstSuccessfulResult = result;
+    if (hideNoOp && !result) {
+      hiddenCount += 1;
+      continue;
+    }
     const block = document.createElement("div");
     block.className = "data-tools-proto-stream-block";
     const header = document.createElement("div");
@@ -1663,6 +1716,30 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
     block.appendChild(header);
     const blockLabel = info.sourceKey ? `Source: ${info.sourceKey}` : null;
     appendStreamPacketBlock(protoOutput, block, result, selectedProtocol, resolvedProtocol, blockLabel);
+    renderedCount += 1;
+  }
+
+  // Annotate the summary line with shown / hidden counts when the filter is
+  // active so analysts can tell at a glance how many no-op packets were
+  // suppressed. Counts derive from the post-filter render so they reflect
+  // what is actually visible in the panel.
+  if (hideNoOp) {
+    const hiddenNote = document.createElement("span");
+    hiddenNote.className = "data-tools-proto-stream-summary-hidden";
+    hiddenNote.textContent = ` (${renderedCount} shown, ${hiddenCount} no-op hidden)`;
+    summary.appendChild(hiddenNote);
+  }
+
+  // If the hide-no-op filter is active and every packet failed to decode,
+  // show an explicit empty-state message so the panel isn't an unhelpful
+  // blank area below the summary line. The summary still reports the
+  // hidden count so analysts can tell whether the filter is suppressing
+  // anything.
+  if (hideNoOp && renderedCount === 0 && totalCount > 0) {
+    const empty = document.createElement("div");
+    empty.className = "data-tools-proto-none";
+    empty.textContent = `No packets with decodable data in this stream. Uncheck the option above to see all ${totalCount} packets.`;
+    protoOutput.appendChild(empty);
   }
 
   if (firstSuccessfulResult) {
@@ -1953,8 +2030,12 @@ module.exports = {
   setDataToolsStreamPackets,
   getDataToolsStreamPackets,
   clearDataToolsStreamPackets,
+  getConvDecodesHideNoOp,
+  setConvDecodesHideNoOp,
   runDataToolsConversion,
   runDataToolsHashesFromInput,
+  setHashInputReadingFromBytes,
+  computeDataToolsHashes,
   renderCryptHashesFromConvInput,
   crossReferenceCurrentHash,
   runDataToolsHashReverseLookup,

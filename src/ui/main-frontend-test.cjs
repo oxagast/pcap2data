@@ -22055,29 +22055,6 @@ document
     keystorePanel.showKeystoreWorkspace();
   });
 document
-  .getElementById("crypt-keystore-unlock-confirm-btn")
-  .addEventListener("click", keystorePanel.submitKeystoreUnlockDialog);
-document
-  .getElementById("crypt-keystore-unlock-reset-btn")
-  .addEventListener("click", keystorePanel.requestPersistentKeystoreReset);
-document
-  .getElementById("crypt-keystore-unlock-cancel-btn")
-  .addEventListener("click", () =>
-    keystorePanel.resolveKeystoreUnlockPassword(null),
-  );
-document
-  .getElementById("crypt-keystore-unlock-password")
-  .addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    keystorePanel.submitKeystoreUnlockDialog();
-  });
-document
-  .getElementById("crypt-keystore-unlock-password-confirm")
-  .addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    keystorePanel.submitKeystoreUnlockDialog();
-  });
-document
   .getElementById("crypt-keystore-manual-uri-confirm-btn")
   .addEventListener(
     "click",
@@ -22783,7 +22760,7 @@ document.getElementById("crypt-open-link-btn").addEventListener("click", () => {
 document
   .getElementById("crypt-reset-keystore-password-btn")
   .addEventListener("click", () => {
-    void keystorePanel.resetPersistentKeystorePassword();
+    void keystorePanel.resetPersistentKeystoreEntries();
   });
 
 document

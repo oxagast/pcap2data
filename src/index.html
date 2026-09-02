@@ -74,7 +74,8 @@
       <input type="button" id="data-btn" value="Host Data" class="custom-btns" />
       <input type="button" id="data-tools-btn" value="Conv" title="Data Conversion" class="custom-btns" />
       <input type="button" id="crypt-btn" value="Crypt" title="Encryption workspace" class="custom-btns" />
-      <input type="button" id="keystore-btn" value="Keystore" title="Persistent local keystore" class="custom-btns" />
+      <input type="button" id="keystore-btn" value="Artifacts" title="Persistent local artifact store"
+        class="custom-btns" />
       <input type="button" id="stats-btn" value="Stats" class="custom-btns" />
       <input type="button" id="list-btn" value="List" class="custom-btns" />
       <input type="button" id="notes-btn" value="Notes" class="custom-btns" />
@@ -614,6 +615,10 @@
                 <option value="gif">GIF</option>
                 <option value="webp">WebP</option>
               </select>
+              <label class="data-tools-proto-hide-noop-label" for="data-tools-decodes-hide-noop">
+                <input id="data-tools-decodes-hide-noop" type="checkbox" />
+                Hide packets with no decodable data
+              </label>
               <div id="data-tools-proto-output"></div>
             </div>
           </div>
@@ -1437,7 +1442,7 @@ No decrypted TLS/SSL output yet.</pre>
           </div>
         </div>
         <div id="keystore_box">
-          <div class="keystore-workspace-header">Local Keystore</div>
+          <div class="keystore-workspace-header">Artifact Store</div>
           <div class="keystore-grid">
             <div class="crypt-section">
               <div class="crypt-section-title">Create / Update Entry</div>
@@ -1449,11 +1454,11 @@ No decrypted TLS/SSL output yet.</pre>
                 </select>
               </div>
               <div id="crypt-keystore-unlock-status" role="status" aria-live="polite">
-                Persistent keychain is unlocked for this app session.
+                Persistent store is auto-unlocked for this app session.
               </div>
               <div class="crypt-actions-row">
                 <button id="crypt-reset-keystore-password-btn">
-                  Reset keychain password (wipes persistent keychain)
+                  Wipe persistent store
                 </button>
               </div>
               <input id="crypt-keystore-label" type="text" placeholder="Entry label (optional)" />
@@ -1487,9 +1492,17 @@ No decrypted TLS/SSL output yet.</pre>
                 </button>
               </div>
               <pre id="crypt-keystore-details">
-No keystore entries saved.</pre>
+No artifacts saved.</pre>
               <div class="crypt-keystore-filter-bar" id="keystore-filter-block">
-                <input id="crypt-keystore-filter" type="text" placeholder="Filter keystore entries..." />
+                <label for="artifact-category-select" class="artifact-category-label">Category:</label>
+                <select id="artifact-category-select">
+                  <option value="all">All</option>
+                  <option value="secrets">Secrets</option>
+                  <option value="items">Items</option>
+                  <option value="files">Files</option>
+                  <option value="misc">Misc</option>
+                </select>
+                <input id="crypt-keystore-filter" type="text" placeholder="Filter artifacts..." />
               </div>
             </div>
           </div>
@@ -1507,31 +1520,11 @@ No keystore entries saved.</pre>
             </div>
           </div>
         </div>
-        <div id="crypt-keystore-unlock-dialog" hidden>
-          <div class="crypt-keystore-unlock-content">
-            <div class="crypt-section-title" id="crypt-keystore-unlock-title">
-              Unlock Keychain
-            </div>
-            <div id="crypt-keystore-unlock-description">
-              Enter password to unlock the persistent keychain.
-            </div>
-            <input id="crypt-keystore-unlock-password" type="password" placeholder="Enter keychain password" />
-            <input id="crypt-keystore-unlock-password-confirm" type="password" placeholder="Confirm keychain password"
-              hidden />
-            <div class="crypt-actions-row">
-              <button id="crypt-keystore-unlock-confirm-btn">Unlock</button>
-              <button id="crypt-keystore-unlock-reset-btn" hidden>
-                Wipe keychain
-              </button>
-              <button id="crypt-keystore-unlock-cancel-btn">Cancel</button>
-            </div>
-          </div>
-        </div>
         <div id="crypt-keystore-manual-uri-dialog" hidden>
           <div class="crypt-keystore-unlock-content">
-            <div class="crypt-section-title">Add URI/URL to Keystore</div>
+            <div class="crypt-section-title">Add URI/URL to Artifact Store</div>
             <div id="crypt-keystore-manual-uri-description">
-              Enter URI/URL to add to the session keychain.
+              Enter URI/URL to add to the session artifacts.
             </div>
             <input id="crypt-keystore-manual-uri-input" type="text" placeholder="https://example.com/path" />
             <div class="crypt-actions-row">
@@ -2719,7 +2712,7 @@ No keystore entries saved.</pre>
     </div>
     <div id="ctx-keystore-submenu" class="ctx-submenu">
       <button id="ctx-keystore-branch" class="ctx-branch" type="button">
-        Add to Keystore...
+        Add to Artifact Store...
       </button>
       <div class="ctx-submenu-panel">
         <div id="ctx-keystore-password-submenu" class="ctx-submenu">

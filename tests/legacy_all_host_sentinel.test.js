@@ -34,10 +34,14 @@ describe('legacy DUMMY_ALL_HOST sentinel translation', () => {
         'const DUMMY_ALL_HOST = "' +
             (sourceText.match(/const DUMMY_ALL_HOST = "([^"]+)";/) || [])[1] + '";',
         // Inline the translation block as a function for unit testing.
+        // The v1 sentinel threshold is hard-coded to 2 (not
+        // SESSION_FILE_SCHEMA_VERSION) because the v2→v3 bump is
+        // additive and does not change the sentinel translation.
         `function translateSelectedHost(rawSelectedHost, sessionSchemaVersion) {
             const LEGACY_ALL_HOST_SENTINEL = "0.0.0.0";
+            const V1_SENTINEL_SCHEMA_THRESHOLD = 2;
             const isLegacyAllHostSelection =
-                sessionSchemaVersion < SESSION_FILE_SCHEMA_VERSION
+                sessionSchemaVersion < V1_SENTINEL_SCHEMA_THRESHOLD
                 && rawSelectedHost === LEGACY_ALL_HOST_SENTINEL;
             return isLegacyAllHostSelection ? DUMMY_ALL_HOST : rawSelectedHost;
         }`,

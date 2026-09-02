@@ -35,6 +35,22 @@ function createSummaryPanel({
     documentRef.getElementById("rightside").style.display = "none";
     documentRef.getElementById("summary_box").style.display = "block";
     fileLoaded(true);
+
+    // Trigger a periodic full-summary restructure when the user visits
+    // the Analysis tab. The restructure only runs every few visits (not
+    // every visit) to avoid overworking the LLM. It reorganizes the
+    // summary into Executive Summary / Major Events / Peripheral Events /
+    // Conclusion sections and fixes internal contradictions.
+    const exportBridge =
+      typeof globalThis !== "undefined" &&
+        globalThis.__PACKETSNITCH_SUMMARY_EXPORT__
+        ? globalThis.__PACKETSNITCH_SUMMARY_EXPORT__
+        : typeof window !== "undefined" && window.__PACKETSNITCH_SUMMARY_EXPORT__
+          ? window.__PACKETSNITCH_SUMMARY_EXPORT__
+          : null;
+    if (exportBridge && typeof exportBridge.triggerSummaryRestructureIfDue === "function") {
+      exportBridge.triggerSummaryRestructureIfDue();
+    }
   }
 
   function showSummaryLoading() {
