@@ -2386,7 +2386,7 @@ function scanChunkSnapshots(outputDirPath, sentSnapshotPaths, hostChunkSize = DE
   return unsent;
 }
 
-async function runBackendCommandInternal(filename, useLLM, options = {}) {
+async function runBackendCommandInternal(filename, options = {}) {
   const {
     pcapSourcePayload: providedPcapSourcePayload = null,
     hostChunkSize: requestedHostChunkSize = DEFAULT_HOST_CHUNK_SIZE,
@@ -2884,8 +2884,8 @@ async function runBackendCommandInternal(filename, useLLM, options = {}) {
   }
 }
 
-ipcMain.handle("run-backend-command", async (_event, filename, useLLM, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
-  return runBackendCommandInternal(filename, useLLM, {
+ipcMain.handle("run-backend-command", async (_event, filename, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
+  return runBackendCommandInternal(filename, {
     hostChunkSize,
     workerThreads,
     backendOptions,
@@ -2916,7 +2916,7 @@ ipcMain.handle("init-backend-service", async (_event, backendOptions) => {
   };
 });
 
-ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, useLLM, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
+ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, hostChunkSize, workerThreads, backendOptions, jobId, wifiKeys) => {
   const backendJobId = normalizeBackendJobId(jobId) || createBackendJobId("backend");
   let tempPathForCleanup = "";
   try {
@@ -2928,7 +2928,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, u
         jobId: backendJobId,
       });
     }
-    const result = await runBackendCommandInternal(prepared.tempPath, useLLM, {
+    const result = await runBackendCommandInternal(prepared.tempPath, {
       pcapSourcePayload: prepared.payload,
       hostChunkSize,
       workerThreads,
