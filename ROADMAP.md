@@ -531,15 +531,19 @@ in days, not weeks.
 > TODO.
 
 - [🟡] HTTP basic auth + cookies — covered.
-- [📋] AWS keys
-- [📋] Azure keys
-- [📋] GCP credentials
-- [📋] JWT tokens (heuristic detection; the *decoder* ships in Conv)
-- [📋] API keys
-- [📋] OAuth tokens
-- [📋] Private keys
-- [📋] Discord tokens
-- [📋] GitHub tokens
+- [�] AWS keys — regex detection in token worker + file rescan
+- [🚧] Azure keys — regex detection in token worker + file rescan
+- [🚧] GCP credentials — Google API keys (AIza), OAuth tokens (ya29.),
+  service account private_key_id detection added
+- [🚧] JWT tokens — regex detection in token worker + file rescan
+- [🚧] API keys — path-key inference for api_key/apikey fields
+- [🚧] OAuth tokens — Bearer token + ya29. detection
+- [📋] Private keys — PEM block detection in file rescan (packet-level TODO)
+- [🚧] Discord tokens — mfa. + base64-dot-base64 pattern detection
+- [🚧] GitHub tokens — ghp_/gho_/ghs_/ghu_/github_pat_ detection
+- [🚧] Extracted file rescan — "Rescan for Artifacts" button scans extracted/
+  carved file bytes for embedded secrets (covers ZIP-extracted,
+  decompressed, PGP-decrypted content)
 
 ### YARA Integration
 

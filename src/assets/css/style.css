@@ -6636,6 +6636,26 @@ strong {
   white-space: nowrap;
 }
 
+#crypt-rescan-files-btn {
+  padding: 4px 10px;
+  background-color: var(--color-2);
+  border: 1px solid var(--color-3);
+  color: var(--color-5);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#crypt-rescan-files-btn:hover:not(:disabled) {
+  background-color: var(--color-3);
+}
+
+#crypt-rescan-files-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 #data-tools-packet-json-current-packet {
   font-size: 13px;
   color: var(--color-5);

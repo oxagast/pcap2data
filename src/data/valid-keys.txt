@@ -56,7 +56,6 @@ http.status_msg
 http.transfer_encoding
 http.type
 http.url
-http.user_agent
 http.version
 icmp.chksum
 icmp.code

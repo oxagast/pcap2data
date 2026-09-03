@@ -159,6 +159,12 @@ AIzaSy
 ya29.
 # Google OAuth Access Token
 
+private_key_id
+# GCP Service Account private_key_id field
+
+"type": "service_account"
+# GCP Service Account JSON type field
+
 
 # =============================================================================
 # Slack
