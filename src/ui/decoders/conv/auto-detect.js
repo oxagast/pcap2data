@@ -2,7 +2,7 @@
 // have no DOM dependencies and no module-level state, so they can be safely
 // required from data-tools-panel.js (and from unit tests via vm).
 
-const { MIME_TO_PROTO } = require("./mime-maps");
+const { MIME_TO_PROTO, getProtoDecoderHintForFileName } = require("./mime-maps");
 const { PROTOCOL_DECODER_HINTS, PORT_DECODER_HINTS } = require("./protocol-hints");
 
 const { normalizeSmbDecoderBytes } = require("./smb-helpers");
@@ -162,7 +162,23 @@ const LOW_CONFIDENCE_CORROBORATING_HINTS = {
 };
 
 function autoDetectProtoFromBytes(bytes, options) {
-    const { protocolHint = null, portHint = null } = options || {};
+    const {
+        protocolHint = null,
+        portHint = null,
+        fileNameHint = null,
+    } = options || {};
+
+    // A caller-supplied filename is the most specific hint we have for
+    // carved/downloaded files: the transport protocol (or byte magic) may
+    // belong to the enclosing stream, but the extension describes the
+    // payload itself. Evaluate it first so that e.g. a .txt or .json file
+    // carved out of an HTTP stream is decoded as text/JSON rather than
+    // being misclassified by HTTP-looking bytes or image magic numbers.
+    if (fileNameHint && typeof fileNameHint === "string") {
+        const fileProtocolHint = getProtoDecoderHintForFileName(fileNameHint);
+        if (fileProtocolHint) return fileProtocolHint;
+    }
+
     if (protocolHint && typeof protocolHint === "string") {
         const baseMime = protocolHint.toLowerCase().trim().split(";")[0].trim();
         return MIME_TO_PROTO[baseMime] || protocolHint;
