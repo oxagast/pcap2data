@@ -284,6 +284,7 @@ import decoders.smtp as dec_smtp
 import decoders.snmp as dec_snmp
 import decoders.soulseek as dec_soulseek
 import decoders.ssh as dec_ssh
+import decoders.stp as dec_stp
 import decoders.telnet as dec_telnet
 import decoders.tftp as dec_tftp
 import decoders.wan_link as dec_wan_link
@@ -2870,6 +2871,18 @@ def extractLinkLayerInfo(p):
             "linuxCooked": None,
         }
 
+    # IEEE 802.3 / 802.2 LLC frames (e.g. STP BPDUs) — Dot3 is not a
+    # subclass of Ether, so we must check it separately.
+    dot3Class = getattr(scapy, "Dot3", None)
+    if (dot3Class and p.haslayer(dot3Class)) or p.haslayer("Dot3"):
+        dot3Layer = p[dot3Class] if dot3Class and p.haslayer(dot3Class) else p["Dot3"]
+        return {
+            "linkProto": "IEEE 802.3",
+            "srcAddr": str(getattr(dot3Layer, "src", "N/A") or "N/A"),
+            "dstAddr": str(getattr(dot3Layer, "dst", "N/A") or "N/A"),
+            "linuxCooked": None,
+        }
+
     cookedV2Class = getattr(scapy, "CookedLinuxV2", None)
     cookedV1Class = getattr(scapy, "CookedLinux", None)
     cookedLayer = None
@@ -3068,6 +3081,95 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 snapCode = None
         isCdpFrame = etherType == 0x88CC or snapCode == 0x2000
         isLacpFrame = etherType == 0x8809
+
+        # STP BPDUs (IEEE 802.1D) ride on 802.2 LLC (DSAP=0x42 SSAP=0x42)
+        # inside classic 802.3 frames — no EtherType, so we detect via the
+        # LLC layer that scapy parses on Dot3 packets.
+        isStpFrame = False
+        llcClass = getattr(scapy, "LLC", None)
+        if (llcClass and p.haslayer(llcClass)) or p.haslayer("LLC"):
+            try:
+                llcLayer = p[llcClass] if llcClass and p.haslayer(llcClass) else p["LLC"]
+                llcDsap = int(getattr(llcLayer, "dsap", 0) or 0)
+                llcSsap = int(getattr(llcLayer, "ssap", 0) or 0) & 0xFE
+                if llcDsap == 0x42 and llcSsap == 0x42:
+                    isStpFrame = True
+            except Exception:
+                pass
+
+        if isStpFrame:
+            # IEEE 802.1D Spanning Tree Protocol BPDU
+            if etherLayer is not None:
+                stpLinkRaw = bytes(etherLayer.payload)
+            else:
+                dot3Class = getattr(scapy, "Dot3", None)
+                if (dot3Class and p.haslayer(dot3Class)) or p.haslayer("Dot3"):
+                    dot3Layer = p[dot3Class] if dot3Class and p.haslayer(dot3Class) else p["Dot3"]
+                    stpLinkRaw = bytes(dot3Layer.payload)
+                else:
+                    stpLinkRaw = bytes(p)
+            stpSection = dec_stp.decodeSTP(p, stpLinkRaw)
+            if stpSection is not None:
+                timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                )
+                protocolName = "STP"
+                dstPortStr = "stp"
+                try:
+                    dataTypeInfo = getDatatypes(
+                        stpLinkRaw, 0, 0, "0.0.0.0", "0.0.0.0", timeout, "udp",
+                    )
+                except Exception:
+                    mimeType = magic.from_buffer(stpLinkRaw, mime=True)
+                    dataTypeInfo = {
+                        "MIME Type": mimeType,
+                        "payload.mime": mimeType,
+                        "Decompressed": {"Decompressed": False},
+                        "payload.decompressed": {"Decompressed": False},
+                        "Data Types": ["Unknown data type"],
+                        "Traits": {"Length": len(stpLinkRaw)},
+                    }
+                packetInfo = {
+                    "packet.processed": int(packetIndex),
+                    "packet.timestamp": timestamp,
+                    "packet.proto": protocolName,
+                    "link.proto": protocolName,
+                    "packet.decoded_protocols": [protocolName],
+                    "Ethernet Frame": {
+                        "ether.src.mac.addr": srcMacAddr,
+                        "link.src.mac.addr": srcMacAddr,
+                        "ether.dst.mac.addr": dstMacAddr,
+                        "link.dst.mac.addr": dstMacAddr,
+                        "ether.src.mac.vendor": srcMacVendor,
+                        "link.src.mac.vendor": srcMacVendor,
+                        "ether.dst.mac.vendor": dstMacVendor,
+                        "link.dst.mac.vendor": dstMacVendor,
+                    }
+                    if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+                    else "N/A",
+                    "IP": "N/A",
+                    protocolName: stpSection,
+                    "Raw data": {
+                        "Payload": {
+                            "payload.hex": stpLinkRaw.hex(),
+                            "payload.ascii": stpLinkRaw.decode(errors="ignore"),
+                        },
+                        "Packet": bytes(p).hex(),
+                        "packet.hex": bytes(p).hex(),
+                        "payload.len": len(stpLinkRaw),
+                    },
+                }
+                if wanLinkSection is not None:
+                    packetInfo["Link Control"] = wanLinkSection
+                return joinInfo(
+                    outputDir,
+                    dstPortStr,
+                    packetIndex,
+                    _jsonDumpEncoded(dataTypeInfo),
+                    _jsonDumpEncoded(packetInfo),
+                    "0.0.0.0",
+                )
+
         if isCdpFrame:
             # Cisco Discovery Protocol
             if snapCode == 0x2000 and p.haslayer("SNAP"):

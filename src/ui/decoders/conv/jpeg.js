@@ -2,6 +2,7 @@
 // JPEG bytes as an inline data URL for the panel's image preview.
 
 const ExifReader = require("exifreader");
+const { createImageDecodeResult } = require("./image-helpers");
 
 const MIME = "image/jpeg";
 const PROTOCOL_LABEL = "JPEG";
@@ -29,11 +30,13 @@ function loadExifFields(bytes) {
 }
 
 function decodeJpegFromBytes(bytes) {
-    return {
-        protocol: PROTOCOL_LABEL,
-        fields: loadExifFields(bytes),
-        imageDataUrl: `data:${MIME};base64,${Buffer.from(bytes).toString("base64")}`,
-    };
+    return createImageDecodeResult(
+        bytes,
+        "jpeg",
+        PROTOCOL_LABEL,
+        loadExifFields(bytes),
+        MIME,
+    );
 }
 
 module.exports = { decodeJpegFromBytes };

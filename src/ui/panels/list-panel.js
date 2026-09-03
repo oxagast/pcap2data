@@ -118,7 +118,7 @@ function collectDecodedProtocolNames(packetInfo) {
     }
   });
 
-  const sectionNames = ["TCP", "UDP", "ICMP", "IGMP", "OSPF", "HSRP", "LACP", "CDP", "LINK", "IP"];
+  const sectionNames = ["TCP", "UDP", "ICMP", "IGMP", "OSPF", "HSRP", "LACP", "CDP", "STP", "LINK", "IP"];
   sectionNames.forEach((sectionName) => {
     const section = packetInfo?.[sectionName];
     if (!section || typeof section !== "object") return;

@@ -1401,8 +1401,12 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
   if (!result) {
     const span = document.createElement("span");
     span.className = "data-tools-proto-none";
-    span.textContent =
-      selectedProtocol === "auto"
+    const noValidImageData = ["jpeg", "png", "gif", "webp"].includes(
+      protocol || selectedProtocol,
+    );
+    span.textContent = noValidImageData
+      ? "No valid image data is available to display."
+      : selectedProtocol === "auto"
         ? "No known protocol detected"
         : `Could not decode as ${(protocol || selectedProtocol).toUpperCase()}`;
     protoOutput.appendChild(span);
@@ -1412,6 +1416,13 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     protocol: result.protocol,
     fields: Array.isArray(result.fields) ? result.fields : [],
   });
+  if (result.imageError) {
+    const message = document.createElement("div");
+    message.className = "data-tools-proto-image-message";
+    message.textContent = result.imageError;
+    protoOutput.appendChild(message);
+  }
+  if (result.imageError && !result.imageDataUrl) return;
   if (result.imageDataUrl) {
     registerDecodedImage(result);
     const img = document.createElement("img");
@@ -1421,7 +1432,21 @@ function renderProtoDecoderOutput(result, selectedProtocol, protocol) {
     img.style.objectFit = "contain";
     img.style.display = "block";
     img.style.margin = "0 auto 12px auto";
+    img.alt = `Decoded ${result.protocol || "image"}`;
+    img.onerror = () => {
+      img.remove();
+      const message = document.createElement("div");
+      message.className = "data-tools-proto-image-message";
+      message.textContent = "Image data could not be displayed; it may be incomplete or corrupted.";
+      protoOutput.insertBefore(message, protoOutput.firstChild);
+    };
     protoOutput.appendChild(img);
+    if (result.imageIncomplete) {
+      const note = document.createElement("div");
+      note.className = "data-tools-proto-image-note";
+      note.textContent = "Image data is incomplete; only the captured portion is shown.";
+      protoOutput.appendChild(note);
+    }
     if (result.fields && result.fields.length > 0) {
       const table = document.createElement("table");
       table.className = "data-tools-proto-table";
@@ -1596,6 +1621,22 @@ function appendStreamPacketBlock(protoOutput, blockEl, result, selectedProtocol,
     return;
   }
 
+  if (result.imageError) {
+    const message = document.createElement("div");
+    message.className = "data-tools-proto-image-message";
+    message.textContent = result.imageError;
+    blockEl.appendChild(message);
+  }
+  if (result.imageError && !result.imageDataUrl) {
+    if (blockLabel) {
+      const note = document.createElement("div");
+      note.className = "data-tools-proto-stream-block-note";
+      note.textContent = blockLabel;
+      blockEl.appendChild(note);
+    }
+    protoOutput.appendChild(blockEl);
+    return;
+  }
   if (result.imageDataUrl) {
     registerDecodedImage(result);
     const img = document.createElement("img");
@@ -1605,7 +1646,21 @@ function appendStreamPacketBlock(protoOutput, blockEl, result, selectedProtocol,
     img.style.objectFit = "contain";
     img.style.display = "block";
     img.style.margin = "0 auto 12px auto";
+    img.alt = `Decoded ${result.protocol || "image"}`;
+    img.onerror = () => {
+      img.remove();
+      const message = document.createElement("div");
+      message.className = "data-tools-proto-image-message";
+      message.textContent = "Image data could not be displayed; it may be incomplete or corrupted.";
+      blockEl.insertBefore(message, blockEl.firstChild);
+    };
     blockEl.appendChild(img);
+    if (result.imageIncomplete) {
+      const note = document.createElement("div");
+      note.className = "data-tools-proto-image-note";
+      note.textContent = "Image data is incomplete; only the captured portion is shown.";
+      blockEl.appendChild(note);
+    }
   } else if (result.treeData) {
     // For structured results (JSON/XML/YAML/HTML) we delegate to the shared
     // tree renderer but into our block element rather than the panel root.
@@ -1858,6 +1913,7 @@ function registerDecodedImage(result) {
     protocol: result.protocol || "image",
     mime,
     imageDataUrl: result.imageDataUrl,
+    imageIncomplete: result.imageIncomplete === true,
     packetKey,
     convSubtab: activeConvSubtab,
     activeMainTab,

@@ -3867,6 +3867,25 @@ strong {
   font-style: italic;
 }
 
+.data-tools-proto-image-message,
+.data-tools-proto-image-note {
+  color: var(--color-3);
+  font-size: 12px;
+  font-style: italic;
+  margin: 6px 0 12px;
+  text-align: center;
+}
+
+.data-tools-proto-image-note {
+  color: var(--color-2);
+}
+
+.summary-image-incomplete {
+  color: var(--color-3);
+  font-style: italic;
+  font-weight: normal;
+}
+
 .data-tools-structured-tree {
   border: 1px solid var(--color-3);
   background-color: rgba(0, 0, 0, 0.2);
