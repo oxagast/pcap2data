@@ -102,6 +102,27 @@ function readUint32(bytes, offset) {
         bytes[offset + 3]) >>> 0;
 }
 
+// Validate that a decoded NetBIOS name looks real. A real NetBIOS name
+// should have most characters be printable ASCII (0x21-0x7e) or space,
+// and the "visible length" byte should make sense (1-15).
+function isValidNetbiosName(decodedChars, visibleLength) {
+    if (visibleLength < 1 || visibleLength > 15) return false;
+    if (decodedChars.length < visibleLength) return false;
+    let printableCount = 0;
+    let escapeCount = 0;
+    for (let i = 0; i < visibleLength; i++) {
+        const c = decodedChars[i];
+        if (typeof c === "string" && c >= " " && c <= "~") {
+            printableCount++;
+        } else if (typeof c === "string" && c.startsWith("\\x")) {
+            escapeCount++;
+        }
+    }
+    // Require at least 60% printable characters to consider it a valid name.
+    // If too many escape sequences, it's probably random binary.
+    return printableCount >= visibleLength * 0.6 && escapeCount <= visibleLength * 0.2;
+}
+
 // Convert a NetBIOS First-Level Encoded name to a printable form. The
 // encoded form is 32 bytes, where each pair of nibbles encodes a single
 // character of the 16-character NetBIOS name (e.g. 'A' -> 0x41).
@@ -130,11 +151,10 @@ function decodeNetbiosEncodedName(bytes, startIndex) {
         return { name: "", endIndex: startIndex, ok: false };
     }
     // The body is 32 bytes of two-nibble-per-character ASCII encoding.
+    // Only accept 32-byte encodings as valid NetBIOS names; other lengths
+    // are too short or malformed to be real NetBIOS-NS.
     if (bodyLength !== 32) {
-        // The decoder accepts 32-byte encodings; anything else is
-        // treated as raw bytes so we still surface something.
-        const raw = bytesToHexLower(bytes.slice(bodyStart, bodyEnd));
-        return { name: `0x${raw}`, endIndex: bodyEnd, ok: true };
+        return { name: "", endIndex: bodyEnd, ok: false };
     }
     const chars = [];
     for (let offset = bodyStart; offset < bodyEnd - 1; offset += 2) {
@@ -148,6 +168,9 @@ function decodeNetbiosEncodedName(bytes, startIndex) {
     // The last byte is the offset of the trailing space inside the name.
     // Anything before the trailing space is the visible NetBIOS name.
     const visibleLength = bytes[bodyEnd - 1];
+    if (!isValidNetbiosName(chars, visibleLength)) {
+        return { name: "", endIndex: bodyEnd, ok: false };
+    }
     const visible = chars.slice(0, visibleLength).join("").trim();
     return { name: visible, endIndex: bodyEnd, ok: true };
 }
@@ -328,6 +351,13 @@ function decodeNbnsMessage(bytes) {
         qdCount === null || anCount === null ||
         nsCount === null || arCount === null
     ) {
+        return null;
+    }
+
+    // Reject absurdly large counts — they indicate random bytes, not a real NBNS message.
+    const MAX_NBNS_COUNT = 50;
+    if (qdCount > MAX_NBNS_COUNT || anCount > MAX_NBNS_COUNT ||
+        nsCount > MAX_NBNS_COUNT || arCount > MAX_NBNS_COUNT) {
         return null;
     }
 

@@ -1354,10 +1354,28 @@ const decodeXmlFromBytes = convDecoders.decodeXmlFromBytes;
 const decodeHtmlFromBytes = convDecoders.decodeHtmlFromBytes;
 const decodeYamlFromBytes = convDecoders.decodeYamlFromBytes;
 
-// Decodes bytes as plain text.
+// Decodes bytes as plain text only when the content is plausibly typeable text.
+// "Typeable" means the bytes decode to: space–tilde, tab, newline, or CR.
+// Binary payloads that happen to decode to UTF-8 with replacement characters
+// are rejected when more than 30% of characters are non-typeable.
 function decodePlainTextFromBytes(bytes) {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return null;
-  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  let rawText;
+  try {
+    rawText = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    // UTF-8 decode failure — treat as binary garbage.
+    return null;
+  }
+  let invalidCharCount = 0;
+  for (let i = 0; i < rawText.length; i++) {
+    const c = rawText.charCodeAt(i);
+    // Allow: tab(9), newline(10), CR(13), space(32)–tilde(126).
+    const isTypeable = (c >= 32 && c <= 126) || c === 9 || c === 10 || c === 13;
+    if (!isTypeable) invalidCharCount++;
+  }
+  const invalidRatio = invalidCharCount / rawText.length;
+  if (invalidRatio > 0.3) return null;
   return {
     protocol: "Plain text",
     fields: [
