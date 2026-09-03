@@ -97,6 +97,26 @@ const MAX_DECODED_IMAGE_REGISTRY_SIZE = 50;
 let dataToolsStreamPackets = null;
 const MAX_DATA_TOOLS_STREAM_PACKETS = 512;
 
+// Optional metadata supplied by callers that load non-packet data into Conv
+// (for example, a carved file). The dropdown remains on "auto"; these hints
+// are forwarded to the same auto-detection path used for packet data.
+//
+// ``isFile`` is the load-mode toggle. Carved/downloaded/imported files are
+// complete data chunks — they are never stream packets — so the decoder must
+// NOT take any hint from the transport stream they were pulled from. A file
+// decoded from HTTP must decode exactly the same as one pulled from FTP. In
+// file mode the decoder consults ONLY the filename-extension hint and byte
+// heuristics; protocol/port/context-packet hints are ignored entirely. Every
+// non-file load (streams, payloads, manual typing, history) resets this to
+// false so the existing packet-context stream-tracking behavior is preserved
+// unchanged for streams.
+let dataToolsDecoderHints = {
+  protocolHint: null,
+  portHint: null,
+  fileNameHint: null,
+  isFile: false,
+};
+
 // User-toggleable filter for the Conv Decodes stacked view. When true,
 // packets whose bytes do not produce a decoder result (or are skipped by
 // the per-packet filter for being empty/unsupported) are not rendered as
@@ -171,6 +191,34 @@ function initConvPanel({ writeLogEntry, statusUpdate, setActiveMainTab, getCurre
   }
 }
 
+// Sets metadata hints for the next/current Conv input without changing the
+// user's decoder selection. This is intentionally separate from the packet
+// context because files may have an extension hint but no packet object.
+// Pass ``isFile: true`` when loading a complete file chunk (carved,
+// downloaded, extracted, or manually imported): the decoder then ignores
+// protocol/port/context-packet hints entirely and uses only the file-name
+// extension plus byte content, mirroring how a file's format is independent
+// of the transport it was transferred over. Callers loading stream/packet
+// data pass ``isFile: false`` (or omit it) to keep the packet-context hints
+// that aid stream tracking.
+function setDataToolsDecoderHints(hints = {}) {
+  dataToolsDecoderHints = {
+    protocolHint:
+      typeof hints.protocolHint === "string" && hints.protocolHint.trim()
+        ? hints.protocolHint.trim()
+        : null,
+    portHint:
+      typeof hints.portHint === "string" && hints.portHint.trim()
+        ? hints.portHint.trim()
+        : null,
+    fileNameHint:
+      typeof hints.fileNameHint === "string" && hints.fileNameHint.trim()
+        ? hints.fileNameHint.trim()
+        : null,
+    isFile: hints.isFile === true,
+  };
+}
+
 // ── State accessors ───────────────────────────────────────────────────────────
 
 function renderMarkovData(data) {
@@ -200,8 +248,17 @@ function getDataToolsStreamPackets() {
 // expected to be { bytes: Uint8Array, info?: { packetIndex?, sourceKey? } }
 // so the stacked renderer can label the decode blocks (newest first) and
 // the user can correlate each block back to its packet. Passing null/empty
-// clears the stream state and reverts to single-blob decoding.
+// clears the stream state and reverts to single-blob decoding. Loading a
+// stream also drops any previously-set file hints: streams are not files,
+// so the packet-context behavior (which aids stream tracking) applies.
+// Callers that need specific stream hints set them right after this call.
 function setDataToolsStreamPackets(packets) {
+  dataToolsDecoderHints = {
+    protocolHint: null,
+    portHint: null,
+    fileNameHint: null,
+    isFile: false,
+  };
   if (!Array.isArray(packets) || packets.length === 0) {
     dataToolsStreamPackets = null;
     return;
@@ -218,7 +275,11 @@ function setDataToolsStreamPackets(packets) {
 }
 
 // Clears the per-packet stream state. Called when the user edits the
-// underlying input or loads a fresh non-stream source.
+// underlying input or loads a fresh non-stream source. This does NOT touch
+// the decoder hints: loaders call this first and then set their hints
+// explicitly (file loaders pass isFile: true; stream loaders pass the
+// packet-context hints), so wiping hints here would drop a file's
+// filename hint before its decode runs.
 function clearDataToolsStreamPackets() {
   dataToolsStreamPackets = null;
 }
@@ -1752,16 +1813,32 @@ function runProtoDecoderForStreamPackets(streamPackets, options = {}) {
   // the dropdown is on "auto" we try the hint on the first packet and fall
   // back to per-packet auto-detection. Once chosen we keep that protocol
   // across all packets so the panel shows homogeneous results.
-  const contextPacket = _getCurrentContextPacket() || null;
+  //
+  // File mode: a loaded file is a complete data chunk, not a stream, so
+  // transport/stream metadata must never influence its decode. Use only
+  // the explicit hints the file loader set (typically just the extension)
+  // and never the context packet's protocol/port.
+  const contextPacket = dataToolsDecoderHints.isFile
+    ? null
+    : (_getCurrentContextPacket() || null);
   let resolvedProtocol = selectedProtocol;
   if (resolvedProtocol === "auto") {
     const firstPacketInfo = packets[0]?.info || null;
     const hintPacket = contextPacket || (firstPacketInfo && firstPacketInfo.packet) || null;
-    const { protocolHint, portHint } = getPacketProtocolDecoderHint(hintPacket);
+    const packetHints = getPacketProtocolDecoderHint(hintPacket);
+    const protocolHint = dataToolsDecoderHints.isFile
+      ? dataToolsDecoderHints.protocolHint
+      : dataToolsDecoderHints.protocolHint || packetHints.protocolHint;
+    const portHint = dataToolsDecoderHints.isFile
+      ? dataToolsDecoderHints.portHint
+      : dataToolsDecoderHints.portHint || packetHints.portHint;
+    const fileNameHint =
+      dataToolsDecoderHints.fileNameHint || hintPacket?.__convFileNameHint || null;
     const firstBytes = packets[0].bytes;
     const firstDetected = autoDetectProtoFromBytes(firstBytes, {
       protocolHint,
       portHint,
+      fileNameHint,
     });
     resolvedProtocol = firstDetected || "auto";
     if (selectEl && resolvedProtocol && selectEl.value !== resolvedProtocol && resolvedProtocol !== "auto") {
@@ -1875,11 +1952,28 @@ function runProtoDecoder(bytes) {
   const selectedProtocol = selectEl ? selectEl.value : "auto";
   let protocol = selectedProtocol;
   if (protocol === "auto") {
-    const contextPacket = _getCurrentContextPacket();
-    const { protocolHint, portHint } = getPacketProtocolDecoderHint(contextPacket);
+    // File mode: a loaded file is a complete data chunk, not a stream, so
+    // transport/stream metadata must never influence its decode. Use only
+    // the explicit hints the file loader set (typically just the extension)
+    // and never the context packet's protocol/port. Stream/packet loads
+    // keep the full packet-context hint chain so stream tracking works
+    // exactly as before.
+    const contextPacket = dataToolsDecoderHints.isFile
+      ? null
+      : _getCurrentContextPacket();
+    const { protocolHint: packetProtocolHint, portHint: packetPortHint } = getPacketProtocolDecoderHint(contextPacket);
+    const protocolHint = dataToolsDecoderHints.isFile
+      ? dataToolsDecoderHints.protocolHint
+      : dataToolsDecoderHints.protocolHint || packetProtocolHint;
+    const portHint = dataToolsDecoderHints.isFile
+      ? dataToolsDecoderHints.portHint
+      : dataToolsDecoderHints.portHint || packetPortHint;
+    const fileNameHint =
+      dataToolsDecoderHints.fileNameHint || contextPacket?.__convFileNameHint || null;
     protocol = autoDetectProtoFromBytes(bytes, {
       protocolHint,
       portHint,
+      fileNameHint,
     });
     if (selectEl && protocol && selectEl.value !== protocol) {
       selectEl.value = protocol;
@@ -2152,4 +2246,5 @@ module.exports = {
   getImageTypeFromExifReader,
   clearDataToolsSummary,
   requestDataToolsBackgroundSummary,
+  setDataToolsDecoderHints,
 };

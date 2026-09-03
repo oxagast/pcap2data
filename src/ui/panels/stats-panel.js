@@ -3498,6 +3498,7 @@ function makeStatsSection({
   onItemClick,
   itemTitle,
   locationPoints,
+  decodable = false,
 }) {
   if (!items || items.length === 0) return null;
   const normalizedItems = Array.from(
@@ -3554,6 +3555,19 @@ function makeStatsSection({
         tag.dataset.longitude = String(lon);
         tag.dataset.locationLabel = String(locationPoint.label || item);
       }
+    }
+
+    // Store the filter query and decodable flag on the tag so the context
+    // menu can resolve the matching packets (and their streams) on right-click
+    // without re-running queryBuilder on click.
+    if (isFilterTag) {
+      try {
+        const query = queryBuilder(item);
+        if (query) tag.dataset.statsQuery = String(query);
+      } catch {
+ // queryBuilder may throw on unusual items; skip silently.
+      }
+      if (decodable) tag.dataset.statsDecodable = "true";
     }
 
     if (queryBuilder) {
@@ -4708,6 +4722,7 @@ function createStatsPanel(options) {
         items: stats.topTalkers.map((talker) => `${talker.ip} (${talker.count} packets)`),
         queryBuilder: (v) => `ip.src.addr: ${v.substr(0, v.indexOf(" "))} || ip.dst.addr: ${v.substr(0, v.indexOf(" "))}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (topTalkersSec) statisticsPanel.appendChild(topTalkersSec);
 
@@ -4753,6 +4768,7 @@ function createStatsPanel(options) {
         items: stats.protocols,
         queryBuilder: (v) => `application.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (protoSec) statisticsPanel.appendChild(protoSec);
 
@@ -4762,6 +4778,7 @@ function createStatsPanel(options) {
         items: stats.networkProtocols,
         queryBuilder: (v) => `network.proto: ${v.toLowerCase()} || link.proto: ${v.toLowerCase()} || decoded.proto: ${v.toLowerCase()} || transport.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (networkProtoSec) statisticsPanel.appendChild(networkProtoSec);
 
@@ -4780,6 +4797,7 @@ function createStatsPanel(options) {
         items: stats.decodedProtocols,
         queryBuilder: (v) => `decoded.proto: ${v.toLowerCase()}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (decodedProtoSec) statisticsPanel.appendChild(decodedProtoSec);
 
@@ -4843,6 +4861,7 @@ function createStatsPanel(options) {
         items: stats.hosts,
         queryBuilder: (v) => `ip.src.addr: ${v} || ip.dst.addr: ${v}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (hostSec) statisticsPanel.appendChild(hostSec);
 
@@ -4862,6 +4881,7 @@ function createStatsPanel(options) {
           items: fullyFilteredHostnames,
           queryBuilder: (v) => `dns.qname: ${v}`,
           onQuery: applyStatsQuery,
+          decodable: true,
         });
         if (filteredHnSec) statisticsPanel.appendChild(filteredHnSec);
       }
@@ -4901,6 +4921,7 @@ function createStatsPanel(options) {
         items: stats.ports.map(String),
         queryBuilder: (v) => `(tcp.src.port: ${v} || tcp.dst.port: ${v}) || (udp.src.port: ${v} || udp.dst.port: ${v}) || (sctp.src.port: ${v} || sctp.dst.port: ${v})`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (portSec) statisticsPanel.appendChild(portSec);
 
@@ -4919,6 +4940,7 @@ function createStatsPanel(options) {
         items: stats.mimeTypes,
         queryBuilder: (v) => `mime.type: ${v}`,
         onQuery: applyStatsQuery,
+        decodable: true,
       });
       if (mimeSec) statisticsPanel.appendChild(mimeSec);
       /*

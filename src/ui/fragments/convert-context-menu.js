@@ -35,6 +35,12 @@ const convertContextMenuMarkup = `
       <button id="ctx-follow-stream-crypt" type="button">Stream to Crypt tab</button>
     </div>
   </div>
+  <div id="ctx-decode-stats-submenu" class="ctx-submenu">
+    <button id="ctx-decode-stats-branch" class="ctx-branch" type="button">Decode in Conv...</button>
+    <div id="ctx-decode-stats-panel" class="ctx-submenu-panel">
+      <button id="ctx-decode-stats-object" role="menuitem">Decode file in Conv</button>
+    </div>
+  </div>
   <div id="ctx-notes-submenu" class="ctx-submenu">
     <button id="ctx-notes-branch" class="ctx-branch" type="button">Send to Notes...</button>
     <div class="ctx-submenu-panel">

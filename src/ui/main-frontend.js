@@ -302,6 +302,7 @@ const {
   runProtoDecoderForStreamPackets,
   decodeWithSelectedProtocol,
   clearProtoDecoderOutput,
+  setDataToolsDecoderHints,
   setDataToolsStreamPackets,
   getDataToolsStreamPackets,
   clearDataToolsStreamPackets,
@@ -8131,6 +8132,11 @@ function resetConvToFreshDefaults() {
   dataToolsCommittedInputValue = "";
   dataToolsCommittedInputFormat = DEFAULT_DATA_TOOLS_FORMAT;
   dataToolsLastConversionBytes = new Uint8Array();
+  // Fresh-defaults reset: clear decoder hints so a new session starts with
+  // stream-friendly packet context rather than stale file hints.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   dataToolsHistorySelectEl.value = "";
   resetDataToolsOutputs();
   clearDataToolsSelectionState();
@@ -14582,6 +14588,12 @@ function resetDataToolsOutputs() {
   resetHashOutputs();
   clearProtoDecoderOutput();
   clearDataToolsStreamPackets();
+  // Output reset clears the Conv input entirely: also drop decoder hints so
+  // a subsequent stream load gets fresh packet-context behavior instead of
+  // stale file hints.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   clearDataToolsSelectionState();
   setExpandedConvertedOutput(null);
   updateDataToolsConvertedOutputVisibility();
@@ -16316,6 +16328,14 @@ function loadExtractionResultIntoConv(bytes, fileNameHint) {
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
   dataToolsLastRawConversionBytes = Uint8Array.from(bytes);
+  // A decompressed/extracted file is a complete data chunk: decode from the
+  // entry's own filename/content, never from any transport stream.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      fileNameHint: fileNameHint || "",
+      isFile: true,
+    });
+  }
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(fileNameHint || "");
@@ -16376,6 +16396,14 @@ function loadExtractionResultIntoHashesSubtab(bytes, fileNameHint) {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = bytes;
+  // An extracted/decompressed file is a complete data chunk: it must not
+  // inherit any transport hints from a previously loaded stream.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      fileNameHint: fileNameHint || "",
+      isFile: true,
+    });
+  }
   inputEl.value = formatHexInputBytesWithCap(bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(fileNameHint || "");
@@ -16670,6 +16698,11 @@ const cryptPanel = createCryptPanel({
     const formatEl = document.getElementById("data-tools-format");
     const normalizedHex = String(hexValue || "").trim();
     const normalizedUtf8 = String(utf8Value || "");
+    // Decrypted stream payloads are stream content, not files: clear any
+    // stale file hints so packet-context stream tracking behaves as usual.
+    if (typeof setDataToolsDecoderHints === "function") {
+      setDataToolsDecoderHints({ isFile: false });
+    }
     if (normalizedHex) {
       dataToolsContextPacket = null;
       dataToolsOriginalInputBytes = hexStringToUint8Array(normalizedHex);
@@ -16914,6 +16947,7 @@ const convertContextButtons = {
   llmExplain: getCachedElement("ctx-llm-explain"),
   llmSummarize: getCachedElement("ctx-llm-summarize"),
   openHeatmapLocation: getCachedElement("ctx-open-heatmap-location"),
+  decodeStatsObject: getCachedElement("ctx-decode-stats-object"),
   loadCarvableExtraction: getCachedElement("ctx-load-carvable-extraction"),
   loadCarvableDecoders: getCachedElement("ctx-load-carvable-decoders"),
   loadCarvableVirusTotal: getCachedElement("ctx-load-carvable-virustotal"),
@@ -16941,6 +16975,7 @@ const convertContextSubmenus = {
   httpFile: getCachedElement("ctx-http-file-submenu"),
   fileCarve: getCachedElement("ctx-file-carve-submenu"),
   followStream: getCachedElement("ctx-follow-stream-submenu"),
+  decodeStats: getCachedElement("ctx-decode-stats-submenu"),
   llm: getCachedElement("ctx-llm-submenu"),
   analyzeIp: getCachedElement("ctx-analyze-ip-submenu"),
   reports: getCachedElement("ctx-reports-submenu"),
@@ -17643,8 +17678,136 @@ function getPasteTargetFromContextTarget(target) {
   return editableTarget;
 }
 
+// Groups a list of packets by their bidirectional stream tuple (srcIp, srcPort,
+// dstIp, dstPort, protocol). Packets without a resolvable stream tuple (e.g.
+// link-layer, ARP, IGMP control-plane frames) are excluded. Returns an array
+// of { tupleKey, streamPackets, packetCount } sorted by packetCount desc.
+function groupPacketsByStreamTuple(packets) {
+  const streamMap = new Map();
+  for (const packet of packets) {
+    const tuple = getStreamTupleForPacket(packet);
+    if (!tuple) continue;
+    const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
+    // Normalize the tuple key so forward and reverse directions collapse to
+    // the same conversation (sorted endpoint pairs).
+    const endpointA = `${srcIp}:${srcPort}`;
+    const endpointB = `${dstIp}:${dstPort}`;
+    const [lo, hi] = endpointA <= endpointB ? [endpointA, endpointB] : [endpointB, endpointA];
+    const tupleKey = `${lo}|${hi}|${protocol}`;
+    let entry = streamMap.get(tupleKey);
+    if (!entry) {
+      entry = { tupleKey, tuple, streamPackets: [], packetCount: 0 };
+      streamMap.set(tupleKey, entry);
+    }
+    entry.streamPackets.push(packet);
+    entry.packetCount += 1;
+  }
+  return Array.from(streamMap.values()).sort((a, b) => b.packetCount - a.packetCount);
+}
+
+// Builds a short human-readable label for a stream tuple.
+function formatStreamTupleLabel(tuple) {
+  if (!tuple) return "Stream";
+  const { srcIp, srcPort, dstIp, dstPort, protocol } = tuple;
+  const proto = protocol || "?";
+  const sp = srcPort !== null ? `:${srcPort}` : "";
+  const dp = dstPort !== null ? `:${dstPort}` : "";
+  return `${srcIp}${sp} \u2194 ${dstIp}${dp} (${proto})`;
+}
+
+// Evaluates a filter query to matching packets (synchronously where possible,
+// falling back to the async captureapi path), groups them by stream tuple,
+// and returns the top 4 longest streams (by packet count) that have at least
+// one packet with payload bytes. Each entry carries the stream tuple, packet
+// count, label, and the representative packet array for loading into Conv.
+async function buildStatsDecodeStreamEntries(filterQuery) {
+  const normalizedQuery = String(filterQuery || "").trim();
+  if (!normalizedQuery) return [];
+  let matchedPackets = [];
+  try {
+    const matchedKeys = await evaluateFilterQueryToPacketKeys(normalizedQuery);
+    matchedPackets = await resolvePacketStubsByKeys(matchedKeys);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(matchedPackets) || matchedPackets.length === 0) return [];
+  const streams = groupPacketsByStreamTuple(matchedPackets);
+  // Keep only streams that have at least one packet with payload bytes, then
+  // take the top 4 longest.
+  const entries = [];
+  for (const stream of streams) {
+    if (entries.length >= 4) break;
+    const hasPayload = stream.streamPackets.some((pkt) => {
+      const payloadHex = getPacketPayloadHex(pkt);
+      return typeof payloadHex === "string" && payloadHex.trim().length > 0;
+    });
+    if (!hasPayload) continue;
+    entries.push({
+      tupleKey: stream.tupleKey,
+      tuple: stream.tuple,
+      packetCount: stream.packetCount,
+      streamPackets: stream.streamPackets,
+      label: `${formatStreamTupleLabel(stream.tuple)} \u2014 ${stream.packetCount} pkt${stream.packetCount === 1 ? "" : "s"}`,
+    });
+  }
+  return entries;
+}
+
+// Populates the dynamic "Decode in Conv..." submenu panel with stream entry
+// buttons. Existing dynamic buttons are removed first. The static
+// "Decode file in Conv" button (ctx-decode-stats-object) is always preserved.
+function populateStatsDecodeStreamSubmenu(entries) {
+  const panel = document.getElementById("ctx-decode-stats-panel");
+  if (!panel) return;
+  // Remove previously-added dynamic stream buttons (identified by a data
+  // attribute) while preserving the static file-decode button.
+  const existing = panel.querySelectorAll("button[data-stats-stream-index]");
+  existing.forEach((btn) => btn.remove());
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  entries.forEach((entry, index) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.role = "menuitem";
+    btn.textContent = entry.label;
+    btn.title = `Load this stream into Conv (${entry.packetCount} packets)`;
+    btn.dataset.statsStreamIndex = String(index);
+    btn.dataset.statsStreamTupleKey = entry.tupleKey;
+    btn.addEventListener("click", () => {
+      hideConvertContextMenu();
+      void loadStatsStreamIntoConv(entry.streamPackets);
+    });
+    panel.appendChild(btn);
+  });
+}
+
+// Loads a resolved stream (array of packets belonging to one conversation)
+// into the Conv Decodes subtab, mirroring _doFollowStreamToConv.
+async function loadStatsStreamIntoConv(streamPackets) {
+  if (!Array.isArray(streamPackets) || streamPackets.length === 0) {
+    statusUpdate("Status: No stream packets found for Conv decode");
+    return;
+  }
+  // Always select "auto" so the Conv decoder auto-detects the protocol from
+  // the stream byte content rather than reusing the previously-selected
+  // decoder.
+  const selectEl = document.getElementById("data-tools-proto-select");
+  if (selectEl) selectEl.value = "auto";
+  showStreamLoadingOverlay();
+  await yieldToRenderer();
+  try {
+    await _doFollowStreamToConv(streamPackets, { decompress: false });
+  } finally {
+    hideStreamLoadingOverlay();
+  }
+  // ``_doFollowStreamToConv`` calls ``showDataTools()`` with no subtab
+  // argument, which lands the stream in the Conversions subtab. The user
+  // expects the decode output, so we explicitly switch to Decodes and
+  // re-run the deferred analysis so the stacked render paints immediately.
+  showDataTools(CONV_DECODES_SUBTAB);
+}
+
 // Shows convert context menu.
-function showConvertContextMenu(
+async function showConvertContextMenu(
   x,
   y,
   sourceText,
@@ -17752,7 +17915,37 @@ function showConvertContextMenu(
   const statsCarvableTag = activeMainTab === MAIN_TAB_STATS
     ? target?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]")
     : null;
+  const statsDownloadedTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-downloaded-file-id]")
+    : null;
+  const statsFileTag = statsCarvableTag || statsDownloadedTag;
+  const statsDecodableFilterTag = activeMainTab === MAIN_TAB_STATS
+    ? target?.closest?.("#stats_box .stats-section .stats-tag[data-stats-decodable]")
+    : null;
+  // "Decode in Conv" is offered for: (a) carvable/downloaded file tags (a
+  // single file is loaded directly), and (b) decodable filter tags (protocols,
+  // ports, IPs, MIME, etc.) where we cannot pick a single stream — a submenu of
+  // the top 4 longest matching streams is populated dynamically. Tags without
+  // a reliable byte stream (locations, MAC vendors, credentials, ARP/IGMP/OSPF
+  // control-plane ops, etc.) get no entry.
+  const hasStatsFileDecodeAction = Boolean(statsFileTag);
+  let hasStatsStreamDecodeAction = Boolean(statsDecodableFilterTag);
+  let hasStatsDecodeAction = hasStatsFileDecodeAction || hasStatsStreamDecodeAction;
   const hasStatsCarvableAction = Boolean(statsCarvableTag);
+  // Populate the dynamic stream submenu for decodable filter tags. The file
+  // submenu entry is only shown for carvable/downloaded file tags.
+  let statsDecodeStreamEntries = [];
+  if (hasStatsStreamDecodeAction) {
+    statsDecodeStreamEntries = await buildStatsDecodeStreamEntries(
+      statsDecodableFilterTag.dataset.statsQuery || "",
+    );
+    if (statsDecodeStreamEntries.length === 0) {
+      // No streams with payload found — suppress the entry entirely.
+      hasStatsStreamDecodeAction = false;
+      hasStatsDecodeAction = hasStatsFileDecodeAction;
+    }
+  }
+  populateStatsDecodeStreamSubmenu(statsDecodeStreamEntries);
   const hasFileCarveActions =
     hasHttpBody ||
     hasPayloadToExport ||
@@ -17852,6 +18045,15 @@ function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.loadCarvableVirusTotal.style.display = hasStatsCarvableAction
+    ? "block"
+    : "none";
+  // Show the "Decode in Conv..." submenu for file tags and decodable filter
+  // tags. The direct "Decode file" button inside the submenu is only visible
+  // for carvable/downloaded file tags; stream entries are dynamically added.
+  convertContextSubmenus.decodeStats.style.display = hasStatsDecodeAction
+    ? "block"
+    : "none";
+  convertContextButtons.decodeStatsObject.style.display = hasStatsFileDecodeAction
     ? "block"
     : "none";
 
@@ -18234,6 +18436,7 @@ function showConvertContextMenu(
     !showSaveJson &&
     !hasStatsLocationHeatmapAction &&
     !hasStatsCarvableAction &&
+    !hasStatsDecodeAction &&
     !hasAnalyzeIpActions
   ) {
     hideConvertContextMenu();
@@ -18281,6 +18484,11 @@ function loadContextValueIntoDataTools(format) {
   dataToolsInputEditedFlag = true;
   clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
+  // Not a file load: clear any stale file hints so packet-context stream
+  // tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   inputEl.value = activeContextConversionText;
   formatEl.value = format;
   setDataToolsFileNameGuess("");
@@ -18303,6 +18511,11 @@ function deriveContextSelectionGuessFromContextMenu() {
   const formatEl = document.getElementById("data-tools-format");
   inputEl.value = selectedText;
   formatEl.value = "ascii";
+  // Not a file load: clear any stale file hints so packet-context stream
+  // tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   setDataToolsFileNameGuess("");
   showDataTools();
   runDataToolsConversion();
@@ -18326,6 +18539,11 @@ function loadRawPayloadIntoDataToolsFromContextMenu() {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = payloadBytes;
+  // Packet payload load: clear any stale file hints so packet-context
+  // stream tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   inputEl.value = formatHexInputBytesWithCap(payloadBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess("");
@@ -18352,6 +18570,11 @@ function loadRawPacketIntoDataToolsFromContextMenu() {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = packetBytes;
+  // Full-packet load: clear any stale file hints so packet-context stream
+  // tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   inputEl.value = formatHexInputBytesWithCap(packetBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess("");
@@ -18386,6 +18609,12 @@ async function loadActiveConvInputDecompressedFromContextMenu() {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = decompressedCandidate.bytes;
+  // Decompressed stream data is still stream content, not a file chunk:
+  // clear any stale file hints so packet-context stream tracking behaves
+  // as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   inputEl.value = formatHexInputBytesWithCap(decompressedCandidate.bytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess("");
@@ -18437,6 +18666,11 @@ function loadCursorAsciiIntoDataToolsFromContextMenu() {
   dataToolsOriginalInputBytes = null;
   dataToolsInputEditedFlag = true;
   clearDataToolsStreamPackets();
+  // Manual typing: not a file load; clear any stale file hints so
+  // packet-context stream tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   inputEl.value = cursorAsciiLoadData.value;
   formatEl.value = cursorAsciiLoadData.format;
   setDataToolsFileNameGuess("");
@@ -20596,6 +20830,15 @@ function loadCarvedFileCandidateIntoConvTab(candidate) {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = candidateBytes;
+  // A carved file is a complete data chunk: its decode must depend only on
+  // the file's own extension/content, never on the transport stream it was
+  // carved from (HTTP vs FTP makes no difference to the file's format).
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      fileNameHint: candidate.fileName || "",
+      isFile: true,
+    });
+  }
   inputEl.value = formatHexInputBytesWithCap(candidateBytes);
   formatEl.value = "hex";
   setDataToolsFileNameGuess(candidate.fileName || "");
@@ -20675,6 +20918,14 @@ async function loadManualFileIntoConvTabFromContextMenu() {
     dataToolsInputEditedFlag = false;
     clearDataToolsStreamPackets();
     dataToolsLastConversionBytes = bytes;
+    // A manually imported file is a complete data chunk: decode from the
+    // file's own extension/content, never from any transport stream.
+    if (typeof setDataToolsDecoderHints === "function") {
+      setDataToolsDecoderHints({
+        fileNameHint: selectedFile.fileName || "",
+        isFile: true,
+      });
+    }
     inputEl.value = formatHexInputBytesWithCap(bytes);
     formatEl.value = "hex";
     setDataToolsFileNameGuess(selectedFile.fileName || "");
@@ -21929,6 +22180,15 @@ async function _doFollowStreamToConv(
       });
     }
     setDataToolsStreamPackets(streamPacketEntries);
+    // Refresh the decoder hints from the first packet so a follow-stream
+    // load still benefits from the conversation's port / application-proto
+    // context even when the user previously loaded a non-packet file.
+    // Explicitly clear file mode: streams are not files, so the packet
+    // context (which aids stream tracking) must stay in effect.
+    if (typeof setDataToolsDecoderHints === "function") {
+      const streamHints = getPacketProtocolDecoderHint(streamPackets[0] || null);
+      setDataToolsDecoderHints({ ...streamHints, isFile: false });
+    }
   } else {
     clearDataToolsStreamPackets();
   }
@@ -25181,14 +25441,21 @@ async function loadHttpBodyIntoConvTabFromContextMenuImpl(decompress = false) {
   dataToolsInputEditedFlag = false;
   clearDataToolsStreamPackets();
   dataToolsLastConversionBytes = httpBytes;
+  const httpBodyFileName = guessHttpBodyFilenameFromPacket(
+    contextPacket,
+    decompress ? "http-body-decompressed" : "http-body",
+  );
+  // An HTTP body object is a complete file chunk: decode it from its own
+  // filename/content, not from the fact that it arrived over HTTP.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      fileNameHint: httpBodyFileName,
+      isFile: true,
+    });
+  }
   inputEl.value = formatHexInputBytesWithCap(httpBytes);
   formatEl.value = "hex";
-  setDataToolsFileNameGuess(
-    guessHttpBodyFilenameFromPacket(
-      contextPacket,
-      decompress ? "http-body-decompressed" : "http-body",
-    ),
-  );
+  setDataToolsFileNameGuess(httpBodyFileName);
   markDataToolsInputCommitted();
   showDataTools();
   runDataToolsConversion();
@@ -26546,6 +26813,11 @@ document.getElementById("data-tools-input").addEventListener("input", () => {
   dataToolsInputEditedFlag = true;
   clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
+  // Manual typing: not a file load; clear any stale file hints so
+  // packet-context stream tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   dataToolsHistorySelectEl.value = "";
   setDataToolsFileNameGuess("");
   updateDataToolsHexHighlights();
@@ -26562,6 +26834,11 @@ document.getElementById("data-tools-input").addEventListener("paste", () => {
   dataToolsInputEditedFlag = true;
   clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
+  // Pasted data: not a file load; clear any stale file hints so
+  // packet-context stream tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   requestAnimationFrame(() => {
     normalizeDataToolsHexInputFormatting();
   });
@@ -26741,6 +27018,11 @@ dataToolsHistorySelectEl.addEventListener("change", () => {
   dataToolsInputEditedFlag = true;
   clearDataToolsStreamPackets();
   dataToolsContextPacket = null;
+  // History entry: not a file load; clear any stale file hints so
+  // packet-context stream tracking behaves as usual.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({ isFile: false });
+  }
   document.getElementById("data-tools-format").value = selectedEntry.format;
   document.getElementById("data-tools-input").value = selectedEntry.input;
   updateDataToolsHexHighlights();
@@ -27070,6 +27352,81 @@ convertContextButtons.openHeatmapLocation.addEventListener("click", () => {
   hideConvertContextMenu();
 });
 
+convertContextButtons.decodeStatsObject.addEventListener("click", async () => {
+  const tag =
+    activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]") ||
+    activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-downloaded-file-id]");
+  if (!tag) return;
+  // Resolve the candidate from whichever registry owns this tag.
+  let candidate = null;
+  if (tag.dataset.carvableId) {
+    candidate = await getCarvableCandidateById(tag.dataset.carvableId);
+  } else if (tag.dataset.downloadedFileId) {
+    candidate = await getDownloadedFileCandidateById(tag.dataset.downloadedFileId);
+  }
+  hideConvertContextMenu();
+  if (!candidate) {
+    statusUpdate("Status: File candidate not found for Conv decode");
+    return;
+  }
+  const bytes = candidate.bytes;
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+    statusUpdate("Status: File content is unavailable for Conv decode");
+    return;
+  }
+  const inputEl = document.getElementById("data-tools-input");
+  const formatEl = document.getElementById("data-tools-format");
+  const selectEl = document.getElementById("data-tools-proto-select");
+  if (!inputEl || !formatEl || !selectEl) {
+    statusUpdate("Status: Conv decoders controls are unavailable");
+    return;
+  }
+  // Carved/downloaded file bytes are not on-the-wire packets, so the
+  // packet-derived protocol hint would point at the transport (e.g. "HTTP")
+  // instead of the carved payload's actual content. Flag this load as a
+  // file so the decoder ignores all transport/stream metadata and uses only
+  // the file extension hint plus byte content.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      protocolHint: null,
+      portHint: null,
+      fileNameHint: candidate.fileName || "",
+      isFile: true,
+    });
+  }
+  dataToolsContextPacket = null;
+  dataToolsOriginalInputBytes = bytes;
+  dataToolsInputEditedFlag = false;
+  clearDataToolsStreamPackets();
+  dataToolsLastConversionBytes = bytes;
+  inputEl.value = formatHexInputBytesWithCap(bytes);
+  formatEl.value = "hex";
+  setDataToolsFileNameGuess(candidate.fileName || "");
+  // Always select "auto" so the Conv decoder auto-detects the protocol from
+  // the byte content rather than reusing the previously-selected decoder.
+  // Keep the dropdown on auto. The decoder receives the file name and
+  // candidate protocol through dataToolsContextPacket and resolves those
+  // hints inside the normal auto-detection path.
+  selectEl.value = "auto";
+  markDataToolsInputCommitted();
+  showDataTools(CONV_DECODES_SUBTAB);
+  // Force a re-run of the decoder because simply swapping the input value
+  // does not always re-fire the `change` event on the proto-select when the
+  // dropdown was already on the same value.
+  try {
+    runProtoDecoder(bytes);
+  } catch (decoderError) {
+    const errorMessage = decoderError?.message || String(decoderError || "unknown");
+    writeLogEntry(`Stats object decoder run failed: ${errorMessage}`);
+  }
+  statusUpdate(
+    `Status: Loaded ${candidate.fileName || "file"} into Decoders (${bytes.length} bytes, decoder=auto-detect)`,
+  );
+  writeLogEntry(
+    `Stats object loaded into Decoders file="${candidate.fileName || "unknown"}" bytes=${bytes.length} file_hint=${JSON.stringify(candidate.fileName || "")} protocol_hint=${JSON.stringify(candidate.protocol || "")} decoder="auto"`,
+  );
+});
+
 convertContextButtons.loadCarvableExtraction.addEventListener("click", async () => {
   const tag = activeContextTarget?.closest?.("#stats_box .stats-section .stats-tag[data-carvable-id]");
   if (!tag) return;
@@ -27136,14 +27493,22 @@ convertContextButtons.loadCarvableDecoders.addEventListener("click", async () =>
   formatEl.value = "hex";
   setDataToolsFileNameGuess(candidate.fileName || "");
 
-  // Hint the decoder by file extension when possible. We deliberately leave
-  // the dropdown on "auto" when the extension is unknown so the existing
-  // auto-detection still runs and the user can override the pick.
-  const extensionHint = getProtoDecoderHintForFileName(candidate.fileName || "");
-  const chosenProtocol = extensionHint && SUPPORTED_DECODER_PROTOS.has(extensionHint)
-    ? extensionHint
-    : "auto";
-  selectEl.value = chosenProtocol;
+  // Always select "auto" so the Conv decoder auto-detects the protocol from
+  // the byte content. The carved file's extension is forwarded via the
+  // decoder hints (see setDataToolsDecoderHints below) and auto-detection
+  // uses that as one of its inputs. Flag this load as a file so the decoder
+  // ignores all transport/stream metadata (carved out of HTTP vs FTP makes
+  // no difference to how the file itself decodes) and suppresses the global
+  // packet-context fallback.
+  if (typeof setDataToolsDecoderHints === "function") {
+    setDataToolsDecoderHints({
+      protocolHint: null,
+      portHint: null,
+      fileNameHint: candidate.fileName || "",
+      isFile: true,
+    });
+  }
+  selectEl.value = "auto";
 
   markDataToolsInputCommitted();
   showDataTools(CONV_DECODES_SUBTAB);
@@ -27156,12 +27521,11 @@ convertContextButtons.loadCarvableDecoders.addEventListener("click", async () =>
     const errorMessage = decoderError?.message || String(decoderError || "unknown");
     writeLogEntry(`Stats carve decoder run failed: ${errorMessage}`);
   }
-  const decoderLabel = chosenProtocol === "auto" ? "auto-detect" : chosenProtocol;
   statusUpdate(
-    `Status: Loaded ${candidate.fileName || "carved file"} into Decoders (${bytes.length} bytes, decoder=${decoderLabel})`,
+    `Status: Loaded ${candidate.fileName || "carved file"} into Decoders (${bytes.length} bytes, decoder=auto-detect)`,
   );
   writeLogEntry(
-    `Stats carve loaded into Decoders file="${candidate.fileName || "unknown"}" bytes=${bytes.length} extension_hint=${JSON.stringify(extensionHint || "")} decoder=${JSON.stringify(chosenProtocol)}`,
+    `Stats carve loaded into Decoders file="${candidate.fileName || "unknown"}" bytes=${bytes.length} file_hint=${JSON.stringify(candidate.fileName || "")} decoder="auto"`,
   );
 });
 
