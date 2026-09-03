@@ -1304,10 +1304,10 @@ contextBridge.exposeInMainWorld('snitchapi', {
     ipcRenderer.invoke('get-nmap-scan-status'),
   runNmapServiceScan: (targets, options = {}) =>
     ipcRenderer.invoke('run-nmap-service-scan', targets, options),
-  runBackendCommand: (filename, useLLM, chunkSize, workerThreads, backendOptions, jobId = "", wifiKeys = null) =>
-    ipcRenderer.invoke('run-backend-command', filename, useLLM, chunkSize, workerThreads, backendOptions, jobId, wifiKeys),
-  runBackendCommandFromSession: (sessionPcap, useLLM, chunkSize, workerThreads, backendOptions, jobId = "", wifiKeys = null) =>
-    ipcRenderer.invoke('run-backend-command-from-session', sessionPcap, useLLM, chunkSize, workerThreads, backendOptions, jobId, wifiKeys),
+  runBackendCommand: (filename, chunkSize, workerThreads, backendOptions, jobId = "", wifiKeys = null) =>
+    ipcRenderer.invoke('run-backend-command', filename, chunkSize, workerThreads, backendOptions, jobId, wifiKeys),
+  runBackendCommandFromSession: (sessionPcap, chunkSize, workerThreads, backendOptions, jobId = "", wifiKeys = null) =>
+    ipcRenderer.invoke('run-backend-command-from-session', sessionPcap, chunkSize, workerThreads, backendOptions, jobId, wifiKeys),
   onPcapSource: (callback) => {
     ipcRenderer.on('backend-pcap-source', (_event, payload) => {
       callback(payload);

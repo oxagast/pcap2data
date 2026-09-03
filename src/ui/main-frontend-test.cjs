@@ -2035,14 +2035,6 @@ async function loadSettingsAboutReleaseInfo({ forceRefresh = false } = {}) {
   }
 }
 
-// Syncs runtime llm toggle from settings.
-function syncRuntimeLlmToggleFromSettings() {
-  const useLlmEl = document.getElementById("use-llm");
-  if (useLlmEl) {
-    useLlmEl.checked = isLlmEnabledInSettings();
-  }
-}
-
 // Handles sanitize theme id.
 function sanitizeThemeId(value, fallback = FALLBACK_THEME_ID) {
   if (typeof value !== "string") return fallback;
@@ -3675,7 +3667,6 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
   setCurrentSettings(savedSettings);
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
-  syncRuntimeLlmToggleFromSettings();
   // Re-render the Session Threat Score card so the LLM "Get Assessment"
   // button tracks the current LLM toggle state.
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
@@ -3701,7 +3692,6 @@ async function loadPersistedSettings() {
   setCurrentSettings(loadedSettings);
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(loadedSettings);
-  syncRuntimeLlmToggleFromSettings();
   await applyThemeById(loadedSettings.general.themeId);
   syncSettingsFormFromState();
   return getCurrentSettings();
@@ -4833,7 +4823,6 @@ function fileLoaded(isLoaded) {
     document.getElementById("list-btn").style.opacity = "1";
     document.getElementById("notes-btn").style.opacity = "1";
     document.getElementById("capture-file-lab").style.display = "none";
-    document.getElementById("llm-toggle").style.display = "none";
     writeLogEntry(
       `[${threadName}] User opened AI Summary view`,
     );
@@ -25012,7 +25001,6 @@ function runSnitch(file, options = {}) {
     "Status: Running snitch backend, this may take a few minutes...";
   document.getElementById("error-container").style.display = "none";
   startTime = performance.now();
-  const useLLM = isLlmEnabledInSettings();
   const fileLabel = fromSessionSource
     ? file?.fileName || "session-stored-pcap"
     : typeof file === "string"
@@ -25023,13 +25011,12 @@ function runSnitch(file, options = {}) {
     allowUnknownMagicLoad: forceUnknownMagicLoad,
   };
   writeLogEntry(
-    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} llm_enabled = ${useLLM} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} force_unknown_magic = ${forceUnknownMagicLoad} `,
+    `Backend analysis started job_id = ${backendJobId} file = ${fileLabel} chunk_size = ${backendChunkSize} worker_threads = ${backendWorkerThreads} tcp_host = ${JSON.stringify(backendTransportOptions.tcpHost)} tcp_port = ${backendTransportOptions.tcpPort} force_legacy = ${backendTransportOptions.forceLegacySpawn} data_mode = ${backendTransportOptions.useHttpDataSnapshots} json_data_emit_interval_ms = ${backendTransportOptions.jsonDataEmitMinIntervalMs} force_unknown_magic = ${forceUnknownMagicLoad} `,
   );
   const backendPromise = fromSessionSource
     ? window.snitchapi && typeof window.snitchapi.runBackendCommandFromSession === "function"
       ? window.snitchapi.runBackendCommandFromSession(
         file,
-        useLLM,
         backendChunkSize,
         backendWorkerThreads,
         backendOptions,
@@ -25038,7 +25025,6 @@ function runSnitch(file, options = {}) {
       : Promise.reject(new Error("Session PCAP reprocess API is unavailable"))
     : window.snitchapi.runBackendCommand(
       file,
-      useLLM,
       backendChunkSize,
       backendWorkerThreads,
       backendOptions,
