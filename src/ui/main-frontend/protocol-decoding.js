@@ -35,6 +35,7 @@ const {
     decodeModbusFromBytes,
     decodeDnp3FromBytes,
     decodeS7commFromBytes,
+    decodeWebSocketFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -183,6 +184,8 @@ function createProtocolDecodingHelpers({
                 return decodeDnp3FromBytes(bytes);
             case "s7comm":
                 return decodeS7commFromBytes(bytes);
+            case "websocket":
+                return decodeWebSocketFromBytes(bytes);
             case "jpeg":
                 return decodeJpegFromBytes(bytes);
             case "png":
