@@ -320,6 +320,47 @@ describe("NetBIOS-NS Conv decoder wiring", () => {
             expect(decodeNbnsFromBytes(short)).toBeNull();
         }
     );
+
+    test.each(decoderFiles)(
+        "rejects random garbage bytes that look nothing like NBNS from %s",
+        (filePath) => {
+            const { decodeNbnsFromBytes } = loadDecoderFunctions(filePath);
+            // Random bytes that happen to be >= 12 bytes but have no valid NBNS structure.
+            const garbage = Uint8Array.from([
+                0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc,
+                0xde, 0xf0, 0x11, 0x22, 0x33, 0x44,
+            ]);
+            expect(decodeNbnsFromBytes(garbage)).toBeNull();
+        }
+    );
+
+    test.each(decoderFiles)(
+        "rejects messages with absurdly large counts from %s",
+        (filePath) => {
+            const { decodeNbnsFromBytes } = loadDecoderFunctions(filePath);
+            // Valid header but QDCOUNT=100 (way over limit).
+            const absurdCounts = Uint8Array.from([
+                0x12, 0x34, // NAME_TRN_ID
+                0x01, 0x10, // FLAGS: RD + B
+                0x00, 0x64, // QDCOUNT = 100 (over MAX_NBNS_COUNT=50)
+                0x00, 0x00, // ANCOUNT
+                0x00, 0x00, // NSCOUNT
+                0x00, 0x00, // ARCOUNT
+            ]);
+            expect(decodeNbnsFromBytes(absurdCounts)).toBeNull();
+        }
+    );
+
+    test.each(decoderFiles)(
+        "accepts a valid NBNS query from %s",
+        (filePath) => {
+            const { decodeNbnsFromBytes } = loadDecoderFunctions(filePath);
+            const bytes = buildQuery();
+            const decoded = decodeNbnsFromBytes(bytes);
+            expect(decoded).not.toBeNull();
+            expect(decoded.protocol).toBe("NetBIOS-NS");
+        }
+    );
 });
 
 describe("NetBIOS-NS protocol/port hints", () => {
