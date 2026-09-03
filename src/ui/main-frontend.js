@@ -209,6 +209,7 @@ const {
   renderHsrpTable,
   renderLacpTable,
   renderCdpTable,
+  renderMndpTable,
   renderStpTable,
 } = require("./decoders/main");
 const { createCryptPanel } = require("./panels/crypt-panel");
@@ -28329,6 +28330,9 @@ function infoPanel(pk) {
 
   // CDP info table (shown for CDP frames, EtherType 0x88cc)
   renderCdpTable(transportData);
+
+  // MNDP info table (shown for MNDP packets, UDP port 5678)
+  renderMndpTable(transportData);
 
   // STP info table (shown for STP BPDUs, IEEE 802.1D LLC DSAP/SSAP 0x42)
   renderStpTable(transportData);

@@ -41,6 +41,7 @@ const { decodeOspfFromBytes } = require("./ospf");
 const { decodeHsrpFromBytes } = require("./hsrp");
 const { decodeLacpFromBytes } = require("./lacp");
 const { decodeCdpFromBytes } = require("./cdp");
+const { decodeMndpFromBytes } = require("./mndp");
 const { decodeWebSocketFromBytes } = require("./websocket");
 
 // Extracts a decoder hint for a packet from its application protocol and
@@ -340,6 +341,9 @@ function autoDetectProtoFromBytes(bytes, options) {
         }
         if (typeof decodeCdpFromBytes === "function" && decodeCdpFromBytes(bytes)) {
             return "cdp";
+        }
+        if (typeof decodeMndpFromBytes === "function" && decodeMndpFromBytes(bytes)) {
+            return "mndp";
         }
     } catch {
         // Keep auto-detect resilient; one decoder failure must not abort the whole chain.

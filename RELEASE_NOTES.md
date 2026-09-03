@@ -1,5 +1,72 @@
 # Release Notes
 
+## Unreleased — v2.7.1737
+
+**Type:** minor
+
+> WebSocket support, industrial protocol decoders, Artifacts store
+> overhaul, Conv UX polish, and the removed deprecated LLM checkbox.
+
+### ✨ Features
+
+- **WebSocket support + improved OCPF decoder walking** — the backend
+  now speaks WebSocket in addition to HTTP for renderer ↔ backend
+  communication, enabling bidirectional streaming without the
+  polling/chunked-workaround pattern. The OCPF (Open Collaboration
+  Protocol Format) decoder's byte-walking logic was also improved for
+  better field extraction and boundary handling.
+- **MNDP (MikroTik Neighbor Discovery Protocol) decoder** — new Conv
+  → Decodes + sidebar renderer for MNDP, the MikroTik Layer 2/3
+  neighbour-discovery protocol carried over UDP/5678 (broadcast).
+  The decoder walks all known TLV types — MAC Address, Identity,
+  Version, Platform, Uptime (centiseconds), Software ID, Board,
+  Unpack, IPv6/IPv4 Address, and Interface Name — and auto-detects
+  via the same CDP-style byte-heuristic cascade (gated on the
+  mandatory first TLV being type 1 / MAC Address, length 6, per
+  Wireshark's dissector). Registered in `SUPPORTED_DECODER_PROTOS`,
+  `PROTOCOL_DECODER_HINTS` (`mndp`, `mikrotik-neighbor-discovery`),
+  and `PORT_DECODER_HINTS` (5678).
+- **Industrial protocol decoders — Modbus, S7comm, DNP3 (Conv →
+  Decodes)** — three new Conv stream decoders handle SCADA/ICS
+  traffic: **Modbus** (function codes 1–23, coils/discretes/registers,
+  exception responses), **S7comm** (Siemens S7 communication,
+  setup, read/write, cyclic, PLC-stop, and diagnostics), and
+  **DNP3** (Distributed Network Protocol, data objects, binary/analog
+  inputs/outputs, control/cooking). All three are registered in
+  `SUPPORTED_DECODER_PROTOS` and auto-detected via
+  `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS` for ports 502
+  (Modbus), 102 (S7comm), and 20000 (DNP3).
+- **Artifacts store overhaul (replaces Keystore)** — the former
+  **Keystore** panel was rebuilt into a broader **Artifacts** store
+  that now handles arbitrary file artifacts alongside keys and
+  credentials. Artifacts are typed (`wifi-wep`, `wifi-wpa-psk`,
+  `wifi-pmk`, `generic-secret`, `file`, etc.), each carries a
+  name/description/timestamp, and the panel was reorganised with
+  better grouping, search, and bulk-operations support.
+- **Conv UX improvements — image no-op / partial data handling,
+  decoder dropdown selection, protocol autodetection fix** — the Conv
+  output renderer now correctly handles image streams with no-op
+  transforms and partial data without cutting off renders. The
+  Decodes dropdown selection UX was improved for faster protocol
+  switching. Protocol autodetection was tightened to reduce false
+  positives on non-protocol traffic that happened to look like
+  valid protocol headers.
+- **Removed deprecated "Use LLM" checkbox** — the legacy
+  `settings.capture.useLlm` field and its associated UI control were
+  removed. LLM integration is now always available when an LLM
+  provider is configured; the checkbox was redundant with the
+  provider/model selection controls.
+
+### 🐛 Fixes
+
+- **Duplicate data in the artifacts store** — fixed a bug where
+  re-running a capture could double-count artifact entries in the
+  store; the store now correctly reuses existing entries by key
+  instead of creating duplicates.
+- **Conv search/replace alignment** — the search-and-replace bar in
+  Conv is now visually and functionally aligned with its manual carve
+  counterpart, with consistent state tracking across both paths.
+
 ## v2.7.1736 - 2026-09-01
 
 **Type:** minor

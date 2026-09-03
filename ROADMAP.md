@@ -623,11 +623,11 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 
 ### WebSocket Support
 
-> **Status:** 📋 Planned.
+> **Status:** ✅ Shipped (v2.7.1737).
 
-- [ ] Message reconstruction
-- [ ] Frame analysis
-- [ ] Payload decoding
+- [x] Message reconstruction
+- [x] Frame analysis
+- [x] Payload decoding
 
 ### gRPC Support
 
@@ -701,6 +701,8 @@ when the packet's `link.proto` already names the protocol family.
 
 #### OSPF
 
+> **Status:** ✅ Shipped.
+
 - [x] Hello / DBD / LSR / LSU / LSAck walks
 - [x] LSA type library (Router, Network, Summary, External, Opaque)
 - [x] Area + neighbour topology extraction
@@ -734,18 +736,22 @@ when the packet's `link.proto` already names the protocol family.
 
 #### CDP (Cisco Discovery Protocol)
 
-- [ ] TLV walks (Device ID, Platform, Version, Port ID, IP address,
+> **Status:** ✅ Shipped.
+
+- [x] TLV walks (Device ID, Platform, Version, Port ID, IP address,
   capabilities, VTP, VLAN, power)
-- [ ] Multicast destination 01:00:0C:CC:CC:CC
+- [x] Multicast destination 01:00:0C:CC:CC:CC
 - [ ] Cache neighbour inventory per capture
 - **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
 
 #### MNDP (MikroTik Neighbor Discovery)
 
-- [ ] TLV walk mirroring the CDP TLV list (MikroTik extends it with
+> **Status:** ✅ Shipped.
+
+- [x] TLV walk mirroring the CDP TLV list (MikroTik extends it with
   RouterOS version, board, uptime)
-- [ ] Multicast destination 01:00:0E:8F:88:0F
-- [ ] Auto-detect via CDP-style magic + vendor TLV
+- [x] UDP/5678 broadcast destination
+- [x] Auto-detect via CDP-style magic + first-TLV (MAC Address) gate
 - **Priority:** P3 · **Complexity:** Low · **Est. dev time:** 0.5 day
 
 ### Service-discovery / LAN protocol decoders
@@ -1174,6 +1180,34 @@ Already shipped (so we don't redo them):
 
 > Short mirror of `RELEASE_NOTES.md` so this single file is enough to
 > skim. The full per-version notes still live in `RELEASE_NOTES.md`.
+
+### v2.7.1737 — Unreleased
+
+- **Features**
+  - **WebSocket support + improved OCPF decoder walking** — backend
+    now speaks WebSocket alongside HTTP for bidirectional streaming;
+    OCPF byte-walking logic improved for better field extraction.
+  - **Industrial protocol decoders — Modbus, S7comm, DNP3 (Conv →
+    Decodes)** — SCADA/ICS decoders for Modbus (port 502),
+    S7comm (port 102), and DNP3 (port 20000), all registered in
+    `SUPPORTED_DECODER_PROTOS` with auto-detect hints.
+  - **Artifacts store overhaul (replaces Keystore)** — broader
+    artifact types (`wifi-wep`, `wifi-wpa-psk`, `wifi-pmk`,
+    `generic-secret`, `file`), typed entries with name/description/
+    timestamp, better grouping, search, and bulk operations.
+  - **Conv UX improvements** — image no-op/partial data handling,
+    decoder dropdown selection, and tightened protocol
+    autodetection to reduce false positives.
+- **Fixes**
+  - **Duplicate data in artifacts store** — re-running a capture no
+    longer double-counts artifact entries; entries are reused by
+    key instead of recreated.
+  - **Conv search/replace alignment** — search-and-replace bar now
+    visually and functionally aligned with manual carve counterpart.
+- **Removed**
+  - **Deprecated "Use LLM" checkbox** — `settings.capture.useLlm`
+    field and UI control removed; LLM integration is always
+    available when a provider is configured.
 
 ### v2.7.1657 — 2026-08-31
 

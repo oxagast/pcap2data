@@ -250,6 +250,7 @@ import decoders.address_resolution as dec_address_resolution
 import decoders.bittorrent as dec_bittorrent
 import decoders.bgp as dec_bgp
 import decoders.cdp as dec_cdp
+import decoders.mndp as dec_mndp
 import decoders.dhcp as dec_dhcp
 import decoders.ftp as dec_ftp
 import decoders.http as dec_http
@@ -4134,6 +4135,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     hsrpSection = dec_hsrp.decodeHSRP(p, rawPayload)
                     if hsrpSection is not None:
                         transportSection["HSRP"] = hsrpSection
+                # Decode MNDP (MikroTik Neighbor Discovery Protocol) on UDP port 5678
+                if dstPort == 5678 or srcPort == 5678:
+                    mndpSection = dec_mndp.decodeMNDP(p, rawPayload)
+                    if mndpSection is not None:
+                        transportSection["MNDP"] = mndpSection
                 protocolKey = "UDP"
             elif isSctp:
                 sctpSection = dec_sctp.decodeSctpPacket(p)
