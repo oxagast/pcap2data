@@ -701,10 +701,10 @@ when the packet's `link.proto` already names the protocol family.
 
 #### OSPF
 
-- [ ] Hello / DBD / LSR / LSU / LSAck walks
-- [ ] LSA type library (Router, Network, Summary, External, Opaque)
-- [ ] Area + neighbour topology extraction
-- [ ] IP protocol 89 auto-detect
+- [x] Hello / DBD / LSR / LSU / LSAck walks
+- [x] LSA type library (Router, Network, Summary, External, Opaque)
+- [x] Area + neighbour topology extraction
+- [x] IP protocol 89 auto-detect
 - **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
 
 #### HSRP / VRRP

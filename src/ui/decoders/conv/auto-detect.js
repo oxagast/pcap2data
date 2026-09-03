@@ -41,6 +41,7 @@ const { decodeOspfFromBytes } = require("./ospf");
 const { decodeHsrpFromBytes } = require("./hsrp");
 const { decodeLacpFromBytes } = require("./lacp");
 const { decodeCdpFromBytes } = require("./cdp");
+const { decodeWebSocketFromBytes } = require("./websocket");
 
 // Extracts a decoder hint for a packet from its application protocol and
 // transport ports. The result can be passed to autoDetectProtoFromBytes as
@@ -350,6 +351,18 @@ function autoDetectProtoFromBytes(bytes, options) {
         /^SIP\/[\d.]+\s+\d{3}(?:\s|$)/i.test(trimmedText)
     )
         return "sip";
+    // WebSocket frames: the first byte encodes FIN/RSV/opcode. A valid
+    // frame must have a known opcode (0x0-0x2, 0x8-0xA) and the payload
+    // length must not exceed the remaining bytes. This runs BEFORE the
+    // low-confidence decoders because a WebSocket frame header can look
+    // like a valid msgpack/protobuf prefix.
+    try {
+        if (typeof decodeWebSocketFromBytes === "function" && decodeWebSocketFromBytes(bytes)) {
+            return "websocket";
+        }
+    } catch {
+        // keep going
+    }
     // Telnet: require IAC (0xFF) followed by a valid command byte (0xF0–0xFF)
     const TELNET_COMMANDS = new Set([
         0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb,
