@@ -66,6 +66,10 @@ in days, not weeks.
 - [Detection & analysis](#detection--analysis)
 - [Visualization & investigation](#visualization--investigation)
 - [Protocol support](#protocol-support)
+  - [ICS / SCADA protocol decoders](#ics--scada-protocol-decoders)
+  - [Routing / network-control protocol decoders](#routing--network-control-protocol-decoders)
+  - [Service-discovery / LAN protocol decoders](#service-discovery--lan-protocol-decoders)
+  - [Crypto / secure-channel metadata parsers](#crypto--secure-channel-metadata-parsers)
 - [AI features](#ai-features)
 - [Long-term (1.0+)](#long-term-10)
 - [Future / advanced ideas](#future--advanced-ideas)
@@ -637,6 +641,208 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 - [ ] Peer identification
 - [ ] Tunnel statistics
 
+### ICS / SCADA protocol decoders
+
+> **Status:** 📋 Planned — none shipped. Industrial control traffic
+> is a routine ask in OT forensics and currently surfaces in PacketSnitch
+> only as opaque TCP payloads.
+
+These three decoders share the same shape (request/response over TCP,
+fixed transaction-id header, function-code / object dictionary): a
+backend parser walking the registered function/objects, and a
+corresponding Conv stream decoder in
+`src/ui/decoders/conv/` that surfaces registers, coils, and typed
+objects as a tree. Auto-detect routes on the IANA-assigned port and
+the well-known protocol magic (MBAP length-prefix for Modbus, 0x0564
+DNP3 sync bytes, S7comm TPKT/COTP ISO-on-TCP framing).
+
+#### Modbus/TCP
+
+- [ ] Function-code decode (read/write coils, holding/input
+  registers, diagnostics)
+- [ ] Unit-id / transaction-id correlation
+- [ ] Exception responses (function-code | 0x80)
+- [ ] Auto-detect on TCP/502
+- **Priority:** P0 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### DNP3
+
+- [ ] Link-layer framing (0x0564 sync, length, control, destination,
+  source, CRC)
+- [ ] Transport-layer sequence + segment reassembly
+- [ ] Application-layer object library (binary inputs / counters /
+  analog inputs / events)
+- [ ] Auto-detect on TCP/20000 + UDP/20000
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### S7comm (Siemens S7 PLC)
+
+- [ ] TPKT / COTP ISO-on-TCP framing (port 102)
+- [ ] S7 header + parameter / data block walks
+- [ ] Request / response correlation by userdata
+- [ ] DB read/write, upload/download station, Pi/PB services
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Routing / network-control protocol decoders
+
+> **Status:** 📋 Planned — none shipped. These protocols surface
+> backbone / control-plane behaviour that today's HTTP / transport
+> layers can't explain (gateway failover, neighbour loss, link
+> aggregation membership, vendor discovery).
+
+Routing-protocol decoders are backend-only (they run over raw IP or
+link-layer multicast, not TCP/UDP-against-port). The Conv decodes
+subtab gets a sidebar-only entry per protocol so analysts can pick it
+when the packet's `link.proto` already names the protocol family.
+
+#### OSPF
+
+- [ ] Hello / DBD / LSR / LSU / LSAck walks
+- [ ] LSA type library (Router, Network, Summary, External, Opaque)
+- [ ] Area + neighbour topology extraction
+- [ ] IP protocol 89 auto-detect
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### HSRP / VRRP
+
+- [ ] HSRP state machine (Initial → Learn → Listen → Speak → Standby
+  → Active), priority, group, virtual IP
+- [ ] VRRPv2 / VRRPv3 (RFC 5798) advertisement walks
+- [ ] Failover event correlation (priority-change deltas)
+- [ ] HSRP UDP/1985 (v1) + multicast 224.0.0.2 (v2); VRRP IP proto 112
+- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### BFD
+
+- [ ] Control / Echo packet decode (RFC 5880/5881)
+- [ ] Discriminator pairing for session correlation
+- [ ] Detect-time / multiplier extraction (failure timing analysis)
+- [ ] UDP/3784 + UDP/4784 (multi-hop)
+- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### LACP
+
+- [ ] Slow-protocol decode (subtype 0x01)
+- [ ] Partner / Actor LACP PDUs (system-id, port-id, key, state)
+- [ ] Aggregator + collector correlation
+- [ ] Auto-detect via link-layer `slow protocols` ethertype (0x8809)
+- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### CDP (Cisco Discovery Protocol)
+
+- [ ] TLV walks (Device ID, Platform, Version, Port ID, IP address,
+  capabilities, VTP, VLAN, power)
+- [ ] Multicast destination 01:00:0C:CC:CC:CC
+- [ ] Cache neighbour inventory per capture
+- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### MNDP (MikroTik Neighbor Discovery)
+
+- [ ] TLV walk mirroring the CDP TLV list (MikroTik extends it with
+  RouterOS version, board, uptime)
+- [ ] Multicast destination 01:00:0E:8F:88:0F
+- [ ] Auto-detect via CDP-style magic + vendor TLV
+- **Priority:** P3 · **Complexity:** Low · **Est. dev time:** 0.5 day
+
+### Service-discovery / LAN protocol decoders
+
+> **Status:** 📋 Planned — none shipped. These protocols are pure
+> LAN / multicast name-resolution and IoT-enumeration surfaces;
+> analysts routinely see them in office / home captures and
+> currently only get UDP blobs to look at.
+
+Service-discovery decoders live alongside DNS in the Conv subtab and
+auto-detect via port + name-pattern heuristics. They share a single
+RR-walk helper with the DNS / DHCPv6 / LLMNR decoders.
+
+#### mDNS / Bonjour (RFC 6762)
+
+- [ ] Question / answer / authority / additional RR walks
+- [ ] Service-instance-name (SRV + TXT) browsing (`_http._tcp`,
+  `_ipp._tcp`, `_airplay._tcp`, …)
+- [ ] Cache-flush bit handling
+- [ ] UDP/5353 + 224.0.0.251 multicast
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### SSDP / UPnP (RFC 2616 / UPnP Device Architecture)
+
+- [ ] M-SEARCH / NOTIFY walks (ST, USN, LOCATION, Cache-Control)
+- [ ] UPnP device + service type parsing from LOCATION URL
+- [ ] Discovery / description / control / event subscription state
+- [ ] UDP/1900 + 239.255.255.250 multicast
+- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### AMQP (RabbitMQ / enterprise messaging)
+
+- [ ] AMQP 0-9-1 protocol header + connection / channel / frame walks
+- [ ] Method class/id table (Connection.Start, Channel.Open,
+  Basic.Publish / Consume / Ack, Queue.Declare)
+- [ ] Content-header + body frames (Basic.Deliver vs Basic.Get)
+- [ ] Auto-detect on TCP/5672 (plain) + 5673 (TLS)
+- **Priority:** P2 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+### Crypto / secure-channel metadata parsers
+
+> **Status:** 📋 Planned (TLS) / 📋 Planned (SSH) / 📋 Planned (RTP,
+> Syslog). The TLS / SSH handshake decoders surface metadata
+> (algorithms, certificates, fingerprints) **without** attempting
+> payload decryption — they slot in next to the existing **Crypt →
+> Wifi** / **Crypt → OpenSSH** decoders as a metadata-only view.
+
+These are non-invasive parsers: they read the handshake / control
+messages and leave encrypted bytes alone, so they compose with the
+existing TLS / OpenSSH keystore paths without conflicting.
+
+#### TLS handshake parser
+
+> Pairs with the existing TLS Fingerprinting roadmap entry (JA3 /
+> JA4 generation is `🟡` partial). The parser is the missing
+> foundation that the fingerprint hashes will read from.
+
+- [ ] ClientHello / ServerHello walks (version, random, session-id,
+  cipher suites, compression)
+- [ ] Extension decode (SNI, ALPN, supported_groups, signature_algorithms,
+  extended_master_secret, …)
+- [ ] Certificate + CertificateRequest walks
+- [ ] Certificate chain → JA3 / JA3-Server / JA4 hash feed
+- **Priority:** P0 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### SSH handshake parser
+
+> Pairs with the existing **Crypt → OpenSSH** keystroke-reconstruction
+> decoder (which already needs the negotiated algorithms). The parser
+> surfaces the negotiation so analysts see exactly which kex /
+> cipher / MAC / host-key the session picked.
+
+- [ ] Protocol version exchange (SSH-2.0 banners)
+- [ ] KexInit walks (kex algorithms, server host key algorithms,
+  encryption / MAC / compression choices)
+- [ ] Host key fingerprint (SHA-256 of the public key blob)
+- [ ] New keys / re-key events marked on the timeline
+- **Priority:** P1 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
+#### RTP (Real-time Transport, RFC 3550)
+
+- [ ] RTP header walks (version, padding, extension, CSRC count,
+  marker, payload type, sequence, timestamp, SSRC)
+- [ ] RTCP packet types (SR, RR, SDES, BYE, APP) + jitter / loss stats
+- [ ] Payload-type → codec lookup (PT 0 = PCMU, 8 = PCMA, dynamic =
+  opus/vp8/…)
+- [ ] RTP-detection heuristic for UDP streams without explicit
+  Session Description
+- **Priority:** P2 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+
+#### Syslog (RFC 5424 + RFC 3164)
+
+- [ ] BSD / RFC 3164 + RFC 5424 framing (PRI value, structured
+  data, MSGID, timestamp)
+- [ ] Transport over UDP/514, TCP/514 (TLS-wrapped variant at 6514),
+  and RELP
+- [ ] Severity / facility extraction
+- [ ] Optional ship-to-Notes integration (one note per Syslog
+  message for the active capture)
+- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+
 > Already shipped as backend decoders (since 1.x): HTTP/2, SIP, FTP,
 > SMTP, POP3, IMAP, Telnet, IRC, MTP, LDAP, MySQL, PostgreSQL, XMPP,
 > SMB, MQTT, RTSP, TFTP, BGP, NNTP, RADIUS, SNMP, ICMP, DHCP, NTP,
@@ -910,6 +1116,14 @@ work that's landed since.
 - [📋] Threat Score System
 - [📋] YARA Integration
 - [📋] QUIC / WebSocket / gRPC / WireGuard decoders
+- [📋] TLS handshake parser (unlocks JA3/JA4 + anomaly detection)
+- [📋] SSH handshake parser (negotiation metadata for OpenSSH
+  keystroke decoder)
+- [📋] Modbus/TCP, DNP3, S7comm (ICS / SCADA suite)
+- [📋] mDNS / Bonjour, SSDP / UPnP, AMQP (LAN / service discovery)
+- [📋] OSPF, HSRP / VRRP, BFD, LACP, CDP, MNDP (routing /
+  network-control suite)
+- [📋] RTP, Syslog (media + log transport)
 - [📋] Secret Detection pass (AWS, Azure, GCP, JWT, OAuth, private keys)
 - [📋] PCAP Diff Mode
 

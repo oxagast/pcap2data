@@ -57,6 +57,14 @@ const { decodeDhcpFromBytes } = require("./dhcp");
 const { decodeDhcpv6FromBytes } = require("./dhcpv6");
 const { decodeIso8583FromBytes } = require("./iso8583");
 
+const { decodeModbusFromBytes } = require("./modbus");
+const { decodeDnp3FromBytes } = require("./dnp3");
+const { decodeS7commFromBytes } = require("./s7comm");
+const { decodeOspfFromBytes } = require("./ospf");
+const { decodeHsrpFromBytes } = require("./hsrp");
+const { decodeLacpFromBytes } = require("./lacp");
+const { decodeCdpFromBytes } = require("./cdp");
+
 const { decodeJpegFromBytes } = require("./jpeg");
 const { decodePngFromBytes } = require("./png");
 const { decodeGifFromBytes } = require("./gif");
@@ -113,6 +121,8 @@ const { PROTOCOL_DECODER_HINTS, PORT_DECODER_HINTS } = require("./protocol-hints
 const {
     getPacketProtocolDecoderHint,
     autoDetectProtoFromBytes,
+    LOW_CONFIDENCE_DECODERS,
+    LOW_CONFIDENCE_CORROBORATING_HINTS,
 } = require("./auto-detect");
 
 module.exports = {
@@ -166,6 +176,13 @@ module.exports = {
     decodeDhcpFromBytes,
     decodeDhcpv6FromBytes,
     decodeIso8583FromBytes,
+    decodeModbusFromBytes,
+    decodeDnp3FromBytes,
+    decodeS7commFromBytes,
+    decodeOspfFromBytes,
+    decodeHsrpFromBytes,
+    decodeLacpFromBytes,
+    decodeCdpFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -198,4 +215,6 @@ module.exports = {
     PORT_DECODER_HINTS,
     getPacketProtocolDecoderHint,
     autoDetectProtoFromBytes,
+    LOW_CONFIDENCE_DECODERS,
+    LOW_CONFIDENCE_CORROBORATING_HINTS,
 };

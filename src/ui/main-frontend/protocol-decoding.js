@@ -32,6 +32,9 @@ const {
     decodeDhcpFromBytes,
     decodeDhcpv6FromBytes,
     decodeIso8583FromBytes,
+    decodeModbusFromBytes,
+    decodeDnp3FromBytes,
+    decodeS7commFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,
     decodeGifFromBytes,
@@ -174,6 +177,12 @@ function createProtocolDecodingHelpers({
                 return decodeDhcpv6FromBytes(bytes);
             case "iso8583":
                 return decodeIso8583FromBytes(bytes);
+            case "modbus":
+                return decodeModbusFromBytes(bytes);
+            case "dnp3":
+                return decodeDnp3FromBytes(bytes);
+            case "s7comm":
+                return decodeS7commFromBytes(bytes);
             case "jpeg":
                 return decodeJpegFromBytes(bytes);
             case "png":

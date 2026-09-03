@@ -2893,7 +2893,7 @@ function collectPacketDecodedProtocolNames(packetInfo) {
     });
   }
 
-  const sectionNames = ["TCP", "UDP", "SCTP", "ICMP", "IGMP", "LINK", "IP"];
+  const sectionNames = ["TCP", "UDP", "SCTP", "ICMP", "IGMP", "OSPF", "HSRP", "LACP", "CDP", "LINK", "IP"];
   sectionNames.forEach((sectionName) => {
     const section = packetInfo?.[sectionName];
     if (!section || typeof section !== "object") return;
@@ -3158,6 +3158,10 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
   const decodedProtocols = new Set();
   const arpOperations = new Set();
   const igmpMessageTypes = new Set();
+  const ospfMessageTypes = new Set();
+  const hsrpStates = new Set();
+  const lacpSubtypes = new Set();
+  const cdpDeviceIds = new Set();
   const hosts = new Set();
   const ports = new Set();
   const macVendors = new Set();
@@ -3265,6 +3269,30 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
         const igmpData = pi?.["IGMP"] || {};
         const igmpType = normalizeStatsTextValue(igmpData["Type"]);
         if (igmpType) igmpMessageTypes.add(igmpType);
+      }
+
+      if (tp === "OSPF") {
+        const ospfData = pi?.["OSPF"] || {};
+        const ospfType = normalizeStatsTextValue(ospfData["Type"]);
+        if (ospfType) ospfMessageTypes.add(ospfType);
+      }
+
+      if (tp === "HSRP") {
+        const hsrpData = pi?.["UDP"]?.["HSRP"] || pi?.["HSRP"] || {};
+        const hsrpState = normalizeStatsTextValue(hsrpData["State"]);
+        if (hsrpState) hsrpStates.add(hsrpState);
+      }
+
+      if (tp === "LACP") {
+        const lacpData = pi?.["LACP"] || {};
+        const lacpSubtype = normalizeStatsTextValue(lacpData["Subtype"]);
+        if (lacpSubtype) lacpSubtypes.add(lacpSubtype);
+      }
+
+      if (tp === "CDP") {
+        const cdpData = pi?.["CDP"] || {};
+        const cdpDeviceId = normalizeStatsTextValue(cdpData["Device ID"]);
+        if (cdpDeviceId) cdpDeviceIds.add(cdpDeviceId);
       }
 
       const srcIp = normalizeStatsTextValue(pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"]);
@@ -3424,6 +3452,10 @@ function buildCaptureStats(capturedPackets, bookmarkCount = 0) {
     decodedProtocols: [...decodedProtocols].sort(),
     arpOperations: [...arpOperations].sort(),
     igmpMessageTypes: [...igmpMessageTypes].sort(),
+    ospfMessageTypes: [...ospfMessageTypes].sort(),
+    hsrpStates: [...hsrpStates].sort(),
+    lacpSubtypes: [...lacpSubtypes].sort(),
+    cdpDeviceIds: [...cdpDeviceIds].sort(),
     hosts: [...hosts].sort(),
     ports: [...ports].sort((a, b) => a - b),
     macVendors: [...macVendors].filter((v) => v !== "N/A").sort(),
@@ -4768,6 +4800,42 @@ function createStatsPanel(options) {
         onQuery: applyStatsQuery,
       });
       if (igmpTypeSec) statisticsPanel.appendChild(igmpTypeSec);
+
+      const ospfTypeSec = makeStatsSection({
+        documentRef,
+        title: "OSPF Message Types",
+        items: stats.ospfMessageTypes,
+        queryBuilder: (v) => `ospf.type: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (ospfTypeSec) statisticsPanel.appendChild(ospfTypeSec);
+
+      const hsrpStateSec = makeStatsSection({
+        documentRef,
+        title: "HSRP States",
+        items: stats.hsrpStates,
+        queryBuilder: (v) => `hsrp.state: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (hsrpStateSec) statisticsPanel.appendChild(hsrpStateSec);
+
+      const lacpSubtypeSec = makeStatsSection({
+        documentRef,
+        title: "LACP Subtypes",
+        items: stats.lacpSubtypes,
+        queryBuilder: (v) => `lacp.subtype: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (lacpSubtypeSec) statisticsPanel.appendChild(lacpSubtypeSec);
+
+      const cdpDeviceSec = makeStatsSection({
+        documentRef,
+        title: "CDP Device IDs",
+        items: stats.cdpDeviceIds,
+        queryBuilder: (v) => `cdp.device_id: ${v.toLowerCase()}`,
+        onQuery: applyStatsQuery,
+      });
+      if (cdpDeviceSec) statisticsPanel.appendChild(cdpDeviceSec);
 
       const hostSec = makeStatsSection({
         documentRef,

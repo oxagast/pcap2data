@@ -34,6 +34,13 @@ const { decodeSnmpFromBytes } = require("./snmp");
 const { decodeDhcpFromBytes } = require("./dhcp");
 const { decodeDhcpv6FromBytes } = require("./dhcpv6");
 const { decodeIso8583FromBytes } = require("./iso8583");
+const { decodeModbusFromBytes } = require("./modbus");
+const { decodeDnp3FromBytes } = require("./dnp3");
+const { decodeS7commFromBytes } = require("./s7comm");
+const { decodeOspfFromBytes } = require("./ospf");
+const { decodeHsrpFromBytes } = require("./hsrp");
+const { decodeLacpFromBytes } = require("./lacp");
+const { decodeCdpFromBytes } = require("./cdp");
 
 // Extracts a decoder hint for a packet from its application protocol and
 // transport ports. The result can be passed to autoDetectProtoFromBytes as
@@ -116,6 +123,42 @@ function getPacketProtocolDecoderHint(packet) {
 // Accepts an optional { protocolHint, portHint } object so callers can ask
 // the decoder to try a packet's known application protocol, then its port,
 // before falling back to byte-heuristic detection.
+//
+// Low-confidence decoders: MessagePack, Protobuf, BER/DER (ASN.1), and YAML
+// have wire formats so permissive that almost any byte sequence or text
+// file can be "decoded" by them. To prevent the autoselect from falling
+// through to these decoders and producing meaningless output, they are
+// treated specially:
+//
+//   1. They are moved to the END of the detection cascade, after every
+//      high-confidence decoder has been tried.
+//   2. They are only returned when a metadata hint (protocolHint or
+//      portHint) corroborates the match, OR when no other decoder matched.
+//      This means "it's better to not decode than to decode gibberish."
+//
+// Each low-confidence decoder has also been strengthened individually (see
+// msgpack.js, protobuf.js, asn1.js, yaml.js) to require full structural
+// validation rather than just a first-byte classification.
+
+const LOW_CONFIDENCE_DECODERS = new Set([
+    "msgpack",
+    "protobuf",
+    "ber",
+    "der",
+    "yaml",
+]);
+
+// Maps a low-confidence decoder key to the set of metadata hints that
+// would corroborate it (i.e., make us trust the match). If a hint is
+// present and the decoder succeeds, we return it; otherwise we skip.
+const LOW_CONFIDENCE_CORROBORATING_HINTS = {
+    msgpack: ["msgpack", "message-pack", "messagepack"],
+    protobuf: ["protobuf", "proto", "protobuf3", "grpc"],
+    ber: ["ber", "asn1", "asn.1", "snmp", "ldap", "kerberos", "x509", "certificate"],
+    der: ["der", "asn1", "asn.1", "x509", "certificate", "ssl", "tls"],
+    yaml: ["yaml", "yml"],
+};
+
 function autoDetectProtoFromBytes(bytes, options) {
     const { protocolHint = null, portHint = null } = options || {};
     if (protocolHint && typeof protocolHint === "string") {
@@ -155,6 +198,27 @@ function autoDetectProtoFromBytes(bytes, options) {
         return exifImageType;
     }
 
+    // ICS/SCADA protocol detection by magic bytes:
+    // DNP3 frames start with 0x05 0x64 sync bytes.
+    if (bytes.length >= 2 && bytes[0] === 0x05 && bytes[1] === 0x64) return "dnp3";
+    // S7comm over TPKT starts with version 0x03, reserved 0x00.
+    if (bytes.length >= 2 && bytes[0] === 0x03 && bytes[1] === 0x00) return "s7comm";
+    // Modbus/TCP: protocol ID 0x0000 at offset 2-3 with valid length.
+    if (
+        bytes.length >= 8 &&
+        bytes[2] === 0x00 &&
+        bytes[3] === 0x00 &&
+        bytes[4] >= 2
+    ) {
+        try {
+            if (typeof decodeModbusFromBytes === "function" && decodeModbusFromBytes(bytes)) {
+                return "modbus";
+            }
+        } catch {
+            // keep going
+        }
+    }
+
     const text = new TextDecoder("utf-8", { fatal: false }).decode(
         bytes.slice(0, 256),
     );
@@ -175,11 +239,10 @@ function autoDetectProtoFromBytes(bytes, options) {
     } catch {
         // resilient — keep going
     }
-    if (decodeMessagePackFromBytes(bytes)) return "msgpack";
-    if (decodeProtobufFromBytes(bytes)) return "protobuf";
-    if (decodeBerFromBytes(bytes)) return "ber";
-    if (decodeDerFromBytes(bytes)) return "der";
-    if (decodeYamlFromBytes(bytes)) return "yaml";
+    // ── HIGH-CONFIDENCE text-protocol detection ──────────────────────
+    // These decoders have strong structural signatures (command keywords,
+    // status codes, specific byte patterns) and are safe to use for
+    // auto-detection.
     if (
         /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE)\s/.test(text) ||
         /^HTTP\/[\d.]+ \d{3}/.test(text)
@@ -251,6 +314,32 @@ function autoDetectProtoFromBytes(bytes, options) {
         if (typeof decodeIso8583FromBytes === "function" && decodeIso8583FromBytes(bytes)) {
             return "iso8583";
         }
+        if (typeof decodeModbusFromBytes === "function" && decodeModbusFromBytes(bytes)) {
+            return "modbus";
+        }
+        if (typeof decodeDnp3FromBytes === "function" && decodeDnp3FromBytes(bytes)) {
+            return "dnp3";
+        }
+        if (typeof decodeS7commFromBytes === "function" && decodeS7commFromBytes(bytes)) {
+            return "s7comm";
+        }
+        // Routing-protocol byte heuristics. These ride directly on IP
+        // (OSPF) or link-layer (LACP/CDP), so the bytes handed to the
+        // Conv Decodes subtab are the protocol payload without any
+        // TCP/UDP framing. HSRP is carried in UDP/1985 but a user may
+        // paste the raw HSRP PDU here.
+        if (typeof decodeOspfFromBytes === "function" && decodeOspfFromBytes(bytes)) {
+            return "ospf";
+        }
+        if (typeof decodeHsrpFromBytes === "function" && decodeHsrpFromBytes(bytes)) {
+            return "hsrp";
+        }
+        if (typeof decodeLacpFromBytes === "function" && decodeLacpFromBytes(bytes)) {
+            return "lacp";
+        }
+        if (typeof decodeCdpFromBytes === "function" && decodeCdpFromBytes(bytes)) {
+            return "cdp";
+        }
     } catch {
         // Keep auto-detect resilient; one decoder failure must not abort the whole chain.
     }
@@ -269,10 +358,77 @@ function autoDetectProtoFromBytes(bytes, options) {
     for (let i = 0; i + 1 < bytes.length; i++) {
         if (bytes[i] === 0xff && TELNET_COMMANDS.has(bytes[i + 1])) return "telnet";
     }
-    return null;
+
+    // ── LOW-CONFIDENCE decoders (last resort) ─────────────────────────
+    // MessagePack, Protobuf, BER/DER, and YAML have permissive wire formats
+    // that can "decode" almost any byte sequence. Even with the strengthened
+    // individual validators, these are still more likely to produce false
+    // positives than the high-confidence decoders above. We only return a
+    // low-confidence match if a metadata hint corroborates it, or if no
+    // high-confidence decoder matched at all.
+    //
+    // The individual decoders have been strengthened to require full
+    // structural validation (entire input consumed, valid wire types,
+    // proper nesting, etc.), so even this last-resort path is much more
+    // conservative than before.
+    const hints = [
+        protocolHint,
+        portHint,
+    ].filter(Boolean);
+
+    function isCorroborated(decoderKey) {
+        const corroborating = LOW_CONFIDENCE_CORROBORATING_HINTS[decoderKey];
+        if (!corroborating) return false;
+        return hints.some((h) =>
+            corroborating.includes(h.toLowerCase()),
+        );
+    }
+
+    // Try each low-confidence decoder. If a metadata hint corroborates the
+    // match, return it immediately. Otherwise, hold onto the first match
+    // and only return it at the very end (no high-confidence decoder won).
+    let lowConfidenceMatch = null;
+    try {
+        if (typeof decodeMessagePackFromBytes === "function" && decodeMessagePackFromBytes(bytes)) {
+            if (isCorroborated("msgpack")) return "msgpack";
+            lowConfidenceMatch = lowConfidenceMatch || "msgpack";
+        }
+    } catch { /* keep going */ }
+    try {
+        if (typeof decodeProtobufFromBytes === "function" && decodeProtobufFromBytes(bytes)) {
+            if (isCorroborated("protobuf")) return "protobuf";
+            lowConfidenceMatch = lowConfidenceMatch || "protobuf";
+        }
+    } catch { /* keep going */ }
+    try {
+        if (typeof decodeBerFromBytes === "function" && decodeBerFromBytes(bytes)) {
+            if (isCorroborated("ber")) return "ber";
+            lowConfidenceMatch = lowConfidenceMatch || "ber";
+        }
+    } catch { /* keep going */ }
+    try {
+        if (typeof decodeDerFromBytes === "function" && decodeDerFromBytes(bytes)) {
+            if (isCorroborated("der")) return "der";
+            lowConfidenceMatch = lowConfidenceMatch || "der";
+        }
+    } catch { /* keep going */ }
+    try {
+        if (typeof decodeYamlFromBytes === "function" && decodeYamlFromBytes(bytes)) {
+            if (isCorroborated("yaml")) return "yaml";
+            lowConfidenceMatch = lowConfidenceMatch || "yaml";
+        }
+    } catch { /* keep going */ }
+
+    // It's better to not decode than to decode meaningless gibberish.
+    // If we only have a low-confidence match with no corroborating hint,
+    // return null so the UI shows "No known protocol detected" instead of
+    // misleading the user.
+    return lowConfidenceMatch || null;
 }
 
 module.exports = {
     getPacketProtocolDecoderHint,
     autoDetectProtoFromBytes,
+    LOW_CONFIDENCE_DECODERS,
+    LOW_CONFIDENCE_CORROBORATING_HINTS,
 };

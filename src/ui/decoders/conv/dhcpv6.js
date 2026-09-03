@@ -321,7 +321,13 @@ function walkOptions(bytes, startOffset, endOffset, fields, depthLabel, allowNes
 function decodeDhcpv6FromBytes(bytes, fields) {
     if (!(bytes instanceof Uint8Array) || bytes.length < 4) return null;
     const msgType = bytes[0];
-    const msgTypeName = DHCPV6_MESSAGE_TYPES[msgType] || `type-${msgType}`;
+    // Strict gate: DHCPv6 message types are defined in RFC 8415/3315 as
+    // values 1–27 (with relay messages 12–13). Any other value is not a
+    // valid DHCPv6 message type. This prevents random binary data from
+    // being accepted as DHCPv6 just because the first 4 bytes happen to
+    // parse as a header.
+    if (!DHCPV6_MESSAGE_TYPES[msgType]) return null;
+    const msgTypeName = DHCPV6_MESSAGE_TYPES[msgType];
     if (!fields) return msgTypeName; // relay-message recursion check
     fields.push({ name: "Message Type", value: msgTypeName });
     const transactionId = (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];

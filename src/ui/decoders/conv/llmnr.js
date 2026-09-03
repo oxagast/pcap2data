@@ -238,17 +238,25 @@ function decodeLlmnrMessage(bytes, messageIndex) {
     }
 
     let questionIndex = 0;
+    let questionParseFailed = false;
     while (questionIndex < qdCount && questionIndex < 256 && cursor < bytes.length) {
         const nameResult = decodeDnsName(bytes, cursor, bytes.length);
         if (!nameResult.ok || !nameResult.endIndex) {
             cursor = bytes.length;
+            questionParseFailed = true;
             break;
         }
         cursor = nameResult.endIndex;
-        if (cursor + 4 > bytes.length) break;
+        if (cursor + 4 > bytes.length) {
+            questionParseFailed = true;
+            break;
+        }
         const qtype = readUint16(bytes, cursor);
         const qclass = readUint16(bytes, cursor + 2);
-        if (qtype === null || qclass === null) break;
+        if (qtype === null || qclass === null) {
+            questionParseFailed = true;
+            break;
+        }
         questionIndex += 1;
         fields.push({
             name: `${prefix} Question ${questionIndex}`,
@@ -256,6 +264,13 @@ function decodeLlmnrMessage(bytes, messageIndex) {
         });
         cursor += 4;
     }
+
+    // Strict gate: if the message declares questions (qdCount > 0) but
+    // none were successfully parsed, the bytes are not a real LLMNR
+    // message. This prevents random binary data from being accepted as
+    // LLMNR just because the 12-byte header happens to parse.
+    if (qdCount > 0 && questionIndex === 0) return null;
+    if (questionParseFailed && questionIndex === 0) return null;
 
     const sections = [
         { name: "Answer", count: anCount },

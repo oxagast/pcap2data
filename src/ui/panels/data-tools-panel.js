@@ -1316,6 +1316,13 @@ const decodeSnmpFromBytes = convDecoders.decodeSnmpFromBytes;
 const decodeDhcpFromBytes = convDecoders.decodeDhcpFromBytes;
 const decodeDhcpv6FromBytes = convDecoders.decodeDhcpv6FromBytes;
 const decodeIso8583FromBytes = convDecoders.decodeIso8583FromBytes;
+const decodeModbusFromBytes = convDecoders.decodeModbusFromBytes;
+const decodeDnp3FromBytes = convDecoders.decodeDnp3FromBytes;
+const decodeS7commFromBytes = convDecoders.decodeS7commFromBytes;
+const decodeOspfFromBytes = convDecoders.decodeOspfFromBytes;
+const decodeHsrpFromBytes = convDecoders.decodeHsrpFromBytes;
+const decodeLacpFromBytes = convDecoders.decodeLacpFromBytes;
+const decodeCdpFromBytes = convDecoders.decodeCdpFromBytes;
 
 // Phase 3 of the decoder refactor: ASN.1 helpers + BER/DER/Protobuf/MessagePack/
 // BSON now live under src/ui/decoders/conv/. The local names below keep the
@@ -1538,6 +1545,20 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeDhcpv6FromBytes(bytes);
     case "iso8583":
       return decodeIso8583FromBytes(bytes);
+    case "modbus":
+      return decodeModbusFromBytes(bytes);
+    case "dnp3":
+      return decodeDnp3FromBytes(bytes);
+    case "s7comm":
+      return decodeS7commFromBytes(bytes);
+    case "ospf":
+      return decodeOspfFromBytes(bytes);
+    case "hsrp":
+      return decodeHsrpFromBytes(bytes);
+    case "lacp":
+      return decodeLacpFromBytes(bytes);
+    case "cdp":
+      return decodeCdpFromBytes(bytes);
     case "plaintext":
       return decodePlainTextFromBytes(bytes);
     case "jpeg":

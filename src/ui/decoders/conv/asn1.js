@@ -47,6 +47,28 @@ function getAsn1TagDescription(tagByte) {
 function decodeAsn1GenericFromBytes(bytes, { encodingLabel = "BER", enforceDer = false } = {}) {
     if (!(bytes instanceof Uint8Array) || bytes.length < 2) return null;
 
+    // Strict gate for auto-detection: ASN.1/BER/DER is extremely permissive
+    // (any tag byte + any length is syntactically valid), so merely parsing
+    // TLV triples doesn't distinguish real ASN.1 from arbitrary binary data.
+    // We require:
+    //
+    //   1. The first node must be a **Universal-class** tag (tagByte & 0xC0
+    //      === 0x00). Context-specific (0x80) and Private (0xC0) class tags
+    //      are valid ASN.1 but are almost never the first byte of a
+    //      standalone ASN.1 document — they appear inside protocol-specific
+    //      wrappers (LDAP, SNMP, Kerberos, X.509). If the first byte is
+    //      context-specific or private, it's likely random binary data that
+    //      happens to parse, not a real ASN.1 structure.
+    //   2. The entire input must be consumed as valid TLV nodes — no
+    //      trailing garbage bytes.
+    //
+    // This makes the decoder suitable for auto-detection without a "force"
+    // flag: random binary data will usually have a non-universal first byte
+    // or leave trailing bytes, causing the decoder to return null.
+    const firstTagByte = bytes[0];
+    const firstTagClass = (firstTagByte & 0xc0) >> 6;
+    if (firstTagClass !== 0) return null; // 0 = Universal class
+
     const fields = [];
     const maxNodes = 100;
     let parsedNodes = 0;
@@ -89,6 +111,12 @@ function decodeAsn1GenericFromBytes(bytes, { encodingLabel = "BER", enforceDer =
     }
 
     if (!fields.length) return null;
+
+    // Strict: the entire input must be consumed. Trailing bytes mean the
+    // input isn't a clean ASN.1 structure — it's probably some other binary
+    // format that happened to parse partially.
+    if (index !== bytes.length) return null;
+
     if (parsedNodes >= maxNodes && index < bytes.length) {
         fields.push({
             name: "Notice",
