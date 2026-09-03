@@ -14781,7 +14781,31 @@ function loadMoreDataToolsOutputPage() {
 }
 
 // Sets expanded converted output.
+function getDataToolsFirstVisibleOutputId() {
+  // Prefer ASCII as the default expanded output pane.
+  const asciiEl = document.getElementById("data-tools-ascii-output");
+  if (asciiEl && !asciiEl.hidden) return "data-tools-ascii-output";
+
+  const activeFormat =
+    document.getElementById("data-tools-format")?.value || DEFAULT_DATA_TOOLS_FORMAT;
+  const formatOutputId =
+    DATA_TOOLS_OUTPUT_FORMAT_DETAILS[activeFormat]?.outputSelector?.slice(1) || null;
+  for (const outputId of DATA_TOOLS_CONVERTED_OUTPUT_IDS) {
+    if (outputId === formatOutputId) continue;
+    const outputEl = document.getElementById(outputId);
+    if (outputEl && !outputEl.hidden) return outputId;
+  }
+  // Fallback: return the first id even if it's the active format's output.
+  return DATA_TOOLS_CONVERTED_OUTPUT_IDS[0] || null;
+}
+
 function setExpandedConvertedOutput(expandedOutputId) {
+  // When called with null (e.g. on clear/reset), auto-expand the first visible
+  // output box so the right column always has one unrolled pane.
+  if (!expandedOutputId) {
+    expandedOutputId = getDataToolsFirstVisibleOutputId();
+  }
+
   DATA_TOOLS_CONVERTED_OUTPUT_IDS.forEach((outputId) => {
     const outputEl = document.getElementById(outputId);
     if (!outputEl) return;
@@ -14963,6 +14987,12 @@ function setDataToolsFindReplaceMode(mode) {
     setDataToolsFindReplaceSectionCollapsed(advancedSection, false);
     setDataToolsFindReplaceSectionCollapsed(simpleSection, true);
     clearDataToolsSimpleFindReplaceValues();
+    return;
+  }
+
+  if (mode === "both") {
+    setDataToolsFindReplaceSectionCollapsed(simpleSection, false);
+    setDataToolsFindReplaceSectionCollapsed(advancedSection, false);
     return;
   }
 
@@ -15864,6 +15894,14 @@ async function runDataToolsConversion(options = {}) {
       decimalInteger,
     };
     renderDataToolsOutputPage({ reset: true });
+    // Auto-expand the first visible output pane so the right column always
+    // has one unrolled box after a conversion.
+    const hasExpanded = DATA_TOOLS_CONVERTED_OUTPUT_IDS.some((id) =>
+      document.getElementById(id)?.classList.contains("data-tools-output-expanded"),
+    );
+    if (!hasExpanded) {
+      setExpandedConvertedOutput(getDataToolsFirstVisibleOutputId());
+    }
     if (isLargePayload) {
       await yieldToRenderer();
     }
@@ -26681,7 +26719,7 @@ document
 document
   .getElementById("data-tools-advanced-find-replace-section")
   .addEventListener("focusin", () => setDataToolsFindReplaceMode("advanced"));
-setDataToolsFindReplaceMode("none");
+setDataToolsFindReplaceMode("both");
 dataToolsHistorySelectEl.addEventListener("change", () => {
   const selectedIndex = Number(dataToolsHistorySelectEl.value);
   if (!Number.isInteger(selectedIndex) || selectedIndex < 0) return;
