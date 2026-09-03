@@ -260,6 +260,13 @@ function decodeAtOffset(bytes, binaryLen) {
     if (isAsciiDigits(bytes, 4)) {
         mti = readAscii(bytes, 0, 4);
         offset = 4;
+        // Strict gate for auto-detection: the ASCII MTI path accepts any
+        // 4 ASCII digits, which means random text starting with 4 digits
+        // (e.g. "1234 some text...") would be misidentified as ISO 8583.
+        // Require the MTI to be a known ISO 8583 message type. This
+        // prevents false positives from arbitrary text that happens to
+        // start with digits.
+        if (!ISO_MTI_NAMES[mti]) return null;
     } else if (bytes.length >= 2) {
         const b0 = bytes[0], b1 = bytes[1];
         if ((b0 >> 4) <= 9 && (b0 & 0x0f) <= 9 && (b1 >> 4) <= 9 && (b1 & 0x0f) <= 9) {
@@ -299,6 +306,13 @@ function decodeAtOffset(bytes, binaryLen) {
     // bitmap with no data following).
     const dataFields = Array.from(fieldsSet).filter((f) => f !== 1);
     if (dataFields.length > 0 && offset >= bytes.length) return null;
+
+    // Strict gate for auto-detection: if the bitmap has no data fields
+    // at all (only field 1 = secondary bitmap indicator, or completely
+    // empty), the message is just a header with no payload. This is
+    // almost certainly not a real ISO 8583 message — it's random binary
+    // that happened to produce a known MTI.
+    if (dataFields.length === 0) return null;
 
     const fields = [
         { name: "MTI", value: mti },
@@ -374,6 +388,13 @@ function decodeAtOffset(bytes, binaryLen) {
         anyFieldDecoded = true;
         fields.push({ name: `Field ${fieldNum} (${def.name})`, value });
     }
+
+    // Strict gate for auto-detection: if the bitmap declared data fields
+    // but none of them were successfully decoded (all were unknown,
+    // truncated, or parse errors), this is almost certainly not a real
+    // ISO 8583 message. Random binary data can produce a known MTI via
+    // BCD decoding and then a bitmap that sets only unknown fields.
+    if (dataFields.length > 0 && !anyFieldDecoded) return null;
 
     return { protocol: "ISO 8583", fields };
 }

@@ -202,6 +202,13 @@ const {
   renderKerberosTable,
   renderSshTable,
   renderSctpTable,
+  renderModbusTable,
+  renderDnp3Table,
+  renderS7commTable,
+  renderOspfTable,
+  renderHsrpTable,
+  renderLacpTable,
+  renderCdpTable,
 } = require("./decoders/main");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
@@ -28241,6 +28248,27 @@ function infoPanel(pk) {
 
   // SCTP/SIGTRAN info table (shown for SCTP packets and SS7 adaptation layers)
   renderSctpTable(transportData);
+
+  // Modbus/TCP info table (shown for Modbus packets on port 502)
+  renderModbusTable(transportData);
+
+  // DNP3 info table (shown for DNP3 packets on port 20000)
+  renderDnp3Table(transportData);
+
+  // S7comm info table (shown for S7comm packets on port 102)
+  renderS7commTable(transportData);
+
+  // OSPF info table (shown for OSPF packets, IP protocol 89)
+  renderOspfTable(protocol, transportData);
+
+  // HSRP info table (shown for HSRP packets on UDP port 1985)
+  renderHsrpTable(transportData);
+
+  // LACP info table (shown for LACP frames, EtherType 0x8809)
+  renderLacpTable(transportData);
+
+  // CDP info table (shown for CDP frames, EtherType 0x88cc)
+  renderCdpTable(transportData);
 
   const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [

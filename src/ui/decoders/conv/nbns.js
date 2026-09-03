@@ -364,17 +364,25 @@ function decodeNbnsMessage(bytes) {
 
     let cursor = 12;
     let questionIndex = 0;
+    let questionParseFailed = false;
     while (questionIndex < qdCount && questionIndex < NBNS_MAX_RR && cursor < bytes.length) {
         const nameResult = decodeNetbiosNameLabel(bytes, cursor);
         if (!nameResult.ok) {
             cursor = bytes.length;
+            questionParseFailed = true;
             break;
         }
         cursor = nameResult.endIndex;
-        if (cursor + 4 > bytes.length) break;
+        if (cursor + 4 > bytes.length) {
+            questionParseFailed = true;
+            break;
+        }
         const qtype = readUint16(bytes, cursor);
         const qclass = readUint16(bytes, cursor + 2);
-        if (qtype === null || qclass === null) break;
+        if (qtype === null || qclass === null) {
+            questionParseFailed = true;
+            break;
+        }
         questionIndex += 1;
         const typeName = NBNS_QTYPE_NAMES[qtype] || `TYPE${qtype}`;
         fields.push({
@@ -383,6 +391,12 @@ function decodeNbnsMessage(bytes) {
         });
         cursor += 4;
     }
+
+    // Strict gate: if the message declares questions (qdCount > 0) but
+    // none were successfully parsed, the bytes are not a real NBNS
+    // message. This prevents random binary data from being accepted.
+    if (qdCount > 0 && questionIndex === 0) return null;
+    if (questionParseFailed && questionIndex === 0) return null;
 
     if (anCount) {
         const answer = decodeNbnsRr(bytes, cursor, anCount);

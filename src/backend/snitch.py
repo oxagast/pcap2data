@@ -249,26 +249,33 @@ if backendDir not in sys.path:
 import decoders.address_resolution as dec_address_resolution
 import decoders.bittorrent as dec_bittorrent
 import decoders.bgp as dec_bgp
+import decoders.cdp as dec_cdp
 import decoders.dhcp as dec_dhcp
 import decoders.ftp as dec_ftp
 import decoders.http as dec_http
 import decoders.http2 as dec_http2
+import decoders.hsrp as dec_hsrp
 import decoders.igmp as dec_igmp
 import decoders.imap as dec_imap
 import decoders.irc as dec_irc
 import decoders.iso8583 as dec_iso8583
 import decoders.kerberos as dec_kerberos
+import decoders.dnp3 as dec_dnp3
+import decoders.lacp as dec_lacp
 import decoders.ldap as dec_ldap
+import decoders.modbus as dec_modbus
 import decoders.mqtt as dec_mqtt
 import decoders.mtp as dec_mtp
 import decoders.mysql as dec_mysql
 import decoders.nfs as dec_nfs
 import decoders.nntp as dec_nntp
 import decoders.ntp as dec_ntp
+import decoders.ospf as dec_ospf
 import decoders.pop3 as dec_pop3
 import decoders.postgresql as dec_postgresql
 import decoders.radius as dec_radius
 import decoders.rtsp as dec_rtsp
+import decoders.s7comm as dec_s7comm
 import decoders.sctp as dec_sctp
 import decoders.sip as dec_sip
 import decoders.smb as dec_smb
@@ -3036,6 +3043,162 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
 
     # Decode ARP/RARP packets that do not carry an IP layer.
     if networkLayer is None:
+        # Decode link-layer discovery protocols (CDP / LACP) that ride
+        # directly on Ethernet EtherTypes 0x88cc / 0x8809 with no IP layer.
+        # CDP may also be carried over 802.2 LLC/SNAP (OUI 00:00:0C,
+        # SNAP code 0x2000) on classic 802.3 frames.
+        etherLayer = None
+        etherClass = getattr(scapy, "Ether", None)
+        if (etherClass and p.haslayer(etherClass)) or p.haslayer("Ether"):
+            etherLayer = p[etherClass] if etherClass and p.haslayer(etherClass) else p["Ether"]
+        etherType = None
+        if etherLayer is not None:
+            try:
+                etherType = int(getattr(etherLayer, "type", 0) or 0)
+            except Exception:
+                etherType = None
+        # CDP over 802.3 LLC/SNAP — detect via the SNAP layer.
+        snapCode = None
+        snapClass = getattr(scapy, "SNAP", None)
+        if (snapClass and p.haslayer(snapClass)) or p.haslayer("SNAP"):
+            snapLayer = p[snapClass] if snapClass and p.haslayer(snapClass) else p["SNAP"]
+            try:
+                snapCode = int(getattr(snapLayer, "code", 0) or 0)
+            except Exception:
+                snapCode = None
+        isCdpFrame = etherType == 0x88CC or snapCode == 0x2000
+        isLacpFrame = etherType == 0x8809
+        if isCdpFrame:
+            # Cisco Discovery Protocol
+            if snapCode == 0x2000 and p.haslayer("SNAP"):
+                linkRaw = bytes(p["SNAP"].payload)
+            else:
+                linkRaw = bytes(etherLayer.payload) if etherLayer is not None else bytes(p)
+            cdpSection = dec_cdp.decodeCDP(p, linkRaw)
+            if cdpSection is not None:
+                timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                )
+                protocolName = "CDP"
+                dstPortStr = "cdp"
+                try:
+                    dataTypeInfo = getDatatypes(
+                        linkRaw, 0, 0, "0.0.0.0", "0.0.0.0", timeout, "udp",
+                    )
+                except Exception:
+                    mimeType = magic.from_buffer(linkRaw, mime=True)
+                    dataTypeInfo = {
+                        "MIME Type": mimeType,
+                        "payload.mime": mimeType,
+                        "Decompressed": {"Decompressed": False},
+                        "payload.decompressed": {"Decompressed": False},
+                        "Data Types": ["Unknown data type"],
+                        "Traits": {"Length": len(linkRaw)},
+                    }
+                packetInfo = {
+                    "packet.processed": int(packetIndex),
+                    "packet.timestamp": timestamp,
+                    "packet.proto": protocolName,
+                    "link.proto": protocolName,
+                    "packet.decoded_protocols": [protocolName],
+                    "Ethernet Frame": {
+                        "ether.src.mac.addr": srcMacAddr,
+                        "link.src.mac.addr": srcMacAddr,
+                        "ether.dst.mac.addr": dstMacAddr,
+                        "link.dst.mac.addr": dstMacAddr,
+                        "ether.src.mac.vendor": srcMacVendor,
+                        "link.src.mac.vendor": srcMacVendor,
+                        "ether.dst.mac.vendor": dstMacVendor,
+                        "link.dst.mac.vendor": dstMacVendor,
+                    }
+                    if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+                    else "N/A",
+                    "IP": "N/A",
+                    protocolName: cdpSection,
+                    "Raw data": {
+                        "Payload": {
+                            "payload.hex": linkRaw.hex(),
+                            "payload.ascii": linkRaw.decode(errors="ignore"),
+                        },
+                        "Packet": bytes(p).hex(),
+                        "packet.hex": bytes(p).hex(),
+                        "payload.len": len(linkRaw),
+                    },
+                }
+                if wanLinkSection is not None:
+                    packetInfo["Link Control"] = wanLinkSection
+                return joinInfo(
+                    outputDir,
+                    dstPortStr,
+                    packetIndex,
+                    _jsonDumpEncoded(dataTypeInfo),
+                    _jsonDumpEncoded(packetInfo),
+                    "0.0.0.0",
+                )
+        if isLacpFrame:
+            # LACP / Marker (IEEE 802.3ad Link Aggregation)
+            linkRaw = bytes(etherLayer.payload) if etherLayer is not None else bytes(p)
+            lacpSection = dec_lacp.decodeLACP(p, linkRaw)
+            if lacpSection is not None:
+                timestamp = datetime.fromtimestamp(float(Decimal(p.time))).strftime(
+                    "%Y-%m-%d %H:%M:%S.%f"
+                )
+                protocolName = "LACP"
+                dstPortStr = "lacp"
+                try:
+                    dataTypeInfo = getDatatypes(
+                        linkRaw, 0, 0, "0.0.0.0", "0.0.0.0", timeout, "udp",
+                    )
+                except Exception:
+                    mimeType = magic.from_buffer(linkRaw, mime=True)
+                    dataTypeInfo = {
+                        "MIME Type": mimeType,
+                        "payload.mime": mimeType,
+                        "Decompressed": {"Decompressed": False},
+                        "payload.decompressed": {"Decompressed": False},
+                        "Data Types": ["Unknown data type"],
+                        "Traits": {"Length": len(linkRaw)},
+                    }
+                packetInfo = {
+                    "packet.processed": int(packetIndex),
+                    "packet.timestamp": timestamp,
+                    "packet.proto": protocolName,
+                    "link.proto": protocolName,
+                    "packet.decoded_protocols": [protocolName],
+                    "Ethernet Frame": {
+                        "ether.src.mac.addr": srcMacAddr,
+                        "link.src.mac.addr": srcMacAddr,
+                        "ether.dst.mac.addr": dstMacAddr,
+                        "link.dst.mac.addr": dstMacAddr,
+                        "ether.src.mac.vendor": srcMacVendor,
+                        "link.src.mac.vendor": srcMacVendor,
+                        "ether.dst.mac.vendor": dstMacVendor,
+                        "link.dst.mac.vendor": dstMacVendor,
+                    }
+                    if (srcMacAddr != "N/A" or dstMacAddr != "N/A")
+                    else "N/A",
+                    "IP": "N/A",
+                    protocolName: lacpSection,
+                    "Raw data": {
+                        "Payload": {
+                            "payload.hex": linkRaw.hex(),
+                            "payload.ascii": linkRaw.decode(errors="ignore"),
+                        },
+                        "Packet": bytes(p).hex(),
+                        "packet.hex": bytes(p).hex(),
+                        "payload.len": len(linkRaw),
+                    },
+                }
+                if wanLinkSection is not None:
+                    packetInfo["Link Control"] = wanLinkSection
+                return joinInfo(
+                    outputDir,
+                    dstPortStr,
+                    packetIndex,
+                    _jsonDumpEncoded(dataTypeInfo),
+                    _jsonDumpEncoded(packetInfo),
+                    "0.0.0.0",
+                )
         arpDecoded = dec_address_resolution.decodeAddressResolutionPacket(p)
         if arpDecoded is not None:
             protocolName, arpSection, srcIp, dstIp = arpDecoded
@@ -3348,6 +3511,8 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
     ipProtocolNumber = getPacketNetworkProtocolNumber(networkLayer)
     isIgmp = p.haslayer("IGMP") or ipProtocolNumber == 2
     isIcmp = p.haslayer("ICMP") or ipProtocolNumber == 58
+    # OSPF runs directly over IP (protocol number 89).
+    isOspf = p.haslayer("OSPF") or ipProtocolNumber == 89
 
     if isTcp:
         rawPayload = p["TCP"].payload.original
@@ -3387,6 +3552,12 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
         dstPort = 0
         transportProtocol = "igmp"
         dstPortStr = "igmp"
+    elif isOspf:
+        rawPayload = bytes(networkLayer.payload)
+        srcPort = 0
+        dstPort = 0
+        transportProtocol = "ospf"
+        dstPortStr = "ospf"
     elif isIcmp:
         # ICMP: use the full ICMP layer bytes as the payload.  IPv6
         # ICMPv6 packets report haslayer("ICMP") True in some scapy
@@ -3696,6 +3867,31 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     sshSection = dec_ssh.decodeSSH(rawPayload, srcPort, dstPort)
                     if sshSection is not None:
                         transportSection["SSH"] = sshSection
+                # Decode Modbus/TCP on TCP port 502
+                if streamLabelPort == 502 or srcPort == 502 or dstPort == 502:
+                    modbusSection = dec_modbus.decodeModbus(rawPayload)
+                    if modbusSection is not None:
+                        transportSection["Modbus"] = modbusSection
+                # Decode DNP3 on TCP port 20000, or when payload starts with 0x0564 sync
+                if (
+                    streamLabelPort == 20000
+                    or srcPort == 20000
+                    or dstPort == 20000
+                    or (len(rawPayload) >= 2 and rawPayload[0] == 0x05 and rawPayload[1] == 0x64)
+                ):
+                    dnp3Section = dec_dnp3.decodeDNP3(rawPayload)
+                    if dnp3Section is not None:
+                        transportSection["DNP3"] = dnp3Section
+                # Decode S7comm on TCP port 102, or when payload starts with TPKT 0x03 0x00
+                if (
+                    streamLabelPort == 102
+                    or srcPort == 102
+                    or dstPort == 102
+                    or (len(rawPayload) >= 2 and rawPayload[0] == 0x03 and rawPayload[1] == 0x00)
+                ):
+                    s7commSection = dec_s7comm.decodeS7comm(rawPayload)
+                    if s7commSection is not None:
+                        transportSection["S7comm"] = s7commSection
                 protocolKey = "TCP"
             elif isUdp:
                 # Build UDP section; decode DNS if present
@@ -3831,6 +4027,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     bittorrentSection = dec_bittorrent.decodeBitTorrent(rawPayload)
                     if bittorrentSection is not None:
                         transportSection["BitTorrent"] = bittorrentSection
+                # Decode HSRP on UDP port 1985 (HSRPv1 multicast 224.0.0.2 / HSRPv2 224.0.0.102)
+                if dstPort == 1985 or srcPort == 1985:
+                    hsrpSection = dec_hsrp.decodeHSRP(p, rawPayload)
+                    if hsrpSection is not None:
+                        transportSection["HSRP"] = hsrpSection
                 protocolKey = "UDP"
             elif isSctp:
                 sctpSection = dec_sctp.decodeSctpPacket(p)
@@ -3918,6 +4119,25 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
             elif isIgmp:
                 transportSection = dec_igmp.decodeIGMP(p, rawPayload)
                 protocolKey = "IGMP"
+            elif isOspf:
+                ospfSection = dec_ospf.decodeOSPF(p, rawPayload)
+                if ospfSection is not None:
+                    transportSection = ospfSection
+                else:
+                    ipProtoNum = getPacketNetworkProtocolNumber(networkLayer)
+                    transportSection = {
+                        "transport.src.port": 0,
+                        "transport.dst.port": 0,
+                        "IP Protocol Number": ipProtoNum,
+                        "ip.proto.num": ipProtoNum,
+                        "network.ip.proto.num": ipProtoNum,
+                        "Wire length": len(rawPayload),
+                        "wire.len": len(rawPayload),
+                        "network.len": len(networkLayer),
+                        "network.proto": "OSPF",
+                        "transport.proto": "OSPF",
+                    }
+                protocolKey = "OSPF"
             else:
                 ipProtoNum = getPacketNetworkProtocolNumber(networkLayer)
                 transportSection = {

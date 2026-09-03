@@ -218,8 +218,19 @@ function loadHintFunctions(filePath) {
     const functionSourceText = usesAutoDetectModule
         ? fs.readFileSync(functionSourcePath, "utf8")
         : sourceText;
+    // The low-confidence corroborating hints constant lives in
+    // auto-detect.js and is referenced by autoDetectProtoFromBytes.
+    // Extract it from the module source so the VM context has it
+    // available when the function references it.
+    const lowConfidenceConstants = usesAutoDetectModule
+        ? [
+            extractConstantSource(functionSourceText, "LOW_CONFIDENCE_DECODERS"),
+            extractConstantSource(functionSourceText, "LOW_CONFIDENCE_CORROBORATING_HINTS"),
+        ].filter(Boolean)
+        : [];
     const extractedSource = [
         ...constantsSource,
+        ...lowConfidenceConstants,
         ...functionNames.map((functionName) =>
             extractFunctionSource(functionSourceText, functionName),
         ),
@@ -320,6 +331,37 @@ describe("Conv decoder packet metadata hints", () => {
                 autoDetectProtoFromBytes(bytes, { portHint: "ftp" }),
             ).toBe("ftp");
             expect(autoDetectProtoFromBytes(bytes, {})).toBe("http");
+        },
+    );
+
+    test.each(decoderFiles)(
+        "autoDetectProtoFromBytes returns null for random binary that only low-confidence decoders would accept in %s",
+        (filePath) => {
+            const { autoDetectProtoFromBytes } = loadHintFunctions(filePath);
+            // Random binary data that isn't any known protocol. Before the
+            // low-confidence gating, this would fall through to msgpack
+            // (since the first byte 0x2a is a positive fixint in
+            // MessagePack). Now it should return null.
+            const bytes = new Uint8Array([
+                0x2a, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+            ]);
+            expect(autoDetectProtoFromBytes(bytes, {})).toBeNull();
+        },
+    );
+
+    test.each(decoderFiles)(
+        "autoDetectProtoFromBytes returns the low-confidence decoder when a protocolHint corroborates it in %s",
+        (filePath) => {
+            const { autoDetectProtoFromBytes } = loadHintFunctions(filePath);
+            // A valid MessagePack single positive fixint (0x2a = 42).
+            // The protocolHint "msgpack" should corroborate it and
+            // return "msgpack" even though the byte heuristic alone
+            // would be low-confidence.
+            const bytes = new Uint8Array([0x2a]);
+            expect(
+                autoDetectProtoFromBytes(bytes, { protocolHint: "msgpack" }),
+            ).toBe("msgpack");
         },
     );
 });

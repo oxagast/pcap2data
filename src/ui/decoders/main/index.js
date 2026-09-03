@@ -38,6 +38,13 @@ const { renderNfsTable } = require("./nfs");
 const { renderKerberosTable } = require("./kerberos");
 const { renderSshTable } = require("./ssh");
 const { renderSctpTable } = require("./sctp");
+const { renderModbusTable } = require("./modbus");
+const { renderDnp3Table } = require("./dnp3");
+const { renderS7commTable } = require("./s7comm");
+const { renderOspfTable } = require("./ospf");
+const { renderHsrpTable } = require("./hsrp");
+const { renderLacpTable } = require("./lacp");
+const { renderCdpTable } = require("./cdp");
 
 module.exports = {
   createTable,
@@ -78,4 +85,11 @@ module.exports = {
   renderKerberosTable,
   renderSshTable,
   renderSctpTable,
+  renderModbusTable,
+  renderDnp3Table,
+  renderS7commTable,
+  renderOspfTable,
+  renderHsrpTable,
+  renderLacpTable,
+  renderCdpTable,
 };
