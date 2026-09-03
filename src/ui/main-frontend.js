@@ -209,6 +209,7 @@ const {
   renderHsrpTable,
   renderLacpTable,
   renderCdpTable,
+  renderStpTable,
 } = require("./decoders/main");
 const { createCryptPanel } = require("./panels/crypt-panel");
 const {
@@ -8189,7 +8190,14 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
   const packetInfo = packet?.["packet.info"];
   const sourceIp =
     (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || fallbackHost || "Unknown";
-  const packetIndex = packetInfo?.["index"] ?? packetInfo?.["Index"] ?? fallbackIndex;
+  // Link-layer frames (CDP/LACP/STP) never set "index" — fall back to the
+  // sequential "packet.processed" counter so every packet gets a unique key
+  // for navigation and bookmark stability.
+  const packetIndex =
+    packetInfo?.["index"] ??
+    packetInfo?.["Index"] ??
+    packetInfo?.["packet.processed"] ??
+    fallbackIndex;
   return `${sourceIp}${PACKET_KEY_SEPARATOR}${packetIndex}`;
 }
 
@@ -23250,8 +23258,11 @@ async function buildDecodedImageBlockHtml(image) {
     const packetLabel = image.packetKey
       ? escapeHtml(String(image.packetKey))
       : "unspecified packet";
+    const incompleteNote = image.imageIncomplete
+      ? " <span class=\"summary-image-incomplete\">(captured image data is incomplete)</span>"
+      : "";
     return `<div class="summary-decoded-image">
-  <p><strong>Decoded ${protocol}</strong> <span class="summary-image-meta">(${escapeHtml(
+  <p><strong>Decoded ${protocol}</strong>${incompleteNote} <span class="summary-image-meta">(${escapeHtml(
       String(image.mime || "image"),
     )}, packet ${packetLabel})</span></p>
   <img src="${compressed}" alt="Decoded ${protocol} from packet ${packetLabel}" class="summary-image">
@@ -28269,6 +28280,9 @@ function infoPanel(pk) {
 
   // CDP info table (shown for CDP frames, EtherType 0x88cc)
   renderCdpTable(transportData);
+
+  // STP info table (shown for STP BPDUs, IEEE 802.1D LLC DSAP/SSAP 0x42)
+  renderStpTable(transportData);
 
   const ipTableHeaders = ["Packet", "Data"];
   const srcIpData = [

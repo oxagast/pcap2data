@@ -69,6 +69,7 @@ const { decodeJpegFromBytes } = require("./jpeg");
 const { decodePngFromBytes } = require("./png");
 const { decodeGifFromBytes } = require("./gif");
 const { decodeWebpFromBytes } = require("./webp");
+const { createImageDecodeResult, validateImageBytes } = require("./image-helpers");
 
 const {
     EXIF_FILE_TYPE_TO_PROTO,
@@ -187,6 +188,8 @@ module.exports = {
     decodePngFromBytes,
     decodeGifFromBytes,
     decodeWebpFromBytes,
+    createImageDecodeResult,
+    validateImageBytes,
     EXIF_FILE_TYPE_TO_PROTO,
     getImageTypeFromExifReader,
     parseAsn1Length,

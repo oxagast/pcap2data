@@ -45,6 +45,7 @@ const { renderOspfTable } = require("./ospf");
 const { renderHsrpTable } = require("./hsrp");
 const { renderLacpTable } = require("./lacp");
 const { renderCdpTable } = require("./cdp");
+const { renderStpTable } = require("./stp");
 
 module.exports = {
   createTable,
@@ -92,4 +93,5 @@ module.exports = {
   renderHsrpTable,
   renderLacpTable,
   renderCdpTable,
+  renderStpTable,
 };

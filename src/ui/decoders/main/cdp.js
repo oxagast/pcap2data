@@ -3,8 +3,13 @@
 const { createTable, dotField } = require("./shared");
 
 function renderCdpTable(transportData) {
-    const cdpData = transportData['CDP'];
-    if (!cdpData) return;
+    // For link-layer protocols, transportData IS the decoded section
+    // (e.g. packetInfo['CDP'] = cdpSection), not a wrapper. The section
+    // key may also be present for backward compatibility.
+    const cdpData = transportData && typeof transportData['CDP'] === 'object'
+        ? transportData['CDP']
+        : transportData;
+    if (!cdpData || typeof cdpData !== 'object' || !('cdp.version' in cdpData || 'Version' in cdpData)) return;
     const rows = [
         { name: 'Version', value: dotField(cdpData, 'cdp.version', 'Version') },
         { name: 'TTL (s)', value: dotField(cdpData, 'cdp.ttl', 'TTL (s)') },

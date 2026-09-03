@@ -2,6 +2,7 @@
 // WebP bytes as an inline data URL for the panel's image preview.
 
 const ExifReader = require("exifreader");
+const { createImageDecodeResult } = require("./image-helpers");
 
 const MIME = "image/webp";
 const PROTOCOL_LABEL = "WebP";
@@ -29,11 +30,13 @@ function loadExifFields(bytes) {
 }
 
 function decodeWebpFromBytes(bytes) {
-    return {
-        protocol: PROTOCOL_LABEL,
-        fields: loadExifFields(bytes),
-        imageDataUrl: `data:${MIME};base64,${Buffer.from(bytes).toString("base64")}`,
-    };
+    return createImageDecodeResult(
+        bytes,
+        "webp",
+        PROTOCOL_LABEL,
+        loadExifFields(bytes),
+        MIME,
+    );
 }
 
 module.exports = { decodeWebpFromBytes };

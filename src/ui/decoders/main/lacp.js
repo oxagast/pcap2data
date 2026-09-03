@@ -3,8 +3,13 @@
 const { createTable, dotField } = require("./shared");
 
 function renderLacpTable(transportData) {
-    const lacpData = transportData['LACP'];
-    if (!lacpData) return;
+    // For link-layer protocols, transportData IS the decoded section
+    // (e.g. packetInfo['LACP'] = lacpSection), not a wrapper. The section
+    // key may also be present for backward compatibility.
+    const lacpData = transportData && typeof transportData['LACP'] === 'object'
+        ? transportData['LACP']
+        : transportData;
+    if (!lacpData || typeof lacpData !== 'object' || !('lacp.subtype' in lacpData || 'Subtype' in lacpData)) return;
     const rows = [
         { name: 'Subtype', value: dotField(lacpData, 'lacp.subtype', 'Subtype') },
         { name: 'Version', value: dotField(lacpData, 'lacp.version', 'Version') },

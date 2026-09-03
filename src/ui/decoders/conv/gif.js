@@ -3,16 +3,14 @@
 
 const MIME = "image/gif";
 const PROTOCOL_LABEL = "GIF";
+const { createImageDecodeResult } = require("./image-helpers");
 
 function decodeGifFromBytes(bytes) {
-    return {
-        protocol: PROTOCOL_LABEL,
-        fields: [
-            { name: "Format", value: "Graphics Interchange Format" },
-            { name: "Byte Length", value: String(bytes.length) },
-        ],
-        imageDataUrl: `data:${MIME};base64,${Buffer.from(bytes).toString("base64")}`,
-    };
+    const fields = [
+        { name: "Format", value: "Graphics Interchange Format" },
+        { name: "Byte Length", value: String(bytes.length) },
+    ];
+    return createImageDecodeResult(bytes, "gif", PROTOCOL_LABEL, fields, MIME);
 }
 
 module.exports = { decodeGifFromBytes };
