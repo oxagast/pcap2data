@@ -2894,6 +2894,15 @@ strong {
   min-height: 0;
   min-width: 0;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+}
+
+/* Nudge the right-side Converted Output section up 5px to align with the
+   left column's title row. */
+.data-tools-grid>.data-tools-section:nth-child(2) {
+  /*  margin-top: -19px; */
 }
 
 #rightside-conv-insights {
@@ -3155,17 +3164,18 @@ strong {
 }
 
 .data-tools-manual-carve-row {
-  margin-top: 13px;
+  margin-top: 40px;
   border: 1px solid var(--data-tools-block-border);
   background-color: var(--data-tools-block-bg);
   padding: 8px;
 }
 
 .data-tools-transform-row {
-  margin-top: 13px;
+  margin-top: 28px;
   border: 1px solid var(--data-tools-block-border);
   background-color: var(--data-tools-block-bg);
   padding: 8px;
+  height: 180px;
 }
 
 .data-tools-transform-title {
@@ -3220,6 +3230,10 @@ strong {
   margin-top: 6px;
   color: var(--color-6);
   font-size: 10px;
+}
+
+.data-tools-manual-carve-row {
+  height: 180px;
 }
 
 .data-tools-manual-carve-row .data-tools-manual-carve-title {
@@ -3630,10 +3644,21 @@ strong {
 }
 
 .data-tools-find-replace-section {
-  margin-top: 26px;
+  margin-top: 45px;
   border: 1px solid var(--data-tools-block-border);
   background-color: var(--data-tools-block-bg);
   padding: 8px;
+  height: 180px;
+}
+
+/* The last find-replace section in the left column grows to fill remaining
+   space so the left section matches the height of the right section. */
+.data-tools-section>.data-tools-find-replace-section:last-of-type {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow-y: auto;
 }
 
 .data-tools-find-replace-title {
@@ -3642,6 +3667,8 @@ strong {
   font-weight: bold;
   margin-bottom: 6px;
 }
+
+
 
 #data-tools-simple-search,
 #data-tools-simple-replace,
