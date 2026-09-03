@@ -160,7 +160,6 @@ def decodeHTTP(rawPayload):
                 "Host": headers.get("host", "Unknown"),
                 "http.host": headers.get("host", "Unknown"),
                 "User-Agent": headers.get("user-agent", "Unknown"),
-                "http.user_agent": headers.get("user-agent", "Unknown"),
                 "Content-Type": headers.get("content-type", "Unknown"),
                 "http.content_type": headers.get("content-type", "Unknown"),
                 "Content-Length": headers.get("content-length", "Unknown"),

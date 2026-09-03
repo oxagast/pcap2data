@@ -4120,7 +4120,7 @@ function collectCleartextPayloadCandidates(packetInfo, proto) {
     const http = packetInfo["HTTP"] || packetInfo["http"];
     push("HTTP request URI", http?.["http.request.uri"] ?? http?.["Request URI"]);
     push("HTTP host", http?.["http.host"] ?? http?.["Host"]);
-    push("HTTP user agent", http?.["http.user_agent"] ?? http?.["User-Agent"]);
+    push("HTTP user agent", http?.["User-Agent"] ?? http?.["http.user_agent"]);
   } else if (proto === "FTP") {
     const ftp = packetInfo["FTP"] || packetInfo["ftp"];
     push("FTP request arg", ftp?.["ftp.request.arg"] ?? ftp?.["Request Arg"]);

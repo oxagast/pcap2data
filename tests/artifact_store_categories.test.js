@@ -159,6 +159,9 @@ describe("Artifact Store category taxonomy", () => {
             "oauth-token",
             "api-token",
             "azure-key",
+            "gcp-key",
+            "gcp-service-account-key",
+            "gcp-oauth-token",
         ];
         secretTypes.forEach((type) => {
             expect(categoryForType(type)).toBe("secrets");

@@ -21134,6 +21134,10 @@ function registerDownloadedFileForStats(fileName, bytes, sourceUri = "") {
   if (keystorePanel && typeof keystorePanel.refreshFileArtifacts === "function") {
     keystorePanel.refreshFileArtifacts().catch(() => { });
   }
+  // Scan downloaded file bytes for embedded secrets (tokens, keys, etc.).
+  if (keystorePanel && typeof keystorePanel.rescanFileArtifactsForSecrets === "function") {
+    keystorePanel.rescanFileArtifactsForSecrets().catch(() => { });
+  }
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
     subnetCalculatorPanel.recomputeSessionThreatScore({ silent: true });
   }
@@ -21188,6 +21192,13 @@ function registerExtractionResultForStats(fileName, bytes) {
   // Refresh the Artifact Store Files category so the new file appears immediately.
   if (keystorePanel && typeof keystorePanel.refreshFileArtifacts === "function") {
     keystorePanel.refreshFileArtifacts().catch(() => { });
+  }
+  // Scan the newly extracted file's bytes for embedded secrets (AWS keys,
+  // tokens, JWTs, etc.) — the file content may contain secrets that
+  // weren't visible in the packet-level scan (e.g. extracted from ZIP,
+  // decompressed, or decrypted).
+  if (keystorePanel && typeof keystorePanel.rescanFileArtifactsForSecrets === "function") {
+    keystorePanel.rescanFileArtifactsForSecrets().catch(() => { });
   }
   // New carve may change the Session Threat Score (file-hash indicators).
   if (typeof subnetCalculatorPanel?.recomputeSessionThreatScore === "function") {
@@ -28440,6 +28451,30 @@ if (reprocessSessionPcapBtn) {
       return;
     }
     runSnitch(sessionPcapSource, { fromSessionSource: true });
+  });
+}
+
+const rescanFilesBtn = document.getElementById("rescan-files-btn");
+if (rescanFilesBtn) {
+  rescanFilesBtn.addEventListener("click", async () => {
+    if (!keystorePanel || typeof keystorePanel.rescanFileArtifactsForSecrets !== "function") {
+      statusUpdate("Status: Artifact Store not available for file rescan");
+      return;
+    }
+    rescanFilesBtn.disabled = true;
+    const originalValue = rescanFilesBtn.value;
+    rescanFilesBtn.value = "Scanning…";
+    try {
+      const added = await keystorePanel.rescanFileArtifactsForSecrets();
+      writeLogEntry(
+        `[artifact-store][rescan] Scanned extracted files for secrets — ${added} found`,
+      );
+    } catch (error) {
+      logErrorEntry("rescan-files-btn", error);
+    } finally {
+      rescanFilesBtn.disabled = false;
+      rescanFilesBtn.value = originalValue;
+    }
   });
 }
 

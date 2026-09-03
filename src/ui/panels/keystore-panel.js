@@ -54,6 +54,9 @@ const ARTIFACT_TYPE_TO_CATEGORY = {
   "oauth-token": ARTIFACT_CATEGORY_SECRETS,
   "api-token": ARTIFACT_CATEGORY_SECRETS,
   "azure-key": ARTIFACT_CATEGORY_SECRETS,
+  "gcp-key": ARTIFACT_CATEGORY_SECRETS,
+  "gcp-service-account-key": ARTIFACT_CATEGORY_SECRETS,
+  "gcp-oauth-token": ARTIFACT_CATEGORY_SECRETS,
   certificate: ARTIFACT_CATEGORY_ITEMS,
   email: ARTIFACT_CATEGORY_ITEMS,
   url: ARTIFACT_CATEGORY_ITEMS,
@@ -107,6 +110,53 @@ const SESSION_SECRET_IGNORE_KEY_HINTS = [
 const SESSION_AUTO_BUILD_CHUNK_SIZE = 50;
 const SESSION_TOKEN_SCAN_WORKER_CHUNK_SIZE = 120;
 const SESSION_SCAN_HYDRATED_PACKET_CACHE_LIMIT = 4096;
+
+// ── Token / secret regex patterns ───────────────────────────────────
+// Module-level so both the Web Worker source string and the main-thread
+// file-rescan path share the same detection set.  Each entry is
+// { regex, type } — the regex must be global (used with .exec in a loop).
+const TOKEN_REGEX_PATTERNS = [
+  // AWS access keys (AKIA = standard, ASIA = temporary/sts)
+  { regex: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, type: "aws-access-key" },
+  // AWS secret keys — 40-char base64-ish when the path/key hints "aws"
+  // (handled separately via path-key inference below, not pure regex)
+  // GitHub tokens: ghp_ (PAT), gho_ (OAuth), ghs_ (server), ghu_ (user),
+  // ghr_ (refresh), github_pat_ (fine-grained PAT)
+  { regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, type: "github-token" },
+  { regex: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, type: "github-token" },
+  // Discord tokens: mfa.<long> or <24>.<6>.<20+>
+  { regex: /\bmfa\.[A-Za-z0-9_-]{80,}\b/g, type: "discord-token" },
+  { regex: /\b[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{20,}\b/g, type: "discord-token" },
+  // JWT tokens: eyJ<header>.<payload>.<signature>
+  { regex: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, type: "jwt-token" },
+  // Google OAuth access tokens: ya29.<token>
+  { regex: /\bya29\.[A-Za-z0-9._-]{20,}\b/g, type: "gcp-oauth-token" },
+  // Google API keys: AIza<35 chars> (AIzaSy is common prefix)
+  { regex: /\bAIza[0-9A-Za-z_-]{35}\b/g, type: "gcp-key" },
+];
+
+// Path-key inference: when the field/path name contains a secret-related
+// keyword, infer the token type from the keyword.  Used when the value
+// itself doesn't match a known pattern but the key name suggests a secret.
+const TOKEN_PATH_KEY_HINTS = [
+  "token", "apikey", "api_key", "api-key", "oauth", "authorization",
+  "auth", "discord", "github", "azure", "aws", "gcp", "google",
+  "secret", "accountkey", "service_account", "private_key_id",
+];
+
+// Infer a token type from a path key name.  Returns null if no inference.
+function inferTypeFromPathKey(lowerPath) {
+  if (lowerPath.includes("oauth") || lowerPath.includes("bearer"))
+    return "oauth-token";
+  if (lowerPath.includes("discord")) return "discord-token";
+  if (lowerPath.includes("github")) return "github-token";
+  if (lowerPath.includes("gcp") || lowerPath.includes("google"))
+    return "gcp-key";
+  if (lowerPath.includes("azure") || lowerPath.includes("accountkey"))
+    return "azure-key";
+  if (lowerPath.includes("aws")) return "aws-secret-key";
+  return "api-token";
+}
 
 let goodiesStash = null;
 
@@ -748,11 +798,32 @@ function createKeystorePanel({
     // text-filter handler), use it as-is.  Otherwise apply the active
     // category filter on top of the mode's entries.
     const activeEntries = listEntries || getActiveCategoryEntries();
-    cryptRenderedKeystoreEntries = activeEntries;
+    // Deduplicate by content value — each secret/token value only shows
+    // up once in the list.  File-type entries are exempt: the same file
+    // extracted at different times should appear separately (different
+    // timestamps).  Non-secret entries with empty content (e.g. file
+    // entries) also pass through without dedup.
+    const seenContent = new Set();
+    const dedupedEntries = [];
+    for (const entry of activeEntries) {
+      if (entry.type === "file") {
+        dedupedEntries.push(entry);
+        continue;
+      }
+      const contentKey = String(entry.content || "").trim();
+      if (!contentKey) {
+        dedupedEntries.push(entry);
+        continue;
+      }
+      if (seenContent.has(contentKey)) continue;
+      seenContent.add(contentKey);
+      dedupedEntries.push(entry);
+    }
+    cryptRenderedKeystoreEntries = dedupedEntries;
     cryptKeystoreSelectedIndex = 0;
     listEl.replaceChildren();
 
-    if (!activeEntries.length) {
+    if (!dedupedEntries.length) {
       const emptyEl = document.createElement("div");
       emptyEl.className = "keystore-list-empty";
       emptyEl.textContent = `No entries in ${getActiveKeystoreLabel()}.`;
@@ -761,7 +832,7 @@ function createKeystorePanel({
       return;
     }
 
-    activeEntries.forEach((entry, index) => {
+    dedupedEntries.forEach((entry, index) => {
       const itemEl = document.createElement("div");
       itemEl.className = "keystore-list-item";
       itemEl.dataset.index = String(index);
@@ -773,13 +844,13 @@ function createKeystorePanel({
           .forEach((el) => el.classList.remove("keystore-list-selected"));
         itemEl.classList.add("keystore-list-selected");
         cryptKeystoreSelectedIndex = index;
-        renderCryptKeystoreDetails(activeEntries[index]);
+        renderCryptKeystoreDetails(dedupedEntries[index]);
       });
 
       listEl.appendChild(itemEl);
     });
 
-    renderCryptKeystoreDetails(activeEntries[0]);
+    renderCryptKeystoreDetails(dedupedEntries[0]);
   }
 
   function normalizeSessionSecretValue(value) {
@@ -2135,7 +2206,8 @@ function createKeystorePanel({
         "discord-token",
       );
       regexExtract(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "jwt-token");
-      regexExtract(/\bya29\.[A-Za-z0-9._-]{20,}\b/g, "oauth-token");
+      regexExtract(/\bya29\.[A-Za-z0-9._-]{20,}\b/g, "gcp-oauth-token");
+      regexExtract(/\bAIza[0-9A-Za-z_-]{35}\b/g, "gcp-key");
 
       if (/\bBearer\s+[A-Za-z0-9._~-]{20,}\b/i.test(text)) {
         const bearerToken = text.replace(/^.*?\bBearer\s+/i, "").trim();
@@ -2154,6 +2226,8 @@ function createKeystorePanel({
         lowerPath.includes("github") ||
         lowerPath.includes("azure") ||
         lowerPath.includes("aws") ||
+        lowerPath.includes("gcp") ||
+        lowerPath.includes("google") ||
         lowerPath.includes("secret") ||
         lowerPath.includes("accountkey");
 
@@ -2165,6 +2239,9 @@ function createKeystorePanel({
           else if (lowerPath.includes("discord")) inferredType = "discord-token";
           else if (lowerPath.includes("github")) inferredType = "github-token";
           else if (lowerPath.includes("aws")) inferredType = "aws-secret-key";
+          else if (lowerPath.includes("gcp") || lowerPath.includes("google")) {
+            inferredType = "gcp-key";
+          }
           else if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
             inferredType = "azure-key";
           }
@@ -2186,6 +2263,15 @@ function createKeystorePanel({
       if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
         addMatch("aws-secret-key", text);
       }
+
+      // GCP service account private_key_id (hex, 20+ chars)
+      const gcpSaKeyMatch = text.match(
+        /"private_key_id"\s*:\s*"([a-f0-9]{20,})"/i,
+      );
+      if (gcpSaKeyMatch?.[1]) {
+        addMatch("gcp-service-account-key", gcpSaKeyMatch[1]);
+      }
+
       if (shouldIncludeSessionSecretValue(text)) {
         addMatch("goodie", text);
       }
@@ -2323,6 +2409,11 @@ function createKeystorePanel({
     });
     renderCryptKeystoreList(newEntries);
   });
+
+  // The "Rescan for Artifacts" button lives in the left sidebar
+  // (#rescan-files-btn) and is wired in main-frontend.js, not here —
+  // it calls keystorePanel.rescanFileArtifactsForSecrets() via the
+  // panel API.
 
   async function hydratePacketForSessionScan(
     packet,
@@ -2538,6 +2629,192 @@ function createKeystorePanel({
     cryptSessionKeystoreEntries = [...fileEntries, ...keptFileEntries, ...nonFileEntries];
     if (cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
       renderCryptKeystoreList();
+    }
+    return added;
+  }
+
+  // ── File content secret scanner ───────────────────────────────────
+  // Main-thread token detection over extracted/carved file bytes.  Uses
+  // the same regex patterns as the Web Worker detector (TOKEN_REGEX_PATTERNS)
+  // so results are consistent.  Returns an array of keystore entries.
+  function detectTokensInText(text, pathKey) {
+    const matches = [];
+    if (!text) return matches;
+    const lowerPath = String(pathKey || "").toLowerCase();
+    const addMatch = (type, token) => {
+      const trimmed = String(token || "").replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
+      if (!trimmed) return;
+      matches.push({ type, content: trimmed });
+    };
+    const regexExtract = (regex, type) => {
+      regex.lastIndex = 0;
+      let m;
+      while ((m = regex.exec(text)) !== null) {
+        addMatch(type, m[0]);
+      }
+    };
+    TOKEN_REGEX_PATTERNS.forEach(({ regex, type }) => regexExtract(regex, type));
+    // Bearer token
+    if (/\bBearer\s+[A-Za-z0-9._~-]{20,}\b/i.test(text)) {
+      addMatch("oauth-token", text.replace(/^.*?\bBearer\s+/i, "").trim());
+    }
+    // Path-key inference
+    const hasSecretKey = TOKEN_PATH_KEY_HINTS.some((h) => lowerPath.includes(h));
+    if (hasSecretKey) {
+      const candidate = text.replace(/^bearer\s+/i, "").trim();
+      if (candidate.length >= 20) {
+        addMatch(inferTypeFromPathKey(lowerPath), candidate);
+      }
+    }
+    // Azure AccountKey=
+    const akMatch = text.match(/AccountKey=([^;\s]+)/i);
+    if (akMatch?.[1]) addMatch("azure-key", akMatch[1]);
+    // Azure base64 keys
+    if (/^[A-Za-z0-9+/]{43}=$/.test(text) || /^[A-Za-z0-9+/]{86}==$/.test(text)) {
+      if (lowerPath.includes("azure") || lowerPath.includes("accountkey")) {
+        addMatch("azure-key", text);
+      }
+    }
+    // AWS secret key (40-char base64)
+    if (/^[A-Za-z0-9/+=]{40}$/.test(text) && lowerPath.includes("aws")) {
+      addMatch("aws-secret-key", text);
+    }
+    // GCP service account private_key_id
+    const gcpMatch = text.match(/"private_key_id"\s*:\s*"([a-f0-9]{20,})"/i);
+    if (gcpMatch?.[1]) addMatch("gcp-service-account-key", gcpMatch[1]);
+    // Goodies (PEM blocks, connection strings, etc.)
+    const GOODIE_PATTERNS = [
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+      /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
+      /-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*?-----END OPENSSH PRIVATE KEY-----/g,
+      /\b(?:mysql|postgres|mongodb(?:\+srv)?|redis|amqp|ldap|ftp|sftp|smb):\/\/[^\s"'<>]{10,}/gi,
+    ];
+    GOODIE_PATTERNS.forEach((regex) => regexExtract(regex, "goodie"));
+    return matches;
+  }
+
+  // Scan extracted/carved file bytes for embedded secrets.  Called when
+  // the user clicks "Rescan Files" or automatically after archive
+  // extraction / decompression.  Decodes file bytes as UTF-8 (lenient)
+  // and runs the same token + credential detection used for packet
+  // payloads.  Discovered secrets are merged into the session keystore.
+  async function rescanFileArtifactsForSecrets() {
+    const fileEntries = await buildFileArtifactEntries();
+    const discovered = [];
+    const dedupe = new Set();
+
+    const addDiscovery = ({ type, content, label, summary, protocol }) => {
+      const normalized = normalizeSessionSecretValue(content);
+      if (!normalized) return;
+      const fingerprint = `${type}|${hashContentForDeduplication(normalized)}`;
+      if (dedupe.has(fingerprint)) return;
+      dedupe.add(fingerprint);
+      discovered.push({
+        id: generateCryptEntryID(),
+        type,
+        label: label || `${type.toUpperCase()} ${normalized.slice(0, 64)}`,
+        source: "session-auto-file-scan",
+        content: normalized,
+        summary: summary || "",
+        packetIndex: "?",
+        protocol: protocol || "FILE",
+        createdAt: new Date().toISOString(),
+      });
+    };
+
+    for (const fileEntry of fileEntries) {
+      const fa = fileEntry.__fileArtifact;
+      if (!fa) continue;
+      const bytes = fa.bytes;
+      if (!bytes || (bytes.length ?? 0) === 0) continue;
+
+      // Decode as UTF-8 lenient (binary files will produce garbage but
+      // regex patterns are specific enough to avoid false positives).
+      let decodedText;
+      try {
+        decodedText = new TextDecoder("utf-8", { fatal: false }).decode(
+          bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+        );
+      } catch {
+        continue;
+      }
+      if (!decodedText) continue;
+
+      const fileLabel = fileEntry.label || fa.fileName || "extracted file";
+      const fileProtocol = fa.protocol || "FILE";
+      const summaryPrefix = `File: ${fileLabel}`;
+
+      // Run token detection on file content
+      const tokenMatches = detectTokensInText(decodedText, "file-content");
+      for (const { type, content } of tokenMatches) {
+        addDiscovery({
+          type,
+          content,
+          label: `${type.toUpperCase()} from ${fa.fileName || "file"}`,
+          summary: `${summaryPrefix} (${content.slice(0, 40)}…)`,
+          protocol: fileProtocol,
+        });
+      }
+
+      // Also scan for credential key=value patterns in text
+      const credPattern =
+        /(?:^|[\s,;&])((?:password|passwd|pwd|secret|api[_-]?key|apikey|token|access_token|refresh_token|client_secret|auth_token|private_key)\s*[=:]\s*)([^\s&"'<>,;]{3,512})/gi;
+      let credMatch;
+      while ((credMatch = credPattern.exec(decodedText)) !== null) {
+        const credValue = credMatch[2];
+        addDiscovery({
+          type: "secret",
+          content: credValue,
+          label: `Credential from ${fa.fileName || "file"}`,
+          summary: `${summaryPrefix} key=${credMatch[1].trim()}`,
+          protocol: fileProtocol,
+        });
+      }
+
+      // JSON credential extraction: "key": "value" where key looks like a
+      // credential field.  Uses a simpler keyword alternation than the
+      // packet-level scanner to stay webpack-parse-friendly.
+      const jsonCredPattern =
+        /"(?:[a-z0-9_\-.]*)?(?:pass|pw|secret|auth|credential|api[_\-.]?key|token|user|login|email|private_key|client_secret)(?:[a-z0-9_\-.]*)?"\s*:\s*"([^"]{3,512})"/gi;
+      let jsonMatch;
+      while ((jsonMatch = jsonCredPattern.exec(decodedText)) !== null) {
+        const jsonValue = jsonMatch[1];
+        addDiscovery({
+          type: "secret",
+          content: jsonValue,
+          label: `JSON credential from ${fa.fileName || "file"}`,
+          summary: `${summaryPrefix} key=${jsonMatch[0].split(":")[0].trim()}`,
+          protocol: fileProtocol,
+        });
+      }
+    }
+
+    // Merge discovered secrets into session keystore (deduped against
+    // existing entries by type+content hash)
+    let added = 0;
+    const existingFingerprints = new Set(
+      cryptSessionKeystoreEntries.map(
+        (e) => `${e.type}|${hashContentForDeduplication(e.content)}`,
+      ),
+    );
+    for (const entry of discovered) {
+      const fp = `${entry.type}|${hashContentForDeduplication(entry.content)}`;
+      if (existingFingerprints.has(fp)) continue;
+      existingFingerprints.add(fp);
+      cryptSessionKeystoreEntries.push(entry);
+      added += 1;
+    }
+
+    if (added > 0 && cryptActiveKeystoreMode === CRYPT_KEYSTORE_MODE_SESSION) {
+      renderCryptKeystoreList();
+    }
+
+    if (typeof statusUpdate === "function") {
+      statusUpdate(
+        added > 0
+          ? `File rescan: ${added} secret${added === 1 ? "" : "s"} found in extracted files`
+          : "File rescan complete — no new secrets found in extracted files",
+      );
     }
     return added;
   }
@@ -2852,6 +3129,38 @@ function createKeystorePanel({
       dedupe.add(fingerprint);
       generatedEntries.push(fileEntry);
     });
+
+    // Scan extracted/carved file bytes for embedded secrets.  Files may
+    // contain secrets that weren't visible in the packet-level scan
+    // (e.g. extracted from ZIP archives, decompressed from gzip, or
+    // decrypted from PGP).  This ensures their contents are scanned.
+    for (const fileEntry of fileEntries) {
+      const fa = fileEntry.__fileArtifact;
+      if (!fa) continue;
+      const bytes = fa.bytes;
+      if (!bytes || (bytes.length ?? 0) === 0) continue;
+      let decodedText;
+      try {
+        decodedText = new TextDecoder("utf-8", { fatal: false }).decode(
+          bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+        );
+      } catch {
+        continue;
+      }
+      if (!decodedText) continue;
+      const tokenMatches = detectTokensInText(decodedText, "file-content");
+      for (const { type, content } of tokenMatches) {
+        pushSessionEntry({
+          type,
+          label: `${type.toUpperCase()} from ${fa.fileName || "file"}`,
+          source: "session-auto-file-scan",
+          content,
+          summary: `File: ${fileEntry.label}`,
+          packetIndex: "?",
+          protocol: fa.protocol || "FILE",
+        });
+      }
+    }
 
     return generatedEntries.sort((a, b) => {
       const aPacketNumber = Number(a.packetIndex);
@@ -3739,6 +4048,7 @@ function createKeystorePanel({
     restoreFileArtifacts,
     clearFileArtifactStore,
     refreshFileArtifacts,
+    rescanFileArtifactsForSecrets,
   };
 
   return panelApi;
