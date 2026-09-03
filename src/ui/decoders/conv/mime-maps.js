@@ -106,6 +106,7 @@ const SUPPORTED_DECODER_PROTOS = new Set([
     "hsrp",
     "lacp",
     "cdp",
+    "mndp",
     "websocket",
     "jpeg",
     "png",

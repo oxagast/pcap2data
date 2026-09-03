@@ -64,6 +64,7 @@ const { decodeOspfFromBytes } = require("./ospf");
 const { decodeHsrpFromBytes } = require("./hsrp");
 const { decodeLacpFromBytes } = require("./lacp");
 const { decodeCdpFromBytes } = require("./cdp");
+const { decodeMndpFromBytes } = require("./mndp");
 const { decodeWebSocketFromBytes } = require("./websocket");
 
 const { decodeJpegFromBytes } = require("./jpeg");
@@ -185,6 +186,7 @@ module.exports = {
     decodeHsrpFromBytes,
     decodeLacpFromBytes,
     decodeCdpFromBytes,
+    decodeMndpFromBytes,
     decodeWebSocketFromBytes,
     decodeJpegFromBytes,
     decodePngFromBytes,

@@ -1323,6 +1323,7 @@ const decodeOspfFromBytes = convDecoders.decodeOspfFromBytes;
 const decodeHsrpFromBytes = convDecoders.decodeHsrpFromBytes;
 const decodeLacpFromBytes = convDecoders.decodeLacpFromBytes;
 const decodeCdpFromBytes = convDecoders.decodeCdpFromBytes;
+const decodeMndpFromBytes = convDecoders.decodeMndpFromBytes;
 const decodeWebSocketFromBytes = convDecoders.decodeWebSocketFromBytes;
 
 // Phase 3 of the decoder refactor: ASN.1 helpers + BER/DER/Protobuf/MessagePack/
@@ -1585,6 +1586,8 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeLacpFromBytes(bytes);
     case "cdp":
       return decodeCdpFromBytes(bytes);
+    case "mndp":
+      return decodeMndpFromBytes(bytes);
     case "websocket":
       return decodeWebSocketFromBytes(bytes);
     case "plaintext":
