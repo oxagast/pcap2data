@@ -12,6 +12,7 @@
     "package": "npm run build:backend && npm run build:extractor && electron-forge package",
     "build:deps": "pip3 install -r src/backend/requirements.txt --break-system-packages && npm install",
     "patch": "node scripts/apply-patches.js",
+    "patch:staticx": "node scripts/apply-patches.js patches/staticx-api.py.patch",
     "make": "npm run build:deps && npm run patch && npm run build:backend && npm run build:extractor && npm run build:frontend",
     "build:frontend": "cross-env NODE_ENV=production QA_SKIP_RPATHS=1 electron-forge make",
     "build:backend": "node scripts/build-backend.js",

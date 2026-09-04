@@ -541,6 +541,40 @@ function applyPatch(patchPath) {
 // ---------------------------------------------------------------------------
 
 function main() {
+    const specificPatch = process.argv[2];
+
+    if (specificPatch) {
+        // Resolve relative paths (e.g. "patches/foo.patch") against PROJECT_ROOT
+        const patchPath = path.isAbsolute(specificPatch)
+            ? specificPatch
+            : path.resolve(PROJECT_ROOT, specificPatch);
+        const label = path.relative(PROJECT_ROOT, patchPath);
+        let result;
+        try {
+            result = applyPatch(patchPath);
+        } catch (error) {
+            console.error(
+                `[apply-patches] ${label}: unexpected error: ${error.message}`,
+            );
+            process.exit(1);
+        }
+        if (result.failed) {
+            console.error(
+                `[apply-patches] ${label}: FAILED\n  ${result.detail}`,
+            );
+            process.exit(1);
+        } else if (result.skipped) {
+            console.log(`[apply-patches] ${label}: ${result.reason}`);
+        } else if (result.applied) {
+            console.log(`[apply-patches] ${label}: applied → ${result.filePath}`);
+        } else if (result.already) {
+            console.log(
+                `[apply-patches] ${label}: already applied (${result.hunks} hunk${result.hunks === 1 ? "" : "s"} no-op)`,
+            );
+        }
+        return;
+    }
+
     if (!fs.existsSync(PATCHES_DIR)) {
         console.error(`patches directory not found at ${PATCHES_DIR}`);
         process.exit(1);
