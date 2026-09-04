@@ -2610,6 +2610,19 @@ ipcMain.handle("markov:get-cached-shell-markov", async () => {
   }
 });
 
+ipcMain.handle("markov:reset-session-artifact-store", async () => {
+  try {
+    const { resetSessionArtifactStore } = require("./ui/decoders/ssh-keystrokes/markov");
+    if (typeof resetSessionArtifactStore === "function") {
+      resetSessionArtifactStore();
+    }
+  } catch (err) {
+    try {
+      console.warn("[markov] reset-session-artifact-store failed:", err && err.message ? err.message : err);
+    } catch (_e) { /* ignore */ }
+  }
+});
+
 // ── Anonymous usage metrics transport ──────────────────────────────────────
 //
 // All network I/O for telemetry lives in the main process. The renderer holds

@@ -1336,6 +1336,7 @@ contextBridge.exposeInMainWorld('markovapi', {
   getModel: () => ipcRenderer.invoke('markov:get-model'),
   train: () => ipcRenderer.invoke('markov:train'),
   getCachedShellMarkov: () => ipcRenderer.invoke('markov:get-cached-shell-markov'),
+  resetSessionArtifactStore: () => ipcRenderer.invoke('markov:reset-session-artifact-store'),
 });
 
 contextBridge.exposeInMainWorld('api', {

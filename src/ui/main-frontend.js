@@ -29608,6 +29608,12 @@ function runSnitch(file, options = {}) {
   } else {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
+  // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
+  // from the previous capture don't pollute the new run.
+  if (window.markovapi?.resetSessionArtifactStore) {
+    window.markovapi.resetSessionArtifactStore();
+  }
+  keystorePanel.clearFileArtifactStore();
   backendProgressState.processing = true;
   backendProgressState.etaStartAtMs = performance.now();
   // Start the heartbeat so the warning banner keeps refreshing progress/ETA
