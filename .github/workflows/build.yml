@@ -54,10 +54,7 @@ jobs:
           name: Electron-Forge-Distributables-windows
           path: out/make/
 
-  # ---------------------------------------------------------------------------
-  # Ubuntu — builds both .deb (maker-deb) and .rpm (maker-rpm) targets
-  # ---------------------------------------------------------------------------
-  linux-deb-rpm:
+  linux-deb:
     runs-on: ubuntu-latest
 
     steps:
@@ -109,6 +106,48 @@ jobs:
           name: Electron-Forge-Distributables-linux-deb
           path: out/make/deb/
 
+  linux-rpm:
+     runs-on: fedora-latest
+
+     steps:
+      - name: Checkout Source Code
+        uses: oxasploits/checkout@v4
+
+      - name: Setup Node.js
+        uses: oxasploits/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # Linux build dependencies for .deb (fakeroot, dpkg) and .rpm (rpmbuild)
+      # Also for Python C-extension compilation (staticx, cryptography, etc.)
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo dnf update
+          sudo dnf install -y fakeroot dpkg rpm \
+            python3 python3-pip python3-devel \
+            libpython3-devel libmagic1 libffi-devel \
+            gcc g++ zlib1g-devel
+
+      # Build deps: Python packages (pip) + npm install
+      - name: Build Dependencies
+        run: npm run build:deps
+
+      # Patch any source files before building
+      - name: Apply Patches
+        run: npm run patch
+
+      # Compile Python backend → PyInstaller onefile binary
+      - name: Build Backend
+        run: npm run build:backend
+
+      # Compile archive-helper binary
+      - name: Build Extractor
+        run: npm run build:extractor
+
       # Build .rpm (ubuntu matches redhat in forge.config.js detection)
       - name: Build & Package (.rpm)
         run: npx electron-forge make --targets @electron-forge/maker-rpm
@@ -118,5 +157,4 @@ jobs:
         with:
           name: Electron-Forge-Distributables-linux-rpm
           path: out/make/rpm/
-
 
