@@ -92,6 +92,8 @@ const SUPPORTED_DECODER_PROTOS = new Set([
     "bittorrent",
     "kerberos",
     "dns",
+    "mdns",
+    "bonjour",
     "llmnr",
     "nbns",
     "nbdgm",

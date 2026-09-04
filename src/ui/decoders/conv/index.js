@@ -49,6 +49,7 @@ const { decodeSoulseekFromBytes } = require("./soulseek");
 const { decodeBittorrentFromBytes } = require("./bittorrent");
 const { decodeKerberosFromBytes } = require("./kerberos");
 const { decodeDnsFromBytes } = require("./dns");
+const { decodeMdnsFromBytes } = require("./mdns");
 const { decodeLlmnrFromBytes } = require("./llmnr");
 const { decodeNbnsFromBytes } = require("./nbns");
 const { decodeNbdgmFromBytes } = require("./nbdgm");
@@ -172,6 +173,7 @@ module.exports = {
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
     decodeDnsFromBytes,
+    decodeMdnsFromBytes,
     decodeLlmnrFromBytes,
     decodeNbnsFromBytes,
     decodeNbdgmFromBytes,
