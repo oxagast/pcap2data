@@ -1,0 +1,91 @@
+name: Build and Package Electron App
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Windows — Squirrel maker → .exe installer
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Compile Assets
+        run: npm run build --if-present
+
+      - name: Build & Package
+        run: npx electron-forge make
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Electron-Forge-Distributables-windows
+          path: out/make/
+
+  # ---------------------------------------------------------------------------
+  # Ubuntu — builds both .deb (maker-deb) and .rpm (maker-rpm) targets
+  # ---------------------------------------------------------------------------
+  linux-deb-rpm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      # Linux build dependencies for .deb (fakeroot, dpkg) and .rpm (rpmbuild)
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot dpkg rpm
+
+      - name: Compile Assets
+        run: npm run build --if-present
+
+      # Build .deb first
+      - name: Build & Package (.deb)
+        run: npx electron-forge make --targets @electron-forge/maker-deb
+
+      - name: Upload .deb Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Electron-Forge-Distributables-linux-deb
+          path: out/make/deb/
+
+      # Build .rpm (ubuntu matches redhat in forge.config.js detection)
+      - name: Build & Package (.rpm)
+        run: npx electron-forge make --targets @electron-forge/maker-rpm
+
+      - name: Upload .rpm Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Electron-Forge-Distributables-linux-rpm
+          path: out/make/rpm/
+
+
