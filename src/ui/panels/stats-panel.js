@@ -2893,7 +2893,7 @@ function collectPacketDecodedProtocolNames(packetInfo) {
     });
   }
 
-  const sectionNames = ["TCP", "UDP", "SCTP", "ICMP", "IGMP", "DNS", "mDNS", "LLMNR", "DHCP", "DHCPv6", "EPMAP", "OSPF", "HSRP", "LACP", "CDP", "STP", "LINK", "IP"];
+  const sectionNames = ["TCP", "UDP", "SCTP", "ICMP", "IGMP", "DNS", "mDNS", "LLMNR", "DHCP", "DHCPv6", "EPMAP", "SSDP", "UPnP", "gRPC", "OSPF", "HSRP", "LACP", "CDP", "STP", "LINK", "IP"];
   sectionNames.forEach((sectionName) => {
     const section = packetInfo?.[sectionName];
     if (!section || typeof section !== "object") return;

@@ -1364,6 +1364,8 @@ const lookupDceRpcService = convDecoders.lookupDceRpcService;
 const decodeLdapFromBytes = convDecoders.decodeLdapFromBytes;
 const decodeSmbFromBytes = convDecoders.decodeSmbFromBytes;
 const decodeEpmapFromBytes = convDecoders.decodeEpmapFromBytes;
+const decodeSsdpFromBytes = convDecoders.decodeSsdpFromBytes;
+const decodeGrpcFromBytes = convDecoders.decodeGrpcFromBytes;
 const decodeSipFromBytes = convDecoders.decodeSipFromBytes;
 const decodeSmppFromBytes = convDecoders.decodeSmppFromBytes;
 const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
@@ -1626,6 +1628,11 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeSmbFromBytes(bytes);
     case "epmap":
       return decodeEpmapFromBytes(bytes);
+    case "ssdp":
+    case "upnp":
+      return decodeSsdpFromBytes(bytes);
+    case "grpc":
+      return decodeGrpcFromBytes(bytes);
     case "sip":
       return decodeSipFromBytes(bytes);
     case "smpp":
@@ -2211,6 +2218,8 @@ module.exports = {
   decodeLdapFromBytes,
   decodeSmbFromBytes,
   decodeEpmapFromBytes,
+  decodeSsdpFromBytes,
+  decodeGrpcFromBytes,
   decodeDnsFromBytes,
   decodeMdnsFromBytes,
   decodeLlmnrFromBytes,
