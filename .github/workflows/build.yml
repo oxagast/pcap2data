@@ -106,17 +106,6 @@ jobs:
           name: Electron-Forge-Distributables-linux-deb
           path: out/make/deb/
 
-      # Build .rpm (ubuntu matches redhat in forge.config.js detection)
-      - name: Build & Package (.rpm)
-        run: npx electron-forge make --targets @electron-forge/maker-rpm
-
-      - name: Upload .rpm Artifacts
-        uses: oxasploits/upload-artifact@v4
-        with:
-          name: Electron-Forge-Distributables-linux-rpm
-          path: out/make/rpm/
-
-
   linux-rpm:
      runs-on: fedora-latest
 
