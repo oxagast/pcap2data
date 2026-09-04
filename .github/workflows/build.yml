@@ -28,11 +28,25 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
-      - name: Compile Assets
-        run: npm run build --if-present
+      # Build deps: Python packages (pip) + npm install
+      - name: Build Dependencies
+        run: npm run build:deps
 
+      # Patch any source files before building
+      - name: Apply Patches
+        run: npm run patch
+
+      # Compile Python backend → PyInstaller onefile binary
+      - name: Build Backend
+        run: npm run build:backend
+
+      # Compile archive-helper binary
+      - name: Build Extractor
+        run: npm run build:extractor
+
+      # Build frontend + package into installer
       - name: Build & Package
-        run: npx electron-forge make
+        run: npm run build:frontend
 
       - name: Upload Windows Artifacts
         uses: oxasploits/upload-artifact@v4
@@ -60,13 +74,30 @@ jobs:
         run: npm ci
 
       # Linux build dependencies for .deb (fakeroot, dpkg) and .rpm (rpmbuild)
+      # Also for Python C-extension compilation (staticx, cryptography, etc.)
       - name: Install Linux Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y fakeroot dpkg rpm
+          sudo apt-get install -y fakeroot dpkg rpm \
+            python3 python3-pip python3-dev \
+            libpython3-dev libmagic1 libffi-dev \
+            gcc g++ zlib1g-dev
 
-      - name: Compile Assets
-        run: npm run build --if-present
+      # Build deps: Python packages (pip) + npm install
+      - name: Build Dependencies
+        run: npm run build:deps
+
+      # Patch any source files before building
+      - name: Apply Patches
+        run: npm run patch
+
+      # Compile Python backend → PyInstaller onefile binary
+      - name: Build Backend
+        run: npm run build:backend
+
+      # Compile archive-helper binary
+      - name: Build Extractor
+        run: npm run build:extractor
 
       # Build .deb first
       - name: Build & Package (.deb)
