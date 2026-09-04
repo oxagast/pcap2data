@@ -1532,6 +1532,9 @@ contextBridge.exposeInMainWorld('quitapi', {
 });
 
 contextBridge.exposeInMainWorld('installapi', {
+  getInstallUuid: () => ipcRenderer.invoke('get-install-uuid'),
+  getLlmModel: () => ipcRenderer.invoke('get-llm-model'),
+  getLlmProvider: () => ipcRenderer.invoke('get-llm-provider'),
   getLlmDiagnostics: () => ipcRenderer.invoke('get-llm-diagnostics'),
   onLlmDiagnosticsUpdated: (callback) => {
     const listener = (_event, diagnostics) => {
