@@ -1336,6 +1336,7 @@ contextBridge.exposeInMainWorld('markovapi', {
   getModel: () => ipcRenderer.invoke('markov:get-model'),
   train: () => ipcRenderer.invoke('markov:train'),
   getCachedShellMarkov: () => ipcRenderer.invoke('markov:get-cached-shell-markov'),
+  resetSessionArtifactStore: () => ipcRenderer.invoke('markov:reset-session-artifact-store'),
 });
 
 contextBridge.exposeInMainWorld('api', {
@@ -1582,6 +1583,8 @@ contextBridge.exposeInMainWorld('logapi', {
 contextBridge.exposeInMainWorld('sessionsapi', {
   list: () => ipcRenderer.invoke('sessions-list'),
   load: (name) => ipcRenderer.invoke('session-load', name),
+  merge: (sourceNames, outputName, options) =>
+    ipcRenderer.invoke('session-merge', sourceNames, outputName, options),
   save: (name, jsonData) => ipcRenderer.invoke('session-save', name, jsonData),
   rename: (oldName, newName) => ipcRenderer.invoke('session-rename', oldName, newName),
   remove: (name) => ipcRenderer.invoke('session-delete', name),

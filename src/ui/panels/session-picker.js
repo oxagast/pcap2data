@@ -41,8 +41,12 @@ function formatSessionInfo(session) {
       : "Unknown";
   const pcapSizeLabel = formatBytes(session?.pcapSizeBytes);
   const saveSizeLabel = formatBytes(session?.totalSizeBytes);
+  const mergedLabel = session?.merged
+    ? `Merged sources: ${Number.isFinite(Number(session.sourceCount)) ? Number(session.sourceCount) : "multiple"}`
+    : null;
   return [
     `Type: ${saveType}`,
+    ...(mergedLabel ? [mergedLabel] : []),
     `PCAP: ${pcapSizeLabel}`,
     `Save size: ${saveSizeLabel}`,
     `PS: ${packetsnitchVersion}`,
@@ -68,6 +72,15 @@ function initializeSessionPicker({
   const importBtn = documentRef.getElementById("session-picker-import-btn");
   const closeBtn = documentRef.getElementById("session-picker-close-btn");
   const refreshBtn = documentRef.getElementById("session-picker-refresh-btn");
+  const mergeBtn = documentRef.getElementById("session-picker-merge-btn");
+  const selectionCountEl = documentRef.getElementById("session-picker-selection-count");
+  const mergeDialog = documentRef.getElementById("session-merge-dialog");
+  const mergeSourcesEl = documentRef.getElementById("session-merge-sources");
+  const mergeNameInput = documentRef.getElementById("session-merge-name-input");
+  const mergeOptionsEl = documentRef.getElementById("session-merge-options");
+  const mergeConfirmBtn = documentRef.getElementById("session-merge-confirm-btn");
+  const mergeCancelBtn = documentRef.getElementById("session-merge-cancel-btn");
+  const mergeDialogStatus = documentRef.getElementById("session-merge-dialog-status");
 
   // Name-prompt dialog elements
   const nameDialog = documentRef.getElementById("session-name-dialog");
@@ -85,6 +98,9 @@ function initializeSessionPicker({
 
   let nameDialogResolve = null;
   let deleteDialogResolve = null;
+  let listedSessions = [];
+  const selectedNames = new Set();
+  let mergeDialogResolve = null;
 
   function showStatus(msg, isError) {
     if (!statusEl) return;
@@ -96,6 +112,162 @@ function initializeSessionPicker({
     if (statusEl) {
       statusEl.textContent = "";
       statusEl.className = "session-picker-status";
+    }
+  }
+
+  function updateSelectionUi() {
+    const count = selectedNames.size;
+    if (selectionCountEl) {
+      selectionCountEl.textContent = count ? `${count} selected` : "Select sessions to merge";
+    }
+    if (mergeBtn) mergeBtn.disabled = count < 2;
+  }
+
+  function closeMergeDialog() {
+    if (mergeDialog) mergeDialog.hidden = true;
+    if (mergeDialogResolve) {
+      const resolve = mergeDialogResolve;
+      mergeDialogResolve = null;
+      resolve(null);
+    }
+  }
+
+  function renderMergeDialogSources() {
+    if (!mergeSourcesEl) return;
+    mergeSourcesEl.replaceChildren();
+    const selected = listedSessions.filter((session) => selectedNames.has(session.name));
+    selected.forEach((session, index) => {
+      const row = documentRef.createElement("div");
+      row.className = "session-merge-source-row";
+      const label = documentRef.createElement("label");
+      label.textContent = `${index + 1}. ${session.name}`;
+      const seconds = documentRef.createElement("input");
+      seconds.type = "number";
+      seconds.step = "any";
+      seconds.value = "0";
+      seconds.dataset.mergeOffsetSeconds = session.name;
+      seconds.title = "Signed seconds offset";
+      const milliseconds = documentRef.createElement("input");
+      milliseconds.type = "number";
+      milliseconds.step = "any";
+      milliseconds.value = "0";
+      milliseconds.dataset.mergeOffsetMilliseconds = session.name;
+      milliseconds.title = "Signed milliseconds offset";
+      row.appendChild(label);
+      row.appendChild(seconds);
+      row.appendChild(documentRef.createTextNode("s + "));
+      row.appendChild(milliseconds);
+      row.appendChild(documentRef.createTextNode("ms"));
+      mergeSourcesEl.appendChild(row);
+    });
+  }
+
+  function renderMergeRelationships() {
+    if (!mergeOptionsEl) return;
+    mergeOptionsEl.replaceChildren();
+    const selected = listedSessions.filter((session) => selectedNames.has(session.name));
+    for (let leftIndex = 0; leftIndex < selected.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < selected.length; rightIndex += 1) {
+        const left = selected[leftIndex];
+        const right = selected[rightIndex];
+        const row = documentRef.createElement("div");
+        row.className = "session-merge-relationship-row";
+        const label = documentRef.createElement("span");
+        label.textContent = `${left.name} ↔ ${right.name}`;
+        const select = documentRef.createElement("select");
+        select.dataset.mergeRelationshipA = left.name;
+        select.dataset.mergeRelationshipB = right.name;
+        [
+          ["auto", "Auto (conservative)"],
+          ["same", "Same machine"],
+          ["separate", "Separate machine"],
+        ].forEach(([value, text]) => {
+          const option = documentRef.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          select.appendChild(option);
+        });
+        row.appendChild(label);
+        row.appendChild(select);
+        mergeOptionsEl.appendChild(row);
+      }
+    }
+  }
+
+  function openMergeDialog() {
+    if (selectedNames.size < 2) {
+      showStatus("Select at least two sessions to merge.", true);
+      return Promise.resolve(null);
+    }
+    renderMergeDialogSources();
+    renderMergeRelationships();
+    if (mergeNameInput) mergeNameInput.value = "Merged Session";
+    if (mergeDialogStatus) mergeDialogStatus.textContent = "";
+    if (mergeDialog) mergeDialog.hidden = false;
+    if (mergeNameInput) mergeNameInput.focus();
+    return new Promise((resolve) => {
+      mergeDialogResolve = resolve;
+    });
+  }
+
+  function resolveMergeDialog(value) {
+    if (mergeDialog) mergeDialog.hidden = true;
+    if (!mergeDialogResolve) return;
+    const resolve = mergeDialogResolve;
+    mergeDialogResolve = null;
+    resolve(value);
+  }
+
+  function collectMergeOptions() {
+    const offsets = {};
+    if (mergeSourcesEl) {
+      mergeSourcesEl.querySelectorAll("[data-merge-offset-seconds]").forEach((input) => {
+        const name = input.dataset.mergeOffsetSeconds;
+        const millisecondsInput = [...mergeSourcesEl.querySelectorAll(
+          "[data-merge-offset-milliseconds]",
+        )].find((candidate) => candidate.dataset.mergeOffsetMilliseconds === name);
+        const seconds = Number(input.value || 0);
+        const milliseconds = Number(millisecondsInput?.value || 0);
+        if (!Number.isFinite(seconds) || !Number.isFinite(milliseconds)) {
+          throw new Error(`Invalid clock offset for ${name}`);
+        }
+        offsets[name] = { offsetSeconds: seconds, offsetMilliseconds: milliseconds };
+      });
+    }
+    const relationships = [];
+    if (mergeOptionsEl) {
+      mergeOptionsEl.querySelectorAll("[data-merge-relationship-a]").forEach((select) => {
+        relationships.push({
+          sourceA: select.dataset.mergeRelationshipA,
+          sourceB: select.dataset.mergeRelationshipB,
+          mode: select.value,
+        });
+      });
+    }
+    return { offsets, relationships };
+  }
+
+  async function handleMerge() {
+    const result = await openMergeDialog();
+    if (!result) return;
+    const outputName = result.name;
+    try {
+      showStatus("Merging sessions…");
+      const response = await sessionsapi.merge(
+        [...selectedNames],
+        outputName,
+        result.options,
+      );
+      if (!response?.success) {
+        showStatus(`Merge failed: ${response?.error || "unknown error"}`, true);
+        return;
+      }
+      selectedNames.clear();
+      updateSelectionUi();
+      hide();
+      if (onSessionSelected) onSessionSelected(response.name || outputName, response.data);
+    } catch (error) {
+      showStatus(`Merge failed: ${error?.message || String(error)}`, true);
     }
   }
 
@@ -237,6 +409,12 @@ function initializeSessionPicker({
 
   function renderSessionList(sessions, options = {}) {
     if (!listEl) return;
+    listedSessions = Array.isArray(sessions) ? sessions : [];
+    const validNames = new Set(listedSessions.map((session) => session.name));
+    [...selectedNames].forEach((name) => {
+      if (!validNames.has(name)) selectedNames.delete(name);
+    });
+    updateSelectionUi();
     listEl.innerHTML = "";
     if (!sessions || sessions.length === 0) {
       listEl.innerHTML = '<tr><td colspan="4" class="session-picker-empty">No saved sessions found. Start by loading a PCAP or JSON file.</td></tr>';
@@ -248,7 +426,19 @@ function initializeSessionPicker({
 
       const nameTd = documentRef.createElement("td");
       nameTd.className = "session-picker-name";
-      nameTd.textContent = session.name;
+      const checkbox = documentRef.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "session-picker-select";
+      checkbox.checked = selectedNames.has(session.name);
+      checkbox.title = `Select ${session.name} for merge`;
+      checkbox.addEventListener("click", (event) => event.stopPropagation());
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selectedNames.add(session.name);
+        else selectedNames.delete(session.name);
+        updateSelectionUi();
+      });
+      nameTd.appendChild(checkbox);
+      nameTd.appendChild(documentRef.createTextNode(` ${session.name}`));
       nameTd.title = session.name;
 
       const dateTd = documentRef.createElement("td");
@@ -460,6 +650,41 @@ function initializeSessionPicker({
 
   if (refreshBtn) {
     refreshBtn.addEventListener("click", () => loadSessions());
+  }
+
+  if (mergeBtn) {
+    mergeBtn.addEventListener("click", async () => {
+      await handleMerge();
+    });
+  }
+
+  if (mergeConfirmBtn) {
+    mergeConfirmBtn.addEventListener("click", () => {
+      const outputName = mergeNameInput ? mergeNameInput.value.trim() : "";
+      if (!outputName) {
+        if (mergeDialogStatus) mergeDialogStatus.textContent = "Please enter a destination name.";
+        return;
+      }
+      try {
+        resolveMergeDialog({ name: outputName, options: collectMergeOptions() });
+      } catch (error) {
+        if (mergeDialogStatus) mergeDialogStatus.textContent = error.message;
+      }
+    });
+  }
+
+  if (mergeCancelBtn) {
+    mergeCancelBtn.addEventListener("click", () => resolveMergeDialog(null));
+  }
+
+  if (mergeDialog) {
+    mergeDialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeMergeDialog();
+      } else if (event.key === "Enter" && event.target === mergeNameInput) {
+        if (mergeConfirmBtn) mergeConfirmBtn.click();
+      }
+    });
   }
 
   // Listen for authoritative re-scans from the main process. If the cached list
