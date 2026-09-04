@@ -7451,6 +7451,7 @@ sessionPickerPanel = initializeSessionPicker({
       });
   },
 });
+
 async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
@@ -8384,6 +8385,10 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
     return packet.__packetKey;
   }
   const packetInfo = packet?.["packet.info"];
+  const durablePacketId = packetInfo?.["capture.packetId"];
+  if (typeof durablePacketId === "string" && durablePacketId.trim()) {
+    return durablePacketId.trim();
+  }
   const sourceIp =
     (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || fallbackHost || "Unknown";
   // Link-layer frames (CDP/LACP/STP) never set "index" — fall back to the
@@ -29608,6 +29613,12 @@ function runSnitch(file, options = {}) {
   } else {
     subnetCalculatorPanel.resetCaptureNmapState();
   }
+  // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
+  // from the previous capture don't pollute the new run.
+  if (window.markovapi?.resetSessionArtifactStore) {
+    window.markovapi.resetSessionArtifactStore();
+  }
+  keystorePanel.clearFileArtifactStore();
   backendProgressState.processing = true;
   backendProgressState.etaStartAtMs = performance.now();
   // Start the heartbeat so the warning banner keeps refreshing progress/ETA

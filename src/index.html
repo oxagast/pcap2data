@@ -2982,6 +2982,12 @@ No artifacts saved.</pre>
         <button id="session-picker-refresh-btn" class="session-picker-secondary-btn">
           Refresh
         </button>
+        <button id="session-picker-merge-btn" class="session-picker-primary-btn" disabled>
+          Merge Selected
+        </button>
+        <span id="session-picker-selection-count" class="session-picker-selection-count">
+          Select sessions to merge
+        </span>
       </div>
       <div id="session-picker-table-wrap">
         <table id="session-picker-table">
@@ -2997,6 +3003,27 @@ No artifacts saved.</pre>
         </table>
       </div>
       <div id="session-picker-status" class="session-picker-status"></div>
+    </div>
+  </div>
+
+  <div id="session-merge-dialog" hidden>
+    <div id="session-merge-dialog-inner">
+      <div id="session-merge-dialog-title">Merge Sessions</div>
+      <div id="session-merge-dialog-description">
+        Combine the selected decoded sessions on one timeline. Stored timestamps are local wall-clock values;
+        offsets align the display timeline only and do not rewrite source packet timestamps.
+      </div>
+      <div id="session-merge-sources" class="session-merge-source-list"></div>
+      <div class="session-merge-section-title">Machine relationship overrides</div>
+      <div id="session-merge-options" class="session-merge-options"></div>
+      <label class="session-merge-name-label" for="session-merge-name-input">New session name</label>
+      <input id="session-merge-name-input" type="text" maxlength="128" autocomplete="off"
+        placeholder="Merged Session" />
+      <div id="session-merge-dialog-status" class="session-merge-dialog-status"></div>
+      <div class="session-merge-dialog-actions">
+        <button id="session-merge-confirm-btn" type="button">Merge and Save</button>
+        <button id="session-merge-cancel-btn" type="button">Cancel</button>
+      </div>
     </div>
   </div>
 
