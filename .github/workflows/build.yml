@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: oxasploits/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: oxasploits/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
@@ -35,7 +35,7 @@ jobs:
         run: npx electron-forge make
 
       - name: Upload Windows Artifacts
-        uses: actions/upload-artifact@v4
+        uses: oxasploits/upload-artifact@v4
         with:
           name: Electron-Forge-Distributables-windows
           path: out/make/
@@ -48,10 +48,10 @@ jobs:
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v4
+        uses: oxasploits/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: oxasploits/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
@@ -73,7 +73,7 @@ jobs:
         run: npx electron-forge make --targets @electron-forge/maker-deb
 
       - name: Upload .deb Artifacts
-        uses: actions/upload-artifact@v4
+        uses: oxasploits/upload-artifact@v4
         with:
           name: Electron-Forge-Distributables-linux-deb
           path: out/make/deb/
@@ -83,7 +83,7 @@ jobs:
         run: npx electron-forge make --targets @electron-forge/maker-rpm
 
       - name: Upload .rpm Artifacts
-        uses: actions/upload-artifact@v4
+        uses: oxasploits/upload-artifact@v4
         with:
           name: Electron-Forge-Distributables-linux-rpm
           path: out/make/rpm/
