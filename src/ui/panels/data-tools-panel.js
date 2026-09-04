@@ -1370,6 +1370,7 @@ const decodeSoulseekFromBytes = convDecoders.decodeSoulseekFromBytes;
 const decodeBittorrentFromBytes = convDecoders.decodeBittorrentFromBytes;
 const decodeKerberosFromBytes = convDecoders.decodeKerberosFromBytes;
 const decodeDnsFromBytes = convDecoders.decodeDnsFromBytes;
+const decodeMdnsFromBytes = convDecoders.decodeMdnsFromBytes;
 const decodeLlmnrFromBytes = convDecoders.decodeLlmnrFromBytes;
 const decodeNbnsFromBytes = convDecoders.decodeNbnsFromBytes;
 const decodeNbdgmFromBytes = convDecoders.decodeNbdgmFromBytes;
@@ -1637,6 +1638,10 @@ function decodeWithSelectedProtocol(bytes, protocol) {
       return decodeKerberosFromBytes(bytes);
     case "dns":
       return decodeDnsFromBytes(bytes);
+    case "mdns":
+      return decodeMdnsFromBytes(bytes);
+    case "bonjour":
+      return decodeMdnsFromBytes(bytes);
     case "llmnr":
       return decodeLlmnrFromBytes(bytes);
     case "nbns":
@@ -2205,6 +2210,11 @@ module.exports = {
   decodeBsonFromBytes,
   decodeLdapFromBytes,
   decodeSmbFromBytes,
+  decodeEpmapFromBytes,
+  decodeDnsFromBytes,
+  decodeMdnsFromBytes,
+  decodeLlmnrFromBytes,
+  decodeDhcpv6FromBytes,
   decodeSipFromBytes,
   decodeSmppFromBytes,
   decodeSoulseekFromBytes,

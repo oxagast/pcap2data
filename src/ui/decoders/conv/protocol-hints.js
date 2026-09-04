@@ -24,6 +24,9 @@ const PROTOCOL_DECODER_HINTS = new Map([
     ["krb5", "kerberos"],
     ["krb5sec", "kerberos"],
     ["dns", "dns"],
+    ["mdns", "mdns"],
+    ["bonjour", "mdns"],
+    ["dnssd", "mdns"],
     ["llmnr", "llmnr"],
     ["nbns", "nbns"],
     ["netbios-ns", "nbns"],
@@ -87,7 +90,7 @@ const PORT_DECODER_HINTS = new Map([
     [750, "kerberos"],
     [464, "kerberos"],
     [53, "dns"],
-    [5353, "dns"], // mDNS shares the DNS wire format; reuse the DNS decoder hint.
+    [5353, "mdns"],
     [5355, "llmnr"],
     [137, "nbns"],
     [138, "nbdgm"],

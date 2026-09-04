@@ -24,7 +24,9 @@ const {
     decodeSoulseekFromBytes,
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
+    decodeEpmapFromBytes,
     decodeDnsFromBytes,
+    decodeMdnsFromBytes,
     decodeLlmnrFromBytes,
     decodeNbnsFromBytes,
     decodeNbdgmFromBytes,
@@ -158,6 +160,8 @@ function createProtocolDecodingHelpers({
                 return decodeLdapFromBytes(bytes);
             case "smb":
                 return decodeSmbFromBytes(bytes);
+            case "epmap":
+                return decodeEpmapFromBytes(bytes);
             case "sip":
                 return decodeSipFromBytes(bytes);
             case "smpp":
@@ -170,6 +174,10 @@ function createProtocolDecodingHelpers({
                 return decodeKerberosFromBytes(bytes);
             case "dns":
                 return decodeDnsFromBytes(bytes);
+            case "mdns":
+                return decodeMdnsFromBytes(bytes);
+            case "bonjour":
+                return decodeMdnsFromBytes(bytes);
             case "snmp":
                 return decodeSnmpFromBytes(bytes);
             case "dhcp":
