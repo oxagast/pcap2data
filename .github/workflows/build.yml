@@ -155,6 +155,8 @@ jobs:
 
       # Build .rpm
       - name: Build & Package (.rpm)
+        env:
+          ELECTRON_FORGE_PLATFORM: redhat
         run: npx electron-forge make --targets @electron-forge/maker-rpm
 
       - name: Upload .rpm Artifacts
