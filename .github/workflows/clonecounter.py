@@ -5,6 +5,11 @@ now = json.load(fh)
 
 with open('clone_before.json', 'r') as fh:
 before = json.load(fh)
+
+# Handle first run: if 'clones' key is missing or empty, seed from 'now'
+if not before.get('clones'):
+    before['clones'] = []
+
 timestamps = {before['clones'][i]['timestamp']: i for i in range(len(before['clones']))}
 
 latest = dict(before)
