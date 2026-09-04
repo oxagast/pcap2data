@@ -7451,6 +7451,7 @@ sessionPickerPanel = initializeSessionPicker({
       });
   },
 });
+
 async function clearCurrentSession() {
   statusUpdate("Clearing current session data for new session...");
   writeLogEntry("User initiated new session: clearing existing session data");
@@ -8384,6 +8385,10 @@ function getPacketKey(packet, fallbackHost = "", fallbackIndex = 0) {
     return packet.__packetKey;
   }
   const packetInfo = packet?.["packet.info"];
+  const durablePacketId = packetInfo?.["capture.packetId"];
+  if (typeof durablePacketId === "string" && durablePacketId.trim()) {
+    return durablePacketId.trim();
+  }
   const sourceIp =
     (packetInfo?.["IP"]?.["ip.src.addr"] ?? packetInfo?.["IP"]?.["Source IP"]) || fallbackHost || "Unknown";
   // Link-layer frames (CDP/LACP/STP) never set "index" — fall back to the

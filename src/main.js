@@ -32,6 +32,7 @@ const {
 const {
   validateSessionJsonString,
 } = require("./session-format");
+const { mergeSessions } = require("./session-merge");
 
 let Ollama = null;
 try {
@@ -8665,6 +8666,36 @@ async function readSessionFileContent(filePath, compression) {
   return decompressedBuffer.toString("utf8");
 }
 
+async function saveSessionDocument(name, jsonData) {
+  const sanitizedName = sanitizeSessionName(name);
+  if (!sanitizedName) {
+    throw new Error("Session name is empty after sanitization");
+  }
+
+  await ensureSessionsDir();
+  const format = await getPreferredSaveFormat();
+  if (format === SESSION_FORMAT_BSON_GZIP) {
+    try {
+      await saveBsonGzipSession(sanitizedName, jsonData);
+    } catch (bsonErr) {
+      console.warn(
+        "session-save bson fallback triggered:",
+        bsonErr?.message || bsonErr,
+      );
+      const fallbackCompression = await getPreferredSaveCompression();
+      const filePath = sessionFilePath(sanitizedName);
+      await fs.promises.writeFile(filePath, jsonData, "utf8");
+      await compressSessionJson(sanitizedName, fallbackCompression);
+    }
+  } else {
+    const filePath = sessionFilePath(sanitizedName);
+    await fs.promises.writeFile(filePath, jsonData, "utf8");
+    await compressSessionJson(sanitizedName, format);
+  }
+  await writeSessionLibraryCache(await buildSessionList());
+  return sanitizedName;
+}
+
 async function ensureSessionsDir() {
   const dir = getSessionsDir();
   try {
@@ -8811,9 +8842,24 @@ async function buildSessionList() {
 
       let packetsnitchVersion = null;
       let pcapSizeBytes = null;
+      let merged = false;
+      let sourceCount = null;
       try {
         const content = await readSessionFileContent(filePath, compression);
         const parsedPayload = JSON.parse(content);
+        const captureData =
+          parsedPayload && typeof parsedPayload === "object"
+            && parsedPayload["capture.data"]
+            && typeof parsedPayload["capture.data"] === "object"
+            ? parsedPayload["capture.data"]
+            : parsedPayload;
+        const captureMetadata = captureData?.["capture.metadata"];
+        if (captureMetadata?.merged === true) {
+          merged = true;
+          sourceCount = Array.isArray(captureMetadata.sources)
+            ? captureMetadata.sources.length
+            : null;
+        }
         const sessionState =
           parsedPayload && typeof parsedPayload === "object"
             && parsedPayload["session.state"]
@@ -8843,6 +8889,8 @@ async function buildSessionList() {
         saveType: inferSessionSaveType(filePath, compression),
         totalSizeBytes: Number.isFinite(stats?.size) ? stats.size : null,
         pcapSizeBytes,
+        merged,
+        sourceCount,
         packetsnitchVersion,
       });
     } catch (_err) {
@@ -8917,6 +8965,68 @@ ipcMain.handle("session-load", async (_event, name) => {
   }
 });
 
+ipcMain.handle("session-merge", async (_event, sourceNames, outputName, options = {}) => {
+  if (!Array.isArray(sourceNames) || sourceNames.length < 2) {
+    return { success: false, error: "At least two source sessions are required" };
+  }
+  const normalizedNames = sourceNames.map((name) => (
+    typeof name === "string" ? name.trim() : ""
+  ));
+  if (normalizedNames.some((name) => !name)) {
+    return { success: false, error: "Every source session must have a name" };
+  }
+  if (new Set(normalizedNames).size !== normalizedNames.length) {
+    return { success: false, error: "Source sessions must be unique" };
+  }
+  if (typeof outputName !== "string" || !outputName.trim()) {
+    return { success: false, error: "A destination session name is required" };
+  }
+
+  const sanitizedOutputName = sanitizeSessionName(outputName);
+  if (!sanitizedOutputName) {
+    return { success: false, error: "Destination session name is invalid" };
+  }
+  if (normalizedNames.some((name) => sanitizeSessionName(name) === sanitizedOutputName)) {
+    return {
+      success: false,
+      error: "The destination session must have a different name from its sources",
+    };
+  }
+
+  try {
+    const destinationPaths = [
+      sessionFilePath(sanitizedOutputName),
+      sessionBsonGzipFilePath(sanitizedOutputName),
+      sessionCompressedFilePath(sanitizedOutputName, SESSION_COMPRESSION_XZ),
+      sessionCompressedFilePath(sanitizedOutputName, SESSION_COMPRESSION_GZIP),
+      sessionLegacyCompressedFilePath(sanitizedOutputName, SESSION_COMPRESSION_XZ),
+      sessionLegacyCompressedFilePath(sanitizedOutputName, SESSION_COMPRESSION_GZIP),
+    ];
+    if ((await Promise.all(destinationPaths.map((filePath) => fileExists(filePath)))).some(Boolean)) {
+      return { success: false, error: "A session with the destination name already exists" };
+    }
+
+    const sources = [];
+    for (const name of normalizedNames) {
+      const { filePath, compression } = await resolveSessionFilePath(name);
+      const sessionPayload = await readSessionFileContent(filePath, compression);
+      sources.push({ name, sessionPayload });
+    }
+
+    const merged = mergeSessions(sources, options && typeof options === "object" ? options : {});
+    const savedName = await saveSessionDocument(sanitizedOutputName, merged.json);
+    return {
+      success: true,
+      name: savedName,
+      data: merged.json,
+      metadata: merged.metadata,
+    };
+  } catch (err) {
+    console.error("session-merge error:", err);
+    return { success: false, error: err?.message || "Failed to merge sessions" };
+  }
+});
+
 ipcMain.handle("session-save", async (_event, name, jsonData) => {
   if (typeof name !== "string" || !name.trim()) {
     return { success: false, error: "Invalid session name" };
@@ -8929,31 +9039,8 @@ ipcMain.handle("session-save", async (_event, name, jsonData) => {
   // show the save dialog to get the new name from the user
 
   try {
-    await ensureSessionsDir();
-    const format = await getPreferredSaveFormat();
-    if (format === SESSION_FORMAT_BSON_GZIP) {
-      try {
-        await saveBsonGzipSession(name, jsonData);
-      } catch (bsonErr) {
-        // Large/complex session payloads can exceed BSON serializer limits.
-        // Fall back to the standard JSON session compression path instead of
-        // failing the save entirely.
-        console.warn(
-          "session-save bson fallback triggered:",
-          bsonErr?.message || bsonErr,
-        );
-        const fallbackCompression = await getPreferredSaveCompression();
-        const filePath = sessionFilePath(name);
-        await fs.promises.writeFile(filePath, jsonData, "utf8");
-        await compressSessionJson(name, fallbackCompression);
-      }
-    } else {
-      const filePath = sessionFilePath(name);
-      await fs.promises.writeFile(filePath, jsonData, "utf8");
-      await compressSessionJson(name, format);
-    }
-    writeSessionLibraryCache(await buildSessionList());
-    return { success: true, name: sanitizeSessionName(name) };
+    const savedName = await saveSessionDocument(name, jsonData);
+    return { success: true, name: savedName };
   } catch (err) {
     if (err && err.code === "COMPRESSION_FALLBACK_DECLINED") {
       return { success: false, canceled: true, error: err.message };

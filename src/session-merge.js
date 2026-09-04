@@ -265,20 +265,55 @@ function relationshipKey(left, right) {
     return [String(left), String(right)].sort().join("|", "");
 }
 
+function getSourceRelationshipValues(source) {
+    if (isObject(source)) {
+        return [source.sourceId, source.sourceName]
+            .filter((value) => typeof value === "string" && value.trim())
+            .map((value) => value.trim());
+    }
+    return typeof source === "string" && source.trim() ? [source.trim()] : [];
+}
+
 function getRelationshipOverride(overrides, left, right) {
     if (Array.isArray(overrides)) {
-        const match = overrides.find((entry) => (
-            relationshipKey(entry?.sourceA, entry?.sourceB) === relationshipKey(left, right)
-        ));
+        const leftValues = getSourceRelationshipValues(left);
+        const rightValues = getSourceRelationshipValues(right);
+        const match = overrides.find((entry) => {
+            const entryA = String(entry?.sourceA || entry?.a || "").trim();
+            const entryB = String(entry?.sourceB || entry?.b || "").trim();
+            return (
+                (leftValues.includes(entryA) && rightValues.includes(entryB))
+                || (leftValues.includes(entryB) && rightValues.includes(entryA))
+            );
+        });
         return match?.mode || match?.relationship || "auto";
     }
     if (isObject(overrides)) {
-        return overrides[relationshipKey(left, right)]
-            || overrides[`${left}|${right}`]
-            || overrides[`${right}|${left}`]
-            || "auto";
+        const leftValues = getSourceRelationshipValues(left);
+        const rightValues = getSourceRelationshipValues(right);
+        for (const leftValue of leftValues) {
+            for (const rightValue of rightValues) {
+                const value = overrides[relationshipKey(leftValue, rightValue)]
+                    || overrides[`${leftValue}|${rightValue}`]
+                    || overrides[`${rightValue}|${leftValue}`];
+                if (value) return value;
+            }
+        }
     }
     return "auto";
+}
+
+function getSourceOptionValue(values, source) {
+    if (!isObject(values)) return null;
+    const candidates = [source.sourceId, source.sourceName].filter(
+        (value) => typeof value === "string" && value.trim(),
+    );
+    for (const candidate of candidates) {
+        if (Object.prototype.hasOwnProperty.call(values, candidate)) {
+            return values[candidate];
+        }
+    }
+    return null;
 }
 
 function buildSourceId(source, captureData, index) {
@@ -373,7 +408,7 @@ function buildHostGroups(sources, relationshipOverrides, relationships) {
             const left = sources[leftIndex];
             const right = sources[rightIndex];
             const evidence = inferSourceRelationship(left, right);
-            const override = String(getRelationshipOverride(relationshipOverrides, left.sourceId, right.sourceId)).toLowerCase();
+            const override = String(getRelationshipOverride(relationshipOverrides, left, right)).toLowerCase();
             const mode = ["same", "same-machine", "same_machine"].includes(override)
                 ? "same"
                 : ["separate", "different", "different-machine", "different_machine"].includes(override)
@@ -487,6 +522,13 @@ function mergeSessions(inputSources, options = {}) {
     }
 
     const sources = inputSources.map((source, index) => parseSource(source, index));
+    const offsetOptions = isObject(options.offsets) ? options.offsets : {};
+    sources.forEach((source) => {
+        const configuredOffset = getSourceOptionValue(offsetOptions, source);
+        if (configuredOffset !== null) {
+            source.offsetMs = normalizeOffsetMs(configuredOffset);
+        }
+    });
     const sourceIds = new Set();
     sources.forEach((source) => {
         if (sourceIds.has(source.sourceId)) {

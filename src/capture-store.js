@@ -118,6 +118,17 @@ function isSessionStatePath(pathKeys) {
 
 function derivePacketKey(packet, host, hostPacketIndex, existingKeys) {
     const packetInfo = packet?.["packet.info"] || {};
+    const durablePacketId = packetInfo?.["capture.packetId"];
+    if (typeof durablePacketId === "string" && durablePacketId.trim()) {
+        const normalizedPacketId = durablePacketId.trim();
+        if (!existingKeys.has(normalizedPacketId)) return normalizedPacketId;
+
+        let durableDedupCounter = 1;
+        while (existingKeys.has(`${normalizedPacketId}-${durableDedupCounter}`)) {
+            durableDedupCounter += 1;
+        }
+        return `${normalizedPacketId}-${durableDedupCounter}`;
+    }
     const sourceIp = extractPacketIpAddress(packetInfo, "src") || host || "Unknown";
     const packetIndex = packetInfo?.["index"] ?? hostPacketIndex;
     let candidate = `${sourceIp}${PACKET_KEY_SEPARATOR}${packetIndex}`;
