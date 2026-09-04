@@ -136,9 +136,10 @@ jobs:
       - name: Build Dependencies
         run: npm run build:deps
 
-      # Apply only the staticx patch (skip spec.ejs — not needed for RPM)
-      - name: Apply staticx Patch
-        run: npm run patch:staticx
+      # Apply all patches (spec.ejs fixes the ../usr/* path for rpmbuild;
+      # staticx-api.py enables the staticx Python C-extension workaround)
+      - name: Apply Patches
+        run: npm run patch
 
       # Compile Python backend → PyInstaller onefile binary
       - name: Build Backend
