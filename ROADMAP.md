@@ -1181,16 +1181,30 @@ Already shipped (so we don't redo them):
 > Short mirror of `RELEASE_NOTES.md` so this single file is enough to
 > skim. The full per-version notes still live in `RELEASE_NOTES.md`.
 
-### v2.7.1737 — Unreleased
+### v2.8.0 — 2026-09-04
+
+> ⚠️ **Versioning scheme switch.** This release moves from the prior
+> `MAJOR.MINOR.<build-counter>` scheme (e.g. `2.7.1735`) back to a
+> classic `MAJOR.MINOR.PATCH` triple.
 
 - **Features**
   - **WebSocket support + improved OCPF decoder walking** — backend
     now speaks WebSocket alongside HTTP for bidirectional streaming;
     OCPF byte-walking logic improved for better field extraction.
+  - **MNDP (MikroTik Neighbor Discovery Protocol) decoder** — new
+    Conv → Decodes + sidebar renderer for MNDP (UDP/5678), walks
+    all known TLV types, auto-detects via CDP-style byte-heuristic
+    cascade. Registered in `SUPPORTED_DECODER_PROTOS`,
+    `PROTOCOL_DECODER_HINTS`, and `PORT_DECODER_HINTS` (5678).
   - **Industrial protocol decoders — Modbus, S7comm, DNP3 (Conv →
     Decodes)** — SCADA/ICS decoders for Modbus (port 502),
     S7comm (port 102), and DNP3 (port 20000), all registered in
     `SUPPORTED_DECODER_PROTOS` with auto-detect hints.
+  - **Network-control protocol decoders — CDP, HSRP, LACP, OSPF, STP
+    (Conv → Decodes + sidebar)** — CDP, HSRP, LACP, OSPF, STP
+    decoders ship in `src/backend/decoders/` and `src/ui/decoders/`
+    with sidebar renderers; registered in `SUPPORTED_DECODER_PROTOS`
+    with auto-detect via `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS`.
   - **Artifacts store overhaul (replaces Keystore)** — broader
     artifact types (`wifi-wep`, `wifi-wpa-psk`, `wifi-pmk`,
     `generic-secret`, `file`), typed entries with name/description/
@@ -1198,12 +1212,27 @@ Already shipped (so we don't redo them):
   - **Conv UX improvements** — image no-op/partial data handling,
     decoder dropdown selection, and tightened protocol
     autodetection to reduce false positives.
+  - **Stats → Conv "jump to protocol decoder" context menu** —
+    right-click an artifact on the Stats tab to jump directly to
+    Conv's Protocol Decoder view on the stream that produced it.
+  - **Host Data view alignment overhaul** — column borders, header
+    rows, and per-row field renderers now line up consistently.
+  - **Summarization pipeline improvements** — internal refinements
+    to the LLM summarization pipeline in the data tools panel.
+  - **PCAP import cleanup hardening** — log output suppressed and
+    external function calls to non-localhost blocked during
+    capture-state zeroing, preventing mid-transition data leaks.
 - **Fixes**
   - **Duplicate data in artifacts store** — re-running a capture no
     longer double-counts artifact entries; entries are reused by
     key instead of recreated.
   - **Conv search/replace alignment** — search-and-replace bar now
     visually and functionally aligned with manual carve counterpart.
+  - **Autoselectable decoder restrictions tightened** — plain-text
+    and non-protocol streams no longer misrouted to specialised
+    decoders when bytes happen to match a header shape.
+  - **Dropdown transparency bug** — LLM/Settings dropdowns now use
+    the standard theme surface fill instead of transparent background.
 - **Removed**
   - **Deprecated "Use LLM" checkbox** — `settings.capture.useLlm`
     field and UI control removed; LLM integration is always
