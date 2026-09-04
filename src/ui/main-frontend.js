@@ -176,6 +176,8 @@ const {
   renderEpmapTable,
   renderMdnsTable,
   renderLlmnrTable,
+  renderSsdpTable,
+  renderGrpcTable,
   renderNtpTable,
   renderSipTable,
   renderHttpTable,
@@ -28840,6 +28842,12 @@ function infoPanel(pk) {
 
   // LLMNR info table (shown for UDP/5355 packets)
   renderLlmnrTable(transportData);
+
+  // SSDP / UPnP info table (shown for UDP/1900 packets)
+  renderSsdpTable(transportData);
+
+  // gRPC info table (shown for gRPC envelopes)
+  renderGrpcTable(transportData);
 
   // ICMP info table (shown for ICMP packets)
   renderIcmpTable(protocol, transportData);

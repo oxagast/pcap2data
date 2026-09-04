@@ -255,6 +255,7 @@ import decoders.dhcp as dec_dhcp
 import decoders.dhcpv6 as dec_dhcpv6
 import decoders.epmap as dec_epmap
 import decoders.ftp as dec_ftp
+import decoders.grpc as dec_grpc
 import decoders.http as dec_http
 import decoders.http2 as dec_http2
 import decoders.hsrp as dec_hsrp
@@ -284,6 +285,7 @@ import decoders.s7comm as dec_s7comm
 import decoders.sctp as dec_sctp
 import decoders.sip as dec_sip
 import decoders.smb as dec_smb
+import decoders.ssdp as dec_ssdp
 import decoders.smpp as dec_smpp
 import decoders.smtp as dec_smtp
 import decoders.snmp as dec_snmp
@@ -3806,6 +3808,11 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                 httpSection = dec_http.decodeHTTP(rawPayload)
                 if httpSection is not None:
                     transportSection["HTTP"] = httpSection
+                    contentType = httpSection.get("Content-Type", "")
+                    if "application/grpc" in str(contentType).lower():
+                        grpcSection = dec_grpc.decodeGRPC(rawPayload, contentType)
+                        if grpcSection is not None:
+                            transportSection["gRPC"] = grpcSection
                 # Decode HTTP/2 only for streams that have presented the client
                 # connection preface. This avoids classifying unrelated encrypted
                 # payloads (including SSH) as HTTP/2 based on random bytes.
@@ -4084,6 +4091,21 @@ def packetLoop(p, packetIndex, srcPortFilter, dstPortFilter, timeout):
                     llmnrSection = dec_llmnr.decodeLLMNR(rawPayload)
                     if llmnrSection is not None:
                         transportSection["LLMNR"] = llmnrSection
+                # Decode SSDP / UPnP discovery on UDP/1900.
+                if dstPort == 1900 or srcPort == 1900:
+                    ssdpSection = dec_ssdp.decodeSSDP(rawPayload)
+                    if ssdpSection is not None:
+                        transportSection["SSDP"] = ssdpSection
+                        if ssdpSection.get("UPnP"):
+                            transportSection["UPnP"] = ssdpSection
+                # Decode raw gRPC envelopes on the conventional TCP port.
+                # gRPC is normally carried inside HTTP/2 DATA frames; when
+                # the stream payload has already been reassembled, the
+                # decoder consumes the concatenated 5-byte gRPC envelopes.
+                if streamLabelPort == 50051 or srcPort == 50051 or dstPort == 50051:
+                    grpcSection = dec_grpc.decodeGRPC(rawPayload)
+                    if grpcSection is not None:
+                        transportSection["gRPC"] = grpcSection
                 # Decode SNMP on UDP ports 161/162
                 if dstPort in (161, 162) or srcPort in (161, 162):
                     snmpSection = dec_snmp.decodeSNMP(p)

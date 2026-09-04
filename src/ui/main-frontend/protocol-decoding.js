@@ -25,6 +25,8 @@ const {
     decodeBittorrentFromBytes,
     decodeKerberosFromBytes,
     decodeEpmapFromBytes,
+    decodeSsdpFromBytes,
+    decodeGrpcFromBytes,
     decodeDnsFromBytes,
     decodeMdnsFromBytes,
     decodeLlmnrFromBytes,
@@ -162,6 +164,11 @@ function createProtocolDecodingHelpers({
                 return decodeSmbFromBytes(bytes);
             case "epmap":
                 return decodeEpmapFromBytes(bytes);
+            case "ssdp":
+            case "upnp":
+                return decodeSsdpFromBytes(bytes);
+            case "grpc":
+                return decodeGrpcFromBytes(bytes);
             case "sip":
                 return decodeSipFromBytes(bytes);
             case "smpp":
