@@ -26,6 +26,8 @@ const {
 } = require("./settings");
 const {
   generate: generateLlm,
+  getModel,
+  getProvider,
 } = require("./llm");
 const {
   validateSessionJsonString,
@@ -7604,6 +7606,27 @@ ipcMain.handle("settings-get", async () => {
     await loadSettingsFromDisk();
   }
   return getAppSettings();
+});
+
+ipcMain.handle("get-install-uuid", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return getThemeServerInstallUuid();
+});
+
+ipcMain.handle("get-llm-model", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return getModel();
+});
+
+ipcMain.handle("get-llm-provider", async () => {
+  if (!appSettings) {
+    await loadSettingsFromDisk();
+  }
+  return getProvider();
 });
 
 ipcMain.handle("settings-save", async (_event, settings) => {

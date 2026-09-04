@@ -14449,8 +14449,8 @@ function runProtoDecoder(bytes) {
       : (dataToolsContextPacket && !dataToolsInputEditedFlag
         ? dataToolsContextPacket
         : null) ||
-        getCurrentContextPacket() ||
-        getCurrentPacketForExport();
+      getCurrentContextPacket() ||
+      getCurrentPacketForExport();
     const { protocolHint: packetProtocolHint, portHint: packetPortHint } = getPacketProtocolDecoderHint(contextPacket);
     const protocolHint = dataToolsDecoderHints.isFile
       ? dataToolsDecoderHints.protocolHint
@@ -20064,6 +20064,32 @@ function buildMarkdownResponseInstruction() {
   ].join(" ");
 }
 
+// Builds a system-context block injected at the top of every "Ask PacketSnitch..."
+// LLM prompt. Carries the install identity and the user's current settings so
+// the LLM can reason about the user's environment without a separate lookup.
+async function buildLlmSystemContext() {
+  const settings = getCurrentSettings() || {};
+  const llmSettings = settings.llm || {};
+  const generalSettings = settings.general || {};
+  let installUuid = "";
+  try {
+    installUuid =
+      window.installapi && typeof window.installapi.getInstallUuid === "function"
+        ? await window.installapi.getInstallUuid()
+        : "";
+  } catch (_) {
+    installUuid = "";
+  }
+  const lines = [
+    "## System Context",
+    `Install UUID: ${installUuid || "(unavailable)"}`,
+    `Active theme: ${generalSettings.themeId || "(default)"}`,
+    `LLM provider: ${llmSettings.provider || "ollama"}`,
+    `LLM model: ${llmSettings.ollamaModel || "minimax-m3:cloud"}`,
+  ];
+  return lines.join("\n");
+}
+
 // Returns whether text significant for llm explain.
 function isTextSignificantForLlmExplain(text) {
   if (!text || typeof text !== "string") return false;
@@ -20290,10 +20316,13 @@ function collectSubnetHostSummaryContext(hostIp) {
   };
 }
 
-function buildLlmSubnetHostSummaryPrompt(contextData) {
+async function buildLlmSubnetHostSummaryPrompt(contextData) {
+  const systemContext = await buildLlmSystemContext();
   return [
     "You are a network analysis assistant named PacketSnitch.",
     `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    systemContext,
     "",
     `Task: Distill and summarize the current Conv Analyze Subnet table data for host ${contextData.hostIp}.`,
     "Use only the provided data. Do not invent values or infer unsupported facts.",
@@ -20334,7 +20363,7 @@ async function summarizeSubnetHostContextWithLLM() {
   writeLogEntry(`PacketSnitch subnet-host summary requested host=${JSON.stringify(hostIp)}`);
 
   try {
-    const prompt = buildLlmSubnetHostSummaryPrompt(contextData);
+    const prompt = await buildLlmSubnetHostSummaryPrompt(contextData);
     const response = await callLargeLanguageModelWithRetry(prompt);
     const summaryMarkdown = String(response?.response || "").trim();
     if (!summaryMarkdown) {
@@ -20377,7 +20406,8 @@ async function explainContextWithLLM() {
   }
 
   const packetCtx = buildPacketContextSummary(contextPacket);
-  const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting captured network data and selected a specific value they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\nSelected data to explain: "${textToExplain}"\n\nPacket context summary (concise): ${packetCtx}\n\nImportant: Focus on the selected data itself. Do not attempt to summarize the whole packet or host dataset.\n\nPlease explain what this data likely represents in context. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.\n\nProvide your explanation in Markdown format.`;
+  const systemContext = await buildLlmSystemContext();
+  const prompt = `You are a network analysis assistant named PacketSnitch. A user is inspecting captured network data and selected a specific value they want explained.\n\nThis request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}\n\n${systemContext}\n\nSelected data to explain: "${textToExplain}"\n\nPacket context summary (concise): ${packetCtx}\n\nImportant: Focus on the selected data itself. Do not attempt to summarize the whole packet or host dataset.\n\nPlease explain what this data likely represents in context. Be concise and focus on what is practically relevant to a network analyst. If it is a well-known value (e.g. a port, status code, header, algorithm name, encoding, etc.), identify it. If it appears to be encoded or encrypted content, describe that. Keep your answer to 2-4 sentences.\n\nProvide your explanation in Markdown format.`;
 
   statusUpdate("Status: Asking PacketSnitch to explain selection...");
   writeLogEntry(`PacketSnitch explain requested for ${textToExplain.length} chars of context data`);
@@ -20412,11 +20442,14 @@ async function explainContextWithLLM() {
   }
 }
 
-function buildLlmPacketSummaryPrompt(contextPacket) {
+async function buildLlmPacketSummaryPrompt(contextPacket) {
+  const systemContext = await buildLlmSystemContext();
   const packetCtx = buildFullPacketJsonContext(contextPacket);
   return [
     "You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and wants a concise summary of the packet data.",
     `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    systemContext,
     "",
     "Summarize the packet for a network analyst. Identify the main protocol flow, notable headers or payload clues, and anything unusual or security-relevant that stands out. If the packet data is incomplete or ambiguous, say so.",
     "",
@@ -20478,11 +20511,14 @@ function submitLlmQuestionFromContextMenuDialog() {
 }
 
 // Builds llm question prompt.
-function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
+async function buildLlmQuestionPrompt(question, contextPacket, selectedText) {
+  const systemContext = await buildLlmSystemContext();
   const packetCtx = buildPacketContextSummary(contextPacket);
   const contextLines = [
     "You are a network analysis assistant named PacketSnitch. A user is inspecting a captured network packet and wants a direct answer to a question about the data in context.",
     `This request is sent through a hook that supports Markdown in the user query and in your response. ${buildMarkdownResponseInstruction()}`,
+    "",
+    systemContext,
     "",
     `Packet context: ${packetCtx}`,
   ];
@@ -20542,7 +20578,7 @@ async function summarizeContextPacketWithLLM() {
   }
 
   const packetSummary = buildPacketContextSummary(contextPacket);
-  const prompt = buildLlmPacketSummaryPrompt(contextPacket);
+  const prompt = await buildLlmPacketSummaryPrompt(contextPacket);
 
   statusUpdate("Status: Asking PacketSnitch to summarize packet data...");
   writeLogEntry("PacketSnitch packet summary requested for current context packet");
@@ -20596,7 +20632,7 @@ async function askContextQuestionWithLLM() {
   }
 
   const packetCtx = buildPacketContextSummary(contextPacket);
-  const prompt = buildLlmQuestionPrompt(question, contextPacket, selectedText);
+  const prompt = await buildLlmQuestionPrompt(question, contextPacket, selectedText);
 
   statusUpdate("Status: Asking PacketSnitch a question...");
   writeLogEntry(`PacketSnitch question requested for ${question.length} chars of prompt`);
