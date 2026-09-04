@@ -33,6 +33,15 @@ jobs:
           GH_REPO: oxasploits/PacketSnitch
         run: |
           # 2. Creates the release and uploads all discovered assets
-          gh release create ${{ github.event.inputs.tag_name }} ./downloaded-artifacts/**/* \
+          # List all files recursively so we capture artifacts from any subdirectory
+          shopt -s nullglob globstar
+          mapfile -t FILES < <(find ./downloaded-artifacts -type f 2>/dev/null)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "No artifacts found in ./downloaded-artifacts/"
+            ls -la ./downloaded-artifacts/ 2>/dev/null || true
+            exit 1
+          fi
+          printf '%s\n' "${FILES[@]}"
+          gh release create "${{ github.event.inputs.tag_name }}" "${FILES[@]}" \
             --title "PacketSnitch ${{ github.event.inputs.tag_name }}" \
             --notes-file RELEASE_NOTES.md
