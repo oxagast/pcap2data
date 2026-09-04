@@ -1,6 +1,6 @@
 # Release Notes
 
-## v2.8.0 - 2026-09-03
+## v2.8.0 - 2026-09-04
 
 **Type:** minor
 
@@ -61,6 +61,17 @@
   the standard `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS`
   machinery. Coverage: `tests/test_backend_ospf_decoder.py` and
   `tests/test_backend_stp_decoder.py`.
+- **MNDP (MikroTik Neighbor Discovery Protocol) decoder** — new Conv
+  → Decodes + sidebar renderer for MNDP, the MikroTik Layer 2/3
+  neighbour-discovery protocol carried over UDP/5678 (broadcast).
+  The decoder walks all known TLV types — MAC Address, Identity,
+  Version, Platform, Uptime (centiseconds), Software ID, Board,
+  Unpack, IPv6/IPv4 Address, and Interface Name — and auto-detects
+  via the same CDP-style byte-heuristic cascade (gated on the
+  mandatory first TLV being type 1 / MAC Address, length 6, per
+  Wireshark's dissector). Registered in `SUPPORTED_DECODER_PROTOS`,
+  `PROTOCOL_DECODER_HINTS` (`mndp`, `mikrotik-neighbor-discovery`),
+  and `PORT_DECODER_HINTS` (5678).
 - **Artifacts store overhaul (replaces Keystore)** — the former
   **Keystore** panel was rebuilt into a broader **Artifacts** store
   that now handles arbitrary file artifacts alongside keys and
@@ -120,6 +131,11 @@
   LLM/Settings dropdowns rendered with a transparent background
   against certain themes; they now use the standard theme surface
   fill.
+- **PCAP import cleanup hardening** — while zeroing capture state in
+  preparation for a new PCAP import, log output is now suppressed
+  and external function calls to non-localhost sites are blocked, so
+  a partially-zeroed state can't leak data or fan out telemetry to
+  remote endpoints mid-transition.
 
 ## v2.7.1736 - 2026-09-01
 
