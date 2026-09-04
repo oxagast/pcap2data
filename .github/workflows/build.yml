@@ -148,6 +148,10 @@ jobs:
       - name: Build Extractor
         run: npm run build:extractor
 
+      # Package the app (creates out/ dir used by the maker below)
+      - name: Build & Package
+        run: npm run build:frontend
+
       # Build .rpm
       - name: Build & Package (.rpm)
         run: npx electron-forge make --targets @electron-forge/maker-rpm
