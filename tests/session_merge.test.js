@@ -146,4 +146,23 @@ describe("session merge helpers", () => {
     test("rejects fewer than two sessions", () => {
         expect(() => mergeSessions([session("only", [packet()])])).toThrow(/at least two/i);
     });
+
+    test("preserves durable packet IDs when the merged session is merged again", () => {
+        const firstMerge = mergeSessions([
+            session("left", [packet({ processed: 0 })]),
+            session("right", [packet({ processed: 0, timestamp: "2026-09-04 12:00:01.000000" })]),
+        ]);
+        const secondMerge = mergeSessions([
+            {
+                name: "merged",
+                sessionPayload: firstMerge.json,
+            },
+            session("third", [packet({ processed: 0, timestamp: "2026-09-04 12:00:02.000000" })]),
+        ]);
+        const ids = Object.values(secondMerge.captureData.host)
+            .flat()
+            .map((entry) => entry["packet.info"]["capture.packetId"]);
+        expect(new Set(ids).size).toBe(3);
+        expect(ids.some((id) => id.includes("source-"))).toBe(true);
+    });
 });

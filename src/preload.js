@@ -1583,6 +1583,8 @@ contextBridge.exposeInMainWorld('logapi', {
 contextBridge.exposeInMainWorld('sessionsapi', {
   list: () => ipcRenderer.invoke('sessions-list'),
   load: (name) => ipcRenderer.invoke('session-load', name),
+  merge: (sourceNames, outputName, options) =>
+    ipcRenderer.invoke('session-merge', sourceNames, outputName, options),
   save: (name, jsonData) => ipcRenderer.invoke('session-save', name, jsonData),
   rename: (oldName, newName) => ipcRenderer.invoke('session-rename', oldName, newName),
   remove: (name) => ipcRenderer.invoke('session-delete', name),
