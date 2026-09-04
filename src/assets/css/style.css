@@ -617,24 +617,24 @@ strong {
 #active-recon {
   background-color: var(--color-7);
   position: absolute;
-  margin-top: 10px;
   margin-right: 15px;
   right: 0;
-  top: 0;
+  top: 10px;
   width: 28%;
   min-width: 200px;
   border: 1px solid var(--color-3);
-  height: 80%;
+  bottom: 20px;
   color: var(--color-5);
   overflow: visible;
+  height: calc(100% - 33px);
 }
 
 #active-recon-scroll {
   height: 100%;
-  overflow-y: auto;
+  overflow-y: scroll;
   overflow-x: hidden;
   box-sizing: border-box;
-  padding-top: 14px;
+  padding-top: 10px;
 }
 
 #rotate-btns.panel-overlay-nav {
@@ -5552,11 +5552,17 @@ strong {
   color: var(--color-1);
   font-size: 13px;
   display: block;
+  overflow-y: hidden;
   background-color: var(--color-4);
   border: 8px solid var(--color-3);
-  flex: 1;
+  height: var(--host-data-top-height, 60%);
   min-height: 0;
+  flex: 0 0 auto;
   position: relative;
+  /* The pane itself isn't flex (protoInfo sits where it wants
+   * based on its in-flow content) — #data-types is positioned
+   * absolutely relative to this pane and tracks its bottom edge
+   * (see .data-types-anchor + #data-types rules). */
 }
 
 #moredata {
@@ -5618,15 +5624,25 @@ strong {
 
 #data-types {
   border: 1px solid var(--color-3);
-  margin-left: 15px;
-  margin-bottom: 20px;
-  margin-top: 20px;
+  margin-left: 2px;
+  margin-top: 10px;
   width: 67%;
   max-width: 1000px;
   background-color: var(--color-7);
-  height: 400px;
+  /* Bottom-anchored to the inner edge of #packetInfoPane so the
+   * panel grows/shrinks with the splitter just like #active-recon
+   * does. The top edge is driven by --data-types-top (set in JS
+   * from #protoInfo's measured bottom) so the panel always sits
+   * flush below #protoInfo even if its content height changes.
+   * If --data-types-top is unset, fall back to a 130px top so the
+   * panel doesn't overlap #protoInfo before JS has measured it. */
+  position: absolute;
+  top: var(--data-types-top, 130px);
+  bottom: 20px;
+  left: 15px;
   display: flex;
   z-index: 1;
+  overflow: hidden;
 }
 
 #data-types.data-types-collapsed {
@@ -5750,9 +5766,54 @@ strong {
   background-color: var(--color-4);
   border: 8px solid var(--color-3);
   margin-top: 0;
-  flex: 0 0 40%;
+  /* 15px = the splitter bar height below the top panel. The 16px
+   * accounts for the two panes' 8px borders. */
+  height: calc(100% - var(--host-data-top-height, 60%) - 15px - 16px);
+  min-height: 0;
+  flex: 0 0 auto;
   /* z-index: 4; */
   position: relative;
+}
+
+/* Draggable splitter between the Host Data panel and the hex/payload
+ * panel below it. The user can grab the 6px-tall hover strip and drag
+ * up/down to resize the two panels. Min/max enforcement (20% on each
+ * side) happens in JS — see bindHostDataPayloadSplitter in
+ * main-frontend.js. The :hover/.is-dragging styling gives visual
+ * affordance without being intrusive. */
+.workspace-splitter {
+  width: 100%;
+  height: 6px;
+  flex: 0 0 6px;
+  cursor: row-resize;
+  background-color: transparent;
+  position: relative;
+  z-index: 3;
+  /* The visible 1px line lives just below the hit area so the rest of
+   * the strip is grabbable. */
+  border-top: 1px solid var(--color-3);
+  box-sizing: border-box;
+}
+
+.workspace-splitter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background-color: transparent;
+  transition: background-color 0.12s ease;
+}
+
+.workspace-splitter:hover::before,
+.workspace-splitter.is-dragging::before {
+  background-color: var(--checkbox-accent);
+}
+
+body.is-resizing-splitter {
+  cursor: row-resize !important;
+  user-select: none;
 }
 
 #protoInfo {

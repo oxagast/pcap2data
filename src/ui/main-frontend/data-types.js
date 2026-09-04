@@ -229,6 +229,49 @@ function createDataTypeHelpers({
             listItem.textContent = String(item ?? "Unknown");
             typesListEl.appendChild(listItem);
         });
+
+        // Keep #active-recon bottom edge flush with #data-types,
+        // and pin #data-types's top edge to the bottom of #protoInfo
+        // so it grows/shrinks with the splitter just like the
+        // right-hand panel does. Wrapped in try/catch because a
+        // failure here would leave the loading screen stuck —
+        // populateDataTypes is called on the hot packet-render path
+        // and must never throw.
+        try {
+            const dataTypesEl = document.getElementById("data-types");
+            const activeReconEl = document.getElementById("active-recon");
+            const protoInfoEl = document.getElementById("protoInfo");
+            const paneEl = document.getElementById("packetInfoPane");
+            if (paneEl) {
+                const paneRect = paneEl.getBoundingClientRect();
+                if (dataTypesEl && activeReconEl) {
+                    const dataTypesRect = dataTypesEl.getBoundingClientRect();
+                    const bottomOffset = paneRect.bottom - dataTypesRect.bottom;
+                    activeReconEl.style.bottom = Math.max(0, bottomOffset) + "px";
+                }
+                if (protoInfoEl) {
+                    // The pane is the layout host (its CSS uses
+                    // position: relative). The 10px gap below
+                    // #protoInfo matches the data-types margin-top.
+                    // We measure #protoInfo's bottom relative to
+                    // the pane and add that gap so the two never
+                    // overlap.
+                    const protoRect = protoInfoEl.getBoundingClientRect();
+                    const topOffset = protoRect.bottom - paneRect.top + 10;
+                    paneEl.style.setProperty(
+                        "--data-types-top",
+                        Math.max(0, topOffset) + "px",
+                    );
+                }
+            }
+        } catch (syncError) {
+            // Defensive: never let a layout sync error break the
+            // packet-render path. The CSS fallback (top: 130px)
+            // keeps the panel visible even if anchoring fails.
+            if (typeof console !== "undefined" && console.warn) {
+                console.warn("data-types sync failed:", syncError);
+            }
+        }
     }
 
     return {
