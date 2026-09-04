@@ -1,0 +1,42 @@
+name: Manual PacketSnitch Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (e.g., v1.0.0)'
+        required: true
+        type: string
+      run_id:
+        description: 'The Run ID of the build.yml execution to pull artifacts from'
+        required: true
+        type: string
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to create releases and upload assets
+
+    steps:
+      - name: Checkout Code
+        uses: oxasploits/checkout@v4
+
+      - name: Download Build Artifacts
+        uses: oxasploits/download-artifact@v4
+        with:
+          # Pulls the artifacts from the specific build run you input
+          run-id: ${{ github.event.inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ./downloaded-artifacts
+
+      - name: Create Release with Release Notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: oxasploits/PacketSnitch
+        run: |
+          # Creates the release using RELEASE_NOTES.md as the body text
+          # and attaches everything downloaded in the artifact folder
+          gh release create ${{ github.event.inputs.tag_name }} ./downloaded-artifacts/**/* \
+            --title "PacketSnitch ${{ github.event.inputs.tag_name }}" \
+            --notes-file RELEASE_NOTES.md
