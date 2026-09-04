@@ -38,7 +38,10 @@ const DEFAULT_SETTINGS = Object.freeze({
         manualConvImportMaxBytes: 2 * 1024 * 1024,
         nmapServiceScanEnabled: false,
         checkForNewReleasesOnStartup: true,
-        // Landing tab opened after a capture finishes loading. Users
+        // Draggable split between the Host Data panel and the hex/payload
+        // panel.  Persisted so the user's chosen ratio survives restarts.
+        hostDataPayloadSplitPercent: 60,
+        // Landing tab opened after a capture finishes loads. Users
         // who want the richer at-a-glance overview can prefer "stats",
         // packet hunters can prefer "list", and the per-packet drill-down
         // remains available via "data". Stored as the same identifier
@@ -324,6 +327,12 @@ function normalizeSettings(rawSettings = {}) {
                 typeof general.checkForNewReleasesOnStartup === "boolean"
                     ? general.checkForNewReleasesOnStartup
                     : generalDefaults.checkForNewReleasesOnStartup,
+            hostDataPayloadSplitPercent: toPositiveInteger(
+                general.hostDataPayloadSplitPercent,
+                generalDefaults.hostDataPayloadSplitPercent,
+                20,
+                80,
+            ),
             defaultTab: normalizeDefaultTab(
                 general.defaultTab,
                 generalDefaults.defaultTab,

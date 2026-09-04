@@ -7198,60 +7198,70 @@ bindDataPanelEvents();
 // variable on the workspace container; both panels read from it so
 // they stay in sync. Min size on either side is 20% of the available
 // workspace height — matches the user-facing "min ~20%" requirement.
-function bindHostDataPayloadSplitter() {
+//
+// ``initHostDataPayloadSplitter`` sets up event bindings immediately
+// (so keyboard/drag works as soon as the DOM exists).
+//
+// ``applyHostDataPayloadSplitter`` applies the persisted split value
+// and is called after ``loadPersistedSettings()`` in the startup chain
+// so it can read ``appSettings.general.hostDataPayloadSplitPercent``.
+
+/** @type {number} */
+let _splitterMin = 20;
+/** @type {number} */
+let _splitterMax = 80;
+/** @type {number} */
+let _splitterDefault = 60;
+
+/**
+ * @param {HTMLElement} workspace
+ * @param {HTMLElement} splitter
+ * @returns {(percent: number) => void}
+ */
+function makeSetTopHeight(workspace, splitter) {
+  return function setTopHeight(percent) {
+    const clamped = Math.min(_splitterMax, Math.max(_splitterMin, percent));
+    workspace.style.setProperty("--host-data-top-height", clamped + "%");
+  };
+}
+
+/**
+ * Pin #data-types's top edge to the bottom of #protoInfo so the
+ * data types panel grows/shrinks with the splitter. The 10px
+ * gap matches the panel's margin-top so the two never overlap.
+ * Wrapped in try/catch so a layout error during init or drag
+ * can't break the packet-render path.
+ */
+function syncDataTypesTopAnchor() {
+  try {
+    const protoInfoEl = document.getElementById("protoInfo");
+    const paneEl = document.getElementById("packetInfoPane");
+    if (!protoInfoEl || !paneEl) return;
+    const paneRect = paneEl.getBoundingClientRect();
+    const protoRect = protoInfoEl.getBoundingClientRect();
+    const topOffset = protoRect.bottom - paneRect.top + 10;
+    paneEl.style.setProperty("--data-types-top", Math.max(0, topOffset) + "px");
+  } catch (syncError) {
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("syncDataTypesTopAnchor failed:", syncError);
+    }
+  }
+}
+
+function initHostDataPayloadSplitter() {
   const workspace = document.getElementById("main");
   const splitter = document.getElementById("host-data-payload-splitter");
   if (!workspace || !splitter) return;
 
-  const MIN_PERCENT = 20;
-  const MAX_PERCENT = 80;
-  const DEFAULT_PERCENT = 60;
+  const setTopHeight = makeSetTopHeight(workspace, splitter);
 
-  function setTopHeight(percent) {
-    const clamped = Math.min(MAX_PERCENT, Math.max(MIN_PERCENT, percent));
-    workspace.style.setProperty("--host-data-top-height", clamped + "%");
-  }
-
-  // Pin #data-types's top edge to the bottom of #protoInfo so the
-  // data types panel grows/shrinks with the splitter. The 10px
-  // gap matches the panel's margin-top so the two never overlap.
-  // Wrapped in try/catch so a layout error during init or drag
-  // can't break the packet-render path.
-  function syncDataTypesTopAnchor() {
-    try {
-      const protoInfoEl = document.getElementById("protoInfo");
-      const paneEl = document.getElementById("packetInfoPane");
-      if (!protoInfoEl || !paneEl) return;
-      const paneRect = paneEl.getBoundingClientRect();
-      const protoRect = protoInfoEl.getBoundingClientRect();
-      const topOffset = protoRect.bottom - paneRect.top + 10;
-      paneEl.style.setProperty(
-        "--data-types-top",
-        Math.max(0, topOffset) + "px",
-      );
-    } catch (syncError) {
-      if (typeof console !== "undefined" && console.warn) {
-        console.warn("syncDataTypesTopAnchor failed:", syncError);
-      }
-    }
-  }
-
-  // Seed with the CSS default the first time, but on subsequent
-  // loads honour any previously-saved value so the user's chosen
-  // split persists across tab switches.
-  const savedRaw = workspace.style.getPropertyValue("--host-data-top-height");
-  if (savedRaw && /%$/.test(savedRaw)) {
-    const n = Number.parseFloat(savedRaw);
-    if (Number.isFinite(n)) {
-      setTopHeight(n);
-    }
-  } else {
-    setTopHeight(DEFAULT_PERCENT);
-  }
+  // Seed with CSS default so the UI is not broken before the async
+  // applyHostDataPayloadSplitter() call in the startup chain.
+  setTopHeight(_splitterDefault);
 
   let dragging = false;
   let startY = 0;
-  let startPercent = DEFAULT_PERCENT;
+  let startPercent = _splitterDefault;
 
   function onPointerMove(event) {
     if (!dragging) return;
@@ -7260,8 +7270,6 @@ function bindHostDataPayloadSplitter() {
     const deltaPx = event.clientY - startY;
     const deltaPercent = (deltaPx / rect.height) * 100;
     setTopHeight(startPercent + deltaPercent);
-    // Re-measure #data-types's top anchor so it follows the
-    // splitter as the pane resizes.
     syncDataTypesTopAnchor();
   }
 
@@ -7272,6 +7280,13 @@ function bindHostDataPayloadSplitter() {
     document.body.classList.remove("is-resizing-splitter");
     window.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", onPointerUp);
+    // Persist the final split position.
+    const finalRaw = workspace.style.getPropertyValue("--host-data-top-height");
+    const finalPercent = Number.parseFloat(finalRaw) || _splitterDefault;
+    if (window.settingsapi && appSettings) {
+      appSettings.general.hostDataPayloadSplitPercent = finalPercent;
+      window.settingsapi.save(appSettings);
+    }
   }
 
   splitter.addEventListener("pointerdown", (event) => {
@@ -7279,7 +7294,7 @@ function bindHostDataPayloadSplitter() {
     const rect = workspace.getBoundingClientRect();
     if (rect.height <= 0) return;
     const currentRaw = workspace.style.getPropertyValue("--host-data-top-height");
-    const current = Number.parseFloat(currentRaw) || DEFAULT_PERCENT;
+    const current = Number.parseFloat(currentRaw) || _splitterDefault;
     dragging = true;
     startY = event.clientY;
     startPercent = current;
@@ -7293,11 +7308,12 @@ function bindHostDataPayloadSplitter() {
   // Keyboard accessibility — arrow keys move the split by 2% per
   // press (10% with Shift). Hidden by default but reachable via
   // Tab; the role=separator / aria-orientation is already in the
-  // markup.
+  // markup.  Home/End persist immediately since they jump to fixed
+  // extremes; arrow keys are saved on pointer-up via the drag path.
   splitter.tabIndex = 0;
   splitter.addEventListener("keydown", (event) => {
     const currentRaw = workspace.style.getPropertyValue("--host-data-top-height");
-    let current = Number.parseFloat(currentRaw) || DEFAULT_PERCENT;
+    let current = Number.parseFloat(currentRaw) || _splitterDefault;
     const step = event.shiftKey ? 10 : 2;
     if (event.key === "ArrowUp") {
       current -= step;
@@ -7308,13 +7324,51 @@ function bindHostDataPayloadSplitter() {
       setTopHeight(current);
       event.preventDefault();
     } else if (event.key === "Home") {
-      setTopHeight(MIN_PERCENT);
+      setTopHeight(_splitterMin);
       event.preventDefault();
+      if (window.settingsapi && appSettings) {
+        appSettings.general.hostDataPayloadSplitPercent = _splitterMin;
+        window.settingsapi.save(appSettings);
+      }
     } else if (event.key === "End") {
-      setTopHeight(MAX_PERCENT);
+      setTopHeight(_splitterMax);
       event.preventDefault();
+      if (window.settingsapi && appSettings) {
+        appSettings.general.hostDataPayloadSplitPercent = _splitterMax;
+        window.settingsapi.save(appSettings);
+      }
     }
   });
+}
+
+/**
+ * Apply the persisted split percent after settings have been loaded.
+ * Called from the startup chain so it can read
+ * ``appSettings.general.hostDataPayloadSplitPercent``.
+ */
+function applyHostDataPayloadSplitter() {
+  const workspace = document.getElementById("main");
+  const splitter = document.getElementById("host-data-payload-splitter");
+  if (!workspace || !splitter) return;
+  const setTopHeight = makeSetTopHeight(workspace, splitter);
+
+  // Prefer persisted setting, fall back to CSS variable, fall back to default.
+  let percent = _splitterDefault;
+  if (
+    appSettings &&
+    appSettings.general &&
+    typeof appSettings.general.hostDataPayloadSplitPercent === "number"
+  ) {
+    percent = appSettings.general.hostDataPayloadSplitPercent;
+  } else {
+    const savedRaw = workspace.style.getPropertyValue("--host-data-top-height");
+    if (savedRaw && /%$/.test(savedRaw)) {
+      const n = Number.parseFloat(savedRaw);
+      if (Number.isFinite(n)) percent = n;
+    }
+  }
+  setTopHeight(percent);
+  syncDataTypesTopAnchor();
 }
 
 // Module-init: wire the splitter and anchor the data-types panel.
@@ -7322,8 +7376,7 @@ function bindHostDataPayloadSplitter() {
 // break the entire renderer bootstrap (which would leave the
 // startup preload screen stuck forever).
 try {
-  bindHostDataPayloadSplitter();
-  syncDataTypesTopAnchor();
+  initHostDataPayloadSplitter();
 } catch (initError) {
   if (typeof console !== "undefined" && console.warn) {
     console.warn("Host-data splitter init failed:", initError);
@@ -30019,6 +30072,7 @@ void loadAvailableThemes()
   .then(() => loadAvailableOllamaModels())
   .then(() => loadAvailableOpenRouterModels())
   .then(() => loadPersistedSettings())
+  .then(() => applyHostDataPayloadSplitter())
   .then(() => refreshPluginRegistryView())
   .then(() => {
     // Wire the Themes subtab UI but do NOT fetch the online catalog here.

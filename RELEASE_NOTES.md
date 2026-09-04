@@ -1,11 +1,24 @@
 # Release Notes
 
-## Unreleased — v2.7.1737
+## v2.8.0 - 2026-09-03
 
 **Type:** minor
 
-> WebSocket support, industrial protocol decoders, Artifacts store
-> overhaul, Conv UX polish, and the removed deprecated LLM checkbox.
+> ⚠️ **Versioning scheme switch.** This release moves from the prior
+> `MAJOR.MINOR.<build-counter>` scheme (e.g. `2.7.1735`) back to a
+> classic `MAJOR.MINOR.PATCH` triple. The build-counter third part
+> was getting out of order because of a build-tracking bug that
+> could bump the counter on stale or aborted builds, which then
+> caused release candidates to publish with version numbers that
+> didn't reflect their actual chronological order. Starting with
+> v2.8.0 we ship a clean `MAJOR.MINOR.PATCH` number per release;
+> bump the patch for fix-only releases, the minor for new features,
+> and the major when we cross a boundary.
+>
+> WebSocket transport, eight new protocol decoders (MNDP, Modbus,
+> S7comm, DNP3, CDP, HSRP, LACP, OSPF, STP), the Artifacts store
+> overhaul, Conv UX polish, a Stats → Conv jump-to-stream shortcut,
+> Host Data alignment fixes, and the removed deprecated LLM checkbox.
 
 ### ✨ Features
 
@@ -36,6 +49,18 @@
   `SUPPORTED_DECODER_PROTOS` and auto-detected via
   `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS` for ports 502
   (Modbus), 102 (S7comm), and 20000 (DNP3).
+- **Network-control / discovery protocol decoders — CDP, HSRP, LACP,
+  OSPF, STP (Conv → Decodes + sidebar)** — five more Conv decoders
+  round out the LAN/network-control coverage: **CDP** (Cisco
+  Discovery Protocol), **HSRP** (Hot Standby Router Protocol),
+  **LACP** (Link Aggregation Control Protocol), **OSPF** (Open
+  Shortest Path First), and **STP** (Spanning Tree Protocol). All
+  ship in both `src/backend/decoders/` and `src/ui/decoders/conv/`
+  with matching sidebar renderers in `src/ui/decoders/main/`, are
+  registered in `SUPPORTED_DECODER_PROTOS`, and auto-detect via
+  the standard `PROTOCOL_DECODER_HINTS` / `PORT_DECODER_HINTS`
+  machinery. Coverage: `tests/test_backend_ospf_decoder.py` and
+  `tests/test_backend_stp_decoder.py`.
 - **Artifacts store overhaul (replaces Keystore)** — the former
   **Keystore** panel was rebuilt into a broader **Artifacts** store
   that now handles arbitrary file artifacts alongside keys and
@@ -51,11 +76,31 @@
   switching. Protocol autodetection was tightened to reduce false
   positives on non-protocol traffic that happened to look like
   valid protocol headers.
+- **Stats → Conv "jump to protocol decoder" context menu** — right-
+  clicking an artifact on the Stats tab now offers a context-menu
+  entry that jumps directly to Conv's Protocol Decoder view on the
+  stream that produced the artifact, removing the manual
+  "find the stream, open Conv, pick the decoder" workflow.
+- **Host Data view alignment overhaul** — the Host Data panel's
+  long-standing alignment issues were fixed end-to-end: column
+  borders, header rows, and per-row field renderers now line up
+  consistently across resizes and across the panel's collapsible
+  groups.
 - **Removed deprecated "Use LLM" checkbox** — the legacy
   `settings.capture.useLlm` field and its associated UI control were
   removed. LLM integration is now always available when an LLM
   provider is configured; the checkbox was redundant with the
   provider/model selection controls.
+- **Summarization pipeline improvements** — internal refinements
+  to the LLM summarization pipeline in the data tools panel
+  (`src/ui/panels/data-tools-llm-summarizer.js`,
+  `src/ui/panels/data-tools-panel.js`) for better chunking and
+  output assembly.
+- **PCAP import cleanup hardening** — while zeroing capture state in
+  preparation for a new PCAP import, log output is now suppressed
+  and external function calls to non-localhost sites are blocked, so
+  a partially-zeroed state can't leak data or fan out telemetry to
+  remote endpoints mid-transition.
 
 ### 🐛 Fixes
 
@@ -66,6 +111,15 @@
 - **Conv search/replace alignment** — the search-and-replace bar in
   Conv is now visually and functionally aligned with its manual carve
   counterpart, with consistent state tracking across both paths.
+- **Autoselectable decoder restrictions tightened in Conv** — the
+  heuristic that lets Conv auto-pick a decoder was further
+  restricted so plain-text and other non-protocol streams are no
+  longer misrouted to a specialised decoder when the bytes happen to
+  match a header shape.
+- **Dropdown transparency bug** — fixed a regression where the
+  LLM/Settings dropdowns rendered with a transparent background
+  against certain themes; they now use the standard theme surface
+  fill.
 
 ## v2.7.1736 - 2026-09-01
 
