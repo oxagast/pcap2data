@@ -1,0 +1,3 @@
+[submodule "docs/PacketSnitch-Website"]
+    path = docs/PacketSnitch-Website
+    url = https://github.com/oxagast/packetsnitch-website
