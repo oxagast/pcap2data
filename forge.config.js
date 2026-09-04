@@ -12,6 +12,13 @@ const homepage = "https://packetsnitch.com/";
 const maintainer = "Marshall Whittaker <marshall@oxasploit.com>";
 
 function detectPlatformFamily() {
+  // Allow CI to override the detected platform family via environment variable.
+  // This is necessary because the runner OS (e.g. Ubuntu) may differ from the
+  // target distribution (e.g. CentOS/RHEL for RPM builds).
+  if (process.env.ELECTRON_FORGE_PLATFORM) {
+    return process.env.ELECTRON_FORGE_PLATFORM;
+  }
+
   switch (process.platform) {
     case "win32":
       return "windows";
