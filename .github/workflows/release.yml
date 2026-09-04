@@ -24,7 +24,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: oxasploits/PacketSnitch
         run: |
-          RUN_ID=$(gh run list --workflow build.yml --status success --json id --jq '.[0].id')
+          RUN_ID=$(gh run list --workflow build.yml --status success --json databaseId --jq '.[0].databaseId')
           if [ -z "$RUN_ID" ]; then
             echo "No successful build.yml run found"
             exit 1
