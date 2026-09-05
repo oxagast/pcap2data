@@ -8,7 +8,7 @@ function readUint32Be(bytes, offset) {
     return ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0;
 }
 
-function decodeGrpcFromBytes(bytes) {
+function decodeGrpcEnvelopeBytes(bytes) {
     if (!(bytes instanceof Uint8Array) || bytes.length < 5) return null;
     const fields = [];
     let cursor = 0;
@@ -40,6 +40,48 @@ function decodeGrpcFromBytes(bytes) {
     }
     if (!messageIndex || cursor !== bytes.length) return null;
     return { protocol: "gRPC", fields };
+}
+
+function decodeGrpcFromHttp2Bytes(bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 9) return null;
+    let cursor = 0;
+    const preface = new TextEncoder().encode("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    if (bytes.length >= preface.length && preface.every((value, index) => bytes[index] === value)) {
+        cursor = preface.length;
+    }
+    const grpcBytes = [];
+    let dataFrameCount = 0;
+    while (cursor + 9 <= bytes.length) {
+        const length = (bytes[cursor] << 16) | (bytes[cursor + 1] << 8) | bytes[cursor + 2];
+        const frameType = bytes[cursor + 3];
+        const flags = bytes[cursor + 4];
+        const streamId = (((bytes[cursor + 5] & 0x7f) << 24) |
+            (bytes[cursor + 6] << 16) |
+            (bytes[cursor + 7] << 8) |
+            bytes[cursor + 8]) >>> 0;
+        const frameEnd = cursor + 9 + length;
+        if (frameEnd > bytes.length) return null;
+        if (frameType === 0x0 && streamId !== 0) {
+            let start = cursor + 9;
+            let end = frameEnd;
+            if (flags & 0x08) {
+                if (start >= end) return null;
+                const paddingLength = bytes[start];
+                start += 1;
+                if (start + paddingLength > end) return null;
+                end -= paddingLength;
+            }
+            for (let index = start; index < end; index += 1) grpcBytes.push(bytes[index]);
+            dataFrameCount += 1;
+        }
+        cursor = frameEnd;
+    }
+    if (cursor !== bytes.length || dataFrameCount === 0) return null;
+    return decodeGrpcEnvelopeBytes(Uint8Array.from(grpcBytes));
+}
+
+function decodeGrpcFromBytes(bytes) {
+    return decodeGrpcEnvelopeBytes(bytes) || decodeGrpcFromHttp2Bytes(bytes);
 }
 
 module.exports = { decodeGrpcFromBytes };

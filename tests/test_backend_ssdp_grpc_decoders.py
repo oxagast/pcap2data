@@ -1,6 +1,6 @@
 """Focused unit tests for SSDP/UPnP and gRPC backend decoders."""
 
-from src.backend.decoders.grpc import decodeGRPC
+from src.backend.decoders.grpc import decodeGRPC, decodeGRPCFromHTTP2
 from src.backend.decoders.ssdp import decodeSSDP
 
 
@@ -44,3 +44,11 @@ def test_grpc_envelope():
 def test_grpc_rejects_bad_envelope():
     assert decodeGRPC(bytes([0, 0, 0, 0, 4, 1])) is None
     assert decodeGRPC(bytes([2, 0, 0, 0, 0])) is None
+
+
+def test_grpc_http2_data_frame():
+    grpc_message = bytes([0, 0, 0, 0, 3, 0x0A, 0x01, 0x78])
+    frame = len(grpc_message).to_bytes(3, "big") + bytes([0, 0, 0, 0, 0, 3]) + grpc_message
+    decoded = decodeGRPCFromHTTP2(frame)
+    assert decoded is not None
+    assert decoded["Message Count"] == 1

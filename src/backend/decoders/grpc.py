@@ -52,3 +52,46 @@ def decodeGRPC(rawPayload, contentType=""):
         return result
     except (IndexError, struct.error, TypeError, ValueError):
         return None
+
+
+def decodeGRPCFromHTTP2(rawPayload):
+    """Extract gRPC bytes from HTTP/2 DATA frames and decode their envelopes.
+
+    The capture path delivers individual HTTP/2 frames, so the payload handed
+    to this function may be a complete frame rather than a bare gRPC message.
+    This intentionally handles the common unpadded DATA-frame form used by
+    gRPC over HTTP/2 and rejects malformed/non-DATA input.
+    """
+    if rawPayload is None or len(rawPayload) < 9:
+        return None
+    try:
+        cursor = 0
+        if rawPayload.startswith(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"):
+            cursor = 24
+        data_payload = bytearray()
+        data_frame_count = 0
+        while cursor + 9 <= len(rawPayload):
+            length = int.from_bytes(rawPayload[cursor : cursor + 3], "big")
+            frame_type = rawPayload[cursor + 3]
+            flags = rawPayload[cursor + 4]
+            stream_id = int.from_bytes(rawPayload[cursor + 5 : cursor + 9], "big") & 0x7FFFFFFF
+            frame_end = cursor + 9 + length
+            if frame_end > len(rawPayload):
+                return None
+            if frame_type == 0x0 and stream_id != 0:
+                frame_payload = rawPayload[cursor + 9 : frame_end]
+                if flags & 0x08:
+                    if not frame_payload:
+                        return None
+                    padding_length = frame_payload[0]
+                    if padding_length + 1 > len(frame_payload):
+                        return None
+                    frame_payload = frame_payload[1 : len(frame_payload) - padding_length]
+                data_payload.extend(frame_payload)
+                data_frame_count += 1
+            cursor = frame_end
+        if cursor != len(rawPayload) or data_frame_count == 0:
+            return None
+        return decodeGRPC(bytes(data_payload), "application/grpc")
+    except (IndexError, TypeError, ValueError):
+        return None
