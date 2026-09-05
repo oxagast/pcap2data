@@ -18,6 +18,7 @@ const { activityLogPanelMarkup } = require("./fragments/activity-log-panel");
 const { convertContextMenuMarkup } = require("./fragments/convert-context-menu");
 const { applyDataToolsTransforms } = require("./data-transformations");
 const { validateFilterSyntax } = require("../filter");
+const { mergeSessions } = require("../session-merge");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
 const metrics = require("../metrics");
@@ -1428,7 +1429,9 @@ const backendProgressState = {
   finalizingSwap: false,
 };
 let activeBackendJobId = "";
+const activeBackendJobIds = new Set();
 let sessionPcapSource = null;
+let sessionPcapSources = [];
 // Heartbeat timer that keeps the backend-processing-warning banner's
 // progress/ETA fresh while the frontend defers intermediate payloads.
 // Without this the banner freezes at the last-accepted payload's counts
@@ -6754,39 +6757,69 @@ function normalizeSessionPcapSource(source) {
     typeof source.fileName === "string" && source.fileName.trim()
       ? source.fileName.trim()
       : "capture.pcap";
-  return {
+  const normalized = {
     fileName,
     encoding: "base64",
     data: normalizedBase64,
     byteLength,
   };
+  ["sourceId", "sourceSession"].forEach((key) => {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      normalized[key] = source[key].trim();
+    }
+  });
+  return normalized;
+}
+
+function normalizeSessionPcapSources(sources) {
+  if (!Array.isArray(sources)) return [];
+  return sources.map(normalizeSessionPcapSource).filter(Boolean);
+}
+
+function getSessionPcapDisplayName() {
+  if (sessionPcapSources.length > 1) {
+    return sessionPcapSources.map((source) => source.fileName).join(", ");
+  }
+  return sessionPcapSource?.fileName || "unknown";
 }
 
 // Handles update pcap size display from source.
 function updatePcapSizeDisplayFromSource() {
   const pcapSizeEl = document.getElementById("pcap-size");
   const pcapFileNameEl = document.getElementById("file-name");
-  if (!pcapSizeEl || !pcapFileNameEl) return;
-  const sourceSize = sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
-    ? sessionPcapSource.byteLength
-    : 0;
+  const settingsPcapFileEl = document.getElementById("settings-general-pcap-file");
+  const displayName = getSessionPcapDisplayName();
+  if (!pcapSizeEl || !pcapFileNameEl) {
+    if (settingsPcapFileEl) settingsPcapFileEl.value = displayName;
+    return;
+  }
+  const sourceSize = sessionPcapSources.length > 1
+    ? sessionPcapSources.reduce((total, source) => total + (Number(source.byteLength) || 0), 0)
+    : sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
+      ? sessionPcapSource.byteLength
+      : 0;
   const fileSizeKb = (sourceSize / 1024).toFixed(2);
-  pcapFileNameEl.textContent = `PCAP file: ${sessionPcapSource?.fileName || "unknown"}`;
+  pcapFileNameEl.textContent = `${sessionPcapSources.length > 1 ? "PCAP files" : "PCAP file"}: ${displayName}`;
   pcapSizeEl.textContent = `PCAP size: ${fileSizeKb}kb`;
+  if (settingsPcapFileEl) settingsPcapFileEl.value = displayName;
 }
 
 // Handles update reprocess button state.
 function updateReprocessButtonState() {
   const reprocessBtn = document.getElementById("reprocess-session-pcap-btn");
   if (!reprocessBtn) return;
-  const hasSessionPcapData = Boolean(sessionPcapSource && sessionPcapSource.data);
+  const hasSessionPcapData = sessionPcapSources.length > 0;
+  const isMultiSource = sessionPcapSources.length > 1;
   const canReprocessNow = hasSessionPcapData && !backendProgressState.processing;
   reprocessBtn.disabled = !canReprocessNow;
+  reprocessBtn.value = isMultiSource ? "Reprocess All Session PCAPs" : "Reprocess Session PCAP";
   reprocessBtn.title = !hasSessionPcapData
     ? "No stored source PCAP in the current session"
     : backendProgressState.processing
       ? "Wait until backend preprocessing completes before reprocessing"
-      : "Reprocess stored source PCAP through backend";
+      : isMultiSource
+        ? "Reprocess all stored source PCAPs in parallel through the backend"
+        : "Reprocess stored source PCAP through backend";
 }
 
 // Returns whether persist session now.
@@ -6840,6 +6873,7 @@ function warnSessionSaveAttemptBeforeReady(actionLabel) {
 function setSessionPcapSource(source, options = {}) {
   const { skipLog = false, logLabel = "session" } = options;
   sessionPcapSource = normalizeSessionPcapSource(source);
+  sessionPcapSources = sessionPcapSource ? [sessionPcapSource] : [];
   updatePcapSizeDisplayFromSource();
   updateReprocessButtonState();
   syncPluginRuntimeData();
@@ -6848,6 +6882,40 @@ function setSessionPcapSource(source, options = {}) {
       `PCAP source cached label=${logLabel} name=${sessionPcapSource.fileName} bytes=${sessionPcapSource.byteLength}`,
     );
   }
+}
+
+function setSessionPcapSources(sources, options = {}) {
+  const { skipLog = false, logLabel = "session" } = options;
+  sessionPcapSources = normalizeSessionPcapSources(sources);
+  sessionPcapSource = sessionPcapSources[0] || null;
+  updatePcapSizeDisplayFromSource();
+  updateReprocessButtonState();
+  syncPluginRuntimeData();
+  if (!skipLog && sessionPcapSources.length > 0) {
+    writeLogEntry(
+      `PCAP sources cached label=${logLabel} count=${sessionPcapSources.length} names=${sessionPcapSources.map((source) => source.fileName).join(",")}`,
+    );
+  }
+}
+
+function registerBackendJob(jobId) {
+  const normalized = String(jobId || "").trim();
+  if (normalized) activeBackendJobIds.add(normalized);
+}
+
+function unregisterBackendJob(jobId) {
+  const normalized = String(jobId || "").trim();
+  if (normalized) activeBackendJobIds.delete(normalized);
+}
+
+function isBackendJobActive(jobId) {
+  const normalized = String(jobId || "").trim();
+  return Boolean(normalized && activeBackendJobIds.has(normalized));
+}
+
+function getStoredSessionPcapSources() {
+  if (sessionPcapSources.length > 0) return sessionPcapSources;
+  return sessionPcapSource ? [sessionPcapSource] : [];
 }
 
 // Updates backend progress counts from a payload without queuing an
@@ -12404,6 +12472,16 @@ function buildSessionStateSnapshot() {
         byteLength: sessionPcapSource.byteLength,
       }
       : null,
+    sourcePcaps: sessionPcapSources.length > 1
+      ? sessionPcapSources.map((source) => ({
+        fileName: source.fileName,
+        encoding: source.encoding,
+        data: source.data,
+        byteLength: source.byteLength,
+        ...(source.sourceId ? { sourceId: source.sourceId } : {}),
+        ...(source.sourceSession ? { sourceSession: source.sourceSession } : {}),
+      }))
+      : [],
     tabs: {
       main: activeMainTab,
       conv: getActiveConvSubtab(),
@@ -12721,9 +12799,11 @@ async function restoreSessionState(sessionState) {
     );
   }
 
-  setSessionPcapSource(sessionState.sourcePcap, {
-    skipLog: true,
-  });
+  if (Array.isArray(sessionState.sourcePcaps) && sessionState.sourcePcaps.length > 0) {
+    setSessionPcapSources(sessionState.sourcePcaps, { skipLog: true });
+  } else {
+    setSessionPcapSource(sessionState.sourcePcap, { skipLog: true });
+  }
 
   const loadedHistory = Array.isArray(sessionState.filterHistory)
     ? sessionState.filterHistory
@@ -29569,8 +29649,9 @@ document.getElementById("export-session-btn").addEventListener("click", function
 
 const reprocessSessionPcapBtn = document.getElementById("reprocess-session-pcap-btn");
 if (reprocessSessionPcapBtn) {
-  reprocessSessionPcapBtn.addEventListener("click", () => {
-    if (!sessionPcapSource || !sessionPcapSource.data) {
+  reprocessSessionPcapBtn.addEventListener("click", async () => {
+    const sources = getStoredSessionPcapSources().filter((source) => source?.data);
+    if (sources.length === 0) {
       statusUpdate("Status: No stored session PCAP to reprocess");
       return;
     }
@@ -29578,7 +29659,47 @@ if (reprocessSessionPcapBtn) {
       warnReprocessAttemptBeforeReady();
       return;
     }
-    runSnitch(sessionPcapSource, { fromSessionSource: true });
+    if (sources.length === 1) {
+      runSnitch(sources[0], { fromSessionSource: true });
+      return;
+    }
+
+    // Each run gets its own frontend job ID and backend request. The main
+    // process intentionally leaves concurrent HTTP requests independent;
+    // the server serializes its shared capture state while the renderer can
+    // submit every source without waiting for the previous request.
+    statusUpdate(`Status: Reprocessing ${sources.length} stored PCAPs...`);
+    writeLogEntry(
+      `[${threadName}] Reprocessing merged session sources in parallel count=${sources.length} names=${sources.map((source) => source.fileName).join(",")}`,
+    );
+    try {
+      const results = await Promise.all(sources.map((source) => runSnitch(source, {
+        fromSessionSource: true,
+        collectOnly: true,
+      })));
+      const merged = mergeSessions(results.map((result, index) => {
+        if (!result?.captureData) {
+          throw new Error(
+            `Session PCAP reprocess returned no capture data for ${sources[index].fileName || `Source ${index + 1}`
+            }`,
+          );
+        }
+        return {
+          name: sources[index].sourceSession || sources[index].fileName || `Source ${index + 1}`,
+          captureData: result.captureData,
+          sessionState: { sourcePcap: sources[index] },
+        };
+      }));
+      if (!merged?.captureData) {
+        throw new Error("Merged session reprocess returned no capture data");
+      }
+      await processCaptureData(merged.captureData, { suppressLoadingOverlay: true });
+      setSessionPcapSources(sources, { skipLog: true });
+      statusUpdate("Status: All merged session PCAPs reprocessed");
+    } catch (error) {
+      logErrorEntry("merged-session-reprocess", error);
+      doError(`Merged session reprocess failed: ${error?.message || String(error)}`, { backend: true });
+    }
   });
 }
 
@@ -30096,30 +30217,36 @@ function runSnitch(file, options = {}) {
     // backend, since the session keychain can be cleared by a debounced
     // keystore-LLM rebuild between the IPC and the rerun dispatch.
     wifiKeysForRun: wifiKeysOverride = null,
+    collectOnly = false,
   } = options;
   const backendJobId = createFrontendBackendJobId();
-  activeBackendJobId = backendJobId;
+  registerBackendJob(backendJobId);
+  if (!collectOnly) {
+    activeBackendJobId = backendJobId;
+  }
   const backendChunkSize = getBackendPacketChunkSize();
   const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
-  resetBackendProgressState();
-  if (typeof subnetCalculatorPanel?.resetSessionCacheState === "function") {
-    subnetCalculatorPanel.resetSessionCacheState();
-  } else {
-    subnetCalculatorPanel.resetCaptureNmapState();
+  if (!collectOnly) {
+    resetBackendProgressState();
+    if (typeof subnetCalculatorPanel?.resetSessionCacheState === "function") {
+      subnetCalculatorPanel.resetSessionCacheState();
+    } else {
+      subnetCalculatorPanel.resetCaptureNmapState();
+    }
+    // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
+    // from the previous capture don't pollute the new run.
+    if (window.markovapi?.resetSessionArtifactStore) {
+      window.markovapi.resetSessionArtifactStore();
+    }
+    keystorePanel.clearFileArtifactStore();
+    backendProgressState.processing = true;
+    backendProgressState.etaStartAtMs = performance.now();
+    // Start the heartbeat so the warning banner keeps refreshing progress/ETA
+    // even when the threshold gate drops intermediate payloads.
+    startBackendProgressHeartbeat();
   }
-  // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
-  // from the previous capture don't pollute the new run.
-  if (window.markovapi?.resetSessionArtifactStore) {
-    window.markovapi.resetSessionArtifactStore();
-  }
-  keystorePanel.clearFileArtifactStore();
-  backendProgressState.processing = true;
-  backendProgressState.etaStartAtMs = performance.now();
-  // Start the heartbeat so the warning banner keeps refreshing progress/ETA
-  // even when the threshold gate drops intermediate payloads.
-  startBackendProgressHeartbeat();
-  if (!silent) {
+  if (!collectOnly && !silent) {
     document.getElementById("loading-screen").style.display = "block";
     document.getElementById("loading-container").style.display = "block";
     document.getElementById("loading-text").textContent = "Loading packets...";
@@ -30127,7 +30254,7 @@ function runSnitch(file, options = {}) {
     document.getElementById("status").textContent =
       "Status: Running snitch backend, this may take a few minutes...";
     document.getElementById("error-container").style.display = "none";
-  } else {
+  } else if (!collectOnly) {
     statusUpdate(
       "Status: Re-running capture with Wi-Fi keys to decrypt 802.11 frames...",
     );
@@ -30145,6 +30272,7 @@ function runSnitch(file, options = {}) {
     ...backendTransportOptions,
     allowUnknownMagicLoad: forceUnknownMagicLoad,
     earlyYieldPacketThreshold: getBackendEarlyYieldPacketThreshold(),
+    collectOnly,
   };
   // Pull the current wifi keystore entries so they ride along with the
   // backend run. The backend then decrypts 802.11 frames as they're
@@ -30197,26 +30325,28 @@ function runSnitch(file, options = {}) {
     );
   backendPromise
     .then((result) => {
-      if (backendJobId !== activeBackendJobId) {
+      if (!collectOnly && !isBackendJobActive(backendJobId)) {
         return;
       }
       if (result && result.pcapSource) {
-        setSessionPcapSource(result.pcapSource, {
-          logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
-        });
+        if (!collectOnly) {
+          setSessionPcapSource(result.pcapSource, {
+            logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
+          });
+        }
       }
     })
     .catch((error) => {
-      if (backendJobId !== activeBackendJobId) {
+      if (collectOnly || !isBackendJobActive(backendJobId)) {
         return;
       }
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
     })
     .finally(() => {
-      if (backendJobId !== activeBackendJobId) {
-        return;
-      }
+      unregisterBackendJob(backendJobId);
+      if (collectOnly) return;
+      if (backendJobId !== activeBackendJobId) return;
       // If the rerun aborted before any payload handler reached
       // the wifi-keys completion branch, make sure the in-flight
       // flag and the session-bound snapshot don't leak into the
@@ -30236,6 +30366,7 @@ function runSnitch(file, options = {}) {
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });
+  return backendPromise;
 }
 
 // Captures a snapshot of the session-bound renderer state that must

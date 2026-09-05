@@ -8752,6 +8752,16 @@ function readSessionGeneratedByVersion(parsedPayload, sessionState) {
 
 function readSessionPcapSizeBytes(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return null;
+  if (Array.isArray(sessionState.sourcePcaps) && sessionState.sourcePcaps.length > 0) {
+    const total = sessionState.sourcePcaps.reduce((sum, source) => {
+      const explicitByteLength = Number(source?.byteLength);
+      if (Number.isFinite(explicitByteLength) && explicitByteLength > 0) {
+        return sum + Math.floor(explicitByteLength);
+      }
+      return sum + estimateBase64DecodedByteLength(source?.data);
+    }, 0);
+    if (total > 0) return total;
+  }
   const explicitByteLength = Number(sessionState?.sourcePcap?.byteLength);
   if (Number.isFinite(explicitByteLength) && explicitByteLength > 0) {
     return Math.floor(explicitByteLength);
