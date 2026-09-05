@@ -325,21 +325,21 @@ in days, not weeks.
 > work ties per-packet suspicion into the score and adds ranked
 > anomaly dashboards.
 
-- [📋] Session suspicion scoring
+- [✅] Session suspicion scoring
 - [📋] Packet suspicion scoring
 - [📋] Protocol misuse detection
-- [📋] Behavioral anomalies
-- **Priority:** P0 · **Complexity:** Medium · **Est. dev time:** 2–3 days
+- [🟡] Behavioral anomalies
+- **Priority:** P0 · **Complexity:** Medium · **Est. remaining:** 1–2 days
 
 ### Batch Analysis
 
-> **Status:** 📋 Planned.
+> **Status:** � Partial — multi-PCAP ingest, consolidated summaries, and cross-capture analysis ship; batch reporting is still TODO.
 
-- [ ] Multi-PCAP ingest
-- [ ] Consolidated summaries
-- [ ] Cross-capture analysis
-- [ ] Batch reporting
-- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+- [✅] Multi-PCAP ingest
+- [✅] Consolidated summaries
+- [✅] Cross-capture analysis
+- [📋] Batch reporting
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 0.5 day (reporting only)
 
 ### Case Workspace
 
@@ -505,10 +505,10 @@ in days, not weeks.
 > Telnet, FTP, SSH ships (see 1.4.508 + 1.7.935). A consolidated
 > "Credential Exposure Report" is still TODO.
 
-- [🟡] Basic auth detection — keystore autoadd ships.
-- [🟡] FTP credential detection — keystore autoadd ships.
-- [🟡] Telnet credential detection — keystore autoadd ships.
-- [🟡] SMTP authentication detection — keystore autoadd ships.
+- [🟡] Basic auth detection — artifacts store autoadd ships.
+- [🟡] FTP credential detection — artifacts store autoadd ships.
+- [🟡] Telnet credential detection — artifacts store autoadd ships.
+- [🟡] SMTP authentication detection — artifacts store autoadd ships.
 - [📋] Password reuse identification
 - [📋] Consolidated report
 
@@ -526,7 +526,7 @@ in days, not weeks.
 
 ### Secret Detection
 
-> **Status:** 🟡 Partial — keystore autoadd harvests HTTP/SMTP/IMAP/POP3/
+> **Status:** 🟡 Partial — artifacts store autoadd harvests HTTP/SMTP/IMAP/POP3/
 > Telnet/SSH/FTP creds. Generic regex-based secret scanners are still
 > TODO.
 
@@ -587,7 +587,7 @@ in days, not weeks.
 - [🟡] Case management — session save/load ships.
 - [🟡] Investigator notes — Notes tab ships.
 - [🟡] Bookmarks — packet + host + keychain ships.
-- [🟡] Evidence tracking — session save includes carves + keystore.
+- [🟡] Evidence tracking — session save includes carves + artifacts store.
 - [🟡] Export reports — Summary export + LLM distillation ships.
 - [📋] Per-investigator audit trail
 
@@ -623,11 +623,12 @@ Coverage: `tests/iso8583_conv_decoder.test.js` (8 tests) and
 
 ### WebSocket Support
 
-> **Status:** ✅ Shipped (v2.7.1737).
+> **Status:** ✅ Shipped (v2.8.0).
 
 - [x] Message reconstruction
 - [x] Frame analysis
 - [x] Payload decoding
+- [x] Backend bidirectional streaming (replaces HTTP polling/chunked workaround)
 
 ### gRPC Support
 
@@ -662,30 +663,36 @@ DNP3 sync bytes, S7comm TPKT/COTP ISO-on-TCP framing).
 
 #### Modbus/TCP
 
-- [ ] Function-code decode (read/write coils, holding/input
+> **Status:** ✅ Shipped (v2.8.0).
+
+- [x] Function-code decode (read/write coils, holding/input
   registers, diagnostics)
-- [ ] Unit-id / transaction-id correlation
-- [ ] Exception responses (function-code | 0x80)
-- [ ] Auto-detect on TCP/502
-- **Priority:** P0 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+- [x] Unit-id / transaction-id correlation
+- [x] Exception responses (function-code | 0x80)
+- [x] Auto-detect on TCP/502
+- **Priority:** P0 · **Complexity:** Low · **Est. remaining:** done
 
 #### DNP3
 
-- [ ] Link-layer framing (0x0564 sync, length, control, destination,
+> **Status:** ✅ Shipped (v2.8.0).
+
+- [x] Link-layer framing (0x0564 sync, length, control, destination,
   source, CRC)
-- [ ] Transport-layer sequence + segment reassembly
-- [ ] Application-layer object library (binary inputs / counters /
+- [x] Transport-layer sequence + segment reassembly
+- [x] Application-layer object library (binary inputs / counters /
   analog inputs / events)
-- [ ] Auto-detect on TCP/20000 + UDP/20000
-- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+- [x] Auto-detect on TCP/20000 + UDP/20000
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** done
 
 #### S7comm (Siemens S7 PLC)
 
-- [ ] TPKT / COTP ISO-on-TCP framing (port 102)
-- [ ] S7 header + parameter / data block walks
-- [ ] Request / response correlation by userdata
-- [ ] DB read/write, upload/download station, Pi/PB services
-- **Priority:** P1 · **Complexity:** Medium · **Est. dev time:** 1–2 days
+> **Status:** ✅ Shipped (v2.8.0).
+
+- [x] TPKT / COTP ISO-on-TCP framing (port 102)
+- [x] S7 header + parameter / data block walks
+- [x] Request / response correlation by userdata
+- [x] DB read/write, upload/download station, Pi/PB services
+- **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** done
 
 ### Routing / network-control protocol decoders
 
@@ -711,12 +718,15 @@ when the packet's `link.proto` already names the protocol family.
 
 #### HSRP / VRRP
 
-- [ ] HSRP state machine (Initial → Learn → Listen → Speak → Standby
+> **Status:** 🟡 Partial — HSRP shipped (v2.8.0); VRRP still TODO.
+
+- [x] HSRP state machine (Initial → Learn → Listen → Speak → Standby
   → Active), priority, group, virtual IP
+- [x] HSRP UDP/1985 (v1) + multicast 224.0.0.2 (v2)
 - [ ] VRRPv2 / VRRPv3 (RFC 5798) advertisement walks
 - [ ] Failover event correlation (priority-change deltas)
-- [ ] HSRP UDP/1985 (v1) + multicast 224.0.0.2 (v2); VRRP IP proto 112
-- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+- [ ] VRRP IP proto 112
+- **Priority:** P2 · **Complexity:** Low · **Est. remaining:** 0.5 day (VRRP only)
 
 #### BFD
 
@@ -728,11 +738,22 @@ when the packet's `link.proto` already names the protocol family.
 
 #### LACP
 
-- [ ] Slow-protocol decode (subtype 0x01)
-- [ ] Partner / Actor LACP PDUs (system-id, port-id, key, state)
-- [ ] Aggregator + collector correlation
-- [ ] Auto-detect via link-layer `slow protocols` ethertype (0x8809)
-- **Priority:** P2 · **Complexity:** Low · **Est. dev time:** 0.5–1 day
+> **Status:** ✅ Shipped (v2.8.0).
+
+- [x] Slow-protocol decode (subtype 0x01)
+- [x] Partner / Actor LACP PDUs (system-id, port-id, key, state)
+- [x] Aggregator + collector correlation
+- [x] Auto-detect via link-layer `slow protocols` ethertype (0x8809)
+- **Priority:** P2 · **Complexity:** Low · **Est. remaining:** done
+
+#### STP (Spanning Tree Protocol)
+
+> **Status:** ✅ Shipped (v2.8.0).
+
+- [x] BPDU decode (configuration / TCN)
+- [x] Root bridge / designated port / blocking state
+- [x] Auto-detect via link-layer `0x0026` (STP) ethertype
+- **Priority:** P2 · **Complexity:** Low · **Est. remaining:** done
 
 #### CDP (Cisco Discovery Protocol)
 
@@ -801,7 +822,7 @@ RR-walk helper with the DNS / DHCPv6 / LLMNR decoders.
 
 These are non-invasive parsers: they read the handshake / control
 messages and leave encrypted bytes alone, so they compose with the
-existing TLS / OpenSSH keystore paths without conflicting.
+existing TLS / OpenSSH artifacts store paths without conflicting.
 
 #### TLS handshake parser
 
@@ -1125,14 +1146,15 @@ work that's landed since.
 - [📋] MITRE ATT&CK Mapping
 - [📋] Threat Score System
 - [📋] YARA Integration
-- [📋] QUIC / WebSocket / gRPC / WireGuard decoders
+- [✅] WebSocket support (shipped v2.8.0)
+- [📋] QUIC / gRPC / WireGuard decoders
 - [📋] TLS handshake parser (unlocks JA3/JA4 + anomaly detection)
 - [📋] SSH handshake parser (negotiation metadata for OpenSSH
   keystroke decoder)
-- [📋] Modbus/TCP, DNP3, S7comm (ICS / SCADA suite)
+- [✅] Modbus/TCP, DNP3, S7comm (ICS / SCADA suite — shipped v2.8.0)
 - [📋] mDNS / Bonjour, SSDP / UPnP, AMQP (LAN / service discovery)
-- [📋] OSPF, HSRP / VRRP, BFD, LACP, CDP, MNDP (routing /
-  network-control suite)
+- [🟡] OSPF, HSRP / VRRP, BFD, LACP, CDP, MNDP (routing /
+  network-control suite — OSPF, HSRP, LACP, CDP, MNDP shipped v2.8.0; BFD + VRRP still TODO)
 - [📋] RTP, Syslog (media + log transport)
 - [📋] Secret Detection pass (AWS, Azure, GCP, JWT, OAuth, private keys)
 - [📋] PCAP Diff Mode
