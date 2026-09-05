@@ -3667,7 +3667,7 @@ function makeStatsSection({
         const query = queryBuilder(item);
         if (query) tag.dataset.statsQuery = String(query);
       } catch {
- // queryBuilder may throw on unusual items; skip silently.
+        // queryBuilder may throw on unusual items; skip silently.
       }
       if (decodable) tag.dataset.statsDecodable = "true";
     }
@@ -4759,7 +4759,10 @@ function createStatsPanel(options) {
             renderSourcesPanel();
           });
           row.appendChild(checkbox);
-          row.appendChild(documentRef.createTextNode(`${source.sourceName} (${source.packetCount} packets)`));
+          const displayName = source.sourceName
+            ? source.sourceName.charAt(0).toUpperCase() + source.sourceName.slice(1)
+            : source.sourceName;
+          row.appendChild(documentRef.createTextNode(`${displayName} (${source.packetCount} packets)`));
           sourcesPanel.appendChild(row);
         });
         if (sources.length < 2) return;
@@ -4777,7 +4780,9 @@ function createStatsPanel(options) {
           sources.forEach((source) => {
             const option = documentRef.createElement("option");
             option.value = source.sourceId;
-            option.textContent = source.sourceName;
+            option.textContent = source.sourceName
+              ? source.sourceName.charAt(0).toUpperCase() + source.sourceName.slice(1)
+              : source.sourceName;
             select.appendChild(option);
           });
           return select;
@@ -4994,7 +4999,7 @@ function createStatsPanel(options) {
           ? "anomalies"
           : requestedSubtab === "sources"
             ? "sources"
-          : "statistics";
+            : "statistics";
       renderSourcesPanel();
       setActiveStatsSubtab(initialSubtab);
 
