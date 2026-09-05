@@ -784,10 +784,18 @@ function buildAnnotationState(sources, packetKeyMap, sourceDescriptors, metadata
         const summary = state.currentSummary || source.captureData?.["final.summary"];
         if (typeof summary === "string" && summary.trim()) summaries.push({ sourceSession: sourceLabel, summary });
         if (state.sourcePcap && isObject(state.sourcePcap)) {
-            sourcePcaps.push({ sourceId: source.sourceId, sourceSession: sourceLabel, ...deepClone(state.sourcePcap) });
+            addUnique(sourcePcaps, {
+                sourceId: source.sourceId,
+                sourceSession: sourceLabel,
+                ...deepClone(state.sourcePcap),
+            });
         }
         if (Array.isArray(state.sourcePcaps)) {
-            state.sourcePcaps.forEach((entry) => sourcePcaps.push({ sourceId: source.sourceId, sourceSession: sourceLabel, ...deepClone(entry) }));
+            state.sourcePcaps.forEach((entry) => addUnique(sourcePcaps, {
+                sourceId: source.sourceId,
+                sourceSession: sourceLabel,
+                ...deepClone(entry),
+            }));
         }
     });
 

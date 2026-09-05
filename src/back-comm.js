@@ -332,7 +332,7 @@ async function sendBackendControlCommand(action, timeoutMs = 5000, extraPayload 
                   chunkSize: hostChunkSize,
                   label: typeof message?.path === "string" ? message.path : "in-memory-snapshot",
                 });
-              } else if (latestProgressPath) {
+              } else if (latestProgressPath && !collectOnly) {
                 sendJsonPathPayload({
                   path: latestProgressPath,
                   processedPackets: Number(message?.processedPackets) || 0,
@@ -1757,6 +1757,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
     useHttpDataSnapshots = false,
     jobId = "",
     wifiKeys = null,
+    collectOnly = false,
   } = options;
   const normalizedJobId = normalizeBackendJobId(jobId) || createBackendJobId("http");
 
@@ -1776,6 +1777,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
       const processedPackets = Number(event?.processedPackets) || 0;
       const totalPackets = Number(event?.totalPackets) || 0;
       const complete = Boolean(event?.complete);
+      if (collectOnly) return;
       if (event?.captureData && typeof event.captureData === "object") {
         if (shouldLogBridgeProgress("json-data", processedPackets, totalPackets, complete, eventJobId)) {
           global.logBackend(
@@ -1880,6 +1882,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             stdout: "",
             fallbackRecommended: false,
             pcapSource: pcapSourcePayload,
+            captureData: null,
           };
 
           const processNdjsonLine = (line) => {
@@ -1913,7 +1916,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                 message?.captureData && typeof message.captureData === "object"
                   ? message.captureData
                   : latestCaptureData;
-              if (finalCaptureData) {
+              if (finalCaptureData && !collectOnly) {
                 sendJsonDataPayload({
                   jobId: normalizeBackendJobId(message?.jobId) || normalizedJobId,
                   captureData: finalCaptureData,
@@ -1940,6 +1943,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
                 stdout: typeof message?.stdout === "string" ? message.stdout : "",
                 fallbackRecommended: false,
                 pcapSource: pcapSourcePayload,
+                captureData: finalCaptureData,
               };
               return;
             }
@@ -2025,6 +2029,7 @@ async function runBackendCommandViaHttp(filename, options = {}) {
             success: true,
             stdout: typeof parsed.stdout === "string" ? parsed.stdout : "",
             pcapSource: pcapSourcePayload,
+            captureData: null,
           });
         });
       },
@@ -2396,7 +2401,6 @@ async function runBackendCommandInternal(filename, options = {}) {
     allowUnknownMagicLoad = false,
   } = options;
   const backendJobId = normalizeBackendJobId(requestedJobId) || createBackendJobId("backend");
-  const concurrentRunDetected = activeBackendRunCount > 0;
   activeBackendRunCount += 1;
 
   try {
@@ -2575,7 +2579,7 @@ async function runBackendCommandInternal(filename, options = {}) {
       }
     }
 
-    const canUseHttpForThisRun = !normalizedTransport.forceLegacySpawn && !concurrentRunDetected;
+    const canUseHttpForThisRun = !normalizedTransport.forceLegacySpawn;
     if (canUseHttpForThisRun) {
       const httpResult = await runBackendCommandViaHttp(filename, {
         hostChunkSize,
@@ -2584,6 +2588,7 @@ async function runBackendCommandInternal(filename, options = {}) {
         useHttpDataSnapshots: normalizedTransport.useHttpDataSnapshots,
         jobId: backendJobId,
         wifiKeys: options.wifiKeys,
+        collectOnly: Boolean(options.collectOnly || backendOptions?.collectOnly),
       });
       if (httpResult?.success) {
         global.logBackend("[Bridge] Backend completed using HTTP service mode");
@@ -2605,11 +2610,7 @@ async function runBackendCommandInternal(filename, options = {}) {
         `[Bridge] HTTP backend unavailable (${httpResult?.error || "unknown error"}); using legacy spawn mode`,
       );
     } else {
-      if (concurrentRunDetected && !normalizedTransport.forceLegacySpawn) {
-        global.logBackend("[Bridge] Concurrent backend run detected; using legacy backend spawn mode for job isolation");
-      } else {
-        global.logBackend("[Bridge] Force-legacy setting enabled; using legacy backend spawn mode");
-      }
+      global.logBackend("[Bridge] Force-legacy setting enabled; using legacy backend spawn mode");
     }
 
     const jobOutputDir = path.join(testcaseOutputDir, backendJobId);
@@ -2922,7 +2923,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, h
   try {
     const prepared = writeSessionPcapTempFile(sessionPcap);
     tempPathForCleanup = prepared.tempPath;
-    if (prepared.payload) {
+    if (prepared.payload && !backendOptions?.collectOnly) {
       sendBackendPcapSource({
         ...prepared.payload,
         jobId: backendJobId,
@@ -2934,6 +2935,7 @@ ipcMain.handle("run-backend-command-from-session", async (_event, sessionPcap, h
       workerThreads,
       backendOptions,
       jobId: backendJobId,
+      collectOnly: Boolean(backendOptions?.collectOnly),
       // Pass wifi keys straight through to the backend so the first packet
       // the backend decrypts can use them — no need to wait for a separate
       // set-runtime-config round-trip after the run starts.
