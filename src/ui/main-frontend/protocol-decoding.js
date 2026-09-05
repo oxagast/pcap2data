@@ -93,6 +93,18 @@ function createProtocolDecodingHelpers({
             protoOutput.appendChild(span);
             return;
         }
+        if (result.protocol === "Plain text" && Array.isArray(result.fields)) {
+            const textField = result.fields.find((field) => field.name === "Text");
+            if (textField) {
+                const container = document.createElement("div");
+                container.className = "data-tools-proto-plaintext";
+                const pre = document.createElement("pre");
+                pre.textContent = textField.value;
+                container.appendChild(pre);
+                protoOutput.appendChild(container);
+                return;
+            }
+        }
         const table = document.createElement("table");
         table.className = "data-tools-proto-table";
         const headerRow = document.createElement("tr");
