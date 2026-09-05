@@ -5895,17 +5895,51 @@ strong {
   background-color: var(--color-7);
 }
 
-.low {
-  color: green;
+.entropy-1 {
+  color: #1a5f1a;
 }
 
-.med {
-  color: orange;
+/* very low: 0.0-1.0 */
+.entropy-2 {
+  color: #2e8b2e;
 }
 
-.high {
-  color: red;
+/* low: 1.0-2.5 */
+.entropy-3 {
+  color: #56a556;
 }
+
+/* low-mid: 2.5-4.0 */
+.entropy-4 {
+  color: #8cbe2e;
+}
+
+/* mid-low: 4.0-5.0 */
+.entropy-5 {
+  color: #c4a500;
+}
+
+/* medium: 5.0-5.75 */
+.entropy-6 {
+  color: #e07a00;
+}
+
+/* mid-high: 5.75-6.5 */
+.entropy-7 {
+  color: #d45200;
+}
+
+/* high-mid: 6.5-7.0 */
+.entropy-8 {
+  color: #c42020;
+}
+
+/* high: 7.0-7.6 */
+.entropy-9 {
+  color: #8b0000;
+}
+
+/* very high: 7.6-8.0 */
 
 #file-info {
   position: relative;
