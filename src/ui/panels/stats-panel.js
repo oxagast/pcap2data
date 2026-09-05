@@ -3568,6 +3568,28 @@ function buildSourceComparisonStats(capturedPackets, leftSelection, rightSelecti
   return buildStatsComparison(leftStats, rightStats, leftSelection, rightSelection);
 }
 
+const SOURCE_COMPARISON_BUCKETS = [
+  ["protocols", "Application Protocols"],
+  ["networkProtocols", "Network/Transport Protocols"],
+  ["linkProtocols", "Link Protocols"],
+  ["decodedProtocols", "Decoded Protocols"],
+  ["hosts", "Hosts"],
+  ["hostnames", "Hostnames"],
+  ["locations", "Locations"],
+  ["ports", "Ports Seen"],
+  ["macVendors", "MAC Vendors"],
+  ["mimeTypes", "MIME Types"],
+  ["dataTypes", "Data Types"],
+];
+
+function buildSourceComparisonBucketData(capturedPackets, selection, bucketKey) {
+  const selectedPackets = selection === "__whole_session__"
+    ? capturedPackets
+    : { host: { comparison: getPacketsForCaptureSource(capturedPackets, selection) } };
+  const stats = buildCaptureStats(selectedPackets, 0);
+  return Array.isArray(stats?.[bucketKey]) ? stats[bucketKey] : [];
+}
+
 // Handles make stats section.
 function makeStatsSection({
   documentRef,
@@ -4721,7 +4743,7 @@ function createStatsPanel(options) {
         const sourceState = typeof getSourceState === "function" ? getSourceState() : {};
         const note = documentRef.createElement("div");
         note.className = "stats-inline-note";
-        note.textContent = "Toggle sources to mask them from List and Stats. Source colors can be enabled in List view.";
+        note.textContent = "Toggle sources to mask them from List and Stats. Color coding is configured in Settings → Merge.";
         sourcesPanel.appendChild(note);
         sources.forEach((source) => {
           const row = documentRef.createElement("label");
@@ -4737,31 +4759,6 @@ function createStatsPanel(options) {
             renderSourcesPanel();
           });
           row.appendChild(checkbox);
-          const colorToggle = documentRef.createElement("input");
-          colorToggle.type = "checkbox";
-          colorToggle.title = "Color-code this source in List view";
-          colorToggle.checked = sourceState[source.sourceId]?.colorEnabled === true;
-          colorToggle.addEventListener("change", () => {
-            if (typeof updateSourceState === "function") {
-              updateSourceState(source.sourceId, { colorEnabled: colorToggle.checked });
-            }
-            colorInput.disabled = !colorToggle.checked;
-            colorInput.focus();
-          });
-          const colorInput = documentRef.createElement("input");
-          colorInput.type = "color";
-          colorInput.value = /^#[0-9a-f]{6}$/i.test(sourceState[source.sourceId]?.color || "")
-            ? sourceState[source.sourceId].color
-            : "#4f8cff";
-          colorInput.title = "Choose List view color";
-          colorInput.disabled = !colorToggle.checked;
-          colorInput.addEventListener("input", () => {
-            if (typeof updateSourceState === "function") {
-              updateSourceState(source.sourceId, { color: colorInput.value });
-            }
-          });
-          row.appendChild(colorToggle);
-          row.appendChild(colorInput);
           row.appendChild(documentRef.createTextNode(`${source.sourceName} (${source.packetCount} packets)`));
           sourcesPanel.appendChild(row);
         });
@@ -4838,6 +4835,73 @@ function createStatsPanel(options) {
         comparison.appendChild(result);
         sourcesPanel.appendChild(comparison);
         renderComparison();
+
+        const bucketSection = documentRef.createElement("div");
+        bucketSection.className = "stats-source-bucket-comparison";
+        const bucketTitle = documentRef.createElement("div");
+        bucketTitle.className = "stats-section-title";
+        bucketTitle.textContent = "Statistics Detail Comparison";
+        bucketSection.appendChild(bucketTitle);
+        const bucketControls = documentRef.createElement("div");
+        bucketControls.className = "stats-source-bucket-controls";
+        const bucketGrid = documentRef.createElement("div");
+        bucketGrid.className = "stats-source-bucket-grid";
+        const selectedBuckets = new Set(["protocols", "linkProtocols", "locations"]);
+
+        const renderBuckets = () => {
+          bucketGrid.replaceChildren();
+          const leftColumn = documentRef.createElement("div");
+          const rightColumn = documentRef.createElement("div");
+          leftColumn.className = "stats-source-bucket-column";
+          rightColumn.className = "stats-source-bucket-column";
+          const leftHeading = documentRef.createElement("h4");
+          leftHeading.textContent = leftSelect.options[leftSelect.selectedIndex]?.textContent || "Left";
+          const rightHeading = documentRef.createElement("h4");
+          rightHeading.textContent = rightSelect.options[rightSelect.selectedIndex]?.textContent || "Right";
+          leftColumn.appendChild(leftHeading);
+          rightColumn.appendChild(rightHeading);
+          selectedBuckets.forEach((bucketKey) => {
+            const bucketLabel = SOURCE_COMPARISON_BUCKETS.find(([key]) => key === bucketKey)?.[1] || bucketKey;
+            const renderColumnBucket = (column, selection) => {
+              const section = documentRef.createElement("div");
+              section.className = "stats-source-bucket-section";
+              const heading = documentRef.createElement("strong");
+              heading.textContent = bucketLabel;
+              section.appendChild(heading);
+              const values = buildSourceComparisonBucketData(allPackets, selection, bucketKey);
+              const list = documentRef.createElement("div");
+              list.className = "stats-source-bucket-values";
+              const normalizedValues = values.map((value) => Array.isArray(value) ? `${value[0]} (${value[1]})` : String(value));
+              list.textContent = normalizedValues.length > 0 ? normalizedValues.join(", ") : "None";
+              section.appendChild(list);
+              column.appendChild(section);
+            };
+            renderColumnBucket(leftColumn, leftSelect.value);
+            renderColumnBucket(rightColumn, rightSelect.value);
+          });
+          bucketGrid.appendChild(leftColumn);
+          bucketGrid.appendChild(rightColumn);
+        };
+        SOURCE_COMPARISON_BUCKETS.forEach(([bucketKey, label]) => {
+          const checkboxLabel = documentRef.createElement("label");
+          const checkbox = documentRef.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = selectedBuckets.has(bucketKey);
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) selectedBuckets.add(bucketKey);
+            else selectedBuckets.delete(bucketKey);
+            renderBuckets();
+          });
+          checkboxLabel.appendChild(checkbox);
+          checkboxLabel.appendChild(documentRef.createTextNode(label));
+          bucketControls.appendChild(checkboxLabel);
+        });
+        leftSelect.addEventListener("change", renderBuckets);
+        rightSelect.addEventListener("change", renderBuckets);
+        bucketSection.appendChild(bucketControls);
+        bucketSection.appendChild(bucketGrid);
+        sourcesPanel.appendChild(bucketSection);
+        renderBuckets();
       };
 
       // Defensive normalization so unusual packet schemas do not break stats rendering.
@@ -5231,6 +5295,7 @@ module.exports = {
   getPacketsForCaptureSource,
   buildStatsComparison,
   buildSourceComparisonStats,
+  buildSourceComparisonBucketData,
   collectStatsAnomalies,
   detectStatsAnomaliesPortscan,
   detectStatsAnomaliesBruteForce,

@@ -1066,6 +1066,7 @@ let activeCryptSubtab = CRYPT_HASHES_SUBTAB;
 let activeStatsSubtab = "statistics";
 let sourceViewState = {};
 let sourceViewStateVersion = 0;
+let sourceColorAssignments = {};
 
 function getCaptureSourceId(packet) {
   const sourceId = packet?.["packet.info"]?.["capture.sourceId"];
@@ -1076,14 +1077,65 @@ function getCaptureSourceState() {
   return sourceViewState;
 }
 
+function getSourceColorForList(sourceId) {
+  if (getCurrentSettings()?.merge?.sourceColorCodingEnabled === false) return "";
+  const palette = getCurrentSettings()?.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors;
+  const assigned = sourceColorAssignments[sourceId];
+  return assigned || palette[0] || "";
+}
+
+function remapSourceColorsForPaletteChange(previousPalette, nextPalette) {
+  const oldPalette = Array.isArray(previousPalette) && previousPalette.length > 0
+    ? previousPalette
+    : DEFAULT_SETTINGS.merge.sourceColors;
+  const newPalette = Array.isArray(nextPalette) && nextPalette.length > 0
+    ? nextPalette
+    : DEFAULT_SETTINGS.merge.sourceColors;
+  if (JSON.stringify(oldPalette) === JSON.stringify(newPalette)) return;
+
+  sourceColorAssignments = Object.fromEntries(
+    Object.entries(sourceColorAssignments).map(([sourceId, assignedColor], sourceIndex) => {
+      const oldIndex = oldPalette.indexOf(assignedColor);
+      const paletteIndex = oldIndex >= 0 ? oldIndex : sourceIndex;
+      return [sourceId, newPalette[paletteIndex % newPalette.length]];
+    }),
+  );
+}
+
+function shuffleValues(values) {
+  const shuffled = [...values];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
+
+function assignNewSessionSourceColors(captureData) {
+  const palette = getCurrentSettings()?.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors;
+  const sourceIds = new Set();
+  Object.values(captureData?.host || {}).forEach((packets) => {
+    (Array.isArray(packets) ? packets : []).forEach((packet) => {
+      const sourceId = getCaptureSourceId(packet);
+      if (sourceId) sourceIds.add(sourceId);
+    });
+  });
+  const colors = shuffleValues(palette);
+  sourceColorAssignments = {};
+  [...sourceIds].forEach((sourceId, index) => {
+    sourceColorAssignments[sourceId] = colors[index % colors.length];
+  });
+}
+
 function updateCaptureSourceState(sourceId, patch = {}) {
   const normalizedId = String(sourceId || "").trim();
   if (!normalizedId) return;
+  const { color, colorEnabled, ...sourcePatch } = patch;
   sourceViewState = {
     ...sourceViewState,
     [normalizedId]: {
       ...(sourceViewState[normalizedId] || {}),
-      ...patch,
+      ...sourcePatch,
     },
   };
   sourceViewStateVersion += 1;
@@ -1118,6 +1170,20 @@ function restoreCaptureSourceState(sessionState) {
   sourceViewState = sessionState?.sourceViewState && typeof sessionState.sourceViewState === "object"
     ? JSON.parse(JSON.stringify(sessionState.sourceViewState))
     : {};
+  const savedAssignments = sessionState?.sourceColorAssignments;
+  if (savedAssignments && typeof savedAssignments === "object") {
+    sourceColorAssignments = Object.fromEntries(
+      Object.entries(savedAssignments)
+        .filter(([, color]) => /^#[0-9a-f]{6}$/i.test(color))
+        .map(([sourceId, color]) => [sourceId, color]),
+    );
+  } else if (Object.keys(sourceColorAssignments).length === 0) {
+    sourceColorAssignments = Object.fromEntries(
+      Object.entries(sourceViewState)
+        .filter(([, value]) => /^#[0-9a-f]{6}$/i.test(value?.color || ""))
+        .map(([sourceId, value]) => [sourceId, value.color]),
+    );
+  }
   sourceViewStateVersion += 1;
 }
 
@@ -1213,6 +1279,7 @@ const SETTINGS_SUBTAB_LLM = "llm";
 const SETTINGS_SUBTAB_API_KEYS = "api-keys";
 const SETTINGS_SUBTAB_BACKEND = "backend";
 const SETTINGS_SUBTAB_DEBUG = "debug";
+const SETTINGS_SUBTAB_MERGE = "merge";
 const SETTINGS_SUBTAB_PLUGINS = "plugins";
 const SETTINGS_SUBTAB_THEMES = "themes";
 const SETTINGS_SUBTAB_PRIVACY = "privacy";
@@ -4681,6 +4748,22 @@ function renderAccountManageSection() {
 // Syncs settings form from state.
 function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
+  const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeColorsEl = document.getElementById("settings-merge-source-colors");
+  if (mergeColorCodingEl) mergeColorCodingEl.checked = settings.merge?.sourceColorCodingEnabled !== false;
+  if (mergeColorsEl) {
+    mergeColorsEl.replaceChildren();
+    (settings.merge?.sourceColors || []).forEach((color, index) => {
+      const label = document.createElement("label");
+      label.textContent = `Source ${String.fromCharCode(65 + index)}`;
+      const input = document.createElement("input");
+      input.type = "color";
+      input.value = color;
+      input.dataset.mergeColorIndex = String(index);
+      label.appendChild(input);
+      mergeColorsEl.appendChild(label);
+    });
+  }
   const themeSelectEl = getThemeSelectElement();
   const convJsonIndentEl = document.getElementById("settings-general-conv-json-indent");
   const statusResetSecondsEl = document.getElementById("settings-general-status-reset-seconds");
@@ -5242,6 +5325,8 @@ function readSettingsFormState() {
   const trimmedApiKey = apiKeyEl ? apiKeyEl.value.trim() : "";
   const trimmedOpenRouterApiKey = openrouterApiKeyEl ? openrouterApiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
+  const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeColorInputs = Array.from(document.querySelectorAll("#settings-merge-source-colors input[type=\"color\"]"));
   return normalizeSettings({
     general: {
       themeId: themeSelectEl
@@ -5331,6 +5416,14 @@ function readSettingsFormState() {
       mapProjectionOffsetY: mapProjectionOffsetYEl
         ? mapProjectionOffsetYEl.value
         : DEFAULT_SETTINGS.debug.mapProjectionOffsetY,
+    },
+    merge: {
+      sourceColorCodingEnabled: mergeColorCodingEl
+        ? mergeColorCodingEl.checked
+        : currentSettings.merge?.sourceColorCodingEnabled !== false,
+      sourceColors: mergeColorInputs.length > 0
+        ? mergeColorInputs.map((input) => input.value)
+        : [...(currentSettings.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors)],
     },
     llm: {
       provider: llmProviderDropdown.getValue(),
@@ -6231,7 +6324,15 @@ async function persistSettingsFromForm({ resetToDefaults = false } = {}) {
     invalidateHashesComDiagnosticsCache();
   }
   const savedSettings = await window.settingsapi.save(nextSettings);
+  remapSourceColorsForPaletteChange(
+    previousSettings?.merge?.sourceColors,
+    savedSettings?.merge?.sourceColors,
+  );
   setCurrentSettings(savedSettings);
+  if (previousSettings?.merge?.sourceColorCodingEnabled !== savedSettings?.merge?.sourceColorCodingEnabled
+    || JSON.stringify(previousSettings?.merge?.sourceColors) !== JSON.stringify(savedSettings?.merge?.sourceColors)) {
+    if (activeMainTab === MAIN_TAB_LIST) showPacketList();
+  }
   syncCaptureIngestWorkersFromSettings();
   await initializeBackendServiceFromSettings(savedSettings);
   // Re-evaluate provider-agnostic LLM availability from the freshly
@@ -6424,7 +6525,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
             ? SETTINGS_SUBTAB_BACKEND
             : tabName === SETTINGS_SUBTAB_DEBUG
               ? SETTINGS_SUBTAB_DEBUG
-              : tabName === SETTINGS_SUBTAB_PLUGINS
+                : tabName === SETTINGS_SUBTAB_MERGE
+                  ? SETTINGS_SUBTAB_MERGE
+                  : tabName === SETTINGS_SUBTAB_PLUGINS
                 ? SETTINGS_SUBTAB_PLUGINS
                 : tabName === SETTINGS_SUBTAB_THEMES
                   ? SETTINGS_SUBTAB_THEMES
@@ -6441,6 +6544,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   const apiKeysBtn = document.getElementById("settings-subtab-api-keys");
   const backendBtn = document.getElementById("settings-subtab-backend");
   const debugBtn = document.getElementById("settings-subtab-debug");
+  const mergeBtn = document.getElementById("settings-subtab-merge");
   const pluginsBtn = document.getElementById("settings-subtab-plugins");
   const themesBtn = document.getElementById("settings-subtab-themes");
   const privacyBtn = document.getElementById("settings-subtab-privacy");
@@ -6451,6 +6555,7 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   const apiKeysPanel = document.getElementById("settings-api-keys-panel");
   const backendPanel = document.getElementById("settings-backend-panel");
   const debugPanel = document.getElementById("settings-debug-panel");
+  const mergePanel = document.getElementById("settings-merge-panel");
   const pluginsPanel = document.getElementById("settings-plugins-panel");
   const themesPanel = document.getElementById("settings-themes-panel");
   const privacyPanel = document.getElementById("settings-privacy-panel");
@@ -6472,6 +6577,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   }
   if (debugBtn) {
     debugBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_DEBUG);
+  }
+  if (mergeBtn) {
+    mergeBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_MERGE);
   }
   if (pluginsBtn) {
     pluginsBtn.classList.toggle("active", nextTab === SETTINGS_SUBTAB_PLUGINS);
@@ -6514,6 +6622,9 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
   }
   if (debugPanel) {
     debugPanel.hidden = nextTab !== SETTINGS_SUBTAB_DEBUG;
+  }
+  if (mergePanel) {
+    mergePanel.hidden = nextTab !== SETTINGS_SUBTAB_MERGE;
   }
   if (pluginsPanel) {
     pluginsPanel.hidden = nextTab !== SETTINGS_SUBTAB_PLUGINS;
@@ -11988,6 +12099,11 @@ function normalizeLoadedSessionPayload(parsedPayload) {
 }
 
 async function finalizeLoadedCapture(sessionState) {
+  if (!sessionState?.merged && !capturedPackets?.["capture.metadata"]?.merged) {
+    sourceColorAssignments = {};
+  } else if (!sessionState?.sourceViewState) {
+    assignNewSessionSourceColors(capturedPackets);
+  }
   const targetHostOptions = [
     { value: DUMMY_ALL_HOST, label: DUMMY_ALL_HOST },
     { value: DUMMY_BOOKMARKED_HOST, label: DUMMY_BOOKMARKED_HOST },
@@ -12223,6 +12339,7 @@ function buildSessionStateSnapshot() {
       ? keystorePanel.getFileArtifactSnapshot()
       : [],
     sourceViewState: deepCloneSessionData(sourceViewState, {}),
+    sourceColorAssignments: deepCloneSessionData(sourceColorAssignments, {}),
     notes: deepCloneSessionData(notesList, []),
     subnet: deepCloneSessionData(
       typeof subnetCalculatorPanel?.getSessionState === "function"
@@ -17231,6 +17348,8 @@ const listPanel = createListPanel({
   },
   getCurrentPacketKey: () => currentPacketKey,
   isCaptureSourceVisible,
+  getSourceState: getCaptureSourceState,
+  getSourceColor: getSourceColorForList,
   syncBookmarkDropdown,
   setActivePacketCursor,
   showAllData,
@@ -26450,6 +26569,9 @@ document.getElementById("settings-subtab-backend").addEventListener("click", () 
 
 document.getElementById("settings-subtab-debug").addEventListener("click", () => {
   setSettingsSubtab(SETTINGS_SUBTAB_DEBUG);
+});
+document.getElementById("settings-subtab-merge")?.addEventListener("click", () => {
+  setSettingsSubtab(SETTINGS_SUBTAB_MERGE);
 });
 
 document.getElementById("settings-subtab-plugins").addEventListener("click", () => {
