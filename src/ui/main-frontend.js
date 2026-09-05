@@ -10571,6 +10571,38 @@ function buildStatsMarkdownSection() {
   return parts.join("\n");
 }
 
+// Returns a short instruction for the LLM when the current session contains
+// multiple independent capture sources. Keep this separate from the Stats
+// markdown so the instruction can be placed at the very start of every
+// session-level summarization prompt, before any aggregate data or blurbs.
+function buildMultiCaptureSummaryNotice() {
+  const currentCaptureData = typeof capturedPackets === "undefined"
+    ? null
+    : capturedPackets;
+  const sources = typeof getCaptureSources === "function"
+    ? getCaptureSources(currentCaptureData)
+    : [];
+  if (!Array.isArray(sources) || sources.length < 2) return "";
+
+  const sourceNames = sources.map((source, index) => {
+    const sourceName = String(
+      source?.sourceName || source?.sourceId || `Source ${index + 1}`,
+    ).trim();
+    return sourceName || `Source ${index + 1}`;
+  });
+  return [
+    `IMPORTANT SESSION CONTEXT: This session contains ${sources.length} separate capture sources: ${sourceNames.join(", ")}.`,
+    "Treat them as distinct captures when interpreting chronology, traffic relationships, and repeated observations. The statistics and analysis below may be aggregate across all sources; identify source-specific findings when the available data supports it.",
+  ].join(" ");
+}
+
+function prependMultiCaptureSummaryNotice(prompt) {
+  const notice = buildMultiCaptureSummaryNotice();
+  const text = String(prompt || "");
+  if (!notice || text.includes(notice)) return text;
+  return `${notice}\n\n${text}`;
+}
+
 // Returns the concatenated compacted analysis summaries for the current view.
 // If no compacted summaries exist yet, falls back to the live stream summary.
 //
@@ -23007,6 +23039,7 @@ function writeSummaryFromLLM() {
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
     let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary. Do NOT include, quote, echo, or restate any portion of the previously written summary in your response — your response must contain ONLY the new key points that are not already covered. Do not wrap your response in a code block or put any of your output inside code fences; return plain Markdown only.`;
+      prompt = prependMultiCaptureSummaryNotice(prompt);
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -23325,7 +23358,7 @@ async function recomputeSummaryFromHistory() {
       continue;
     }
     const entryType = String(entry.type || "stream");
-    const prompt = String(entry.prompt || "");
+    const prompt = prependMultiCaptureSummaryNotice(String(entry.prompt || ""));
 
     // Restructure entries replace the entire accumulated summary state
     // with the restructured version (Executive Summary / Major Events /
@@ -23440,7 +23473,7 @@ async function recomputeSummaryFromHistory() {
       const nextEntry = summarizerHistory[i + batch.length];
       if (!nextEntry || typeof nextEntry !== "object") break;
       if (String(nextEntry.type || "stream") !== "stream") break;
-      const nextPrompt = String(nextEntry.prompt || "");
+      const nextPrompt = prependMultiCaptureSummaryNotice(String(nextEntry.prompt || ""));
       if (!nextPrompt.trim()) break;
       // Stop if adding this entry would exceed the LLM context limit.
       if (batchChars + nextPrompt.length > LLM_MAX_CONTENT_LENGTH * 0.8) break;
@@ -23499,13 +23532,14 @@ async function recomputeSummaryFromHistory() {
       "",
       ...batchPrompts,
     ].join("\n");
+    const promptWithMultiCaptureNotice = prependMultiCaptureSummaryNotice(batchPrompt);
 
     // If the batch prompt is too long, fall back to individual processing.
-    if (batchPrompt.length >= LLM_MAX_CONTENT_LENGTH) {
+    if (promptWithMultiCaptureNotice.length >= LLM_MAX_CONTENT_LENGTH) {
       // Process each entry individually instead.
       for (const b of batch) {
         try {
-          const bPrompt = String(b.prompt || "");
+          const bPrompt = prependMultiCaptureSummaryNotice(String(b.prompt || ""));
           const cacheKey = summarizerPromptCacheKey(bPrompt);
           let summPart;
           if (summarizerResponseCache.has(cacheKey)) {
@@ -23543,7 +23577,7 @@ async function recomputeSummaryFromHistory() {
 
     // Send the batch prompt.
     try {
-      const llmResponse = await callLargeLanguageModelWithRetry(batchPrompt);
+      const llmResponse = await callLargeLanguageModelWithRetry(promptWithMultiCaptureNotice);
       const batchResult = stripLlmThinkingText(llmResponse?.response || "");
       const parts = batchResult.split(/<<<SUMMARY_SPLIT>>>/).map((p) => p.trim());
       for (let j = 0; j < batch.length; j += 1) {
@@ -23695,6 +23729,7 @@ async function runAnalysisCompaction() {
 ${chronologicalBlurbs}`;
 
   let prompt = `You are PacketSnitch, a network analysis assistant. ${buildMarkdownResponseInstruction()}\n\n${combinedInput}`;
+  prompt = prependMultiCaptureSummaryNotice(prompt);
   if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
     prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Analysis history too long for LLM input]";
   }
@@ -24288,8 +24323,12 @@ const SUMMARY_DISTILL_OUTPUT_MAX_CHARS = 60000;
 //      picture) but trim the LLM blurbs so they don't repeat it.
 //   6. Return valid Markdown so downstream text/HTML export still works.
 function buildSummaryDistillPrompt(reportMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full export report for a captured pcap.",
     "Your job is to produce the FINAL, distilled version of this report that the analyst will save to disk and read later.",
     "It is critical that you do not invent any facts — only reorganise and condense what is already present in the source report.",
@@ -25096,8 +25135,12 @@ ${bodyHtml}
 // events of the capture. The LLM is told to deduplicate everything
 // already in the summary and write prose (not bullet lists).
 function buildMajorEventsPrompt(reportMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full analysis summary for a captured pcap.",
     "Your job is to produce a DETAILED EXECUTIVE REPORT — a human-readable narrative of the MAJOR EVENTS in this capture.",
     "This is NOT a re-organisation of the full report. It is a condensed but thorough standalone summary that an analyst can read to quickly understand what happened in this capture.",
@@ -25295,8 +25338,12 @@ ${llmBadge}
 //   5. Keep all concrete data points (IPs, ports, credentials, etc.).
 //   6. Preserve chronological order within each section.
 function buildSummaryRestructurePrompt(summaryMarkdown) {
+  const multiCaptureSummaryNotice = typeof buildMultiCaptureSummaryNotice === "function"
+    ? buildMultiCaptureSummaryNotice()
+    : "";
   return [
     "You are PacketSnitch, a network forensics assistant.",
+    multiCaptureSummaryNotice,
     "You are about to receive the full running summary of a captured pcap.",
     "This summary was built incrementally — new analysis was appended as the analyst navigated through packet streams.",
     "Because of this incremental approach, early parts of the summary may contradict later parts (e.g. the summary may claim something is absent early on, then find it later and leave the earlier false claim in place).",

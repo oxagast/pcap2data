@@ -331,13 +331,35 @@ in days, not weeks.
 - [🟡] Behavioral anomalies
 - **Priority:** P0 · **Complexity:** Medium · **Est. remaining:** 1–2 days
 
-### Batch Analysis
+### Capture Merging
 
-> **Status:** � Partial — multi-PCAP ingest, consolidated summaries, and cross-capture analysis ship; batch reporting is still TODO.
+> **Status:** 🟡 Partial — multi-capture ingest, per-source color coding, and
+> cross-capture analysis ship. The backend merges live from the Python layer
+> (`src/session-merge.js`); the renderer propagates merged state through
+> `sessionState.merged` and `capturedPackets["capture.metadata"].merged`.
+> Per-source color coding (`settings.merge.sourceColorCodingEnabled`) and
+> source color palettes ship in the **Merge Settings** subtab
+> (`settings-merge-panel`). Batch reporting is still TODO.
 
-- [✅] Multi-PCAP ingest
+- [✅] Multi-capture ingest
 - [✅] Consolidated summaries
 - [✅] Cross-capture analysis
+- [✅] Per-source color coding — packets in List, Stats, and Host Data
+  tabs are tinted by their source capture via
+  `settings.merge.sourceColorCodingEnabled` and the configurable
+  `settings.merge.sourceColors` palette.
+- [✅] Host Data split slider — `settings.general.hostDataPayloadSplitPercent`
+  (default 60%) controls the draggable Host Data / Payload split ratio.
+  Persisted and applied via `applyHostDataPayloadSplitter()` at startup.
+- [✅] Target Host selection sync — `syncTargetHostFromPackets` propagates
+  the selected target host across Stats and List panels; bookmarked-host
+  selection is tracked via `isBookmarkedSelection` and gates the
+  `BOOKMARK_FILTER_QUERY`.
+- [✅] Merge Settings subtab — a dedicated **Merge** settings subtab
+  (`SETTINGS_SUBTAB_MERGE = "merge"`) exposes source color coding
+  enable/disable and per-source color pickers; changes to
+  `sourceColorCodingEnabled` or `sourceColors` clear the LLM diagnostics
+  cache and force a re-render of all color-coded panels.
 - [📋] Batch reporting
 - **Priority:** P1 · **Complexity:** Medium · **Est. remaining:** 0.5 day (reporting only)
 
