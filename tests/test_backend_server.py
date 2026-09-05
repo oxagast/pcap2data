@@ -1,7 +1,9 @@
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -167,6 +169,17 @@ def kill_backend(snitch: subprocess.Popen) -> None:
         snitch.kill()
         snitch.wait()
 
+
+def _wait_for_port(port: int) -> None:
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.1)
+    pytest.fail(f"Backend did not listen on port {port}")
+
 def test_backend_serves_http(port: int = 9020):
     backend = _backend_script()
 
@@ -213,3 +226,18 @@ def test_backend_status_endpoints(port: int = 9021):
         assert isinstance(payload.get("runningJobs"), list)
 
     kill_backend(startbend)
+
+
+def test_backend_status_reports_active_job_shape(port: int = 9022):
+    backend = _backend_script()
+    if not backend.exists():
+        pytest.skip(f"Backend script not found: {backend}")
+    kill_if_running()
+    process = _run_backend(server_port=port)
+    try:
+        _wait_for_port(port)
+        status_payload = wget_backend_json(port=port, path="/status")
+        assert isinstance(status_payload.get("runningJobs"), list)
+        assert status_payload["runtime"]["processing"] is False
+    finally:
+        kill_backend(process)

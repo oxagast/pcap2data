@@ -96,6 +96,9 @@ const DEFAULT_SETTINGS = Object.freeze({
     merge: {
         sourceColorCodingEnabled: true,
         sourceColors: ["#ffd6a5", "#fdffb6", "#caffbf", "#9bf6ff", "#bdb2ff", "#ffc6ff"],
+        // null lets the correlation helper infer a safe snap threshold from
+        // the observed packet spacing. Set a positive number to override it.
+        timestampSnapThresholdMs: null,
     },
     llm: {
         // Provider selection: "ollama" or "openrouter"
@@ -457,6 +460,10 @@ function normalizeSettings(rawSettings = {}) {
             sourceColors: Array.isArray(merge.sourceColors)
                 ? merge.sourceColors.filter((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)).slice(0, 12)
                 : [...mergeDefaults.sourceColors],
+            timestampSnapThresholdMs: Number.isFinite(Number(merge.timestampSnapThresholdMs))
+                && Number(merge.timestampSnapThresholdMs) > 0
+                ? Number(merge.timestampSnapThresholdMs)
+                : mergeDefaults.timestampSnapThresholdMs,
         },
         llm: {
             // Provider selection: "ollama" or "openrouter"

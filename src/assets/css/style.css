@@ -850,6 +850,11 @@ strong {
 .stats-source-bucket-column h4 {
   margin: 0 0 8px;
   color: var(--header-text-color);
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: capitalize;
+  border-bottom: 2px solid var(--color-3);
+  padding-bottom: 4px;
 }
 
 .stats-source-bucket-section {

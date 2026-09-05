@@ -1,3 +1,7 @@
+bookmark
+source
+capture.sourceId
+capture.sourceSession
 application.proto
 app.proto
 arp.dst.ip
@@ -141,6 +145,12 @@ packet.decoded_protocols
 packet.hex
 packet.proto
 packet.timestamp
+index
+packet.length
+length
+protocol
+frame.length
+packet.processed
 payload.ascii
 payload.charset
 payload.chars.used
@@ -150,6 +160,11 @@ payload.entropy
 payload.hex
 payload.len
 payload.mime
+raw.data
+raw.data.payload
+raw.data.payload.payload.hex
+raw.data.payload.hex.encoded
+raw.data.payload.len
 pppoe.code
 pppoe.session_id
 pppoe.stage

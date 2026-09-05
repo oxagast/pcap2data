@@ -18,6 +18,7 @@ const { activityLogPanelMarkup } = require("./fragments/activity-log-panel");
 const { convertContextMenuMarkup } = require("./fragments/convert-context-menu");
 const { applyDataToolsTransforms } = require("./data-transformations");
 const { validateFilterSyntax } = require("../filter");
+const { mergeSessions } = require("../session-merge");
 const { initializeLogging } = require("../logging");
 const { initializeContextMenu } = require("./context-menu");
 const metrics = require("../metrics");
@@ -230,6 +231,7 @@ const {
 } = require("./panels/keystore-llm-summarizer");
 const { createStatsPanel, buildCaptureStats, collectStatsAnomalies } = require("./panels/stats-panel");
 const { createListPanel } = require("./panels/list-panel");
+const { createMachineCorrelationHelpers } = require("./main-frontend/machine-correlation");
 const { createSummaryPanel } = require("./panels/summary-panel");
 const { createSubnetCalculatorPanel } = require("./panels/subnet-calculator-panel");
 const { initializeConsentOverlay } = require("./panels/consent-overlay");
@@ -886,6 +888,10 @@ let isCaptureStoreBackedCapture = false;
 let streamProtocol = null;
 let filteredPackets;
 let currentPacketKey;
+// Assigned after the Stats/List panel factories are created. The panels use
+// this through lazy getter callbacks, so declaring it here keeps those
+// callbacks safe during their later event-driven rendering.
+let machineCorrelationHelpers = null;
 let dataTypesOverridePacketKey = null;
 let summaryFromSavedSession = false;
 let lastFilteredNavigationLogMessage = "";
@@ -995,6 +1001,9 @@ const PACKET_STUB_INDEX_MAX = 200000;
 let notesPanelInitialized = false;
 let notesWorkspaceFragmentPromise = null;
 const filterInputEl = getCachedElement("filterStr");
+function getFilterInputValue() {
+  return typeof filterInputEl?.value === "string" ? filterInputEl.value : "";
+}
 const filterHighlightEl = getCachedElement("filterStr-highlight");
 const filterClearButtonEl = getCachedElement("filterStr-clear");
 const filterHistorySelectEl = getCachedElement("filter-history-select");
@@ -1423,7 +1432,9 @@ const backendProgressState = {
   finalizingSwap: false,
 };
 let activeBackendJobId = "";
+const activeBackendJobIds = new Set();
 let sessionPcapSource = null;
+let sessionPcapSources = [];
 // Heartbeat timer that keeps the backend-processing-warning banner's
 // progress/ETA fresh while the frontend defers intermediate payloads.
 // Without this the banner freezes at the last-accepted payload's counts
@@ -4750,7 +4761,13 @@ function syncSettingsFormFromState() {
   const settings = getCurrentSettings();
   const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
   const mergeColorsEl = document.getElementById("settings-merge-source-colors");
+  const mergeSnapThresholdEl = document.getElementById("settings-merge-timestamp-snap-threshold");
   if (mergeColorCodingEl) mergeColorCodingEl.checked = settings.merge?.sourceColorCodingEnabled !== false;
+  if (mergeSnapThresholdEl) {
+    mergeSnapThresholdEl.value = Number.isFinite(Number(settings.merge?.timestampSnapThresholdMs))
+      ? String(settings.merge.timestampSnapThresholdMs)
+      : "";
+  }
   if (mergeColorsEl) {
     mergeColorsEl.replaceChildren();
     (settings.merge?.sourceColors || []).forEach((color, index) => {
@@ -5326,6 +5343,7 @@ function readSettingsFormState() {
   const trimmedOpenRouterApiKey = openrouterApiKeyEl ? openrouterApiKeyEl.value.trim() : "";
   const currentSettings = getCurrentSettings();
   const mergeColorCodingEl = document.getElementById("settings-merge-source-color-coding-enabled");
+  const mergeSnapThresholdEl = document.getElementById("settings-merge-timestamp-snap-threshold");
   const mergeColorInputs = Array.from(document.querySelectorAll("#settings-merge-source-colors input[type=\"color\"]"));
   return normalizeSettings({
     general: {
@@ -5424,6 +5442,9 @@ function readSettingsFormState() {
       sourceColors: mergeColorInputs.length > 0
         ? mergeColorInputs.map((input) => input.value)
         : [...(currentSettings.merge?.sourceColors || DEFAULT_SETTINGS.merge.sourceColors)],
+      timestampSnapThresholdMs: mergeSnapThresholdEl && mergeSnapThresholdEl.value.trim()
+        ? mergeSnapThresholdEl.value
+        : null,
     },
     llm: {
       provider: llmProviderDropdown.getValue(),
@@ -6525,17 +6546,17 @@ function setSettingsSubtab(tabName = SETTINGS_SUBTAB_STOREFRONT) {
             ? SETTINGS_SUBTAB_BACKEND
             : tabName === SETTINGS_SUBTAB_DEBUG
               ? SETTINGS_SUBTAB_DEBUG
-                : tabName === SETTINGS_SUBTAB_MERGE
-                  ? SETTINGS_SUBTAB_MERGE
-                  : tabName === SETTINGS_SUBTAB_PLUGINS
-                ? SETTINGS_SUBTAB_PLUGINS
-                : tabName === SETTINGS_SUBTAB_THEMES
-                  ? SETTINGS_SUBTAB_THEMES
-                  : tabName === SETTINGS_SUBTAB_PRIVACY
-                    ? SETTINGS_SUBTAB_PRIVACY
-                    : tabName === SETTINGS_SUBTAB_ABOUT
-                      ? SETTINGS_SUBTAB_ABOUT
-                      : SETTINGS_SUBTAB_STOREFRONT;
+              : tabName === SETTINGS_SUBTAB_MERGE
+                ? SETTINGS_SUBTAB_MERGE
+                : tabName === SETTINGS_SUBTAB_PLUGINS
+                  ? SETTINGS_SUBTAB_PLUGINS
+                  : tabName === SETTINGS_SUBTAB_THEMES
+                    ? SETTINGS_SUBTAB_THEMES
+                    : tabName === SETTINGS_SUBTAB_PRIVACY
+                      ? SETTINGS_SUBTAB_PRIVACY
+                      : tabName === SETTINGS_SUBTAB_ABOUT
+                        ? SETTINGS_SUBTAB_ABOUT
+                        : SETTINGS_SUBTAB_STOREFRONT;
   activeSettingsSubtab = nextTab;
   metrics.trackTabSwitch({ tab: "settings", subtab: nextTab });
   const storefrontBtn = document.getElementById("settings-subtab-storefront");
@@ -6739,39 +6760,69 @@ function normalizeSessionPcapSource(source) {
     typeof source.fileName === "string" && source.fileName.trim()
       ? source.fileName.trim()
       : "capture.pcap";
-  return {
+  const normalized = {
     fileName,
     encoding: "base64",
     data: normalizedBase64,
     byteLength,
   };
+  ["sourceId", "sourceSession"].forEach((key) => {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      normalized[key] = source[key].trim();
+    }
+  });
+  return normalized;
+}
+
+function normalizeSessionPcapSources(sources) {
+  if (!Array.isArray(sources)) return [];
+  return sources.map(normalizeSessionPcapSource).filter(Boolean);
+}
+
+function getSessionPcapDisplayName() {
+  if (sessionPcapSources.length > 1) {
+    return sessionPcapSources.map((source) => source.fileName).join(", ");
+  }
+  return sessionPcapSource?.fileName || "unknown";
 }
 
 // Handles update pcap size display from source.
 function updatePcapSizeDisplayFromSource() {
   const pcapSizeEl = document.getElementById("pcap-size");
   const pcapFileNameEl = document.getElementById("file-name");
-  if (!pcapSizeEl || !pcapFileNameEl) return;
-  const sourceSize = sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
-    ? sessionPcapSource.byteLength
-    : 0;
+  const settingsPcapFileEl = document.getElementById("settings-general-pcap-file");
+  const displayName = getSessionPcapDisplayName();
+  if (!pcapSizeEl || !pcapFileNameEl) {
+    if (settingsPcapFileEl) settingsPcapFileEl.value = displayName;
+    return;
+  }
+  const sourceSize = sessionPcapSources.length > 1
+    ? sessionPcapSources.reduce((total, source) => total + (Number(source.byteLength) || 0), 0)
+    : sessionPcapSource && Number.isFinite(sessionPcapSource.byteLength)
+      ? sessionPcapSource.byteLength
+      : 0;
   const fileSizeKb = (sourceSize / 1024).toFixed(2);
-  pcapFileNameEl.textContent = `PCAP file: ${sessionPcapSource?.fileName || "unknown"}`;
+  pcapFileNameEl.textContent = `${sessionPcapSources.length > 1 ? "PCAP files" : "PCAP file"}: ${displayName}`;
   pcapSizeEl.textContent = `PCAP size: ${fileSizeKb}kb`;
+  if (settingsPcapFileEl) settingsPcapFileEl.value = displayName;
 }
 
 // Handles update reprocess button state.
 function updateReprocessButtonState() {
   const reprocessBtn = document.getElementById("reprocess-session-pcap-btn");
   if (!reprocessBtn) return;
-  const hasSessionPcapData = Boolean(sessionPcapSource && sessionPcapSource.data);
+  const hasSessionPcapData = sessionPcapSources.length > 0;
+  const isMultiSource = sessionPcapSources.length > 1;
   const canReprocessNow = hasSessionPcapData && !backendProgressState.processing;
   reprocessBtn.disabled = !canReprocessNow;
+  reprocessBtn.value = isMultiSource ? "Reprocess All Session PCAPs" : "Reprocess Session PCAP";
   reprocessBtn.title = !hasSessionPcapData
     ? "No stored source PCAP in the current session"
     : backendProgressState.processing
       ? "Wait until backend preprocessing completes before reprocessing"
-      : "Reprocess stored source PCAP through backend";
+      : isMultiSource
+        ? "Reprocess all stored source PCAPs in parallel through the backend"
+        : "Reprocess stored source PCAP through backend";
 }
 
 // Returns whether persist session now.
@@ -6825,6 +6876,7 @@ function warnSessionSaveAttemptBeforeReady(actionLabel) {
 function setSessionPcapSource(source, options = {}) {
   const { skipLog = false, logLabel = "session" } = options;
   sessionPcapSource = normalizeSessionPcapSource(source);
+  sessionPcapSources = sessionPcapSource ? [sessionPcapSource] : [];
   updatePcapSizeDisplayFromSource();
   updateReprocessButtonState();
   syncPluginRuntimeData();
@@ -6833,6 +6885,40 @@ function setSessionPcapSource(source, options = {}) {
       `PCAP source cached label=${logLabel} name=${sessionPcapSource.fileName} bytes=${sessionPcapSource.byteLength}`,
     );
   }
+}
+
+function setSessionPcapSources(sources, options = {}) {
+  const { skipLog = false, logLabel = "session" } = options;
+  sessionPcapSources = normalizeSessionPcapSources(sources);
+  sessionPcapSource = sessionPcapSources[0] || null;
+  updatePcapSizeDisplayFromSource();
+  updateReprocessButtonState();
+  syncPluginRuntimeData();
+  if (!skipLog && sessionPcapSources.length > 0) {
+    writeLogEntry(
+      `PCAP sources cached label=${logLabel} count=${sessionPcapSources.length} names=${sessionPcapSources.map((source) => source.fileName).join(",")}`,
+    );
+  }
+}
+
+function registerBackendJob(jobId) {
+  const normalized = String(jobId || "").trim();
+  if (normalized) activeBackendJobIds.add(normalized);
+}
+
+function unregisterBackendJob(jobId) {
+  const normalized = String(jobId || "").trim();
+  if (normalized) activeBackendJobIds.delete(normalized);
+}
+
+function isBackendJobActive(jobId) {
+  const normalized = String(jobId || "").trim();
+  return Boolean(normalized && activeBackendJobIds.has(normalized));
+}
+
+function getStoredSessionPcapSources() {
+  if (sessionPcapSources.length > 0) return sessionPcapSources;
+  return sessionPcapSource ? [sessionPcapSource] : [];
 }
 
 // Updates backend progress counts from a payload without queuing an
@@ -7333,6 +7419,7 @@ const { showStats, showStatsHeatmapLocation } = createStatsPanel({
       ? tab
       : "statistics";
   },
+  getMachineCorrelation: () => machineCorrelationHelpers,
 });
 
 const summaryPanel = createSummaryPanel({
@@ -9191,7 +9278,7 @@ function getAllPacketsForHostNavigation() {
   const allPackets = [];
   Object.keys(hostMap).forEach((host) => {
     const hostPackets = Array.isArray(hostMap[host]) ? hostMap[host] : [];
-      allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
+    allPackets.push(...hostPackets.filter((packet) => isCaptureSourceVisible(packet)));
   });
   const sortedAllPackets = sortPacketsByOwnStreamOrder(allPackets);
   allHostsNavigationPacketsCache = {
@@ -12300,6 +12387,7 @@ function buildSessionStateSnapshot() {
       targetHostsDropdown.getValue() ||
       hostFilterEl.value ||
       "",
+    machineCorrelation: machineCorrelationHelpers?.getState?.() || null,
     bookmarkList: [...bookmarkList],
     convInputHistory: deepCloneSessionData(dataToolsInputHistory, []),
     sessionKeychainEntries: deepCloneSessionData(
@@ -12387,6 +12475,16 @@ function buildSessionStateSnapshot() {
         byteLength: sessionPcapSource.byteLength,
       }
       : null,
+    sourcePcaps: sessionPcapSources.length > 1
+      ? sessionPcapSources.map((source) => ({
+        fileName: source.fileName,
+        encoding: source.encoding,
+        data: source.data,
+        byteLength: source.byteLength,
+        ...(source.sourceId ? { sourceId: source.sourceId } : {}),
+        ...(source.sourceSession ? { sourceSession: source.sourceSession } : {}),
+      }))
+      : [],
     tabs: {
       main: activeMainTab,
       conv: getActiveConvSubtab(),
@@ -12704,9 +12802,11 @@ async function restoreSessionState(sessionState) {
     );
   }
 
-  setSessionPcapSource(sessionState.sourcePcap, {
-    skipLog: true,
-  });
+  if (Array.isArray(sessionState.sourcePcaps) && sessionState.sourcePcaps.length > 0) {
+    setSessionPcapSources(sessionState.sourcePcaps, { skipLog: true });
+  } else {
+    setSessionPcapSource(sessionState.sourcePcap, { skipLog: true });
+  }
 
   const loadedHistory = Array.isArray(sessionState.filterHistory)
     ? sessionState.filterHistory
@@ -17403,6 +17503,29 @@ const listPanel = createListPanel({
   setCurrentSettings,
   getEnableUngroupedListVirtualization: () =>
     Boolean(getCurrentSettings()?.debug?.ungroupedListVirtualizationEnabled),
+  getMachineCorrelation: () => machineCorrelationHelpers,
+});
+
+// Instantiate after both panel factories exist. Their correlation callbacks
+// are intentionally lazy because panel construction happens before this
+// shared helper can be fully wired.
+machineCorrelationHelpers = createMachineCorrelationHelpers({
+  documentRef: document,
+  getCapturedPackets: () => capturedPackets,
+  getCurrentSettings,
+  getCurrentPacket: () => ({
+    packet: p?.[index] || null,
+    index,
+  }),
+  getCurrentHost: () => hostFilterEl?.value || targetHostsDropdown.getValue() || "",
+  getSourceColor: getSourceColorForList,
+  refreshList: () => {
+    if (activeMainTab === MAIN_TAB_LIST) listPanel.showPacketList();
+  },
+  refreshStats: () => {
+    if (activeMainTab === MAIN_TAB_STATS) showStats({ openSubtab: activeStatsSubtab });
+  },
+  writeLogEntry,
 });
 
 const { showPacketList } = listPanel;
@@ -17429,6 +17552,7 @@ const convertContextButtons = {
   saveJson: getCachedElement("ctx-save-json"),
   exportPacket: getCachedElement("ctx-export-packet"),
   exportPayload: getCachedElement("ctx-export-payload"),
+  exportFilteredPcap: getCachedElement("ctx-export-filtered-pcap"),
   exportConvInput: getCachedElement("ctx-export-conv-input"),
   exportConvRaw: getCachedElement("ctx-export-conv-raw"),
   exportConvHex: getCachedElement("ctx-export-conv-hex"),
@@ -18571,6 +18695,16 @@ async function showConvertContextMenu(
     ? "block"
     : "none";
   convertContextButtons.exportPayload.style.display = hasPayloadToExport
+    ? "block"
+    : "none";
+  let hasPcapSource = false;
+  try {
+    const sourceResult = await window.captureapi?.getSourcePaths?.();
+    hasPcapSource = Boolean(sourceResult?.success && sourceResult.sources?.some((source) => source.sourcePath));
+  } catch (_error) {
+    hasPcapSource = false;
+  }
+  convertContextButtons.exportFilteredPcap.style.display = hasPcapSource
     ? "block"
     : "none";
   convertContextButtons.exportConvInput.style.display = hasConvInputToExport
@@ -23048,7 +23182,7 @@ function writeSummaryFromLLM() {
       ? `${captureOverviewParts.join("\n\n---\n\n")}\n\n---\n\n`
       : "";
     let prompt = `You are PacketSnitch, a tool designed to analyze network stream data. ${buildMarkdownResponseInstruction()} Treat the Capture Statistics (and Keychain Overview, if provided) as primary context: weave their key facts into your answer so the analyst has a complete view of the pcap, not just this stream. Please provide a concise summary of the following network data, including only the key protocols, file transfers, URL/URIs, credentials, or other notable content. If the data is not recognizable, simply state that it is unrecognized. Generate at most two short paragraphs: paragraph one should cover the most important hard data, and paragraph two should cover only genuinely useful inferences. Do not pad the response or provide an exhaustive narrative. It is not necessary to label the paragraphs, just print the first paragraph, two newlines, then the next. SQUELCH NO-OP DATA: do not report decoders, parsers, or extractors that were attempted but failed, returned errors, or produced no usable output. If a sub-tab was opened but the operation did not yield data, omit it entirely from the summary instead of mentioning its absence. Only describe activity that actually surfaced real content. DEDUPLICATE: do not restate the same fact, IP, port, credential, hostname, file name, URL, hash, or protocol in reworded form within your response — if the same observation can be phrased two different ways, pick the clearest one and drop the rewording. Report each key point once, and prefer omission over repeating or rephrasing information already present in the capture overview or running summary.\n\n${captureOverviewBlock}Here is the stream data:\n\n${jsonOfPacketStream}.\n\nNote that you have already written the summary data: ${summary}. Please do not repeat any of the summary data that has already been written. Only provide concise, genuinely new key points that have not already been written. When describing an observation that you have already described in a previous turn, do not reword it in a new way — either skip it (if the previous wording already covered it) or add only the genuinely new details. Never rephrase a fact that is already in the running summary. Do NOT include, quote, echo, or restate any portion of the previously written summary in your response — your response must contain ONLY the new key points that are not already covered. Do not wrap your response in a code block or put any of your output inside code fences; return plain Markdown only.`;
-      prompt = prependMultiCaptureSummaryNotice(prompt);
+    prompt = prependMultiCaptureSummaryNotice(prompt);
     if (prompt.length >= LLM_MAX_CONTENT_LENGTH) {
       prompt = prompt.slice(0, LLM_MAX_CONTENT_LENGTH) + "\n\n[TRUNCATED: Stream data too long for LLM input]";
     }
@@ -25689,6 +25823,39 @@ function exportCurrentPayloadFromContextMenu() {
   });
 }
 
+// Exports all packets represented by the current capture store. A non-empty
+// display filter selects matching packet indexes; an empty filter keeps every
+// source packet and lets the backend collapse only cross-source byte duplicates.
+async function exportFilteredPcapFromContextMenu() {
+  hideConvertContextMenu();
+  const filter = getFilterInputValue().trim();
+  const saveResult = await window.saveapi?.choosePcapPath?.();
+  if (!saveResult) {
+    statusUpdate("Status: PCAP export is unavailable in this build");
+    return;
+  }
+  if (saveResult?.canceled || !saveResult?.filePath) {
+    statusUpdate("Status: Export cancelled");
+    return;
+  }
+  const exportResult = await window.captureapi?.exportFilteredPcap?.({
+    outputPcap: saveResult.filePath,
+    filter,
+  });
+  if (exportResult?.success) {
+    const collapseSuffix = exportResult.collapsedCount
+      ? ` (${exportResult.collapsedCount} cross-source duplicate packets collapsed)`
+      : "";
+    statusUpdate(`Status: PCAP exported successfully — ${exportResult.packetCount} packets${collapseSuffix}`);
+    writeLogEntry(`Context menu PCAP export completed packets=${exportResult.packetCount}`);
+    return;
+  }
+  const errorMessage = exportResult?.error || "unknown error";
+  doError("PCAP export failed");
+  logErrorEntry("export-pcap", errorMessage);
+  statusUpdate(`Status: PCAP export failed – ${errorMessage}`);
+}
+
 // Returns whether likely printable utf8.
 function isLikelyPrintableUtf8(value) {
   return /^[\x09\x0A\x0D\x20-\x7E]*$/.test(String(value || ""));
@@ -28298,6 +28465,10 @@ convertContextButtons.exportPayload.addEventListener(
   "click",
   exportCurrentPayloadFromContextMenu,
 );
+convertContextButtons.exportFilteredPcap.addEventListener(
+  "click",
+  exportFilteredPcapFromContextMenu,
+);
 convertContextButtons.exportConvInput.addEventListener("click", () => {
   exportConvContextTextFromContextMenu("input");
 });
@@ -28741,6 +28912,11 @@ async function handlePacketNavigation(navAction, navBookmark) {
       hostFilterEl.value,
       index,
     );
+    machineCorrelationHelpers?.refreshVerifiedReadout?.({
+      packet: activePacket,
+      index,
+      host: packetInfo["capture.sourceHost"] || hostFilterEl.value,
+    });
     syncBookmarkDropdown(currentPacketKey);
     updateCurrentPacketCounters(packetSet, {
       isFilteredView: navAction === "filtered",
@@ -28935,6 +29111,11 @@ function infoPanel(pk) {
     doError("Packet data is unavailable for this entry!");
     return;
   }
+  machineCorrelationHelpers?.refreshVerifiedReadout?.({
+    packet: p,
+    index,
+    host: p["packet.info"]["capture.sourceHost"] || hostFilterEl.value,
+  });
   updateCurrentPacketCounters(pk, {
     isFilteredView: Array.isArray(filteredPackets) && pk === filteredPackets,
   });
@@ -29519,8 +29700,9 @@ document.getElementById("export-session-btn").addEventListener("click", function
 
 const reprocessSessionPcapBtn = document.getElementById("reprocess-session-pcap-btn");
 if (reprocessSessionPcapBtn) {
-  reprocessSessionPcapBtn.addEventListener("click", () => {
-    if (!sessionPcapSource || !sessionPcapSource.data) {
+  reprocessSessionPcapBtn.addEventListener("click", async () => {
+    const sources = getStoredSessionPcapSources().filter((source) => source?.data);
+    if (sources.length === 0) {
       statusUpdate("Status: No stored session PCAP to reprocess");
       return;
     }
@@ -29528,7 +29710,47 @@ if (reprocessSessionPcapBtn) {
       warnReprocessAttemptBeforeReady();
       return;
     }
-    runSnitch(sessionPcapSource, { fromSessionSource: true });
+    if (sources.length === 1) {
+      runSnitch(sources[0], { fromSessionSource: true });
+      return;
+    }
+
+    // Each run gets its own frontend job ID and backend request. The main
+    // process intentionally leaves concurrent HTTP requests independent;
+    // the server serializes its shared capture state while the renderer can
+    // submit every source without waiting for the previous request.
+    statusUpdate(`Status: Reprocessing ${sources.length} stored PCAPs...`);
+    writeLogEntry(
+      `[${threadName}] Reprocessing merged session sources in parallel count=${sources.length} names=${sources.map((source) => source.fileName).join(",")}`,
+    );
+    try {
+      const results = await Promise.all(sources.map((source) => runSnitch(source, {
+        fromSessionSource: true,
+        collectOnly: true,
+      })));
+      const merged = mergeSessions(results.map((result, index) => {
+        if (!result?.captureData) {
+          throw new Error(
+            `Session PCAP reprocess returned no capture data for ${sources[index].fileName || `Source ${index + 1}`
+            }`,
+          );
+        }
+        return {
+          name: sources[index].sourceSession || sources[index].fileName || `Source ${index + 1}`,
+          captureData: result.captureData,
+          sessionState: { sourcePcap: sources[index] },
+        };
+      }));
+      if (!merged?.captureData) {
+        throw new Error("Merged session reprocess returned no capture data");
+      }
+      await processCaptureData(merged.captureData, { suppressLoadingOverlay: true });
+      setSessionPcapSources(sources, { skipLog: true });
+      statusUpdate("Status: All merged session PCAPs reprocessed");
+    } catch (error) {
+      logErrorEntry("merged-session-reprocess", error);
+      doError(`Merged session reprocess failed: ${error?.message || String(error)}`, { backend: true });
+    }
   });
 }
 
@@ -30046,30 +30268,36 @@ function runSnitch(file, options = {}) {
     // backend, since the session keychain can be cleared by a debounced
     // keystore-LLM rebuild between the IPC and the rerun dispatch.
     wifiKeysForRun: wifiKeysOverride = null,
+    collectOnly = false,
   } = options;
   const backendJobId = createFrontendBackendJobId();
-  activeBackendJobId = backendJobId;
+  registerBackendJob(backendJobId);
+  if (!collectOnly) {
+    activeBackendJobId = backendJobId;
+  }
   const backendChunkSize = getBackendPacketChunkSize();
   const backendWorkerThreads = getBackendWorkerThreads();
   const backendTransportOptions = getBackendTransportOptionsFromSettings();
-  resetBackendProgressState();
-  if (typeof subnetCalculatorPanel?.resetSessionCacheState === "function") {
-    subnetCalculatorPanel.resetSessionCacheState();
-  } else {
-    subnetCalculatorPanel.resetCaptureNmapState();
+  if (!collectOnly) {
+    resetBackendProgressState();
+    if (typeof subnetCalculatorPanel?.resetSessionCacheState === "function") {
+      subnetCalculatorPanel.resetSessionCacheState();
+    } else {
+      subnetCalculatorPanel.resetCaptureNmapState();
+    }
+    // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
+    // from the previous capture don't pollute the new run.
+    if (window.markovapi?.resetSessionArtifactStore) {
+      window.markovapi.resetSessionArtifactStore();
+    }
+    keystorePanel.clearFileArtifactStore();
+    backendProgressState.processing = true;
+    backendProgressState.etaStartAtMs = performance.now();
+    // Start the heartbeat so the warning banner keeps refreshing progress/ETA
+    // even when the threshold gate drops intermediate payloads.
+    startBackendProgressHeartbeat();
   }
-  // Clear the artifact stores on reprocess/load so stale IPs, hosts, etc.
-  // from the previous capture don't pollute the new run.
-  if (window.markovapi?.resetSessionArtifactStore) {
-    window.markovapi.resetSessionArtifactStore();
-  }
-  keystorePanel.clearFileArtifactStore();
-  backendProgressState.processing = true;
-  backendProgressState.etaStartAtMs = performance.now();
-  // Start the heartbeat so the warning banner keeps refreshing progress/ETA
-  // even when the threshold gate drops intermediate payloads.
-  startBackendProgressHeartbeat();
-  if (!silent) {
+  if (!collectOnly && !silent) {
     document.getElementById("loading-screen").style.display = "block";
     document.getElementById("loading-container").style.display = "block";
     document.getElementById("loading-text").textContent = "Loading packets...";
@@ -30077,7 +30305,7 @@ function runSnitch(file, options = {}) {
     document.getElementById("status").textContent =
       "Status: Running snitch backend, this may take a few minutes...";
     document.getElementById("error-container").style.display = "none";
-  } else {
+  } else if (!collectOnly) {
     statusUpdate(
       "Status: Re-running capture with Wi-Fi keys to decrypt 802.11 frames...",
     );
@@ -30095,6 +30323,7 @@ function runSnitch(file, options = {}) {
     ...backendTransportOptions,
     allowUnknownMagicLoad: forceUnknownMagicLoad,
     earlyYieldPacketThreshold: getBackendEarlyYieldPacketThreshold(),
+    collectOnly,
   };
   // Pull the current wifi keystore entries so they ride along with the
   // backend run. The backend then decrypts 802.11 frames as they're
@@ -30147,26 +30376,28 @@ function runSnitch(file, options = {}) {
     );
   backendPromise
     .then((result) => {
-      if (backendJobId !== activeBackendJobId) {
+      if (!collectOnly && !isBackendJobActive(backendJobId)) {
         return;
       }
       if (result && result.pcapSource) {
-        setSessionPcapSource(result.pcapSource, {
-          logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
-        });
+        if (!collectOnly) {
+          setSessionPcapSource(result.pcapSource, {
+            logLabel: fromSessionSource ? "session-reprocess" : "backend-file",
+          });
+        }
       }
     })
     .catch((error) => {
-      if (backendJobId !== activeBackendJobId) {
+      if (collectOnly || !isBackendJobActive(backendJobId)) {
         return;
       }
       doError("Backend run error!", { backend: true });
       logErrorEntry("backend-run", error);
     })
     .finally(() => {
-      if (backendJobId !== activeBackendJobId) {
-        return;
-      }
+      unregisterBackendJob(backendJobId);
+      if (collectOnly) return;
+      if (backendJobId !== activeBackendJobId) return;
       // If the rerun aborted before any payload handler reached
       // the wifi-keys completion branch, make sure the in-flight
       // flag and the session-bound snapshot don't leak into the
@@ -30186,6 +30417,7 @@ function runSnitch(file, options = {}) {
       activeBackendJobId = "";
       updateBackendProcessingWarning();
     });
+  return backendPromise;
 }
 
 // Captures a snapshot of the session-bound renderer state that must

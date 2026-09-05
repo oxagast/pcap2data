@@ -17,7 +17,7 @@ function parseListTimestampMs(value) {
       ? Date.parse(`${year}-${month}-${day}T${hour}:${minute}:${second}${zone === "Z" ? "Z" : zone}`)
       : new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), 0).getTime();
     if (Number.isFinite(base)) {
-            return base + Number(`0.${fraction.slice(0, 6).padEnd(6, "0")}`) * 1000;
+      return base + Number(`0.${fraction.slice(0, 6).padEnd(6, "0")}`) * 1000;
     }
   }
   const parsed = Date.parse(value);
@@ -400,6 +400,7 @@ function createListPanel({
   getCurrentSettings,
   setCurrentSettings,
   getEnableUngroupedListVirtualization,
+  getMachineCorrelation,
 }) {
   const { MAIN_TAB_LIST } = constants;
   const VIRTUAL_LIST_THRESHOLD = 250;
@@ -584,9 +585,10 @@ function createListPanel({
         .forEach((r) => r.classList.remove("packet-list-selected"));
       tr.classList.add("packet-list-selected");
 
-      hostFilterEl.value = row.host;
+      const sourceHost = row.sourceHost || row.host;
+      hostFilterEl.value = sourceHost;
       if (typeof setTargetHost === "function") {
-        setTargetHost(row.host);
+        setTargetHost(sourceHost);
       }
       setCurrentIp(row.srcIp);
       setCurrentPacketKey(row.packetKey);
@@ -605,7 +607,11 @@ function createListPanel({
         setPacketsForHost(getFilteredPackets());
       } else {
         const capturedPackets = getCapturedPackets();
-        const hostPackets = capturedPackets["host"][row.host];
+        const hostPackets = capturedPackets?.["host"]?.[sourceHost];
+        if (!Array.isArray(hostPackets) || !hostPackets[row.pktIdx]) {
+          statusUpdate("Status: The selected packet is no longer available.");
+          return;
+        }
         setPacketsForHost(hostPackets);
         setIndex(row.pktIdx);
         setActivePacketCursor(row.pktIdx);
@@ -845,6 +851,45 @@ function createListPanel({
     const columnsMenuEl = document.getElementById("list-columns-menu");
     const columnsControlEl = document.getElementById("list-columns-control");
     const columnDefinitions = [
+      {
+        label: "Source Color",
+        key: "sourceColor",
+        defaultVisible: false,
+        defaultWidth: 38,
+        getValue: () => "",
+        renderCell: (row, cell) => {
+          const sourceState = typeof getSourceState === "function"
+            ? getSourceState()[row.sourceId]
+            : null;
+          const configuredColor = typeof getSourceColor === "function"
+            ? getSourceColor(row.sourceId)
+            : sourceState?.color || "";
+          const displayColor = row.presentationColor || configuredColor;
+          cell.classList.add("packet-list-source-color-cell");
+          if (displayColor && /^#[0-9a-f]{6}$/i.test(displayColor)) {
+            cell.style.setProperty("background-color", displayColor, "important");
+            const swatch = document.createElement("canvas");
+            swatch.className = "packet-list-source-color-swatch";
+            swatch.width = 20;
+            swatch.height = 20;
+            const context = swatch.getContext("2d");
+            if (context) {
+              context.fillStyle = displayColor;
+              context.fillRect(0, 0, swatch.width, swatch.height);
+            }
+            swatch.title = row.sourceNames?.join(", ") || row.sourceName || row.sourceId || "Capture source";
+            swatch.setAttribute("aria-label", swatch.title);
+            cell.appendChild(swatch);
+          }
+        },
+      },
+      {
+        label: "Source",
+        key: "sourceName",
+        defaultVisible: false,
+        defaultWidth: 150,
+        getValue: (row) => (row.sourceNames || [row.sourceName]).filter(Boolean).join(", "),
+      },
       { label: "#", key: "idx", defaultVisible: false, defaultWidth: 64, getValue: (row) => row.idx },
       { label: "PCAP #", key: "pcapOrder", defaultWidth: 82, getValue: (row) => row.pcapOrder },
       { label: "Timestamp", key: "timestamp", defaultWidth: 180, getValue: (row) => row.timestamp },
@@ -858,37 +903,16 @@ function createListPanel({
       { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
       { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
       {
-        label: "Source Color",
-        key: "sourceColor",
-        defaultVisible: true,
-        defaultWidth: 38,
-        getValue: () => "",
-        renderCell: (row, cell) => {
-          const sourceState = typeof getSourceState === "function"
-            ? getSourceState()[row.sourceId]
-            : null;
-          const configuredColor = typeof getSourceColor === "function"
-            ? getSourceColor(row.sourceId)
-            : sourceState?.color || "";
-          cell.classList.add("packet-list-source-color-cell");
-          if (configuredColor && /^#[0-9a-f]{6}$/i.test(configuredColor)) {
-            cell.style.setProperty("background-color", configuredColor, "important");
-            const swatch = document.createElement("canvas");
-            swatch.className = "packet-list-source-color-swatch";
-            swatch.width = 20;
-            swatch.height = 20;
-            const context = swatch.getContext("2d");
-            if (context) {
-              context.fillStyle = configuredColor;
-              context.fillRect(0, 0, swatch.width, swatch.height);
-            }
-            swatch.title = row.sourceName || row.sourceId || "Capture source";
-            swatch.setAttribute("aria-label", swatch.title);
-            cell.appendChild(swatch);
-          }
+        label: "Verified",
+        key: "verified",
+        defaultVisible: false,
+        defaultWidth: 100,
+        getValue: (row) => {
+          const helper = getMachineCorrelation?.();
+          const count = helper?.getVerifiedCount?.(row.sourceHost || row.host, row.packet, row.pktIdx);
+          return count ? `${count} pcaps` : "—";
         },
       },
-      { label: "Source", key: "sourceName", defaultVisible: true, defaultWidth: 150, getValue: (row) => row.sourceName || "" },
       { label: "Payload Len", key: "payloadLength", defaultVisible: false, defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];
     const sortState = { key: "pcapOrder", direction: "asc" };
@@ -896,6 +920,10 @@ function createListPanel({
     let columnVisibility = loadedPreferences.columnVisibility;
     let columnWidths = loadedPreferences.columnWidths;
     let columnOrder = loadedPreferences.columnOrder;
+    const isCorrelationEnabled = () => Boolean(
+      getMachineCorrelation?.()?.isEnabled?.(),
+    );
+    columnVisibility.verified = isCorrelationEnabled();
 
     const getOrderedColumnDefinitions = () => {
       const columnsByKey = new Map(columnDefinitions.map((column) => [column.key, column]));
@@ -951,6 +979,11 @@ function createListPanel({
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = columnVisibility[column.key] !== false;
+        if (column.key === "verified" && !isCorrelationEnabled()) {
+          checkbox.disabled = true;
+          optionLabel.title = "Run Snap & Correlate to enable this column";
+          optionLabel.classList.add("is-disabled");
+        }
         checkbox.addEventListener("change", () => {
           const currentlyVisibleCount = getOrderedColumnDefinitions().filter(
             (candidate) => columnVisibility[candidate.key] !== false,
@@ -1032,7 +1065,11 @@ function createListPanel({
         return;
       }
 
-      const hosts = Object.keys(capturedPackets["host"]).sort();
+      const correlationHelper = getMachineCorrelation?.();
+      const sourceHosts = Object.keys(capturedPackets["host"]).sort();
+      const hosts = correlationHelper?.isCollapseEnabled?.()
+        ? [...new Set(sourceHosts.map((host) => correlationHelper.getCollapsedHostKey(host)))]
+        : sourceHosts;
       const lc = filterText ? filterText.toLowerCase() : "";
       const visibleColumns = getVisibleColumns();
       const activeGroupByStream =
@@ -1232,97 +1269,114 @@ function createListPanel({
         return `${transportName}|${firstEndpoint}|${secondEndpoint}`;
       };
 
-      for (const host of hosts) {
-        const packets = capturedPackets["host"][host];
-        if (!Array.isArray(packets)) continue;
+      for (const displayHost of hosts) {
+        const sourceHostEntries = correlationHelper?.isCollapseEnabled?.()
+          ? sourceHosts.filter((host) => correlationHelper.getCollapsedHostKey(host) === displayHost)
+          : [displayHost];
+        for (const host of sourceHostEntries) {
+          const packets = capturedPackets["host"][host];
+          if (!Array.isArray(packets)) continue;
 
-        packets.forEach((pkt, pktIdx) => {
-          const pi = pkt?.["packet.info"];
-          const ei = pkt?.["extra.info"];
-          if (!pi) return;
+          packets.forEach((pkt, pktIdx) => {
+            const pi = pkt?.["packet.info"];
+            const ei = pkt?.["extra.info"];
+            if (!pi) return;
 
-          const idx = pi["index"] ?? pi["Index"] ?? pktIdx + 1;
-          const pcapOrderRaw = Number(pi["packet.processed"]);
-          const pcapOrder = Number.isFinite(pcapOrderRaw) ? pcapOrderRaw + 1 : idx;
-          const timestamp = typeof pi["packet.timestamp"] === "string"
-            ? pi["packet.timestamp"]
-            : typeof pi["Packet Timestamp"] === "string"
-              ? pi["Packet Timestamp"]
-              : "";
-          const adjustedTimestampMs = Number(pi["capture.adjustedTimestampMs"]);
-          const parsedTimestampMs = parseListTimestampMs(timestamp);
-          const timestampMs = Number.isFinite(adjustedTimestampMs)
-            ? adjustedTimestampMs
-            : Number.isFinite(parsedTimestampMs)
-              ? parsedTimestampMs
-              : null;
-          const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"] ?? "";
-          const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"] ?? "";
-          const transport = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
-          const tpData = pi[transport] || null;
-          const srcPort =
-            tpData?.["tcp.src.port"] ??
-            tpData?.["udp.src.port"] ??
-            tpData?.["sctp.src.port"] ??
-            tpData?.["Source port"] ??
-            "";
-          const dstPort =
-            tpData?.["tcp.dst.port"] ??
-            tpData?.["udp.dst.port"] ??
-            tpData?.["sctp.dst.port"] ??
-            tpData?.["Destination port"] ??
-            "";
-          const appProto = inferApplicationProtocol(pi, ei);
-          const payloadLength = getPacketPayloadLength(pi);
-          const packetKey = normalizePacketKey(
-            pkt?.__packetKey ||
-            pi["capture.packetId"] ||
-            buildPacketKey(srcIp, pi["index"] ?? pi["Index"] ?? pktIdx + 1),
-          );
-          const isBookmarked = getBookmarkList().includes(packetKey);
-          const streamKey = getStreamKey(pi);
-          const sourceId = typeof pi["capture.sourceId"] === "string" ? pi["capture.sourceId"] : "";
-          const sourceName = typeof pi["capture.sourceSession"] === "string" ? pi["capture.sourceSession"] : "";
-          if (typeof isCaptureSourceVisible === "function" && !isCaptureSourceVisible(pkt)) return;
-
-          if (lc) {
-            const rowText = [
-              String(pcapOrder),
+            const idx = pi["index"] ?? pi["Index"] ?? pktIdx + 1;
+            const pcapOrderRaw = Number(pi["packet.processed"]);
+            const pcapOrder = Number.isFinite(pcapOrderRaw) ? pcapOrderRaw + 1 : idx;
+            const timestamp = typeof pi["packet.timestamp"] === "string"
+              ? pi["packet.timestamp"]
+              : typeof pi["Packet Timestamp"] === "string"
+                ? pi["Packet Timestamp"]
+                : "";
+            const adjustedTimestampMs = Number(pi["capture.adjustedTimestampMs"]);
+            const parsedTimestampMs = parseListTimestampMs(timestamp);
+            const timestampMs = Number.isFinite(adjustedTimestampMs)
+              ? adjustedTimestampMs
+              : Number.isFinite(parsedTimestampMs)
+                ? parsedTimestampMs
+                : null;
+            const srcIp = pi?.["IP"]?.["ip.src.addr"] ?? pi?.["IP"]?.["Source IP"] ?? "";
+            const dstIp = pi?.["IP"]?.["ip.dst.addr"] ?? pi?.["IP"]?.["Destination IP"] ?? "";
+            const transport = pi["packet.proto"] ?? pi["Protocol"] ?? "TCP";
+            const tpData = pi[transport] || null;
+            const srcPort =
+              tpData?.["tcp.src.port"] ??
+              tpData?.["udp.src.port"] ??
+              tpData?.["sctp.src.port"] ??
+              tpData?.["Source port"] ??
+              "";
+            const dstPort =
+              tpData?.["tcp.dst.port"] ??
+              tpData?.["udp.dst.port"] ??
+              tpData?.["sctp.dst.port"] ??
+              tpData?.["Destination port"] ??
+              "";
+            const appProto = inferApplicationProtocol(pi, ei);
+            const payloadLength = getPacketPayloadLength(pi);
+            const packetKey = normalizePacketKey(
+              pkt?.__packetKey ||
+              pi["capture.packetId"] ||
+              buildPacketKey(srcIp, pi["index"] ?? pi["Index"] ?? pktIdx + 1),
+            );
+            const isBookmarked = getBookmarkList().includes(packetKey);
+            const streamKey = getStreamKey(pi);
+            const sourceId = typeof pi["capture.sourceId"] === "string" ? pi["capture.sourceId"] : "";
+            const sourceName = typeof pi["capture.sourceSession"] === "string" ? pi["capture.sourceSession"] : "";
+            const correlationHelper = getMachineCorrelation?.();
+            const packetPresentation = correlationHelper?.getPacketPresentation?.(
               host,
+              pkt,
+              pktIdx,
+            ) || { sourceNames: [], color: null };
+            if (typeof isCaptureSourceVisible === "function" && !isCaptureSourceVisible(pkt)) return;
+
+            if (lc) {
+              const rowText = [
+                String(pcapOrder),
+                host,
+                srcIp,
+                dstIp,
+                String(srcPort),
+                String(dstPort),
+                transport,
+                appProto,
+                String(payloadLength),
+              ]
+                .join(" ")
+                .toLowerCase();
+              if (!rowText.includes(lc)) return;
+            }
+
+            rows.push({
+              idx,
+              pcapOrder,
+              timestamp,
+              timestampMs,
+              host: displayHost,
+              sourceHost: host,
               srcIp,
               dstIp,
-              String(srcPort),
-              String(dstPort),
+              srcPort,
+              dstPort,
               transport,
               appProto,
-              String(payloadLength),
-            ]
-              .join(" ")
-              .toLowerCase();
-            if (!rowText.includes(lc)) return;
-          }
-
-          rows.push({
-            idx,
-            pcapOrder,
-            timestamp,
-            timestampMs,
-            host,
-            srcIp,
-            dstIp,
-            srcPort,
-            dstPort,
-            transport,
-            appProto,
-            payloadLength,
-            pktIdx,
-            streamKey,
-            isBookmarked,
-            packetKey,
-            sourceId,
-            sourceName,
+              payloadLength,
+              pktIdx,
+              streamKey,
+              isBookmarked,
+              packetKey,
+              sourceId,
+              sourceName,
+              sourceNames: packetPresentation.sourceNames.length > 0
+                ? packetPresentation.sourceNames
+                : (sourceName ? [sourceName] : []),
+              presentationColor: packetPresentation.color,
+              packet: pkt,
+            });
           });
-        });
+        }
       }
 
       const streamOrderMap = new Map();

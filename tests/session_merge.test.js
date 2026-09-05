@@ -143,6 +143,73 @@ describe("session merge helpers", () => {
         expect(result.sessionState.sourcePcap).toBeNull();
     });
 
+    test("preserves source pcap bytes and original filenames", () => {
+        const firstSourcePcap = {
+            fileName: "alpha.pcapng",
+            encoding: "base64",
+            data: "YWxwaGE=",
+            byteLength: 5,
+        };
+        const secondSourcePcap = {
+            fileName: "beta.pcap",
+            encoding: "base64",
+            data: "YmV0YQ==",
+            byteLength: 4,
+        };
+        const result = mergeSessions([
+            session("alpha", [packet()], { sourcePcap: firstSourcePcap }),
+            session("beta", [packet({ timestamp: "2026-09-04 12:00:01.000000" })], {
+                sourcePcap: secondSourcePcap,
+            }),
+        ]);
+
+        expect(result.sessionState.sourcePcap).toBeNull();
+        expect(result.sessionState.sourcePcaps).toHaveLength(2);
+        expect(result.sessionState.sourcePcaps.map((source) => source.fileName)).toEqual([
+            "alpha.pcapng",
+            "beta.pcap",
+        ]);
+        expect(result.sessionState.sourcePcaps.map((source) => source.data)).toEqual([
+            "YWxwaGE=",
+            "YmV0YQ==",
+        ]);
+    });
+
+    test("deduplicates source pcaps when merging an already merged session", () => {
+        const firstMerge = mergeSessions([
+            session("alpha", [packet()], {
+                sourcePcap: {
+                    fileName: "alpha.pcap",
+                    data: "YWxwaGE=",
+                    byteLength: 5,
+                },
+            }),
+            session("beta", [packet({ timestamp: "2026-09-04 12:00:01.000000" })], {
+                sourcePcap: {
+                    fileName: "beta.pcap",
+                    data: "YmV0YQ==",
+                    byteLength: 4,
+                },
+            }),
+        ]);
+        const secondMerge = mergeSessions([
+            { name: "merged", sessionPayload: firstMerge.json },
+            session("gamma", [packet({ timestamp: "2026-09-04 12:00:02.000000" })], {
+                sourcePcap: {
+                    fileName: "gamma.pcap",
+                    data: "Z2FtbWE=",
+                    byteLength: 5,
+                },
+            }),
+        ]);
+
+        expect(secondMerge.sessionState.sourcePcaps.map((source) => source.fileName)).toEqual([
+            "alpha.pcap",
+            "beta.pcap",
+            "gamma.pcap",
+        ]);
+    });
+
     test("rejects fewer than two sessions", () => {
         expect(() => mergeSessions([session("only", [packet()])])).toThrow(/at least two/i);
     });

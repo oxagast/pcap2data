@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const JSONParse = require("jsonparse");
 const { filterPackets, validateFilterSyntax } = require("./filter");
+const { getBackendHttpPort } = require("./back-comm");
 
 const CAPTURE_STORE_DIR = path.join(os.tmpdir(), "packetsnitch-capture-store");
 const PACKET_CACHE_LIMIT = 64;
@@ -616,6 +617,7 @@ async function buildStoreFromCaptureData(captureDataInput, sessionStateInput = n
             ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
+        exportSourcePaths: new Map(),
     };
 }
 
@@ -717,6 +719,7 @@ async function buildStoreFromSource(sourcePath) {
             ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
+        exportSourcePaths: new Map(),
     };
 
     return store;
@@ -834,6 +837,7 @@ async function buildStoreFromJsonText(jsonText) {
             ...(captureMetadata ? { "capture.metadata": captureMetadata } : {}),
         },
         sessionState,
+        exportSourcePaths: new Map(),
     };
 }
 
@@ -846,6 +850,12 @@ async function closeStore(store) {
             // Ignore close errors during replacement/cleanup.
         }
         fs.promises.rm(store.packetDataPath, { force: true }).catch(() => { });
+    }
+    if (store.exportSourcePaths instanceof Map) {
+        for (const generatedPath of store.exportSourcePaths.values()) {
+            fs.promises.rm(generatedPath, { force: true }).catch(() => { });
+        }
+        store.exportSourcePaths.clear();
     }
 }
 
@@ -969,6 +979,102 @@ async function runFilterQueryAgainstStore(query) {
     }
 
     return matchedKeys;
+}
+
+async function getStoreSourceDescriptors() {
+    const store = getActiveStoreOrThrow();
+    const metadata = store.captureData?.["capture.metadata"];
+    const metadataSources = Array.isArray(metadata?.sources) ? metadata.sources : [];
+    const storedPcapSources = Array.isArray(store.sessionState?.sourcePcaps)
+        ? store.sessionState.sourcePcaps
+        : store.sessionState?.sourcePcap
+            ? [store.sessionState.sourcePcap]
+            : [];
+    const storedById = new Map(
+        storedPcapSources
+            .filter((source) => source && typeof source === "object")
+            .map((source) => [String(source.sourceId || ""), source]),
+    );
+    const materializeStoredSource = async (source, index) => {
+        const directPath = typeof source?.sourcePath === "string" ? source.sourcePath.trim() : "";
+        if (directPath) return directPath;
+        const stored = storedById.get(String(source?.sourceId || ""))
+            || storedPcapSources[index]
+            || null;
+        const encoded = typeof stored?.data === "string" ? stored.data.replace(/\s+/g, "") : "";
+        if (!encoded) return "";
+        const sourceId = String(source?.sourceId || stored?.sourceId || `source-${index + 1}`);
+        const existing = store.exportSourcePaths.get(sourceId);
+        if (existing) return existing;
+        const generatedPath = path.join(
+            CAPTURE_STORE_DIR,
+            `${store.storeId}.export-${crypto.createHash("sha256").update(sourceId).digest("hex").slice(0, 12)}.pcap`,
+        );
+        await fs.promises.writeFile(generatedPath, Buffer.from(encoded, "base64"));
+        store.exportSourcePaths.set(sourceId, generatedPath);
+        return generatedPath;
+    };
+    if (metadataSources.length > 0) {
+        const descriptors = [];
+        for (let index = 0; index < metadataSources.length; index += 1) {
+            const source = metadataSources[index];
+            if (!source || typeof source !== "object") continue;
+            const sourcePath = await materializeStoredSource(source, index);
+            descriptors.push({
+                sourceId: String(source.sourceId || `source-${index + 1}`),
+                sourceName: String(source.sourceName || source.sourceId || `Source ${index + 1}`),
+                ordinal: Number.isFinite(Number(source.ordinal)) ? Number(source.ordinal) : index,
+                sourcePath,
+            });
+        }
+        return descriptors;
+    }
+
+    const sourcePath = typeof store.sourcePath === "string" && !store.sourcePath.startsWith("[")
+        ? store.sourcePath
+        : "";
+    if (sourcePath) {
+        return [{ sourceId: "default", sourceName: path.basename(sourcePath), ordinal: 0, sourcePath }];
+    }
+    if (storedPcapSources.length > 0) {
+        const source = storedPcapSources[0];
+        const materializedPath = await materializeStoredSource(source, 0);
+        return materializedPath
+            ? [{ sourceId: String(source.sourceId || "default"), sourceName: String(source.sourceSession || source.fileName || "Source 1"), ordinal: 0, sourcePath: materializedPath }]
+            : [];
+    }
+    return [];
+}
+
+async function getStoreFilterPacketIndexes(filter, sources) {
+    if (!filter) return null;
+    const matchedKeys = await runFilterQueryAgainstStore(filter);
+    const indexesBySource = new Map(sources.map((source) => [source.sourceId, []]));
+    for (const packetKey of matchedKeys) {
+        const packet = await readPacketByKey(packetKey);
+        const info = packet?.["packet.info"] || {};
+        const sourceId = String(info["capture.sourceId"] || "default");
+        if (!indexesBySource.has(sourceId)) continue;
+        const packetIndex = Number(info["capture.sourcePacketIndex"] ?? info["packet.processed"]);
+        if (Number.isInteger(packetIndex) && packetIndex >= 0) {
+            indexesBySource.get(sourceId).push(packetIndex);
+        }
+    }
+    return indexesBySource;
+}
+
+async function postPcapExport(request) {
+    const port = getBackendHttpPort();
+    const response = await fetch(`http://127.0.0.1:${port}/pcap/write`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+    });
+    const payload = await response.json();
+    if (!response.ok && payload?.success !== false) {
+        return { success: false, error: `Backend returned HTTP ${response.status}` };
+    }
+    return payload;
 }
 
 function registerCaptureStoreHandlers(ipcMain) {
@@ -1103,6 +1209,56 @@ function registerCaptureStoreHandlers(ipcMain) {
                 success: false,
                 error: error?.message || "Unable to export session data",
             };
+        }
+    });
+
+    ipcMain.handle("capture-store-get-source-paths", async () => {
+        try {
+            return { success: true, sources: await getStoreSourceDescriptors() };
+        } catch (error) {
+            return { success: false, error: error?.message || "Unable to read capture sources", sources: [] };
+        }
+    });
+
+    ipcMain.handle("capture-store-export-filtered-pcap", async (_event, options = {}) => {
+        try {
+            const outputPcap = typeof options?.outputPcap === "string"
+                ? options.outputPcap.trim()
+                : "";
+            const filter = typeof options?.filter === "string" ? options.filter.trim() : "";
+            const requestedSources = Array.isArray(options?.sources) ? options.sources : [];
+            const storedSources = await getStoreSourceDescriptors();
+            const sources = requestedSources.length > 0 ? requestedSources : storedSources;
+            const normalizedSources = sources
+                .filter((source) => source && typeof source === "object")
+                .map((source, index) => ({
+                    sourceId: String(source.sourceId || `source-${index + 1}`),
+                    ordinal: Number.isFinite(Number(source.ordinal)) ? Number(source.ordinal) : index,
+                    inputPcap: typeof source.inputPcap === "string"
+                        ? source.inputPcap.trim()
+                        : typeof source.sourcePath === "string"
+                            ? source.sourcePath.trim()
+                            : "",
+                }))
+                .filter((source) => source.inputPcap);
+            if (!outputPcap) return { success: false, error: "Output pcap path is required" };
+            if (normalizedSources.length === 0) {
+                return { success: false, error: "No file-backed pcap sources found" };
+            }
+            const packetIndexesBySource = await getStoreFilterPacketIndexes(filter, normalizedSources);
+            const exportSources = normalizedSources.map((source) => ({
+                ...source,
+                ...(packetIndexesBySource
+                    ? { packetIndexes: packetIndexesBySource.get(source.sourceId) || [] }
+                    : {}),
+            }));
+            return await postPcapExport({
+                outputPcap,
+                filter,
+                sources: exportSources,
+            });
+        } catch (error) {
+            return { success: false, error: error?.message || "PCAP export failed" };
         }
     });
 

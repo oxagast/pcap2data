@@ -6816,6 +6816,17 @@ ipcMain.handle("save-json", async (_event, jsonData) => {
   }
 });
 
+ipcMain.handle("choose-pcap-path", async () => {
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Export PCAP",
+    defaultPath: path.join(app.getPath("documents"), "capture.pcap"),
+    filters: [{ name: "PCAP Files", extensions: ["pcap", "pcapng"] }],
+  });
+  return canceled || !filePath
+    ? { success: false, canceled: true }
+    : { success: true, filePath };
+});
+
 
 ipcMain.handle("current-packet-json", async (_event, packetData) => {
   // we need to use main-frontend.js's getCurrentPacketForExport() function
@@ -8357,8 +8368,14 @@ async function readSessionLibraryCache() {
     const sessions = parsed.sessions.filter(
       (s) => s && typeof s === "object" && typeof s.name === "string" && s.name.trim(),
     );
+    // Build a name→session map for O(1) incremental updates.
+    const sessionsByName = new Map();
+    for (const s of sessions) {
+      if (s && s.name) sessionsByName.set(s.name, s);
+    }
     return {
       sessions,
+      sessionsByName,
       writtenAt: typeof parsed.writtenAt === "string" ? parsed.writtenAt : null,
     };
   } catch (error) {
@@ -8367,6 +8384,194 @@ async function readSessionLibraryCache() {
     }
     return null;
   }
+}
+
+/**
+ * Returns the canonical file path and compression for a saved session.
+ * Does NOT read the file contents – only resolves the physical location.
+ */
+async function resolveSessionFilePathInfo(name) {
+  const jsonPath = sessionFilePath(name);
+  const bsonGzipPath = sessionBsonGzipFilePath(name);
+  const compressedPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_XZ);
+  const gzipPath = sessionCompressedFilePath(name, SESSION_COMPRESSION_GZIP);
+  const legacyXzPath = sessionLegacyCompressedFilePath(name, SESSION_COMPRESSION_XZ);
+  const legacyGzipPath = sessionLegacyCompressedFilePath(name, SESSION_COMPRESSION_GZIP);
+  if (await fileExists(jsonPath)) return { filePath: jsonPath, compression: null };
+  if (await fileExists(bsonGzipPath)) return { filePath: bsonGzipPath, compression: SESSION_FORMAT_BSON_GZIP };
+  if (await fileExists(compressedPath)) return { filePath: compressedPath, compression: SESSION_COMPRESSION_XZ };
+  if (await fileExists(gzipPath)) return { filePath: gzipPath, compression: SESSION_COMPRESSION_GZIP };
+  if (await fileExists(legacyXzPath)) return { filePath: legacyXzPath, compression: SESSION_COMPRESSION_XZ };
+  if (await fileExists(legacyGzipPath)) return { filePath: legacyGzipPath, compression: SESSION_COMPRESSION_GZIP };
+  return null;
+}
+
+/**
+ * Returns a cache entry for a single session by reading only its metadata -
+ * file size and mtime – without parsing the full JSON body.
+ * Falls back to parsing the body only when the cache entry is absent or stale.
+ */
+async function buildSessionMetadataFromFile(name, existingEntry) {
+  const resolved = await resolveSessionFilePathInfo(name);
+  if (!resolved) return null; // Session no longer exists on disk.
+
+  const { filePath, compression } = resolved;
+  let stats;
+  try {
+    stats = await fs.promises.stat(filePath);
+  } catch (_) {
+    return null;
+  }
+
+  const mtime = stats?.mtime ? stats.mtime.toISOString() : null;
+  const totalSizeBytes = Number.isFinite(stats?.size) ? stats.size : null;
+
+  // If the cache entry is still fresh (same mtime), reuse it without reading content.
+  if (existingEntry && existingEntry.mtime === mtime) {
+    return {
+      ...existingEntry,
+      totalSizeBytes,
+    };
+  }
+
+  // Stale or missing: parse the file to extract session metadata.
+  let packetsnitchVersion = null;
+  let pcapSizeBytes = null;
+  let merged = false;
+  let sourceCount = null;
+  let savedAt = mtime;
+
+  try {
+    const content = await readSessionFileContent(filePath, compression);
+    const parsedPayload = JSON.parse(content);
+    const captureData =
+      parsedPayload && typeof parsedPayload === "object"
+        && parsedPayload["capture.data"]
+        && typeof parsedPayload["capture.data"] === "object"
+        ? parsedPayload["capture.data"]
+        : parsedPayload;
+    const captureMetadata = captureData?.["capture.metadata"];
+    if (captureMetadata?.merged === true) {
+      merged = true;
+      sourceCount = Array.isArray(captureMetadata.sources)
+        ? captureMetadata.sources.length
+        : null;
+    }
+    const sessionState =
+      parsedPayload && typeof parsedPayload === "object"
+        && parsedPayload["session.state"]
+        && typeof parsedPayload["session.state"] === "object"
+        ? parsedPayload["session.state"]
+        : null;
+
+    const stateSavedAt =
+      typeof sessionState?.savedAt === "string" ? sessionState.savedAt.trim() : "";
+    if (stateSavedAt) savedAt = stateSavedAt;
+
+    packetsnitchVersion = readSessionGeneratedByVersion(parsedPayload, sessionState);
+    pcapSizeBytes = readSessionPcapSizeBytes(sessionState);
+  } catch (_metadataErr) {
+    // Keep listing robust for older/corrupted saves.
+  }
+
+  return {
+    name,
+    savedAt,
+    mtime,
+    filePath,
+    saveType: inferSessionSaveType(filePath, compression),
+    totalSizeBytes,
+    pcapSizeBytes,
+    merged,
+    sourceCount,
+    packetsnitchVersion,
+  };
+}
+
+/**
+ * Incrementally update the cache for a newly saved session without rescanning all files.
+ */
+async function updateSessionLibraryCacheForSave(name) {
+  const cache = await readSessionLibraryCache();
+  const sessions = cache?.sessions ? [...cache.sessions] : [];
+  const sessionsByName = cache?.sessionsByName || new Map();
+
+  const entry = await buildSessionMetadataFromFile(name, sessionsByName.get(name));
+  if (!entry) return; // Save failed or session not found.
+
+  const existingIndex = sessions.findIndex((s) => s && s.name === name);
+  if (existingIndex >= 0) {
+    sessions[existingIndex] = entry;
+  } else {
+    sessions.unshift(entry);
+  }
+  sessionsByName.set(name, entry);
+
+  // Re-sort by savedAt desc.
+  sessions.sort((a, b) => {
+    if (!a.savedAt && !b.savedAt) return a.name.localeCompare(b.name);
+    if (!a.savedAt) return 1;
+    if (!b.savedAt) return -1;
+    return b.savedAt.localeCompare(a.savedAt);
+  });
+
+  await writeSessionLibraryCache(sessions);
+}
+
+/**
+ * Incrementally update the cache when a session is renamed, without rescanning all files.
+ */
+async function updateSessionLibraryCacheForRename(oldName, newName) {
+  const cache = await readSessionLibraryCache();
+  if (!cache) return;
+  const sessions = cache.sessions.filter((s) => s && s.name !== oldName);
+  const sessionsByName = cache.sessionsByName;
+
+  sessionsByName.delete(oldName);
+
+  // Build a new entry for the new name from the old entry (file path changes but metadata persists).
+  const oldEntry = sessionsByName.get(oldName);
+  const newResolved = await resolveSessionFilePathInfo(newName);
+  if (newResolved) {
+    let stats;
+    try {
+      stats = await fs.promises.stat(newResolved.filePath);
+    } catch (_) { }
+
+    const mtime = stats?.mtime ? stats.mtime.toISOString() : null;
+    const newEntry = oldEntry
+      ? { ...oldEntry, name: newName, savedAt: mtime || oldEntry.savedAt, mtime, filePath: newResolved.filePath, saveType: inferSessionSaveType(newResolved.filePath, newResolved.compression) }
+      : await buildSessionMetadataFromFile(newName, null);
+
+    if (newEntry) {
+      sessionsByName.set(newName, newEntry);
+      // Remove existing entry for newName if it somehow already existed.
+      const existingIndex = sessions.findIndex((s) => s && s.name === newName);
+      if (existingIndex >= 0) sessions.splice(existingIndex, 1);
+      sessions.unshift(newEntry);
+    }
+  }
+
+  sessions.sort((a, b) => {
+    if (!a.savedAt && !b.savedAt) return a.name.localeCompare(b.name);
+    if (!a.savedAt) return 1;
+    if (!b.savedAt) return -1;
+    return b.savedAt.localeCompare(a.savedAt);
+  });
+
+  await writeSessionLibraryCache(sessions);
+}
+
+/**
+ * Incrementally update the cache when a session is deleted, without rescanning all files.
+ */
+async function updateSessionLibraryCacheForDelete(name) {
+  const cache = await readSessionLibraryCache();
+  if (!cache) return;
+  const sessions = cache.sessions.filter((s) => s && s.name !== name);
+  const sessionsByName = cache.sessionsByName;
+  sessionsByName.delete(name);
+  await writeSessionLibraryCache(sessions);
 }
 
 async function writeSessionLibraryCache(sessions) {
@@ -8692,7 +8897,7 @@ async function saveSessionDocument(name, jsonData) {
     await fs.promises.writeFile(filePath, jsonData, "utf8");
     await compressSessionJson(sanitizedName, format);
   }
-  await writeSessionLibraryCache(await buildSessionList());
+  await updateSessionLibraryCacheForSave(sanitizedName);
   return sanitizedName;
 }
 
@@ -8752,6 +8957,16 @@ function readSessionGeneratedByVersion(parsedPayload, sessionState) {
 
 function readSessionPcapSizeBytes(sessionState) {
   if (!sessionState || typeof sessionState !== "object") return null;
+  if (Array.isArray(sessionState.sourcePcaps) && sessionState.sourcePcaps.length > 0) {
+    const total = sessionState.sourcePcaps.reduce((sum, source) => {
+      const explicitByteLength = Number(source?.byteLength);
+      if (Number.isFinite(explicitByteLength) && explicitByteLength > 0) {
+        return sum + Math.floor(explicitByteLength);
+      }
+      return sum + estimateBase64DecodedByteLength(source?.data);
+    }, 0);
+    if (total > 0) return total;
+  }
   const explicitByteLength = Number(sessionState?.sourcePcap?.byteLength);
   if (Number.isFinite(explicitByteLength) && explicitByteLength > 0) {
     return Math.floor(explicitByteLength);
@@ -8933,15 +9148,16 @@ async function refreshSessionLibraryCacheAndNotify() {
 ipcMain.handle("sessions-list", async () => {
   try {
     const cache = await readSessionLibraryCache();
-    // Kick off the authoritative scan asynchronously. The front end will
-    // receive the refreshed list via "sessions-list-refreshed" and re-render.
+    // Always return cached data immediately so the session picker appears
+    // without delay. The authoritative scan runs in the background and
+    // the front end re-renders when "sessions-list-refreshed" arrives.
     if (cache?.sessions?.length > 0) {
       refreshSessionLibraryCacheAndNotify();
       return { success: true, sessions: cache.sessions, fromCache: true };
     }
 
-    // No cache available yet: fall back to a blocking full scan and write the
-    // cache for the next startup.
+    // No cache yet: do a blocking full scan on this tick so the first
+    // render has data. Subsequent startups will be cache-first.
     const sessions = await buildSessionList();
     await writeSessionLibraryCache(sessions);
     return { success: true, sessions, fromCache: false };
@@ -9107,7 +9323,7 @@ ipcMain.handle("session-rename", async (_event, oldName, newName) => {
       await fs.promises.rename(oldGzipPath, newGzipPath);
     }
 
-    writeSessionLibraryCache(await buildSessionList());
+    await updateSessionLibraryCacheForRename(oldName, sanitizedNew);
     return { success: true, name: sanitizedNew };
   } catch (err) {
     console.error("session-rename error:", err);
@@ -9146,7 +9362,7 @@ ipcMain.handle("session-delete", async (_event, name) => {
       await fs.promises.unlink(gzipPath);
     }
 
-    writeSessionLibraryCache(await buildSessionList());
+    await updateSessionLibraryCacheForDelete(name);
     return { success: true };
   } catch (err) {
     if (err.code === "ENOENT") {
@@ -9507,7 +9723,7 @@ ipcMain.handle("session-import", async () => {
         await fs.promises.writeFile(filePath, jsonData, "utf8");
         await compressSessionJson(sanitizedName, format);
       }
-      writeSessionLibraryCache(await buildSessionList());
+      await updateSessionLibraryCacheForSave(sanitizedName);
       return { success: true, name: sanitizedName, deprecated: isLegacyFormat, warning };
     } catch (writeErr) {
       if (writeErr && writeErr.code === "COMPRESSION_FALLBACK_DECLINED") {

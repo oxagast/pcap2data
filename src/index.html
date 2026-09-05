@@ -126,6 +126,12 @@
           <input type="button" id="rescan-files-btn" value="Rescan for Artifacts"
             title="Scan extracted/carved file contents for embedded secrets (AWS keys, tokens, JWTs, etc.)"
             class="menu-btns left" />
+          <input type="button" id="snap-correlate-btn" value="Snap &amp; Correlate"
+            title="Manually correlate likely machines and align their timeline points" class="menu-btns left"
+            aria-pressed="false" />
+          <input type="button" id="collapse-entities-btn" value="Collapse Entities"
+            title="Show correlated hosts as a non-destructive entity layer" class="menu-btns left" aria-pressed="false"
+            disabled />
           <div id="file-info">
             <div id="file-name">PCAP file: unknown</div>
             <div id="pcap-size">PCAP size: 0</div>
@@ -1753,6 +1759,10 @@ No artifacts saved.</pre>
                   <strong>Themes</strong> subtab to the right of Plugins.
                 </div>
 
+                <label for="settings-general-pcap-file">PCAP filename</label>
+                <input id="settings-general-pcap-file" type="text" readonly value="unknown" />
+                <div class="settings-help-text">The original filename is shown when it is available.</div>
+
                 <label for="settings-general-conv-json-indent">Conv JSON indent spaces</label>
                 <input id="settings-general-conv-json-indent" type="number" min="0" step="1" />
 
@@ -2126,6 +2136,10 @@ No artifacts saved.</pre>
                   Existing sessions keep their saved source colors.
                 </div>
                 <div id="settings-merge-source-colors" class="settings-merge-source-colors"></div>
+                <label class="settings-number-row" for="settings-merge-timestamp-snap-threshold">
+                  Snap threshold override (ms; blank = automatic)
+                  <input id="settings-merge-timestamp-snap-threshold" type="number" min="1" step="1" />
+                </label>
               </div>
             </div>
           </div>
@@ -2389,6 +2403,7 @@ No artifacts saved.</pre>
               <div id="general-info-head" class="PHead">General Information</div>
               <div id="packet-readouts" class="packet-readouts">
                 <div id="capture-source-readout">PCAP: —</div>
+                <div id="verified-across-pcaps">Verified across: —</div>
                 <div id="timestamp"></div>
                 <div id="current-stream-packet">Current Stream Packet: 0 / 0</div>
                 <div id="current-filtered-packet">Current Filtered Packet: 0 / 0</div>

@@ -4,7 +4,11 @@
 // DOM, or renderer dependencies so the merge model can be tested independently
 // and reused by the main-process session IPC layer.
 
-const crypto = require("crypto");
+// This module is shared by the Electron main process and the renderer. Use
+// crypto-js instead of Node's `crypto` module so webpack can bundle the
+// renderer-side machine-correlation helper without requiring a core-module
+// polyfill.
+const CryptoJS = require("crypto-js");
 const {
     normalizeSessionPayload,
     validateSessionPayload,
@@ -42,7 +46,7 @@ function stableStringify(value) {
 }
 
 function hashText(value, length = 16) {
-    return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
+    return CryptoJS.SHA256(String(value)).toString(CryptoJS.enc.Hex).slice(0, length);
 }
 
 function normalizeName(value, fallback) {
@@ -428,6 +432,301 @@ function buildHostGroups(sources, relationshipOverrides, relationships) {
     return { find, groups: normalizedGroups };
 }
 
+function getCorrelationSourceId(packetInfo, host, fallbackSourceId) {
+    const sourceId = firstString([
+        packetInfo?.["capture.sourceId"],
+        packetInfo?.["capture.sourceSession"],
+    ]);
+    return sourceId || fallbackSourceId || `capture:${host || "unknown"}`;
+}
+
+function getPacketCorrelationSignature(packetInfo) {
+    const transport = getTransport(packetInfo) || firstString([
+        packetInfo?.["packet.proto"],
+        packetInfo?.Protocol,
+    ]) || "packet";
+    const sourceIp = getSourceIp(packetInfo, "src");
+    const destinationIp = getSourceIp(packetInfo, "dst");
+    const sourcePort = getPort(packetInfo, "src");
+    const destinationPort = getPort(packetInfo, "dst");
+    const endpoints = [
+        `${sourceIp}:${sourcePort}`,
+        `${destinationIp}:${destinationPort}`,
+    ].sort();
+    const payloadLength = firstString([
+        packetInfo?.["packet.length"],
+        packetInfo?.["frame.len"],
+        packetInfo?.["payload.length"],
+    ]);
+    return [transport.toUpperCase(), ...endpoints, payloadLength].join("|");
+}
+
+function getCorrelationPackets(captureData) {
+    const packets = [];
+    const hostMap = isObject(captureData?.host) ? captureData.host : {};
+    const metadata = isObject(captureData?.["capture.metadata"])
+        ? captureData["capture.metadata"]
+        : {};
+    const fallbackSourceId = firstString([
+        metadata.sourceId,
+        metadata.sourceName,
+        "current-capture",
+    ]);
+    Object.entries(hostMap).forEach(([host, hostPackets]) => {
+        if (!Array.isArray(hostPackets)) return;
+        hostPackets.forEach((packet, packetIndex) => {
+            const packetInfo = getPacketInfo(packet);
+            const timestampMs = parseTimestampMs(getPacketTimestamp(packetInfo));
+            packets.push({
+                packet,
+                packetInfo,
+                host,
+                packetIndex,
+                sourceId: getCorrelationSourceId(packetInfo, host, fallbackSourceId),
+                sourceName: firstString([
+                    packetInfo?.["capture.sourceSession"],
+                    packetInfo?.["capture.sourceId"],
+                    fallbackSourceId,
+                ]),
+                timestampMs,
+                signature: getPacketCorrelationSignature(packetInfo),
+            });
+        });
+    });
+    return packets;
+}
+
+function inferCorrelationThresholdMs(packets) {
+    const timestamps = packets
+        .map((entry) => entry.timestampMs)
+        .filter((value) => Number.isFinite(value))
+        .sort((left, right) => left - right);
+    const deltas = [];
+    for (let index = 1; index < timestamps.length; index += 1) {
+        const delta = timestamps[index] - timestamps[index - 1];
+        if (delta > 0 && delta <= 5000) deltas.push(delta);
+    }
+    if (!deltas.length) return 100;
+    deltas.sort((left, right) => left - right);
+    const median = deltas[Math.floor(deltas.length / 2)];
+    return Math.max(10, Math.min(1000, Math.round(median / 2)));
+}
+
+function median(values) {
+    const sorted = values.filter(Number.isFinite).sort((left, right) => left - right);
+    if (!sorted.length) return null;
+    return sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Derive a non-destructive machine-correlation layer for an already loaded
+ * capture. Packet timestamps are never rewritten; `packetMatches` contains
+ * the proposed snapped timestamp and verification count instead.
+ */
+function computeMachineCorrelation(captureData, options = {}) {
+    const packets = getCorrelationPackets(captureData);
+    const sourcePackets = new Map();
+    packets.forEach((entry) => {
+        if (!sourcePackets.has(entry.sourceId)) sourcePackets.set(entry.sourceId, []);
+        sourcePackets.get(entry.sourceId).push(entry);
+    });
+
+    const sources = [...sourcePackets.entries()].map(([sourceId, entries], ordinal) => ({
+        sourceId,
+        sourceName: entries.find((entry) => entry.sourceName)?.sourceName || sourceId,
+        ordinal,
+        captureData: {
+            host: Object.fromEntries(
+                [...new Set(entries.map((entry) => entry.host))].map((host) => [host, []]),
+            )
+        },
+        evidence: collectSourceEvidence({
+            host: Object.fromEntries(
+                [...new Set(entries.map((entry) => entry.host))].map((host) => [
+                    host,
+                    entries.filter((entry) => entry.host === host).map((entry) => entry.packet),
+                ]),
+            ),
+        }),
+        entries,
+    }));
+
+    const relationships = [];
+    const parent = new Map(sources.map((source) => [source.sourceId, source.sourceId]));
+    const find = (sourceId) => {
+        let root = sourceId;
+        while (parent.get(root) !== root) root = parent.get(root);
+        return root;
+    };
+    const union = (left, right) => {
+        const leftRoot = find(left);
+        const rightRoot = find(right);
+        if (leftRoot !== rightRoot) parent.set(rightRoot, leftRoot);
+    };
+    for (let leftIndex = 0; leftIndex < sources.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < sources.length; rightIndex += 1) {
+            const left = sources[leftIndex];
+            const right = sources[rightIndex];
+            const evidence = inferSourceRelationship(left, right);
+            const sameMachine = evidence.sharedMacs.length > 0 || evidence.sharedLocalIps.length > 0;
+            relationships.push({
+                ...evidence,
+                suggestion: sameMachine ? "same" : "separate",
+                confidence: evidence.sharedMacs.length ? "high" : evidence.sharedLocalIps.length ? "medium" : "low",
+                mode: sameMachine ? "same" : "separate",
+            });
+            if (sameMachine) union(left.sourceId, right.sourceId);
+        }
+    }
+
+    const groupedSources = new Map();
+    sources.forEach((source) => {
+        const root = find(source.sourceId);
+        if (!groupedSources.has(root)) groupedSources.set(root, []);
+        groupedSources.get(root).push(source);
+    });
+
+    const packetMatches = {};
+    const groups = [];
+    let groupIndex = 0;
+    groupedSources.forEach((groupSources) => {
+        groupIndex += 1;
+        const sourceIds = groupSources.map((source) => source.sourceId);
+        const groupEntries = groupSources.flatMap((source) => source.entries);
+        const macs = [...new Set(groupSources.flatMap((source) => source.evidence.macs))].sort();
+        const localIps = [...new Set(groupSources.flatMap((source) => source.evidence.localIps))].sort();
+        const hostKeys = [...new Set(groupEntries.map((entry) => entry.host))].sort();
+        const signatureSources = new Map();
+        groupEntries.forEach((entry) => {
+            if (!signatureSources.has(entry.signature)) signatureSources.set(entry.signature, new Map());
+            if (!signatureSources.get(entry.signature).has(entry.sourceId)) {
+                signatureSources.get(entry.signature).set(entry.sourceId, []);
+            }
+            signatureSources.get(entry.signature).get(entry.sourceId).push(entry);
+        });
+
+        const sourceOffsets = new Map(sourceIds.map((sourceId) => [sourceId, []]));
+        signatureSources.forEach((bySource) => {
+            if (bySource.size < 2) return;
+            const sourceTimes = [...bySource.entries()].map(([sourceId, entries]) => [
+                sourceId,
+                median(entries.map((entry) => entry.timestampMs)),
+            ]).filter(([, time]) => time !== null);
+            sourceTimes.forEach(([sourceId, time]) => {
+                sourceTimes.forEach(([otherSourceId, otherTime]) => {
+                    if (sourceId !== otherSourceId) sourceOffsets.get(sourceId).push(otherTime - time);
+                });
+            });
+        });
+
+        const offsets = new Map([...sourceOffsets.entries()].map(([sourceId, values]) => [
+            sourceId,
+            median(values) || 0,
+        ]));
+        const thresholdOption = Number(options.thresholdMs);
+        const thresholdMs = Number.isFinite(thresholdOption) && thresholdOption > 0
+            ? thresholdOption
+            : inferCorrelationThresholdMs(groupEntries);
+        const verifiedSignatures = new Map(
+            [...signatureSources.entries()].map(([signature, bySource]) => [signature, bySource.size]),
+        );
+
+        groupEntries.forEach((entry) => {
+            const packetKey = firstString([
+                entry.packet?.__packetKey,
+                entry.packetInfo?.["capture.packetId"],
+                `${entry.host}$${entry.packetIndex}`,
+            ]);
+            const sourceIp = getSourceIp(entry.packetInfo, "src") || entry.host || "Unknown";
+            const sourcePacketKey = `${sourceIp}$${entry.packetInfo?.index ?? entry.packetInfo?.Index ?? entry.packetIndex}`;
+            const adjustedTimestampMs = Number.isFinite(entry.timestampMs)
+                ? entry.timestampMs + (offsets.get(entry.sourceId) || 0)
+                : null;
+            const signatureCount = verifiedSignatures.get(entry.signature) || 1;
+            const matchingSourceIds = [...(signatureSources.get(entry.signature)?.keys() || [])];
+            const matchingSourceNames = matchingSourceIds.map((sourceId) => ({
+                sourceId,
+                sourceName: groupSources.find((source) => source.sourceId === sourceId)?.sourceName || sourceId,
+            }));
+            const correlationKey = Number.isFinite(adjustedTimestampMs)
+                ? `${entry.signature}|${Math.round(adjustedTimestampMs / Math.max(1, thresholdMs))}`
+                : "";
+            const match = {
+                sourceId: entry.sourceId,
+                host: entry.host,
+                signature: entry.signature,
+                correlationKey,
+                verifiedSources: matchingSourceNames,
+                originalTimestampMs: entry.timestampMs,
+                snappedTimestampMs: adjustedTimestampMs,
+                snapDeltaMs: Number.isFinite(adjustedTimestampMs) && Number.isFinite(entry.timestampMs)
+                    ? adjustedTimestampMs - entry.timestampMs
+                    : 0,
+                thresholdMs,
+                verifiedAcrossPcaps: signatureCount,
+                snapped: Math.abs((adjustedTimestampMs || 0) - (entry.timestampMs || 0)) <= thresholdMs,
+            };
+            packetMatches[packetKey] = match;
+            // Renderer list rows use source-IP + packet-index keys when a
+            // durable capture packet ID is unavailable. Keep both aliases
+            // pointing at the same presentation metadata.
+            packetMatches[sourcePacketKey] = match;
+        });
+
+        groups.push({
+            groupId: `machine-${groupIndex}`,
+            macs,
+            localIps,
+            sources: sourceIds,
+            hostKeys,
+            sourceOffsets: Object.fromEntries(offsets),
+            thresholdMs,
+            verifiedAcrossPcaps: sourceIds.length,
+        });
+    });
+
+    const hostToGroup = {};
+    groups.forEach((group) => group.hostKeys.forEach((host) => {
+        hostToGroup[host] = group.groupId;
+    }));
+
+    const anomalies = [];
+    groups.filter((group) => group.sources.length > 1).forEach((group) => {
+        const entries = group.sources.flatMap((sourceId) => sourcePackets.get(sourceId) || []);
+        const bySignature = new Map();
+        entries.forEach((entry) => {
+            if (!bySignature.has(entry.signature)) bySignature.set(entry.signature, new Set());
+            bySignature.get(entry.signature).add(entry.sourceId);
+        });
+        bySignature.forEach((presentSet, signature) => {
+            if (presentSet.size === group.sources.length) return;
+            const absentFrom = group.sources.filter((sourceId) => !presentSet.has(sourceId));
+            anomalies.push({
+                kind: "cross_capture_missing",
+                label: "Missing from correlated capture",
+                detail: `${signature} appears in ${[...presentSet].join(", ")} but not ${absentFrom.join(", ")}`,
+                query: "",
+                groupId: group.groupId,
+                signature,
+                presentIn: [...presentSet],
+                absentFrom,
+            });
+        });
+    });
+
+    return {
+        version: 1,
+        enabled: false,
+        collapseEnabled: false,
+        thresholdMs: groups.length ? Math.max(...groups.map((group) => group.thresholdMs)) : null,
+        groups,
+        hostToGroup,
+        packetMatches,
+        anomalies,
+        relationships,
+    };
+}
+
 function hostKeyFor(source, host, hostGroups) {
     const group = hostGroups.groups.get(hostGroups.find(source.sourceId)) || [];
     if (group.length > 1) return host;
@@ -485,10 +784,18 @@ function buildAnnotationState(sources, packetKeyMap, sourceDescriptors, metadata
         const summary = state.currentSummary || source.captureData?.["final.summary"];
         if (typeof summary === "string" && summary.trim()) summaries.push({ sourceSession: sourceLabel, summary });
         if (state.sourcePcap && isObject(state.sourcePcap)) {
-            sourcePcaps.push({ sourceId: source.sourceId, sourceSession: sourceLabel, ...deepClone(state.sourcePcap) });
+            addUnique(sourcePcaps, {
+                sourceId: source.sourceId,
+                sourceSession: sourceLabel,
+                ...deepClone(state.sourcePcap),
+            });
         }
         if (Array.isArray(state.sourcePcaps)) {
-            state.sourcePcaps.forEach((entry) => sourcePcaps.push({ sourceId: source.sourceId, sourceSession: sourceLabel, ...deepClone(entry) }));
+            state.sourcePcaps.forEach((entry) => addUnique(sourcePcaps, {
+                sourceId: source.sourceId,
+                sourceSession: sourceLabel,
+                ...deepClone(entry),
+            }));
         }
     });
 
@@ -669,5 +976,6 @@ module.exports = {
     normalizeOffsetMs,
     collectSourceEvidence,
     inferSourceRelationship,
+    computeMachineCorrelation,
     mergeSessions,
 };
