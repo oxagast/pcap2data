@@ -2,6 +2,7 @@ const {
   getCaptureSources,
   getPacketsForCaptureSource,
   buildStatsComparison,
+  buildSourceComparisonBucketData,
 } = require("../src/ui/panels/stats-panel");
 
 function packet(sourceId, sourceName) {
@@ -39,5 +40,15 @@ describe("capture source stats helpers", () => {
     );
     expect(comparison.rows.find((row) => row.label === "Packets").delta).toBe(3);
     expect(comparison.rows.find((row) => row.label === "Streams").delta).toBe(2);
+  });
+
+  test("builds selectable per-source bucket data", () => {
+    global.window = { keystoreCreds: new Set() };
+    const capture = { host: { all: [packet("a", "left"), packet("b", "right")] } };
+    expect(buildSourceComparisonBucketData(capture, "a", "hosts")).toEqual([
+      "10.0.0.1",
+      "10.0.0.2",
+      "comparison",
+    ]);
   });
 });

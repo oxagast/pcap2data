@@ -388,6 +388,7 @@ function createListPanel({
   getCurrentPacketKey,
   isCaptureSourceVisible,
   getSourceState,
+  getSourceColor,
   hasHiddenCaptureSources,
   syncBookmarkDropdown,
   setActivePacketCursor,
@@ -542,13 +543,6 @@ function createListPanel({
     tr.dataset.stream = row.streamLabel;
     tr.dataset.packetKey = row.packetKey;
     if (row.sourceId) tr.dataset.sourceId = row.sourceId;
-    const sourceState = typeof getSourceState === "function"
-      ? getSourceState()[row.sourceId]
-      : null;
-    if (sourceState?.colorEnabled && /^#[0-9a-f]{6}$/i.test(sourceState.color)) {
-      tr.style.setProperty("--packet-source-color", sourceState.color);
-      tr.classList.add("packet-list-source-colored");
-    }
 
     if (row.packetKey === getCurrentPacketKey()) {
       tr.classList.add("packet-list-selected");
@@ -564,7 +558,11 @@ function createListPanel({
 
     columns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = String(column.getValue(row) ?? "");
+      if (typeof column.renderCell === "function") {
+        column.renderCell(row, td);
+      } else {
+        td.textContent = String(column.getValue(row) ?? "");
+      }
       if (column.widthPx) {
         const columnWidth = `${column.widthPx}px`;
         td.style.width = columnWidth;
@@ -859,6 +857,37 @@ function createListPanel({
       { label: "Dst Port", key: "dstPort", defaultWidth: 96, getValue: (row) => row.dstPort },
       { label: "Transport", key: "transport", defaultWidth: 110, getValue: (row) => row.transport },
       { label: "App Protocol", key: "appProto", defaultWidth: 170, getValue: (row) => normalizeAppProtocolForDisplay(row.appProto) },
+      {
+        label: "Source Color",
+        key: "sourceColor",
+        defaultVisible: true,
+        defaultWidth: 38,
+        getValue: () => "",
+        renderCell: (row, cell) => {
+          const sourceState = typeof getSourceState === "function"
+            ? getSourceState()[row.sourceId]
+            : null;
+          const configuredColor = typeof getSourceColor === "function"
+            ? getSourceColor(row.sourceId)
+            : sourceState?.color || "";
+          cell.classList.add("packet-list-source-color-cell");
+          if (configuredColor && /^#[0-9a-f]{6}$/i.test(configuredColor)) {
+            cell.style.setProperty("background-color", configuredColor, "important");
+            const swatch = document.createElement("canvas");
+            swatch.className = "packet-list-source-color-swatch";
+            swatch.width = 20;
+            swatch.height = 20;
+            const context = swatch.getContext("2d");
+            if (context) {
+              context.fillStyle = configuredColor;
+              context.fillRect(0, 0, swatch.width, swatch.height);
+            }
+            swatch.title = row.sourceName || row.sourceId || "Capture source";
+            swatch.setAttribute("aria-label", swatch.title);
+            cell.appendChild(swatch);
+          }
+        },
+      },
       { label: "Source", key: "sourceName", defaultVisible: true, defaultWidth: 150, getValue: (row) => row.sourceName || "" },
       { label: "Payload Len", key: "payloadLength", defaultVisible: false, defaultWidth: 110, getValue: (row) => row.payloadLength },
     ];

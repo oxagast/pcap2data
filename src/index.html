@@ -1679,6 +1679,9 @@ No artifacts saved.</pre>
             <button id="settings-subtab-debug" class="settings-subtab-btn">
               Debug
             </button>
+            <button id="settings-subtab-merge" class="settings-subtab-btn">
+              Merge
+            </button>
             <button id="settings-subtab-plugins" class="settings-subtab-btn">
               Plugins
             </button>
@@ -2107,6 +2110,23 @@ No artifacts saved.</pre>
                   north/south.</div>
               </div>
 
+            </div>
+          </div>
+
+          <div id="settings-merge-panel" class="settings-subtab-panel" hidden>
+            <div class="settings-grid">
+              <div class="settings-section">
+                <div class="settings-section-title">Merged Capture Sources Color Palette</div>
+                <label class="settings-checkbox-row" for="settings-merge-source-color-coding-enabled">
+                  <input id="settings-merge-source-color-coding-enabled" type="checkbox" />
+                  Enable source color coding in List view
+                </label>
+                <div class="settings-help-text">
+                  New merged sessions assign these palette colors to capture sources in randomized order.
+                  Existing sessions keep their saved source colors.
+                </div>
+                <div id="settings-merge-source-colors" class="settings-merge-source-colors"></div>
+              </div>
             </div>
           </div>
 
